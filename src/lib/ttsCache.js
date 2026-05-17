@@ -6,7 +6,7 @@
 
 const DB_NAME = "tts_audio_cache";
 const STORE_NAME = "chunks";
-const DB_VERSION = 2; // bumped to clear stale cache from speed-param era
+const DB_VERSION = 5; // bumped to clear stale cache after podcast-style TTS tuning
 
 let dbPromise = null;
 

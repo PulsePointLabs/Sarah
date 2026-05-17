@@ -1,10 +1,9 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import PageHeader from "../components/PageHeader";
-import { ArrowLeft, Star, Trash2, Heart, Clock, Zap, Pencil, XCircle } from "lucide-react";
+import { ArrowLeft, Star, Trash2, Heart, Clock, Zap, Pencil, XCircle, Gauge, ListTree, Brain, NotebookText } from "lucide-react";
 import AITagSuggester from "../components/AITagSuggester";
 import AIChat from "../components/AIChat";
 import SessionExportButton from "../components/SessionExportButton";
@@ -28,11 +27,11 @@ import SessionTimelineNarrative from "../components/SessionTimelineNarrative";
 import JournalRecorder from "../components/JournalRecorder";
 import { EVENT_CATEGORIES } from "../components/session-form/EventTimelineSection";
 
-function getCategoryMeta(value) {
+function _getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
 }
 
-function fmtMmSs(s) {
+function _fmtMmSs(s) {
   const totalS = Math.round(Number(s));
   const m = Math.floor(totalS / 60);
   const sec = totalS % 60;
@@ -83,6 +82,7 @@ export default function SessionDetail() {
   const [chatMessages, setChatMessages] = useState([]);
   const [sessionNotes, setSessionNotes] = useState("");
   const [sessionJournal, setSessionJournal] = useState(null);
+  const [activeTab, setActiveTab] = useState("overview");
 
   const nearClimaxEvents = useMemo(() => {
     if (!session) return [];
@@ -144,7 +144,7 @@ export default function SessionDetail() {
             const timeZero = startRow ? startRow.time_s : result.rows[0]?.time_s ?? 0;
             setEmgRows(result.rows.map((r) => ({ ...r, time_s: parseFloat((r.time_s - timeZero).toFixed(6)) })));
           }
-        } catch (_) {
+        } catch {
           setEmgRows([]);
         }
       }
@@ -263,6 +263,13 @@ export default function SessionDetail() {
 
   const s = session;
   const cap = (str) => str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
+  const tabs = [
+    { id: "overview", label: "Overview", icon: Gauge },
+    { id: "physiology", label: "Physiology", icon: Heart },
+    { id: "timeline", label: "Timeline", icon: ListTree },
+    { id: "ai", label: "AI", icon: Brain },
+    { id: "journal", label: "Journal", icon: NotebookText },
+  ];
 
   return (
     <div>
@@ -322,8 +329,28 @@ export default function SessionDetail() {
           }}
         />
 
+        <div className="sticky top-0 z-20 -mx-2 md:-mx-4 px-2 md:px-4 py-2 bg-background/95 backdrop-blur border-y border-border">
+          <div className="grid grid-cols-5 gap-1 rounded-lg bg-muted/50 p-1">
+            {tabs.map(({ id: tabId, label, icon: Icon }) => (
+              <button
+                key={tabId}
+                type="button"
+                onClick={() => setActiveTab(tabId)}
+                className={`min-h-10 rounded-md px-1.5 text-[10px] sm:text-xs font-medium transition-colors flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 ${
+                  activeTab === tabId
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Subjective Metrics */}
-        <div className="bg-card rounded-xl border border-border p-4 space-y-3">
+        {activeTab === "overview" && <div className="bg-card rounded-xl border border-border p-4 space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Metrics</h3>
           <MetricBadge label={s.no_climax ? "Peak Arousal" : "Intensity"} value={s.intensity} />
           <MetricBadge label="Build Quality" value={s.build_quality} />
@@ -332,10 +359,10 @@ export default function SessionDetail() {
           {!s.no_climax && s.climax_duration && (
             <InfoRow label="Climax Duration" value={cap(s.climax_duration)} />
           )}
-        </div>
+        </div>}
 
         {/* Heart Rate + Most Recent Side-by-Side */}
-        <div className="bg-card rounded-xl border border-border p-4">
+        {activeTab === "physiology" && <div className="bg-card rounded-xl border border-border p-4">
         <div className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
             <Heart className="w-3.5 h-3.5" /> Heart Rate
@@ -434,10 +461,10 @@ export default function SessionDetail() {
         </div>
 
         </div>
-        </div>
+        </div>}
 
         {/* EMG */}
-        {(emgRows.length > 0 || s.emg_enabled) && (
+        {activeTab === "physiology" && (emgRows.length > 0 || s.emg_enabled) && (
           <div className="bg-card rounded-xl border border-border p-4 space-y-3">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">EMG</h3>
             {s.emg_target_area && <p className="text-xs text-muted-foreground">Target: {s.emg_target_area}</p>}
@@ -514,7 +541,7 @@ export default function SessionDetail() {
         )}
 
         {/* Methods */}
-        <div className="bg-card rounded-xl border border-border p-4 space-y-3">
+        {activeTab === "overview" && <div className="bg-card rounded-xl border border-border p-4 space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Methods</h3>
           <div className="flex flex-wrap gap-1.5">
             {(s.methods || []).map((m) => <Badge key={m} variant="secondary">{m}</Badge>)}
@@ -527,18 +554,18 @@ export default function SessionDetail() {
           {s.estim_screenshot && (
             <img src={s.estim_screenshot} alt="E-Stim settings" className="rounded-lg w-full mt-2" />
           )}
-        </div>
+        </div>}
 
         {/* Context */}
-        <div className="bg-card rounded-xl border border-border p-4 space-y-1">
+        {activeTab === "overview" && <div className="bg-card rounded-xl border border-border p-4 space-y-1">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Context</h3>
           <InfoRow label="Mood" value={cap(s.mood)} />
           <InfoRow label="Environment" value={cap(s.environment)} />
           <InfoRow label="Hydration" value={cap(s.hydration)} />
-        </div>
+        </div>}
 
         {/* Physiological */}
-        <div className="bg-card rounded-xl border border-border p-4 space-y-1">
+        {activeTab === "overview" && <div className="bg-card rounded-xl border border-border p-4 space-y-1">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Physiological</h3>
           <InfoRow label="Ejaculate Volume" value={cap(s.ejaculate_volume)} />
           {s.discomfort_entries?.length > 0 && (
@@ -555,10 +582,10 @@ export default function SessionDetail() {
           {!s.discomfort_entries?.length && <InfoRow label="Discomfort" value={s.discomfort ? "Yes" : "No"} />}
           {s.unusual_sensations && <InfoRow label="Unusual Sensations" value={s.unusual_sensations} />}
           {s.refractory_notes && <InfoRow label="Refractory Notes" value={s.refractory_notes} />}
-        </div>
+        </div>}
 
         {/* Notes */}
-        {s.notes && (
+        {activeTab === "overview" && s.notes && (
           <div className="bg-card rounded-xl border border-border p-4">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Notes</h3>
             <p className="text-sm whitespace-pre-wrap">{s.notes}</p>
@@ -566,7 +593,7 @@ export default function SessionDetail() {
         )}
 
         {/* Media */}
-        {((s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link) && (
+        {activeTab === "overview" && ((s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link) && (
           <div className="bg-card rounded-xl border border-border p-4 space-y-3">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Media</h3>
             {s.media_images?.length > 0 && (
@@ -592,7 +619,7 @@ export default function SessionDetail() {
         )}
 
         {/* Pause / Active Time */}
-        {(() => {
+        {activeTab === "overview" && (() => {
           const events = s.event_timeline || [];
           const cats = (ev) => Array.isArray(ev.category) ? ev.category : [ev.category].filter(Boolean);
           const sorted = [...events].sort((a, b) => a.time_s - b.time_s);
@@ -630,40 +657,40 @@ export default function SessionDetail() {
         })()}
 
         {/* Interactive Timeline Player */}
-        {(timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0) && (
+        {activeTab === "timeline" && (timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0) && (
           <InteractiveTimelinePlayer session={s} timelineRows={timelineRows} />
         )}
 
         {/* Interactive Multi-Track Timeline */}
-        {(timelineRows.length > 0 || (s.event_timeline || []).length > 0) && (
+        {activeTab === "timeline" && (timelineRows.length > 0 || (s.event_timeline || []).length > 0) && (
           <InteractiveSessionTimeline session={s} timelineRows={timelineRows} />
         )}
 
         {/* Unified Interactive Timeline */}
-        {timelineRows.length > 0 && (
+        {activeTab === "timeline" && timelineRows.length > 0 && (
           <UnifiedSessionTimeline session={s} timelineRows={timelineRows} />
         )}
 
         {/* Arousal Arc + Event Correlation */}
-        {((session.event_timeline || []).length > 0 || timelineRows.length > 0) && (
+        {activeTab === "timeline" && ((session.event_timeline || []).length > 0 || timelineRows.length > 0) && (
           <ArousalEventChart session={s} timelineRows={timelineRows} />
         )}
 
         {/* Cascade + AI — only for climax sessions */}
-        {!s.no_climax && <CascadeOverviewPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
-        {!s.no_climax && <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
+        {activeTab === "ai" && !s.no_climax && <CascadeOverviewPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
+        {activeTab === "ai" && !s.no_climax && <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
 
         {/* Timeline & Arousal Narrative */}
-        {!s.no_climax && <SessionTimelineNarrative session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
+        {activeTab === "ai" && !s.no_climax && <SessionTimelineNarrative session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
 
         {/* No-Climax AI Analysis */}
-        {s.no_climax && <NoClimaxAIPanel session={s} timelineRows={timelineRows} userProfile={userProfile} />}
+        {activeTab === "ai" && s.no_climax && <NoClimaxAIPanel session={s} timelineRows={timelineRows} userProfile={userProfile} />}
 
         {/* Session Journal */}
-        <JournalRecorder session={s} timelineRows={timelineRows} />
+        {activeTab === "journal" && <JournalRecorder session={s} timelineRows={timelineRows} />}
 
         {/* Ask the AI — Session Deep Dive */}
-        <AIChat
+        {activeTab === "journal" && <AIChat
           mode="session"
           userProfile={userProfile}
           context={[
@@ -695,10 +722,10 @@ export default function SessionDetail() {
             setSessionNotes(merged);
             await base44.entities.Session.update(id, { notes: merged });
           }}
-        />
+        />}
 
         {/* Tags */}
-        <div className="bg-card rounded-xl border border-border p-4 space-y-3">
+        {activeTab === "overview" && <div className="bg-card rounded-xl border border-border p-4 space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Tags</h3>
           {(s.tags || []).length > 0 && (
             <div className="flex flex-wrap gap-1.5">
@@ -709,7 +736,7 @@ export default function SessionDetail() {
             session={s}
             onTagsAdded={(merged) => setSession((prev) => ({ ...prev, tags: merged }))}
           />
-        </div>
+        </div>}
       </div>
     </div>
   );

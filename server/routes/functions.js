@@ -16,6 +16,17 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 25000) {
   finally { clearTimeout(t); }
 }
 
+function clampSpeed(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0.25 && parsed <= 4 ? parsed : 1.0;
+}
+
+function getTTSInstructions(voice, requestedInstructions) {
+  if (requestedInstructions) return String(requestedInstructions);
+  if (process.env.OPENAI_TTS_INSTRUCTIONS) return process.env.OPENAI_TTS_INSTRUCTIONS;
+  return 'Read as a warm, natural podcast-style narrator: emotionally present, lightly enthusiastic, curious, and conversational. Use natural inflection, gentle emphasis on meaningful findings, and brief pauses between ideas. Avoid sounding flat, clinical, robotic, intimate-whispery, or theatrical.';
+}
+
 functionsRouter.post('/saveTimelineData', (req, res) => {
   const { session_id, entity, rows = [], action } = req.body || {};
   if (!session_id || !['HeartRateTimeline', 'EMGTimeline'].includes(entity)) {
@@ -53,16 +64,32 @@ functionsRouter.post('/purgeEMGData', (req, res) => {
 functionsRouter.post('/openaiTTS', async (req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY' });
-    const { text, voice = 'nova', speed = 1.0 } = req.body || {};
-    if (!text) return res.status(400).json({ error: 'Missing text' });
+    const { text, voice = 'nova', speed = 1.0, instructions: requestedInstructions } = req.body || {};
+    const input = String(text || '').trim();
+    if (!input) return res.status(400).json({ error: 'Missing text' });
+    const maxChars = Number(process.env.OPENAI_TTS_MAX_CHARS || 2500);
+    if (input.length > maxChars) {
+      return res.status(413).json({ error: 'Text chunk too large', length: input.length, maxLength: maxChars });
+    }
+    const model = process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts';
+    const instructions = getTTSInstructions(voice, requestedInstructions);
+    const body = {
+      model,
+      input,
+      voice,
+      response_format: 'mp3',
+      speed: clampSpeed(speed),
+    };
+    if (instructions) body.instructions = instructions;
     const response = await fetchWithTimeout('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
       headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'gpt-4o-mini-tts', input: String(text), voice, response_format: 'mp3', speed }),
+      body: JSON.stringify(body),
     }, 30000);
     if (!response.ok) return res.status(response.status).json({ error: await response.text() });
     const buffer = Buffer.from(await response.arrayBuffer());
     res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Cache-Control', 'no-store');
     res.send(buffer);
   } catch (error) {
     res.status(502).json({ error: error.message || String(error), retryable: true });

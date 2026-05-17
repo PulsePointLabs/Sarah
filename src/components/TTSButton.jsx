@@ -73,8 +73,8 @@ export function cleanTextForSpeech(text) {
     .trim();
 }
 
-// Split text into chunks only if it exceeds OpenAI's 4096-char limit
-export function splitIntoChunks(text, maxLen = 4000) {
+// Keep chunks short enough for warm, consistent TTS narration.
+export function splitIntoChunks(text, maxLen = 2500) {
   if (text.length <= maxLen) return [text];
   const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
   const chunks = [];
@@ -112,7 +112,7 @@ export default function TTSButton({ getText }) {
   };
 
   const stopSource = () => {
-    if (sourceRef.current) { try { sourceRef.current.stop(); } catch (_) {} sourceRef.current = null; }
+    if (sourceRef.current) { try { sourceRef.current.stop(); } catch {} sourceRef.current = null; }
   };
 
   const stop = () => {

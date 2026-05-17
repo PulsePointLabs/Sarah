@@ -1,6 +1,13 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { Play, Pause, Video, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   ComposedChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine, CartesianGrid,
@@ -43,7 +50,7 @@ function nearestHR(chartData, time_s) {
 }
 
 // Events within ±windowSec of a playhead position
-function nearbyEvents(events, currentSec, windowSec = 30) {
+function _nearbyEvents(events, currentSec, windowSec = 30) {
   return events
     .map((ev, i) => ({ ev, i, dist: Math.abs(ev.time_s - currentSec) }))
     .filter(({ dist }) => dist <= windowSec)
@@ -80,6 +87,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [videoDuration, setVideoDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [playerHeight, setPlayerHeight] = useState(68);
   const [zoomWindow, setZoomWindow] = useState(60);
   const [activeEventIdx, setActiveEventIdx] = useState(null);
 
@@ -221,6 +229,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
     setNewSec(String(Math.round(playheadS % 60)));
     setNewCats([lastUsedCat]);
     setAddingNew(true);
+    setTimeout(() => newNoteRef.current?.focus(), 80);
   };
 
   const chartData = useMemo(() =>
@@ -355,9 +364,6 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
     v.currentTime = frac * videoDuration;
   };
 
-  // Nearby events relative to playhead
-  const nearby = useMemo(() => nearbyEvents(events, playheadS, 30), [events, playheadS]);
-  // eslint-disable-next-line no-unused-vars
   const currentHR = useMemo(() => nearestHR(chartData, playheadS), [chartData, playheadS]);
 
   // Chart: only show data in visible window
@@ -379,6 +385,81 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
           <ArrowUp className="w-4 h-4" />
         </button>
       )}
+      <Dialog
+        open={addingNew}
+        onOpenChange={(open) => {
+          if (!open) {
+            stopListening();
+            setAddingNew(false);
+          }
+        }}
+      >
+        <DialogContent
+          overlayClassName="bg-transparent"
+          className="w-[calc(100vw-2rem)] max-w-lg rounded-xl border-primary/30 bg-card p-4 sm:left-auto sm:right-6 sm:top-auto sm:bottom-6 sm:translate-x-0 sm:translate-y-0"
+        >
+          <DialogHeader className="pr-8">
+            <DialogTitle className="text-sm text-primary">New Event at {fmtMmSs(playheadS)}</DialogTitle>
+            <DialogDescription className="text-xs">
+              Capture the current video moment and save it back to this session.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <input type="number" min={0} value={newMin} onChange={(e) => setNewMin(e.target.value)}
+                placeholder="min" className="w-16 text-xs font-mono text-center bg-background border border-border rounded px-2 py-1.5" />
+              <span className="text-muted-foreground font-bold">:</span>
+              <input type="number" min={0} max={59} value={newSec} onChange={(e) => setNewSec(e.target.value)}
+                placeholder="sec" className="w-16 text-xs font-mono text-center bg-background border border-border rounded px-2 py-1.5" />
+            </div>
+            <CategorySelector selected={newCats} onChange={setNewCats} />
+            <div className="flex gap-2 items-end">
+              <textarea
+                ref={newNoteRef}
+                value={newNote}
+                onChange={(e) => setNewNote(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (newNote.trim()) { commitAdd(); if (videoRef.current) videoRef.current.play(); } } }}
+                placeholder="Describe the event… or tap mic to dictate"
+                rows={3}
+                className="flex-1 text-sm bg-background border border-border rounded px-3 py-2 resize-none"
+              />
+              {sttSupported && (
+                <button
+                  type="button"
+                  onClick={toggleListening}
+                  className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center border transition-colors ${isListening ? "bg-destructive/10 border-destructive text-destructive animate-pulse" : "bg-muted border-border text-muted-foreground hover:text-foreground"}`}
+                  title={isListening ? "Stop dictation" : "Dictate"}
+                >
+                  {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                </button>
+              )}
+            </div>
+            {isListening && (
+              <p className="text-[10px] flex items-center gap-1.5 text-destructive">
+                <span className="w-1.5 h-1.5 rounded-full bg-destructive animate-pulse inline-block shrink-0" />
+                Recording, tap mic to stop and transcribe
+              </p>
+            )}
+            {!isListening && interimText && (
+              <p className="text-[10px] flex items-center gap-1.5 text-primary">
+                <span className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin inline-block shrink-0" />
+                {interimText}
+              </p>
+            )}
+            {!isListening && !interimText && (
+              <p className="text-[10px] text-muted-foreground/70"><kbd className="px-1 py-0.5 rounded bg-muted border border-border font-mono text-[9px]">Enter</kbd> saves and resumes video</p>
+            )}
+            <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+              <button onClick={() => { stopListening(); setAddingNew(false); }} className="flex items-center justify-center gap-1 text-xs px-3 py-2 rounded-lg bg-muted text-muted-foreground font-medium">
+                <X className="w-3 h-3" /> Cancel
+              </button>
+              <button onClick={() => { commitAdd(); if (videoRef.current) videoRef.current.play(); }} className="flex items-center justify-center gap-1 text-xs px-3 py-2 rounded-lg bg-primary text-primary-foreground font-medium">
+                <Check className="w-3 h-3" /> Save &amp; Resume
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
@@ -394,19 +475,35 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
       </div>
 
       <div className="p-4 space-y-4">
-        {/* Video player + side panels */}
-        <div className="grid grid-cols-5 gap-4">
-          {/* Video player - 3/5 width */}
-          <div className="col-span-3 space-y-2">
+        {/* Video player */}
+        <div className="space-y-4">
+          <div className="space-y-3">
         {videoSrc ? (
-          <div className="space-y-2">
-            <video
-              ref={videoRef}
-              src={videoSrc}
-              className="w-full rounded-lg bg-black max-h-[70vh] object-contain cursor-pointer"
-              playsInline
-              onClick={() => videoRef.current && (videoRef.current.paused ? videoRef.current.play() : videoRef.current.pause())}
-            />
+          <div className="space-y-3">
+            <div
+              className="w-full rounded-lg bg-black overflow-hidden"
+              style={{ height: `${playerHeight}vh`, minHeight: 280, maxHeight: "82vh" }}
+            >
+              <video
+                ref={videoRef}
+                src={videoSrc}
+                className="w-full h-full object-contain cursor-pointer"
+                playsInline
+                onClick={() => videoRef.current && (videoRef.current.paused ? videoRef.current.play() : videoRef.current.pause())}
+              />
+            </div>
+            <div className="flex items-center gap-3 rounded-lg bg-muted/40 px-3 py-2">
+              <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider shrink-0">Player height</span>
+              <Slider
+                value={[playerHeight]}
+                min={38}
+                max={82}
+                step={2}
+                onValueChange={([value]) => setPlayerHeight(value)}
+                className="flex-1"
+              />
+              <span className="text-[10px] font-mono text-muted-foreground w-10 text-right">{playerHeight}vh</span>
+            </div>
             {/* Video timeline scrubber */}
             {videoDuration > 0 && (
               <div className="space-y-1">
@@ -464,72 +561,12 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
               ))}
             </div>
 
-            {/* Add event — right below controls */}
-            {addingNew ? (
-              <div className="rounded-lg px-3 py-2.5 space-y-2 bg-muted/40 border border-primary/30">
-                <div className="flex items-center justify-between">
-                <p className="text-[10px] font-semibold text-primary uppercase tracking-wider">New Event at {fmtMmSs(playheadS)}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                <input type="number" min={0} value={newMin} onChange={(e) => setNewMin(e.target.value)}
-                  placeholder="min" className="w-14 text-xs font-mono text-center bg-background border border-border rounded px-2 py-1" />
-                <span className="text-muted-foreground font-bold">:</span>
-                <input type="number" min={0} max={59} value={newSec} onChange={(e) => setNewSec(e.target.value)}
-                  placeholder="sec" className="w-14 text-xs font-mono text-center bg-background border border-border rounded px-2 py-1" />
-                </div>
-                <CategorySelector selected={newCats} onChange={setNewCats} />
-                <div className="flex gap-1.5 items-end">
-                 <textarea
-                   value={newNote}
-                   onChange={(e) => setNewNote(e.target.value)}
-                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (newNote.trim()) { commitAdd(); if (videoRef.current) videoRef.current.play(); } } }}
-                   placeholder="Describe the event… or tap 🎤 to dictate"
-                   rows={2}
-                   className="flex-1 text-xs bg-background border border-border rounded px-2 py-1.5 resize-none"
-                 />
-                {sttSupported && (
-                  <button
-                    type="button"
-                    onClick={toggleListening}
-                    className={`shrink-0 w-7 h-7 rounded flex items-center justify-center border transition-colors ${isListening ? "bg-destructive/10 border-destructive text-destructive animate-pulse" : "bg-muted border-border text-muted-foreground hover:text-foreground"}`}
-                    title={isListening ? "Stop dictation" : "Dictate"}
-                  >
-                    {isListening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
-                  </button>
-                )}
-                </div>
-                {isListening && (
-                <p className="text-[9px] flex items-center gap-1.5 text-destructive">
-                  <span className="w-1.5 h-1.5 rounded-full bg-destructive animate-pulse inline-block shrink-0" />
-                  Recording — tap mic to stop &amp; transcribe
-                </p>
-                )}
-                {!isListening && interimText && (
-                <p className="text-[9px] flex items-center gap-1.5 text-primary">
-                  <span className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin inline-block shrink-0" />
-                  {interimText}
-                </p>
-                )}
-                {!isListening && !interimText && (
-                <p className="text-[9px] text-muted-foreground/60"><kbd className="px-1 py-0.5 rounded bg-muted border border-border font-mono text-[8px]">Enter</kbd> to save &amp; resume video</p>
-                )}
-                <div className="flex gap-2">
-                <button onClick={() => { commitAdd(); if (videoRef.current) videoRef.current.play(); }} className="flex items-center gap-1 text-[10px] px-3 py-1 rounded-lg bg-primary text-primary-foreground font-medium">
-                  <Check className="w-3 h-3" /> Save &amp; Resume
-                </button>
-                <button onClick={() => { stopListening(); setAddingNew(false); }} className="flex items-center gap-1 text-[10px] px-3 py-1 rounded-lg bg-muted text-muted-foreground font-medium">
-                  <X className="w-3 h-3" /> Cancel
-                </button>
-                </div>
-                </div>
-            ) : (
-              <button
-                onClick={startAddAtPlayhead}
-                className="w-full flex items-center justify-center gap-2 h-10 rounded-xl bg-primary/10 text-primary font-semibold text-sm hover:bg-primary/20 transition-colors border border-primary/20"
-              >
-                <Plus className="w-4 h-4" /> Add Event at {fmtMmSs(playheadS)} <span className="text-[9px] font-normal opacity-60 ml-1">(or press Enter)</span>
-              </button>
-            )}
+            <button
+              onClick={startAddAtPlayhead}
+              className="w-full flex items-center justify-center gap-2 h-10 rounded-xl bg-primary/10 text-primary font-semibold text-sm hover:bg-primary/20 transition-colors border border-primary/20"
+            >
+              <Plus className="w-4 h-4" /> Add Event at {fmtMmSs(playheadS)} <span className="text-[9px] font-normal opacity-60 ml-1">(or press S)</span>
+            </button>
 
             {/* Video offset alignment */}
             <div className="flex items-center gap-2 bg-muted/50 rounded-lg px-3 py-2">
@@ -557,76 +594,8 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
         )}
           </div>
 
-          {/* HR Timeline + Most Recent Events - 2/5 width */}
-          <div className="col-span-2 space-y-3 flex flex-col max-h-[70vh] overflow-y-auto">
-            {/* Add event form - first in sidebar */}
-            {addingNew ? (
-              <div className="rounded-lg px-3 py-2.5 space-y-2 bg-muted/40 border border-primary/30">
-                <div className="flex items-center justify-between">
-                  <p className="text-[10px] font-semibold text-primary uppercase tracking-wider">New Event at {fmtMmSs(playheadS)}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input type="number" min={0} value={newMin} onChange={(e) => setNewMin(e.target.value)}
-                    placeholder="min" className="w-14 text-xs font-mono text-center bg-background border border-border rounded px-2 py-1" />
-                  <span className="text-muted-foreground font-bold">:</span>
-                  <input type="number" min={0} max={59} value={newSec} onChange={(e) => setNewSec(e.target.value)}
-                    placeholder="sec" className="w-14 text-xs font-mono text-center bg-background border border-border rounded px-2 py-1" />
-                </div>
-                <CategorySelector selected={newCats} onChange={setNewCats} />
-                <div className="flex gap-1.5 items-end">
-                   <textarea
-                     ref={newNoteRef}
-                     value={newNote}
-                     onChange={(e) => setNewNote(e.target.value)}
-                     onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (newNote.trim()) { commitAdd(); if (videoRef.current) videoRef.current.play(); } } }}
-                     placeholder="Describe the event… or tap 🎤 to dictate"
-                     rows={2}
-                     className="flex-1 text-xs bg-background border border-border rounded px-2 py-1.5 resize-none"
-                   />
-                   {sttSupported && (
-                     <button
-                       type="button"
-                       onClick={toggleListening}
-                       className={`shrink-0 w-7 h-7 rounded flex items-center justify-center border transition-colors ${isListening ? "bg-destructive/10 border-destructive text-destructive animate-pulse" : "bg-muted border-border text-muted-foreground hover:text-foreground"}`}
-                       title={isListening ? "Stop dictation" : "Dictate"}
-                     >
-                       {isListening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
-                     </button>
-                   )}
-                 </div>
-                 {isListening && (
-                   <p className="text-[9px] flex items-center gap-1.5 text-destructive">
-                     <span className="w-1.5 h-1.5 rounded-full bg-destructive animate-pulse inline-block shrink-0" />
-                     Recording — tap mic to stop &amp; transcribe
-                   </p>
-                 )}
-                 {!isListening && interimText && (
-                   <p className="text-[9px] flex items-center gap-1.5 text-primary">
-                     <span className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin inline-block shrink-0" />
-                     {interimText}
-                   </p>
-                 )}
-                 {!isListening && !interimText && (
-                   <p className="text-[9px] text-muted-foreground/60"><kbd className="px-1 py-0.5 rounded bg-muted border border-border font-mono text-[8px]">Enter</kbd> to save &amp; resume video</p>
-                 )}
-                 <div className="flex gap-2">
-                   <button onClick={() => { commitAdd(); if (videoRef.current) videoRef.current.play(); }} className="flex items-center gap-1 text-[10px] px-3 py-1 rounded-lg bg-primary text-primary-foreground font-medium">
-                     <Check className="w-3 h-3" /> Save &amp; Resume
-                   </button>
-                   <button onClick={() => { stopListening(); setAddingNew(false); }} className="flex items-center gap-1 text-[10px] px-3 py-1 rounded-lg bg-muted text-muted-foreground font-medium">
-                     <X className="w-3 h-3" /> Cancel
-                   </button>
-                 </div>
-              </div>
-            ) : (
-              <button
-                onClick={startAddAtPlayhead}
-                className="w-full flex items-center justify-center gap-2 h-10 rounded-xl bg-primary/10 text-primary font-semibold text-sm hover:bg-primary/20 transition-colors border border-primary/20"
-              >
-                <Plus className="w-4 h-4" /> Add Event at {fmtMmSs(playheadS)} <span className="text-[9px] font-normal opacity-60 ml-1">(or Enter)</span>
-              </button>
-            )}
-
+          {/* HR Timeline + event context */}
+          <div className="space-y-4">
             {/* HR Timeline */}
             {chartData.length > 0 && (
               <div>
