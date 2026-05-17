@@ -53,7 +53,7 @@ functionsRouter.post('/purgeEMGData', (req, res) => {
 functionsRouter.post('/openaiTTS', async (req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY' });
-    const { text, voice = 'alloy', speed = 1.0 } = req.body || {};
+    const { text, voice = 'nova', speed = 1.0 } = req.body || {};
     if (!text) return res.status(400).json({ error: 'Missing text' });
     const response = await fetchWithTimeout('https://api.openai.com/v1/audio/speech', {
       method: 'POST',

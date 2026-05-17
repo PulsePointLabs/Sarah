@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8787/api';
+const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, options);
@@ -13,6 +13,38 @@ async function request(path, options = {}) {
     return response;
   }
   return contentType.includes('application/json') ? response.json() : response.text();
+}
+
+async function invokeFunction(name, payload) {
+  const response = await fetch(`${API_BASE}/functions/${name}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload || {}),
+  });
+  const contentType = response.headers.get('content-type') || '';
+
+  if (!response.ok) {
+    const data = contentType.includes('application/json')
+      ? await response.json()
+      : { error: await response.text() };
+    const error = new Error(data.error || `Request failed: ${response.status}`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+
+  if (contentType.includes('audio/')) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return { status: response.status, data: { audio: btoa(binary) } };
+  }
+
+  const data = contentType.includes('application/json') ? await response.json() : await response.text();
+  return { status: response.status, data, ...data };
 }
 
 function entityApi(entity) {
@@ -69,8 +101,6 @@ export const base44 = {
     },
   },
   functions: {
-    invoke: (name, payload) => request(`/functions/${name}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload || {}),
-    }),
+    invoke: invokeFunction,
   },
 };
