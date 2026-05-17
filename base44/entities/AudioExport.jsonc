@@ -1,0 +1,38 @@
+{
+  "name": "AudioExport",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "User-friendly title for the audio file"
+    },
+    "file_url": {
+      "type": "string",
+      "description": "URL to the stored audio file"
+    },
+    "duration_seconds": {
+      "type": "number",
+      "description": "Length of the audio in seconds"
+    },
+    "voice": {
+      "type": "string",
+      "description": "Voice used for TTS generation"
+    },
+    "speed": {
+      "type": "number",
+      "description": "Speed multiplier used during generation"
+    },
+    "section_name": {
+      "type": "string",
+      "description": "Optional name/label for the section"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional user notes about this export"
+    }
+  },
+  "required": [
+    "title",
+    "file_url"
+  ]
+}

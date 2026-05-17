@@ -1,0 +1,15 @@
+{
+  "name": "CascadeAnalysisResult",
+  "type": "object",
+  "properties": {
+    "result": {
+      "type": "object",
+      "description": "Stored AI cascade analysis result"
+    },
+    "session_count": {
+      "type": "number",
+      "description": "Number of sessions analyzed"
+    }
+  },
+  "required": []
+}

@@ -1,0 +1,15 @@
+{
+  "name": "CompareAnalysisResult",
+  "type": "object",
+  "properties": {
+    "session_key": {
+      "type": "string",
+      "description": "Sorted comma-joined session IDs used as cache key"
+    },
+    "result": {
+      "type": "object",
+      "description": "Stored AI comparison analysis result"
+    }
+  },
+  "required": []
+}

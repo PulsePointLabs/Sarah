@@ -1,0 +1,87 @@
+{
+  "name": "EMGTimeline",
+  "type": "object",
+  "properties": {
+    "session": {
+      "type": "string",
+      "description": "Reference to Session ID"
+    },
+    "time_s": {
+      "type": "number",
+      "description": "Time offset in seconds from recording start"
+    },
+    "unix_time": {
+      "type": "number",
+      "description": "Unix timestamp (fractional seconds), optional"
+    },
+    "iso_time": {
+      "type": "string",
+      "description": "ISO 8601 datetime string, optional"
+    },
+    "marker": {
+      "type": "string",
+      "description": "Special marker e.g. RECORD_START, RECORD_STOP"
+    },
+    "obs_recording": {
+      "type": "boolean"
+    },
+    "obs_state": {
+      "type": "string"
+    },
+    "raw_env": {
+      "type": "number",
+      "description": "Single-channel raw envelope value"
+    },
+    "env_smooth": {
+      "type": "number",
+      "description": "Single-channel smoothed envelope"
+    },
+    "level_pct": {
+      "type": "number",
+      "description": "Single-channel normalized activation percent (0-100)"
+    },
+    "left_raw": {
+      "type": "number"
+    },
+    "left_env": {
+      "type": "number"
+    },
+    "left_pct": {
+      "type": "number",
+      "description": "Left channel normalized percent (0-100)"
+    },
+    "right_raw": {
+      "type": "number"
+    },
+    "right_env": {
+      "type": "number"
+    },
+    "right_pct": {
+      "type": "number",
+      "description": "Right channel normalized percent (0-100)"
+    },
+    "diff_pct": {
+      "type": "number",
+      "description": "Left minus Right percent difference"
+    },
+    "rest_l": {
+      "type": "number"
+    },
+    "max_l": {
+      "type": "number"
+    },
+    "rest_r": {
+      "type": "number"
+    },
+    "max_r": {
+      "type": "number"
+    },
+    "flip_lr": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "session",
+    "time_s"
+  ]
+}

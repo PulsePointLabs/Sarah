@@ -1,0 +1,68 @@
+{
+  "name": "Journal",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Reference to Session ID"
+    },
+    "session_date": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Date of the session this journal is linked to"
+    },
+    "voice_transcript": {
+      "type": "string",
+      "description": "Raw Whisper transcription of the voice note"
+    },
+    "ai_journal": {
+      "type": "object",
+      "description": "AI-generated structured journal entry",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "emotional_reflection": {
+          "type": "string"
+        },
+        "physiological_observations": {
+          "type": "string"
+        },
+        "experience_narrative": {
+          "type": "string"
+        },
+        "key_moments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "insights": {
+          "type": "string"
+        },
+        "next_session_intentions": {
+          "type": "string"
+        }
+      }
+    },
+    "audio_url": {
+      "type": "string",
+      "description": "URL to the stored voice note audio file"
+    },
+    "voice": {
+      "type": "string",
+      "description": "TTS voice used for audio playback"
+    },
+    "tts_audio_url": {
+      "type": "string",
+      "description": "URL to the generated TTS audio for this journal entry"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional user notes"
+    }
+  },
+  "required": [
+    "session_id"
+  ]
+}

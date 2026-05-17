@@ -1,0 +1,23 @@
+{
+  "name": "SessionClusterAnalysis",
+  "type": "object",
+  "properties": {
+    "result": {
+      "type": "object",
+      "description": "Stored AI cluster/profile analysis result"
+    },
+    "session_count": {
+      "type": "number",
+      "description": "Number of sessions analyzed"
+    },
+    "near_climax_result": {
+      "type": "object",
+      "description": "Stored AI near-climax event narrative and stats"
+    },
+    "best_session_result": {
+      "type": "object",
+      "description": "Stored AI best session determination result"
+    }
+  },
+  "required": []
+}

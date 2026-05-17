@@ -1,0 +1,42 @@
+{
+  "name": "HeartRateTimeline",
+  "type": "object",
+  "properties": {
+    "session": {
+      "type": "string",
+      "description": "Reference to Session ID"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "time_offset_ms": {
+      "type": "number"
+    },
+    "time_offset_s": {
+      "type": "number"
+    },
+    "hr": {
+      "type": "number"
+    },
+    "hr_smoothed": {
+      "type": "number"
+    },
+    "baseline_hr": {
+      "type": "number"
+    },
+    "elevated_delta": {
+      "type": "number"
+    },
+    "marker": {
+      "type": "string"
+    },
+    "note": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session",
+    "hr"
+  ]
+}

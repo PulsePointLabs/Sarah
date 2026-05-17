@@ -1,0 +1,110 @@
+{
+  "name": "User",
+  "type": "object",
+  "properties": {
+    "role": {
+      "type": "string",
+      "description": "The role of the user in the app",
+      "enum": [
+        "admin",
+        "user"
+      ]
+    },
+    "age": {
+      "type": "number",
+      "description": "User age in years"
+    },
+    "weight_kg": {
+      "type": "number",
+      "description": "User weight in kg"
+    },
+    "resting_hr": {
+      "type": "number",
+      "description": "Resting heart rate in bpm"
+    },
+    "max_hr": {
+      "type": "number",
+      "description": "True measured max heart rate in bpm"
+    },
+    "recovery_hr_60s": {
+      "type": "number",
+      "description": "Typical HR drop (bpm) in 60s after peak \u2014 auto-computed or manually set"
+    },
+    "medications": {
+      "type": "string",
+      "description": "Medications or conditions affecting HR (e.g. beta-blockers)"
+    },
+    "fitness_level": {
+      "type": "string",
+      "enum": [
+        "sedentary",
+        "light",
+        "moderate",
+        "active",
+        "athlete"
+      ],
+      "description": "Self-rated fitness level"
+    },
+    "arousal_response_style": {
+      "type": "string",
+      "enum": [
+        "gradual",
+        "rapid",
+        "stepwise",
+        "plateau-heavy",
+        "erratic"
+      ],
+      "description": "How arousal typically builds for this user"
+    },
+    "typical_build_duration": {
+      "type": "string",
+      "enum": [
+        "short (<10min)",
+        "medium (10-30min)",
+        "long (>30min)"
+      ],
+      "description": "Typical session build duration to climax"
+    },
+    "climax_sensitivity": {
+      "type": "string",
+      "enum": [
+        "low",
+        "moderate",
+        "high",
+        "very high"
+      ],
+      "description": "General sensitivity / ease of reaching climax"
+    },
+    "preferred_stimulation": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Stimulation methods that produce best results"
+    },
+    "refractory_pattern": {
+      "type": "string",
+      "enum": [
+        "short (<15min)",
+        "medium (15-60min)",
+        "long (>1hr)",
+        "variable"
+      ],
+      "description": "Typical refractory period length"
+    },
+    "arousal_notes": {
+      "type": "string",
+      "description": "Free-text notes on arousal patterns, what works, what doesn't, unique characteristics \u2014 also stores AI interview findings"
+    },
+    "profile_chat_messages": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Persisted AI interview chat messages for the profile page"
+    }
+  },
+  "required": [
+    "role"
+  ]
+}

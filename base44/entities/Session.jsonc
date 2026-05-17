@@ -1,0 +1,417 @@
+{
+  "name": "Session",
+  "type": "object",
+  "properties": {
+    "date": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "start_time": {
+      "type": "string"
+    },
+    "end_time": {
+      "type": "string"
+    },
+    "duration_minutes": {
+      "type": "number"
+    },
+    "no_climax": {
+      "type": "boolean",
+      "description": "True if this session did not result in climax"
+    },
+    "avg_hr": {
+      "type": "number"
+    },
+    "max_hr": {
+      "type": "number"
+    },
+    "hr_at_climax": {
+      "type": "number"
+    },
+    "hr_avg_pre_to_climax": {
+      "type": "number",
+      "description": "Average HR between pre-climax and climax markers"
+    },
+    "hr_avg_at_climax_window": {
+      "type": "number",
+      "description": "Average HR in a \u00b130s window around climax marker"
+    },
+    "hr_data_file": {
+      "type": "string"
+    },
+    "hr_timeline": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "minute": {
+            "type": "number"
+          },
+          "hr": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "pre_climax_offset_s": {
+      "type": "number"
+    },
+    "climax_offset_s": {
+      "type": "number"
+    },
+    "recovery_offset_s": {
+      "type": "number"
+    },
+    "event_timeline": {
+      "type": "array",
+      "description": "User-logged events during the session with timestamps",
+      "items": {
+        "type": "object",
+        "properties": {
+          "time_s": {
+            "type": "number"
+          },
+          "note": {
+            "type": "string"
+          },
+          "category": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "One or more event categories"
+          }
+        },
+        "required": [
+          "time_s",
+          "note"
+        ]
+      }
+    },
+    "methods": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "custom_methods": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "foley_size": {
+      "type": "string"
+    },
+    "foley_type": {
+      "type": "string"
+    },
+    "estim_screenshot": {
+      "type": "string"
+    },
+    "estim_screenshots": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Multiple E-Stim settings screenshots"
+    },
+    "estim_notes": {
+      "type": "string"
+    },
+    "sleeve_type": {
+      "type": "string"
+    },
+    "tens_placement": {
+      "type": "string"
+    },
+    "intensity": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 10
+    },
+    "buildup_quality": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 10
+    },
+    "build_quality": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 10
+    },
+    "build_type": {
+      "type": "string",
+      "enum": [
+        "Gradual",
+        "Stepwise",
+        "Spike",
+        "Plateau-heavy",
+        "Erratic",
+        "Other"
+      ]
+    },
+    "custom_build_type": {
+      "type": "string"
+    },
+    "climax_duration": {
+      "type": "string",
+      "enum": [
+        "short",
+        "medium",
+        "long"
+      ]
+    },
+    "satisfaction": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 10
+    },
+    "unusual_sensations": {
+      "type": "string"
+    },
+    "refractory_notes": {
+      "type": "string"
+    },
+    "ejaculate_volume": {
+      "type": "string",
+      "enum": [
+        "low",
+        "normal",
+        "high"
+      ]
+    },
+    "discomfort": {
+      "type": "boolean"
+    },
+    "discomfort_notes": {
+      "type": "string"
+    },
+    "discomfort_entries": {
+      "type": "array",
+      "description": "Multiple discomfort entries with severity rating and description",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 10
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "severity",
+          "note"
+        ]
+      }
+    },
+    "mood": {
+      "type": "string",
+      "enum": [
+        "relaxed",
+        "stressed",
+        "neutral",
+        "excited",
+        "tired",
+        "anxious"
+      ]
+    },
+    "environment": {
+      "type": "string",
+      "enum": [
+        "private",
+        "clinical",
+        "experimental",
+        "other"
+      ]
+    },
+    "substances": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "hydration": {
+      "type": "string",
+      "enum": [
+        "low",
+        "normal",
+        "high"
+      ]
+    },
+    "notes": {
+      "type": "string"
+    },
+    "media_images": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "media_videos": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "video_link": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "is_favorite": {
+      "type": "boolean"
+    },
+    "is_quick_entry": {
+      "type": "boolean"
+    },
+    "ai_analysis": {
+      "type": "object",
+      "description": "Stored AI session analysis result"
+    },
+    "ai_cascade": {
+      "type": "object",
+      "description": "Stored AI cascade overview result"
+    },
+    "ai_no_climax": {
+      "type": "object",
+      "description": "Stored AI analysis for no-climax sessions"
+    },
+    "ai_timeline_narrative": {
+      "type": "object",
+      "description": "Stored AI timeline and arousal narrative result"
+    },
+    "ai_near_climax_events": {
+      "type": "array",
+      "description": "AI-refined near-climax events detected from HR data + session analysis context",
+      "items": {
+        "type": "object",
+        "properties": {
+          "start_offset_s": {
+            "type": "number"
+          },
+          "peak_offset_s": {
+            "type": "number"
+          },
+          "end_offset_s": {
+            "type": "number"
+          },
+          "base_hr": {
+            "type": "number"
+          },
+          "peak_hr": {
+            "type": "number"
+          },
+          "rise_bpm": {
+            "type": "number"
+          },
+          "sustained_s": {
+            "type": "number"
+          },
+          "duration_s": {
+            "type": "number"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "note_corroborated": {
+            "type": "boolean"
+          },
+          "ai_label": {
+            "type": "string",
+            "description": "Short AI-generated label for what this event represents"
+          },
+          "ai_interpretation": {
+            "type": "string",
+            "description": "AI narrative interpretation of this event"
+          }
+        }
+      }
+    },
+    "ai_near_climax_overview": {
+      "type": "object",
+      "description": "Stored AI session-specific near-climax event narrative and analysis"
+    },
+    "emg_enabled": {
+      "type": "boolean",
+      "description": "Whether EMG was recorded this session"
+    },
+    "emg_channels": {
+      "type": "string",
+      "enum": [
+        "single",
+        "dual"
+      ],
+      "description": "Number of EMG channels"
+    },
+    "emg_sensor_type": {
+      "type": "string",
+      "description": "Sensor model, e.g. MyoWare 2.0"
+    },
+    "emg_target_area": {
+      "type": "string",
+      "description": "Muscle / body area being monitored"
+    },
+    "emg_left_placement_notes": {
+      "type": "string"
+    },
+    "emg_right_placement_notes": {
+      "type": "string"
+    },
+    "emg_general_notes": {
+      "type": "string"
+    },
+    "emg_calibration_notes": {
+      "type": "string"
+    },
+    "emg_rest_left": {
+      "type": "number"
+    },
+    "emg_max_left": {
+      "type": "number"
+    },
+    "emg_rest_right": {
+      "type": "number"
+    },
+    "emg_max_right": {
+      "type": "number"
+    },
+    "emg_left_right_flipped": {
+      "type": "boolean"
+    },
+    "emg_data_file": {
+      "type": "string",
+      "description": "URL to the uploaded raw EMG CSV file"
+    },
+    "emg_placement_photos": {
+      "type": "array",
+      "description": "Electrode placement photos with tags and captions",
+      "items": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "caption": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "date",
+    "intensity",
+    "methods"
+  ]
+}
