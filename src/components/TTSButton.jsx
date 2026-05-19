@@ -84,7 +84,7 @@ export function cleanTextForSpeech(text) {
     .trim();
 }
 
-// Split text only when needed. This mirrors the original Base44-era flow.
+// Split text only when needed. This mirrors the known-good bright natural profile.
 export function splitIntoChunks(text, maxLen = TTS_CHUNK_MAX_CHARS) {
   if (text.length <= maxLen) return [text];
   const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];

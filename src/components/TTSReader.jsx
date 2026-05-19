@@ -5,9 +5,7 @@ import {
   splitIntoChunks,
   TTS_CACHE_VOICE_PROFILE,
   TTS_CHUNK_TARGET_CHARS,
-  TTS_EXPORT_CONTAINER,
   TTS_EXPORT_FORMAT,
-  TTS_EXPORT_MIME,
   TTS_PLAYBACK_FORMAT,
   TTS_SPEED,
   VOICE_INSTRUCTIONS,
@@ -19,8 +17,13 @@ import { idbGet, idbSet } from "@/lib/ttsCache";
 const OAI_VOICES = ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const TTS_UNIT_MAX_CHARS = TTS_CHUNK_TARGET_CHARS;
 const ttsCacheKey = (chunk, format = TTS_PLAYBACK_FORMAT) =>
   `${TTS_CACHE_VOICE_PROFILE}|${format}|${VOICE_INSTRUCTIONS.trim()}|${chunk}`;
+
+function splitForTTS(text) {
+  return splitIntoChunks(text, TTS_UNIT_MAX_CHARS);
+}
 
 function buildSpeechUnits(paragraphs, startIdx = 0) {
   const units = [];
@@ -44,14 +47,16 @@ function buildSpeechUnits(paragraphs, startIdx = 0) {
     const cleaned = cleanTextForSpeech(paragraphs[i] || "");
     if (!cleaned) continue;
 
-    const nextText = currentText ? `${currentText} ${cleaned}` : cleaned;
-    if (currentText && nextText.length > TTS_CHUNK_TARGET_CHARS) {
-      push();
-    }
+    for (const part of splitForTTS(cleaned)) {
+      const nextText = currentText ? `${currentText}\n\n${part}` : part;
+      if (currentText && nextText.length > TTS_UNIT_MAX_CHARS) {
+        push();
+      }
 
-    currentText = currentText ? `${currentText} ${cleaned}` : cleaned;
-    if (currentStart < 0) currentStart = i;
-    currentEnd = i;
+      currentText = currentText ? `${currentText}\n\n${part}` : part;
+      if (currentStart < 0) currentStart = i;
+      currentEnd = i;
+    }
   }
 
   push();
@@ -130,56 +135,6 @@ async function callTTSWithRetries(payload, attempts = 7) {
   throw lastError;
 }
 
-function writeAscii(view, offset, text) {
-  for (let i = 0; i < text.length; i++) {
-    view.setUint8(offset + i, text.charCodeAt(i));
-  }
-}
-
-function encodeAudioBuffersToWav(buffers) {
-  if (!buffers.length) return new Uint8Array();
-
-  const channelCount = Math.max(1, Math.min(2, buffers[0].numberOfChannels || 1));
-  const sampleRate = buffers[0].sampleRate;
-  const bytesPerSample = 2;
-  const blockAlign = channelCount * bytesPerSample;
-  const totalFrames = buffers.reduce((sum, buffer) => sum + buffer.length, 0);
-  const dataSize = totalFrames * blockAlign;
-  const arrayBuffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(arrayBuffer);
-
-  writeAscii(view, 0, "RIFF");
-  view.setUint32(4, 36 + dataSize, true);
-  writeAscii(view, 8, "WAVE");
-  writeAscii(view, 12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, channelCount, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * blockAlign, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bytesPerSample * 8, true);
-  writeAscii(view, 36, "data");
-  view.setUint32(40, dataSize, true);
-
-  let offset = 44;
-  for (const buffer of buffers) {
-    const channels = Array.from({ length: channelCount }, (_unused, index) =>
-      buffer.getChannelData(Math.min(index, buffer.numberOfChannels - 1))
-    );
-    for (let frame = 0; frame < buffer.length; frame++) {
-      for (let channel = 0; channel < channelCount; channel++) {
-        const clamped = Math.max(-1, Math.min(1, channels[channel][frame] || 0));
-        view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
-        offset += bytesPerSample;
-      }
-    }
-  }
-
-  return new Uint8Array(arrayBuffer);
-}
-
-
 export default function TTSReader({ paragraphs, renderParagraph, sessionId, title, sessionDate }) {
   const [state, setState] = useState("idle"); // idle | buffering | playing | paused
   const [currentPara, setCurrentPara] = useState(-1);
@@ -191,6 +146,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     return valid;
   });
   const [showVoicePicker, setShowVoicePicker] = useState(false);
+  const [speed, setSpeed] = useState(1.0);
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
   const [requestStatus, setRequestStatus] = useState(null); // { type: "fetching"|"ok"|"error", msg: string }
@@ -279,7 +235,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     const unit = remainingParasRef.current.shift();
     setCP(unit.start);
-    chunkQueueRef.current = splitIntoChunks(unit.text || "");
+    chunkQueueRef.current = splitForTTS(unit.text || "");
     currentChunkRef.current = null;
     playNextChunk(gen);
   };
@@ -296,9 +252,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       try {
         // Check IndexedDB persistent cache first
         const cacheText = ttsCacheKey(chunk, TTS_PLAYBACK_FORMAT);
-        let audioBuffer = await idbGet(cacheText, voiceRef.current, TTS_SPEED);
+        let mp3Buffer = await idbGet(cacheText, voiceRef.current, TTS_SPEED);
 
-        if (!audioBuffer) {
+        if (!mp3Buffer) {
           setRequestStatus({ type: "fetching", msg: "Fetching audio…" });
           const response = await callTTSWithRetries({
             text: chunk,
@@ -312,15 +268,15 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           const binary = atob(base64);
           const bytes = new Uint8Array(binary.length);
           for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          audioBuffer = bytes.buffer;
-          idbSet(cacheText, voiceRef.current, TTS_SPEED, audioBuffer); // fire-and-forget
+          mp3Buffer = bytes.buffer;
+          idbSet(cacheText, voiceRef.current, TTS_SPEED, mp3Buffer); // fire-and-forget
           setRequestStatus({ type: "ok", msg: "Audio ready" });
         } else {
           setRequestStatus({ type: "ok", msg: "Audio ready (cached)" });
         }
 
         const ctx = getAudioCtx();
-        const decoded = await ctx.decodeAudioData(audioBuffer.slice(0));
+        const decoded = await ctx.decodeAudioData(mp3Buffer.slice(0));
         return decoded;
       } catch (err) {
         prefetchCacheRef.current.delete(cacheKey); // allow retry on failure
@@ -347,7 +303,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     let paraIdx = 0;
     while (upcoming.length < 1 && paraIdx < remainingParasRef.current.length) {
       const nextUnit = remainingParasRef.current[paraIdx];
-      const nextChunks = splitIntoChunks(nextUnit?.text || "");
+      const nextChunks = splitForTTS(nextUnit?.text || "");
       for (const c of nextChunks) {
         upcoming.push(c);
         if (upcoming.length >= 1) break;
@@ -542,6 +498,17 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     setShowVoicePicker(false);
   };
 
+  const changeSpeed = (v) => {
+    speedRef.current = v;
+    setSpeed(v);
+    localStorage.setItem("tts_speed", String(v));
+    prefetchCacheRef.current.clear();
+    if (stateRef.current === "playing" || stateRef.current === "paused") {
+      const para = currentParaRef.current >= 0 ? currentParaRef.current : 0;
+      startFrom(para);
+    }
+  };
+
   const isActive = state === "playing" || state === "paused" || state === "buffering";
   const savedIdx = sessionId ? parseInt(localStorage.getItem(`tts_progress_${sessionId}`) || "-1", 10) : -1;
 
@@ -605,10 +572,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     try {
       const allChunks = [];
       for (const unit of buildSpeechUnits(paragraphs, 0)) {
-        allChunks.push(...splitIntoChunks(unit.text));
+        allChunks.push(...splitForTTS(unit.text));
       }
 
-      const audioChunks = new Array(allChunks.length);
+      const mp3Chunks = new Array(allChunks.length);
       setDownloadProgress({ current: 0, total: allChunks.length });
       let completed = 0;
 
@@ -617,9 +584,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
         // Check IndexedDB persistent cache first
         const cacheText = ttsCacheKey(chunk, TTS_EXPORT_FORMAT);
-        let audioBuffer = await idbGet(cacheText, voiceRef.current, TTS_SPEED);
+        let mp3Buffer = await idbGet(cacheText, voiceRef.current, TTS_SPEED);
 
-        if (!audioBuffer) {
+        if (!mp3Buffer) {
           const res = await callTTSWithRetries({
             text: chunk,
             voice: voiceRef.current,
@@ -633,11 +600,11 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           const binary = atob(base64);
           const bytes = new Uint8Array(binary.length);
           for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
-          audioBuffer = bytes.buffer;
-          idbSet(cacheText, voiceRef.current, TTS_SPEED, audioBuffer); // fire-and-forget
+          mp3Buffer = bytes.buffer;
+          idbSet(cacheText, voiceRef.current, TTS_SPEED, mp3Buffer); // fire-and-forget
         }
 
-        audioChunks[i] = new Uint8Array(audioBuffer);
+        mp3Chunks[i] = new Uint8Array(mp3Buffer);
         await sleep(1500);
         completed++;
         setDownloadProgress({ current: completed, total: allChunks.length });
@@ -661,61 +628,42 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         ? (titleHasDate ? title : `${friendlyDate} – ${title}`)
         : `PhysioLog Analysis – ${friendlyDate}`;
       const fileSlug = displayTitle.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
-      const fileName = `${fileSlug}.${TTS_EXPORT_CONTAINER}`;
+      const fileName = `${fileSlug}.mp3`;
+      const totalSize = mp3Chunks.reduce((a, c) => a + c.length, 0);
+      const combined = new Uint8Array(totalSize);
+      let offset = 0;
+      for (const chunk of mp3Chunks) { combined.set(chunk, offset); offset += chunk.length; }
 
-      let downloadBytes;
-      let durationSeconds = 0;
-      if (TTS_EXPORT_FORMAT === "wav") {
-        setRequestStatus({ type: "fetching", msg: "Stitching WAV…" });
-        const ctx = getAudioCtx();
-        const decodedChunks = [];
-        for (const chunk of audioChunks) {
-          const decoded = await ctx.decodeAudioData(chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength));
-          decodedChunks.push(decoded);
-          durationSeconds += decoded.duration;
-        }
-        downloadBytes = encodeAudioBuffersToWav(decodedChunks);
-      } else {
-        const totalSize = audioChunks.reduce((a, c) => a + c.length, 0);
-        const combined = new Uint8Array(totalSize);
-        let offset = 0;
-        for (const chunk of audioChunks) { combined.set(chunk, offset); offset += chunk.length; }
-        downloadBytes = combined;
-        durationSeconds = (combined.length * 8) / 128000;
-      }
+      const id3 = buildID3Tag({
+        title: displayTitle,
+        year: String(yearNum),
+        comment: `Recorded ${friendlyDate}, ${yearNum}`,
+      });
 
-      if (TTS_EXPORT_FORMAT === "mp3") {
-        const id3 = buildID3Tag({
-          title: displayTitle,
-          year: String(yearNum),
-          comment: `Recorded ${friendlyDate}, ${yearNum}`,
-        });
-        const combined = downloadBytes;
-        downloadBytes = new Uint8Array(id3.length + combined.length);
-        downloadBytes.set(id3, 0);
-        downloadBytes.set(combined, id3.length);
-      }
+      const mp3WithMeta = new Uint8Array(id3.length + combined.length);
+      mp3WithMeta.set(id3, 0);
+      mp3WithMeta.set(combined, id3.length);
 
-      const audioBlob = new Blob([downloadBytes], { type: TTS_EXPORT_MIME });
+      const mp3Blob = new Blob([mp3WithMeta], { type: "audio/mpeg" });
 
       // Trigger download
-      const url = URL.createObjectURL(audioBlob);
+      const url = URL.createObjectURL(mp3Blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = fileName;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 100);
 
-      const file = new File([audioBlob], fileName, { type: TTS_EXPORT_MIME });
+      const approxDuration = (combined.length * 8) / 128000;
+      const file = new File([mp3Blob], fileName, { type: "audio/mpeg" });
       const uploadRes = await base44.integrations.Core.UploadFile({ file });
 
       await base44.entities.AudioExport.create({
         title: displayTitle,  // e.g. "April 23 Cascade Overview"
         file_url: uploadRes.file_url,
-        duration_seconds: Math.round(durationSeconds),
+        duration_seconds: Math.round(approxDuration),
         voice: voiceRef.current,
         speed: speedRef.current,
-        format: TTS_EXPORT_FORMAT,
       });
 
       setRequestStatus({ type: "ok", msg: "Download complete" });

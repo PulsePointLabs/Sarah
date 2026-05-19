@@ -6,7 +6,7 @@
 
 const DB_NAME = "tts_audio_cache";
 const STORE_NAME = "chunks";
-const DB_VERSION = 19; // clear stale chunks after bright-natural analysis retune
+const DB_VERSION = 27; // clear stale chunks after restoring known-good bright natural profile
 
 let dbPromise = null;
 

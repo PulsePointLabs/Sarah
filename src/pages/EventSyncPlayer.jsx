@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { base44 } from "@/api/base44Client";
 import { Play, Pause, Square, Upload, Volume2, VolumeX, ChevronDown, ChevronLeft, ChevronRight, ZoomOut, Mic, MicOff, Plus, ArrowUp } from "lucide-react";
 import { EVENT_CATEGORIES } from "@/components/session-form/EventTimelineSection";
-import { TTS_CACHE_VOICE_PROFILE, TTS_PLAYBACK_FORMAT, VOICE_INSTRUCTIONS } from "@/components/TTSButton";
+import { TTS_CACHE_VOICE_PROFILE, TTS_PLAYBACK_FORMAT, TTS_SPEED, VOICE_INSTRUCTIONS } from "@/components/TTSButton";
 import {
   ResponsiveContainer, ComposedChart, Line, XAxis, YAxis,
   Tooltip, CartesianGrid, ReferenceLine,
@@ -55,13 +55,13 @@ const EVENT_COLORS = ["#f59e0b","#a855f7","#10b981","#f43f5e","#0ea5e9","#fb923c
 
 // ── TTS helpers ───────────────────────────────────────────────────────────────
 
-async function fetchTTSBase64(text, voice, speed, format = TTS_PLAYBACK_FORMAT) {
-  const cacheKey = `tts_cache:${TTS_CACHE_VOICE_PROFILE}:${voice}:${speed}:${format}:${VOICE_INSTRUCTIONS.trim()}:${text}`;
+async function fetchTTSBase64(text, voice, format = TTS_PLAYBACK_FORMAT) {
+  const cacheKey = `tts_cache:${TTS_CACHE_VOICE_PROFILE}:${voice}:${TTS_SPEED}:${format}:${VOICE_INSTRUCTIONS.trim()}:${text}`;
   try { const c = sessionStorage.getItem(cacheKey); if (c) return c; } catch (_) {}
   const res = await base44.functions.invoke("openaiTTS", {
     text,
     voice,
-    speed,
+    speed: TTS_SPEED,
     instructions: VOICE_INSTRUCTIONS,
     format,
   });
@@ -117,7 +117,6 @@ export default function EventSyncPlayer() {
 
   // TTS
   const [voice, setVoice] = useState(() => localStorage.getItem("tts_oai_voice") || "nova");
-  const [speed] = useState(() => parseFloat(localStorage.getItem("tts_speed") || "1.0"));
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [showVoicePicker, setShowVoicePicker] = useState(false);
   const [ttsMode, setTtsMode] = useState("events"); // "events" | "cascade" | "analysis"
@@ -244,14 +243,14 @@ export default function EventSyncPlayer() {
     stopTTS();
     const ctx = getCtx();
     if (ctx.state === "suspended") await ctx.resume();
-    const b64 = await fetchTTSBase64(text, voiceRef.current, speed);
+    const b64 = await fetchTTSBase64(text, voiceRef.current);
     const buffer = await decodeToBuffer(ctx, b64);
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.connect(ctx.destination);
     src.start(0);
     ttsSourceRef.current = src;
-  }, [speed, stopTTS]);
+  }, [stopTTS]);
 
   // Read AI paragraphs sequentially
   const startAIReading = useCallback(async (paras, fromIdx = 0) => {
@@ -266,7 +265,7 @@ export default function EventSyncPlayer() {
       setBufferingPara(i);
       const ctx = getCtx();
       if (ctx.state === "suspended") await ctx.resume();
-      const b64 = await fetchTTSBase64(paras[i], voiceRef.current, speed);
+      const b64 = await fetchTTSBase64(paras[i], voiceRef.current);
       if (gen !== aiGenRef.current) return;
       const buffer = await decodeToBuffer(ctx, b64);
       if (gen !== aiGenRef.current) return;
@@ -284,7 +283,7 @@ export default function EventSyncPlayer() {
     }
     aiReadingRef.current = false;
     setActivePara(-1);
-  }, [speed]);
+  }, []);
 
   // ── Event sync ────────────────────────────────────────────────────────────
 

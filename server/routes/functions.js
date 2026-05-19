@@ -25,8 +25,6 @@ function clampSpeed(value) {
   return Number.isFinite(parsed) && parsed >= 0.25 && parsed <= 4 ? parsed : 1.0;
 }
 
-const DEFAULT_TTS_INSTRUCTIONS = 'Read with friendly analytical enthusiasm, like an engaged physiologist explaining a fascinating finding to someone they know well. Keep a smooth natural cadence, varied inflection, and clear sentence-level pauses. Sound warm and alive, not formal, monotone, sultry, or announcer-like.';
-
 const TTS_CONTENT_TYPES = {
   mp3: 'audio/mpeg',
   opus: 'audio/ogg',
@@ -39,11 +37,6 @@ const TTS_CONTENT_TYPES = {
 function normalizeTTSFormat(value) {
   const format = String(value || process.env.OPENAI_TTS_FORMAT || 'mp3').toLowerCase();
   return TTS_CONTENT_TYPES[format] ? format : 'mp3';
-}
-
-function getTTSInstructions(requestedInstructions) {
-  const instructions = requestedInstructions ?? process.env.OPENAI_TTS_INSTRUCTIONS ?? DEFAULT_TTS_INSTRUCTIONS;
-  return String(instructions || '').trim();
 }
 
 function supportsTTSInstructions(model) {
@@ -154,7 +147,7 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
       response_format: responseFormat,
       speed: finalSpeed,
     };
-    const instructions = getTTSInstructions(requestedInstructions);
+    const instructions = String(requestedInstructions || process.env.OPENAI_TTS_INSTRUCTIONS || '').trim();
     if (instructions && supportsTTSInstructions(model)) body.instructions = instructions;
     const meta = {
       chunkIndex: req.body?.chunkIndex,
