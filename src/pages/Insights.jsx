@@ -1,26 +1,227 @@
-import { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
-import PageHeader from "../components/PageHeader";
-import { Badge } from "@/components/ui/badge";
-import { Trophy, Heart, TrendingUp, TrendingDown, AlertTriangle, Star, Layers, Brain, Activity } from "lucide-react";
-import moment from "moment";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import moment from "moment";
+import {
+  AlertTriangle,
+  ArrowRight,
+  Brain,
+  CheckCircle2,
+  Compass,
+  Gauge,
+  Heart,
+  Layers,
+  ShieldAlert,
+  Sparkles,
+  Target,
+  TrendingDown,
+  TrendingUp,
+} from "lucide-react";
+import { base44 } from "@/api/base44Client";
+import { Badge } from "@/components/ui/badge";
+import PageHeader from "../components/PageHeader";
 import BestSessionPanel from "../components/BestSessionPanel";
 import HRSatisfactionCorrelationChart from "../components/HRSatisfactionCorrelationChart";
 
-function InsightCard({ icon: Icon, color, title, description, sessionId }) {
-  const content = (
-    <div className="bg-card rounded-xl border border-border p-4 flex gap-3 items-start">
-      <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 bg-muted`}>
-        <Icon className="w-5 h-5 text-primary" />
+const POSITIVE_FIELDS = [
+  "satisfaction",
+  "intensity",
+  "build_quality",
+  "arousal_depth",
+  "release_completeness",
+  "erection_stability",
+  "stimulation_fit",
+  "sensory_immersion",
+  "recovery_quality",
+];
+
+const NEW_SUBJECTIVE_FIELDS = [
+  "release_completeness",
+  "arousal_depth",
+  "erection_stability",
+  "stimulation_fit",
+  "sensory_immersion",
+  "recovery_quality",
+  "discomfort_interference",
+  "primary_limiting_factor",
+];
+
+const metricLabels = {
+  arousal_depth: "Arousal Depth",
+  build_quality: "Build Quality",
+  discomfort_interference: "Discomfort Interference",
+  erection_stability: "Erection Stability",
+  intensity: "Intensity",
+  recovery_quality: "Recovery Quality",
+  release_completeness: "Release Completeness",
+  satisfaction: "Satisfaction",
+  sensory_immersion: "Sensory Immersion",
+  stimulation_fit: "Stimulation Fit",
+};
+
+const num = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const avg = (values) => {
+  const valid = values.map(num).filter((value) => value != null);
+  if (!valid.length) return null;
+  return valid.reduce((sum, value) => sum + value, 0) / valid.length;
+};
+
+const fmt = (value, digits = 1) => {
+  const parsed = num(value);
+  return parsed == null ? "n/a" : parsed.toFixed(digits);
+};
+
+const sentenceCase = (value) => {
+  if (!value) return "";
+  return String(value)
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^\w/, (char) => char.toUpperCase());
+};
+
+const formatMethods = (methods) => {
+  const list = Array.isArray(methods) ? methods.filter(Boolean) : [];
+  return list.length ? [...list].sort().join(" + ") : "Unspecified method";
+};
+
+const methodComboKey = (session) => {
+  const key = formatMethods(session.methods);
+  return key === "Unspecified method" ? null : key;
+};
+
+const buildTypeLabel = (session) => {
+  if (!session?.build_type) return "Unspecified build";
+  if (session.build_type === "Other" && session.custom_build_type) return session.custom_build_type;
+  return session.build_type;
+};
+
+const scoreSession = (session) => {
+  const values = POSITIVE_FIELDS.map((field) => num(session[field])).filter((value) => value != null);
+  if (!values.length) return null;
+
+  const discomfort = num(session.discomfort_interference);
+  if (discomfort != null) values.push(Math.max(0, 10 - discomfort));
+
+  return avg(values);
+};
+
+const groupAverage = (sessions, getKey, getValue = scoreSession, minCount = 2) => {
+  const groups = new Map();
+
+  for (const session of sessions) {
+    const key = getKey(session);
+    const value = getValue(session);
+    if (!key || value == null) continue;
+    const current = groups.get(key) || { key, total: 0, count: 0, sessions: [] };
+    current.total += value;
+    current.count += 1;
+    current.sessions.push(session);
+    groups.set(key, current);
+  }
+
+  return [...groups.values()]
+    .filter((group) => group.count >= minCount)
+    .map((group) => ({ ...group, average: group.total / group.count }))
+    .sort((a, b) => b.average - a.average);
+};
+
+const confidenceFor = (count, total) => {
+  if (count >= Math.max(5, Math.ceil(total * 0.3))) {
+    return { label: "Strong signal", className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" };
+  }
+  if (count >= 3) {
+    return { label: "Emerging pattern", className: "border-cyan-500/30 bg-cyan-500/10 text-cyan-300" };
+  }
+  return { label: "Low sample", className: "border-amber-500/30 bg-amber-500/10 text-amber-300" };
+};
+
+const countLimitingFactors = (sessions) => {
+  const counts = new Map();
+  for (const session of sessions) {
+    const factor = session.primary_limiting_factor || session.limiting_factor;
+    if (!factor) continue;
+    const key = sentenceCase(factor);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+};
+
+const countDiscomfortSessions = (sessions) =>
+  sessions.filter((session) => {
+    const entries = Array.isArray(session.discomfort_entries) ? session.discomfort_entries : [];
+    return entries.length > 0 || Boolean(session.discomfort) || num(session.discomfort_interference) >= 4;
+  });
+
+function SignalCard({ icon: Icon, label, value, detail, tone = "primary" }) {
+  const toneClass = {
+    primary: "text-primary bg-primary/10",
+    rose: "text-rose-300 bg-rose-500/10",
+    amber: "text-amber-300 bg-amber-500/10",
+    cyan: "text-cyan-300 bg-cyan-500/10",
+  }[tone];
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
+          <p className="mt-2 text-2xl font-semibold leading-none">{value}</p>
+        </div>
+        <div className={`rounded-lg p-2 ${toneClass}`}>
+          <Icon className="h-4 w-4" />
+        </div>
       </div>
-      <div className="min-w-0">
-        <p className="text-sm font-semibold">{title}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+      {detail && <p className="mt-3 text-xs text-muted-foreground">{detail}</p>}
+    </div>
+  );
+}
+
+function InsightCard({ icon: Icon, question, title, description, count, total, to, metric }) {
+  const confidence = confidenceFor(count || 1, total || 1);
+  const content = (
+    <div className="h-full rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/40">
+      <div className="flex items-start gap-3">
+        <div className="rounded-lg bg-primary/10 p-2 text-primary">
+          <Icon className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{question}</p>
+            <Badge variant="outline" className={`h-5 border px-2 text-[10px] ${confidence.className}`}>
+              {confidence.label}
+            </Badge>
+          </div>
+          <p className="mt-2 text-sm font-semibold leading-snug">{title}</p>
+          <p className="mt-2 text-xs leading-5 text-muted-foreground">{description}</p>
+          {metric && <p className="mt-3 text-xs font-medium text-primary">{metric}</p>}
+        </div>
+        {to && <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />}
       </div>
     </div>
   );
-  if (sessionId) return <Link to={`/sessions/${sessionId}`}>{content}</Link>;
+
+  if (to) return <Link to={to}>{content}</Link>;
+  return content;
+}
+
+function RecordRow({ label, value, detail, to }) {
+  const content = (
+    <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-card px-4 py-3 hover:border-primary/40">
+      <div className="min-w-0">
+        <p className="text-xs font-semibold text-muted-foreground">{label}</p>
+        <p className="mt-1 truncate text-sm font-medium">{detail}</p>
+      </div>
+      <p className="shrink-0 font-mono text-sm font-semibold text-primary">{value}</p>
+    </div>
+  );
+
+  if (to) return <Link to={to}>{content}</Link>;
   return content;
 }
 
@@ -36,10 +237,199 @@ export default function Insights() {
     })();
   }, []);
 
+  const model = useMemo(() => {
+    const total = sessions.length;
+    const scored = sessions.map((session) => ({ session, score: scoreSession(session) })).filter((item) => item.score != null);
+    const completed = sessions.filter((session) => !session.no_climax);
+    const withHr = sessions.filter((session) => session.max_hr || session.avg_hr);
+    const metricCoverage = NEW_SUBJECTIVE_FIELDS.filter((field) =>
+      sessions.some((session) => session[field] != null && session[field] !== "")
+    ).length;
+
+    const bestOverall = scored.sort((a, b) => b.score - a.score)[0];
+    const highestSatisfaction = sessions
+      .filter((session) => num(session.satisfaction) != null)
+      .sort((a, b) => num(b.satisfaction) - num(a.satisfaction))[0];
+    const highestIntensity = sessions
+      .filter((session) => num(session.intensity) != null)
+      .sort((a, b) => num(b.intensity) - num(a.intensity))[0];
+    const peakHr = sessions
+      .filter((session) => num(session.max_hr) != null)
+      .sort((a, b) => num(b.max_hr) - num(a.max_hr))[0];
+
+    const methodGroups = groupAverage(sessions, methodComboKey, scoreSession, 2);
+    const buildGroups = groupAverage(sessions, buildTypeLabel, scoreSession, 2);
+    const moodGroups = groupAverage(sessions, (session) => sentenceCase(session.mood), scoreSession, 2);
+    const limiterCounts = countLimitingFactors(sessions);
+    const discomfortSessions = countDiscomfortSessions(sessions);
+
+    const recent = sessions.slice(0, 5);
+    const previous = sessions.slice(5, 10);
+    const recentScore = avg(recent.map(scoreSession));
+    const previousScore = avg(previous.map(scoreSession));
+    const trendDelta = recentScore != null && previousScore != null ? recentScore - previousScore : null;
+
+    const stimulationFitGroups = groupAverage(
+      sessions,
+      methodComboKey,
+      (session) => num(session.stimulation_fit),
+      2
+    );
+
+    const immersionHigh = sessions.filter((session) => num(session.sensory_immersion) >= 8);
+    const immersionLow = sessions.filter((session) => {
+      const value = num(session.sensory_immersion);
+      return value != null && value <= 5;
+    });
+    const highImmersionScore = avg(immersionHigh.map(scoreSession));
+    const lowImmersionScore = avg(immersionLow.map(scoreSession));
+
+    const insights = [];
+
+    if (methodGroups[0]) {
+      insights.push({
+        icon: Sparkles,
+        question: "What works best?",
+        title: methodGroups[0].key,
+        description: `This combination has the strongest blended outcome score across satisfaction, intensity, build quality, and newer subjective markers when available.`,
+        count: methodGroups[0].count,
+        total,
+        metric: `Avg signal ${fmt(methodGroups[0].average)}/10 across ${methodGroups[0].count} sessions`,
+        to: methodGroups[0].sessions[0]?.id ? `/sessions/${methodGroups[0].sessions[0].id}` : null,
+      });
+    } else if (bestOverall) {
+      insights.push({
+        icon: Sparkles,
+        question: "What works best?",
+        title: bestOverall.session?.id ? "Current best reference session" : "Best available signal",
+        description: "There is not enough repeated method data for a confident method pattern yet, so the strongest full-session result is the clearest reference point.",
+        count: 1,
+        total,
+        metric: `Best blended signal ${fmt(bestOverall.score)}/10`,
+        to: `/sessions/${bestOverall.session.id}`,
+      });
+    }
+
+    if (buildGroups[0]) {
+      insights.push({
+        icon: Layers,
+        question: "What build shape helps?",
+        title: sentenceCase(buildGroups[0].key),
+        description: "This build pattern is currently associated with the strongest overall session quality, not just the highest heart-rate peak.",
+        count: buildGroups[0].count,
+        total,
+        metric: `Avg signal ${fmt(buildGroups[0].average)}/10`,
+      });
+    }
+
+    if (stimulationFitGroups[0]) {
+      insights.push({
+        icon: Target,
+        question: "What feels most matched?",
+        title: stimulationFitGroups[0].key,
+        description: "Among sessions with stimulation-fit ratings, this method cluster appears to match the body state most cleanly.",
+        count: stimulationFitGroups[0].count,
+        total,
+        metric: `Stimulation fit ${fmt(stimulationFitGroups[0].average)}/10`,
+      });
+    }
+
+    if (limiterCounts[0]) {
+      insights.push({
+        icon: ShieldAlert,
+        question: "What limits outcomes?",
+        title: limiterCounts[0].name,
+        description: "This is the most repeated limiting factor in the newer subjective fields, so it is worth tracking as a first-class condition.",
+        count: limiterCounts[0].count,
+        total,
+        metric: `${limiterCounts[0].count} logged sessions`,
+      });
+    } else if (discomfortSessions.length > 0) {
+      insights.push({
+        icon: AlertTriangle,
+        question: "What interrupts comfort?",
+        title: `${discomfortSessions.length} sessions with discomfort markers`,
+        description: "Discomfort is present often enough to keep separated from general quality scores, especially when interpreting intensity or recovery.",
+        count: discomfortSessions.length,
+        total,
+        metric: `${Math.round((discomfortSessions.length / total) * 100)}% of recorded sessions`,
+      });
+    }
+
+    if (trendDelta != null) {
+      insights.push({
+        icon: trendDelta >= 0 ? TrendingUp : TrendingDown,
+        question: "What changed recently?",
+        title: trendDelta >= 0 ? "Recent sessions are trending stronger" : "Recent sessions are trending softer",
+        description: "This compares the latest five sessions against the five before them using the blended outcome score.",
+        count: Math.min(total, 10),
+        total,
+        metric: `${trendDelta >= 0 ? "+" : ""}${fmt(trendDelta)} points`,
+      });
+    }
+
+    if (highImmersionScore != null && lowImmersionScore != null) {
+      insights.push({
+        icon: Brain,
+        question: "Does immersion matter?",
+        title: highImmersionScore >= lowImmersionScore ? "High immersion tracks with better outcomes" : "Immersion is not the main driver yet",
+        description: "Sensory immersion is compared against the blended outcome score, which helps separate environment effects from pure stimulation intensity.",
+        count: immersionHigh.length + immersionLow.length,
+        total,
+        metric: `High ${fmt(highImmersionScore)}/10 vs low ${fmt(lowImmersionScore)}/10`,
+      });
+    }
+
+    if (moodGroups.length >= 2) {
+      insights.push({
+        icon: Brain,
+        question: "Which starting state helps?",
+        title: moodGroups[0].key,
+        description: `This mood state currently has the strongest average session signal compared with ${moodGroups[moodGroups.length - 1].key}.`,
+        count: moodGroups[0].count,
+        total,
+        metric: `${fmt(moodGroups[0].average)}/10 vs ${fmt(moodGroups[moodGroups.length - 1].average)}/10`,
+      });
+    }
+
+    const nextExperiment =
+      methodGroups[0] && buildGroups[0]
+        ? {
+            title: `${methodGroups[0].key} with a ${sentenceCase(buildGroups[0].key)} build`,
+            rationale: "This combines the strongest method pattern with the strongest build-shape pattern, then watches whether the result repeats.",
+            track: ["release_completeness", "arousal_depth", "stimulation_fit", "sensory_immersion"],
+          }
+        : buildGroups[0]
+          ? {
+              title: `Repeat a ${sentenceCase(buildGroups[0].key)} build under clean conditions`,
+              rationale: "Build shape is the clearest repeated signal right now. A deliberate repeat will make the method and context patterns easier to separate.",
+              track: ["release_completeness", "arousal_depth", "stimulation_fit", "primary_limiting_factor"],
+            }
+        : {
+            title: "Repeat the current strongest session conditions once",
+            rationale: "A clean repeat will separate a real pattern from a one-off peak and make the next insight pass more confident.",
+            track: ["release_completeness", "arousal_depth", "recovery_quality", "primary_limiting_factor"],
+          };
+
+    return {
+      bestOverall,
+      completed,
+      highestIntensity,
+      highestSatisfaction,
+      insights,
+      metricCoverage,
+      nextExperiment,
+      peakHr,
+      scored,
+      total,
+      withHr,
+    };
+  }, [sessions]);
+
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+      <div className="flex h-64 items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
       </div>
     );
   }
@@ -47,329 +437,134 @@ export default function Insights() {
   if (sessions.length === 0) {
     return (
       <div>
-        <PageHeader title="Insights" subtitle="Smart analysis of your sessions" />
-        <div className="px-4 text-center py-12 text-muted-foreground text-sm">
-          Record some sessions first to see insights
+        <PageHeader title="Insights" subtitle="Pattern guidance from your session history" />
+        <div className="px-4 py-12 text-center text-sm text-muted-foreground">
+          Record some sessions first to see insights.
         </div>
       </div>
     );
   }
 
-  const insights = [];
-
-  // Highest intensity
-  const maxIntensity = sessions.reduce((best, s) => (!best || s.intensity > best.intensity ? s : best), null);
-  if (maxIntensity) {
-    insights.push({
-      icon: Trophy,
-      title: `Peak Intensity: ${maxIntensity.intensity}/10`,
-      description: `Achieved on ${moment(maxIntensity.date).format("MMM D, YYYY")} using ${(maxIntensity.methods || []).join(", ")}`,
-      sessionId: maxIntensity.id,
-    });
-  }
-
-  // Highest Build Quality
-  const maxBQ = sessions.filter((s) => s.build_quality).reduce((best, s) => (!best || s.build_quality > best.build_quality ? s : best), null);
-  if (maxBQ) {
-    insights.push({
-      icon: TrendingUp,
-      title: `Peak Build Quality: ${maxBQ.build_quality}/10`,
-      description: `On ${moment(maxBQ.date).format("MMM D, YYYY")}${maxBQ.build_type ? ` — ${maxBQ.build_type} build` : ""}`,
-      sessionId: maxBQ.id,
-    });
-  }
-
-  // Highest HR
-  const maxHRSession = sessions.filter((s) => s.max_hr).reduce((best, s) => (!best || s.max_hr > best.max_hr ? s : best), null);
-  if (maxHRSession) {
-    insights.push({
-      icon: Heart,
-      title: `Peak HR: ${maxHRSession.max_hr} bpm`,
-      description: `Recorded on ${moment(maxHRSession.date).format("MMM D, YYYY")}`,
-      sessionId: maxHRSession.id,
-    });
-  }
-
-  // Intensity trend
-  if (sessions.length >= 6) {
-    const recent5 = sessions.slice(0, 5);
-    const prev5 = sessions.slice(5, 10);
-    const recentAvg = recent5.reduce((a, s) => a + (s.intensity || 0), 0) / recent5.length;
-    const prevAvg = prev5.reduce((a, s) => a + (s.intensity || 0), 0) / prev5.length;
-    const diff = recentAvg - prevAvg;
-    if (Math.abs(diff) >= 0.5) {
-      insights.push({
-        icon: diff > 0 ? TrendingUp : TrendingDown,
-        title: `Intensity ${diff > 0 ? "Trending Up ↑" : "Trending Down ↓"}`,
-        description: `Recent avg: ${recentAvg.toFixed(1)} vs previous: ${prevAvg.toFixed(1)} (${diff > 0 ? "+" : ""}${diff.toFixed(1)})`,
-      });
-    }
-  }
-
-  // Build Quality trend
-  const bqSessions = sessions.filter((s) => s.build_quality);
-  if (bqSessions.length >= 6) {
-    const r5 = bqSessions.slice(0, 5);
-    const p5 = bqSessions.slice(5, 10);
-    const rAvg = r5.reduce((a, s) => a + s.build_quality, 0) / r5.length;
-    const pAvg = p5.reduce((a, s) => a + s.build_quality, 0) / p5.length;
-    const d = rAvg - pAvg;
-    if (Math.abs(d) >= 0.5) {
-      insights.push({
-        icon: d > 0 ? TrendingUp : TrendingDown,
-        title: `Build Quality ${d > 0 ? "Improving ↑" : "Declining ↓"}`,
-        description: `Recent avg: ${rAvg.toFixed(1)} vs previous: ${pAvg.toFixed(1)} (${d > 0 ? "+" : ""}${d.toFixed(1)})`,
-      });
-    }
-  }
-
-  // BQ vs Intensity correlation
-  const paired = sessions.filter((s) => s.build_quality && s.intensity);
-  if (paired.length >= 3) {
-    const highBQ = paired.filter((s) => s.build_quality >= 7);
-    const lowBQ = paired.filter((s) => s.build_quality <= 4);
-    if (highBQ.length >= 2 && lowBQ.length >= 2) {
-      const highAvgInt = highBQ.reduce((a, s) => a + s.intensity, 0) / highBQ.length;
-      const lowAvgInt = lowBQ.reduce((a, s) => a + s.intensity, 0) / lowBQ.length;
-      if (highAvgInt - lowAvgInt > 0.5) {
-        insights.push({
-          icon: TrendingUp,
-          title: "Higher Build Quality → Higher Intensity",
-          description: `Sessions with BQ ≥7 avg intensity ${highAvgInt.toFixed(1)} vs BQ ≤4 avg ${lowAvgInt.toFixed(1)}`,
-        });
-      }
-    }
-  }
-
-  // Best method combo for Build Quality (combinations counted together)
-  const comboBQ = {};
-  sessions.forEach((s) => {
-    if (!s.build_quality || !(s.methods || []).length) return;
-    const key = [...(s.methods || [])].sort().join(" + ");
-    if (!comboBQ[key]) comboBQ[key] = { total: 0, count: 0 };
-    comboBQ[key].total += s.build_quality;
-    comboBQ[key].count++;
-  });
-  const comboBQAvgs = Object.entries(comboBQ)
-    .filter(([_, v]) => v.count >= 2)
-    .map(([name, v]) => ({ name, avg: v.total / v.count, count: v.count }))
-    .sort((a, b) => b.avg - a.avg);
-  if (comboBQAvgs.length > 0) {
-    insights.push({
-      icon: Star,
-      title: `Best Combo for Build Quality: ${comboBQAvgs[0].name}`,
-      description: `Avg BQ ${comboBQAvgs[0].avg.toFixed(1)}/10 across ${comboBQAvgs[0].count} sessions`,
-    });
-  }
-
-  // Build Type vs Max HR
-  const buildTypeHR = {};
-  sessions.forEach((s) => {
-    if (!s.build_type || !s.max_hr) return;
-    const key = s.build_type === "Other" && s.custom_build_type ? s.custom_build_type : s.build_type;
-    if (!buildTypeHR[key]) buildTypeHR[key] = { total: 0, count: 0 };
-    buildTypeHR[key].total += s.max_hr;
-    buildTypeHR[key].count++;
-  });
-  const buildTypeHRAvgs = Object.entries(buildTypeHR)
-    .filter(([_, v]) => v.count >= 2)
-    .sort((a, b) => (b[1].total / b[1].count) - (a[1].total / a[1].count));
-  if (buildTypeHRAvgs.length > 0) {
-    const [topType, topStats] = buildTypeHRAvgs[0];
-    insights.push({
-      icon: Layers,
-      title: `"${topType}" builds → Highest Avg HR`,
-      description: `Avg max HR of ${(topStats.total / topStats.count).toFixed(0)} bpm across ${topStats.count} sessions`,
-    });
-  }
-
-  // Build Type vs Satisfaction
-  const buildTypeSat = {};
-  sessions.forEach((s) => {
-    if (!s.build_type || !s.satisfaction) return;
-    const key = s.build_type === "Other" && s.custom_build_type ? s.custom_build_type : s.build_type;
-    if (!buildTypeSat[key]) buildTypeSat[key] = { total: 0, count: 0 };
-    buildTypeSat[key].total += s.satisfaction;
-    buildTypeSat[key].count++;
-  });
-  const satAvgs = Object.entries(buildTypeSat)
-    .filter(([_, v]) => v.count >= 2)
-    .sort((a, b) => (b[1].total / b[1].count) - (a[1].total / a[1].count));
-  if (satAvgs.length > 0) {
-    const [topType, stats] = satAvgs[0];
-    insights.push({
-      icon: Star,
-      title: `Best Satisfaction: "${topType}" builds`,
-      description: `Avg satisfaction ${(stats.total / stats.count).toFixed(1)}/10 across ${stats.count} sessions`,
-    });
-  }
-
-  // Mood vs satisfaction correlation
-  const moodSat = {};
-  sessions.forEach((s) => {
-    if (!s.mood || !s.satisfaction) return;
-    if (!moodSat[s.mood]) moodSat[s.mood] = { total: 0, count: 0 };
-    moodSat[s.mood].total += s.satisfaction;
-    moodSat[s.mood].count++;
-  });
-  const moodSatAvgs = Object.entries(moodSat)
-    .filter(([_, v]) => v.count >= 2)
-    .map(([mood, v]) => ({ mood, avg: v.total / v.count, count: v.count }))
-    .sort((a, b) => b.avg - a.avg);
-  if (moodSatAvgs.length >= 2) {
-    const best = moodSatAvgs[0];
-    const worst = moodSatAvgs[moodSatAvgs.length - 1];
-    insights.push({
-      icon: Brain,
-      title: `Best Mood for Satisfaction: "${best.mood.charAt(0).toUpperCase() + best.mood.slice(1)}"`,
-      description: `Avg satisfaction ${best.avg.toFixed(1)}/10 vs "${worst.mood.charAt(0).toUpperCase() + worst.mood.slice(1)}" at ${worst.avg.toFixed(1)}/10`,
-    });
-  }
-
-  // Discomfort warning
-  const discomfortSessions = sessions.filter((s) => s.discomfort);
-  if (discomfortSessions.length > 0) {
-    const pct = ((discomfortSessions.length / sessions.length) * 100).toFixed(0);
-    insights.push({
-      icon: AlertTriangle,
-      title: `${discomfortSessions.length} sessions with discomfort`,
-      description: `${pct}% of all sessions reported discomfort`,
-    });
-  }
-
-  // Climax duration insight (longer pre→climax gap = more powerful)
-  const climaxSessions = sessions.filter((s) => s.pre_climax_offset_s != null && s.climax_offset_s != null);
-  if (climaxSessions.length >= 2) {
-    const durations = climaxSessions.map((s) => ({
-      dur: Math.abs(s.climax_offset_s - s.pre_climax_offset_s),
-      s,
-    }));
-    const avgDur = durations.reduce((a, d) => a + d.dur, 0) / durations.length;
-    const longest = durations.reduce((best, d) => d.dur > best.dur ? d : best, durations[0]);
-    const fmtS = (v) => { const m = Math.floor(v / 60); const s = Math.round(v % 60); return m > 0 ? `${m}m ${s}s` : `${s}s`; };
-    insights.push({
-      icon: TrendingUp,
-      title: `Avg Climax Build Duration: ${fmtS(avgDur)}`,
-      description: `Longest: ${fmtS(longest.dur)} on ${moment(longest.s.date).format("MMM D, YYYY")} — longer durations indicate stronger climax events`,
-      sessionId: longest.s.id,
-    });
-  }
-
-  // Pause time insight
-  const calcPauseS = (s) => {
-    const events = s.event_timeline || [];
-    const cats = (ev) => Array.isArray(ev.category) ? ev.category : [ev.category].filter(Boolean);
-    const sorted = [...events].sort((a, b) => a.time_s - b.time_s);
-    let total = 0, start = null;
-    for (const ev of sorted) {
-      const c = cats(ev);
-      if (c.includes("stimulation_paused") && start == null) start = ev.time_s;
-      if (c.includes("stimulation_resumed") && start != null) { total += ev.time_s - start; start = null; }
-    }
-    return total;
-  };
-  const fmtS2 = (v) => { const m = Math.floor(v / 60); const sec = Math.round(v % 60); return m > 0 ? `${m}m ${sec}s` : `${sec}s`; };
-  const pauseSessions = sessions.filter((s) => calcPauseS(s) > 0);
-  if (pauseSessions.length >= 2) {
-    const pauseTimes = pauseSessions.map((s) => calcPauseS(s));
-    const avgPause = pauseTimes.reduce((a, b) => a + b, 0) / pauseTimes.length;
-    // Correlation: low-pause vs high-pause sessions and satisfaction
-    const median = [...pauseTimes].sort((a, b) => a - b)[Math.floor(pauseTimes.length / 2)];
-    const lowPause = pauseSessions.filter((s) => calcPauseS(s) <= median && s.satisfaction);
-    const highPause = pauseSessions.filter((s) => calcPauseS(s) > median && s.satisfaction);
-    const lpAvg = lowPause.length ? lowPause.reduce((a, s) => a + s.satisfaction, 0) / lowPause.length : null;
-    const hpAvg = highPause.length ? highPause.reduce((a, s) => a + s.satisfaction, 0) / highPause.length : null;
-    const desc = lpAvg && hpAvg
-      ? `Avg satisfaction: fewer pauses ${lpAvg.toFixed(1)}/10 vs more pauses ${hpAvg.toFixed(1)}/10`
-      : `Avg pause time: ${fmtS2(avgPause)} across ${pauseSessions.length} sessions`;
-    insights.push({
-      icon: Activity,
-      title: `Avg Pause Time: ${fmtS2(avgPause)}`,
-      description: desc,
-    });
-  }
-
-  // Climax → Recovery duration (recovery speed)
-  const recSessions = sessions.filter((s) => s.climax_offset_s != null && s.recovery_offset_s != null);
-  if (recSessions.length >= 2) {
-    const recDurs = recSessions.map((s) => Math.abs(s.recovery_offset_s - s.climax_offset_s));
-    const avgRec = recDurs.reduce((a, d) => a + d, 0) / recDurs.length;
-    const fmtS = (v) => { const m = Math.floor(v / 60); const sec = Math.round(v % 60); return m > 0 ? `${m}m ${sec}s` : `${sec}s`; };
-    insights.push({
-      icon: Activity,
-      title: `Avg Recovery Time After Climax: ${fmtS(avgRec)}`,
-      description: `Based on ${recSessions.length} sessions with marked recovery points`,
-    });
-  }
-
-  // Combo vs avg satisfaction
-  const comboSat = {};
-  sessions.forEach((s) => {
-    if (!s.satisfaction || !(s.methods || []).length) return;
-    const key = [...(s.methods || [])].sort().join(" + ");
-    if (!comboSat[key]) comboSat[key] = { total: 0, count: 0 };
-    comboSat[key].total += s.satisfaction;
-    comboSat[key].count++;
-  });
-  const comboSatAvgs = Object.entries(comboSat)
-    .filter(([_, v]) => v.count >= 2)
-    .map(([name, v]) => ({ name, avg: v.total / v.count, count: v.count }))
-    .sort((a, b) => b.avg - a.avg);
-  if (comboSatAvgs.length > 0) {
-    insights.push({
-      icon: Activity,
-      title: `Highest Satisfaction Combo: ${comboSatAvgs[0].name}`,
-      description: `Avg satisfaction ${comboSatAvgs[0].avg.toFixed(1)}/10 across ${comboSatAvgs[0].count} sessions`,
-    });
-  }
-
-  // Method combo BQ rankings
-  const comboAvgs = Object.entries(comboBQ)
-    .map(([name, v]) => ({ name, avg: v.total / v.count, count: v.count }))
-    .sort((a, b) => b.avg - a.avg);
-  const rankedMethods = comboAvgs;
+  const coveragePct = Math.round((model.metricCoverage / NEW_SUBJECTIVE_FIELDS.length) * 100);
 
   return (
     <div>
-      <PageHeader title="Insights" subtitle={`Based on ${sessions.length} sessions`} />
+      <PageHeader title="Insights" subtitle={`Pattern guidance from ${model.total} sessions`} />
 
-      <div className="px-4 space-y-3 pb-6">
-        <div className="flex flex-wrap gap-2 mb-2">
-          <Badge variant="outline" className="py-1">{sessions.length} sessions</Badge>
-          <Badge variant="outline" className="py-1">
-            Since {moment(sessions[sessions.length - 1].date).format("MMM YYYY")}
-          </Badge>
+      <div className="space-y-6 px-4 pb-10">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <SignalCard
+            icon={Compass}
+            label="Outcome Signal"
+            value={`${fmt(avg(model.scored.map((item) => item.score)))}/10`}
+            detail={`${model.scored.length} sessions with enough subjective data`}
+          />
+          <SignalCard
+            icon={Heart}
+            label="HR Coverage"
+            value={model.withHr.length}
+            detail={`${Math.round((model.withHr.length / model.total) * 100)}% of session history`}
+            tone="rose"
+          />
+          <SignalCard
+            icon={CheckCircle2}
+            label="Completion"
+            value={`${Math.round((model.completed.length / model.total) * 100)}%`}
+            detail={`${model.completed.length} completed sessions`}
+            tone="cyan"
+          />
+          <SignalCard
+            icon={Gauge}
+            label="New Metrics"
+            value={`${coveragePct}%`}
+            detail={`${model.metricCoverage} of ${NEW_SUBJECTIVE_FIELDS.length} newer fields are represented`}
+            tone={coveragePct >= 60 ? "primary" : "amber"}
+          />
         </div>
 
-        <BestSessionPanel sessions={sessions} />
+        <div className="rounded-xl border border-border bg-card p-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary">
+              Insight Brief
+            </Badge>
+            <Badge variant="outline">{moment(sessions[sessions.length - 1].date).format("MMM YYYY")} to {moment(sessions[0].date).format("MMM YYYY")}</Badge>
+          </div>
+          <p className="mt-4 max-w-5xl text-sm leading-6 text-muted-foreground">
+            The useful signal is shifting from isolated peaks toward repeatable conditions: method fit, build shape, sensory immersion, and recovery quality.
+            The strongest insights below weight older session fields when needed, then become more specific as the newer subjective metrics fill in.
+          </p>
+        </div>
 
-        <HRSatisfactionCorrelationChart sessions={sessions} />
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Pattern Questions</h2>
+              <p className="mt-1 text-xs text-muted-foreground">Ranked by usefulness and available sample size.</p>
+            </div>
+          </div>
+          <div className="grid gap-3 lg:grid-cols-2">
+            {model.insights.map((insight) => (
+              <InsightCard key={`${insight.question}-${insight.title}`} {...insight} total={model.total} />
+            ))}
+          </div>
+        </section>
 
-        {insights.map((insight, i) => <InsightCard key={i} {...insight} />)}
-
-        {rankedMethods.length > 0 && (
-          <div className="bg-card rounded-xl border border-border p-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-              Build Quality Rankings by Method Combination
-            </h3>
-            <div className="space-y-2">
-              {rankedMethods.map((m, i) => (
-                <div key={m.name} className="flex items-center gap-3">
-                  <span className="text-xs font-bold font-mono w-5 text-muted-foreground">{i + 1}</span>
-                  <div className="flex-1">
-                    <div className="flex justify-between text-xs mb-1">
-                      <span className="font-medium">{m.name}</span>
-                      <span className="font-mono text-muted-foreground">{m.avg.toFixed(1)} ({m.count}x)</span>
-                    </div>
-                    <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                      <div className="h-full bg-primary rounded-full" style={{ width: `${(m.avg / 10) * 100}%` }} />
-                    </div>
-                  </div>
-                </div>
+        <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+          <div className="rounded-xl border border-border bg-card p-5">
+            <div className="flex items-center gap-2 text-primary">
+              <Target className="h-4 w-4" />
+              <h2 className="text-sm font-semibold uppercase tracking-wider">Next Session Experiment</h2>
+            </div>
+            <p className="mt-4 text-lg font-semibold leading-snug">{model.nextExperiment.title}</p>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">{model.nextExperiment.rationale}</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {model.nextExperiment.track.map((field) => (
+                <Badge key={field} variant="outline" className="border-border bg-muted/50">
+                  {metricLabels[field] || sentenceCase(field)}
+                </Badge>
               ))}
             </div>
           </div>
-        )}
+
+          <div className="space-y-2">
+            {model.highestSatisfaction && (
+              <RecordRow
+                label="Highest Satisfaction"
+                value={`${model.highestSatisfaction.satisfaction}/10`}
+                detail={moment(model.highestSatisfaction.date).format("MMM D, YYYY")}
+                to={`/sessions/${model.highestSatisfaction.id}`}
+              />
+            )}
+            {model.highestIntensity && (
+              <RecordRow
+                label="Highest Intensity"
+                value={`${model.highestIntensity.intensity}/10`}
+                detail={formatMethods(model.highestIntensity.methods)}
+                to={`/sessions/${model.highestIntensity.id}`}
+              />
+            )}
+            {model.peakHr && (
+              <RecordRow
+                label="Peak Heart Rate"
+                value={`${model.peakHr.max_hr} bpm`}
+                detail={moment(model.peakHr.date).format("MMM D, YYYY")}
+                to={`/sessions/${model.peakHr.id}`}
+              />
+            )}
+            {model.bestOverall && (
+              <RecordRow
+                label="Best Blended Signal"
+                value={`${fmt(model.bestOverall.score)}/10`}
+                detail={formatMethods(model.bestOverall.session.methods)}
+                to={`/sessions/${model.bestOverall.session.id}`}
+              />
+            )}
+          </div>
+        </section>
+
+        <HRSatisfactionCorrelationChart sessions={sessions} />
+
+        <BestSessionPanel sessions={sessions} />
       </div>
     </div>
   );

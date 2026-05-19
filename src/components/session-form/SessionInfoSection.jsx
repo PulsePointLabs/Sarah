@@ -1,10 +1,7 @@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
-// Get today's date in America/New_York
-function todayET() {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
-}
+import { Button } from "@/components/ui/button";
+import { CalendarDays, Clock3, Timer, FileCheck2 } from "lucide-react";
 
 // Get current time HH:MM in America/New_York
 function nowTimeET() {
@@ -13,6 +10,14 @@ function nowTimeET() {
 
 export default function SessionInfoSection({ data, onChange }) {
   const update = (field, value) => onChange({ ...data, [field]: value });
+  const hasHrTiming = (data._csv_rows || []).length > 0;
+  const dateValue = data.date?.split("T")[0] || "";
+  const durationMinutes = Number(data.duration_minutes || 0);
+  const durationLabel = durationMinutes > 0
+    ? durationMinutes >= 60
+      ? `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`
+      : `${durationMinutes}m`
+    : "Not set";
 
   const handleDurationChange = (field, value) => {
     const hours = field === "dur_hours" ? Number(value) : (data.dur_hours || 0);
@@ -21,14 +26,44 @@ export default function SessionInfoSection({ data, onChange }) {
     onChange({ ...data, [field]: Number(value), duration_minutes: totalMinutes });
   };
 
-  // Auto-fill start time with current ET time if not set
-  const handleStartTimeFocus = () => {
-    if (!data.start_time) update("start_time", nowTimeET());
-  };
-
   return (
     <div className="space-y-4">
       <h3 className="text-sm font-semibold uppercase tracking-wider text-primary">Session Info</h3>
+
+      {hasHrTiming && (
+        <div className="rounded-lg border border-primary/30 bg-primary/10 p-3 space-y-3">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-primary">
+            <FileCheck2 className="w-4 h-4" />
+            Detected from HR CSV
+          </div>
+          <div className="grid gap-2 text-xs sm:grid-cols-3">
+            <div className="rounded-md bg-background/60 p-2">
+              <div className="flex items-center gap-1.5 text-muted-foreground">
+                <CalendarDays className="w-3.5 h-3.5" />
+                Date
+              </div>
+              <p className="mt-1 font-mono font-semibold text-foreground">{dateValue || "Not set"}</p>
+            </div>
+            <div className="rounded-md bg-background/60 p-2">
+              <div className="flex items-center gap-1.5 text-muted-foreground">
+                <Clock3 className="w-3.5 h-3.5" />
+                Start
+              </div>
+              <p className="mt-1 font-mono font-semibold text-foreground">{data.start_time || "Not set"}</p>
+            </div>
+            <div className="rounded-md bg-background/60 p-2">
+              <div className="flex items-center gap-1.5 text-muted-foreground">
+                <Timer className="w-3.5 h-3.5" />
+                Duration
+              </div>
+              <p className="mt-1 font-mono font-semibold text-foreground">{durationLabel}</p>
+            </div>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            These stay editable below for corrections, but the HR file is now filling them in first.
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         <div>
@@ -41,14 +76,13 @@ export default function SessionInfoSection({ data, onChange }) {
           />
         </div>
         <div>
-          <Label className="text-xs text-muted-foreground">Start Time (ET)</Label>
-          <Input
-            type="time"
-            value={data.start_time || ""}
-            onFocus={handleStartTimeFocus}
-            onChange={(e) => update("start_time", e.target.value)}
-            className="h-12 mt-1 font-mono"
-          />
+          <div className="flex items-center justify-between">
+            <Label className="text-xs text-muted-foreground">Start Time (ET)</Label>
+            <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => update("start_time", nowTimeET())}>
+              Now
+            </Button>
+          </div>
+          <Input type="time" value={data.start_time || ""} onChange={(e) => update("start_time", e.target.value)} className="h-12 mt-1 font-mono" />
         </div>
       </div>
 

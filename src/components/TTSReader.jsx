@@ -4,6 +4,11 @@ import {
   cleanTextForSpeech,
   splitIntoChunks,
   TTS_CACHE_VOICE_PROFILE,
+  TTS_CHUNK_TARGET_CHARS,
+  TTS_EXPORT_CONTAINER,
+  TTS_EXPORT_FORMAT,
+  TTS_EXPORT_MIME,
+  TTS_PLAYBACK_FORMAT,
   TTS_SPEED,
   VOICE_INSTRUCTIONS,
 } from "./TTSButton";
@@ -14,8 +19,44 @@ import { idbGet, idbSet } from "@/lib/ttsCache";
 const OAI_VOICES = ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const estimateDuration = (text) => Math.max(1, Math.round(text.split(/\s+/).filter(Boolean).length / 2.25));
-const ttsCacheKey = (chunk) => `${TTS_CACHE_VOICE_PROFILE}|${VOICE_INSTRUCTIONS.trim()}|${chunk}`;
+const ttsCacheKey = (chunk, format = TTS_PLAYBACK_FORMAT) =>
+  `${TTS_CACHE_VOICE_PROFILE}|${format}|${VOICE_INSTRUCTIONS.trim()}|${chunk}`;
+
+function buildSpeechUnits(paragraphs, startIdx = 0) {
+  const units = [];
+  let currentText = "";
+  let currentStart = -1;
+  let currentEnd = -1;
+
+  const push = () => {
+    if (!currentText.trim()) return;
+    units.push({
+      start: currentStart,
+      end: currentEnd,
+      text: currentText.trim(),
+    });
+    currentText = "";
+    currentStart = -1;
+    currentEnd = -1;
+  };
+
+  for (let i = startIdx; i < paragraphs.length; i++) {
+    const cleaned = cleanTextForSpeech(paragraphs[i] || "");
+    if (!cleaned) continue;
+
+    const nextText = currentText ? `${currentText} ${cleaned}` : cleaned;
+    if (currentText && nextText.length > TTS_CHUNK_TARGET_CHARS) {
+      push();
+    }
+
+    currentText = currentText ? `${currentText} ${cleaned}` : cleaned;
+    if (currentStart < 0) currentStart = i;
+    currentEnd = i;
+  }
+
+  push();
+  return units;
+}
 
 const getTtsErrorMessage = (err) => {
   const raw =
@@ -41,15 +82,12 @@ const getTtsStatus = (err) => {
   return err?.status || err?.response?.status || err?.data?.status || 500;
 };
 
-async function callTTSWithRetries(payload, attempts = 7, meta = {}) {
+async function callTTSWithRetries(payload, attempts = 7) {
   let lastError;
-  const startedAt = performance.now();
 
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      const requestStartedAt = performance.now();
       const response = await base44.functions.invoke("openaiTTS", payload);
-      const latencyMs = Math.round(performance.now() - requestStartedAt);
 
       if (response?.data?.error) {
         const error = new Error(getTtsErrorMessage(response));
@@ -65,18 +103,6 @@ async function callTTSWithRetries(payload, attempts = 7, meta = {}) {
         throw error;
       }
 
-      console.info("[TTS] chunk success", {
-        chunkIndex: meta.chunkIndex,
-        charCount: payload.text?.length || 0,
-        estimatedDurationSec: estimateDuration(payload.text || ""),
-        model: response?.data?.model || "server-default",
-        voice: payload.voice,
-        speed: payload.speed,
-        latencyMs,
-        retries: attempt,
-        totalMs: Math.round(performance.now() - startedAt),
-      });
-
       return response;
     } catch (err) {
       lastError = err;
@@ -85,16 +111,6 @@ async function callTTSWithRetries(payload, attempts = 7, meta = {}) {
       const retryable = [408, 429, 500, 502, 503, 504].includes(status);
 
       if (!retryable || attempt === attempts - 1) {
-        console.error("[TTS] chunk failed", {
-          chunkIndex: meta.chunkIndex,
-          charCount: payload.text?.length || 0,
-          estimatedDurationSec: estimateDuration(payload.text || ""),
-          voice: payload.voice,
-          speed: payload.speed,
-          retries: attempt,
-          status,
-          error: getTtsErrorMessage(err),
-        });
         throw err;
       }
 
@@ -114,13 +130,62 @@ async function callTTSWithRetries(payload, attempts = 7, meta = {}) {
   throw lastError;
 }
 
+function writeAscii(view, offset, text) {
+  for (let i = 0; i < text.length; i++) {
+    view.setUint8(offset + i, text.charCodeAt(i));
+  }
+}
+
+function encodeAudioBuffersToWav(buffers) {
+  if (!buffers.length) return new Uint8Array();
+
+  const channelCount = Math.max(1, Math.min(2, buffers[0].numberOfChannels || 1));
+  const sampleRate = buffers[0].sampleRate;
+  const bytesPerSample = 2;
+  const blockAlign = channelCount * bytesPerSample;
+  const totalFrames = buffers.reduce((sum, buffer) => sum + buffer.length, 0);
+  const dataSize = totalFrames * blockAlign;
+  const arrayBuffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(arrayBuffer);
+
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channelCount, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bytesPerSample * 8, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (const buffer of buffers) {
+    const channels = Array.from({ length: channelCount }, (_unused, index) =>
+      buffer.getChannelData(Math.min(index, buffer.numberOfChannels - 1))
+    );
+    for (let frame = 0; frame < buffer.length; frame++) {
+      for (let channel = 0; channel < channelCount; channel++) {
+        const clamped = Math.max(-1, Math.min(1, channels[channel][frame] || 0));
+        view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+        offset += bytesPerSample;
+      }
+    }
+  }
+
+  return new Uint8Array(arrayBuffer);
+}
+
 
 export default function TTSReader({ paragraphs, renderParagraph, sessionId, title, sessionDate }) {
   const [state, setState] = useState("idle"); // idle | buffering | playing | paused
   const [currentPara, setCurrentPara] = useState(-1);
   const [bufferingPara, setBufferingPara] = useState(-1); // which paragraph is currently fetching
   const [voice, setVoice] = useState(() => {
-    const saved = localStorage.getItem("tts_oai_voice") || "alloy";
+    const saved = localStorage.getItem("tts_oai_voice") || "nova";
     const valid = OAI_VOICES.includes(saved) ? saved : "alloy";
     if (valid !== saved) localStorage.setItem("tts_oai_voice", valid);
     return valid;
@@ -141,7 +206,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const chunkQueueRef = useRef([]);
   const currentChunkRef = useRef(null); // the chunk currently playing/buffering
   const voiceRef = useRef(voice);
-  const chunkCounterRef = useRef(0);
   // Generation counter: increment on every startFrom to cancel stale async chains
   const genRef = useRef(0);
   // Prefetch cache: chunk text → decoded AudioBuffer (keyed by gen+chunk for staleness)
@@ -213,10 +277,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       return;
     }
 
-    const idx = remainingParasRef.current.shift();
-    setCP(idx);
-    const text = paragraphs[idx] || "";
-    chunkQueueRef.current = splitIntoChunks(cleanTextForSpeech(text));
+    const unit = remainingParasRef.current.shift();
+    setCP(unit.start);
+    chunkQueueRef.current = splitIntoChunks(unit.text || "");
     currentChunkRef.current = null;
     playNextChunk(gen);
   };
@@ -232,32 +295,32 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     const promise = (async () => {
       try {
         // Check IndexedDB persistent cache first
-        const cacheText = ttsCacheKey(chunk);
-        let mp3Buffer = await idbGet(cacheText, voiceRef.current, TTS_SPEED);
+        const cacheText = ttsCacheKey(chunk, TTS_PLAYBACK_FORMAT);
+        let audioBuffer = await idbGet(cacheText, voiceRef.current, TTS_SPEED);
 
-        if (!mp3Buffer) {
+        if (!audioBuffer) {
           setRequestStatus({ type: "fetching", msg: "Fetching audio…" });
-          const chunkIndex = ++chunkCounterRef.current;
           const response = await callTTSWithRetries({
             text: chunk,
             voice: voiceRef.current,
             speed: TTS_SPEED,
             instructions: VOICE_INSTRUCTIONS,
-          }, 7, { chunkIndex });
+            format: TTS_PLAYBACK_FORMAT,
+          });
           if (response.data?.error) throw new Error(response.data.error);
           const base64 = response.data.audio;
           const binary = atob(base64);
           const bytes = new Uint8Array(binary.length);
           for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          mp3Buffer = bytes.buffer;
-          idbSet(cacheText, voiceRef.current, TTS_SPEED, mp3Buffer); // fire-and-forget
+          audioBuffer = bytes.buffer;
+          idbSet(cacheText, voiceRef.current, TTS_SPEED, audioBuffer); // fire-and-forget
           setRequestStatus({ type: "ok", msg: "Audio ready" });
         } else {
           setRequestStatus({ type: "ok", msg: "Audio ready (cached)" });
         }
 
         const ctx = getAudioCtx();
-        const decoded = await ctx.decodeAudioData(mp3Buffer.slice(0));
+        const decoded = await ctx.decodeAudioData(audioBuffer.slice(0));
         return decoded;
       } catch (err) {
         prefetchCacheRef.current.delete(cacheKey); // allow retry on failure
@@ -280,11 +343,11 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       if (upcoming.length >= 1) break;
     }
 
-    // Then: first chunk(s) from the next paragraph(s)
+    // Then: first chunk(s) from the next speech unit(s)
     let paraIdx = 0;
     while (upcoming.length < 1 && paraIdx < remainingParasRef.current.length) {
-      const nextParaIdx = remainingParasRef.current[paraIdx];
-      const nextChunks = splitIntoChunks(cleanTextForSpeech(paragraphs[nextParaIdx] || ""));
+      const nextUnit = remainingParasRef.current[paraIdx];
+      const nextChunks = splitIntoChunks(nextUnit?.text || "");
       for (const c of nextChunks) {
         upcoming.push(c);
         if (upcoming.length >= 1) break;
@@ -424,14 +487,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     chunkQueueRef.current = [];
     currentChunkRef.current = null;
-    remainingParasRef.current = paragraphs.map((_, i) => i).filter(i => i >= paraIdx);
-    chunkCounterRef.current = 0;
+    remainingParasRef.current = buildSpeechUnits(paragraphs, paraIdx);
     setCP(paraIdx);
     setS("playing");
     setBufferingPara(paraIdx);
-
-    const text = paragraphs[paraIdx] || "";
-    chunkQueueRef.current = splitIntoChunks(cleanTextForSpeech(text));
     playNextChunk(gen);
   };
 
@@ -490,7 +549,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const buildID3Tag = (meta) => {
     const enc = new TextEncoder(); // UTF-8
 
-    // ID3v2.3 text frame: encoding(1=UTF-8 as 0x03) + UTF-8 bytes
     const makeTextFrame = (id, text) => {
       const textBytes = enc.encode(text);
       const payload = new Uint8Array(1 + textBytes.length);
@@ -506,7 +564,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       return frame;
     };
 
-    // COMM frame
     const makeCommentFrame = (text) => {
       const textBytes = enc.encode(text);
       const payload = new Uint8Array(1 + 3 + 1 + textBytes.length);
@@ -547,13 +604,11 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     setDownloading(true);
     try {
       const allChunks = [];
-      for (const para of paragraphs) {
-        const cleaned = cleanTextForSpeech(para);
-        const chunks = splitIntoChunks(cleaned);
-        allChunks.push(...chunks);
+      for (const unit of buildSpeechUnits(paragraphs, 0)) {
+        allChunks.push(...splitIntoChunks(unit.text));
       }
 
-      const mp3Chunks = new Array(allChunks.length);
+      const audioChunks = new Array(allChunks.length);
       setDownloadProgress({ current: 0, total: allChunks.length });
       let completed = 0;
 
@@ -561,27 +616,28 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         const chunk = allChunks[i];
 
         // Check IndexedDB persistent cache first
-        const cacheText = ttsCacheKey(chunk);
-        let mp3Buffer = await idbGet(cacheText, voiceRef.current, TTS_SPEED);
+        const cacheText = ttsCacheKey(chunk, TTS_EXPORT_FORMAT);
+        let audioBuffer = await idbGet(cacheText, voiceRef.current, TTS_SPEED);
 
-        if (!mp3Buffer) {
+        if (!audioBuffer) {
           const res = await callTTSWithRetries({
             text: chunk,
             voice: voiceRef.current,
             speed: TTS_SPEED,
             instructions: VOICE_INSTRUCTIONS,
-          }, 7, { chunkIndex: i + 1 });
+            format: TTS_EXPORT_FORMAT,
+          });
           if (res.data?.error) throw new Error(res.data.error);
           if (!res.data?.audio) throw new Error(`TTS request failed (status ${res.status})`);
           const base64 = res.data.audio;
           const binary = atob(base64);
           const bytes = new Uint8Array(binary.length);
           for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
-          mp3Buffer = bytes.buffer;
-          idbSet(cacheText, voiceRef.current, TTS_SPEED, mp3Buffer); // fire-and-forget
+          audioBuffer = bytes.buffer;
+          idbSet(cacheText, voiceRef.current, TTS_SPEED, audioBuffer); // fire-and-forget
         }
 
-        mp3Chunks[i] = new Uint8Array(mp3Buffer);
+        audioChunks[i] = new Uint8Array(audioBuffer);
         await sleep(1500);
         completed++;
         setDownloadProgress({ current: completed, total: allChunks.length });
@@ -592,12 +648,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       for (let i = 0; i < allChunks.length; i++) {
         await fetchChunk(i);
       }
-
-      // Concatenate all MP3 frames
-      const totalSize = mp3Chunks.reduce((a, c) => a + c.length, 0);
-      const combined = new Uint8Array(totalSize);
-      let offset = 0;
-      for (const chunk of mp3Chunks) { combined.set(chunk, offset); offset += chunk.length; }
 
       const dateObj = sessionDate ? new Date(sessionDate) : new Date();
       const monthName = dateObj.toLocaleDateString("en-US", { month: "long" });
@@ -611,41 +661,61 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         ? (titleHasDate ? title : `${friendlyDate} – ${title}`)
         : `PhysioLog Analysis – ${friendlyDate}`;
       const fileSlug = displayTitle.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
-      const fileName = `${fileSlug}.mp3`;
+      const fileName = `${fileSlug}.${TTS_EXPORT_CONTAINER}`;
 
-      // Build ID3 tag
-      const id3 = buildID3Tag({
-        title: displayTitle,
-        year: String(yearNum),
-        comment: `Recorded ${friendlyDate}, ${yearNum}`,
-      });
+      let downloadBytes;
+      let durationSeconds = 0;
+      if (TTS_EXPORT_FORMAT === "wav") {
+        setRequestStatus({ type: "fetching", msg: "Stitching WAV…" });
+        const ctx = getAudioCtx();
+        const decodedChunks = [];
+        for (const chunk of audioChunks) {
+          const decoded = await ctx.decodeAudioData(chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength));
+          decodedChunks.push(decoded);
+          durationSeconds += decoded.duration;
+        }
+        downloadBytes = encodeAudioBuffersToWav(decodedChunks);
+      } else {
+        const totalSize = audioChunks.reduce((a, c) => a + c.length, 0);
+        const combined = new Uint8Array(totalSize);
+        let offset = 0;
+        for (const chunk of audioChunks) { combined.set(chunk, offset); offset += chunk.length; }
+        downloadBytes = combined;
+        durationSeconds = (combined.length * 8) / 128000;
+      }
 
-      // Prepend ID3 tag to MP3 data
-      const mp3WithMeta = new Uint8Array(id3.length + combined.length);
-      mp3WithMeta.set(id3, 0);
-      mp3WithMeta.set(combined, id3.length);
+      if (TTS_EXPORT_FORMAT === "mp3") {
+        const id3 = buildID3Tag({
+          title: displayTitle,
+          year: String(yearNum),
+          comment: `Recorded ${friendlyDate}, ${yearNum}`,
+        });
+        const combined = downloadBytes;
+        downloadBytes = new Uint8Array(id3.length + combined.length);
+        downloadBytes.set(id3, 0);
+        downloadBytes.set(combined, id3.length);
+      }
 
-      const mp3Blob = new Blob([mp3WithMeta], { type: "audio/mpeg" });
+      const audioBlob = new Blob([downloadBytes], { type: TTS_EXPORT_MIME });
 
       // Trigger download
-      const url = URL.createObjectURL(mp3Blob);
+      const url = URL.createObjectURL(audioBlob);
       const a = document.createElement("a");
       a.href = url;
       a.download = fileName;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 100);
 
-      // Save to library (approximate duration from file size at ~128kbps)
-      const approxDuration = (combined.length * 8) / 128000;
-      const file = new File([mp3Blob], fileName, { type: "audio/mpeg" });
+      const file = new File([audioBlob], fileName, { type: TTS_EXPORT_MIME });
       const uploadRes = await base44.integrations.Core.UploadFile({ file });
 
       await base44.entities.AudioExport.create({
         title: displayTitle,  // e.g. "April 23 Cascade Overview"
         file_url: uploadRes.file_url,
-        duration_seconds: Math.round(approxDuration),
+        duration_seconds: Math.round(durationSeconds),
         voice: voiceRef.current,
         speed: speedRef.current,
+        format: TTS_EXPORT_FORMAT,
       });
 
       setRequestStatus({ type: "ok", msg: "Download complete" });
@@ -695,7 +765,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           disabled={downloading}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-muted text-muted-foreground hover:text-foreground disabled:opacity-50 active:opacity-70 transition-colors text-xs font-medium select-none ml-auto"
           style={{ WebkitTapHighlightColor: "transparent", touchAction: "manipulation" }}
-          title="Download full section as MP3 with metadata"
+          title="Download full section audio"
         >
           {downloading ? (
             <>

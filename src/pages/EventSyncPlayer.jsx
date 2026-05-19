@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { base44 } from "@/api/base44Client";
 import { Play, Pause, Square, Upload, Volume2, VolumeX, ChevronDown, ChevronLeft, ChevronRight, ZoomOut, Mic, MicOff, Plus, ArrowUp } from "lucide-react";
 import { EVENT_CATEGORIES } from "@/components/session-form/EventTimelineSection";
+import { TTS_CACHE_VOICE_PROFILE, TTS_PLAYBACK_FORMAT, VOICE_INSTRUCTIONS } from "@/components/TTSButton";
 import {
   ResponsiveContainer, ComposedChart, Line, XAxis, YAxis,
   Tooltip, CartesianGrid, ReferenceLine,
@@ -54,10 +55,16 @@ const EVENT_COLORS = ["#f59e0b","#a855f7","#10b981","#f43f5e","#0ea5e9","#fb923c
 
 // ── TTS helpers ───────────────────────────────────────────────────────────────
 
-async function fetchTTSBase64(text, voice, speed) {
-  const cacheKey = `tts_cache:${voice}:${speed}:${text}`;
+async function fetchTTSBase64(text, voice, speed, format = TTS_PLAYBACK_FORMAT) {
+  const cacheKey = `tts_cache:${TTS_CACHE_VOICE_PROFILE}:${voice}:${speed}:${format}:${VOICE_INSTRUCTIONS.trim()}:${text}`;
   try { const c = sessionStorage.getItem(cacheKey); if (c) return c; } catch (_) {}
-  const res = await base44.functions.invoke("openaiTTS", { text, voice, speed });
+  const res = await base44.functions.invoke("openaiTTS", {
+    text,
+    voice,
+    speed,
+    instructions: VOICE_INSTRUCTIONS,
+    format,
+  });
   const b64 = res.data.audio;
   try { sessionStorage.setItem(cacheKey, b64); } catch (_) {}
   return b64;
@@ -109,7 +116,7 @@ export default function EventSyncPlayer() {
   const videoUrlRef = useRef(null);
 
   // TTS
-  const [voice, setVoice] = useState(() => localStorage.getItem("tts_oai_voice") || "alloy");
+  const [voice, setVoice] = useState(() => localStorage.getItem("tts_oai_voice") || "nova");
   const [speed] = useState(() => parseFloat(localStorage.getItem("tts_speed") || "1.0"));
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [showVoicePicker, setShowVoicePicker] = useState(false);

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Play, Pause, Video, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp } from "lucide-react";
+import { Play, Pause, Video, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, Sparkles } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
   Dialog,
@@ -36,6 +36,20 @@ const EVENT_COLORS = [
   "#f59e0b", "#a855f7", "#10b981", "#f43f5e", "#0ea5e9",
   "#fb923c", "#84cc16", "#e879f9", "#34d399", "#f87171",
 ];
+
+const AI_EVENT_TAGS = {
+  physical_finding: { label: "Physical finding", color: "#10b981" },
+  physiological_observation: { label: "Physiology", color: "#14b8a6" },
+  stimulation_action: { label: "Stimulation action", color: "#3b82f6" },
+  stimulation_change: { label: "Stim change", color: "#06b6d4" },
+  sensation_report: { label: "Sensation", color: "#a855f7" },
+  position_or_comfort: { label: "Position/comfort", color: "#f59e0b" },
+  equipment_or_setup: { label: "Equipment", color: "#64748b" },
+  other_context: { label: "Other context", color: "#94a3b8" },
+};
+
+const VALID_EVENT_CATEGORIES = new Set(EVENT_CATEGORIES.map((c) => c.value));
+const VALID_AI_EVENT_TAGS = new Set(Object.keys(AI_EVENT_TAGS));
 
 // Nearest HR from sorted chart data
 function nearestHR(chartData, time_s) {
@@ -78,6 +92,144 @@ function CategorySelector({ selected, onChange }) {
   );
 }
 
+function AnnotationTagPill({ value }) {
+  const meta = AI_EVENT_TAGS[value];
+  if (!meta) return null;
+  return (
+    <span
+      className="inline-flex items-center rounded-full px-1.5 py-0 text-[8px] font-medium"
+      style={{ background: meta.color + "1f", color: meta.color, border: `1px solid ${meta.color}40` }}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
+function normalizeTagResult(result) {
+  const categories = (Array.isArray(result?.categories) ? result.categories : [])
+    .filter((cat) => VALID_EVENT_CATEGORIES.has(cat));
+  const annotationTags = (Array.isArray(result?.annotation_tags) ? result.annotation_tags : [])
+    .filter((tag) => VALID_AI_EVENT_TAGS.has(tag));
+  return {
+    categories: categories.length ? [...new Set(categories)] : ["other"],
+    annotation_tags: annotationTags.length ? [...new Set(annotationTags)] : ["other_context"],
+    rationale: typeof result?.rationale === "string" ? result.rationale.slice(0, 180) : "",
+  };
+}
+
+function getAnnotationTags(ev) {
+  const tags = Array.isArray(ev?.annotation_tags) ? ev.annotation_tags : [];
+  return tags.filter((tag) => VALID_AI_EVENT_TAGS.has(tag));
+}
+
+function heuristicTagEventNote(note) {
+  const text = String(note || "").toLowerCase();
+  const categories = new Set();
+  const annotationTags = new Set();
+
+  if (/\b(stroke|stroking|grip|squeeze|speed|pace|pressure|manual|sleeve|vibrat|estim|e-stim|tens|foley|catheter|probe|lubric|suction|glans|frenulum|perineal|perineum|shaft)\b/.test(text)) {
+    categories.add("stimulation");
+    annotationTags.add("stimulation_action");
+  }
+  if (/\b(increas|decreas|faster|slower|firmer|lighter|harder|softer|adjust|switch|change|resume|pause|stop|start)\b/.test(text)) {
+    annotationTags.add("stimulation_change");
+  }
+  if (/\b(start|begin|initiated|first contact)\b/.test(text)) categories.add("stimulation_started");
+  if (/\b(paused|pause|break|stopped touching)\b/.test(text)) categories.add("stimulation_paused");
+  if (/\b(resumed|resume|restarted)\b/.test(text)) categories.add("stimulation_resumed");
+  if (/\b(stopped|stop stimulation|ended stimulation)\b/.test(text)) categories.add("stimulation_stopped");
+
+  if (/\b(leg|legs|feet|foot|toe|toes|curl|plant|planted|tense|tensing|relax|shudder|tremor|spasm|pelvic|floor|thigh|hips|abdomen|breath|breathing|erection|scrot|foreskin|glans|flush|sweat)\b/.test(text)) {
+    categories.add("physical");
+    annotationTags.add("physical_finding");
+  }
+  if (/\b(hr|heart rate|bpm|sympathetic|parasympathetic|arousal|climax|ejaculat|release|recovery|engorg|contraction|autonomic)\b/.test(text)) {
+    categories.add("physical");
+    annotationTags.add("physiological_observation");
+  }
+  if (/\b(sensation|feel|felt|pleasure|warm|fullness|pressure|tingle|urge|near|edge|sensitive|discomfort|pain|burn|numb)\b/.test(text)) {
+    categories.add("sensation");
+    annotationTags.add("sensation_report");
+  }
+  if (/\b(reposition|position|table|comfort|pillow|adjusted body|moved|shifted|sat up|laid back|lithotomy|supine)\b/.test(text)) {
+    categories.add("other");
+    annotationTags.add("position_or_comfort");
+  }
+  if (/\b(camera|video|light|setup|electrode|wire|strap|device|tool|towel|sheet)\b/.test(text)) {
+    categories.add("other");
+    annotationTags.add("equipment_or_setup");
+  }
+  if (!categories.size) categories.add("other");
+  if (!annotationTags.size) annotationTags.add("other_context");
+
+  return normalizeTagResult({
+    categories: [...categories],
+    annotation_tags: [...annotationTags],
+    rationale: "Local keyword fallback",
+  });
+}
+
+async function classifyEventNoteWithAI(note) {
+  const fallback = heuristicTagEventNote(note);
+  try {
+    const result = await base44.integrations.Core.InvokeLLM({
+      model: "claude_sonnet_4_5",
+      temperature: 0,
+      max_tokens: 600,
+      response_json_schema: {
+        type: "object",
+        properties: {
+          categories: {
+            type: "array",
+            items: { type: "string", enum: EVENT_CATEGORIES.map((c) => c.value) },
+          },
+          annotation_tags: {
+            type: "array",
+            items: { type: "string", enum: Object.keys(AI_EVENT_TAGS) },
+          },
+          rationale: { type: "string" },
+        },
+        required: ["categories", "annotation_tags", "rationale"],
+        additionalProperties: false,
+      },
+      prompt: `Classify this timestamped event annotation from a sexual response physiology video review.
+
+Return broad event categories plus more specific annotation tags.
+
+Broad category rules:
+- stimulation: direct stimulation technique, speed, pressure, grip, tool use, e-stim, manual action.
+- stimulation_started / stimulation_paused / stimulation_resumed / stimulation_stopped: use when the note clearly marks that state change.
+- physical: visible body finding or physiological sign, including legs, feet, toes, pelvic floor, breathing, erection, heart-rate/body response.
+- sensation: subjective sensation, pleasure, discomfort, fullness, sensitivity, urge, near-climax sensation.
+- other: non-stimulation actions, repositioning, setup, comfort adjustment, camera/table/environment, or context.
+
+Specific annotation tag rules:
+- physical_finding: visible physical finding such as tense legs, foot planting, toe curl, tremor, pelvic movement.
+- physiological_observation: arousal physiology, heart rate, autonomic shift, erection/climax/recovery pattern.
+- stimulation_action: what is being done to stimulate.
+- stimulation_change: increasing/decreasing speed, pressure, grip, switching tools, pausing/resuming.
+- sensation_report: subjective feeling or sensation.
+- position_or_comfort: repositioning or comfort adjustment that is not stimulation.
+- equipment_or_setup: device, camera, electrode, catheter, sleeve, table, or setup note.
+- other_context: useful context that does not fit above.
+
+Use multiple categories and tags when one annotation contains multiple things.
+
+Annotation:
+"${String(note).replace(/"/g, '\\"')}"`,
+    });
+    const normalized = normalizeTagResult(result);
+    return {
+      categories: normalized.categories.length ? normalized.categories : fallback.categories,
+      annotation_tags: normalized.annotation_tags.length ? normalized.annotation_tags : fallback.annotation_tags,
+      rationale: normalized.rationale || "AI classification",
+    };
+  } catch (err) {
+    console.warn("AI event auto-tagging failed, using local fallback:", err);
+    return fallback;
+  }
+}
+
 export default function VideoSyncPlayer({ session, timelineRows }) {
   const videoRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -108,6 +260,10 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
   const [newCats, setNewCats] = useState([lastUsedCat]);
   const [newMin, setNewMin] = useState("");
   const [newSec, setNewSec] = useState("");
+  const [autoTagging, setAutoTagging] = useState(false);
+  const [autoTagSuggestion, setAutoTagSuggestion] = useState(null);
+  const [autoTagError, setAutoTagError] = useState("");
+  const [newCatsTouched, setNewCatsTouched] = useState(false);
 
   // STT — Whisper via MediaRecorder, single-blob transcription on stop
   const [isListening, setIsListening] = useState(false);
@@ -180,6 +336,33 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
     }
   }, [isListening, stopListening]);
 
+  useEffect(() => {
+    const note = newNote.trim();
+    if (!addingNew || newCatsTouched || isListening || interimText || note.length < 8) {
+      if (note.length < 8) {
+        setAutoTagSuggestion(null);
+        setAutoTagError("");
+      }
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setAutoTagging(true);
+      setAutoTagError("");
+      const suggestion = await classifyEventNoteWithAI(note);
+      if (cancelled) return;
+      setAutoTagSuggestion(suggestion);
+      setNewCats(suggestion.categories);
+      setAutoTagging(false);
+    }, 900);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [addingNew, interimText, isListening, newCatsTouched, newNote]);
+
   const saveEvents = async (updated) => {
     const sorted = [...updated].sort((a, b) => a.time_s - b.time_s);
     setEvents(sorted);
@@ -210,17 +393,46 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
     await saveEvents(events.filter((_, i) => i !== idx));
   };
 
-  const commitAdd = async () => {
+  const commitAdd = async ({ resume = false } = {}) => {
     const cleanNote = newNote.trim();
     if (!cleanNote) return;
     stopListening();
-    const m = parseInt(newMin, 10) || 0;
-    const s = Math.min(59, parseInt(newSec, 10) || 0);
-    const ev = { time_s: m * 60 + s, note: cleanNote, category: newCats };
-    setLastUsedCat(newCats[0]);
-    setAddingNew(false);
-    setNewNote(""); setNewMin(""); setNewSec(""); setNewCats([newCats[0]]);
-    await saveEvents([...events, ev]);
+    try {
+      setAutoTagging(true);
+      setAutoTagError("");
+      const classification = newCatsTouched && autoTagSuggestion
+        ? autoTagSuggestion
+        : await classifyEventNoteWithAI(cleanNote);
+      const m = parseInt(newMin, 10) || 0;
+      const s = Math.min(59, parseInt(newSec, 10) || 0);
+      const categories = newCatsTouched ? newCats : classification.categories;
+      const ev = {
+        time_s: m * 60 + s,
+        note: cleanNote,
+        category: categories,
+        annotation_tags: classification.annotation_tags,
+        ai_annotation: {
+          source: classification.rationale === "Local keyword fallback" ? "local-fallback" : "ai",
+          rationale: classification.rationale,
+        },
+      };
+      await saveEvents([...events, ev]);
+      setLastUsedCat(categories[0] || "other");
+      setNewNote(""); setNewMin(""); setNewSec(""); setNewCats([categories[0] || "other"]);
+      setNewCatsTouched(false);
+      setAutoTagSuggestion(null);
+      setAutoTagError("");
+      setAutoTagging(false);
+      setAddingNew(false);
+      if (resume && videoRef.current) {
+        await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+        await videoRef.current.play();
+      }
+    } catch (err) {
+      console.error("Failed to save event:", err);
+      setAutoTagging(false);
+      setAutoTagError("Could not save event. Please try again.");
+    }
   };
 
   const startAddAtPlayhead = () => {
@@ -228,6 +440,10 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
     setNewMin(String(Math.floor(playheadS / 60)));
     setNewSec(String(Math.round(playheadS % 60)));
     setNewCats([lastUsedCat]);
+    setNewCatsTouched(false);
+    setAutoTagSuggestion(null);
+    setAutoTagError("");
+    setAutoTagging(false);
     setAddingNew(true);
     setTimeout(() => newNoteRef.current?.focus(), 80);
   };
@@ -391,6 +607,10 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
           if (!open) {
             stopListening();
             setAddingNew(false);
+            setAutoTagging(false);
+            setAutoTagSuggestion(null);
+            setAutoTagError("");
+            setNewCatsTouched(false);
           }
         }}
       >
@@ -412,13 +632,22 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
               <input type="number" min={0} max={59} value={newSec} onChange={(e) => setNewSec(e.target.value)}
                 placeholder="sec" className="w-16 text-xs font-mono text-center bg-background border border-border rounded px-2 py-1.5" />
             </div>
-            <CategorySelector selected={newCats} onChange={setNewCats} />
+            <CategorySelector
+              selected={newCats}
+              onChange={(cats) => {
+                setNewCatsTouched(true);
+                setNewCats(cats.length ? cats : ["other"]);
+              }}
+            />
             <div className="flex gap-2 items-end">
               <textarea
                 ref={newNoteRef}
                 value={newNote}
-                onChange={(e) => setNewNote(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (newNote.trim()) { commitAdd(); if (videoRef.current) videoRef.current.play(); } } }}
+                onChange={(e) => {
+                  setNewNote(e.target.value);
+                  setAutoTagError("");
+                }}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (newNote.trim() && !autoTagging) commitAdd({ resume: true }); } }}
                 placeholder="Describe the event… or tap mic to dictate"
                 rows={3}
                 className="flex-1 text-sm bg-background border border-border rounded px-3 py-2 resize-none"
@@ -433,6 +662,45 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
                   {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
                 </button>
               )}
+            </div>
+            <div className="rounded-lg border border-border bg-muted/25 px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <Sparkles className="h-3 w-3 text-primary" />
+                  AI Annotation Tags
+                </div>
+                {autoTagging && (
+                  <span className="inline-flex items-center gap-1 text-[10px] text-primary">
+                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                    Tagging
+                  </span>
+                )}
+                {newCatsTouched && autoTagSuggestion && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewCats(autoTagSuggestion.categories);
+                      setNewCatsTouched(false);
+                    }}
+                    className="text-[10px] font-medium text-primary hover:underline"
+                  >
+                    Apply AI
+                  </button>
+                )}
+              </div>
+              {autoTagSuggestion?.annotation_tags?.length ? (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {autoTagSuggestion.annotation_tags.map((tag) => <AnnotationTagPill key={tag} value={tag} />)}
+                </div>
+              ) : (
+                <p className="mt-1 text-[10px] text-muted-foreground/75">
+                  Type a note and PulsePoint will suggest broad categories plus finding/action tags.
+                </p>
+              )}
+              {autoTagSuggestion?.rationale && autoTagSuggestion.rationale !== "Local keyword fallback" && (
+                <p className="mt-1 text-[10px] text-muted-foreground/75">{autoTagSuggestion.rationale}</p>
+              )}
+              {autoTagError && <p className="mt-1 text-[10px] text-destructive">{autoTagError}</p>}
             </div>
             {isListening && (
               <p className="text-[10px] flex items-center gap-1.5 text-destructive">
@@ -453,8 +721,13 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
               <button onClick={() => { stopListening(); setAddingNew(false); }} className="flex items-center justify-center gap-1 text-xs px-3 py-2 rounded-lg bg-muted text-muted-foreground font-medium">
                 <X className="w-3 h-3" /> Cancel
               </button>
-              <button onClick={() => { commitAdd(); if (videoRef.current) videoRef.current.play(); }} className="flex items-center justify-center gap-1 text-xs px-3 py-2 rounded-lg bg-primary text-primary-foreground font-medium">
-                <Check className="w-3 h-3" /> Save &amp; Resume
+              <button
+                onClick={() => commitAdd({ resume: true })}
+                disabled={!newNote.trim() || autoTagging}
+                className="flex items-center justify-center gap-1 text-xs px-3 py-2 rounded-lg bg-primary text-primary-foreground font-medium disabled:opacity-50"
+              >
+                {autoTagging ? <span className="w-3 h-3 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" /> : <Check className="w-3 h-3" />}
+                Save &amp; Resume
               </button>
             </div>
           </div>
@@ -692,6 +965,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
                   {nearby.map(({ ev, i, dist }) => {
                     const color = EVENT_COLORS[i % EVENT_COLORS.length];
                     const cats = normalizeCategoryArray(ev.category);
+                    const annotationTags = getAnnotationTags(ev);
                     const isCurrent = dist < 5;
                     return (
                       <button
@@ -719,6 +993,11 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
                               );
                             })}
                           </div>
+                          {annotationTags.length > 0 && (
+                            <div className="mb-0.5 flex flex-wrap gap-0.5">
+                              {annotationTags.map((tag) => <AnnotationTagPill key={tag} value={tag} />)}
+                            </div>
+                          )}
                           <span className="text-[10px] text-foreground leading-tight line-clamp-2">{ev.note}</span>
                         </div>
                         <span className="text-[8px] font-mono text-muted-foreground shrink-0 mt-0.5">
@@ -745,6 +1024,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
                   {past.map(({ ev, i, diff }) => {
                     const color = EVENT_COLORS[i % EVENT_COLORS.length];
                     const cats = normalizeCategoryArray(ev.category);
+                    const annotationTags = getAnnotationTags(ev);
                     const isCurrent = diff < 5;
                     return (
                       <button
@@ -771,6 +1051,11 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
                             );
                           })}
                         </div>
+                        {annotationTags.length > 0 && (
+                          <div className="flex flex-wrap gap-0.5">
+                            {annotationTags.map((tag) => <AnnotationTagPill key={tag} value={tag} />)}
+                          </div>
+                        )}
                         <span className="text-xs text-foreground leading-tight">{ev.note}</span>
                         <span className="text-[9px] font-mono text-muted-foreground">
                           {diff < 1 ? "now" : `${Math.round(diff)}s ago`}
@@ -806,6 +1091,7 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
               const i = events.indexOf(ev);
               const color = EVENT_COLORS[i % EVENT_COLORS.length];
               const cats = normalizeCategoryArray(ev.category);
+              const annotationTags = getAnnotationTags(ev);
               const dist = Math.abs(ev.time_s - playheadS);
               const isNearby = dist <= 30;
               const isCurrent = dist < 5;
@@ -868,6 +1154,11 @@ export default function VideoSyncPlayer({ session, timelineRows }) {
                         );
                       })}
                     </div>
+                    {annotationTags.length > 0 && (
+                      <div className="mb-0.5 flex flex-wrap gap-0.5">
+                        {annotationTags.map((tag) => <AnnotationTagPill key={tag} value={tag} />)}
+                      </div>
+                    )}
                     <span className="text-xs text-foreground leading-snug">{ev.note}</span>
                   </button>
                   <div className="shrink-0 flex flex-col items-end gap-1">

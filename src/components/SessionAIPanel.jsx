@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { base44 } from "@/api/base44Client";
-import { Brain, AlertCircle, Activity, Lightbulb, TrendingUp, Zap, ChevronDown, ChevronUp } from "lucide-react";
+import { AlertCircle, Brain, Activity, Lightbulb, TrendingUp, Zap, ChevronDown, ChevronUp } from "lucide-react";
 import TTSReader from "./TTSReader";
 import { Button } from "@/components/ui/button";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
@@ -14,6 +14,29 @@ function buildSessionContext(session, timelineRows) {
     session.foley_size ? `Foley: ${session.foley_size}Fr ${session.foley_type || ""}` : null,
     session.estim_notes ? `E-Stim notes: ${session.estim_notes}` : null,
     `Intensity: ${session.intensity}/10, Build quality: ${session.build_quality}/10, Satisfaction: ${session.satisfaction}/10`,
+    [
+      session.release_completeness ? `release completeness ${session.release_completeness}/10` : null,
+      session.arousal_depth ? `arousal depth ${session.arousal_depth}/10` : null,
+      session.erection_stability ? `response stability ${session.erection_stability}/10` : null,
+      session.stimulation_fit ? `stimulation fit ${session.stimulation_fit}/10` : null,
+      session.control ? `edge/control quality ${session.control}/10` : null,
+      session.sensory_immersion ? `sensory immersion ${session.sensory_immersion}/10` : null,
+      session.recovery_quality ? `recovery quality ${session.recovery_quality}/10` : null,
+      session.discomfort_interference ? `discomfort/interruption impact ${session.discomfort_interference}/10` : null,
+    ].filter(Boolean).length
+      ? `Targeted subjective metrics: ${[
+        session.release_completeness ? `release completeness ${session.release_completeness}/10` : null,
+        session.arousal_depth ? `arousal depth ${session.arousal_depth}/10` : null,
+        session.erection_stability ? `response stability ${session.erection_stability}/10` : null,
+        session.stimulation_fit ? `stimulation fit ${session.stimulation_fit}/10` : null,
+        session.control ? `edge/control quality ${session.control}/10` : null,
+        session.sensory_immersion ? `sensory immersion ${session.sensory_immersion}/10` : null,
+        session.recovery_quality ? `recovery quality ${session.recovery_quality}/10` : null,
+        session.discomfort_interference ? `discomfort/interruption impact ${session.discomfort_interference}/10` : null,
+      ].filter(Boolean).join(", ")}`
+      : null,
+    session.primary_limiting_factor ? `Primary limiting factor: ${session.primary_limiting_factor}` : null,
+    session.subjective_notes ? `Subjective metric notes: ${session.subjective_notes}` : null,
     `Build type: ${session.build_type}${session.custom_build_type ? " — " + session.custom_build_type : ""}`,
     `Climax duration: ${session.climax_duration ?? "?"}`,
     `Mood: ${session.mood}, Hydration: ${session.hydration}`,
@@ -41,6 +64,33 @@ const SECTION_COLORS = {
   destructive: "hsl(var(--destructive))",
 };
 
+function aiErrorMessage(error) {
+  const raw = error?.data?.error || error?.message || String(error || "Analysis failed");
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed?.error?.message || parsed?.message || parsed?.error || raw;
+  } catch {
+    return raw;
+  }
+}
+
+function normalizeSessionAnalysis(res) {
+  const raw = typeof res === "string" ? JSON.parse(res) : res;
+  const parsed = raw?.response ?? raw;
+  const hasContent =
+    parsed?.summary ||
+    parsed?.arousal_arc?.length ||
+    parsed?.phase_analysis?.length ||
+    parsed?.event_analysis?.length ||
+    parsed?.hr_analysis?.length;
+
+  if (!hasContent || parsed?.raw) {
+    throw new Error("AI returned text, but not the structured session analysis the app needs. Please try again.");
+  }
+
+  return parsed;
+}
+
 function Section({ icon, title, color, children }) {
   return (
     <div className="bg-muted/60 rounded-lg p-3 space-y-2">
@@ -64,10 +114,13 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
   const [collapsed, setCollapsed] = useState(true);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(session.ai_analysis ?? null);
+  const [error, setError] = useState("");
 
   const analyze = async () => {
     setLoading(true);
-    setResult(null);
+    setError("");
+
+    try {
 
     // Build EMG summary for AI
     const emgSummary = (() => {
@@ -222,6 +275,7 @@ Factor the journal into your analysis — where the person's subjective experien
 
     const res = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_6",
+      max_tokens: 7000,
       ...(estimScreenshots.length > 0 ? { file_urls: estimScreenshots } : {}),
       prompt: `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session integrating arousal physiology, anatomy, heart rate data, event timeline, and subjective experience into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
@@ -284,6 +338,16 @@ ${JSON.stringify({
   intensity: session.intensity,
   satisfaction: session.satisfaction,
   build_quality: session.build_quality,
+  release_completeness: session.release_completeness,
+  arousal_depth: session.arousal_depth,
+  erection_stability: session.erection_stability,
+  stimulation_fit: session.stimulation_fit,
+  edge_control_quality: session.control,
+  sensory_immersion: session.sensory_immersion,
+  recovery_quality: session.recovery_quality,
+  discomfort_interruption_impact: session.discomfort_interference,
+  primary_limiting_factor: session.primary_limiting_factor,
+  subjective_notes: session.subjective_notes,
   build_type: session.build_type,
   climax_duration: session.climax_duration,
   mood: session.mood,
@@ -326,11 +390,15 @@ Provide a rich, physiologically-grounded analysis that tells the story of this s
       },
     });
 
-    const raw = typeof res === "string" ? JSON.parse(res) : res;
-    const parsed = raw?.response ?? raw;
+    const parsed = normalizeSessionAnalysis(res);
     setResult(parsed);
     await base44.entities.Session.update(session.id, { ai_analysis: parsed });
+    } catch (err) {
+      console.error("AI Session analysis failed:", err);
+      setError(aiErrorMessage(err));
+    } finally {
     setLoading(false);
+    }
   };
 
   return (
@@ -355,7 +423,12 @@ Provide a rich, physiologically-grounded analysis that tells the story of this s
         </p>
       )}
 
-
+      {!collapsed && error && (
+        <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
 
       {!collapsed && result && (() => {
         // Support both old schema (hr_analysis/phase_analysis) and new schema (arousal_arc/event_analysis)

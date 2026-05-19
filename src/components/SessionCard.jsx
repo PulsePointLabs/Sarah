@@ -1,9 +1,72 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Star, Heart, Zap, Clock, Brain, ChevronDown, ChevronUp, XCircle } from "lucide-react";
+import {
+  Activity,
+  AlertTriangle,
+  Brain,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  FileText,
+  Heart,
+  Star,
+  Video,
+  Zap,
+  XCircle,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import moment from "moment";
-import { computeSessionScore, gradeFromPct } from "@/utils/sessionScore";
+import { gradeFromPct } from "@/utils/sessionScore";
+
+const num = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const hasVideo = (session) =>
+  Boolean(session.video_link) || (session.media_videos || []).length > 0 || Boolean(session.video_file);
+
+const hasDiscomfort = (session) =>
+  Boolean(session.discomfort) ||
+  (session.discomfort_entries || []).length > 0 ||
+  num(session.discomfort_interference) >= 4;
+
+const buildTypeLabel = (session) => {
+  if (!session.build_type) return null;
+  if (session.build_type === "Other" && session.custom_build_type) return session.custom_build_type;
+  return session.build_type;
+};
+
+function buildSignalLine(session) {
+  const parts = [];
+  const build = buildTypeLabel(session);
+  if (build) parts.push(`${build} build`);
+  if (num(session.stimulation_fit) >= 8) parts.push("strong stimulation fit");
+  if (num(session.sensory_immersion) >= 8) parts.push("high immersion");
+  if (num(session.release_completeness) >= 8) parts.push("complete release");
+  if (num(session.recovery_quality) >= 8) parts.push("clean recovery");
+  if (num(session.arousal_depth) >= 8) parts.push("deep arousal");
+  if (hasDiscomfort(session)) parts.push("comfort flag");
+  if (session.primary_limiting_factor) parts.push(`limit: ${session.primary_limiting_factor}`);
+  if (session.no_climax && num(session.arousal_depth) >= 7) parts.push("high arousal without climax");
+  if (!parts.length && session.ai_analysis?.summary) return session.ai_analysis.summary.split(/\n+/)[0]?.slice(0, 150);
+  return parts.slice(0, 3).join(" · ");
+}
+
+function DataPill({ icon: Icon, label, active, tone = "muted" }) {
+  const className = active
+    ? tone === "primary"
+      ? "border-primary/30 bg-primary/10 text-primary"
+      : "border-cyan-500/30 bg-cyan-500/10 text-cyan-300"
+    : "border-border bg-muted/30 text-muted-foreground/70";
+
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${className}`}>
+      <Icon className="h-3 w-3" />
+      {label}
+    </span>
+  );
+}
 
 export default function SessionCard({ session, selectable, selected, onSelect }) {
   const [aiExpanded, setAiExpanded] = useState(false);
@@ -19,6 +82,17 @@ export default function SessionCard({ session, selectable, selected, onSelect })
   const hasEMG = session.emg_enabled ||
     session.emg_general_notes || session.emg_left_placement_notes || session.emg_right_placement_notes ||
     (session.emg_placement_photos || []).length > 0;
+  const signalLine = buildSignalLine(session);
+  const newerMetrics = [
+    session.release_completeness,
+    session.arousal_depth,
+    session.erection_stability,
+    session.stimulation_fit,
+    session.sensory_immersion,
+    session.recovery_quality,
+    session.discomfort_interference,
+    session.primary_limiting_factor,
+  ].filter((value) => value != null && value !== "").length;
 
   const content = (
     <div className={`bg-card rounded-xl border p-4 transition-all ${
@@ -58,6 +132,11 @@ export default function SessionCard({ session, selectable, selected, onSelect })
               EMG
             </span>
           )}
+          {hasVideo(session) && (
+            <span className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+              <Video className="w-2.5 h-2.5" /> VID
+            </span>
+          )}
           {session.is_quick_entry && <Zap className="w-4 h-4 text-primary" />}
           {session.is_favorite && <Star className="w-4 h-4 text-yellow-500 fill-yellow-500" />}
         </div>
@@ -92,6 +171,12 @@ export default function SessionCard({ session, selectable, selected, onSelect })
         )}
       </div>
 
+      {signalLine && (
+        <p className="mb-2 rounded-lg border border-border bg-muted/25 px-3 py-2 text-xs leading-5 text-foreground/85">
+          {signalLine}
+        </p>
+      )}
+
       {/* Badges */}
       <div className="flex flex-wrap gap-1 mb-2">
         {methods.slice(0, 3).map((m) => (
@@ -108,6 +193,14 @@ export default function SessionCard({ session, selectable, selected, onSelect })
         {(session.tags || []).slice(0, 2).map((t) => (
           <Badge key={t} variant="outline" className="text-[10px] py-0">{t}</Badge>
         ))}
+      </div>
+
+      <div className="mb-2 flex flex-wrap gap-1.5">
+        <DataPill icon={Heart} label="HR" active={Boolean(session.avg_hr || session.max_hr)} tone="primary" />
+        <DataPill icon={Activity} label={`${eventCount} Events`} active={eventCount > 0} />
+        <DataPill icon={Brain} label="AI" active={Boolean(aiSummary || gradeInfo)} tone="primary" />
+        <DataPill icon={FileText} label={`${newerMetrics}/8 Metrics`} active={newerMetrics >= 5} />
+        {hasDiscomfort(session) && <DataPill icon={AlertTriangle} label="Comfort" active tone="primary" />}
       </div>
 
       {/* AI breakdown toggle (only shown when summary exists) */}

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { MessageCircle, Send, ChevronDown, ChevronUp, Sparkles, Save, RefreshCw, Mic, MicOff, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
+import { TTS_PLAYBACK_FORMAT, TTS_SPEED, VOICE_INSTRUCTIONS } from "@/components/TTSButton";
 
 const PROFILE_CATEGORIES = [
   { key: "physical", label: "Physical Baseline", emoji: "🫀", hint: "Body metrics, fitness, resting HR, medications" },
@@ -55,10 +56,17 @@ export default function AIChat({
   const speakText = async (text, idx) => {
     if (!ttsEnabled) return;
     setSpeakingIdx(idx);
-    const res = await base44.functions.invoke("openaiTTS", { text, voice: "nova", speed: 1.0 });
+    const res = await base44.functions.invoke("openaiTTS", {
+      text,
+      voice: "nova",
+      speed: TTS_SPEED,
+      instructions: VOICE_INSTRUCTIONS,
+      format: TTS_PLAYBACK_FORMAT,
+    });
     const audio = res.data?.audio;
     if (!audio) { setSpeakingIdx(null); return; }
-    const src = `data:audio/mpeg;base64,${audio}`;
+    const mime = res.data?.format === "wav" ? "audio/wav" : res.data?.format === "aac" ? "audio/aac" : "audio/mpeg";
+    const src = `data:${mime};base64,${audio}`;
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     const el = new Audio(src);
     audioRef.current = el;

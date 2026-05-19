@@ -18,6 +18,84 @@ function briefText(value, max = 180) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+function avg(values) {
+  const nums = values.map(Number).filter(Number.isFinite);
+  return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+}
+
+function fmtAvg(value, digits = 1) {
+  return value == null ? "—" : Number(value).toFixed(digits).replace(/\.0$/, "");
+}
+
+function buildProfileEvidenceDigest(sessions) {
+  const withHr = sessions.filter((s) => s.avg_hr || s.max_hr || s.hr_at_climax);
+  const climaxSessions = sessions.filter((s) => !s.no_climax && s.climax_offset_s != null);
+  const favorites = sessions.filter((s) => s.is_favorite).length;
+  const topRated = [...sessions]
+    .sort((a, b) => ((b.satisfaction || 0) + (b.intensity || 0)) - ((a.satisfaction || 0) + (a.intensity || 0)))
+    .slice(0, 5)
+    .map((s) => `${s.date?.slice(0, 10)} S${s.satisfaction ?? "?"}/I${s.intensity ?? "?"}, ${[...(s.methods || []), ...(s.custom_methods || [])].filter(Boolean).slice(0, 4).join("+") || "no method"}, maxHR ${s.max_hr || "?"}`)
+    .join(" | ");
+
+  const methodMap = new Map();
+  for (const s of sessions) {
+    const methods = [...(s.methods || []), ...(s.custom_methods || [])].filter(Boolean);
+    for (const method of methods) {
+      const key = String(method).toLowerCase();
+      const row = methodMap.get(key) || { label: method, count: 0, satisfaction: [], intensity: [], maxHr: [] };
+      row.count += 1;
+      row.satisfaction.push(s.satisfaction);
+      row.intensity.push(s.intensity);
+      row.maxHr.push(s.max_hr);
+      methodMap.set(key, row);
+    }
+  }
+  const methodStats = [...methodMap.values()]
+    .sort((a, b) => b.count - a.count || (avg(b.satisfaction) || 0) - (avg(a.satisfaction) || 0))
+    .slice(0, 8)
+    .map((m) => `${m.label}: n${m.count}, sat ${fmtAvg(avg(m.satisfaction))}, intensity ${fmtAvg(avg(m.intensity))}, maxHR ${fmtAvg(avg(m.maxHr), 0)}`)
+    .join(" | ");
+
+  const contextMap = new Map();
+  for (const s of sessions) {
+    for (const raw of [s.mood, s.environment, s.build_type, s.substances].filter(Boolean)) {
+      const key = String(raw).toLowerCase();
+      const row = contextMap.get(key) || { label: raw, count: 0, satisfaction: [], intensity: [] };
+      row.count += 1;
+      row.satisfaction.push(s.satisfaction);
+      row.intensity.push(s.intensity);
+      contextMap.set(key, row);
+    }
+  }
+  const contextStats = [...contextMap.values()]
+    .filter((c) => c.count >= 2)
+    .sort((a, b) => (avg(b.satisfaction) || 0) - (avg(a.satisfaction) || 0))
+    .slice(0, 8)
+    .map((c) => `${c.label}: n${c.count}, sat ${fmtAvg(avg(c.satisfaction))}, intensity ${fmtAvg(avg(c.intensity))}`)
+    .join(" | ");
+
+  return [
+    `Coverage: ${sessions.length} sessions, ${withHr.length} with HR, ${climaxSessions.length} with climax timing, ${favorites} favorites, ${sessions.filter((s) => s.no_climax).length} no-climax sessions.`,
+    `HR: avg session HR ${fmtAvg(avg(sessions.map((s) => s.avg_hr)), 0)}, avg max HR ${fmtAvg(avg(sessions.map((s) => s.max_hr)), 0)}, avg HR at climax ${fmtAvg(avg(sessions.map((s) => s.hr_at_climax)), 0)}.`,
+    `Ratings: avg satisfaction ${fmtAvg(avg(sessions.map((s) => s.satisfaction)))}, avg intensity ${fmtAvg(avg(sessions.map((s) => s.intensity)))}, avg build quality ${fmtAvg(avg(sessions.map((s) => s.build_quality)))}.`,
+    topRated ? `Highest-rated evidence: ${topRated}` : null,
+    methodStats ? `Method patterns: ${methodStats}` : null,
+    contextStats ? `Context patterns: ${contextStats}` : null,
+  ].filter(Boolean).join("\n");
+}
+
+function normalizeAIProfileResult(raw) {
+  const parsed = raw?.response ?? raw;
+  if (!parsed) return null;
+  if (typeof parsed === "string") {
+    return { profile_overview: parsed, arousal_physiology: [], stimulation_profile: [], climax_and_recovery: [], contextual_sensitivities: [], discomfort_and_edge_cases: [], behavioral_tendencies: [], optimization_recommendations: [] };
+  }
+  if (parsed.raw && typeof parsed.raw === "string") {
+    return { profile_overview: parsed.raw, arousal_physiology: [], stimulation_profile: [], climax_and_recovery: [], contextual_sensitivities: [], discomfort_and_edge_cases: [], behavioral_tendencies: [], optimization_recommendations: [] };
+  }
+  return parsed;
+}
+
 function aiErrorMessage(error) {
   const raw = error?.data?.error || error?.message || String(error || "Analysis failed");
   try {
@@ -244,12 +322,8 @@ function AIProfilePanel({ sessions, userProfile, journals }) {
 
     try {
     const sortedSessions = [...sessions].sort((a, b) => new Date(b.date) - new Date(a.date));
-    const topSessions = [...sessions]
-      .filter((s) => s.satisfaction || s.intensity)
-      .sort((a, b) => ((b.satisfaction || 0) - (a.satisfaction || 0)) || ((b.intensity || 0) - (a.intensity || 0)))
-      .slice(0, 8);
-    const signalSessions = [...new Map([...sortedSessions.slice(0, 14), ...topSessions].map((s) => [s.id, s])).values()];
-    const sessionSummaries = signalSessions.map(compactSessionLine).join("\n");
+    const sessionSummaries = sortedSessions.map(compactSessionLine).join("\n");
+    const evidenceDigest = buildProfileEvidenceDigest(sortedSessions);
 
     const profileContext = userProfile ? `
 USER PROFILE & NOTES:
@@ -291,7 +365,10 @@ CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Avoid jargon—explain concepts clearly as if speaking aloud
 - Use commas and periods to create natural speech cadence
 ${profileContext}${journalContext}
-SESSION DATA SUMMARY (${sessions.length} total sessions; using the newest and highest-signal sessions to stay under rate limits):
+SESSION DATA SUMMARY (${sessions.length} total sessions; compacted to preserve full coverage without exceeding rate limits):
+${evidenceDigest}
+
+SESSION-BY-SESSION EVIDENCE:
 ${sessionSummaries}
 
 Generate a rich, holistic profile. Your job is NOT to restate what was already logged — the person already knows what they did. Instead, offer your own interpretations, inferences, hypotheses, and conclusions drawn FROM the data. Go beyond the surface. Make observations they may not have noticed themselves. Point out cross-session patterns, contradictions, and surprising findings. Be willing to form opinions and state them directly.
@@ -327,10 +404,15 @@ Be direct, insightful, and willing to state conclusions. Ground everything in th
         },
         required: ["profile_overview", "arousal_physiology", "stimulation_profile", "climax_and_recovery", "contextual_sensitivities", "behavioral_tendencies", "optimization_recommendations"],
       },
+      max_tokens: 8192,
+      attempts: 4,
     });
 
     const raw = typeof res === "string" ? JSON.parse(res) : res;
-    const parsed = raw?.response ?? raw;
+    const parsed = normalizeAIProfileResult(raw);
+    if (!parsed?.profile_overview && !parsed?.arousal_physiology?.length) {
+      throw new Error("Claude returned an empty profile response. Try again in a minute; the rate limit may still be cooling down.");
+    }
     setResult(parsed);
 
     const existing = await base44.entities.SessionClusterAnalysis.list("-updated_date", 1);

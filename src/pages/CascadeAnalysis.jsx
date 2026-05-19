@@ -6,7 +6,7 @@ import {
 "recharts";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Brain, Activity, TrendingDown, Clock, Zap, AlertCircle } from "lucide-react";
+import { Brain, Activity, AlertCircle } from "lucide-react";
 import TTSReader from "../components/TTSReader";
 import CascadeTrendPanel from "../components/CascadeTrendPanel";
 
@@ -25,15 +25,38 @@ function fmtDur(s) {
   return v >= 60 ? `${Math.floor(v / 60)}m${v % 60}s` : `${v}s`;
 }
 
-const PHASE_COLORS = ["#3b82f6", "#ef4444", "#f59e0b", "#a855f7", "#10b981", "#f43f5e", "#0ea5e9", "#8b5cf6"];
+function briefText(value, max = 180) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
 
-const SECTION_COLORS = {
-  "chart-1": "hsl(var(--chart-1))",
-  "chart-2": "hsl(var(--chart-2))",
-  "chart-4": "hsl(var(--chart-4))",
-  "accent": "hsl(var(--accent))",
-  "destructive": "hsl(var(--destructive))"
-};
+function aiErrorMessage(error) {
+  const raw = error?.data?.error || error?.message || String(error || "Analysis failed");
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed?.error?.message || parsed?.message || parsed?.error || raw;
+  } catch {
+    return raw;
+  }
+}
+
+function normalizeCascadeAnalysisResult(res) {
+  const raw = typeof res === "string" ? JSON.parse(res) : res;
+  const parsed = raw?.response ?? raw;
+  const hasContent =
+    parsed?.summary ||
+    parsed?.cascade_overview?.length ||
+    parsed?.heart_rate_signature?.length ||
+    parsed?.physiological_findings?.length;
+
+  if (!hasContent || parsed?.raw) {
+    throw new Error("AI returned text, but not the structured Cascade Analysis the page needs. Please try again.");
+  }
+
+  return parsed;
+}
+
+const PHASE_COLORS = ["#3b82f6", "#ef4444", "#f59e0b", "#a855f7", "#10b981", "#f43f5e", "#0ea5e9", "#8b5cf6"];
 
 // ─── Heatmap cell ─────────────────────────────────────────────────────────────
 
@@ -54,23 +77,14 @@ function HeatmapCell({ value, min, max }) {
 
 }
 
-// ─── Section / Item for AI output ─────────────────────────────────────────────
-
-function Section({ icon, title, color, children }) {
+function CompactError({ message }) {
+  if (!message) return null;
   return (
-    <div>
-      <p className="flex items-center gap-1 font-semibold mb-1.5" style={{ color: SECTION_COLORS[color] }}>
-        {icon}{title}
-      </p>
-      <ul className="space-y-1">{children}</ul>
-    </div>);
-
-}
-
-function Item({ text }) {
-  return (
-    <li className="text-[#ffffff] pl-3 py-0.5 text-sm leading-relaxed border-l-2 border-primary/40">• {text}</li>);
-
+    <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span>{message}</span>
+    </div>
+  );
 }
 
 // ─── AI Insight panel ─────────────────────────────────────────────────────────
@@ -80,12 +94,19 @@ function AIInsightPanel({ sessions }) {
   const [result, setResult] = useState(null);
   const [savedId, setSavedId] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     base44.entities.CascadeAnalysisResult.list("-updated_date", 1).then((rows) => {
       if (rows[0]) {
-        setResult(rows[0].result);
-        setSavedId(rows[0].id);
+        try {
+          setResult(normalizeCascadeAnalysisResult(rows[0].result));
+          setSavedId(rows[0].id);
+        } catch {
+          setResult(null);
+          setSavedId(rows[0].id);
+          setError("The last saved Cascade Analysis was incomplete. Please regenerate it.");
+        }
       }
     });
     base44.auth.me().then((u) => setUserProfile(u)).catch(() => {});
@@ -94,6 +115,9 @@ function AIInsightPanel({ sessions }) {
   const analyze = async () => {
     setLoading(true);
     setResult(null);
+    setError("");
+
+    try {
 
     // Build nearest-HR lookup per session for event annotation
     const nearestHR = (rows, time_s) => {
@@ -156,14 +180,14 @@ function AIInsightPanel({ sessions }) {
         if (sec === 0) return `${m} minute${m !== 1 ? "s" : ""}`;
         return `${m} minute${m !== 1 ? "s" : ""} and ${sec} second${sec !== 1 ? "s" : ""}`;
       };
-      const annotatedEvents = (s.event_timeline || []).map((e) => {
+      const annotatedEvents = (s.event_timeline || []).slice(0, 8).map((e) => {
         const timeWords = formatTimeWords(e.time_s);
         const hr = nearestHR(rows, e.time_s);
         const relToClimax = s.climax_offset_s != null ? Math.round(e.time_s - s.climax_offset_s) : null;
         const relStr = relToClimax != null ? ` (${formatTimeWords(Math.abs(relToClimax))} ${relToClimax >= 0 ? "after" : "before"} climax)` : "";
         const cats = Array.isArray(e.category) ? e.category : [e.category].filter(Boolean);
         const catStr = cats.length ? `[${cats.join("+")}]` : "";
-        return `${catStr} at ${timeWords}${relStr} — ${e.note}${hr != null ? ` (heart rate: ${hr} beats per minute)` : ""}`.trim();
+        return `${catStr} at ${timeWords}${relStr} — ${briefText(e.note, 130)}${hr != null ? ` (heart rate: ${hr} beats per minute)` : ""}`.trim();
       });
 
       // Build cascade shape: HR at pre-climax, climax, and recovery markers
@@ -207,7 +231,7 @@ function AIInsightPanel({ sessions }) {
         methods: s.methods,
         event_notes: annotatedEvents.length > 0 ? annotatedEvents : undefined,
         discomfort_entries: s.discomfort_entries?.length > 0 ? s.discomfort_entries : undefined,
-        notes: s.notes || undefined
+        notes: briefText(s.notes, 180) || undefined
       };
     });
 
@@ -278,31 +302,52 @@ function AIInsightPanel({ sessions }) {
       };
     }).filter(Boolean);
 
-    const withRecovery = summary.filter((s) => s.cascade_shape?.recovery_onset_s != null);
+    const withRecovery = temporalTrend.filter((s) => s.recovery_onset_s != null);
     const avgRecoveryOnset = withRecovery.length ?
-    Math.round(withRecovery.reduce((a, s) => a + s.cascade_shape.recovery_onset_s, 0) / withRecovery.length) :
+    Math.round(withRecovery.reduce((a, s) => a + s.recovery_onset_s, 0) / withRecovery.length) :
     null;
 
     const arousalProfile = userProfile && (userProfile.arousal_response_style || userProfile.arousal_notes || userProfile.climax_sensitivity) ? `
 
 USER AROUSAL PROFILE:
-${JSON.stringify({
-  arousal_response_style: userProfile.arousal_response_style,
-  typical_build_duration: userProfile.typical_build_duration,
-  climax_sensitivity: userProfile.climax_sensitivity,
-  preferred_stimulation: userProfile.preferred_stimulation,
-  refractory_pattern: userProfile.refractory_pattern,
-  arousal_notes: userProfile.arousal_notes,
-}, null, 2)}
+Arousal style: ${userProfile.arousal_response_style || "unknown"}.
+Typical build duration: ${userProfile.typical_build_duration || "unknown"}.
+Climax sensitivity: ${userProfile.climax_sensitivity || "unknown"}.
+Preferred stimulation: ${(userProfile.preferred_stimulation || []).join(", ") || "unknown"}.
+Refractory pattern: ${userProfile.refractory_pattern || "unknown"}.
+Arousal notes: ${briefText(userProfile.arousal_notes, 500) || "none"}.
 
 Use this profile throughout the analysis — compare observed cascade patterns against the user's known arousal response style. Note sessions that align with or deviate from their typical build arc, sensitivity, and refractory pattern.` : "";
 
+    const temporalTrendText = temporalTrend.map((s) => (
+      `${s.date}: peak ${s.peak_hr_bpm ?? "?"} beats per minute; build ${s.build_duration_s != null ? fmtDur(s.build_duration_s) : "unknown"}; recovery ${s.recovery_onset_s != null ? fmtDur(s.recovery_onset_s) : "unknown"}; satisfaction ${s.satisfaction ?? "?"}; intensity ${s.intensity ?? "?"}; build type ${s.build_type || "unknown"}; methods ${(s.methods || []).join(", ") || "none"}`
+    )).join("\n");
+
+    const physiologicalMetricsText = physiologicalMetrics.map((m) => (
+      `${m.date}: baseline ${m.estimated_baseline_hr_bpm}; peak ${m.peak_hr_bpm ?? "?"}; rise ${m.hr_rise_above_baseline_bpm ?? "?"}; sympathetic index ${m.sympathetic_activation_index_bpm ?? "?"}; build rate ${m.build_rate_bpm_per_second ?? "?"}; plateau ${m.plateau_duration_near_peak_s != null ? fmtDur(m.plateau_duration_near_peak_s) : "unknown"}; recovery slope ${m.recovery_slope_bpm_per_second ?? "?"}; roughness ${m.hr_variability_roughness_rmssd ?? "?"}; duration ${m.session_duration_minutes ?? "?"} minutes`
+    )).join("\n");
+
+    const sessionEvidenceText = summary.map((s) => {
+      const shape = s.cascade_shape || {};
+      const events = (s.event_notes || []).slice(0, 6).join(" | ");
+      return [
+        `${s.date}: pre ${shape.hr_at_pre_climax_marker ?? "?"}, climax ${shape.hr_at_climax_marker ?? "?"}, recovery ${shape.hr_at_recovery_marker ?? "?"}`,
+        `build ${shape.build_duration || "unknown"}, recovery onset ${shape.recovery_onset || "unknown"}, rise ${shape.hr_rise_pre_to_climax_bpm ?? "?"} beats per minute`,
+        `average ${s.avg_hr ?? "?"}, maximum ${s.max_hr ?? "?"}, intensity ${s.intensity ?? "?"}, satisfaction ${s.satisfaction ?? "?"}, build ${s.build_type || "unknown"}, climax duration ${s.climax_duration || "unknown"}`,
+        `mood ${s.mood || "unknown"}, methods ${(s.methods || []).join(", ") || "none"}`,
+        events ? `events ${events}` : null,
+        s.discomfort_entries?.length ? `discomfort ${briefText(s.discomfort_entries.map((d) => d.note || d).join("; "), 220)}` : null,
+        s.notes ? `notes ${s.notes}` : null,
+      ].filter(Boolean).join("; ");
+    }).join("\n");
+
     const res = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_6",
+      max_tokens: 12000,
       prompt: `You are a physiological research assistant analyzing sexual response cascade data across ${sessions.length} sessions. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 CHRONOLOGICAL TREND DATA (sessions in date order — use this for temporal analysis):
-${JSON.stringify(temporalTrend, null, 2)}
+${temporalTrendText}
 
 COMPUTED PHYSIOLOGICAL METRICS (per session):
 - estimated_baseline_hr_bpm: resting-like HR at session start (proxy for pre-arousal state)
@@ -312,7 +357,7 @@ COMPUTED PHYSIOLOGICAL METRICS (per session):
 - plateau_duration_near_peak_s: seconds heart rate stayed within 5 bpm of the climax peak (longer = more sustained peak)
 - recovery_slope_bpm_per_second: rate of HR descent in first 60 seconds post-climax (negative = falling; closer to 0 = slower recovery)
 - hr_variability_roughness_rmssd: beat-to-beat roughness of HR signal (proxy for autonomic variability; higher = more parasympathetic activity mixed in)
-${JSON.stringify(physiologicalMetrics, null, 2)}
+${physiologicalMetricsText}
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Write all times as words: "ten minutes and thirty seconds" not "10:30"
@@ -329,7 +374,7 @@ Each session includes the full cascade arc: pre-climax buildup, climax peak, and
 Where available, event notes are annotated with heart rate values and their timing relative to the climax marker.
 
 Session data:
-${JSON.stringify(summary, null, 2)}
+${sessionEvidenceText}
 
 Provide a comprehensive, multi-layered analysis covering:
 
@@ -386,8 +431,7 @@ Be specific and reference actual values — but always written as spoken words, 
     });
 
     console.log("AI Cascade result:", res);
-    const raw = typeof res === "string" ? JSON.parse(res) : res;
-    const parsed = raw?.response ?? raw;
+    const parsed = normalizeCascadeAnalysisResult(res);
     setResult(parsed);
     if (savedId) {
       await base44.entities.CascadeAnalysisResult.update(savedId, { result: parsed, session_count: sessions.length });
@@ -395,7 +439,12 @@ Be specific and reference actual values — but always written as spoken words, 
       const created = await base44.entities.CascadeAnalysisResult.create({ result: parsed, session_count: sessions.length });
       setSavedId(created.id);
     }
-    setLoading(false);
+    } catch (err) {
+      console.error("AI Cascade analysis failed:", err);
+      setError(aiErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -424,6 +473,8 @@ Be specific and reference actual values — but always written as spoken words, 
           Click Analyze to generate AI-powered physiological insights across all aligned sessions. Uses Claude Sonnet (advanced model).
         </p>
       }
+
+      <CompactError message={error} />
 
       {result && (() => {
          const SECTION_ORDER = [

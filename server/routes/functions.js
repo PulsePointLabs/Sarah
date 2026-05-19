@@ -22,27 +22,28 @@ function sleep(ms) {
 
 function clampSpeed(value) {
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0.25 && parsed <= 4 ? parsed : 0.94;
+  return Number.isFinite(parsed) && parsed >= 0.25 && parsed <= 4 ? parsed : 1.0;
 }
 
-const VOICE_INSTRUCTIONS = `
-Read in a warm, calm, clinically intelligent tone.
-Sound like a distinctly feminine, thoughtful physiology podcast narrator with excellent bedside manner.
-Use relaxed pacing and natural conversational rhythm.
-Be soothing, emotionally grounded, and subtly expressive.
-Add gentle, audible enthusiasm at meaningful turning points, especially when describing notable physiological shifts, climax approach, release, or recovery.
-Let those key moments sound a little more alive, impressed, and engaged, while returning to calm narration afterward.
-Use a touch more feminine liveliness and forward motion, while staying calm, intelligent, and never bubbly.
-Keep the delivery intimate and human, but not overtly flirtatious or performative.
-Maintain consistent tone, pacing, and emotional energy across all segments.
-Do not sound robotic, flat, exaggerated, overly cheerful, customer-service-like, melodramatic, or clinical-dictation-like.
-`;
+const DEFAULT_TTS_INSTRUCTIONS = 'Read with friendly analytical enthusiasm, like an engaged physiologist explaining a fascinating finding to someone they know well. Keep a smooth natural cadence, varied inflection, and clear sentence-level pauses. Sound warm and alive, not formal, monotone, sultry, or announcer-like.';
 
-const TTS_SPEED = Number(process.env.OPENAI_TTS_SPEED || 0.97);
+const TTS_CONTENT_TYPES = {
+  mp3: 'audio/mpeg',
+  opus: 'audio/ogg',
+  aac: 'audio/aac',
+  flac: 'audio/flac',
+  wav: 'audio/wav',
+  pcm: 'application/octet-stream',
+};
+
+function normalizeTTSFormat(value) {
+  const format = String(value || process.env.OPENAI_TTS_FORMAT || 'mp3').toLowerCase();
+  return TTS_CONTENT_TYPES[format] ? format : 'mp3';
+}
 
 function getTTSInstructions(requestedInstructions) {
-  if (requestedInstructions) return String(requestedInstructions);
-  return process.env.OPENAI_TTS_INSTRUCTIONS || VOICE_INSTRUCTIONS;
+  const instructions = requestedInstructions ?? process.env.OPENAI_TTS_INSTRUCTIONS ?? DEFAULT_TTS_INSTRUCTIONS;
+  return String(instructions || '').trim();
 }
 
 function supportsTTSInstructions(model) {
@@ -130,7 +131,13 @@ functionsRouter.post('/purgeEMGData', (req, res) => {
 functionsRouter.post('/openaiTTS', async (req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY' });
-    const { text, voice = 'nova', speed = TTS_SPEED, instructions: requestedInstructions } = req.body || {};
+    const {
+      text,
+      voice = 'nova',
+      speed = 1.0,
+      instructions: requestedInstructions,
+      format: requestedFormat,
+    } = req.body || {};
     const input = String(text || '').trim();
     if (!input) return res.status(400).json({ error: 'Missing text' });
     const maxChars = Number(process.env.OPENAI_TTS_MAX_CHARS || 2500);
@@ -139,11 +146,12 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
     }
     const model = process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts';
     const finalSpeed = clampSpeed(speed);
+    const responseFormat = normalizeTTSFormat(requestedFormat);
     const body = {
       model,
       input,
       voice,
-      response_format: 'mp3',
+      response_format: responseFormat,
       speed: finalSpeed,
     };
     const instructions = getTTSInstructions(requestedInstructions);
@@ -155,14 +163,16 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
       model,
       voice,
       speed: finalSpeed,
+      format: responseFormat,
     };
     const { response, latencyMs, retries } = await callOpenAITTS(body, meta);
     const buffer = Buffer.from(await response.arrayBuffer());
-    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Type', TTS_CONTENT_TYPES[responseFormat]);
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-TTS-Model', model);
     res.setHeader('X-TTS-Voice', voice);
     res.setHeader('X-TTS-Speed', String(finalSpeed));
+    res.setHeader('X-TTS-Format', responseFormat);
     res.setHeader('X-TTS-Latency-Ms', String(latencyMs));
     res.setHeader('X-TTS-Retries', String(retries));
     res.send(buffer);

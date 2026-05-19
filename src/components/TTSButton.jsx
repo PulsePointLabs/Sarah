@@ -2,23 +2,16 @@ import { useState, useRef } from "react";
 import { Play, Pause, Square } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 
-export const VOICE_INSTRUCTIONS = `
-Read in a warm, calm, clinically intelligent tone.
-Sound like a distinctly feminine, thoughtful physiology podcast narrator with excellent bedside manner.
-Use relaxed pacing and natural conversational rhythm.
-Be soothing, emotionally grounded, and subtly expressive.
-Add gentle, audible enthusiasm at meaningful turning points, especially when describing notable physiological shifts, climax approach, release, or recovery.
-Let those key moments sound a little more alive, impressed, and engaged, while returning to calm narration afterward.
-Use a touch more feminine liveliness and forward motion, while staying calm, intelligent, and never bubbly.
-Keep the delivery intimate and human, but not overtly flirtatious or performative.
-Maintain consistent tone, pacing, and emotional energy across all segments.
-Do not sound robotic, flat, exaggerated, overly cheerful, customer-service-like, melodramatic, or clinical-dictation-like.
-`;
-
-export const TTS_SPEED = Number(import.meta.env.VITE_TTS_SPEED || 0.97);
-export const TTS_CHUNK_MAX_CHARS = 2400;
-export const TTS_CHUNK_MIN_CHARS = 1800;
-export const TTS_CACHE_VOICE_PROFILE = "feminine-more-lift-v1";
+export const VOICE_INSTRUCTIONS = "Read with friendly analytical enthusiasm, like an engaged physiologist explaining a fascinating finding to someone they know well. Keep a smooth natural cadence, varied inflection, and clear sentence-level pauses. Sound warm and alive, not formal, monotone, sultry, or announcer-like.";
+export const TTS_SPEED = 1.0;
+export const TTS_PLAYBACK_FORMAT = "mp3";
+export const TTS_EXPORT_FORMAT = "mp3";
+export const TTS_EXPORT_CONTAINER = "mp3";
+export const TTS_EXPORT_MIME = "audio/mpeg";
+export const TTS_CHUNK_MAX_CHARS = 2500;
+export const TTS_CHUNK_TARGET_CHARS = 2400;
+export const TTS_CHUNK_MIN_CHARS = 1000;
+export const TTS_CACHE_VOICE_PROFILE = "bright-natural-analysis-mp3-100-v1";
 
 // Convert large raw-second values to spoken minutes + seconds
 function secondsToSpeech(n) {
@@ -87,18 +80,18 @@ export function cleanTextForSpeech(text) {
     .replace(/\bI:(\d+)/g, "intensity $1")
     .replace(/♥/g, "heart rate")
     .replace(/[#_*`]/g, "")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\s{2,}/g, " ")
     .trim();
 }
 
-function splitOversizedText(text, maxLen) {
-  const sentences = text.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g) || [text];
+// Split text only when needed. This mirrors the original Base44-era flow.
+export function splitIntoChunks(text, maxLen = TTS_CHUNK_MAX_CHARS) {
+  if (text.length <= maxLen) return [text];
+  const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
   const chunks = [];
   let current = "";
   for (const s of sentences) {
-    if ((current + s).length > maxLen && current.trim()) {
+    if ((current + s).length > maxLen) {
       if (current.trim()) chunks.push(current.trim());
       current = s;
     } else {
@@ -106,74 +99,7 @@ function splitOversizedText(text, maxLen) {
     }
   }
   if (current.trim()) chunks.push(current.trim());
-
-  const finalChunks = [];
-  for (const chunk of chunks) {
-    if (chunk.length <= maxLen) {
-      finalChunks.push(chunk);
-      continue;
-    }
-
-    const punctuationParts = chunk.match(/[^,;:]+[,;:]*\s*|.+$/g) || [chunk];
-    let partCurrent = "";
-    for (const part of punctuationParts) {
-      if ((partCurrent + part).length > maxLen && partCurrent.trim()) {
-        finalChunks.push(partCurrent.trim());
-        partCurrent = part;
-      } else {
-        partCurrent += part;
-      }
-    }
-    if (partCurrent.trim()) finalChunks.push(partCurrent.trim());
-  }
-
-  const hardWrapped = [];
-  for (const chunk of finalChunks) {
-    if (chunk.length <= maxLen) {
-      hardWrapped.push(chunk);
-      continue;
-    }
-    for (let i = 0; i < chunk.length; i += maxLen) {
-      hardWrapped.push(chunk.slice(i, i + maxLen).trim());
-    }
-  }
-
-  return hardWrapped.filter(Boolean);
-}
-
-// Chunk hierarchy: paragraph break first, then sentence break, then punctuation fallback.
-export function splitIntoChunks(text, maxLen = TTS_CHUNK_MAX_CHARS) {
-  const normalized = String(text || "").trim();
-  if (!normalized) return [];
-  if (normalized.length <= maxLen) return [normalized];
-
-  const paragraphs = normalized.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
-  const chunks = [];
-  let current = "";
-
-  const pushCurrent = () => {
-    if (current.trim()) chunks.push(current.trim());
-    current = "";
-  };
-
-  for (const paragraph of paragraphs) {
-    if (paragraph.length > maxLen) {
-      pushCurrent();
-      chunks.push(...splitOversizedText(paragraph, maxLen));
-      continue;
-    }
-
-    const next = current ? `${current}\n\n${paragraph}` : paragraph;
-    if (next.length <= maxLen) {
-      current = next;
-    } else {
-      pushCurrent();
-      current = paragraph;
-    }
-  }
-
-  pushCurrent();
-  return chunks.length ? chunks : splitOversizedText(normalized, maxLen);
+  return chunks.length ? chunks : [text];
 }
 
 /**
@@ -185,7 +111,7 @@ export default function TTSButton({ getText }) {
   const audioCtxRef = useRef(null);
   const sourceRef = useRef(null);
   const queueRef = useRef([]);
-  const voiceRef = useRef(localStorage.getItem("tts_oai_voice") || "alloy");
+  const voiceRef = useRef(localStorage.getItem("tts_oai_voice") || "nova");
 
   const setS = (s) => { stateRef.current = s; setState(s); };
 
@@ -218,6 +144,7 @@ export default function TTSButton({ getText }) {
         voice: voiceRef.current,
         speed: TTS_SPEED,
         instructions: VOICE_INSTRUCTIONS,
+        format: TTS_PLAYBACK_FORMAT,
       });
     } catch (err) {
       console.error("TTS fetch failed:", err);

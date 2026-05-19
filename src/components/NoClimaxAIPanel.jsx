@@ -18,13 +18,42 @@ const SECTION_DEFS = [
   { key: "recommendations",        label: "Recommendations",        color: "hsl(var(--primary))", icon: <Lightbulb className="w-3.5 h-3.5" /> },
 ];
 
+function aiErrorMessage(error) {
+  const raw = error?.data?.error || error?.message || String(error || "Analysis failed");
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed?.error?.message || parsed?.message || parsed?.error || raw;
+  } catch {
+    return raw;
+  }
+}
+
+function normalizeNoClimaxAnalysis(res) {
+  const raw = typeof res === "string" ? JSON.parse(res) : res;
+  const parsed = raw?.response ?? raw;
+  const hasContent =
+    parsed?.summary ||
+    parsed?.arousal_assessment?.length ||
+    parsed?.event_analysis?.length ||
+    parsed?.physiological_findings?.length;
+
+  if (!hasContent || parsed?.raw) {
+    throw new Error("AI returned text, but not the structured incomplete-session analysis the app needs. Please try again.");
+  }
+
+  return parsed;
+}
+
 export default function NoClimaxAIPanel({ session, timelineRows, userProfile }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(session.ai_no_climax ?? null);
+  const [error, setError] = useState("");
 
   const analyze = async () => {
     setLoading(true);
-    setResult(null);
+    setError("");
+
+    try {
 
     // HR summary
     const hrSummary = timelineRows.length > 0 ? {
@@ -106,6 +135,7 @@ export default function NoClimaxAIPanel({ session, timelineRows, userProfile }) 
 
     const res = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_6",
+      max_tokens: 7000,
       ...(estimScreenshots.length > 0 ? { file_urls: estimScreenshots } : {}),
       prompt: `You are an expert sexual arousal physiologist and narrative writer. Analyze this INCOMPLETE session — it did NOT result in climax. Write a rich, story-driven analysis as if narrating a fascinating physiological journey. Do NOT treat this as a failed session — it is a valuable dataset. Write directly to the person using "you" and "your" throughout, like a knowledgeable friend reviewing their experience.
 
@@ -130,9 +160,18 @@ ${JSON.stringify({
   time_of_day: timeOfDay,
   duration_minutes: session.duration_minutes,
   peak_arousal_level: session.intensity,
+  arousal_depth: session.arousal_depth,
+  arousal_sustainability: session.sustainability,
   build_quality: session.build_quality,
   build_type: session.build_type === "Other" && session.custom_build_type ? session.custom_build_type : session.build_type,
   overall_satisfaction: session.satisfaction,
+  stimulation_fit: session.stimulation_fit,
+  response_stability: session.erection_stability,
+  edge_control_quality: session.control,
+  sensory_immersion: session.sensory_immersion,
+  discomfort_interruption_impact: session.discomfort_interference,
+  stop_reason: session.no_climax_stop_reason,
+  barrier_to_completion: session.barrier_to_completion,
   mood: session.mood,
   environment: session.environment,
   methods: session.methods,
@@ -163,11 +202,15 @@ ${JSON.stringify({
       },
     });
 
-    const raw = typeof res === "string" ? JSON.parse(res) : res;
-    const parsed = raw?.response ?? raw;
+    const parsed = normalizeNoClimaxAnalysis(res);
     setResult(parsed);
     await base44.entities.Session.update(session.id, { ai_no_climax: parsed });
+    } catch (err) {
+      console.error("AI incomplete-session analysis failed:", err);
+      setError(aiErrorMessage(err));
+    } finally {
     setLoading(false);
+    }
   };
 
   // Build flat paragraph list + metadata for TTSReader rendering
@@ -200,6 +243,13 @@ ${JSON.stringify({
         <p className="text-xs text-muted-foreground">
           Full-depth AI analysis: arousal arc assessment, event timeline review, near-climax threshold estimation, physiological findings, and targeted recommendations. Uses Claude Sonnet.
         </p>
+      )}
+
+      {error && (
+        <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{error}</span>
+        </div>
       )}
 
       {result && (() => {

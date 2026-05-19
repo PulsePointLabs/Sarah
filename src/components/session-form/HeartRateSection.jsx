@@ -9,8 +9,6 @@ import HRTimelineChart from "@/components/HRTimelineChart";
 function calcDerivedMetrics(rows) {
   const buildRows = rows.filter((r) => r.marker === "build");
   const recoveryRows = rows.filter((r) => r.marker === "recovery");
-  const climaxRows = rows.filter((r) => r.marker === "climax");
-
   // Build duration: time span of build-marked rows
   const buildOffsets = buildRows.map((r) => Number(r.time_offset_s));
   const buildDuration = buildOffsets.length > 1 ? Math.round(Math.max(...buildOffsets) - Math.min(...buildOffsets)) : 0;
@@ -127,7 +125,10 @@ export default function HeartRateSection({ data, onChange }) {
     const durationMins = Math.round(maxOffsetS / 60);
     const timestamps = validRows.map((r) => r.timestamp).filter(Boolean).sort();
     const firstTs = timestamps[0] ? new Date(timestamps[0]) : null;
-    const firstTimestamp = firstTs ? firstTs.toISOString() : data.date;
+    const firstDateET = firstTs
+      ? new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(firstTs)
+      : null;
+    const firstTimestamp = firstDateET ? `${firstDateET}T00:00:00` : data.date;
 
     // Extract HH:MM start time in America/New_York from the first timestamp
     let startTime = data.start_time;
@@ -152,6 +153,8 @@ export default function HeartRateSection({ data, onChange }) {
       max_hr: maxHr,
       date: firstTimestamp || data.date,
       duration_minutes: durationMins,
+      dur_hours: Math.floor(durationMins / 60),
+      dur_minutes: durationMins % 60,
       start_time: startTime,
       _csv_rows: validRows,
     });

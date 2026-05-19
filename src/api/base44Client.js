@@ -4,10 +4,14 @@ async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, options);
   const contentType = response.headers.get('content-type') || '';
   if (!response.ok) {
-    const message = contentType.includes('application/json')
-      ? JSON.stringify(await response.json())
-      : await response.text();
-    throw new Error(message || `Request failed: ${response.status}`);
+    const data = contentType.includes('application/json')
+      ? await response.json()
+      : { error: await response.text() };
+    const message = data?.error || data?.message || `Request failed: ${response.status}`;
+    const error = new Error(message);
+    error.status = response.status;
+    error.data = data;
+    throw error;
   }
   if (contentType.includes('audio/') || contentType.includes('application/octet-stream')) {
     return response;
@@ -47,6 +51,7 @@ async function invokeFunction(name, payload) {
         model: response.headers.get('x-tts-model') || undefined,
         voice: response.headers.get('x-tts-voice') || undefined,
         speed: response.headers.get('x-tts-speed') || undefined,
+        format: response.headers.get('x-tts-format') || undefined,
         latency_ms: response.headers.get('x-tts-latency-ms') || undefined,
         retries: response.headers.get('x-tts-retries') || undefined,
       },

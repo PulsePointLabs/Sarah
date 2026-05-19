@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
-import { TrendingUp, Zap, Activity, Flag, Brain, ChevronDown, ChevronUp } from "lucide-react";
+import { AlertCircle, TrendingUp, Zap, Activity, Flag, Brain, ChevronDown, ChevronUp } from "lucide-react";
 import TTSReader from "./TTSReader";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 
@@ -19,6 +19,33 @@ function fmtMmSs(s) {
 function fmtDur(s) {
   const v = Math.round(Math.abs(s));
   return v >= 60 ? `${Math.floor(v / 60)}m ${v % 60}s` : `${v}s`;
+}
+
+function aiErrorMessage(error) {
+  const raw = error?.data?.error || error?.message || String(error || "Analysis failed");
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed?.error?.message || parsed?.message || parsed?.error || raw;
+  } catch {
+    return raw;
+  }
+}
+
+function normalizeCascadeOverview(res) {
+  const raw = typeof res === "string" ? JSON.parse(res) : res;
+  const parsed = raw?.response ?? raw;
+  const hasContent =
+    parsed?.summary ||
+    parsed?.build_phase ||
+    parsed?.pre_climax_phase ||
+    parsed?.climax_phase ||
+    parsed?.recovery_phase;
+
+  if (!hasContent || parsed?.raw) {
+    throw new Error("AI returned text, but not the structured cascade overview the app needs. Please try again.");
+  }
+
+  return parsed;
 }
 
 function PhaseBlock({ color, icon, title, items }) {
@@ -41,6 +68,7 @@ export default function CascadeOverviewPanel({ session, timelineRows, emgRows = 
   const [collapsed, setCollapsed] = useState(true);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(session.ai_cascade ?? null);
+  const [error, setError] = useState("");
 
   const hasMarkers = session.climax_offset_s != null;
 
@@ -58,7 +86,9 @@ export default function CascadeOverviewPanel({ session, timelineRows, emgRows = 
 
   const analyze = async () => {
     setLoading(true);
-    setResult(null);
+    setError("");
+
+    try {
 
     const formatTimeWords = (seconds) => {
       const m = Math.floor(seconds / 60);
@@ -110,7 +140,7 @@ export default function CascadeOverviewPanel({ session, timelineRows, emgRows = 
 
         // Phase-windowed EMG averages for cascade correlation
         const phaseAvg = (pcts, timeKey) => {
-          if (!session[timeKey + '_offset_s'] == null) return null;
+          if (session[timeKey + '_offset_s'] == null) return null;
           const phaseRows = sampled.filter((r) => {
             const t = r.time_s;
             if (timeKey === 'pre_climax') return t >= (session.pre_climax_offset_s - 30) && t <= session.pre_climax_offset_s;
@@ -252,6 +282,7 @@ Use this arousal profile to contextualize the cascade — compare the observed b
 
     const res = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_6",
+      max_tokens: 7000,
       ...(estimScreenshots.length > 0 ? { file_urls: estimScreenshots } : {}),
       prompt: `You are a physiological research assistant and anatomist specializing in sexual response. Analyze the climax cascade arc of this single session in depth, integrating HR data, EMG data (if present), anatomy, and event timing. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
@@ -370,11 +401,15 @@ ${annotatedEvents.length > 0 ? `\nAnnotated event timeline (with HR at each mome
       }
     });
 
-    const raw = typeof res === "string" ? JSON.parse(res) : res;
-    const parsed = raw?.response ?? raw;
+    const parsed = normalizeCascadeOverview(res);
     setResult(parsed);
     await base44.entities.Session.update(session.id, { ai_cascade: parsed });
+    } catch (err) {
+      console.error("AI Cascade overview failed:", err);
+      setError(aiErrorMessage(err));
+    } finally {
     setLoading(false);
+    }
   };
 
   return (
@@ -410,6 +445,13 @@ ${annotatedEvents.length > 0 ? `\nAnnotated event timeline (with HR at each mome
       <p className="text-xs text-muted-foreground">
           Analyze the full cascade arc — build, pre-climax, climax, and recovery — with event correlations. Uses Claude Sonnet.
         </p>
+      }
+
+      {!collapsed && error &&
+      <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{error}</span>
+        </div>
       }
 
       {/* Phase timing mini-summary */}

@@ -1,12 +1,12 @@
 /**
  * Persistent TTS audio cache backed by IndexedDB.
- * Stores raw MP3 bytes (ArrayBuffer) keyed by voice+speed+text hash.
+ * Stores raw TTS audio bytes (ArrayBuffer) keyed by voice+speed+profile+text hash.
  * Falls back silently to no-op if IndexedDB is unavailable.
  */
 
 const DB_NAME = "tts_audio_cache";
 const STORE_NAME = "chunks";
-const DB_VERSION = 10; // clear stale cache after feminine more-lift voice selection
+const DB_VERSION = 19; // clear stale chunks after bright-natural analysis retune
 
 let dbPromise = null;
 
@@ -35,7 +35,7 @@ async function cacheKey(text, voice, speed) {
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Returns ArrayBuffer of MP3 bytes, or null if not cached. */
+/** Returns ArrayBuffer of audio bytes, or null if not cached. */
 export async function idbGet(text, voice, speed) {
   try {
     const db = await openDB();
@@ -52,7 +52,7 @@ export async function idbGet(text, voice, speed) {
   }
 }
 
-/** Stores ArrayBuffer of MP3 bytes. Fire-and-forget safe. */
+/** Stores ArrayBuffer of audio bytes. Fire-and-forget safe. */
 export async function idbSet(text, voice, speed, buffer) {
   try {
     const db = await openDB();
