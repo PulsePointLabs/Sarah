@@ -2,7 +2,11 @@ import { useState, useRef } from "react";
 import { Play, Pause, Square } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 
-export const VOICE_INSTRUCTIONS = "Read with friendly analytical enthusiasm, like an engaged physiologist explaining a fascinating finding to someone they know well. Keep a smooth natural cadence, varied inflection, and clear sentence-level pauses. Sound warm and alive, not formal, monotone, sultry, or announcer-like.";
+export const VOICE_INSTRUCTIONS = `Read naturally in a warm, calm, feminine human voice.
+Sound soothing, emotionally intelligent, relaxed, and subtly intimate.
+Think excellent bedside manner, thoughtful podcast host, or trusted human narrator.
+Maintain consistent warmth and pacing across all chunks.
+Do not sound robotic, theatrical, overly analytical, documentary-like, exaggerated, customer-service-like, or performative.`;
 export const TTS_SPEED = 1.0;
 export const TTS_PLAYBACK_FORMAT = "mp3";
 export const TTS_EXPORT_FORMAT = "mp3";
