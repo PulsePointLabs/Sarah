@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import RoutinePatternAnalysis from "../components/RoutinePatternAnalysis";
 import { computeAISessionScore } from "@/utils/sessionScore";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 const ALL_METHODS = ["Manual", "Silicone Sleeve", "Coyote E-Stim", "TENS", "Foley Catheter"];
 const BUILD_TYPES = ["Gradual", "Stepwise", "Spike", "Plateau-heavy", "Erratic", "Other"];
@@ -137,6 +138,7 @@ function ViewButton({ active, count, icon: Icon, label, onClick }) {
 
 export default function Sessions() {
   const [sessions, setSessions] = useState([]);
+  const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeProgress, setAnalyzeProgress] = useState(0);
@@ -162,8 +164,12 @@ export default function Sessions() {
   }, []);
 
   const loadSessions = async () => {
-    const data = await base44.entities.Session.list("-date", 200);
+    const [data, profile] = await Promise.all([
+      base44.entities.Session.list("-date", 200),
+      base44.auth.me().catch(() => null),
+    ]);
     setSessions(data);
+    setUserProfile(profile);
     setLoading(false);
   };
 
@@ -294,6 +300,8 @@ export default function Sessions() {
       const eventCount = (session.event_timeline || []).length;
       const text = await base44.integrations.Core.InvokeLLM({
         prompt: `Write a brief 1-2 paragraph physiological summary of this session. Be concise and insightful. Focus on what happened, how the body responded, and any notable patterns.
+
+${buildAIGroundingContext(userProfile)}
 
 Session data:
 - Date: ${session.date?.slice(0, 10)}
@@ -613,7 +621,7 @@ ${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
           </div>
         )}
 
-        <RoutinePatternAnalysis sessions={sessions} />
+        <RoutinePatternAnalysis sessions={sessions} userProfile={userProfile} />
 
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>

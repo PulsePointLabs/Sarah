@@ -40,12 +40,17 @@ function CustomTooltip({ active, payload, label }) {
 
 export default function EventCorrelations() {
   const [sessions, setSessions] = useState([]);
+  const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedOutcome, setSelectedOutcome] = useState("satisfaction");
 
   useEffect(() => {
-    base44.entities.Session.list("-date", 500).then((data) => {
+    Promise.all([
+      base44.entities.Session.list("-date", 500),
+      base44.auth.me().catch(() => null),
+    ]).then(([data, profile]) => {
       setSessions(data);
+      setUserProfile(profile);
       setLoading(false);
     });
   }, []);
@@ -276,7 +281,7 @@ export default function EventCorrelations() {
       )}
 
       {/* AI Correlation Analysis */}
-      <EventCorrelationAI sessions={sessions} correlationData={correlationData} selectedOutcome={selectedOutcome} />
+      <EventCorrelationAI sessions={sessions} correlationData={correlationData} selectedOutcome={selectedOutcome} userProfile={userProfile} />
     </div>
   );
 }

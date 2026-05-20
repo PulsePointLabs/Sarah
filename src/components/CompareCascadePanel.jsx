@@ -3,6 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { TrendingUp, Activity, Zap, Flag, Brain, Lightbulb } from "lucide-react";
 import TTSReader from "./TTSReader";
 import moment from "moment";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 const PHASE_COLORS = {
   build: "#6366f1",
@@ -123,9 +124,14 @@ ${JSON.stringify({
 
 Use this profile to interpret cascade phase differences — compare observed arc shapes against the user's typical response style, and flag sessions where the cascade deviated meaningfully from their norm.` : "";
 
+      const groundingContext = buildAIGroundingContext(userProfile);
+
       const res = await base44.integrations.Core.InvokeLLM({
         model: "claude_sonnet_4_6",
-        prompt: `You are a physiological research assistant specializing in sexual response. Perform a comparative cascade analysis across ${sessions.length} sessions. Write directly to the person — use "you" and "your" throughout.${arousalProfile}
+        prompt: `You are a physiological research assistant specializing in sexual response. Perform a comparative cascade analysis across ${sessions.length} sessions. Write directly to the person — use "you" and "your" throughout.
+
+${groundingContext}
+${arousalProfile}
 
 For each cascade phase — Build, Pre-Climax, Climax, Recovery — identify meaningful differences and patterns. Reference specific values when relevant. Focus on what changed between sessions and what those changes imply physiologically.
 

@@ -4,6 +4,7 @@ import { Brain, Zap, Heart, Clock, ChevronDown, ChevronUp, TrendingUp, AlertCirc
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import TTSReader from "@/components/TTSReader";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 const PRESET_METHODS = [
   "Manual", "E-Stim", "Foley", "TENS", "Vibration", "Edging", "Prostate", "Sleeve", "Hands-free"
@@ -55,6 +56,7 @@ function GaugeBar({ label, value, color, suffix = "%" }) {
 export default function PredictiveModeler() {
   const [sessions, setSessions] = useState([]);
   const [customMethods, setCustomMethods] = useState([]);
+  const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState(null);
@@ -71,9 +73,11 @@ export default function PredictiveModeler() {
     Promise.all([
       base44.entities.Session.list("-date", 200),
       base44.entities.CustomMethod.list(),
-    ]).then(([s, cm]) => {
+      base44.auth.me().catch(() => null),
+    ]).then(([s, cm, profile]) => {
       setSessions(s);
       setCustomMethods(cm.map(c => c.name));
+      setUserProfile(profile);
       setLoading(false);
     });
   }, []);
@@ -168,9 +172,13 @@ export default function PredictiveModeler() {
       build_type: s.build_type,
     }));
 
+    const groundingContext = buildAIGroundingContext(userProfile);
+
     const res = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_6",
       prompt: `You are a physiological data scientist specializing in sexual response modelling. Based on the person's historical session data, predict outcomes for a PLANNED session with the following parameters.
+
+${groundingContext}
 
 PLANNED SESSION:
 - Methods: ${selectedMethods.join(", ")}

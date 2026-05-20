@@ -3,6 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { Brain, Lightbulb, TrendingUp, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import TTSReader from "./TTSReader";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 const OUTCOME_LABELS = {
   intensity: "Intensity",
@@ -10,7 +11,7 @@ const OUTCOME_LABELS = {
   build_quality: "Build Quality",
 };
 
-export default function EventCorrelationAI({ sessions, correlationData, selectedOutcome }) {
+export default function EventCorrelationAI({ sessions, correlationData, selectedOutcome, userProfile }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
 
@@ -66,9 +67,13 @@ export default function EventCorrelationAI({ sessions, correlationData, selected
       .map(([mood, scores]) => `${mood}: ${(scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2)}`)
       .join(", ");
 
+    const groundingContext = buildAIGroundingContext(userProfile);
+
     const res = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_6",
       prompt: `You are an expert physiological data analyst. Analyze cross-session correlations between event categories, session methods, and contextual factors against the outcome metric "${OUTCOME_LABELS[selectedOutcome]}" (scale 1–10).
+
+${groundingContext}
 
 DATA SUMMARY:
 - Total sessions analyzed: ${sessions.length}

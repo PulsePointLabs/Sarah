@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { Brain, Activity, TrendingUp, Zap, Lightbulb, AlertCircle } from "lucide-react";
 import TTSReader from "./TTSReader";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 const SECTION_COLORS = {
   "chart-1": "hsl(var(--chart-1))",
@@ -126,9 +127,13 @@ ${JSON.stringify({
 
 Use this profile to contextualize the comparison — note which sessions aligned with or deviated from the user's known arousal patterns. Reference preferred methods and typical response style when interpreting differences.` : "";
 
+      const groundingContext = buildAIGroundingContext(userProfile);
+
       const res = await base44.integrations.Core.InvokeLLM({
         model: "claude_sonnet_4_6",
         prompt: `You are a physiological research assistant and anatomist specializing in sexual response. Compare the following ${sessions.length} sessions side-by-side, analyzing the full cascade arc: Build Phase → Pre-Climax → Climax → Recovery. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
+
+${groundingContext}
 
 PHYSIOLOGICAL & ANATOMICAL LENS — apply throughout:
 - Interpret HR trajectories as windows into sympathetic nervous system activation, parasympathetic withdrawal, and autonomic arousal state

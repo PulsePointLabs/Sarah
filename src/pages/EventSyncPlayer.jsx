@@ -55,15 +55,17 @@ const EVENT_COLORS = ["#f59e0b","#a855f7","#10b981","#f43f5e","#0ea5e9","#fb923c
 
 // ── TTS helpers ───────────────────────────────────────────────────────────────
 
-async function fetchTTSBase64(text, voice, format = TTS_PLAYBACK_FORMAT) {
+async function fetchTTSBase64(text, voice) {
   const runtime = getTTSRuntime();
-  const cacheKey = `tts_cache:${runtime.cacheProfile}:${voice}:${runtime.speed}:${format}:${runtime.instructions.trim()}:${text}`;
+  const format = runtime.format || TTS_PLAYBACK_FORMAT;
+  const cacheKey = `tts_cache:${runtime.cacheProfile}:${voice}:${runtime.model}:${runtime.speed}:${format}:${runtime.instructions.trim()}:${text}`;
   try { const c = sessionStorage.getItem(cacheKey); if (c) return c; } catch (_) {}
   const res = await base44.functions.invoke("openaiTTS", {
     text: prepareTTSInput(text),
     voice,
+    model: runtime.model,
     speed: runtime.speed,
-    instructions: runtime.instructions,
+    instructions: runtime.supportsInstructions ? runtime.instructions : "",
     format,
   });
   const b64 = res.data.audio;
@@ -244,7 +246,7 @@ export default function EventSyncPlayer() {
     if (!ttsEnabledRef.current) { stopTTS(); return; }
     stopTTS();
     const b64 = await fetchTTSBase64(text, voiceRef.current);
-    const url = URL.createObjectURL(new Blob([base64ToAudioBytes(b64)], { type: getTTSMime(TTS_PLAYBACK_FORMAT) }));
+    const url = URL.createObjectURL(new Blob([base64ToAudioBytes(b64)], { type: getTTSMime(getTTSRuntime().format) }));
     const audio = new Audio(url);
     audio.preload = "auto";
     audio.onended = () => {
@@ -272,7 +274,7 @@ export default function EventSyncPlayer() {
       setBufferingPara(-1);
       setActivePara(i);
       await new Promise((resolve) => {
-        const url = URL.createObjectURL(new Blob([base64ToAudioBytes(b64)], { type: getTTSMime(TTS_PLAYBACK_FORMAT) }));
+        const url = URL.createObjectURL(new Blob([base64ToAudioBytes(b64)], { type: getTTSMime(getTTSRuntime().format) }));
         const audio = new Audio(url);
         audio.preload = "auto";
         const done = () => {

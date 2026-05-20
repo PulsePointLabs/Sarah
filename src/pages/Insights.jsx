@@ -227,12 +227,17 @@ function RecordRow({ label, value, detail, to }) {
 
 export default function Insights() {
   const [sessions, setSessions] = useState([]);
+  const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
-      const data = await base44.entities.Session.list("-date", 500);
+      const [data, profile] = await Promise.all([
+        base44.entities.Session.list("-date", 500),
+        base44.auth.me().catch(() => null),
+      ]);
       setSessions(data);
+      setUserProfile(profile);
       setLoading(false);
     })();
   }, []);
@@ -564,7 +569,7 @@ export default function Insights() {
 
         <HRSatisfactionCorrelationChart sessions={sessions} />
 
-        <BestSessionPanel sessions={sessions} />
+        <BestSessionPanel sessions={sessions} userProfile={userProfile} />
       </div>
     </div>
   );

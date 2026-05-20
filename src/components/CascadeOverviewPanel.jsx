@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { AlertCircle, TrendingUp, Zap, Activity, Flag, Brain, ChevronDown, ChevronUp } from "lucide-react";
 import TTSReader from "./TTSReader";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 function getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -273,7 +274,9 @@ ${JSON.stringify({
       arousal_notes: userProfile.arousal_notes
     }, null, 2)}
 
-Use this arousal profile to contextualize the cascade — compare the observed build arc, phase durations, and recovery against the user's known response style. Note deviations and what factors may have caused them.` : "";
+    Use this arousal profile to contextualize the cascade — compare the observed build arc, phase durations, and recovery against the user's known response style. Note deviations and what factors may have caused them.` : "";
+
+    const groundingContext = buildAIGroundingContext(userProfile);
 
     const estimScreenshots = [
       ...(session.estim_screenshots || []),
@@ -286,12 +289,16 @@ Use this arousal profile to contextualize the cascade — compare the observed b
       ...(estimScreenshots.length > 0 ? { file_urls: estimScreenshots } : {}),
       prompt: `You are a physiological research assistant and anatomist specializing in sexual response. Analyze the climax cascade arc of this single session in depth, integrating HR data, EMG data (if present), anatomy, and event timing. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
+${groundingContext}
+
 PHYSIOLOGICAL & ANATOMICAL LENS — CONDITIONAL USE ONLY:
 Only mention specific physiological phases, anatomical structures, or mechanisms when the session data gives you a concrete reason to do so. Never insert these as generic background explanation.
 - BUILD: Sympathetic tone ramp-up, pelvic floor baseline tone, how stimulation method drives afferent nerve signaling — only narrate if HR or event data shows it
 - PRE-CLIMAX: Emission phase signals, HR acceleration, sensory events — ground every claim in the data
 - CLIMAX: Peak physiology, contraction pattern, ejaculate correlates — reference actual HR values and events
-- RECOVERY: Parasympathetic rebound, HR descent rate, refractory physiology — use the computed recovery slope${emgSummary ? `
+- RECOVERY: Parasympathetic rebound, HR descent rate, refractory physiology — use the computed recovery slope
+- Preserve the explanatory "why." When phase timing, heart-rate movement, stimulation changes, event notes, or subjective metrics line up, explain the likely autonomic or sensory mechanism behind that cascade pattern.
+- Discuss stimulation-to-body links when supported: how pressure, friction, suction, vibration, e-stim, foley/urethral input, perineal contact, or technique shifts likely changed sensory input, pelvic floor tone, autonomic loading, or climax threshold.${emgSummary ? `
 
 EMG INTERPRETATION RULES — apply carefully:
 - EMG % is NORMALIZED RELATIVE ACTIVATION, not absolute force. Never claim EMG % equals muscle force.

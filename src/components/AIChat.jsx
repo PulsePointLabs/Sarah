@@ -3,6 +3,7 @@ import { MessageCircle, Send, ChevronDown, ChevronUp, Sparkles, Save, RefreshCw,
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { getTTSMime, getTTSRuntime, prepareTTSInput, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 const PROFILE_CATEGORIES = [
   { key: "physical", label: "Physical Baseline", emoji: "🫀", hint: "Body metrics, fitness, resting HR, medications" },
@@ -60,9 +61,10 @@ export default function AIChat({
     const res = await base44.functions.invoke("openaiTTS", {
       text: prepareTTSInput(text),
       voice: "nova",
+      model: runtime.model,
       speed: runtime.speed,
-      instructions: runtime.instructions,
-      format: TTS_PLAYBACK_FORMAT,
+      instructions: runtime.supportsInstructions ? runtime.instructions : "",
+      format: runtime.format,
     });
     const audio = res.data?.audio;
     if (!audio) { setSpeakingIdx(null); return; }
@@ -70,7 +72,7 @@ export default function AIChat({
     const binary = atob(audio);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const src = URL.createObjectURL(new Blob([bytes.buffer], { type: getTTSMime(res.data?.format || TTS_PLAYBACK_FORMAT) }));
+    const src = URL.createObjectURL(new Blob([bytes.buffer], { type: getTTSMime(res.data?.format || runtime.format || TTS_PLAYBACK_FORMAT) }));
     const el = new Audio(src);
     el._pulsePointObjectUrl = src;
     audioRef.current = el;
@@ -155,19 +157,7 @@ export default function AIChat({
 
     const shouldPivot = messages.length > 4 && Math.random() < 0.4;
 
-    // Build a profile context block if userProfile is available
-    const profileBlock = userProfile ? `
-PERSON'S PHYSIOLOGICAL & AROUSAL PROFILE (use this to personalize every question — never assume anatomy or biology not stated here):
-- Physical/Anatomical context: ${userProfile.medications || "not specified"}
-- Age: ${userProfile.age ?? "not set"}, Fitness: ${userProfile.fitness_level ?? "not set"}
-- Resting HR: ${userProfile.resting_hr ?? "not set"} bpm, Max HR: ${userProfile.max_hr ?? "not set"} bpm
-- Arousal response style: ${userProfile.arousal_response_style ?? "not set"}
-- Typical build duration: ${userProfile.typical_build_duration ?? "not set"}
-- Climax sensitivity: ${userProfile.climax_sensitivity ?? "not set"}
-- Refractory pattern: ${userProfile.refractory_pattern ?? "not set"}
-- Preferred stimulation: ${(userProfile.preferred_stimulation || []).join(", ") || "not set"}
-- Arousal notes: ${userProfile.arousal_notes || "none"}
-` : "";
+    const groundingContext = buildAIGroundingContext(userProfile);
 
     const ANATOMY_RULE = `ANATOMY RULE: Use ONLY the anatomical and physiological details stated in the profile above. Never assume or infer biological sex, genitalia, or anatomy not explicitly mentioned. If anatomy is ambiguous, use neutral language (e.g. "genital stimulation", "pelvic region", "that area").`;
 
@@ -180,7 +170,7 @@ Questions should be rooted in the session's AROUSAL and STIMULATION experience, 
   - A subjective metric gap: "intensity was an 8 but satisfaction only a 5 — what felt like it was missing?"
   - An outcome or experience quality: "the build was rated high but climax duration was short — what did that arc feel like from the inside?"
   - A notable logged experience: "you noted discomfort at one point — did that affect how present you felt during the rest of the session?"
-  - A broad session pattern: "the buildup went long this time — were you edging intentionally or did it just feel harder to tip over?"
+  - A broad session pattern: "the buildup went long this time — did it feel like a sustained plateau, a slower climb, or something else?"
   - Something they haven't mentioned yet: "what was the most physically intense moment for you, and what was driving it?"
 
 TONE: Casual, warm, curious — like a knowledgeable friend who actually read the session notes, not a clinician reviewing a chart. Short sentences. Use "you" freely. Contractions are fine.
@@ -223,7 +213,7 @@ ${ANATOMY_RULE}
 No affirmations or pleasantries. 2–3 sentences.`;
 
     const res = await base44.integrations.Core.InvokeLLM({
-      prompt: `${systemPrompt}${profileBlock ? `\n\n${profileBlock}` : ""}\n\nSession data:\n${context}\n\nConversation:\n${history}\n\nRespond now as the AI:`,
+      prompt: `${systemPrompt}\n\n${groundingContext}\n\nSession data:\n${context}\n\nConversation:\n${history}\n\nRespond now as the AI:`,
     });
 
     const reply = typeof res === "string" ? res.trim() : res?.response?.trim() ?? "";
@@ -239,8 +229,9 @@ No affirmations or pleasantries. 2–3 sentences.`;
   const saveFindings = async () => {
     setSavingFindings(true);
     const history = messages.map((m) => `${m.role === "user" ? "User" : "AI"}: ${m.text}`).join("\n");
+    const groundingContext = buildAIGroundingContext(userProfile);
     const res = await base44.integrations.Core.InvokeLLM({
-      prompt: `Based on this Q&A conversation about a person's ${mode === "profile" ? "physiological and arousal profile" : "session"}, write 2-4 concise bullet points summarizing only the NEW factual findings from the user's answers that would be useful to persist for future AI analysis. Do not repeat generic information already obvious from the base data. Be specific and factual.\n\nConversation:\n${history}\n\nOutput as plain bullet points starting with "•":`,
+      prompt: `${groundingContext}\n\nBased on this Q&A conversation about a person's ${mode === "profile" ? "physiological and arousal profile" : "session"}, write 2-4 concise bullet points summarizing only the NEW factual findings from the user's answers that would be useful to persist for future AI analysis. Do not repeat generic information already obvious from the base data. Be specific and factual. Do not preserve assumptions about intent unless the person explicitly stated them.\n\nConversation:\n${history}\n\nOutput as plain bullet points starting with "•":`,
     });
     const findings = typeof res === "string" ? res.trim() : res?.response?.trim() ?? "";
     const timestamp = new Date().toISOString().slice(0, 10);

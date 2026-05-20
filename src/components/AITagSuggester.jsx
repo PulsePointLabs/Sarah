@@ -2,8 +2,9 @@ import { useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { Sparkles, Plus, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
-export default function AITagSuggester({ session, onTagsAdded }) {
+export default function AITagSuggester({ session, userProfile, onTagsAdded }) {
   const [loading, setLoading] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
   const [selected, setSelected] = useState(new Set());
@@ -24,6 +25,8 @@ export default function AITagSuggester({ session, onTagsAdded }) {
 
     const res = await base44.integrations.Core.InvokeLLM({
       prompt: `You are a tagging assistant for a personal biophysiological session journal. Analyze the session data below and suggest 5–10 concise, searchable tags that best describe this session. Tags should capture: stimulation methods, physical sensations, build type, mood, notable events, equipment used, or any other distinguishing characteristics.
+
+${buildAIGroundingContext(userProfile)}
 
 Tags must be:
 - Lowercase, hyphenated (e.g. "slow-build", "e-stim", "high-intensity")

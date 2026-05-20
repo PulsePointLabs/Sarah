@@ -3,6 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { Sparkles, ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import moment from "moment";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 function fmtSec(v) {
   if (v == null) return null;
@@ -23,7 +24,7 @@ function DiffRow({ label, a, b }) {
   );
 }
 
-export default function SessionDiffSummary({ sessionA, sessionB }) {
+export default function SessionDiffSummary({ sessionA, sessionB, userProfile }) {
   const [open, setOpen] = useState(true);
   const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState(null);
@@ -79,6 +80,8 @@ export default function SessionDiffSummary({ sessionA, sessionB }) {
     const res = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_6",
       prompt: `You are a specialist in sexual physiology and stimulation response. Compare these two sessions and write a focused 3-paragraph summary for the person.
+
+${buildAIGroundingContext(userProfile)}
 
 Paragraph 1 — STIMULATION METHODS: What was different about the techniques, equipment, or combinations used? How might those differences explain what happened?
 

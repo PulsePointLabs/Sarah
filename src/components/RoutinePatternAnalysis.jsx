@@ -3,6 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { Brain, TrendingUp, Award, Lightbulb, Activity, Zap, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 // Compute average of an array, or null if empty
 function avg(arr) {
@@ -96,7 +97,7 @@ function StatBar({ data, dataKey, label }) {
   );
 }
 
-export default function RoutinePatternAnalysis({ sessions }) {
+export default function RoutinePatternAnalysis({ sessions, userProfile }) {
   const [aiResult, setAiResult] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -115,6 +116,8 @@ export default function RoutinePatternAnalysis({ sessions }) {
       const res = await base44.integrations.Core.InvokeLLM({
         model: "claude_sonnet_4_6",
         prompt: `You are an expert physiological data analyst. Analyze these personal session statistics to provide deep, specific, actionable insights.
+
+${buildAIGroundingContext(userProfile)}
 
 DATASET OVERVIEW:
 - Total sessions: ${totalSessions}

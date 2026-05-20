@@ -3,6 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { Zap, Brain, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import TTSReader from "./TTSReader";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 function fmtMmSs(s) {
   const totalS = Math.round(Number(s));
@@ -28,6 +29,7 @@ export default function NearClimaxSessionOverview({ session, nearClimaxEvents, u
   const profileContext = userProfile && (userProfile.arousal_response_style || userProfile.arousal_notes || userProfile.climax_sensitivity)
     ? `\nUSER AROUSAL PROFILE:\n- Arousal style: ${userProfile.arousal_response_style || "—"}\n- Typical build duration: ${userProfile.typical_build_duration || "—"}\n- Climax sensitivity: ${userProfile.climax_sensitivity || "—"}\n- Preferred stimulation: ${(userProfile.preferred_stimulation || []).join(", ") || "—"}\n- Arousal notes: ${userProfile.arousal_notes || "none"}\n`
     : "";
+  const groundingContext = buildAIGroundingContext(userProfile);
 
   const analyze = async () => {
     setLoading(true);
@@ -61,7 +63,9 @@ export default function NearClimaxSessionOverview({ session, nearClimaxEvents, u
       model: "claude_sonnet_4_6",
       prompt: `You are a physiological analyst providing a session-specific interpretation of near-climax events detected in heart rate data. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
-DEFINITION: A near-climax event is a sustained HR elevation (8+ bpm rise, held for 20+ seconds, then resolved) occurring before the actual climax window. These may represent arousal plateaus, stimulation intensity peaks, autonomic surges, physical reflexes, or deliberate arousal control — interpret based on context, not assumption.
+${groundingContext}
+
+DEFINITION: A near-climax event is a sustained HR elevation (8+ bpm rise, held for 20+ seconds, then resolved) occurring before the actual climax window. These may represent arousal plateaus, stimulation intensity peaks, autonomic surges, physical reflexes, or explicitly logged arousal control. Interpret based on context, not assumption.
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Spell out all numbers as words: "twelve beats per minute", "forty seconds", "two minutes and thirty seconds"

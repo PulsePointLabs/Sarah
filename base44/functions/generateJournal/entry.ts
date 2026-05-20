@@ -41,11 +41,36 @@ Deno.serve(async (req) => {
         : null,
     ].filter(Boolean).join('\n');
 
+    const profile = s.user_profile || {};
+    const profileContext = profile && Object.keys(profile).length ? [
+      `Age: ${profile.age || ''}`,
+      `Fitness level: ${profile.fitness_level || ''}`,
+      `Resting heart rate: ${profile.resting_hr || ''}`,
+      `Maximum heart rate: ${profile.max_hr || ''}`,
+      `Arousal response style: ${profile.arousal_response_style || ''}`,
+      `Typical build duration: ${profile.typical_build_duration || ''}`,
+      `Climax sensitivity: ${profile.climax_sensitivity || ''}`,
+      `Preferred stimulation: ${Array.isArray(profile.preferred_stimulation) ? profile.preferred_stimulation.join(', ') : profile.preferred_stimulation || ''}`,
+      `Refractory pattern: ${profile.refractory_pattern || ''}`,
+      `Arousal notes: ${profile.arousal_notes || ''}`,
+      `Profile notes: ${profile.profile_notes || profile.notes || ''}`,
+    ].filter((line) => !line.endsWith(': ')).join('\n') : '';
+
     const transcriptSection = voice_transcript?.trim()
       ? `\n\nNOTES FROM THE PERSON (written or transcribed immediately after session):\n"${voice_transcript.trim()}"`
       : '';
 
     const prompt = `You are a compassionate physiological journal assistant. Write in second person ("you", "your") directly to the person. Your writing is warm, introspective, and data-grounded.
+
+GLOBAL PROFILE REFERENCE:
+${profileContext || 'No saved profile context was available. Rely only on the session data and the person\'s notes.'}
+
+GLOBAL EVIDENCE AND INTERPRETATION RULES:
+- Treat the profile as background context, not as a replacement for the current session facts.
+- Separate observed facts from interpretation.
+- Do not infer intent, strategy, motivation, or goals unless the person explicitly wrote it in notes, journal text, event annotations, or profile context.
+- Avoid claims like "trying to avoid climax", "intentionally edging", "choosing to delay", "suppressing climax", or "holding back" unless explicitly logged.
+- Use neutral physiological language when intent is not stated.
 
 CRITICAL FOR TEXT-TO-SPEECH:
 - Write all numbers as words (e.g., "eight out of ten", "seventy-two beats per minute")

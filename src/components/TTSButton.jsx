@@ -6,13 +6,131 @@ const TTS_SETTINGS_KEY = "pulsepoint_tts_settings_v1";
 const TTS_REQUEST_TAIL = "\u200B";
 
 export const DEFAULT_TTS_SETTINGS = {
-  speed: 1.0,
+  speed: 0.96,
+  engine: "expressive",
+  audioFormat: "mp3",
+  normalizeExport: false,
   warmth: 8,
-  enthusiasm: 6,
+  enthusiasm: 5,
   soothing: 9,
   lightness: 8,
   femininity: 8,
-  continuity: 9,
+  continuity: 10,
+  naturalness: 10,
+  pauses: 9,
+  softStart: 10,
+};
+
+export const TTS_PRESETS = {
+  "Base44 Flow": {
+    speed: 0.96,
+    engine: "expressive",
+    audioFormat: "mp3",
+    normalizeExport: false,
+    warmth: 8,
+    enthusiasm: 5,
+    soothing: 9,
+    lightness: 8,
+    femininity: 8,
+    continuity: 10,
+    naturalness: 10,
+    pauses: 9,
+    softStart: 10,
+  },
+  "Soft ASMR": {
+    speed: 0.94,
+    engine: "expressive",
+    audioFormat: "mp3",
+    normalizeExport: false,
+    warmth: 9,
+    enthusiasm: 4,
+    soothing: 10,
+    lightness: 8,
+    femininity: 9,
+    continuity: 10,
+    naturalness: 10,
+    pauses: 10,
+    softStart: 10,
+  },
+  "Bright Natural": {
+    speed: 0.97,
+    engine: "expressive",
+    audioFormat: "mp3",
+    normalizeExport: false,
+    warmth: 8,
+    enthusiasm: 6,
+    soothing: 8,
+    lightness: 9,
+    femininity: 8,
+    continuity: 9,
+    naturalness: 10,
+    pauses: 8,
+    softStart: 9,
+  },
+  "Trusted Friend": {
+    speed: 0.96,
+    engine: "expressive",
+    audioFormat: "mp3",
+    normalizeExport: false,
+    warmth: 9,
+    enthusiasm: 5,
+    soothing: 9,
+    lightness: 7,
+    femininity: 8,
+    continuity: 10,
+    naturalness: 10,
+    pauses: 9,
+    softStart: 10,
+  },
+  "HD Crisp": {
+    speed: 0.96,
+    engine: "hd",
+    audioFormat: "mp3",
+    normalizeExport: false,
+    warmth: 8,
+    enthusiasm: 5,
+    soothing: 9,
+    lightness: 8,
+    femininity: 8,
+    continuity: 10,
+    naturalness: 10,
+    pauses: 9,
+    softStart: 10,
+  },
+  "Lossless Test": {
+    speed: 0.96,
+    engine: "expressive",
+    audioFormat: "wav",
+    normalizeExport: false,
+    warmth: 8,
+    enthusiasm: 5,
+    soothing: 9,
+    lightness: 8,
+    femininity: 8,
+    continuity: 10,
+    naturalness: 10,
+    pauses: 9,
+    softStart: 10,
+  },
+};
+
+export const TTS_ENGINES = {
+  expressive: {
+    label: "Expressive",
+    model: "gpt-4o-mini-tts",
+    supportsInstructions: true,
+  },
+  hd: {
+    label: "HD Crisp",
+    model: "tts-1-hd",
+    supportsInstructions: false,
+  },
+};
+
+export const TTS_AUDIO_FORMATS = {
+  mp3: { label: "MP3", extension: "mp3", mime: "audio/mpeg" },
+  m4a: { label: "M4A", extension: "m4a", mime: "audio/mp4" },
+  wav: { label: "WAV", extension: "wav", mime: "audio/wav" },
 };
 
 export const BOOKMARKED_TTS_PROFILE = "bright-natural-analysis-mp3-100-v14";
@@ -41,12 +159,18 @@ export function normalizeTTSSettings(settings = {}) {
   };
   return {
     speed: Number(clamp(settings.speed, 0.94, 1.04, DEFAULT_TTS_SETTINGS.speed).toFixed(2)),
+    engine: TTS_ENGINES[settings.engine] ? settings.engine : DEFAULT_TTS_SETTINGS.engine,
+    audioFormat: TTS_AUDIO_FORMATS[settings.audioFormat] ? settings.audioFormat : DEFAULT_TTS_SETTINGS.audioFormat,
+    normalizeExport: Boolean(settings.normalizeExport ?? DEFAULT_TTS_SETTINGS.normalizeExport),
     warmth: Math.round(clamp(settings.warmth, 0, 10, DEFAULT_TTS_SETTINGS.warmth)),
     enthusiasm: Math.round(clamp(settings.enthusiasm, 0, 10, DEFAULT_TTS_SETTINGS.enthusiasm)),
     soothing: Math.round(clamp(settings.soothing, 0, 10, DEFAULT_TTS_SETTINGS.soothing)),
     lightness: Math.round(clamp(settings.lightness, 0, 10, DEFAULT_TTS_SETTINGS.lightness)),
     femininity: Math.round(clamp(settings.femininity, 0, 10, DEFAULT_TTS_SETTINGS.femininity)),
     continuity: Math.round(clamp(settings.continuity, 0, 10, DEFAULT_TTS_SETTINGS.continuity)),
+    naturalness: Math.round(clamp(settings.naturalness, 0, 10, DEFAULT_TTS_SETTINGS.naturalness)),
+    pauses: Math.round(clamp(settings.pauses, 0, 10, DEFAULT_TTS_SETTINGS.pauses)),
+    softStart: Math.round(clamp(settings.softStart, 0, 10, DEFAULT_TTS_SETTINGS.softStart)),
   };
 }
 
@@ -88,14 +212,33 @@ export function buildVoiceInstructions(settings = DEFAULT_TTS_SETTINGS) {
       : s.continuity >= 5
         ? "Keep transitions between sections smooth and connected."
         : "Keep transitions natural and simple.";
+  const naturalness =
+    s.naturalness >= 8
+      ? "Sound like natural human conversation, not event narration; use varied, organic inflection and avoid repetitive sentence-start energy."
+      : s.naturalness >= 5
+        ? "Keep the performance conversational and natural."
+        : "Keep the reading clear and simple.";
+  const pauses =
+    s.pauses >= 8
+      ? "Use relaxed, natural pauses and tiny breath-like holds where a person would naturally breathe; never rush through transitions."
+      : s.pauses >= 5
+        ? "Use natural pauses without rushing."
+        : "Keep pauses minimal and straightforward.";
+  const softStart =
+    s.softStart >= 8
+      ? "Enter every new chunk, paragraph, and section softly, as if continuing mid-thought; make opening words light, unstressed, and unannounced."
+      : s.softStart >= 5
+        ? "Keep section entrances smooth and lightly stressed."
+        : "Keep section starts plain and clear.";
 
   return `Read naturally in a warm, calm, feminine human voice.
-Sound soothing, emotionally intelligent, relaxed, softly bright, and subtly intimate.
-Maintain smooth, continuous emotional tone across all sections.
-Use natural conversational pacing with gentle, brighter warmth and a soft, easy voice.
-Slightly slower delivery.
-Subtle, lightly smiling enthusiasm only when naturally appropriate, with a relaxed friend-like ease.
-Sound like a trusted friend with strong anatomy and physiology knowledge explaining what is happening in the body during masturbation, build, climax, and recovery.
+Sound soothing, emotionally intelligent, relaxed, and subtly intimate.
+Think trusted friend with strong anatomy and physiology knowledge explaining something thoughtfully.
+Maintain identical warmth, pacing, and emotional tone across all sections.
+Use natural conversational rhythm.
+Slightly slower pacing.
+Subtle enthusiasm only when naturally appropriate.
+Natural human conversation, NOT event narration.
 Keep final consonants complete and clean, especially words ending in "s"; let sibilants sound gentle, crisp, and finished, never clipped, slurred, hissy, or harsh.
 ${warmth}
 ${soothing}
@@ -103,11 +246,14 @@ ${lightness}
 ${femininity}
 ${enthusiasm}
 ${continuity}
+${naturalness}
+${pauses}
+${softStart}
 Treat the start of every chunk or section as a soft pickup from the previous thought, not a headline.
 Make first words smaller and lighter than the sentence that follows.
 If a chunk or section begins with "you", "your", "this", or "the", pronounce that word lightly and unstressed, as a continuation, never as "YOU" or "YOUR".
 Avoid hard emphasis on section starts or first words.
-Do not sound robotic, theatrical, exaggerated, documentary-like, overly clinical, customer-service-like, or performative.`;
+Do not sound robotic, theatrical, exaggerated, documentary-like, overly analytical, clinical-dictation-like, overly clinical, customer-service-like, or performative.`;
 }
 
 export function getTTSRuntime(settings = loadTTSSettings()) {
@@ -115,9 +261,28 @@ export function getTTSRuntime(settings = loadTTSSettings()) {
   return {
     settings: normalized,
     speed: normalized.speed,
+    engine: normalized.engine,
+    model: TTS_ENGINES[normalized.engine].model,
+    format: normalized.audioFormat,
+    supportsInstructions: TTS_ENGINES[normalized.engine].supportsInstructions,
     instructions: buildVoiceInstructions(normalized),
-    cacheProfile: `settings-v3-speed-${normalized.speed}-w${normalized.warmth}-e${normalized.enthusiasm}-s${normalized.soothing}-l${normalized.lightness}-f${normalized.femininity}-c${normalized.continuity}`,
+    cacheProfile: `settings-v5-${normalized.engine}-${normalized.audioFormat}-speed-${normalized.speed}-w${normalized.warmth}-e${normalized.enthusiasm}-s${normalized.soothing}-l${normalized.lightness}-f${normalized.femininity}-c${normalized.continuity}-n${normalized.naturalness}-p${normalized.pauses}-ss${normalized.softStart}`,
   };
+}
+
+export function buildTTSInstructions(baseInstructions, previousContext = "") {
+  const context = String(previousContext || "").trim();
+  if (!context) return baseInstructions;
+  return `${baseInstructions}
+
+CONTEXT ONLY — DO NOT READ:
+Previous narration:
+"${context}"
+
+Continue seamlessly from the previous narration.
+This is the same continuous thought.
+Do NOT restart energy, tone, pacing, or emphasis.
+Read only the input text.`;
 }
 
 export function prepareTTSInput(text) {
@@ -127,12 +292,13 @@ export function prepareTTSInput(text) {
 
 export const VOICE_INSTRUCTIONS = buildVoiceInstructions(DEFAULT_TTS_SETTINGS);
 export const TTS_SPEED = DEFAULT_TTS_SETTINGS.speed;
-export const TTS_PLAYBACK_FORMAT = "mp3";
-export const TTS_EXPORT_FORMAT = "mp3";
-export const TTS_EXPORT_CONTAINER = "mp3";
-export const TTS_EXPORT_MIME = "audio/mpeg";
+export const TTS_PLAYBACK_FORMAT = DEFAULT_TTS_SETTINGS.audioFormat;
+export const TTS_EXPORT_FORMAT = DEFAULT_TTS_SETTINGS.audioFormat;
+export const TTS_EXPORT_CONTAINER = TTS_AUDIO_FORMATS[DEFAULT_TTS_SETTINGS.audioFormat].extension;
+export const TTS_EXPORT_MIME = TTS_AUDIO_FORMATS[DEFAULT_TTS_SETTINGS.audioFormat].mime;
 export const TTS_MIME_BY_FORMAT = {
   mp3: "audio/mpeg",
+  m4a: "audio/mp4",
   aac: "audio/aac",
   opus: "audio/ogg",
   flac: "audio/flac",
@@ -140,6 +306,8 @@ export const TTS_MIME_BY_FORMAT = {
 };
 export const getTTSMime = (format = TTS_PLAYBACK_FORMAT) =>
   TTS_MIME_BY_FORMAT[String(format || "").toLowerCase()] || "audio/mpeg";
+export const getTTSFileExtension = (format = TTS_EXPORT_FORMAT) =>
+  TTS_AUDIO_FORMATS[String(format || "").toLowerCase()]?.extension || "mp3";
 export const TTS_CHUNK_MAX_CHARS = 2500;
 export const TTS_CHUNK_TARGET_CHARS = 2400;
 export const TTS_CHUNK_MIN_CHARS = 1000;
@@ -242,6 +410,7 @@ export default function TTSButton({ getText }) {
   const stateRef = useRef("idle");
   const sourceRef = useRef(null);
   const queueRef = useRef([]);
+  const previousChunkRef = useRef("");
 
   const setS = (s) => { stateRef.current = s; setState(s); };
 
@@ -263,6 +432,7 @@ export default function TTSButton({ getText }) {
   const stop = () => {
     stopSource();
     queueRef.current = [];
+    previousChunkRef.current = "";
     setS("idle");
   };
 
@@ -271,15 +441,16 @@ export default function TTSButton({ getText }) {
     const chunk = queueRef.current.shift();
     if (!chunk) { setS("idle"); return; }
 
+    const runtime = getTTSRuntime();
     let response;
     try {
-      const runtime = getTTSRuntime();
       response = await base44.functions.invoke("openaiTTS", {
         text: prepareTTSInput(chunk),
         voice: "nova",
+        model: runtime.model,
         speed: runtime.speed,
-        instructions: runtime.instructions,
-        format: TTS_PLAYBACK_FORMAT,
+        instructions: runtime.supportsInstructions ? buildTTSInstructions(runtime.instructions, previousChunkRef.current) : "",
+        format: runtime.format,
       });
     } catch (err) {
       console.error("TTS fetch failed:", err);
@@ -295,12 +466,13 @@ export default function TTSButton({ getText }) {
     // slice() to get a fresh, non-detachable ArrayBuffer
     const buffer = bytes.buffer.slice(0);
 
-    const url = URL.createObjectURL(new Blob([buffer], { type: getTTSMime(response.data?.format || TTS_PLAYBACK_FORMAT) }));
+    const url = URL.createObjectURL(new Blob([buffer], { type: getTTSMime(response.data?.format || runtime.format) }));
     const audio = new Audio(url);
     audio.preload = "auto";
     audio.onended = () => {
       URL.revokeObjectURL(url);
       sourceRef.current = null;
+      previousChunkRef.current = chunk;
       playNextChunk();
     };
     audio.onerror = () => {

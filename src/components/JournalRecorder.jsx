@@ -24,7 +24,7 @@ const SECTION_LABELS = {
   next_session_intentions:    "Next Session Intentions",
 };
 
-export default function JournalRecorder({ session, timelineRows = [] }) {
+export default function JournalRecorder({ session, timelineRows = [], userProfile }) {
   const [collapsed, setCollapsed] = useState(true);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -126,6 +126,7 @@ export default function JournalRecorder({ session, timelineRows = [] }) {
       refractory_notes:   session.refractory_notes,
       notes:              session.notes,
       event_timeline:     session.event_timeline,
+      user_profile:       userProfile,
     };
 
     const res = await base44.functions.invoke("generateJournal", {

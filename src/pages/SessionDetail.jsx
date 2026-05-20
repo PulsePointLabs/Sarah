@@ -420,6 +420,7 @@ export default function SessionDetail() {
                 <AIPhaseMarkerSuggester
                   session={s}
                   timelineRows={timelineRows}
+                  userProfile={userProfile}
                   onApply={async (updates) => {
                     await base44.entities.Session.update(id, updates);
                     setSession((prev) => ({ ...prev, ...updates }));
@@ -698,7 +699,7 @@ export default function SessionDetail() {
         {activeTab === "ai" && s.no_climax && <NoClimaxAIPanel session={s} timelineRows={timelineRows} userProfile={userProfile} />}
 
         {/* Session Journal */}
-        {activeTab === "journal" && <JournalRecorder session={s} timelineRows={timelineRows} />}
+        {activeTab === "journal" && <JournalRecorder session={s} timelineRows={timelineRows} userProfile={userProfile} />}
 
         {/* Ask the AI — Session Deep Dive */}
         {activeTab === "journal" && <AIChat
@@ -745,6 +746,7 @@ export default function SessionDetail() {
           )}
           <AITagSuggester
             session={s}
+            userProfile={userProfile}
             onTagsAdded={(merged) => setSession((prev) => ({ ...prev, tags: merged }))}
           />
         </div>}

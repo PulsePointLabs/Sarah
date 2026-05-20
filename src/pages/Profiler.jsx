@@ -4,6 +4,7 @@ import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, 
 import TTSReader from "../components/TTSReader";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -324,6 +325,7 @@ function AIProfilePanel({ sessions, userProfile, journals }) {
     const sortedSessions = [...sessions].sort((a, b) => new Date(b.date) - new Date(a.date));
     const sessionSummaries = sortedSessions.map(compactSessionLine).join("\n");
     const evidenceDigest = buildProfileEvidenceDigest(sortedSessions);
+    const groundingContext = buildAIGroundingContext(userProfile);
 
     const profileContext = userProfile ? `
 USER PROFILE & NOTES:
@@ -357,6 +359,8 @@ Use the journals to surface recurring emotional themes, evolving insights, and s
       model: "claude_sonnet_4_6",
       prompt: `You are an expert physiological and sexual response analyst. Based on ${sessions.length} recorded sessions and profile notes, generate a comprehensive, deeply personal physiological and arousal profile. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
+${groundingContext}
+
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Write all times as words: "ten minutes and thirty seconds" not "10:30"
 - Spell out all numbers as words (e.g., "ten beats per minute" not "10 bpm")
@@ -385,7 +389,7 @@ Cover these areas:
 
 5. DISCOMFORT & PHYSIOLOGICAL EDGE CASES: Interpret what recurring discomfort or unusual sensations suggest anatomically — consider urethral, prostatic, pelvic floor, and neurovascular context given their specific methods. Hypothesize about tissue adaptation, nerve sensitization, or structural factors. Be specific, not generic.
 
-6. BEHAVIORAL & AROUSAL TENDENCIES: Look for patterns in their build style, pause/resume habits, edging behavior, and event timelines that reveal something about their psychological relationship with arousal — control tendencies, anxiety responses, comfort zones. Offer a perspective on what those tendencies are likely doing to their outcomes.
+6. BEHAVIORAL & AROUSAL TENDENCIES: Look for observable patterns in build style, pause/resume moments, event timelines, and the person's own subjective notes. Do not infer motives, anxiety, control strategies, or intentional edging unless explicitly logged. Focus on how observable behavior and physiology relate to outcomes.
 
 7. PERSONAL OPTIMIZATION RECOMMENDATIONS: Give bold, specific, opinionated recommendations — not generic advice. Reference their actual data patterns and explain the physiological or behavioral reasoning behind each suggestion.
 
@@ -526,7 +530,7 @@ Be direct, insightful, and willing to state conclusions. Ground everything in th
   );
 }
 
-function NearClimaxPanel({ sessions, allTimelines }) {
+function NearClimaxPanel({ sessions, allTimelines, userProfile }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [eventStats, setEventStats] = useState(null);
@@ -575,10 +579,13 @@ function NearClimaxPanel({ sessions, allTimelines }) {
       avg_events_per_session: sessionEvents.length ? (totalEvents / sessionEvents.length).toFixed(1) : 0
     };
     setEventStats(stats);
+    const groundingContext = buildAIGroundingContext(userProfile);
 
     const res = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_6",
       prompt: `You are a physiological research assistant analyzing near-climax events detected in heart rate data from sexual response sessions. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
+
+${groundingContext}
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Write all times as words: "ten minutes and thirty seconds" not "10:30"
@@ -592,7 +599,7 @@ Detected event data across ${sessionEvents.length} sessions (out of ${sessions.l
 ${sessionEvents.slice(0, 12).map((s) => `${s.date}: ${s.event_count} events, ${fmtSec(s.total_time_in_events_s)} total, avg rise ${s.avg_rise_bpm} bpm, max peak ${s.max_peak_hr} bpm, methods ${(s.methods || []).join(", ") || "none"}, climax ${fmtSec(s.climax_offset_s)}. Events: ${s.near_climax_events.map((e) => `${fmtSec(e.start_offset_s)}-${fmtSec(e.end_offset_s)}, peak ${e.peak_hr}, rise ${e.rise_bpm}, confidence ${e.confidence}`).join(" | ")}`).join("\n")}
 
 Provide a rich, interpretive narrative analysis. Focus on:
-1. What these events physiologically represent for you — are they arousal plateaus, mini-edging responses, parasympathetic interruptions, or something else?
+1. What these events physiologically represent for you — are they arousal plateaus, stimulation intensity peaks, parasympathetic interruptions, explicitly logged arousal control, or something else?
 2. How frequently they occur and what that suggests about your physiological response pattern.
 3. Which session contexts (methods, duration, time-in-session) seem to trigger more of these events for you.
 4. What role they likely play in your overall arousal arc — do they precede stronger or weaker climax events for you?
@@ -798,10 +805,13 @@ function StimulationMethodsPanel({ sessions, userProfile }) {
     }).sort((a, b) => b.session_count - a.session_count);
 
     const profileContext = userProfile ? `USER PROFILE: Arousal style: ${userProfile.arousal_response_style || "—"} | Preferred stimulation: ${(userProfile.preferred_stimulation || []).join(", ") || "—"} | Climax sensitivity: ${userProfile.climax_sensitivity || "—"} | Arousal notes: ${userProfile.arousal_notes || "none"}` : "";
+    const groundingContext = buildAIGroundingContext(userProfile);
 
     const res = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_6",
       prompt: `You are a physiological research analyst specializing in sexual response and stimulation science. Analyze how different stimulation methods affect this person's sensations and physiology based on their session data. Write directly to the person — use "you" and "your" throughout.
+
+${groundingContext}
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Write all times as words: "ten minutes" not "10m"
@@ -1028,7 +1038,7 @@ export default function Profiler() {
 
       <AIProfilePanel sessions={sessions} userProfile={userProfile} journals={journals} />
       <StimulationMethodsPanel sessions={sessions} userProfile={userProfile} />
-      <NearClimaxPanel sessions={sessions} allTimelines={allTimelines} />
+      <NearClimaxPanel sessions={sessions} allTimelines={allTimelines} userProfile={userProfile} />
     </div>
   );
 }

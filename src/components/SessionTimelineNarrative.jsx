@@ -4,6 +4,7 @@ import { ChevronDown, ChevronUp, Activity, Clock, TrendingUp, Zap, Lightbulb } f
 import { Button } from "@/components/ui/button";
 import TTSReader from "./TTSReader";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 function getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -157,9 +158,13 @@ export default function SessionTimelineNarrative({ session, timelineRows, userPr
         }, null, 2)}`
       : "";
 
+    const groundingContext = buildAIGroundingContext(userProfile);
+
     const res = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_6",
       prompt: `You are an expert session analyst. Write a rich, long-form TIMELINE AND AROUSAL NARRATIVE of this session. This is not a physiology lecture — it is a moment-by-moment story of how arousal unfolded, driven primarily by heart rate data and event timing.
+
+${groundingContext}
 
 PRIMARY FOCUS:
 1. Walk through the session chronologically — what was happening at each key moment based on HR + events
@@ -170,6 +175,7 @@ PRIMARY FOCUS:
 6. Characterize the overall "shape" of arousal: slow burn, plateau-driven, erratic spikes, clean ramp, etc.
 
 ANATOMY / PHYSIOLOGY: Include ONLY when the HR data or events strongly suggest something physiologically notable — e.g. a sudden spike hinting at a reflex, a long plateau suggesting a specific sustained state. Do not add routine anatomy. Let the data lead.
+IMPORTANT: Do not reduce the narrative to a surface timeline. When heart-rate movement and event notes line up, explain the likely physiological reason behind the shift — sympathetic loading, parasympathetic rebound, sensory amplification, pelvic floor tension, stimulation intensity, or recovery physiology.
 
 STYLE — CRITICAL:
 - Write directly to the person using "you" and "your"

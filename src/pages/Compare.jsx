@@ -214,7 +214,7 @@ export default function Compare() {
           <div className="space-y-4">
             {/* 2-session focused diff summary — shown first */}
             {selectedSessions.length === 2 && (
-              <SessionDiffSummary sessionA={selectedSessions[0]} sessionB={selectedSessions[1]} />
+              <SessionDiffSummary sessionA={selectedSessions[0]} sessionB={selectedSessions[1]} userProfile={userProfile} />
             )}
 
             {loadingTimelines ? (

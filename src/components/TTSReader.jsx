@@ -3,17 +3,19 @@ import { Play, Pause, Square, Download, Settings, RotateCcw, Save } from "lucide
 import {
   cleanTextForSpeech,
   DEFAULT_TTS_SETTINGS,
+  buildTTSInstructions,
   getTTSRuntime,
   getTTSMime,
+  getTTSFileExtension,
   loadTTSSettings,
   normalizeTTSSettings,
   prepareTTSInput,
   saveTTSSettings,
+  TTS_AUDIO_FORMATS,
   splitIntoChunks,
+  TTS_PRESETS,
   TTS_CHUNK_TARGET_CHARS,
-  TTS_EXPORT_FORMAT,
-  TTS_EXPORT_MIME,
-  TTS_PLAYBACK_FORMAT,
+  TTS_ENGINES,
 } from "./TTSButton";
 import { Slider } from "@/components/ui/slider";
 import { fmtSecondsInText } from "@/utils/formatSeconds";
@@ -24,25 +26,35 @@ const TTS_SAMPLE_TEXT = "Your build phase begins quietly, with stimulation becom
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const TTS_UNIT_MAX_CHARS = TTS_CHUNK_TARGET_CHARS;
-const ttsCacheKey = (chunk, format, runtime) =>
-  `${runtime.cacheProfile}|${format}|${runtime.instructions.trim()}|${chunk}`;
+const TTS_PREFETCH_AHEAD = 2;
+const ttsCacheKey = (chunk, format, runtime, previousContext = "") =>
+  `${runtime.cacheProfile}|${format}|${buildTTSInstructions(runtime.instructions, previousContext).trim()}|${chunk}`;
 
 function splitForTTS(text) {
   return splitIntoChunks(text, TTS_UNIT_MAX_CHARS);
 }
 
-function buildSpeechUnits(paragraphs, startIdx = 0) {
-  const units = [];
+function getTrailingSentences(text, count = 2) {
+  const sentences = String(text || "")
+    .match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g)
+    ?.map((s) => s.trim())
+    .filter(Boolean) || [];
+  return sentences.slice(-count).join(" ");
+}
+
+function buildSpeechChunks(paragraphs, startIdx = 0) {
+  const chunks = [];
   let currentText = "";
   let currentStart = -1;
   let currentEnd = -1;
 
   const push = () => {
     if (!currentText.trim()) return;
-    units.push({
+    chunks.push({
       start: currentStart,
       end: currentEnd,
       text: currentText.trim(),
+      previousContext: "",
     });
     currentText = "";
     currentStart = -1;
@@ -53,7 +65,8 @@ function buildSpeechUnits(paragraphs, startIdx = 0) {
     const cleaned = cleanTextForSpeech(paragraphs[i] || "");
     if (!cleaned) continue;
 
-    for (const part of splitForTTS(cleaned)) {
+    const parts = splitForTTS(cleaned);
+    for (const part of parts) {
       const nextText = currentText ? `${currentText} ${part}` : part;
       if (currentText && nextText.length > TTS_UNIT_MAX_CHARS) {
         push();
@@ -66,7 +79,12 @@ function buildSpeechUnits(paragraphs, startIdx = 0) {
   }
 
   push();
-  return units;
+
+  for (let i = 1; i < chunks.length; i++) {
+    chunks[i].previousContext = getTrailingSentences(chunks[i - 1].text, 2);
+  }
+
+  return chunks;
 }
 
 const getTtsErrorMessage = (err) => {
@@ -141,6 +159,89 @@ async function callTTSWithRetries(payload, attempts = 7) {
   throw lastError;
 }
 
+const getChunkText = (chunk) => (typeof chunk === "string" ? chunk : chunk?.text || "");
+const getChunkContext = (chunk) => (typeof chunk === "string" ? "" : chunk?.previousContext || "");
+
+function readAscii(bytes, offset, length) {
+  let out = "";
+  for (let i = 0; i < length; i++) out += String.fromCharCode(bytes[offset + i]);
+  return out;
+}
+
+function writeAscii(bytes, offset, value) {
+  for (let i = 0; i < value.length; i++) bytes[offset + i] = value.charCodeAt(i);
+}
+
+function writeUint32LE(bytes, offset, value) {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >> 8) & 0xff;
+  bytes[offset + 2] = (value >> 16) & 0xff;
+  bytes[offset + 3] = (value >> 24) & 0xff;
+}
+
+function parseWavChunk(chunkBytes) {
+  const bytes = chunkBytes instanceof Uint8Array ? chunkBytes : new Uint8Array(chunkBytes);
+  if (readAscii(bytes, 0, 4) !== "RIFF" || readAscii(bytes, 8, 4) !== "WAVE") {
+    throw new Error("TTS export returned non-WAV audio");
+  }
+
+  let fmt = null;
+  let data = null;
+  let offset = 12;
+  while (offset + 8 <= bytes.length) {
+    const id = readAscii(bytes, offset, 4);
+    const size = new DataView(bytes.buffer, bytes.byteOffset + offset + 4, 4).getUint32(0, true);
+    const start = offset + 8;
+    const end = Math.min(start + size, bytes.length);
+    if (id === "fmt ") fmt = bytes.slice(start, end);
+    if (id === "data") data = bytes.slice(start, end);
+    offset = end + (size % 2);
+  }
+
+  if (!fmt || !data) throw new Error("TTS export WAV is missing audio data");
+  const fmtView = new DataView(fmt.buffer, fmt.byteOffset, fmt.byteLength);
+  return {
+    fmt,
+    data,
+    byteRate: fmtView.getUint32(8, true),
+  };
+}
+
+function combineWavChunks(chunks) {
+  const parsed = chunks.map(parseWavChunk);
+  const firstFmt = parsed[0]?.fmt;
+  if (!firstFmt) throw new Error("No WAV audio chunks to export");
+
+  for (const item of parsed) {
+    if (item.fmt.length !== firstFmt.length || item.fmt.some((value, idx) => value !== firstFmt[idx])) {
+      throw new Error("TTS WAV chunks used different audio formats");
+    }
+  }
+
+  const dataSize = parsed.reduce((sum, item) => sum + item.data.length, 0);
+  const totalSize = 12 + 8 + firstFmt.length + 8 + dataSize;
+  const output = new Uint8Array(totalSize);
+  writeAscii(output, 0, "RIFF");
+  writeUint32LE(output, 4, totalSize - 8);
+  writeAscii(output, 8, "WAVE");
+  writeAscii(output, 12, "fmt ");
+  writeUint32LE(output, 16, firstFmt.length);
+  output.set(firstFmt, 20);
+  const dataHeaderOffset = 20 + firstFmt.length;
+  writeAscii(output, dataHeaderOffset, "data");
+  writeUint32LE(output, dataHeaderOffset + 4, dataSize);
+  let writeOffset = dataHeaderOffset + 8;
+  for (const item of parsed) {
+    output.set(item.data, writeOffset);
+    writeOffset += item.data.length;
+  }
+
+  return {
+    bytes: output,
+    durationSeconds: parsed[0].byteRate ? dataSize / parsed[0].byteRate : 0,
+  };
+}
+
 export default function TTSReader({ paragraphs, renderParagraph, sessionId, title, sessionDate }) {
   const [state, setState] = useState("idle"); // idle | buffering | playing | paused
   const [currentPara, setCurrentPara] = useState(-1);
@@ -171,6 +272,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const playbackTimeRef = useRef(0); // track playback time in seconds
   const wordRefs = useRef(new Map()); // map of word element refs for auto-scroll
   const updateIntervalRef = useRef(null); // track update interval to clear it
+  const renderProgressTimerRef = useRef(null);
 
   useEffect(() => {
     const runtime = getTTSRuntime(ttsSettings);
@@ -233,14 +335,15 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       const response = await callTTSWithRetries({
         text: prepareTTSInput(TTS_SAMPLE_TEXT),
         voice: "nova",
+        model: runtime.model,
         speed: runtime.speed,
-        instructions: runtime.instructions,
-        format: TTS_PLAYBACK_FORMAT,
+        instructions: runtime.supportsInstructions ? runtime.instructions : "",
+        format: runtime.format,
       }, 4);
       const binary = atob(response.data.audio);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const url = URL.createObjectURL(new Blob([bytes.buffer], { type: getTTSMime(response.data?.format || TTS_PLAYBACK_FORMAT) }));
+      const url = URL.createObjectURL(new Blob([bytes.buffer], { type: getTTSMime(response.data?.format || runtime.format) }));
       const audio = new Audio(url);
       audio.onended = stopSample;
       audio.onerror = stopSample;
@@ -279,6 +382,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       clearInterval(updateIntervalRef.current);
       updateIntervalRef.current = null;
     }
+    if (renderProgressTimerRef.current) {
+      clearInterval(renderProgressTimerRef.current);
+      renderProgressTimerRef.current = null;
+    }
     setBufferingPara(-1);
     setRequestStatus(null);
     setS("idle");
@@ -305,7 +412,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     const unit = remainingParasRef.current.shift();
     setCP(unit.start);
-    chunkQueueRef.current = splitForTTS(unit.text || "");
+    chunkQueueRef.current = [unit];
     currentChunkRef.current = null;
     playNextChunk(gen);
   };
@@ -314,7 +421,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   // Each chunk fetch runs independently (not serialized) so prefetched chunks
   // are ready before the current one finishes — eliminating inter-chunk gaps.
   const fetchDecoded = async (chunk, gen) => {
-    const cacheKey = `${gen}:${chunk}`;
+    const chunkText = getChunkText(chunk);
+    const previousContext = getChunkContext(chunk);
+    const cacheKey = `${gen}:${previousContext}:${chunkText}`;
     if (prefetchCacheRef.current.has(cacheKey)) {
       return prefetchCacheRef.current.get(cacheKey);
     }
@@ -322,17 +431,19 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       try {
         // Check IndexedDB persistent cache first
         const runtime = runtimeRef.current;
-        const cacheText = ttsCacheKey(chunk, TTS_PLAYBACK_FORMAT, runtime);
+        const instructions = buildTTSInstructions(runtime.instructions, previousContext);
+        const cacheText = ttsCacheKey(chunkText, runtime.format, runtime, previousContext);
         let mp3Buffer = await idbGet(cacheText, voiceRef.current, runtime.speed);
 
         if (!mp3Buffer) {
           setRequestStatus({ type: "fetching", msg: "Fetching audio…" });
           const response = await callTTSWithRetries({
-            text: prepareTTSInput(chunk),
+            text: prepareTTSInput(chunkText),
             voice: voiceRef.current,
+            model: runtime.model,
             speed: runtime.speed,
-            instructions: runtime.instructions,
-            format: TTS_PLAYBACK_FORMAT,
+            instructions: runtime.supportsInstructions ? instructions : "",
+            format: runtime.format,
           });
           if (response.data?.error) throw new Error(response.data.error);
           const base64 = response.data.audio;
@@ -362,21 +473,17 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     // Collect next upcoming chunk
     const upcoming = [];
 
-    // First: remaining chunks in the current paragraph's queue
+    // First: remaining chunks already queued
     for (const c of chunkQueueRef.current) {
       upcoming.push(c);
-      if (upcoming.length >= 1) break;
+      if (upcoming.length >= TTS_PREFETCH_AHEAD) break;
     }
 
-    // Then: first chunk(s) from the next speech unit(s)
+    // Then: first upcoming speech chunk(s)
     let paraIdx = 0;
-    while (upcoming.length < 1 && paraIdx < remainingParasRef.current.length) {
+    while (upcoming.length < TTS_PREFETCH_AHEAD && paraIdx < remainingParasRef.current.length) {
       const nextUnit = remainingParasRef.current[paraIdx];
-      const nextChunks = splitForTTS(nextUnit?.text || "");
-      for (const c of nextChunks) {
-        upcoming.push(c);
-        if (upcoming.length >= 1) break;
-      }
+      if (nextUnit?.text) upcoming.push(nextUnit);
       paraIdx++;
     }
 
@@ -411,7 +518,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     if (gen !== genRef.current) return;
 
-    const url = URL.createObjectURL(new Blob([mp3Buffer], { type: getTTSMime(TTS_PLAYBACK_FORMAT) }));
+    const url = URL.createObjectURL(new Blob([mp3Buffer], { type: getTTSMime(runtimeRef.current.format) }));
     const audio = new Audio(url);
     audio.preload = "auto";
 
@@ -488,7 +595,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     chunkQueueRef.current = [];
     currentChunkRef.current = null;
-    remainingParasRef.current = buildSpeechUnits(paragraphs, paraIdx);
+    remainingParasRef.current = buildSpeechChunks(paragraphs, paraIdx);
     setCP(paraIdx);
     setS("playing");
     setBufferingPara(paraIdx);
@@ -591,53 +698,32 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
   const downloadAudio = async () => {
     setDownloading(true);
+    if (renderProgressTimerRef.current) {
+      clearInterval(renderProgressTimerRef.current);
+      renderProgressTimerRef.current = null;
+    }
     try {
-      const allChunks = [];
-      for (const unit of buildSpeechUnits(paragraphs, 0)) {
-        allChunks.push(...splitForTTS(unit.text));
-      }
-
-      const mp3Chunks = new Array(allChunks.length);
+      const allChunks = buildSpeechChunks(paragraphs, 0);
       setDownloadProgress({ current: 0, total: allChunks.length });
-      let completed = 0;
-
-      const fetchChunk = async (i) => {
-        const chunk = allChunks[i];
-
-        // Check IndexedDB persistent cache first
-        const runtime = runtimeRef.current;
-        const cacheText = ttsCacheKey(chunk, TTS_EXPORT_FORMAT, runtime);
-        let mp3Buffer = await idbGet(cacheText, voiceRef.current, runtime.speed);
-
-        if (!mp3Buffer) {
-          const res = await callTTSWithRetries({
-            text: prepareTTSInput(chunk),
-            voice: voiceRef.current,
-            speed: runtime.speed,
-            instructions: runtime.instructions,
-            format: TTS_EXPORT_FORMAT,
+      setRequestStatus({ type: "fetching", msg: `Rendering premium audio on server (${allChunks.length} chunks)…` });
+      const jobId = crypto.randomUUID();
+      renderProgressTimerRef.current = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/functions/ttsRenderProgress/${encodeURIComponent(jobId)}`);
+          if (!res.ok) return;
+          const progress = await res.json();
+          const current = Number(progress.current || 0);
+          const total = Number(progress.total || allChunks.length || 0);
+          if (total) setDownloadProgress({ current, total });
+          const type = progress.phase === "error" ? "error" : progress.phase === "complete" ? "ok" : "fetching";
+          setRequestStatus({
+            type,
+            msg: progress.message || `Rendering chunk ${current} of ${total || allChunks.length}…`,
           });
-          if (res.data?.error) throw new Error(res.data.error);
-          if (!res.data?.audio) throw new Error(`TTS request failed (status ${res.status})`);
-          const base64 = res.data.audio;
-          const binary = atob(base64);
-          const bytes = new Uint8Array(binary.length);
-          for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
-          mp3Buffer = bytes.buffer;
-          idbSet(cacheText, voiceRef.current, runtime.speed, mp3Buffer); // fire-and-forget
+        } catch {
+          // Progress polling is best-effort; the render request itself remains authoritative.
         }
-
-        mp3Chunks[i] = new Uint8Array(mp3Buffer);
-        await sleep(1500);
-        completed++;
-        setDownloadProgress({ current: completed, total: allChunks.length });
-        setRequestStatus({ type: "fetching", msg: `Fetching chunk ${completed} of ${allChunks.length}…` });
-      };
-
-      // Run sequentially to avoid rate limiting
-      for (let i = 0; i < allChunks.length; i++) {
-        await fetchChunk(i);
-      }
+      }, 1200);
 
       const dateObj = sessionDate ? new Date(sessionDate) : new Date();
       const monthName = dateObj.toLocaleDateString("en-US", { month: "long" });
@@ -650,49 +736,56 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       const displayTitle = title
         ? (titleHasDate ? title : `${friendlyDate} – ${title}`)
         : `PhysioLog Analysis – ${friendlyDate}`;
-      const fileSlug = displayTitle.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
-      const fileName = `${fileSlug}.mp3`;
-      const totalSize = mp3Chunks.reduce((a, c) => a + c.length, 0);
-      const combined = new Uint8Array(totalSize);
-      let offset = 0;
-      for (const chunk of mp3Chunks) { combined.set(chunk, offset); offset += chunk.length; }
-
-      const id3 = buildID3Tag({
+      const exportFormat = runtimeRef.current.format;
+      const runtime = runtimeRef.current;
+      const renderRes = await base44.functions.invoke("renderTTSExport", {
+        jobId,
         title: displayTitle,
-        year: String(yearNum),
-        comment: `Recorded ${friendlyDate}, ${yearNum}`,
+        chunks: allChunks.map((chunk) => ({
+          text: prepareTTSInput(getChunkText(chunk)),
+          previousContext: getChunkContext(chunk),
+        })),
+        voice: voiceRef.current,
+        model: runtime.model,
+        speed: runtime.speed,
+        instructions: runtime.instructions,
+        outputFormat: exportFormat,
+        normalize: runtime.settings.normalizeExport,
       });
 
-      const mp3WithMeta = new Uint8Array(id3.length + combined.length);
-      mp3WithMeta.set(id3, 0);
-      mp3WithMeta.set(combined, id3.length);
-
-      const mp3Blob = new Blob([mp3WithMeta], { type: TTS_EXPORT_MIME });
+      if (renderRes?.data?.error) throw new Error(renderRes.data.error);
+      const rendered = renderRes?.data || renderRes;
+      if (!rendered?.file_url) throw new Error("Server render did not return an audio file");
+      if (renderProgressTimerRef.current) {
+        clearInterval(renderProgressTimerRef.current);
+        renderProgressTimerRef.current = null;
+      }
 
       // Trigger download
-      const url = URL.createObjectURL(mp3Blob);
       const a = document.createElement("a");
-      a.href = url;
-      a.download = fileName;
+      a.href = rendered.file_url;
+      a.download = rendered.filename || `${displayTitle.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase()}.${getTTSFileExtension(exportFormat)}`;
       a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 100);
-
-      const approxDuration = (combined.length * 8) / 128000;
-      const file = new File([mp3Blob], fileName, { type: TTS_EXPORT_MIME });
-      const uploadRes = await base44.integrations.Core.UploadFile({ file });
 
       await base44.entities.AudioExport.create({
         title: displayTitle,  // e.g. "April 23 Cascade Overview"
-        file_url: uploadRes.file_url,
-        duration_seconds: Math.round(approxDuration),
+        file_url: rendered.file_url,
+        duration_seconds: Math.round(rendered.duration_seconds || 0),
         voice: voiceRef.current,
         speed: runtimeRef.current.speed,
+        model: runtime.model,
+        format: rendered.format || exportFormat,
+        size: rendered.size,
       });
 
-      setRequestStatus({ type: "ok", msg: "Download complete" });
+      setRequestStatus({ type: "ok", msg: `Premium ${String(rendered.format || exportFormat).toUpperCase()} render complete` });
       setDownloadProgress({ current: 0, total: 0 });
       setDownloading(false);
     } catch (err) {
+      if (renderProgressTimerRef.current) {
+        clearInterval(renderProgressTimerRef.current);
+        renderProgressTimerRef.current = null;
+      }
       console.error("Download failed:", err);
       setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) || "Download failed" });
       setDownloadProgress({ current: 0, total: 0 });
@@ -767,7 +860,85 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
               <p className="text-xs font-semibold uppercase tracking-wider text-primary">TTS Settings</p>
               <p className="text-[10px] text-muted-foreground">Nova voice. Saved settings apply everywhere in PulsePoint.</p>
             </div>
-            <span className="text-[10px] rounded-full bg-primary/10 px-2 py-1 text-primary font-medium">Nova</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] rounded-full bg-primary/10 px-2 py-1 text-primary font-medium">Nova</span>
+              <span className="text-[10px] rounded-full bg-muted px-2 py-1 text-muted-foreground font-medium">
+                {TTS_ENGINES[draftSettings.engine]?.label}
+              </span>
+              <span className="text-[10px] rounded-full bg-muted px-2 py-1 text-muted-foreground font-medium">
+                {TTS_AUDIO_FORMATS[draftSettings.audioFormat]?.label}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Audio Engine</p>
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(TTS_ENGINES).map(([key, engine]) => (
+                  <button
+                    key={key}
+                    onClick={() => setDraftSettings((prev) => normalizeTTSSettings({ ...prev, engine: key }))}
+                    className={`px-2 py-1 rounded-lg text-[10px] font-medium ${
+                      draftSettings.engine === key
+                        ? "bg-primary/10 text-primary"
+                        : "bg-muted text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {engine.label}
+                  </button>
+                ))}
+              </div>
+              {draftSettings.engine === "hd" && (
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  HD Crisp prioritizes fidelity; tone sliders have less influence with this engine.
+                </p>
+              )}
+            </div>
+            <div>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Audio Format</p>
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(TTS_AUDIO_FORMATS).map(([key, format]) => (
+                  <button
+                    key={key}
+                    onClick={() => setDraftSettings((prev) => normalizeTTSSettings({ ...prev, audioFormat: key }))}
+                    className={`px-2 py-1 rounded-lg text-[10px] font-medium ${
+                      draftSettings.audioFormat === key
+                        ? "bg-primary/10 text-primary"
+                        : "bg-muted text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {format.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setDraftSettings((prev) => normalizeTTSSettings({ ...prev, normalizeExport: !prev.normalizeExport }))}
+            className={`w-full rounded-lg px-2.5 py-2 text-left text-[11px] font-medium transition-colors ${
+              draftSettings.normalizeExport
+                ? "bg-primary/10 text-primary"
+                : "bg-muted text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Gentle final loudness normalization: {draftSettings.normalizeExport ? "On" : "Off"}
+            <span className="block text-[10px] font-normal opacity-75">
+              Applies once during premium server download rendering only. Leave off for the most transparent fidelity.
+            </span>
+          </button>
+
+          <div className="flex flex-wrap gap-1.5">
+            {Object.entries(TTS_PRESETS).map(([name, preset]) => (
+              <button
+                key={name}
+                onClick={() => setDraftSettings(normalizeTTSSettings(preset))}
+                className="px-2 py-1 rounded-lg bg-muted text-[10px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted/80"
+              >
+                {name}
+              </button>
+            ))}
           </div>
 
           {[
@@ -778,6 +949,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             ["lightness", "Lightness", 0, 10, 1],
             ["femininity", "Femininity", 0, 10, 1],
             ["continuity", "Section Flow", 0, 10, 1],
+            ["naturalness", "Naturalness", 0, 10, 1],
+            ["pauses", "Pauses", 0, 10, 1],
+            ["softStart", "Soft Start", 0, 10, 1],
           ].map(([key, label, min, max, step]) => (
             <label key={key} className="grid grid-cols-[86px_1fr_42px] items-center gap-3 text-[11px]">
               <span className="font-medium text-muted-foreground">{label}</span>

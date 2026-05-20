@@ -3,6 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { TrendingUp } from "lucide-react";
 import TTSReader from "./TTSReader";
 import moment from "moment";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 function fmtDurWords(sec) {
   if (sec == null) return null;
@@ -133,10 +134,13 @@ export default function ArousalComparisonAIPanel({ sessions, timelineMap = {}, u
             arousal_notes: userProfile.arousal_notes,
           }, null, 2)}`
         : "";
+      const groundingContext = buildAIGroundingContext(userProfile);
 
       const res = await base44.integrations.Core.InvokeLLM({
         model: "claude_sonnet_4_6",
         prompt: `You are an expert in physiological arousal analysis. Your task is to deeply compare the AROUSAL PATTERNS across these ${sessions.length} sessions — focusing specifically on how arousal built, peaked, and resolved, not just final metrics.
+
+${groundingContext}
 
 YOUR FOCUS AREAS:
 1. Arousal shape and trajectory — how did arousal unfold over time? Was it a slow ramp, stepwise, erratic, plateau-driven?

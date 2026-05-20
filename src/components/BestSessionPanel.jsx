@@ -4,6 +4,7 @@ import { Trophy, Brain, Star, Activity, Heart, Zap } from "lucide-react";
 import { Link } from "react-router-dom";
 import TTSReader from "./TTSReader";
 import moment from "moment";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 function Item({ text }) {
   return (
@@ -13,7 +14,7 @@ function Item({ text }) {
 
 }
 
-export default function BestSessionPanel({ sessions }) {
+export default function BestSessionPanel({ sessions, userProfile }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [savedId, setSavedId] = useState(null);
@@ -91,6 +92,8 @@ export default function BestSessionPanel({ sessions }) {
       const res = await base44.integrations.Core.InvokeLLM({
         model: "claude_sonnet_4_6",
         prompt: `You are a physiological research assistant analyzing sexual response session data. Your task is to identify the single best session overall and explain in depth why it stands out.
+
+${buildAIGroundingContext(userProfile)}
 
 Consider ALL factors holistically:
 - Physiological quality: HR data, HR at climax, build quality, intensity

@@ -8,6 +8,7 @@ import {
   CartesianGrid, Legend,
 } from "recharts";
 import moment from "moment";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 // ─── Small reusable pieces ────────────────────────────────────────────────────
 
@@ -199,7 +200,7 @@ const SECTION_DEFS = [
   { key: "watch_points",      label: "Watch Points",       color: "hsl(var(--destructive))", icon: <Brain className="w-3.5 h-3.5" /> },
 ];
 
-function AITrendsPanel({ sessions }) {
+function AITrendsPanel({ sessions, userProfile }) {
   const [collapsed, setCollapsed] = useState(true);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
@@ -215,10 +216,13 @@ function AITrendsPanel({ sessions }) {
   const analyze = async () => {
     setLoading(true);
     const agg = buildAggregate(sessions);
+    const groundingContext = buildAIGroundingContext(userProfile);
 
     const res = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_6",
       prompt: `You are an expert longitudinal physiological analyst providing natural, flowing audio commentary. You are reviewing a personal session dataset with ${agg.total_records} records spanning ${agg.observation_period.start} to ${agg.observation_period.end}.
+
+${groundingContext}
 
 IMPORTANT — This will be read aloud, so:
 - SPELL OUT all numbers as words (e.g., "eight point eight out of ten" not "8.8/10")
@@ -366,13 +370,18 @@ Write as one reader reviewing their own longitudinal self-monitoring. Every numb
 
 export default function LongTermTrends() {
   const [sessions, setSessions] = useState([]);
+  const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [weekIdx, setWeekIdx] = useState(null); // null = not yet set
 
   useEffect(() => {
-    base44.entities.Session.list("date", 500).then((rows) => {
+    Promise.all([
+      base44.entities.Session.list("date", 500),
+      base44.auth.me().catch(() => null),
+    ]).then(([rows, profile]) => {
       const sorted = rows.sort((a, b) => new Date(a.date) - new Date(b.date));
       setSessions(sorted);
+      setUserProfile(profile);
       setLoading(false);
     });
   }, []);
@@ -531,7 +540,7 @@ export default function LongTermTrends() {
       )}
 
       {/* AI Panel */}
-      <AITrendsPanel sessions={sessions} />
+      <AITrendsPanel sessions={sessions} userProfile={userProfile} />
     </div>
   );
 }

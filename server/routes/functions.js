@@ -1,8 +1,18 @@
 import express from 'express';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { bulkCreate, deleteEntity, listEntities } from '../db.js';
 import { aiInvokeInternal } from './internalAi.js';
 
 export const functionsRouter = express.Router();
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(__dirname, '../..');
+const uploadDir = path.resolve(root, process.env.UPLOAD_DIR || './data/uploads');
+const ttsWorkDir = path.resolve(root, process.env.TTS_RENDER_DIR || './data/tts-render-work');
+const ttsRenderJobs = new Map();
 
 function b64ToBuffer(b64) {
   const clean = String(b64 || '').replace(/^data:.*?;base64,/, '');
@@ -39,8 +49,68 @@ function normalizeTTSFormat(value) {
   return TTS_CONTENT_TYPES[format] ? format : 'mp3';
 }
 
+function normalizeTTSModel(value) {
+  const requested = String(value || process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts');
+  return ['gpt-4o-mini-tts', 'tts-1-hd', 'tts-1'].includes(requested)
+    ? requested
+    : 'gpt-4o-mini-tts';
+}
+
 function supportsTTSInstructions(model) {
   return !String(model || '').startsWith('tts-1');
+}
+
+function normalizeTTSExportFormat(value) {
+  const format = String(value || 'mp3').toLowerCase();
+  return ['mp3', 'm4a', 'wav'].includes(format) ? format : 'mp3';
+}
+
+function ttsExportMime(format) {
+  if (format === 'wav') return 'audio/wav';
+  if (format === 'm4a') return 'audio/mp4';
+  return 'audio/mpeg';
+}
+
+function slugifyFilePart(value) {
+  return String(value || 'pulsepoint-tts')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80) || 'pulsepoint-tts';
+}
+
+function q(str) {
+  return `'${String(str).replace(/'/g, "'\\''")}'`;
+}
+
+function runProcess(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { windowsHide: true, ...options });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (data) => { stdout += data.toString(); });
+    child.stderr?.on('data', (data) => { stderr += data.toString(); });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`${command} exited with ${code}: ${stderr || stdout}`));
+    });
+  });
+}
+
+function setTtsRenderProgress(jobId, patch) {
+  if (!jobId) return;
+  const previous = ttsRenderJobs.get(jobId) || {};
+  const next = {
+    ...previous,
+    ...patch,
+    jobId,
+    updatedAt: new Date().toISOString(),
+  };
+  ttsRenderJobs.set(jobId, next);
+  if (['complete', 'error'].includes(next.phase)) {
+    setTimeout(() => ttsRenderJobs.delete(jobId), 10 * 60 * 1000).unref?.();
+  }
 }
 
 async function callOpenAITTS(body, meta) {
@@ -55,7 +125,7 @@ async function callOpenAITTS(body, meta) {
         method: 'POST',
         headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      }, Number(process.env.OPENAI_TTS_TIMEOUT_MS || 30000));
+      }, Number(process.env.OPENAI_TTS_TIMEOUT_MS || 45000));
       const latencyMs = Date.now() - startedAt;
 
       if (response.ok) {
@@ -85,6 +155,23 @@ async function callOpenAITTS(body, meta) {
   const error = new Error(lastMessage);
   error.status = lastStatus;
   throw error;
+}
+
+function buildChunkInstructions(baseInstructions, previousContext, supportsInstructionsForModel) {
+  const base = String(baseInstructions || '').trim();
+  if (!supportsInstructionsForModel) return '';
+  const context = String(previousContext || '').trim();
+  if (!context) return base;
+  return `${base}
+
+CONTEXT ONLY — DO NOT READ:
+Previous narration:
+"${context}"
+
+Continue seamlessly from the previous narration.
+This is the same continuous thought.
+Do NOT restart energy, tone, pacing, or emphasis.
+Read only the input text.`;
 }
 
 functionsRouter.post('/saveTimelineData', (req, res) => {
@@ -127,6 +214,7 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
     const {
       text,
       voice = 'nova',
+      model: requestedModel,
       speed = 1.0,
       instructions: requestedInstructions,
       format: requestedFormat,
@@ -137,7 +225,7 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
     if (input.length > maxChars) {
       return res.status(413).json({ error: 'Text chunk too large', length: input.length, maxLength: maxChars });
     }
-    const model = process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts';
+    const model = normalizeTTSModel(requestedModel);
     const finalSpeed = clampSpeed(speed);
     const responseFormat = normalizeTTSFormat(requestedFormat);
     const body = {
@@ -171,6 +259,199 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
     res.send(buffer);
   } catch (error) {
     res.status(error.status || 502).json({ error: error.message || String(error), retryable: true });
+  }
+});
+
+functionsRouter.get('/ttsRenderProgress/:jobId', (req, res) => {
+  const job = ttsRenderJobs.get(req.params.jobId);
+  if (!job) {
+    return res.json({
+      jobId: req.params.jobId,
+      phase: 'unknown',
+      current: 0,
+      total: 0,
+      message: 'Waiting for render to start…',
+    });
+  }
+  res.json(job);
+});
+
+functionsRouter.post('/renderTTSExport', async (req, res) => {
+  let workDir = null;
+  let jobId = null;
+  try {
+    if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY' });
+    const {
+      chunks = [],
+      title = 'PulsePoint TTS Export',
+      voice = 'nova',
+      model: requestedModel,
+      speed = 1.0,
+      instructions = '',
+      outputFormat: requestedOutputFormat = 'mp3',
+      normalize = false,
+      jobId: requestedJobId,
+    } = req.body || {};
+    jobId = String(requestedJobId || crypto.randomUUID());
+
+    const model = normalizeTTSModel(requestedModel);
+    const finalSpeed = clampSpeed(speed);
+    const outputFormat = normalizeTTSExportFormat(requestedOutputFormat);
+    const supportsInstructionsForModel = supportsTTSInstructions(model);
+    const normalizedChunks = (Array.isArray(chunks) ? chunks : [])
+      .map((chunk) => ({
+        text: String(chunk?.text || '').trim(),
+        previousContext: String(chunk?.previousContext || '').trim(),
+      }))
+      .filter((chunk) => chunk.text);
+
+    if (!normalizedChunks.length) {
+      setTtsRenderProgress(jobId, { phase: 'error', current: 0, total: 0, message: 'No TTS chunks provided' });
+      return res.status(400).json({ error: 'No TTS chunks provided' });
+    }
+    if (normalizedChunks.length > 120) {
+      setTtsRenderProgress(jobId, { phase: 'error', current: 0, total: normalizedChunks.length, message: 'Too many TTS chunks' });
+      return res.status(413).json({ error: 'Too many TTS chunks', count: normalizedChunks.length, max: 120 });
+    }
+
+    setTtsRenderProgress(jobId, {
+      phase: 'starting',
+      current: 0,
+      total: normalizedChunks.length,
+      message: `Preparing ${normalizedChunks.length} chunks…`,
+      model,
+      voice,
+      format: outputFormat,
+    });
+
+    await fs.mkdir(uploadDir, { recursive: true });
+    await fs.mkdir(ttsWorkDir, { recursive: true });
+    workDir = path.join(ttsWorkDir, `${Date.now()}-${crypto.randomUUID()}`);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const sourceFiles = [];
+    for (let i = 0; i < normalizedChunks.length; i++) {
+      const chunk = normalizedChunks[i];
+      setTtsRenderProgress(jobId, {
+        phase: 'generating',
+        current: i,
+        total: normalizedChunks.length,
+        message: `Generating chunk ${i + 1} of ${normalizedChunks.length}…`,
+      });
+      const body = {
+        model,
+        input: chunk.text,
+        voice,
+        response_format: 'wav',
+        speed: finalSpeed,
+      };
+      const chunkInstructions = buildChunkInstructions(instructions, chunk.previousContext, supportsInstructionsForModel);
+      if (chunkInstructions) body.instructions = chunkInstructions;
+      const meta = {
+        chunkIndex: i,
+        charCount: chunk.text.length,
+        estimatedDurationSec: Math.max(1, Math.round(chunk.text.split(/\s+/).filter(Boolean).length / 2.25)),
+        model,
+        voice,
+        speed: finalSpeed,
+        format: 'wav',
+        render: 'server',
+      };
+      const { response } = await callOpenAITTS(body, meta);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const chunkPath = path.join(workDir, `chunk-${String(i).padStart(4, '0')}.wav`);
+      await fs.writeFile(chunkPath, buffer);
+      sourceFiles.push(chunkPath);
+      setTtsRenderProgress(jobId, {
+        phase: 'generating',
+        current: i + 1,
+        total: normalizedChunks.length,
+        message: `Generated chunk ${i + 1} of ${normalizedChunks.length}`,
+      });
+    }
+
+    setTtsRenderProgress(jobId, {
+      phase: 'encoding',
+      current: normalizedChunks.length,
+      total: normalizedChunks.length,
+      message: `Encoding final ${outputFormat.toUpperCase()} with ffmpeg…`,
+    });
+
+    const concatPath = path.join(workDir, 'concat.txt');
+    await fs.writeFile(concatPath, sourceFiles.map((file) => `file ${q(file.replace(/\\/g, '/'))}`).join('\n'), 'utf8');
+
+    const outputBase = `${slugifyFilePart(title)}-${Date.now()}`;
+    const finalFilename = `${outputBase}.${outputFormat}`;
+    const finalPath = path.join(uploadDir, finalFilename);
+    const filterArgs = normalize
+      ? ['-af', 'loudnorm=I=-18:TP=-1.5:LRA=11']
+      : [];
+    const encodeArgs = outputFormat === 'wav'
+      ? (normalize ? ['-c:a', 'pcm_s16le'] : ['-c:a', 'copy'])
+      : outputFormat === 'm4a'
+        ? ['-c:a', 'aac', '-b:a', '320k', '-movflags', '+faststart']
+        : ['-c:a', 'libmp3lame', '-b:a', '320k', '-compression_level', '0'];
+
+    await runProcess('ffmpeg', [
+      '-hide_banner',
+      '-y',
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', concatPath,
+      ...filterArgs,
+      ...encodeArgs,
+      finalPath,
+    ]);
+
+    const stat = await fs.stat(finalPath);
+    let durationSeconds = 0;
+    try {
+      const probe = await runProcess('ffprobe', [
+        '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        finalPath,
+      ]);
+      durationSeconds = Math.round(Number(probe.stdout.trim()) || 0);
+    } catch {}
+
+    res.json({
+      ok: true,
+      jobId,
+      file_url: `/uploads/${finalFilename}`,
+      filename: finalFilename,
+      size: stat.size,
+      format: outputFormat,
+      mime: ttsExportMime(outputFormat),
+      duration_seconds: durationSeconds,
+      model,
+      voice,
+      speed: finalSpeed,
+      chunks: normalizedChunks.length,
+      normalized: Boolean(normalize),
+    });
+    setTtsRenderProgress(jobId, {
+      phase: 'complete',
+      current: normalizedChunks.length,
+      total: normalizedChunks.length,
+      message: `Complete: ${finalFilename}`,
+      file_url: `/uploads/${finalFilename}`,
+      filename: finalFilename,
+      format: outputFormat,
+      size: stat.size,
+      duration_seconds: durationSeconds,
+    });
+  } catch (error) {
+    console.error('[renderTTSExport] failed', error);
+    setTtsRenderProgress(jobId, {
+      phase: 'error',
+      message: error.message || String(error),
+    });
+    res.status(error.status || 502).json({ error: error.message || String(error), retryable: true });
+  } finally {
+    if (workDir) {
+      fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
 });
 
@@ -230,10 +511,34 @@ functionsRouter.post('/generateJournal', async (req, res) => {
       s.notes ? `Session notes: ${s.notes}` : null,
       s.event_timeline?.length ? `Event timeline: ${s.event_timeline.slice(0, 10).map(e => `[${Math.floor(e.time_s / 60)}:${String(Math.round(e.time_s % 60)).padStart(2, '0')}] ${e.note}`).join(' | ')}` : null,
     ].filter(Boolean).join('\n');
+    const profile = s.user_profile || {};
+    const profileContext = profile && Object.keys(profile).length ? [
+      `Age: ${profile.age || ''}`,
+      `Fitness level: ${profile.fitness_level || ''}`,
+      `Resting heart rate: ${profile.resting_hr || ''}`,
+      `Maximum heart rate: ${profile.max_hr || ''}`,
+      `Arousal response style: ${profile.arousal_response_style || ''}`,
+      `Typical build duration: ${profile.typical_build_duration || ''}`,
+      `Climax sensitivity: ${profile.climax_sensitivity || ''}`,
+      `Preferred stimulation: ${Array.isArray(profile.preferred_stimulation) ? profile.preferred_stimulation.join(', ') : profile.preferred_stimulation || ''}`,
+      `Refractory pattern: ${profile.refractory_pattern || ''}`,
+      `Arousal notes: ${profile.arousal_notes || ''}`,
+      `Profile notes: ${profile.profile_notes || profile.notes || ''}`,
+    ].filter((line) => !line.endsWith(': ')).join('\n') : '';
     const transcriptSection = voice_transcript?.trim()
       ? `\n\nNOTES FROM THE PERSON (written or transcribed immediately after session):\n"${voice_transcript.trim()}"`
       : '';
     const prompt = `You are a compassionate physiological journal assistant. Write in second person ("you", "your") directly to the person. Your writing is warm, introspective, and data-grounded.
+
+GLOBAL PROFILE REFERENCE:
+${profileContext || 'No saved profile context was available. Rely only on the session data and the person\'s notes.'}
+
+GLOBAL EVIDENCE AND INTERPRETATION RULES:
+- Treat the profile as background context, not as a replacement for the current session facts.
+- Separate observed facts from interpretation.
+- Do not infer intent, strategy, motivation, or goals unless the person explicitly wrote it in notes, journal text, event annotations, or profile context.
+- Avoid claims like "trying to avoid climax", "intentionally edging", "choosing to delay", "suppressing climax", or "holding back" unless explicitly logged.
+- Use neutral physiological language when intent is not stated.
 
 CRITICAL FOR TEXT-TO-SPEECH:
 - Write all numbers as words (e.g., "eight out of ten", "seventy-two beats per minute")

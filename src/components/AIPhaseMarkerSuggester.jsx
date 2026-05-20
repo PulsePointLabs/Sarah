@@ -3,6 +3,7 @@ import { AlertCircle, Brain, Check, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "./session-form/EventTimelineSection";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 function fmtMmSs(value) {
   if (value == null || Number(value) < 0) return "--";
@@ -229,7 +230,7 @@ function MarkerCell({ label, color, time, confidence }) {
   );
 }
 
-export default function AIPhaseMarkerSuggester({ session, timelineRows, onApply }) {
+export default function AIPhaseMarkerSuggester({ session, timelineRows, userProfile, onApply }) {
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
   const [suggestion, setSuggestion] = useState(session.phase_marker_ai_suggestion || null);
@@ -245,11 +246,14 @@ export default function AIPhaseMarkerSuggester({ session, timelineRows, onApply 
       const candidates = buildCandidateEvents(session, timelineRows);
       const hrSamples = buildHRSamples(timelineRows);
       const durationS = Math.round(Math.max(...timelineRows.map((r) => Number(r.time_offset_s) || 0), Number(session.duration_minutes || 0) * 60));
+      const groundingContext = buildAIGroundingContext(userProfile);
 
       const res = await base44.integrations.Core.InvokeLLM({
         model: "claude_sonnet_4_6",
         max_tokens: 2200,
         prompt: `You are helping place pre-climax, climax, and recovery markers on a personal physiology timeline. Use the timestamped event notes as primary evidence. Use heart-rate shape only as supporting context.
+
+${groundingContext}
 
 Choose:
 - pre_climax_offset_s: the beginning of the final pre-climax escalation. Prefer the first event in the final continuous approach where notes show impending climax, involuntary tension, legs/feet/toes locking or planting, tremors, breathing shifts, escalating stimulation, point-of-no-return language, or repeated near-climax signs.

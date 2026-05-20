@@ -4,6 +4,7 @@ import { AlertCircle, Brain, Activity, Lightbulb, TrendingUp, Zap, ChevronDown, 
 import TTSReader from "./TTSReader";
 import { Button } from "@/components/ui/button";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 function buildSessionContext(session, timelineRows) {
   const hrMin = timelineRows.length ? Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))) : null;
   const hrMax = timelineRows.length ? Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))) : null;
@@ -259,7 +260,9 @@ ${JSON.stringify({
   arousal_notes: userProfile.arousal_notes,
 }, null, 2)}
 
-Use this arousal profile to personalize analysis: compare the observed build arc and climax pattern against the user's known response style. Note deviations (e.g. faster/slower than typical, more/less sensitive). Reference preferred methods when interpreting session effectiveness.` : "";
+    Use this arousal profile to personalize analysis: compare the observed build arc and climax pattern against the user's known response style. Note deviations (e.g. faster/slower than typical, more/less sensitive). Reference preferred methods when interpreting session effectiveness.` : "";
+
+    const groundingContext = buildAIGroundingContext(userProfile);
 
     const journalContext = sessionJournal ? `
 
@@ -279,14 +282,18 @@ Factor the journal into your analysis — where the person's subjective experien
       ...(estimScreenshots.length > 0 ? { file_urls: estimScreenshots } : {}),
       prompt: `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session integrating arousal physiology, anatomy, heart rate data, event timeline, and subjective experience into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
+${groundingContext}
+
 PHYSIOLOGICAL & ANATOMICAL LENS — CONDITIONAL USE ONLY:
 - Only mention specific physiological phases (e.g. emission, expulsion, plateau) or anatomical structures (e.g. pudendal nerve, bulbocavernosus, prostatic urethra) when the session data — an event note, HR pattern, subjective metric, or logged sensation — gives you a concrete reason to do so. Never insert these as generic background explanation.
 - Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery).
+- Preserve the explanatory "why." When stimulation changes, heart-rate movement, physical cues, or subjective metrics line up, explain the likely mechanism behind the pattern instead of merely restating that it happened.
+- Discuss stimulation-to-body links when supported: how pressure, friction, suction, vibration, e-stim, foley/urethral input, perineal contact, or technique shifts likely changed sensory input, pelvic floor tone, autonomic loading, or climax threshold.
 - If foley or urethral stimulation is logged, discuss urethral sensory dynamics — but only in terms of what actually happened (logged sensations, HR response, notes). Skip if there's nothing to connect it to.
 - If e-stim is present, discuss fiber recruitment and frequency effects only if the e-stim notes or settings screenshots give you something specific to work with.
 - Connect subjective sensations (pressure, throb, tightness, wave) to anatomical generators ONLY if the user actually logged those sensations.
 - Interpret discomfort anatomically ONLY if discomfort entries are present.
-- The goal is a tight, evidence-driven analysis of what actually happened — not a physiology lecture. Every anatomical or physiological claim must be traceable to a specific data point in the session.
+- The goal is a tight, evidence-driven explanation of what happened and why it likely happened. Every anatomical or physiological claim must be traceable to a specific data point in the session, but do not omit relevant physiology when the data supports it.
 ${emgSummary ? `
 EMG INTERPRETATION RULES — apply carefully:
 - EMG % is NORMALIZED RELATIVE ACTIVATION, NOT absolute force. Never claim EMG % equals muscle force.

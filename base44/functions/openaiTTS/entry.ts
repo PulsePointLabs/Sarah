@@ -23,13 +23,41 @@ function clampSpeed(value: unknown) {
     : 1.0;
 }
 
-async function callOpenAITTS(text: string, voice: string, speed: number) {
+const TTS_CONTENT_TYPES: Record<string, string> = {
+  mp3: "audio/mpeg",
+  opus: "audio/ogg",
+  aac: "audio/aac",
+  flac: "audio/flac",
+  wav: "audio/wav",
+  pcm: "application/octet-stream",
+};
+
+function normalizeTTSFormat(value: unknown) {
+  const format = String(value || "mp3").toLowerCase();
+  return TTS_CONTENT_TYPES[format] ? format : "mp3";
+}
+
+function normalizeTTSModel(value: unknown) {
+  const requested = String(value || "gpt-4o-mini-tts");
+  return ["gpt-4o-mini-tts", "tts-1-hd", "tts-1"].includes(requested)
+    ? requested
+    : "gpt-4o-mini-tts";
+}
+
+async function callOpenAITTS(
+  text: string,
+  voice: string,
+  model: string,
+  speed: number,
+  instructions: string,
+  format: string,
+) {
   let lastStatus = 500;
   let lastMessage = "Unknown TTS error";
 
   // Keep this short. Base44/serverless isolates can die if one request hangs too long.
   const MAX_ATTEMPTS = 3;
-  const FETCH_TIMEOUT_MS = 25_000;
+  const FETCH_TIMEOUT_MS = 35_000;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const controller = new AbortController();
@@ -44,11 +72,12 @@ async function callOpenAITTS(text: string, voice: string, speed: number) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "gpt-4o-mini-tts",
+          model,
           input: text,
           voice,
-          response_format: "mp3",
+          response_format: format,
           speed,
+          ...(instructions && !model.startsWith("tts-1") ? { instructions } : {}),
         }),
       });
 
@@ -117,8 +146,11 @@ Deno.serve(async (req) => {
     const body = await req.json();
 
     const text = String(body.text || "").trim();
-    const voice = String(body.voice || "alloy");
+    const voice = String(body.voice || "nova");
+    const model = normalizeTTSModel(body.model);
     const speed = clampSpeed(body.speed);
+    const instructions = String(body.instructions || "").trim();
+    const format = normalizeTTSFormat(body.format);
 
     if (!text) {
       return jsonResponse({ error: "Missing text" }, 400);
@@ -135,16 +167,20 @@ Deno.serve(async (req) => {
       );
     }
 
-    const ttsResponse = await callOpenAITTS(text, voice, speed);
+    const ttsResponse = await callOpenAITTS(text, voice, model, speed, instructions, format);
     const audioBuffer = await ttsResponse.arrayBuffer();
 
     return new Response(audioBuffer, {
       status: 200,
       headers: {
         ...corsHeaders,
-        "Content-Type": "audio/mpeg",
+        "Content-Type": TTS_CONTENT_TYPES[format],
         "Content-Length": String(audioBuffer.byteLength),
         "Cache-Control": "no-store",
+        "X-TTS-Model": model,
+        "X-TTS-Voice": voice,
+        "X-TTS-Speed": String(speed),
+        "X-TTS-Format": format,
       },
     });
   } catch (error) {

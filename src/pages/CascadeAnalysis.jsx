@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Brain, Activity, AlertCircle } from "lucide-react";
 import TTSReader from "../components/TTSReader";
 import CascadeTrendPanel from "../components/CascadeTrendPanel";
+import { buildAIGroundingContext } from "@/lib/aiGrounding";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -317,7 +318,8 @@ Preferred stimulation: ${(userProfile.preferred_stimulation || []).join(", ") ||
 Refractory pattern: ${userProfile.refractory_pattern || "unknown"}.
 Arousal notes: ${briefText(userProfile.arousal_notes, 500) || "none"}.
 
-Use this profile throughout the analysis — compare observed cascade patterns against the user's known arousal response style. Note sessions that align with or deviate from their typical build arc, sensitivity, and refractory pattern.` : "";
+    Use this profile throughout the analysis — compare observed cascade patterns against the user's known arousal response style. Note sessions that align with or deviate from their typical build arc, sensitivity, and refractory pattern.` : "";
+    const groundingContext = buildAIGroundingContext(userProfile);
 
     const temporalTrendText = temporalTrend.map((s) => (
       `${s.date}: peak ${s.peak_hr_bpm ?? "?"} beats per minute; build ${s.build_duration_s != null ? fmtDur(s.build_duration_s) : "unknown"}; recovery ${s.recovery_onset_s != null ? fmtDur(s.recovery_onset_s) : "unknown"}; satisfaction ${s.satisfaction ?? "?"}; intensity ${s.intensity ?? "?"}; build type ${s.build_type || "unknown"}; methods ${(s.methods || []).join(", ") || "none"}`
@@ -345,6 +347,8 @@ Use this profile throughout the analysis — compare observed cascade patterns a
       model: "claude_sonnet_4_6",
       max_tokens: 12000,
       prompt: `You are a physiological research assistant analyzing sexual response cascade data across ${sessions.length} sessions. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
+
+${groundingContext}
 
 CHRONOLOGICAL TREND DATA (sessions in date order — use this for temporal analysis):
 ${temporalTrendText}
