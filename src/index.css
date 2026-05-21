@@ -102,5 +102,20 @@
       font-size: 0.8125rem;
       line-height: 1.15rem;
     }
+
+    input,
+    select,
+    textarea {
+      font-size: max(0.875rem, 16px);
+    }
+
+    button,
+    [role="button"] {
+      min-height: 2.25rem;
+    }
+
+    .text-muted-foreground {
+      color: hsl(var(--muted-foreground) / 0.98);
+    }
   }
 }

@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { AlertCircle, Brain, Activity, Lightbulb, TrendingUp, Zap, ChevronDown, ChevronUp } from "lucide-react";
 import TTSReader from "./TTSReader";
 import { Button } from "@/components/ui/button";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
-import { startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 function buildSessionContext(session, timelineRows) {
   const hrMin = timelineRows.length ? Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))) : null;
   const hrMax = timelineRows.length ? Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))) : null;
@@ -149,6 +149,68 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
   const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(session.ai_analysis ?? null);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    setResult(session.ai_analysis ?? null);
+  }, [session.id, session.ai_analysis]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (session.ai_analysis || result) return undefined;
+
+    const reconnect = async () => {
+      try {
+        const data = await listBackgroundJobs({
+          type: "ai_invoke",
+          status: "queued,running,complete",
+          metaSessionId: session.id,
+          limit: 4,
+        });
+        if (cancelled) return;
+        const job = (data.jobs || []).find((item) => item.meta?.label === "AI Session Analysis");
+        if (!job) return;
+
+        setCollapsed(false);
+        setJobStatus(job);
+        setLoading(job.status !== "complete");
+
+        const completedJob = job.status === "complete"
+          ? job
+          : await waitForBackgroundJob(job.id, {
+            intervalMs: 1200,
+            onProgress: (nextJob) => {
+              if (!cancelled) setJobStatus(nextJob);
+            },
+          });
+        if (cancelled) return;
+
+        const parsed = normalizeSessionAnalysis(completedJob.result);
+        setResult(parsed);
+        setJobStatus({
+          ...completedJob,
+          progress: {
+            ...(completedJob.progress || {}),
+            phase: "saving",
+            current: 3,
+            total: 3,
+            message: "Recovered complete analysis; saving it back to the session…",
+          },
+        });
+        await base44.entities.Session.update(session.id, { ai_analysis: parsed });
+      } catch (err) {
+        if (!cancelled) {
+          console.warn("AI Session Analysis reconnect skipped:", err);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    reconnect();
+    return () => {
+      cancelled = true;
+    };
+  }, [result, session.ai_analysis, session.id]);
 
   const analyze = async () => {
     setLoading(true);

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Brain, CheckCircle2, ChevronDown, ClipboardCheck, Edit3, FileText, HeartPulse, ListChecks, NotebookText } from "lucide-react";
+import { ArrowRight, Brain, CheckCircle2, ChevronDown, ClipboardCheck, Edit3, FileText, HeartPulse, ListChecks, NotebookText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 function fmtMmSs(value) {
@@ -136,8 +136,9 @@ export default function PostSessionReviewWizard({ session, timelineRows = [], em
       },
     ];
     const doneCount = steps.filter((step) => step.done).length;
+    const nextStep = steps.find((step) => !step.done) || null;
     const completedAt = savedAt || session?.post_session_review?.completed_at || "";
-    return { steps, doneCount, total: steps.length, pct: Math.round((doneCount / steps.length) * 100), captureDigest, completedAt };
+    return { steps, doneCount, total: steps.length, pct: Math.round((doneCount / steps.length) * 100), captureDigest, completedAt, nextStep };
   }, [emgRows.length, savedAt, session, timelineRows.length]);
 
   const markComplete = async () => {
@@ -220,6 +221,33 @@ export default function PostSessionReviewWizard({ session, timelineRows = [], em
               {finding}
             </span>
           ))}
+        </div>
+      )}
+
+      {review.nextStep && (
+        <div className="rounded-lg border border-primary/25 bg-primary/8 px-3 py-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wider text-primary">Next Best Review Step</p>
+              <p className="mt-1 text-sm text-foreground">{review.nextStep.title}</p>
+              <p className="mt-0.5 text-sm text-muted-foreground">{review.nextStep.detail}</p>
+            </div>
+            {review.nextStep.actionLabel && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (review.nextStep.action === "edit") onEdit?.();
+                  else if (review.nextStep.tab) onOpenTab?.(review.nextStep.tab);
+                }}
+                className="shrink-0 gap-1.5 text-sm"
+              >
+                {review.nextStep.actionLabel}
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
         </div>
       )}
 
