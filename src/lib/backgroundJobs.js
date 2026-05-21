@@ -29,6 +29,12 @@ export function getBackgroundJob(jobId) {
   return jobRequest(`/jobs/${encodeURIComponent(jobId)}`);
 }
 
+export function cancelBackgroundJob(jobId) {
+  return jobRequest(`/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST",
+  });
+}
+
 export function listBackgroundJobs(params = {}) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {

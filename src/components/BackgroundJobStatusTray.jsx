@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, ChevronDown, ChevronUp, Loader2, XCircle } from "lucide-react";
-import { listBackgroundJobs } from "@/lib/backgroundJobs";
+import { useNavigate } from "react-router-dom";
+import { CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Loader2, Square, XCircle } from "lucide-react";
+import { cancelBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
 
 function fmtTime(value) {
   if (!value) return "";
@@ -25,11 +26,58 @@ function statusTone(status) {
   return "text-primary bg-primary/10 border-primary/25";
 }
 
+function jobTarget(job) {
+  const sessionId = job?.meta?.sessionId;
+  if (sessionId) return `/sessions/${sessionId}`;
+  if (job?.type === "tts_export") return "/library";
+  if (job?.type === "ai_invoke") return "/sessions";
+  return null;
+}
+
 export default function BackgroundJobStatusTray() {
+  const navigate = useNavigate();
   const [jobs, setJobs] = useState([]);
   const [expanded, setExpanded] = useState(false);
   const [hiddenCompleteIds, setHiddenCompleteIds] = useState(() => new Set());
+  const [cancellingIds, setCancellingIds] = useState(() => new Set());
   const [offline, setOffline] = useState(false);
+
+  const goToJob = (job) => {
+    const target = jobTarget(job);
+    if (!target) return;
+    navigate(target);
+    setExpanded(false);
+  };
+
+  const handleCancel = async (job, event) => {
+    event?.stopPropagation();
+    if (!job?.id || cancellingIds.has(job.id)) return;
+
+    setCancellingIds((prev) => new Set([...prev, job.id]));
+    try {
+      const cancelledJob = await cancelBackgroundJob(job.id);
+      setJobs((prev) => prev.map((item) => (item.id === job.id ? cancelledJob : item)));
+    } catch (err) {
+      setJobs((prev) =>
+        prev.map((item) =>
+          item.id === job.id
+            ? {
+                ...item,
+                status: "error",
+                error: err?.message || "Could not stop this job.",
+                updatedAt: new Date().toISOString(),
+              }
+            : item
+        )
+      );
+    } finally {
+      setCancellingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(job.id);
+        return next;
+      });
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -101,8 +149,25 @@ export default function BackgroundJobStatusTray() {
               const total = Number(progress.total || 0);
               const current = Number(progress.current || 0);
               const pct = total > 0 ? Math.max(8, Math.min(100, Math.round((current / total) * 100))) : ["queued", "running"].includes(job.status) ? 20 : 100;
+              const active = ["queued", "running"].includes(job.status);
+              const target = jobTarget(job);
+              const cancelling = cancellingIds.has(job.id);
               return (
-                <div key={job.id} className={`rounded-lg border px-3 py-2 ${statusTone(job.status)}`}>
+                <div
+                  key={job.id}
+                  role={target ? "button" : undefined}
+                  tabIndex={target ? 0 : undefined}
+                  onClick={() => goToJob(job)}
+                  onKeyDown={(event) => {
+                    if (!target) return;
+                    if (event.target?.closest?.("button")) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      goToJob(job);
+                    }
+                  }}
+                  className={`rounded-lg border px-3 py-2 transition-colors ${statusTone(job.status)} ${target ? "cursor-pointer hover:border-current/70 hover:bg-current/15" : ""}`}
+                >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold">{jobLabel(job)}</p>
@@ -117,15 +182,47 @@ export default function BackgroundJobStatusTray() {
                     <span>{progress.phase || job.type}</span>
                     <span>{fmtTime(job.updatedAt || job.finishedAt || job.createdAt)}</span>
                   </div>
-                  {!["queued", "running"].includes(job.status) && (
-                    <button
-                      type="button"
-                      onClick={() => setHiddenCompleteIds((prev) => new Set([...prev, job.id]))}
-                      className="mt-1 text-[10px] font-medium opacity-75 hover:opacity-100"
-                    >
-                      Hide
-                    </button>
-                  )}
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {target && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          goToJob(job);
+                        }}
+                        aria-label={`Open ${jobLabel(job)}`}
+                        className="inline-flex items-center gap-1 rounded-full border border-current/25 px-2 py-1 text-[10px] font-semibold opacity-85 hover:opacity-100"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        Open
+                      </button>
+                    )}
+                    {active && (
+                      <button
+                        type="button"
+                        disabled={cancelling}
+                        onClick={(event) => handleCancel(job, event)}
+                        aria-label={`Stop ${jobLabel(job)}`}
+                        className="inline-flex items-center gap-1 rounded-full border border-current/25 px-2 py-1 text-[10px] font-semibold opacity-85 hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {cancelling ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />}
+                        {cancelling ? "Stopping" : "Stop"}
+                      </button>
+                    )}
+                    {!active && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setHiddenCompleteIds((prev) => new Set([...prev, job.id]));
+                        }}
+                        aria-label={`Hide ${jobLabel(job)}`}
+                        className="rounded-full px-2 py-1 text-[10px] font-medium opacity-75 hover:opacity-100"
+                      >
+                        Hide
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}
