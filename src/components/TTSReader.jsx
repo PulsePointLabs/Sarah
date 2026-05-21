@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from "react";
-import { Play, Pause, Square, Download, Settings, RotateCcw, Save } from "lucide-react";
+import { Play, Pause, Square, Download, Settings } from "lucide-react";
+import { Link } from "react-router-dom";
 import {
   cleanTextForSpeech,
-  DEFAULT_TTS_SETTINGS,
   buildTTSInstructions,
   getTTSRuntime,
   getTTSMime,
@@ -10,20 +10,13 @@ import {
   loadTTSSettings,
   normalizeTTSSettings,
   prepareTTSInput,
-  saveTTSSettings,
-  TTS_AUDIO_FORMATS,
   splitIntoChunks,
-  TTS_PRESETS,
   TTS_CHUNK_TARGET_CHARS,
-  TTS_ENGINES,
 } from "./TTSButton";
-import { Slider } from "@/components/ui/slider";
 import { fmtSecondsInText } from "@/utils/formatSeconds";
 import { base44 } from "@/api/base44Client";
 import { idbGet, idbSet } from "@/lib/ttsCache";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
-
-const TTS_SAMPLE_TEXT = "Your build phase begins quietly, with stimulation becoming more focused while your body starts to organize around arousal. As climax approaches, the shift is meaningful: sensation, muscle tone, and heart rate begin telling the same story, then recovery arrives as stimulation stops and the body settles.";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const TTS_UNIT_MAX_CHARS = TTS_CHUNK_TARGET_CHARS;
@@ -250,9 +243,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const [currentPara, setCurrentPara] = useState(-1);
   const [bufferingPara, setBufferingPara] = useState(-1); // which paragraph is currently fetching
   const [ttsSettings, setTtsSettings] = useState(() => loadTTSSettings());
-  const [draftSettings, setDraftSettings] = useState(() => loadTTSSettings());
-  const [showSettings, setShowSettings] = useState(false);
-  const [sampleState, setSampleState] = useState("idle");
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
   const [requestStatus, setRequestStatus] = useState(null); // { type: "fetching"|"ok"|"error", msg: string }
@@ -268,7 +258,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const currentChunkRef = useRef(null); // the chunk currently playing/buffering
   const voiceRef = useRef("nova");
   const runtimeRef = useRef(getTTSRuntime(ttsSettings));
-  const sampleAudioRef = useRef(null);
   // Generation counter: increment on every startFrom to cancel stale async chains
   const genRef = useRef(0);
   // Prefetch cache: chunk text → decoded AudioBuffer (keyed by gen+chunk for staleness)
@@ -287,7 +276,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     const sync = (event) => {
       const next = normalizeTTSSettings(event?.detail || loadTTSSettings());
       setTtsSettings(next);
-      setDraftSettings(next);
       runtimeRef.current = getTTSRuntime(next);
       prefetchCacheRef.current.clear();
     };
@@ -319,65 +307,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     }
   };
 
-  const stopSample = () => {
-    if (sampleAudioRef.current) {
-      try {
-        sampleAudioRef.current.audio.pause();
-        sampleAudioRef.current.audio.src = "";
-        URL.revokeObjectURL(sampleAudioRef.current.url);
-      } catch {}
-      sampleAudioRef.current = null;
-    }
-    setSampleState("idle");
-  };
-
-  const playSettingsSample = async () => {
-    stopSample();
-    setSampleState("loading");
-    try {
-      const runtime = getTTSRuntime(draftSettings);
-      const response = await callTTSWithRetries({
-        text: prepareTTSInput(TTS_SAMPLE_TEXT),
-        voice: "nova",
-        model: runtime.model,
-        speed: runtime.speed,
-        instructions: runtime.supportsInstructions ? runtime.instructions : "",
-        format: runtime.format,
-      }, 4);
-      const binary = atob(response.data.audio);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const url = URL.createObjectURL(new Blob([bytes.buffer], { type: getTTSMime(response.data?.format || runtime.format) }));
-      const audio = new Audio(url);
-      audio.onended = stopSample;
-      audio.onerror = stopSample;
-      sampleAudioRef.current = { audio, url };
-      setSampleState("playing");
-      await audio.play();
-    } catch (err) {
-      console.error("TTS sample failed:", err);
-      setSampleState("idle");
-      setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) });
-    }
-  };
-
-  const applyTTSSettings = () => {
-    const saved = saveTTSSettings(draftSettings);
-    setTtsSettings(saved);
-    runtimeRef.current = getTTSRuntime(saved);
-    prefetchCacheRef.current.clear();
-    setRequestStatus({ type: "ok", msg: "TTS settings saved" });
-  };
-
-  const resetTTSSettings = () => {
-    const reset = normalizeTTSSettings(DEFAULT_TTS_SETTINGS);
-    setDraftSettings(reset);
-  };
-
   const stop = () => {
     genRef.current++; // invalidate any in-flight async chain
     stopSource();
-    stopSample();
     remainingParasRef.current = [];
     chunkQueueRef.current = [];
     currentChunkRef.current = null;
@@ -991,155 +923,15 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           )}
         </button>
 
-        <button
-          onClick={() => setShowSettings((v) => !v)}
+        <Link
+          to="/settings"
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-muted text-muted-foreground hover:text-foreground active:opacity-70 transition-colors text-xs font-medium select-none"
           style={{ WebkitTapHighlightColor: "transparent", touchAction: "manipulation" }}
-          title="TTS settings"
+          title="Open TTS settings"
         >
-          <Settings className="w-3.5 h-3.5" /> TTS
-        </button>
+          <Settings className="w-3.5 h-3.5" /> Settings
+        </Link>
       </div>
-
-      {showSettings && (
-        <div className="rounded-xl border border-border bg-muted/25 p-3 mb-2 space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-primary">TTS Settings</p>
-              <p className="text-[10px] text-muted-foreground">Nova voice. Saved settings apply everywhere in PulsePoint.</p>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] rounded-full bg-primary/10 px-2 py-1 text-primary font-medium">Nova</span>
-              <span className="text-[10px] rounded-full bg-muted px-2 py-1 text-muted-foreground font-medium">
-                {TTS_ENGINES[draftSettings.engine]?.label}
-              </span>
-              <span className="text-[10px] rounded-full bg-muted px-2 py-1 text-muted-foreground font-medium">
-                {TTS_AUDIO_FORMATS[draftSettings.audioFormat]?.label}
-              </span>
-            </div>
-          </div>
-
-          <div className="grid gap-2 sm:grid-cols-2">
-            <div>
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Audio Engine</p>
-              <div className="flex flex-wrap gap-1.5">
-                {Object.entries(TTS_ENGINES).map(([key, engine]) => (
-                  <button
-                    key={key}
-                    onClick={() => setDraftSettings((prev) => normalizeTTSSettings({ ...prev, engine: key }))}
-                    className={`px-2 py-1 rounded-lg text-[10px] font-medium ${
-                      draftSettings.engine === key
-                        ? "bg-primary/10 text-primary"
-                        : "bg-muted text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {engine.label}
-                  </button>
-                ))}
-              </div>
-              {draftSettings.engine === "hd" && (
-                <p className="mt-1 text-[10px] text-muted-foreground">
-                  HD Crisp prioritizes fidelity; tone sliders have less influence with this engine.
-                </p>
-              )}
-            </div>
-            <div>
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Audio Format</p>
-              <div className="flex flex-wrap gap-1.5">
-                {Object.entries(TTS_AUDIO_FORMATS).map(([key, format]) => (
-                  <button
-                    key={key}
-                    onClick={() => setDraftSettings((prev) => normalizeTTSSettings({ ...prev, audioFormat: key }))}
-                    className={`px-2 py-1 rounded-lg text-[10px] font-medium ${
-                      draftSettings.audioFormat === key
-                        ? "bg-primary/10 text-primary"
-                        : "bg-muted text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {format.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <button
-            onClick={() => setDraftSettings((prev) => normalizeTTSSettings({ ...prev, normalizeExport: !prev.normalizeExport }))}
-            className={`w-full rounded-lg px-2.5 py-2 text-left text-[11px] font-medium transition-colors ${
-              draftSettings.normalizeExport
-                ? "bg-primary/10 text-primary"
-                : "bg-muted text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Gentle final loudness normalization: {draftSettings.normalizeExport ? "On" : "Off"}
-            <span className="block text-[10px] font-normal opacity-75">
-              Applies once during premium server download rendering only. Leave off for the most transparent fidelity.
-            </span>
-          </button>
-
-          <div className="flex flex-wrap gap-1.5">
-            {Object.entries(TTS_PRESETS).map(([name, preset]) => (
-              <button
-                key={name}
-                onClick={() => setDraftSettings(normalizeTTSSettings(preset))}
-                className="px-2 py-1 rounded-lg bg-muted text-[10px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted/80"
-              >
-                {name}
-              </button>
-            ))}
-          </div>
-
-          {[
-            ["speed", "Speed", 0.94, 1.04, 0.01],
-            ["warmth", "Warmth", 0, 10, 1],
-            ["enthusiasm", "Enthusiasm", 0, 10, 1],
-            ["soothing", "Soothing", 0, 10, 1],
-            ["lightness", "Lightness", 0, 10, 1],
-            ["femininity", "Femininity", 0, 10, 1],
-            ["continuity", "Section Flow", 0, 10, 1],
-            ["naturalness", "Naturalness", 0, 10, 1],
-            ["pauses", "Pauses", 0, 10, 1],
-            ["softStart", "Soft Start", 0, 10, 1],
-          ].map(([key, label, min, max, step]) => (
-            <label key={key} className="grid grid-cols-[86px_1fr_42px] items-center gap-3 text-[11px]">
-              <span className="font-medium text-muted-foreground">{label}</span>
-              <Slider
-                value={[draftSettings[key]]}
-                min={min}
-                max={max}
-                step={step}
-                onValueChange={([value]) => setDraftSettings((prev) => normalizeTTSSettings({ ...prev, [key]: value }))}
-              />
-              <span className="font-mono text-right text-muted-foreground">{draftSettings[key]}</span>
-            </label>
-          ))}
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={sampleState === "playing" ? stopSample : playSettingsSample}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 text-xs font-medium"
-            >
-              {sampleState === "loading"
-                ? <><span className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />Preparing…</>
-                : sampleState === "playing"
-                  ? <><Square className="w-3.5 h-3.5" />Stop Sample</>
-                  : <><Play className="w-3.5 h-3.5" />Play Sample</>}
-            </button>
-            <button
-              onClick={applyTTSSettings}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-medium"
-            >
-              <Save className="w-3.5 h-3.5" />Save
-            </button>
-            <button
-              onClick={resetTTSSettings}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-muted text-muted-foreground hover:text-foreground text-xs font-medium"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />Reset
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* API Request Status */}
       {requestStatus && (

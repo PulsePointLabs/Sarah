@@ -508,7 +508,13 @@ ${evidenceDigest}
 SESSION-BY-SESSION EVIDENCE:
 ${sessionSummaries}
 
-Generate a rich, holistic profile. Your job is NOT to restate what was already logged — the person already knows what they did. Instead, offer your own interpretations, inferences, hypotheses, and conclusions drawn FROM the data. Go beyond the surface. Make observations they may not have noticed themselves. Point out cross-session patterns, contradictions, and surprising findings. Be willing to form opinions and state them directly.
+Generate a rich, holistic profile. Your job is NOT to restate what was already logged — the person already knows what they did. Instead, offer your own interpretations, inferences, hypotheses, and conclusions drawn FROM the data. Go beyond the surface. Make observations they may not have noticed themselves. Point out cross-session patterns, contradictions, and surprising findings. Be willing to form opinions when the evidence supports them, and calibrate certainty using the evidence rules above.
+
+For this longitudinal profile, preserve the warm, personalized interpretive voice while keeping certainty honest:
+- Repeated response patterns may be described with strong narrative confidence when telemetry, session behavior, and the person's notes point the same way.
+- Mechanism-level explanations about nerves, hormones, tissue adaptation, anatomy, or psychology must stay qualified unless directly supported by the available evidence.
+- When the person's own hypothesis appears in notes, identify it as their hypothesis or a plausible interpretation rather than silently upgrading it into fact.
+- Recommendations should follow demonstrated session patterns first; avoid turning a single evocative session or an attractive theory into a firm protocol.
 
 Cover these areas:
 
@@ -520,13 +526,13 @@ Cover these areas:
 
 4. CONTEXTUAL SENSITIVITIES: Form a hypothesis about which contextual factors matter MOST for this specific person based on cross-session correlation. Don't just list factors — rank them by apparent impact and explain why.
 
-5. DISCOMFORT & PHYSIOLOGICAL EDGE CASES: Interpret what recurring discomfort or unusual sensations suggest anatomically — consider urethral, prostatic, pelvic floor, and neurovascular context given their specific methods. Hypothesize about tissue adaptation, nerve sensitization, or structural factors. Be specific, not generic.
+5. DISCOMFORT & PHYSIOLOGICAL EDGE CASES: Interpret what recurring discomfort or unusual sensations may suggest anatomically — consider urethral, prostatic, pelvic floor, and neurovascular context given their specific methods. Discuss tissue adaptation, nerve sensitization, or structural factors only as evidence-linked possibilities when the data supports that level of interpretation. Be specific, not generic.
 
 6. BEHAVIORAL & AROUSAL TENDENCIES: Look for observable patterns in build style, pause/resume moments, event timelines, and the person's own subjective notes. Do not infer motives, anxiety, control strategies, or intentional edging unless explicitly logged. Focus on how observable behavior and physiology relate to outcomes.
 
-7. PERSONAL OPTIMIZATION RECOMMENDATIONS: Give bold, specific, opinionated recommendations — not generic advice. Reference their actual data patterns and explain the physiological or behavioral reasoning behind each suggestion.
+7. PERSONAL OPTIMIZATION RECOMMENDATIONS: Give specific, useful recommendations — not generic advice. Reference their actual data patterns and explain the physiological or behavioral reasoning behind each suggestion. Make the boldest recommendations only where repeated evidence earns them.
 
-Be direct, insightful, and willing to state conclusions. Ground everything in their data but go well beyond restating it.`,
+Be warm, direct, insightful, and willing to state conclusions when the evidence earns them. Ground everything in their data but go well beyond restating it.`,
       response_json_schema: {
         type: "object",
         properties: {

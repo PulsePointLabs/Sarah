@@ -35,6 +35,12 @@ export function cancelBackgroundJob(jobId) {
   });
 }
 
+export function clearBackgroundJobs() {
+  return jobRequest("/jobs/clear", {
+    method: "POST",
+  });
+}
+
 export function listBackgroundJobs(params = {}) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {

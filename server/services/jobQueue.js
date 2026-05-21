@@ -16,6 +16,10 @@ function publicJob(job) {
   return rest;
 }
 
+function isCleared(job) {
+  return Boolean(job?.meta?.clearedAt);
+}
+
 function persistedJob(job) {
   if (!job) return null;
   const { abortController: _abortController, ...rest } = job;
@@ -247,6 +251,7 @@ export function listJobs({ type, status, limit = 20, meta = {} } = {}) {
   const metaEntries = Object.entries(meta || {}).filter(([, value]) => value !== undefined && value !== null && value !== '');
 
   return [...merged.values()]
+    .filter((job) => !isCleared(job))
     .filter((job) => !type || job.type === type)
     .filter((job) => statuses.length === 0 || statuses.includes(job.status))
     .filter((job) => metaEntries.every(([key, value]) => String(job.meta?.[key] ?? '') === String(value)))
@@ -296,4 +301,52 @@ export function cancelJob(id) {
     });
   }
   return publicJob(job);
+}
+
+function clearPersistedJob(record, clearedAt) {
+  if (!record?.id) return null;
+  return upsertEntity('ProcessingJob', record.id, {
+    ...record,
+    meta: {
+      ...(record.meta || {}),
+      clearedAt,
+    },
+  });
+}
+
+export function clearJobs() {
+  const clearedAt = nowIso();
+  const merged = new Map();
+
+  for (const record of listEntities('ProcessingJob')) {
+    if (record?.id) merged.set(record.id, record);
+  }
+  for (const job of jobs.values()) {
+    if (job?.id) merged.set(job.id, job);
+  }
+
+  let cancelled = 0;
+  let cleared = 0;
+  for (const job of merged.values()) {
+    if (!job?.id || isCleared(job)) continue;
+    if (['queued', 'running'].includes(job.status)) {
+      cancelJob(job.id);
+      cancelled += 1;
+    }
+
+    const runtimeJob = jobs.get(job.id);
+    if (runtimeJob) {
+      patchJob(runtimeJob, {
+        meta: {
+          ...(runtimeJob.meta || {}),
+          clearedAt,
+        },
+      });
+    } else {
+      clearPersistedJob(job, clearedAt);
+    }
+    cleared += 1;
+  }
+
+  return { ok: true, cleared, cancelled, clearedAt };
 }

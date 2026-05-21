@@ -1,5 +1,5 @@
 import express from 'express';
-import { cancelJob, createJob, getJob, listJobs, registerJobHandler } from '../services/jobQueue.js';
+import { cancelJob, clearJobs, createJob, getJob, listJobs, registerJobHandler } from '../services/jobQueue.js';
 import { renderTTSExport } from '../services/ttsRenderer.js';
 import { aiInvokeInternal } from './internalAi.js';
 
@@ -107,6 +107,10 @@ jobsRouter.get('/', (req, res) => {
   } catch (error) {
     res.status(400).json({ error: error.message || String(error) });
   }
+});
+
+jobsRouter.post('/clear', (_req, res) => {
+  res.json(clearJobs());
 });
 
 jobsRouter.get('/:jobId', (req, res) => {

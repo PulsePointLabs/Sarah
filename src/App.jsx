@@ -26,6 +26,7 @@ import Analytics from './pages/Analytics';
 import PredictiveModeler from './pages/PredictiveModeler';
 import JournalList from './pages/JournalList';
 import LiveCapture from './pages/LiveCapture';
+import SettingsStatus from './pages/SettingsStatus';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -74,6 +75,7 @@ const AuthenticatedApp = () => {
         <Route path="/modeler" element={<PredictiveModeler />} />
         <Route path="/journal" element={<JournalList />} />
         <Route path="/capture" element={<LiveCapture />} />
+        <Route path="/settings" element={<SettingsStatus />} />
         <Route path="*" element={<PageNotFound />} />
       </Route>
     </Routes>
