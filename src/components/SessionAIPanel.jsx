@@ -404,13 +404,17 @@ COMPANION NARRATIVE STYLE:
 - Write with warm, fluid, companion-like flow. Sound personally attentive and naturally struck by what is distinctive in this session.
 - Keep the detail rich but curated. The analysis should feel observant and slightly lyrical, not like a timeline report or an exhaustive annotation log.
 - Let paragraphs continue the story naturally. Avoid report-style paragraph prefixes such as "Baseline and first contact" or "Recovery" and avoid turning each phase into a labeled subsection.
-- Use physiology and anatomy to illuminate the lived arc of the session. Do not let mechanism-heavy explanation overpower the human narrative voice.`}
+- Tell the story of what mattered most in the session. Let repeated evidence strengthen one strong interpretation instead of restating the same finding in every output section.
+- Prefer observed pattern and personalized meaning over mechanistic storytelling. Use physiology and anatomy sparingly when they deepen the lived arc of the session; do not turn distinctive moments into mini anatomy lectures.
+- When the evidence is strongest at the pattern level, stay there. Sound warm, impressed, and thoughtful without over-explaining why the body must have behaved that way.`}
 
 ${isTechnical ? groundingContext : ""}
 
 PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — CONDITIONAL USE ONLY:"}
 - Only mention specific physiological phases (e.g. emission, expulsion, plateau) or anatomical structures (e.g. pudendal nerve, bulbocavernosus, prostatic urethra) when the session data — an event note, HR pattern, subjective metric, or logged sensation — gives you a concrete reason to do so. Never insert these as generic background explanation.
-- Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery).
+${isTechnical
+  ? "- Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery)."
+  : "- Use heart-rate movement to support the session story: entry state, build, meaningful rises or pauses, climax timing, and recovery. Mechanistic explanations should be occasional, evidence-earned, and clearly useful."}
 ${isTechnical
   ? `- Preserve the explanatory "why" as the center of the answer. When stimulation changes, heart-rate movement, physical cues, or subjective metrics line up, explain the likely mechanism behind the pattern instead of merely restating that it happened.
 - Discuss stimulation-to-body links when supported: how pressure, friction, suction, vibration, e-stim, foley/urethral input, perineal contact, or technique shifts likely changed sensory input, pelvic floor tone, autonomic loading, or climax threshold.
@@ -457,7 +461,9 @@ ${isTechnical
 Use time references when they anchor the arc, but each time reference should answer "what changed and why might it matter?" Connect stimulation changes, physical findings, HR movement, and subjective context into mechanism-level interpretation. If a technique shift appears to change arousal, explain the plausible sensory/autonomic reason. If HR rises, plateaus, or drops, explain what that likely says about sympathetic load, parasympathetic settling, pelvic floor engagement, sensory novelty, stimulation efficiency, or recovery state.
 
 The best output should feel like: "Here is what was happening in the body during this phase, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."`
-  : `This is the primary dataset. Read the full sequence closely, then use the events that best reveal the session's rhythm, turning points, physical findings, stimulation changes, and recovery. Interpret heart rate and event notes together when they show a meaningful shift in arousal or sensation. Fold repeated or reinforcing notes into a flowing narrative instead of restating every logged moment.`}` : ""}
+  : `This is the primary dataset. Read the full sequence closely, then choose the events that best reveal the session's rhythm, turning points, physical findings, stimulation changes, and recovery. Interpret heart rate and event notes together when they show a meaningful shift in arousal or sensation. Fold repeated or reinforcing notes into a flowing narrative instead of restating every logged moment.
+
+Curate the analysis across sections: if the summary already establishes a standout pattern, later sections should deepen it with fresh context or move to the next meaningful finding rather than repeating the same point.`}` : ""}
 
 ${hrTrajectory ? `HR TRAJECTORY (time_s:bpm, sampled):
 ${hrTrajectory}
@@ -520,7 +526,9 @@ ${session.discomfort_entries?.length > 0 ? "Discomfort entries present — analy
 ${emgSummary ? `\nEMG DATA:\n${JSON.stringify(emgSummary, null, 2)}\n\nAnalyze EMG activation patterns alongside HR. Reference timing relationships between EMG and HR changes. Check for clipping, asymmetry, noise, and relate activation bursts to event markers and phase markers when present. Describe what muscle the sensor likely captures based on placement notes and target area.` : ""}
 ${journalContext}
 
-Provide a rich, physiologically-grounded analysis that tells the story of this session — from the autonomic and anatomical level up to the subjective experience.${isTechnical ? " It should be detailed enough to explain the HR arc, phase shifts, stimulation effectiveness, distinctive sensations, and recovery pattern, while remaining smooth enough for text-to-speech narration." : ""}`,
+Provide ${isTechnical
+  ? "a rich, physiologically-grounded analysis that tells the story of this session — from the autonomic and anatomical level up to the subjective experience. It should be detailed enough to explain the HR arc, phase shifts, stimulation effectiveness, distinctive sensations, and recovery pattern, while remaining smooth enough for text-to-speech narration."
+  : "a warm, physiologically informed analysis that tells the story of this session with curated detail, personal meaning, and natural flow. Preserve what is distinctive. Explain only the physiology that makes the observation clearer."}`,
       response_json_schema: {
         type: "object",
         properties: {
