@@ -113,6 +113,7 @@ export default function InteractiveTimelinePlayer({
   timelineRows,
   onActiveEventIndexChange,
   onActiveWaypointChange,
+  onWaypointActivate,
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -121,6 +122,7 @@ export default function InteractiveTimelinePlayer({
   const [playbackRate, setPlaybackRate] = useState(1);
 
   const playbackTimeoutRef = useRef(null);
+  const waypointReadyRef = useRef(Promise.resolve());
 
   // Sorted HR rows for lookup
   const sortedRows = useMemo(
@@ -148,10 +150,13 @@ export default function InteractiveTimelinePlayer({
   const activateWaypoint = useCallback((idx, keepPlaying = false) => {
     const wp = waypoints[idx];
     if (!wp) return;
+    waypointReadyRef.current = Promise.resolve().then(() => onWaypointActivate?.(wp)).catch((error) => {
+      console.warn("Timeline waypoint activation did not finish cleanly:", error);
+    });
     setCurrentTime(wp.time_s);
     setActiveWaypointIdx(idx);
     setPlaying(keepPlaying);
-  }, [waypoints]);
+  }, [onWaypointActivate, waypoints]);
 
   useEffect(() => {
     if (playbackTimeoutRef.current) {
@@ -175,16 +180,25 @@ export default function InteractiveTimelinePlayer({
       return undefined;
     }
 
-    playbackTimeoutRef.current = setTimeout(() => {
-      const nextIdx = currentIdx + 1;
-      if (nextIdx >= waypoints.length) {
-        setPlaying(false);
-        return;
-      }
-      activateWaypoint(nextIdx, true);
-    }, DEFAULT_EVENT_HOLD_MS / playbackRate);
+    let cancelled = false;
+    const scheduleNextWaypoint = async () => {
+      await waypointReadyRef.current;
+      if (cancelled) return;
+
+      playbackTimeoutRef.current = setTimeout(() => {
+        const nextIdx = currentIdx + 1;
+        if (nextIdx >= waypoints.length) {
+          setPlaying(false);
+          return;
+        }
+        activateWaypoint(nextIdx, true);
+      }, DEFAULT_EVENT_HOLD_MS / playbackRate);
+    };
+
+    scheduleNextWaypoint();
 
     return () => {
+      cancelled = true;
       if (playbackTimeoutRef.current) {
         clearTimeout(playbackTimeoutRef.current);
         playbackTimeoutRef.current = null;

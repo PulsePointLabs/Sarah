@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Clapperboard, ScanSearch, Video } from "lucide-react";
 import moment from "moment";
 import { base44 } from "@/api/base44Client";
@@ -95,20 +95,52 @@ export default function SessionReviewPlayer() {
     }
   };
 
-  const seekVideoTo = (timeS, shouldPlay = false) => {
+  const seekVideoTo = useCallback((timeS, shouldPlay = false, waitForSeek = false) => {
     const video = videoRef.current;
-    if (!video || !Number.isFinite(Number(timeS))) return;
+    if (!video || !Number.isFinite(Number(timeS))) return Promise.resolve();
     const nextTime = Math.max(0, Math.min(Number(timeS), Number.isFinite(video.duration) ? video.duration : Number(timeS)));
-    video.currentTime = nextTime;
-    setVideoTime(nextTime);
-    if (shouldPlay) video.play().catch(() => {});
-  };
+    const playVideo = () => {
+      if (shouldPlay) video.play().catch(() => {});
+    };
+
+    if (!waitForSeek || video.readyState < 1) {
+      video.currentTime = nextTime;
+      setVideoTime(nextTime);
+      playVideo();
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      let timeoutId = null;
+      const finish = () => {
+        if (timeoutId) window.clearTimeout(timeoutId);
+        video.removeEventListener("seeked", finish);
+        setVideoTime(video.currentTime);
+        playVideo();
+        resolve();
+      };
+
+      if (!video.seeking && Math.abs(video.currentTime - nextTime) < 0.15) {
+        finish();
+        return;
+      }
+
+      video.addEventListener("seeked", finish);
+      video.currentTime = nextTime;
+      setVideoTime(nextTime);
+
+      // Local media should emit seeked; keep playback moving if a browser misses it.
+      timeoutId = window.setTimeout(finish, 8000);
+    });
+  }, []);
+
+  const handleReviewWaypointActivate = useCallback((waypoint) => {
+    if (!followTimeline || !waypoint) return Promise.resolve();
+    return seekVideoTo(waypoint.time_s, true, true);
+  }, [followTimeline, seekVideoTo]);
 
   const handleWaypointChange = (detail) => {
     setTimelineWaypointDetail(detail);
-    if (detail?.waypoint && followTimeline) {
-      seekVideoTo(detail.waypoint.time_s, true);
-    }
   };
 
   const handleSelectEventIndex = (index) => {
@@ -247,7 +279,7 @@ export default function SessionReviewPlayer() {
                   <div className="space-y-1">
                     <p className="text-xs font-semibold uppercase tracking-wider text-primary">Review Behavior</p>
                     <p className="text-sm text-muted-foreground">
-                      The timeline player advances through each waypoint. With Follow timeline on, the video seeks and plays from the matching timestamp so the observed moment stays visible.
+                      The timeline player advances through each waypoint. With Follow timeline on, the video seeks and plays from the matching timestamp before the next waypoint timer begins.
                     </p>
                   </div>
                 </div>
@@ -295,6 +327,7 @@ export default function SessionReviewPlayer() {
                     timelineRows={timelineRows}
                     onActiveEventIndexChange={setSelectedEventIdx}
                     onActiveWaypointChange={handleWaypointChange}
+                    onWaypointActivate={handleReviewWaypointActivate}
                   />
                 </>
               ) : (
