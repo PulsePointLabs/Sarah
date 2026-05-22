@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Star, Trash2, Heart, Clock, Zap, Pencil, XCircle, Gauge, ListTree, Brain, NotebookText } from "lucide-react";
+import { ArrowLeft, Star, Trash2, Heart, Clock, Zap, Pencil, XCircle } from "lucide-react";
 import AITagSuggester from "../components/AITagSuggester";
 import AIChat from "../components/AIChat";
 import SessionExportButton from "../components/SessionExportButton";
@@ -24,7 +24,7 @@ import AIPhaseMarkerSuggester from "../components/AIPhaseMarkerSuggester";
 import ArousalEventChart from "../components/ArousalEventChart";
 import UnifiedSessionTimeline from "../components/UnifiedSessionTimeline";
 import InteractiveSessionTimeline from "../components/InteractiveSessionTimeline";
-import InteractiveTimelinePlayer from "../components/InteractiveTimelinePlayer";
+import InteractiveTimelinePlayer, { TimelineWaypointDetail } from "../components/InteractiveTimelinePlayer";
 import NoClimaxAIPanel from "../components/NoClimaxAIPanel";
 import SessionTimelineNarrative from "../components/SessionTimelineNarrative";
 import JournalRecorder from "../components/JournalRecorder";
@@ -153,11 +153,11 @@ export default function SessionDetail() {
   const [loading, setLoading] = useState(true);
   const [selectedNearClimaxIdx, setSelectedNearClimaxIdx] = useState(null);
   const [selectedEventIdx, setSelectedEventIdx] = useState(null);
+  const [timelineWaypointDetail, setTimelineWaypointDetail] = useState(null);
   const [lightboxPhoto, setLightboxPhoto] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [sessionNotes, setSessionNotes] = useState("");
   const [sessionJournal, setSessionJournal] = useState(null);
-  const [activeTab, setActiveTab] = useState("overview");
   const [pendingSectionId, setPendingSectionId] = useState("");
 
   const nearClimaxEvents = useMemo(() => {
@@ -330,7 +330,7 @@ export default function SessionDetail() {
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [activeTab, pendingSectionId]);
+  }, [pendingSectionId]);
 
   const handleDelete = async () => {
     await base44.entities.Session.delete(id);
@@ -356,34 +356,44 @@ export default function SessionDetail() {
 
   const s = session;
   const cap = (str) => str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
-  const tabs = [
-    { id: "overview", label: "Overview", icon: Gauge },
-    { id: "physiology", label: "Physiology", icon: Heart },
-    { id: "timeline", label: "Timeline", icon: ListTree },
-    { id: "ai", label: "AI", icon: Brain },
-    { id: "journal", label: "Journal", icon: NotebookText },
-  ];
   const hasTimelineSection = timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0;
   const hasMediaSection = (s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link;
   const sectionLinks = [
-    { id: "session-summary", label: "Review / Summary", group: "Session", tab: null },
-    { id: "session-metrics-context", label: "Metrics & Context", group: "Overview", tab: "overview" },
-    { id: "session-physiology", label: "Physiology", group: "Overview", tab: "overview" },
-    { id: "session-devices", label: "Devices / Instrumentation", group: "Overview", tab: "overview" },
-    ...(hasMediaSection ? [{ id: "session-media", label: "Media", group: "Overview", tab: "overview" }] : []),
-    { id: "session-telemetry", label: "Telemetry Charts", group: "Physiology", tab: "physiology" },
-    ...(hasTimelineSection ? [{ id: "session-timeline", label: "Timeline & Events", group: "Timeline", tab: "timeline" }] : []),
+    { id: "session-summary", label: "Executive Summary", group: "Overview" },
+    { id: "session-review", label: "Review Checklist", group: "Overview" },
+    { id: "session-metrics-context", label: "Metrics & Context", group: "Overview" },
     ...(!s.no_climax ? [
-      { id: "session-ai-companion", label: "AI Companion Analysis", group: "AI", tab: "ai" },
-      { id: "session-ai-technical", label: "Technical Deep Dive", group: "AI", tab: "ai" },
+      { id: "session-ai-companion", label: "Companion Analysis", group: "Session Story" },
+      { id: "session-ai-technical", label: "Technical Deep Dive", group: "Session Story" },
+      { id: "session-ai-support", label: "Supporting AI Views", group: "Session Story" },
     ] : []),
-    { id: "session-journal", label: "Journal & Interviews", group: "Journal", tab: "journal" },
+    ...(s.no_climax ? [{ id: "session-ai-companion", label: "No-Climax Analysis", group: "Session Story" }] : []),
+    { id: "session-telemetry", label: "Heart Rate & Markers", group: "Physiology" },
+    ...((emgRows.length > 0 || s.emg_enabled) ? [{ id: "session-emg", label: "EMG", group: "Physiology" }] : []),
+    ...(hasTimelineSection ? [
+      { id: "session-timeline", label: "Timeline Player", group: "Timeline & Events" },
+      { id: "session-event-notes", label: "Event Notes", group: "Timeline & Events" },
+      { id: "session-timeline-advanced", label: "Advanced Views", group: "Timeline & Events" },
+    ] : []),
+    { id: "session-journal", label: "Journal", group: "Reflection" },
+    { id: "session-interview", label: "AI Interview", group: "Reflection" },
+    { id: "session-devices", label: "Methods & Devices", group: "Session Context" },
+    { id: "session-physiology", label: "Body Findings", group: "Session Context" },
+    { id: "session-notes", label: "Session Notes", group: "Session Context" },
+    ...(hasMediaSection ? [{ id: "session-media", label: "Media", group: "Session Context" }] : []),
+    { id: "session-tags", label: "Tags", group: "Session Context" },
   ];
   const selectSection = (section) => {
-    if (section.tab && section.tab !== activeTab) {
-      setActiveTab(section.tab);
-    }
     setPendingSectionId(section.id);
+  };
+  const openReviewSection = (target) => {
+    const idByTarget = {
+      physiology: "session-telemetry",
+      timeline: "session-timeline",
+      ai: "session-ai-companion",
+      journal: "session-journal",
+    };
+    if (idByTarget[target]) setPendingSectionId(idByTarget[target]);
   };
 
   return (
@@ -430,7 +440,7 @@ export default function SessionDetail() {
         </AlertDialog>
       </div>
 
-      <SessionSectionNavigator sections={sectionLinks} activeTab={activeTab} onSelect={selectSection} />
+      <SessionSectionNavigator sections={sectionLinks} onSelect={selectSection} />
 
       <div className="px-2 md:px-4 py-4 space-y-4 pb-24 xl:pr-60">
         {/* Executive Summary */}
@@ -447,41 +457,24 @@ export default function SessionDetail() {
             }}
           />
 
-          <PostSessionReviewWizard
-            session={s}
-            timelineRows={timelineRows}
-            emgRows={emgRows}
-            onOpenTab={setActiveTab}
-            onEdit={() => navigate(`/sessions/${id}/edit`)}
-            onUpdate={async (updates) => {
-              await base44.entities.Session.update(id, updates);
-              setSession((prev) => ({ ...prev, ...updates }));
-            }}
-          />
+          <section id="session-review" className="scroll-mt-24">
+            <PostSessionReviewWizard
+              session={s}
+              timelineRows={timelineRows}
+              emgRows={emgRows}
+              onOpenTab={openReviewSection}
+              onEdit={() => navigate(`/sessions/${id}/edit`)}
+              onUpdate={async (updates) => {
+                await base44.entities.Session.update(id, updates);
+                setSession((prev) => ({ ...prev, ...updates }));
+              }}
+            />
+          </section>
         </section>
 
-        <div className="sticky top-0 z-20 -mx-2 md:-mx-4 px-2 md:px-4 py-2 bg-background/95 backdrop-blur border-y border-border">
-          <div className="grid grid-cols-5 gap-1 rounded-lg bg-muted/50 p-1">
-            {tabs.map(({ id: tabId, label, icon: Icon }) => (
-              <button
-                key={tabId}
-                type="button"
-                onClick={() => setActiveTab(tabId)}
-                className={`min-h-10 rounded-md px-1.5 text-xs sm:text-sm font-medium transition-colors flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 ${
-                  activeTab === tabId
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                <span>{label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
         {/* Subjective Metrics */}
-        {activeTab === "overview" && <div id="session-metrics-context" className="scroll-mt-24 bg-card rounded-xl border border-border p-4 space-y-3">
+        <section id="session-metrics-context" className="scroll-mt-24 space-y-4">
+        <div className="bg-card rounded-xl border border-border p-4 space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Metrics</h3>
           <MetricBadge label={s.no_climax ? "Peak Arousal" : "Intensity"} value={s.intensity} />
           <MetricBadge label="Build Quality" value={s.build_quality} />
@@ -490,10 +483,45 @@ export default function SessionDetail() {
           {!s.no_climax && s.climax_duration && (
             <InfoRow label="Climax Duration" value={cap(s.climax_duration)} />
           )}
-        </div>}
+        </div>
+
+        <div className="bg-card rounded-xl border border-border p-4 space-y-1">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Context</h3>
+          <InfoRow label="Mood" value={cap(s.mood)} />
+          <InfoRow label="Environment" value={cap(s.environment)} />
+          <InfoRow label="Hydration" value={cap(s.hydration)} />
+        </div>
+        </section>
+
+        {/* Story & AI Analysis */}
+        {!s.no_climax && (
+          <section className="space-y-4">
+            <section id="session-ai-companion" className="scroll-mt-24">
+              <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />
+            </section>
+            <section id="session-ai-technical" className="scroll-mt-24">
+              <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" />
+            </section>
+            <details id="session-ai-support" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+              <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+                Supporting AI Views
+              </summary>
+              <div className="mt-3 space-y-4">
+                <SessionEvidencePatternPanel session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />
+                <CascadeOverviewPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />
+                <SessionTimelineNarrative session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />
+              </div>
+            </details>
+          </section>
+        )}
+        {s.no_climax && (
+          <section id="session-ai-companion" className="scroll-mt-24">
+            <NoClimaxAIPanel session={s} timelineRows={timelineRows} userProfile={userProfile} />
+          </section>
+        )}
 
         {/* Heart Rate + Most Recent Side-by-Side */}
-        {activeTab === "physiology" && <div id="session-telemetry" className="scroll-mt-24 bg-card rounded-xl border border-border p-4">
+        <div id="session-telemetry" className="scroll-mt-24 bg-card rounded-xl border border-border p-4">
         <div className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
             <Heart className="w-3.5 h-3.5" /> Heart Rate
@@ -618,12 +646,13 @@ export default function SessionDetail() {
         </div>
 
         </div>
-        </div>}
+        </div>
 
         {/* EMG */}
-        {activeTab === "physiology" && (emgRows.length > 0 || s.emg_enabled) && (
-          <div className="bg-card rounded-xl border border-border p-4 space-y-3">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">EMG</h3>
+        {(emgRows.length > 0 || s.emg_enabled) && (
+          <details id="session-emg" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">EMG</summary>
+            <div className="mt-3 space-y-3">
             {s.emg_target_area && <p className="text-xs text-muted-foreground">Target: {s.emg_target_area}</p>}
             {emgRows.length > 0 ? (
               <EMGTimelineChart
@@ -670,7 +699,8 @@ export default function SessionDetail() {
                 )}
               </div>
             )}
-          </div>
+            </div>
+          </details>
         )}
 
         {/* Lightbox */}
@@ -698,32 +728,27 @@ export default function SessionDetail() {
         )}
 
         {/* Methods */}
-        {activeTab === "overview" && <div id="session-devices" className="scroll-mt-24 bg-card rounded-xl border border-border p-4 space-y-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Methods</h3>
-          <div className="flex flex-wrap gap-1.5">
-            {(s.methods || []).map((m) => <Badge key={m} variant="secondary">{m}</Badge>)}
+        <details id="session-devices" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Methods & Devices</summary>
+          <div className="mt-3 space-y-3">
+            <div className="flex flex-wrap gap-1.5">
+              {(s.methods || []).map((m) => <Badge key={m} variant="secondary">{m}</Badge>)}
+            </div>
+            {s.foley_size && <InfoRow label="Foley Size" value={`${s.foley_size} Fr`} />}
+            {s.foley_type && <InfoRow label="Foley Type" value={s.foley_type} />}
+            {s.estim_notes && <InfoRow label="E-Stim Notes" value={s.estim_notes} />}
+            {s.sleeve_type && <InfoRow label="Sleeve" value={s.sleeve_type} />}
+            {s.tens_placement && <InfoRow label="TENS Placement" value={s.tens_placement} />}
+            {s.estim_screenshot && (
+              <img src={s.estim_screenshot} alt="E-Stim settings" className="rounded-lg w-full mt-2" />
+            )}
           </div>
-          {s.foley_size && <InfoRow label="Foley Size" value={`${s.foley_size} Fr`} />}
-          {s.foley_type && <InfoRow label="Foley Type" value={s.foley_type} />}
-          {s.estim_notes && <InfoRow label="E-Stim Notes" value={s.estim_notes} />}
-          {s.sleeve_type && <InfoRow label="Sleeve" value={s.sleeve_type} />}
-          {s.tens_placement && <InfoRow label="TENS Placement" value={s.tens_placement} />}
-          {s.estim_screenshot && (
-            <img src={s.estim_screenshot} alt="E-Stim settings" className="rounded-lg w-full mt-2" />
-          )}
-        </div>}
-
-        {/* Context */}
-        {activeTab === "overview" && <div className="bg-card rounded-xl border border-border p-4 space-y-1">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Context</h3>
-          <InfoRow label="Mood" value={cap(s.mood)} />
-          <InfoRow label="Environment" value={cap(s.environment)} />
-          <InfoRow label="Hydration" value={cap(s.hydration)} />
-        </div>}
+        </details>
 
         {/* Physiological */}
-        {activeTab === "overview" && <div id="session-physiology" className="scroll-mt-24 bg-card rounded-xl border border-border p-4 space-y-1">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Physiological</h3>
+        <details id="session-physiology" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Body Findings</summary>
+          <div className="mt-3 space-y-1">
           <InfoRow label="Ejaculate Volume" value={cap(s.ejaculate_volume)} />
           {s.discomfort_entries?.length > 0 && (
             <div className="py-2 border-b border-border space-y-1.5">
@@ -739,34 +764,22 @@ export default function SessionDetail() {
           {!s.discomfort_entries?.length && <InfoRow label="Discomfort" value={s.discomfort ? "Yes" : "No"} />}
           {s.unusual_sensations && <InfoRow label="Unusual Sensations" value={s.unusual_sensations} />}
           {s.refractory_notes && <InfoRow label="Refractory Notes" value={s.refractory_notes} />}
-        </div>}
+          </div>
+        </details>
 
         {/* Notes */}
-        {activeTab === "overview" && s.notes && (
-          <div className="bg-card rounded-xl border border-border p-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Notes</h3>
-            <p className="text-sm whitespace-pre-wrap">{s.notes}</p>
-          </div>
-        )}
-
-        {/* Marked Moments */}
-        {activeTab === "overview" && (s.event_timeline || []).length > 0 && (
-          <div className="bg-card rounded-xl border border-border p-4">
-            <EventNotesPanel
-              events={s.event_timeline || []}
-              selectedIndex={selectedEventIdx}
-              onSelect={setSelectedEventIdx}
-              title="Marked Moments"
-              helper="All timestamped event notes for this session."
-              maxHeight={false}
-            />
-          </div>
+        {s.notes && (
+          <details id="session-notes" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Session Notes</summary>
+            <p className="mt-3 text-sm whitespace-pre-wrap">{s.notes}</p>
+          </details>
         )}
 
         {/* Media */}
-        {activeTab === "overview" && ((s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link) && (
-          <div id="session-media" className="scroll-mt-24 bg-card rounded-xl border border-border p-4 space-y-3">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Media</h3>
+        {((s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link) && (
+          <details id="session-media" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Media</summary>
+            <div className="mt-3 space-y-3">
             {s.media_images?.length > 0 && (
               <div className="grid grid-cols-3 gap-2">
                 {s.media_images.map((url, i) => (
@@ -786,11 +799,12 @@ export default function SessionDetail() {
                 Video Link →
               </a>
             )}
-          </div>
+            </div>
+          </details>
         )}
 
         {/* Pause / Active Time */}
-        {activeTab === "overview" && (() => {
+        {(() => {
           const events = s.event_timeline || [];
           const cats = (ev) => Array.isArray(ev.category) ? ev.category : [ev.category].filter(Boolean);
           const sorted = [...events].sort((a, b) => a.time_s - b.time_s);
@@ -828,14 +842,56 @@ export default function SessionDetail() {
         })()}
 
         {/* Interactive Timeline Player */}
-        {activeTab === "timeline" && (timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0) && (
-          <section id="session-timeline" className="scroll-mt-24">
-            <InteractiveTimelinePlayer session={s} timelineRows={timelineRows} />
+        {(timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0) && (
+          <section id="session-timeline" className="scroll-mt-24 space-y-4">
+            <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Timeline Heart Rate Trace</h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  The active event in the player is highlighted here so the note stays tied to its HR context.
+                </p>
+              </div>
+              {timelineRows.length > 0 ? (
+                <HRTimelineChart
+                  rows={timelineRows}
+                  savedMarkers={{
+                    pre_climax_offset_s: s.pre_climax_offset_s,
+                    climax_offset_s: s.climax_offset_s,
+                    recovery_offset_s: s.recovery_offset_s,
+                  }}
+                  highlightRange={highlightRange}
+                  noClimax={!!s.no_climax}
+                  nearClimaxEvents={nearClimaxEvents}
+                  events={s.event_timeline || []}
+                  selectedEventIndex={selectedEventIdx}
+                  onSelectEventIndex={setSelectedEventIdx}
+                  initialWindow="full"
+                />
+              ) : (
+                <p className="rounded-lg border border-border bg-muted/25 px-3 py-3 text-sm text-muted-foreground">
+                  No imported heart-rate timeline is available for this session yet.
+                </p>
+              )}
+              <TimelineWaypointDetail
+                waypoint={timelineWaypointDetail?.waypoint}
+                currentHR={timelineWaypointDetail?.currentHR}
+              />
+            </div>
+            <InteractiveTimelinePlayer
+              session={s}
+              timelineRows={timelineRows}
+              onActiveEventIndexChange={setSelectedEventIdx}
+              onActiveWaypointChange={setTimelineWaypointDetail}
+            />
           </section>
         )}
 
-        {activeTab === "timeline" && (s.event_timeline || []).length > 0 && (
-          <div className="bg-card rounded-xl border border-border p-4">
+        {(s.event_timeline || []).length > 0 && (
+          <details id="session-event-notes" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+              Event Notes ({(s.event_timeline || []).length})
+            </summary>
+            <div className="mt-3">
             <EventNotesPanel
               events={s.event_timeline || []}
               selectedIndex={selectedEventIdx}
@@ -844,12 +900,13 @@ export default function SessionDetail() {
               helper="Use this as the readable log beside the timeline visualizations."
               maxHeight={false}
             />
-          </div>
+            </div>
+          </details>
         )}
 
         {/* Advanced Timeline Views */}
-        {activeTab === "timeline" && (timelineRows.length > 0 || (s.event_timeline || []).length > 0) && (
-          <details className="rounded-xl border border-border bg-card p-4">
+        {(timelineRows.length > 0 || (s.event_timeline || []).length > 0) && (
+          <details id="session-timeline-advanced" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
             <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
               Advanced Timeline Views
             </summary>
@@ -863,35 +920,19 @@ export default function SessionDetail() {
           </details>
         )}
 
-        {/* Cascade + AI — only for climax sessions */}
-        {activeTab === "ai" && !s.no_climax && <SessionEvidencePatternPanel session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
-        {activeTab === "ai" && !s.no_climax && <CascadeOverviewPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
-        {activeTab === "ai" && !s.no_climax && (
-          <section id="session-ai-companion" className="scroll-mt-24">
-            <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />
-          </section>
-        )}
-        {activeTab === "ai" && !s.no_climax && (
-          <section id="session-ai-technical" className="scroll-mt-24">
-            <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" />
-          </section>
-        )}
-
-        {/* Timeline & Arousal Narrative */}
-        {activeTab === "ai" && !s.no_climax && <SessionTimelineNarrative session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />}
-
-        {/* No-Climax AI Analysis */}
-        {activeTab === "ai" && s.no_climax && <NoClimaxAIPanel session={s} timelineRows={timelineRows} userProfile={userProfile} />}
-
         {/* Session Journal */}
-        {activeTab === "journal" && (
-          <section id="session-journal" className="scroll-mt-24">
-            <JournalRecorder session={s} timelineRows={timelineRows} userProfile={userProfile} />
-          </section>
-        )}
+        <details id="session-journal" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Session Journal</summary>
+          <div className="mt-3">
+          <JournalRecorder session={s} timelineRows={timelineRows} userProfile={userProfile} />
+          </div>
+        </details>
 
         {/* Ask the AI — Session Deep Dive */}
-        {activeTab === "journal" && <AIChat
+        <details id="session-interview" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Ask the AI</summary>
+          <div className="mt-3">
+        <AIChat
           mode="session"
           userProfile={userProfile}
           context={[
@@ -923,11 +964,14 @@ export default function SessionDetail() {
             setSessionNotes(merged);
             await base44.entities.Session.update(id, { notes: merged });
           }}
-        />}
+        />
+          </div>
+        </details>
 
         {/* Tags */}
-        {activeTab === "overview" && <div className="bg-card rounded-xl border border-border p-4 space-y-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Tags</h3>
+        <details id="session-tags" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Tags</summary>
+          <div className="mt-3 space-y-3">
           {(s.tags || []).length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {s.tags.map((t) => <Badge key={t} variant="outline">{t}</Badge>)}
@@ -938,7 +982,8 @@ export default function SessionDetail() {
             userProfile={userProfile}
             onTagsAdded={(merged) => setSession((prev) => ({ ...prev, tags: merged }))}
           />
-        </div>}
+          </div>
+        </details>
       </div>
     </div>
   );

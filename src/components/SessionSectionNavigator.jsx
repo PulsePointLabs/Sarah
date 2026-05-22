@@ -10,37 +10,53 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 
-function SectionButtons({ sections, activeTab, onSelect, closeOnSelect = false }) {
-  return (
-    <div className="space-y-1">
-      {sections.map((section) => {
-        const button = (
-          <button
-            key={section.id}
-            type="button"
-            onClick={() => onSelect(section)}
-            className={`w-full rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
-              section.tab === activeTab || (!section.tab && section.id.includes("summary"))
-                ? "border-primary/35 bg-primary/10 text-foreground"
-                : "border-transparent bg-muted/40 text-muted-foreground hover:border-primary/25 hover:text-foreground"
-            }`}
-          >
-            <span className="block font-medium">{section.label}</span>
-            {section.group && <span className="block text-xs text-muted-foreground">{section.group}</span>}
-          </button>
-        );
+function groupSections(sections) {
+  return sections.reduce((groups, section) => {
+    const group = section.group || "Sections";
+    const existing = groups.find((item) => item.label === group);
+    if (existing) existing.sections.push(section);
+    else groups.push({ label: group, sections: [section] });
+    return groups;
+  }, []);
+}
 
-        return closeOnSelect ? (
-          <SheetClose key={section.id} asChild>
-            {button}
-          </SheetClose>
-        ) : button;
-      })}
+function SectionButtons({ sections, onSelect, closeOnSelect = false }) {
+  return (
+    <div className="space-y-3">
+      {groupSections(sections).map((group) => (
+        <div key={group.label} className="space-y-1">
+          <p className="px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {group.label}
+          </p>
+          {group.sections.map((section) => {
+            const button = (
+              <button
+                key={section.id}
+                type="button"
+                onClick={() => onSelect(section)}
+                className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                  section.id === "session-summary"
+                    ? "border-primary/35 bg-primary/10 text-foreground"
+                    : "border-transparent bg-muted/35 text-muted-foreground hover:border-primary/25 hover:bg-muted/55 hover:text-foreground"
+                }`}
+              >
+                <span className="block text-sm font-medium">{section.label}</span>
+              </button>
+            );
+
+            return closeOnSelect ? (
+              <SheetClose key={section.id} asChild>
+                {button}
+              </SheetClose>
+            ) : button;
+          })}
+        </div>
+      ))}
     </div>
   );
 }
 
-export default function SessionSectionNavigator({ sections, activeTab, onSelect }) {
+export default function SessionSectionNavigator({ sections, onSelect }) {
   return (
     <>
       <aside className="fixed right-4 top-28 z-30 hidden w-52 rounded-xl border border-border bg-card/95 p-3 shadow-xl backdrop-blur xl:block">
@@ -48,7 +64,7 @@ export default function SessionSectionNavigator({ sections, activeTab, onSelect 
           <Bookmark className="h-3.5 w-3.5" />
           Session Sections
         </div>
-        <SectionButtons sections={sections} activeTab={activeTab} onSelect={onSelect} />
+        <SectionButtons sections={sections} onSelect={onSelect} />
       </aside>
 
       <div className="fixed bottom-5 left-4 z-40 xl:hidden">
@@ -65,7 +81,7 @@ export default function SessionSectionNavigator({ sections, activeTab, onSelect 
               <SheetDescription>Move through this session without losing the thread.</SheetDescription>
             </SheetHeader>
             <div className="mt-4">
-              <SectionButtons sections={sections} activeTab={activeTab} onSelect={onSelect} closeOnSelect />
+              <SectionButtons sections={sections} onSelect={onSelect} closeOnSelect />
             </div>
           </SheetContent>
         </Sheet>

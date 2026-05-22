@@ -398,7 +398,13 @@ TARGET SESSION ANALYSIS STYLE:
 - A window may be chronological when chronology explains the physiology. The point is not to avoid time; the point is to make each time window explain arousal state, autonomic loading, sensory input, technique effectiveness, or recovery.
 - Keep the older PulsePoint feel: detailed, insightful, physiology-forward, personally grounded, and useful for later comparison across sessions.
 - Do not flatten the analysis into generic observations or a short summary. This is a deep session interpretation.`
-        : `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session integrating arousal physiology, anatomy, heart rate data, event timeline, and subjective experience into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.`}
+        : `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session integrating arousal physiology, anatomy, heart rate data, event timeline, and subjective experience into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
+
+COMPANION NARRATIVE STYLE:
+- Write with warm, fluid, companion-like flow. Sound personally attentive and naturally struck by what is distinctive in this session.
+- Keep the detail rich but curated. The analysis should feel observant and slightly lyrical, not like a timeline report or an exhaustive annotation log.
+- Let paragraphs continue the story naturally. Avoid report-style paragraph prefixes such as "Baseline and first contact" or "Recovery" and avoid turning each phase into a labeled subsection.
+- Use physiology and anatomy to illuminate the lived arc of the session. Do not let mechanism-heavy explanation overpower the human narrative voice.`}
 
 ${isTechnical ? groundingContext : ""}
 
@@ -451,9 +457,7 @@ ${isTechnical
 Use time references when they anchor the arc, but each time reference should answer "what changed and why might it matter?" Connect stimulation changes, physical findings, HR movement, and subjective context into mechanism-level interpretation. If a technique shift appears to change arousal, explain the plausible sensory/autonomic reason. If HR rises, plateaus, or drops, explain what that likely says about sympathetic load, parasympathetic settling, pelvic floor engagement, sensory novelty, stimulation efficiency, or recovery state.
 
 The best output should feel like: "Here is what was happening in the body during this phase, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."`
-  : `This is the primary dataset, but the warm companion analysis should not become a note-by-note or timestamp-by-timestamp commentary track. Use the full timeline to tell the session story through the meaningful turning points, event clusters, body findings, stimulation changes, and recovery cues that shaped the arc.
-
-Time references are welcome when they anchor an important shift. Curate them. Favor a cohesive narrative that explains what stood out, what changed, and why it mattered for this session over exhausting every logged event. Identify physiological turning points where heart rate and event notes together reveal a shift in arousal, sensation, technique effectiveness, or recovery.`}` : ""}
+  : `This is the primary dataset. Read the full sequence closely, then use the events that best reveal the session's rhythm, turning points, physical findings, stimulation changes, and recovery. Interpret heart rate and event notes together when they show a meaningful shift in arousal or sensation. Fold repeated or reinforcing notes into a flowing narrative instead of restating every logged moment.`}` : ""}
 
 ${hrTrajectory ? `HR TRAJECTORY (time_s:bpm, sampled):
 ${hrTrajectory}

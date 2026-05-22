@@ -113,11 +113,12 @@ export default function HRTimelineChart({
   events = [],
   selectedEventIndex = null,
   onSelectEventIndex,
+  initialWindow,
 }) {
   const maxOffsetS = useMemo(() => Math.max(...rows.map((r) => Number(r.time_offset_s) || 0)), [rows]);
   const durationMins = maxOffsetS / 60;
 
-  const defaultWindow = durationMins > 10 ? 5 : "full";
+  const defaultWindow = initialWindow ?? (durationMins > 10 ? 5 : "full");
   const [window, setWindow] = useState(defaultWindow);
   const [showBuild, setShowBuild] = useState(false);
   const [showRecovery, setShowRecovery] = useState(false);

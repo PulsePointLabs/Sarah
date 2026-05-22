@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { Play, Pause, SkipBack, SkipForward, ChevronDown, ChevronUp, Zap, Activity, Flag, Clock } from "lucide-react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { Play, Pause, SkipBack, SkipForward, ChevronDown, ChevronUp, Zap, Activity, Flag } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 
 function getCategoryMeta(value) {
@@ -37,7 +36,7 @@ function buildWaypoints(session) {
 
   // User event timeline
   (session.event_timeline || []).forEach((ev, i) => {
-    waypoints.push({ time_s: ev.time_s, type: "event", event: ev, id: `ev_${i}` });
+    waypoints.push({ time_s: ev.time_s, type: "event", event: ev, eventIndex: i, id: `ev_${i}` });
   });
 
   // Near-climax AI events
@@ -48,21 +47,86 @@ function buildWaypoints(session) {
   return waypoints.sort((a, b) => a.time_s - b.time_s);
 }
 
-export default function InteractiveTimelinePlayer({ session, timelineRows }) {
+const PLAYBACK_RATES = [0.5, 1, 1.5, 2];
+const DEFAULT_EVENT_HOLD_MS = 2000;
+
+export function TimelineWaypointDetail({ waypoint, currentHR }) {
+  if (!waypoint) return null;
+
+  return (
+    <div
+      className="rounded-xl p-3 space-y-1.5 border"
+      style={{
+        background: waypoint.type === "phase"
+          ? (PHASE_COLORS[waypoint.phase] || "#888") + "18"
+          : waypoint.type === "near_climax"
+          ? "#f59e0b18"
+          : "hsl(var(--primary) / 0.08)",
+        borderColor: waypoint.type === "phase"
+          ? (PHASE_COLORS[waypoint.phase] || "#888") + "66"
+          : waypoint.type === "near_climax"
+          ? "#f59e0b66"
+          : "hsl(var(--primary) / 0.3)",
+      }}
+    >
+      <div className="flex items-center gap-2">
+        {waypoint.type === "phase" && <Flag className="w-4 h-4" style={{ color: PHASE_COLORS[waypoint.phase] }} />}
+        {waypoint.type === "event" && <Activity className="w-4 h-4 text-primary" />}
+        {waypoint.type === "near_climax" && <Zap className="w-4 h-4 text-yellow-500" />}
+        <span
+          className="text-xs font-semibold uppercase tracking-wide"
+          style={{
+            color: waypoint.type === "phase" ? PHASE_COLORS[waypoint.phase]
+              : waypoint.type === "near_climax" ? "#f59e0b"
+              : "hsl(var(--primary))",
+          }}
+        >
+          {waypoint.type === "phase" ? waypoint.label
+            : waypoint.type === "near_climax" ? (waypoint.nc.ai_label || "Near-Climax Event")
+            : getCategoryMeta(waypoint.event.category).label}
+        </span>
+        <span className="text-xs text-muted-foreground ml-auto font-mono">{fmtTime(waypoint.time_s)}</span>
+      </div>
+
+      {waypoint.type === "event" && (
+        <p className="text-sm text-foreground leading-relaxed pl-6">{waypoint.event.note}</p>
+      )}
+      {waypoint.type === "near_climax" && (
+        <div className="pl-6 space-y-0.5">
+          <p className="text-sm text-foreground leading-relaxed">{waypoint.nc.ai_interpretation || "Near-climax physiological event detected."}</p>
+          <div className="flex gap-3 mt-1">
+            <span className="text-[10px] text-muted-foreground">Peak: <span className="text-foreground font-mono">{waypoint.nc.peak_hr} bpm</span></span>
+            <span className="text-[10px] text-muted-foreground">Rise: <span className="text-foreground font-mono">+{waypoint.nc.rise_bpm} bpm</span></span>
+            <span className="text-[10px] text-muted-foreground">Confidence: <span className="text-foreground font-mono">{Math.round((waypoint.nc.confidence || 0) * 100)}%</span></span>
+          </div>
+        </div>
+      )}
+      {waypoint.type === "phase" && currentHR && (
+        <p className="text-sm text-muted-foreground pl-6">HR at this moment: <span className="text-foreground font-bold font-mono">{currentHR} bpm</span></p>
+      )}
+    </div>
+  );
+}
+
+export default function InteractiveTimelinePlayer({
+  session,
+  timelineRows,
+  onActiveEventIndexChange,
+  onActiveWaypointChange,
+}) {
   const [collapsed, setCollapsed] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [pausedAt, setPausedAt] = useState(null); // waypoint index we're paused at
   const [activeWaypointIdx, setActiveWaypointIdx] = useState(null);
+  const [playbackRate, setPlaybackRate] = useState(1);
 
-  const intervalRef = useRef(null);
-  const waypointsRef = useRef([]);
-  const playingRef = useRef(false);
-  const currentTimeRef = useRef(0);
-  const pausedAtRef = useRef(null);
+  const playbackTimeoutRef = useRef(null);
 
   // Sorted HR rows for lookup
-  const sortedRows = [...timelineRows].sort((a, b) => Number(a.time_offset_s) - Number(b.time_offset_s));
+  const sortedRows = useMemo(
+    () => [...timelineRows].sort((a, b) => Number(a.time_offset_s) - Number(b.time_offset_s)),
+    [timelineRows],
+  );
   const totalDuration = sortedRows.length
     ? Number(sortedRows[sortedRows.length - 1].time_offset_s)
     : (session.duration_minutes || 0) * 60;
@@ -79,85 +143,75 @@ export default function InteractiveTimelinePlayer({ session, timelineRows }) {
     return Math.round(Number(best.hr));
   }, [sortedRows]);
 
-  const waypoints = buildWaypoints(session);
-  waypointsRef.current = waypoints;
+  const waypoints = useMemo(() => buildWaypoints(session), [session]);
 
-  // Sync refs
-  useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
-  useEffect(() => { pausedAtRef.current = pausedAt; }, [pausedAt]);
-  useEffect(() => { playingRef.current = playing; }, [playing]);
-
-  const PLAYBACK_SPEED = 10; // 10x real-time
-  const TICK_MS = 100;
-  const PAUSE_DURATION_MS = 3000; // pause 3s at each waypoint
-
-  const stopTicker = () => {
-    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-  };
-
-  const startTicker = useCallback(() => {
-    stopTicker();
-    intervalRef.current = setInterval(() => {
-      if (!playingRef.current) return;
-
-      const t = currentTimeRef.current;
-      const wps = waypointsRef.current;
-
-      // Check if we just passed a waypoint
-      const nextWpIdx = wps.findIndex((w) => w.time_s > t && w.time_s <= t + (PLAYBACK_SPEED * TICK_MS / 1000) * 2);
-      if (nextWpIdx !== -1 && pausedAtRef.current !== nextWpIdx) {
-        // Snap to waypoint and pause
-        const wp = wps[nextWpIdx];
-        setCurrentTime(wp.time_s);
-        currentTimeRef.current = wp.time_s;
-        setActiveWaypointIdx(nextWpIdx);
-        setPlaying(false);
-        playingRef.current = false;
-        setPausedAt(nextWpIdx);
-        pausedAtRef.current = nextWpIdx;
-        return;
-      }
-
-      const newTime = t + (PLAYBACK_SPEED * TICK_MS / 1000);
-      if (newTime >= totalDuration) {
-        setCurrentTime(totalDuration);
-        setPlaying(false);
-        playingRef.current = false;
-        stopTicker();
-        return;
-      }
-      setCurrentTime(newTime);
-    }, TICK_MS);
-  }, [totalDuration]);
+  const activateWaypoint = useCallback((idx, keepPlaying = false) => {
+    const wp = waypoints[idx];
+    if (!wp) return;
+    setCurrentTime(wp.time_s);
+    setActiveWaypointIdx(idx);
+    setPlaying(keepPlaying);
+  }, [waypoints]);
 
   useEffect(() => {
-    if (playing) startTicker();
-    else stopTicker();
-    return stopTicker;
-  }, [playing, startTicker]);
+    if (playbackTimeoutRef.current) {
+      clearTimeout(playbackTimeoutRef.current);
+      playbackTimeoutRef.current = null;
+    }
+    if (!playing) return undefined;
+
+    if (waypoints.length === 0) {
+      setPlaying(false);
+      return undefined;
+    }
+
+    const currentIdx = activeWaypointIdx ?? waypoints.findIndex((wp) => wp.time_s >= currentTime - 0.5);
+    if (currentIdx === -1) {
+      setPlaying(false);
+      return undefined;
+    }
+    if (activeWaypointIdx == null) {
+      activateWaypoint(currentIdx, true);
+      return undefined;
+    }
+
+    playbackTimeoutRef.current = setTimeout(() => {
+      const nextIdx = currentIdx + 1;
+      if (nextIdx >= waypoints.length) {
+        setPlaying(false);
+        return;
+      }
+      activateWaypoint(nextIdx, true);
+    }, DEFAULT_EVENT_HOLD_MS / playbackRate);
+
+    return () => {
+      if (playbackTimeoutRef.current) {
+        clearTimeout(playbackTimeoutRef.current);
+        playbackTimeoutRef.current = null;
+      }
+    };
+  }, [activateWaypoint, activeWaypointIdx, currentTime, playbackRate, playing, waypoints]);
 
   const handlePlayPause = () => {
     if (playing) {
       setPlaying(false);
     } else {
-      // If paused at a waypoint, clear it and continue
-      setPausedAt(null);
-      setActiveWaypointIdx(null);
-      setPlaying(true);
+      const nextIdx = activeWaypointIdx != null
+        ? activeWaypointIdx
+        : Math.max(0, waypoints.findIndex((wp) => wp.time_s >= currentTime - 0.5));
+      activateWaypoint(nextIdx, true);
     }
   };
 
   const handleReset = () => {
     setPlaying(false);
     setCurrentTime(0);
-    setPausedAt(null);
     setActiveWaypointIdx(null);
   };
 
   const handleScrub = (e) => {
     const val = Number(e.target.value);
     setCurrentTime(val);
-    setPausedAt(null);
     setActiveWaypointIdx(null);
     if (playing) setPlaying(false);
   };
@@ -165,10 +219,7 @@ export default function InteractiveTimelinePlayer({ session, timelineRows }) {
   const jumpToWaypoint = (idx) => {
     const wp = waypoints[idx];
     if (!wp) return;
-    setCurrentTime(wp.time_s);
-    setActiveWaypointIdx(idx);
-    setPausedAt(idx);
-    setPlaying(false);
+    activateWaypoint(idx);
   };
 
   const jumpNext = () => {
@@ -185,6 +236,17 @@ export default function InteractiveTimelinePlayer({ session, timelineRows }) {
   const currentHR = hrAtTime(currentTime);
   const activeWp = activeWaypointIdx != null ? waypoints[activeWaypointIdx] : null;
   const progress = totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0;
+
+  useEffect(() => {
+    onActiveEventIndexChange?.(activeWp?.type === "event" ? activeWp.eventIndex : null);
+  }, [activeWp, onActiveEventIndexChange]);
+
+  useEffect(() => {
+    onActiveWaypointChange?.({
+      waypoint: activeWp,
+      currentHR,
+    });
+  }, [activeWp, currentHR, onActiveWaypointChange]);
 
   // Determine which phase we're in
   const currentPhase = (() => {
@@ -311,7 +373,7 @@ export default function InteractiveTimelinePlayer({ session, timelineRows }) {
           </div>
 
           {/* Controls */}
-          <div className="flex items-center justify-center gap-3">
+          <div className="flex flex-wrap items-center justify-center gap-3">
             <Button size="sm" variant="ghost" onClick={handleReset} className="h-8 w-8 p-0">
               <SkipBack className="w-4 h-4" />
             </Button>
@@ -329,79 +391,27 @@ export default function InteractiveTimelinePlayer({ session, timelineRows }) {
             <Button size="sm" variant="ghost" onClick={jumpNext} className="h-8 w-8 p-0">
               <SkipForward className="w-3.5 h-3.5" />
             </Button>
-            <span className="text-[10px] text-muted-foreground ml-2">10× speed</span>
-          </div>
-
-          {/* Active waypoint card */}
-          {activeWp && (
-            <div
-              className="rounded-xl p-3 space-y-1.5 border"
-              style={{
-                background: activeWp.type === "phase"
-                  ? (PHASE_COLORS[activeWp.phase] || "#888") + "18"
-                  : activeWp.type === "near_climax"
-                  ? "#f59e0b18"
-                  : "hsl(var(--primary) / 0.08)",
-                borderColor: activeWp.type === "phase"
-                  ? (PHASE_COLORS[activeWp.phase] || "#888") + "66"
-                  : activeWp.type === "near_climax"
-                  ? "#f59e0b66"
-                  : "hsl(var(--primary) / 0.3)",
-              }}
-            >
-              <div className="flex items-center gap-2">
-                {activeWp.type === "phase" && <Flag className="w-4 h-4" style={{ color: PHASE_COLORS[activeWp.phase] }} />}
-                {activeWp.type === "event" && <Activity className="w-4 h-4 text-primary" />}
-                {activeWp.type === "near_climax" && <Zap className="w-4 h-4 text-yellow-500" />}
-                <span
-                  className="text-xs font-semibold uppercase tracking-wide"
-                  style={{
-                    color: activeWp.type === "phase" ? PHASE_COLORS[activeWp.phase]
-                      : activeWp.type === "near_climax" ? "#f59e0b"
-                      : "hsl(var(--primary))",
-                  }}
+            <div className="flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
+              <span className="px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Speed</span>
+              {PLAYBACK_RATES.map((rate) => (
+                <button
+                  key={rate}
+                  type="button"
+                  onClick={() => setPlaybackRate(rate)}
+                  className={`rounded-md px-2 py-1 text-[10px] font-semibold transition-colors ${
+                    playbackRate === rate
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
                 >
-                  {activeWp.type === "phase" ? activeWp.label
-                    : activeWp.type === "near_climax" ? (activeWp.nc.ai_label || "Near-Climax Event")
-                    : getCategoryMeta(activeWp.event.category).label}
-                </span>
-                <span className="text-xs text-muted-foreground ml-auto font-mono">{fmtTime(activeWp.time_s)}</span>
-              </div>
-
-              {activeWp.type === "event" && (
-                <p className="text-sm text-foreground leading-relaxed pl-6">{activeWp.event.note}</p>
-              )}
-              {activeWp.type === "near_climax" && (
-                <div className="pl-6 space-y-0.5">
-                  <p className="text-sm text-foreground leading-relaxed">{activeWp.nc.ai_interpretation || "Near-climax physiological event detected."}</p>
-                  <div className="flex gap-3 mt-1">
-                    <span className="text-[10px] text-muted-foreground">Peak: <span className="text-foreground font-mono">{activeWp.nc.peak_hr} bpm</span></span>
-                    <span className="text-[10px] text-muted-foreground">Rise: <span className="text-foreground font-mono">+{activeWp.nc.rise_bpm} bpm</span></span>
-                    <span className="text-[10px] text-muted-foreground">Confidence: <span className="text-foreground font-mono">{Math.round((activeWp.nc.confidence || 0) * 100)}%</span></span>
-                  </div>
-                </div>
-              )}
-              {activeWp.type === "phase" && currentHR && (
-                <p className="text-sm text-muted-foreground pl-6">HR at this moment: <span className="text-foreground font-bold font-mono">{currentHR} bpm</span></p>
-              )}
-
-              {/* Continue button */}
-              <div className="pt-1">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs"
-                  onClick={() => {
-                    setPausedAt(null);
-                    setActiveWaypointIdx(null);
-                    setPlaying(true);
-                  }}
-                >
-                  Continue <Play className="w-3 h-3 ml-1" />
-                </Button>
-              </div>
+                  {rate}x
+                </button>
+              ))}
             </div>
-          )}
+          </div>
+          <p className="text-center text-[10px] text-muted-foreground">
+            Events advance automatically. At {playbackRate}x, each waypoint holds for {Math.round(DEFAULT_EVENT_HOLD_MS / playbackRate / 100) / 10} seconds.
+          </p>
 
           {/* Waypoint list */}
           <div className="space-y-1">

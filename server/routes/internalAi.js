@@ -64,7 +64,10 @@ export async function aiInvokeInternal({ prompt, response_json_schema, model, ma
     model: MODEL_MAP[model] || process.env.ANTHROPIC_MODEL || model || 'claude-sonnet-4-6',
     max_tokens,
     temperature,
-    messages: [{ role: 'user', content: `${prompt}${wantsJson ? `\n\nReturn ONLY valid JSON matching this schema:\n${JSON.stringify(response_json_schema)}` : ''}` }],
+    messages: [{
+      role: 'user',
+      content: `${prompt}${wantsJson ? `\n\nReturn ONLY valid JSON matching this JSON schema. Do not wrap in markdown.\n${JSON.stringify(response_json_schema, null, 2)}` : ''}`,
+    }],
   }, Number(process.env.ANTHROPIC_ATTEMPTS || 3), signal);
   const text = msg.content?.map((p) => p.type === 'text' ? p.text : '').join('\n').trim() || '';
   if (!wantsJson) return text;

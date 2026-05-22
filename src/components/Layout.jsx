@@ -19,6 +19,7 @@ const navItems = [
 { path: "/trends", icon: LineChart, label: "Trends" },
 { path: "/correlations", icon: Grid3x3, label: "Correlations" },
 { path: "/video", icon: Clapperboard, label: "Video Sync" },
+{ path: "/review-player", icon: Clapperboard, label: "Review Player" },
 { path: "/library", icon: Music, label: "Audio Library" },
 { path: "/analytics", icon: BarChart2, label: "Analytics" },
 { path: "/modeler", icon: FlaskConical, label: "Predictive Modeler" },
