@@ -114,6 +114,8 @@ export default function HRTimelineChart({
   selectedEventIndex = null,
   onSelectEventIndex,
   initialWindow,
+  compact = false,
+  playbackTime,
 }) {
   const maxOffsetS = useMemo(() => Math.max(...rows.map((r) => Number(r.time_offset_s) || 0)), [rows]);
   const durationMins = maxOffsetS / 60;
@@ -177,8 +179,6 @@ export default function HRTimelineChart({
   }, [visibleRows, zoomDomain]);
 
   const xDomain = zoomDomain ? [zoomDomain.x1, zoomDomain.x2] : ["dataMin", "dataMax"];
-
-  if (!rows || rows.length === 0) return null;
 
   const hasSmoothed = rows.some((r) => r.hr_smoothed != null && r.hr_smoothed !== "");
   const hasBaseline = rows.some((r) => r.baseline_hr != null && r.baseline_hr !== "");
@@ -330,6 +330,8 @@ export default function HRTimelineChart({
       .filter(({ event }) => Number(event.time_s) >= min && Number(event.time_s) <= max);
   }, [events, showEvents, zoomDomain, visibleMin, visibleMax]);
 
+  if (!rows || rows.length === 0) return null;
+
   return (
     <div>
       {/* Controls row */}
@@ -385,7 +387,7 @@ export default function HRTimelineChart({
 
 
 
-      <div className={`h-64 cursor-crosshair`} {...wrapperProps}>
+      <div className={`${compact ? "h-40" : "h-64"} cursor-crosshair`} {...wrapperProps}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart
             data={displayRows}
@@ -509,6 +511,17 @@ export default function HRTimelineChart({
                   label={{ value: PHASE_LABELS[phase], fontSize: 8, fill: PHASE_COLORS[phase], position: "insideTopLeft" }}
                 />
               ) : null
+            )}
+
+            {Number.isFinite(Number(playbackTime))
+              && Number(playbackTime) >= visibleMin
+              && Number(playbackTime) <= visibleMax && (
+              <ReferenceLine
+                x={Number(playbackTime)}
+                stroke="#f43f5e"
+                strokeWidth={2}
+                strokeOpacity={0.9}
+              />
             )}
 
             {hasBaseline && visibleLines.baseline && (

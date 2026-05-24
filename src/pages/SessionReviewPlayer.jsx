@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Clapperboard, ScanSearch, Video } from "lucide-react";
+import { Activity, Clapperboard, HeartPulse, Maximize2, ScanSearch, Video, X } from "lucide-react";
 import moment from "moment";
 import { base44 } from "@/api/base44Client";
 import PageHeader from "../components/PageHeader";
@@ -62,9 +62,56 @@ function nearestHeartRate(rows, timeS) {
   return Number.isFinite(hr) ? Math.round(hr) : null;
 }
 
+function FocusMetric({ label, value, suffix = "", accent = "text-foreground" }) {
+  if (value == null) return null;
+  return (
+    <div className="rounded-lg border border-border bg-muted/20 px-3 py-2">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
+      <p className={`mt-1 font-mono text-lg font-bold ${accent}`}>{value}{suffix}</p>
+    </div>
+  );
+}
+
+function ActivityBar({ label, value, color }) {
+  if (value == null) return null;
+  const width = Math.max(0, Math.min(100, Number(value) || 0));
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-[11px]">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-mono font-semibold text-foreground">{value}</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-muted">
+        <div className="h-full rounded-full" style={{ width: `${width}%`, background: color }} />
+      </div>
+    </div>
+  );
+}
+
+function nearestMotionSample(summary, timeS) {
+  const timeline = Array.isArray(summary?.derived_timeline) ? summary.derived_timeline : [];
+  if (!timeline.length || !Number.isFinite(Number(timeS))) return null;
+  return timeline.reduce((closest, sample) => (
+    Math.abs(Number(sample.time_s) - Number(timeS)) < Math.abs(Number(closest.time_s) - Number(timeS))
+      ? sample
+      : closest
+  ), timeline[0]);
+}
+
+function nearestCadenceSample(summary, timeS) {
+  const timeline = Array.isArray(summary?.hand_cadence_timeline) ? summary.hand_cadence_timeline : [];
+  if (!timeline.length || !Number.isFinite(Number(timeS))) return null;
+  return timeline.reduce((closest, sample) => (
+    Math.abs(Number(sample.time_s) - Number(timeS)) < Math.abs(Number(closest.time_s) - Number(timeS))
+      ? sample
+      : closest
+  ), timeline[0]);
+}
+
 export default function SessionReviewPlayer() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const requestedSessionId = searchParams.get("session") || "";
+  const focusView = searchParams.get("display") === "focus";
   const videoRef = useRef(null);
   const fileInputRef = useRef(null);
   const videoUrlRef = useRef(null);
@@ -102,6 +149,10 @@ export default function SessionReviewPlayer() {
     () => nearestHeartRate(timelineRows, currentReviewEvent?.event?.time_s),
     [currentReviewEvent?.event?.time_s, timelineRows],
   );
+  const playbackHR = useMemo(() => nearestHeartRate(timelineRows, reviewTime), [reviewTime, timelineRows]);
+  const savedMotion = selectedSession?.motion_analysis_summary;
+  const playbackMotion = useMemo(() => nearestMotionSample(savedMotion, reviewTime), [reviewTime, savedMotion]);
+  const playbackCadence = useMemo(() => nearestCadenceSample(savedMotion, reviewTime), [reviewTime, savedMotion]);
 
   useEffect(() => {
     base44.entities.Session.list("-date", 250)
@@ -296,6 +347,234 @@ export default function SessionReviewPlayer() {
       || selectedSession.pre_climax_offset_s != null
       || selectedSession.climax_offset_s != null
       || selectedSession.recovery_offset_s != null);
+  const setFocusView = (enabled) => {
+    const next = new URLSearchParams(searchParams);
+    if (enabled) {
+      next.set("display", "focus");
+      if (selectedId) next.set("session", selectedId);
+    }
+    else next.delete("display");
+    setSearchParams(next);
+  };
+
+  if (focusView && selectedSession && !loadingReview) {
+    const motion = savedMotion;
+    const rhythm = motion?.hand_movement_summary;
+    const currentLeft = playbackMotion?.left_lower_body_activity;
+    const currentRight = playbackMotion?.right_lower_body_activity;
+    const currentTotal = Number(currentLeft || 0) + Number(currentRight || 0);
+    const currentIndex = currentTotal > 0 ? (Number(currentLeft || 0) - Number(currentRight || 0)) / currentTotal : null;
+    const sideBalance = currentIndex != null
+      ? (Math.abs(currentIndex) <= 0.1 ? "Similar now" : `${currentIndex > 0 ? "Left" : "Right"} now`)
+      : null;
+
+    return (
+      <div className="h-screen overflow-hidden bg-background p-3">
+        <div className="flex h-full min-h-0 flex-col gap-3">
+          <header className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wider text-primary">Evidence Review Display</p>
+              <p className="truncate text-sm text-foreground">{reviewLabel(selectedSession)}{videoName ? ` · ${videoName}` : ""}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs font-medium text-foreground hover:border-primary/40"
+              >
+                <Video className="h-4 w-4 text-primary" />
+                {videoSrc ? "Change Video" : "Load Video"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setFocusView(false)}
+                className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary"
+              >
+                <X className="h-4 w-4" />
+                Exit Display View
+              </button>
+              <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={handleVideoChange} />
+            </div>
+          </header>
+
+          <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(0,1fr)_22rem]">
+            <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
+              <div className="grid gap-3 2xl:grid-cols-2">
+                <div className="rounded-xl border border-border bg-card p-3">
+                  <div className="mb-2 flex items-center gap-2">
+                    <HeartPulse className="h-4 w-4 text-primary" />
+                    <p className="text-xs font-semibold uppercase tracking-wider text-primary">Heart Rate Trace</p>
+                  </div>
+                  {timelineRows.length > 0 ? (
+                    <HRTimelineChart
+                      rows={timelineRows}
+                      savedMarkers={{
+                        pre_climax_offset_s: selectedSession.pre_climax_offset_s,
+                        climax_offset_s: selectedSession.climax_offset_s,
+                        recovery_offset_s: selectedSession.recovery_offset_s,
+                      }}
+                      noClimax={!!selectedSession.no_climax}
+                      nearClimaxEvents={selectedSession.ai_near_climax_events || []}
+                      events={selectedSession.event_timeline || []}
+                      selectedEventIndex={selectedEventIdx}
+                      onSelectEventIndex={handleSelectEventIndex}
+                      initialWindow="full"
+                      compact
+                      playbackTime={videoTime}
+                    />
+                  ) : (
+                    <p className="px-3 py-8 text-sm text-muted-foreground">No heart-rate trace available for this session.</p>
+                  )}
+                </div>
+                {motion ? (
+                  <SavedMotionSummaryCard
+                    summary={motion}
+                    onSeek={videoSrc ? (timeS) => seekVideoTo(timeS, false, true) : undefined}
+                    playbackTime={videoTime}
+                    chartOnly
+                    focus
+                  />
+                ) : (
+                  <div className="rounded-xl border border-border bg-card p-3">
+                    <div className="mb-2 flex items-center gap-2">
+                      <Activity className="h-4 w-4 text-primary" />
+                      <p className="text-xs font-semibold uppercase tracking-wider text-primary">Motion Trace</p>
+                    </div>
+                    <p className="px-3 py-8 text-sm text-muted-foreground">Save a local motion summary to show movement telemetry here.</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
+                {currentReviewEvent && (
+                  <button
+                    type="button"
+                    onClick={() => handleSelectEventIndex(currentReviewEvent.index)}
+                    className="flex flex-wrap items-center justify-between gap-3 border-b border-primary/20 bg-primary/[0.07] px-4 py-2 text-left"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-primary">Current Event</span>
+                        {normalizeCategoryArray(currentReviewEvent.event.category).map((category) => {
+                          const meta = getCategoryMeta(category);
+                          return (
+                            <span key={category} className="rounded-full border px-1.5 py-0.5 text-[9px] font-semibold" style={{ color: meta.color, borderColor: `${meta.color}44`, background: `${meta.color}18` }}>
+                              {meta.label}
+                            </span>
+                          );
+                        })}
+                        {currentReviewEvent.event.source === "motion_derived" && <MotionDerivedBadge />}
+                      </div>
+                      <p className="truncate text-sm text-foreground">{currentReviewEvent.event.note || "Event note"}</p>
+                    </div>
+                    <span className="font-mono text-sm font-semibold text-primary">{formatTime(currentReviewEvent.event.time_s)}</span>
+                  </button>
+                )}
+                <div className="flex min-h-0 flex-1 items-center justify-center bg-black">
+                  {videoSrc ? (
+                    <video
+                      ref={videoRef}
+                      src={videoSrc}
+                      controls
+                      playsInline
+                      className="h-full max-h-full w-full bg-black object-contain"
+                      onTimeUpdate={handleVideoTimeUpdate}
+                      onPlay={() => setVideoPlaying(true)}
+                      onPause={() => setVideoPlaying(false)}
+                      onSeeked={handleVideoSeeked}
+                      onLoadedMetadata={(event) => setVideoDuration(event.currentTarget.duration || 0)}
+                    />
+                  ) : (
+                    <button type="button" onClick={() => fileInputRef.current?.click()} className="flex flex-col items-center gap-3 text-muted-foreground hover:text-primary">
+                      <Video className="h-10 w-10" />
+                      <span className="text-sm font-semibold">Load the full session video</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            <aside className="min-h-0 space-y-3 overflow-y-auto pr-1">
+              <div className="rounded-xl border border-border bg-card p-3 space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Current Telemetry</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <FocusMetric label="Position" value={formatTime(reviewTime)} accent="text-primary" />
+                  <FocusMetric label="Heart Rate" value={playbackHR ?? "--"} suffix={playbackHR != null ? " bpm" : ""} accent="text-destructive" />
+                </div>
+                <label className="inline-flex items-center gap-2 text-xs font-medium text-foreground">
+                  <input type="checkbox" checked={followTimeline} onChange={(event) => setFollowTimeline(event.target.checked)} className="h-3.5 w-3.5 accent-primary" />
+                  Follow telemetry while the video plays
+                </label>
+              </div>
+
+              <div className="rounded-xl border border-border bg-card p-3 space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Movement At Playback Position</p>
+                {motion ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      <FocusMetric label="Left Foot / Leg Now" value={currentLeft ?? "--"} accent="text-primary" />
+                      <FocusMetric label="Right Foot / Leg Now" value={currentRight ?? "--"} accent="text-amber-400" />
+                      <FocusMetric label="Balance Now" value={sideBalance ?? "--"} />
+                      <FocusMetric label="Index Now" value={currentIndex == null ? "--" : currentIndex.toFixed(2)} />
+                    </div>
+                    <div className="space-y-2 rounded-lg border border-border bg-muted/15 p-2.5">
+                      <ActivityBar label="Left foot / leg activity now" value={currentLeft} color="hsl(var(--primary))" />
+                      <ActivityBar label="Right foot / leg activity now" value={currentRight} color="#f59e0b" />
+                    </div>
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
+                      Playback-time value from the saved motion trace. Session averages: left {motion.left_lower_body_average_activity ?? "-"} / right {motion.right_lower_body_average_activity ?? "-"}. Side comparison is observational and reflects the saved region assignments.
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No saved motion summary yet.</p>
+                )}
+              </div>
+
+              {(rhythm?.reliability === "moderate" || playbackMotion?.hand_activity != null) && (
+                <div className="rounded-xl border border-[#a78bfa]/30 bg-[#a78bfa]/[0.07] p-3 space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-[#a78bfa]">Hand Movement At Playback Position</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <FocusMetric label="Hand Activity Now" value={playbackMotion?.hand_activity ?? "--"} accent="text-[#a78bfa]" />
+                    <FocusMetric
+                      label="Rolling Cadence Proxy"
+                      value={playbackCadence?.movement_cycles_per_minute_estimate ?? "--"}
+                      suffix={playbackCadence?.movement_cycles_per_minute_estimate != null ? " cycles/min" : ""}
+                      accent="text-[#a78bfa]"
+                    />
+                    <FocusMetric label="Session Cadence Proxy" value={rhythm?.movement_cycles_per_minute_estimate ?? "--"} suffix={rhythm?.movement_cycles_per_minute_estimate != null ? " cycles/min" : ""} />
+                    <FocusMetric label="Pauses 2s+ (Session)" value={rhythm?.pause_count ?? "--"} />
+                  </div>
+                  {!Array.isArray(motion.hand_cadence_timeline) && (
+                    <p className="rounded-lg border border-[#a78bfa]/20 bg-background/25 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                      This saved analysis predates rolling cadence storage. Re-run motion analysis and save the summary to show a playback-time cadence proxy here.
+                    </p>
+                  )}
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    Playback-time hand activity is read from the saved motion trace. Rolling cadence is derived from visible hand-movement rhythm in a local time window; it is not confirmed stroke technique, force, or physiological state.
+                  </p>
+                </div>
+              )}
+
+              {nearbyEvents.length > 0 && (
+                <div className="rounded-xl border border-border bg-card p-3 space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">Nearby Events</p>
+                  {nearbyEvents.map(({ event, index }) => (
+                    <button key={`${event.time_s}-${index}`} type="button" onClick={() => handleSelectEventIndex(index)} className="block w-full rounded-lg border border-border bg-muted/15 px-2.5 py-2 text-left hover:border-primary/40">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-[11px] font-semibold text-primary">{formatTime(event.time_s)}</span>
+                        {event.source === "motion_derived" && <MotionDerivedBadge />}
+                      </div>
+                      <p className="mt-1 line-clamp-2 text-xs text-foreground">{event.note}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </aside>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -321,6 +600,16 @@ export default function SessionReviewPlayer() {
               <Video className="h-4 w-4" />
               {videoSrc ? "Change Video" : "Load Full Video"}
             </button>
+            {selectedSession && (
+              <button
+                type="button"
+                onClick={() => setFocusView(true)}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/15"
+              >
+                <Maximize2 className="h-4 w-4" />
+                Display View
+              </button>
+            )}
             <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={handleVideoChange} />
           </div>
 

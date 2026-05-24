@@ -629,6 +629,33 @@ function calculateHandRhythmSummary(samples, scoreKey, handCoverage, sampleRate)
   };
 }
 
+function buildHandCadenceTimeline(result) {
+  if (!result.hasHands || !result.samples.length || result.sampleRate < 6) return [];
+  const scoreKey = result.hasLegs ? "handScore" : "score";
+  const radiusS = 5;
+  const firstTime = result.samples[0]?.timeS ?? result.start;
+  const lastTime = result.samples[result.samples.length - 1]?.timeS ?? result.end;
+  const points = [];
+
+  for (let timeS = firstTime; timeS <= lastTime + 0.001; timeS += 1) {
+    const windowSamples = result.samples.filter((sample) => (
+      sample.timeS >= timeS - radiusS && sample.timeS <= timeS + radiusS
+    ));
+    if (!windowSamples.length) continue;
+    const detectedCount = windowSamples.filter((sample) => sample.handsDetected).length;
+    const coverage = Math.round((detectedCount / windowSamples.length) * 100);
+    const rhythm = calculateHandRhythmSummary(windowSamples, scoreKey, coverage, result.sampleRate);
+    points.push({
+      time_s: Math.round(timeS * 10) / 10,
+      movement_cycles_per_minute_estimate: rhythm.reliability === "moderate"
+        ? rhythm.movement_cycles_per_minute_estimate
+        : null,
+      reliability: rhythm.reliability,
+    });
+  }
+  return points;
+}
+
 const MOTION_SUGGESTION_SENSITIVITY = {
   conservative: { inactiveThreshold: 18, resumeDurationS: 1, minimumCoverage: 75 },
   balanced: { inactiveThreshold: 22, resumeDurationS: 0.75, minimumCoverage: 65 },
@@ -834,6 +861,7 @@ function buildSavedSummary(result) {
     right_forefoot_average_activity: result.hasForefoot ? result.rightForefootAverage : undefined,
     hand_average_activity: result.hasHands ? result.handAverage : undefined,
     hand_movement_summary: result.hasHands ? result.handRhythm : undefined,
+    hand_cadence_timeline: result.hasHands ? buildHandCadenceTimeline(result) : undefined,
     findings: result.findings,
     derived_timeline: buildDerivedTimeline(result),
     review_peaks: result.moments.map((moment) => ({

@@ -58,7 +58,7 @@ function MotionTooltip({ active, payload, label }) {
   );
 }
 
-export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, compact = false, chartOnly = false }) {
+export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, compact = false, chartOnly = false, focus = false }) {
   const savedSummary = summary || {};
   const peaks = Array.isArray(savedSummary.review_peaks) ? savedSummary.review_peaks : [];
   const findings = Array.isArray(savedSummary.findings) ? savedSummary.findings : [];
@@ -151,7 +151,7 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
             )}
           </div>
         </div>
-        <div className="h-44 cursor-pointer">
+        <div className={`${focus ? "h-40" : "h-44"} cursor-pointer`}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart
               data={timeline}
@@ -178,6 +178,33 @@ export default function SavedMotionSummaryCard({ summary, onSeek, playbackTime, 
             </LineChart>
           </ResponsiveContainer>
         </div>
+        {(savedSummary.asymmetry_summary || savedSummary.hand_movement_summary?.reliability === "moderate") && (
+          <div className="grid gap-2 sm:grid-cols-4">
+            <Metric label="Session Avg Left" value={savedSummary.left_lower_body_average_activity} />
+            <Metric label="Session Avg Right" value={savedSummary.right_lower_body_average_activity} />
+            {savedSummary.asymmetry_summary && (
+              <Metric
+                label="Side Balance"
+                value={savedSummary.asymmetry_summary.predominantSide === "balanced"
+                  || savedSummary.asymmetry_summary.predominantPct < 55
+                  ? "No clear lead"
+                  : `${savedSummary.asymmetry_summary.predominantSide === "left" ? "Left" : "Right"} ${savedSummary.asymmetry_summary.predominantPct}%`}
+              />
+            )}
+            {savedSummary.hand_movement_summary?.reliability === "moderate" && (
+              <Metric
+                label="Session Cadence Proxy"
+                value={savedSummary.hand_movement_summary.movement_cycles_per_minute_estimate}
+                suffix=" cycles/min"
+              />
+            )}
+          </div>
+        )}
+        {savedSummary.hand_movement_summary?.reliability === "moderate" && (
+          <p className="text-[10px] text-muted-foreground">
+            Session cadence proxy is derived from visible hand-movement rhythm and is not confirmed technique or force. Playback-time cadence requires a newly saved analysis with rolling cadence data.
+          </p>
+        )}
       </div>
     );
   }

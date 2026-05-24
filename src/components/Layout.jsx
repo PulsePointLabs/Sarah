@@ -30,12 +30,13 @@ const navItems = [
 export default function Layout() {
   const location = useLocation();
   const [open, setOpen] = useState(false);
-  const isCaptureDisplayView = location.pathname === "/capture" && new URLSearchParams(location.search).get("display") === "focus";
+  const isDisplayView = ["/capture", "/review-player"].includes(location.pathname)
+    && new URLSearchParams(location.search).get("display") === "focus";
 
   return (
     <div className="dark min-h-screen bg-background text-foreground flex flex-col">
       {/* Top bar */}
-      {!isCaptureDisplayView && <header className="fixed top-0 left-0 right-0 z-50 h-14 bg-card border-b border-border flex items-center px-2 gap-2">
+      {!isDisplayView && <header className="fixed top-0 left-0 right-0 z-50 h-14 bg-card border-b border-border flex items-center px-2 gap-2">
         <button
           onClick={() => setOpen((o) => !o)}
           className="flex items-center justify-center w-12 h-12 rounded-xl hover:bg-muted active:bg-muted transition-colors text-foreground"
@@ -49,7 +50,7 @@ export default function Layout() {
       </header>}
 
       {/* Backdrop */}
-      {!isCaptureDisplayView && open &&
+      {!isDisplayView && open &&
       <div
         className="fixed inset-0 z-40 bg-black/60"
         onClick={() => setOpen(false)} />
@@ -57,7 +58,7 @@ export default function Layout() {
       }
 
       {/* Side panel */}
-      {!isCaptureDisplayView && <aside
+      {!isDisplayView && <aside
         className={`fixed top-0 left-0 h-full z-50 w-64 bg-card border-r border-border flex flex-col transition-transform duration-200 ease-in-out ${
         open ? "translate-x-0" : "-translate-x-full"}`
         }>
@@ -92,10 +93,10 @@ export default function Layout() {
         <InstallAppButton />
       </aside>}
 
-      <main className={`flex-1 ${isCaptureDisplayView ? "overflow-hidden" : "pt-14 overflow-auto"}`}>
+      <main className={`flex-1 ${isDisplayView ? "overflow-hidden" : "pt-14 overflow-auto"}`}>
         <Outlet />
       </main>
-      {!isCaptureDisplayView && <BackgroundJobStatusTray />}
+      {!isDisplayView && <BackgroundJobStatusTray />}
     </div>);
 
 }
