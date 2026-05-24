@@ -120,6 +120,37 @@ function formatRoiLabel(roi) {
   return `${Math.round(roi.width * 100)}% x ${Math.round(roi.height * 100)}% at ${Math.round(roi.x * 100)}%, ${Math.round(roi.y * 100)}%`;
 }
 
+const ROI_MIN_SIZE = 0.02;
+const ROI_HANDLE_TOLERANCE = 0.02;
+
+function roiCorners(roi) {
+  return {
+    nw: { x: roi.x, y: roi.y },
+    ne: { x: roi.x + roi.width, y: roi.y },
+    sw: { x: roi.x, y: roi.y + roi.height },
+    se: { x: roi.x + roi.width, y: roi.y + roi.height },
+  };
+}
+
+function findRoiResizeCorner(point, roi) {
+  return Object.entries(roiCorners(roi)).find(([, corner]) => (
+    Math.abs(point.x - corner.x) <= ROI_HANDLE_TOLERANCE
+    && Math.abs(point.y - corner.y) <= ROI_HANDLE_TOLERANCE
+  ))?.[0] || null;
+}
+
+function resizeRoiFromCorner(roi, corner, point) {
+  let left = roi.x;
+  let top = roi.y;
+  let right = roi.x + roi.width;
+  let bottom = roi.y + roi.height;
+  if (corner.includes("n")) top = clamp(point.y, 0, bottom - ROI_MIN_SIZE);
+  if (corner.includes("s")) bottom = clamp(point.y, top + ROI_MIN_SIZE, 1);
+  if (corner.includes("w")) left = clamp(point.x, 0, right - ROI_MIN_SIZE);
+  if (corner.includes("e")) right = clamp(point.x, left + ROI_MIN_SIZE, 1);
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
 function anatomicalScreenSide(orientation, side) {
   const leftAppearsRight = orientation === "anatomical_left_on_screen_right";
   if (side === "left") return leftAppearsRight ? "screen right" : "screen left";
@@ -808,6 +839,18 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       context.fillStyle = color;
       context.font = "bold 13px sans-serif";
       context.fillText(label, x + 8, y + 18);
+      if (key === activeRoi) {
+        const handleSize = Math.max(10, Math.min(canvas.width, canvas.height) * 0.018);
+        context.fillStyle = "#ffffff";
+        context.strokeStyle = color;
+        context.lineWidth = 3;
+        Object.values(roiCorners(roi)).forEach((corner) => {
+          const handleX = (corner.x * canvas.width) - (handleSize / 2);
+          const handleY = (corner.y * canvas.height) - (handleSize / 2);
+          context.fillRect(handleX, handleY, handleSize, handleSize);
+          context.strokeRect(handleX, handleY, handleSize, handleSize);
+        });
+      }
     });
   };
 
@@ -850,16 +893,24 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     const start = pointerToCanvasFrame(event, canvas);
     if (!start) return;
     const selectedRoi = rois[activeRoi];
-    const movingKey = selectedRoi
+    const resizeCorner = selectedRoi ? findRoiResizeCorner(start, selectedRoi) : null;
+    const movingKey = !resizeCorner && selectedRoi
       && start.x >= selectedRoi.x && start.x <= selectedRoi.x + selectedRoi.width
       && start.y >= selectedRoi.y && start.y <= selectedRoi.y + selectedRoi.height
       ? activeRoi
       : null;
-    const initialRoi = movingKey ? rois[movingKey] : null;
+    const initialRoi = resizeCorner ? selectedRoi : movingKey ? rois[movingKey] : null;
     roiDragStartRef.current = start;
     const onMove = (moveEvent) => {
       const current = pointerToCanvasFrame(moveEvent, canvas, true);
       if (!current) return;
+      if (resizeCorner && initialRoi) {
+        setRois((existing) => ({
+          ...existing,
+          [activeRoi]: resizeRoiFromCorner(initialRoi, resizeCorner, current),
+        }));
+        return;
+      }
       if (movingKey && initialRoi) {
         const x = clamp(initialRoi.x + current.x - start.x, 0, 1 - initialRoi.width);
         const y = clamp(initialRoi.y + current.y - start.y, 0, 1 - initialRoi.height);
@@ -871,8 +922,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       }
       const x = Math.min(start.x, current.x);
       const y = Math.min(start.y, current.y);
-      const width = Math.max(0.02, Math.abs(start.x - current.x));
-      const height = Math.max(0.02, Math.abs(start.y - current.y));
+      const width = Math.max(ROI_MIN_SIZE, Math.abs(start.x - current.x));
+      const height = Math.max(ROI_MIN_SIZE, Math.abs(start.y - current.y));
       setRois((existing) => ({
         ...existing,
         [activeRoi]: { x, y, width: Math.min(width, 1 - x), height: Math.min(height, 1 - y) },
@@ -1383,7 +1434,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           </button>
           <span className="text-[11px] text-muted-foreground">
             {roiFrameReady
-              ? roiLayout === "pip" ? "Choose the region to edit first. Drag inside that selected rectangle to move it, or drag elsewhere to redraw it." : "The full frame will be analyzed."
+              ? roiLayout === "pip" ? "Choose the region to edit first. Drag its white corner handles to resize, drag inside to move it, or drag elsewhere to redraw it." : "The full frame will be analyzed."
               : "Load a local video, then capture a frame to adjust the regions."}
           </span>
         </div>
@@ -1398,7 +1449,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
               />
             </div>
             <p className="text-[11px] text-muted-foreground">
-              These colored rectangles are the exact crop regions used for the next analysis; they are not automatically repositioned.
+              These colored rectangles are the exact crop regions used for the next analysis. White corner handles resize the selected region.
             </p>
           </div>
         )}
