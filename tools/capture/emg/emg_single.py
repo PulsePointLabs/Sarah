@@ -46,6 +46,8 @@ OBS_PASSWORD = os.getenv("OBS_PASSWORD", "")
 
 # Output files
 LEVEL_TXT = Path(os.getenv("EMG_LEVEL_TEXT_PATH", BASE_DIR / "emg_level.txt"))
+COMMAND_FILE = Path(os.getenv("EMG_COMMAND_FILE", LEVEL_TXT.parent / "emg_command.json"))
+COMMAND_STATUS_FILE = Path(os.getenv("EMG_COMMAND_STATUS_FILE", LEVEL_TXT.parent / "emg_command_status.json"))
 OUTPUT_DIR = Path(os.getenv("EMG_SESSIONS_DIR", BASE_DIR / "emg_sessions"))
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -268,34 +270,88 @@ def main():
         }, indent=2))
         print(f"Saved calibration: REST={REST:.1f}, MAX={MAX_CONTRACT:.1f}, HEADROOM={HEADROOM:.2f}")
 
-    def on_key(event):
+    def write_command_status(command, status, message):
+        COMMAND_STATUS_FILE.write_text(json.dumps({
+            "id": command.get("id"),
+            "action": command.get("action"),
+            "status": status,
+            "message": message,
+            "applied_at": datetime.now().isoformat(),
+            "calibration": {
+                "rest": REST,
+                "max_contract": MAX_CONTRACT,
+                "headroom": HEADROOM,
+            }
+        }, indent=2))
+
+    def apply_calibration_action(action, save=False):
         global REST, MAX_CONTRACT, HEADROOM
         nonlocal env_s
 
-        key = event.key.lower() if event.key else ""
+        if action == "save_calibration":
+            save_calibration()
+            return True, "Calibration saved."
+
+        if action == "headroom_up":
+            HEADROOM += 0.05
+            message = f"HEADROOM increased: {HEADROOM:.2f}"
+            print(message)
+            if save:
+                save_calibration()
+            return True, message
+
+        if action == "headroom_down":
+            HEADROOM = max(1.0, HEADROOM - 0.05)
+            message = f"HEADROOM decreased: {HEADROOM:.2f}"
+            print(message)
+            if save:
+                save_calibration()
+            return True, message
 
         if env_s is None:
-            print("No EMG data yet.")
-            return
+            message = "No EMG data yet."
+            print(message)
+            return False, message
 
-        if key == "r":
+        if action == "set_both_rest":
             REST = env_s
-            print(f"Set REST: {REST:.1f}")
+            message = f"Set REST: {REST:.1f}"
 
-        elif key == "m":
+        elif action == "set_both_max":
             MAX_CONTRACT = env_s
-            print(f"Set MAX_CONTRACT: {MAX_CONTRACT:.1f}")
+            message = f"Set MAX_CONTRACT: {MAX_CONTRACT:.1f}"
+        elif action in {"set_left_max", "set_right_max", "set_left_rest", "set_right_rest", "flip_lr"}:
+            return False, "This command requires the dual-channel EMG helper."
+        else:
+            return False, f"Unsupported calibration command: {action}"
 
-        elif key == "c":
+        print(message)
+        if save:
             save_calibration()
+        return True, message
 
-        elif key == "up":
-            HEADROOM += 0.05
-            print(f"HEADROOM increased: {HEADROOM:.2f}")
+    def consume_app_command():
+        if not COMMAND_FILE.exists():
+            return
+        try:
+            command = json.loads(COMMAND_FILE.read_text())
+            COMMAND_FILE.unlink(missing_ok=True)
+            ok, message = apply_calibration_action(command.get("action", ""), command.get("save", True))
+            write_command_status(command, "applied" if ok else "rejected", message)
+        except Exception as exc:
+            write_command_status({"id": None, "action": "unknown"}, "rejected", str(exc))
 
-        elif key == "down":
-            HEADROOM = max(1.0, HEADROOM - 0.05)
-            print(f"HEADROOM decreased: {HEADROOM:.2f}")
+    def on_key(event):
+        key = event.key.lower() if event.key else ""
+        actions = {
+            "r": "set_both_rest",
+            "m": "set_both_max",
+            "c": "save_calibration",
+            "up": "headroom_up",
+            "down": "headroom_down",
+        }
+        if key in actions:
+            apply_calibration_action(actions[key], save=False)
 
     fig.canvas.mpl_connect("key_press_event", on_key)
 
@@ -327,6 +383,8 @@ def main():
 
             # Smooth the incoming ENV signal.
             env_s = ALPHA_ENV * raw + (1 - ALPHA_ENV) * env_s
+
+            consume_app_command()
 
             # Normalize with headroom and extended ceiling.
             level_raw = norm_with_headroom(env_s, REST, MAX_CONTRACT)

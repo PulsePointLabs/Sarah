@@ -55,6 +55,8 @@ OBS_PASSWORD = os.getenv("OBS_PASSWORD", "")
 LEFT_TXT = Path(os.getenv("EMG_LEFT_TEXT_PATH", BASE_DIR / "emg_left.txt"))
 RIGHT_TXT = Path(os.getenv("EMG_RIGHT_TEXT_PATH", BASE_DIR / "emg_right.txt"))
 DIFF_TXT = Path(os.getenv("EMG_DIFF_TEXT_PATH", BASE_DIR / "emg_diff.txt"))
+COMMAND_FILE = Path(os.getenv("EMG_COMMAND_FILE", LEFT_TXT.parent / "emg_command.json"))
+COMMAND_STATUS_FILE = Path(os.getenv("EMG_COMMAND_STATUS_FILE", LEFT_TXT.parent / "emg_command_status.json"))
 
 OUTPUT_DIR = Path(os.getenv("EMG_SESSIONS_DIR", BASE_DIR / "emg_sessions"))
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -320,59 +322,120 @@ def main():
             f"FLIP_LR={FLIP_LR}"
         )
 
-    def on_key(event):
+    def write_command_status(command, status, message):
+        COMMAND_STATUS_FILE.write_text(json.dumps({
+            "id": command.get("id"),
+            "action": command.get("action"),
+            "status": status,
+            "message": message,
+            "applied_at": datetime.now().isoformat(),
+            "calibration": {
+                "rest_l": REST_L,
+                "max_l": MAX_L,
+                "rest_r": REST_R,
+                "max_r": MAX_R,
+                "headroom": HEADROOM,
+                "flip_lr": FLIP_LR,
+            }
+        }, indent=2))
+
+    def apply_calibration_action(action, save=False):
         global REST_L, MAX_L, REST_R, MAX_R, HEADROOM, FLIP_LR
         nonlocal env_l, env_r
 
-        key = event.key.lower() if event.key else ""
-
-        if key == "v":
+        if action == "flip_lr":
             FLIP_LR = not FLIP_LR
-            print(f"Flip set to {FLIP_LR} ({'A0=Right, A1=Left' if FLIP_LR else 'A0=Left, A1=Right'})")
-            return
+            message = f"Flip set to {FLIP_LR} ({'A0=Right, A1=Left' if FLIP_LR else 'A0=Left, A1=Right'})"
+            print(message)
+            if save:
+                save_calibration()
+            return True, message
 
-        if key == "up":
+        if action == "headroom_up":
             HEADROOM += 0.05
-            print(f"HEADROOM increased: {HEADROOM:.2f}")
-            return
+            message = f"HEADROOM increased: {HEADROOM:.2f}"
+            print(message)
+            if save:
+                save_calibration()
+            return True, message
 
-        if key == "down":
+        if action == "headroom_down":
             HEADROOM = max(1.0, HEADROOM - 0.05)
-            print(f"HEADROOM decreased: {HEADROOM:.2f}")
-            return
+            message = f"HEADROOM decreased: {HEADROOM:.2f}"
+            print(message)
+            if save:
+                save_calibration()
+            return True, message
+
+        if action == "save_calibration":
+            save_calibration()
+            return True, "Calibration saved."
 
         if env_l is None or env_r is None:
-            print("No EMG data yet.")
-            return
+            message = "No EMG data yet."
+            print(message)
+            return False, message
 
-        if key == "r":
+        if action == "set_both_rest":
             REST_L = env_l
             REST_R = env_r
-            print(f"Set BOTH REST: L={REST_L:.1f}, R={REST_R:.1f}")
+            message = f"Set BOTH REST: L={REST_L:.1f}, R={REST_R:.1f}"
 
-        elif key == "m":
+        elif action == "set_both_max":
             MAX_L = env_l
             MAX_R = env_r
-            print(f"Set BOTH MAX: L={MAX_L:.1f}, R={MAX_R:.1f}")
+            message = f"Set BOTH MAX: L={MAX_L:.1f}, R={MAX_R:.1f}"
 
-        elif key == "a":
+        elif action == "set_left_rest":
             REST_L = env_l
-            print(f"Set LEFT REST: {REST_L:.1f}")
+            message = f"Set LEFT REST: {REST_L:.1f}"
 
-        elif key == "d":
+        elif action == "set_right_rest":
             REST_R = env_r
-            print(f"Set RIGHT REST: {REST_R:.1f}")
+            message = f"Set RIGHT REST: {REST_R:.1f}"
 
-        elif key == "z":
+        elif action == "set_left_max":
             MAX_L = env_l
-            print(f"Set LEFT MAX: {MAX_L:.1f}")
+            message = f"Set LEFT MAX: {MAX_L:.1f}"
 
-        elif key == "x":
+        elif action == "set_right_max":
             MAX_R = env_r
-            print(f"Set RIGHT MAX: {MAX_R:.1f}")
+            message = f"Set RIGHT MAX: {MAX_R:.1f}"
+        else:
+            return False, f"Unsupported calibration command: {action}"
 
-        elif key == "c":
+        print(message)
+        if save:
             save_calibration()
+        return True, message
+
+    def consume_app_command():
+        if not COMMAND_FILE.exists():
+            return
+        try:
+            command = json.loads(COMMAND_FILE.read_text())
+            COMMAND_FILE.unlink(missing_ok=True)
+            ok, message = apply_calibration_action(command.get("action", ""), command.get("save", True))
+            write_command_status(command, "applied" if ok else "rejected", message)
+        except Exception as exc:
+            write_command_status({"id": None, "action": "unknown"}, "rejected", str(exc))
+
+    def on_key(event):
+        key = event.key.lower() if event.key else ""
+        actions = {
+            "v": "flip_lr",
+            "up": "headroom_up",
+            "down": "headroom_down",
+            "r": "set_both_rest",
+            "m": "set_both_max",
+            "a": "set_left_rest",
+            "d": "set_right_rest",
+            "z": "set_left_max",
+            "x": "set_right_max",
+            "c": "save_calibration",
+        }
+        if key in actions:
+            apply_calibration_action(actions[key], save=False)
 
     fig.canvas.mpl_connect("key_press_event", on_key)
 
@@ -407,6 +470,8 @@ def main():
                 raw_l, raw_r = a1, a0
             else:
                 raw_l, raw_r = a0, a1
+
+            consume_app_command()
 
             if env_l is None:
                 env_l = raw_l

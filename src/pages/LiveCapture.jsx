@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Activity, Brain, CheckCircle2, CircleDot, ExternalLink, FileText, Flag, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
+import { Activity, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
 import {
   CartesianGrid,
   Legend,
@@ -33,6 +33,34 @@ const CAPTURE_MODES = [
   { value: "hr", label: "HR Only / Main Telemetry", helper: "Distance-readable HR and EMG dashboard" },
   { value: "video", label: "Video sync", helper: "OBS-first review workflow" },
 ];
+const EMG_CALIBRATION_STEPS = [
+  {
+    key: "neutral",
+    label: "Both neutral",
+    instruction: "Relax both monitored sides and capture a quiet reference.",
+  },
+  {
+    key: "both_max",
+    label: "Both max tension",
+    instruction: "Briefly contract both monitored sides as strongly as is comfortable.",
+  },
+  {
+    key: "left_max",
+    label: "Left max only",
+    instruction: "Contract the left monitored side while keeping the right as relaxed as possible.",
+  },
+  {
+    key: "right_max",
+    label: "Right max only",
+    instruction: "Contract the right monitored side while keeping the left as relaxed as possible.",
+  },
+];
+const EMG_CALIBRATION_ACTIONS = {
+  neutral: "set_both_rest",
+  both_max: "set_both_max",
+  left_max: "set_left_max",
+  right_max: "set_right_max",
+};
 
 function playToneSequence(audioContext, frequencies) {
   if (!audioContext || audioContext.state === "closed") return;
@@ -86,6 +114,35 @@ function readNumber(...values) {
     if (Number.isFinite(n)) return n;
   }
   return null;
+}
+
+function summarizeEmgCalibrationReading(history, telemetry) {
+  const recent = history
+    .slice(-12)
+    .map((point) => ({ left: readNumber(point.left), right: readNumber(point.right) }))
+    .filter((point) => point.left != null || point.right != null);
+  const fallback = {
+    left: readNumber(telemetry?.left_pct, telemetry?.level_pct),
+    right: readNumber(telemetry?.right_pct),
+  };
+  const readings = recent.length ? recent : [fallback].filter((point) => point.left != null || point.right != null);
+  const summary = (side) => {
+    const values = readings.map((point) => point[side]).filter((value) => value != null);
+    if (!values.length) return null;
+    const average = values.reduce((total, value) => total + value, 0) / values.length;
+    return {
+      value: Math.round(average * 10) / 10,
+      spread: Math.round((Math.max(...values) - Math.min(...values)) * 10) / 10,
+    };
+  };
+  const left = summary("left");
+  const right = summary("right");
+  return {
+    left,
+    right,
+    sampleCount: readings.length,
+    diff: left && right ? Math.round((left.value - right.value) * 10) / 10 : null,
+  };
 }
 
 function asArray(value) {
@@ -401,6 +458,11 @@ export default function LiveCapture() {
   const [mediaDragging, setMediaDragging] = useState(false);
   const [mediaFullscreen, setMediaFullscreen] = useState(false);
   const [presetModalOpen, setPresetModalOpen] = useState(false);
+  const [calibrationOpen, setCalibrationOpen] = useState(false);
+  const [calibrationSaving, setCalibrationSaving] = useState("");
+  const [calibrationStatus, setCalibrationStatus] = useState("");
+  const [calibrationError, setCalibrationError] = useState("");
+  const [calibrationCommandStatus, setCalibrationCommandStatus] = useState(null);
   const latestHrRef = useRef(null);
   const latestEmgRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -420,6 +482,8 @@ export default function LiveCapture() {
   const mediaVideoRef = useRef(null);
   const mediaInputRef = useRef(null);
   const mediaObjectUrlRef = useRef(null);
+  const appliedCalibrationCommandRef = useRef("");
+  const pendingCalibrationCommandRef = useRef("");
 
   const appendTelemetryPoint = (nextHr = latestHrRef.current, nextEmg = latestEmgRef.current) => {
     if (!nextHr && !nextEmg) return;
@@ -452,6 +516,7 @@ export default function LiveCapture() {
       setRecording(data.hr?.recording || null);
       setFiles(data.files || null);
       setLiveSession(data.session || null);
+      setCalibrationCommandStatus(data.emg?.calibrationCommandStatus || null);
       appendTelemetryPoint(nextHr, nextEmg);
     }).catch(() => {});
 
@@ -470,6 +535,7 @@ export default function LiveCapture() {
       setRecording(data.hr?.recording || null);
       setFiles(data.files || null);
       setLiveSession(data.session || null);
+      setCalibrationCommandStatus(data.emg?.calibrationCommandStatus || null);
       appendTelemetryPoint(nextHr, nextEmg);
     });
     events.addEventListener("hr_telemetry", (event) => {
@@ -483,6 +549,9 @@ export default function LiveCapture() {
       latestEmgRef.current = data;
       setEmgTelemetry(data);
       appendTelemetryPoint(latestHrRef.current, data);
+    });
+    events.addEventListener("emg_calibration_status", (event) => {
+      setCalibrationCommandStatus(JSON.parse(event.data));
     });
     events.addEventListener("recording", (event) => setRecording(JSON.parse(event.data)));
     events.addEventListener("recording_finalized", (event) => setRecording(JSON.parse(event.data)));
@@ -526,6 +595,37 @@ export default function LiveCapture() {
     }).catch(() => {});
   }, [liveSession?.activeSessionId, liveSession?.lastImportedAt]);
 
+  useEffect(() => {
+    const sessionId = liveSession?.activeSessionId;
+    const calibration = calibrationCommandStatus?.calibration;
+    if (
+      !sessionId
+      || calibrationCommandStatus?.status !== "applied"
+      || !calibrationCommandStatus?.id
+      || pendingCalibrationCommandRef.current !== calibrationCommandStatus.id
+      || appliedCalibrationCommandRef.current === calibrationCommandStatus.id
+      || !calibration
+    ) {
+      return;
+    }
+    appliedCalibrationCommandRef.current = calibrationCommandStatus.id;
+    const patch = {};
+    if (calibration.rest_l != null) patch.emg_rest_left = calibration.rest_l;
+    if (calibration.max_l != null) patch.emg_max_left = calibration.max_l;
+    if (calibration.rest_r != null) patch.emg_rest_right = calibration.rest_r;
+    if (calibration.max_r != null) patch.emg_max_right = calibration.max_r;
+    if (calibration.rest != null) patch.emg_rest_left = calibration.rest;
+    if (calibration.max_contract != null) patch.emg_max_left = calibration.max_contract;
+    if (calibration.flip_lr != null) patch.emg_left_right_flipped = calibration.flip_lr;
+    if (!Object.keys(patch).length) return;
+    base44.entities.Session.update(sessionId, patch).then(() => {
+      setActiveSessionDoc((prev) => (prev ? { ...prev, ...patch } : prev));
+      setCalibrationStatus(`${calibrationCommandStatus.message} Calibration values have been saved with this session.`);
+    }).catch(() => {
+      setCalibrationError("Calibration was applied by the helper, but its raw reference values could not be saved to this session.");
+    });
+  }, [calibrationCommandStatus, liveSession?.activeSessionId]);
+
   const prediction = useMemo(() => computePrediction(hrTelemetry, emgTelemetry, telemetryHistory), [hrTelemetry, emgTelemetry, telemetryHistory]);
   const recordingActive = Boolean(recording?.active);
   const hrConnected = Boolean(status?.hr?.connected);
@@ -540,6 +640,10 @@ export default function LiveCapture() {
   const buildLevel = readNumber(hrTelemetry?.buildConfidence, hrTelemetry?.build_confidence);
   const leftEmgLevel = readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct);
   const rightEmgLevel = readNumber(emgTelemetry?.right_pct);
+  const calibrationReading = useMemo(
+    () => summarizeEmgCalibrationReading(telemetryHistory, emgTelemetry),
+    [emgTelemetry, telemetryHistory],
+  );
   const captureDigest = activeSessionDoc?.capture_digest || null;
   const recentLiveEvents = useMemo(() => [...liveEvents].sort((a, b) => Number(b.time_s || 0) - Number(a.time_s || 0)).slice(0, 8), [liveEvents]);
   const recentPhaseMarkers = useMemo(() => [...phaseMarkers].reverse().slice(0, 5), [phaseMarkers]);
@@ -740,6 +844,73 @@ export default function LiveCapture() {
     setActiveSessionDoc((prev) => (prev ? { ...prev, ...patch } : prev));
     return sessionId;
   }, [ensureSession, liveSession]);
+
+  const captureEmgCalibrationReference = useCallback(async (step) => {
+    const reading = summarizeEmgCalibrationReading(telemetryHistory, latestEmgRef.current);
+    if (!reading.left && !reading.right) {
+      setCalibrationError("No recent EMG signal is available. Start the EMG feed, then capture this reference again.");
+      return;
+    }
+    setCalibrationSaving(step.key);
+    setCalibrationStatus("");
+    setCalibrationError("");
+    try {
+      const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();
+      const sessionId = sessionState?.activeSessionId;
+      if (!sessionId) throw new Error("No active live session is available for calibration.");
+      const commandResponse = await fetch(`${API_BASE}/live-capture/emg/calibration-command`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: EMG_CALIBRATION_ACTIONS[step.key], save: true }),
+      });
+      const commandStatus = await commandResponse.json();
+      if (!commandResponse.ok) throw new Error(commandStatus?.error || "Unable to send calibration command to the EMG helper.");
+      pendingCalibrationCommandRef.current = commandStatus.id;
+      setCalibrationCommandStatus(commandStatus);
+      const rows = await base44.entities.Session.filter({ id: sessionId });
+      const session = rows[0] || {};
+      const timeS = getCurrentSessionTime();
+      const leftText = reading.left ? `left ${reading.left.value}%` : "left unavailable";
+      const rightText = reading.right ? `right ${reading.right.value}%` : "right unavailable";
+      const note = `EMG calibration command requested: ${step.label.toLowerCase()} (${leftText}, ${rightText} on the live display). Intentional calibration maneuver; exclude this window from spontaneous response interpretation.`;
+      const nextEvent = {
+        time_s: timeS,
+        note,
+        category: ["other"],
+        annotation_tags: ["calibration", "emg_calibration", "context", "exclude_from_response_interpretation"],
+        source: "emg_calibration",
+        created_at: new Date().toISOString(),
+        emg_calibration: {
+          step: step.key,
+          label: step.label,
+          left_pct: reading.left?.value ?? null,
+          right_pct: reading.right?.value ?? null,
+          diff_pct: reading.diff,
+          sample_count: reading.sampleCount,
+          left_spread_pct: reading.left?.spread ?? null,
+          right_spread_pct: reading.right?.spread ?? null,
+          command_id: commandStatus.id,
+          backend_action: EMG_CALIBRATION_ACTIONS[step.key],
+          status: "requested",
+        },
+      };
+      const calibrationLine = `[${fmtMmSs(timeS)}] Requested ${step.label} calibration in the active EMG helper (${leftText}, ${rightText} on the live display; ${reading.sampleCount} recent normalized sample${reading.sampleCount === 1 ? "" : "s"}). Intentional calibration maneuver; exclude from spontaneous physiological response interpretation.`;
+      const patch = {
+        emg_enabled: true,
+        emg_calibration_notes: [session.emg_calibration_notes, calibrationLine].filter(Boolean).join("\n"),
+        event_timeline: [...(session.event_timeline || []), nextEvent].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0)),
+      };
+      if (reading.right) patch.emg_channels = "dual";
+      await base44.entities.Session.update(sessionId, patch);
+      setLiveEvents(patch.event_timeline);
+      setActiveSessionDoc((prev) => ({ ...(prev || session), ...patch }));
+      setCalibrationStatus(`${step.label} sent at ${fmtMmSs(timeS)}. Waiting for the running EMG helper to confirm it applied the new calibration.`);
+    } catch (err) {
+      setCalibrationError(err?.message || "Unable to save EMG calibration reference.");
+    } finally {
+      setCalibrationSaving("");
+    }
+  }, [ensureSession, getCurrentSessionTime, liveSession, telemetryHistory]);
 
   const undoLastVoiceAnnotation = useCallback(async () => {
     const sessionId = liveSession?.activeSessionId;
@@ -1427,6 +1598,164 @@ export default function LiveCapture() {
       </div>}
 
       {!focusView && !mainTelemetryView && voiceAnnotationPanel}
+
+      {!focusView && captureMode !== "media" && (
+        <div className="rounded-xl border border-border bg-card">
+          <button
+            type="button"
+            onClick={() => setCalibrationOpen((open) => !open)}
+            className="flex w-full items-start gap-3 p-4 text-left"
+            aria-expanded={calibrationOpen}
+          >
+            <Activity className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wider text-primary">EMG Calibration Reference Capture</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Record neutral and intentional contraction references so later AI interpretation can recognize calibration maneuvers.
+              </p>
+            </div>
+            <ChevronDown className={`ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform ${calibrationOpen ? "rotate-180" : ""}`} />
+          </button>
+          {calibrationOpen && (
+            <div className="space-y-4 border-t border-border p-4">
+              <div className="rounded-lg border border-primary/20 bg-primary/[0.06] p-3 text-xs text-muted-foreground">
+                These controls send calibration actions to the running local EMG helper and record each intentional maneuver for review and AI grounding. Confirm an applied acknowledgement below before relying on the new scale.
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-lg border border-border bg-muted/20 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Live Left</p>
+                  <p className="mt-1 text-2xl font-bold text-primary">{calibrationReading.left ? `${fmtNumber(calibrationReading.left.value)}%` : "—"}</p>
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    {calibrationReading.left ? `Recent spread ${fmtNumber(calibrationReading.left.spread)}%` : "No live sample"}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/20 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Live Right</p>
+                  <p className="mt-1 text-2xl font-bold text-chart-2">{calibrationReading.right ? `${fmtNumber(calibrationReading.right.value)}%` : "—"}</p>
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    {calibrationReading.right ? `Recent spread ${fmtNumber(calibrationReading.right.spread)}%` : "Single channel or no sample"}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/20 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Verification</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">
+                    {!calibrationReading.left && !calibrationReading.right
+                      ? "Waiting for EMG"
+                      : Math.max(calibrationReading.left?.spread || 0, calibrationReading.right?.spread || 0) <= 8
+                        ? "Stable capture window"
+                        : "Signal moving"}
+                  </p>
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    {calibrationReading.sampleCount
+                      ? `${calibrationReading.sampleCount} recent sample${calibrationReading.sampleCount === 1 ? "" : "s"} averaged`
+                      : "Hold the intended state briefly before saving."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-2 lg:grid-cols-2">
+                {EMG_CALIBRATION_STEPS.map((step) => {
+                  const requiresDualChannel = step.key === "left_max" || step.key === "right_max";
+                  const hasReference = step.key === "neutral"
+                    ? activeSessionDoc?.emg_rest_left != null || activeSessionDoc?.emg_rest_right != null
+                    : step.key === "left_max"
+                      ? activeSessionDoc?.emg_max_left != null
+                      : step.key === "right_max"
+                        ? activeSessionDoc?.emg_max_right != null
+                        : activeSessionDoc?.emg_max_left != null && activeSessionDoc?.emg_max_right != null;
+                  return (
+                    <div key={step.key} className="rounded-lg border border-border bg-muted/20 p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-foreground">{step.label}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">{step.instruction}</p>
+                        </div>
+                        {hasReference && (
+                          <span className="rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                            Saved
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        disabled={Boolean(calibrationSaving) || (!calibrationReading.left && !calibrationReading.right) || (requiresDualChannel && !calibrationReading.right)}
+                        onClick={() => captureEmgCalibrationReference(step)}
+                        className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 text-xs font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        {calibrationSaving === step.key ? (
+                          <span className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                        ) : (
+                          <CircleDot className="h-3.5 w-3.5" />
+                        )}
+                        {calibrationSaving === step.key ? "Sending command..." : "Apply calibration now"}
+                      </button>
+                      {requiresDualChannel && !calibrationReading.right && (
+                        <p className="mt-2 text-[10px] text-muted-foreground">Requires the dual-channel EMG feed.</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {(activeSessionDoc?.emg_rest_left != null || activeSessionDoc?.emg_max_left != null || activeSessionDoc?.emg_rest_right != null || activeSessionDoc?.emg_max_right != null) && (
+                <div className="rounded-lg border border-border bg-muted/20 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Stored Raw Calibration Values</p>
+                  <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {[
+                      ["Left neutral", activeSessionDoc?.emg_rest_left],
+                      ["Right neutral", activeSessionDoc?.emg_rest_right],
+                      ["Left max", activeSessionDoc?.emg_max_left],
+                      ["Right max", activeSessionDoc?.emg_max_right],
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-md bg-card px-3 py-2">
+                        <p className="text-[10px] text-muted-foreground">{label}</p>
+                        <p className="mt-1 font-mono text-sm font-semibold text-foreground">{value != null ? fmtNumber(value) : "—"}</p>
+                      </div>
+                    ))}
+                  </div>
+                  {activeSessionDoc?.emg_left_right_flipped && (
+                    <p className="mt-2 text-xs text-amber-300">Left/right channel flip is enabled for this session; interpret displayed sides using that saved orientation.</p>
+                  )}
+                </div>
+              )}
+
+              {calibrationCommandStatus && (
+                <div className={`rounded-lg border px-3 py-3 text-xs ${
+                  calibrationCommandStatus.status === "applied"
+                    ? "border-primary/25 bg-primary/10"
+                    : calibrationCommandStatus.status === "rejected"
+                      ? "border-destructive/30 bg-destructive/10"
+                      : "border-border bg-muted/20"
+                }`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-semibold uppercase tracking-wider text-foreground">EMG Helper Status</p>
+                    <span className="rounded-full border border-current/20 px-2 py-0.5 font-semibold uppercase tracking-wider">
+                      {calibrationCommandStatus.status}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-muted-foreground">{calibrationCommandStatus.message}</p>
+                  {calibrationCommandStatus.status === "applied" && calibrationCommandStatus.calibration && (
+                    <p className="mt-2 text-muted-foreground">
+                      Raw calibration:{" "}
+                      {calibrationCommandStatus.calibration.rest_l != null
+                        ? `left ${fmtNumber(calibrationCommandStatus.calibration.rest_l)} / ${fmtNumber(calibrationCommandStatus.calibration.max_l)}, right ${fmtNumber(calibrationCommandStatus.calibration.rest_r)} / ${fmtNumber(calibrationCommandStatus.calibration.max_r)}`
+                        : `rest ${fmtNumber(calibrationCommandStatus.calibration.rest)} / max ${fmtNumber(calibrationCommandStatus.calibration.max_contract)}`}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {calibrationStatus && (
+                <div className="rounded-lg border border-primary/25 bg-primary/10 px-3 py-2 text-xs text-primary">{calibrationStatus}</div>
+              )}
+              {calibrationError && (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">{calibrationError}</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {captureMode !== "media" && (
         <>

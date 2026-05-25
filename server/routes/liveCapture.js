@@ -1,4 +1,5 @@
 import express from 'express';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parse } from 'csv-parse/sync';
@@ -11,6 +12,18 @@ const HR_WS_URL = liveCaptureConfig.hrWsUrl;
 const HR_RECORDINGS_DIR = liveCaptureConfig.hrRecordingsDir;
 const EMG_TEXT_DIR = liveCaptureConfig.emgTextDir;
 const EMG_SESSIONS_DIR = liveCaptureConfig.emgSessionsDir;
+const EMG_COMMAND_FILE = path.join(EMG_TEXT_DIR, 'emg_command.json');
+const EMG_COMMAND_STATUS_FILE = path.join(EMG_TEXT_DIR, 'emg_command_status.json');
+const EMG_CALIBRATION_ACTIONS = new Set([
+  'set_both_rest',
+  'set_both_max',
+  'set_left_max',
+  'set_right_max',
+  'set_left_rest',
+  'set_right_rest',
+  'save_calibration',
+  'flip_lr',
+]);
 
 const clients = new Set();
 let hrSocket = null;
@@ -36,6 +49,7 @@ const state = {
     lastMessageAt: null,
     lastPollAt: null,
     lastSourceAt: null,
+    calibrationCommandStatus: null,
     error: null,
   },
   files: {
@@ -462,6 +476,17 @@ function connectHrBridge() {
 }
 
 async function readEmgTextTelemetry() {
+  try {
+    const commandStatus = JSON.parse(await fs.readFile(EMG_COMMAND_STATUS_FILE, 'utf8'));
+    const previous = JSON.stringify(state.emg.calibrationCommandStatus);
+    if (JSON.stringify(commandStatus) !== previous) {
+      state.emg.calibrationCommandStatus = commandStatus;
+      broadcast('emg_calibration_status', commandStatus);
+    }
+  } catch {
+    // The helper only creates this status file after the first app-issued command.
+  }
+
   const read = async (name) => {
     try {
       const filePath = path.join(EMG_TEXT_DIR, name);
@@ -521,6 +546,39 @@ function startEmgPolling() {
 connectHrBridge();
 startEmgPolling();
 refreshLatestFiles();
+
+liveCaptureRouter.post('/emg/calibration-command', async (req, res) => {
+  const action = String(req.body?.action || '');
+  if (!EMG_CALIBRATION_ACTIONS.has(action)) {
+    res.status(400).json({ error: 'Unsupported EMG calibration command.' });
+    return;
+  }
+
+  const command = {
+    id: randomUUID(),
+    action,
+    save: req.body?.save !== false,
+    requested_at: new Date().toISOString(),
+    source: 'pulsepoint_live_capture',
+  };
+
+  try {
+    await fs.mkdir(EMG_TEXT_DIR, { recursive: true });
+    await fs.writeFile(EMG_COMMAND_FILE, JSON.stringify(command, null, 2), 'utf8');
+    const queued = {
+      id: command.id,
+      action,
+      status: 'queued',
+      requested_at: command.requested_at,
+      message: 'Waiting for the running EMG helper to apply this calibration command.',
+    };
+    state.emg.calibrationCommandStatus = queued;
+    broadcast('emg_calibration_status', queued);
+    res.json(queued);
+  } catch (error) {
+    res.status(500).json({ error: error.message || String(error) });
+  }
+});
 
 liveCaptureRouter.get('/status', (_req, res) => {
   res.json(state);
