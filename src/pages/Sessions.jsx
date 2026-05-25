@@ -38,6 +38,7 @@ import { computeAISessionScore } from "@/utils/sessionScore";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { hasAnyMotionEvidence, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
 import { buildProfileExportFilename } from "@/utils/exportFilenames";
+import { useToast } from "@/components/ui/use-toast";
 
 const ALL_METHODS = ["Manual", "Silicone Sleeve", "Coyote E-Stim", "TENS", "Foley Catheter"];
 const BUILD_TYPES = ["Gradual", "Stepwise", "Spike", "Plateau-heavy", "Erratic", "Other"];
@@ -140,6 +141,7 @@ function ViewButton({ active, count, icon: Icon, label, onClick }) {
 }
 
 export default function Sessions() {
+  const { toast } = useToast();
   const [sessions, setSessions] = useState([]);
   const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -325,10 +327,14 @@ Session data:
 ${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
       });
       const summary = typeof text === "string" ? text : (text?.response ?? text?.summary ?? "");
-      await base44.entities.Session.update(session.id, { ai_analysis: { ...(session.ai_analysis || {}), summary } });
+      const updatedSession = await base44.entities.Session.update(session.id, { ai_analysis: { ...(session.ai_analysis || {}), summary } });
       done++;
       setAnalyzeProgress(Math.round((done / toAnalyze.length) * 100));
-      setSessions((prev) => prev.map((item) => item.id === session.id ? { ...item, ai_analysis: { ...(item.ai_analysis || {}), summary } } : item));
+      setSessions((prev) => prev.map((item) => item.id === session.id ? {
+        ...item,
+        ai_analysis: { ...(item.ai_analysis || {}), summary },
+        updated_date: updatedSession?.updated_date || updatedSession?.updated_at || new Date().toISOString(),
+      } : item));
     }));
     setAnalyzing(false);
   };
@@ -344,8 +350,13 @@ ${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
       if (score != null) {
         const shouldFav = score >= 85 && (session.intensity >= 8 || session.satisfaction >= 9) && !session.no_climax;
         const updated = { ...(session.ai_analysis || {}), ai_score: score };
-        await base44.entities.Session.update(session.id, { ai_analysis: updated, is_favorite: shouldFav || session.is_favorite });
-        setSessions((prev) => prev.map((item) => item.id === session.id ? { ...item, ai_analysis: updated, is_favorite: shouldFav || item.is_favorite } : item));
+        const updatedSession = await base44.entities.Session.update(session.id, { ai_analysis: updated, is_favorite: shouldFav || session.is_favorite });
+        setSessions((prev) => prev.map((item) => item.id === session.id ? {
+          ...item,
+          ai_analysis: updated,
+          is_favorite: shouldFav || item.is_favorite,
+          updated_date: updatedSession?.updated_date || updatedSession?.updated_at || new Date().toISOString(),
+        } : item));
       }
       done++;
       setGradeProgress(Math.round((done / toGrade.length) * 100));
@@ -401,6 +412,16 @@ ${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
     setFilterBQMax("");
     setFilterDateFrom("");
     setFilterDateTo("");
+  };
+
+  const deleteSession = async (session) => {
+    try {
+      await base44.entities.Session.delete(session.id);
+      setSessions((current) => current.filter((item) => item.id !== session.id));
+      toast({ title: "Session deleted", duration: 2000 });
+    } catch (error) {
+      toast({ title: `Delete failed: ${error.message}`, variant: "destructive" });
+    }
   };
 
   const exportCSV = () => {
@@ -656,7 +677,9 @@ ${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
               <button onClick={clearFilters} className="mt-1 text-sm text-primary">Clear filters</button>
             </div>
           ) : (
-            visibleSessions.map((session) => <SessionCard key={session.id} session={session} />)
+            visibleSessions.map((session) => (
+              <SessionCard key={session.id} session={session} onDelete={deleteSession} />
+            ))
           )}
         </div>
       </div>

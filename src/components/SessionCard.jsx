@@ -10,11 +10,23 @@ import {
   FileText,
   Heart,
   Star,
+  Trash2,
   Video,
   Zap,
   XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import moment from "moment";
 import { gradeFromPct } from "@/utils/sessionScore";
 import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
@@ -69,10 +81,40 @@ function DataPill({ icon: Icon, label, active, tone = "muted" }) {
   );
 }
 
-export default function SessionCard({ session, selectable, selected, onSelect }) {
+function latestSessionUpdate(session) {
+  const candidates = [
+    session.updated_date,
+    session.updated_at,
+    session.motion_analysis_summary?.analyzed_at,
+    session.ai_analysis?._meta?.last_generated_at,
+    session.ai_analysis?._meta?.updated_at,
+    session.ai_analysis?._meta?.generated_at,
+    session.ai_session_deep_dive?._meta?.last_generated_at,
+    session.ai_session_deep_dive?._meta?.updated_at,
+    session.ai_cascade?._meta?.last_generated_at,
+    session.ai_cascade?._meta?.updated_at,
+    session.ai_no_climax?._meta?.last_generated_at,
+    session.ai_no_climax?._meta?.updated_at,
+    session.ai_timeline_narrative?._meta?.last_generated_at,
+    session.ai_timeline_narrative?._meta?.updated_at,
+    session.ai_near_climax_overview?._meta?.last_generated_at,
+    session.ai_near_climax_overview?._meta?.updated_at,
+  ].filter(Boolean);
+
+  const dates = candidates
+    .map((candidate) => moment(candidate))
+    .filter((candidate) => candidate.isValid());
+  if (!dates.length) return null;
+  return dates.reduce((latest, candidate) => candidate.isAfter(latest) ? candidate : latest);
+}
+
+export default function SessionCard({ session, selectable, selected, onSelect, onDelete }) {
   const [aiExpanded, setAiExpanded] = useState(false);
 
   const date = moment(session.date).format("MMM D, YYYY");
+  const updatedMoment = latestSessionUpdate(session);
+  const updatedLabel = updatedMoment ? `Updated ${updatedMoment.fromNow()}` : "Updated time unavailable";
+  const updatedTitle = updatedMoment ? `Last updated ${updatedMoment.format("MMM D, YYYY [at] h:mm A")}` : undefined;
   const methods = session.methods || [];
   const eventCount = (session.event_timeline || []).length;
   // Prefer the cached score computed in SessionDetail (includes HR data); fall back to score without HR
@@ -121,6 +163,9 @@ export default function SessionCard({ session, selectable, selected, onSelect })
                 {session.duration_minutes && ` (${session.duration_minutes}m)`}
               </p>
             )}
+            <p className="mt-0.5 text-[11px] text-muted-foreground/80" title={updatedTitle}>
+              {updatedLabel}
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-1.5">
@@ -161,6 +206,38 @@ export default function SessionCard({ session, selectable, selected, onSelect })
           )}
           {session.is_quick_entry && <Zap className="w-4 h-4 text-primary" />}
           {session.is_favorite && <Star className="w-4 h-4 text-yellow-500 fill-yellow-500" />}
+          {!selectable && onDelete && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={`Delete session from ${date}`}
+                  title="Delete session"
+                  onClick={(event) => event.stopPropagation()}
+                  className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent onClick={(event) => event.stopPropagation()}>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete this session?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {date} will be permanently removed. This cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => onDelete(session)}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    Delete session
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
         </div>
       </div>
 
