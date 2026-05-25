@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Activity, Clapperboard, HeartPulse, Maximize2, ScanSearch, Video, X } from "lucide-react";
 import moment from "moment";
 import { base44 } from "@/api/base44Client";
 import PageHeader from "../components/PageHeader";
 import HRTimelineChart from "../components/HRTimelineChart";
 import InteractiveTimelinePlayer, { TimelineWaypointDetail } from "../components/InteractiveTimelinePlayer";
-import LocalMotionAnalysisPanel from "../components/LocalMotionAnalysisPanel";
 import SavedMotionSummaryCard from "../components/SavedMotionSummaryCard";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "../components/session-form/EventTimelineSection";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -252,48 +251,6 @@ export default function SessionReviewPlayer() {
     if (!requestedSessionId || loadingSessions || selectedId || !sessions.some((session) => session.id === requestedSessionId)) return;
     handleSelectSession(requestedSessionId);
   }, [handleSelectSession, loadingSessions, requestedSessionId, selectedId, sessions]);
-
-  const handleSaveMotionSummary = async (summary, finalizedMotionEvents = []) => {
-    if (!selectedSession?.id) throw new Error("Select a session before saving a motion summary.");
-    const manualAndLegacyEvents = (selectedSession.event_timeline || []).filter((event) => event.source !== "motion_derived");
-    const eventTimeline = [...manualAndLegacyEvents, ...(Array.isArray(finalizedMotionEvents) ? finalizedMotionEvents : [])]
-      .sort((a, b) => Number(a.time_s) - Number(b.time_s));
-    const updated = await base44.entities.Session.update(selectedSession.id, {
-      motion_analysis_summary: summary,
-      event_timeline: eventTimeline,
-    });
-    const nextSession = { ...updated, motion_analysis_summary: summary, event_timeline: eventTimeline };
-    setSelectedSession(nextSession);
-    setSessions((existing) => existing.map((session) => (
-      session.id === updated.id ? { ...session, motion_analysis_summary: summary, event_timeline: eventTimeline } : session
-    )));
-  };
-
-  const handleAcceptMotionSuggestions = async (suggestedEvents) => {
-    if (!selectedSession?.id) throw new Error("Select a session before accepting motion-derived suggestions.");
-    const existingEvents = selectedSession.event_timeline || [];
-    const isMatchingMotionEvent = (event, suggestion) => (
-        event.source === "motion_derived"
-        && event.motion_evidence?.suggestion_type === suggestion.motion_evidence?.suggestion_type
-        && (
-          event.motion_evidence?.candidate_id === suggestion.motion_evidence?.candidate_id
-          || Math.abs(Number(event.time_s) - Number(suggestion.time_s)) <= 0.75
-        )
-    );
-    const additions = (Array.isArray(suggestedEvents) ? suggestedEvents : []).filter((suggestion, index, suggestions) => (
-      !existingEvents.some((event) => isMatchingMotionEvent(event, suggestion))
-      && !suggestions.slice(0, index).some((prior) => isMatchingMotionEvent(prior, suggestion))
-    ));
-    if (!additions.length) return selectedSession;
-    const eventTimeline = [...existingEvents, ...additions].sort((a, b) => Number(a.time_s) - Number(b.time_s));
-    const updated = await base44.entities.Session.update(selectedSession.id, { event_timeline: eventTimeline });
-    const nextSession = { ...updated, event_timeline: eventTimeline };
-    setSelectedSession(nextSession);
-    setSessions((existing) => existing.map((session) => (
-      session.id === nextSession.id ? { ...session, event_timeline: eventTimeline } : session
-    )));
-    return nextSession;
-  };
 
   const seekVideoTo = useCallback((timeS, shouldPlay = false, waitForSeek = false) => {
     const video = videoRef.current;
@@ -787,16 +744,25 @@ export default function SessionReviewPlayer() {
           </div>
         )}
 
-        <LocalMotionAnalysisPanel
-          videoSrc={videoSrc}
-          videoDuration={videoDuration}
-          videoTime={videoTime}
-          videoPlaying={videoPlaying}
-          selectedSession={selectedSession}
-          onSeek={(timeS) => seekVideoTo(timeS, false, true)}
-          onSaveSummary={handleSaveMotionSummary}
-          onAcceptSuggestions={handleAcceptMotionSuggestions}
-        />
+        <div className="rounded-xl border border-primary/20 bg-primary/[0.05] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <Activity className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Motion Processing Moved to Motion Lab</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Review Player now concentrates on playback, saved motion evidence, and timeline confirmation. Configure or re-run local detection in Motion Lab.
+                </p>
+              </div>
+            </div>
+            <Link
+              to={`/motion-lab${selectedSession?.id ? `?session=${encodeURIComponent(selectedSession.id)}` : ""}`}
+              className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+            >
+              Open Motion Lab
+            </Link>
+          </div>
+        </div>
 
         {selectedSession?.motion_analysis_summary && (
           <SavedMotionSummaryCard

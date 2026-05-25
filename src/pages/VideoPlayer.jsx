@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import PageHeader from "../components/PageHeader";
 import VideoSyncPlayer from "../components/VideoSyncPlayer";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { RefreshCw } from "lucide-react";
+import { Activity, RefreshCw } from "lucide-react";
 import moment from "moment";
 
 export default function VideoPlayer() {
@@ -66,6 +67,15 @@ export default function VideoPlayer() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Select Record</p>
             <div className="flex flex-wrap items-center gap-2">
+              {recordType === "session" && selectedId && (
+                <Link
+                  to={`/motion-lab?session=${encodeURIComponent(selectedId)}`}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15"
+                >
+                  <Activity className="h-3.5 w-3.5" />
+                  Analyze in Motion Lab
+                </Link>
+              )}
               {selectedId && (
                 <button
                   type="button"

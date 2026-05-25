@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Star, Trash2, Heart, Clock, Zap, Pencil, XCircle, Clapperboard } from "lucide-react";
+import { Activity, ArrowLeft, Star, Trash2, Heart, Clock, Zap, Pencil, XCircle, Clapperboard } from "lucide-react";
 import AITagSuggester from "../components/AITagSuggester";
 import AIChat from "../components/AIChat";
 import SessionExportButton from "../components/SessionExportButton";
@@ -479,6 +479,15 @@ export default function SessionDetail() {
         </div>
         <Button variant="ghost" size="icon" onClick={() => navigate(`/sessions/${id}/edit`)}>
           <Pencil className="w-5 h-5 text-muted-foreground" />
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="hidden gap-1.5 md:inline-flex"
+          onClick={() => navigate(`/motion-lab?session=${encodeURIComponent(s.id)}`)}
+        >
+          <Activity className="h-3.5 w-3.5" />
+          Motion Lab
         </Button>
         <SessionExportButton session={s} timelineRows={timelineRows} />
         <Button variant="ghost" size="icon" onClick={toggleFav}>

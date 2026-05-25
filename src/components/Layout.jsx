@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { LayoutDashboard, List, PlusCircle, GitCompare, TrendingUp, Waves, ScanSearch, GitMerge, LineChart, Menu, X, UserCircle, Grid3x3, Clapperboard, Music, BarChart2, FlaskConical, BookOpen, Radio, Settings2 } from "lucide-react";
+import { LayoutDashboard, List, PlusCircle, GitCompare, TrendingUp, Waves, ScanSearch, GitMerge, LineChart, Menu, X, UserCircle, Grid3x3, Clapperboard, Music, BarChart2, FlaskConical, BookOpen, Radio, Settings2, Activity } from "lucide-react";
 import InstallAppButton from "./InstallAppButton";
 import BackgroundJobStatusTray from "./BackgroundJobStatusTray";
 
@@ -20,6 +20,7 @@ const navItems = [
 { path: "/correlations", icon: Grid3x3, label: "Correlations" },
 { path: "/video", icon: Clapperboard, label: "Video Sync" },
 { path: "/review-player", icon: Clapperboard, label: "Review Player" },
+{ path: "/motion-lab", icon: Activity, label: "Motion Lab" },
 { path: "/library", icon: Music, label: "Audio Library" },
 { path: "/analytics", icon: BarChart2, label: "Analytics" },
 { path: "/modeler", icon: FlaskConical, label: "Predictive Modeler" },

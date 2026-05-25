@@ -7,6 +7,8 @@ import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { SESSION_CONTEXT_GROUNDING_RULE, structuredSessionContextForAI } from "@/lib/sessionContext";
+import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
+import { buildSessionAIContentMeta, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 function buildSessionContext(session, timelineRows) {
   const hrMin = timelineRows.length ? Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))) : null;
   const hrMax = timelineRows.length ? Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))) : null;
@@ -55,28 +57,12 @@ function buildSessionContext(session, timelineRows) {
 }
 
 function buildWarmMotionEvidence(session) {
-  const motion = session.motion_analysis_summary;
-  if (!motion) return "";
-  const rhythm = motion.hand_movement_summary;
-  const details = [
-    motion.left_lower_body_average_activity != null ? `Left foot / leg average activity: ${motion.left_lower_body_average_activity}` : null,
-    motion.right_lower_body_average_activity != null ? `Right foot / leg average activity: ${motion.right_lower_body_average_activity}` : null,
-    motion.hand_average_activity != null ? `Hand average activity: ${motion.hand_average_activity}` : null,
-    motion.asymmetry_summary
-      ? `Lower-body asymmetry: average index ${motion.asymmetry_summary.averageIndex}; ${motion.asymmetry_summary.predominantSide === "balanced" ? "no clear predominance" : `${motion.asymmetry_summary.predominantSide} predominance in ${motion.asymmetry_summary.predominantPct}% of active paired windows`}.`
-      : null,
-    rhythm?.reliability === "moderate" && rhythm.movement_cycles_per_minute_estimate != null
-      ? `Estimated hand-movement cadence proxy: approximately ${rhythm.movement_cycles_per_minute_estimate} movement cycles per minute; pauses of at least two seconds: ${rhythm.pause_count}.`
-      : null,
-    ...(motion.findings || [])
-      .filter((finding) => !finding.startsWith("Repeated hand-movement oscillations support"))
-      .slice(0, 5),
-  ].filter(Boolean);
-  if (!details.length) return "";
+  const evidence = getMotionEvidenceSummary(session);
+  if (!evidence.hasAnyMotionEvidence) return "";
   return `
 
-REVIEWED MEDIA-DERIVED MOTION SUMMARY (observational evidence only):
-${details.map((detail) => `- ${detail}`).join("\n")}
+REVIEWED MEDIA-DERIVED MOTION EVIDENCE (observational evidence only):
+${getMotionEvidenceDigest(session)}
 
 MOTION INTERPRETATION RULES:
 - This summary contains compact locally derived movement signals, not raw video or raw landmarks.
@@ -191,6 +177,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
   const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(session[analysisField] ?? null);
   const [error, setError] = useState("");
+  const resultStale = isSessionAIContentStale(result, session);
 
   useEffect(() => {
     setResult(session[analysisField] ?? null);
@@ -227,7 +214,11 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
         if (cancelled) return;
 
         const parsed = normalizeSessionAnalysis(completedJob.result);
-        setResult(parsed);
+        const storedResult = {
+          ...parsed,
+          _meta: buildSessionAIContentMeta(session, session[analysisField]?._meta),
+        };
+        setResult(storedResult);
         setJobStatus({
           ...completedJob,
           progress: {
@@ -238,7 +229,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
             message: "Recovered complete analysis; saving it back to the session…",
           },
         });
-        await base44.entities.Session.update(session.id, { [analysisField]: parsed });
+        await base44.entities.Session.update(session.id, { [analysisField]: storedResult });
       } catch (err) {
         if (!cancelled) {
           console.warn(`${analysisLabel} reconnect skipped:`, err);
@@ -608,7 +599,11 @@ Provide ${isTechnical
     });
 
     const parsed = normalizeSessionAnalysis(completedJob.result);
-    setResult(parsed);
+    const storedResult = {
+      ...parsed,
+      _meta: buildSessionAIContentMeta(session, session[analysisField]?._meta),
+    };
+    setResult(storedResult);
     setJobStatus({
       ...completedJob,
       progress: {
@@ -619,7 +614,7 @@ Provide ${isTechnical
         message: "Saving analysis to the session…",
       },
     });
-    await base44.entities.Session.update(session.id, { [analysisField]: parsed });
+    await base44.entities.Session.update(session.id, { [analysisField]: storedResult });
     } catch (err) {
       console.error(`${analysisLabel} failed:`, err);
       setError(aiErrorMessage(err));
@@ -687,12 +682,25 @@ Provide ${isTechnical
         if (result.recommendations?.length) { sections.push({ label: "Recommendations", color: "accent", icon: <Lightbulb className="w-3.5 h-3.5" />, items: result.recommendations, start: idx }); }
 
         return (
-          <TTSReader
-            sessionId={session.id}
-            title={analysisTitle}
-            sessionDate={session.date}
-            paragraphs={paras}
-            renderParagraph={(text, paraIdx, isActive, isBuffering) => {
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+              <span>
+                {result?._meta?.last_generated_at
+                  ? `Generated ${formatGeneratedAt(result._meta.last_generated_at)}`
+                  : "Generated time unavailable"}
+              </span>
+              {resultStale && (
+                <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 font-semibold text-amber-300">
+                  May be stale - newer saved evidence exists
+                </span>
+              )}
+            </div>
+            <TTSReader
+              sessionId={session.id}
+              title={analysisTitle}
+              sessionDate={session.date}
+              paragraphs={paras}
+              renderParagraph={(text, paraIdx, isActive, isBuffering) => {
               // Find which section this paragraph belongs to
               let section = sections[0];
               for (const sec of sections) {
@@ -713,8 +721,9 @@ Provide ${isTechnical
                   {text}
                 </li>
               );
-            }}
-          />
+              }}
+            />
+          </div>
         );
       })()}
     </div>

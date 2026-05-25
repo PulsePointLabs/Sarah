@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import PageHeader from "../components/PageHeader";
 import SessionCard from "../components/SessionCard";
 import {
+  Activity,
   AlertTriangle,
   Brain,
   CheckCircle2,
@@ -35,6 +36,8 @@ import {
 import RoutinePatternAnalysis from "../components/RoutinePatternAnalysis";
 import { computeAISessionScore } from "@/utils/sessionScore";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { hasAnyMotionEvidence, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
+import { buildProfileExportFilename } from "@/utils/exportFilenames";
 
 const ALL_METHODS = ["Manual", "Silicone Sleeve", "Coyote E-Stim", "TENS", "Foley Catheter"];
 const BUILD_TYPES = ["Gradual", "Stepwise", "Spike", "Plateau-heavy", "Erratic", "Other"];
@@ -182,6 +185,7 @@ export default function Sessions() {
     const recentAvg = avg(recent.map((session) => scoreOf(session) ?? session.satisfaction ?? session.intensity));
     const previousAvg = avg(previous.map((session) => scoreOf(session) ?? session.satisfaction ?? session.intensity));
     const best = [...sessions].sort((a, b) => (scoreOf(b) ?? b.satisfaction ?? 0) - (scoreOf(a) ?? a.satisfaction ?? 0))[0];
+    const motion = summarizeMotionEvidenceCoverage(sessions);
 
     return {
       avgScore: avg(scored.map(scoreOf)),
@@ -192,6 +196,7 @@ export default function Sessions() {
       recentDelta: recentAvg != null && previousAvg != null ? recentAvg - previousAvg : null,
       scored,
       withHr,
+      motion,
     };
   }, [sessions]);
 
@@ -209,6 +214,7 @@ export default function Sessions() {
     { value: "video", label: "Video", icon: Video, count: sessions.filter(hasVideo).length },
     { value: "emg", label: "EMG", icon: HeartPulse, count: sessions.filter(hasEMG).length },
     { value: "discomfort", label: "Discomfort", icon: AlertTriangle, count: sessions.filter(hasDiscomfort).length },
+    { value: "motion", label: "Motion", icon: Activity, count: sessions.filter(hasAnyMotionEvidence).length },
   ], [sessions, stats.needsReview.length]);
 
   const activeFilterCount = [
@@ -232,6 +238,7 @@ export default function Sessions() {
       if (viewMode === "video") return hasVideo(session);
       if (viewMode === "emg") return hasEMG(session);
       if (viewMode === "discomfort") return hasDiscomfort(session);
+      if (viewMode === "motion") return hasAnyMotionEvidence(session);
       return true;
     };
 
@@ -423,7 +430,7 @@ ${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "sessions.csv";
+    a.download = buildProfileExportFilename({ outputType: "Sessions", extension: "csv" });
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -485,6 +492,11 @@ ${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
       />
 
       <div className="space-y-4 px-4 pb-6">
+        {stats.motion.any > 0 && (
+          <div className="rounded-xl border border-primary/20 bg-primary/[0.05] px-4 py-3 text-xs text-muted-foreground">
+            <span className="font-semibold text-primary">Motion evidence:</span> {stats.motion.any} session{stats.motion.any === 1 ? "" : "s"} · {stats.motion.saved} saved telemetry · {stats.motion.promoted} with promoted findings
+          </div>
+        )}
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <SummaryTile
             icon={Sparkles}

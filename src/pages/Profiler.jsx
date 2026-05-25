@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
-import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp } from "lucide-react";
+import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
 import TTSReader from "../components/TTSReader";
 import { normalizeJournalEntry } from "@/lib/journalEntry";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionContextFactorLabels } from "@/lib/sessionContext";
+import { getMotionEvidenceSummary, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
+import { buildProfileAIContentMeta, formatGeneratedAt, isProfileAIContentStale } from "@/utils/aiContentMetadata";
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -65,7 +67,7 @@ function buildProfileEvidenceDigest(sessions) {
   const withHr = sessions.filter((s) => s.avg_hr || s.max_hr || s.hr_at_climax);
   const climaxSessions = sessions.filter((s) => !s.no_climax && s.climax_offset_s != null);
   const favorites = sessions.filter((s) => s.is_favorite).length;
-  const withMotionAnalysis = sessions.filter((s) => s.motion_analysis_summary);
+  const motionCoverage = summarizeMotionEvidenceCoverage(sessions);
   const topRated = [...sessions]
     .sort((a, b) => ((b.satisfaction || 0) + (b.intensity || 0)) - ((a.satisfaction || 0) + (a.intensity || 0)))
     .slice(0, 5)
@@ -111,7 +113,7 @@ function buildProfileEvidenceDigest(sessions) {
 
   return [
     `Coverage: ${sessions.length} sessions, ${withHr.length} with HR, ${climaxSessions.length} with climax timing, ${favorites} favorites, ${sessions.filter((s) => s.no_climax).length} no-climax sessions.`,
-    withMotionAnalysis.length ? `Reviewed media-derived movement evidence: ${withMotionAnalysis.length} sessions include saved local motion summaries; treat side-specific activity, forefoot/toe-region activity, and motion timing as observational evidence, not mechanism. Activity scores are normalized within each analyzed video window and are not directly comparable absolute magnitudes across recordings.` : null,
+    motionCoverage.any ? `Motion evidence is available for ${motionCoverage.any} sessions: ${motionCoverage.saved} with saved motion telemetry, ${motionCoverage.promoted} with promoted motion-derived timeline events, and ${motionCoverage.both} with both. Saved telemetry counts as motion evidence even when no reviewed finding has been promoted. Treat movement evidence as observational, not mechanism; activity scores are normalized within each analyzed window and are not absolute magnitudes across recordings.` : null,
     `HR: avg session HR ${fmtAvg(avg(sessions.map((s) => s.avg_hr)), 0)}, avg max HR ${fmtAvg(avg(sessions.map((s) => s.max_hr)), 0)}, avg HR at climax ${fmtAvg(avg(sessions.map((s) => s.hr_at_climax)), 0)}.`,
     `Ratings: avg satisfaction ${fmtAvg(avg(sessions.map((s) => s.satisfaction)))}, avg intensity ${fmtAvg(avg(sessions.map((s) => s.intensity)))}, avg build quality ${fmtAvg(avg(sessions.map((s) => s.build_quality)))}.`,
     topRated ? `Highest-rated evidence: ${topRated}` : null,
@@ -242,6 +244,7 @@ function compactSessionLine(s) {
     .map((e) => `${fmtSec(e.time_s)}${e.source === "motion_derived" ? " [motion-derived observation]" : ""} ${briefText(e.note, 70)}`)
     .join(" | ");
   const motion = s.motion_analysis_summary;
+  const motionSummary = getMotionEvidenceSummary(s);
   const motionQuality = motion?.quality_indicators
     ? [
       motion.quality_indicators.left_lower_body ? `left quality ${motion.quality_indicators.left_lower_body}` : null,
@@ -249,23 +252,27 @@ function compactSessionLine(s) {
       motion.quality_indicators.hands ? `hand quality ${motion.quality_indicators.hands}` : null,
     ].filter(Boolean).join(", ")
     : null;
-  const motionEvidence = motion
+  const motionEvidence = motionSummary.hasAnyMotionEvidence
     ? `media motion ${[
-      motion.left_lower_body_average_activity != null ? `left ${motion.left_lower_body_average_activity}` : null,
-      motion.right_lower_body_average_activity != null ? `right ${motion.right_lower_body_average_activity}` : null,
-      motion.left_forefoot_average_activity != null ? `left forefoot/toe-region ${motion.left_forefoot_average_activity}` : null,
-      motion.right_forefoot_average_activity != null ? `right forefoot/toe-region ${motion.right_forefoot_average_activity}` : null,
-      motion.hand_average_activity != null ? `hands ${motion.hand_average_activity}` : null,
-      motion.asymmetry_summary
+      motionSummary.hasSavedTelemetry && !motionSummary.hasPromotedEvents ? "saved telemetry available; no promoted findings yet" : null,
+      !motionSummary.hasSavedTelemetry && motionSummary.hasPromotedEvents ? "promoted motion-derived findings available without saved telemetry summary" : null,
+      motionSummary.hasSavedTelemetry && motionSummary.hasPromotedEvents ? "saved telemetry plus promoted findings available" : null,
+      motion?.left_lower_body_average_activity != null ? `left ${motion.left_lower_body_average_activity}` : null,
+      motion?.right_lower_body_average_activity != null ? `right ${motion.right_lower_body_average_activity}` : null,
+      motion?.left_forefoot_average_activity != null ? `left forefoot/toe-region ${motion.left_forefoot_average_activity}` : null,
+      motion?.right_forefoot_average_activity != null ? `right forefoot/toe-region ${motion.right_forefoot_average_activity}` : null,
+      motion?.hand_average_activity != null ? `hands ${motion.hand_average_activity}` : null,
+      motion?.asymmetry_summary
         ? `asymmetry average index ${motion.asymmetry_summary.averageIndex}, peak ${motion.asymmetry_summary.peakIndex}, ${motion.asymmetry_summary.predominantSide === "balanced" ? "no clear side predominance" : `${motion.asymmetry_summary.predominantSide} predominance in ${motion.asymmetry_summary.predominantPct}% of active paired windows`}`
         : null,
-      motion.hand_movement_summary?.reliability === "moderate" && motion.hand_movement_summary.movement_cycles_per_minute_estimate != null
+      motion?.hand_movement_summary?.reliability === "moderate" && motion.hand_movement_summary.movement_cycles_per_minute_estimate != null
         ? `estimated hand-movement cadence ${motion.hand_movement_summary.movement_cycles_per_minute_estimate} movement cycles/min with ${motion.hand_movement_summary.pause_count} pauses of at least two seconds (observational proxy, not confirmed stroke speed)`
         : null,
       motionQuality ? `confidence/reliability ${motionQuality}` : null,
-      (motion.findings || []).length
+      (motion?.findings || []).length
         ? briefText(motion.findings.filter((finding) => !finding.startsWith("Repeated hand-movement oscillations support")).join(" "), 140)
         : null,
+      motionSummary.promotedEventCount ? `${motionSummary.promotedEventCount} promoted motion-derived events` : null,
     ].filter(Boolean).join(", ")}`
     : null;
   return [
@@ -460,6 +467,7 @@ function AIProfilePanel({ sessions, userProfile, journals }) {
   const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
+  const profileStale = isProfileAIContentStale(result, sessions);
 
   useEffect(() => {
     base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
@@ -506,8 +514,12 @@ function AIProfilePanel({ sessions, userProfile, journals }) {
 
         const parsed = normalizeAIProfileResult(completedJob.result);
         if (!parsed?.profile_overview && !parsed?.arousal_physiology?.length) return;
-        setResult(parsed);
-        await saveClusterAnalysisPatch({ result: parsed }, sessions.length);
+        const storedResult = {
+          ...parsed,
+          _meta: buildProfileAIContentMeta(sessions, result?._meta),
+        };
+        setResult(storedResult);
+        await saveClusterAnalysisPatch({ result: storedResult }, sessions.length);
       } catch (err) {
         if (!cancelled) console.warn("AI profile reconnect skipped:", err);
       } finally {
@@ -670,9 +682,13 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
     if (!parsed?.profile_overview && !parsed?.arousal_physiology?.length) {
       throw new Error("Claude returned an empty profile response. Try again in a minute; the rate limit may still be cooling down.");
     }
-    setResult(parsed);
+    const storedResult = {
+      ...parsed,
+      _meta: buildProfileAIContentMeta(sessions, result?._meta),
+    };
+    setResult(storedResult);
 
-    await saveClusterAnalysisPatch({ result: parsed }, sessions.length);
+    await saveClusterAnalysisPatch({ result: storedResult }, sessions.length);
     } catch (err) {
       console.error("AI profile generation failed:", err);
       setError(aiErrorMessage(err));
@@ -716,6 +732,19 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
             : <><Brain className="w-3 h-3" />{result ? "Re-generate" : "Generate Profile"}</>}
         </Button>
       </div>
+
+      {result && (
+        <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+          <span>{result?._meta?.last_generated_at ? `Generated ${formatGeneratedAt(result._meta.last_generated_at)}` : "Generated time unavailable"}</span>
+          <span>Source sessions: {result?._meta?.source_session_count ?? sessions.length}</span>
+          <span>Motion evidence sessions: {result?._meta?.motion_evidence_session_count ?? summarizeMotionEvidenceCoverage(sessions).any}</span>
+          {profileStale && (
+            <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 font-semibold text-amber-300">
+              May be stale - newer saved evidence exists
+            </span>
+          )}
+        </div>
+      )}
 
       {sessions.length < 2 && (
         <p className="text-xs text-muted-foreground flex items-center gap-1.5">
@@ -790,6 +819,7 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
   const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
+  const profileStale = isProfileAIContentStale(result, sessions);
 
   useEffect(() => {
     base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
@@ -838,8 +868,12 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
 
         const parsed = normalizeAnatomicalProfileResult(completedJob.result);
         if (!parsed?.overview) return;
-        setResult(parsed);
-        await saveClusterAnalysisPatch({ anatomical_physiological_profile_result: parsed }, sessions.length);
+        const storedResult = {
+          ...parsed,
+          _meta: buildProfileAIContentMeta(sessions, result?._meta),
+        };
+        setResult(storedResult);
+        await saveClusterAnalysisPatch({ anatomical_physiological_profile_result: storedResult }, sessions.length);
       } catch (err) {
         if (!cancelled) console.warn("Anatomical physiological profile reconnect skipped:", err);
       } finally {
@@ -919,8 +953,12 @@ Write directly to the person in clear, clinically grounded language. Favor meani
 
       const parsed = normalizeAnatomicalProfileResult(typeof raw === "string" ? JSON.parse(raw) : raw);
       if (!parsed?.overview) throw new Error("Claude returned an empty anatomical and physiological profile.");
-      setResult(parsed);
-      await saveClusterAnalysisPatch({ anatomical_physiological_profile_result: parsed }, sessions.length);
+      const storedResult = {
+        ...parsed,
+        _meta: buildProfileAIContentMeta(sessions, result?._meta),
+      };
+      setResult(storedResult);
+      await saveClusterAnalysisPatch({ anatomical_physiological_profile_result: storedResult }, sessions.length);
     } catch (err) {
       console.error("Anatomical physiological profile generation failed:", err);
       setError(aiErrorMessage(err));
@@ -967,6 +1005,19 @@ Write directly to the person in clear, clinically grounded language. Favor meani
             : <><Activity className="w-3 h-3" />{result ? "Re-generate" : "Generate A&P"}</>}
         </Button>
       </div>
+
+      {result && (
+        <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+          <span>{result?._meta?.last_generated_at ? `Generated ${formatGeneratedAt(result._meta.last_generated_at)}` : "Generated time unavailable"}</span>
+          <span>Source sessions: {result?._meta?.source_session_count ?? sessions.length}</span>
+          <span>Motion evidence sessions: {result?._meta?.motion_evidence_session_count ?? summarizeMotionEvidenceCoverage(sessions).any}</span>
+          {profileStale && (
+            <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 font-semibold text-amber-300">
+              May be stale - newer saved evidence exists
+            </span>
+          )}
+        </div>
+      )}
 
       <CompactError message={error} />
       {loading && <ProfilerJobStatus job={jobStatus} fallback="The anatomical and physiological profile is running in the background..." />}
@@ -1485,6 +1536,7 @@ export default function Profiler() {
   const [userProfile, setUserProfile] = useState(null);
   const [journals, setJournals] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshingEvidence, setRefreshingEvidence] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -1517,6 +1569,16 @@ export default function Profiler() {
     })();
   }, []);
 
+  const refreshEvidence = async () => {
+    setRefreshingEvidence(true);
+    try {
+      const all = await base44.entities.Session.list("-date", 300);
+      setSessions(all);
+    } finally {
+      setRefreshingEvidence(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -1527,9 +1589,17 @@ export default function Profiler() {
 
   return (
     <div className="px-4 py-6 pb-24 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">AI Profiler</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">{sessions.length} sessions · {Object.keys(allTimelines).length} with HR data</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">AI Profiler</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {sessions.length} sessions · {Object.keys(allTimelines).length} with HR data · {summarizeMotionEvidenceCoverage(sessions).any} with motion evidence
+          </p>
+        </div>
+        <Button size="sm" variant="outline" onClick={refreshEvidence} disabled={refreshingEvidence} className="gap-1.5 text-xs">
+          <RefreshCw className={`h-3.5 w-3.5 ${refreshingEvidence ? "animate-spin" : ""}`} />
+          {refreshingEvidence ? "Refreshing evidence..." : "Refresh evidence"}
+        </Button>
       </div>
 
       <AIProfilePanel sessions={sessions} userProfile={userProfile} journals={journals} />

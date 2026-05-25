@@ -17,6 +17,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import moment from "moment";
 import { gradeFromPct } from "@/utils/sessionScore";
+import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 
 const num = (value) => {
   const parsed = Number(value);
@@ -83,6 +84,7 @@ export default function SessionCard({ session, selectable, selected, onSelect })
     session.emg_general_notes || session.emg_left_placement_notes || session.emg_right_placement_notes ||
     (session.emg_placement_photos || []).length > 0;
   const signalLine = buildSignalLine(session);
+  const motionEvidence = getMotionEvidenceSummary(session);
   const newerMetrics = [
     session.release_completeness,
     session.arousal_depth,
@@ -135,6 +137,26 @@ export default function SessionCard({ session, selectable, selected, onSelect })
           {hasVideo(session) && (
             <span className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
               <Video className="w-2.5 h-2.5" /> VID
+            </span>
+          )}
+          {motionEvidence.hasAnyMotionEvidence && (
+            <span
+              className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${
+                motionEvidence.hasSavedTelemetry && motionEvidence.hasPromotedEvents
+                  ? "border-primary/35 bg-primary/15 text-primary"
+                  : motionEvidence.hasSavedTelemetry
+                    ? "border-amber-400/30 bg-amber-400/10 text-amber-300"
+                    : "border-violet-400/30 bg-violet-400/10 text-violet-300"
+              }`}
+              title={motionEvidence.hasSavedTelemetry && motionEvidence.hasPromotedEvents
+                ? "Saved motion telemetry and reviewed motion-derived findings are available."
+                : motionEvidence.hasSavedTelemetry
+                  ? "Saved motion telemetry exists, but no reviewed motion findings have been promoted yet."
+                  : "Reviewed motion-derived findings are present in the event timeline."}
+            >
+              {motionEvidence.hasSavedTelemetry && motionEvidence.hasPromotedEvents
+                ? "Motion Saved + Events"
+                : motionEvidence.hasSavedTelemetry ? "Telemetry Only" : "Motion Events"}
             </span>
           )}
           {session.is_quick_entry && <Zap className="w-4 h-4 text-primary" />}
@@ -199,6 +221,7 @@ export default function SessionCard({ session, selectable, selected, onSelect })
         <DataPill icon={Heart} label="HR" active={Boolean(session.avg_hr || session.max_hr)} tone="primary" />
         <DataPill icon={Activity} label={`${eventCount} Events`} active={eventCount > 0} />
         <DataPill icon={Brain} label="AI" active={Boolean(aiSummary || gradeInfo)} tone="primary" />
+        {motionEvidence.hasSavedTelemetry && <DataPill icon={Activity} label="Motion Saved" active tone="primary" />}
         <DataPill icon={FileText} label={`${newerMetrics}/8 Metrics`} active={newerMetrics >= 5} />
         {hasDiscomfort(session) && <DataPill icon={AlertTriangle} label="Comfort" active tone="primary" />}
       </div>

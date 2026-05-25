@@ -17,6 +17,7 @@ import { base44 } from "@/api/base44Client";
 import SavedMotionSummaryCard from "./SavedMotionSummaryCard";
 import ClimaxMotionSnapshotCard from "./ClimaxMotionSnapshotCard";
 import MotionPlaybackReadout from "./MotionPlaybackReadout";
+import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 
 function getCategoryMeta(value) {
   return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -940,7 +941,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
   }, [chartData, xDomain]);
 
   const savedMotionSummary = !isExploration ? session.motion_analysis_summary : null;
-  const hasPromotedMotionEvents = events.some((event) => event.source === "motion_derived");
+  const motionEvidence = !isExploration ? getMotionEvidenceSummary(session) : null;
   const visibleEventEntries = useMemo(() => events
     .map((ev, i) => ({ ev, i }))
     .filter(({ ev }) => (
@@ -1678,7 +1679,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
 
             {savedMotionSummary && (
               <>
-                {!hasPromotedMotionEvents && (
+                {motionEvidence?.hasSavedTelemetry && !motionEvidence?.hasPromotedEvents && (
                   <div className="rounded-lg border border-amber-400/25 bg-amber-400/[0.06] px-3 py-2 text-[11px] leading-relaxed text-amber-200">
                     Motion telemetry is saved for this session, but no reviewed motion candidates have been promoted to timeline events. The Movement and Context filters show promoted event notes only.
                   </div>

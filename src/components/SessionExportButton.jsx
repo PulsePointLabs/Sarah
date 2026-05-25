@@ -7,6 +7,8 @@ import {
 import moment from "moment";
 import { jsPDF } from "jspdf";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
+import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
+import { buildExportMetadataHeader, buildSessionExportFilename } from "@/utils/exportFilenames";
 
 function getCategoryLabel(value) {
   const cat = EVENT_CATEGORIES.find((c) => c.value === value);
@@ -22,7 +24,14 @@ function fmtMmSs(s) {
 
 function buildCSV(session, timelineRows) {
   const s = session;
-  const lines = [];
+  const motion = getMotionEvidenceSummary(s);
+  const lines = [
+    "=== PULSEPOINT EXPORT METADATA ===",
+    `Export Type,Session Data CSV`,
+    `Generated,${moment().format("YYYY-MM-DD HH:mm")}`,
+    `Motion Evidence,${motion.hasAnyMotionEvidence ? (motion.hasSavedTelemetry && motion.hasPromotedEvents ? "Saved telemetry and promoted events" : motion.hasSavedTelemetry ? "Saved telemetry only" : "Promoted events only") : "None"}`,
+    "",
+  ];
 
   // Session summary header
   lines.push("=== SESSION SUMMARY ===");
@@ -115,7 +124,16 @@ function buildCSV(session, timelineRows) {
 
 function buildTextReport(session, timelineRows) {
   const s = session;
-  const lines = [];
+  const motion = getMotionEvidenceSummary(s);
+  const evidenceStatus = motion.hasAnyMotionEvidence
+    ? (motion.hasSavedTelemetry && motion.hasPromotedEvents ? "Saved telemetry and promoted events" : motion.hasSavedTelemetry ? "Saved telemetry only" : "Promoted events only")
+    : "None";
+  const lines = [buildExportMetadataHeader({
+    type: "Session Report",
+    session: s,
+    generatedAt: new Date(),
+    evidenceStatus,
+  })];
   const divider = "─".repeat(50);
 
   lines.push(`SESSION REPORT — ${moment(s.date).format("MMMM D, YYYY")}`);
@@ -643,16 +661,23 @@ function downloadFile(content, filename, mimeType) {
 export default function SessionExportButton({ session, timelineRows = [] }) {
   const [open, setOpen] = useState(false);
   const [generatingPDF, setGeneratingPDF] = useState(false);
-  const dateSlug = moment(session.date).format("YYYY-MM-DD");
   const hasAI = !!(session.ai_analysis || session.ai_cascade);
 
   const handleCSV = () => {
-    downloadFile(buildCSV(session, timelineRows), `session-${dateSlug}.csv`, "text/csv");
+    downloadFile(
+      buildCSV(session, timelineRows),
+      buildSessionExportFilename({ session, outputType: "SessionData", extension: "csv" }),
+      "text/csv",
+    );
     setOpen(false);
   };
 
   const handleText = () => {
-    downloadFile(buildTextReport(session, timelineRows), `session-${dateSlug}.txt`, "text/plain");
+    downloadFile(
+      buildTextReport(session, timelineRows),
+      buildSessionExportFilename({ session, outputType: "SessionReport", extension: "txt" }),
+      "text/plain",
+    );
     setOpen(false);
   };
 
@@ -662,7 +687,7 @@ export default function SessionExportButton({ session, timelineRows = [] }) {
     // Defer so UI can update before the synchronous PDF build
     setTimeout(() => {
       const doc = buildPDF(session, timelineRows);
-      doc.save(`session-${dateSlug}.pdf`);
+      doc.save(buildSessionExportFilename({ session, outputType: "SessionReport", extension: "pdf" }));
       setGeneratingPDF(false);
     }, 50);
   };
