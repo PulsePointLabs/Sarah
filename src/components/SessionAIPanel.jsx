@@ -77,6 +77,14 @@ EVIDENCE PRECEDENCE HIERARCHY FOR MOVEMENT:
 - Treat motion-derived evidence as observational only. Do not infer intent, arousal phase, muscle force, neurological meaning, or physiological mechanism from motion alone.`;
 }
 
+const PERSONAL_ANATOMY_LANGUAGE_RULE = `
+PERSONAL ANATOMY LANGUAGE RULE:
+- When describing this person's observed body state, session evidence, response pattern, or supported anatomical finding, use direct second-person phrasing: "your penis," "your shaft," "your glans," "your foreskin" when applicable, "your pelvic floor," "your lower body," "your feet," "your hand movement," "your heart rate," and "your recovery pattern."
+- Avoid detached session-specific phrasing such as "the penis," "the shaft," "the glans," "the body," "the subject," "the participant," "the patient," or "the individual."
+- Generic educational anatomy may still use general phrasing when it is truly explaining anatomy rather than describing this session. For example, "The penis is supplied by autonomic and somatic pathways" is acceptable as education; "Your penis remained visibly engaged during this build phase" is required for the person's observed response.
+- Keep this direct language clinically grounded and evidence-based. It should feel personally attentive, not euphemistic, eroticized, or speculative.
+`;
+
 function getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
 }
@@ -428,17 +436,17 @@ Factor the journal into your analysis — where the person's subjective experien
         ? `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session as a rich, cohesive physiological story. Integrate arousal physiology, anatomy, heart rate data, stimulation technique, event notes, and subjective experience. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 TARGET SESSION ANALYSIS STYLE:
-- Keep all references to the person's anatomy and physiological experience personally addressed: say "your body," "your penis," "your feet," and "your response" rather than detached phrasing such as "the body" or "the penis," unless a general anatomical statement genuinely requires it.
 - Begin with a substantial overview that synthesizes the session's outcome, heart-rate arc, stimulation context, notable physiology, and why the session behaved the way it did.
 - Then explain the session through meaningful physiological windows: baseline/entry state, build, plateaus or transitions, pre-climax when supported, climax or non-climax outcome, and recovery.
 - A window may be chronological when chronology explains the physiology. The point is not to avoid time; the point is to make each time window explain arousal state, autonomic loading, sensory input, technique effectiveness, or recovery.
 - Keep the older PulsePoint feel: detailed, insightful, physiology-forward, personally grounded, and useful for later comparison across sessions.
 - Do not flatten the analysis into generic observations or a short summary. This is a deep session interpretation.`
-        : `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session integrating arousal physiology, anatomy, heart rate data, event timeline, and subjective experience into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally. When contextually appropriate, prefer personalized embodied phrasing such as "your penis," "your erection," and "your body" over detached phrasing such as "the penis" or "the erection." Keep this natural, clinically grounded, and never forced. Let the narration feel warmly attentive and quietly familiar with the person's established patterns, noticing what stands out with natural human interest while staying grounded in the provided evidence.`}
+        : `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session integrating arousal physiology, anatomy, heart rate data, event timeline, and subjective experience into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally. Keep this natural, clinically grounded, and never forced. Let the narration feel warmly attentive and quietly familiar with the person's established patterns, noticing what stands out with natural human interest while staying grounded in the provided evidence.`}
 
 ${isTechnical ? groundingContext : ""}
 ${!isTechnical ? SESSION_CONTEXT_GROUNDING_RULE : ""}
 ${warmMotionEvidence}
+${PERSONAL_ANATOMY_LANGUAGE_RULE}
 
 PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — CONDITIONAL USE ONLY:"}
 - Only mention specific physiological phases (e.g. emission, expulsion, plateau) or anatomical structures (e.g. pudendal nerve, bulbocavernosus, prostatic urethra) when the session data — an event note, HR pattern, subjective metric, or logged sensation — gives you a concrete reason to do so. Never insert these as generic background explanation.
@@ -699,6 +707,7 @@ Provide ${isTechnical
               sessionId={session.id}
               title={analysisTitle}
               sessionDate={session.date}
+              sourceGeneratedAt={result?._meta?.last_generated_at}
               paragraphs={paras}
               renderParagraph={(text, paraIdx, isActive, isBuffering) => {
               // Find which section this paragraph belongs to

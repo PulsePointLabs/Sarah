@@ -25,6 +25,21 @@ const ttsCacheKey = (chunk, format, runtime, previousContext = "") =>
   `${runtime.cacheProfile}|${format}|${buildTTSInstructions(runtime.instructions, previousContext).trim()}|${chunk}`;
 const ttsExportStorageKey = (sessionId, title = "") =>
   `pulsepoint.ttsExport.${sessionId || String(title || "global").replace(/[^a-z0-9]+/gi, "_").slice(0, 80)}`;
+const ttsDownloadRecordKey = (sessionId, title = "") =>
+  `pulsepoint.ttsDownload.${String(`${sessionId || "global"}-${title || "analysis"}`).replace(/[^a-z0-9]+/gi, "_").slice(0, 120)}`;
+
+function formatDownloadTimestamp(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 function splitForTTS(text) {
   return splitIntoChunks(text, TTS_UNIT_MAX_CHARS);
@@ -238,7 +253,7 @@ function combineWavChunks(chunks) {
   };
 }
 
-export default function TTSReader({ paragraphs, renderParagraph, sessionId, title, sessionDate }) {
+export default function TTSReader({ paragraphs, renderParagraph, sessionId, title, sessionDate, sourceGeneratedAt }) {
   const [state, setState] = useState("idle"); // idle | buffering | playing | paused
   const [currentPara, setCurrentPara] = useState(-1);
   const [bufferingPara, setBufferingPara] = useState(-1); // which paragraph is currently fetching
@@ -247,6 +262,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
   const [requestStatus, setRequestStatus] = useState(null); // { type: "fetching"|"ok"|"error", msg: string }
   const [completedRender, setCompletedRender] = useState(null);
+  const [lastDownloadRecord, setLastDownloadRecord] = useState(null);
   const [currentWordIdx, setCurrentWordIdx] = useState(-1); // index of highlighted word in current para
   const [copied, setCopied] = useState(false);
 
@@ -268,6 +284,14 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const updateIntervalRef = useRef(null); // track update interval to clear it
   const renderProgressTimerRef = useRef(null);
   const copyContentRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      setLastDownloadRecord(JSON.parse(localStorage.getItem(ttsDownloadRecordKey(sessionId, title)) || "null"));
+    } catch {
+      setLastDownloadRecord(null);
+    }
+  }, [sessionId, title]);
 
   const copyOutput = async () => {
     const renderedText = copyContentRef.current?.innerText || "";
@@ -684,11 +708,21 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     }
   };
 
+  const saveDownloadRecord = (record) => {
+    try {
+      localStorage.setItem(ttsDownloadRecordKey(sessionId, title), JSON.stringify(record));
+    } catch {
+      // Download remains valid if local history storage is unavailable.
+    }
+    setLastDownloadRecord(record);
+  };
+
   const triggerRenderedDownload = async (rendered, displayTitle = getDownloadDisplayTitle(), exportFormat = runtimeRef.current.format, runtime = runtimeRef.current) => {
     if (!rendered?.file_url) throw new Error("Server render did not return an audio file");
+    const filename = rendered.filename || `${displayTitle.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase()}.${getTTSFileExtension(exportFormat)}`;
     const a = document.createElement("a");
     a.href = rendered.file_url;
-    a.download = rendered.filename || `${displayTitle.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase()}.${getTTSFileExtension(exportFormat)}`;
+    a.download = filename;
     a.click();
 
     await base44.entities.AudioExport.create({
@@ -702,6 +736,13 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       size: rendered.size,
     });
 
+    saveDownloadRecord({
+      downloaded_at: new Date().toISOString(),
+      source_generated_at: rendered.sourceGeneratedAt || sourceGeneratedAt || null,
+      title: displayTitle,
+      filename,
+      format: rendered.format || exportFormat,
+    });
     clearSavedExportJob();
     setCompletedRender(null);
     setRequestStatus({ type: "ok", msg: `Premium ${String(rendered.format || exportFormat).toUpperCase()} render downloaded` });
@@ -731,6 +772,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           ...rendered,
           displayTitle: saved.displayTitle || completedJob.meta?.title || getDownloadDisplayTitle(),
           exportFormat: rendered.format || saved.exportFormat || runtimeRef.current.format,
+          sourceGeneratedAt: saved.sourceGeneratedAt || completedJob.meta?.sourceGeneratedAt || null,
         });
         setRequestStatus({ type: "ok", msg: "Audio render finished on the server. Tap Download to save it." });
       }
@@ -768,6 +810,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
               ...job.result,
               displayTitle: saved.displayTitle || job.meta?.title || getDownloadDisplayTitle(),
               exportFormat: job.result.format || saved.exportFormat || runtimeRef.current.format,
+              sourceGeneratedAt: saved.sourceGeneratedAt || job.meta?.sourceGeneratedAt || null,
             });
             setRequestStatus({ type: "ok", msg: "Audio render finished while the app was away. Tap Download to save it." });
             return;
@@ -789,6 +832,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             displayTitle: job.meta?.title || getDownloadDisplayTitle(),
             exportFormat: runtimeRef.current.format,
             chunks: job.meta?.chunks || 0,
+            sourceGeneratedAt: job.meta?.sourceGeneratedAt || null,
           });
           resumeExportJob(job.id, job.meta || {});
         }
@@ -802,8 +846,19 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     };
   }, [sessionId, title]);
 
+  const downloadedForOlderOutput = Boolean(
+    sourceGeneratedAt &&
+    lastDownloadRecord &&
+    lastDownloadRecord.source_generated_at !== sourceGeneratedAt
+  );
+  const completedRenderForOlderOutput = Boolean(
+    sourceGeneratedAt &&
+    completedRender?.file_url &&
+    completedRender.sourceGeneratedAt !== sourceGeneratedAt
+  );
+
   const downloadAudio = async () => {
-    if (completedRender?.file_url) {
+    if (completedRender?.file_url && !completedRenderForOlderOutput) {
       try {
         setDownloading(true);
         await triggerRenderedDownload(
@@ -818,6 +873,11 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         setDownloading(false);
       }
       return;
+    }
+
+    if (completedRenderForOlderOutput) {
+      setCompletedRender(null);
+      clearSavedExportJob();
     }
 
     setDownloading(true);
@@ -851,8 +911,14 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         chunks: allChunks.length,
         source: "TTSReader",
         sessionId,
+        sourceGeneratedAt: sourceGeneratedAt || null,
       });
-      saveActiveExportJob(startedJob, { displayTitle, exportFormat, chunks: allChunks.length });
+      saveActiveExportJob(startedJob, {
+        displayTitle,
+        exportFormat,
+        chunks: allChunks.length,
+        sourceGeneratedAt: sourceGeneratedAt || null,
+      });
       const completedJob = await waitForBackgroundJob(startedJob.id, {
         intervalMs: 1200,
         onProgress: (job) => {
@@ -875,7 +941,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         renderProgressTimerRef.current = null;
       }
 
-      await triggerRenderedDownload(rendered, displayTitle, exportFormat, runtime);
+      await triggerRenderedDownload({ ...rendered, sourceGeneratedAt: sourceGeneratedAt || null }, displayTitle, exportFormat, runtime);
 
       setRequestStatus({ type: "ok", msg: `Premium ${String(rendered.format || exportFormat).toUpperCase()} render complete` });
       setDownloadProgress({ current: 0, total: 0 });
@@ -950,7 +1016,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             </>
           ) : (
             <>
-              <Download className="w-3.5 h-3.5" /> {completedRender?.file_url ? "Download Ready" : "Download"}
+              <Download className="w-3.5 h-3.5" /> {completedRenderForOlderOutput ? "Download Updated" : completedRender?.file_url ? "Download Ready" : "Download"}
             </>
           )}
         </button>
@@ -978,6 +1044,27 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           {downloading && downloadProgress.total > 0
             ? `Downloading: chunk ${downloadProgress.current} / ${downloadProgress.total} — ${requestStatus.msg}`
             : requestStatus.msg}
+        </div>
+      )}
+
+      {lastDownloadRecord?.downloaded_at && (
+        <div className={`text-[10px] px-2 py-1 rounded-md mb-1 ${
+          downloadedForOlderOutput
+            ? "border border-amber-400/30 bg-amber-400/10 text-amber-300"
+            : "bg-muted/50 text-muted-foreground"
+        }`}>
+          Narration downloaded {formatDownloadTimestamp(lastDownloadRecord.downloaded_at) || "at an unknown time"}.
+          {downloadedForOlderOutput
+            ? " A newer AI output exists; download again for current narration."
+            : sourceGeneratedAt && lastDownloadRecord.source_generated_at === sourceGeneratedAt
+              ? " Matches this AI output."
+              : ""}
+        </div>
+      )}
+
+      {completedRenderForOlderOutput && (
+        <div className="text-[10px] px-2 py-1 rounded-md mb-1 border border-amber-400/30 bg-amber-400/10 text-amber-300">
+          A ready narration belongs to an older AI output and will not be downloaded. Use Download Updated to render the current version.
         </div>
       )}
 

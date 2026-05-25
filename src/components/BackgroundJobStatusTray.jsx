@@ -1,7 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Loader2, Square, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Loader2, Square, X, XCircle } from "lucide-react";
 import { cancelBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
+
+const DISMISSED_RESULTS_KEY = "pulsepoint.backgroundJobs.dismissedTerminalIds";
+
+function loadDismissedResults() {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(DISMISSED_RESULTS_KEY) || "[]");
+    return new Set(Array.isArray(stored) ? stored : []);
+  } catch {
+    return new Set();
+  }
+}
 
 function fmtTime(value) {
   if (!value) return "";
@@ -51,9 +62,18 @@ export default function BackgroundJobStatusTray() {
   const navigate = useNavigate();
   const [jobs, setJobs] = useState([]);
   const [expanded, setExpanded] = useState(false);
-  const [hiddenCompleteIds, setHiddenCompleteIds] = useState(() => new Set());
+  const [dismissedTerminalIds, setDismissedTerminalIds] = useState(loadDismissedResults);
   const [cancellingIds, setCancellingIds] = useState(() => new Set());
   const [offline, setOffline] = useState(false);
+  const [closed, setClosed] = useState(false);
+  const previousActiveIdsRef = useRef(new Set());
+  const previousJobIdsRef = useRef(new Set());
+  const dismissedTerminalIdsRef = useRef(dismissedTerminalIds);
+
+  useEffect(() => {
+    dismissedTerminalIdsRef.current = dismissedTerminalIds;
+    window.localStorage.setItem(DISMISSED_RESULTS_KEY, JSON.stringify([...dismissedTerminalIds].slice(-100)));
+  }, [dismissedTerminalIds]);
 
   const goToJob = (job) => {
     const target = jobTarget(job);
@@ -107,7 +127,18 @@ export default function BackgroundJobStatusTray() {
         [...(active.jobs || []), ...(recent.jobs || [])].forEach((job) => {
           if (job?.id) merged.set(job.id, job);
         });
-        setJobs([...merged.values()].sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0)));
+        const loadedJobs = [...merged.values()].sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
+        const activeIds = new Set(loadedJobs.filter((job) => ["queued", "running"].includes(job.status)).map((job) => job.id));
+        const newActiveJob = [...activeIds].some((id) => !previousActiveIdsRef.current.has(id));
+        const newVisibleResult = loadedJobs.some((job) => (
+          !previousJobIdsRef.current.has(job.id)
+          && !["queued", "running"].includes(job.status)
+          && !dismissedTerminalIdsRef.current.has(job.id)
+        ));
+        if (newActiveJob || newVisibleResult) setClosed(false);
+        previousActiveIdsRef.current = activeIds;
+        previousJobIdsRef.current = new Set(loadedJobs.map((job) => job.id));
+        setJobs(loadedJobs);
         setOffline(false);
       } catch {
         if (!cancelled) setOffline(true);
@@ -125,36 +156,67 @@ export default function BackgroundJobStatusTray() {
 
   const visibleJobs = useMemo(() => {
     return jobs.filter((job) => {
-      if (hiddenCompleteIds.has(job.id)) return false;
+      if (!["queued", "running"].includes(job.status) && dismissedTerminalIds.has(job.id)) return false;
       return true;
     });
-  }, [hiddenCompleteIds, jobs]);
+  }, [dismissedTerminalIds, jobs]);
 
   const activeCount = visibleJobs.filter((job) => ["queued", "running"].includes(job.status)).length;
-  if (!visibleJobs.length && !offline) return null;
+  const completedJobs = visibleJobs.filter((job) => job.status === "complete");
+
+  const dismissFinished = (jobIds) => {
+    setDismissedTerminalIds((previous) => new Set([...previous, ...jobIds]));
+  };
+
+  if (closed || (!visibleJobs.length && !offline)) return null;
 
   return (
     <div className="fixed bottom-3 left-3 right-3 z-40 sm:left-auto sm:w-[24rem]">
       <div className="rounded-xl border border-border bg-card/95 shadow-2xl backdrop-blur">
-        <button
-          type="button"
-          onClick={() => setExpanded((value) => !value)}
-          className="flex w-full items-center gap-2 px-3 py-2 text-left"
-        >
-          {activeCount > 0 ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : offline ? <XCircle className="h-4 w-4 text-muted-foreground" /> : <CheckCircle2 className="h-4 w-4 text-emerald-400" />}
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-foreground">
-              {activeCount > 0 ? `${activeCount} background task${activeCount === 1 ? "" : "s"} running` : offline ? "Background status unavailable" : "Background tasks updated"}
-            </p>
-            <p className="truncate text-xs text-muted-foreground">
-              {progressMessage(visibleJobs[0]) || (offline ? "Local API may need a restart." : "Recent AI/TTS work is visible here.")}
-            </p>
-          </div>
-          {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
-        </button>
+        <div className="flex items-center gap-1 px-1 py-1">
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1 text-left"
+          >
+            {activeCount > 0 ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : offline ? <XCircle className="h-4 w-4 text-muted-foreground" /> : <CheckCircle2 className="h-4 w-4 text-emerald-400" />}
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-foreground">
+                {activeCount > 0 ? `${activeCount} background task${activeCount === 1 ? "" : "s"} running` : offline ? "Background status unavailable" : "Background tasks updated"}
+              </p>
+              <p className="truncate text-xs text-muted-foreground">
+                {progressMessage(visibleJobs[0]) || (offline ? "Local API may need a restart." : "Recent AI/TTS work is visible here.")}
+              </p>
+            </div>
+            {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setClosed(true);
+              setExpanded(false);
+            }}
+            aria-label="Close background tasks bar"
+            title="Close background tasks bar"
+            className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
 
         {expanded && (
           <div className="max-h-72 space-y-2 overflow-y-auto border-t border-border p-2">
+            {completedJobs.length > 0 && (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => dismissFinished(completedJobs.map((job) => job.id))}
+                  className="rounded-full border border-border px-2.5 py-1 text-[10px] font-semibold text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                >
+                  Dismiss completed
+                </button>
+              </div>
+            )}
             {visibleJobs.map((job) => {
               const progress = job.progress || {};
               const total = Number(progress.total || 0);
@@ -225,12 +287,12 @@ export default function BackgroundJobStatusTray() {
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
-                          setHiddenCompleteIds((prev) => new Set([...prev, job.id]));
+                          dismissFinished([job.id]);
                         }}
-                        aria-label={`Hide ${jobLabel(job)}`}
+                        aria-label={`Dismiss ${jobLabel(job)}`}
                         className="rounded-full px-2 py-1 text-[10px] font-medium opacity-75 hover:opacity-100"
                       >
-                        Hide
+                        Dismiss
                       </button>
                     )}
                   </div>

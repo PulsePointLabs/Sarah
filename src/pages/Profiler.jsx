@@ -63,6 +63,14 @@ MOVEMENT EVIDENCE PRECEDENCE RULE (apply only when saved media-derived motion ev
 - A cadence estimate is a visible hand-movement rhythm proxy, not confirmed stroke speed, technique, force, or stimulation intensity.
 `;
 
+const PERSONAL_ANATOMY_LANGUAGE_RULE = `
+PERSONAL ANATOMY LANGUAGE RULE:
+- When connecting saved anatomy or session evidence to this person's own body and response pattern, use direct second-person phrasing: "your penis," "your shaft," "your glans," "your foreskin" when applicable, "your pelvic floor," "your lower body," "your feet," "your hand movement," "your heart rate," and "your recovery pattern."
+- Avoid detached phrasing such as "the penis," "the shaft," "the glans," "the body," "the subject," "the participant," "the patient," or "the individual" when describing this person's observations or findings.
+- Generic educational explanation may use general anatomy language when appropriate. For example, "The glans contains dense sensory innervation" is acceptable education; a finding tied to this person should say "Your glans showed..." or "Your recorded glans observations suggest..." as supported by the evidence.
+- Remain clinically grounded, proportional, and observational. Do not turn direct address into erotic commentary or unsupported certainty.
+`;
+
 function buildProfileEvidenceDigest(sessions) {
   const withHr = sessions.filter((s) => s.avg_hr || s.max_hr || s.hr_at_climax);
   const climaxSessions = sessions.filter((s) => !s.no_climax && s.climax_offset_s != null);
@@ -590,6 +598,7 @@ Use the journals to surface recurring emotional themes, evolving insights, and s
 ${groundingContext}
 ${SESSION_CONTEXT_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}
+${PERSONAL_ANATOMY_LANGUAGE_RULE}
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Write all times as words: "ten minutes and thirty seconds" not "10:30"
@@ -771,6 +780,7 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
         <TTSReader
           sessionId="profiler_ai_profile"
           title="AI Physiological Profile"
+          sourceGeneratedAt={result?._meta?.last_generated_at}
           paragraphs={paras}
           renderParagraph={(text, idx, isActive) => {
             const meta = paraMeta[idx];
@@ -914,6 +924,7 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
 ${groundingContext}
 ${SESSION_CONTEXT_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}
+${PERSONAL_ANATOMY_LANGUAGE_RULE}
 
 SYNTHESIS REQUIREMENTS:
 - Begin with a compact whole-body overview, then expand only where the provided evidence supports detail.
@@ -1030,6 +1041,7 @@ Write directly to the person in clear, clinically grounded language. Favor meani
         <TTSReader
           sessionId="profiler_anatomical_physiological_profile"
           title="Anatomical and Physiological Profile"
+          sourceGeneratedAt={result?._meta?.last_generated_at}
           paragraphs={paragraphs}
           renderParagraph={(text, idx, isActive) => {
             const meta = paragraphMeta[idx];
