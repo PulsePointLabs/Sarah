@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Activity, AlertCircle, Brain, Lightbulb, ScanSearch, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
-import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import TTSReader from "./TTSReader";
 import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 
@@ -87,6 +87,7 @@ Focus on:
 - useful next-review notes grounded in the actual record
 
 ${groundingContext}
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 
 STYLE:
 - Write directly to the person using "you" and "your".

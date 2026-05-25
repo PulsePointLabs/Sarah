@@ -4,7 +4,7 @@ import { AlertCircle, Brain, Activity, Lightbulb, TrendingUp, Zap, ChevronDown, 
 import TTSReader from "./TTSReader";
 import { Button } from "@/components/ui/button";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
-import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { SESSION_CONTEXT_GROUNDING_RULE, structuredSessionContextForAI } from "@/lib/sessionContext";
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
@@ -77,12 +77,20 @@ EVIDENCE PRECEDENCE HIERARCHY FOR MOVEMENT:
 - Treat motion-derived evidence as observational only. Do not infer intent, arousal phase, muscle force, neurological meaning, or physiological mechanism from motion alone.`;
 }
 
-const PERSONAL_ANATOMY_LANGUAGE_RULE = `
-PERSONAL ANATOMY LANGUAGE RULE:
-- When describing this person's observed body state, session evidence, response pattern, or supported anatomical finding, use direct second-person phrasing: "your penis," "your shaft," "your glans," "your foreskin" when applicable, "your pelvic floor," "your lower body," "your feet," "your hand movement," "your heart rate," and "your recovery pattern."
-- Avoid detached session-specific phrasing such as "the penis," "the shaft," "the glans," "the body," "the subject," "the participant," "the patient," or "the individual."
-- Generic educational anatomy may still use general phrasing when it is truly explaining anatomy rather than describing this session. For example, "The penis is supplied by autonomic and somatic pathways" is acceptable as education; "Your penis remained visibly engaged during this build phase" is required for the person's observed response.
-- Keep this direct language clinically grounded and evidence-based. It should feel personally attentive, not euphemistic, eroticized, or speculative.
+const WARM_COMPANION_OUTPUT_DISCIPLINE = `
+COMPANION VOICE AND SINGLE-PASS STRUCTURE - HIGH PRIORITY:
+- Address the person directly throughout. Never write "the user," "the user's notes," "the subject," "the participant," or "the patient." Say "your notes," "you observed," "your body," "your pattern," or "your recovery."
+- Produce one interpretive pass through the timeline only. The executive summary should preview the central arc without replaying details. The chronological deep dive is the only place to narrate sequential events.
+- Do not re-explain the same insertion, heart-rate shift, movement event, or sensory note in multiple sections. Later sections should synthesize implications, not retell the event sequence.
+- Organize the existing response keys as follows:
+  * summary = Executive Summary: rich and concise.
+  * arousal_arc = Chronological Deep Dive: one ordered, phase-by-phase timeline pass.
+  * event_analysis = Motion Telemetry Interpretation and evidence integration: asymmetry, cadence proxy, movement patterns, conflicts between sources, and new implications only; do not replay chronology.
+  * notable_findings = Pattern Recognition / Cross-Session Context and clearly identified hypotheses.
+  * recommendations = Recommendations / Experiments: focused next steps grounded in supported findings.
+- Prefix speculative mechanisms with "Hypothesis:" or "One possible explanation:" and qualify them with wording such as "may suggest" or "is consistent with."
+- Describe observed findings confidently, but never say evidence "proves," "confirms," or "indicates definitively" an inferred physiological mechanism.
+- If a subjective note conflicts with stronger direct visual review, reviewed media-derived evidence, telemetry, or a corrected later observation, prefer the stronger evidence and explicitly acknowledge the discrepancy. Do not build recommendations on a disputed note as though it were settled fact.
 `;
 
 function getCategoryMeta(value) {
@@ -409,6 +417,7 @@ ${JSON.stringify({
 Use this arousal profile to personalize analysis: compare the observed build arc and climax pattern against the user's known response style. Note deviations (e.g. faster/slower than typical, more/less sensitive). Reference preferred methods when interpreting session effectiveness.` : "";
 
     const groundingContext = buildAIGroundingContext(userProfile);
+    const firstNameToneCue = !isTechnical ? buildOptionalFirstNameToneCue(userProfile) : "";
     const structuredSessionContext = structuredSessionContextForAI(session);
     const warmMotionEvidence = !isTechnical ? buildWarmMotionEvidence(session) : "";
 
@@ -446,7 +455,9 @@ TARGET SESSION ANALYSIS STYLE:
 ${isTechnical ? groundingContext : ""}
 ${!isTechnical ? SESSION_CONTEXT_GROUNDING_RULE : ""}
 ${warmMotionEvidence}
-${PERSONAL_ANATOMY_LANGUAGE_RULE}
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}
+${firstNameToneCue}
+${!isTechnical ? WARM_COMPANION_OUTPUT_DISCIPLINE : ""}
 
 PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — CONDITIONAL USE ONLY:"}
 - Only mention specific physiological phases (e.g. emission, expulsion, plateau) or anatomical structures (e.g. pudendal nerve, bulbocavernosus, prostatic urethra) when the session data — an event note, HR pattern, subjective metric, or logged sensation — gives you a concrete reason to do so. Never insert these as generic background explanation.
@@ -499,7 +510,7 @@ ${isTechnical
 Use time references when they anchor the arc, but each time reference should answer "what changed and why might it matter?" Connect stimulation changes, physical findings, HR movement, and subjective context into mechanism-level interpretation. If a technique shift appears to change arousal, explain the plausible sensory/autonomic reason. If HR rises, plateaus, or drops, explain what that likely says about sympathetic load, parasympathetic settling, pelvic floor engagement, sensory novelty, stimulation efficiency, or recovery state.
 
 The best output should feel like: "Here is what was happening in the body during this phase, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."`
-  : `This is the primary dataset. For each event: interpret the arousal state at that HR level, what the note reveals about the underlying physiology or anatomy, and how it connects to the session arc. Identify physiological turning points — moments where HR + event note together reveal a shift in autonomic or sensory state.`}` : ""}
+  : `This is primary evidence for the single Chronological Deep Dive. Group closely related events into meaningful transitions rather than narrating every note separately. Interpret turning points once in chronological order. Reserve movement telemetry synthesis, recurring patterns, hypotheses, and recommendations for their dedicated sections; do not retell this timeline there.`}` : ""}
 
 ${hrTrajectory ? `HR TRAJECTORY (time_s:bpm, sampled):
 ${hrTrajectory}
@@ -571,16 +582,20 @@ Provide ${isTechnical
         properties: {
           summary: isTechnical
             ? { type: "string", description: "One cohesive overview emphasizing physiology, arousal pattern, stimulation effectiveness, and why the session behaved the way it did." }
-            : { type: "string" },
+            : { type: "string", description: "Executive Summary: a rich but concise overview of the session arc and defining findings, without retelling the full chronology." },
           arousal_arc: isTechnical
             ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining the HR/autonomic arc, stimulation links, supported anatomy, pre-climax/climax/recovery shifts, and why the session progressed as it did." }
-            : { type: "array", items: { type: "string" } },
+            : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: the only detailed ordered pass through the session arc; group related events into meaningful transitions." },
           event_analysis: isTechnical
             ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, HR-supported turning points, and what made the session notable. Use time anchors when they strengthen the interpretation." }
-            : { type: "array", items: { type: "string" } },
+            : { type: "array", items: { type: "string" }, description: "Motion Telemetry Interpretation and evidence synthesis: interpret asymmetry, cadence proxy, movement patterns, and evidence discrepancies without replaying the chronology." },
           emg_analysis: { type: "array", items: { type: "string" }, description: "EMG signal quality, activation patterns, L/R comparison, EMG vs HR, calibration notes — only if EMG data present" },
-          notable_findings: { type: "array", items: { type: "string" } },
-          recommendations: { type: "array", items: { type: "string" } },
+          notable_findings: isTechnical
+            ? { type: "array", items: { type: "string" } }
+            : { type: "array", items: { type: "string" }, description: "Pattern recognition, cross-session context when supported, and clearly labelled hypotheses with calibrated mechanism language." },
+          recommendations: isTechnical
+            ? { type: "array", items: { type: "string" } }
+            : { type: "array", items: { type: "string" }, description: "Focused recommendations or experiments grounded in supported findings rather than repeated narrative." },
         },
         required: ["summary", "arousal_arc", "event_analysis", "notable_findings", "recommendations"],
       },
@@ -683,11 +698,11 @@ Provide ${isTechnical
         let idx = 0;
         const sections = [];
         if (result.summary) sections.push({ label: null, color: "primary", items: [result.summary], start: idx++ });
-        if (arousalItems.length) { sections.push({ label: "Arousal Arc", color: "chart-2", icon: <TrendingUp className="w-3.5 h-3.5" />, items: arousalItems, start: idx }); idx += arousalItems.length; }
-        if (eventItems.length) { sections.push({ label: "Event Analysis", color: "chart-1", icon: <Activity className="w-3.5 h-3.5" />, items: eventItems, start: idx }); idx += eventItems.length; }
+        if (arousalItems.length) { sections.push({ label: isTechnical ? "Arousal Arc" : "Chronological Deep Dive", color: "chart-2", icon: <TrendingUp className="w-3.5 h-3.5" />, items: arousalItems, start: idx }); idx += arousalItems.length; }
+        if (eventItems.length) { sections.push({ label: isTechnical ? "Event Analysis" : "Motion & Evidence Interpretation", color: "chart-1", icon: <Activity className="w-3.5 h-3.5" />, items: eventItems, start: idx }); idx += eventItems.length; }
         if (emgItems.length) { sections.push({ label: "EMG Analysis", color: "chart-3", icon: <Activity className="w-3.5 h-3.5" />, items: emgItems, start: idx }); idx += emgItems.length; }
-        if (result.notable_findings?.length) { sections.push({ label: "Notable Findings", color: "chart-4", icon: <Zap className="w-3.5 h-3.5" />, items: result.notable_findings, start: idx }); idx += result.notable_findings.length; }
-        if (result.recommendations?.length) { sections.push({ label: "Recommendations", color: "accent", icon: <Lightbulb className="w-3.5 h-3.5" />, items: result.recommendations, start: idx }); }
+        if (result.notable_findings?.length) { sections.push({ label: isTechnical ? "Notable Findings" : "Patterns & Hypotheses", color: "chart-4", icon: <Zap className="w-3.5 h-3.5" />, items: result.notable_findings, start: idx }); idx += result.notable_findings.length; }
+        if (result.recommendations?.length) { sections.push({ label: isTechnical ? "Recommendations" : "Recommendations & Experiments", color: "accent", icon: <Lightbulb className="w-3.5 h-3.5" />, items: result.recommendations, start: idx }); }
 
         return (
           <div className="space-y-3">

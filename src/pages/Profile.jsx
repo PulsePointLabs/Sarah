@@ -30,6 +30,18 @@ function NumInput({ value, onChange, placeholder, min, max }) {
   );
 }
 
+function TextInput({ value, onChange, placeholder }) {
+  return (
+    <input
+      type="text"
+      value={value ?? ""}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+    />
+  );
+}
+
 function SelectInput({ value, onChange, options, placeholder = "Not set" }) {
   const optionValues = options.map((option) => typeof option === "string" ? option : option.value);
   const hasSavedLegacyValue = value && !optionValues.includes(value);
@@ -289,6 +301,7 @@ export default function Profile() {
     base44.auth.me().then((u) => {
       setUser(u);
       setForm({
+        first_name: u.first_name ?? "",
         age: u.age ?? null,
         weight_kg: u.weight_kg ?? null,
         resting_hr: u.resting_hr ?? null,
@@ -338,6 +351,7 @@ export default function Profile() {
     setSaving(true);
     const canonicalForm = {
       ...form,
+      first_name: String(form.first_name || "").trim() || null,
       medications: richTextToCanonicalText(form.medications),
       arousal_notes: richTextToCanonicalText(form.arousal_notes),
       anatomical_mechanical_profile: normalizeMechanicalProfile(form.anatomical_mechanical_profile),
@@ -385,6 +399,9 @@ export default function Profile() {
             <h2 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
               <User className="w-3.5 h-3.5" /> Demographics
             </h2>
+            <Field label="First Name (optional)" hint="Used sparingly by AI when a more personal direct address feels natural.">
+              <TextInput value={form.first_name} onChange={(v) => setForm((f) => ({ ...f, first_name: v }))} placeholder="e.g. Ben" />
+            </Field>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Age (years)">
                 <NumInput value={form.age} onChange={(v) => setForm((f) => ({ ...f, age: v }))} placeholder="e.g. 35" min={10} max={100} />
@@ -818,6 +835,7 @@ export default function Profile() {
         mode="profile"
         userProfile={form}
         context={[
+          `First name: ${form.first_name?.trim() || "not set"}`,
           `Age: ${form.age ?? "not set"}, Weight: ${form.weight_kg ?? "not set"}kg, Fitness: ${form.fitness_level ?? "not set"}`,
           `Resting HR: ${form.resting_hr ?? "not set"} bpm, Max HR: ${form.max_hr ?? "not set"} bpm, Recovery HR drop 60s: ${form.recovery_hr_60s ?? "not set"} bpm`,
           `Physical & anatomical context: ${richTextToPlainText(form.medications) || "none"}`,

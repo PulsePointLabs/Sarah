@@ -3,7 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { Zap, Brain, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import TTSReader from "./TTSReader";
-import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 
 function fmtMmSs(s) {
   const totalS = Math.round(Number(s));
@@ -64,6 +64,7 @@ export default function NearClimaxSessionOverview({ session, nearClimaxEvents, u
       prompt: `You are a physiological analyst providing a session-specific interpretation of near-climax events detected in heart rate data. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 ${groundingContext}
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 
 DEFINITION: A near-climax event is a sustained HR elevation (8+ bpm rise, held for 20+ seconds, then resolved) occurring before the actual climax window. These may represent arousal plateaus, stimulation intensity peaks, autonomic surges, physical reflexes, or explicitly logged arousal control. Interpret based on context, not assumption.
 

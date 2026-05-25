@@ -5,7 +5,7 @@ import TTSReader from "../components/TTSReader";
 import { normalizeJournalEntry } from "@/lib/journalEntry";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionContextFactorLabels } from "@/lib/sessionContext";
 import { getMotionEvidenceSummary, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
@@ -61,14 +61,6 @@ MOVEMENT EVIDENCE PRECEDENCE RULE (apply only when saved media-derived motion ev
 - If saved telemetry conflicts with vague manual movement notes, characterize visible movement from telemetry and preserve the manual note only as subjective or contextual history unless it adds distinct information.
 - Motion evidence remains observational only. Do not infer intent, arousal phase, muscle force, neurological mechanism, autonomic cause, or physiological cause from motion alone.
 - A cadence estimate is a visible hand-movement rhythm proxy, not confirmed stroke speed, technique, force, or stimulation intensity.
-`;
-
-const PERSONAL_ANATOMY_LANGUAGE_RULE = `
-PERSONAL ANATOMY LANGUAGE RULE:
-- When connecting saved anatomy or session evidence to this person's own body and response pattern, use direct second-person phrasing: "your penis," "your shaft," "your glans," "your foreskin" when applicable, "your pelvic floor," "your lower body," "your feet," "your hand movement," "your heart rate," and "your recovery pattern."
-- Avoid detached phrasing such as "the penis," "the shaft," "the glans," "the body," "the subject," "the participant," "the patient," or "the individual" when describing this person's observations or findings.
-- Generic educational explanation may use general anatomy language when appropriate. For example, "The glans contains dense sensory innervation" is acceptable education; a finding tied to this person should say "Your glans showed..." or "Your recorded glans observations suggest..." as supported by the evidence.
-- Remain clinically grounded, proportional, and observational. Do not turn direct address into erotic commentary or unsupported certainty.
 `;
 
 function buildProfileEvidenceDigest(sessions) {
@@ -560,6 +552,7 @@ function AIProfilePanel({ sessions, userProfile, journals }) {
     const sessionSummaries = sortedSessions.map(compactSessionLine).join("\n");
     const evidenceDigest = buildProfileEvidenceDigest(sortedSessions);
     const groundingContext = buildAIGroundingContext(userProfile);
+    const firstNameToneCue = buildOptionalFirstNameToneCue(userProfile, { prioritizeProfileTone: true });
 
     const profileContext = userProfile ? `
 USER PROFILE & NOTES:
@@ -598,7 +591,8 @@ Use the journals to surface recurring emotional themes, evolving insights, and s
 ${groundingContext}
 ${SESSION_CONTEXT_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}
-${PERSONAL_ANATOMY_LANGUAGE_RULE}
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}
+${firstNameToneCue}
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Write all times as words: "ten minutes and thirty seconds" not "10:30"
@@ -916,6 +910,7 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
       const evidenceDigest = naturalizeSpokenDates(buildProfileEvidenceDigest(sortedSessions));
       const sessionSummaries = sortedSessions.slice(0, 80).map(compactAnatomicalSessionLine).join("\n");
       const groundingContext = buildAIGroundingContext(userProfile);
+      const firstNameToneCue = buildOptionalFirstNameToneCue(userProfile, { prioritizeProfileTone: true });
 
       const raw = await runProfilerAIJob({
         model: "claude_sonnet_4_6",
@@ -924,7 +919,8 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile }) {
 ${groundingContext}
 ${SESSION_CONTEXT_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}
-${PERSONAL_ANATOMY_LANGUAGE_RULE}
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}
+${firstNameToneCue}
 
 SYNTHESIS REQUIREMENTS:
 - Begin with a compact whole-body overview, then expand only where the provided evidence supports detail.

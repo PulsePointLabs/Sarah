@@ -10,6 +10,10 @@
         "user"
       ]
     },
+    "first_name": {
+      "type": "string",
+      "description": "Optional preferred first name for naturally personalized AI address"
+    },
     "age": {
       "type": "number",
       "description": "User age in years"

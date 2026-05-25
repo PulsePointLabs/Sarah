@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { AlertCircle, TrendingUp, Zap, Activity, Flag, Brain, ChevronDown, ChevronUp } from "lucide-react";
 import TTSReader from "./TTSReader";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
-import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 
 function getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -290,6 +290,7 @@ ${JSON.stringify({
       prompt: `You are a physiological research assistant and anatomist specializing in sexual response. Analyze the climax cascade arc of this single session in depth, integrating HR data, EMG data (if present), anatomy, and event timing. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 ${groundingContext}
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 
 PHYSIOLOGICAL & ANATOMICAL LENS — CONDITIONAL USE ONLY:
 Only mention specific physiological phases, anatomical structures, or mechanisms when the session data gives you a concrete reason to do so. Never insert these as generic background explanation.

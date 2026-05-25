@@ -1,5 +1,14 @@
 import { richTextToPlainText } from "@/lib/richText";
 
+export const PERSONALIZED_ANATOMY_OUTPUT_RULE = `
+PERSONALIZED ANATOMY OUTPUT RULE - HIGH PRIORITY:
+- In any sentence describing this person's recorded body, anatomy, appearance, sensation, session response, device interaction, or supported finding, use a personal reference: "your penis," "your shaft," "your glans," "your foreskin" when applicable, "your meatus," "your urethra," "your erection," "your pelvic floor," "your scrotum," "your lower body," "your feet," or the corresponding "your ..." construction.
+- This applies even when source notes or structured fields use detached labels. Paraphrase session-linked findings personally rather than echoing phrases such as "the penis," "the shaft," "the glans," "the meatus," "the urethra," "the feet," or "the body."
+- Generic phrasing with "the" is permitted only for an unmistakably general physiology or anatomy explanation, such as explaining how penile tissue, the urethra, or the pelvic floor generally functions. As soon as the sentence returns to this person's data, observations, or interpretation, switch back to "your."
+- Before returning final output, check every anatomical reference in session-specific findings and revise any detached reference into direct second-person language.
+- Keep this personal language clinically grounded, observational, and natural. Do not make it erotic, euphemistic, or more certain than the evidence allows.
+`;
+
 function hasValue(value) {
   if (Array.isArray(value)) return value.length > 0;
   return value !== null && value !== undefined && String(value).trim() !== "";
@@ -88,6 +97,7 @@ export function buildGlobalProfileContext(userProfile) {
   if (!userProfile) return "";
 
   const lines = [];
+  addLine(lines, "Preferred first name", userProfile.first_name, 80);
   addLine(lines, "Age", userProfile.age);
   addLine(lines, "Fitness level", userProfile.fitness_level);
   addLine(lines, "Resting heart rate", userProfile.resting_hr ? `${userProfile.resting_hr} beats per minute` : "");
@@ -106,6 +116,16 @@ export function buildGlobalProfileContext(userProfile) {
   if (mechanicalLines.length) lines.push("Functional mechanical profile:", ...mechanicalLines);
 
   return lines.length ? lines.join("\n") : "";
+}
+
+export function buildOptionalFirstNameToneCue(userProfile, { prioritizeProfileTone = false } = {}) {
+  const firstName = cleanText(userProfile?.first_name, 80);
+  if (!firstName) return "";
+  return `
+OPTIONAL FIRST-NAME ADDRESS CUE:
+- The person's preferred first name is ${firstName}.
+- You may use ${firstName} sparingly when direct address naturally deepens warmth or continuity${prioritizeProfileTone ? ", particularly in the profile overview or a meaningful concluding observation" : ""}.
+- Do not overuse the name, force it into technical sentences, or substitute it for clear second-person language.`;
 }
 
 export function buildAIGroundingContext(userProfile, { includeProfile = true } = {}) {
@@ -142,5 +162,7 @@ GLOBAL EVIDENCE AND INTERPRETATION RULES:
 - Do not use anatomy for unsupported physiological claims, vanity assumptions, or speculative causal conclusions.
 - Meatal morphology may be considered only when interpreting device fit, movement perception, sealing behavior, stimulation mechanics, or repeated observed functional patterns.
 - Do not use morphology for unsupported causal physiological claims or speculative conclusions.
-- Do not turn ambiguous pauses, slowdowns, or non-climax sessions into psychological conclusions.`;
+- Do not turn ambiguous pauses, slowdowns, or non-climax sessions into psychological conclusions.
+
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}`;
 }
