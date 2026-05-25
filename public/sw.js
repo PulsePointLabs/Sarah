@@ -64,3 +64,19 @@ self.addEventListener("fetch", (event) => {
       .catch(() => caches.match(request) || Response.error())
   );
 });
+
+self.addEventListener("notificationclick", (event) => {
+  const route = event.notification?.data?.route || "/";
+  event.notification?.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (clients) => {
+      const existingClient = clients[0];
+      if (existingClient) {
+        await existingClient.focus();
+        if ("navigate" in existingClient) return existingClient.navigate(route);
+        return existingClient;
+      }
+      return self.clients.openWindow ? self.clients.openWindow(route) : null;
+    })
+  );
+});

@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Loader2, Square, X, XCircle } from "lucide-react";
+import { Bell, BellOff, CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Loader2, Square, X, XCircle } from "lucide-react";
 import { cancelBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
+import {
+  areBackgroundNotificationsEnabled,
+  getNotificationPermission,
+  isNotificationSupported,
+  notifyBackgroundJobFinished,
+  requestBackgroundNotificationPermission,
+  setBackgroundNotificationsEnabled,
+} from "@/utils/backgroundJobNotifications";
 
 const DISMISSED_RESULTS_KEY = "pulsepoint.backgroundJobs.dismissedTerminalIds";
 
@@ -66,8 +74,13 @@ export default function BackgroundJobStatusTray() {
   const [cancellingIds, setCancellingIds] = useState(() => new Set());
   const [offline, setOffline] = useState(false);
   const [closed, setClosed] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState(getNotificationPermission);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(areBackgroundNotificationsEnabled);
+  const [notificationMessage, setNotificationMessage] = useState("");
   const previousActiveIdsRef = useRef(new Set());
   const previousJobIdsRef = useRef(new Set());
+  const previousJobStatusesRef = useRef(new Map());
+  const jobsInitializedRef = useRef(false);
   const dismissedTerminalIdsRef = useRef(dismissedTerminalIds);
 
   useEffect(() => {
@@ -112,6 +125,33 @@ export default function BackgroundJobStatusTray() {
     }
   };
 
+  const toggleNotifications = async () => {
+    setNotificationMessage("");
+    if (!isNotificationSupported()) {
+      setNotificationMessage("Notifications are not supported in this browser or app mode.");
+      return;
+    }
+    if (notificationPermission === "denied") {
+      setNotificationMessage("Notifications are blocked by browser or app settings.");
+      return;
+    }
+    if (notificationPermission !== "granted") {
+      const permission = await requestBackgroundNotificationPermission();
+      setNotificationPermission(permission);
+      setNotificationsEnabled(permission === "granted");
+      setNotificationMessage(permission === "granted"
+        ? "Completion notifications enabled."
+        : permission === "denied"
+          ? "Notifications are blocked by browser or app settings."
+          : "Notifications were not enabled.");
+      return;
+    }
+    const nextEnabled = !notificationsEnabled;
+    setBackgroundNotificationsEnabled(nextEnabled);
+    setNotificationsEnabled(nextEnabled);
+    setNotificationMessage(nextEnabled ? "Completion notifications enabled." : "Completion notifications disabled.");
+  };
+
   useEffect(() => {
     let cancelled = false;
     let timer = null;
@@ -128,6 +168,17 @@ export default function BackgroundJobStatusTray() {
           if (job?.id) merged.set(job.id, job);
         });
         const loadedJobs = [...merged.values()].sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
+        if (jobsInitializedRef.current) {
+          loadedJobs.forEach((job) => {
+            const previousStatus = previousJobStatusesRef.current.get(job.id);
+            if (["queued", "running"].includes(previousStatus) && ["complete", "error"].includes(job.status)) {
+              notifyBackgroundJobFinished(job, {
+                route: jobTarget(job),
+                onOpen: (target) => navigate(target),
+              });
+            }
+          });
+        }
         const activeIds = new Set(loadedJobs.filter((job) => ["queued", "running"].includes(job.status)).map((job) => job.id));
         const newActiveJob = [...activeIds].some((id) => !previousActiveIdsRef.current.has(id));
         const newVisibleResult = loadedJobs.some((job) => (
@@ -138,6 +189,8 @@ export default function BackgroundJobStatusTray() {
         if (newActiveJob || newVisibleResult) setClosed(false);
         previousActiveIdsRef.current = activeIds;
         previousJobIdsRef.current = new Set(loadedJobs.map((job) => job.id));
+        previousJobStatusesRef.current = new Map(loadedJobs.map((job) => [job.id, job.status]));
+        jobsInitializedRef.current = true;
         setJobs(loadedJobs);
         setOffline(false);
       } catch {
@@ -152,7 +205,7 @@ export default function BackgroundJobStatusTray() {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, []);
+  }, [navigate]);
 
   const visibleJobs = useMemo(() => {
     return jobs.filter((job) => {
@@ -207,7 +260,17 @@ export default function BackgroundJobStatusTray() {
         {expanded && (
           <div className="max-h-72 space-y-2 overflow-y-auto border-t border-border p-2">
             {completedJobs.length > 0 && (
-              <div className="flex justify-end">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={toggleNotifications}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${
+                    notificationsEnabled ? "border-primary/35 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                  }`}
+                >
+                  {notificationsEnabled ? <Bell className="h-3 w-3" /> : <BellOff className="h-3 w-3" />}
+                  {notificationsEnabled ? "Completion notifications enabled" : notificationPermission === "denied" ? "Notifications blocked" : "Enable completion notifications"}
+                </button>
                 <button
                   type="button"
                   onClick={() => dismissFinished(completedJobs.map((job) => job.id))}
@@ -216,6 +279,28 @@ export default function BackgroundJobStatusTray() {
                   Dismiss completed
                 </button>
               </div>
+            )}
+            {!completedJobs.length && (
+              <button
+                type="button"
+                onClick={toggleNotifications}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${
+                  notificationsEnabled ? "border-primary/35 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                }`}
+              >
+                {notificationsEnabled ? <Bell className="h-3 w-3" /> : <BellOff className="h-3 w-3" />}
+                {notificationsEnabled ? "Completion notifications enabled" : notificationPermission === "denied" ? "Notifications blocked" : "Enable completion notifications"}
+              </button>
+            )}
+            {notificationMessage && (
+              <p className="rounded-lg border border-border bg-muted/20 px-2.5 py-2 text-[10px] text-muted-foreground">
+                {notificationMessage}
+              </p>
+            )}
+            {notificationsEnabled && (
+              <p className="px-1 text-[10px] leading-relaxed text-muted-foreground">
+                Notifications work while PulsePoint is open or running in the background. Fully closed-app delivery may require future service worker support.
+              </p>
             )}
             {visibleJobs.map((job) => {
               const progress = job.progress || {};
