@@ -47,6 +47,137 @@ const POSTURE_REFERENCE_OPTIONS = [
 ];
 const HAND_REFERENCE_KEYS = ["stroke_like", "non_stroke"];
 
+const FOOT_LANDMARKS = [
+  { key: "leftBigToe", label: "Left big toe", shortLabel: "L toe", side: "left", role: "big_toe", color: "#38bdf8" },
+  { key: "leftForefoot", label: "Left forefoot / ball", shortLabel: "L ball", side: "left", role: "forefoot", color: "#2dd4bf" },
+  { key: "leftHeel", label: "Left heel", shortLabel: "L heel", side: "left", role: "heel", color: "#a78bfa" },
+  { key: "rightBigToe", label: "Right big toe", shortLabel: "R toe", side: "right", role: "big_toe", color: "#fb7185" },
+  { key: "rightForefoot", label: "Right forefoot / ball", shortLabel: "R ball", side: "right", role: "forefoot", color: "#fb923c" },
+  { key: "rightHeel", label: "Right heel", shortLabel: "R heel", side: "right", role: "heel", color: "#f472b6" },
+];
+
+function emptyFootLandmarks() {
+  return Object.fromEntries(FOOT_LANDMARKS.map(({ key }) => [key, null]));
+}
+
+function copyFootPoint(point) {
+  return point ? { x: point.x, y: point.y } : null;
+}
+
+function copyFootLandmarks(landmarks) {
+  return Object.fromEntries(FOOT_LANDMARKS.map(({ key }) => [key, copyFootPoint(landmarks?.[key])]));
+}
+
+function roundedFootPoint(point) {
+  return point ? { x: Math.round(point.x * 1000) / 1000, y: Math.round(point.y * 1000) / 1000 } : null;
+}
+
+function roundedFootLandmarks(landmarks) {
+  return Object.fromEntries(FOOT_LANDMARKS.map(({ key }) => [key, roundedFootPoint(landmarks?.[key])]));
+}
+
+function footLandmarkCompletion(landmarks) {
+  return FOOT_LANDMARKS.filter(({ key }) => landmarks?.[key]).length;
+}
+
+function footAxisAngleDegrees(heel, toe) {
+  if (!heel || !toe) return null;
+  return Math.round((Math.atan2(toe.x - heel.x, -(toe.y - heel.y)) * 1800) / Math.PI) / 10;
+}
+
+function normalizedLandmarkDistance(first, second) {
+  if (!first || !second) return null;
+  return Math.round(pointDistance(first, second) * 1000) / 1000;
+}
+
+function footPlantedProxy(heel, forefoot, toe) {
+  const full = pointDistance(heel, toe);
+  const short = pointDistance(heel, forefoot);
+  if (!full || !short) return null;
+  return Math.round((short / full) * 1000) / 1000;
+}
+
+function computeFootLandmarkGeometry(landmarks) {
+  const leftHeel = landmarks?.leftHeel;
+  const leftToe = landmarks?.leftBigToe;
+  const leftForefoot = landmarks?.leftForefoot;
+  const rightHeel = landmarks?.rightHeel;
+  const rightToe = landmarks?.rightBigToe;
+  const rightForefoot = landmarks?.rightForefoot;
+  const leftAxisDeg = footAxisAngleDegrees(leftHeel, leftToe);
+  const rightAxisDeg = footAxisAngleDegrees(rightHeel, rightToe);
+  const fanAngleDeg = leftAxisDeg != null && rightAxisDeg != null
+    ? Math.round(Math.abs(rightAxisDeg - leftAxisDeg) * 10) / 10
+    : null;
+  const markedCount = footLandmarkCompletion(landmarks);
+  return {
+    status: markedCount >= FOOT_LANDMARKS.length ? "complete" : markedCount > 0 ? "partial" : "not_marked",
+    marked_count: markedCount,
+    expected_count: FOOT_LANDMARKS.length,
+    left_axis_deg: leftAxisDeg,
+    right_axis_deg: rightAxisDeg,
+    fan_angle_deg: fanAngleDeg,
+    toe_gap_normalized: normalizedLandmarkDistance(leftToe, rightToe),
+    heel_gap_normalized: normalizedLandmarkDistance(leftHeel, rightHeel),
+    left_planted_proxy: footPlantedProxy(leftHeel, leftForefoot, leftToe),
+    right_planted_proxy: footPlantedProxy(rightHeel, rightForefoot, rightToe),
+    method: "manual_foot_landmark_geometry",
+    method_note: "Manual visual foot landmarks are normalized to the source frame. Geometry values are observational review aids, not force, pressure, or confirmed posture measurements.",
+  };
+}
+
+function plantedProxyLabel(value) {
+  if (value == null) return "needs heel / forefoot / toe";
+  if (value < 0.5) return "more compressed / planted proxy";
+  if (value < 0.68) return "neutral-ish proxy";
+  return "extended / dorsiflexed proxy";
+}
+
+function drawFootLandmarkOverlay(context, landmarks, width, height, activeKey, dotSize = 8) {
+  const pointFor = (key) => {
+    const point = landmarks?.[key];
+    return point ? { x: point.x * width, y: point.y * height } : null;
+  };
+  const drawLine = (from, to, color, label) => {
+    const start = pointFor(from);
+    const end = pointFor(to);
+    if (!start || !end) return;
+    context.beginPath();
+    context.strokeStyle = color;
+    context.lineWidth = 3;
+    context.moveTo(start.x, start.y);
+    context.lineTo(end.x, end.y);
+    context.stroke();
+    if (label) {
+      context.fillStyle = color;
+      context.font = "bold 12px sans-serif";
+      context.fillText(label, ((start.x + end.x) / 2) + 6, ((start.y + end.y) / 2) - 6);
+    }
+  };
+  drawLine("leftHeel", "leftBigToe", "#38bdf8", "L axis");
+  drawLine("rightHeel", "rightBigToe", "#fb7185", "R axis");
+  drawLine("leftBigToe", "rightBigToe", "#e5e7eb", "toe gap");
+  drawLine("leftHeel", "rightHeel", "#94a3b8", "heel gap");
+  drawLine("leftHeel", "leftForefoot", "#2dd4bf");
+  drawLine("rightHeel", "rightForefoot", "#fb923c");
+
+  FOOT_LANDMARKS.forEach(({ key, shortLabel, color }) => {
+    const point = pointFor(key);
+    if (!point) return;
+    const radius = key === activeKey ? dotSize + 3 : dotSize;
+    context.beginPath();
+    context.fillStyle = color;
+    context.arc(point.x, point.y, radius, 0, Math.PI * 2);
+    context.fill();
+    context.lineWidth = key === activeKey ? 4 : 2;
+    context.strokeStyle = "#ffffff";
+    context.stroke();
+    context.fillStyle = color;
+    context.font = "bold 12px sans-serif";
+    context.fillText(shortLabel, point.x + radius + 4, point.y - radius - 2);
+  });
+}
+
 const LOWER_BODY_METHODS = {
   regionMotion: {
     label: "Region motion (recommended for soles-facing view)",
@@ -143,6 +274,7 @@ function normalizeRegionSegments(segments) {
     rois: copyRois(segment.rois),
     postureReferenceTimes: copyPostureReferenceTimes(segment.postureReferenceTimes),
     handBehaviorReferenceTimes: copyHandBehaviorReferenceTimes(segment.handBehaviorReferenceTimes),
+    footLandmarks: copyFootLandmarks(segment.footLandmarks),
   }));
 }
 
@@ -176,6 +308,8 @@ function serializeRegionSegments(segments) {
       foot_postures: copyPostureReferenceTimes(segment.postureReferenceTimes),
       hand_behavior: copyHandBehaviorReferenceTimes(segment.handBehaviorReferenceTimes),
     },
+    manual_foot_landmarks: roundedFootLandmarks(segment.footLandmarks),
+    manual_foot_landmark_geometry: computeFootLandmarkGeometry(segment.footLandmarks),
     anatomical_orientation: segment.leftRightOrientation,
   }));
 }
@@ -1803,8 +1937,11 @@ function buildSavedSummary(result) {
       analyzed_segment_count: analyzedSegmentIds.length,
       analyzed_segment_ids: analyzedSegmentIds,
       boundary_times_s: serializedSegments.slice(1).map((segment) => segment.start_time_s),
+      manual_foot_landmark_segment_count: serializedSegments.filter((segment) => segment.manual_foot_landmark_geometry?.marked_count > 0).length,
       interpretation_note: "Tracking regions changed at marked position boundaries. Signal changes near those boundaries may reflect framing or region-of-interest changes and should be verified against video before physiological interpretation.",
     } : undefined,
+    manual_foot_landmarks: !serializedSegments.length ? roundedFootLandmarks(result.footLandmarks) : undefined,
+    manual_foot_landmark_geometry: !serializedSegments.length ? result.footLandmarkGeometry : undefined,
     window_start_s: Math.round(result.start),
     window_end_s: Math.round(result.end),
     sample_rate_fps: result.sampleRate,
@@ -1898,6 +2035,12 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const [regionSegments, setRegionSegments] = useState([]);
   const [selectedRegionSegmentId, setSelectedRegionSegmentId] = useState(null);
   const [activeRoi, setActiveRoi] = useState("leftLowerBody");
+  const [landmarkPlacementEnabled, setLandmarkPlacementEnabled] = useState(false);
+  const [activeFootLandmark, setActiveFootLandmark] = useState("leftBigToe");
+  const [footLandmarks, setFootLandmarks] = useState(() => emptyFootLandmarks());
+  const [landmarkDisplaySize, setLandmarkDisplaySize] = useState(8);
+  const [roiPreviewZoom, setRoiPreviewZoom] = useState(1);
+  const [roiPreviewPan, setRoiPreviewPan] = useState({ x: 0, y: 0 });
   const [forefootEnabled, setForefootEnabled] = useState(false);
   const [postureMatchingEnabled, setPostureMatchingEnabled] = useState(true);
   const [postureReferenceTimes, setPostureReferenceTimes] = useState(() => emptyPostureReferenceTimes());
@@ -1967,6 +2110,10 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     setExpandedPeakClusters([]);
     setPostureReferenceTimes(emptyPostureReferenceTimes());
     setHandBehaviorReferenceTimes(emptyHandBehaviorReferenceTimes());
+    setFootLandmarks(emptyFootLandmarks());
+    setLandmarkPlacementEnabled(false);
+    setRoiPreviewZoom(1);
+    setRoiPreviewPan({ x: 0, y: 0 });
   }, [videoSrc]);
 
   useEffect(() => {
@@ -2044,6 +2191,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
       end: Math.min(duration, center + 60),
     };
   }, [videoDuration, videoTime, windowMode]);
+  const footLandmarkGeometry = useMemo(() => computeFootLandmarkGeometry(footLandmarks), [footLandmarks]);
 
   const stopAnalysis = () => {
     stopRequestedRef.current = true;
@@ -2104,11 +2252,12 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         });
       }
     });
+    drawFootLandmarkOverlay(context, footLandmarks, canvas.width, canvas.height, activeFootLandmark, landmarkDisplaySize);
   };
 
   useEffect(() => {
     drawRoiSetupFrame();
-  }, [activeRoi, forefootEnabled, leftRightOrientation, lowerBodyMethod, roiFrameReady, roiFrameRevision, roiLayout, rois]);
+  }, [activeFootLandmark, activeRoi, footLandmarks, forefootEnabled, landmarkDisplaySize, leftRightOrientation, lowerBodyMethod, roiFrameReady, roiFrameRevision, roiLayout, rois]);
 
   const captureRoiSetupFrame = async (requestedTime = videoTime) => {
     if (!videoSrc) return;
@@ -2170,6 +2319,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     handBehaviorReferenceTimes: preserveCalibration
       ? copyHandBehaviorReferenceTimes(source?.handBehaviorReferenceTimes || handBehaviorReferenceTimes)
       : emptyHandBehaviorReferenceTimes(),
+    footLandmarks: preserveCalibration
+      ? copyFootLandmarks(source?.footLandmarks || footLandmarks)
+      : emptyFootLandmarks(),
     leftRightOrientation: source?.leftRightOrientation || leftRightOrientation,
   });
 
@@ -2183,6 +2335,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     setPostureReferenceTimes(copyPostureReferenceTimes(segment.postureReferenceTimes));
     setHandBehaviorMatchingEnabled(segment.handBehaviorMatchingEnabled ?? true);
     setHandBehaviorReferenceTimes(copyHandBehaviorReferenceTimes(segment.handBehaviorReferenceTimes));
+    setFootLandmarks(copyFootLandmarks(segment.footLandmarks));
     setLeftRightOrientation(segment.leftRightOrientation);
     if (seekToStart) navigateRoiSetupFrame(segment.startTimeS);
   };
@@ -2248,11 +2401,12 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
           postureReferenceTimes: copyPostureReferenceTimes(postureReferenceTimes),
           handBehaviorMatchingEnabled,
           handBehaviorReferenceTimes: copyHandBehaviorReferenceTimes(handBehaviorReferenceTimes),
+          footLandmarks: copyFootLandmarks(footLandmarks),
           leftRightOrientation,
         }
         : segment
     ))));
-  }, [forefootEnabled, handBehaviorMatchingEnabled, handBehaviorReferenceTimes, leftRightOrientation, postureMatchingEnabled, postureReferenceTimes, roiLayout, rois, selectedRegionSegmentId]);
+  }, [footLandmarks, forefootEnabled, handBehaviorMatchingEnabled, handBehaviorReferenceTimes, leftRightOrientation, postureMatchingEnabled, postureReferenceTimes, roiLayout, rois, selectedRegionSegmentId]);
 
   useEffect(() => {
     if (!videoPlaying || !activeRegionSegment || activeRegionSegment.id === selectedRegionSegmentId || running) return;
@@ -2277,6 +2431,13 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     const canvas = event.currentTarget;
     const start = pointerToCanvasFrame(event, canvas);
     if (!start) return;
+    if (landmarkPlacementEnabled && mode !== "hands") {
+      setFootLandmarks((current) => ({
+        ...current,
+        [activeFootLandmark]: { x: start.x, y: start.y },
+      }));
+      return;
+    }
     const selectedRoi = rois[activeRoi];
     const resizeCorner = selectedRoi ? findRoiResizeCorner(start, selectedRoi) : null;
     const visibleRoiKeys = [
@@ -2608,6 +2769,8 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         roiLayout,
         rois: analysisRois,
         regionSegments: analysisRegionSegments,
+        footLandmarks: copyFootLandmarks(footLandmarks),
+        footLandmarkGeometry,
         postureReferenceTimes,
         handBehaviorReferenceTimes,
         leftCoverage: hasLegs
@@ -2649,6 +2812,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
         )
         : null;
       nextResult.findings = buildFindings(nextResult);
+      if (hasLegs && footLandmarkGeometry.marked_count > 0) {
+        nextResult.findings.unshift(`Manual foot landmark geometry was available for review (${footLandmarkGeometry.marked_count}/${footLandmarkGeometry.expected_count} landmarks marked; fan angle ${footLandmarkGeometry.fan_angle_deg ?? "not available"}°).`);
+      }
       setResult(nextResult);
     } catch (caughtError) {
       setError(caughtError?.message || "Motion analysis could not be completed.");
@@ -3317,12 +3483,85 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
                 <span className="text-[11px] text-muted-foreground">Scrub here to find postures without leaving the rectangle editor.</span>
               </div>
             </div>
+            {mode !== "hands" && (
+              <div className="space-y-3 rounded-lg border border-[#38bdf8]/25 bg-[#38bdf8]/[0.05] p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[#7dd3fc]">Manual foot landmark calibration</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                      Optional review geometry for existing videos. Enable placement, choose a landmark, then click the paused frame. Points are saved as normalized source-frame coordinates.
+                    </p>
+                  </div>
+                  <label className="inline-flex items-center gap-2 rounded-full border border-[#38bdf8]/30 bg-card/60 px-2.5 py-1 text-[11px] font-medium text-[#bae6fd]">
+                    <input
+                      type="checkbox"
+                      checked={landmarkPlacementEnabled}
+                      onChange={(event) => setLandmarkPlacementEnabled(event.target.checked)}
+                      disabled={running || !roiFrameReady}
+                      className="h-3.5 w-3.5 accent-[#38bdf8]"
+                    />
+                    Place landmarks
+                  </label>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {FOOT_LANDMARKS.map((landmark) => (
+                    <button
+                      key={landmark.key}
+                      type="button"
+                      onClick={() => {
+                        setActiveFootLandmark(landmark.key);
+                        setLandmarkPlacementEnabled(true);
+                      }}
+                      disabled={running || !roiFrameReady}
+                      className={`rounded-lg border px-2.5 py-2 text-left text-[11px] font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-45 ${
+                        activeFootLandmark === landmark.key
+                          ? "border-[#38bdf8] bg-[#38bdf8]/15 text-[#bae6fd] ring-1 ring-[#38bdf8]/20"
+                          : "border-border bg-card/60 text-foreground hover:border-[#38bdf8]/35"
+                      }`}
+                    >
+                      <span className="block">{landmark.label}</span>
+                      <span className="mt-0.5 block font-mono text-[10px] text-muted-foreground">
+                        {footLandmarks[landmark.key]
+                          ? `${Math.round(footLandmarks[landmark.key].x * 100)}%, ${Math.round(footLandmarks[landmark.key].y * 100)}%`
+                          : "not marked"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-lg border border-border bg-card/50 px-3 py-2"><p className="text-[10px] uppercase tracking-wider text-muted-foreground">Fan angle</p><p className="mt-1 font-mono text-base font-semibold text-foreground">{footLandmarkGeometry.fan_angle_deg != null ? `${footLandmarkGeometry.fan_angle_deg}°` : "—"}</p></div>
+                  <div className="rounded-lg border border-border bg-card/50 px-3 py-2"><p className="text-[10px] uppercase tracking-wider text-muted-foreground">Toe / heel gap</p><p className="mt-1 font-mono text-base font-semibold text-foreground">{footLandmarkGeometry.toe_gap_normalized ?? "—"} / {footLandmarkGeometry.heel_gap_normalized ?? "—"}</p></div>
+                  <div className="rounded-lg border border-border bg-card/50 px-3 py-2"><p className="text-[10px] uppercase tracking-wider text-muted-foreground">Left planted proxy</p><p className="mt-1 text-xs font-medium text-foreground">{plantedProxyLabel(footLandmarkGeometry.left_planted_proxy)}</p></div>
+                  <div className="rounded-lg border border-border bg-card/50 px-3 py-2"><p className="text-[10px] uppercase tracking-wider text-muted-foreground">Right planted proxy</p><p className="mt-1 text-xs font-medium text-foreground">{plantedProxyLabel(footLandmarkGeometry.right_planted_proxy)}</p></div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" onClick={() => setRoiPreviewZoom((current) => Math.min(5, Math.round((current + 0.25) * 100) / 100))} disabled={running} className="rounded-md border border-border bg-card px-2.5 py-1.5 text-[11px] font-medium text-foreground hover:border-[#38bdf8]/35 disabled:opacity-45">Zoom +</button>
+                  <button type="button" onClick={() => setRoiPreviewZoom((current) => Math.max(1, Math.round((current - 0.25) * 100) / 100))} disabled={running} className="rounded-md border border-border bg-card px-2.5 py-1.5 text-[11px] font-medium text-foreground hover:border-[#38bdf8]/35 disabled:opacity-45">Zoom -</button>
+                  <button type="button" onClick={() => { setRoiPreviewZoom(2.5); setRoiPreviewPan({ x: 0, y: 0 }); }} disabled={running} className="rounded-md border border-border bg-card px-2.5 py-1.5 text-[11px] font-medium text-foreground hover:border-[#38bdf8]/35 disabled:opacity-45">Upper-left PiP zoom</button>
+                  <button type="button" onClick={() => { setRoiPreviewZoom(1); setRoiPreviewPan({ x: 0, y: 0 }); }} disabled={running} className="rounded-md border border-border bg-card px-2.5 py-1.5 text-[11px] font-medium text-foreground hover:border-[#38bdf8]/35 disabled:opacity-45">Fit frame</button>
+                  <button type="button" onClick={() => setRoiPreviewPan((current) => ({ ...current, x: current.x + 40 }))} disabled={running || roiPreviewZoom <= 1} className="rounded-md border border-border bg-card px-2 py-1.5 text-[11px] font-medium text-foreground hover:border-[#38bdf8]/35 disabled:opacity-45">Pan →</button>
+                  <button type="button" onClick={() => setRoiPreviewPan((current) => ({ ...current, x: current.x - 40 }))} disabled={running || roiPreviewZoom <= 1} className="rounded-md border border-border bg-card px-2 py-1.5 text-[11px] font-medium text-foreground hover:border-[#38bdf8]/35 disabled:opacity-45">Pan ←</button>
+                  <button type="button" onClick={() => setRoiPreviewPan((current) => ({ ...current, y: current.y + 40 }))} disabled={running || roiPreviewZoom <= 1} className="rounded-md border border-border bg-card px-2 py-1.5 text-[11px] font-medium text-foreground hover:border-[#38bdf8]/35 disabled:opacity-45">Pan ↓</button>
+                  <button type="button" onClick={() => setRoiPreviewPan((current) => ({ ...current, y: current.y - 40 }))} disabled={running || roiPreviewZoom <= 1} className="rounded-md border border-border bg-card px-2 py-1.5 text-[11px] font-medium text-foreground hover:border-[#38bdf8]/35 disabled:opacity-45">Pan ↑</button>
+                  <label className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 text-[11px] text-foreground">Dot size<input type="range" min="4" max="16" value={landmarkDisplaySize} onChange={(event) => setLandmarkDisplaySize(Number(event.target.value))} className="w-20" /><span className="font-mono text-muted-foreground">{landmarkDisplaySize}px</span></label>
+                  <button type="button" onClick={() => setFootLandmarks(emptyFootLandmarks())} disabled={running} className="rounded-md border border-border bg-card px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground hover:border-destructive/40 hover:text-destructive disabled:opacity-45">Clear landmarks</button>
+                </div>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">Zoom/pan only changes this placement view. Saved landmarks stay normalized to the source video frame, so geometry remains stable across preview zoom levels.</p>
+              </div>
+            )}
             <div className="overflow-hidden rounded-lg border border-border bg-black">
-              <canvas
-                ref={roiCanvasRef}
-                onMouseDown={handleRoiMouseDown}
-                className={`block aspect-video max-h-[52vh] w-full object-contain ${roiLayout === "pip" && !running ? "cursor-crosshair" : ""}`}
-              />
+              <div
+                style={{
+                  transform: `translate(${roiPreviewPan.x}px, ${roiPreviewPan.y}px) scale(${roiPreviewZoom})`,
+                  transformOrigin: "top left",
+                }}
+              >
+                <canvas
+                  ref={roiCanvasRef}
+                  onMouseDown={handleRoiMouseDown}
+                  className={`block aspect-video max-h-[52vh] w-full object-contain ${roiLayout === "pip" && !running ? "cursor-crosshair" : ""}`}
+                />
+              </div>
             </div>
             <p className="text-[11px] text-muted-foreground">
               These colored rectangles are the exact crop regions used for the next analysis. Click a rectangle to select it; white corner handles resize the selected region. Anatomical left/right assignment is shown above.
