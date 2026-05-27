@@ -6,6 +6,23 @@ function present(value) {
   return value != null && value !== "";
 }
 
+function manualGeometryMarkedCount(geometry) {
+  return Number(geometry?.marked_count || 0);
+}
+
+function geometryValue(value, suffix = "") {
+  return value == null ? "unknown" : `${value}${suffix}`;
+}
+
+function summarizeManualFootLandmarkGeometry(geometry, label = "Manual foot landmark geometry") {
+  if (!geometry || manualGeometryMarkedCount(geometry) <= 0) return null;
+  return `${label}: ${geometry.marked_count}/${geometry.expected_count || 6} landmarks marked; fan angle ${geometryValue(geometry.fan_angle_deg, "°")}; toe gap ${geometryValue(geometry.toe_gap_normalized)}; heel gap ${geometryValue(geometry.heel_gap_normalized)}; left axis ${geometryValue(geometry.left_axis_deg, "°")}; right axis ${geometryValue(geometry.right_axis_deg, "°")}; left planted proxy ${geometryValue(geometry.left_planted_proxy)}; right planted proxy ${geometryValue(geometry.right_planted_proxy)}.`;
+}
+
+function manualFootLandmarkSegments(motion) {
+  return rows(motion?.region_segments).filter((segment) => manualGeometryMarkedCount(segment?.manual_foot_landmark_geometry) > 0);
+}
+
 function eventCategories(event) {
   return Array.isArray(event?.category) ? event.category : [event?.category].filter(Boolean);
 }
@@ -61,6 +78,8 @@ export function hasSavedMotionTelemetry(session) {
     || present(motion.hand_behavior_summary)
     || present(motion.lower_body_pattern_summary)
     || present(motion.lower_body_posture_summary)
+    || present(motion.manual_foot_landmark_geometry)
+    || rows(motion.region_segments).some((segment) => present(segment.manual_foot_landmark_geometry))
     || rows(motion.region_segments).length
     || present(motion.left_lower_body_average_activity)
     || present(motion.right_lower_body_average_activity)
@@ -94,6 +113,14 @@ export function getMotionEvidenceFreshnessKey(session) {
         end_time_s: segment.end_time_s,
         label: segment.label,
       })),
+      manualFootLandmarkGeometry: motion.manual_foot_landmark_geometry || null,
+      manualFootLandmarkSegments: rows(motion.region_segments).map((segment) => ({
+        id: segment.id,
+        start_time_s: segment.start_time_s,
+        end_time_s: segment.end_time_s,
+        label: segment.label,
+        geometry: segment.manual_foot_landmark_geometry || null,
+      })),
       quality: motion.quality_indicators || null,
     }),
     timeline.length,
@@ -111,6 +138,7 @@ export function getMotionEvidenceSummary(session) {
   const verifiedPromotedEvents = promotedEvents.filter(isVerifiedMotionEvent);
   const hasSavedTelemetry = hasSavedMotionTelemetry(session);
   const hasPromotedEvents = promotedEvents.length > 0;
+  const manualFootLandmarkSegmentRows = manualFootLandmarkSegments(motion);
   const sourceTypes = [
     hasSavedTelemetry ? "saved_telemetry" : null,
     hasPromotedEvents ? "promoted_motion_events" : null,
@@ -140,6 +168,10 @@ export function getMotionEvidenceSummary(session) {
     handBehaviorSummary: motion.hand_behavior_summary || null,
     lowerBodyPatternProxySummary: motion.lower_body_pattern_summary || null,
     footAppearanceCandidateSummary: motion.lower_body_posture_summary || null,
+    manualFootLandmarks: motion.manual_foot_landmarks || null,
+    manualFootLandmarkGeometry: motion.manual_foot_landmark_geometry || null,
+    manualFootLandmarkSegmentCount: manualFootLandmarkSegmentRows.length,
+    manualFootLandmarkSegments: manualFootLandmarkSegmentRows,
     regionSegments: rows(motion.region_segments),
     regionSegmentSummary: motion.region_segment_summary || null,
     regionSegmentCount: rows(motion.region_segments).length,
@@ -177,6 +209,20 @@ export function getMotionEvidenceDigest(session) {
   if (evidence.asymmetrySummary) {
     const asymmetry = evidence.asymmetrySummary;
     lines.push(`Lower-body asymmetry summary: average index ${asymmetry.averageIndex ?? "unknown"}; ${asymmetry.predominantSide === "balanced" ? "no clear side predominance" : `${asymmetry.predominantSide || "unknown"} predominance${asymmetry.predominantPct != null ? ` in ${asymmetry.predominantPct}% of active paired windows` : ""}`}.`);
+  }
+  const standaloneManualGeometry = summarizeManualFootLandmarkGeometry(evidence.manualFootLandmarkGeometry);
+  if (standaloneManualGeometry) {
+    lines.push(`${standaloneManualGeometry} Treat this as user-placed visual geometry evidence from the saved video frame, not automatic tracking, force, pressure, intent, or physiological cause.`);
+  }
+  if (evidence.manualFootLandmarkSegmentCount) {
+    lines.push(`Manual foot landmark geometry is available for ${evidence.manualFootLandmarkSegmentCount} position segment${evidence.manualFootLandmarkSegmentCount === 1 ? "" : "s"}. These segment-level landmarks should be used to interpret foot spread, foot-axis angle, toe/heel spacing, and planted/neutral proxies only within the matching position segment.`);
+    evidence.manualFootLandmarkSegments.slice(0, 6).forEach((segment) => {
+      const summary = summarizeManualFootLandmarkGeometry(
+        segment.manual_foot_landmark_geometry,
+        `Segment ${segment.label || segment.start_time_s || "unknown"} manual foot geometry`,
+      );
+      if (summary) lines.push(summary);
+    });
   }
   if (evidence.handCadenceSummary?.movement_cycles_per_minute_estimate != null) {
     lines.push(`Hand-movement cadence proxy: approximately ${evidence.handCadenceSummary.movement_cycles_per_minute_estimate} movement cycles per minute; pauses of at least two seconds: ${evidence.handCadenceSummary.pause_count ?? "unknown"}.`);

@@ -134,6 +134,29 @@ export default function SavedMotionSummaryCard({
   const lowerBodyPatterns = savedSummary.lower_body_pattern_summary;
   const postureSummary = savedSummary.lower_body_posture_summary;
   const handBehaviorSummary = savedSummary.hand_behavior_summary;
+  const manualGeometryCards = useMemo(() => {
+    const cards = [];
+    if ((Number(savedSummary.manual_foot_landmark_geometry?.marked_count) || 0) > 0) {
+      cards.push({
+        key: "summary",
+        label: "Saved manual foot geometry",
+        geometry: savedSummary.manual_foot_landmark_geometry,
+        landmarks: savedSummary.manual_foot_landmarks,
+      });
+    }
+    (Array.isArray(savedSummary.region_segments) ? savedSummary.region_segments : []).forEach((segment) => {
+      if ((Number(segment.manual_foot_landmark_geometry?.marked_count) || 0) > 0) {
+        cards.push({
+          key: segment.id || `${segment.start_time_s}-${segment.label}`,
+          label: segment.label || `Position ${formatTime(segment.start_time_s)}`,
+          timeS: segment.start_time_s,
+          geometry: segment.manual_foot_landmark_geometry,
+          landmarks: segment.manual_foot_landmarks,
+        });
+      }
+    });
+    return cards;
+  }, [savedSummary.manual_foot_landmark_geometry, savedSummary.manual_foot_landmarks, savedSummary.region_segments]);
   const timeline = useMemo(() => (
     Array.isArray(savedSummary.derived_timeline)
       ? savedSummary.derived_timeline.map((point) => ({
@@ -465,6 +488,48 @@ export default function SavedMotionSummaryCard({
           {!savedSummary.lower_body_tracking_method && (
             <div className="rounded-lg border border-amber-400/25 bg-amber-400/[0.07] px-3 py-2 text-xs leading-relaxed text-amber-200">
               This saved result was created before region-motion tracking was recorded. It may differ substantially from a new live analysis until you save a new summary.
+            </div>
+          )}
+
+          {manualGeometryCards.length > 0 && (
+            <div className="rounded-lg border border-[#38bdf8]/25 bg-[#38bdf8]/[0.05] p-2.5 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-[#7dd3fc]">Manual Foot Landmark Geometry</p>
+                <span className="text-[10px] text-muted-foreground">User-placed visual landmarks</span>
+              </div>
+              <div className={`grid gap-2 ${compact ? "grid-cols-1" : "md:grid-cols-2"}`}>
+                {manualGeometryCards.map((entry) => (
+                  <div key={entry.key} className="rounded-lg border border-[#38bdf8]/15 bg-card/60 p-2.5 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-foreground">{entry.label}</p>
+                      {entry.timeS != null && (
+                        <button
+                          type="button"
+                          onClick={() => onSeek?.(entry.timeS)}
+                          disabled={!onSeek}
+                          className="inline-flex items-center gap-1 rounded-md border border-[#38bdf8]/25 bg-[#38bdf8]/[0.06] px-2 py-1 font-mono text-[10px] text-[#bae6fd] enabled:hover:border-[#38bdf8]/45 disabled:cursor-default"
+                        >
+                          <Play className="h-3 w-3" />
+                          {formatTime(entry.timeS)}
+                        </button>
+                      )}
+                    </div>
+                    <div className={`grid gap-2 ${compact ? "grid-cols-2" : "grid-cols-2 xl:grid-cols-4"}`}>
+                      <Metric label="Marked" value={`${entry.geometry.marked_count}/${entry.geometry.expected_count || 6}`} />
+                      <Metric label="Fan Angle" value={entry.geometry.fan_angle_deg} suffix="°" />
+                      <Metric label="Toe Gap" value={entry.geometry.toe_gap_normalized} />
+                      <Metric label="Heel Gap" value={entry.geometry.heel_gap_normalized} />
+                      <Metric label="Left Axis" value={entry.geometry.left_axis_deg} suffix="°" />
+                      <Metric label="Right Axis" value={entry.geometry.right_axis_deg} suffix="°" />
+                      <Metric label="Left Planted Proxy" value={entry.geometry.left_planted_proxy} />
+                      <Metric label="Right Planted Proxy" value={entry.geometry.right_planted_proxy} />
+                    </div>
+                    <p className="text-[10px] leading-relaxed text-muted-foreground">
+                      Manual landmarks describe visible frame geometry only. Use with the saved video frame for foot spread, axis, toe/heel spacing, and planted/neutral review; do not treat as force, pressure, intent, or physiological cause.
+                    </p>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
