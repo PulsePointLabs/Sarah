@@ -1927,6 +1927,30 @@ function PatternProxyMetric({ label, count }) {
         </span>
       </div>
       <p className={`mt-1 font-mono text-base font-semibold ${severity.numberClassName}`}>{count}</p>
+      <div className="motion-lab-floating-navigator fixed bottom-4 right-4 z-40 hidden max-w-[11rem] rounded-2xl border border-primary/25 bg-card/95 p-2 shadow-2xl shadow-background/40 backdrop-blur supports-[backdrop-filter]:bg-card/85 xl:block">
+        <p className="mb-1.5 px-1 text-[9px] font-semibold uppercase tracking-wider text-primary">Motion Lab Nav</p>
+        <div className="grid gap-1">
+          {[
+            ["motion-lab-top", "Top"],
+            ["motion-lab-setup", "Setup"],
+            ["motion-lab-regions", "Regions"],
+            ["motion-lab-landmarks", "Landmarks"],
+            ["motion-lab-preview", "Preview"],
+            ["motion-lab-results", "Results"],
+            ["motion-lab-findings", "Findings"],
+            ["motion-lab-trace", "Trace"],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => scrollToMotionSection(id)}
+              className="rounded-lg border border-border/70 bg-muted/20 px-2 py-1 text-left text-[10px] font-medium text-foreground transition-colors hover:border-primary/45 hover:bg-primary/[0.1] hover:text-primary"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -3070,9 +3094,13 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   };
 
   const ModeIcon = selectedMode.icon;
+  const scrollToMotionSection = (id) => {
+    if (typeof document === "undefined") return;
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   return (
-    <div className="rounded-xl border border-border bg-card p-4 space-y-4">
+    <div id="motion-lab-top" className="relative rounded-xl border border-border bg-card p-4 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
           <Activity className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
