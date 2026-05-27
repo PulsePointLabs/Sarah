@@ -16,7 +16,12 @@ function geometryValue(value, suffix = "") {
 
 function summarizeManualFootLandmarkGeometry(geometry, label = "Manual foot landmark geometry") {
   if (!geometry || manualGeometryMarkedCount(geometry) <= 0) return null;
-  return `${label}: ${geometry.marked_count}/${geometry.expected_count || 6} landmarks marked; fan angle ${geometryValue(geometry.fan_angle_deg, "°")}; toe gap ${geometryValue(geometry.toe_gap_normalized)}; heel gap ${geometryValue(geometry.heel_gap_normalized)}; left axis ${geometryValue(geometry.left_axis_deg, "°")}; right axis ${geometryValue(geometry.right_axis_deg, "°")}; left planted proxy ${geometryValue(geometry.left_planted_proxy)}; right planted proxy ${geometryValue(geometry.right_planted_proxy)}.`;
+  return [
+    `${label}: ${geometry.marked_count}/${geometry.expected_count || 6} landmarks marked.`,
+    `Foot spread / posture geometry: fan angle ${geometryValue(geometry.fan_angle_deg, "°")}; toe gap ${geometryValue(geometry.toe_gap_normalized)}; heel gap ${geometryValue(geometry.heel_gap_normalized)}.`,
+    `Foot axis geometry: left axis ${geometryValue(geometry.left_axis_deg, "°")}; right axis ${geometryValue(geometry.right_axis_deg, "°")}.`,
+    `Planted-vs-neutral proxy: left ${geometryValue(geometry.left_planted_proxy)}; right ${geometryValue(geometry.right_planted_proxy)}.`,
+  ].join(" ");
 }
 
 function manualFootLandmarkSegments(motion) {
@@ -213,9 +218,11 @@ export function getMotionEvidenceDigest(session) {
   const standaloneManualGeometry = summarizeManualFootLandmarkGeometry(evidence.manualFootLandmarkGeometry);
   if (standaloneManualGeometry) {
     lines.push(`${standaloneManualGeometry} Treat this as user-placed visual geometry evidence from the saved video frame, not automatic tracking, force, pressure, intent, or physiological cause.`);
+    lines.push("When manual foot landmark geometry is present, explicitly mention toe gap, heel gap, fan angle, left/right foot-axis angles, and planted-vs-neutral proxy values when discussing foot spread, fanning, toe curl, planted posture, or lower-body positioning. Heel gap and toe gap together are especially important for distinguishing whole-foot spread from forefoot-only fanning.");
   }
   if (evidence.manualFootLandmarkSegmentCount) {
     lines.push(`Manual foot landmark geometry is available for ${evidence.manualFootLandmarkSegmentCount} position segment${evidence.manualFootLandmarkSegmentCount === 1 ? "" : "s"}. These segment-level landmarks should be used to interpret foot spread, foot-axis angle, toe/heel spacing, and planted/neutral proxies only within the matching position segment.`);
+    lines.push("For segment-level manual foot geometry, cite the actual toe gap and heel gap when available. Use heel gap plus toe gap to distinguish whole-foot base spread from forefoot/toe fanning, and use left/right axis angles to describe asymmetry in foot orientation.");
     evidence.manualFootLandmarkSegments.slice(0, 6).forEach((segment) => {
       const summary = summarizeManualFootLandmarkGeometry(
         segment.manual_foot_landmark_geometry,
