@@ -3363,8 +3363,8 @@ return (
       )}
 
       {regionsExpanded && (
-      <div id="motion-lab-regions" className="scroll-mt-32 rounded-lg border border-border bg-muted/10 p-3 space-y-3 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(24rem,34rem)] xl:items-start xl:gap-3 xl:space-y-0 [&>*]:xl:col-start-2">
-        {/* MOTION_LAB_REGION_EDITOR_WORKSPACE_V2 */}
+      <div id="motion-lab-regions" className="scroll-mt-32 rounded-lg border border-border bg-muted/10 p-3 space-y-3 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(24rem,34rem)] xl:items-start xl:gap-3 xl:space-y-0 xl:[&>*]:col-start-2">
+        {/* MOTION_LAB_REGION_EDITOR_WORKSPACE_V3 */}
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-primary">Analysis Regions</p>
@@ -3552,7 +3552,7 @@ return (
 
         {roiLayout === "pip" ? (
           <>
-            <div className="space-y-2">
+            <div className="space-y-2 xl:col-start-2">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Click a region to edit</p>
               <div className="flex flex-wrap items-center gap-2">
               <button
@@ -3620,7 +3620,7 @@ return (
               </div>
             </div>
             {appliedLowerBodyMethod === "regionMotion" && (
-              <div className="space-y-2 rounded-lg border border-border bg-card/40 p-3">
+              <div className="space-y-2 rounded-lg border border-border bg-card/40 p-3 xl:col-start-2">
                 <label className="inline-flex items-center gap-2 text-xs text-foreground">
                   <input
                     type="checkbox"
@@ -3660,7 +3660,7 @@ return (
               </div>
             )}
             {mode !== "hands" && appliedLowerBodyMethod === "regionMotion" && (
-              <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/[0.04] p-3">
+              <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/[0.04] p-3 xl:col-start-2">
                 <label className="inline-flex items-center gap-2 text-xs font-medium text-foreground">
                   <input
                     type="checkbox"
@@ -3734,7 +3734,7 @@ return (
                 running={running}
               />
             )}
-            <div className="grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-3">
+            <div className="grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-1 xl:col-start-2">
               <p><span className="font-medium text-primary">Your left foot ({anatomicalScreenSide(leftRightOrientation, "left")}):</span> {formatRoiLabel(appliedRois.leftLowerBody)}</p>
               <p><span className="font-medium text-[#fbbf24]">Your right foot ({anatomicalScreenSide(leftRightOrientation, "right")}):</span> {formatRoiLabel(appliedRois.rightLowerBody)}</p>
               <p><span className="font-medium text-[#c4b5fd]">Hands / main:</span> {formatRoiLabel(appliedRois.hands)}</p>
@@ -3766,7 +3766,7 @@ return (
           </>
         )}
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 xl:col-start-2">
           <button
             type="button"
             onClick={() => captureRoiSetupFrame(videoTime)}
@@ -3901,7 +3901,7 @@ return (
                 <p className="text-[11px] leading-relaxed text-muted-foreground">Zoom/pan only changes this placement view. Saved landmarks stay normalized to the source video frame, so geometry remains stable across preview zoom levels.</p>
               </div>
             )}
-            <div className="overflow-hidden rounded-lg border border-border bg-black xl:col-start-1 xl:row-start-1 xl:row-span-[40]">
+            <div className="overflow-hidden rounded-lg border border-border bg-black xl:col-start-1 xl:row-start-1 xl:row-span-[80]">
               <div
                 style={{
                   transform: `translate(${roiPreviewPan.x}px, ${roiPreviewPan.y}px) scale(${roiPreviewZoom})`,
@@ -3915,7 +3915,7 @@ return (
                 />
               </div>
             </div>
-            <p className="text-[11px] text-muted-foreground xl:col-start-1">
+            <p className="text-[11px] text-muted-foreground xl:col-start-1 xl:row-start-[81]">
               These colored rectangles are the exact crop regions used for the next analysis. This paused-frame editor is the main workspace; all setup, calibration, scrubber, and landmark controls are docked in the settings rail.
             </p>
           </div>
