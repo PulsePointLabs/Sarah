@@ -533,9 +533,9 @@ export default function MotionLab() {
             </div>
           </aside>
 
-          <section className="grid gap-4 2xl:grid-cols-[minmax(44rem,1.35fr)_minmax(34rem,0.9fr)]">
-            {/* MOTION_LAB_VIDEO_FIRST_WORKSPACE_V1 */}
-            <div className="space-y-4 2xl:sticky 2xl:top-4 2xl:self-start">
+          <section className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(22rem,28rem)]">
+            {/* MOTION_LAB_EDITOR_FIRST_WORKSPACE_V1 */}
+            <div className="order-2 space-y-4 2xl:sticky 2xl:top-4 2xl:self-start">
               {videoSrc ? (
               <div
                 ref={previewRef}
@@ -585,7 +585,7 @@ export default function MotionLab() {
                   src={videoSrc}
                   controls
                   playsInline
-                  className={`${previewFloating ? "max-h-[42vh]" : "2xl:max-h-[calc(100vh-13rem)] max-h-[72vh]"} w-full rounded-lg bg-black object-contain`}
+                  className={`${previewFloating ? "max-h-[42vh]" : "2xl:max-h-[32vh] max-h-[48vh]"} w-full rounded-lg bg-black object-contain`}
                   onTimeUpdate={(event) => updateFeedWorkspace(feedRole, { videoTime: event.currentTarget.currentTime })}
                   onPlay={() => updateFeedWorkspace(feedRole, { videoPlaying: true })}
                   onPause={() => updateFeedWorkspace(feedRole, { videoPlaying: false })}
@@ -621,9 +621,9 @@ export default function MotionLab() {
               )}
             </div>
 
-            <div className="space-y-4 min-w-0">
-              <div className="rounded-xl border border-primary/25 bg-primary/[0.06] p-3 text-xs leading-relaxed text-muted-foreground 2xl:hidden">
-                <span className="font-semibold text-primary">Video-first workspace:</span> on wider screens, the video stays pinned while setup, regions, landmarks, findings, and summaries scroll beside it.
+            <div className="order-1 space-y-4 min-w-0">
+              <div className="rounded-xl border border-primary/25 bg-primary/[0.06] p-3 text-xs leading-relaxed text-muted-foreground">
+                <span className="font-semibold text-primary">Editor-first workspace:</span> the Local Motion Analysis panel is now the primary workspace. Region editing, manual landmarks, and analysis preview stay in the main column; the regular video is only a compact reference/seeking player.
               </div>
 
             {selectedSession?.motion_analysis_summary && evidence.hasSavedTelemetry && (
