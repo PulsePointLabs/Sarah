@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, CheckCircle2, Footprints, Hand, Loader2, Play, Save, Settings2, ShieldCheck, Square } from "lucide-react";
+import { Activity, CheckCircle2, Footprints, Hand, Loader2, MousePointer2, Play, Save, Settings2, ShieldCheck, Square } from "lucide-react";
 import {
   CartesianGrid,
   Legend,
@@ -2278,6 +2278,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const roiFrameCanvasRef = useRef(null);
   const roiFrameRequestRef = useRef(0);
   const roiDragStartRef = useRef(null);
+  const autoPlacementVideoRef = useRef(null);
   const [mode, setMode] = useState("combined");
   const [windowMode, setWindowMode] = useState("segment");
   const [roiLayout, setRoiLayout] = useState("pip");
@@ -2292,6 +2293,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const [landmarkDisplaySize, setLandmarkDisplaySize] = useState(8);
   const [roiPreviewZoom, setRoiPreviewZoom] = useState(1);
   const [roiPreviewPan, setRoiPreviewPan] = useState({ x: 0, y: 0 });
+  const [roiEditorHeight, setRoiEditorHeight] = useState(500);
   const [forefootEnabled, setForefootEnabled] = useState(false);
   const [postureMatchingEnabled, setPostureMatchingEnabled] = useState(true);
   const [postureReferenceTimes, setPostureReferenceTimes] = useState(() => emptyPostureReferenceTimes());
@@ -2337,8 +2339,9 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const [acceptingSuggestions, setAcceptingSuggestions] = useState(false);
   const [expandedPeakClusters, setExpandedPeakClusters] = useState([]);
   const [setupExpanded, setSetupExpanded] = useState(false);
-  const [regionsExpanded, setRegionsExpanded] = useState(false);
+  const [regionsExpanded, setRegionsExpanded] = useState(splitWorkspaceLayout);
   const [previewExpanded, setPreviewExpanded] = useState(false);
+  const [activeEditorSection, setActiveEditorSection] = useState("rectangles");
 
   useEffect(() => {
     stopRequestedRef.current = true;
@@ -2365,7 +2368,18 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     setLandmarkPlacementEnabled(false);
     setRoiPreviewZoom(1);
     setRoiPreviewPan({ x: 0, y: 0 });
+    setActiveEditorSection("rectangles");
+    autoPlacementVideoRef.current = null;
   }, [videoSrc]);
+
+  useEffect(() => {
+    if (!roiFrameReady && ["position", "size", "landmarks"].includes(activeEditorSection)) {
+      setActiveEditorSection("rectangles");
+    }
+    if (mode === "hands" && activeEditorSection === "landmarks") {
+      setActiveEditorSection("rectangles");
+    }
+  }, [activeEditorSection, mode, roiFrameReady]);
 
   useEffect(() => {
     previewEnabledRef.current = previewEnabled;
@@ -2553,6 +2567,15 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
     captureRoiSetupFrame(nextTime);
     if (syncRoiWithMainPlayer) onSeek?.(nextTime);
   };
+
+  useEffect(() => {
+    if (!splitWorkspaceLayout || !videoSrc || loadingRoiFrame || roiFrameReady) return;
+    if (autoPlacementVideoRef.current === videoSrc) return;
+    autoPlacementVideoRef.current = videoSrc;
+    setRegionsExpanded(true);
+    setActiveEditorSection("rectangles");
+    captureRoiSetupFrame(0);
+  }, [loadingRoiFrame, roiFrameReady, splitWorkspaceLayout, videoSrc]);
 
   const createRegionSegment = (label, startTimeS, source = null, preserveCalibration = false) => ({
     id: `region-segment-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -3148,22 +3171,51 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   };
 
   const ModeIcon = selectedMode.icon;
+  const editorNavItems = [
+    { key: "view", label: "View mode", available: true },
+    { key: "segments", label: "Position changes", available: true },
+    { key: "rectangles", label: roiLayout === "pip" ? "Tracking rectangles" : "Full-frame tracking", available: true },
+    { key: "frame", label: "Placement frame", available: true },
+    { key: "position", label: "Scrub position", available: roiFrameReady },
+    { key: "size", label: "View size", available: roiFrameReady },
+    { key: "landmarks", label: "Landmarks", available: roiFrameReady && mode !== "hands" },
+  ].filter((item) => item.available);
+  const editorPanelClass = (key, baseClass = "") => (
+    splitWorkspaceLayout
+      ? `${baseClass} ${activeEditorSection === key ? "2xl:col-start-1 2xl:row-start-2" : "hidden"}`
+      : `${baseClass} xl:col-start-2`
+  );
+  const placementPlaceholderHeight = videoSrc ? roiEditorHeight : 220;
+  const placementEditorStyle = splitWorkspaceLayout
+    ? {
+      maxHeight: `min(${roiEditorHeight}px, calc(100vh - 7rem))`,
+    }
+    : undefined;
 
 return (
     <div id="motion-lab-top" className={splitWorkspaceLayout ? "contents" : "relative rounded-xl border border-border bg-card p-4 space-y-4"}>
-      <div className={`flex flex-wrap items-start justify-between gap-3 ${splitWorkspaceLayout ? "rounded-xl border border-border bg-card p-4 2xl:col-start-2" : ""}`}>
+      <div className={`flex flex-wrap items-start justify-between gap-3 ${splitWorkspaceLayout ? "rounded-xl border border-border bg-card p-3 2xl:col-start-2" : ""}`}>
         <div className="flex min-w-0 items-start gap-3">
-          <Activity className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+          {!splitWorkspaceLayout && <Activity className="mt-0.5 h-4 w-4 shrink-0 text-primary" />}
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-primary">Local Motion Analysis</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Experimental local movement tracking for review support. Results remain temporary unless you explicitly save a compact summary to a selected session.
+            <p className="text-xs font-semibold uppercase tracking-wider text-primary">
+              {splitWorkspaceLayout ? "Motion controls" : "Local Motion Analysis"}
             </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {analysisFeedLabel
-                ? `${analysisFeedLabel} is configured independently. Finalize this derived result to combine its supported signals with other finalized feeds for the session.`
-                : "Combined tracking expects both views in one composite video; separate feeds can be configured and finalized independently."}
-            </p>
+            {!splitWorkspaceLayout && (
+              <>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Experimental local movement tracking for review support. Results remain temporary unless you explicitly save a compact summary to a selected session.
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {analysisFeedLabel
+                    ? `${analysisFeedLabel} is configured independently. Finalize this derived result to combine its supported signals with other finalized feeds for the session.`
+                    : "Combined tracking expects both views in one composite video; separate feeds can be configured and finalized independently."}
+                </p>
+              </>
+            )}
+            {splitWorkspaceLayout && analysisFeedLabel && (
+              <p className="mt-1 text-[11px] text-muted-foreground">{analysisFeedLabel}</p>
+            )}
           </div>
         </div>
         <div className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/[0.08] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-primary">
@@ -3172,7 +3224,15 @@ return (
         </div>
       </div>
 
-      <div className={`rounded-xl border border-primary/20 bg-primary/[0.04] p-3 space-y-3 ${splitWorkspaceLayout ? "2xl:col-start-2" : ""}`}>
+      <div className={`rounded-xl border border-primary/20 bg-primary/[0.04] p-2.5 space-y-2 ${splitWorkspaceLayout ? "2xl:col-start-2" : ""}`}>
+        {splitWorkspaceLayout && (
+          <div className="rounded-lg border border-primary/20 bg-primary/[0.06] px-2.5 py-1.5">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">Region placement workflow</p>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+              The center frame is the working surface. Pick a settings category below; its controls appear under the placement frame.
+            </p>
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -3208,7 +3268,10 @@ return (
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => setSetupExpanded((current) => !current)}
+            onClick={() => {
+              setSetupExpanded((current) => !current);
+              if (splitWorkspaceLayout) setActiveEditorSection("setup");
+            }}
             className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${setupExpanded ? "border-primary/35 bg-primary/10 text-primary" : "border-border bg-card text-foreground hover:border-primary/35"}`}
           >
             <Settings2 className="h-3.5 w-3.5" />
@@ -3216,7 +3279,14 @@ return (
           </button>
           <button
             type="button"
-            onClick={() => setRegionsExpanded((current) => !current)}
+            onClick={() => {
+              if (splitWorkspaceLayout) {
+                setRegionsExpanded(true);
+                setActiveEditorSection((current) => current === "setup" ? "rectangles" : current);
+              } else {
+                setRegionsExpanded((current) => !current);
+              }
+            }}
             className={`rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${regionsExpanded ? "border-primary/35 bg-primary/10 text-primary" : "border-border bg-card text-foreground hover:border-primary/35"}`}
           >
             Regions & calibration
@@ -3232,10 +3302,36 @@ return (
             <span className="text-xs text-muted-foreground">Load a local video to begin.</span>
           )}
         </div>
+        {splitWorkspaceLayout && (
+          <div className="rounded-lg border border-border/70 bg-background/35 p-2">
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Settings navigator</p>
+            <div className="grid gap-1.5 sm:grid-cols-2 2xl:grid-cols-1">
+              {editorNavItems.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setActiveEditorSection(item.key)}
+                  className={`rounded-md border px-2.5 py-2 text-left text-[11px] font-semibold transition-colors ${
+                    activeEditorSection === item.key
+                      ? "border-primary/45 bg-primary/[0.14] text-primary"
+                      : "border-border bg-card/60 text-foreground hover:border-primary/35 hover:bg-muted/30"
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            {videoSrc && (
+            <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+              Pick a settings category here; its controls open below the placement frame.
+            </p>
+            )}
+          </div>
+        )}
       </div>
 
       {setupExpanded && (
-      <div id="motion-lab-setup" className={`scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3 ${splitWorkspaceLayout ? "2xl:col-start-2" : ""}`}>
+      <div id="motion-lab-setup" className={`scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3 ${splitWorkspaceLayout ? (activeEditorSection === "setup" ? "2xl:col-start-1 2xl:row-start-2" : "hidden") : ""}`}>
         <p className="text-xs font-semibold uppercase tracking-wider text-primary">Analysis Setup</p>
         <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
@@ -3299,7 +3395,7 @@ return (
       {regionsExpanded && (
       <div id="motion-lab-regions" className={splitWorkspaceLayout ? "contents" : "scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(20rem,28rem)] xl:items-start xl:gap-4 xl:space-y-0 xl:[&>*]:col-start-2"}>
         {/* MOTION_LAB_REGION_EDITOR_WORKSPACE_V3 */}
-        <details className="rounded-lg border border-border bg-card/45 p-3 xl:col-start-2">
+        <details open={splitWorkspaceLayout || undefined} className={editorPanelClass("view", "rounded-lg border border-border bg-card/45 p-3")}>
           <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-xs font-semibold uppercase tracking-wider text-primary transition-colors hover:bg-muted/35">
             Analysis Regions & View Mode
           </summary>
@@ -3334,7 +3430,7 @@ return (
           </div>
         </details>
 
-        <details className="rounded-lg border border-primary/20 bg-primary/[0.04] p-3 xl:col-start-2">
+        <details open={splitWorkspaceLayout || undefined} className={editorPanelClass("segments", "rounded-lg border border-primary/20 bg-primary/[0.04] p-3")}>
           <summary className="cursor-pointer list-none rounded-md border border-primary/20 bg-primary/[0.06] px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wider text-primary transition-colors hover:bg-primary/[0.1]">
             Position Changes / Region Segments
           </summary>
@@ -3492,7 +3588,7 @@ return (
         </details>
 
         {roiLayout === "pip" ? (
-          <details className="rounded-lg border border-border bg-card/45 p-3 xl:col-start-2">
+          <details open={splitWorkspaceLayout || undefined} className={editorPanelClass("rectangles", "rounded-lg border border-border bg-card/45 p-3")}>
             <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:bg-muted/35">
               Tracking Rectangle Controls
             </summary>
@@ -3693,7 +3789,7 @@ return (
             </div>
           </details>
         ) : (
-          <details className="rounded-lg border border-border bg-card/45 p-3 xl:col-start-2">
+          <details open={splitWorkspaceLayout || undefined} className={editorPanelClass("rectangles", "rounded-lg border border-border bg-card/45 p-3")}>
             <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:bg-muted/35">
               Full-Frame Tracking Controls
             </summary>
@@ -3717,7 +3813,7 @@ return (
           </details>
         )}
 
-        <details className="rounded-lg border border-border bg-card/45 p-3 xl:col-start-2">
+        <details open={splitWorkspaceLayout || undefined} className={editorPanelClass("frame", "rounded-lg border border-border bg-card/45 p-3")}>
           <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:bg-muted/35">
             Open / Refresh Placement Frame
           </summary>
@@ -3738,9 +3834,32 @@ return (
           </div>
         </details>
 
+        {splitWorkspaceLayout && !roiFrameReady && (
+          <div
+            className="region-editor-preview overflow-hidden rounded-lg border border-dashed border-primary/25 bg-card/45 xl:col-start-1 2xl:row-start-1 2xl:sticky 2xl:top-2 2xl:order-1 2xl:self-start"
+            style={{ minHeight: `${placementPlaceholderHeight}px` }}
+          >
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+              <div className="rounded-full border border-primary/25 bg-primary/[0.08] p-3 text-primary">
+                {loadingRoiFrame ? <Loader2 className="h-5 w-5 animate-spin" /> : <MousePointer2 className="h-5 w-5" />}
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-foreground">
+                  {loadingRoiFrame ? "Preparing placement frame..." : "Region placement workspace"}
+                </p>
+                <p className="mt-1 max-w-md text-xs leading-relaxed text-muted-foreground">
+                  {videoSrc
+                    ? "Motion Lab opens the first frame here automatically so you can start setting foot and hand regions without hunting for the editor."
+                    : "Load a local video and the first frame will appear here for region placement."}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {roiFrameReady && (
           <div className="contents">
-            <details className="rounded-lg border border-border bg-card/45 p-3 xl:col-start-2">
+            <details open={splitWorkspaceLayout || undefined} className={editorPanelClass("position", "rounded-lg border border-border bg-card/45 p-3")}>
               <summary className="cursor-pointer list-none rounded-md border border-primary/20 bg-primary/[0.06] px-2.5 py-2 text-xs font-semibold uppercase tracking-wider text-primary transition-colors hover:bg-primary/[0.1]">
                 Region Editor Position
               </summary>
@@ -3796,8 +3915,54 @@ return (
               </div>
               </div>
             </details>
+            <details open={splitWorkspaceLayout || undefined} className={editorPanelClass("size", "rounded-lg border border-border bg-card/45 p-3")}>
+              <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:bg-muted/35">
+                Placement View Size
+              </summary>
+              <div className="mt-3 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">Placement editor height</p>
+                  <span className="font-mono text-sm font-semibold text-foreground">{roiEditorHeight}px</span>
+                </div>
+                <input
+                  type="range"
+                  min="320"
+                  max="560"
+                  step="20"
+                  value={roiEditorHeight}
+                  onChange={(event) => setRoiEditorHeight(Number(event.target.value))}
+                  disabled={running}
+                  className="w-full accent-primary"
+                  aria-label="Placement editor height"
+                />
+                <div className="flex flex-wrap items-center gap-2">
+                  {[
+                    ["Compact", 340],
+                    ["Standard", 440],
+                    ["Tall", 540],
+                  ].map(([label, height]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => setRoiEditorHeight(height)}
+                      disabled={running}
+                      className={`rounded-md border px-2.5 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-45 ${
+                        roiEditorHeight === height
+                          ? "border-primary/50 bg-primary/[0.14] text-primary"
+                          : "border-border bg-card text-foreground hover:border-primary/35"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  The placement editor follows the page on wide screens so region placement stays visible while the settings rail scrolls.
+                </p>
+              </div>
+            </details>
             {mode !== "hands" && (
-              <details className="rounded-lg border border-[#38bdf8]/25 bg-[#38bdf8]/[0.05] p-3 xl:col-start-2">
+              <details open={splitWorkspaceLayout || undefined} className={editorPanelClass("landmarks", "rounded-lg border border-[#38bdf8]/25 bg-[#38bdf8]/[0.05] p-3")}>
                 <summary className="cursor-pointer list-none rounded-md border border-[#38bdf8]/25 bg-[#38bdf8]/[0.08] px-2.5 py-2 text-xs font-semibold uppercase tracking-wider text-[#7dd3fc] transition-colors hover:bg-[#38bdf8]/[0.12]">
                   Manual Foot Landmark Calibration
                 </summary>
@@ -3867,8 +4032,14 @@ return (
                 </div>
               </details>
             )}
-            <div className="region-editor-preview overflow-hidden rounded-lg border border-border bg-black xl:col-start-1 xl:row-start-1 xl:row-span-[80]">
+            <div
+              className={`region-editor-preview overflow-hidden rounded-lg border border-border bg-black xl:col-start-1 2xl:row-start-1 ${
+                splitWorkspaceLayout ? "2xl:sticky 2xl:top-2 2xl:order-1 2xl:self-start" : ""
+              }`}
+              style={placementEditorStyle}
+            >
               <div
+                className={splitWorkspaceLayout ? "w-full" : undefined}
                 style={{
                   transform: `translate(${roiPreviewPan.x}px, ${roiPreviewPan.y}px) scale(${roiPreviewZoom})`,
                   transformOrigin: "top left",
@@ -3877,12 +4048,14 @@ return (
                 <canvas
                   ref={roiCanvasRef}
                   onMouseDown={handleRoiMouseDown}
-                  className={`block aspect-video max-h-[calc(100vh-13rem)] min-h-[34rem] w-full object-contain ${roiLayout === "pip" && !running ? "cursor-crosshair" : ""}`}
+                  className={`block w-full object-contain ${
+                    splitWorkspaceLayout ? "h-auto" : "aspect-video max-h-[calc(100vh-13rem)] min-h-[34rem]"
+                  } ${roiLayout === "pip" && !running ? "cursor-crosshair" : ""}`}
                 />
               </div>
             </div>
-            <p className="text-[11px] text-muted-foreground xl:col-start-2">
-              These colored rectangles are the exact crop regions used for the next analysis. This paused-frame editor is the main workspace; all setup, calibration, scrubber, and landmark controls are docked in the settings rail.
+            <p className={`text-[11px] text-muted-foreground ${splitWorkspaceLayout ? "2xl:col-start-1 2xl:row-start-3" : "xl:col-start-2"}`}>
+              These colored rectangles are the exact crop regions used for the next analysis. This paused-frame editor is the main workspace; choose a settings category in the right rail and edit it below this frame.
             </p>
           </div>
         )}

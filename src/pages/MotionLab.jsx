@@ -424,9 +424,9 @@ export default function MotionLab() {
   return (
     <div>
       <PageHeader title="Motion Lab" subtitle="Local-only motion detection, configuration, and derived evidence saving" />
-      <div className="space-y-4 px-4 pb-8">
-        <div className="rounded-xl border border-primary/20 bg-primary/[0.05] p-4">
-          <div className="flex items-start gap-3">
+      <div className="space-y-2 px-2 pb-4">
+        <div className="rounded-xl border border-primary/20 bg-primary/[0.05] px-3 py-2">
+          <div className="flex items-start gap-2">
             <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
             <div>
               <p className="text-sm font-semibold text-foreground">Videos stay local to this browser session.</p>
@@ -437,9 +437,9 @@ export default function MotionLab() {
           </div>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[21rem_minmax(0,1fr)]">
-          <aside className="space-y-4">
-            <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+        <div className="grid gap-2 xl:grid-cols-[18rem_minmax(0,1fr)]">
+          <aside className="space-y-2">
+            <div className="rounded-xl border border-border bg-card p-2.5 space-y-2">
               <p className="text-xs font-semibold uppercase tracking-wider text-primary">Analysis Target</p>
               {loading ? <p className="text-sm text-muted-foreground">Loading sessions...</p> : (
                 <Select value={selectedId} onValueChange={selectSession}>
@@ -505,7 +505,7 @@ export default function MotionLab() {
               </button>
             </div>
 
-            <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+            <div className="rounded-xl border border-border bg-card p-2.5 space-y-2">
               <p className="text-xs font-semibold uppercase tracking-wider text-primary">Processing Queue</p>
               <p className="text-[11px] leading-relaxed text-muted-foreground">
                 Queue items retain local file access only while this page is open. Configure and finalize each feed independently; finalized feeds are combined in the selected session's derived summary.
@@ -533,13 +533,13 @@ export default function MotionLab() {
             </div>
           </aside>
 
-          <section className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(26rem,34rem)]">
+          <section className="grid gap-2 2xl:grid-cols-[minmax(0,1fr)_minmax(24rem,32rem)]">
             {/* MOTION_LAB_EDITOR_FIRST_WORKSPACE_V1 */}
-            <div className="order-2 space-y-4 2xl:self-start">
+            <div className="order-1 space-y-2 2xl:col-start-2 2xl:row-start-1 2xl:self-start">
               {videoSrc ? (
               <div
                 ref={previewRef}
-                className={`rounded-xl border border-border bg-card p-4 space-y-3 ${
+                className={`rounded-xl border border-border bg-card p-2.5 space-y-2 ${
                 previewFloating
                   ? "fixed z-[60] min-w-[20rem] max-w-[calc(100vw-2rem)] border-primary/35 shadow-2xl"
                   : ""
@@ -615,7 +615,7 @@ export default function MotionLab() {
                 )}
               </div>
             ) : (
-              <div className="rounded-xl border border-dashed border-border bg-card p-12 text-center text-sm text-muted-foreground">
+              <div className="rounded-xl border border-dashed border-border bg-card p-8 text-center text-sm text-muted-foreground">
                 Load a local video to configure and run derived motion analysis.
               </div>
               )}
