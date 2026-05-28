@@ -10,6 +10,7 @@ import { Brain, Activity, AlertCircle } from "lucide-react";
 import TTSReader from "../components/TTSReader";
 import CascadeTrendPanel from "../components/CascadeTrendPanel";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText } from "@/lib/sessionContext";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -161,6 +162,7 @@ function AIInsightPanel({ sessions }) {
         intensity: s.intensity,
         build_type: s.build_type,
         methods: s.methods,
+        session_context: sessionContextEvidenceText(s) || undefined,
       };
     });
 
@@ -230,6 +232,7 @@ function AIInsightPanel({ sessions }) {
         climax_duration: s.climax_duration,
         mood: s.mood,
         methods: s.methods,
+        session_context: sessionContextEvidenceText(s) || undefined,
         event_notes: annotatedEvents.length > 0 ? annotatedEvents : undefined,
         discomfort_entries: s.discomfort_entries?.length > 0 ? s.discomfort_entries : undefined,
         notes: briefText(s.notes, 180) || undefined
@@ -322,7 +325,7 @@ Arousal notes: ${briefText(userProfile.arousal_notes, 500) || "none"}.
     const groundingContext = buildAIGroundingContext(userProfile);
 
     const temporalTrendText = temporalTrend.map((s) => (
-      `${s.date}: peak ${s.peak_hr_bpm ?? "?"} beats per minute; build ${s.build_duration_s != null ? fmtDur(s.build_duration_s) : "unknown"}; recovery ${s.recovery_onset_s != null ? fmtDur(s.recovery_onset_s) : "unknown"}; satisfaction ${s.satisfaction ?? "?"}; intensity ${s.intensity ?? "?"}; build type ${s.build_type || "unknown"}; methods ${(s.methods || []).join(", ") || "none"}`
+      `${s.date}: peak ${s.peak_hr_bpm ?? "?"} beats per minute; build ${s.build_duration_s != null ? fmtDur(s.build_duration_s) : "unknown"}; recovery ${s.recovery_onset_s != null ? fmtDur(s.recovery_onset_s) : "unknown"}; satisfaction ${s.satisfaction ?? "?"}; intensity ${s.intensity ?? "?"}; build type ${s.build_type || "unknown"}; methods ${(s.methods || []).join(", ") || "none"}${s.session_context ? `; context ${s.session_context}` : ""}`
     )).join("\n");
 
     const physiologicalMetricsText = physiologicalMetrics.map((m) => (
@@ -337,6 +340,7 @@ Arousal notes: ${briefText(userProfile.arousal_notes, 500) || "none"}.
         `build ${shape.build_duration || "unknown"}, recovery onset ${shape.recovery_onset || "unknown"}, rise ${shape.hr_rise_pre_to_climax_bpm ?? "?"} beats per minute`,
         `average ${s.avg_hr ?? "?"}, maximum ${s.max_hr ?? "?"}, intensity ${s.intensity ?? "?"}, satisfaction ${s.satisfaction ?? "?"}, build ${s.build_type || "unknown"}, climax duration ${s.climax_duration || "unknown"}`,
         `mood ${s.mood || "unknown"}, methods ${(s.methods || []).join(", ") || "none"}`,
+        s.session_context ? `structured context ${s.session_context}` : null,
         events ? `events ${events}` : null,
         s.discomfort_entries?.length ? `discomfort ${briefText(s.discomfort_entries.map((d) => d.note || d).join("; "), 220)}` : null,
         s.notes ? `notes ${s.notes}` : null,
@@ -349,6 +353,12 @@ Arousal notes: ${briefText(userProfile.arousal_notes, 500) || "none"}.
       prompt: `You are a physiological research assistant analyzing sexual response cascade data across ${sessions.length} sessions. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 ${groundingContext}
+${SESSION_CONTEXT_GROUNDING_RULE}
+SESSION CONTEXT CASCADE RULE:
+- Structured session context is available in the chronological trend and per-session cascade evidence where logged.
+- Use fatigue, hydration, food state, cannabis, alcohol, privacy/interruption risk, mental state, environment, and preparation when they are relevant to cascade shape, build speed, peak heart-rate behavior, plateau duration, recovery slope, anomalies, phenotype clusters, or temporal evolution.
+- Context should inform interpretation, especially repeated patterns and outliers, but it is not proof of causation by itself.
+- Prefer wording like "sessions with this logged context tend to..." or "this may have shaped the cascade" over universal physiological claims.
 
 CHRONOLOGICAL TREND DATA (sessions in date order — use this for temporal analysis):
 ${temporalTrendText}
@@ -396,7 +406,7 @@ Provide a comprehensive, multi-layered analysis covering:
 
 7. COMMON SIGNATURES: Recurring physiological fingerprints across your full cascade arc — patterns that appear again and again, even when other variables change.
 
-8. CONTEXTUAL CORRELATIONS: How do intensity, mood, hydration, methods, and environment link to cascade shape? Does a "high intensity" session produce a different cascade than a "low intensity" one? Are there mood states that consistently produce different physiological arcs?
+8. CONTEXTUAL CORRELATIONS: How do intensity, structured session context, mood, hydration, fatigue, food state, cannabis, alcohol, privacy/interruption risk, preparation, methods, and environment link to cascade shape? Does a "high intensity" session produce a different cascade than a "low intensity" one? Are there logged context states that consistently produce different physiological arcs?
 
 9. PREDICTIVE INSIGHTS: Which factors best predict cascade quality, peak heart rate, recovery speed, or satisfaction? Can you predict how a session will unfold based on early buildup dynamics?
 

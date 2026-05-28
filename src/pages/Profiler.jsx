@@ -122,6 +122,14 @@ function buildProfileEvidenceDigest(sessions) {
     .map((m) => `${m.label}: n${m.count}, sat ${fmtAvg(avg(m.satisfaction))}, intensity ${fmtAvg(avg(m.intensity))}, maxHR ${fmtAvg(avg(m.maxHr), 0)}`)
     .join(" | ");
 
+  // FULL_AI_SESSION_CONTEXT_EXPOSURE_V1
+  const structuredContextLines = sessions
+    .map((s) => {
+      const context = sessionContextEvidenceText(s);
+      return context ? `${sessionDateKey(s.date) || "unknown"}: ${context}` : null;
+    })
+    .filter(Boolean);
+
   const contextMap = new Map();
   for (const s of sessions) {
     for (const raw of [...sessionContextFactorLabels(s), s.build_type].filter(Boolean)) {
@@ -148,6 +156,9 @@ function buildProfileEvidenceDigest(sessions) {
     topRated ? `Highest-rated evidence: ${topRated}` : null,
     methodStats ? `Method patterns: ${methodStats}` : null,
     contextStats ? `Context patterns: ${contextStats}` : null,
+    structuredContextLines.length
+      ? `Structured context evidence is available for ${structuredContextLines.length} sessions. Use it where relevant for context sensitivity, but do not treat it as causal by itself: ${structuredContextLines.slice(0, 30).join(" | ")}${structuredContextLines.length > 30 ? " | additional context-bearing sessions omitted from this compact digest but still present in the session-by-session evidence lines" : ""}`
+      : null,
   ].filter(Boolean).join("\n");
 }
 
@@ -640,6 +651,11 @@ Use the journals to surface recurring emotional themes, evolving insights, and s
 
 ${groundingContext}
 ${SESSION_CONTEXT_GROUNDING_RULE}
+SESSION CONTEXT PROFILE RULE:
+- Structured session context is longitudinal evidence. Use it in the AI Profiler wherever it helps explain recurring contextual sensitivities, session clusters, outliers, recovery differences, build quality differences, or preparation effects.
+- Do not trap context only in the contextual_sensitivities section. If fatigue, hydration, food state, cannabis, alcohol, privacy/interruption risk, mental state, environment, or preparation meaningfully shapes arousal physiology, stimulation response, climax/recovery, behavioral tendencies, or recommendations, integrate it there too.
+- Rank contextual factors by repeated association across sessions when possible. Clearly distinguish repeated associations from single-session anecdotes.
+- Never upgrade logged context into proof of causation. Use language like "appears associated with", "may have shaped", or "is repeatedly present in sessions where..." unless the evidence is direct and repeated.
 ${SESSION_DATE_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
