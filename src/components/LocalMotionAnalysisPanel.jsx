@@ -3782,8 +3782,9 @@ return (
         </div>
 
         {roiFrameReady && (
-          <div className="space-y-2">
-            <div className="space-y-2 rounded-lg border border-border bg-muted/10 p-3">
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(24rem,34rem)] xl:items-start">
+            {/* MOTION_LAB_REGION_EDITOR_WORKSPACE_V1 */}
+            <div className="space-y-2 rounded-lg border border-border bg-muted/10 p-3 xl:col-start-2 xl:row-start-1">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-semibold uppercase tracking-wider text-primary">Region Editor Position</p>
                 <span className="font-mono text-sm font-semibold text-foreground">{formatTime(roiSetupTime)}</span>
@@ -3835,7 +3836,7 @@ return (
               </div>
             </div>
             {mode !== "hands" && (
-              <div className="space-y-3 rounded-lg border border-[#38bdf8]/25 bg-[#38bdf8]/[0.05] p-3">
+              <div className="space-y-3 rounded-lg border border-[#38bdf8]/25 bg-[#38bdf8]/[0.05] p-3 xl:col-start-2 xl:row-start-2">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wider text-[#7dd3fc]">Manual foot landmark calibration</p>
@@ -3900,7 +3901,7 @@ return (
                 <p className="text-[11px] leading-relaxed text-muted-foreground">Zoom/pan only changes this placement view. Saved landmarks stay normalized to the source video frame, so geometry remains stable across preview zoom levels.</p>
               </div>
             )}
-            <div className="overflow-hidden rounded-lg border border-border bg-black">
+            <div className="overflow-hidden rounded-lg border border-border bg-black xl:col-start-1 xl:row-start-1 xl:row-span-3">
               <div
                 style={{
                   transform: `translate(${roiPreviewPan.x}px, ${roiPreviewPan.y}px) scale(${roiPreviewZoom})`,
@@ -3910,12 +3911,12 @@ return (
                 <canvas
                   ref={roiCanvasRef}
                   onMouseDown={handleRoiMouseDown}
-                  className={`block aspect-video max-h-[52vh] w-full object-contain ${roiLayout === "pip" && !running ? "cursor-crosshair" : ""}`}
+                  className={`block aspect-video max-h-[calc(100vh-13rem)] min-h-[34rem] w-full object-contain ${roiLayout === "pip" && !running ? "cursor-crosshair" : ""}`}
                 />
               </div>
             </div>
-            <p className="text-[11px] text-muted-foreground">
-              These colored rectangles are the exact crop regions used for the next analysis. Click a rectangle to select it; white corner handles resize the selected region. Anatomical left/right assignment is shown above.
+            <p className="text-[11px] text-muted-foreground xl:col-start-1">
+              These colored rectangles are the exact crop regions used for the next analysis. Click a rectangle to select it; white corner handles resize the selected region. Anatomical left/right assignment is shown above. The editor canvas is now the primary workspace; scrubber and landmark controls stay docked to the side.
             </p>
           </div>
         )}
