@@ -653,9 +653,18 @@ ${groundingContext}
 ${SESSION_CONTEXT_GROUNDING_RULE}
 SESSION CONTEXT PROFILE RULE:
 - Structured session context is longitudinal evidence. Use it in the AI Profiler wherever it helps explain recurring contextual sensitivities, session clusters, outliers, recovery differences, build quality differences, or preparation effects.
-- Do not trap context only in the contextual_sensitivities section. If fatigue, hydration, food state, cannabis, alcohol, privacy/interruption risk, mental state, environment, or preparation meaningfully shapes arousal physiology, stimulation response, climax/recovery, behavioral tendencies, or recommendations, integrate it there too.
-- Rank contextual factors by repeated association across sessions when possible. Clearly distinguish repeated associations from single-session anecdotes.
+- Context should qualify, explain, or contextualize the core findings. Do not let hydration, fatigue, food state, cannabis, alcohol, privacy/interruption risk, mental state, environment, or preparation replace the central analysis of observable arousal physiology, stimulation response, anatomy or device interaction, motion evidence, climax mechanics, and recovery behavior.
+- Integrate context outside the contextual_sensitivities section only when it clearly modifies one of those core body/mechanics observations.
+- Distinguish repeated association, plausible modifier, single-session anecdote, and unproven causal explanation. Do not rank a contextual factor as important unless repeated session evidence supports that weighting.
 - Never upgrade logged context into proof of causation. Use language like "appears associated with", "may have shaped", or "is repeatedly present in sessions where..." unless the evidence is direct and repeated.
+
+AI PROFILER PRIORITY RULE:
+- Prioritize directly observed sexual and physiological mechanics first: arousal build shape, stimulation method response, erection quality, glans/shaft/foreskin dynamics, urethral or device-fit observations, prostatic/perineal involvement, ejaculatory characteristics, foot/lower-body motion telemetry, climax timing, and recovery pattern.
+- Structured context such as hydration, fatigue, cannabis, alcohol, food state, preparation, privacy/interruption risk, mental state, and environment should qualify, explain, or contextualize those observations. Do not let context replace the core body/mechanics analysis.
+- Do not lead recommendations with contextual variables unless repeated session evidence clearly shows they outweigh method response, anatomy, telemetry, climax/recovery mechanics, or direct session observations.
+- Avoid overstating context as causal. Prefer "appears associated with", "may have shaped", "is repeatedly present in sessions where", or "could help explain this pattern".
+- Be especially careful with alcohol: do not frame alcohol as beneficial, neutral, or performance-enhancing unless the evidence directly and repeatedly supports that narrow claim. If alcohol is present but hard to isolate from fatigue, cannabis, mood, or environment, say that clearly.
+- Hydration, THC/cannabis, fatigue, preparation, and environment are important modifiers, but they are seasoning, not the steak. The profile should still primarily be about the person's observable arousal physiology, stimulation response, anatomy/device interaction, motion evidence, climax mechanics, and recovery behavior.
 ${SESSION_DATE_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
@@ -721,13 +730,13 @@ Cover these areas:
 
 3. CLIMAX & RECOVERY PATTERNS: Go beyond describing duration and volume — interpret the repeated shape of their climax and recovery data, the cues that reliably accompany release, and what recovery slope contributes to the pattern. Discuss neuromuscular, ejaculatory-threshold, autonomic, or refractory explanations only when directly supported or clearly framed as exploratory hypotheses.
 
-4. CONTEXTUAL SENSITIVITIES: Form a hypothesis about which contextual factors matter MOST for this specific person based on cross-session correlation. Don't just list factors — rank them by apparent impact and explain why.
+4. CONTEXTUAL SENSITIVITIES: Identify contextual factors that repeatedly appear to modify the person's core physiology or session mechanics. Don't just list factors. Separate repeated associations from plausible modifiers, single-session anecdotes, and unproven causal explanations. Keep this section subordinate to the primary body/mechanics profile unless the repeated evidence clearly shows context is the dominant driver.
 
 5. DISCOMFORT & PHYSIOLOGICAL EDGE CASES: Interpret what recurring discomfort or unusual sensations may suggest anatomically — consider urethral, prostatic, pelvic floor, and neurovascular context given their specific methods. Discuss tissue adaptation, nerve sensitization, or structural factors only as evidence-linked possibilities when the data supports that level of interpretation. Be specific, not generic.
 
 6. BEHAVIORAL & AROUSAL TENDENCIES: Look for observable patterns in build style, pause/resume moments, event timelines, and the person's own subjective notes. Do not infer motives, anxiety, control strategies, or intentional edging unless explicitly logged. Focus on how observable behavior and physiology relate to outcomes.
 
-7. PERSONAL OPTIMIZATION RECOMMENDATIONS: Give specific, useful recommendations — not generic advice. Reference their actual data patterns and explain the physiological or behavioral reasoning behind each suggestion. Make the boldest recommendations only where repeated evidence earns them.
+7. PERSONAL OPTIMIZATION RECOMMENDATIONS: Give specific, useful recommendations — not generic advice. Lead with method, anatomy/device interaction, telemetry, climax/recovery mechanics, and direct session observations. Use contextual variables as supporting modifiers unless repeated evidence clearly shows they outweigh the body/mechanics pattern. Reference their actual data patterns and explain the physiological or behavioral reasoning behind each suggestion. Make the boldest recommendations only where repeated evidence earns them.
 
 Be warm, direct, insightful, and willing to state conclusions when the evidence earns them. Ground everything in their data but go well beyond restating it.`,
       response_json_schema: {
