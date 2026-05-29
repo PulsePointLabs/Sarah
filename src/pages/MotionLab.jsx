@@ -424,7 +424,7 @@ export default function MotionLab() {
   return (
     <div>
       <PageHeader title="Motion Lab" subtitle="Local-only motion detection, configuration, and derived evidence saving" />
-      <div className="space-y-2 px-2 pb-4">
+      <div className="space-y-1.5 px-1.5 pb-3">
         <div className="rounded-xl border border-primary/20 bg-primary/[0.05] px-3 py-2">
           <div className="flex items-start gap-2">
             <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
@@ -437,8 +437,8 @@ export default function MotionLab() {
           </div>
         </div>
 
-        <div className="grid gap-2 xl:grid-cols-[18rem_minmax(0,1fr)]">
-          <aside className="space-y-2">
+        <div className="grid gap-1.5 xl:grid-cols-[16rem_minmax(0,1fr)]">
+          <aside className="space-y-1.5">
             <div className="rounded-xl border border-border bg-card p-2.5 space-y-2">
               <p className="text-xs font-semibold uppercase tracking-wider text-primary">Analysis Target</p>
               {loading ? <p className="text-sm text-muted-foreground">Loading sessions...</p> : (
@@ -533,9 +533,9 @@ export default function MotionLab() {
             </div>
           </aside>
 
-          <section className="grid gap-2 2xl:grid-cols-[minmax(0,1fr)_minmax(24rem,32rem)]">
+          <section className="grid gap-1.5 2xl:grid-cols-[minmax(0,1fr)_minmax(21rem,25rem)]">
             {/* MOTION_LAB_EDITOR_FIRST_WORKSPACE_V1 */}
-            <div className="order-1 space-y-2 2xl:col-start-2 2xl:row-start-1 2xl:self-start">
+            <div className="space-y-1.5 2xl:col-start-2 2xl:row-start-1 2xl:order-1 2xl:self-start">
               {videoSrc ? (
               <div
                 ref={previewRef}
@@ -585,7 +585,7 @@ export default function MotionLab() {
                   src={videoSrc}
                   controls
                   playsInline
-                  className={`${previewFloating ? "max-h-[42vh]" : "2xl:max-h-[32vh] max-h-[48vh]"} w-full rounded-lg bg-black object-contain`}
+                  className={`${previewFloating ? "max-h-[42vh]" : "2xl:max-h-[24vh] max-h-[42vh]"} w-full rounded-lg bg-black object-contain`}
                   onTimeUpdate={(event) => updateFeedWorkspace(feedRole, { videoTime: event.currentTarget.currentTime })}
                   onPlay={() => updateFeedWorkspace(feedRole, { videoPlaying: true })}
                   onPause={() => updateFeedWorkspace(feedRole, { videoPlaying: false })}

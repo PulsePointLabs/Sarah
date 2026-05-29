@@ -2293,7 +2293,7 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   const [landmarkDisplaySize, setLandmarkDisplaySize] = useState(8);
   const [roiPreviewZoom, setRoiPreviewZoom] = useState(1);
   const [roiPreviewPan, setRoiPreviewPan] = useState({ x: 0, y: 0 });
-  const [roiEditorHeight, setRoiEditorHeight] = useState(500);
+  const [roiEditorHeight, setRoiEditorHeight] = useState(440);
   const [forefootEnabled, setForefootEnabled] = useState(false);
   const [postureMatchingEnabled, setPostureMatchingEnabled] = useState(true);
   const [postureReferenceTimes, setPostureReferenceTimes] = useState(() => emptyPostureReferenceTimes());
@@ -3182,19 +3182,22 @@ export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, vide
   ].filter((item) => item.available);
   const editorPanelClass = (key, baseClass = "") => (
     splitWorkspaceLayout
-      ? `${baseClass} ${activeEditorSection === key ? "2xl:col-start-1 2xl:row-start-2" : "hidden"}`
+      ? `${baseClass} ${activeEditorSection === key ? "2xl:col-start-1 2xl:order-2" : "hidden"}`
       : `${baseClass} xl:col-start-2`
   );
   const placementPlaceholderHeight = videoSrc ? roiEditorHeight : 220;
   const placementEditorStyle = splitWorkspaceLayout
     ? {
-      maxHeight: `min(${roiEditorHeight}px, calc(100vh - 7rem))`,
+      maxWidth: "100%",
     }
     : undefined;
+  const showMainAnalysisPreview = splitWorkspaceLayout && running;
+  const showSidebarAnalysisPreviewCanvas = !showMainAnalysisPreview;
+  const previewControlsVisible = previewEnabled || showMainAnalysisPreview;
 
 return (
     <div id="motion-lab-top" className={splitWorkspaceLayout ? "contents" : "relative rounded-xl border border-border bg-card p-4 space-y-4"}>
-      <div className={`flex flex-wrap items-start justify-between gap-3 ${splitWorkspaceLayout ? "rounded-xl border border-border bg-card p-3 2xl:col-start-2" : ""}`}>
+      <div className={`flex flex-wrap items-start justify-between gap-3 ${splitWorkspaceLayout ? "hidden" : ""}`}>
         <div className="flex min-w-0 items-start gap-3">
           {!splitWorkspaceLayout && <Activity className="mt-0.5 h-4 w-4 shrink-0 text-primary" />}
           <div>
@@ -3224,7 +3227,7 @@ return (
         </div>
       </div>
 
-      <div className={`rounded-xl border border-primary/20 bg-primary/[0.04] p-2.5 space-y-2 ${splitWorkspaceLayout ? "2xl:col-start-2" : ""}`}>
+      <div className={`rounded-xl border border-primary/20 bg-primary/[0.04] p-2.5 space-y-2 ${splitWorkspaceLayout ? "2xl:col-start-2 2xl:row-start-1 2xl:order-2 2xl:mt-[15.5rem]" : ""}`}>
         {splitWorkspaceLayout && (
           <div className="rounded-lg border border-primary/20 bg-primary/[0.06] px-2.5 py-1.5">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">Region placement workflow</p>
@@ -3331,7 +3334,7 @@ return (
       </div>
 
       {setupExpanded && (
-      <div id="motion-lab-setup" className={`scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3 ${splitWorkspaceLayout ? (activeEditorSection === "setup" ? "2xl:col-start-1 2xl:row-start-2" : "hidden") : ""}`}>
+      <div id="motion-lab-setup" className={`scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3 ${splitWorkspaceLayout ? (activeEditorSection === "setup" ? "2xl:col-start-1 2xl:order-2" : "hidden") : ""}`}>
         <p className="text-xs font-semibold uppercase tracking-wider text-primary">Analysis Setup</p>
         <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
@@ -3392,8 +3395,40 @@ return (
       </div>
       )}
 
-      {regionsExpanded && (
-      <div id="motion-lab-regions" className={splitWorkspaceLayout ? "contents" : "scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(20rem,28rem)] xl:items-start xl:gap-4 xl:space-y-0 xl:[&>*]:col-start-2"}>
+      {showMainAnalysisPreview && (
+        <div
+          id="motion-lab-processing-preview"
+          className="xl:col-start-1 2xl:order-1 flex min-w-0 flex-col gap-2 rounded-lg border border-primary/30 bg-primary/[0.04] p-2"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">Live analysis preview</p>
+              <p className="text-[11px] text-muted-foreground">
+                Temporary local frame preview while analysis runs. Region editor controls are hidden until processing finishes.
+              </p>
+            </div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/[0.08] px-2.5 py-1 text-[11px] font-semibold text-primary">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              {progress}%
+            </div>
+          </div>
+          <div className="relative overflow-hidden rounded-lg border border-border bg-black">
+            <canvas
+              ref={previewCanvasRef}
+              className="block w-full object-contain"
+              style={{ height: "auto" }}
+            />
+            {!previewReady && (
+              <div className="absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-muted-foreground">
+                Waiting for the first analyzed frame...
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {regionsExpanded && !showMainAnalysisPreview && (
+      <div id="motion-lab-regions" className={splitWorkspaceLayout ? "xl:col-start-1 2xl:order-1 flex min-w-0 flex-col gap-1.5" : "scroll-mt-32 space-y-3 rounded-lg border border-border bg-muted/10 p-3 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(20rem,28rem)] xl:items-start xl:gap-4 xl:space-y-0 xl:[&>*]:col-start-2"}>
         {/* MOTION_LAB_REGION_EDITOR_WORKSPACE_V3 */}
         <details open={splitWorkspaceLayout || undefined} className={editorPanelClass("view", "rounded-lg border border-border bg-card/45 p-3")}>
           <summary className="cursor-pointer list-none rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-xs font-semibold uppercase tracking-wider text-primary transition-colors hover:bg-muted/35">
@@ -3836,7 +3871,7 @@ return (
 
         {splitWorkspaceLayout && !roiFrameReady && (
           <div
-            className="region-editor-preview overflow-hidden rounded-lg border border-dashed border-primary/25 bg-card/45 xl:col-start-1 2xl:row-start-1 2xl:sticky 2xl:top-2 2xl:order-1 2xl:self-start"
+            className="region-editor-preview overflow-hidden rounded-lg border border-dashed border-primary/25 bg-card/45 xl:col-start-1 2xl:order-1"
             style={{ minHeight: `${placementPlaceholderHeight}px` }}
           >
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
@@ -3858,7 +3893,7 @@ return (
         )}
 
         {roiFrameReady && (
-          <div className="contents">
+          <div className={splitWorkspaceLayout ? "flex flex-col gap-1.5 2xl:order-1" : "contents"}>
             <details open={splitWorkspaceLayout || undefined} className={editorPanelClass("position", "rounded-lg border border-border bg-card/45 p-3")}>
               <summary className="cursor-pointer list-none rounded-md border border-primary/20 bg-primary/[0.06] px-2.5 py-2 text-xs font-semibold uppercase tracking-wider text-primary transition-colors hover:bg-primary/[0.1]">
                 Region Editor Position
@@ -3926,7 +3961,7 @@ return (
                 </div>
                 <input
                   type="range"
-                  min="320"
+                  min="340"
                   max="560"
                   step="20"
                   value={roiEditorHeight}
@@ -3937,7 +3972,7 @@ return (
                 />
                 <div className="flex flex-wrap items-center gap-2">
                   {[
-                    ["Compact", 340],
+                    ["Compact", 360],
                     ["Standard", 440],
                     ["Tall", 540],
                   ].map(([label, height]) => (
@@ -4033,8 +4068,8 @@ return (
               </details>
             )}
             <div
-              className={`region-editor-preview overflow-hidden rounded-lg border border-border bg-black xl:col-start-1 2xl:row-start-1 ${
-                splitWorkspaceLayout ? "2xl:sticky 2xl:top-2 2xl:order-1 2xl:self-start" : ""
+              className={`region-editor-preview overflow-hidden rounded-lg border border-border bg-black xl:col-start-1 ${
+                splitWorkspaceLayout ? "2xl:order-1" : ""
               }`}
               style={placementEditorStyle}
             >
@@ -4049,12 +4084,13 @@ return (
                   ref={roiCanvasRef}
                   onMouseDown={handleRoiMouseDown}
                   className={`block w-full object-contain ${
-                    splitWorkspaceLayout ? "h-auto" : "aspect-video max-h-[calc(100vh-13rem)] min-h-[34rem]"
+                    splitWorkspaceLayout ? "" : "aspect-video max-h-[calc(100vh-13rem)] min-h-[34rem]"
                   } ${roiLayout === "pip" && !running ? "cursor-crosshair" : ""}`}
+                  style={splitWorkspaceLayout ? { width: "100%", height: "auto" } : undefined}
                 />
               </div>
             </div>
-            <p className={`text-[11px] text-muted-foreground ${splitWorkspaceLayout ? "2xl:col-start-1 2xl:row-start-3" : "xl:col-start-2"}`}>
+            <p className={`text-[11px] text-muted-foreground ${splitWorkspaceLayout ? "2xl:order-3" : "xl:col-start-2"}`}>
               These colored rectangles are the exact crop regions used for the next analysis. This paused-frame editor is the main workspace; choose a settings category in the right rail and edit it below this frame.
             </p>
           </div>
@@ -4067,7 +4103,8 @@ return (
         <label className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
           <input
             type="checkbox"
-            checked={previewEnabled}
+            checked={previewEnabled || showMainAnalysisPreview}
+            disabled={showMainAnalysisPreview}
             onChange={(event) => setPreviewEnabled(event.target.checked)}
             className="h-4 w-4 accent-primary"
           />
@@ -4076,7 +4113,7 @@ return (
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           Displays the currently analyzed frame with temporary signal regions and available MediaPipe overlays in this browser only. Preview frames and landmarks are not saved.
         </p>
-        {previewEnabled && (
+        {previewControlsVisible && (
           <>
             <div className="flex flex-wrap gap-2">
               {mode !== "hands" && (
@@ -4104,14 +4141,20 @@ return (
                 </label>
               )}
             </div>
-            <div className="relative overflow-hidden rounded-lg border border-border bg-black">
-              <canvas ref={previewCanvasRef} className="block aspect-video max-h-[52vh] w-full object-contain" />
-              {!previewReady && (
-                <div className="absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-muted-foreground">
-                  Run an analysis to see the temporary landmark overlay.
-                </div>
-              )}
-            </div>
+            {showSidebarAnalysisPreviewCanvas ? (
+              <div className="relative overflow-hidden rounded-lg border border-border bg-black">
+                <canvas ref={previewCanvasRef} className="block aspect-video max-h-[52vh] w-full object-contain" />
+                {!previewReady && (
+                  <div className="absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-muted-foreground">
+                    Run an analysis to see the temporary landmark overlay.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="rounded-lg border border-primary/20 bg-primary/[0.06] px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                Live analysis frames are shown in the main workspace while processing runs.
+              </p>
+            )}
           </>
         )}
       </div>

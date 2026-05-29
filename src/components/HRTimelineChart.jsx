@@ -128,7 +128,10 @@ export default function HRTimelineChart({
   const maxOffsetS = useMemo(() => Math.max(...rows.map((r) => Number(r.time_offset_s) || 0)), [rows]);
   const durationMins = maxOffsetS / 60;
 
-  const defaultWindow = initialWindow ?? (durationMins > 10 ? 5 : "full");
+  const requestedDefaultWindow = initialWindow ?? (durationMins > 10 ? 5 : "full");
+  const defaultWindow = noClimax && (requestedDefaultWindow === "climax" || requestedDefaultWindow === "recovery")
+    ? "full"
+    : requestedDefaultWindow;
   const [window, setWindow] = useState(defaultWindow);
   const [showBuild, setShowBuild] = useState(false);
   const [showRecovery, setShowRecovery] = useState(false);
@@ -145,6 +148,10 @@ export default function HRTimelineChart({
     climax: savedMarkers.climax_offset_s ?? null,
     recovery: savedMarkers.recovery_offset_s ?? null,
   });
+  const windowOptions = useMemo(
+    () => noClimax ? WINDOWS.filter(({ value }) => value !== "climax" && value !== "recovery") : WINDOWS,
+    [noClimax]
+  );
 
   useEffect(() => {
     setLocalMarkers({
@@ -179,6 +186,13 @@ export default function HRTimelineChart({
 
   const { zoomDomain, resetZoom, isSelecting, selectRange, chartProps, wrapperProps } = useChartZoom(visibleMin, visibleMax);
 
+  useEffect(() => {
+    if (noClimax && (window === "climax" || window === "recovery")) {
+      setWindow(defaultWindow === "climax" || defaultWindow === "recovery" ? "full" : defaultWindow);
+      resetZoom();
+    }
+  }, [defaultWindow, noClimax, resetZoom, window]);
+
   const displayRows = useMemo(() => {
     if (!zoomDomain) return visibleRows;
     return visibleRows.filter(r => {
@@ -197,6 +211,7 @@ export default function HRTimelineChart({
   const markerLines = [];
   const seen = new Set();
   visibleRows.forEach((r) => {
+    if (noClimax) return;
     if (!r.marker) return;
     if (!KNOWN_DATA_MARKERS.has(r.marker)) return; // skip unknown/gray markers
     if (r.marker === "build" && !showBuild) return;
@@ -362,6 +377,52 @@ export default function HRTimelineChart({
     }));
   }, [eventsInView, visibleMax, visibleMin]);
 
+  const hrChangeBands = useMemo(() => {
+    if (!noClimax || !rows || rows.length < 8) return [];
+    const points = rows
+      .map((row) => ({
+        t: Number(row.time_offset_s),
+        hr: Number(row.hr_smoothed ?? row.hr),
+      }))
+      .filter((point) => Number.isFinite(point.t) && Number.isFinite(point.hr))
+      .sort((a, b) => a.t - b.t);
+
+    if (points.length < 8) return [];
+
+    const lookbackS = 45;
+    const thresholdBpm = 5;
+    const rawBands = [];
+    let anchor = 0;
+
+    for (let i = 1; i < points.length; i += 1) {
+      while (anchor < i - 1 && points[i].t - points[anchor + 1].t >= lookbackS) {
+        anchor += 1;
+      }
+      if (points[i].t - points[anchor].t < Math.min(20, lookbackS)) continue;
+
+      const delta = points[i].hr - points[anchor].hr;
+      if (Math.abs(delta) < thresholdBpm) continue;
+
+      rawBands.push({
+        type: delta > 0 ? "rise" : "drop",
+        x1: points[anchor].t,
+        x2: points[i].t,
+        delta,
+      });
+    }
+
+    return rawBands.reduce((bands, band) => {
+      const previous = bands[bands.length - 1];
+      if (previous && previous.type === band.type && band.x1 - previous.x2 <= 20) {
+        previous.x2 = Math.max(previous.x2, band.x2);
+        previous.delta = Math.abs(band.delta) > Math.abs(previous.delta) ? band.delta : previous.delta;
+        return bands;
+      }
+      bands.push({ ...band });
+      return bands;
+    }, []);
+  }, [noClimax, rows]);
+
   const handleInspectMove = (data) => {
     chartProps.onMouseMove?.(data);
     if (!isSelecting && Number.isFinite(Number(data?.activeLabel))) {
@@ -382,7 +443,7 @@ export default function HRTimelineChart({
     <div>
       {/* Controls row */}
       <div className="flex gap-1 mb-2 flex-wrap items-center">
-        {WINDOWS.map(({ label, value }) => (
+        {windowOptions.map(({ label, value }) => (
           <Button
             key={label}
             size="sm"
@@ -412,13 +473,19 @@ export default function HRTimelineChart({
         )}
         <div className="w-px h-4 bg-border mx-1" />
         <span className="text-[10px] text-muted-foreground flex items-center gap-1"><Layers className="w-3 h-3" /> Layers</span>
-        {[
-          ["Phases", showPhases, setShowPhases],
-          ["Events", showEvents, setShowEvents],
-          ["Surges", showNearClimax, setShowNearClimax],
-          ["Build", showBuild, setShowBuild],
-          ["Recovery", showRecovery, setShowRecovery],
-        ].map(([label, active, setter]) => (
+        {(noClimax
+          ? [
+            ["Events", showEvents, setShowEvents],
+            ["HR shifts", showNearClimax, setShowNearClimax],
+          ]
+          : [
+            ["Phases", showPhases, setShowPhases],
+            ["Events", showEvents, setShowEvents],
+            ["Surges", showNearClimax, setShowNearClimax],
+            ["Build", showBuild, setShowBuild],
+            ["Recovery", showRecovery, setShowRecovery],
+          ]
+        ).map(([label, active, setter]) => (
           <Button
             key={label}
             size="sm"
@@ -485,6 +552,19 @@ export default function HRTimelineChart({
                 fillOpacity={band.opacity}
                 stroke={band.color}
                 strokeOpacity={0.12}
+              />
+            ))}
+
+            {/* Exploration HR rise/drop background bands */}
+            {noClimax && showNearClimax && hrChangeBands.map((band, index) => (
+              <ReferenceArea
+                key={`hr-shift-${index}`}
+                x1={band.x1}
+                x2={band.x2}
+                fill={band.type === "rise" ? "#f59e0b" : "#14b8a6"}
+                fillOpacity={Math.min(0.16, 0.06 + Math.abs(band.delta) / 120)}
+                stroke={band.type === "rise" ? "#f59e0b" : "#14b8a6"}
+                strokeOpacity={0.2}
               />
             ))}
 
@@ -755,6 +835,11 @@ export default function HRTimelineChart({
         {showEvents && events.length > 0 && (
           <span className="text-[10px] text-muted-foreground flex items-center gap-1">
             <MapPin className="w-3 h-3" />{events.length} event pins
+          </span>
+        )}
+        {noClimax && showNearClimax && hrChangeBands.length > 0 && (
+          <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full inline-block bg-amber-400" />{hrChangeBands.length} HR shift bands
           </span>
         )}
         {showPhases && phaseBands.map((band) => (

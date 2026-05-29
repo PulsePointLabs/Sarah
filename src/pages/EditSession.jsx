@@ -14,7 +14,7 @@ import ContextSection from "../components/session-form/ContextSection";
 import NotesMediaSection from "../components/session-form/NotesMediaSection";
 import EventTimelineSection from "../components/session-form/EventTimelineSection";
 import EMGSection from "../components/session-form/EMGSection";
-import { Save, ChevronDown, ChevronUp, ArrowLeft, XCircle } from "lucide-react";
+import { Save, ChevronDown, ChevronUp, ArrowLeft, XCircle, ScanSearch } from "lucide-react";
 
 const SECTIONS = [
   { id: "info", label: "Session Info" },
@@ -42,6 +42,7 @@ export default function EditSession() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [saving, setSaving] = useState(false); // false | "Saving session…" | { label: string, pct: number }
+  const [converting, setConverting] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(new Set(["info", "hr", "subjective", "methods"]));
@@ -127,6 +128,56 @@ export default function EditSession() {
     }
   };
 
+  const handleConvertToBodyExploration = async () => {
+    if (!data) return;
+    const confirmed = window.confirm(
+      "Convert this session into a Body Exploration record? Heart-rate and EMG telemetry will stay linked to this record, and the original session entry will be removed from the regular Sessions list."
+    );
+    if (!confirmed) return;
+
+    setConverting(true);
+    try {
+      const duration = calcDuration(data.start_time, data.end_time);
+      const {
+        _csv_rows,
+        _emg_rows,
+        _emg_channel_mode,
+        ai_analysis,
+        ai_cascade,
+        no_climax,
+        ...recordData
+      } = data;
+
+      const explorationRecord = {
+        ...recordData,
+        id,
+        standalone_body_exploration: true,
+        telemetry_only: true,
+        converted_from_session: true,
+        converted_from_session_at: new Date().toISOString(),
+        exploration_type: data.exploration_type || "Body exploration",
+        title: data.title || "Converted telemetry body exploration",
+        methods: data.methods?.length ? data.methods : ["Manual Observation"],
+        duration_minutes: duration || data.duration_minutes,
+      };
+
+      const existing = await base44.entities.BodyExploration.filter({ id });
+      if (existing?.[0]) {
+        await base44.entities.BodyExploration.update(id, explorationRecord);
+      } else {
+        await base44.entities.BodyExploration.create(explorationRecord);
+      }
+
+      await base44.entities.Session.delete(id);
+      toast({ title: "Converted to Body Exploration", duration: 2500 });
+      navigate(`/exploration/${id}/edit`);
+    } catch (err) {
+      toast({ title: "Conversion failed: " + err.message, variant: "destructive" });
+    } finally {
+      setConverting(false);
+    }
+  };
+
   const renderSection = (sectionId) => {
     const props = { data, onChange: setData };
     switch (sectionId) {
@@ -168,6 +219,32 @@ export default function EditSession() {
       />
 
       <div className="px-4 space-y-2 pb-6">
+        {!data.standalone_body_exploration && (
+          <div className="rounded-xl border border-primary/30 bg-primary/10 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-sm font-semibold text-primary">
+                  <ScanSearch className="h-4 w-4" />
+                  Convert to Body Exploration
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  Use this when an automatically recorded telemetry session was really a body exploration or instrumentation review. Existing HR/EMG timeline data stays attached to the converted record.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleConvertToBodyExploration}
+                disabled={converting || !!saving}
+                className="shrink-0 gap-1.5"
+              >
+                <ScanSearch className="h-4 w-4" />
+                {converting ? "Converting..." : "Convert"}
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* No-Climax Toggle */}
         <button
           type="button"
