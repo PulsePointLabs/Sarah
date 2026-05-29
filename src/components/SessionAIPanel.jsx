@@ -81,6 +81,26 @@ EVIDENCE PRECEDENCE HIERARCHY FOR MOVEMENT:
 - Treat motion-derived evidence as observational only. Do not infer intent, arousal phase, muscle force, neurological meaning, or physiological mechanism from motion alone.`;
 }
 
+const AI_SESSION_TYPE_GROUNDING_V1 = `
+SESSION TYPE / INTENT GROUNDING - HIGH PRIORITY:
+- Before interpreting this session, infer the session intent from build_type, methods, notes, event timeline, phase markers, climax fields, HR data, journal, and saved motion evidence.
+- Distinguish masturbation/stimulation sessions from body exploration, sensation mapping, positioning review, recovery review, device fit/comfort review, or other non-climax observational sessions.
+- Absence of climax is not missing data, failure, or an incomplete session when the session appears exploratory or observational. Do not imply that heart-rate data, event notes, motion evidence, or metrics are absent if they are present in the prompt.
+- If climax, ejaculation, pre-climax, or recovery markers are absent, say that those specific phase markers are not logged; do not generalize that session evidence is missing.
+- For body exploration sessions, analyze the available evidence on its own terms: what the body was doing, which sensations or positions were being mapped, how HR changed, what events were logged, what motion evidence showed, and what was learned.
+- For masturbation/stimulation sessions, interpret stimulation efficiency, arousal build, plateau, climax approach, climax/release when present, and recovery when supported.
+- For mixed sessions, explicitly separate exploratory/body-mapping goals from stimulation/arousal goals.
+`;
+
+const BODY_STATE_INTERPRETIVE_STYLE_V1 = `
+BODY-STATE INTERPRETIVE STYLE - RESTORE PULSEPOINT FEEL:
+- Do not let the analysis become only "this happened, then this happened." Use the timeline as evidence for what the body was doing in each phase.
+- When HR, event notes, subjective sensations, movement evidence, or stimulation changes line up, translate them into body-state language: autonomic loading, sensory focus, pelvic/urethral/prostatic awareness when supported, muscular tension or settling when supported, preparation, plateauing, thresholding, recovery, or exploratory mapping.
+- Prefer phrasing like "at this point your body appears to be..." or "this looks like..." when evidence supports a visible/physiological state.
+- Keep mechanism calibrated. Do not overclaim. But when the data supports it, explain the likely physiological meaning instead of merely retelling the timestamp.
+- In body exploration sessions, "what your body is doing" may mean mapping sensation, testing comfort, observing HR response, position tolerance, device fit, movement patterns, or nervous-system settling rather than arousal escalation.
+`;
+
 const WARM_COMPANION_OUTPUT_DISCIPLINE = `
 COMPANION VOICE AND SINGLE-PASS STRUCTURE - HIGH PRIORITY:
 - Address the person directly throughout. Never write "the user," "the user's notes," "the subject," "the participant," or "the patient." Say "your notes," "you observed," "your body," "your pattern," or "your recovery."
@@ -439,7 +459,7 @@ Use this arousal profile to personalize analysis: compare the observed build arc
     const groundingContext = buildAIGroundingContext(userProfile);
     const firstNameToneCue = !isTechnical ? buildOptionalFirstNameToneCue(userProfile) : "";
     const structuredSessionContext = structuredSessionContextForAI(session);
-    const warmMotionEvidence = !isTechnical ? buildWarmMotionEvidence(session) : "";
+    const warmMotionEvidence = buildWarmMotionEvidence(session);
 
     const journalContext = sessionJournal ? `
 
@@ -462,18 +482,20 @@ Factor the journal into your analysis — where the person's subjective experien
       } : {}),
       ...(estimScreenshots.length > 0 ? { file_urls: estimScreenshots } : {}),
       prompt: `${isTechnical
-        ? `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session as a rich, cohesive physiological story. Integrate arousal physiology, anatomy, heart rate data, stimulation technique, event notes, and subjective experience. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
+        ? `You are an expert physiologist and anatomist specializing in sexual response, body-state interpretation, and careful review of intimate physiology data. Analyze this session as a rich, cohesive physiological story. Integrate session intent, arousal or exploration context, anatomy, heart rate data, stimulation or body-mapping technique, event notes, motion evidence when present, and subjective experience. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 TARGET SESSION ANALYSIS STYLE:
 - Begin with a substantial overview that synthesizes the session's outcome, heart-rate arc, stimulation context, notable physiology, and why the session behaved the way it did.
-- Then explain the session through meaningful physiological windows: baseline/entry state, build, plateaus or transitions, pre-climax when supported, climax or non-climax outcome, and recovery.
+- Then explain the session through meaningful physiological windows based on session intent: baseline/entry state, exploration or stimulation phase, sensory/body-state transitions, plateaus or settling, pre-climax when supported, climax or intentionally non-climax outcome, and recovery or end-state.
 - A window may be chronological when chronology explains the physiology. The point is not to avoid time; the point is to make each time window explain arousal state, autonomic loading, sensory input, technique effectiveness, or recovery.
 - Keep the older PulsePoint feel: detailed, insightful, physiology-forward, personally grounded, and useful for later comparison across sessions.
 - Do not flatten the analysis into generic observations or a short summary. This is a deep session interpretation.`
-        : `You are an expert physiologist and anatomist specializing in sexual response. Analyze this session integrating arousal physiology, anatomy, heart rate data, event timeline, and subjective experience into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally. Keep this natural, clinically grounded, and never forced. Let the narration feel warmly attentive and quietly familiar with the person's established patterns, noticing what stands out with natural human interest while staying grounded in the provided evidence.`}
+        : `You are an expert physiologist and anatomist specializing in sexual response, body-state interpretation, and careful review of intimate physiology data. Analyze this session by first identifying whether it is primarily masturbation/stimulation, body exploration, sensation mapping, recovery review, or mixed. Integrate anatomy, heart rate data, event timeline, motion evidence when present, subjective experience, and session intent into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally. Keep this natural, clinically grounded, and never forced. Let the narration feel warmly attentive and quietly familiar with the person's established patterns, noticing what stands out with natural human interest while staying grounded in the provided evidence.`}
 
 ${isTechnical ? groundingContext : ""}
 ${!isTechnical ? SESSION_CONTEXT_GROUNDING_RULE : ""}
+${AI_SESSION_TYPE_GROUNDING_V1}
+${BODY_STATE_INTERPRETIVE_STYLE_V1}
 ${warmMotionEvidence}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
@@ -531,12 +553,12 @@ ${isTechnical
 Use time references when they anchor the arc, but each time reference should answer "what changed and why might it matter?" Connect stimulation changes, physical findings, HR movement, and subjective context into mechanism-level interpretation. If a technique shift appears to change arousal, explain the plausible sensory/autonomic reason. If HR rises, plateaus, or drops, explain what that likely says about sympathetic load, parasympathetic settling, pelvic floor engagement, sensory novelty, stimulation efficiency, or recovery state.
 
 The best output should feel like: "Here is what was happening in the body during this phase, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."`
-  : `This is primary evidence for the single Chronological Deep Dive. Group closely related events into meaningful transitions rather than narrating every note separately. Interpret turning points once in chronological order. Reserve movement telemetry synthesis, recurring patterns, hypotheses, and recommendations for their dedicated sections; do not retell this timeline there.`}` : ""}
+  : `This is primary evidence for the single Chronological Deep Dive. Group closely related events into meaningful body-state transitions rather than narrating every note separately. At each major transition, explain what the body appears to be doing and why that matters. Reserve movement telemetry synthesis, recurring patterns, hypotheses, and recommendations for their dedicated sections; do not retell this timeline there.`}` : ""}
 
 ${hrTrajectory ? `HR TRAJECTORY (time_s:bpm, sampled):
 ${hrTrajectory}
 
-Use this to trace sympathetic activation patterns, identify arousal plateaus, and correlate HR changes to event timing.` : ""}
+Use this to trace sympathetic activation patterns, body-state transitions, exploratory response, arousal plateaus when relevant, and correlation between HR changes and event timing. For non-climax body exploration sessions, HR still matters: use it to describe autonomic response, settling, activation, comfort/discomfort, or positional/sensory response rather than looking for a climax arc.` : ""}
 
 Session data:
 ${JSON.stringify({
@@ -612,8 +634,8 @@ Provide ${isTechnical
             ? { type: "string", description: "One cohesive overview emphasizing physiology, arousal pattern, stimulation effectiveness, and why the session behaved the way it did." }
             : { type: "string", description: "Executive Summary: a rich but concise overview of the session arc and defining findings, without retelling the full chronology." },
           arousal_arc: isTechnical
-            ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining the HR/autonomic arc, stimulation links, supported anatomy, pre-climax/climax/recovery shifts, and why the session progressed as it did." }
-            : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: the only detailed ordered pass through the session arc; group related events into meaningful transitions." },
+            ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining the HR/autonomic arc, exploration or stimulation links, supported anatomy, body-state transitions, pre-climax/climax/recovery shifts when present, and why the session progressed as it did." }
+            : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: the only detailed ordered pass through the session arc; group related events into meaningful body-state transitions and explain what the body appears to be doing at those moments." },
           event_analysis: isTechnical
             ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, HR-supported turning points, and what made the session notable. Use time anchors when they strengthen the interpretation." }
             : { type: "array", items: { type: "string" }, description: "Motion Telemetry Interpretation and evidence synthesis: interpret asymmetry, cadence proxy, movement patterns, and evidence discrepancies without replaying the chronology." },
