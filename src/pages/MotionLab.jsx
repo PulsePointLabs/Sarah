@@ -421,6 +421,99 @@ export default function MotionLab() {
   const evidence = getMotionEvidenceSummary(selectedSession);
   const configuredRoles = FEED_ROLES.filter((role) => role.value === feedRole || feedWorkspaces[role.value]?.videoSrc);
 
+  const rightRailHeader = (
+    <div className="space-y-1.5">
+      {/* MOTION_LAB_RIGHT_RAIL_COMPOSED_STACK_V1 */}
+      {videoSrc ? (
+        <div
+          ref={previewRef}
+          className={`rounded-xl border border-border bg-card p-2.5 space-y-2 ${
+          previewFloating
+            ? "fixed z-[60] min-w-[20rem] max-w-[calc(100vw-2rem)] border-primary/35 shadow-2xl"
+            : ""
+          }`}
+          style={previewFloating ? {
+            width: `min(${floatingPreviewWidth}px, calc(100vw - 2rem))`,
+            left: `${floatingPreviewPosition.x}px`,
+            top: `${floatingPreviewPosition.y}px`,
+          } : undefined}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div
+              onPointerDown={beginFloatingDrag}
+              className={`${previewFloating ? "touch-none cursor-move select-none rounded-md border border-transparent px-1.5 py-1 hover:border-primary/20 hover:bg-primary/[0.05]" : ""}`}
+              title={previewFloating ? "Drag to move preview" : undefined}
+            >
+              <p className="text-xs font-semibold uppercase tracking-wider text-primary">Local Processing Preview</p>
+              {previewFloating && <p className="text-[9px] text-muted-foreground">Drag to move</p>}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPreviewFloating((floating) => !floating)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-primary/25 bg-primary/[0.06] px-2.5 py-1.5 text-xs font-medium text-primary hover:border-primary/45 hover:bg-primary/10"
+              >
+                {previewFloating ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+                {previewFloating ? "Dock preview" : "Float preview"}
+              </button>
+              {selectedSession && (
+                <Link to={`/review-player?session=${encodeURIComponent(selectedSession.id)}`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+                  Return to Review Player <ArrowRight className="h-3 w-3" />
+                </Link>
+              )}
+            </div>
+          </div>
+          {previewFloating && (
+            <p className="text-[10px] text-muted-foreground">
+              Drag the header to move; drag the resize grip below to resize. Video seeking remains available in the player controls.
+            </p>
+          )}
+          <video
+            ref={videoRef}
+            src={videoSrc}
+            controls
+            playsInline
+            className={`${previewFloating ? "max-h-[42vh]" : "2xl:max-h-[24vh] max-h-[42vh]"} w-full rounded-lg bg-black object-contain`}
+            onTimeUpdate={(event) => updateFeedWorkspace(feedRole, { videoTime: event.currentTarget.currentTime })}
+            onPlay={() => updateFeedWorkspace(feedRole, { videoPlaying: true })}
+            onPause={() => updateFeedWorkspace(feedRole, { videoPlaying: false })}
+            onLoadedMetadata={(event) => {
+              const savedTime = Number(feedWorkspaces[feedRole]?.videoTime) || 0;
+              if (savedTime > 0 && savedTime < event.currentTarget.duration) {
+                event.currentTarget.currentTime = savedTime;
+              }
+              updateFeedWorkspace(feedRole, { videoDuration: event.currentTarget.duration || 0 });
+              setFloatingPreviewPosition((current) => clampFloatingPreviewPosition(
+                current,
+                floatingPreviewWidth,
+                previewRef.current?.getBoundingClientRect().height,
+              ));
+            }}
+          />
+          {previewFloating && (
+            <button
+              type="button"
+              onPointerDown={beginFloatingResize}
+              className="ml-auto flex h-5 w-20 touch-none cursor-ew-resize items-center justify-center rounded-md border border-primary/30 bg-primary/10 text-[9px] font-semibold uppercase tracking-wider text-primary hover:bg-primary/20"
+              aria-label="Drag to resize floating preview"
+              title="Drag horizontally to resize preview"
+            >
+              Resize
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="rounded-xl border border-dashed border-border bg-card p-8 text-center text-sm text-muted-foreground">
+          Load a local video to configure and run derived motion analysis.
+        </div>
+      )}
+
+      {selectedSession?.motion_analysis_summary && evidence.hasSavedTelemetry && (
+        <SavedMotionSummaryCard summary={selectedSession.motion_analysis_summary} compact onSeek={videoSrc ? seek : undefined} playbackTime={videoTime} />
+      )}
+    </div>
+  );
+
   return (
     <div>
       <PageHeader title="Motion Lab" subtitle="Local-only motion detection, configuration, and derived evidence saving" />
@@ -535,96 +628,6 @@ export default function MotionLab() {
 
           <section className="grid gap-1.5 2xl:grid-cols-[minmax(0,1fr)_minmax(21rem,25rem)]">
             {/* MOTION_LAB_EDITOR_FIRST_WORKSPACE_V1 */}
-            <div className="space-y-1.5 2xl:col-start-2 2xl:row-start-1 2xl:order-1 2xl:self-start">
-              {videoSrc ? (
-              <div
-                ref={previewRef}
-                className={`rounded-xl border border-border bg-card p-2.5 space-y-2 ${
-                previewFloating
-                  ? "fixed z-[60] min-w-[20rem] max-w-[calc(100vw-2rem)] border-primary/35 shadow-2xl"
-                  : ""
-                }`}
-                style={previewFloating ? {
-                  width: `min(${floatingPreviewWidth}px, calc(100vw - 2rem))`,
-                  left: `${floatingPreviewPosition.x}px`,
-                  top: `${floatingPreviewPosition.y}px`,
-                } : undefined}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div
-                    onPointerDown={beginFloatingDrag}
-                    className={`${previewFloating ? "touch-none cursor-move select-none rounded-md border border-transparent px-1.5 py-1 hover:border-primary/20 hover:bg-primary/[0.05]" : ""}`}
-                    title={previewFloating ? "Drag to move preview" : undefined}
-                  >
-                    <p className="text-xs font-semibold uppercase tracking-wider text-primary">Local Processing Preview</p>
-                    {previewFloating && <p className="text-[9px] text-muted-foreground">Drag to move</p>}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setPreviewFloating((floating) => !floating)}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-primary/25 bg-primary/[0.06] px-2.5 py-1.5 text-xs font-medium text-primary hover:border-primary/45 hover:bg-primary/10"
-                    >
-                      {previewFloating ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-                      {previewFloating ? "Dock preview" : "Float preview"}
-                    </button>
-                    {selectedSession && (
-                      <Link to={`/review-player?session=${encodeURIComponent(selectedSession.id)}`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-                        Return to Review Player <ArrowRight className="h-3 w-3" />
-                      </Link>
-                    )}
-                  </div>
-                </div>
-                {previewFloating && (
-                  <p className="text-[10px] text-muted-foreground">
-                    Drag the header to move; drag the resize grip below to resize. Video seeking remains available in the player controls.
-                  </p>
-                )}
-                <video
-                  ref={videoRef}
-                  src={videoSrc}
-                  controls
-                  playsInline
-                  className={`${previewFloating ? "max-h-[42vh]" : "2xl:max-h-[24vh] max-h-[42vh]"} w-full rounded-lg bg-black object-contain`}
-                  onTimeUpdate={(event) => updateFeedWorkspace(feedRole, { videoTime: event.currentTarget.currentTime })}
-                  onPlay={() => updateFeedWorkspace(feedRole, { videoPlaying: true })}
-                  onPause={() => updateFeedWorkspace(feedRole, { videoPlaying: false })}
-                  onLoadedMetadata={(event) => {
-                    const savedTime = Number(feedWorkspaces[feedRole]?.videoTime) || 0;
-                    if (savedTime > 0 && savedTime < event.currentTarget.duration) {
-                      event.currentTarget.currentTime = savedTime;
-                    }
-                    updateFeedWorkspace(feedRole, { videoDuration: event.currentTarget.duration || 0 });
-                    setFloatingPreviewPosition((current) => clampFloatingPreviewPosition(
-                      current,
-                      floatingPreviewWidth,
-                      previewRef.current?.getBoundingClientRect().height,
-                    ));
-                  }}
-                />
-                {previewFloating && (
-                  <button
-                    type="button"
-                    onPointerDown={beginFloatingResize}
-                    className="ml-auto flex h-5 w-20 touch-none cursor-ew-resize items-center justify-center rounded-md border border-primary/30 bg-primary/10 text-[9px] font-semibold uppercase tracking-wider text-primary hover:bg-primary/20"
-                    aria-label="Drag to resize floating preview"
-                    title="Drag horizontally to resize preview"
-                  >
-                    Resize
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="rounded-xl border border-dashed border-border bg-card p-8 text-center text-sm text-muted-foreground">
-                Load a local video to configure and run derived motion analysis.
-              </div>
-              )}
-
-            {selectedSession?.motion_analysis_summary && evidence.hasSavedTelemetry && (
-              <SavedMotionSummaryCard summary={selectedSession.motion_analysis_summary} compact onSeek={videoSrc ? seek : undefined} playbackTime={videoTime} />
-            )}
-            </div>
-
             <div className="contents">
               {configuredRoles.map((role) => {
                 const workspace = feedWorkspaces[role.value] || {};
@@ -639,6 +642,7 @@ export default function MotionLab() {
                       selectedSession={selectedSession}
                       analysisFeedLabel={role.value === "composite" ? null : role.label}
                       splitWorkspaceLayout
+                      rightRailHeader={rightRailHeader}
                       onSeek={(timeS) => {
                         if (active) seek(timeS);
                         else updateFeedWorkspace(role.value, { videoTime: Number(timeS) || 0 });

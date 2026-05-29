@@ -2267,7 +2267,7 @@ function MotionTooltip({ active, payload, label }) {
   );
 }
 
-export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, videoTime, videoPlaying = false, selectedSession, analysisFeedLabel = null, onSeek, onSaveSummary, onAcceptSuggestions, splitWorkspaceLayout = false }) {
+export default function LocalMotionAnalysisPanel({ videoSrc, videoDuration, videoTime, videoPlaying = false, selectedSession, analysisFeedLabel = null, onSeek, onSaveSummary, onAcceptSuggestions, splitWorkspaceLayout = false, rightRailHeader = null }) {
   const stopRequestedRef = useRef(false);
   const previewCanvasRef = useRef(null);
   const previewEnabledRef = useRef(false);
@@ -3227,8 +3227,15 @@ return (
         </div>
       </div>
 
-      <div className={`rounded-xl border border-primary/20 bg-primary/[0.04] p-2.5 space-y-2 ${splitWorkspaceLayout ? "2xl:col-start-2 2xl:row-start-1 2xl:order-2" : ""}`}>
-        {/* MOTION_LAB_LIVE_PREVIEW_TOP_AND_RAIL_TEXT_V1 */}
+      <div className={`rounded-xl border border-primary/20 bg-primary/[0.04] p-2.5 space-y-2 ${splitWorkspaceLayout ? "2xl:col-start-2 2xl:row-start-1 2xl:order-2 2xl:self-start" : ""}`}>
+        {/* MOTION_LAB_RIGHT_RAIL_COMPOSED_STACK_V1 */}
+        {splitWorkspaceLayout && rightRailHeader && (
+          <div className="space-y-1.5">
+            {rightRailHeader}
+          </div>
+        )}
+        {/* MOTION_LAB_RIGHT_RAIL_ROW2_STACK_V1 */}
+        {/* MOTION_LAB_RIGHT_RAIL_CLEAR_PREVIEW_STACK_V1 */}
         {splitWorkspaceLayout && (
           <div className="rounded-lg border border-primary/20 bg-primary/[0.06] px-2.5 py-1.5">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">Region placement workflow</p>
@@ -3242,7 +3249,7 @@ return (
             type="button"
             onClick={analyze}
             disabled={!videoSrc || running}
-            className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+            className="inline-flex h-10 max-w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
           >
             {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <ModeIcon className="h-4 w-4" />}
             {running ? `Analyzing ${progress}%` : `Analyze ${selectedMode.label}`}
@@ -3872,7 +3879,7 @@ return (
 
         {splitWorkspaceLayout && !roiFrameReady && (
           <div
-            className="region-editor-preview overflow-hidden rounded-lg border border-dashed border-primary/25 bg-card/45 xl:col-start-1 2xl:order-1"
+            className="region-editor-preview overflow-hidden rounded-lg border border-dashed border-primary/25 bg-card/45 xl:col-start-1 2xl:row-start-1 2xl:order-1"
             style={{ minHeight: `${placementPlaceholderHeight}px` }}
           >
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
@@ -4100,7 +4107,7 @@ return (
       )}
 
       {previewExpanded && (
-      <div id="motion-lab-preview" className={`scroll-mt-32 rounded-lg border border-border bg-muted/10 p-3 space-y-3 ${splitWorkspaceLayout ? "2xl:col-start-2" : ""}`}>
+      <div id="motion-lab-preview" className={`scroll-mt-32 rounded-lg border border-border bg-muted/10 p-3 space-y-3 ${splitWorkspaceLayout ? "2xl:col-start-2 2xl:row-start-4 2xl:order-4 2xl:self-start" : ""}`}>
         <label className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
           <input
             type="checkbox"
