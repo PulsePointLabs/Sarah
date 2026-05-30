@@ -1,8 +1,28 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { LayoutDashboard, List, PlusCircle, GitCompare, TrendingUp, Waves, ScanSearch, GitMerge, LineChart, Menu, X, UserCircle, Grid3x3, Clapperboard, Music, BarChart2, FlaskConical, BookOpen, Radio, Settings2, Activity } from "lucide-react";
 import InstallAppButton from "./InstallAppButton";
 import BackgroundJobStatusTray from "./BackgroundJobStatusTray";
+
+// UI_OLD_MAN_ACCESSIBILITY_V1
+const UI_PREFS_STORAGE_KEY = "pulsepoint-ui-preferences-v1";
+const DEFAULT_UI_PREFS = { theme: "teal", fontScale: "comfortable" };
+
+function readUiPreferences() {
+  if (typeof window === "undefined") return DEFAULT_UI_PREFS;
+  try {
+    return { ...DEFAULT_UI_PREFS, ...(JSON.parse(window.localStorage.getItem(UI_PREFS_STORAGE_KEY) || "{}")) };
+  } catch {
+    return DEFAULT_UI_PREFS;
+  }
+}
+
+function uiPreferenceClasses(prefs) {
+  return [
+    `theme-${prefs.theme || DEFAULT_UI_PREFS.theme}`,
+    `text-scale-${prefs.fontScale || DEFAULT_UI_PREFS.fontScale}`,
+  ].join(" ");
+}
 
 const navItems = [
 { path: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -31,11 +51,23 @@ const navItems = [
 export default function Layout() {
   const location = useLocation();
   const [open, setOpen] = useState(false);
+  const [uiPrefs, setUiPrefs] = useState(readUiPreferences);
+
+  useEffect(() => {
+    const syncPrefs = () => setUiPrefs(readUiPreferences());
+    window.addEventListener("pulsepoint:ui-preferences-changed", syncPrefs);
+    window.addEventListener("storage", syncPrefs);
+    return () => {
+      window.removeEventListener("pulsepoint:ui-preferences-changed", syncPrefs);
+      window.removeEventListener("storage", syncPrefs);
+    };
+  }, []);
+
   const isDisplayView = ["/capture", "/review-player"].includes(location.pathname)
     && new URLSearchParams(location.search).get("display") === "focus";
 
   return (
-    <div className="dark min-h-screen bg-background text-foreground flex flex-col">
+    <div className={`dark ${uiPreferenceClasses(uiPrefs)} min-h-screen bg-background text-foreground flex flex-col`}>
       {/* Top bar */}
       {!isDisplayView && <header className="fixed top-0 left-0 right-0 z-50 h-14 bg-card border-b border-border flex items-center px-2 gap-2">
         <button

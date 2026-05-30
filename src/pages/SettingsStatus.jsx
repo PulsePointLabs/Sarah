@@ -4,6 +4,8 @@ import {
   Activity,
   BellRing,
   CircleDollarSign,
+  Palette,
+  Type,
   ExternalLink,
   KeyRound,
   Loader2,
@@ -103,6 +105,38 @@ async function showPulsePointNotification({ title, body, route = "/settings" }) 
   };
 }
 
+// UI_OLD_MAN_ACCESSIBILITY_V1
+const UI_PREFS_STORAGE_KEY = "pulsepoint-ui-preferences-v1";
+const DEFAULT_UI_PREFS = { theme: "teal", fontScale: "comfortable" };
+
+const THEME_OPTIONS = [
+  { value: "teal", label: "PulsePoint Teal", helper: "Default dark PulsePoint look." },
+  { value: "blue", label: "Clinical Blue", helper: "Cooler blue accents with softer contrast." },
+  { value: "warm", label: "Warm Amber", helper: "Warmer highlights for late-night reading." },
+  { value: "high-contrast", label: "High Contrast", helper: "Bigger contrast, brighter borders, old-man approved." },
+];
+
+const FONT_SCALE_OPTIONS = [
+  { value: "comfortable", label: "Comfortable", helper: "Current default sizing." },
+  { value: "large", label: "Large", helper: "A little bigger everywhere." },
+  { value: "xl", label: "Extra Large", helper: "Less squinting, more dignity." },
+  { value: "old-man", label: "Old Man", helper: "Maximum readability. Buttons and tiny labels get boosted too." },
+];
+
+function readUiPreferences() {
+  if (typeof window === "undefined") return DEFAULT_UI_PREFS;
+  try {
+    return { ...DEFAULT_UI_PREFS, ...(JSON.parse(window.localStorage.getItem(UI_PREFS_STORAGE_KEY) || "{}")) };
+  } catch {
+    return DEFAULT_UI_PREFS;
+  }
+}
+
+function saveUiPreferences(nextPrefs) {
+  window.localStorage.setItem(UI_PREFS_STORAGE_KEY, JSON.stringify(nextPrefs));
+  window.dispatchEvent(new CustomEvent("pulsepoint:ui-preferences-changed", { detail: nextPrefs }));
+}
+
 function ProviderCard({ status }) {
   const report = status?.costReport;
   return (
@@ -160,6 +194,15 @@ export default function SettingsStatus() {
   ));
   const [notificationMessage, setNotificationMessage] = useState("");
   const [notificationBusy, setNotificationBusy] = useState(false);
+  const [uiPrefs, setUiPrefs] = useState(readUiPreferences);
+
+  const updateUiPrefs = (patch) => {
+    setUiPrefs((previous) => {
+      const next = { ...previous, ...patch };
+      saveUiPreferences(next);
+      return next;
+    });
+  };
 
   const loadProviders = async () => {
     setProviderLoading(true);
@@ -383,6 +426,65 @@ export default function SettingsStatus() {
       </section>
 
       <TTSSettingsPanel />
+
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-primary">
+              <Palette className="h-4 w-4" />
+              <h2 className="text-sm font-bold uppercase tracking-wider">Display & Readability</h2>
+            </div>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+              Old man version controls: pick a color theme and bump the app-wide font size without touching browser zoom.
+            </p>
+          </div>
+          <span className="rounded-full bg-primary/10 px-2 py-1 text-xs font-semibold uppercase text-primary">
+            Local only
+          </span>
+        </div>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <div className="rounded-xl border border-border bg-muted/20 p-3">
+            <div className="flex items-center gap-2 text-foreground">
+              <Palette className="h-4 w-4 text-primary" />
+              <h3 className="text-sm font-bold">Color theme</h3>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {THEME_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => updateUiPrefs({ theme: option.value })}
+                  className={`rounded-lg border px-3 py-2 text-left transition-colors ${uiPrefs.theme === option.value ? "border-primary bg-primary/10 text-foreground" : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground"}`}
+                >
+                  <span className="block text-sm font-semibold">{option.label}</span>
+                  <span className="mt-0.5 block text-xs opacity-85">{option.helper}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border bg-muted/20 p-3">
+            <div className="flex items-center gap-2 text-foreground">
+              <Type className="h-4 w-4 text-primary" />
+              <h3 className="text-sm font-bold">Font size</h3>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {FONT_SCALE_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => updateUiPrefs({ fontScale: option.value })}
+                  className={`rounded-lg border px-3 py-2 text-left transition-colors ${uiPrefs.fontScale === option.value ? "border-primary bg-primary/10 text-foreground" : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground"}`}
+                >
+                  <span className="block text-sm font-semibold">{option.label}</span>
+                  <span className="mt-0.5 block text-xs opacity-85">{option.helper}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
