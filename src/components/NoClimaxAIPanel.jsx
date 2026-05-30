@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import TTSReader from "./TTSReader";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
+import { buildSessionAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 
 function getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -49,6 +50,8 @@ export default function NoClimaxAIPanel({ session, timelineRows, userProfile }) 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(session.ai_no_climax ?? null);
   const [error, setError] = useState("");
+  const generatedAt = getAIContentGeneratedAt(result);
+  const resultStale = isSessionAIContentStale(result, session);
 
   const analyze = async () => {
     setLoading(true);
@@ -208,7 +211,10 @@ ${JSON.stringify({
       },
     });
 
-    const parsed = normalizeNoClimaxAnalysis(res);
+    const parsed = {
+      ...normalizeNoClimaxAnalysis(res),
+      _meta: buildSessionAIContentMeta(session, result?._meta),
+    };
     setResult(parsed);
     await base44.entities.Session.update(session.id, { ai_no_climax: parsed });
     } catch (err) {
@@ -274,12 +280,22 @@ ${JSON.stringify({
         });
 
         return (
-          <TTSReader
-            sessionId={session.id}
-            title="AI Incomplete Session Analysis"
-            sessionDate={session.date}
-            paragraphs={paras}
-            renderParagraph={(text, idx, isActive) => {
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+              <span>{generatedAt ? `Generated ${formatGeneratedAt(generatedAt)}` : "Generated time unavailable"}</span>
+              {resultStale && (
+                <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 font-semibold text-amber-300">
+                  May be stale - newer saved evidence exists
+                </span>
+              )}
+            </div>
+            <TTSReader
+              sessionId={session.id}
+              title="AI Incomplete Session Analysis"
+              sessionDate={session.date}
+              sourceGeneratedAt={generatedAt}
+              paragraphs={paras}
+              renderParagraph={(text, idx, isActive) => {
               const meta = paraMeta[idx];
               if (!meta) return null;
 
@@ -314,8 +330,9 @@ ${JSON.stringify({
                   </li>
                 </div>
               );
-            }}
-          />
+              }}
+            />
+          </div>
         );
       })()}
     </div>

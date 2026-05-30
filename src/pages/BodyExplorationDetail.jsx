@@ -22,23 +22,30 @@ function fmtTime(totalSeconds) {
 
 function TimestampedNotes({ events }) {
   return (
-    <div className="space-y-2">
-      <div>
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Timestamped Notes</h3>
-        <p className="mt-1 text-xs text-muted-foreground">Observation notes for this body exploration record.</p>
-      </div>
-      {events.map((event, index) => (
-        <div key={`${event.time_s || 0}-${index}`} className="rounded-lg border border-border bg-muted/20 px-3 py-2">
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="font-mono font-semibold text-primary">{fmtTime(event.time_s)}</span>
-            {(Array.isArray(event.category) ? event.category : [event.category].filter(Boolean)).map((category) => (
-              <Badge key={`${index}-${category}`} variant="outline" className="text-[10px]">{String(category).replaceAll("_", " ")}</Badge>
-            ))}
+    <details className="rounded-xl border border-border bg-card p-4">
+      <summary className="cursor-pointer list-none">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Timestamped Notes</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Observation notes for this body exploration record.</p>
           </div>
-          <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-foreground">{event.note}</p>
+          <Badge variant="outline" className="text-[10px]">{events.length} notes</Badge>
         </div>
-      ))}
-    </div>
+      </summary>
+      <div className="mt-3 space-y-2">
+        {events.map((event, index) => (
+          <div key={`${event.time_s || 0}-${index}`} className="rounded-lg border border-border bg-muted/20 px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-mono font-semibold text-primary">{fmtTime(event.time_s)}</span>
+              {(Array.isArray(event.category) ? event.category : [event.category].filter(Boolean)).map((category) => (
+                <Badge key={`${index}-${category}`} variant="outline" className="text-[10px]">{String(category).replaceAll("_", " ")}</Badge>
+              ))}
+            </div>
+            <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-foreground">{event.note}</p>
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -101,7 +108,7 @@ export default function BodyExplorationDetail() {
 
         {timelineRows.length > 0 && <div className="rounded-xl border border-border bg-card p-4"><h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-primary">Heart Rate Timeline</h3><HRTimelineChart rows={timelineRows} events={exploration.event_timeline || []} noClimax /></div>}
         {emgRows.length > 0 && <div className="rounded-xl border border-border bg-card p-4"><h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-primary">EMG Timeline</h3><EMGTimelineChart rows={emgRows} channelMode={exploration.emg_channels || "single"} events={exploration.event_timeline || []} timelineRows={timelineRows} /></div>}
-        {(exploration.event_timeline || []).length > 0 && <div className="rounded-xl border border-border bg-card p-4"><TimestampedNotes events={exploration.event_timeline} /></div>}
+        {(exploration.event_timeline || []).length > 0 && <TimestampedNotes events={exploration.event_timeline} />}
         <BodyExplorationAIPanel exploration={exploration} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} />
         <div className="rounded-xl border border-border bg-muted/20 p-4 text-xs text-muted-foreground">
           <p className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-primary"><Brain className="h-3.5 w-3.5" /> Standalone exploration mode</p>

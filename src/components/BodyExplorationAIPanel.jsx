@@ -5,6 +5,7 @@ import { base44 } from "@/api/base44Client";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import TTSReader from "./TTSReader";
 import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
+import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
 
 const SECTION_DEFS = [
   { key: "telemetry_findings", label: "Telemetry Findings", icon: <Activity className="h-3.5 w-3.5" />, color: "hsl(var(--chart-2))" },
@@ -52,6 +53,19 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(exploration.ai_body_exploration || null);
   const [error, setError] = useState("");
+  const generatedAt = getAIContentGeneratedAt(result);
+
+  const attachAnalysisMeta = (analysis, previousAnalysis) => {
+    return {
+      ...analysis,
+      _meta: buildGenericAIContentMeta(previousAnalysis?._meta, null, {
+        source_exploration_updated_at: exploration.updated_date || exploration.updated_at || exploration.modified_date || null,
+        source_event_count: Array.isArray(exploration.event_timeline) ? exploration.event_timeline.length : 0,
+        source_hr_row_count: Array.isArray(timelineRows) ? timelineRows.length : 0,
+        source_emg_row_count: Array.isArray(emgRows) ? emgRows.length : 0,
+      }),
+    };
+  };
 
   const analyze = async () => {
     setLoading(true);
@@ -131,7 +145,7 @@ ${events.length ? `TIMESTAMPED NOTES:\n${events.join("\n")}` : "No timestamped n
           required: ["summary", "telemetry_findings", "mechanical_findings", "comfort_safety_findings", "recommendations"],
         },
       });
-      const parsed = normalizeAnalysis(raw);
+      const parsed = attachAnalysisMeta(normalizeAnalysis(raw), result);
       setResult(parsed);
       await base44.entities.BodyExploration.update(exploration.id, { ai_body_exploration: parsed });
     } catch (err) {
@@ -156,6 +170,11 @@ ${events.length ? `TIMESTAMPED NOTES:\n${events.join("\n")}` : "No timestamped n
             <Brain className="h-4 w-4" /> AI Body Exploration Analysis
           </h3>
           {!result && <p className="mt-1 text-xs text-muted-foreground">Useful feedback and findings for exploration, instrumentation, telemetry, and comfort observations.</p>}
+          {result && (
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {generatedAt ? `Generated ${formatGeneratedAt(generatedAt)}` : "Generated time unavailable"}
+            </p>
+          )}
         </div>
         <Button size="sm" onClick={analyze} disabled={loading} className="h-8 gap-1.5 text-xs">
           {loading ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Analyzing</> : <><Brain className="h-3 w-3" />{result ? "Re-analyze" : "Analyze"}</>}
@@ -172,6 +191,7 @@ ${events.length ? `TIMESTAMPED NOTES:\n${events.join("\n")}` : "No timestamped n
           sessionId={`body-exploration-${exploration.id}`}
           title="AI Body Exploration Analysis"
           sessionDate={exploration.date}
+          sourceGeneratedAt={generatedAt}
           paragraphs={paragraphs}
           renderParagraph={(text, index, isActive) => {
             const meta = paragraphMeta[index];

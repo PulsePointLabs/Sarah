@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import TTSReader from "./TTSReader";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { buildSessionAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 
 function getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -22,6 +23,8 @@ export default function SessionTimelineNarrative({ session, timelineRows, userPr
   const [collapsed, setCollapsed] = useState(true);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(session.ai_timeline_narrative ?? null);
+  const generatedAt = getAIContentGeneratedAt(result);
+  const resultStale = isSessionAIContentStale(result, session);
 
   const analyze = async () => {
     setLoading(true);
@@ -242,7 +245,10 @@ ${JSON.stringify({
     });
 
     const raw = typeof res === "string" ? JSON.parse(res) : res;
-    const parsed = raw?.response ?? raw;
+    const parsed = {
+      ...(raw?.response ?? raw),
+      _meta: buildSessionAIContentMeta(session, result?._meta),
+    };
     setResult(parsed);
     await base44.entities.Session.update(session.id, { ai_timeline_narrative: parsed });
     setLoading(false);
@@ -293,12 +299,22 @@ ${JSON.stringify({
       )}
 
       {!collapsed && result && (
-        <TTSReader
-          sessionId={session.id + "_timeline"}
-          title="Timeline & Arousal Narrative"
-          sessionDate={session.date}
-          paragraphs={paras}
-          renderParagraph={(text, idx, isActive, isBuffering) => {
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+            <span>{generatedAt ? `Generated ${formatGeneratedAt(generatedAt)}` : "Generated time unavailable"}</span>
+            {resultStale && (
+              <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 font-semibold text-amber-300">
+                May be stale - newer saved evidence exists
+              </span>
+            )}
+          </div>
+          <TTSReader
+            sessionId={session.id + "_timeline"}
+            title="Timeline & Arousal Narrative"
+            sessionDate={session.date}
+            sourceGeneratedAt={generatedAt}
+            paragraphs={paras}
+            renderParagraph={(text, idx, isActive, isBuffering) => {
             const meta = paraMeta[idx];
             if (!meta) return null;
 
@@ -334,8 +350,9 @@ ${JSON.stringify({
                 </li>
               </div>
             );
-          }}
-        />
+            }}
+          />
+        </div>
       )}
     </div>
   );

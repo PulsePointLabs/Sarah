@@ -4,6 +4,7 @@ import { TrendingUp } from "lucide-react";
 import TTSReader from "./TTSReader";
 import moment from "moment";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
 
 function fmtDurWords(sec) {
   if (sec == null) return null;
@@ -77,6 +78,7 @@ export default function ArousalComparisonAIPanel({ sessions, timelineMap = {}, u
 
   const sessionKey = "arousal_" + sessions.map((s) => s.id).sort().join(",");
   const prevKeyRef = useRef(null);
+  const generatedAt = getAIContentGeneratedAt(result);
 
   useEffect(() => {
     if (prevKeyRef.current === sessionKey) return;
@@ -178,7 +180,13 @@ ${JSON.stringify(sessionSummaries, null, 2)}`,
       });
 
       const raw = typeof res === "string" ? JSON.parse(res) : res;
-      const parsed = raw?.response ?? raw;
+      const parsed = {
+        ...(raw?.response ?? raw),
+        _meta: buildGenericAIContentMeta(result?._meta, null, {
+          source_session_count: sessions.length,
+          source_session_ids: sessions.map((s) => s.id).filter(Boolean),
+        }),
+      };
       setResult(parsed);
 
       const existing = await base44.entities.CompareAnalysisResult.filter({ session_key: sessionKey }, "-updated_date", 1);
@@ -256,11 +264,17 @@ ${JSON.stringify(sessionSummaries, null, 2)}`,
       )}
 
       {result && (
-        <TTSReader
-          sessionId={"arousal_compare_" + sessionKey}
-          title={`Arousal Comparison – ${sessionDatesLabel}`}
-          paragraphs={paras}
-          renderParagraph={(text, idx, isActive, isBuffering) => {
+        <div className="space-y-3">
+          <div className="text-[10px] text-muted-foreground">
+            {generatedAt ? `Generated ${formatGeneratedAt(generatedAt)}` : "Generated time unavailable"}
+          </div>
+          <TTSReader
+            sessionId={"arousal_compare_" + sessionKey}
+            title={`Arousal Comparison – ${sessionDatesLabel}`}
+            sessionDate={sessions[0]?.date}
+            sourceGeneratedAt={generatedAt}
+            paragraphs={paras}
+            renderParagraph={(text, idx, isActive, isBuffering) => {
             const meta = paraMeta[idx];
             if (!meta) return null;
 
@@ -294,8 +308,9 @@ ${JSON.stringify(sessionSummaries, null, 2)}`,
                 </li>
               </div>
             );
-          }}
-        />
+            }}
+          />
+        </div>
       )}
     </div>
   );

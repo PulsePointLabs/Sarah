@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
-import { Brain, Activity, TrendingUp, Zap, Lightbulb, AlertCircle } from "lucide-react";
+import { Brain } from "lucide-react";
 import TTSReader from "./TTSReader";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
 
 const SECTION_COLORS = {
   "chart-1": "hsl(var(--chart-1))",
@@ -35,6 +36,7 @@ export default function CompareAIPanel({ sessions, userProfile }) {
   const [savedId, setSavedId] = useState(null);
   const sessionKey = sessions.map((s) => s.id).sort().join(",");
   const prevKeyRef = useRef(null);
+  const generatedAt = getAIContentGeneratedAt(result);
 
   // Load persisted result for this exact set of sessions
   useEffect(() => {
@@ -179,7 +181,13 @@ Provide a structured comparative analysis covering key differences, HR patterns,
       });
 
       const raw = typeof res === "string" ? JSON.parse(res) : res;
-      const parsed = raw?.response ?? raw;
+      const parsed = {
+        ...(raw?.response ?? raw),
+        _meta: buildGenericAIContentMeta(result?._meta, null, {
+          source_session_count: sessions.length,
+          source_session_ids: sessions.map((s) => s.id).filter(Boolean),
+        }),
+      };
       setResult(parsed);
 
       if (existingId) {
@@ -237,10 +245,17 @@ Provide a structured comparative analysis covering key differences, HR patterns,
         const compareTitle = `Session Comparison – ${sessionDatesLabel}`;
 
         return (
-          <TTSReader
-            title={compareTitle}
-            paragraphs={paras}
-            renderParagraph={(text, idx, isActive, isBuffering) => (
+          <div className="space-y-3">
+            <div className="text-[10px] text-muted-foreground">
+              {generatedAt ? `Generated ${formatGeneratedAt(generatedAt)}` : "Generated time unavailable"}
+            </div>
+            <TTSReader
+              sessionId={`session-compare-${sessionKey}`}
+              title={compareTitle}
+              sessionDate={sessions[0]?.date}
+              sourceGeneratedAt={generatedAt}
+              paragraphs={paras}
+              renderParagraph={(text, idx, isActive, isBuffering) => (
               <p className={`text-sm leading-relaxed pl-3 border-l-2 py-1 transition-all duration-200 rounded-r-md flex items-center gap-2 ${
                 idx === 0
                   ? isActive ? "border-primary bg-primary/10 text-foreground font-bold" : "border-primary text-foreground font-medium"
@@ -249,8 +264,9 @@ Provide a structured comparative analysis covering key differences, HR patterns,
                 {isBuffering && <span className="shrink-0 w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />}
                 {text}
               </p>
-            )}
-          />
+              )}
+            />
+          </div>
         );
       })()}
     </div>);

@@ -49,6 +49,26 @@ export function buildProfileAIContentMeta(sessions, previousMeta = null, generat
   };
 }
 
+export function buildGenericAIContentMeta(previousMeta = null, generatedAtOverride = null, extra = {}) {
+  const generatedAt = generatedAtOverride || new Date().toISOString();
+  return {
+    ...extra,
+    created_at: previousMeta?.created_at || generatedAt,
+    updated_at: generatedAt,
+    last_generated_at: generatedAt,
+  };
+}
+
+export function getAIContentGeneratedAt(result) {
+  return (
+    result?._meta?.last_generated_at ||
+    result?._meta?.updated_at ||
+    result?._meta?.generated_at ||
+    result?.generated_at ||
+    null
+  );
+}
+
 export function isSessionAIContentStale(result, session) {
   return Boolean(result?._meta?.evidence_freshness_key)
     && result._meta.evidence_freshness_key !== getMotionEvidenceFreshnessKey(session);

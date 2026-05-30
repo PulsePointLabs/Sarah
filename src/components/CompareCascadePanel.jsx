@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
-import { TrendingUp, Activity, Zap, Flag, Brain, Lightbulb } from "lucide-react";
+import { TrendingUp, Brain } from "lucide-react";
 import TTSReader from "./TTSReader";
 import moment from "moment";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
+import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
 
 const PHASE_COLORS = {
   build: "#6366f1",
@@ -34,6 +35,7 @@ export default function CompareCascadePanel({ sessions, timelineMap, userProfile
   const [savedId, setSavedId] = useState(null);
   const sessionKey = sessions.map((s) => s.id).sort().join(",") + ":cascade";
   const prevKeyRef = useRef(null);
+  const generatedAt = getAIContentGeneratedAt(result);
 
   useEffect(() => {
     if (prevKeyRef.current === sessionKey) return;
@@ -165,7 +167,13 @@ Provide structured findings per phase, cross-session notable findings, and a sta
       });
 
       const raw = typeof res === "string" ? JSON.parse(res) : res;
-      const parsed = raw?.response ?? raw;
+      const parsed = {
+        ...(raw?.response ?? raw),
+        _meta: buildGenericAIContentMeta(result?._meta, null, {
+          source_session_count: sessions.length,
+          source_session_ids: sessions.map((s) => s.id).filter(Boolean),
+        }),
+      };
       setResult(parsed);
 
       if (existingId) {
@@ -224,9 +232,17 @@ Provide structured findings per phase, cross-session notable findings, and a sta
         if (result.standout) paras.push({ text: result.standout, color: "accent" });
 
         return (
-          <TTSReader
-            paragraphs={paras.map(p => p.text)}
-            renderParagraph={(text, idx, isActive, isBuffering) => {
+          <div className="space-y-3">
+            <div className="text-[10px] text-muted-foreground">
+              {generatedAt ? `Generated ${formatGeneratedAt(generatedAt)}` : "Generated time unavailable"}
+            </div>
+            <TTSReader
+              sessionId={`cascade-compare-${sessionKey}`}
+              title="Comparative Cascade Analysis"
+              sessionDate={sessions[0]?.date}
+              sourceGeneratedAt={generatedAt}
+              paragraphs={paras.map(p => p.text)}
+              renderParagraph={(text, idx, isActive, isBuffering) => {
               const meta = paras[idx];
               return (
                 <p
@@ -241,8 +257,9 @@ Provide structured findings per phase, cross-session notable findings, and a sta
                   {text}
                 </p>
               );
-            }}
-          />
+              }}
+            />
+          </div>
         );
       })()}
     </div>);
