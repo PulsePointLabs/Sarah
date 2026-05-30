@@ -1,5 +1,6 @@
 // PWA_FULL_SEND_V1
-const CACHE_NAME = "pulsepoint-shell-v3";
+// PWA_NO_FOCUS_RELOAD_V1
+const CACHE_NAME = "pulsepoint-shell-v4";
 const SHELL_ASSETS = [
   "/",
   "/manifest.json",
@@ -33,7 +34,6 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => cache.addAll(SHELL_ASSETS))
-      .then(() => self.skipWaiting())
   );
 });
 

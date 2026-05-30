@@ -8,6 +8,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 )
 
 const PWA_FULL_SEND_V1 = true;
+const PWA_NO_FOCUS_RELOAD_V1 = true;
 
 function isLocalDevHost() {
   return location.hostname === 'localhost' || location.hostname === '127.0.0.1';
@@ -45,10 +46,11 @@ if (import.meta.env.DEV && 'serviceWorker' in navigator) {
     });
   });
 
-  let refreshing = false;
+  // PWA_NO_FOCUS_RELOAD_V1
+  // Do not auto-reload on service-worker controller changes. Android/Chrome can
+  // check for SW updates when the installed app regains focus, and an automatic
+  // reload here can interrupt live capture, Motion Lab analysis, AI jobs, or TTS.
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (refreshing) return;
-    refreshing = true;
-    window.location.reload();
+    window.dispatchEvent(new CustomEvent('pulsepoint:pwa-controller-changed'));
   });
 }
