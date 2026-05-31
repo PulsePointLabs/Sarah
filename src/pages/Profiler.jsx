@@ -10,6 +10,7 @@ import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionContextFactorLabels } from "@/lib/sessionContext";
 import { getManualStimulationPauseResumeEvents, getMotionEvidenceSummary, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
 import { buildProfileAIContentMeta, formatGeneratedAt, isProfileAIContentStale } from "@/utils/aiContentMetadata";
+import { splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -75,10 +76,7 @@ function calmSpokenHeading(label) {
 }
 
 function renderSentenceHighlightedText(text, activeSentenceIdx = -1, onSentenceClick) {
-  const sentences = String(text || "")
-    .match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g)
-    ?.map((sentence) => sentence.trim())
-    .filter(Boolean) || [text];
+  const sentences = splitSentencesPreservingDecimals(text);
   return sentences.map((sentence, index) => (
     <span
       key={`${index}-${sentence.slice(0, 24)}`}

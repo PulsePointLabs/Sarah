@@ -1,3 +1,13 @@
+const DECIMAL_POINT_TOKEN = "__PULSEPOINT_DECIMAL_POINT__";
+
+function protectDecimalPoints(text) {
+  return String(text || "").replace(/(\d+)\.(\d+)/g, `$1${DECIMAL_POINT_TOKEN}$2`);
+}
+
+function restoreDecimalPoints(text) {
+  return String(text || "").replaceAll(DECIMAL_POINT_TOKEN, ".");
+}
+
 export function repairCharacterSplitParagraph(text) {
   if (typeof text !== "string") return text;
 
@@ -22,7 +32,17 @@ export function repairCharacterSplitParagraph(text) {
 
 export function repairDecimalSpacing(text) {
   if (typeof text !== "string") return text;
-  return text.replace(/(\d+)\.\s+(\d+)(?=\s*(?:mm|cm|in|inch|inches|kg|lb|lbs|bpm|%|°|\b))/gi, "$1.$2");
+  return text.replace(/(\d+)\.\s+(\d+)/g, "$1.$2");
+}
+
+export function splitSentencesPreservingDecimals(text) {
+  const repaired = repairDecimalSpacing(text);
+  const protectedText = protectDecimalPoints(repaired);
+  const sentences = protectedText
+    .match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g)
+    ?.map((sentence) => restoreDecimalPoints(sentence).trim())
+    .filter(Boolean) || [];
+  return sentences.length ? sentences : [repaired].filter(Boolean);
 }
 
 export function repairAITextBlocks(value) {

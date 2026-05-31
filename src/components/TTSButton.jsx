@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { Play, Pause, Square } from "lucide-react";
 import { base44 } from "@/api/base44Client";
-import { repairDecimalSpacing } from "@/utils/aiTextRepair";
+import { repairDecimalSpacing, splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 
 const TTS_SETTINGS_KEY = "pulsepoint_tts_settings_v1";
 const TTS_REQUEST_TAIL = "\u200B";
@@ -388,15 +388,16 @@ export function cleanTextForSpeech(text) {
 // Split text only when needed. This mirrors the known-good bright natural profile.
 export function splitIntoChunks(text, maxLen = TTS_CHUNK_MAX_CHARS) {
   if (text.length <= maxLen) return [text];
-  const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
+  const sentences = splitSentencesPreservingDecimals(text);
   const chunks = [];
   let current = "";
   for (const s of sentences) {
-    if ((current + s).length > maxLen) {
+    const nextSentence = `${s} `;
+    if ((current + nextSentence).length > maxLen) {
       if (current.trim()) chunks.push(current.trim());
-      current = s;
+      current = nextSentence;
     } else {
-      current += s;
+      current += nextSentence;
     }
   }
   if (current.trim()) chunks.push(current.trim());

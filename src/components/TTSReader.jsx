@@ -18,7 +18,7 @@ import { buildAudioExportFilename } from "@/utils/exportFilenames";
 import { base44 } from "@/api/base44Client";
 import { idbGet, idbSet } from "@/lib/ttsCache";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
-import { repairCharacterSplitParagraph, repairDecimalSpacing } from "@/utils/aiTextRepair";
+import { repairCharacterSplitParagraph, repairDecimalSpacing, splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
   if (signal?.aborted) {
@@ -62,10 +62,7 @@ function countWords(text) {
 }
 
 function sentenceRangesForText(text, offset = 0) {
-  const sentences = String(text || "")
-    .match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g)
-    ?.map((sentence) => sentence.trim())
-    .filter(Boolean) || [];
+  const sentences = splitSentencesPreservingDecimals(text);
   let cursor = offset;
   return sentences.map((sentence, index) => {
     const length = Math.max(1, countWords(sentence));
@@ -80,19 +77,14 @@ function sentenceRangesForText(text, offset = 0) {
 }
 
 function getTrailingSentences(text, count = 2) {
-  const sentences = String(text || "")
-    .match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g)
-    ?.map((s) => s.trim())
-    .filter(Boolean) || [];
+  const sentences = splitSentencesPreservingDecimals(text);
   return sentences.slice(-count).join(" ");
 }
 
-function sentenceTextFromIndex(text, sentenceIdx = 0) {
-  const sentences = String(text || "")
-    .match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g)
-    ?.map((sentence) => sentence.trim())
-    .filter(Boolean) || [];
-  return sentenceIdx > 0 && sentenceIdx < sentences.length ? sentences.slice(sentenceIdx).join(" ") : text;
+function sentenceWordOffset(text, sentenceIdx = 0) {
+  const sentences = splitSentencesPreservingDecimals(text);
+  if (sentenceIdx <= 0 || sentenceIdx >= sentences.length) return 0;
+  return countWords(sentences.slice(0, sentenceIdx).join(" "));
 }
 
 function buildSpeechChunks(paragraphs, startIdx = 0, startSentenceIdx = 0) {
@@ -119,12 +111,10 @@ function buildSpeechChunks(paragraphs, startIdx = 0, startSentenceIdx = 0) {
   };
 
   for (let i = startIdx; i < paragraphs.length; i++) {
-    const paragraphText = i === startIdx
-      ? sentenceTextFromIndex(paragraphs[i] || "", startSentenceIdx)
-      : paragraphs[i] || "";
+    const paragraphText = paragraphs[i] || "";
     const cleaned = cleanTextForSpeech(paragraphText);
     if (!cleaned) continue;
-    const sentenceBase = i === startIdx ? startSentenceIdx : 0;
+    const resumeWordOffset = i === startIdx ? sentenceWordOffset(cleaned, startSentenceIdx) : 0;
 
     const parts = splitForTTS(cleaned);
     for (const part of parts) {
@@ -142,15 +132,31 @@ function buildSpeechChunks(paragraphs, startIdx = 0, startSentenceIdx = 0) {
         paraIdx: i,
         startWord,
         endWord: startWord + wordCount - 1,
+        resumeWordOffset,
         sentenceRanges: sentenceRangesForText(part, startWord).map((range) => ({
           ...range,
-          index: range.index + sentenceBase,
         })),
       });
     }
   }
 
   push();
+
+  if (startSentenceIdx > 0) {
+    const resumeChunk = chunks.find((chunk) => chunk.parts?.some((part) => (
+      part.paraIdx === startIdx &&
+      part.resumeWordOffset >= part.startWord &&
+      part.resumeWordOffset <= part.endWord
+    )));
+    if (resumeChunk) {
+      const resumePart = resumeChunk.parts.find((part) => (
+        part.paraIdx === startIdx &&
+        part.resumeWordOffset >= part.startWord &&
+        part.resumeWordOffset <= part.endWord
+      ));
+      resumeChunk.playbackStartWord = resumePart.resumeWordOffset;
+    }
+  }
 
   for (let i = 1; i < chunks.length; i++) {
     chunks[i].previousContext = getTrailingSentences(chunks[i - 1].text, 2);
@@ -687,6 +693,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     const url = URL.createObjectURL(new Blob([mp3Buffer], { type: getTTSMime(runtimeRef.current.format) }));
     const audio = new Audio(url);
     audio.preload = "auto";
+    const playbackStartWord = Number(chunk?.playbackStartWord || 0);
 
     audio.onended = () => {
       URL.revokeObjectURL(url);
@@ -717,6 +724,21 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     }, 50);
     
     try {
+      if (playbackStartWord > 0) {
+        const applyResumeOffset = () => {
+          if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+          const words = getChunkText(chunk).split(/\s+/).filter(Boolean);
+          if (!words.length) return;
+          audio.currentTime = Math.min(audio.duration - 0.05, Math.max(0, audio.duration * (playbackStartWord / words.length)));
+          playbackTimeRef.current = Math.max(0, audio.currentTime || 0);
+          updateWordHighlight(audio.duration);
+        };
+        if (Number.isFinite(audio.duration) && audio.duration > 0) {
+          applyResumeOffset();
+        } else {
+          audio.addEventListener("loadedmetadata", applyResumeOffset, { once: true });
+        }
+      }
       await audio.play();
       setRequestStatus(null);
     } catch (err) {

@@ -220,7 +220,7 @@ export default function BackgroundJobStatusTray() {
   if (closed || (!visibleJobs.length && !offline)) return null;
 
   return (
-    <div className="fixed bottom-3 left-3 right-3 z-40 sm:left-auto sm:w-[24rem]">
+    <div className={`fixed bottom-3 left-3 right-3 sm:left-auto sm:w-[24rem] ${expanded ? "z-50" : "z-20"}`}>
       <div className="rounded-xl border border-border bg-card/95 shadow-2xl backdrop-blur">
         <div className="flex items-center gap-1 px-1 py-1">
           <button
