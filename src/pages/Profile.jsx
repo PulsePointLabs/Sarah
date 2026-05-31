@@ -918,7 +918,7 @@ export default function Profile() {
           `Refractory pattern: ${form.refractory_pattern ?? "not set"}`,
           `Preferred stimulation: ${(form.preferred_stimulation || []).join(", ") || "not set"}`,
           `Arousal notes: ${richTextToPlainText(form.arousal_notes) || "none"}`,
-          `Profile Q&A findings: ${profileQaFindings.slice(0, 12).map((entry) => `[${entry.date}] ${entry.findings.join(" ")}`).join("\n") || "none"}`,
+          `User-verified interview findings (Profile Q&A): ${profileQaFindings.slice(0, 12).map((entry) => `[${entry.date}] ${entry.findings.join(" ")}`).join("\n") || "none"}`,
           `Functional mechanical profile: ${Object.entries(mechanicalProfile).filter(([, value]) => Array.isArray(value) ? value.length : typeof value === "object" ? value?.value != null : value).map(([key, value]) => `${key}: ${typeof value === "object" && !Array.isArray(value) ? `${value.value} ${value.unit}` : Array.isArray(value) ? value.join(", ") : richTextToPlainText(value)}`).join("; ") || "not set"}`,
         ].join("\n")}
         savedMessages={chatMessages}

@@ -52,12 +52,18 @@ export default function AIChat({
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const audioRef = useRef(null);
+  const audioUrlCacheRef = useRef(new Map());
 
   const categories = mode === "profile" ? PROFILE_CATEGORIES : SESSION_CATEGORIES;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => () => {
+    audioUrlCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
+    audioUrlCacheRef.current.clear();
+  }, []);
 
   useEffect(() => {
     if (!fullScreen) return undefined;
@@ -73,8 +79,31 @@ export default function AIChat({
     };
   }, [fullScreen]);
 
+  const playAudioUrl = (src, idx) => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    const el = new Audio(src);
+    audioRef.current = el;
+    const cleanup = () => {
+      if (audioRef.current === el) audioRef.current = null;
+      setSpeakingIdx(null);
+    };
+    el.onended = cleanup;
+    el.onerror = cleanup;
+    setSpeakingIdx(idx);
+    el.play();
+  };
+
   const speakText = async (text, idx) => {
     if (!ttsEnabled) return;
+    const cacheKey = `${idx}:${String(text || "")}`;
+    const cachedUrl = audioUrlCacheRef.current.get(cacheKey);
+    if (cachedUrl) {
+      playAudioUrl(cachedUrl, idx);
+      return;
+    }
     setSpeakingIdx(idx);
     const runtime = getTTSRuntime();
     const res = await base44.functions.invoke("openaiTTS", {
@@ -92,28 +121,22 @@ export default function AIChat({
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     const src = URL.createObjectURL(new Blob([bytes.buffer], { type: getTTSMime(res.data?.format || runtime.format || TTS_PLAYBACK_FORMAT) }));
-    const el = new Audio(src);
-    el._pulsePointObjectUrl = src;
-    audioRef.current = el;
-    const cleanup = () => {
-      URL.revokeObjectURL(src);
-      if (audioRef.current === el) audioRef.current = null;
-      setSpeakingIdx(null);
-    };
-    el.onended = cleanup;
-    el.onerror = cleanup;
-    el.play();
+    audioUrlCacheRef.current.set(cacheKey, src);
+    playAudioUrl(src, idx);
   };
 
   const stopSpeaking = () => {
     if (audioRef.current) {
       audioRef.current.pause();
-      if (audioRef.current._pulsePointObjectUrl) {
-        URL.revokeObjectURL(audioRef.current._pulsePointObjectUrl);
-      }
       audioRef.current = null;
     }
     setSpeakingIdx(null);
+  };
+
+  const clearAudioCache = () => {
+    stopSpeaking();
+    audioUrlCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
+    audioUrlCacheRef.current.clear();
   };
 
   const WHISPER_PROMPT =
@@ -430,8 +453,8 @@ No affirmations or pleasantries. 2–3 sentences.`;
                   )}
                   <div
                     className={messageClass(msg.role)}
-                    onClick={msg.role === "assistant" ? () => speakingIdx === i ? stopSpeaking() : speakText(msg.text, i) : undefined}
-                    title={msg.role === "assistant" ? (speakingIdx === i ? "Tap to stop" : "Tap to hear") : undefined}
+                    onClick={msg.role === "assistant" ? () => speakText(msg.text, i) : undefined}
+                    title={msg.role === "assistant" ? (speakingIdx === i ? "Tap to replay from start" : "Tap to hear") : undefined}
                   >
                     {msg.text}
                     {msg.role === "assistant" && (
@@ -532,7 +555,7 @@ No affirmations or pleasantries. 2–3 sentences.`;
                   : <><Save className="w-3 h-3" />{mode === "profile" ? "Save Findings Again" : "Save Findings"}</>}
               </Button>
               <button
-                onClick={() => { setMessages([]); onSaveMessages?.([]); }}
+                onClick={() => { clearAudioCache(); setMessages([]); onSaveMessages?.([]); }}
                 className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors ml-auto"
               >
                 <RefreshCw className="w-3 h-3" /> Clear chat

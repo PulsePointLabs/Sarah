@@ -124,7 +124,7 @@ export function buildGlobalProfileContext(userProfile) {
   addLine(lines, "Arousal notes", userProfile.arousal_notes, 1200);
   addLine(lines, "Profile notes", userProfile.profile_notes || userProfile.notes, 1200);
   const qaFindingLines = buildProfileQaFindingLines(userProfile.profile_qa_findings);
-  if (qaFindingLines.length) lines.push("Profile Q&A findings:", ...qaFindingLines);
+  if (qaFindingLines.length) lines.push("User-verified interview findings (Profile Q&A):", ...qaFindingLines);
   addLine(lines, "Anatomical context", userProfile.anatomical_context || userProfile.anatomy_notes, 900);
   const mechanicalLines = buildMechanicalProfileContext(userProfile.anatomical_mechanical_profile);
   if (mechanicalLines.length) lines.push("Functional mechanical profile:", ...mechanicalLines);
@@ -150,6 +150,8 @@ ${profileContext || "- No saved profile context was available. Rely only on the 
 
 GLOBAL EVIDENCE AND INTERPRETATION RULES:
 - Treat the profile as background context, not as a replacement for the current session facts.
+- Treat User-verified interview findings (Profile Q&A) as structured first-person interview evidence. They are stronger than loose profile notes because they were distilled from direct Q&A, but they remain below current-session telemetry, event notes, journal text, and direct session facts when those sources conflict.
+- Use repeated or convergent Profile Q&A findings to support higher-confidence longitudinal interpretation, especially when they align with telemetry, behavior, journals, or saved profile fields.
 - Compare current observations against the profile when useful, especially deviations from the person's known build style, sensitivity, recovery, and preferred stimulation.
 - Separate observed facts from interpretation. Anchor every meaningful claim in heart-rate data, event notes, journal text, subjective metrics, or saved profile notes.
 - Maintain a warm, deeply personalized, psychologically resonant tone. The person values meaningful interpretation, not sterile detached reporting.

@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import TTSSettingsPanel from "@/components/TTSSettingsPanel";
 import { cancelBackgroundJob, clearBackgroundJobs, listBackgroundJobs } from "@/lib/backgroundJobs";
+import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
 import { getProviderStatus } from "@/lib/providerStatus";
 
 function fmtMoney(value) {
@@ -49,11 +50,7 @@ function jobLabel(job) {
 }
 
 function jobRoute(job) {
-  if (job?.meta?.route) return job.meta.route;
-  if (job?.meta?.sessionId) return `/sessions/${job.meta.sessionId}`;
-  if (job?.type === "tts_export") return "/library";
-  if (job?.type === "ai_invoke") return "/sessions";
-  return "";
+  return backgroundJobRoute(job);
 }
 
 function progressPercent(job) {

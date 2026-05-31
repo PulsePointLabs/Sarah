@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bell, BellOff, CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Loader2, Square, X, XCircle } from "lucide-react";
 import { cancelBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
+import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
 import {
   areBackgroundNotificationsEnabled,
   getNotificationPermission,
@@ -58,12 +59,7 @@ function progressMessage(job) {
 }
 
 function jobTarget(job) {
-  if (job?.meta?.route) return job.meta.route;
-  const sessionId = job?.meta?.sessionId;
-  if (sessionId) return `/sessions/${sessionId}`;
-  if (job?.type === "tts_export") return "/library";
-  if (job?.type === "ai_invoke") return "/sessions";
-  return null;
+  return backgroundJobRoute(job) || null;
 }
 
 export default function BackgroundJobStatusTray() {

@@ -1,0 +1,26 @@
+const PROFILER_SESSION_TARGETS = new Set([
+  "profiler_ai_profile",
+  "profiler_anatomical_physiological_profile",
+  "profiler_near_climax",
+  "profiler_stim_methods",
+]);
+
+function normalizeRoute(route) {
+  if (!route || typeof route !== "string") return "";
+  return route.startsWith("/") ? route : `/${route}`;
+}
+
+export function backgroundJobRoute(job) {
+  const explicitRoute = normalizeRoute(job?.meta?.route);
+  if (explicitRoute) return explicitRoute;
+
+  const sessionId = job?.meta?.sessionId;
+  if (PROFILER_SESSION_TARGETS.has(sessionId) || job?.meta?.source === "Profiler") {
+    return "/profiler";
+  }
+
+  if (sessionId) return `/sessions/${encodeURIComponent(sessionId)}`;
+  if (job?.type === "tts_export") return "/library";
+  if (job?.type === "ai_invoke") return "/sessions";
+  return "";
+}
