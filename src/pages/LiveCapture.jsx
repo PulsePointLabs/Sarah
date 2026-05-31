@@ -1472,16 +1472,8 @@ export default function LiveCapture() {
     </div>
   ) : null;
 
-  if (focusView && captureMode === "media") {
-    return (
-      <div className="h-screen overflow-hidden bg-background">
-        {mediaPanel}
-      </div>
-    );
-  }
-
   return (
-    <div className={`${focusView ? "h-screen overflow-hidden p-4" : "p-4 md:p-6"} space-y-4`}>
+    <div className={`${focusView ? "h-screen overflow-y-auto p-4" : "p-4 md:p-6"} space-y-4`}>
       {!focusView && <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <PageHeader
           title="Live Capture"
@@ -1561,7 +1553,15 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {!focusView && mediaPanel}
+      <LiveFootLandmarkTracker
+        sessionId={liveSession?.activeSessionId}
+        recordingActive={recordingActive}
+        getSessionTimeS={getCurrentSessionTime}
+        onTrackingSnapshot={handleFootTrackingSnapshot}
+        compact={focusView || mainTelemetryView || captureMode === "media"}
+      />
+
+      {mediaPanel}
 
       {!focusView && !mainTelemetryView && <div className="rounded-xl border border-border bg-card p-4">
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -1613,16 +1613,6 @@ export default function LiveCapture() {
       </div>}
 
       {!focusView && !mainTelemetryView && voiceAnnotationPanel}
-
-      {!focusView && (
-        <LiveFootLandmarkTracker
-          sessionId={liveSession?.activeSessionId}
-          recordingActive={recordingActive}
-          getSessionTimeS={getCurrentSessionTime}
-          onTrackingSnapshot={handleFootTrackingSnapshot}
-          compact={mainTelemetryView || captureMode === "media"}
-        />
-      )}
 
       {!focusView && captureMode !== "media" && (
         <div className="rounded-xl border border-border bg-card">

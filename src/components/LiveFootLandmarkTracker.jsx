@@ -55,6 +55,42 @@ function pointDistance(a, b) {
   return Math.hypot((a?.x || 0) - (b?.x || 0), (a?.y || 0) - (b?.y || 0));
 }
 
+function buildFootRoi(points, image, padding = 180) {
+  const anchors = points
+    .map((point) => ({
+      x: Number.isFinite(point.lastGoodX) ? point.lastGoodX : point.x,
+      y: Number.isFinite(point.lastGoodY) ? point.lastGoodY : point.y,
+    }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (!image?.width || anchors.length < 2) {
+    return { x: 0, y: 0, w: image?.width || 1, h: image?.height || 1, locked: false };
+  }
+  const minX = Math.min(...anchors.map((point) => point.x));
+  const maxX = Math.max(...anchors.map((point) => point.x));
+  const minY = Math.min(...anchors.map((point) => point.y));
+  const maxY = Math.max(...anchors.map((point) => point.y));
+  const adaptivePadding = Math.max(padding, Math.min(image.width, image.height) * 0.12);
+  const x = clamp(minX - adaptivePadding, 0, image.width);
+  const y = clamp(minY - adaptivePadding, 0, image.height);
+  const right = clamp(maxX + adaptivePadding, 0, image.width);
+  const bottom = clamp(maxY + adaptivePadding, 0, image.height);
+  return {
+    x,
+    y,
+    w: Math.max(1, right - x),
+    h: Math.max(1, bottom - y),
+    locked: true,
+  };
+}
+
+function pointInRect(point, rect, padding = 0) {
+  if (!point || !rect) return true;
+  return point.x >= rect.x - padding
+    && point.x <= rect.x + rect.w + padding
+    && point.y >= rect.y - padding
+    && point.y <= rect.y + rect.h + padding;
+}
+
 function averageRingBrightness(image, x, y, radius) {
   const samples = 16;
   let total = 0;
@@ -202,6 +238,37 @@ function makeLearnedPoint(label, blob, image, fallback) {
   };
 }
 
+function autoLearnDefaultPoints(image, settings) {
+  const minimumSpacing = Math.max(26, Math.min(image.width, image.height) * 0.035);
+  const candidates = detectBrightBlobs(image, settings, { x: 0, y: 0, w: image.width, h: image.height })
+    .filter((blob) => blob.markerScore >= 0.18 || blob.ringContrast >= 18)
+    .sort((a, b) => {
+      const aScore = (a.markerScore || 0) * 100 + (a.ringContrast || 0) * 0.45 + (a.brightness || 0) * 0.08;
+      const bScore = (b.markerScore || 0) * 100 + (b.ringContrast || 0) * 0.45 + (b.brightness || 0) * 0.08;
+      return bScore - aScore;
+    });
+  const picked = [];
+  candidates.forEach((blob) => {
+    if (picked.length >= 6) return;
+    if (picked.some((item) => Math.hypot(item.x - blob.x, item.y - blob.y) < minimumSpacing)) return;
+    picked.push(blob);
+  });
+  if (picked.length < 6) return null;
+
+  const byX = picked.slice().sort((a, b) => a.x - b.x);
+  const left = byX.slice(0, 3).sort((a, b) => a.y - b.y);
+  const right = byX.slice(3, 6).sort((a, b) => a.y - b.y);
+  const assignments = [
+    ["left_toe", left[0]],
+    ["left_forefoot", left[1]],
+    ["left_heel", left[2]],
+    ["right_toe", right[0]],
+    ["right_forefoot", right[1]],
+    ["right_heel", right[2]],
+  ];
+  return assignments.map(([label, blob]) => makeLearnedPoint(label, blob, image, blob));
+}
+
 function scoreCandidate(blob, point, targetX, targetY, claimed) {
   if (claimed.some((item) => Math.hypot(blob.x - item.x, blob.y - item.y) < 10)) return Number.POSITIVE_INFINITY;
   const distance = Math.hypot(blob.x - targetX, blob.y - targetY);
@@ -243,7 +310,8 @@ function pickBestBlob(image, point, targetX, targetY, radius, settings, claimed,
 function pickFullFrameBlob(image, point, settings, claimed, options = {}) {
   const maxDistance = options.maxDistance ?? 520;
   const maxScore = options.maxScore ?? 175;
-  const blobs = detectBrightBlobs(image, settings, { x: 0, y: 0, w: image.width, h: image.height });
+  const searchRect = options.rect || { x: 0, y: 0, w: image.width, h: image.height };
+  const blobs = detectBrightBlobs(image, settings, searchRect);
   const anchorX = point.lastGoodX ?? point.x;
   const anchorY = point.lastGoodY ?? point.y;
   let best = null;
@@ -391,7 +459,7 @@ function angleBetween(a, b, c) {
 
 function describePlanting(value) {
   if (!Number.isFinite(value)) return "unknown";
-  if (value >= 0.78) return "planted";
+  if (value >= 0.78) return "steady";
   if (value >= 0.45) return "shifting";
   return "active";
 }
@@ -508,15 +576,19 @@ function MetricPill({ label, value, tone = "default" }) {
 function FootMetricsPanel({ geometry, trackedCount, lostCount, compact = false }) {
   const leftPlanting = geometry?.left?.planting || "unknown";
   const rightPlanting = geometry?.right?.planting || "unknown";
-  const rightHeelTone = geometry?.right?.heel_stability_proxy >= 0.7 ? "good" : lostCount ? "warn" : "default";
+  const heelStabilityValues = [geometry?.left?.heel_stability_proxy, geometry?.right?.heel_stability_proxy].filter(Number.isFinite);
+  const heelStability = heelStabilityValues.length
+    ? heelStabilityValues.reduce((sum, value) => sum + value, 0) / heelStabilityValues.length
+    : null;
+  const heelTone = heelStability >= 0.7 ? "good" : lostCount ? "warn" : "default";
   return (
     <div className={`grid gap-2 ${compact ? "sm:grid-cols-2 xl:grid-cols-6" : "sm:grid-cols-2 xl:grid-cols-3"}`}>
       <MetricPill label="Tracked" value={`${trackedCount}/6`} tone={lostCount ? "warn" : "good"} />
-      <MetricPill label="Left plant" value={leftPlanting} tone={leftPlanting === "planted" ? "good" : "default"} />
-      <MetricPill label="Right plant" value={rightPlanting} tone={rightPlanting === "planted" ? "good" : "default"} />
+      <MetricPill label="Left foot" value={leftPlanting} tone={leftPlanting === "steady" ? "good" : "default"} />
+      <MetricPill label="Right foot" value={rightPlanting} tone={rightPlanting === "steady" ? "good" : "default"} />
       <MetricPill label="Heel spread" value={geometry?.bilateral?.heel_separation_px ? `${Math.round(geometry.bilateral.heel_separation_px)} px` : "learning"} />
       <MetricPill label="Toe motion" value={`${geometry?.left?.toe_activity || "?"} / ${geometry?.right?.toe_activity || "?"}`} />
-      <MetricPill label="Right heel" value={geometry?.right?.heel_stability_proxy != null ? `${Math.round(geometry.right.heel_stability_proxy * 100)}% stable` : "learning"} tone={rightHeelTone} />
+      <MetricPill label="Heel stability" value={heelStability != null ? `${Math.round(heelStability * 100)}% stable` : "learning"} tone={heelTone} />
     </div>
   );
 }
@@ -659,6 +731,8 @@ export default function LiveFootLandmarkTracker({ sessionId, recordingActive, ge
     if (trackingFrozen) return pointsRef.current;
     const settingsNow = settingsRef.current;
     const claimed = [];
+    const footRoi = buildFootRoi(pointsRef.current, image);
+    const keepInsideRoi = (candidate) => (candidate && footRoi.locked && !pointInRect(candidate, footRoi, 32) ? null : candidate);
     const nextPoints = pointsRef.current
       .slice()
       .sort((a, b) => (a.lostFrames || 0) - (b.lostFrames || 0))
@@ -674,30 +748,31 @@ export default function LiveFootLandmarkTracker({ sessionId, recordingActive, ge
 
         if (missedFrames > 0) {
           const anchorRadius = Math.min(460, 90 + missedFrames * 28);
-          found = pickBestBlob(image, point, anchorX, anchorY, anchorRadius, settingsNow, claimed, true);
+          found = keepInsideRoi(pickBestBlob(image, point, anchorX, anchorY, anchorRadius, settingsNow, claimed, true));
           if (found) found.mode = "last_good_reacquire";
         }
-        if (!found && missedFrames === 0) found = pickBestBlob(image, point, predictedX, predictedY, radius, settingsNow, claimed);
+        if (!found && missedFrames === 0) found = keepInsideRoi(pickBestBlob(image, point, predictedX, predictedY, radius, settingsNow, claimed));
         if (!found) {
-          found = pickBestBlob(image, point, anchorX, anchorY, Math.min(560, radius + 70 + missedFrames * 10), settingsNow, claimed, true);
+          found = keepInsideRoi(pickBestBlob(image, point, anchorX, anchorY, Math.min(560, radius + 70 + missedFrames * 10), settingsNow, claimed, true));
           if (found) found.mode = missedFrames > 0 ? "anchor_reacquire" : "blob";
         }
         if (!found && missedFrames > 0) {
           const geometryTarget = estimateGeometryTarget(point, pointsRef.current, image);
           if (geometryTarget) {
-            found = pickBestBlob(image, point, geometryTarget.x, geometryTarget.y, Math.min(520, 110 + missedFrames * 30), settingsNow, claimed, false);
+            found = keepInsideRoi(pickBestBlob(image, point, geometryTarget.x, geometryTarget.y, Math.min(520, 110 + missedFrames * 30), settingsNow, claimed, false));
             if (found) found.mode = "geometry_reacquire";
           }
         }
         if (!found && missedFrames >= settingsNow.reacquireAfter) {
           const isHeel = String(point.label || "").endsWith("_heel");
-          found = pickFullFrameBlob(image, point, settingsNow, claimed, {
+          found = keepInsideRoi(pickFullFrameBlob(image, point, settingsNow, claimed, {
+            rect: footRoi,
             maxDistance: isHeel ? 860 : 620,
             maxScore: isHeel ? 225 : 185,
-          });
+          }));
         }
         if (!found && missedFrames < Math.max(3, Math.floor(settingsNow.lostTolerance * 0.35))) {
-          found = findNearbyPeak(image, point, Math.min(180, radius * 0.55), settingsNow);
+          found = keepInsideRoi(findNearbyPeak(image, point, Math.min(180, radius * 0.55), settingsNow));
         }
 
         if (!found) return coastPoint({ ...point, searchRadius: radius }, settingsNow);
@@ -737,8 +812,28 @@ export default function LiveFootLandmarkTracker({ sessionId, recordingActive, ge
     ctx.font = "12px system-ui";
     ctx.lineWidth = 2.5;
 
+    if (image && pointsRef.current.length >= 2) {
+      const roi = buildFootRoi(pointsRef.current, image);
+      if (roi.locked) {
+        const topLeft = videoToScreen({ x: roi.x, y: roi.y });
+        const bottomRight = videoToScreen({ x: roi.x + roi.w, y: roi.y + roi.h });
+        ctx.strokeStyle = "rgba(45, 212, 191, .48)";
+        ctx.setLineDash([8, 6]);
+        ctx.strokeRect(
+          Math.min(topLeft.x, bottomRight.x),
+          Math.min(topLeft.y, bottomRight.y),
+          Math.abs(bottomRight.x - topLeft.x),
+          Math.abs(bottomRight.y - topLeft.y),
+        );
+        ctx.setLineDash([]);
+        ctx.fillStyle = "rgba(45, 212, 191, .85)";
+        ctx.fillText("foot ROI", Math.min(topLeft.x, bottomRight.x) + 8, Math.min(topLeft.y, bottomRight.y) + 16);
+      }
+    }
+
     if (settingsRef.current.showCandidates && image) {
-      const candidates = detectBrightBlobs(image, settingsRef.current, { x: 0, y: 0, w: image.width, h: image.height });
+      const roi = buildFootRoi(pointsRef.current, image);
+      const candidates = detectBrightBlobs(image, settingsRef.current, roi.locked ? roi : { x: 0, y: 0, w: image.width, h: image.height });
       setCandidateCount(candidates.length);
       candidates.slice(0, 80).forEach((candidate) => {
         const point = videoToScreen(candidate);
@@ -871,6 +966,22 @@ export default function LiveFootLandmarkTracker({ sessionId, recordingActive, ge
     setCsvRows([]);
   };
 
+  const autoLearnMarkers = () => {
+    const image = getFrame();
+    if (!image) {
+      setStatus("Start a camera or video source before auto-learning markers.");
+      return;
+    }
+    const learned = autoLearnDefaultPoints(image, settingsRef.current);
+    if (!learned) {
+      setStatus("Auto-learn did not find six clear marker dots. Manual marking is still available for tuning.");
+      return;
+    }
+    pointsRef.current = learned;
+    setPoints(learned);
+    setStatus("Auto-learned six foot markers. Tap any marker to fine-tune if needed.");
+  };
+
   const downloadCsv = () => {
     if (!csvRows.length) return;
     const fields = Array.from(new Set(csvRows.flatMap((row) => Object.keys(row)))).sort((a, b) => {
@@ -999,6 +1110,10 @@ export default function LiveFootLandmarkTracker({ sessionId, recordingActive, ge
                   <button type="button" onClick={() => setTrackingFrozen((value) => !value)} className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50">
                     <ShieldCheck className="h-4 w-4 text-primary" />
                     {trackingFrozen ? "Resume tracking" : "Freeze tracking"}
+                  </button>
+                  <button type="button" onClick={autoLearnMarkers} className="inline-flex items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm font-semibold text-foreground hover:bg-primary/15">
+                    <Crosshair className="h-4 w-4 text-primary" />
+                    Auto-learn dots
                   </button>
                 </div>
                 <p className="mt-2 text-xs text-muted-foreground">{status}</p>
