@@ -33,7 +33,7 @@ import SavedMotionSummaryCard from "../components/SavedMotionSummaryCard";
 import JournalRecorder from "../components/JournalRecorder";
 import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
 import { sessionContextDisplayRows } from "@/lib/sessionContext";
-import { buildSessionVisualEvidenceDigest, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionVisualEvidence } from "@/lib/visualEvidence";
+import { buildSessionVisualEvidenceDigest, getReviewedVisualClips, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionVisualEvidence } from "@/lib/visualEvidence";
 import { EVENT_CATEGORIES } from "../components/session-form/EventTimelineSection";
 import { hasMixedPauseResumeEvidence, isVerifiedMotionEvent } from "@/utils/sessionMotionEvidence";
 
@@ -496,7 +496,8 @@ export default function SessionDetail() {
   const cap = (str) => str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
   const contextRows = sessionContextDisplayRows(s);
   const hasTimelineSection = timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0 || !!s.motion_analysis_summary;
-  const hasMediaSection = (s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link;
+  const reviewedMediaClips = getReviewedVisualClips(s.ai_analysis?._visual_findings || []);
+  const hasMediaSection = (s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link || reviewedMediaClips.length > 0;
   const sectionLinks = [
     { id: "session-snapshot", label: "Session Snapshot", group: "Overview" },
     { id: "session-telemetry", label: "Evidence Dashboard", group: "Overview" },
@@ -996,7 +997,7 @@ export default function SessionDetail() {
         )}
 
         {/* Media */}
-        {((s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link) && (
+        {hasMediaSection && (
           <details id="session-media" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
             <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Media</summary>
             <div className="mt-3 space-y-3">
@@ -1011,6 +1012,20 @@ export default function SessionDetail() {
               <div className="space-y-2">
                 {s.media_videos.map((url, i) => (
                   <video key={i} src={url} controls className="w-full rounded-lg bg-black" />
+                ))}
+              </div>
+            )}
+            {reviewedMediaClips.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Sarah Reviewed Clips</p>
+                {reviewedMediaClips.map((clip, i) => (
+                  <div key={`${clip.processedClipUrl}-${i}`} className="rounded-lg border border-border bg-muted/20 p-2">
+                    <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                      <span className="font-semibold text-primary">{clip.label || clip.filename || "Reviewed clip"}</span>
+                      <span>{clip.evidenceDate || "Undated"} · {clip.startSeconds != null && clip.endSeconds != null ? `${Number(clip.startSeconds).toFixed(1)}-${Number(clip.endSeconds).toFixed(1)}s` : "trimmed clip"}</span>
+                    </div>
+                    <video src={clip.processedClipUrl} controls className="w-full rounded-lg bg-black" />
+                  </div>
                 ))}
               </div>
             )}

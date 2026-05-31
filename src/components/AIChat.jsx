@@ -220,6 +220,8 @@ export default function AIChat({
   recentSavedFindings,
   scopeId,
   defaultOpen = false,
+  visualEvidenceScope = mode,
+  subjectLabel,
   onSaveMessages,
   onSaveNotes,
 }) {
@@ -264,6 +266,8 @@ export default function AIChat({
   const ttsRequestIdRef = useRef(0);
 
   const categories = mode === "profile" ? PROFILE_CATEGORIES : SESSION_CATEGORIES;
+  const evidenceScope = ["profile", "session", "body_exploration"].includes(visualEvidenceScope) ? visualEvidenceScope : mode;
+  const conversationSubject = subjectLabel || (mode === "profile" ? "physiological and arousal profile" : "session");
 
   useEffect(() => {
     setMessages(savedMessages || []);
@@ -757,6 +761,7 @@ export default function AIChat({
           sourceVideo: image.sourceVideo || null,
           profileId: mode === "profile" ? scopeId || userProfile?.id || null : null,
           sessionId: mode === "session" ? scopeId || null : null,
+          bodyExplorationId: evidenceScope === "body_exploration" ? scopeId || null : null,
         });
         aiImages.push({
           filename: image.filename,
@@ -927,7 +932,7 @@ export default function AIChat({
     const groundingContext = buildAIGroundingContext(userProfile);
     const profileMechanicalContext = mode === "profile" ? `\n\n${PROFILE_MECHANICAL_RULE}` : "";
     const res = await base44.integrations.Core.InvokeLLM({
-      prompt: `${groundingContext}${profileMechanicalContext}\n\nBased on this Q&A conversation about a person's ${mode === "profile" ? "physiological and arousal profile" : "session"}, write 2-4 concise bullet points summarizing only the NEW factual findings from the user's answers that would be useful to persist for future AI analysis. Do not repeat generic information already obvious from the base data. Be specific and factual. Do not preserve assumptions about intent unless the person explicitly stated them. Write every saved bullet in direct second person using "you" and "your"; do not use the person's name, "the user", "he", "she", "his", or "her".\n\nConversation:\n${history}\n\nOutput as plain bullet points starting with "•":`,
+      prompt: `${groundingContext}${profileMechanicalContext}\n\nBased on this Q&A conversation about a person's ${conversationSubject}, write 2-4 concise bullet points summarizing only the NEW factual findings from the user's answers that would be useful to persist for future AI analysis. Do not repeat generic information already obvious from the base data. Be specific and factual. Do not preserve assumptions about intent unless the person explicitly stated them. Write every saved bullet in direct second person using "you" and "your"; do not use the person's name, "the user", "he", "she", "his", or "her".\n\nConversation:\n${history}\n\nOutput as plain bullet points starting with "•":`,
     });
     return typeof res === "string" ? res.trim() : res?.response?.trim() ?? "";
   };
@@ -941,7 +946,7 @@ export default function AIChat({
       const merged = mode === "profile" ? findings : (savedNotes || "") + newNote;
       await onSaveNotes?.(merged, {
         date: timestamp,
-        source: mode === "profile" ? "profile_ai_interview" : "session_ai_interview",
+        source: mode === "profile" ? "profile_ai_interview" : `${evidenceScope}_ai_interview`,
         conversation: messageList,
       });
     }
@@ -965,9 +970,7 @@ export default function AIChat({
     const timestamp = new Date().toISOString().slice(0, 10);
     const mediaContext = extractVisualMediaContextFromConversation(finalMessages);
     const hasVideoFrames = mediaContext.frame_count > 0;
-    const source = mode === "profile"
-      ? hasVideoFrames ? "profile_sarah_video_review" : "profile_sarah_image_review"
-      : hasVideoFrames ? "session_sarah_video_review" : "session_sarah_image_review";
+    const source = hasVideoFrames ? `${evidenceScope}_sarah_video_review` : `${evidenceScope}_sarah_image_review`;
     const merged = mode === "profile" ? bullets : `${savedNotes || ""}\n\n[Sarah ${hasVideoFrames ? "Video" : "Image"} Review — ${timestamp}]\n${bullets}`;
     await onSaveNotes?.(merged, {
       date: timestamp,
@@ -1036,7 +1039,7 @@ export default function AIChat({
 
     const ANATOMY_RULE = `ANATOMY RULE: Use ONLY the anatomical and physiological details stated in the profile above. Never assume or infer biological sex, genitalia, or anatomy not explicitly mentioned. If anatomy is ambiguous, use neutral language (e.g. "genital stimulation", "pelvic region", "that area").`;
 
-    const SESSION_SCOPE_RULE = `SCOPE RULE: Stay anchored to THIS specific session's data only. Never compare to or reference other sessions.`;
+    const SESSION_SCOPE_RULE = `SCOPE RULE: Stay anchored to THIS specific ${conversationSubject}'s data only. Never compare to or reference other records unless the provided context explicitly asks for that comparison.`;
 
     const QUESTION_QUALITY_RULE = `QUESTION QUALITY — THIS IS THE MOST IMPORTANT RULE:
 Questions should be rooted in the session's AROUSAL and STIMULATION experience, not heart rate numbers or timestamps. Good anchors to use:
@@ -1063,7 +1066,7 @@ If nothing specific stands out, ask what surprised them most or what they'd most
     const systemPrompt = messages.length === 1
       ? mode === "profile"
         ? `You're having a genuine, immersive conversation with someone about their physiology and arousal — like a knowledgeable friend who has studied their data closely. They've just shared something. Respond naturally, ask ONE follow-up question that goes deeper. Curious, specific, engaged. 2–3 sentences. No bullets, no clinical jargon. ${ANATOMY_RULE}`
-        : `You're a curious, knowledgeable friend helping someone unpack a specific session. They just shared something. React briefly and naturally, then ask ONE question grounded in a real detail from this session — a stimulation method used, a logged event or note, a subjective metric gap, or something about the arc of their arousal. Sound like you actually read the session, not like you're scanning a graph. Keep it casual and conversational.
+        : `You're a curious, knowledgeable friend helping someone unpack a specific ${conversationSubject}. They just shared something. React briefly and naturally, then ask ONE question grounded in a real detail from this ${conversationSubject} — a method used, a logged event or note, a subjective metric gap, or something about the body response. Sound like you actually read the record, not like you're scanning a graph. Keep it casual and conversational.
 
 ${SESSION_SCOPE_RULE}
 ${QUESTION_QUALITY_RULE}

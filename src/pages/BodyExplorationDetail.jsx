@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Activity, ArrowLeft, Brain, Pencil, ScanSearch } from "lucide-react";
+import { Activity, ArrowLeft, Brain, MessageCircle, Pencil, ScanSearch } from "lucide-react";
 import moment from "moment";
 import { base44 } from "@/api/base44Client";
 import PageHeader from "@/components/PageHeader";
@@ -9,6 +9,14 @@ import { Button } from "@/components/ui/button";
 import HRTimelineChart from "@/components/HRTimelineChart";
 import EMGTimelineChart from "@/components/EMGTimelineChart";
 import BodyExplorationAIPanel from "@/components/BodyExplorationAIPanel";
+import AIChat from "@/components/AIChat";
+import {
+  buildBodyExplorationVisualEvidenceDigest,
+  getReviewedVisualClips,
+  isVisualReviewSource,
+  makeBodyExplorationVisualEvidenceEntry,
+  normalizeBodyExplorationVisualEvidence,
+} from "@/lib/visualEvidence";
 
 function Info({ label, value }) {
   if (!value && value !== 0) return null;
@@ -49,12 +57,46 @@ function TimestampedNotes({ events }) {
   );
 }
 
+function buildExplorationChatContext(exploration, timelineRows, emgRows) {
+  const events = (exploration.event_timeline || []).map((event) => {
+    const m = Math.floor(Number(event.time_s || 0) / 60);
+    const sec = Math.round(Number(event.time_s || 0) % 60);
+    const categories = (Array.isArray(event.category) ? event.category : [event.category].filter(Boolean))
+      .map((category) => String(category).replaceAll("_", " "))
+      .join(", ");
+    return `[${m}:${String(sec).padStart(2, "0")}]${categories ? ` ${categories}:` : ""} ${event.note}`;
+  });
+
+  return [
+    `Body exploration date: ${exploration.date?.slice(0, 10) || "undated"}`,
+    `Type: ${exploration.exploration_type || "body exploration"}`,
+    exploration.title ? `Title: ${exploration.title}` : null,
+    exploration.duration_minutes ? `Duration: ${exploration.duration_minutes} minutes` : null,
+    (exploration.methods || []).length ? `Methods: ${exploration.methods.join(", ")}` : null,
+    exploration.focus_areas ? `Focus areas: ${exploration.focus_areas}` : null,
+    exploration.purpose ? `Purpose / question: ${exploration.purpose}` : null,
+    exploration.devices ? `Devices / setup: ${exploration.devices}` : null,
+    exploration.foley_size ? `Foley: ${exploration.foley_size}${exploration.foley_type ? ` ${exploration.foley_type}` : ""}` : null,
+    exploration.findings ? `Observed findings: ${exploration.findings}` : null,
+    exploration.comfort_notes ? `Comfort notes: ${exploration.comfort_notes}` : null,
+    exploration.sounding_notes ? `Instrumentation notes: ${exploration.sounding_notes}` : null,
+    exploration.unusual_sensations ? `Unusual sensations: ${exploration.unusual_sensations}` : null,
+    exploration.notes ? `Exploration notes: ${exploration.notes}` : null,
+    timelineRows.length ? `Heart-rate rows available: ${timelineRows.length}; avg ${exploration.avg_hr || "unknown"} bpm; max ${exploration.max_hr || "unknown"} bpm.` : null,
+    emgRows.length ? `EMG rows available: ${emgRows.length}.` : null,
+    events.length ? `Timestamped notes:\n${events.join("\n")}` : null,
+    buildBodyExplorationVisualEvidenceDigest(exploration),
+  ].filter(Boolean).join("\n");
+}
+
 export default function BodyExplorationDetail() {
   const { id } = useParams();
   const [exploration, setExploration] = useState(null);
   const [timelineRows, setTimelineRows] = useState([]);
   const [emgRows, setEmgRows] = useState([]);
   const [userProfile, setUserProfile] = useState(null);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [explorationNotes, setExplorationNotes] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -64,15 +106,19 @@ export default function BodyExplorationDetail() {
       base44.entities.EMGTimeline.filter({ session: id }, "time_s", 10000),
       base44.auth.me(),
     ]).then(([items, hr, emg, profile]) => {
-      setExploration(items[0] || null);
+      const loadedExploration = items[0] || null;
+      setExploration(loadedExploration);
       setTimelineRows(hr || []);
       setEmgRows(emg || []);
       setUserProfile(profile);
+      setChatMessages(loadedExploration?.ai_body_exploration?._chat_messages || []);
+      setExplorationNotes(loadedExploration?.notes || "");
     }).finally(() => setLoading(false));
   }, [id]);
 
   if (loading) return <div className="flex h-64 items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" /></div>;
   if (!exploration) return <div className="p-6 text-center text-muted-foreground">Body exploration record not found.</div>;
+  const reviewedMediaClips = getReviewedVisualClips(exploration.ai_body_exploration?._visual_findings || []);
 
   return (
     <div>
@@ -109,6 +155,76 @@ export default function BodyExplorationDetail() {
         {timelineRows.length > 0 && <div className="rounded-xl border border-border bg-card p-4"><h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-primary">Heart Rate Timeline</h3><HRTimelineChart rows={timelineRows} events={exploration.event_timeline || []} noClimax /></div>}
         {emgRows.length > 0 && <div className="rounded-xl border border-border bg-card p-4"><h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-primary">EMG Timeline</h3><EMGTimelineChart rows={emgRows} channelMode={exploration.emg_channels || "single"} events={exploration.event_timeline || []} timelineRows={timelineRows} /></div>}
         {(exploration.event_timeline || []).length > 0 && <TimestampedNotes events={exploration.event_timeline} />}
+
+        <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+          <div>
+            <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
+              <MessageCircle className="h-4 w-4" /> Sarah Review Chat
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Ask Sarah about this exploration, attach images, or clip local video for technique, device fit, visible anatomy, positioning, and reaction review.
+            </p>
+          </div>
+          <AIChat
+            mode="session"
+            visualEvidenceScope="body_exploration"
+            subjectLabel="body exploration"
+            userProfile={userProfile}
+            scopeId={id}
+            context={buildExplorationChatContext(exploration, timelineRows, emgRows)}
+            savedMessages={chatMessages}
+            savedNotes={explorationNotes}
+            defaultOpen
+            onSaveMessages={async (msgs) => {
+              setChatMessages(msgs);
+              const updatedAi = { ...(exploration.ai_body_exploration || {}), _chat_messages: msgs };
+              setExploration((prev) => ({ ...prev, ai_body_exploration: updatedAi }));
+              await base44.entities.BodyExploration.update(id, { ai_body_exploration: updatedAi });
+            }}
+            onSaveNotes={async (merged, meta = {}) => {
+              setExplorationNotes(merged);
+              const updatedAi = {
+                ...(exploration.ai_body_exploration || {}),
+                _chat_messages: Array.isArray(meta.conversation) ? meta.conversation : chatMessages,
+              };
+              if (isVisualReviewSource(meta.source)) {
+                const visualEntry = makeBodyExplorationVisualEvidenceEntry(meta, merged);
+                updatedAi._visual_findings = normalizeBodyExplorationVisualEvidence([
+                  visualEntry,
+                  ...(exploration.ai_body_exploration?._visual_findings || []),
+                ]);
+              }
+              setExploration((prev) => ({
+                ...prev,
+                notes: merged,
+                ai_body_exploration: { ...(prev?.ai_body_exploration || {}), ...updatedAi },
+              }));
+              await base44.entities.BodyExploration.update(id, {
+                notes: merged,
+                ai_body_exploration: updatedAi,
+              });
+            }}
+          />
+          {reviewedMediaClips.length > 0 && (
+            <details className="rounded-lg border border-border bg-muted/20 p-3">
+              <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-primary">
+                Sarah Reviewed Clips ({reviewedMediaClips.length})
+              </summary>
+              <div className="mt-3 space-y-2">
+                {reviewedMediaClips.map((clip, index) => (
+                  <div key={`${clip.processedClipUrl}-${index}`} className="rounded-lg border border-border bg-background/40 p-2">
+                    <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                      <span className="font-semibold text-primary">{clip.label || clip.filename || "Reviewed clip"}</span>
+                      <span>{clip.evidenceDate || "Undated"} · {clip.startSeconds != null && clip.endSeconds != null ? `${Number(clip.startSeconds).toFixed(1)}-${Number(clip.endSeconds).toFixed(1)}s` : "trimmed clip"}</span>
+                    </div>
+                    <video src={clip.processedClipUrl} controls className="w-full rounded-lg bg-black" />
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+
         <BodyExplorationAIPanel exploration={exploration} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} />
         <div className="rounded-xl border border-border bg-muted/20 p-4 text-xs text-muted-foreground">
           <p className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-primary"><Brain className="h-3.5 w-3.5" /> Standalone exploration mode</p>

@@ -3,6 +3,7 @@ import { Activity, AlertCircle, Brain, Lightbulb, ScanSearch, ShieldCheck } from
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
+import { buildBodyExplorationVisualEvidenceDigest } from "@/lib/visualEvidence";
 import TTSReader from "./TTSReader";
 import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
@@ -87,6 +88,7 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
         return `[${Math.floor(Number(event.time_s || 0) / 60)}:${String(Math.round(Number(event.time_s || 0) % 60)).padStart(2, "0")}] ${labels || "Observation"} - ${event.note}${hr != null ? ` [heart rate ${Math.round(Number(hr))} beats per minute]` : ""}`;
       });
       const groundingContext = buildAIGroundingContext(userProfile);
+      const visualEvidenceContext = buildBodyExplorationVisualEvidenceDigest(exploration);
       const raw = await base44.integrations.Core.InvokeLLM({
         model: "claude_sonnet_4_6",
         max_tokens: 6000,
@@ -101,6 +103,7 @@ Focus on:
 - useful next-review notes grounded in the actual record
 
 ${groundingContext}
+${visualEvidenceContext}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 
 STYLE:
@@ -130,6 +133,7 @@ ${JSON.stringify({
   tags: exploration.tags,
   heart_rate: telemetrySummary(timelineRows, exploration),
   emg_rows: emgRows.length,
+  reviewed_visual_evidence: visualEvidenceContext || null,
 }, null, 2)}
 
 ${events.length ? `TIMESTAMPED NOTES:\n${events.join("\n")}` : "No timestamped notes were recorded."}`,

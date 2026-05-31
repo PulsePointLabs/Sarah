@@ -7,6 +7,9 @@ export const VISUAL_REVIEW_SOURCES = [
   "session_sarah_image_review",
   "session_sarah_video_review",
   "session_sarah_visual_review",
+  "body_exploration_sarah_image_review",
+  "body_exploration_sarah_video_review",
+  "body_exploration_sarah_visual_review",
 ];
 
 export function isVisualReviewSource(source) {
@@ -74,19 +77,30 @@ export function extractVisualMediaContextFromConversation(conversation = []) {
   };
 }
 
-export function makeSessionVisualEvidenceEntry(meta = {}, fallbackText = "") {
+function defaultVisualSource(scope, mediaContext) {
+  const normalizedScope = ["profile", "session", "body_exploration"].includes(scope) ? scope : "session";
+  if (mediaContext.frame_count) return `${normalizedScope}_sarah_video_review`;
+  if (mediaContext.image_count) return `${normalizedScope}_sarah_image_review`;
+  return `${normalizedScope}_sarah_visual_review`;
+}
+
+export function makeVisualEvidenceEntry(meta = {}, fallbackText = "", { defaultScope = "session" } = {}) {
   const now = new Date().toISOString();
   const mediaContext = meta.media_context || extractVisualMediaContextFromConversation(meta.conversation);
   const structuredFindings = Array.isArray(meta.structured_findings) ? meta.structured_findings : [];
   const findings = structuredFindings.length
     ? structuredFindings.map(compactFindingText).filter(Boolean)
     : parseFindingBullets(fallbackText).slice(-8);
+  const source = isVisualReviewSource(meta.source) ? meta.source : defaultVisualSource(defaultScope, mediaContext);
+  const scope = source.startsWith("profile_")
+    ? "profile"
+    : source.startsWith("body_exploration_") ? "body_exploration" : "session";
 
   return {
-    id: meta.id || `session-visual-${now}`,
+    id: meta.id || `${scope}-visual-${now}`,
     date: meta.date || now.slice(0, 10),
     saved_at: meta.saved_at || now,
-    source: isVisualReviewSource(meta.source) ? meta.source : mediaContext.frame_count ? "session_sarah_video_review" : "session_sarah_image_review",
+    source,
     needs_review: Boolean(meta.needs_review),
     persistence_status: meta.persistence_status || "recommended",
     structured_findings: structuredFindings,
@@ -97,10 +111,15 @@ export function makeSessionVisualEvidenceEntry(meta = {}, fallbackText = "") {
   };
 }
 
-export function normalizeSessionVisualEvidence(sessionOrEntries) {
-  const entries = Array.isArray(sessionOrEntries)
-    ? sessionOrEntries
-    : sessionOrEntries?.ai_analysis?._visual_findings;
+export function makeSessionVisualEvidenceEntry(meta = {}, fallbackText = "") {
+  return makeVisualEvidenceEntry(meta, fallbackText, { defaultScope: "session" });
+}
+
+export function makeBodyExplorationVisualEvidenceEntry(meta = {}, fallbackText = "") {
+  return makeVisualEvidenceEntry(meta, fallbackText, { defaultScope: "body_exploration" });
+}
+
+export function normalizeVisualEvidenceEntries(entries, { fallbackSource = "session_sarah_visual_review" } = {}) {
   if (!Array.isArray(entries)) return [];
   const seen = new Set();
   return entries
@@ -108,7 +127,7 @@ export function normalizeSessionVisualEvidence(sessionOrEntries) {
       id: entry.id || `session-visual-${entry.saved_at || entry.date || index}`,
       date: entry.date || entry.saved_at?.slice?.(0, 10) || "Undated",
       saved_at: entry.saved_at || entry.created_at || null,
-      source: entry.source || "session_sarah_visual_review",
+      source: entry.source || fallbackSource,
       needs_review: Boolean(entry.needs_review),
       persistence_status: entry.persistence_status || "recommended",
       structured_findings: Array.isArray(entry.structured_findings) ? entry.structured_findings : [],
@@ -125,6 +144,20 @@ export function normalizeSessionVisualEvidence(sessionOrEntries) {
       return true;
     })
     .sort((a, b) => (Date.parse(b.saved_at || b.date) || 0) - (Date.parse(a.saved_at || a.date) || 0));
+}
+
+export function normalizeSessionVisualEvidence(sessionOrEntries) {
+  const entries = Array.isArray(sessionOrEntries)
+    ? sessionOrEntries
+    : sessionOrEntries?.ai_analysis?._visual_findings;
+  return normalizeVisualEvidenceEntries(entries, { fallbackSource: "session_sarah_visual_review" });
+}
+
+export function normalizeBodyExplorationVisualEvidence(explorationOrEntries) {
+  const entries = Array.isArray(explorationOrEntries)
+    ? explorationOrEntries
+    : explorationOrEntries?.ai_body_exploration?._visual_findings;
+  return normalizeVisualEvidenceEntries(entries, { fallbackSource: "body_exploration_sarah_visual_review" });
 }
 
 function formatMediaContext(entry) {
@@ -159,4 +192,31 @@ export function buildSessionVisualEvidenceDigest(session, { limit = 12 } = {}) {
     ));
   });
   return lines.length ? `Reviewed Sarah visual evidence for this session:\n${lines.join("\n")}` : "";
+}
+
+export function buildBodyExplorationVisualEvidenceDigest(exploration, { limit = 12 } = {}) {
+  const entries = normalizeBodyExplorationVisualEvidence(exploration).slice(0, limit);
+  if (!entries.length) return "";
+  const lines = entries.flatMap((entry) => {
+    const sourceLabel = entry.source.includes("video") ? "video/frame sequence" : entry.source.includes("image") ? "image" : "visual review";
+    const status = entry.needs_review ? "review candidate" : entry.persistence_status || "recommended";
+    const mediaContext = formatMediaContext(entry);
+    return entry.findings.slice(0, 6).map((finding) => (
+      `- [${entry.date}; Sarah ${sourceLabel}; ${status}] ${finding}${mediaContext}`
+    ));
+  });
+  return lines.length ? `Reviewed Sarah visual evidence for this body exploration:\n${lines.join("\n")}` : "";
+}
+
+export function getReviewedVisualClips(entries = []) {
+  const seen = new Set();
+  return normalizeVisualEvidenceEntries(entries, { fallbackSource: "session_sarah_visual_review" })
+    .flatMap((entry) => Array.isArray(entry.media_context?.videos) ? entry.media_context.videos.map((video) => ({ ...video, evidenceDate: entry.date, evidenceSource: entry.source })) : [])
+    .filter((video) => video.processedClipUrl)
+    .filter((video) => {
+      const key = `${video.processedClipUrl}|${video.startSeconds}|${video.endSeconds}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
