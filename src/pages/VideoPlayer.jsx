@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useState, useEffect } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import PageHeader from "../components/PageHeader";
 import VideoSyncPlayer from "../components/VideoSyncPlayer";
@@ -8,6 +8,7 @@ import { Activity, ArrowLeft, RefreshCw } from "lucide-react";
 import moment from "moment";
 
 export default function VideoPlayer() {
+  const [searchParams] = useSearchParams();
   const [sessions, setSessions] = useState([]);
   const [explorations, setExplorations] = useState([]);
   const [recordType, setRecordType] = useState("session");
@@ -17,6 +18,22 @@ export default function VideoPlayer() {
   const [loading, setLoading] = useState(true);
   const [loadingSession, setLoadingSession] = useState(false);
 
+  const handleSelectRecord = useCallback(async (id, typeOverride = recordType) => {
+    setSelectedId(id);
+    setSelectedRecord(null);
+    setTimelineRows([]);
+    if (!id) return;
+    setLoadingSession(true);
+    const entity = typeOverride === "body_exploration" ? base44.entities.BodyExploration : base44.entities.Session;
+    const [recordList, rows] = await Promise.all([
+      entity.filter({ id }),
+      base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000),
+    ]);
+    setSelectedRecord(recordList[0] || null);
+    setTimelineRows(rows);
+    setLoadingSession(false);
+  }, [recordType]);
+
   useEffect(() => {
     Promise.all([
       base44.entities.Session.list("-date", 200).catch(() => []),
@@ -25,30 +42,22 @@ export default function VideoPlayer() {
       setSessions(sessionRows);
       setExplorations(explorationRows);
       setLoading(false);
+      const requestedType = searchParams.get("type") === "body_exploration" || searchParams.get("exploration")
+        ? "body_exploration"
+        : "session";
+      const requestedId = searchParams.get("id") || searchParams.get("session") || searchParams.get("exploration") || "";
+      if (requestedId) {
+        setRecordType(requestedType);
+        handleSelectRecord(requestedId, requestedType);
+      }
     });
-  }, []);
+  }, [handleSelectRecord, searchParams]);
 
   const handleRecordTypeChange = (type) => {
     setRecordType(type);
     setSelectedId("");
     setSelectedRecord(null);
     setTimelineRows([]);
-  };
-
-  const handleSelectRecord = async (id) => {
-    setSelectedId(id);
-    setSelectedRecord(null);
-    setTimelineRows([]);
-    if (!id) return;
-    setLoadingSession(true);
-    const entity = recordType === "body_exploration" ? base44.entities.BodyExploration : base44.entities.Session;
-    const [recordList, rows] = await Promise.all([
-      entity.filter({ id }),
-      base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000),
-    ]);
-    setSelectedRecord(recordList[0] || null);
-    setTimelineRows(rows);
-    setLoadingSession(false);
   };
 
   const refreshSelectedRecord = async () => {

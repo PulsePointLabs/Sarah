@@ -98,6 +98,7 @@ function blankVideoFeeds() {
     label: feed.label,
     fileName: "",
     src: null,
+    localPath: "",
   }]));
 }
 
@@ -398,6 +399,10 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
   const loadedFeeds = useMemo(
     () => VIDEO_FEED_SLOTS.map((meta) => ({ ...meta, ...videoFeeds[meta.key] })).filter((feed) => feed.src),
     [videoFeeds],
+  );
+  const linkedLocalVideos = useMemo(
+    () => (session.linked_local_videos || []).filter((video) => video?.path && video.exists !== false),
+    [session.linked_local_videos],
   );
 
   // Local mutable events list
@@ -711,7 +716,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
     videoFeedUrls.current[feedKey] = url;
     setVideoFeeds((current) => ({
       ...current,
-      [feedKey]: { ...current[feedKey], src: url, fileName: file.name },
+      [feedKey]: { ...current[feedKey], src: url, fileName: file.name, localPath: "" },
     }));
     if (!videoSrc || feedKey === activeFeedKey) {
       setActiveFeedKey(feedKey);
@@ -719,6 +724,34 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
     }
     e.target.value = "";
   };
+
+  const loadLinkedLocalVideo = useCallback((video, feedKey = "composite") => {
+    if (!video?.path) return;
+    const previousUrl = videoFeedUrls.current[feedKey];
+    if (previousUrl) {
+      URL.revokeObjectURL(previousUrl);
+      delete videoFeedUrls.current[feedKey];
+    }
+    const url = base44.integrations.Core.localVideoStreamUrl(video.path);
+    setVideoFeeds((current) => ({
+      ...current,
+      [feedKey]: {
+        ...current[feedKey],
+        src: url,
+        fileName: video.label || video.filename || video.path,
+        localPath: video.path,
+      },
+    }));
+    if (!videoSrc || feedKey === activeFeedKey) {
+      setActiveFeedKey(feedKey);
+      setVideoSrc(url);
+    }
+  }, [activeFeedKey, videoSrc]);
+
+  useEffect(() => {
+    if (videoSrc || !linkedLocalVideos.length) return;
+    loadLinkedLocalVideo(linkedLocalVideos[0], "composite");
+  }, [linkedLocalVideos, loadLinkedLocalVideo, videoSrc]);
 
   const renameFeed = (feedKey, label) => {
     setVideoFeeds((current) => ({
@@ -732,7 +765,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
     const remaining = loadedFeeds.filter((feed) => feed.key !== feedKey);
     setVideoFeeds((current) => ({
       ...current,
-      [feedKey]: { ...current[feedKey], src: null, fileName: "" },
+      [feedKey]: { ...current[feedKey], src: null, fileName: "", localPath: "" },
     }));
     delete videoFeedRefs.current[feedKey];
     delete videoFeedUrls.current[feedKey];
@@ -1178,7 +1211,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Local Video Feeds</p>
               <p className="mt-1 text-[11px] text-muted-foreground">
-                Use one composite picture-in-picture recording or load separate angles. Files remain local to this browser review.
+                Use one composite picture-in-picture recording, linked original recording, or separate angles. Files remain local to this browser review.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1236,6 +1269,9 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                         aria-label={`Rename ${slot.label}`}
                       />
                       <p className="mt-1 truncate text-[10px] text-muted-foreground">{feed.fileName}</p>
+                      {feed.localPath && (
+                        <p className="mt-1 truncate font-mono text-[9px] text-muted-foreground">{feed.localPath}</p>
+                      )}
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {!isMaster && (
                           <button type="button" onClick={() => selectMasterFeed(slot.key)} className="rounded-md border border-primary/25 px-2 py-1 text-[10px] font-medium text-primary">
@@ -1246,16 +1282,50 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
                           Replace
                           <input type="file" accept="video/*" className="hidden" onChange={(event) => handleFileLoad(event, slot.key)} />
                         </label>
+                        {linkedLocalVideos.length > 0 && (
+                          <select
+                            value=""
+                            onChange={(event) => {
+                              const selected = linkedLocalVideos.find((video) => video.id === event.target.value || video.path === event.target.value);
+                              if (selected) loadLinkedLocalVideo(selected, slot.key);
+                            }}
+                            className="h-6 rounded-md border border-border bg-background px-1.5 text-[10px] text-muted-foreground"
+                            aria-label={`Load linked video into ${slot.label}`}
+                          >
+                            <option value="">Linked...</option>
+                            {linkedLocalVideos.map((video) => (
+                              <option key={video.id || video.path} value={video.id || video.path}>{video.label || video.filename || "Linked video"}</option>
+                            ))}
+                          </select>
+                        )}
                         <button type="button" onClick={() => removeFeed(slot.key)} className="rounded-md border border-border px-2 py-1 text-[10px] text-muted-foreground hover:text-destructive">
                           Remove
                         </button>
                       </div>
                     </>
                   ) : (
-                    <label className="mt-3 flex cursor-pointer items-center justify-center rounded-md border border-dashed border-border px-2 py-2 text-[10px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary">
-                      Load local video
-                      <input type="file" accept="video/*" className="hidden" onChange={(event) => handleFileLoad(event, slot.key)} />
-                    </label>
+                    <div className="mt-3 grid gap-1.5">
+                      {linkedLocalVideos.length > 0 && (
+                        <select
+                          value=""
+                          onChange={(event) => {
+                            const selected = linkedLocalVideos.find((video) => video.id === event.target.value || video.path === event.target.value);
+                            if (selected) loadLinkedLocalVideo(selected, slot.key);
+                          }}
+                          className="h-8 rounded-md border border-primary/25 bg-primary/10 px-2 text-[10px] font-medium text-primary"
+                          aria-label={`Load linked video into ${slot.label}`}
+                        >
+                          <option value="">Load linked video...</option>
+                          {linkedLocalVideos.map((video) => (
+                            <option key={video.id || video.path} value={video.id || video.path}>{video.label || video.filename || "Linked video"}</option>
+                          ))}
+                        </select>
+                      )}
+                      <label className="flex cursor-pointer items-center justify-center rounded-md border border-dashed border-border px-2 py-2 text-[10px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary">
+                        Load local video
+                        <input type="file" accept="video/*" className="hidden" onChange={(event) => handleFileLoad(event, slot.key)} />
+                      </label>
+                    </div>
                   )}
                 </div>
               );

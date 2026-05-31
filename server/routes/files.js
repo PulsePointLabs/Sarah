@@ -17,6 +17,63 @@ const storage = multer.diskStorage({
   },
 });
 const upload = multer({ storage });
+const LOCAL_VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.mkv', '.m4v', '.avi']);
+const LOCAL_VIDEO_MIME = {
+  '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo',
+};
+
+function normalizeLocalVideoPath(value) {
+  const raw = String(value || '').trim().replace(/^file:\/+/, '');
+  if (!raw) return '';
+  return process.platform === 'win32' ? decodeURIComponent(raw).replace(/\//g, '\\') : decodeURIComponent(raw);
+}
+
+function assertLocalVideoPath(filePath) {
+  const resolved = path.resolve(filePath);
+  const ext = path.extname(resolved).toLowerCase();
+  if (!LOCAL_VIDEO_EXTENSIONS.has(ext)) {
+    const error = new Error('Linked local videos must be MP4, WebM, MOV, MKV, M4V, or AVI files.');
+    error.status = 400;
+    throw error;
+  }
+  return { resolved, ext };
+}
+
+async function localVideoMetadata(filePath) {
+  const { resolved, ext } = assertLocalVideoPath(filePath);
+  const stat = await fsp.stat(resolved);
+  if (!stat.isFile()) {
+    const error = new Error('The selected local video path is not a file.');
+    error.status = 400;
+    throw error;
+  }
+  return {
+    path: resolved,
+    filename: path.basename(resolved),
+    extension: ext,
+    mimeType: LOCAL_VIDEO_MIME[ext] || 'application/octet-stream',
+    sizeBytes: stat.size,
+    modifiedAt: stat.mtime.toISOString(),
+    fingerprint: `${stat.size}-${Math.round(stat.mtimeMs)}`,
+    exists: true,
+    checkedAt: new Date().toISOString(),
+    stream_url: `/api/files/local-video/stream?path=${encodeURIComponent(resolved)}`,
+  };
+}
+
+async function handleLocalVideoError(res, error) {
+  const status = error?.code === 'ENOENT' ? 404 : error?.status || 500;
+  res.status(status).json({
+    error: status === 404 ? 'Local video not found. The file may have moved, been renamed, or be on a disconnected drive.' : error?.message || 'Could not inspect local video.',
+    exists: false,
+    checkedAt: new Date().toISOString(),
+  });
+}
 
 function summarizeMotion(samples, fps) {
   if (samples.length < 2) {
@@ -105,6 +162,48 @@ filesRouter.post('/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const fileUrl = `/uploads/${req.file.filename}`;
   res.json({ file_url: fileUrl, url: fileUrl, filename: req.file.originalname, size: req.file.size });
+});
+
+filesRouter.post('/local-video/metadata', async (req, res) => {
+  try {
+    const requestedPath = normalizeLocalVideoPath(req.body?.path);
+    if (!requestedPath) return res.status(400).json({ error: 'Paste the full local video path first.' });
+    res.json(await localVideoMetadata(requestedPath));
+  } catch (error) {
+    await handleLocalVideoError(res, error);
+  }
+});
+
+filesRouter.get('/local-video/stream', async (req, res) => {
+  try {
+    const requestedPath = normalizeLocalVideoPath(req.query?.path);
+    if (!requestedPath) return res.status(400).json({ error: 'Missing local video path.' });
+    const meta = await localVideoMetadata(requestedPath);
+    const range = req.headers.range;
+    if (!range) {
+      res.setHeader('Content-Type', meta.mimeType);
+      res.setHeader('Content-Length', meta.sizeBytes);
+      fs.createReadStream(meta.path).pipe(res);
+      return;
+    }
+    const [startRaw, endRaw] = String(range).replace(/bytes=/, '').split('-');
+    const start = Math.max(0, Number.parseInt(startRaw, 10) || 0);
+    const end = Math.min(meta.sizeBytes - 1, endRaw ? Number.parseInt(endRaw, 10) : start + 1024 * 1024 * 4);
+    if (start >= meta.sizeBytes || end < start) {
+      res.writeHead(416, { 'Content-Range': `bytes */${meta.sizeBytes}` });
+      res.end();
+      return;
+    }
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${meta.sizeBytes}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': end - start + 1,
+      'Content-Type': meta.mimeType,
+    });
+    fs.createReadStream(meta.path, { start, end }).pipe(res);
+  } catch (error) {
+    if (!res.headersSent) await handleLocalVideoError(res, error);
+  }
 });
 
 filesRouter.post('/video-clip-preview', upload.single('file'), async (req, res) => {

@@ -20,6 +20,7 @@ import SessionExecutiveSummary from "../components/SessionExecutiveSummary";
 import SessionSnapshotHero from "../components/SessionSnapshotHero";
 import SessionTelemetryDashboard from "../components/SessionTelemetryDashboard";
 import SessionSectionNavigator from "../components/SessionSectionNavigator";
+import LinkedLocalVideoManager from "../components/LinkedLocalVideoManager";
 import PostSessionReviewWizard from "../components/PostSessionReviewWizard";
 import CascadeOverviewPanel from "../components/CascadeOverviewPanel";
 import AIPhaseMarkerSuggester from "../components/AIPhaseMarkerSuggester";
@@ -497,7 +498,7 @@ export default function SessionDetail() {
   const contextRows = sessionContextDisplayRows(s);
   const hasTimelineSection = timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0 || !!s.motion_analysis_summary;
   const reviewedMediaClips = getReviewedVisualClips(s.ai_analysis?._visual_findings || []);
-  const hasMediaSection = (s.media_images || []).length > 0 || (s.media_videos || []).length > 0 || s.video_link || reviewedMediaClips.length > 0;
+  const linkedLocalVideos = s.linked_local_videos || [];
   const sectionLinks = [
     { id: "session-snapshot", label: "Session Snapshot", group: "Overview" },
     { id: "session-telemetry", label: "Evidence Dashboard", group: "Overview" },
@@ -521,7 +522,7 @@ export default function SessionDetail() {
     { id: "session-devices", label: "Methods & Devices", group: "Session Context" },
     { id: "session-physiology", label: "Body Findings", group: "Session Context" },
     { id: "session-notes", label: "Session Notes", group: "Session Context" },
-    ...(hasMediaSection ? [{ id: "session-media", label: "Media", group: "Session Context" }] : []),
+    { id: "session-media", label: "Media", group: "Session Context" },
     { id: "session-tags", label: "Tags", group: "Session Context" },
   ];
   const selectSection = (section) => {
@@ -997,10 +998,18 @@ export default function SessionDetail() {
         )}
 
         {/* Media */}
-        {hasMediaSection && (
-          <details id="session-media" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+        <details id="session-media" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
             <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Media</summary>
             <div className="mt-3 space-y-3">
+            <LinkedLocalVideoManager
+              videos={linkedLocalVideos}
+              title="Linked Original Videos"
+              helper="Save local references to original recordings for review and Video Sync. The app stores the path and fingerprint metadata only; raw video is not copied into the database."
+              onChange={async (nextVideos) => {
+                await base44.entities.Session.update(id, { linked_local_videos: nextVideos });
+                setSession((prev) => ({ ...prev, linked_local_videos: nextVideos }));
+              }}
+            />
             {s.media_images?.length > 0 && (
               <div className="grid grid-cols-3 gap-2">
                 {s.media_images.map((url, i) => (
@@ -1036,7 +1045,6 @@ export default function SessionDetail() {
             )}
             </div>
           </details>
-        )}
 
         {/* Pause / Active Time */}
         {(() => {

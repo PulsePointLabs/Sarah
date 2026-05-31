@@ -222,6 +222,7 @@ export default function AIChat({
   defaultOpen = false,
   visualEvidenceScope = mode,
   subjectLabel,
+  clipTimelineOffsetSeconds = 0,
   onSaveMessages,
   onSaveNotes,
 }) {
@@ -268,6 +269,7 @@ export default function AIChat({
   const categories = mode === "profile" ? PROFILE_CATEGORIES : SESSION_CATEGORIES;
   const evidenceScope = ["profile", "session", "body_exploration"].includes(visualEvidenceScope) ? visualEvidenceScope : mode;
   const conversationSubject = subjectLabel || (mode === "profile" ? "physiological and arousal profile" : "session");
+  const timelineOffsetSeconds = Number(clipTimelineOffsetSeconds) || 0;
 
   useEffect(() => {
     setMessages(savedMessages || []);
@@ -666,6 +668,24 @@ export default function AIChat({
     sendMessage(input.trim() || fallback);
   };
 
+  const resetVideoClipForNextRange = () => {
+    if (!selectedVideoClip) return;
+    const current = selectedVideoClip.processedClip
+      ? selectedVideoClip.endSeconds
+      : Number.isFinite(videoPreviewRef.current?.currentTime) ? videoPreviewRef.current.currentTime : videoPlayheadSeconds;
+    const duration = selectedVideoClip.duration || Math.max(selectedVideoClip.endSeconds || 0, current + 12);
+    const startSeconds = Math.max(0, Math.min(Number(current) || 0, Math.max(0, duration - 0.3)));
+    const endSeconds = Math.min(duration, Math.max(startSeconds + 0.3, startSeconds + Math.min(12, Math.max(0.3, duration - startSeconds))));
+    updateSelectedVideoClip((clip) => ({
+      ...clip,
+      startSeconds,
+      endSeconds,
+      processedClip: null,
+      processingStatus: "Ready for another clip from the same source video.",
+    }), { keepProcessed: true });
+    window.setTimeout(() => seekVideoPreview(startSeconds), 0);
+  };
+
   const materializeVideoClipFrames = async () => {
     if (!selectedVideoClip) return [];
     const slots = VIDEO_FRAME_SAMPLE_COUNT;
@@ -677,8 +697,12 @@ export default function AIChat({
     try {
       const label = selectedVideoClip.label?.trim() || selectedVideoClip.filename || "video technique example";
       const processed = selectedVideoClip.processedClip || await processSelectedVideoClip();
+      const timelineStartSeconds = selectedVideoClip.startSeconds + timelineOffsetSeconds;
+      const timelineEndSeconds = selectedVideoClip.endSeconds + timelineOffsetSeconds;
+      const timelineLabel = evidenceScope === "body_exploration" ? "body exploration timeline" : evidenceScope === "session" ? "session timeline" : "source video timeline";
       if (processed?.frames?.length) {
         return processed.frames.slice(0, slots).map((frame, index) => {
+          const frameTimeSeconds = Number(frame.frameTimeSeconds ?? selectedVideoClip.startSeconds);
           const dataUrl = frame.data ? `data:${frame.mimeType || "image/jpeg"};base64,${frame.data}` : frame.url || frame.file_url || "";
           const filename = frame.filename || `${label}-frame-${index + 1}.jpg`;
           const file = dataUrl.startsWith("data:")
@@ -699,7 +723,11 @@ export default function AIChat({
               label,
               startSeconds: selectedVideoClip.startSeconds,
               endSeconds: selectedVideoClip.endSeconds,
-              frameTimeSeconds: Number(frame.frameTimeSeconds ?? selectedVideoClip.startSeconds),
+              frameTimeSeconds,
+              timelineStartSeconds,
+              timelineEndSeconds,
+              frameTimelineSeconds: frameTimeSeconds + timelineOffsetSeconds,
+              timelineLabel,
               frameIndex: frame.frameIndex || index + 1,
               processedClipUrl: processed.clip_url || processed.url || "",
               motionSummary: index === 0 ? processed.motion_summary || null : null,
@@ -728,6 +756,10 @@ export default function AIChat({
           startSeconds: selectedVideoClip.startSeconds,
           endSeconds: selectedVideoClip.endSeconds,
           frameTimeSeconds: Number(frame.time.toFixed(2)),
+          timelineStartSeconds,
+          timelineEndSeconds,
+          frameTimelineSeconds: Number((frame.time + timelineOffsetSeconds).toFixed(2)),
+          timelineLabel,
           frameIndex: index + 1,
         },
       }));
@@ -769,7 +801,11 @@ export default function AIChat({
           data: image.base64Data || stripDataUrl(image.previewUrl),
         });
       }
-      if (videoFrames.length) setSelectedVideoClip(null);
+      if (videoFrames.length) {
+        updateSelectedVideoClip({
+          processingStatus: "Clip sent to Sarah. Keep this open to mark another range, or close it when finished.",
+        }, { keepProcessed: true });
+      }
       return { metadata: uploaded, aiImages };
     } finally {
       setUploadingImages(false);
@@ -1015,7 +1051,14 @@ export default function AIChat({
     const videoContext = imagePayload.metadata
       .filter((item) => item.sourceVideo)
       .map((item) => item.sourceVideo)
-      .map((video) => `Video clip frame ${video.frameIndex}: "${video.label}" from ${Number(video.startSeconds).toFixed(1)}s to ${Number(video.endSeconds).toFixed(1)}s, sampled at ${Number(video.frameTimeSeconds).toFixed(1)}s from ${video.filename}.`)
+      .map((video) => {
+        const sourceRange = `${Number(video.startSeconds).toFixed(1)}s to ${Number(video.endSeconds).toFixed(1)}s`;
+        const sourceFrameTime = `${Number(video.frameTimeSeconds).toFixed(1)}s`;
+        const timelineRange = video.timelineStartSeconds != null && video.timelineEndSeconds != null
+          ? ` This same clip spans ${formatSeconds(video.timelineStartSeconds)} to ${formatSeconds(video.timelineEndSeconds)} on the ${video.timelineLabel || "session timeline"}, and this frame is at ${formatSeconds(video.frameTimelineSeconds ?? video.frameTimeSeconds)} on that timeline.`
+          : "";
+        return `Video clip frame ${video.frameIndex}: "${video.label}" from ${sourceRange} in source video ${video.filename}, sampled at source time ${sourceFrameTime}.${timelineRange}`;
+      })
       .join("\n");
     const motionSummary = imagePayload.metadata
       .map((item) => item.sourceVideo?.motionSummary)
@@ -1182,7 +1225,9 @@ Return a conversational answer plus structured findings for review/persistence.`
     : "p-3 space-y-3";
   const threadClass = fullScreen
     ? "flex min-h-0 flex-1 basis-0 flex-col gap-2 overflow-y-auto border-t border-border px-1 pt-3 sm:px-3"
-    : "min-h-80 max-h-80 space-y-2 overflow-y-auto pr-1 border-t border-border pt-2";
+    : selectedVideoClip
+      ? "min-h-[42rem] max-h-[76vh] space-y-2 overflow-y-auto pr-1 border-t border-border pt-2"
+      : "min-h-80 max-h-80 space-y-2 overflow-y-auto pr-1 border-t border-border pt-2";
   const messageClass = (role) => `group relative rounded-2xl px-3 py-2 text-sm leading-relaxed shadow-sm ${
     fullScreen ? "max-w-[min(78%,52rem)] sm:text-[15px]" : "max-w-[85%]"
   } ${
@@ -1220,9 +1265,9 @@ Return a conversational answer plus structured findings for review/persistence.`
   const renderSelectedVideoClip = () => {
     if (!selectedVideoClip) return null;
     const expandedPreview = videoPreviewSize === "expanded";
-    const previewHeightClass = expandedPreview
-      ? "h-[clamp(28rem,62vh,48rem)]"
-      : "h-[clamp(20rem,46vh,34rem)]";
+    const previewHeightClass = fullScreen
+      ? expandedPreview ? "h-[clamp(28rem,62vh,48rem)]" : "h-[clamp(20rem,46vh,34rem)]"
+      : expandedPreview ? "h-[clamp(24rem,52vh,38rem)]" : "h-[clamp(16rem,36vh,28rem)]";
 
     return (
     <div className="rounded-lg border border-primary/25 bg-primary/[0.05] p-3 text-xs">
@@ -1245,10 +1290,11 @@ Return a conversational answer plus structured findings for review/persistence.`
           <button
             type="button"
             onClick={() => setSelectedVideoClip(null)}
-            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
             title="Remove video clip"
           >
             <X className="h-3.5 w-3.5" />
+            Close
           </button>
         </div>
       </div>
@@ -1292,6 +1338,11 @@ Return a conversational answer plus structured findings for review/persistence.`
             Out <span className="font-medium text-foreground">{formatSeconds(selectedVideoClip.endSeconds)}</span>
           </span>
         </div>
+        {evidenceScope !== "profile" && (
+          <p className="mb-1 text-[10px] text-muted-foreground">
+            Sarah sees this as <span className="font-medium text-foreground">{formatSeconds(selectedVideoClip.startSeconds + timelineOffsetSeconds)}-{formatSeconds(selectedVideoClip.endSeconds + timelineOffsetSeconds)}</span> on the {evidenceScope === "body_exploration" ? "body exploration" : "session"} timeline.
+          </p>
+        )}
         <input
           type="range"
           min="0"
@@ -1411,13 +1462,22 @@ Return a conversational answer plus structured findings for review/persistence.`
               type="button"
               size="sm"
               variant="ghost"
+              onClick={resetVideoClipForNextRange}
+              className="h-7 px-2 text-[11px]"
+            >
+              Next Clip
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
               onClick={() => {
-                updateSelectedVideoClip({ processedClip: null, processingStatus: "" });
+                updateSelectedVideoClip({ processedClip: null, processingStatus: "Marks unlocked for editing." });
                 seekVideoPreview(selectedVideoClip.startSeconds);
               }}
               className="h-7 px-2 text-[11px]"
             >
-              Edit Marks
+              Edit This Clip
             </Button>
           </>
         )}

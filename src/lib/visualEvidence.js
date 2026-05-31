@@ -57,11 +57,16 @@ export function extractVisualMediaContextFromConversation(conversation = []) {
       label: video.label || "",
       startSeconds: video.startSeconds,
       endSeconds: video.endSeconds,
+      timelineStartSeconds: video.timelineStartSeconds,
+      timelineEndSeconds: video.timelineEndSeconds,
+      timelineLabel: video.timelineLabel || "",
       processedClipUrl: video.processedClipUrl || "",
       frameTimes: [],
+      frameTimelineTimes: [],
       motionSummary: video.motionSummary || null,
     };
     if (video.frameTimeSeconds != null) existing.frameTimes.push(Number(video.frameTimeSeconds));
+    if (video.frameTimelineSeconds != null) existing.frameTimelineTimes.push(Number(video.frameTimelineSeconds));
     if (!existing.motionSummary && video.motionSummary) existing.motionSummary = video.motionSummary;
     videoMap.set(key, existing);
   });
@@ -73,6 +78,7 @@ export function extractVisualMediaContextFromConversation(conversation = []) {
     videos: [...videoMap.values()].map((video) => ({
       ...video,
       frameTimes: [...new Set(video.frameTimes.filter(Number.isFinite).map((time) => Number(time.toFixed(2))))],
+      frameTimelineTimes: [...new Set(video.frameTimelineTimes.filter(Number.isFinite).map((time) => Number(time.toFixed(2))))],
     })),
   };
 }
@@ -171,9 +177,12 @@ function formatMediaContext(entry) {
       const range = video.startSeconds != null && video.endSeconds != null
         ? `${Number(video.startSeconds).toFixed(1)}-${Number(video.endSeconds).toFixed(1)}s`
         : "";
+      const timelineRange = video.timelineStartSeconds != null && video.timelineEndSeconds != null
+        ? `, ${video.timelineLabel || "session timeline"} ${Number(video.timelineStartSeconds).toFixed(1)}-${Number(video.timelineEndSeconds).toFixed(1)}s`
+        : "";
       const label = video.label || video.filename || "video clip";
       const frames = video.frameTimes?.length ? ` frames at ${video.frameTimes.join(", ")}s` : "";
-      return `${label}${range ? ` (${range})` : ""}${frames}`;
+      return `${label}${range ? ` (${range}${timelineRange})` : timelineRange ? ` (${timelineRange.replace(/^, /, "")})` : ""}${frames}`;
     });
     parts.push(videos.join("; "));
   }

@@ -10,6 +10,7 @@ import HRTimelineChart from "@/components/HRTimelineChart";
 import EMGTimelineChart from "@/components/EMGTimelineChart";
 import BodyExplorationAIPanel from "@/components/BodyExplorationAIPanel";
 import AIChat from "@/components/AIChat";
+import LinkedLocalVideoManager from "@/components/LinkedLocalVideoManager";
 import {
   buildBodyExplorationVisualEvidenceDigest,
   getReviewedVisualClips,
@@ -119,6 +120,7 @@ export default function BodyExplorationDetail() {
   if (loading) return <div className="flex h-64 items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" /></div>;
   if (!exploration) return <div className="p-6 text-center text-muted-foreground">Body exploration record not found.</div>;
   const reviewedMediaClips = getReviewedVisualClips(exploration.ai_body_exploration?._visual_findings || []);
+  const linkedLocalVideos = exploration.linked_local_videos || [];
 
   return (
     <div>
@@ -155,6 +157,15 @@ export default function BodyExplorationDetail() {
         {timelineRows.length > 0 && <div className="rounded-xl border border-border bg-card p-4"><h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-primary">Heart Rate Timeline</h3><HRTimelineChart rows={timelineRows} events={exploration.event_timeline || []} noClimax /></div>}
         {emgRows.length > 0 && <div className="rounded-xl border border-border bg-card p-4"><h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-primary">EMG Timeline</h3><EMGTimelineChart rows={emgRows} channelMode={exploration.emg_channels || "single"} events={exploration.event_timeline || []} timelineRows={timelineRows} /></div>}
         {(exploration.event_timeline || []).length > 0 && <TimestampedNotes events={exploration.event_timeline} />}
+        <LinkedLocalVideoManager
+          videos={linkedLocalVideos}
+          title="Linked Original Videos"
+          helper="Save local references to original body exploration recordings for review and Video Sync. The app stores the path and fingerprint metadata only; raw video is not copied into the database."
+          onChange={async (nextVideos) => {
+            await base44.entities.BodyExploration.update(id, { linked_local_videos: nextVideos });
+            setExploration((prev) => ({ ...prev, linked_local_videos: nextVideos }));
+          }}
+        />
 
         <div className="rounded-xl border border-border bg-card p-4 space-y-3">
           <div>
