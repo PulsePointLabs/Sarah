@@ -19,11 +19,12 @@ async function request(path, options = {}) {
   return contentType.includes('application/json') ? response.json() : response.text();
 }
 
-async function invokeFunction(name, payload) {
+async function invokeFunction(name, payload, options = {}) {
   const response = await fetch(`${API_BASE}/functions/${name}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload || {}),
+    signal: options.signal,
   });
   const contentType = response.headers.get('content-type') || '';
 

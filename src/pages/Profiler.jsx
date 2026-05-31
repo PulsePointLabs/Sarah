@@ -70,6 +70,37 @@ function naturalizeSpokenDates(value) {
   ));
 }
 
+function calmSpokenHeading(label) {
+  return `Section: ${String(label || "").replace(/&/g, "and").toLowerCase()}.`;
+}
+
+function renderSentenceHighlightedText(text, activeSentenceIdx = -1, onSentenceClick) {
+  const sentences = String(text || "")
+    .match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g)
+    ?.map((sentence) => sentence.trim())
+    .filter(Boolean) || [text];
+  return sentences.map((sentence, index) => (
+    <span
+      key={`${index}-${sentence.slice(0, 24)}`}
+      role="button"
+      tabIndex={0}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSentenceClick?.(index);
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        event.stopPropagation();
+        onSentenceClick?.(index);
+      }}
+      className={`rounded-sm px-0.5 transition-colors ${activeSentenceIdx === index ? "bg-primary/20 text-foreground" : "hover:bg-muted/40"}`}
+    >
+      {sentence}{index < sentences.length - 1 ? " " : ""}
+    </span>
+  ));
+}
+
 const SESSION_DATE_GROUNDING_RULE = `
 SESSION DATE GROUNDING RULE:
 - A date attached to a session below is the recorded date that session occurred, normalized to the America/New_York local calendar date.
@@ -858,14 +889,14 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
           title="AI Physiological Profile"
           sourceGeneratedAt={result?._meta?.last_generated_at}
           paragraphs={paras}
-          renderParagraph={(text, idx, isActive) => {
+          renderParagraph={(text, idx, isActive, _isBuffering, activeSentenceIdx, startFromSentence) => {
             const meta = paraMeta[idx];
             if (!meta) return null;
 
             if (meta.type === "overview") {
               return (
                 <p className={`text-base font-medium leading-relaxed border-l-2 pl-3 py-1 transition-all duration-200 rounded-r-md ${isActive ? "border-primary bg-primary/10 text-foreground" : "border-primary/50 text-foreground"}`}>
-                  {text}
+                  {meta.displayLabel || text}
                 </p>
               );
             }
@@ -889,7 +920,7 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
                     color: "hsl(var(--foreground))",
                   }}
                 >
-                  {text}
+                  {renderSentenceHighlightedText(text, activeSentenceIdx, startFromSentence)}
                 </li>
               </div>
             );
@@ -1075,16 +1106,16 @@ Write directly to the person in clear, clinically grounded language. Favor meani
   const paragraphs = [];
   const paragraphMeta = [];
   if (result) {
-    paragraphs.push("Anatomical and Physiological Profile");
-    paragraphMeta.push({ type: "title", color: "hsl(var(--chart-2))" });
+    paragraphs.push(calmSpokenHeading("Anatomical and Physiological Profile"));
+    paragraphMeta.push({ type: "title", color: "hsl(var(--chart-2))", displayLabel: "Anatomical and Physiological Profile" });
     if (result.overview) {
       paragraphs.push(naturalizeSpokenDates(result.overview));
       paragraphMeta.push({ type: "overview" });
     }
     for (const section of sections) {
       if ((result[section.key] || []).length) {
-        paragraphs.push(section.label);
-        paragraphMeta.push({ type: "section-title", section });
+        paragraphs.push(calmSpokenHeading(section.label));
+        paragraphMeta.push({ type: "section-title", section, displayLabel: section.label });
       }
       for (const finding of (result[section.key] || [])) {
         paragraphs.push(naturalizeSpokenDates(finding));
@@ -1135,7 +1166,7 @@ Write directly to the person in clear, clinically grounded language. Favor meani
           title="Anatomical and Physiological Profile"
           sourceGeneratedAt={result?._meta?.last_generated_at}
           paragraphs={paragraphs}
-          renderParagraph={(text, idx, isActive) => {
+          renderParagraph={(text, idx, isActive, isBuffering, activeSentenceIdx, startFromSentence) => {
             const meta = paragraphMeta[idx];
             if (!meta) return null;
 
@@ -1143,13 +1174,13 @@ Write directly to the person in clear, clinically grounded language. Favor meani
               const color = meta.section?.color || meta.color || "hsl(var(--chart-2))";
               return (
                 <p
-                  className="mt-4 border-t border-border pt-3 text-xs font-semibold uppercase tracking-wider transition-colors"
+                  className="mt-4 border-t border-border pt-3 text-xs font-semibold transition-colors"
                   style={{
                     color,
                     background: isActive ? `${color}18` : "transparent",
                   }}
                 >
-                  {text}
+                  {meta.displayLabel || text}
                 </p>
               );
             }
@@ -1163,7 +1194,7 @@ Write directly to the person in clear, clinically grounded language. Favor meani
                     background: isActive ? "hsl(var(--chart-2) / 0.1)" : "transparent",
                   }}
                 >
-                  {text}
+                  {renderSentenceHighlightedText(text, activeSentenceIdx, startFromSentence)}
                 </p>
               );
             }
@@ -1179,7 +1210,7 @@ Write directly to the person in clear, clinically grounded language. Favor meani
                     background: isActive ? section.color + "18" : "transparent",
                   }}
                 >
-                  {text}
+                  {renderSentenceHighlightedText(text, activeSentenceIdx, startFromSentence)}
                 </p>
               </div>
             );

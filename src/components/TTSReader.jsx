@@ -20,7 +20,17 @@ import { idbGet, idbSet } from "@/lib/ttsCache";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms, signal) => new Promise((resolve, reject) => {
+  if (signal?.aborted) {
+    reject(new DOMException("TTS request cancelled", "AbortError"));
+    return;
+  }
+  const timer = setTimeout(resolve, ms);
+  signal?.addEventListener("abort", () => {
+    clearTimeout(timer);
+    reject(new DOMException("TTS request cancelled", "AbortError"));
+  }, { once: true });
+});
 const TTS_UNIT_MAX_CHARS = TTS_CHUNK_TARGET_CHARS;
 const TTS_PREFETCH_AHEAD = 2;
 const ttsCacheKey = (chunk, format, runtime, previousContext = "") =>
@@ -47,6 +57,28 @@ function splitForTTS(text) {
   return splitIntoChunks(text, TTS_UNIT_MAX_CHARS);
 }
 
+function countWords(text) {
+  return String(text || "").split(/\s+/).filter(Boolean).length;
+}
+
+function sentenceRangesForText(text, offset = 0) {
+  const sentences = String(text || "")
+    .match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g)
+    ?.map((sentence) => sentence.trim())
+    .filter(Boolean) || [];
+  let cursor = offset;
+  return sentences.map((sentence, index) => {
+    const length = Math.max(1, countWords(sentence));
+    const range = {
+      index,
+      startWord: cursor,
+      endWord: cursor + length - 1,
+    };
+    cursor += length;
+    return range;
+  });
+}
+
 function getTrailingSentences(text, count = 2) {
   const sentences = String(text || "")
     .match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g)
@@ -55,28 +87,44 @@ function getTrailingSentences(text, count = 2) {
   return sentences.slice(-count).join(" ");
 }
 
-function buildSpeechChunks(paragraphs, startIdx = 0) {
+function sentenceTextFromIndex(text, sentenceIdx = 0) {
+  const sentences = String(text || "")
+    .match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g)
+    ?.map((sentence) => sentence.trim())
+    .filter(Boolean) || [];
+  return sentenceIdx > 0 && sentenceIdx < sentences.length ? sentences.slice(sentenceIdx).join(" ") : text;
+}
+
+function buildSpeechChunks(paragraphs, startIdx = 0, startSentenceIdx = 0) {
   const chunks = [];
   let currentText = "";
   let currentStart = -1;
   let currentEnd = -1;
+  let currentParts = [];
 
   const push = () => {
     if (!currentText.trim()) return;
+    const chunkText = currentText.trim();
     chunks.push({
       start: currentStart,
       end: currentEnd,
-      text: currentText.trim(),
+      text: chunkText,
+      parts: currentParts,
       previousContext: "",
     });
     currentText = "";
     currentStart = -1;
     currentEnd = -1;
+    currentParts = [];
   };
 
   for (let i = startIdx; i < paragraphs.length; i++) {
-    const cleaned = cleanTextForSpeech(paragraphs[i] || "");
+    const paragraphText = i === startIdx
+      ? sentenceTextFromIndex(paragraphs[i] || "", startSentenceIdx)
+      : paragraphs[i] || "";
+    const cleaned = cleanTextForSpeech(paragraphText);
     if (!cleaned) continue;
+    const sentenceBase = i === startIdx ? startSentenceIdx : 0;
 
     const parts = splitForTTS(cleaned);
     for (const part of parts) {
@@ -85,9 +133,20 @@ function buildSpeechChunks(paragraphs, startIdx = 0) {
         push();
       }
 
+      const startWord = countWords(currentText);
+      const wordCount = countWords(part);
       currentText = currentText ? `${currentText} ${part}` : part;
       if (currentStart < 0) currentStart = i;
       currentEnd = i;
+      currentParts.push({
+        paraIdx: i,
+        startWord,
+        endWord: startWord + wordCount - 1,
+        sentenceRanges: sentenceRangesForText(part, startWord).map((range) => ({
+          ...range,
+          index: range.index + sentenceBase,
+        })),
+      });
     }
   }
 
@@ -124,12 +183,15 @@ const getTtsStatus = (err) => {
   return err?.status || err?.response?.status || err?.data?.status || 500;
 };
 
-async function callTTSWithRetries(payload, attempts = 7) {
+const isAbortError = (err) => err?.name === "AbortError" || /cancelled|aborted/i.test(String(err?.message || ""));
+
+async function callTTSWithRetries(payload, attempts = 7, signal) {
   let lastError;
 
   for (let attempt = 0; attempt < attempts; attempt++) {
+    if (signal?.aborted) throw new DOMException("TTS request cancelled", "AbortError");
     try {
-      const response = await base44.functions.invoke("openaiTTS", payload);
+      const response = await base44.functions.invoke("openaiTTS", payload, { signal });
 
       if (response?.data?.error) {
         const error = new Error(getTtsErrorMessage(response));
@@ -147,6 +209,7 @@ async function callTTSWithRetries(payload, attempts = 7) {
 
       return response;
     } catch (err) {
+      if (isAbortError(err)) throw err;
       lastError = err;
 
       const status = getTtsStatus(err);
@@ -165,7 +228,7 @@ async function callTTSWithRetries(payload, attempts = 7) {
         getTtsErrorMessage(err)
       );
 
-      await sleep(delay);
+      await sleep(delay, signal);
     }
   }
 
@@ -258,6 +321,7 @@ function combineWavChunks(chunks) {
 export default function TTSReader({ paragraphs, renderParagraph, sessionId, title, sessionDate, sourceGeneratedAt }) {
   const [state, setState] = useState("idle"); // idle | buffering | playing | paused
   const [currentPara, setCurrentPara] = useState(-1);
+  const [currentSentenceIdx, setCurrentSentenceIdx] = useState(-1);
   const [bufferingPara, setBufferingPara] = useState(-1); // which paragraph is currently fetching
   const [ttsSettings, setTtsSettings] = useState(() => loadTTSSettings());
   const [downloading, setDownloading] = useState(false);
@@ -278,6 +342,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const currentChunkRef = useRef(null); // the chunk currently playing/buffering
   const voiceRef = useRef("nova");
   const runtimeRef = useRef(getTTSRuntime(ttsSettings));
+  const prefetchAbortRef = useRef(null);
   // Generation counter: increment on every startFrom to cancel stale async chains
   const genRef = useRef(0);
   // Prefetch cache: chunk text → decoded AudioBuffer (keyed by gen+chunk for staleness)
@@ -335,11 +400,14 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   }, []);
 
   const setS = (s) => { stateRef.current = s; setState(s); };
-  const setCP = (i) => {
+  const setCP = (i, { resetPlayback = true } = {}) => {
     currentParaRef.current = i;
     setCurrentPara(i);
-    setCurrentWordIdx(-1);
-    playbackTimeRef.current = 0;
+    if (resetPlayback) {
+      setCurrentWordIdx(-1);
+      setCurrentSentenceIdx(-1);
+      playbackTimeRef.current = 0;
+    }
     if (sessionId && i >= 0) localStorage.setItem(`tts_progress_${sessionId}`, String(i));
   };
 
@@ -358,8 +426,16 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     }
   };
 
+  const abortSpeculativePrefetch = () => {
+    if (prefetchAbortRef.current) {
+      prefetchAbortRef.current.abort();
+      prefetchAbortRef.current = null;
+    }
+  };
+
   const stop = () => {
     genRef.current++; // invalidate any in-flight async chain
+    abortSpeculativePrefetch();
     stopSource();
     remainingParasRef.current = [];
     chunkQueueRef.current = [];
@@ -378,6 +454,22 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     setS("idle");
     setCP(-1);
   };
+
+  useEffect(() => {
+    const cancelPrefetchOnFocusLoss = () => {
+      abortSpeculativePrefetch();
+      prefetchCacheRef.current.clear();
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) cancelPrefetchOnFocusLoss();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("blur", cancelPrefetchOnFocusLoss);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("blur", cancelPrefetchOnFocusLoss);
+    };
+  }, []);
 
   const playNextChunk = async (gen) => {
     if (gen !== genRef.current) return; // stale call — a new startFrom has taken over
@@ -407,7 +499,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   // Fetch a chunk and cache the original MP3 bytes when available.
   // Each chunk fetch runs independently (not serialized) so prefetched chunks
   // are ready before the current one finishes — eliminating inter-chunk gaps.
-  const fetchDecoded = async (chunk, gen) => {
+  const fetchDecoded = async (chunk, gen, { speculative = false } = {}) => {
     const chunkText = getChunkText(chunk);
     const previousContext = getChunkContext(chunk);
     const cacheKey = `${gen}:${previousContext}:${chunkText}`;
@@ -431,7 +523,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             speed: runtime.speed,
             instructions: runtime.supportsInstructions ? instructions : "",
             format: runtime.format,
-          });
+          }, 7, speculative ? prefetchAbortRef.current?.signal : undefined);
           if (response.data?.error) throw new Error(response.data.error);
           const base64 = response.data.audio;
           const binary = atob(base64);
@@ -447,6 +539,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         return mp3Buffer.slice(0);
       } catch (err) {
         prefetchCacheRef.current.delete(cacheKey); // allow retry on failure
+        if (isAbortError(err) || gen !== genRef.current) throw err;
         setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) });
         throw err;
       }
@@ -457,6 +550,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
   // Fire-and-forget: prefetch the next chunk into the cache without blocking playback.
   const prefetchNext = (gen) => {
+    if (document.hidden || !document.hasFocus()) return;
+    if (!prefetchAbortRef.current || prefetchAbortRef.current.signal.aborted) {
+      prefetchAbortRef.current = new AbortController();
+    }
     // Collect next upcoming chunk
     const upcoming = [];
 
@@ -477,7 +574,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     for (const chunk of upcoming) {
       const cacheKey = `${gen}:${chunk}`;
       if (!prefetchCacheRef.current.has(cacheKey)) {
-        fetchDecoded(chunk, gen).catch(() => {}); // errors cleared inside fetchDecoded
+        fetchDecoded(chunk, gen, { speculative: true }).catch(() => {}); // errors cleared inside fetchDecoded
       }
     }
   };
@@ -492,6 +589,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     try {
       mp3Buffer = await fetchDecoded(chunk, gen);
     } catch (err) {
+      if (isAbortError(err) || gen !== genRef.current) return;
       console.error("TTS fetch failed:", err);
       setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) });
       stop();
@@ -544,23 +642,30 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   };
 
   const updateWordHighlight = () => {
-    const paraIdx = currentParaRef.current;
-    if (paraIdx < 0 || paraIdx >= readableParagraphs.length) return;
+    const chunk = currentChunkRef.current;
+    const chunkText = getChunkText(chunk);
+    if (!chunkText) return;
     
-    const text = readableParagraphs[paraIdx];
-    const words = text.split(/\s+/).filter(Boolean);
+    const words = chunkText.split(/\s+/).filter(Boolean);
     if (!words.length) return;
     
     // Estimate word index based on playback time (~120 WPM = 2 words/sec)
     const estimatedWordIdx = Math.floor(playbackTimeRef.current * 2);
     const boundedIdx = Math.max(0, Math.min(estimatedWordIdx, words.length - 1));
+    const part = chunk?.parts?.find((item) => boundedIdx >= item.startWord && boundedIdx <= item.endWord);
+    const paraIdx = part?.paraIdx ?? currentParaRef.current;
+    if (paraIdx < 0 || paraIdx >= readableParagraphs.length) return;
+    const paraWordIdx = part ? Math.max(0, boundedIdx - part.startWord) : boundedIdx;
+    const sentenceIdx = part?.sentenceRanges?.find((range) => boundedIdx >= range.startWord && boundedIdx <= range.endWord)?.index ?? -1;
     
     // Update state with new index
-    setCurrentWordIdx(boundedIdx);
+    if (paraIdx !== currentParaRef.current) setCP(paraIdx, { resetPlayback: false });
+    setCurrentWordIdx(paraWordIdx);
+    setCurrentSentenceIdx(sentenceIdx);
     
     // Auto-scroll using requestAnimationFrame for better mobile performance
     requestAnimationFrame(() => {
-      const wordKey = `word-${paraIdx}-${boundedIdx}`;
+      const wordKey = `word-${paraIdx}-${paraWordIdx}`;
       const wordEl = wordRefs.current.get(wordKey);
       if (wordEl) {
         try {
@@ -572,8 +677,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     });
   };
 
-  const startFrom = async (paraIdx) => {
+  const startFrom = async (paraIdx, sentenceIdx = 0) => {
     genRef.current++; // cancel any in-flight chain immediately
+    abortSpeculativePrefetch();
     const gen = genRef.current;
     userPausedRef.current = false;
 
@@ -582,8 +688,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     chunkQueueRef.current = [];
     currentChunkRef.current = null;
-    remainingParasRef.current = buildSpeechChunks(readableParagraphs, paraIdx);
+    remainingParasRef.current = buildSpeechChunks(readableParagraphs, paraIdx, sentenceIdx);
     setCP(paraIdx);
+    setCurrentSentenceIdx(sentenceIdx > 0 ? sentenceIdx : -1);
     setS("playing");
     setBufferingPara(paraIdx);
     playNextChunk(gen);
@@ -1149,16 +1256,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         </div>
       )}
 
-      {/* Resume from saved position */}
-      {sessionId && currentPara === -1 && state === "idle" && savedIdx >= 0 && savedIdx < readableParagraphs.length && (
-        <button
-          onClick={() => startFrom(savedIdx)}
-          className="mb-2 text-xs px-3 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 font-medium transition-colors"
-        >
-          Resume from paragraph {savedIdx + 1}
-        </button>
-      )}
-
       {/* Paragraphs */}
       <div ref={copyContentRef} className="ai-output-copy-surface space-y-1 min-w-0 w-full max-w-full">
       {readableParagraphs.map((text, paraIdx) => {
@@ -1171,10 +1268,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           return (
             <div
               key={paraIdx}
-              className={isActive ? "cursor-pointer" : ""}
-              onClick={() => isActive && startFrom(paraIdx)}
+              className="cursor-pointer"
+              onClick={() => startFrom(paraIdx)}
             >
-              {renderParagraph(displayText, paraIdx, isPlaying, isBuffering)}
+              {renderParagraph(displayText, paraIdx, isPlaying, isBuffering, isPlaying ? currentSentenceIdx : -1, (sentenceIdx) => startFrom(paraIdx, sentenceIdx))}
             </div>
           );
         }
@@ -1182,10 +1279,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         return (
           <p
             key={paraIdx}
-            onClick={() => isActive && startFrom(paraIdx)}
+            onClick={() => startFrom(paraIdx)}
             className={[
               "text-sm leading-relaxed pl-3 border-l-2 py-1 transition-all duration-200 flex items-center gap-2 flex-wrap",
-              isActive ? "cursor-pointer" : "",
+              "cursor-pointer",
               isPlaying ? "border-primary bg-primary/8 text-foreground font-medium rounded-r-md"
                 : isBuffering ? "border-primary/60 bg-primary/5 text-foreground rounded-r-md"
                 : "border-primary/30 text-foreground/80",
