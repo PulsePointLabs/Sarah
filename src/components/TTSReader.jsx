@@ -342,6 +342,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const currentChunkRef = useRef(null); // the chunk currently playing/buffering
   const voiceRef = useRef("nova");
   const runtimeRef = useRef(getTTSRuntime(ttsSettings));
+  const playbackAbortRef = useRef(null);
   const prefetchAbortRef = useRef(null);
   // Generation counter: increment on every startFrom to cancel stale async chains
   const genRef = useRef(0);
@@ -433,8 +434,16 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     }
   };
 
-  const stop = () => {
+  const abortPlaybackFetch = () => {
+    if (playbackAbortRef.current) {
+      playbackAbortRef.current.abort();
+      playbackAbortRef.current = null;
+    }
+  };
+
+  const stop = ({ clearStatus = true } = {}) => {
     genRef.current++; // invalidate any in-flight async chain
+    abortPlaybackFetch();
     abortSpeculativePrefetch();
     stopSource();
     remainingParasRef.current = [];
@@ -450,7 +459,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       renderProgressTimerRef.current = null;
     }
     setBufferingPara(-1);
-    setRequestStatus(null);
+    if (clearStatus) setRequestStatus(null);
     setS("idle");
     setCP(-1);
   };
@@ -515,7 +524,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         let mp3Buffer = await idbGet(cacheText, voiceRef.current, runtime.speed);
 
         if (!mp3Buffer) {
-          setRequestStatus({ type: "fetching", msg: "Fetching audio…" });
+          if (!speculative) {
+            setRequestStatus({ type: "fetching", msg: "Fetching audio..." });
+          }
           const response = await callTTSWithRetries({
             text: prepareTTSInput(chunkText),
             voice: voiceRef.current,
@@ -523,7 +534,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             speed: runtime.speed,
             instructions: runtime.supportsInstructions ? instructions : "",
             format: runtime.format,
-          }, 7, speculative ? prefetchAbortRef.current?.signal : undefined);
+          }, 7, speculative ? prefetchAbortRef.current?.signal : playbackAbortRef.current?.signal);
           if (response.data?.error) throw new Error(response.data.error);
           const base64 = response.data.audio;
           const binary = atob(base64);
@@ -531,9 +542,13 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
           mp3Buffer = bytes.buffer;
           idbSet(cacheText, voiceRef.current, runtime.speed, mp3Buffer); // fire-and-forget
-          setRequestStatus({ type: "ok", msg: "Audio ready" });
+          if (!speculative) {
+            setRequestStatus({ type: "ok", msg: "Audio ready" });
+          }
         } else {
-          setRequestStatus({ type: "ok", msg: "Audio ready (cached)" });
+          if (!speculative) {
+            setRequestStatus({ type: "ok", msg: "Audio ready (cached)" });
+          }
         }
 
         return mp3Buffer.slice(0);
@@ -635,7 +650,16 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       updateWordHighlight();
     }, 50);
     
-    await audio.play();
+    try {
+      await audio.play();
+      setRequestStatus(null);
+    } catch (err) {
+      URL.revokeObjectURL(url);
+      sourceRef.current = null;
+      stop({ clearStatus: false });
+      setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) || "Audio playback was blocked" });
+      return;
+    }
 
     // Kick off background prefetch of the next chunk as soon as this one starts
     prefetchNext(gen);
@@ -679,8 +703,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
   const startFrom = async (paraIdx, sentenceIdx = 0) => {
     genRef.current++; // cancel any in-flight chain immediately
+    abortPlaybackFetch();
     abortSpeculativePrefetch();
     const gen = genRef.current;
+    playbackAbortRef.current = new AbortController();
     userPausedRef.current = false;
 
     stopSource();
@@ -1028,6 +1054,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     completedRender?.file_url &&
     completedRender.sourceGeneratedAt !== sourceGeneratedAt
   );
+  const showFloatingFetchStatus = requestStatus?.type === "fetching" && !downloading;
 
   const downloadAudio = async () => {
     if (savedServerExport?.file_url) {
@@ -1142,6 +1169,14 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
   return (
     <>
+    {showFloatingFetchStatus && (
+      <div className="fixed bottom-24 left-3 right-3 z-50 rounded-xl border border-primary/25 bg-card/95 px-3 py-2 text-xs text-primary shadow-2xl backdrop-blur sm:left-auto sm:w-80">
+        <div className="flex items-center gap-2">
+          <span className="h-3 w-3 shrink-0 rounded-full border-2 border-current border-t-transparent animate-spin" />
+          <span className="min-w-0 flex-1 truncate">{requestStatus.msg || "Fetching audio..."}</span>
+        </div>
+      </div>
+    )}
     <div className="ai-output-width-guard space-y-1 min-w-0 w-full max-w-full">
       {/* Controls */}
       <div className="flex items-center gap-1 mb-2 flex-wrap">
@@ -1213,7 +1248,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       </div>
 
       {/* API Request Status */}
-      {requestStatus && (
+      {requestStatus && !showFloatingFetchStatus && (
         <div className={`flex items-center gap-1.5 text-[10px] px-2 py-1 rounded-md mb-1 ${
           requestStatus.type === "fetching" ? "bg-primary/10 text-primary" :
           requestStatus.type === "ok" ? "bg-green-500/10 text-green-500" :
