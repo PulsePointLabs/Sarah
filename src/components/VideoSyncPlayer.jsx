@@ -102,6 +102,28 @@ function blankVideoFeeds() {
   }]));
 }
 
+function inferLinkedVideoFeedKey(video) {
+  const text = `${video?.label || ""} ${video?.filename || ""} ${video?.path || ""}`.toLowerCase();
+  if (/\b(feet|foot|toe|toes|heel|heels|lower[-_\s]?body|legs?|pelvis)\b/.test(text)) return "lower_body";
+  if (/\b(main|focus|primary|close|genital|penis|shaft|glans|meatus)\b/.test(text)) return "main";
+  if (/\b(side|lateral|angle)\b/.test(text)) return "lateral";
+  if (/\b(composite|pip|picture[-_\s]?in[-_\s]?picture|obs)\b/.test(text)) return "composite";
+  return "";
+}
+
+function assignLinkedVideosToFeeds(videos = []) {
+  const fallbackSlots = ["composite", "lower_body", "main", "lateral"];
+  const usedSlots = new Set();
+  return videos.slice(0, VIDEO_FEED_SLOTS.length).map((video) => {
+    const preferred = inferLinkedVideoFeedKey(video);
+    const slotKey = preferred && !usedSlots.has(preferred)
+      ? preferred
+      : fallbackSlots.find((slot) => !usedSlots.has(slot));
+    usedSlots.add(slotKey);
+    return { video, slotKey };
+  }).filter((assignment) => assignment.slotKey);
+}
+
 // Nearest HR from sorted chart data
 function nearestHR(chartData, time_s) {
   if (!chartData.length) return null;
@@ -376,6 +398,7 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
   const videoFeedRefs = useRef({});
   const videoFeedUrls = useRef({});
   const pendingMasterTimeRef = useRef(null);
+  const autoLinkedSignatureRef = useRef("");
   const [videoSrc, setVideoSrc] = useState(null);
   const [videoFeeds, setVideoFeeds] = useState(blankVideoFeeds);
   const [activeFeedKey, setActiveFeedKey] = useState("composite");
@@ -749,9 +772,42 @@ export default function VideoSyncPlayer({ session, timelineRows, recordType = "s
   }, [activeFeedKey, videoSrc]);
 
   useEffect(() => {
-    if (videoSrc || !linkedLocalVideos.length) return;
-    loadLinkedLocalVideo(linkedLocalVideos[0], "composite");
-  }, [linkedLocalVideos, loadLinkedLocalVideo, videoSrc]);
+    if (!linkedLocalVideos.length) return;
+    const signature = linkedLocalVideos.map((video) => video.id || video.path).join("|");
+    if (autoLinkedSignatureRef.current === signature) return;
+    autoLinkedSignatureRef.current = signature;
+
+    const assignments = assignLinkedVideosToFeeds(linkedLocalVideos);
+    if (!assignments.length) return;
+    const firstAssignment = assignments[0];
+    const firstUrl = base44.integrations.Core.localVideoStreamUrl(firstAssignment.video.path);
+
+    setVideoFeeds((current) => {
+      const next = { ...current };
+      assignments.forEach(({ video, slotKey }) => {
+        const currentFeed = next[slotKey] || {};
+        const isManualBrowserFile = currentFeed.src && !currentFeed.localPath;
+        if (isManualBrowserFile) return;
+        next[slotKey] = {
+          ...currentFeed,
+          label: video.label || video.filename || currentFeed.label || VIDEO_FEED_SLOTS.find((slot) => slot.key === slotKey)?.label || "Linked video",
+          src: base44.integrations.Core.localVideoStreamUrl(video.path),
+          fileName: video.label || video.filename || video.path,
+          localPath: video.path,
+        };
+      });
+      return next;
+    });
+
+    if (!videoSrc) {
+      setActiveFeedKey(firstAssignment.slotKey);
+      setVideoSrc(firstUrl);
+    }
+    if (assignments.length > 1) {
+      setVideoLayout("multi");
+      setFeedsExpanded(false);
+    }
+  }, [linkedLocalVideos, videoSrc]);
 
   const renameFeed = (feedKey, label) => {
     setVideoFeeds((current) => ({

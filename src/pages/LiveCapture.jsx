@@ -34,6 +34,8 @@ const CAPTURE_MODES = [
   { value: "hr", label: "HR Only / Main Telemetry", helper: "Distance-readable HR and EMG dashboard" },
   { value: "video", label: "Video sync", helper: "OBS-first review workflow" },
 ];
+const MEDIA_VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov", ".mkv", ".m4v", ".avi", ".wmv"];
+const MEDIA_TRANSCODE_EXTENSIONS = [".wmv"];
 const EMG_CALIBRATION_STEPS = [
   {
     key: "neutral",
@@ -150,6 +152,22 @@ function asArray(value) {
   if (Array.isArray(value)) return value;
   if (value == null || value === "") return [];
   return [value];
+}
+
+function getFileExtension(file) {
+  const name = String(file?.name || "").toLowerCase();
+  const dotIndex = name.lastIndexOf(".");
+  return dotIndex >= 0 ? name.slice(dotIndex) : "";
+}
+
+function isMediaVideoFile(file) {
+  if (!file) return false;
+  if (file.type?.startsWith("video/")) return true;
+  return MEDIA_VIDEO_EXTENSIONS.includes(getFileExtension(file));
+}
+
+function needsMediaTranscode(file) {
+  return MEDIA_TRANSCODE_EXTENSIONS.includes(getFileExtension(file));
 }
 
 function ReadinessItem({ label, value, helper, ready, optional = false }) {
@@ -458,6 +476,8 @@ export default function LiveCapture() {
   const [mediaVideo, setMediaVideo] = useState(null);
   const [mediaDragging, setMediaDragging] = useState(false);
   const [mediaFullscreen, setMediaFullscreen] = useState(false);
+  const [mediaProcessing, setMediaProcessing] = useState("");
+  const [mediaError, setMediaError] = useState("");
   const [presetModalOpen, setPresetModalOpen] = useState(false);
   const [calibrationOpen, setCalibrationOpen] = useState(false);
   const [calibrationSaving, setCalibrationSaving] = useState("");
@@ -672,20 +692,49 @@ export default function LiveCapture() {
       mediaObjectUrlRef.current = null;
     }
     setMediaVideo(null);
+    setMediaProcessing("");
+    setMediaError("");
     if (mediaInputRef.current) mediaInputRef.current.value = "";
   }, []);
 
-  const loadMediaFile = useCallback((file) => {
-    if (!file || !file.type?.startsWith("video/")) return;
+  const loadMediaFile = useCallback(async (file) => {
+    if (!isMediaVideoFile(file)) {
+      setMediaError("Choose a video file. WMV, MP4, WebM, MOV, MKV, M4V, and AVI are accepted.");
+      return;
+    }
     if (mediaObjectUrlRef.current) URL.revokeObjectURL(mediaObjectUrlRef.current);
+    mediaObjectUrlRef.current = null;
+    setMediaError("");
+    if (needsMediaTranscode(file)) {
+      setMediaProcessing(`Converting ${file.name} to MP4 for browser playback...`);
+      setMediaVideo(null);
+      try {
+        const converted = await base44.integrations.Core.ConvertVideoForPlayback({ file, label: file.name });
+        setMediaVideo({
+          url: converted.url || converted.file_url,
+          name: file.name,
+          size: file.size,
+          convertedName: converted.filename,
+          convertedSize: converted.size,
+          converted: true,
+        });
+      } catch (error) {
+        setMediaError(error?.data?.error || error?.message || "Could not convert that WMV for playback.");
+      } finally {
+        setMediaProcessing("");
+      }
+      return;
+    }
     const url = URL.createObjectURL(file);
     mediaObjectUrlRef.current = url;
-    setMediaVideo({ url, name: file.name, size: file.size });
+    setMediaVideo({ url, name: file.name, size: file.size, converted: false });
+    setMediaProcessing("");
   }, []);
 
   const loadMediaFiles = useCallback((filesList) => {
-    const file = Array.from(filesList || []).find((item) => item.type?.startsWith("video/"));
+    const file = Array.from(filesList || []).find(isMediaVideoFile);
     if (file) loadMediaFile(file);
+    else setMediaError("Drop or choose a video file. WMV, MP4, WebM, MOV, MKV, M4V, and AVI are accepted.");
   }, [loadMediaFile]);
 
   const openMediaFullscreen = useCallback(async () => {
@@ -1316,7 +1365,7 @@ export default function LiveCapture() {
           <input
             ref={mediaInputRef}
             type="file"
-            accept="video/*"
+            accept="video/*,.wmv"
             className="hidden"
             onChange={(event) => loadMediaFiles(event.target.files)}
           />
@@ -1348,6 +1397,15 @@ export default function LiveCapture() {
           )}
         </div>
       </div>
+      {(mediaProcessing || mediaError) && (
+        <div className={`mb-3 rounded-lg border px-3 py-2 text-sm ${
+          mediaError
+            ? "border-destructive/30 bg-destructive/10 text-destructive"
+            : "border-primary/30 bg-primary/10 text-primary"
+        }`}>
+          {mediaProcessing || mediaError}
+        </div>
+      )}
 
       <div className={`grid gap-3 ${focusView ? "min-h-0 flex-1 xl:grid-cols-[minmax(0,1fr)_30rem]" : "min-h-[calc(100vh-15rem)] xl:grid-cols-[minmax(0,1fr)_27rem]"}`}>
         <div
@@ -1380,6 +1438,12 @@ export default function LiveCapture() {
               playsInline
               className={`${focusView ? "h-full min-h-0 max-h-full" : "max-h-[calc(100vh-17rem)] min-h-[22rem]"} w-full bg-black object-contain`}
             />
+          ) : mediaProcessing ? (
+            <div className="flex h-full min-h-[22rem] w-full flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
+              <RefreshCw className="h-10 w-10 animate-spin text-primary" />
+              <span className="text-base font-semibold text-foreground">Preparing browser playback</span>
+              <span className="max-w-md text-sm">{mediaProcessing}</span>
+            </div>
           ) : (
             <button
               type="button"
@@ -1388,12 +1452,13 @@ export default function LiveCapture() {
             >
               <UploadCloud className="h-10 w-10 text-primary" />
               <span className="text-base font-semibold text-foreground">Drop a local video here</span>
-              <span className="max-w-md text-sm">or use Load Video above to start media review without moving the telemetry page around.</span>
+              <span className="max-w-md text-sm">or use Load Video above to start media review. WMV files will be converted locally to MP4 first.</span>
             </button>
           )}
           {mediaVideo && !mediaFullscreen && (
             <div className="pointer-events-none absolute left-3 top-3 max-w-[70%] rounded-lg bg-black/65 px-3 py-2 text-xs text-white backdrop-blur-sm">
               <p className="truncate font-semibold">{mediaVideo.name}</p>
+              {mediaVideo.converted && <p className="mt-0.5 text-[10px] text-white/75">WMV converted to MP4 preview</p>}
             </div>
           )}
         </div>

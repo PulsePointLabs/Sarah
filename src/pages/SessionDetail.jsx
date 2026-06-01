@@ -21,6 +21,7 @@ import SessionSnapshotHero from "../components/SessionSnapshotHero";
 import SessionTelemetryDashboard from "../components/SessionTelemetryDashboard";
 import SessionSectionNavigator from "../components/SessionSectionNavigator";
 import LinkedLocalVideoManager from "../components/LinkedLocalVideoManager";
+import VideoSyncPlayer from "../components/VideoSyncPlayer";
 import PostSessionReviewWizard from "../components/PostSessionReviewWizard";
 import CascadeOverviewPanel from "../components/CascadeOverviewPanel";
 import AIPhaseMarkerSuggester from "../components/AIPhaseMarkerSuggester";
@@ -1010,6 +1011,24 @@ export default function SessionDetail() {
                 setSession((prev) => ({ ...prev, linked_local_videos: nextVideos }));
               }}
             />
+            {linkedLocalVideos.length > 0 && (
+              <details className="rounded-xl border border-border bg-muted/10 p-3" open>
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+                  Rich Linked Video Playback
+                </summary>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Play the linked original video with synchronized event notes and telemetry context.
+                </p>
+                <div className="mt-3">
+                  <VideoSyncPlayer
+                    key={`media-sync:${s.id}:${linkedLocalVideos.map((video) => video.fingerprint || video.path).join("|")}`}
+                    session={s}
+                    timelineRows={timelineRows}
+                    recordType="session"
+                  />
+                </div>
+              </details>
+            )}
             {s.media_images?.length > 0 && (
               <div className="grid grid-cols-3 gap-2">
                 {s.media_images.map((url, i) => (

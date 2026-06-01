@@ -20,7 +20,7 @@ const storage = multer.diskStorage({
   },
 });
 const upload = multer({ storage });
-const LOCAL_VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.mkv', '.m4v', '.avi']);
+const LOCAL_VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.mkv', '.m4v', '.avi', '.wmv']);
 const LOCAL_VIDEO_MIME = {
   '.mp4': 'video/mp4',
   '.m4v': 'video/mp4',
@@ -28,6 +28,7 @@ const LOCAL_VIDEO_MIME = {
   '.mov': 'video/quicktime',
   '.mkv': 'video/x-matroska',
   '.avi': 'video/x-msvideo',
+  '.wmv': 'video/x-ms-wmv',
 };
 
 function normalizeLocalVideoPath(value) {
@@ -40,7 +41,7 @@ function assertLocalVideoPath(filePath) {
   const resolved = path.resolve(filePath);
   const ext = path.extname(resolved).toLowerCase();
   if (!LOCAL_VIDEO_EXTENSIONS.has(ext)) {
-    const error = new Error('Linked local videos must be MP4, WebM, MOV, MKV, M4V, or AVI files.');
+    const error = new Error('Linked local videos must be MP4, WebM, MOV, MKV, M4V, AVI, or WMV files.');
     error.status = 400;
     throw error;
   }
@@ -177,6 +178,49 @@ filesRouter.post('/local-video/metadata', async (req, res) => {
   }
 });
 
+filesRouter.post('/video-playback-preview', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No video uploaded' });
+
+  const sourcePath = req.file.path;
+  const label = slugifyFilePart(req.body?.label || req.file.originalname || 'video-preview');
+  const filename = `${Date.now()}-${crypto.randomUUID()}-${label}.mp4`;
+  const outputPath = path.join(uploadDir, filename);
+
+  try {
+    await runProcess('ffmpeg', [
+      '-hide_banner',
+      '-y',
+      '-i', sourcePath,
+      '-map', '0:v:0',
+      '-map', '0:a?',
+      '-vf', 'scale=min(1280\\,iw):-2',
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-crf', '24',
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-pix_fmt', 'yuv420p',
+      '-movflags', '+faststart',
+      outputPath,
+    ]);
+
+    const stat = await fsp.stat(outputPath);
+    res.json({
+      ok: true,
+      source_deleted: true,
+      url: `/uploads/${filename}`,
+      file_url: `/uploads/${filename}`,
+      filename,
+      mimeType: 'video/mp4',
+      size: stat.size,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error?.message || 'Could not convert video for browser playback' });
+  } finally {
+    fsp.unlink(sourcePath).catch(() => {});
+  }
+});
+
 filesRouter.post('/local-video/browse', async (_req, res) => {
   if (process.platform !== 'win32') {
     return res.status(400).json({ error: 'The local video picker is currently available on Windows only.' });
@@ -187,7 +231,7 @@ Add-Type -AssemblyName System.Windows.Forms
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $dialog = New-Object System.Windows.Forms.OpenFileDialog
 $dialog.Title = 'Select local session video'
-$dialog.Filter = 'Video files (*.mp4;*.webm;*.mov;*.mkv;*.m4v;*.avi)|*.mp4;*.webm;*.mov;*.mkv;*.m4v;*.avi|All files (*.*)|*.*'
+$dialog.Filter = 'Video files (*.mp4;*.webm;*.mov;*.mkv;*.m4v;*.avi;*.wmv)|*.mp4;*.webm;*.mov;*.mkv;*.m4v;*.avi;*.wmv|All files (*.*)|*.*'
 $dialog.Multiselect = $false
 if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
   Write-Output $dialog.FileName

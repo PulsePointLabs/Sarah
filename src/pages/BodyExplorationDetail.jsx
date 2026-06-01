@@ -11,6 +11,7 @@ import EMGTimelineChart from "@/components/EMGTimelineChart";
 import BodyExplorationAIPanel from "@/components/BodyExplorationAIPanel";
 import AIChat from "@/components/AIChat";
 import LinkedLocalVideoManager from "@/components/LinkedLocalVideoManager";
+import VideoSyncPlayer from "@/components/VideoSyncPlayer";
 import {
   buildBodyExplorationVisualEvidenceDigest,
   getReviewedVisualClips,
@@ -166,6 +167,24 @@ export default function BodyExplorationDetail() {
             setExploration((prev) => ({ ...prev, linked_local_videos: nextVideos }));
           }}
         />
+        {linkedLocalVideos.length > 0 && (
+          <details className="rounded-xl border border-border bg-card p-4" open>
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+              Rich Linked Video Playback
+            </summary>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Play the linked original video with synchronized event notes and telemetry context.
+            </p>
+            <div className="mt-3">
+              <VideoSyncPlayer
+                key={`body-media-sync:${exploration.id}:${linkedLocalVideos.map((video) => video.fingerprint || video.path).join("|")}`}
+                session={exploration}
+                timelineRows={timelineRows}
+                recordType="body_exploration"
+              />
+            </div>
+          </details>
+        )}
 
         <div className="rounded-xl border border-border bg-card p-4 space-y-3">
           <div>
