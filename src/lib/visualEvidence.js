@@ -213,6 +213,104 @@ export function buildSessionVisualEvidenceDigest(session, { limit = 12 } = {}) {
   return lines.length ? `Reviewed Sarah visual evidence for this session:\n${lines.join("\n")}` : "";
 }
 
+function normalizeVideoPassFindingCard(card, index = 0) {
+  if (!card) return null;
+  const clip = card.clip || {};
+  const sourceVideo = card.source_video || card.sourceVideo || {};
+  const findings = Array.isArray(card.findings)
+    ? card.findings.map(compactFindingText).filter(Boolean)
+    : parseFindingBullets(card.findings);
+  const events = Array.isArray(card.draft_events || card.events)
+    ? (card.draft_events || card.events)
+      .map((event) => ({
+        time_s: Number(event?.time_s),
+        note: cleanText(event?.note || event?.text || "", 500),
+        confidence: event?.confidence || "",
+      }))
+      .filter((event) => Number.isFinite(event.time_s) && event.note)
+    : [];
+  const start = Number(clip.start_s ?? card.window?.start);
+  const end = Number(clip.end_s ?? card.window?.end);
+
+  return {
+    id: card.id || `video-pass-${card.saved_at || index}`,
+    saved_at: card.saved_at || null,
+    label: card.label || "AI video pass",
+    source_video: {
+      label: sourceVideo.label || "",
+      filename: sourceVideo.filename || "",
+    },
+    clip: {
+      url: clip.url || card.clipUrl || "",
+      start_s: Number.isFinite(start) ? start : null,
+      end_s: Number.isFinite(end) ? end : null,
+      duration_s: Number(clip.duration_s || (Number.isFinite(start) && Number.isFinite(end) ? end - start : 0)) || null,
+    },
+    summary: cleanText(card.summary, 900),
+    findings,
+    draft_events: events,
+    telemetry: cleanText(card.telemetry, 400),
+    motion_summary: card.motion_summary || card.motionSummary || null,
+  };
+}
+
+export function normalizeSessionVideoPassFindings(sessionOrEntries) {
+  const entries = Array.isArray(sessionOrEntries)
+    ? sessionOrEntries
+    : sessionOrEntries?.ai_analysis?._video_pass_findings;
+  if (!Array.isArray(entries)) return [];
+  const seen = new Set();
+  return entries
+    .map(normalizeVideoPassFindingCard)
+    .filter((entry) => entry && (entry.summary || entry.findings.length || entry.draft_events.length))
+    .filter((entry) => {
+      const key = [
+        entry.source_video.filename || entry.source_video.label || "video",
+        entry.clip.start_s ?? "",
+        entry.clip.end_s ?? "",
+        entry.summary.toLowerCase(),
+        entry.findings.join("|").toLowerCase(),
+      ].join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => {
+      const aStart = a.clip.start_s ?? Number.POSITIVE_INFINITY;
+      const bStart = b.clip.start_s ?? Number.POSITIVE_INFINITY;
+      if (aStart !== bStart) return aStart - bStart;
+      return (Date.parse(a.saved_at || "") || 0) - (Date.parse(b.saved_at || "") || 0);
+    });
+}
+
+function formatVideoPassRange(entry) {
+  const start = entry.clip.start_s;
+  const end = entry.clip.end_s;
+  if (start != null && end != null) return `${formatTimePhrase(start)} to ${formatTimePhrase(end)}`;
+  if (start != null) return `starting at ${formatTimePhrase(start)}`;
+  return "time range not specified";
+}
+
+export function buildSessionVideoPassDigest(session, { limit = 14, findingsPerCard = 4, eventsPerCard = 3 } = {}) {
+  const entries = normalizeSessionVideoPassFindings(session).slice(0, limit);
+  if (!entries.length) return cleanText(session?.ai_analysis?._video_pass_digest || "", 6000);
+  const lines = entries.map((entry) => {
+    const videoLabel = entry.source_video.label || entry.source_video.filename || "linked local video";
+    const findings = entry.findings.slice(0, findingsPerCard);
+    const events = entry.draft_events.slice(0, eventsPerCard);
+    const parts = [
+      `- [${formatVideoPassRange(entry)}; ${videoLabel}] ${entry.summary}`,
+    ];
+    if (findings.length) parts.push(`Findings: ${findings.join(" | ")}`);
+    if (events.length) {
+      parts.push(`Draft Video Sync events: ${events.map((event) => `${formatTimePhrase(event.time_s)} - ${event.note}${event.confidence ? ` (${event.confidence} confidence)` : ""}`).join(" | ")}`);
+    }
+    if (entry.telemetry) parts.push(`Telemetry: ${entry.telemetry}`);
+    return parts.filter(Boolean).join(" ");
+  });
+  return lines.length ? `Sarah video-pass findings applied to this session:\n${lines.join("\n")}` : "";
+}
+
 export function buildBodyExplorationVisualEvidenceDigest(exploration, { limit = 12 } = {}) {
   const entries = normalizeBodyExplorationVisualEvidence(exploration).slice(0, limit);
   if (!entries.length) return "";

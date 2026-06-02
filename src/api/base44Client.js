@@ -126,6 +126,11 @@ export const base44 = {
         form.append('frameCount', String(frameCount));
         return request('/files/video-clip-preview', { method: 'POST', body: form });
       },
+      ProcessLocalVideoClip: async ({ path, startSeconds = 0, endSeconds = 8, label = '', frameCount = 12 }) => request('/files/local-video/clip-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, startSeconds, endSeconds, label, frameCount }),
+      }),
       ConvertVideoForPlayback: async ({ file, label = '' }) => {
         const form = new FormData();
         form.append('file', file);

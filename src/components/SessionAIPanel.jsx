@@ -7,7 +7,7 @@ import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { SESSION_CONTEXT_GROUNDING_RULE, structuredSessionContextForAI } from "@/lib/sessionContext";
-import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
+import { buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 import { repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
@@ -54,6 +54,8 @@ function buildSessionContext(session, timelineRows) {
     (session.discomfort_entries || []).length ? `Discomfort: ${session.discomfort_entries.map(e => `sev ${e.severity}/10 — ${e.note}`).join("; ")}` : null,
     (session.event_timeline || []).length ? `Events: ${session.event_timeline.map(e => `[${e.time_s}s] ${e.note}`).join(" | ")}` : null,
     session.notes ? `Session notes: ${session.notes}` : null,
+    buildSessionVisualEvidenceDigest(session),
+    buildSessionVideoPassDigest(session),
     session.ai_analysis?.summary ? `AI analysis summary: ${session.ai_analysis.summary}` : null,
   ].filter(Boolean).join("\n");
 }
@@ -462,6 +464,7 @@ Use this arousal profile to personalize analysis: compare the observed build arc
     const structuredSessionContext = structuredSessionContextForAI(session);
     const warmMotionEvidence = buildWarmMotionEvidence(session);
     const reviewedVisualEvidence = buildSessionVisualEvidenceDigest(session);
+    const reviewedVideoPassEvidence = buildSessionVideoPassDigest(session);
 
     const journalContext = sessionJournal ? `
 
@@ -499,6 +502,7 @@ ${!isTechnical ? SESSION_CONTEXT_GROUNDING_RULE : ""}
 ${AI_SESSION_TYPE_GROUNDING_V1}
 ${BODY_STATE_INTERPRETIVE_STYLE_V1}
 ${reviewedVisualEvidence}
+${reviewedVideoPassEvidence}
 ${warmMotionEvidence}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
@@ -609,6 +613,7 @@ ${JSON.stringify({
   refractory_notes: session.refractory_notes,
   notes: session.notes,
   reviewed_visual_evidence: reviewedVisualEvidence || undefined,
+  reviewed_video_pass_evidence: reviewedVideoPassEvidence || undefined,
   hr: hrSummary ? {
     timeline_derived_avg: hrSummary.hr_avg,
     timeline_derived_max: hrSummary.hr_max,

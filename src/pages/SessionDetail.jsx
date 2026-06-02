@@ -22,6 +22,7 @@ import SessionTelemetryDashboard from "../components/SessionTelemetryDashboard";
 import SessionSectionNavigator from "../components/SessionSectionNavigator";
 import LinkedLocalVideoManager from "../components/LinkedLocalVideoManager";
 import VideoSyncPlayer from "../components/VideoSyncPlayer";
+import AIVideoPassPanel from "../components/AIVideoPassPanel";
 import PostSessionReviewWizard from "../components/PostSessionReviewWizard";
 import CascadeOverviewPanel from "../components/CascadeOverviewPanel";
 import AIPhaseMarkerSuggester from "../components/AIPhaseMarkerSuggester";
@@ -35,7 +36,7 @@ import SavedMotionSummaryCard from "../components/SavedMotionSummaryCard";
 import JournalRecorder from "../components/JournalRecorder";
 import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
 import { sessionContextDisplayRows } from "@/lib/sessionContext";
-import { buildSessionVisualEvidenceDigest, getReviewedVisualClips, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionVisualEvidence } from "@/lib/visualEvidence";
+import { buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, getReviewedVisualClips, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionVisualEvidence } from "@/lib/visualEvidence";
 import { EVENT_CATEGORIES } from "../components/session-form/EventTimelineSection";
 import { hasMixedPauseResumeEvidence, isVerifiedMotionEvent } from "@/utils/sessionMotionEvidence";
 
@@ -1029,6 +1030,14 @@ export default function SessionDetail() {
                 </div>
               </details>
             )}
+            {linkedLocalVideos.length > 0 && (
+              <AIVideoPassPanel
+                session={s}
+                timelineRows={timelineRows}
+                linkedLocalVideos={linkedLocalVideos}
+                onSessionUpdate={setSession}
+              />
+            )}
             {s.media_images?.length > 0 && (
               <div className="grid grid-cols-3 gap-2">
                 {s.media_images.map((url, i) => (
@@ -1241,6 +1250,7 @@ export default function SessionDetail() {
             (s.discomfort_entries || []).length ? `Discomfort: ${s.discomfort_entries.map(e => `sev ${e.severity}/10 — ${e.note}`).join("; ")}` : null,
             (s.event_timeline || []).length ? `Events: ${s.event_timeline.map(e => { const m = Math.floor(e.time_s / 60); const sec = Math.round(e.time_s % 60); return `[${m}:${sec.toString().padStart(2,"0")}] ${e.note}`; }).join(" | ")}` : null,
             buildSessionVisualEvidenceDigest(s),
+            buildSessionVideoPassDigest(s),
             s.notes ? `Session notes: ${s.notes}` : null,
           ].filter(Boolean).join("\n")}
           savedMessages={chatMessages}

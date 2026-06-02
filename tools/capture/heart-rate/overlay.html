@@ -356,6 +356,8 @@ canvas{
 const OBS_HOST = "ws://192.168.0.33:4455";
 const HR_TEXT_SOURCE_NAME = "HR";
 const CONTROL_WS_URL = "ws://localhost:8765";
+const LIVE_CAPTURE_STREAM_URL = "http://localhost:8787/api/live-capture/stream";
+const LIVE_CAPTURE_STATUS_URL = "http://localhost:8787/api/live-capture/status";
 
 /*** POLLING / DISPLAY ***/
 const POLL_MS = 1000;
@@ -383,6 +385,9 @@ const HR_SMOOTHING = 0.30;
 let smoothedHr = null;
 let lastSampleAtMs = 0;
 let lastSampleBpm = null;
+let liveCaptureEvents = null;
+let liveCaptureConnected = false;
+let lastLiveCaptureHrAtMs = 0;
 
 /*** BASELINE ANCHOR ***/
 const BASELINE_SMOOTHING = 0.03;
@@ -587,6 +592,58 @@ function sendTelemetry(data) {
       type: "telemetry",
       data
     }));
+  }
+}
+
+function readTelemetryBpm(data) {
+  const value = data?.currentHr ?? data?.heartRate ?? data?.hr ?? data?.bpm;
+  const bpm = Number(value);
+  return Number.isFinite(bpm) && bpm >= 25 && bpm <= 250 ? Math.round(bpm) : null;
+}
+
+function ingestLiveTelemetry(data) {
+  const bpm = readTelemetryBpm(data);
+  if (bpm == null) return;
+  lastLiveCaptureHrAtMs = Date.now();
+  ingestHRText(String(bpm));
+}
+
+function liveCaptureTelemetryFresh() {
+  return liveCaptureConnected && Date.now() - lastLiveCaptureHrAtMs < 5000;
+}
+
+async function loadInitialLiveCaptureStatus() {
+  try {
+    const response = await fetch(LIVE_CAPTURE_STATUS_URL, { cache: "no-store" });
+    if (!response.ok) return;
+    const status = await response.json();
+    ingestLiveTelemetry(status?.hr?.latestTelemetry);
+  } catch {}
+}
+
+function connectLiveCaptureStream() {
+  if (!window.EventSource) return;
+  try {
+    liveCaptureEvents = new EventSource(LIVE_CAPTURE_STREAM_URL);
+    liveCaptureEvents.onopen = () => {
+      liveCaptureConnected = true;
+    };
+    liveCaptureEvents.onerror = () => {
+      liveCaptureConnected = false;
+    };
+    liveCaptureEvents.addEventListener("status", (event) => {
+      try {
+        const status = JSON.parse(event.data);
+        ingestLiveTelemetry(status?.hr?.latestTelemetry);
+      } catch {}
+    });
+    liveCaptureEvents.addEventListener("hr_telemetry", (event) => {
+      try {
+        ingestLiveTelemetry(JSON.parse(event.data));
+      } catch {}
+    });
+  } catch {
+    liveCaptureConnected = false;
   }
 }
 
@@ -1096,6 +1153,10 @@ function ingestHRText(text) {
 }
 
 async function pollHR(){
+  if (liveCaptureTelemetryFresh()) {
+    setTimeout(pollHR, POLL_MS);
+    return;
+  }
   try{
     const resp = await callOBS("GetInputSettings", { inputName: HR_TEXT_SOURCE_NAME });
     ingestHRText(resp.inputSettings?.text);
@@ -1108,6 +1169,8 @@ async function pollHR(){
 
 (async()=>{
   connectControlWS();
+  connectLiveCaptureStream();
+  loadInitialLiveCaptureStatus();
   await connectOBS();
   pollHR();
 })();

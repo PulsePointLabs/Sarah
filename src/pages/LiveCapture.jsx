@@ -650,11 +650,20 @@ export default function LiveCapture() {
           pulsoidMode: settings.pulsoidMode,
         }),
       });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Could not apply HR source.");
+      const responseText = await response.text();
+      const data = responseText ? JSON.parse(responseText) : {};
+      if (!response.ok) {
+        if (response.status === 404 && responseText.includes("Cannot POST /api/live-capture/hr-source")) {
+          throw new Error("PulsePoint server needs a restart to load the new Pulsoid route.");
+        }
+        throw new Error(data.error || "Could not apply HR source.");
+      }
       setStatus((prev) => ({ ...(prev || {}), hr: { ...(prev?.hr || {}), ...(data.hr || {}) } }));
     } catch (error) {
-      setHrSourceError(error.message || String(error));
+      const message = error instanceof SyntaxError
+        ? "PulsePoint server returned an unexpected response. Restart the server and try again."
+        : error.message || String(error);
+      setHrSourceError(message);
     } finally {
       setHrSourceSaving(false);
     }

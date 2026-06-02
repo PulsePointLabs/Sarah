@@ -286,95 +286,139 @@ filesRouter.get('/local-video/stream', async (req, res) => {
   }
 });
 
+async function generateVideoClipPreview({
+  sourcePath,
+  startSeconds = 0,
+  endSeconds,
+  label = 'video-clip',
+  frameCount = 12,
+  sourceDeleted = false,
+  sourceType = 'upload',
+}) {
+  const start = Math.max(0, Number(startSeconds || 0));
+  const requestedEnd = Number(endSeconds || start + 8);
+  const end = Math.max(start + 0.25, requestedEnd);
+  const duration = Math.min(30, Math.max(0.25, end - start));
+  const safeLabel = slugifyFilePart(label || 'video-clip');
+  const stem = `${Date.now()}-${crypto.randomUUID()}-${safeLabel}`;
+  const clipFilename = `${stem}.mp4`;
+  const clipPath = path.join(uploadDir, clipFilename);
+  const requestedFrameCount = Math.max(1, Math.min(18, Number(frameCount || 12)));
+  const framePattern = path.join(uploadDir, `${stem}-frame-%02d.jpg`);
+
+  await runProcess('ffmpeg', [
+    '-hide_banner',
+    '-y',
+    '-ss', String(start),
+    '-t', String(duration),
+    '-i', sourcePath,
+    '-map', '0:v:0',
+    '-map', '0:a?',
+    '-vf', 'scale=min(960\\,iw):-2',
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '23',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
+    clipPath,
+  ]);
+
+  await runProcess('ffmpeg', [
+    '-hide_banner',
+    '-y',
+    '-ss', String(start),
+    '-t', String(duration),
+    '-i', sourcePath,
+    '-vf', `fps=${requestedFrameCount / duration},scale=min(960\\,iw):-2`,
+    '-frames:v', String(requestedFrameCount),
+    '-q:v', '3',
+    framePattern,
+  ]);
+
+  const files = await fsp.readdir(uploadDir);
+  const frameFiles = files
+    .filter((file) => file.startsWith(`${stem}-frame-`) && file.endsWith('.jpg'))
+    .sort()
+    .slice(0, requestedFrameCount);
+  const frames = await Promise.all(frameFiles.map(async (filename, index) => {
+    const framePath = path.join(uploadDir, filename);
+    const bytes = await fsp.readFile(framePath);
+    const time = start + (duration * (frameFiles.length <= 1 ? 0 : index / (frameFiles.length - 1)));
+    return {
+      filename,
+      file_url: `/uploads/${filename}`,
+      url: `/uploads/${filename}`,
+      mimeType: 'image/jpeg',
+      data: bytes.toString('base64'),
+      frameTimeSeconds: Number(time.toFixed(2)),
+      frameIndex: index + 1,
+    };
+  }));
+
+  const motionSummary = await buildMotionSummary(sourcePath, start, duration).catch((error) => ({
+    method: 'local_frame_difference',
+    motion_level: 'unknown',
+    error: error?.message || 'Could not estimate motion',
+    note: 'Motion summary was unavailable for this clip; use the sampled frames only.',
+  }));
+
+  const stat = await fsp.stat(clipPath);
+  return {
+    ok: true,
+    source_deleted: sourceDeleted,
+    source_type: sourceType,
+    clip_url: `/uploads/${clipFilename}`,
+    url: `/uploads/${clipFilename}`,
+    file_url: `/uploads/${clipFilename}`,
+    filename: clipFilename,
+    mimeType: 'video/mp4',
+    size: stat.size,
+    startSeconds: start,
+    endSeconds: start + duration,
+    durationSeconds: duration,
+    motion_summary: motionSummary,
+    frames,
+  };
+}
+
+filesRouter.post('/local-video/clip-preview', async (req, res) => {
+  try {
+    const requestedPath = normalizeLocalVideoPath(req.body?.path);
+    if (!requestedPath) return res.status(400).json({ error: 'Missing local video path.' });
+    const meta = await localVideoMetadata(requestedPath);
+    const result = await generateVideoClipPreview({
+      sourcePath: meta.path,
+      startSeconds: req.body?.startSeconds,
+      endSeconds: req.body?.endSeconds,
+      label: req.body?.label || meta.filename || 'local-video-clip',
+      frameCount: req.body?.frameCount,
+      sourceDeleted: false,
+      sourceType: 'linked_local_video',
+    });
+    res.json({ ...result, source_filename: meta.filename, source_fingerprint: meta.fingerprint });
+  } catch (error) {
+    const status = error?.status || (error?.code === 'ENOENT' ? 404 : 500);
+    res.status(status).json({ error: error?.message || 'Could not generate local video clip preview' });
+  }
+});
+
 filesRouter.post('/video-clip-preview', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No video uploaded' });
 
   const sourcePath = req.file.path;
-  const start = Math.max(0, Number(req.body?.startSeconds || 0));
-  const requestedEnd = Number(req.body?.endSeconds || start + 8);
-  const end = Math.max(start + 0.25, requestedEnd);
-  const duration = Math.min(30, Math.max(0.25, end - start));
-  const label = slugifyFilePart(req.body?.label || req.file.originalname || 'video-clip');
-  const stem = `${Date.now()}-${crypto.randomUUID()}-${label}`;
-  const clipFilename = `${stem}.mp4`;
-  const clipPath = path.join(uploadDir, clipFilename);
-  const frameCount = Math.max(1, Math.min(18, Number(req.body?.frameCount || 12)));
-  const framePattern = path.join(uploadDir, `${stem}-frame-%02d.jpg`);
-
   try {
-    await runProcess('ffmpeg', [
-      '-hide_banner',
-      '-y',
-      '-ss', String(start),
-      '-t', String(duration),
-      '-i', sourcePath,
-      '-map', '0:v:0',
-      '-map', '0:a?',
-      '-vf', 'scale=min(960\\,iw):-2',
-      '-c:v', 'libx264',
-      '-preset', 'veryfast',
-      '-crf', '23',
-      '-c:a', 'aac',
-      '-b:a', '128k',
-      '-pix_fmt', 'yuv420p',
-      '-movflags', '+faststart',
-      clipPath,
-    ]);
-
-    await runProcess('ffmpeg', [
-      '-hide_banner',
-      '-y',
-      '-ss', String(start),
-      '-t', String(duration),
-      '-i', sourcePath,
-      '-vf', `fps=${frameCount / duration},scale=min(960\\,iw):-2`,
-      '-frames:v', String(frameCount),
-      '-q:v', '3',
-      framePattern,
-    ]);
-
-    const files = await fsp.readdir(uploadDir);
-    const frameFiles = files
-      .filter((file) => file.startsWith(`${stem}-frame-`) && file.endsWith('.jpg'))
-      .sort()
-      .slice(0, frameCount);
-    const frames = await Promise.all(frameFiles.map(async (filename, index) => {
-      const framePath = path.join(uploadDir, filename);
-      const bytes = await fsp.readFile(framePath);
-      const time = start + (duration * (frameFiles.length <= 1 ? 0 : index / (frameFiles.length - 1)));
-      return {
-        filename,
-        file_url: `/uploads/${filename}`,
-        url: `/uploads/${filename}`,
-        mimeType: 'image/jpeg',
-        data: bytes.toString('base64'),
-        frameTimeSeconds: Number(time.toFixed(2)),
-        frameIndex: index + 1,
-      };
-    }));
-
-    const motionSummary = await buildMotionSummary(sourcePath, start, duration).catch((error) => ({
-      method: 'local_frame_difference',
-      motion_level: 'unknown',
-      error: error?.message || 'Could not estimate motion',
-      note: 'Motion summary was unavailable for this clip; use the sampled frames only.',
-    }));
-
-    const stat = await fsp.stat(clipPath);
-    res.json({
-      ok: true,
-      source_deleted: true,
-      clip_url: `/uploads/${clipFilename}`,
-      url: `/uploads/${clipFilename}`,
-      filename: clipFilename,
-      mimeType: 'video/mp4',
-      size: stat.size,
-      startSeconds: start,
-      endSeconds: start + duration,
-      durationSeconds: duration,
-      motion_summary: motionSummary,
-      frames,
+    const result = await generateVideoClipPreview({
+      sourcePath,
+      startSeconds: req.body?.startSeconds,
+      endSeconds: req.body?.endSeconds,
+      label: req.body?.label || req.file.originalname || 'video-clip',
+      frameCount: req.body?.frameCount,
+      sourceDeleted: true,
+      sourceType: 'upload',
     });
+    res.json(result);
   } catch (error) {
     res.status(500).json({ error: error?.message || 'Could not generate video clip preview' });
   } finally {
