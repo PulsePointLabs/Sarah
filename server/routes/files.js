@@ -439,9 +439,12 @@ async function generateVideoClipPreview({
   sourceDeleted = false,
   sourceType = 'upload',
 }) {
-  const start = Math.max(0, Number(startSeconds || 0));
+  const mediaDuration = await getMediaDurationSeconds(sourcePath).catch(() => 0);
+  const maxStart = mediaDuration ? Math.max(0, mediaDuration - 0.25) : Number.POSITIVE_INFINITY;
+  const start = Math.min(Math.max(0, Number(startSeconds || 0)), maxStart);
   const requestedEnd = Number(endSeconds || start + 8);
-  const end = Math.max(start + 0.25, requestedEnd);
+  const unclampedEnd = Math.max(start + 0.25, requestedEnd);
+  const end = mediaDuration ? Math.min(mediaDuration, unclampedEnd) : unclampedEnd;
   const duration = Math.min(30, Math.max(0.25, end - start));
   const safeLabel = slugifyFilePart(label || 'video-clip');
   const stem = `${Date.now()}-${crypto.randomUUID()}-${safeLabel}`;
@@ -472,10 +475,9 @@ async function generateVideoClipPreview({
   await runProcess('ffmpeg', [
     '-hide_banner',
     '-y',
-    '-ss', String(start),
-    '-t', String(duration),
-    '-i', sourcePath,
-    '-vf', `fps=${requestedFrameCount / duration},scale=min(960\\,iw):-2`,
+    '-i', clipPath,
+    '-an',
+    '-vf', `fps=${requestedFrameCount / duration},scale=960:-2:force_original_aspect_ratio=decrease`,
     '-frames:v', String(requestedFrameCount),
     '-q:v', '3',
     framePattern,

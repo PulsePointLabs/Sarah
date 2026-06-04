@@ -16,7 +16,7 @@ import PageHeader from "@/components/PageHeader";
 import LiveFootLandmarkTracker from "@/components/LiveFootLandmarkTracker";
 import { base44 } from "@/api/base44Client";
 import { useToast } from "@/components/ui/use-toast";
-import { HR_SOURCE_OPTIONS, PULSOID_MODE_OPTIONS, maskPulsoidToken, readHrSourceSettings, writeHrSourceSettings } from "@/lib/hrSources";
+import { HR_SOURCE_OPTIONS, PULSOID_MODE_OPTIONS, computeHrvFromRr, maskPulsoidToken, readHrSourceSettings, writeHrSourceSettings } from "@/lib/hrSources";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 const MAX_TELEMETRY_POINTS = 240;
@@ -171,6 +171,95 @@ function needsMediaTranscode(file) {
   return MEDIA_TRANSCODE_EXTENSIONS.includes(getFileExtension(file));
 }
 
+function parseHeartRateMeasurement(value) {
+  if (!value || value.byteLength < 2) return { heartRate: null, rrIntervalsMs: [] };
+  const flags = value.getUint8(0);
+  let offset = 1;
+  const heartRate = (flags & 0x01)
+    ? value.getUint16(offset, true)
+    : value.getUint8(offset);
+  offset += (flags & 0x01) ? 2 : 1;
+
+  if (flags & 0x08) offset += 2; // Energy Expended field.
+
+  const rrIntervalsMs = [];
+  if (flags & 0x10) {
+    while (offset + 1 < value.byteLength) {
+      const raw = value.getUint16(offset, true);
+      const ms = (raw / 1024) * 1000;
+      if (Number.isFinite(ms)) rrIntervalsMs.push(Math.round(ms * 10) / 10);
+      offset += 2;
+    }
+  }
+
+  return { heartRate, rrIntervalsMs };
+}
+
+function appendRollingRrIntervals(current, next, maxSamples = 180) {
+  const combined = [...(Array.isArray(current) ? current : []), ...(Array.isArray(next) ? next : [])]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value >= 300 && value <= 2000);
+  return combined.slice(-maxSamples);
+}
+
+function wait(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function getDirectH10Device() {
+  try {
+    return await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: "Polar H10" }],
+      optionalServices: ["heart_rate", "battery_service", "device_information"],
+    });
+  } catch (error) {
+    if (/user cancelled|user canceled|cancelled|canceled/i.test(error?.message || "")) throw error;
+  }
+
+  const grantedDevices = typeof navigator.bluetooth.getDevices === "function"
+    ? await navigator.bluetooth.getDevices().catch(() => [])
+    : [];
+  const pairedH10 = grantedDevices.find((device) => /polar\s+h10/i.test(device?.name || ""));
+  if (pairedH10) return pairedH10;
+  return navigator.bluetooth.requestDevice({
+    acceptAllDevices: true,
+    optionalServices: ["heart_rate", "battery_service", "device_information"],
+  });
+}
+
+async function getHeartRateMeasurementCharacteristic(device) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      await wait(attempt === 0 ? 400 : 900);
+      const server = device.gatt.connected ? device.gatt : await device.gatt.connect();
+      if (!server.connected) throw new Error("H10 GATT connection did not stay open.");
+      const service = await server.getPrimaryService("heart_rate");
+      return service.getCharacteristic("heart_rate_measurement");
+    } catch (error) {
+      lastError = error;
+      try {
+        if (device.gatt?.connected) device.gatt.disconnect();
+      } catch {
+        // Best-effort cleanup before retrying the H10 GATT session.
+      }
+      await wait(900 + attempt * 500);
+    }
+  }
+  throw lastError || new Error("Could not open the H10 heart-rate service.");
+}
+
+function friendlyDirectH10Error(error) {
+  const message = error?.message || String(error || "");
+  if (/gatt server is disconnected|cannot retrieve services|networkerror/i.test(message)) {
+    return "The browser paired with the H10 but the live BLE session dropped before services opened. Wake the strap, make sure Pulsoid/phone apps are not holding it, then tap Connect H10 again.";
+  }
+  if (/user cancelled|user canceled|cancelled|canceled/i.test(message)) {
+    return "H10 pairing was cancelled.";
+  }
+  return message || "Could not connect to the Direct H10 source.";
+}
+
 function ReadinessItem({ label, value, helper, ready, optional = false }) {
   return (
     <div className={`rounded-lg border px-3 py-2.5 ${
@@ -198,18 +287,26 @@ function HrSourceSelector({
   recordingActive,
   saving,
   error,
+  directStatus,
   onChange,
   onApply,
+  onConnectDirectH10,
+  onDisconnectDirectH10,
+  onForgetDirectH10,
 }) {
   const source = HR_SOURCE_OPTIONS.find((option) => option.value === settings.source) || HR_SOURCE_OPTIONS[0];
   const selectedSource = status?.hr?.selectedSource || settings.source;
   const sourceStatus = status?.hr?.sourceStatus || {};
   const pulsoidStatus = status?.hr?.pulsoid || {};
+  const directH10Status = status?.hr?.directH10 || {};
   const isPulsoid = settings.source === "pulsoid";
+  const isDirectH10 = settings.source === "direct_h10";
   const connected = Boolean(sourceStatus.connected);
   const tokenSummary = isPulsoid && settings.pulsoidToken
     ? `Token ${maskPulsoidToken(settings.pulsoidToken)}`
-    : "Token stays local to this browser and server session.";
+    : isDirectH10
+      ? "Pairs locally through this browser. RR intervals feed HRV when available."
+      : "Token stays local to this browser and server session.";
 
   return (
     <div className="rounded-xl border border-border bg-card p-4">
@@ -241,31 +338,63 @@ function HrSourceSelector({
             ))}
           </select>
         </label>
-        <label className="space-y-1">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Pulsoid token</span>
-          <input
-            className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
-            value={settings.pulsoidToken}
-            disabled={recordingActive || !isPulsoid}
-            type="password"
-            placeholder="Pulsoid access token"
-            onChange={(event) => onChange({ pulsoidToken: event.target.value })}
-          />
-        </label>
-        <div className="flex items-end gap-2">
-          <label className="min-w-32 flex-1 space-y-1">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Mode</span>
-            <select
+        {isDirectH10 ? (
+          <div className="space-y-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Direct H10</span>
+            <div className="flex h-10 items-center rounded-lg border border-border bg-background px-3 text-sm">
+              {directStatus?.connected || directH10Status.connected
+                ? directStatus?.deviceName || directH10Status.deviceName || "Polar H10 connected"
+                : directStatus?.message || "Use Connect H10 after applying this source."}
+            </div>
+          </div>
+        ) : (
+          <label className="space-y-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Pulsoid token</span>
+            <input
               className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
-              value={settings.pulsoidMode}
+              value={settings.pulsoidToken}
               disabled={recordingActive || !isPulsoid}
-              onChange={(event) => onChange({ pulsoidMode: event.target.value })}
-            >
-              {PULSOID_MODE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
+              type="password"
+              placeholder="Pulsoid access token"
+              onChange={(event) => onChange({ pulsoidToken: event.target.value })}
+            />
           </label>
+        )}
+        <div className="flex items-end gap-2">
+          {isDirectH10 ? (
+            <>
+              <button
+                type="button"
+                className="h-10 rounded-lg border border-border bg-background px-4 text-sm font-semibold text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={selectedSource !== "direct_h10" || directStatus?.connecting}
+                onClick={directStatus?.connected ? onDisconnectDirectH10 : onConnectDirectH10}
+              >
+                {directStatus?.connecting ? "Connecting" : directStatus?.connected ? "Disconnect" : "Connect H10"}
+              </button>
+              <button
+                type="button"
+                className="h-10 rounded-lg border border-border bg-background px-3 text-xs font-semibold text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={directStatus?.connecting}
+                onClick={onForgetDirectH10}
+              >
+                Forget
+              </button>
+            </>
+          ) : (
+            <label className="min-w-32 flex-1 space-y-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Mode</span>
+              <select
+                className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                value={settings.pulsoidMode}
+                disabled={recordingActive || !isPulsoid}
+                onChange={(event) => onChange({ pulsoidMode: event.target.value })}
+              >
+                {PULSOID_MODE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
           <button
             type="button"
             className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
@@ -279,8 +408,11 @@ function HrSourceSelector({
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <span>{source.helper}</span>
         <span>{tokenSummary}</span>
-        {pulsoidStatus.lastMessageAt && <span>Last Pulsoid HR {fmtTime(pulsoidStatus.lastMessageAt)}</span>}
-        {pulsoidStatus.error && <span className="text-destructive">{pulsoidStatus.error}</span>}
+        {isPulsoid && pulsoidStatus.lastMessageAt && <span>Last Pulsoid HR {fmtTime(pulsoidStatus.lastMessageAt)}</span>}
+        {isPulsoid && pulsoidStatus.error && <span className="text-destructive">{pulsoidStatus.error}</span>}
+        {(directStatus?.lastMessageAt || directH10Status.lastMessageAt) && <span>Last H10 HR {fmtTime(directStatus?.lastMessageAt || directH10Status.lastMessageAt)}</span>}
+        {isDirectH10 && <span>ECG waveform is not enabled yet; this pass captures standard H10 HR + RR intervals for HRV.</span>}
+        {(directStatus?.error || directH10Status.error) && <span className="text-destructive">{directStatus?.error || directH10Status.error}</span>}
         {error && <span className="text-destructive">{error}</span>}
         {recordingActive && <span>Stop recording before switching HR sources.</span>}
       </div>
@@ -567,6 +699,15 @@ export default function LiveCapture() {
   const [hrSourceSettings, setHrSourceSettings] = useState(() => readHrSourceSettings());
   const [hrSourceSaving, setHrSourceSaving] = useState(false);
   const [hrSourceError, setHrSourceError] = useState("");
+  const [directH10Status, setDirectH10Status] = useState({
+    connected: false,
+    connecting: false,
+    deviceName: "",
+    message: "Direct H10 not connected",
+    error: "",
+    lastMessageAt: null,
+    rrCount: 0,
+  });
   const [captureMode, setCaptureMode] = useState(() => localStorage.getItem("pulsepoint.captureMode") || "full");
   const [telemetryNoticesEnabled, setTelemetryNoticesEnabled] = useState(() => localStorage.getItem("pulsepoint.telemetryNotices") !== "off");
   const [voiceWakeEnabled, setVoiceWakeEnabled] = useState(false);
@@ -607,6 +748,10 @@ export default function LiveCapture() {
   const mediaObjectUrlRef = useRef(null);
   const appliedCalibrationCommandRef = useRef("");
   const pendingCalibrationCommandRef = useRef("");
+  const directH10DeviceRef = useRef(null);
+  const directH10CharacteristicRef = useRef(null);
+  const directH10NotificationHandlerRef = useRef(null);
+  const directH10RrRef = useRef([]);
 
   const appendTelemetryPoint = (nextHr = latestHrRef.current, nextEmg = latestEmgRef.current) => {
     if (!nextHr && !nextEmg) return;
@@ -654,7 +799,7 @@ export default function LiveCapture() {
       const data = responseText ? JSON.parse(responseText) : {};
       if (!response.ok) {
         if (response.status === 404 && responseText.includes("Cannot POST /api/live-capture/hr-source")) {
-          throw new Error("PulsePoint server needs a restart to load the new Pulsoid route.");
+          throw new Error("PulsePoint server needs a restart to load the new heart-rate source route.");
         }
         throw new Error(data.error || "Could not apply HR source.");
       }
@@ -669,14 +814,237 @@ export default function LiveCapture() {
     }
   }, [hrSourceSettings]);
 
+  const disconnectDirectH10 = useCallback(async ({ updateStatus = true } = {}) => {
+    const characteristic = directH10CharacteristicRef.current;
+    const handler = directH10NotificationHandlerRef.current;
+    if (characteristic && handler) {
+      try {
+        characteristic.removeEventListener("characteristicvaluechanged", handler);
+      } catch {
+        // Ignore stale browser BLE listener cleanup.
+      }
+      try {
+        await characteristic.stopNotifications();
+      } catch {
+        // Some browsers throw if notifications already stopped.
+      }
+    }
+
+    const device = directH10DeviceRef.current;
+    if (device?.gatt?.connected) {
+      try {
+        device.gatt.disconnect();
+      } catch {
+        // The disconnected event will settle visible state when available.
+      }
+    }
+
+    directH10CharacteristicRef.current = null;
+    directH10NotificationHandlerRef.current = null;
+    directH10DeviceRef.current = null;
+    directH10RrRef.current = [];
+    if (updateStatus) {
+      setDirectH10Status((prev) => ({
+        ...prev,
+        connected: false,
+        connecting: false,
+        message: "Direct H10 disconnected",
+        error: "",
+        rrCount: 0,
+      }));
+    }
+  }, []);
+
+  const connectDirectH10 = useCallback(async () => {
+    if (hrSourceSettings.source !== "direct_h10") {
+      setDirectH10Status((prev) => ({
+        ...prev,
+        error: "Switch to Direct Polar H10 and apply it first.",
+      }));
+      return;
+    }
+    if (!navigator.bluetooth) {
+      setDirectH10Status((prev) => ({
+        ...prev,
+        error: "This browser does not expose Web Bluetooth. Use Chrome/Edge on localhost or the Android PWA.",
+      }));
+      return;
+    }
+
+    setDirectH10Status((prev) => ({
+      ...prev,
+      connecting: true,
+      error: "",
+      message: "Opening the browser Bluetooth picker. Select the Polar H10, even if Windows already says paired.",
+    }));
+
+    try {
+      const devicePromise = getDirectH10Device();
+      await disconnectDirectH10({ updateStatus: false });
+      const device = await devicePromise;
+      directH10DeviceRef.current = device;
+      const handleDisconnected = () => {
+        directH10CharacteristicRef.current = null;
+        directH10NotificationHandlerRef.current = null;
+        directH10DeviceRef.current = null;
+        directH10RrRef.current = [];
+        setDirectH10Status((prev) => ({
+          ...prev,
+          connected: false,
+          connecting: false,
+          message: "Direct H10 disconnected",
+          rrCount: 0,
+        }));
+      };
+      device.addEventListener("gattserverdisconnected", handleDisconnected, { once: true });
+
+      setDirectH10Status((prev) => ({
+        ...prev,
+        connecting: true,
+        deviceName: device.name || "Polar H10",
+        message: "Opening H10 heart-rate service.",
+        error: "",
+      }));
+
+      const characteristic = await getHeartRateMeasurementCharacteristic(device);
+      directH10CharacteristicRef.current = characteristic;
+
+      const handleMeasurement = (event) => {
+        const parsed = parseHeartRateMeasurement(event.target.value);
+        if (!parsed.heartRate) return;
+        const receivedAt = Date.now();
+        directH10RrRef.current = appendRollingRrIntervals(directH10RrRef.current, parsed.rrIntervalsMs);
+        const hrv = computeHrvFromRr(directH10RrRef.current);
+        const telemetry = {
+          source: "direct_h10",
+          sourceLabel: "Direct Polar H10",
+          deviceName: device.name || "Polar H10",
+          measuredAt: receivedAt,
+          receivedAt,
+          heartRate: parsed.heartRate,
+          currentHr: parsed.heartRate,
+          hr: parsed.heartRate,
+          rrIntervalsMs: parsed.rrIntervalsMs,
+          hrv,
+          quality: {
+            stale: false,
+            ageMs: 0,
+            rrCount: directH10RrRef.current.length,
+            hrvQuality: hrv?.quality || "unavailable",
+          },
+        };
+
+        setDirectH10Status((prev) => ({
+          ...prev,
+          connected: true,
+          connecting: false,
+          deviceName: telemetry.deviceName,
+          message: parsed.rrIntervalsMs.length ? "Direct H10 HR + RR live" : "Direct H10 HR live; waiting for RR intervals",
+          error: "",
+          lastMessageAt: new Date(receivedAt).toISOString(),
+          rrCount: directH10RrRef.current.length,
+        }));
+
+        fetch(`${API_BASE}/live-capture/hr-direct-h10/telemetry`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(telemetry),
+        })
+          .then(async (response) => {
+            if (!response.ok) {
+              const text = await response.text();
+              if (response.status === 404 && text.includes("Cannot POST /api/live-capture/hr-direct-h10/telemetry")) {
+                throw new Error("PulsePoint server needs a restart to receive Direct H10 telemetry.");
+              }
+              throw new Error(text?.startsWith("<!DOCTYPE") ? "Direct H10 telemetry was rejected by the server." : text || "Direct H10 telemetry was rejected.");
+            }
+          })
+          .catch((error) => {
+            setDirectH10Status((prev) => ({
+              ...prev,
+              error: error.message || String(error),
+            }));
+          });
+      };
+
+      directH10NotificationHandlerRef.current = handleMeasurement;
+      characteristic.addEventListener("characteristicvaluechanged", handleMeasurement);
+      await characteristic.startNotifications();
+      setDirectH10Status((prev) => ({
+        ...prev,
+        connected: true,
+        connecting: false,
+        deviceName: device.name || "Polar H10",
+        message: "Direct H10 connected. Waiting for first HR packet.",
+        error: "",
+      }));
+    } catch (error) {
+      setDirectH10Status((prev) => ({
+        ...prev,
+        connected: false,
+        connecting: false,
+        message: "Direct H10 not connected",
+        error: friendlyDirectH10Error(error),
+      }));
+    }
+  }, [disconnectDirectH10, hrSourceSettings.source]);
+
+  const forgetDirectH10 = useCallback(async () => {
+    if (!navigator.bluetooth?.getDevices) {
+      setDirectH10Status((prev) => ({
+        ...prev,
+        error: "This browser cannot list saved Bluetooth permissions. Use the browser site settings to clear Bluetooth access.",
+      }));
+      return;
+    }
+    setDirectH10Status((prev) => ({
+      ...prev,
+      connecting: true,
+      error: "",
+      message: "Clearing saved H10 Bluetooth permission.",
+    }));
+    try {
+      await disconnectDirectH10({ updateStatus: false });
+      const devices = await navigator.bluetooth.getDevices();
+      const h10Devices = devices.filter((device) => /polar\s+h10/i.test(device?.name || ""));
+      for (const device of h10Devices) {
+        if (typeof device.forget === "function") await device.forget();
+      }
+      directH10RrRef.current = [];
+      setDirectH10Status((prev) => ({
+        ...prev,
+        connected: false,
+        connecting: false,
+        deviceName: "",
+        message: h10Devices.length
+          ? "Forgot saved H10 permission. Tap Connect H10 and choose it again."
+          : "No saved H10 permission found. Tap Connect H10 and choose the strap.",
+        error: "",
+        lastMessageAt: null,
+        rrCount: 0,
+      }));
+    } catch (error) {
+      setDirectH10Status((prev) => ({
+        ...prev,
+        connected: false,
+        connecting: false,
+        error: error?.message || String(error),
+      }));
+    }
+  }, [disconnectDirectH10]);
+
   useEffect(() => {
     const settings = readHrSourceSettings();
     setHrSourceSettings(settings);
-    if (settings.source === "heartrateonstream" || (settings.source === "pulsoid" && settings.pulsoidToken)) {
+    if (settings.source === "heartrateonstream" || settings.source === "direct_h10" || (settings.source === "pulsoid" && settings.pulsoidToken)) {
       applyHrSourceSettings(settings);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => () => {
+    disconnectDirectH10();
+  }, [disconnectDirectH10]);
 
   useEffect(() => {
     fetch(`${API_BASE}/live-capture/status`).then((res) => res.json()).then((data) => {
@@ -812,6 +1180,10 @@ export default function LiveCapture() {
   const hasEmgTrend = telemetryHistory.some((point) => point.left != null || point.right != null || point.diff != null);
   const currentHrLevel = hrLevelPercent(hrTelemetry?.currentHr, hrTelemetry?.baselineHr);
   const buildLevel = readNumber(hrTelemetry?.buildConfidence, hrTelemetry?.build_confidence);
+  const hrv = hrTelemetry?.hrv || {};
+  const rrCount = readNumber(hrTelemetry?.quality?.rrCount, hrv.sampleCount);
+  const hrvRmssd = readNumber(hrv.rmssdMs, hrTelemetry?.hrv_rmssd_ms);
+  const hrvQuality = hrv.quality || hrTelemetry?.hrv_quality || null;
   const leftEmgLevel = readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct);
   const rightEmgLevel = readNumber(emgTelemetry?.right_pct);
   const calibrationReading = useMemo(
@@ -1622,7 +1994,12 @@ export default function LiveCapture() {
               <CompactStat label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="bpm" level={currentHrLevel} emphasis />
               <CompactStat label="Max HR" value={fmtNumber(maxHr, 0)} helper="session peak" level={hrLevelPercent(maxHr, hrTelemetry?.baselineHr)} emphasis />
               <CompactStat label="Build" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "phase"} level={buildLevel} />
-              <CompactStat label="Near-Climax Watch" value={`${prediction.nearClimax}%`} helper={prediction.label} level={prediction.nearClimax} />
+              <CompactStat
+                label={hrTelemetry?.source === "direct_h10" ? "RR / HRV" : "Near-Climax Watch"}
+                value={hrTelemetry?.source === "direct_h10" ? `${fmtNumber(rrCount, 0)} RR` : `${prediction.nearClimax}%`}
+                helper={hrTelemetry?.source === "direct_h10" ? `RMSSD ${fmtNumber(hrvRmssd, 1)} · ${hrvQuality || "waiting"}` : prediction.label}
+                level={hrTelemetry?.source === "direct_h10" ? Math.min(100, (Number(rrCount) || 0) * 1.25) : prediction.nearClimax}
+              />
             </div>
 
             <div
@@ -1788,8 +2165,12 @@ export default function LiveCapture() {
           recordingActive={recordingActive}
           saving={hrSourceSaving}
           error={hrSourceError}
+          directStatus={directH10Status}
           onChange={updateHrSourceSettings}
           onApply={() => applyHrSourceSettings()}
+          onConnectDirectH10={connectDirectH10}
+          onDisconnectDirectH10={disconnectDirectH10}
+          onForgetDirectH10={forgetDirectH10}
         />
       )}
 
@@ -2133,9 +2514,15 @@ export default function LiveCapture() {
           </div>
         </div>
 
-        <div className={`grid gap-3 sm:grid-cols-2 ${telemetryEmgLive ? "lg:grid-cols-4" : "lg:grid-cols-2"}`}>
+        <div className={`grid gap-3 sm:grid-cols-2 ${telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4" : "lg:grid-cols-2"}`}>
           <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large />
           <MetricCard icon={<Zap className="w-4 h-4" />} label="Build Confidence" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "No HR phase"} active={Number(hrTelemetry?.buildConfidence) > 40} level={buildLevel} large />
+          {hrTelemetry?.source === "direct_h10" && (
+            <>
+              <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="RR Samples" value={fmtNumber(rrCount, 0)} helper="rolling H10 interval window" active={Number(rrCount) > 0} level={Math.min(100, (Number(rrCount) || 0) * 1.25)} large />
+              <MetricCard icon={<Activity className="w-4 h-4" />} label="RMSSD" value={fmtNumber(hrvRmssd, 1)} helper={hrvQuality ? `HRV quality: ${hrvQuality}` : "waiting for RR window"} active={hrvRmssd != null} level={hrvQuality === "high" ? 90 : hrvQuality === "moderate" ? 65 : hrvQuality === "low" ? 35 : 0} large />
+            </>
+          )}
           {telemetryEmgLive && (
             <>
               <MetricCard icon={<Activity className="w-4 h-4" />} label="Left EMG" value={`${fmtNumber(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct)}%`} helper="normalized activation" active={(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct) != null} level={leftEmgLevel} large />

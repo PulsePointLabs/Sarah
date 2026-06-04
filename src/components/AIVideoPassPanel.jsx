@@ -187,6 +187,15 @@ function isGenericControlObjectMention(item) {
   return !/(vibrator|sleeve|foley|catheter|lubric|lube|bottle|ring|pump|tens|e-stim|estim|electrode|known device|identified device)/.test(text);
 }
 
+function isLowValueNoChangeForRole(item, role) {
+  if (role !== "feet") return false;
+  const text = `${item?.title || ""} ${item?.text || item?.findingText || ""} ${item?.note || ""}`.toLowerCase();
+  if (!/(no visible|no change|unchanged|stationary|stillness|remain|remains|stay|stays|stable|continues|baseline|without interruption|no heel|no toe|no leg|no bracing|no tremor|no tension|no lower-body response)/.test(text)) {
+    return false;
+  }
+  return !/(increases|decreases|begins|becomes|shifts|moves|plants further|planting increases|curl increases|toe curl visible|tremor visible|trembling|shudder|bracing develops|heel lifts|relaxes after|tenses|tensing|oscillation|asymmetry increases|left.*more than right|right.*more than left)/.test(text);
+}
+
 function neutralizeIntentLanguage(text) {
   return String(text || "")
     .replace(/\b(second|third|another|repeated)\s+hand-lift\s+edging\s+maneuver\b/gi, "$1 hand-lift stimulation change")
@@ -266,7 +275,7 @@ function videoRoleLabel(role) {
 function videoFocusInstruction(video = {}, selectedRole = "") {
   const role = selectedRole || inferVideoRole(video);
   if (role === "feet") {
-    return "This is the feet/lower-body evidence lane. Findings and draft timeline events must be about feet, toes, heels, soles, ankles, legs, lower-body tension/relaxation/bracing/asymmetry, tremor, shudder, and lower-body transitions. Do not create hand, genital, stimulation, device, lubricant, control-object, or erection events from the feet lane; those belong to main/composite or lateral views. You may mention an upper-body/genital/session-note detail only as brief context inside a lower-body observation when it directly explains a visible foot or leg change.";
+    return "This is the feet/lower-body evidence lane. Findings and draft timeline events must be about visible feet, toes, heels, soles, ankles, legs, lower-body tension/relaxation/bracing/asymmetry, tremor, shudder, and lower-body transitions. Actively compare frame-to-frame toe curl, downward plantar flexion/planting, heel separation/lift, foot fan/splay, leg tensing, tremble, oscillation, and left/right asymmetry. Do not create hand, genital, stimulation, device, lubricant, control-object, erection, or detumescence events from the feet lane; those belong to main/composite or lateral views. If the feet/lower body truly look static, say so once in the summary only and return empty findings/events rather than repeating no-change cards.";
   }
   if (role === "lateral") {
     return "This is a lateral/full-body angle. Prioritize head-to-toe body state: posture, pelvic lift/drop, abdominal or chest motion if visible enough for cautious breathing assessment, leg/foot tension, relaxation, and meaningful whole-body transitions.";
@@ -386,7 +395,7 @@ function isOutOfLaneForRole(item, role) {
 
 function normalizeAIResult(raw, fallbackWindow, selectedRole = "main") {
   const value = typeof raw === "string" ? null : raw;
-  const findings = Array.isArray(value?.findings) && value.findings.length
+  const findings = Array.isArray(value?.findings)
     ? value.findings
     : [{
       title: "Video window review",
@@ -402,7 +411,7 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main") {
       text: neutralizeIntentLanguage(finding.text || finding.findingText || ""),
       confidence: finding.confidence || "moderate",
       category: finding.category || "other",
-    })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding) && !isTelemetryOnlyFinding(finding) && !isGenericControlObjectMention(finding) && !isOutOfLaneForRole(finding, selectedRole)),
+    })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding) && !isTelemetryOnlyFinding(finding) && !isGenericControlObjectMention(finding) && !isLowValueNoChangeForRole(finding, selectedRole) && !isOutOfLaneForRole(finding, selectedRole)),
     events: events.map((event) => {
       const note = cleanDraftEventNote(event.note || event.text || "");
       return {
@@ -412,7 +421,7 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main") {
         annotation_tags: Array.isArray(event.annotation_tags) ? event.annotation_tags : ["other_context"],
         confidence: event.confidence || "moderate",
       };
-    }).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note }) && !isTelemetryOnlyFinding({ title: "", text: event.note }) && !isGenericControlObjectMention(event) && !isOutOfLaneForRole(event, selectedRole)),
+    }).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note }) && !isTelemetryOnlyFinding({ title: "", text: event.note }) && !isGenericControlObjectMention(event) && !isLowValueNoChangeForRole(event, selectedRole) && !isOutOfLaneForRole(event, selectedRole)),
   };
 }
 
@@ -796,6 +805,8 @@ ${videoFocusInstruction(selectedVideo, selectedVideoRole)}
 
 Source-lane rule: treat the selected camera as its own evidence lane. Main/composite owns genital, stimulation, hand contact, device, lubricant, and technique observations. Feet/lower-body owns feet, toes, heels, soles, ankles, legs, planting, bracing, tremor, shudder, and lower-body tension/relaxation observations. Lateral/full-body owns posture, pelvic lift/drop, breathing cues, whole-body tension, and major body transitions. For a feet/lower-body pass, do not draft timeline events about right/left hand movement, genital contact, control objects, lube/device handling, erection/genital state, or stimulation pause/resume unless a visible foot/leg change is the main event.
 
+Feet-lane sensitivity rule: for feet/lower-body videos, look carefully for subtle but meaningful lower-body activity before claiming no change. Specifically compare toe curl/extension, toes pointing downward or relaxing, heel spread or lift, foot fan/splay, sole angle, ankle flexion, leg tension/relaxation, tremble, shudder, side-to-side oscillation, and left/right asymmetry. Downward planting, toe curl, tensing, trembling, or progressive foot fan are meaningful findings/events even if the body otherwise stays in place. Do not write repeated "no change", "stillness continues", "baseline unchanged", or "no lower-body response" findings/events across adjacent windows. If the only observation is static lower-body position, keep the summary to one brief sentence and return empty findings and empty events.
+
 Observation priorities, in order:
 1. Visible physiological response: erection/engorgement quality, genital position/state, glans/shaft/foreskin/scrotal/perineal state, visible skin color or surface sheen, cautious visible fluid/moisture labeling, pelvic lift/drop, and whether these change from the prior window.
 2. Stimulation state and technique: what body area is contacted, whether contact continues, starts, pauses, resumes, or changes, and whether motion/position suggests a technique shift.
@@ -805,7 +816,7 @@ Observation priorities, in order:
 
 Generic object rule: ignore mouse, remote, keyboard, phone, dark handheld object, side-table object, or generic "control object" details. Do not write "reaches for control object", "returns to control object", "handheld controller", or similar language in findings or draft events. If the hand leaves or returns to the body, describe only the relevant body/session change, such as "genital contact pauses", "stimulation resumes", "hand leaves genital contact", or "hand returns to genital contact." Only identify an object when it is a known or clearly visible session-relevant item such as a silicone sleeve, vibrator, lubricant bottle, Foley catheter, TENS/e-stim component, pump, towel, or explicitly user-labeled device.
 
-Output style: write the summary as a flowing chronological observation with the most useful visible physiology and stimulation changes first. Keep it to 2 concise sentences. Return 2-4 finding cards only. Each finding title should be under 9 words, and each finding text should be 1 concise sentence. Return 1-3 timeline events only, each one sentence. Avoid spending a finding slot on HR overlay text, static background objects, unchanged setup, or the mere presence of a control object.
+Output style: write the summary as a flowing chronological observation with the most useful visible physiology and stimulation changes first. Keep it to 2 concise sentences. Return 2-4 finding cards only when there are useful non-repetitive observations; return fewer or none when the window adds nothing. Each finding title should be under 9 words, and each finding text should be 1 concise sentence. Return 1-3 timeline events only when there is a meaningful change or useful timestampable observation. Avoid spending a finding slot on HR overlay text, static background objects, unchanged setup, no-change filler, or the mere presence of a control object.
 
 Draft event style: write events like concise manual timeline notes, not analysis paragraphs. Prefer observations such as "Left foot plants further while legs tense", "Pelvis lifts briefly then drops", "Lubrication applied to glans", "Perineal contact resumes below scrotum", "Stimulation resumes with mid-shaft to glans strokes", "Glans remains engorged with visible sheen", "Deep exhale visible through abdominal drop", or "Whitish ejaculate clearly visible after confirmed climax marker" only when strongly supported. Do not include HR/BPM/overlay/timer language in event notes unless no visible body/stimulation change exists. Do not begin event notes with "this window opens", "window opens", "this window closes", or "window closes"; write the actual observed change directly.
 
@@ -835,7 +846,7 @@ Nearby session events: ${(session?.event_timeline || [])
   .map((event) => `[${fmtMmSs(event.time_s)}] ${event.note}`)
   .join(" | ") || "None nearby."}
 
-Return concise visual findings and 1-3 proposed timeline events. Good targets are genital state changes, stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, scrotal/perineal observations, cautious moisture/sheen observations, pelvic lift/drop, breathing/abdomen cues when visible, body/feet bracing, leg tensing/relaxing, device/position changes, and important setup context only when it changes interpretation. Use low confidence or omit the finding when the evidence is ambiguous. Keep the full JSON response compact so it can finish cleanly.`,
+Return concise visual findings and 1-3 proposed timeline events only when the window contains useful non-repetitive evidence. Good targets are genital state changes, stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, scrotal/perineal observations, cautious moisture/sheen observations, pelvic lift/drop, breathing/abdomen cues when visible, body/feet bracing, leg tensing/relaxing, toe curl/downward planting, tremble/shudder, device/position changes, and important setup context only when it changes interpretation. Use low confidence or omit the finding when the evidence is ambiguous. Keep the full JSON response compact so it can finish cleanly.`,
           });
           const normalized = normalizeAIResult(ai, window, selectedVideoRole);
           const card = {

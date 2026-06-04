@@ -11,6 +11,7 @@ import {
   HR_SOURCE_LABELS,
   cleanHr,
   maskToken,
+  normalizeDirectH10Telemetry,
   normalizeHeartRateOnStreamTelemetry,
   normalizePulsoidTelemetry,
   parsePulsoidMessage,
@@ -46,6 +47,7 @@ let pulsoidAccessToken = '';
 let emgPollTimer = null;
 let lastEmgSignature = '';
 let pulsoidRecording = null;
+let directH10Recording = null;
 
 const state = {
   startedAt: new Date().toISOString(),
@@ -73,6 +75,13 @@ const state = {
       error: null,
       reconnecting: false,
       pollMs: 800,
+    },
+    directH10: {
+      connected: false,
+      deviceName: '',
+      lastMessageAt: null,
+      lastMeasuredAt: null,
+      error: null,
     },
     lastMessageAt: null,
     error: null,
@@ -152,8 +161,9 @@ function shouldUseTelemetrySource(source) {
 }
 
 function sanitizeHrSourceSettings(body = {}) {
-  const source = body.source === HR_SOURCE_IDS.PULSOID
-    ? HR_SOURCE_IDS.PULSOID
+  const requestedSource = String(body.source || '');
+  const source = [HR_SOURCE_IDS.PULSOID, HR_SOURCE_IDS.DIRECT_H10].includes(requestedSource)
+    ? requestedSource
     : HR_SOURCE_IDS.HEART_RATE_ON_STREAM;
   const mode = body.pulsoidMode === 'http' ? 'http' : 'websocket';
   return {
@@ -166,19 +176,27 @@ function sanitizeHrSourceSettings(body = {}) {
 function refreshHrSourceStatus(message = '') {
   const source = state.hr.selectedSource;
   state.hr.selectedSourceLabel = HR_SOURCE_LABELS[source] || source;
+  const sourceConnected = source === HR_SOURCE_IDS.PULSOID
+    ? Boolean(state.hr.pulsoid.connected)
+    : source === HR_SOURCE_IDS.DIRECT_H10
+      ? Boolean(state.hr.directH10.connected)
+      : Boolean(state.hr.connected);
+  const sourceMessage = message || (
+    source === HR_SOURCE_IDS.PULSOID
+      ? state.hr.pulsoid.error || (state.hr.pulsoid.connected ? 'Pulsoid feed connected' : 'Pulsoid feed waiting')
+      : source === HR_SOURCE_IDS.DIRECT_H10
+        ? state.hr.directH10.error || (state.hr.directH10.connected ? 'Direct H10 connected' : 'Connect the H10 from Live Capture')
+        : state.hr.error || 'Using HeartRateOnStream relay'
+  );
   state.hr.sourceStatus = {
     source,
     label: state.hr.selectedSourceLabel,
-    connected: source === HR_SOURCE_IDS.PULSOID ? Boolean(state.hr.pulsoid.connected) : Boolean(state.hr.connected),
-    mode: source === HR_SOURCE_IDS.PULSOID ? state.hr.pulsoid.mode : 'websocket',
+    connected: sourceConnected,
+    mode: source === HR_SOURCE_IDS.PULSOID ? state.hr.pulsoid.mode : source === HR_SOURCE_IDS.DIRECT_H10 ? 'web_bluetooth' : 'websocket',
     tokenMasked: source === HR_SOURCE_IDS.PULSOID ? state.hr.pulsoid.tokenMasked : '',
-    message: message || (
-      source === HR_SOURCE_IDS.PULSOID
-        ? state.hr.pulsoid.error || (state.hr.pulsoid.connected ? 'Pulsoid feed connected' : 'Pulsoid feed waiting')
-        : state.hr.error || 'Using HeartRateOnStream relay'
-    ),
-    lastMessageAt: source === HR_SOURCE_IDS.PULSOID ? state.hr.pulsoid.lastMessageAt : state.hr.lastMessageAt,
-    lastMeasuredAt: source === HR_SOURCE_IDS.PULSOID ? state.hr.pulsoid.lastMeasuredAt : null,
+    message: sourceMessage,
+    lastMessageAt: source === HR_SOURCE_IDS.PULSOID ? state.hr.pulsoid.lastMessageAt : source === HR_SOURCE_IDS.DIRECT_H10 ? state.hr.directH10.lastMessageAt : state.hr.lastMessageAt,
+    lastMeasuredAt: source === HR_SOURCE_IDS.PULSOID ? state.hr.pulsoid.lastMeasuredAt : source === HR_SOURCE_IDS.DIRECT_H10 ? state.hr.directH10.lastMeasuredAt : null,
     reconnecting: source === HR_SOURCE_IDS.PULSOID ? state.hr.pulsoid.reconnecting : false,
   };
 }
@@ -309,11 +327,116 @@ async function finalizePulsoidRecording(recording = {}) {
   return state.hr.pulsoidRecording;
 }
 
+async function createDirectH10Recording(recording = {}, reason = 'obs_record_start') {
+  await fs.mkdir(HR_RECORDINGS_DIR, { recursive: true });
+  const filename = `hr_timeline_direct_h10_${formatFilenameDate()}.csv`;
+  const filepath = path.join(HR_RECORDINGS_DIR, filename);
+  const header = [
+    'timestamp',
+    'time_offset_ms',
+    'time_offset_s',
+    'hr',
+    'hr_smoothed',
+    'baseline_hr',
+    'elevated_delta',
+    'marker',
+    'note',
+    'hr_source',
+    'hr_measured_at',
+    'hr_received_at',
+    'hr_age_ms',
+    'rr_intervals_ms',
+    'hrv_rmssd_ms',
+    'hrv_sdnn_ms',
+    'hrv_pnn50',
+    'hrv_window_seconds',
+    'hrv_quality',
+  ].join(',') + '\n';
+  await fs.writeFile(filepath, header, 'utf8');
+  directH10Recording = {
+    filename,
+    filepath,
+    createdAt: new Date().toISOString(),
+    startEpochMs: Number(recording?.startedAtMs) || Date.now(),
+    lastEpochMs: null,
+    reason,
+  };
+  state.hr.directH10Recording = {
+    filename,
+    filepath,
+    active: Boolean(recording?.active ?? true),
+    startedAtMs: directH10Recording.startEpochMs,
+  };
+  return directH10Recording;
+}
+
+async function appendDirectH10TelemetryRow(telemetry) {
+  if (!state.hr.recording?.active || state.hr.selectedSource !== HR_SOURCE_IDS.DIRECT_H10) return;
+  if (!directH10Recording) await createDirectH10Recording(state.hr.recording, 'direct_h10_auto_start');
+  const epochMs = Number(telemetry?.receivedAt) || Date.now();
+  if (directH10Recording.lastEpochMs != null && epochMs <= directH10Recording.lastEpochMs) return;
+  const hr = cleanHr(telemetry?.heartRate || telemetry?.currentHr || telemetry?.hr);
+  if (hr == null) return;
+  const timeOffsetMs = epochMs - directH10Recording.startEpochMs;
+  const hrv = telemetry?.hrv || {};
+  const rr = Array.isArray(telemetry?.rrIntervalsMs) ? telemetry.rrIntervalsMs.join('|') : '';
+  const note = hrv.quality && hrv.quality !== 'unavailable'
+    ? `direct_h10=true; real_rr_intervals=true; hrv_quality=${hrv.quality}`
+    : 'direct_h10=true; hrv_waiting_for_rr_window';
+  const row = [
+    csvEscape(new Date(epochMs).toISOString()),
+    csvEscape(timeOffsetMs),
+    csvEscape((timeOffsetMs / 1000).toFixed(3)),
+    csvEscape(hr),
+    csvEscape(hr),
+    '',
+    '',
+    '',
+    csvEscape(note),
+    csvEscape(HR_SOURCE_IDS.DIRECT_H10),
+    csvEscape(telemetry.measuredAt || ''),
+    csvEscape(telemetry.receivedAt || epochMs),
+    csvEscape(telemetry.quality?.ageMs ?? ''),
+    csvEscape(rr),
+    csvEscape(hrv.rmssdMs ?? ''),
+    csvEscape(hrv.sdnnMs ?? ''),
+    csvEscape(hrv.pnn50 ?? ''),
+    csvEscape(hrv.windowSeconds ?? ''),
+    csvEscape(hrv.quality || 'unavailable'),
+  ].join(',') + '\n';
+  await fs.appendFile(directH10Recording.filepath, row, 'utf8');
+  directH10Recording.lastEpochMs = epochMs;
+}
+
+async function finalizeDirectH10Recording(recording = {}) {
+  if (!directH10Recording) return null;
+  const current = directH10Recording;
+  const metaPath = current.filepath.replace(/\.csv$/i, '.json');
+  await fs.writeFile(metaPath, JSON.stringify({
+    reason: 'obs_record_stop',
+    csv: current.filepath,
+    createdAt: current.createdAt,
+    endedAt: new Date().toISOString(),
+    source: HR_SOURCE_IDS.DIRECT_H10,
+    sourceLabel: HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10],
+    obsOutputPath: recording?.obsOutputPath || recording?.outputPath || null,
+  }, null, 2), 'utf8');
+  state.hr.directH10Recording = {
+    filename: current.filename,
+    filepath: current.filepath,
+    metaPath,
+    active: false,
+    startedAtMs: current.startEpochMs,
+  };
+  directH10Recording = null;
+  return state.hr.directH10Recording;
+}
+
 async function resolveHrRecordingForImport(recording = {}) {
-  if (state.hr.selectedSource !== HR_SOURCE_IDS.PULSOID) return recording;
-  const sourceRecording = pulsoidRecording
-    ? await finalizePulsoidRecording(recording)
-    : state.hr.pulsoidRecording;
+  if (![HR_SOURCE_IDS.PULSOID, HR_SOURCE_IDS.DIRECT_H10].includes(state.hr.selectedSource)) return recording;
+  const sourceRecording = state.hr.selectedSource === HR_SOURCE_IDS.DIRECT_H10
+    ? (directH10Recording ? await finalizeDirectH10Recording(recording) : state.hr.directH10Recording)
+    : (pulsoidRecording ? await finalizePulsoidRecording(recording) : state.hr.pulsoidRecording);
   if (!sourceRecording?.filepath) return recording;
   return {
     ...recording,
@@ -822,6 +945,13 @@ function connectHrBridge() {
               broadcast('status', state);
             });
           }
+          if (state.hr.selectedSource === HR_SOURCE_IDS.DIRECT_H10 && !directH10Recording) {
+            createDirectH10Recording(state.hr.recording, 'direct_h10_recording_info').catch((error) => {
+              state.hr.directH10.error = `Direct H10 CSV start failed: ${error.message || error}`;
+              refreshHrSourceStatus();
+              broadcast('status', state);
+            });
+          }
         }
         broadcast('recording', state.hr.recording);
       }
@@ -839,6 +969,13 @@ function connectHrBridge() {
           if (state.hr.selectedSource === HR_SOURCE_IDS.PULSOID && !pulsoidRecording) {
             createPulsoidRecording(state.hr.recording).catch((error) => {
               state.hr.pulsoid.error = `Pulsoid CSV start failed: ${error.message || error}`;
+              refreshHrSourceStatus();
+              broadcast('status', state);
+            });
+          }
+          if (state.hr.selectedSource === HR_SOURCE_IDS.DIRECT_H10 && !directH10Recording) {
+            createDirectH10Recording(state.hr.recording).catch((error) => {
+              state.hr.directH10.error = `Direct H10 CSV start failed: ${error.message || error}`;
               refreshHrSourceStatus();
               broadcast('status', state);
             });
@@ -975,9 +1112,25 @@ liveCaptureRouter.post('/hr-source', (req, res) => {
     error: null,
     reconnecting: false,
   };
+  state.hr.directH10 = {
+    ...state.hr.directH10,
+    error: null,
+  };
   if (settings.source === HR_SOURCE_IDS.PULSOID) {
     state.hr.latestTelemetry = null;
     restartPulsoidSource();
+  } else if (settings.source === HR_SOURCE_IDS.DIRECT_H10) {
+    closePulsoidConnection({ quiet: true });
+    state.hr.latestTelemetry = null;
+    state.hr.directH10 = {
+      ...state.hr.directH10,
+      connected: false,
+      lastMessageAt: null,
+      lastMeasuredAt: null,
+      error: null,
+    };
+    refreshHrSourceStatus('Connect the H10 from Live Capture');
+    broadcast('status', state);
   } else {
     closePulsoidConnection({ quiet: true });
     state.hr.pulsoid = {
@@ -996,8 +1149,39 @@ liveCaptureRouter.post('/hr-source', (req, res) => {
       selectedSourceLabel: state.hr.selectedSourceLabel,
       sourceStatus: state.hr.sourceStatus,
       pulsoid: state.hr.pulsoid,
+      directH10: state.hr.directH10,
     },
   });
+});
+
+liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
+  const telemetry = normalizeDirectH10Telemetry(req.body || {});
+  if (!telemetry) {
+    res.status(400).json({ error: 'Direct H10 telemetry did not include a valid heart rate.' });
+    return;
+  }
+  const receivedIso = new Date(telemetry.receivedAt || Date.now()).toISOString();
+  state.hr.directH10 = {
+    ...state.hr.directH10,
+    connected: true,
+    deviceName: String(req.body?.deviceName || req.body?.device_name || state.hr.directH10.deviceName || ''),
+    error: null,
+    lastMessageAt: receivedIso,
+    lastMeasuredAt: telemetry.measuredAt ? new Date(telemetry.measuredAt).toISOString() : null,
+  };
+  if (shouldUseTelemetrySource(HR_SOURCE_IDS.DIRECT_H10)) {
+    refreshHrSourceStatus('Direct H10 HR + RR live');
+    applySelectedHrTelemetry(telemetry);
+    appendDirectH10TelemetryRow(telemetry).catch((error) => {
+      state.hr.directH10.error = `Direct H10 CSV write failed: ${error.message || error}`;
+      refreshHrSourceStatus();
+      broadcast('status', state);
+    });
+  } else {
+    refreshHrSourceStatus();
+  }
+  broadcast('status', state);
+  res.json({ ok: true, hr: { latestTelemetry: telemetry, sourceStatus: state.hr.sourceStatus, directH10: state.hr.directH10 } });
 });
 
 liveCaptureRouter.post('/emg/calibration-command', async (req, res) => {

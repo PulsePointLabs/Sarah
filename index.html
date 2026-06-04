@@ -20,30 +20,6 @@
   </head>
   <body>
     <div id="root"></div>
-    <script>
-      (() => {
-        const isLocalDev = location.hostname === "localhost" || location.hostname === "127.0.0.1";
-        if (!isLocalDev || !("serviceWorker" in navigator)) return;
-
-        const cleanupKey = "pulsepoint.dev-sw-cleanup-v1";
-        if (sessionStorage.getItem(cleanupKey)) return;
-
-        Promise.all([
-          navigator.serviceWorker.getRegistrations().then((registrations) =>
-            Promise.all(registrations.map((registration) => registration.unregister()))
-          ),
-          "caches" in window
-            ? caches.keys().then((keys) =>
-              Promise.all(keys.filter((key) => key.startsWith("pulsepoint-shell-")).map((key) => caches.delete(key)))
-            )
-            : Promise.resolve([]),
-        ]).then(([registrations, deletedCaches]) => {
-          if (!registrations.length && !deletedCaches.some(Boolean)) return;
-          sessionStorage.setItem(cleanupKey, "1");
-          location.reload();
-        });
-      })();
-    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

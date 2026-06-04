@@ -10,27 +10,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 const PWA_FULL_SEND_V1 = true;
 const PWA_NO_FOCUS_RELOAD_V1 = true;
 const PWA_FOREGROUND_STABILITY_V1 = true;
+const PWA_KEEP_WORKER_REGISTERED_V1 = true;
 
-function isLocalDevHost() {
-  return location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-}
-
-async function clearPulsePointShellCaches() {
-  if (!('caches' in window)) return;
-  const keys = await caches.keys();
-  await Promise.all(
-    keys
-      .filter((key) => key.startsWith('pulsepoint-shell-'))
-      .map((key) => caches.delete(key))
-  );
-}
-
-if (import.meta.env.DEV && 'serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then((registrations) => {
-    registrations.forEach((registration) => registration.unregister());
-  });
-  clearPulsePointShellCaches();
-} else if ('serviceWorker' in navigator && window.isSecureContext) {
+if ('serviceWorker' in navigator && window.isSecureContext) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch((error) => {
       console.warn('Service worker registration failed:', error);

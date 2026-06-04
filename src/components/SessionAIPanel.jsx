@@ -11,6 +11,7 @@ import { buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest } from "@
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 import { repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
+import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 function buildSessionContext(session, timelineRows) {
   const hrMin = timelineRows.length ? Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))) : null;
   const hrMax = timelineRows.length ? Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))) : null;
@@ -401,6 +402,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
       hr_avg: Math.round(timelineRows.reduce((sum, row) => sum + Number(row.hr), 0) / timelineRows.length),
       hr_max: Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))),
     } : null;
+    const hrvEvidence = buildSessionHrvEvidence(timelineRows, session);
 
     // Sample HR trajectory for the prompt (~1 point every 15s)
     const hrTrajectory = (() => {
@@ -491,6 +493,7 @@ Factor the journal into your analysis — where the person's subjective experien
 
 TARGET SESSION ANALYSIS STYLE:
 - Begin with a substantial overview that synthesizes the session's outcome, heart-rate arc, stimulation context, notable physiology, and why the session behaved the way it did.
+- When usable RR-derived HRV is present, integrate meaningful HRV changes into the overview and relevant windows instead of treating heart rate as the only autonomic signal.
 - Then explain the session through meaningful physiological windows based on session intent: baseline/entry state, exploration or stimulation phase, sensory/body-state transitions, plateaus or settling, pre-climax when supported, climax or intentionally non-climax outcome, and recovery or end-state.
 - A window may be chronological when chronology explains the physiology. The point is not to avoid time; the point is to make each time window explain arousal state, autonomic loading, sensory input, technique effectiveness, or recovery.
 - Keep the older PulsePoint feel: detailed, insightful, physiology-forward, personally grounded, and useful for later comparison across sessions.
@@ -513,6 +516,7 @@ PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — CONDITIONAL USE ONLY:
 ${isTechnical
   ? "- Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery)."
   : "- Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery)."}
+${hrvEvidence ? "- Use usable RR-derived HRV as an additional within-session signal where it changes or strengthens the interpretation; do not merely list HRV numbers." : ""}
 ${isTechnical
   ? `- Preserve the explanatory "why" as the center of the answer. When stimulation changes, heart-rate movement, physical cues, or subjective metrics line up, explain the likely mechanism behind the pattern instead of merely restating that it happened.
 - Discuss stimulation-to-body links when supported: how pressure, friction, suction, vibration, e-stim, foley/urethral input, perineal contact, or technique shifts likely changed sensory input, pelvic floor tone, autonomic loading, or climax threshold.
@@ -539,6 +543,7 @@ EMG INTERPRETATION RULES — apply carefully:
 - If EMG peaks precede HR rise, describe EMG leading the HR response.
 - If HR rises without EMG change, note this as a possible autonomic or non-muscular response.
 - Describe the likely target muscle based on placement notes and photo tags when available.` : ""}
+${hrvEvidence ? RR_HRV_INTERPRETATION_RULES : ""}
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Write all times as words: "ten minutes and thirty seconds" not "10:30"
@@ -622,6 +627,7 @@ ${JSON.stringify({
     ...(session.avg_hr != null && Number(session.avg_hr) !== hrSummary.hr_avg ? { stored_summary_avg: session.avg_hr } : {}),
     ...(session.max_hr != null && Number(session.max_hr) !== hrSummary.hr_max ? { stored_summary_max: session.max_hr } : {}),
   } : undefined,
+  rr_derived_hrv: hrvEvidence || undefined,
   phase_markers_s: {
     pre_climax: session.pre_climax_offset_s,
     climax: session.climax_offset_s,

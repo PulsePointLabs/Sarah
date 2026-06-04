@@ -2,7 +2,8 @@
 // PWA_NO_FOCUS_RELOAD_V1
 // PWA_RESUME_NO_NAVIGATE_V1
 // PWA_FOREGROUND_STABILITY_V1
-const CACHE_NAME = "pulsepoint-shell-v8";
+// PWA_ACTIVATE_WITHOUT_CLAIM_V1
+const CACHE_NAME = "pulsepoint-shell-v9";
 const SHELL_ASSETS = [
   "/",
   "/manifest.json",
@@ -36,6 +37,10 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => cache.addAll(SHELL_ASSETS))
+      // Activate the new worker without claiming or navigating existing app
+      // windows. The current PulsePoint view keeps its controller and state;
+      // the new worker takes effect on the next real navigation.
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -53,16 +58,7 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("message", (event) => {
   if (event.data?.type === "PULSEPOINT_SKIP_WAITING") {
-    event.waitUntil(
-      self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-        // Android installed-app resume can surface a waiting worker while TTS,
-        // live capture, or AI/video processing is active. Never swap
-        // controllers underneath an open PulsePoint window; the update can
-        // activate naturally after all app windows are closed.
-        if (!clients.length) return self.skipWaiting();
-        return null;
-      })
-    );
+    event.waitUntil(self.skipWaiting());
   }
 });
 
@@ -75,16 +71,21 @@ self.addEventListener("fetch", (event) => {
   if (isSensitiveOrDynamicRequest(url) || isDevelopmentAsset(url)) return;
 
   if (request.mode === "navigate") {
+    const networkRefresh = fetch(request)
+      .then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put("/", copy));
+        }
+        return response;
+      })
+      .catch(() => null);
+
+    event.waitUntil(networkRefresh);
     event.respondWith(
       caches.match("/").then((cached) => {
         if (cached) return cached;
-        return fetch(request).then((response) => {
-          if (response.ok) {
-            const copy = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put("/", copy));
-          }
-          return response;
-        });
+        return networkRefresh.then((response) => response || Response.error());
       })
     );
     return;

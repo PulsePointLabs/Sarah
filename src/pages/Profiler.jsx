@@ -12,6 +12,7 @@ import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionCont
 import { getManualStimulationPauseResumeEvents, getMotionEvidenceSummary, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
 import { buildProfileAIContentMeta, formatGeneratedAt, isProfileAIContentStale } from "@/utils/aiContentMetadata";
 import { splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
+import { buildLongitudinalHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -1086,7 +1087,14 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
   );
 }
 
-function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile, profileLoading = false, evidenceLoading = false }) {
+function AnatomicalPhysiologicalProfilePanel({
+  sessions,
+  allTimelines = {},
+  userProfile,
+  profileLoading = false,
+  evidenceLoading = false,
+  timelineLoading = false,
+}) {
   const [loading, setLoading] = useState(false);
   const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(null);
@@ -1192,6 +1200,7 @@ function AnatomicalPhysiologicalProfilePanel({ sessions, userProfile, profileLoa
       const sortedSessions = [...sessions].sort((a, b) => new Date(b.date) - new Date(a.date));
       const evidenceDigest = naturalizeSpokenDates(buildProfileEvidenceDigest(sortedSessions));
       const sessionSummaries = sortedSessions.slice(0, 80).map(compactAnatomicalSessionLine).join("\n");
+      const longitudinalHrvEvidence = buildLongitudinalHrvEvidence(sortedSessions, allTimelines);
       const groundingContext = buildAIGroundingContext(userProfile);
       const firstNameToneCue = buildOptionalFirstNameToneCue(userProfile, { prioritizeProfileTone: true });
 
@@ -1205,12 +1214,14 @@ ${SESSION_DATE_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
+${longitudinalHrvEvidence ? RR_HRV_INTERPRETATION_RULES : ""}
 
 SYNTHESIS REQUIREMENTS:
 - Begin with a compact whole-body overview, then expand only where the provided evidence supports detail.
 - Write every part of the response directly to the person in second person, including the opening overview. Do not open with "Ben is," "the person is," "the user is," or any other third-person framing.
 - Separate directly entered anatomical observations from repeated session-linked findings and from cautious interpretations.
 - Consider constitutional/body habitus, cardiovascular/autonomic, respiratory, neurological/sensory, musculoskeletal/biomechanical, and endocrine/metabolic context only when those data were provided.
+- When usable RR-derived HRV exists, use repeated within-session build, climax, or recovery changes to deepen the cardiovascular and autonomic context without treating session HRV as a resting baseline or diagnostic measure.
 - When populated, integrate static resting or flaccid anatomy, static erect anatomy, dynamic transition findings, glans or foreskin context, meatal structure, urethral accommodation, fit or tolerance, pressure distribution, device interaction, instrumentation compatibility or limitations, and repeated functional response observations.
 - Use anatomical dimensions analytically, such as when dynamic expansion, fit variability, accommodation, pressure distribution, stimulation mechanics, or session findings make them relevant. Do not recite measurements without purpose.
 - Genital or pelvic detail is optional and must be proportional to its relevance in the entered data and session evidence.
@@ -1222,6 +1233,12 @@ SYNTHESIS REQUIREMENTS:
 SESSION EVIDENCE SUMMARY (${sessions.length} sessions):
 ${evidenceDigest}
 
+${longitudinalHrvEvidence ? `RR-DERIVED HRV EVIDENCE:
+${JSON.stringify(longitudinalHrvEvidence, null, 2)}
+
+Use this evidence in the cardiovascular and autonomic context only where it adds a supported within-session or repeated cross-session pattern. Do not force HRV into the synthesis when the quality, coverage, or number of sessions is insufficient.
+
+` : ""}
 SELECTED SESSION-BY-SESSION EVIDENCE:
 ${sessionSummaries || "No session evidence is available; rely only on populated profile entries."}
 
@@ -1305,7 +1322,7 @@ Write directly to the person in clear, clinically grounded language. Favor meani
         <p className="text-xs text-muted-foreground">
           Evidence-grounded anatomy, dynamic function, fit, and instrumentation synthesis from your optional profile data and supported session findings.
         </p>
-        <Button size="sm" onClick={analyze} disabled={loading || profileLoading || !userProfile} className="h-7 text-xs gap-1.5 shrink-0">
+        <Button size="sm" onClick={analyze} disabled={loading || profileLoading || evidenceLoading || timelineLoading || !userProfile} className="h-7 text-xs gap-1.5 shrink-0">
           {loading
             ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Synthesizing...</>
             : <><Activity className="w-3 h-3" />{result ? "Re-generate" : "Generate A&P"}</>}
@@ -1928,7 +1945,14 @@ export default function Profiler() {
       )}
 
       <AIProfilePanel sessions={sessions} userProfile={userProfile} journals={journals} evidenceLoading={sessionEvidenceLoading} />
-      <AnatomicalPhysiologicalProfilePanel sessions={sessions} userProfile={userProfile} profileLoading={profileContextLoading} evidenceLoading={sessionEvidenceLoading} />
+      <AnatomicalPhysiologicalProfilePanel
+        sessions={sessions}
+        allTimelines={allTimelines}
+        userProfile={userProfile}
+        profileLoading={profileContextLoading}
+        evidenceLoading={sessionEvidenceLoading}
+        timelineLoading={timelineLoading}
+      />
       <StimulationMethodsPanel sessions={sessions} userProfile={userProfile} evidenceLoading={sessionEvidenceLoading} />
       <NearClimaxPanel sessions={sessions} allTimelines={allTimelines} userProfile={userProfile} timelineLoading={timelineLoading} />
     </div>

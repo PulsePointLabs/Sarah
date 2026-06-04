@@ -6,11 +6,13 @@ const RR_MAX_MS = 2000;
 export const HR_SOURCE_IDS = {
   HEART_RATE_ON_STREAM: 'heartrateonstream',
   PULSOID: 'pulsoid',
+  DIRECT_H10: 'direct_h10',
 };
 
 export const HR_SOURCE_LABELS = {
   [HR_SOURCE_IDS.HEART_RATE_ON_STREAM]: 'HeartRateOnStream',
   [HR_SOURCE_IDS.PULSOID]: 'Pulsoid / Polar H10',
+  [HR_SOURCE_IDS.DIRECT_H10]: 'Direct Polar H10',
 };
 
 export function cleanHr(value) {
@@ -157,6 +159,47 @@ export function normalizePulsoidTelemetry(payload, receivedAt = Date.now()) {
     rrIntervalsMs,
     hrv,
     quality: {
+      stale: ageMs > 5000,
+      ageMs,
+    },
+    raw: payload,
+  };
+}
+
+export function normalizeDirectH10Telemetry(payload, receivedAt = Date.now()) {
+  const data = payload?.data || payload || {};
+  const heartRate = cleanHr(pickFirst(
+    data.heart_rate,
+    data.heartRate,
+    data.currentHr,
+    data.hr,
+    payload?.heart_rate,
+    payload?.heartRate,
+    payload?.currentHr,
+    payload?.hr
+  ));
+  if (heartRate == null) return null;
+
+  const measuredAtRaw = pickFirst(payload?.measured_at, payload?.measuredAt, data.measured_at, data.measuredAt);
+  const measuredAt = Number(measuredAtRaw) || receivedAt;
+  const ageMs = Math.max(0, receivedAt - measuredAt);
+  const rrIntervalsMs = extractRrIntervals(payload);
+  const hrv = payload?.hrv || data.hrv || (rrIntervalsMs.length
+    ? computeHrvFromRr(rrIntervalsMs)
+    : { quality: 'unavailable' });
+
+  return {
+    source: HR_SOURCE_IDS.DIRECT_H10,
+    sourceLabel: HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10],
+    measuredAt,
+    receivedAt,
+    heartRate,
+    currentHr: heartRate,
+    hr: heartRate,
+    rrIntervalsMs,
+    hrv,
+    quality: {
+      ...(payload?.quality || data.quality || {}),
       stale: ageMs > 5000,
       ageMs,
     },
