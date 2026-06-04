@@ -267,7 +267,7 @@ export function getTTSRuntime(settings = loadTTSSettings()) {
     format: normalized.audioFormat,
     supportsInstructions: TTS_ENGINES[normalized.engine].supportsInstructions,
     instructions: buildVoiceInstructions(normalized),
-    cacheProfile: `settings-v5-${normalized.engine}-${normalized.audioFormat}-speed-${normalized.speed}-w${normalized.warmth}-e${normalized.enthusiasm}-s${normalized.soothing}-l${normalized.lightness}-f${normalized.femininity}-c${normalized.continuity}-n${normalized.naturalness}-p${normalized.pauses}-ss${normalized.softStart}`,
+    cacheProfile: `settings-v6-${normalized.engine}-${normalized.audioFormat}-speed-${normalized.speed}-w${normalized.warmth}-e${normalized.enthusiasm}-s${normalized.soothing}-l${normalized.lightness}-f${normalized.femininity}-c${normalized.continuity}-n${normalized.naturalness}-p${normalized.pauses}-ss${normalized.softStart}`,
   };
 }
 
@@ -348,9 +348,35 @@ export function formatTimeAsWords(time) {
     : `${m} minute${m !== 1 ? 's' : ''} and ${s} seconds`;
 }
 
+const RESUME_PRONUNCIATION = {
+  resume: "re-zoom",
+  resumes: "re-zooms",
+  resumed: "re-zoomed",
+  resuming: "re-zooming",
+};
+
+const RESUME_CONTEXT_WORDS = "(stimulation|contact|stroke|strokes|stroking|motion|movement|activity|rhythm|hand|hands|genital|penile|shaft|glans|perineal|pelvic|masturbation)";
+
+function pronounceResumeVerb(word) {
+  return RESUME_PRONUNCIATION[String(word || "").toLowerCase()] || word;
+}
+
+function applyTTSPronunciationHints(text) {
+  return String(text || "")
+    .replace(/\bpause\s*\/\s*resume\b/gi, "pause/re-zoom")
+    .replace(
+      new RegExp(`\\b${RESUME_CONTEXT_WORDS}\\s+(resume|resumes|resumed|resuming)\\b`, "gi"),
+      (match, context, resumeWord) => `${context} ${pronounceResumeVerb(resumeWord)}`
+    )
+    .replace(
+      new RegExp(`\\b(resume|resumes|resumed|resuming)\\s+${RESUME_CONTEXT_WORDS}\\b`, "gi"),
+      (match, resumeWord, context) => `${pronounceResumeVerb(resumeWord)} ${context}`
+    );
+}
+
 // Clean text for natural speech
 export function cleanTextForSpeech(text) {
-  return repairDecimalSpacing(text)
+  return applyTTSPronunciationHints(repairDecimalSpacing(text))
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/\*([^*]+)\*/g, "$1")
     .replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g, (_, time) => formatTimeAsWords(time))
