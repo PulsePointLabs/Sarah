@@ -44,6 +44,7 @@ function normalizeVideoRecord(video) {
     fingerprint: video.fingerprint || "",
     mimeType: video.mimeType || "",
     exists: video.exists !== false,
+    timelineOffsetSeconds: Number(video.timelineOffsetSeconds) || 0,
     linkedAt: video.linkedAt || new Date().toISOString(),
     lastCheckedAt: video.lastCheckedAt || video.checkedAt || null,
   };
@@ -205,6 +206,21 @@ export default function LinkedLocalVideoManager({
     await saveVideos(normalizedVideos.filter((video) => video.id !== videoId));
   };
 
+  const updateTimelineOffset = async (videoId, value) => {
+    const timelineOffsetSeconds = Number(value) || 0;
+    setBusy(`offset:${videoId}`);
+    setError("");
+    try {
+      await saveVideos(normalizedVideos.map((video) => (
+        video.id === videoId ? { ...video, timelineOffsetSeconds } : video
+      )));
+    } catch (err) {
+      setError(errorMessage(err, "Could not save that video timeline offset."));
+    } finally {
+      setBusy("");
+    }
+  };
+
   return (
     <div className="rounded-xl border border-border bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -289,6 +305,20 @@ export default function LinkedLocalVideoManager({
                     <p className="mt-1 text-[10px] text-muted-foreground">
                       {video.filename || "video"} · {formatBytes(video.sizeBytes)} · modified {formatDate(video.modifiedAt)} · checked {formatDate(video.lastCheckedAt)}
                     </p>
+                    <label className="mt-2 flex max-w-md items-center gap-2 text-[10px] text-muted-foreground">
+                      <span className="shrink-0">Video 0:00 = record timeline</span>
+                      <input
+                        key={`${video.id}:${video.timelineOffsetSeconds}`}
+                        type="number"
+                        defaultValue={video.timelineOffsetSeconds}
+                        step="0.1"
+                        onBlur={(event) => updateTimelineOffset(video.id, event.target.value)}
+                        className="h-7 w-20 rounded border border-border bg-background px-2 text-center font-mono text-xs text-foreground"
+                        aria-label={`Timeline offset for ${video.label || video.filename}`}
+                      />
+                      <span>s</span>
+                      <span>Positive means the video starts after the record timeline.</span>
+                    </label>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
                     {streamUrl && (

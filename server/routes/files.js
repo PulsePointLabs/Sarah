@@ -477,7 +477,7 @@ async function generateVideoClipPreview({
     '-y',
     '-i', clipPath,
     '-an',
-    '-vf', `fps=${requestedFrameCount / duration},scale=960:-2:force_original_aspect_ratio=decrease`,
+    '-vf', `fps=${requestedFrameCount / duration}:start_time=0,scale=960:-2:force_original_aspect_ratio=decrease`,
     '-frames:v', String(requestedFrameCount),
     '-q:v', '3',
     framePattern,
@@ -491,7 +491,7 @@ async function generateVideoClipPreview({
   const frames = await Promise.all(frameFiles.map(async (filename, index) => {
     const framePath = path.join(uploadDir, filename);
     const bytes = await fsp.readFile(framePath);
-    const time = start + (duration * (frameFiles.length <= 1 ? 0 : index / (frameFiles.length - 1)));
+    const time = start + (index * (duration / requestedFrameCount));
     return {
       filename,
       file_url: `/uploads/${filename}`,

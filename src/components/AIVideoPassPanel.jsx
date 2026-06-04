@@ -12,8 +12,25 @@ function fmtMmSs(totalSeconds) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+function fmtSignedMmSs(totalSeconds) {
+  const value = Number(totalSeconds) || 0;
+  return `${value < 0 ? "-" : ""}${fmtMmSs(Math.abs(value))}`;
+}
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function timelineOffsetSeconds(video) {
+  return Number(video?.timelineOffsetSeconds) || 0;
+}
+
+function sourceTimeForSession(sessionSeconds, video) {
+  return Math.max(0, Number(sessionSeconds || 0) - timelineOffsetSeconds(video));
+}
+
+function sessionTimeForSource(sourceSeconds, video) {
+  return Math.max(0, Number(sourceSeconds || 0) + timelineOffsetSeconds(video));
 }
 
 function estimateSessionEnd(session, timelineRows = []) {
@@ -85,6 +102,7 @@ function buildSessionVideoContext(session, selectedVideo, timelineRows = []) {
 
   return [
     linkedLabel ? `Linked video selected: ${linkedLabel}` : null,
+    selectedVideo ? `Linked video alignment: source video 0:00 = session ${fmtSignedMmSs(timelineOffsetSeconds(selectedVideo))}.` : null,
     anchors ? `Timing anchors: ${anchors}` : null,
     telemetrySpan,
     deviceLines.length ? `Known methods/devices/materials: ${deviceLines.join(" | ")}` : null,
@@ -415,7 +433,11 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main") {
     events: events.map((event) => {
       const note = cleanDraftEventNote(event.note || event.text || "");
       return {
-        time_s: Number.isFinite(Number(event.time_s)) ? Number(event.time_s) : fallbackWindow.start,
+        time_s: clamp(
+          Number.isFinite(Number(event.time_s)) ? Number(event.time_s) : fallbackWindow.start,
+          fallbackWindow.start,
+          fallbackWindow.end,
+        ),
         note,
         category: normalizeDraftEventCategories(event.category, note, fallbackWindow),
         annotation_tags: Array.isArray(event.annotation_tags) ? event.annotation_tags : ["other_context"],
@@ -449,6 +471,9 @@ function eventFromCard(card, event, index) {
       clip_url: card.clipUrl,
       clip_start_s: card.window.start,
       clip_end_s: card.window.end,
+      source_clip_start_s: card.sourceWindow?.start ?? card.window.start,
+      source_clip_end_s: card.sourceWindow?.end ?? card.window.end,
+      timeline_offset_s: timelineOffsetSeconds(card.sourceVideo),
       source_video_role: card.sourceVideoRole || inferVideoRole(card.sourceVideo),
       source_video: card.sourceVideo?.filename || card.sourceVideo?.label || "",
       source_video_fingerprint: card.sourceVideo?.fingerprint || "",
@@ -457,6 +482,9 @@ function eventFromCard(card, event, index) {
       url: card.clipUrl,
       start_s: card.window.start,
       end_s: card.window.end,
+      source_start_s: card.sourceWindow?.start ?? card.window.start,
+      source_end_s: card.sourceWindow?.end ?? card.window.end,
+      timeline_offset_s: timelineOffsetSeconds(card.sourceVideo),
       label: card.label,
     },
     title: `${card.label} finding ${index + 1}`,
@@ -616,6 +644,8 @@ function eventFromAudioResult(event, sourceVideo) {
       },
       start_s: Number(event.startSeconds || 0),
       end_s: Number(event.endSeconds || 0),
+      source_start_s: Number(event.sourceStartSeconds ?? event.startSeconds ?? 0),
+      source_end_s: Number(event.sourceEndSeconds ?? event.endSeconds ?? 0),
       duration_s: Number(event.durationSeconds || 0),
       transcript: event.transcript || "",
       transcription_error: event.transcriptionError || "",
@@ -653,6 +683,7 @@ export default function AIVideoPassPanel({
   const [audioAccepted, setAudioAccepted] = useState(false);
 
   const selectedVideo = availableVideos.find((video) => video.path === selectedPath) || availableVideos[0];
+  const selectedVideoOffset = timelineOffsetSeconds(selectedVideo);
   const selectedVideoStreamUrl = selectedVideo?.path ? base44.integrations.Core.localVideoStreamUrl(selectedVideo.path) : "";
   const [selectedVideoRole, setSelectedVideoRole] = useState(inferVideoRole(selectedVideo));
   const selectedVideoRoleHelper = VIDEO_ROLE_OPTIONS.find((option) => option.value === selectedVideoRole)?.helper;
@@ -668,7 +699,7 @@ export default function AIVideoPassPanel({
     const video = previewVideoRef.current;
     if (!video || !Number.isFinite(Number(seconds))) return;
     try {
-      video.currentTime = clamp(Number(seconds) || 0, 0, Math.max(0, video.duration || sessionEnd || 0));
+      video.currentTime = clamp(sourceTimeForSession(seconds, selectedVideo), 0, Math.max(0, video.duration || sessionEnd || 0));
     } catch {
       // Some browser/container combinations reject seeking before metadata is ready.
     }
@@ -723,15 +754,24 @@ export default function AIVideoPassPanel({
         for (let i = 0; i < windowsToRun.length; i += 1) {
           const window = windowsToRun[i];
           const label = `AI video pass ${fmtMmSs(window.start)}-${fmtMmSs(window.end)}`;
+          const sourceStart = sourceTimeForSession(window.start, selectedVideo);
+          const sourceEnd = Math.max(sourceStart + 0.25, Number(window.end || 0) - selectedVideoOffset);
           setStatus(`Preparing ${label}${autoContinue && scanMode === "continue" ? ` · batch ${batchNumber}` : ""}`);
           const preview = await base44.integrations.Core.ProcessLocalVideoClip({
             path: selectedVideo.path,
-            startSeconds: window.start,
-            endSeconds: window.end,
+            startSeconds: sourceStart,
+            endSeconds: sourceEnd,
             label,
             frameCount: 10,
           });
-          const telemetry = nearestTelemetrySummary(timelineRows, window.start, window.end);
+          const reviewWindow = {
+            start: sessionTimeForSource(preview.startSeconds ?? sourceStart, selectedVideo),
+            end: sessionTimeForSource(preview.endSeconds ?? sourceEnd, selectedVideo),
+          };
+          const telemetry = nearestTelemetrySummary(timelineRows, reviewWindow.start, reviewWindow.end);
+          const frameTiming = (preview.frames || [])
+            .map((frame, index) => `frame ${index + 1} = session ${fmtMmSs(sessionTimeForSource(frame.frameTimeSeconds, selectedVideo))} (source ${fmtMmSs(frame.frameTimeSeconds)})`)
+            .join(", ");
           setStatus(`Sarah reviewing ${label}${autoContinue && scanMode === "continue" ? ` · batch ${batchNumber}` : ""}`);
           const continuityContext = compactCardContinuity(nextCards[nextCards.length - 1])
             || findSavedPriorContinuity(session, selectedVideo, window)
@@ -832,7 +872,9 @@ ${continuityContext}
 Full session context for this video review:
 ${sessionVideoContext || "No additional session context is available."}
 
-Session window: ${fmtMmSs(window.start)} to ${fmtMmSs(window.end)} (${window.start.toFixed(1)}s-${window.end.toFixed(1)}s).
+Session window: ${fmtMmSs(reviewWindow.start)} to ${fmtMmSs(reviewWindow.end)} (${reviewWindow.start.toFixed(1)}s-${reviewWindow.end.toFixed(1)}s).
+Source video window: ${fmtMmSs(sourceStart)} to ${fmtMmSs(sourceEnd)}. Video 0:00 aligns to session ${fmtSignedMmSs(selectedVideoOffset)}.
+Sampled frame timing in image order: ${frameTiming || "No decoded frame timing was returned."}
 Telemetry in this window: ${telemetry}
 Session methods/devices/context: ${[
   ...(session?.methods || []),
@@ -848,11 +890,12 @@ Nearby session events: ${(session?.event_timeline || [])
 
 Return concise visual findings and 1-3 proposed timeline events only when the window contains useful non-repetitive evidence. Good targets are genital state changes, stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, scrotal/perineal observations, cautious moisture/sheen observations, pelvic lift/drop, breathing/abdomen cues when visible, body/feet bracing, leg tensing/relaxing, toe curl/downward planting, tremble/shudder, device/position changes, and important setup context only when it changes interpretation. Use low confidence or omit the finding when the evidence is ambiguous. Keep the full JSON response compact so it can finish cleanly.`,
           });
-          const normalized = normalizeAIResult(ai, window, selectedVideoRole);
+          const normalized = normalizeAIResult(ai, reviewWindow, selectedVideoRole);
           const card = {
             id: `${Date.now()}-${batchNumber}-${i}`,
             label,
-            window,
+            window: reviewWindow,
+            sourceWindow: { start: sourceStart, end: sourceEnd },
             sourceVideo: selectedVideo,
             sourceVideoRole: selectedVideoRole,
             clipUrl: preview.clip_url || preview.url,
@@ -892,12 +935,27 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
     try {
       const result = await base44.integrations.Core.ProcessLocalVideoAudio({
         path: selectedVideo.path,
-        startSeconds: scanCursor,
+        startSeconds: sourceTimeForSession(scanCursor, selectedVideo),
         windowSeconds: audioWindowSeconds,
         maxSnippets: audioMaxSnippets,
         transcribe: true,
       });
-      setAudioResult(result);
+      setAudioResult({
+        ...result,
+        sourceStartSeconds: result.startSeconds,
+        sourceEndSeconds: result.endSeconds,
+        startSeconds: sessionTimeForSource(result.startSeconds, selectedVideo),
+        endSeconds: sessionTimeForSource(result.endSeconds, selectedVideo),
+        sessionStartSeconds: sessionTimeForSource(result.startSeconds, selectedVideo),
+        sessionEndSeconds: sessionTimeForSource(result.endSeconds, selectedVideo),
+        events: (result.events || []).map((event) => ({
+          ...event,
+          sourceStartSeconds: event.startSeconds,
+          sourceEndSeconds: event.endSeconds,
+          startSeconds: sessionTimeForSource(event.startSeconds, selectedVideo),
+          endSeconds: sessionTimeForSource(event.endSeconds, selectedVideo),
+        })),
+      });
       setAudioStatus(result.summary || "Audio pass complete.");
     } catch (err) {
       setAudioError(err?.data?.error || err?.message || "Audio pass failed.");
@@ -923,6 +981,9 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
       },
       start_s: audioResult.startSeconds,
       end_s: audioResult.endSeconds,
+      source_start_s: audioResult.sourceStartSeconds ?? audioResult.startSeconds,
+      source_end_s: audioResult.sourceEndSeconds ?? audioResult.endSeconds,
+      timeline_offset_s: selectedVideoOffset,
       summary: audioResult.summary,
       events,
       created_at: new Date().toISOString(),
@@ -1171,8 +1232,15 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
               {selectedVideo?.label || selectedVideo?.filename || "Selected local video"}
             </p>
             <p className="text-muted-foreground">
-              Preview at <span className="font-mono text-primary">{fmtMmSs(scanCursor)}</span> · {videoRoleLabel(selectedVideoRole)} lane
+              Preview at session <span className="font-mono text-primary">{fmtMmSs(scanCursor)}</span>
+              {" · "}source <span className="font-mono text-primary">{fmtMmSs(sourceTimeForSession(scanCursor, selectedVideo))}</span>
+              {" · "}{videoRoleLabel(selectedVideoRole)} lane
             </p>
+            {selectedVideoOffset !== 0 && (
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                Saved alignment: video 0:00 = session <span className="font-mono text-primary">{fmtSignedMmSs(selectedVideoOffset)}</span>.
+              </p>
+            )}
           </div>
           <Button
             type="button"
@@ -1194,7 +1262,11 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
             className="max-h-[34rem] w-full rounded-lg bg-black object-contain"
             onLoadedMetadata={() => seekPreviewVideo(scanCursor)}
             onSeeked={(event) => {
-              const nextCursor = clamp(event.currentTarget.currentTime || 0, 0, Math.max(0, sessionEnd - clipSeconds));
+              const nextCursor = clamp(
+                sessionTimeForSource(event.currentTarget.currentTime, selectedVideo),
+                0,
+                Math.max(0, sessionEnd - clipSeconds),
+              );
               if (Math.abs(nextCursor - scanCursor) > 0.75) {
                 setScanCursor(nextCursor);
                 onCursorChange?.(nextCursor);

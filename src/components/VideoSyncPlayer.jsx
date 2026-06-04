@@ -41,6 +41,11 @@ function fmtMmSs(totalSeconds) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+function fmtSignedMmSs(totalSeconds) {
+  const value = Number(totalSeconds) || 0;
+  return `${value < 0 ? "-" : ""}${fmtMmSs(Math.abs(value))}`;
+}
+
 const PHASE_LINES = [
   { key: "pre_climax_offset_s", label: "Pre", color: "#a855f7" },
   { key: "climax_offset_s",     label: "Climax", color: "#ef4444" },
@@ -616,6 +621,20 @@ export default function VideoSyncPlayer({
     onEventsChange?.(sorted);
   };
 
+  const persistVideoOffset = async () => {
+    const activePath = videoFeeds[activeFeedKey]?.localPath;
+    if (!activePath) return;
+    const nextVideos = (session.linked_local_videos || []).map((video) => (
+      video.path === activePath ? { ...video, timelineOffsetSeconds: Number(videoOffset) || 0 } : video
+    ));
+    const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
+    try {
+      await entity.update(session.id, { linked_local_videos: nextVideos });
+    } catch (err) {
+      console.warn("Could not save linked video timeline offset:", err);
+    }
+  };
+
   const startEdit = (ev, idx) => {
     setEditingIdx(idx);
     setEditNote(ev.note);
@@ -754,9 +773,11 @@ export default function VideoSyncPlayer({
     if (!feed?.src || key === activeFeedKey) return;
     pendingMasterTimeRef.current = Math.max(0, playheadS - videoOffset);
     videoRef.current?.pause();
+    const linkedVideo = linkedLocalVideos.find((video) => video.path === feed.localPath);
+    setVideoOffset(Number(linkedVideo?.timelineOffsetSeconds) || 0);
     setActiveFeedKey(key);
     setVideoSrc(feed.src);
-  }, [activeFeedKey, playheadS, videoFeeds, videoOffset]);
+  }, [activeFeedKey, linkedLocalVideos, playheadS, videoFeeds, videoOffset]);
 
   // Load browser-local video feeds. Files remain in memory only for this review.
   const handleFileLoad = (e, feedKey = "composite") => {
@@ -773,6 +794,7 @@ export default function VideoSyncPlayer({
     if (!videoSrc || feedKey === activeFeedKey) {
       setActiveFeedKey(feedKey);
       setVideoSrc(url);
+      setVideoOffset(Number(video.timelineOffsetSeconds) || 0);
     }
     e.target.value = "";
   };
@@ -802,7 +824,9 @@ export default function VideoSyncPlayer({
 
   useEffect(() => {
     if (!linkedLocalVideos.length) return;
-    const signature = linkedLocalVideos.map((video) => video.id || video.path).join("|");
+    const signature = linkedLocalVideos
+      .map((video) => `${video.id || video.path}:${Number(video.timelineOffsetSeconds) || 0}`)
+      .join("|");
     if (autoLinkedSignatureRef.current === signature) return;
     autoLinkedSignatureRef.current = signature;
 
@@ -831,12 +855,17 @@ export default function VideoSyncPlayer({
     if (!videoSrc) {
       setActiveFeedKey(firstAssignment.slotKey);
       setVideoSrc(firstUrl);
+      setVideoOffset(Number(firstAssignment.video.timelineOffsetSeconds) || 0);
+    } else {
+      const activePath = videoFeeds[activeFeedKey]?.localPath;
+      const activeLinkedVideo = linkedLocalVideos.find((video) => video.path === activePath);
+      if (activeLinkedVideo) setVideoOffset(Number(activeLinkedVideo.timelineOffsetSeconds) || 0);
     }
     if (assignments.length > 1) {
       setVideoLayout("multi");
       setFeedsExpanded(false);
     }
-  }, [linkedLocalVideos, videoSrc]);
+  }, [activeFeedKey, linkedLocalVideos, videoFeeds, videoSrc]);
 
   const renameFeed = (feedKey, label) => {
     setVideoFeeds((current) => ({
@@ -1692,11 +1721,12 @@ export default function VideoSyncPlayer({
                 type="number"
                 value={videoOffset}
                 onChange={(e) => setVideoOffset(Number(e.target.value) || 0)}
+                onBlur={persistVideoOffset}
                 className="w-20 text-xs font-mono text-center bg-background border border-border rounded px-2 py-1 h-7"
-                step="1"
+                step="0.1"
               />
               <span className="text-xs text-muted-foreground">s</span>
-              <span className="text-xs text-muted-foreground ml-auto">Video 0:00 = {isExploration ? "Exploration" : "Session"} {fmtMmSs(videoOffset)}</span>
+              <span className="text-xs text-muted-foreground ml-auto">Video 0:00 = {isExploration ? "Exploration" : "Session"} {fmtSignedMmSs(videoOffset)}</span>
             </div>
           </div>
         ) : (
