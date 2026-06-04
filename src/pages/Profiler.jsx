@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
-import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, RefreshCw, History } from "lucide-react";
+import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, RefreshCw, History, Image as ImageIcon, Upload, X } from "lucide-react";
 import TTSReader from "../components/TTSReader";
 import AIOutputReader from "../components/AIOutputReader";
 import { normalizeJournalEntry } from "@/lib/journalEntry";
@@ -13,6 +13,7 @@ import { getManualStimulationPauseResumeEvents, getMotionEvidenceSummary, summar
 import { buildProfileAIContentMeta, formatGeneratedAt, isProfileAIContentStale } from "@/utils/aiContentMetadata";
 import { splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 import { buildLongitudinalHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
+import { buildProfileQaFindingCards, normalizeProfileQaFindings } from "@/lib/profileQa";
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -679,6 +680,421 @@ function ProfileArchiveList({ title = "Profile Run Archive", archive = [], curre
         })}
       </div>
     </div>
+  );
+}
+
+function imageFileToPayload(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || "");
+      const base64 = dataUrl.replace(/^data:[^;]+;base64,/, "");
+      resolve({
+        id: `${file.name}-${file.size}-${file.lastModified}`,
+        filename: file.name,
+        media_type: file.type || "image/jpeg",
+        data: base64,
+        previewUrl: dataUrl,
+        size: file.size,
+        lastModified: file.lastModified,
+      });
+    };
+    reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function compactProfileJsonValue(value) {
+  if (value == null) return null;
+  if (typeof value === "string") return value.trim() ? value.trim() : null;
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) {
+    const items = value.map(compactProfileJsonValue).filter((item) => item != null);
+    return items.length ? items : null;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value)
+      .map(([key, entryValue]) => [key, compactProfileJsonValue(entryValue)])
+      .filter(([, entryValue]) => entryValue != null);
+    return entries.length ? Object.fromEntries(entries) : null;
+  }
+  return null;
+}
+
+function buildProfileImageReviewContext({ userProfile, sessions = [] }) {
+  const qaEntries = normalizeProfileQaFindings(userProfile?.profile_qa_findings);
+  const qaCards = buildProfileQaFindingCards(userProfile?.profile_qa_findings, userProfile?.first_name).slice(0, 45);
+  const compactMetrics = compactProfileJsonValue({
+    anatomical_mechanical_profile: userProfile?.anatomical_mechanical_profile,
+    profile_notes: userProfile?.profile_notes || userProfile?.notes,
+    age: userProfile?.age,
+    sex: userProfile?.sex,
+    height: userProfile?.height,
+    weight: userProfile?.weight,
+    medications: userProfile?.medications,
+    medical_context: userProfile?.medical_context,
+    physiology_notes: userProfile?.physiology_notes,
+  });
+  const sortedSessions = [...(sessions || [])]
+    .sort((a, b) => new Date(b.date || b.created_date || 0) - new Date(a.date || a.created_date || 0));
+  const sessionLines = sortedSessions.slice(0, 45).map(compactAnatomicalSessionLine).filter(Boolean);
+  const evidenceDigest = sortedSessions.length ? naturalizeSpokenDates(buildProfileEvidenceDigest(sortedSessions)) : "";
+
+  return `
+PROFILE IMAGE REVIEW SOURCE CONTEXT:
+- Use the uploaded images as the primary source for directly visible anatomy, position, tissue state, and image-limited observations.
+- Use saved Q&A findings, entered profile metrics, and session evidence as historical/mechanical context. Reconcile them with the images instead of ignoring them.
+- If existing context conflicts with the image, state the mismatch and explain which source is stronger for that claim.
+- Do not let profile history make you overcall something that is not visible.
+
+SAVED PROFILE Q&A FINDINGS (${qaEntries.length} entries; showing up to ${qaCards.length} deduplicated findings):
+${qaCards.length ? qaCards.map((card, index) => `${index + 1}. ${card.finding} (${card.sourceLabel}, ${card.timestamp})`).join("\n") : "- None saved."}
+
+ENTERED PROFILE METRICS AND NOTES:
+${compactMetrics ? JSON.stringify(compactMetrics, null, 2) : "- None saved."}
+
+SESSION EVIDENCE SUMMARY (${sortedSessions.length} sessions loaded):
+${evidenceDigest || "- No session evidence loaded."}
+
+SELECTED SESSION-BY-SESSION ANATOMICAL / PHYSIOLOGICAL EVIDENCE:
+${sessionLines.length ? sessionLines.join("\n") : "- No session-level anatomical evidence available."}
+`;
+}
+
+function buildImageReviewMeta(images = [], sessions = [], previousMeta = null) {
+  return {
+    ...buildProfileAIContentMeta(sessions, previousMeta, null),
+    image_count: images.length,
+    image_filenames: images.map((image) => image.filename).filter(Boolean),
+    source_kind: "profile_image_review",
+  };
+}
+
+function profileReviewResultSections(config) {
+  return config.sections || [];
+}
+
+const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
+  title: "Head-to-Toe Image Review",
+  shortTitle: "Head-to-Toe",
+  kind: "profile_head_to_toe_image_review",
+  resultKey: "head_to_toe_image_review_result",
+  archiveKey: "head_to_toe_image_review_archive",
+  ttsSessionId: "profile-head-to-toe-image-review",
+  icon: <ImageIcon className="w-4 h-4" />,
+  color: "hsl(var(--chart-4))",
+  purpose: "Nude whole-body image review in anatomical position, standing, prone, supine, seated, or on-table positioning.",
+  helper: "Upload whole-body reference images for a structured visual review of posture, alignment, body habitus, skin/surface findings, table positioning, and profile-context fit. Images are sent only for this AI review and are not stored by this panel.",
+  emptyText: "Add anatomical-position or table-position whole-body images when you want Sarah to build a head-to-toe profile reference.",
+  reviewInstructions: `
+HEAD-TO-TOE REVIEW SCOPE:
+- Focus on whole-body anatomy and physiology-relevant visual context: posture, alignment, symmetry, body habitus, soft tissue distribution, skin/surface findings, limb positioning, hands, feet, and table/standing setup.
+- Include pelvic/genital visibility only as broad positioning context. Save detailed genital, meatal, scrotal, perineal, instrumentation, or pelvic-floor review for the dedicated pelvic/genital panel.
+- Compare visible whole-body findings against saved Q&A findings, prior sessions, and entered metrics. Highlight useful continuity and mismatches.
+- Describe image-taking limitations that would improve future reviews, such as missing anterior/posterior/lateral views, posture angle, lighting, cropping, scale reference, or supine/prone mismatch.
+`,
+  sections: [
+    { key: "overall_body_overview", label: "Overall Body Overview", color: "hsl(var(--chart-4))" },
+    { key: "posture_alignment", label: "Posture & Alignment", color: "hsl(var(--chart-2))" },
+    { key: "body_habitus_soft_tissue", label: "Body Habitus & Soft Tissue", color: "hsl(var(--primary))" },
+    { key: "skin_surface_findings", label: "Skin & Surface Findings", color: "hsl(var(--chart-3))" },
+    { key: "musculoskeletal_and_limb_findings", label: "Musculoskeletal, Limb, Hand & Foot Findings", color: "hsl(var(--chart-5))" },
+    { key: "positioning_and_table_context", label: "Positioning & Table Context", color: "hsl(var(--chart-1))" },
+    { key: "profile_context_reconciliation", label: "Profile Context Reconciliation", color: "hsl(var(--chart-2))" },
+    { key: "limitations_and_next_images", label: "Limitations & Next Images", color: "hsl(var(--muted-foreground))", required: false },
+  ],
+};
+
+const PELVIC_GENITAL_IMAGE_REVIEW_CONFIG = {
+  title: "Pelvic & Genital Image Review",
+  shortTitle: "Pelvic/Genital",
+  kind: "profile_pelvic_genital_image_review",
+  resultKey: "pelvic_genital_image_review_result",
+  archiveKey: "pelvic_genital_image_review_archive",
+  ttsSessionId: "profile-pelvic-genital-image-review",
+  icon: <User className="w-4 h-4" />,
+  color: "hsl(var(--chart-2))",
+  purpose: "Detailed pelvis, external genital, glans/meatus/foreskin, scrotal/perineal, pelvic positioning, tissue state, and visible instrumentation or device-fit context review.",
+  helper: "Upload pelvic/genital reference images for a focused anatomical review tied to saved Q&A, session evidence, and entered measurements. Keep this separate from the whole-body panel so the output can go deep without muddying the head-to-toe profile.",
+  emptyText: "Add focused pelvic/genital images when you want Sarah to review external anatomy, state, tissue context, meatus/glans/foreskin, scrotum/perineum, and fit/instrumentation context.",
+  reviewInstructions: `
+PELVIC / GENITAL REVIEW SCOPE:
+- Focus on visible pelvic positioning, external genital anatomy, shaft, glans, foreskin or circumcision context, meatus, scrotum, perineum, lower abdomen/groin, tissue state, surface findings, and image-limited pelvic-floor context.
+- If catheters, urethral sounds, devices, sleeves, markers, stickers, lubricant, or medical/procedural supplies are visible, describe their visible position and fit cautiously. Do not invent insertion depth, advancement, discomfort, sensation, or procedure stage unless image evidence or saved context directly supports it.
+- Compare visible findings with entered measurements, Foley/sound/device profile fields, prior Q&A findings, and session/video evidence. Use this to explain continuity, mismatch, or what cannot be assessed.
+- Keep the language anatomical and practical. Do not eroticize the review or write arousal-focused prose.
+`,
+  sections: [
+    { key: "pelvic_positioning_context", label: "Pelvic Positioning Context", color: "hsl(var(--chart-2))" },
+    { key: "external_genital_overview", label: "External Genital Overview", color: "hsl(var(--primary))" },
+    { key: "shaft_glans_foreskin_meatus", label: "Shaft, Glans, Foreskin & Meatus", color: "hsl(var(--chart-4))" },
+    { key: "scrotal_perineal_and_pelvic_floor_context", label: "Scrotal, Perineal & Pelvic-Floor Context", color: "hsl(var(--chart-5))" },
+    { key: "tissue_state_surface_findings", label: "Tissue State & Surface Findings", color: "hsl(var(--chart-3))" },
+    { key: "instrumentation_fit_and_device_context", label: "Instrumentation, Fit & Device Context", color: "hsl(var(--chart-1))" },
+    { key: "profile_context_reconciliation", label: "Profile Context Reconciliation", color: "hsl(var(--chart-2))" },
+    { key: "limitations_and_next_images", label: "Limitations & Next Images", color: "hsl(var(--muted-foreground))", required: false },
+  ],
+};
+
+function ProfileImageReviewPanel({
+  config,
+  sessions = [],
+  userProfile,
+  profileLoading = false,
+  evidenceLoading = false,
+}) {
+  const [images, setImages] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [archive, setArchive] = useState([]);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
+      if (rows[0]?.[config.resultKey]) setResult(rows[0][config.resultKey]);
+      if (Array.isArray(rows[0]?.[config.archiveKey])) setArchive(rows[0][config.archiveKey]);
+    });
+  }, [config.archiveKey, config.resultKey]);
+
+  const handleImageFiles = async (event) => {
+    const files = Array.from(event.target.files || []).filter((file) => file.type?.startsWith("image/"));
+    event.target.value = "";
+    if (!files.length) return;
+    setError("");
+    try {
+      const loaded = await Promise.all(files.map(imageFileToPayload));
+      setImages((current) => [...current, ...loaded].slice(0, config.maxImages || 8));
+    } catch (err) {
+      setError(err?.message || "Could not read one of the selected images.");
+    }
+  };
+
+  const removeImage = (id) => {
+    setImages((current) => current.filter((image) => image.id !== id));
+  };
+
+  const analyze = async () => {
+    if (!images.length) return;
+    setLoading(true);
+    setError("");
+    try {
+      const groundingContext = buildAIGroundingContext(userProfile);
+      const imageReviewContext = buildProfileImageReviewContext({ userProfile, sessions });
+      const firstNameToneCue = buildOptionalFirstNameToneCue(userProfile, { prioritizeProfileTone: true });
+      const imagePayload = images.map((image) => ({
+        filename: image.filename,
+        media_type: image.media_type,
+        data: image.data,
+      }));
+      const raw = await base44.integrations.Core.InvokeLLM({
+        model: "claude_sonnet_4_6",
+        max_tokens: 7000,
+        images: imagePayload,
+        prompt: `You are Sarah, performing a dedicated profile image review for PulsePoint.
+
+Review type: ${config.title}
+Review purpose: ${config.purpose}
+
+${groundingContext}
+${imageReviewContext}
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}
+${firstNameToneCue}
+${SESSION_CONTEXT_GROUNDING_RULE}
+
+IMAGE REVIEW RULES:
+- Treat these as consensual private profile-reference images for anatomical and physiological review.
+- Analyze only what is visible in the images and supported by saved profile context.
+- Use existing Q&A findings, entered profile metrics, and session/video evidence as context, not as permission to invent visible findings.
+- Do not eroticize the image or write arousal-focused prose.
+- Do not infer identity, diagnosis, pathology, intent, pain, force, or sexual activity.
+- If image quality, angle, lighting, posture, tissue state, cropping, or camera distortion limits confidence, say so clearly.
+- Use anatomical terminology naturally and clinically.
+- Write directly to the person using "you" and "your".
+- Separate direct visual observations from cautious profile implications.
+- Prefer specific observations over generic filler.
+- Preserve uncertainty. Use "appears", "is visible", "may reflect", or "cannot be assessed from this image" where appropriate.
+
+${config.reviewInstructions}
+
+Return a detailed structured review. Keep each paragraph TTS-ready: complete sentences, no markdown bullets, no clipped fragments.
+
+Uploaded image filenames:
+${images.map((image, index) => `${index + 1}. ${image.filename}`).join("\n")}`,
+        response_json_schema: {
+          type: "object",
+          properties: {
+            overview: { type: "string" },
+            ...Object.fromEntries(profileReviewResultSections(config).map((section) => [section.key, { type: "array", items: { type: "string" } }])),
+          },
+          required: ["overview", ...profileReviewResultSections(config).filter((section) => section.required !== false).map((section) => section.key)],
+        },
+      });
+      const parsed = normalizeAnatomicalProfileResult(typeof raw === "string" ? JSON.parse(raw) : raw);
+      if (!parsed?.overview) throw new Error("Sarah returned an empty image review.");
+      const storedResult = {
+        ...parsed,
+        _meta: buildImageReviewMeta(images, sessions, result?._meta),
+      };
+      setResult(storedResult);
+      const nextArchive = await saveProfileResultWithArchive({
+        resultKey: config.resultKey,
+        archiveKey: config.archiveKey,
+        kind: config.kind,
+        label: config.title,
+        result: storedResult,
+        sessionCount: sessions.length,
+      });
+      setArchive(nextArchive);
+    } catch (err) {
+      console.error(`${config.title} failed:`, err);
+      setError(aiErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const sections = profileReviewResultSections(config);
+  const paragraphs = [];
+  const paragraphMeta = [];
+  if (result) {
+    paragraphs.push(calmSpokenHeading(config.title));
+    paragraphMeta.push({ type: "title", color: config.color, displayLabel: config.title });
+    if (result.overview) {
+      paragraphs.push(naturalizeSpokenDates(result.overview));
+      paragraphMeta.push({ type: "overview" });
+    }
+    for (const section of sections) {
+      if ((result[section.key] || []).length) {
+        paragraphs.push(calmSpokenHeading(section.label));
+        paragraphMeta.push({ type: "section-title", section, displayLabel: section.label });
+      }
+      for (const finding of (result[section.key] || [])) {
+        paragraphs.push(naturalizeSpokenDates(finding));
+        paragraphMeta.push({ type: "section", section });
+      }
+    }
+  }
+
+  return (
+    <SectionCard icon={config.icon} title={config.title} color={config.color} defaultCollapsed={true}>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <p className="max-w-3xl text-xs leading-relaxed text-muted-foreground">{config.helper}</p>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground hover:bg-muted/60">
+              <Upload className="h-3.5 w-3.5" /> Add Images
+              <input type="file" accept="image/*" multiple className="hidden" onChange={handleImageFiles} />
+            </label>
+            <Button size="sm" onClick={analyze} disabled={loading || profileLoading || evidenceLoading || !userProfile || !images.length} className="h-8 gap-1.5 text-xs">
+              {loading
+                ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Reviewing...</>
+                : <><ImageIcon className="h-3.5 w-3.5" />{result ? "Re-review" : "Review Images"}</>}
+            </Button>
+          </div>
+        </div>
+
+        {result && (
+          <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+            <span>{result?._meta?.last_generated_at ? `Generated ${formatGeneratedAt(result._meta.last_generated_at)}` : "Generated time unavailable"}</span>
+            <span>Images reviewed: {result?._meta?.image_count ?? "?"}</span>
+            {Array.isArray(result?._meta?.image_filenames) && result._meta.image_filenames.length > 0 && (
+              <span className="max-w-full truncate">Files: {result._meta.image_filenames.join(", ")}</span>
+            )}
+          </div>
+        )}
+
+        {profileLoading && !result && (
+          <p className="text-xs text-muted-foreground">Loading saved profile context...</p>
+        )}
+
+        {evidenceLoading && !result && (
+          <p className="text-xs text-muted-foreground">Loading saved session evidence...</p>
+        )}
+
+        {!profileLoading && !images.length && (
+          <p className="text-xs text-muted-foreground">{config.emptyText}</p>
+        )}
+
+        {images.length > 0 && (
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {images.map((image) => (
+              <div key={image.id} className="overflow-hidden rounded-lg border border-border bg-muted/20">
+                <div className="relative aspect-[4/3] bg-black">
+                  <img src={image.previewUrl} alt={image.filename} className="h-full w-full object-contain" />
+                  <button
+                    type="button"
+                    onClick={() => removeImage(image.id)}
+                    className="absolute right-1 top-1 rounded-full bg-background/85 p-1 text-muted-foreground hover:text-destructive"
+                    aria-label={`Remove ${image.filename}`}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <p className="truncate px-2 py-1.5 text-[10px] text-muted-foreground">{image.filename}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <CompactError message={error} />
+
+        {result && (
+          <TTSReader
+            sessionId={config.ttsSessionId}
+            title={config.title}
+            sourceGeneratedAt={result?._meta?.last_generated_at}
+            paragraphs={paragraphs}
+            renderParagraph={(text, idx, isActive, _isBuffering, activeSentenceIdx, startFromSentence) => {
+              const meta = paragraphMeta[idx];
+              if (!meta) return null;
+              if (meta.type === "title" || meta.type === "section-title") {
+                const color = meta.section?.color || meta.color || config.color;
+                return (
+                  <p
+                    className="mt-4 border-t border-border pt-3 text-xs font-semibold transition-colors"
+                    style={{ color, background: isActive ? `${color}18` : "transparent" }}
+                  >
+                    {meta.displayLabel || text}
+                  </p>
+                );
+              }
+              if (meta.type === "overview") {
+                return (
+                  <p
+                    className="text-base font-medium leading-relaxed border-l-2 pl-3 py-1 transition-all duration-200 rounded-r-md text-foreground"
+                    style={{
+                      borderColor: isActive ? config.color : `${config.color}99`,
+                      background: isActive ? `${config.color}18` : "transparent",
+                    }}
+                  >
+                    {renderSentenceHighlightedText(text, activeSentenceIdx, startFromSentence)}
+                  </p>
+                );
+              }
+              const { section } = meta;
+              return (
+                <p
+                  className="border-l-2 pl-3 py-1 text-sm leading-relaxed transition-all duration-200 rounded-r-md"
+                  style={{
+                    borderColor: isActive ? section.color : `${section.color}66`,
+                    background: isActive ? `${section.color}18` : "transparent",
+                  }}
+                >
+                  {renderSentenceHighlightedText(text, activeSentenceIdx, startFromSentence)}
+                </p>
+              );
+            }}
+          />
+        )}
+
+        <ProfileArchiveList
+          title={`${config.shortTitle} Run Archive`}
+          archive={archive}
+          currentResult={result}
+          onViewRun={(archivedResult) => archivedResult && setResult(archivedResult)}
+        />
+      </div>
+    </SectionCard>
   );
 }
 
@@ -1952,6 +2368,20 @@ export default function Profiler() {
         profileLoading={profileContextLoading}
         evidenceLoading={sessionEvidenceLoading}
         timelineLoading={timelineLoading}
+      />
+      <ProfileImageReviewPanel
+        config={HEAD_TO_TOE_IMAGE_REVIEW_CONFIG}
+        sessions={sessions}
+        userProfile={userProfile}
+        profileLoading={profileContextLoading}
+        evidenceLoading={sessionEvidenceLoading}
+      />
+      <ProfileImageReviewPanel
+        config={PELVIC_GENITAL_IMAGE_REVIEW_CONFIG}
+        sessions={sessions}
+        userProfile={userProfile}
+        profileLoading={profileContextLoading}
+        evidenceLoading={sessionEvidenceLoading}
       />
       <StimulationMethodsPanel sessions={sessions} userProfile={userProfile} evidenceLoading={sessionEvidenceLoading} />
       <NearClimaxPanel sessions={sessions} allTimelines={allTimelines} userProfile={userProfile} timelineLoading={timelineLoading} />
