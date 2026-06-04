@@ -3,7 +3,7 @@ import { Activity, AlertCircle, Brain, Lightbulb, ScanSearch, ShieldCheck } from
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
-import { buildBodyExplorationVisualEvidenceDigest } from "@/lib/visualEvidence";
+import { buildBodyExplorationVideoPassDigest, buildBodyExplorationVisualEvidenceDigest } from "@/lib/visualEvidence";
 import AIOutputReader from "./AIOutputReader";
 import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
@@ -58,6 +58,7 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
 
   const attachAnalysisMeta = (analysis, previousAnalysis) => {
     return {
+      ...(previousAnalysis || {}),
       ...analysis,
       _meta: buildGenericAIContentMeta(previousAnalysis?._meta, null, {
         source_exploration_updated_at: exploration.updated_date || exploration.updated_at || exploration.modified_date || null,
@@ -89,6 +90,7 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
       });
       const groundingContext = buildAIGroundingContext(userProfile);
       const visualEvidenceContext = buildBodyExplorationVisualEvidenceDigest(exploration);
+      const videoPassEvidenceContext = buildBodyExplorationVideoPassDigest(exploration);
       const raw = await base44.integrations.Core.InvokeLLM({
         model: "claude_sonnet_4_6",
         max_tokens: 6000,
@@ -104,6 +106,7 @@ Focus on:
 
 ${groundingContext}
 ${visualEvidenceContext}
+${videoPassEvidenceContext}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 
 STYLE:
@@ -134,6 +137,7 @@ ${JSON.stringify({
   heart_rate: telemetrySummary(timelineRows, exploration),
   emg_rows: emgRows.length,
   reviewed_visual_evidence: visualEvidenceContext || null,
+  reviewed_video_pass_evidence: videoPassEvidenceContext || null,
 }, null, 2)}
 
 ${events.length ? `TIMESTAMPED NOTES:\n${events.join("\n")}` : "No timestamped notes were recorded."}`,
@@ -149,7 +153,8 @@ ${events.length ? `TIMESTAMPED NOTES:\n${events.join("\n")}` : "No timestamped n
           required: ["summary", "telemetry_findings", "mechanical_findings", "comfort_safety_findings", "recommendations"],
         },
       });
-      const parsed = attachAnalysisMeta(normalizeAnalysis(raw), result);
+      const previousAnalysis = exploration.ai_body_exploration || result;
+      const parsed = attachAnalysisMeta(normalizeAnalysis(raw), previousAnalysis);
       setResult(parsed);
       await base44.entities.BodyExploration.update(exploration.id, { ai_body_exploration: parsed });
     } catch (err) {

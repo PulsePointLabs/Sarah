@@ -3,7 +3,12 @@ import { Check, ChevronDown, ChevronUp, Clapperboard, Loader2, Mic, Play, Sparkl
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { sessionContextEvidenceText } from "@/lib/sessionContext";
-import { buildSessionVideoPassDigest, normalizeSessionVideoPassFindings } from "@/lib/visualEvidence";
+import {
+  buildBodyExplorationVideoPassDigest,
+  buildSessionVideoPassDigest,
+  normalizeBodyExplorationVideoPassFindings,
+  normalizeSessionVideoPassFindings,
+} from "@/lib/visualEvidence";
 
 function fmtMmSs(totalSeconds) {
   const v = Math.max(0, Math.round(Number(totalSeconds) || 0));
@@ -113,6 +118,56 @@ function buildSessionVideoContext(session, selectedVideo, timelineRows = []) {
   ].filter(Boolean).join("\n");
 }
 
+function buildBodyExplorationVideoContext(exploration, selectedVideo, timelineRows = []) {
+  const methods = listText(exploration?.methods);
+  const linkedLabel = selectedVideo?.label || selectedVideo?.filename || selectedVideo?.path || "";
+  const deviceLines = [
+    methods ? `Methods: ${methods}` : null,
+    exploration?.exploration_type ? `Exploration type: ${exploration.exploration_type}` : null,
+    exploration?.focus_areas ? `Focus areas: ${compactText(exploration.focus_areas, 600)}` : null,
+    exploration?.purpose ? `Purpose/question: ${compactText(exploration.purpose, 700)}` : null,
+    exploration?.devices ? `Devices/setup: ${compactText(exploration.devices, 900)}` : null,
+    exploration?.foley_size ? `Foley size: ${exploration.foley_size}` : null,
+    exploration?.foley_type ? `Foley type: ${exploration.foley_type}` : null,
+    exploration?.sounding_notes ? `Instrumentation notes: ${compactText(exploration.sounding_notes, 900)}` : null,
+    exploration?.comfort_notes ? `Comfort/tolerance notes: ${compactText(exploration.comfort_notes, 900)}` : null,
+    exploration?.unusual_sensations ? `Unusual sensations: ${compactText(exploration.unusual_sensations, 700)}` : null,
+    exploration?.findings ? `Logged findings: ${compactText(exploration.findings, 900)}` : null,
+  ].filter(Boolean);
+  const timelineEvents = (exploration?.event_timeline || [])
+    .filter((event) => String(event?.note || "").trim())
+    .slice()
+    .sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0))
+    .slice(0, 80)
+    .map((event) => `[${fmtMmSs(event.time_s)}] ${compactText(event.note, 180)}`)
+    .join(" | ");
+  const audioPasses = (Array.isArray(exploration?.ai_body_exploration?.ai_audio_passes) ? exploration.ai_body_exploration.ai_audio_passes : [])
+    .slice(0, 12)
+    .map((pass) => {
+      const spoken = (pass.events || [])
+        .filter((event) => event.transcript)
+        .slice(0, 6)
+        .map((event) => `[${fmtMmSs(event.startSeconds)}] "${compactText(event.transcript, 140)}"`)
+        .join(" | ");
+      return `${fmtMmSs(pass.start_s)}-${fmtMmSs(pass.end_s)}: ${spoken || compactText(pass.summary, 220)}`;
+    })
+    .filter(Boolean)
+    .join(" || ");
+  const telemetrySpan = timelineRows.length
+    ? `Telemetry rows: ${timelineRows.length}; exploration span approximately ${fmtMmSs(estimateSessionEnd(exploration, timelineRows))}.`
+    : "";
+
+  return [
+    linkedLabel ? `Linked video selected: ${linkedLabel}` : null,
+    selectedVideo ? `Linked video alignment: source video 0:00 = exploration ${fmtSignedMmSs(timelineOffsetSeconds(selectedVideo))}.` : null,
+    telemetrySpan,
+    deviceLines.length ? `Known exploration/procedure context: ${deviceLines.join(" | ")}` : null,
+    exploration?.notes ? `Full exploration notes: ${compactText(exploration.notes, 1800)}` : null,
+    timelineEvents ? `Manual/timestamped exploration notes: ${timelineEvents}` : null,
+    audioPasses ? `Accepted audio-pass evidence: ${audioPasses}` : null,
+  ].filter(Boolean).join("\n");
+}
+
 function candidateWindows(session, timelineRows, count = 6, clipSeconds = 24) {
   const end = estimateSessionEnd(session, timelineRows);
   const anchors = [];
@@ -128,7 +183,7 @@ function candidateWindows(session, timelineRows, count = 6, clipSeconds = 24) {
     .sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0))
     .forEach((event) => {
       const note = String(event.note || "").toLowerCase();
-      if (/(climax|ejac|orgasm|pause|resume|stroke|stimulation|foley|feet|foot|toe|heel|erection|recovery|bracing)/.test(note)) {
+      if (/(climax|ejac|orgasm|pause|resume|stroke|stimulation|foley|catheter|insert|insertion|withdraw|removal|sound|sounding|dilator|meatus|urethra|urethral|balloon|instrument|comfort|tolerance|feet|foot|toe|heel|erection|recovery|bracing)/.test(note)) {
         anchors.push(Number(event.time_s));
       }
     });
@@ -236,8 +291,20 @@ function cleanDraftEventNote(text) {
     .trim();
 }
 
-function normalizeDraftEventCategories(categories = [], note = "", fallbackWindow = {}) {
+function normalizeDraftEventCategories(categories = [], note = "", fallbackWindow = {}, isExploration = false) {
   const list = (Array.isArray(categories) ? categories : [categories || "other"]).filter(Boolean);
+  if (isExploration) {
+    const allowed = new Set(EXPLORATION_EVENT_CATEGORIES.map((category) => category.value));
+    const mapped = list.map((category) => {
+      if (category === "equipment" || category === "environment") return "setup";
+      if (category === "physiology" || category === "movement") return "physical";
+      if (category === "device" || category === "foley" || category === "catheter" || category === "sounding") return "instrumentation";
+      if (category === "device_change" || category === "instrument_change") return "instrumentation_change";
+      if (category === "position_or_comfort" || category === "tolerance") return "comfort";
+      return category;
+    }).filter((category) => allowed.has(category));
+    return mapped.length ? [...new Set(mapped)] : ["other"];
+  }
   const text = String(note || "").toLowerCase();
   const windowStart = Number(fallbackWindow?.start || 0);
   return list.map((category) => {
@@ -290,15 +357,28 @@ function videoRoleLabel(role) {
   return VIDEO_ROLE_OPTIONS.find((option) => option.value === role)?.shortLabel || "Main";
 }
 
-function videoFocusInstruction(video = {}, selectedRole = "") {
+function videoFocusInstruction(video = {}, selectedRole = "", isExploration = false) {
   const role = selectedRole || inferVideoRole(video);
   if (role === "feet") {
+    if (isExploration) {
+      return "This is the feet/lower-body evidence lane for a body exploration/procedure review. Findings and draft timeline events must be about visible feet, toes, heels, soles, ankles, legs, lower-body tension/relaxation/bracing/asymmetry, tremor, shudder, and lower-body response during instrumentation or positioning. Do not create hand, genital, or device events from the feet lane unless a visible lower-body response is the main event.";
+    }
     return "This is the feet/lower-body evidence lane. Findings and draft timeline events must be about visible feet, toes, heels, soles, ankles, legs, lower-body tension/relaxation/bracing/asymmetry, tremor, shudder, and lower-body transitions. Actively compare frame-to-frame toe curl, downward plantar flexion/planting, heel separation/lift, foot fan/splay, leg tensing, tremble, oscillation, and left/right asymmetry. Do not create hand, genital, stimulation, device, lubricant, control-object, erection, or detumescence events from the feet lane; those belong to main/composite or lateral views. If the feet/lower body truly look static, say so once in the summary only and return empty findings/events rather than repeating no-change cards.";
   }
   if (role === "lateral") {
-    return "This is a lateral/full-body angle. Prioritize head-to-toe body state: posture, pelvic lift/drop, abdominal or chest motion if visible enough for cautious breathing assessment, leg/foot tension, relaxation, and meaningful whole-body transitions.";
+    return isExploration
+      ? "This is a lateral/full-body angle for a body exploration/procedure review. Prioritize posture, positioning, breathing/body settling when visible, leg/foot tension or relaxation, comfort/tolerance cues, and meaningful whole-body response during instrumentation or setup changes."
+      : "This is a lateral/full-body angle. Prioritize head-to-toe body state: posture, pelvic lift/drop, abdominal or chest motion if visible enough for cautious breathing assessment, leg/foot tension, relaxation, and meaningful whole-body transitions.";
+  }
+  if (isExploration) {
+    return "This is the main body exploration/procedure view. Prioritize visible Foley catheter, urethral sound/dilator, meatal/urethral context when visible or logged, insertion/withdrawal/adjustment, device position, genital/body state, tissue appearance, lubricant/tool handling, comfort/tolerance cues, and body response. Do not treat procedure handling as active stimulation unless the record clearly shows or logs active stimulation.";
   }
   return "This is a main/genital-composite session view. Prioritize stimulation mechanics, visible genital state, device/lubrication use, hand contact transitions, cautious visible fluid/moisture labeling, and only then supporting body movement.";
+}
+
+function videoRoleHelper(role, isExploration = false) {
+  if (isExploration) return videoFocusInstruction({}, role, true);
+  return VIDEO_ROLE_OPTIONS.find((option) => option.value === role)?.helper || "";
 }
 
 const LOWER_BODY_TERMS = [
@@ -411,7 +491,7 @@ function isOutOfLaneForRole(item, role) {
   return otherIndex < lowerIndex;
 }
 
-function normalizeAIResult(raw, fallbackWindow, selectedRole = "main") {
+function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExploration = false) {
   const value = typeof raw === "string" ? null : raw;
   const findings = Array.isArray(value?.findings)
     ? value.findings
@@ -439,7 +519,7 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main") {
           fallbackWindow.end,
         ),
         note,
-        category: normalizeDraftEventCategories(event.category, note, fallbackWindow),
+        category: normalizeDraftEventCategories(event.category, note, fallbackWindow, isExploration),
         annotation_tags: Array.isArray(event.annotation_tags) ? event.annotation_tags : ["other_context"],
         confidence: event.confidence || "moderate",
       };
@@ -447,9 +527,19 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main") {
   };
 }
 
-function normalizeEventCategories(categories = []) {
-  const allowed = new Set(["stimulation", "stimulation_started", "stimulation_paused", "stimulation_resumed", "stimulation_stopped", "motion_pause", "motion_resume", "movement_observed", "sensation", "physical", "other"]);
+function normalizeEventCategories(categories = [], isExploration = false) {
+  const allowed = new Set(isExploration
+    ? EXPLORATION_EVENT_CATEGORIES.map((category) => category.value)
+    : ["stimulation", "stimulation_started", "stimulation_paused", "stimulation_resumed", "stimulation_stopped", "motion_pause", "motion_resume", "movement_observed", "sensation", "physical", "other"]);
   const mapped = categories.map((category) => {
+    if (isExploration) {
+      if (category === "equipment" || category === "environment") return "setup";
+      if (category === "physiology" || category === "movement") return "physical";
+      if (category === "device" || category === "foley" || category === "catheter" || category === "sounding") return "instrumentation";
+      if (category === "device_change" || category === "instrument_change") return "instrumentation_change";
+      if (category === "position_or_comfort" || category === "tolerance") return "comfort";
+      return category;
+    }
     if (category === "movement") return "movement_observed";
     if (category === "physiology") return "physical";
     if (category === "environment" || category === "equipment") return "other";
@@ -458,11 +548,11 @@ function normalizeEventCategories(categories = []) {
   return mapped.length ? [...new Set(mapped)] : ["other"];
 }
 
-function eventFromCard(card, event, index) {
+function eventFromCard(card, event, index, isExploration = false) {
   return {
     time_s: Number(event.time_s || card.window.start),
     note: event.note,
-    category: normalizeEventCategories(event.category),
+    category: normalizeEventCategories(event.category, isExploration),
     source: "ai_video_pass",
     annotation_tags: event.annotation_tags?.length ? event.annotation_tags : ["other_context"],
     ai_annotation: {
@@ -520,6 +610,18 @@ function persistedCardFrom(card) {
   };
 }
 
+function normalizeVideoPassFindingsForRecord(recordOrEntries, isExploration = false) {
+  return isExploration
+    ? normalizeBodyExplorationVideoPassFindings(recordOrEntries)
+    : normalizeSessionVideoPassFindings(recordOrEntries);
+}
+
+function buildVideoPassDigestForRecord(analysisBase, isExploration = false) {
+  return isExploration
+    ? buildBodyExplorationVideoPassDigest({ ai_body_exploration: analysisBase })
+    : buildSessionVideoPassDigest({ ai_analysis: analysisBase });
+}
+
 function compactVideoPassFlow(entries = []) {
   return normalizeSessionVideoPassFindings(entries).map((entry) => ({
     id: entry.id,
@@ -568,12 +670,12 @@ function compactSavedContinuity(entry) {
   ].filter(Boolean).join("\n");
 }
 
-function findSavedPriorContinuity(session, selectedVideo, window) {
+function findSavedPriorContinuity(session, selectedVideo, window, isExploration = false) {
   const currentStart = Number(window?.start);
   if (!Number.isFinite(currentStart)) return "";
   const selectedFingerprint = selectedVideo?.fingerprint || "";
   const selectedFilename = selectedVideo?.filename || selectedVideo?.label || "";
-  const entries = normalizeSessionVideoPassFindings(session)
+  const entries = normalizeVideoPassFindingsForRecord(session, isExploration)
     .filter((entry) => {
       const end = Number(entry.clip?.end_s);
       if (!Number.isFinite(end) || end > currentStart + 0.5) return false;
@@ -620,20 +722,24 @@ function persistedTimelineEventsForCard(card, session) {
   });
 }
 
-function isCardAccepted(card, session, acceptedIds) {
+function isCardAccepted(card, session, acceptedIds, isExploration = false) {
   if (acceptedIds.has(card.id)) return true;
-  const savedCard = normalizeSessionVideoPassFindings(session).some((entry) => sameSavedCardClip(card, entry));
+  const savedCard = normalizeVideoPassFindingsForRecord(session, isExploration).some((entry) => sameSavedCardClip(card, entry));
   if (!savedCard) return false;
   if (!card.events?.length) return true;
   return persistedTimelineEventsForCard(card, session).length >= card.events.length;
 }
 
-function eventFromAudioResult(event, sourceVideo) {
+function eventFromAudioResult(event, sourceVideo, isExploration = false) {
   return {
     time_s: Number(event.startSeconds || 0),
     note: event.note || "Audio activity detected.",
-    category: event.transcript ? ["other", "sensation"] : ["other"],
-    annotation_tags: event.transcript ? ["sensation_report", "other_context"] : ["other_context"],
+    category: isExploration
+      ? (event.transcript ? ["instrumentation", "sensation"] : ["other"])
+      : (event.transcript ? ["other", "sensation"] : ["other"]),
+    annotation_tags: isExploration
+      ? (event.transcript ? ["instrumentation_action", "sensation_report", "other_context"] : ["other_context"])
+      : (event.transcript ? ["sensation_report", "other_context"] : ["other_context"]),
     source: "ai_audio_pass",
     confidence: event.confidence || "moderate",
     audio_review: {
@@ -657,9 +763,14 @@ export default function AIVideoPassPanel({
   session,
   timelineRows = [],
   linkedLocalVideos = [],
+  recordType = "session",
   onSessionUpdate,
   onCursorChange,
 }) {
+  const isExploration = recordType === "body_exploration" || session?.standalone_body_exploration;
+  const recordLabel = isExploration ? "exploration" : "session";
+  const analysisField = isExploration ? "ai_body_exploration" : "ai_analysis";
+  const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
   const availableVideos = useMemo(() => linkedLocalVideos.filter((video) => video?.path && video.exists !== false), [linkedLocalVideos]);
   const previewVideoRef = useRef(null);
   const [selectedPath, setSelectedPath] = useState(availableVideos[0]?.path || "");
@@ -686,7 +797,7 @@ export default function AIVideoPassPanel({
   const selectedVideoOffset = timelineOffsetSeconds(selectedVideo);
   const selectedVideoStreamUrl = selectedVideo?.path ? base44.integrations.Core.localVideoStreamUrl(selectedVideo.path) : "";
   const [selectedVideoRole, setSelectedVideoRole] = useState(inferVideoRole(selectedVideo));
-  const selectedVideoRoleHelper = VIDEO_ROLE_OPTIONS.find((option) => option.value === selectedVideoRole)?.helper;
+  const selectedVideoRoleHelper = videoRoleHelper(selectedVideoRole, isExploration);
   const sessionEnd = useMemo(() => estimateSessionEnd(session, timelineRows), [session, timelineRows]);
   const plannedWindows = useMemo(
     () => scanMode === "continue"
@@ -745,7 +856,9 @@ export default function AIVideoPassPanel({
     setAcceptedIds(new Set());
     try {
       const nextCards = [];
-      const sessionVideoContext = buildSessionVideoContext(session, selectedVideo, timelineRows);
+      const videoContext = isExploration
+        ? buildBodyExplorationVideoContext(session, selectedVideo, timelineRows)
+        : buildSessionVideoContext(session, selectedVideo, timelineRows);
       let cursor = scanMode === "continue" ? scanCursor : 0;
       let batchNumber = 0;
       let windowsToRun = plannedWindows;
@@ -770,11 +883,11 @@ export default function AIVideoPassPanel({
           };
           const telemetry = nearestTelemetrySummary(timelineRows, reviewWindow.start, reviewWindow.end);
           const frameTiming = (preview.frames || [])
-            .map((frame, index) => `frame ${index + 1} = session ${fmtMmSs(sessionTimeForSource(frame.frameTimeSeconds, selectedVideo))} (source ${fmtMmSs(frame.frameTimeSeconds)})`)
+            .map((frame, index) => `frame ${index + 1} = ${recordLabel} ${fmtMmSs(sessionTimeForSource(frame.frameTimeSeconds, selectedVideo))} (source ${fmtMmSs(frame.frameTimeSeconds)})`)
             .join(", ");
           setStatus(`Sarah reviewing ${label}${autoContinue && scanMode === "continue" ? ` · batch ${batchNumber}` : ""}`);
           const continuityContext = compactCardContinuity(nextCards[nextCards.length - 1])
-            || findSavedPriorContinuity(session, selectedVideo, window)
+            || findSavedPriorContinuity(session, selectedVideo, window, isExploration)
             || "No prior reviewed window is available. Treat this as the first observed window, then establish baseline context for the next window.";
           const images = (preview.frames || []).map((frame) => ({
             filename: frame.filename,
@@ -795,7 +908,7 @@ export default function AIVideoPassPanel({
                     properties: {
                       title: { type: "string" },
                       text: { type: "string" },
-                      category: { type: "string", enum: ["stimulation", "physiology", "physical", "movement", "environment", "equipment", "other"] },
+                      category: { type: "string", enum: isExploration ? ["instrumentation", "physiology", "physical", "movement", "comfort", "environment", "equipment", "other"] : ["stimulation", "physiology", "physical", "movement", "environment", "equipment", "other"] },
                       confidence: { type: "string", enum: ["low", "moderate", "high"] },
                     },
                     required: ["title", "text", "category", "confidence"],
@@ -813,7 +926,7 @@ export default function AIVideoPassPanel({
                         type: "array",
                         items: {
                           type: "string",
-                          enum: ["stimulation", "stimulation_started", "stimulation_paused", "stimulation_resumed", "stimulation_stopped", "motion_pause", "motion_resume", "movement_observed", "sensation", "physical", "other"],
+                          enum: isExploration ? EXPLORATION_EVENT_CATEGORIES.map((category) => category.value) : ["stimulation", "stimulation_started", "stimulation_paused", "stimulation_resumed", "stimulation_stopped", "motion_pause", "motion_resume", "movement_observed", "sensation", "physical", "other"],
                         },
                       },
                       annotation_tags: { type: "array", items: { type: "string" } },
@@ -826,9 +939,15 @@ export default function AIVideoPassPanel({
               required: ["summary", "findings", "events"],
             },
             images,
-            prompt: `You are Sarah, reviewing sampled frames from a linked local session video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
+            prompt: `${isExploration ? `HIGH-PRIORITY BODY EXPLORATION MODE:
+This is a Body Exploration / instrumentation review, not an active-stimulation session analysis. Watch for procedure, setup, device position, genital/body state, tissue appearance, Foley catheter or urethral sound/dilator presence, insertion/withdrawal/adjustment, meatal/urethral context when visible or logged, comfort/tolerance cues, breathing/legs/body response, and telemetry-supported autonomic response.
+Do not force a stimulation lifecycle. Do not create stimulation start/pause/resume/stop events. If masturbation or active stimulation is not visibly present and not logged, treat hands/devices as procedure/instrumentation context, not stimulation. Interpret Foley/sound/catheter evidence through the exploration notes and mechanical profile context when provided, while staying strict about what is visible.
+Use exploration event categories only: instrumentation, instrumentation_change, physical, sensation, comfort, setup, or other.
+Draft event examples for this mode: "Foley catheter remains visible at the meatus", "Urethral sound advances with brief leg tension", "Catheter position adjusted while breathing stays steady", "Glans appears fuller with visible lubricant sheen", "Body relaxes after withdrawal", "Comfort note aligns with visible repositioning".` : ""}
 
-Session context grounding has priority when it identifies known setup, devices, materials, or technique. Use the session notes, methods, devices, and timestamped/manual notes below to interpret ambiguous visible objects and contact locations. For example, if the session context says a vibrator is held at the perineum during stimulation and the frames show a matching device/contact at that location, call it a perineal vibrator/contact rather than a vague "blue device near the scrotum and genitals." If context and visuals do not line up, state the uncertainty instead of forcing the label.
+You are Sarah, reviewing sampled frames from a linked local ${recordLabel} video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
+
+${isExploration ? "Exploration/procedure context grounding" : "Session context grounding"} has priority when it identifies known setup, devices, materials, or technique. Use the ${recordLabel} notes, methods, devices, and timestamped/manual notes below to interpret ambiguous visible objects and contact locations. ${isExploration ? "For example, if the exploration context says an 18 French Foley catheter or urethral sound is in use and the frames show a matching device at the meatus, identify it as that supported instrumentation rather than vague stimulation or generic object handling." : "For example, if the session context says a vibrator is held at the perineum during stimulation and the frames show a matching device/contact at that location, call it a perineal vibrator/contact rather than a vague \"blue device near the scrotum and genitals.\""} If context and visuals do not line up, state the uncertainty instead of forcing the label.
 
 Hard wording rule: do not use "edging", "edging maneuver", "intentional edging", "holding back", "delaying climax", or similar intent language unless the nearby session event, session note, or user caption explicitly uses that exact concept. If the visible behavior is a hand lift, withdrawal, pause, restart, speed change, or contact change, describe the observable behavior only.
 
@@ -841,7 +960,7 @@ Timeline timing rule: sampled frames can lag the true transition. Do not assume 
 Stimulation lifecycle rule: there should usually be only one "stimulation_started" event for the initial obvious masturbation/contact and only one "stimulation_stopped" event for the true post-climax/end-of-session cessation. Inside the session, use "stimulation_paused", "stimulation_resumed", or plain "stimulation" for hand lifts, contact changes, technique shifts, lubrication breaks, device handling, and post-climax milking/recovery transitions. Do not create repeated start/stop events for adjacent windows that are really pause/resume or method changes.
 
 Camera/view focus:
-${videoFocusInstruction(selectedVideo, selectedVideoRole)}
+${videoFocusInstruction(selectedVideo, selectedVideoRole, isExploration)}
 
 Source-lane rule: treat the selected camera as its own evidence lane. Main/composite owns genital, stimulation, hand contact, device, lubricant, and technique observations. Feet/lower-body owns feet, toes, heels, soles, ankles, legs, planting, bracing, tremor, shudder, and lower-body tension/relaxation observations. Lateral/full-body owns posture, pelvic lift/drop, breathing cues, whole-body tension, and major body transitions. For a feet/lower-body pass, do not draft timeline events about right/left hand movement, genital contact, control objects, lube/device handling, erection/genital state, or stimulation pause/resume unless a visible foot/leg change is the main event.
 
@@ -869,28 +988,33 @@ Do not create a standalone finding or timeline event just because static trackin
 Continuity rule: each window is part of a sequential review. Use the previous reviewed window below as context. In this current window, prioritize what continues, what changed, what started, what stopped, and what became more or less visible. Do not repeat stable background details from the prior window unless they changed or are needed to explain a new observation.
 ${continuityContext}
 
-Full session context for this video review:
-${sessionVideoContext || "No additional session context is available."}
+Full ${recordLabel} context for this video review:
+${videoContext || `No additional ${recordLabel} context is available.`}
 
-Session window: ${fmtMmSs(reviewWindow.start)} to ${fmtMmSs(reviewWindow.end)} (${reviewWindow.start.toFixed(1)}s-${reviewWindow.end.toFixed(1)}s).
-Source video window: ${fmtMmSs(sourceStart)} to ${fmtMmSs(sourceEnd)}. Video 0:00 aligns to session ${fmtSignedMmSs(selectedVideoOffset)}.
+${isExploration ? "Exploration" : "Session"} window: ${fmtMmSs(reviewWindow.start)} to ${fmtMmSs(reviewWindow.end)} (${reviewWindow.start.toFixed(1)}s-${reviewWindow.end.toFixed(1)}s).
+Source video window: ${fmtMmSs(sourceStart)} to ${fmtMmSs(sourceEnd)}. Video 0:00 aligns to ${recordLabel} ${fmtSignedMmSs(selectedVideoOffset)}.
 Sampled frame timing in image order: ${frameTiming || "No decoded frame timing was returned."}
 Telemetry in this window: ${telemetry}
-Session methods/devices/context: ${[
+${isExploration ? "Exploration procedure/devices/context" : "Session methods/devices/context"}: ${[
   ...(session?.methods || []),
+  isExploration && session?.exploration_type ? `Type: ${session.exploration_type}` : null,
+  isExploration && session?.devices ? `Devices: ${session.devices}` : null,
+  isExploration && session?.foley_size ? `Foley size: ${session.foley_size}` : null,
   session?.sleeve_type ? `Sleeve: ${session.sleeve_type}` : null,
   session?.foley_type ? `Foley: ${session.foley_type}` : null,
+  isExploration && session?.sounding_notes ? `Instrumentation notes: ${session.sounding_notes}` : null,
+  isExploration && session?.comfort_notes ? `Comfort notes: ${session.comfort_notes}` : null,
   session?.tens_placement ? `TENS placement: ${session.tens_placement}` : null,
   session?.estim_notes ? `E-stim notes: ${session.estim_notes}` : null,
 ].filter(Boolean).join(" | ") || "No specific device context listed."}
-Nearby session events: ${(session?.event_timeline || [])
+Nearby ${recordLabel} events: ${(session?.event_timeline || [])
   .filter((event) => Math.abs(Number(event.time_s || 0) - ((window.start + window.end) / 2)) <= 75)
   .map((event) => `[${fmtMmSs(event.time_s)}] ${event.note}`)
   .join(" | ") || "None nearby."}
 
-Return concise visual findings and 1-3 proposed timeline events only when the window contains useful non-repetitive evidence. Good targets are genital state changes, stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, scrotal/perineal observations, cautious moisture/sheen observations, pelvic lift/drop, breathing/abdomen cues when visible, body/feet bracing, leg tensing/relaxing, toe curl/downward planting, tremble/shudder, device/position changes, and important setup context only when it changes interpretation. Use low confidence or omit the finding when the evidence is ambiguous. Keep the full JSON response compact so it can finish cleanly.`,
+Return concise visual findings and 1-3 proposed timeline events only when the window contains useful non-repetitive evidence. Good targets are ${isExploration ? "Foley/catheter/sound/dilator presence or movement, insertion/withdrawal/adjustment, meatal or urethral context when visible/supported, genital/body state changes, tissue appearance, lubricant/device handling, comfort/tolerance cues, breathing/body settling, leg/feet tension or relaxation, procedure setup changes, and telemetry-supported autonomic response" : "genital state changes, stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, scrotal/perineal observations, cautious moisture/sheen observations, pelvic lift/drop, breathing/abdomen cues when visible, body/feet bracing, leg tensing/relaxing, toe curl/downward planting, tremble/shudder, device/position changes, and important setup context only when it changes interpretation"}. Use low confidence or omit the finding when the evidence is ambiguous. Keep the full JSON response compact so it can finish cleanly.`,
           });
-          const normalized = normalizeAIResult(ai, reviewWindow, selectedVideoRole);
+          const normalized = normalizeAIResult(ai, reviewWindow, selectedVideoRole, isExploration);
           const card = {
             id: `${Date.now()}-${batchNumber}-${i}`,
             label,
@@ -970,9 +1094,9 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
     if (!events.length) return;
     const nextEvents = [
       ...(session?.event_timeline || []),
-      ...events.map((event) => eventFromAudioResult(event, selectedVideo)),
+      ...events.map((event) => eventFromAudioResult(event, selectedVideo, isExploration)),
     ].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0));
-    const existingAnalysis = session?.ai_analysis || {};
+    const existingAnalysis = session?.[analysisField] || {};
     const audioReview = {
       source_video: {
         filename: selectedVideo?.filename || selectedVideo?.label || "",
@@ -995,8 +1119,8 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
         ...(Array.isArray(existingAnalysis.ai_audio_passes) ? existingAnalysis.ai_audio_passes : []),
       ].slice(0, 80),
     };
-    const updated = { event_timeline: nextEvents, ai_analysis: nextAnalysis };
-    await base44.entities.Session.update(session.id, updated);
+    const updated = { event_timeline: nextEvents, [analysisField]: nextAnalysis };
+    await entity.update(session.id, updated);
     onSessionUpdate?.({ ...session, ...updated });
     setAudioAccepted(true);
   };
@@ -1035,9 +1159,9 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
     });
     const nextEvents = [
       ...retainedEvents,
-      ...cleanedEvents.map((event, index) => eventFromCard(card, event, index)),
+      ...cleanedEvents.map((event, index) => eventFromCard(card, event, index, isExploration)),
     ].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0));
-    const existingAnalysis = session?.ai_analysis || {};
+    const existingAnalysis = session?.[analysisField] || {};
     const existingVideoPassFindings = Array.isArray(existingAnalysis._video_pass_findings)
       ? existingAnalysis._video_pass_findings
       : [];
@@ -1055,19 +1179,19 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
     };
     const nextAnalysis = {
       ...nextAnalysisBase,
-      _video_pass_digest: buildSessionVideoPassDigest({ ai_analysis: nextAnalysisBase }),
+      _video_pass_digest: buildVideoPassDigestForRecord(nextAnalysisBase, isExploration),
     };
-    const updated = await base44.entities.Session.update(session.id, {
+    const updated = await entity.update(session.id, {
       event_timeline: nextEvents,
-      ai_analysis: nextAnalysis,
+      [analysisField]: nextAnalysis,
     });
-    onSessionUpdate?.({ ...session, ...updated, event_timeline: nextEvents, ai_analysis: nextAnalysis });
+    onSessionUpdate?.({ ...session, ...updated, event_timeline: nextEvents, [analysisField]: nextAnalysis });
     setAcceptedIds((prev) => new Set([...prev, card.id]));
     setExpanded((prev) => ({ ...prev, [card.id]: false }));
   };
 
   const acceptAllDraftCards = async () => {
-    const draftCards = cards.filter((card) => !isCardAccepted(card, session, acceptedIds));
+    const draftCards = cards.filter((card) => !isCardAccepted(card, session, acceptedIds, isExploration));
     if (!draftCards.length) return;
     const cardsToPersist = draftCards
       .map((card) => ({
@@ -1093,10 +1217,10 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
     });
     const nextEvents = [
       ...retainedEvents,
-      ...cardsToPersist.flatMap((card) => card.events.map((event, index) => eventFromCard(card, event, index))),
+      ...cardsToPersist.flatMap((card) => card.events.map((event, index) => eventFromCard(card, event, index, isExploration))),
     ].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0));
 
-    const existingAnalysis = session?.ai_analysis || {};
+    const existingAnalysis = session?.[analysisField] || {};
     const existingVideoPassFindings = Array.isArray(existingAnalysis._video_pass_findings)
       ? existingAnalysis._video_pass_findings
       : [];
@@ -1117,13 +1241,13 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
     };
     const nextAnalysis = {
       ...nextAnalysisBase,
-      _video_pass_digest: buildSessionVideoPassDigest({ ai_analysis: nextAnalysisBase }),
+      _video_pass_digest: buildVideoPassDigestForRecord(nextAnalysisBase, isExploration),
     };
-    const updated = await base44.entities.Session.update(session.id, {
+    const updated = await entity.update(session.id, {
       event_timeline: nextEvents,
-      ai_analysis: nextAnalysis,
+      [analysisField]: nextAnalysis,
     });
-    onSessionUpdate?.({ ...session, ...updated, event_timeline: nextEvents, ai_analysis: nextAnalysis });
+    onSessionUpdate?.({ ...session, ...updated, event_timeline: nextEvents, [analysisField]: nextAnalysis });
     setAcceptedIds((prev) => new Set([...prev, ...cardsToPersist.map((card) => card.id)]));
     setExpanded((prev) => cardsToPersist.reduce((next, card) => ({ ...next, [card.id]: false }), { ...prev }));
   };
@@ -1144,7 +1268,7 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
             <Sparkles className="h-3.5 w-3.5" /> AI Video Pass
           </h4>
           <p className="mt-1 text-xs text-muted-foreground">
-            Sarah scans candidate windows, creates short preview clips, and drafts timeline findings for review.
+            Sarah scans candidate windows, creates short preview clips, and drafts {recordLabel} timeline findings for review.
           </p>
         </div>
         <Button type="button" onClick={runPass} disabled={running || !selectedVideo || !plannedWindows.length} className="h-8">
@@ -1232,13 +1356,13 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
               {selectedVideo?.label || selectedVideo?.filename || "Selected local video"}
             </p>
             <p className="text-muted-foreground">
-              Preview at session <span className="font-mono text-primary">{fmtMmSs(scanCursor)}</span>
+              Preview at {recordLabel} <span className="font-mono text-primary">{fmtMmSs(scanCursor)}</span>
               {" · "}source <span className="font-mono text-primary">{fmtMmSs(sourceTimeForSession(scanCursor, selectedVideo))}</span>
               {" · "}{videoRoleLabel(selectedVideoRole)} lane
             </p>
             {selectedVideoOffset !== 0 && (
               <p className="mt-1 text-[10px] text-muted-foreground">
-                Saved alignment: video 0:00 = session <span className="font-mono text-primary">{fmtSignedMmSs(selectedVideoOffset)}</span>.
+                Saved alignment: video 0:00 = {recordLabel} <span className="font-mono text-primary">{fmtSignedMmSs(selectedVideoOffset)}</span>.
               </p>
             )}
           </div>
@@ -1402,7 +1526,7 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
         <div className="mt-3 grid gap-3">
           {cards.map((card) => {
             const isExpanded = expanded[card.id];
-            const accepted = isCardAccepted(card, session, acceptedIds);
+            const accepted = isCardAccepted(card, session, acceptedIds, isExploration);
             const compactAccepted = accepted && !isExpanded;
             return (
               <article key={card.id} className={`overflow-hidden rounded-xl border bg-card transition-opacity ${accepted ? "border-primary/25 opacity-80" : "border-border"}`}>
@@ -1479,7 +1603,7 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
                     </div>
                     <p className="text-sm leading-relaxed text-foreground/90">{card.summary}</p>
                     <p className="rounded-md border border-primary/15 bg-primary/5 px-2 py-1 text-[10px] text-muted-foreground">
-                      Accepting this card saves the summary, finding cards, clip range, and draft events into the session AI details.
+                      Accepting this card saves the summary, finding cards, clip range, and draft events into the {recordLabel} AI details.
                     </p>
                     <div className="space-y-1.5">
                       {card.findings.map((finding, index) => (
@@ -1525,7 +1649,7 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
               </article>
             );
           })}
-          {cards.some((card) => !isCardAccepted(card, session, acceptedIds)) && (
+          {cards.some((card) => !isCardAccepted(card, session, acceptedIds, isExploration)) && (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/25 bg-primary/5 px-3 py-2">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wider text-primary">Batch Review Ready</p>

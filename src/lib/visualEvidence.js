@@ -283,6 +283,13 @@ export function normalizeSessionVideoPassFindings(sessionOrEntries) {
     });
 }
 
+export function normalizeBodyExplorationVideoPassFindings(explorationOrEntries) {
+  const entries = Array.isArray(explorationOrEntries)
+    ? explorationOrEntries
+    : explorationOrEntries?.ai_body_exploration?._video_pass_findings;
+  return normalizeSessionVideoPassFindings(entries);
+}
+
 function formatVideoPassRange(entry) {
   const start = entry.clip.start_s;
   const end = entry.clip.end_s;
@@ -309,6 +316,26 @@ export function buildSessionVideoPassDigest(session, { limit = 14, findingsPerCa
     return parts.filter(Boolean).join(" ");
   });
   return lines.length ? `Sarah video-pass findings applied to this session:\n${lines.join("\n")}` : "";
+}
+
+export function buildBodyExplorationVideoPassDigest(exploration, { limit = 14, findingsPerCard = 4, eventsPerCard = 3 } = {}) {
+  const entries = normalizeBodyExplorationVideoPassFindings(exploration).slice(0, limit);
+  if (!entries.length) return cleanText(exploration?.ai_body_exploration?._video_pass_digest || "", 6000);
+  const lines = entries.map((entry) => {
+    const videoLabel = entry.source_video.label || entry.source_video.filename || "linked local video";
+    const findings = entry.findings.slice(0, findingsPerCard);
+    const events = entry.draft_events.slice(0, eventsPerCard);
+    const parts = [
+      `- [${formatVideoPassRange(entry)}; ${videoLabel}] ${entry.summary}`,
+    ];
+    if (findings.length) parts.push(`Findings: ${findings.join(" | ")}`);
+    if (events.length) {
+      parts.push(`Draft exploration timeline events: ${events.map((event) => `${formatTimePhrase(event.time_s)} - ${event.note}${event.confidence ? ` (${event.confidence} confidence)` : ""}`).join(" | ")}`);
+    }
+    if (entry.telemetry) parts.push(`Telemetry: ${entry.telemetry}`);
+    return parts.filter(Boolean).join(" ");
+  });
+  return lines.length ? `Sarah video-pass findings applied to this body exploration:\n${lines.join("\n")}` : "";
 }
 
 export function buildBodyExplorationVisualEvidenceDigest(exploration, { limit = 12 } = {}) {

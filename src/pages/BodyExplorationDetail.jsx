@@ -9,11 +9,13 @@ import { Button } from "@/components/ui/button";
 import HRTimelineChart from "@/components/HRTimelineChart";
 import EMGTimelineChart from "@/components/EMGTimelineChart";
 import BodyExplorationAIPanel from "@/components/BodyExplorationAIPanel";
+import AIVideoPassPanel from "@/components/AIVideoPassPanel";
 import AIChat from "@/components/AIChat";
 import LinkedLocalVideoManager from "@/components/LinkedLocalVideoManager";
 import VideoSyncPlayer from "@/components/VideoSyncPlayer";
 import {
   buildBodyExplorationVisualEvidenceDigest,
+  buildBodyExplorationVideoPassDigest,
   getReviewedVisualClips,
   isVisualReviewSource,
   makeBodyExplorationVisualEvidenceEntry,
@@ -88,6 +90,7 @@ function buildExplorationChatContext(exploration, timelineRows, emgRows) {
     emgRows.length ? `EMG rows available: ${emgRows.length}.` : null,
     events.length ? `Timestamped notes:\n${events.join("\n")}` : null,
     buildBodyExplorationVisualEvidenceDigest(exploration),
+    buildBodyExplorationVideoPassDigest(exploration),
   ].filter(Boolean).join("\n");
 }
 
@@ -181,6 +184,25 @@ export default function BodyExplorationDetail() {
                 session={exploration}
                 timelineRows={timelineRows}
                 recordType="body_exploration"
+              />
+            </div>
+          </details>
+        )}
+        {linkedLocalVideos.length > 0 && (
+          <details className="rounded-xl border border-border bg-card p-4" open>
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+              AI Procedure Video + Audio Passes
+            </summary>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Sarah can scan linked exploration recordings for procedure steps, Foley/sound/catheter context, urethral or meatal observations, body response, comfort/tolerance, and setup changes.
+            </p>
+            <div className="mt-3">
+              <AIVideoPassPanel
+                session={exploration}
+                timelineRows={timelineRows}
+                linkedLocalVideos={linkedLocalVideos}
+                recordType="body_exploration"
+                onSessionUpdate={(updated) => setExploration((current) => ({ ...(current || {}), ...updated }))}
               />
             </div>
           </details>
