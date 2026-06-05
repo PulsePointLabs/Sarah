@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Activity, ArrowLeft, Brain, MessageCircle, Pencil, ScanSearch } from "lucide-react";
+import { Activity, ArrowLeft, Brain, Clapperboard, MessageCircle, Pencil, ScanSearch } from "lucide-react";
 import moment from "moment";
 import { base44 } from "@/api/base44Client";
 import PageHeader from "@/components/PageHeader";
@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import HRTimelineChart from "@/components/HRTimelineChart";
 import EMGTimelineChart from "@/components/EMGTimelineChart";
 import BodyExplorationAIPanel from "@/components/BodyExplorationAIPanel";
-import AIVideoPassPanel from "@/components/AIVideoPassPanel";
 import AIChat from "@/components/AIChat";
 import LinkedLocalVideoManager from "@/components/LinkedLocalVideoManager";
 import VideoSyncPlayer from "@/components/VideoSyncPlayer";
@@ -188,25 +187,23 @@ export default function BodyExplorationDetail() {
             </div>
           </details>
         )}
-        {linkedLocalVideos.length > 0 && (
-          <details className="rounded-xl border border-border bg-card p-4" open>
-            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
-              AI Procedure Video + Audio Passes
-            </summary>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Sarah can scan linked exploration recordings for procedure steps, Foley/sound/catheter context, urethral or meatal observations, body response, comfort/tolerance, and setup changes.
-            </p>
-            <div className="mt-3">
-              <AIVideoPassPanel
-                session={exploration}
-                timelineRows={timelineRows}
-                linkedLocalVideos={linkedLocalVideos}
-                recordType="body_exploration"
-                onSessionUpdate={(updated) => setExploration((current) => ({ ...(current || {}), ...updated }))}
-              />
+        <div className="rounded-xl border border-border bg-card p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
+                <Clapperboard className="h-4 w-4" /> AI Procedure Video + Audio Passes
+              </h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Run and manage Sarah video/audio analysis from the central AI Annotation workbench. That page handles body explorations and sessions with the same event clearing and filtering controls.
+              </p>
             </div>
-          </details>
-        )}
+            <Button asChild size="sm" variant="outline" className="gap-1.5">
+              <Link to={`/ai-annotation?type=body_exploration&id=${exploration.id}`}>
+                <Clapperboard className="h-4 w-4" /> Open AI Annotation
+              </Link>
+            </Button>
+          </div>
+        </div>
 
         <div className="rounded-xl border border-border bg-card p-4 space-y-3">
           <div>
