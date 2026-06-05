@@ -1,9 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Clapperboard, Loader2, ScanSearch, Sparkles } from "lucide-react";
+import { ArrowLeft, Clapperboard, Loader2, ScanSearch, Sparkles, Trash2 } from "lucide-react";
 import moment from "moment";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import AIVideoPassPanel from "../components/AIVideoPassPanel";
 import LinkedLocalVideoManager from "../components/LinkedLocalVideoManager";
 
@@ -15,6 +26,16 @@ function recordLabel(record, type = "session") {
   const duration = record.duration_minutes ? ` · ${record.duration_minutes}m` : "";
   const videoCount = (record.linked_local_videos || []).length ? ` · ${record.linked_local_videos.length} linked` : "";
   return `${date}${time}${title}${duration}${videoCount}`;
+}
+
+function isAIGeneratedAnnotation(event) {
+  return event?.source === "ai_video_pass"
+    || event?.source === "ai_audio_pass"
+    || event?.ai_generated === true
+    || event?.annotation_origin === "ai"
+    || event?.ai_annotation?.source === "sarah_video_pass"
+    || event?.ai_annotation?.source === "sarah_audio_pass"
+    || Boolean(event?.audio_review);
 }
 
 export default function AIAnnotation() {
@@ -37,6 +58,10 @@ export default function AIAnnotation() {
     ? selectedType === "body_exploration" ? `/exploration/${record.id}` : `/sessions/${record.id}`
     : "";
   const detailLabel = selectedType === "body_exploration" ? "Exploration Details" : "Session Details";
+  const aiGeneratedEventCount = useMemo(
+    () => (record?.event_timeline || []).filter(isAIGeneratedAnnotation).length,
+    [record?.event_timeline],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -135,6 +160,19 @@ export default function AIAnnotation() {
     else setSessions(updateList);
   };
 
+  const clearAIGeneratedEvents = async () => {
+    if (!record?.id || !aiGeneratedEventCount) return;
+    const retainedEvents = (record.event_timeline || []).filter((event) => !isAIGeneratedAnnotation(event));
+    const updated = { event_timeline: retainedEvents };
+    await entity.update(record.id, updated);
+    setRecord((current) => (current ? { ...current, ...updated } : current));
+    const updateList = (current) => current.map((item) => (
+      item.id === record.id ? { ...item, ...updated } : item
+    ));
+    if (selectedType === "body_exploration") setExplorations(updateList);
+    else setSessions(updateList);
+  };
+
   return (
     <div className="mx-auto max-w-7xl space-y-4 px-4 py-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -154,6 +192,33 @@ export default function AIAnnotation() {
                 <ArrowLeft className="mr-2 h-4 w-4" /> {detailLabel}
               </Link>
             </Button>
+          )}
+          {record?.id && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  disabled={aiGeneratedEventCount === 0}
+                  className="h-9 border-destructive/30 text-destructive hover:bg-destructive/10 disabled:border-border disabled:text-muted-foreground"
+                >
+                  <Trash2 className="mr-2 h-4 w-4" /> Clear AI Events ({aiGeneratedEventCount})
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Clear AI-generated annotations?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This removes {aiGeneratedEventCount} Sarah video/audio annotation{aiGeneratedEventCount === 1 ? "" : "s"} from this {selectedType === "body_exploration" ? "body exploration" : "session"} timeline. Manual notes and non-AI events are kept.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={clearAIGeneratedEvents} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                    Clear AI annotations
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           )}
         </div>
       </div>
@@ -194,6 +259,9 @@ export default function AIAnnotation() {
             </div>
             <div className="rounded-lg border border-border bg-muted/20 px-3 py-2">
               <span className="font-mono text-primary">{linkedLocalVideos.length}</span> linked videos
+            </div>
+            <div className="rounded-lg border border-border bg-muted/20 px-3 py-2">
+              <span className="font-mono text-primary">{aiGeneratedEventCount}</span> AI events
             </div>
           </div>
         </div>

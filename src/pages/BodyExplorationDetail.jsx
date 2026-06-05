@@ -31,6 +31,16 @@ function fmtTime(totalSeconds) {
   return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, "0")}`;
 }
 
+function isAIGeneratedAnnotation(event) {
+  return event?.source === "ai_video_pass"
+    || event?.source === "ai_audio_pass"
+    || event?.ai_generated === true
+    || event?.annotation_origin === "ai"
+    || event?.ai_annotation?.source === "sarah_video_pass"
+    || event?.ai_annotation?.source === "sarah_audio_pass"
+    || Boolean(event?.audio_review);
+}
+
 function TimestampedNotes({ events }) {
   return (
     <details className="rounded-xl border border-border bg-card p-4">
@@ -48,6 +58,7 @@ function TimestampedNotes({ events }) {
           <div key={`${event.time_s || 0}-${index}`} className="rounded-lg border border-border bg-muted/20 px-3 py-2">
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="font-mono font-semibold text-primary">{fmtTime(event.time_s)}</span>
+              {isAIGeneratedAnnotation(event) && <Badge variant="secondary" className="text-[10px]">AI generated</Badge>}
               {(Array.isArray(event.category) ? event.category : [event.category].filter(Boolean)).map((category) => (
                 <Badge key={`${index}-${category}`} variant="outline" className="text-[10px]">{String(category).replaceAll("_", " ")}</Badge>
               ))}
