@@ -78,11 +78,28 @@ export default function BackgroundJobStatusTray() {
   const previousJobStatusesRef = useRef(new Map());
   const jobsInitializedRef = useRef(false);
   const dismissedTerminalIdsRef = useRef(dismissedTerminalIds);
+  const wasHiddenSinceLastPollRef = useRef(
+    typeof document !== "undefined" && (document.hidden || document.visibilityState !== "visible" || !document.hasFocus())
+  );
 
   useEffect(() => {
     dismissedTerminalIdsRef.current = dismissedTerminalIds;
     window.localStorage.setItem(DISMISSED_RESULTS_KEY, JSON.stringify([...dismissedTerminalIds].slice(-100)));
   }, [dismissedTerminalIds]);
+
+  useEffect(() => {
+    const markHidden = () => {
+      if (document.hidden || document.visibilityState !== "visible" || !document.hasFocus()) {
+        wasHiddenSinceLastPollRef.current = true;
+      }
+    };
+    document.addEventListener("visibilitychange", markHidden);
+    window.addEventListener("blur", markHidden);
+    return () => {
+      document.removeEventListener("visibilitychange", markHidden);
+      window.removeEventListener("blur", markHidden);
+    };
+  }, []);
 
   const goToJob = (job) => {
     const target = jobTarget(job);
@@ -164,6 +181,7 @@ export default function BackgroundJobStatusTray() {
           if (job?.id) merged.set(job.id, job);
         });
         const loadedJobs = [...merged.values()].sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
+        const shouldForceResumeNotification = wasHiddenSinceLastPollRef.current;
         if (jobsInitializedRef.current) {
           loadedJobs.forEach((job) => {
             const previousStatus = previousJobStatusesRef.current.get(job.id);
@@ -171,10 +189,12 @@ export default function BackgroundJobStatusTray() {
               notifyBackgroundJobFinished(job, {
                 route: jobTarget(job),
                 onOpen: (target) => navigate(target),
+                force: shouldForceResumeNotification,
               });
             }
           });
         }
+        wasHiddenSinceLastPollRef.current = document.hidden || document.visibilityState !== "visible" || !document.hasFocus();
         const activeIds = new Set(loadedJobs.filter((job) => ["queued", "running"].includes(job.status)).map((job) => job.id));
         const newActiveJob = [...activeIds].some((id) => !previousActiveIdsRef.current.has(id));
         const newVisibleResult = loadedJobs.some((job) => (

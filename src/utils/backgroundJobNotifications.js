@@ -42,6 +42,11 @@ export function shouldNotifyForBackgroundJob() {
     && (document.hidden || document.visibilityState !== "visible" || !document.hasFocus());
 }
 
+function canNotifyForBackgroundJob({ force = false } = {}) {
+  return areBackgroundNotificationsEnabled()
+    && (force || document.hidden || document.visibilityState !== "visible" || !document.hasFocus());
+}
+
 function notificationKey(job) {
   return `${job?.id || "unknown"}:${job?.status || "terminal"}`;
 }
@@ -78,12 +83,23 @@ export function buildSafeJobNotification(job) {
   };
 }
 
-export async function notifyBackgroundJobFinished(job, { route, onOpen } = {}) {
-  if (!["complete", "error"].includes(job?.status) || !shouldNotifyForBackgroundJob() || hasNotified(job)) {
+async function getReadyServiceWorkerRegistration() {
+  if (!("serviceWorker" in navigator)) return null;
+  if (navigator.serviceWorker.ready) {
+    try {
+      return await navigator.serviceWorker.ready;
+    } catch {
+      // Fall through to best-effort registration lookup.
+    }
+  }
+  return navigator.serviceWorker.getRegistration?.() || null;
+}
+
+export async function notifyBackgroundJobFinished(job, { route, onOpen, force = false } = {}) {
+  if (!["complete", "error"].includes(job?.status) || !canNotifyForBackgroundJob({ force }) || hasNotified(job)) {
     return false;
   }
 
-  markNotified(job);
   const message = buildSafeJobNotification(job);
   const options = {
     body: message.body,
@@ -95,9 +111,10 @@ export async function notifyBackgroundJobFinished(job, { route, onOpen } = {}) {
   };
 
   try {
-    const registration = await navigator.serviceWorker?.getRegistration?.();
+    const registration = await getReadyServiceWorkerRegistration();
     if (registration?.showNotification) {
       await registration.showNotification(message.title, options);
+      markNotified(job);
       return true;
     }
 
@@ -107,6 +124,7 @@ export async function notifyBackgroundJobFinished(job, { route, onOpen } = {}) {
       window.focus();
       onOpen?.(route || "/");
     };
+    markNotified(job);
     return true;
   } catch {
     return false;

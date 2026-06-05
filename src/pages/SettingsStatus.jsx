@@ -19,6 +19,7 @@ import TTSSettingsPanel from "@/components/TTSSettingsPanel";
 import { cancelBackgroundJob, clearBackgroundJobs, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
 import { getProviderStatus } from "@/lib/providerStatus";
+import { areBackgroundNotificationsEnabled, setBackgroundNotificationsEnabled } from "@/utils/backgroundJobNotifications";
 
 function fmtMoney(value) {
   const n = Number(value);
@@ -189,6 +190,7 @@ export default function SettingsStatus() {
   const [notificationPermission, setNotificationPermission] = useState(() => (
     typeof Notification !== "undefined" ? Notification.permission : "unsupported"
   ));
+  const [completionNotificationsEnabled, setCompletionNotificationsEnabled] = useState(areBackgroundNotificationsEnabled);
   const [notificationMessage, setNotificationMessage] = useState("");
   const [notificationBusy, setNotificationBusy] = useState(false);
   const [uiPrefs, setUiPrefs] = useState(readUiPreferences);
@@ -220,6 +222,7 @@ export default function SettingsStatus() {
   useEffect(() => {
     if (!notificationSupport.supported || typeof Notification === "undefined") return;
     setNotificationPermission(Notification.permission);
+    setCompletionNotificationsEnabled(areBackgroundNotificationsEnabled());
   }, [notificationSupport.supported]);
 
   const requestNotifications = async () => {
@@ -230,11 +233,20 @@ export default function SettingsStatus() {
     setNotificationBusy(true);
     setNotificationMessage("");
     try {
-      const permission = await Notification.requestPermission();
+      const permission = Notification.permission === "granted"
+        ? "granted"
+        : await Notification.requestPermission();
+      if (permission === "granted") {
+        setBackgroundNotificationsEnabled(true);
+        setCompletionNotificationsEnabled(true);
+      } else {
+        setBackgroundNotificationsEnabled(false);
+        setCompletionNotificationsEnabled(false);
+      }
       setNotificationPermission(permission);
       setNotificationMessage(
         permission === "granted"
-          ? "Notifications are enabled for this browser/app install."
+          ? "Notifications are enabled for this browser/app install, including background task completion alerts."
           : permission === "denied"
             ? "Notifications are blocked. Re-enable them from browser or Android app/site settings."
             : "Notification permission was left undecided."
@@ -259,6 +271,8 @@ export default function SettingsStatus() {
     setNotificationBusy(true);
     setNotificationMessage("");
     try {
+      setBackgroundNotificationsEnabled(true);
+      setCompletionNotificationsEnabled(true);
       await showPulsePointNotification({
         title: "PulsePoint is ready 🫀",
         body: "Local notifications are working. Tapping this should open Settings & Status.",
@@ -511,11 +525,11 @@ export default function SettingsStatus() {
             <button
               type="button"
               onClick={requestNotifications}
-              disabled={notificationBusy || !notificationSupport.supported || notificationPermission === "granted"}
+              disabled={notificationBusy || !notificationSupport.supported || (notificationPermission === "granted" && completionNotificationsEnabled)}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
               {notificationBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <BellRing className="h-4 w-4" />}
-              Enable
+              {notificationPermission === "granted" && !completionNotificationsEnabled ? "Enable Alerts" : "Enable"}
             </button>
             <button
               type="button"
