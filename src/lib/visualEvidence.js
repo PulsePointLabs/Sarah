@@ -318,7 +318,7 @@ export function buildSessionVideoPassDigest(session, { limit = 14, findingsPerCa
   return lines.length ? `Sarah video-pass findings applied to this session:\n${lines.join("\n")}` : "";
 }
 
-export function buildBodyExplorationVideoPassDigest(exploration, { limit = 14, findingsPerCard = 4, eventsPerCard = 3 } = {}) {
+export function buildBodyExplorationVideoPassDigest(exploration, { limit = 28, findingsPerCard = 4, eventsPerCard = 3 } = {}) {
   const entries = normalizeBodyExplorationVideoPassFindings(exploration).slice(0, limit);
   if (!entries.length) return cleanText(exploration?.ai_body_exploration?._video_pass_digest || "", 6000);
   const lines = entries.map((entry) => {

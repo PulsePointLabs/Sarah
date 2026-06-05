@@ -93,10 +93,22 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
       const videoPassEvidenceContext = buildBodyExplorationVideoPassDigest(exploration);
       const raw = await base44.integrations.Core.InvokeLLM({
         model: "claude_sonnet_4_6",
-        max_tokens: 6000,
+        max_tokens: 10000,
         prompt: `You are a warm, careful physiological analyst reviewing a BODY EXPLORATION / INSTRUMENTATION record.
 
 This record is not a climax-oriented masturbation session. Do not force pre-climax, climax, ejaculation, recovery, arousal-score, or orgasm framing onto it unless the person explicitly logged relevant language in the exploration record.
+
+PRIMARY ANALYSIS GOAL:
+Reconstruct the procedural arc from the best available evidence. This should feel like a careful Foley/instrumentation review, not a generic session summary. When reviewed video-pass evidence exists, use it as the highest-priority evidence for visible timing, device/tool handling, body position, tissue state, and procedure mechanics. Use notes/profile context to explain what the visual evidence and telemetry mean, but do not let broad history replace the procedural tracking.
+
+PROCEDURAL TRACKING RULE:
+- For Foley insertion, urethral sounding, dilation, or similar instrumentation, track the session by landmark/window when evidence supports it: setup and sterile field, foreskin/glans/meatal prep, lubrication or urethral instillation, meatal engagement, spongy urethral passage, external sphincter resistance or relaxation, prostatic/internal sphincter passage, bladder entry or urine return, balloon inflation/seating, securement/alignment, dwell comfort, removal or post-procedure state.
+- In each relevant landmark, identify what was directly visible, what was logged by timestamped note, what telemetry did, and what remains uncertain.
+- Prefer concrete observations like catheter type/size, orientation, insertion depth progression, rotation maneuver, resistance point, urine bypass/return, balloon volume/seat, securement slack, meatal tension, tissue color, lubricant leakage, scrotal/foreskin state, leg/foot/body response, and comfort/tolerance cues.
+- If a landmark is not visually reviewed or not timestamped, say that limitation instead of smoothing over it. Do not invent a complete procedural sequence from profile history alone.
+- When telemetry is available, compare heart-rate changes around landmarks rather than only giving session min/avg/max. Explain whether a visible/logged step produced a rise, plateau, dip, or no measurable response. If only whole-session telemetry exists, say it cannot be tied to landmarks.
+- When prior comparison context is relevant, keep it secondary and specific: use it to explain how this insertion differs in size, lubrication, substance context, resistance, comfort, urine return, securement, or dwell tolerance. Do not turn the review into a broad longitudinal Foley biography.
+- The best output should resemble a procedural evidence review: timeline-aware, landmark-specific, visibly grounded, mechanically precise, and cautious about uncertainty.
 
 Focus on:
 - what the body and telemetry did during exploration or instrumentation
@@ -115,6 +127,7 @@ STYLE:
 - Use paragraphs that read naturally aloud.
 - Spell out measurements and numbers in natural spoken prose where practical.
 - Do not invent anatomy, mechanisms, intent, goals, risk, or findings not present in the record.
+- Do not collapse reviewed video evidence into a high-level summary. Preserve useful procedural landmarks, frame/window timing, and evidence hierarchy in the final sections.
 
 BODY EXPLORATION RECORD:
 ${JSON.stringify({
@@ -145,10 +158,10 @@ ${events.length ? `TIMESTAMPED NOTES:\n${events.join("\n")}` : "No timestamped n
           type: "object",
           properties: {
             summary: { type: "string" },
-            telemetry_findings: { type: "array", items: { type: "string" } },
-            mechanical_findings: { type: "array", items: { type: "string" } },
-            comfort_safety_findings: { type: "array", items: { type: "string" } },
-            recommendations: { type: "array", items: { type: "string" } },
+            telemetry_findings: { type: "array", items: { type: "string" }, description: "Landmark/window-specific HR or EMG interpretation where possible; do not merely list min/avg/max." },
+            mechanical_findings: { type: "array", items: { type: "string" }, description: "Procedure mechanics by visible/logged landmark: prep, lubrication, meatal engagement, urethral passage, sphincters, bladder entry/urine return, balloon, securement, dwell/removal when supported." },
+            comfort_safety_findings: { type: "array", items: { type: "string" }, description: "Comfort, sterile/safety controls, tissue state, irritation/lack of irritation, tension, dwell tolerance, uncertainty, and risk-control observations." },
+            recommendations: { type: "array", items: { type: "string" }, description: "Focused review notes or future documentation gaps grounded in the procedure evidence, phrased without pressure." },
           },
           required: ["summary", "telemetry_findings", "mechanical_findings", "comfort_safety_findings", "recommendations"],
         },
