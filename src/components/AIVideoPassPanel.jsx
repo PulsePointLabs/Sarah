@@ -700,6 +700,37 @@ async function runBackgroundAIVideoReview({ aiPayload, cardMeta, session, record
   return completedJob;
 }
 
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || "").replace(/^data:[^;]+;base64,/, ""));
+    reader.onerror = () => reject(reader.error || new Error("Could not read sampled frame."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function sampledFrameImagePayload(frames = []) {
+  const payload = [];
+  for (const frame of frames.slice(0, 5)) {
+    if (!frame?.url) continue;
+    try {
+      const response = await fetch(frame.url);
+      if (!response.ok) continue;
+      const blob = await response.blob();
+      const data = await blobToBase64(blob);
+      if (!data) continue;
+      payload.push({
+        filename: frame.url.split("/").pop() || "sampled-frame.jpg",
+        media_type: blob.type || "image/jpeg",
+        data,
+      });
+    } catch {
+      // Reassessment can still use text context if an old sampled frame file expired.
+    }
+  }
+  return payload;
+}
+
 function normalizeVideoPassFindingsForRecord(recordOrEntries, isExploration = false) {
   return isExploration
     ? normalizeBodyExplorationVideoPassFindings(recordOrEntries)
@@ -926,6 +957,7 @@ export default function AIVideoPassPanel({
   const [autoContinue, setAutoContinue] = useState(false);
   const [scanCursor, setScanCursor] = useState(0);
   const [running, setRunning] = useState(false);
+  const [reassessing, setReassessing] = useState(false);
   const [status, setStatus] = useState("");
   const [cards, setCards] = useState([]);
   const [error, setError] = useState("");
@@ -1378,6 +1410,124 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
     }
   };
 
+  const reassessExplorationSequence = async () => {
+    if (!isExploration || !cards.length || running || reassessing) return;
+    setReassessing(true);
+    setError("");
+    try {
+      let revisedCards = [...cards];
+      const sequenceText = cards.map((card, index) => (
+        `${index + 1}. ${fmtMmSs(card.window.start)}-${fmtMmSs(card.window.end)}: ${compactText(card.summary, 280)}`
+      )).join("\n");
+
+      for (let index = 0; index < cards.length; index += 1) {
+        const card = revisedCards[index];
+        if (!card || isCardAccepted(card, session, acceptedIds, isExploration)) continue;
+        setStatus(`Reassessing Foley sequence ${index + 1}/${cards.length}: ${fmtMmSs(card.window.start)}-${fmtMmSs(card.window.end)}`);
+        const images = await sampledFrameImagePayload(card.sampledFrames || []);
+        const aiPayload = {
+          max_tokens: 1800,
+          images,
+          response_json_schema: {
+            type: "object",
+            properties: {
+              summary: { type: "string" },
+              findings: {
+                type: "array",
+                maxItems: 3,
+                items: {
+                  type: "object",
+                  properties: {
+                    title: { type: "string" },
+                    text: { type: "string" },
+                    category: { type: "string", enum: ["instrumentation", "physiology", "physical", "movement", "comfort", "environment", "equipment", "other"] },
+                    confidence: { type: "string", enum: ["low", "moderate", "high"] },
+                  },
+                  required: ["title", "text", "category", "confidence"],
+                },
+              },
+              events: {
+                type: "array",
+                maxItems: 2,
+                items: {
+                  type: "object",
+                  properties: {
+                    time_s: { type: "number" },
+                    note: { type: "string" },
+                    category: { type: "array", items: { type: "string", enum: EXPLORATION_EVENT_CATEGORIES.map((category) => category.value) } },
+                    annotation_tags: { type: "array", items: { type: "string" } },
+                    confidence: { type: "string", enum: ["low", "moderate", "high"] },
+                  },
+                  required: ["time_s", "note", "category", "annotation_tags", "confidence"],
+                },
+              },
+            },
+            required: ["summary", "findings", "events"],
+          },
+          prompt: `You are Sarah doing a second-pass BODY EXPLORATION / Foley sequence audit for one already-generated video card.
+
+Only correct the current card. Use the sampled frames in this request as primary evidence, and use the sequence list below only to avoid repeated or impossible Foley stage claims.
+
+Full generated sequence before reassessment:
+${sequenceText}
+
+Current card to reassess:
+Window: ${fmtMmSs(card.window.start)}-${fmtMmSs(card.window.end)}
+Original summary: ${card.summary}
+Original findings: ${(card.findings || []).map((finding) => `${finding.title}: ${finding.text}`).join(" | ") || "None"}
+Original events: ${(card.events || []).map((event) => `[${fmtMmSs(event.time_s)}] ${event.note}`).join(" | ") || "None"}
+Telemetry: ${card.telemetry || "None"}
+
+Foley correction rules:
+- Foley/tubing visible means present/state, not newly inserted, placed, advanced, secured, or finalized.
+- Use insertion/advancement only if the sampled frames show catheter/tool movement through the meatus in this current window.
+- Use already-in-place/tubing handling when tubing or catheter is visible but the catheter is not visibly advancing.
+- Do not mention StatLock, securement, adhesive securement, securement finalization, balloon inflation, bladder entry, urine confirmation, or urine collection unless that exact thing is visible in the sampled frames or explicitly stated in the current card's nearby context.
+- If a prior card already claimed a Foley stage, do not repeat it as newly happening here unless the current frames independently show a new repeat.
+- Prefer conservative procedure labels: drape/setup, swabbing/prep, lubrication/dilation syringe, penis stabilization, catheter positioning, visible meatal engagement, visible advancement, already-in-place catheter state, tubing/field handling, drape removal, urine collection.
+- If the original card overclaimed, rewrite it more conservatively. If it was already accurate, keep it concise.
+
+Return a corrected compact card for this same window. Keep timeline events only for meaningful visible changes; if there is no timestampable change, return an empty events array.`,
+        };
+        const completedJob = await runBackgroundAIVideoReview({
+          aiPayload,
+          cardMeta: {
+            label: `${card.label} reassessment`,
+            window: card.window,
+            sourceWindow: card.sourceWindow,
+            sourceVideo: card.sourceVideo,
+            sourceVideoRole: card.sourceVideoRole,
+            clipUrl: card.clipUrl,
+            thumbnailUrl: card.thumbnailUrl,
+            sampledFrames: card.sampledFrames,
+            motionSummary: card.motionSummary,
+            telemetry: card.telemetry,
+          },
+          session,
+          recordType,
+          label: `${card.label} Foley reassessment`,
+          onProgress: (job) => {
+            const progress = job?.progress || {};
+            if (progress.message) setStatus(progress.message);
+          },
+        });
+        const normalized = normalizeAIResult(completedJob.result, card.window, card.sourceVideoRole, true);
+        revisedCards = revisedCards.map((item, itemIndex) => (
+          itemIndex === index
+            ? { ...item, ...normalized, reassessed: true }
+            : item
+        ));
+        setCards(revisedCards);
+      }
+      setStatus("Foley sequence reassessment complete. Review corrected cards before accepting.");
+    } catch (err) {
+      setError(err?.data?.error || err?.message || "Foley sequence reassessment failed.");
+      setStatus("");
+    } finally {
+      setReassessing(false);
+    }
+  };
+
   const runAudioPass = async () => {
     if (!selectedVideo?.path || audioRunning) return;
     setAudioRunning(true);
@@ -1624,7 +1774,13 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
               </AlertDialogContent>
             </AlertDialog>
           )}
-          <Button type="button" onClick={runPass} disabled={running || !selectedVideo || !plannedWindows.length} className="h-8">
+          {isExploration && cards.length > 0 && (
+            <Button type="button" variant="outline" onClick={reassessExplorationSequence} disabled={running || reassessing} className="h-8">
+              {reassessing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
+              Reassess Foley Sequence
+            </Button>
+          )}
+          <Button type="button" onClick={runPass} disabled={running || reassessing || !selectedVideo || !plannedWindows.length} className="h-8">
             {running ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="mr-2 h-3.5 w-3.5" />}
             {scanMode === "continue" ? (scanCursor > 0 ? "Run Next Pass" : "Start at 0:00") : "Run Pass"}
           </Button>
@@ -1942,6 +2098,11 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
                           {accepted && (
                             <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
                               Accepted
+                            </span>
+                          )}
+                          {card.reassessed && (
+                            <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
+                              Reassessed
                             </span>
                           )}
                         </div>
