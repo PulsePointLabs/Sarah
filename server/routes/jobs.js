@@ -22,6 +22,7 @@ registerJobHandler('ai_invoke', async (payload, context) => {
     max_tokens,
     temperature,
     schema_mode,
+    images = [],
     forensic_capture,
     forensic_session_id,
     experiment,
@@ -42,6 +43,7 @@ registerJobHandler('ai_invoke', async (payload, context) => {
     total: 3,
     message: `${label}: preparing prompt (${String(prompt).length.toLocaleString()} characters)…`,
     model: model || process.env.ANTHROPIC_MODEL || 'claude_sonnet_4_6',
+    image_count: Array.isArray(images) ? images.length : 0,
     ...(forensicCaptureId ? { forensic_capture_id: forensicCaptureId } : {}),
   });
   if (context.signal?.aborted) throw new Error('Cancelled');
@@ -61,6 +63,7 @@ registerJobHandler('ai_invoke', async (payload, context) => {
       max_tokens,
       temperature,
       schema_mode,
+      images,
       forensicCaptureId,
       invocationAttempt: 1,
       signal: context.signal,
@@ -85,6 +88,7 @@ registerJobHandler('ai_invoke', async (payload, context) => {
       max_tokens: retryMaxTokens,
       temperature,
       schema_mode,
+      images,
       forensicCaptureId,
       invocationAttempt: 2,
       signal: context.signal,

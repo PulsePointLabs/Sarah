@@ -68,6 +68,33 @@ function jsonInstruction(responseJsonSchema, schemaMode) {
   return `\n\nReturn ONLY valid JSON matching this JSON schema. Do not wrap in markdown.\n${JSON.stringify(responseJsonSchema, null, 2)}`;
 }
 
+function imageBlocksFromPayload(images = []) {
+  if (!Array.isArray(images)) return [];
+  return images.slice(0, 5).map((image) => {
+    const mediaType = image?.media_type || image?.mimeType || image?.mime_type;
+    const rawData = String(image?.data || image?.base64 || '').replace(/^data:[^;]+;base64,/, '');
+    if (!mediaType || !rawData) return null;
+    return {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: mediaType,
+        data: rawData,
+      },
+    };
+  }).filter(Boolean);
+}
+
+function imageMetadata(images = []) {
+  if (!Array.isArray(images)) return [];
+  return images.slice(0, 5).map((image, index) => ({
+    index,
+    filename: image?.filename || '',
+    media_type: image?.media_type || image?.mimeType || image?.mime_type || '',
+    has_data: Boolean(image?.data || image?.base64),
+  }));
+}
+
 export async function aiInvokeInternal({
   prompt,
   response_json_schema,
@@ -75,6 +102,7 @@ export async function aiInvokeInternal({
   max_tokens = Number(process.env.ANTHROPIC_MAX_TOKENS || 8192),
   temperature = 0.3,
   schema_mode = 'strict',
+  images = [],
   forensicCaptureId,
   invocationAttempt = 1,
   signal,
@@ -84,10 +112,15 @@ export async function aiInvokeInternal({
   const wantsJson = !!response_json_schema;
   const resolvedModel = MODEL_MAP[model] || process.env.ANTHROPIC_MODEL || model || 'claude-sonnet-4-6';
   const providerMessage = `${prompt}${jsonInstruction(response_json_schema, schema_mode)}`;
+  const imageBlocks = imageBlocksFromPayload(images);
+  const content = imageBlocks.length
+    ? [{ type: 'text', text: providerMessage }, ...imageBlocks]
+    : providerMessage;
   const attemptPrefix = `attempt-${invocationAttempt}`;
   writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-prompt.txt`, prompt);
   writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-schema.json`, response_json_schema || null);
   writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-provider-message.txt`, providerMessage);
+  writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-image-metadata.json`, imageMetadata(images));
   writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-request-config.json`, {
     requested_model_alias: model,
     resolved_model_id: resolvedModel,
@@ -95,6 +128,9 @@ export async function aiInvokeInternal({
     max_tokens,
     schema_mode,
     structured_response_requested: wantsJson,
+    image_count: Array.isArray(images) ? images.length : 0,
+    image_block_count: imageBlocks.length,
+    provider_content_shape: imageBlocks.length ? 'text-plus-images' : 'text-only',
     configured_transport_attempts: Number(process.env.ANTHROPIC_ATTEMPTS || 3),
   });
   const { message: msg, attemptsUsed } = await createMessageWithRetries(anthropic, {
@@ -103,7 +139,7 @@ export async function aiInvokeInternal({
     temperature,
     messages: [{
       role: 'user',
-      content: providerMessage,
+      content,
     }],
   }, Number(process.env.ANTHROPIC_ATTEMPTS || 3), signal);
   const text = msg.content?.map((p) => p.type === 'text' ? p.text : '').join('\n').trim() || '';
