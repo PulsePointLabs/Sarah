@@ -4,6 +4,7 @@
 !.env.example
 # Database and media storage
 data
+.codex-remote-attachments/
 # Logs
 /logs
 *.log
