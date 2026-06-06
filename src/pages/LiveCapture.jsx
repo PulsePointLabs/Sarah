@@ -17,8 +17,8 @@ import LiveFootLandmarkTracker from "@/components/LiveFootLandmarkTracker";
 import { base44 } from "@/api/base44Client";
 import { useToast } from "@/components/ui/use-toast";
 import { HR_SOURCE_OPTIONS, PULSOID_MODE_OPTIONS, computeHrvFromRr, maskPulsoidToken, readHrSourceSettings, writeHrSourceSettings } from "@/lib/hrSources";
+import { apiUrl } from "@/lib/mobileApiBase";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 const MAX_TELEMETRY_POINTS = 240;
 const MAX_VOICE_NOTE_MS = 12000;
 const VOICE_NOTE_MIN_MS = 900;
@@ -819,7 +819,7 @@ export default function LiveCapture() {
     setHrSourceError("");
     writeHrSourceSettings(settings);
     try {
-      const response = await fetch(`${API_BASE}/live-capture/hr-source`, {
+      const response = await fetch(apiUrl("/live-capture/hr-source"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -978,7 +978,7 @@ export default function LiveCapture() {
           rrCount: directH10RrRef.current.length,
         }));
 
-        fetch(`${API_BASE}/live-capture/hr-direct-h10/telemetry`, {
+        fetch(apiUrl("/live-capture/hr-direct-h10/telemetry"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(telemetry),
@@ -1080,7 +1080,7 @@ export default function LiveCapture() {
   }, [disconnectDirectH10]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/live-capture/status`).then((res) => res.json()).then((data) => {
+    fetch(apiUrl("/live-capture/status")).then((res) => res.json()).then((data) => {
       setStatus(data);
       const nextHr = data.hr?.latestTelemetry || null;
       const nextEmg = data.emg?.latestTelemetry || null;
@@ -1095,7 +1095,7 @@ export default function LiveCapture() {
       appendTelemetryPoint(nextHr, nextEmg);
     }).catch(() => {});
 
-    const events = new EventSource(`${API_BASE}/live-capture/stream`);
+    const events = new EventSource(apiUrl("/live-capture/stream"));
     events.onopen = () => setConnected(true);
     events.onerror = () => setConnected(false);
     events.addEventListener("status", (event) => {
@@ -1319,12 +1319,12 @@ export default function LiveCapture() {
   }, []);
 
   const refreshFiles = async () => {
-    const res = await fetch(`${API_BASE}/live-capture/refresh-files`, { method: "POST" });
+    const res = await fetch(apiUrl("/live-capture/refresh-files"), { method: "POST" });
     if (res.ok) setFiles(await res.json());
   };
 
   const ensureSession = async () => {
-    const res = await fetch(`${API_BASE}/live-capture/ensure-session`, {
+    const res = await fetch(apiUrl("/live-capture/ensure-session"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ recording }),
@@ -1480,7 +1480,7 @@ export default function LiveCapture() {
       const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();
       const sessionId = sessionState?.activeSessionId;
       if (!sessionId) throw new Error("No active live session is available for calibration.");
-      const commandResponse = await fetch(`${API_BASE}/live-capture/emg/calibration-command`, {
+      const commandResponse = await fetch(apiUrl("/live-capture/emg/calibration-command"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: EMG_CALIBRATION_ACTIONS[step.key], save: true }),
