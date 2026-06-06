@@ -38,6 +38,26 @@ function isAIGeneratedAnnotation(event) {
     || Boolean(event?.audio_review);
 }
 
+function clearAIPassAnalysis(record, type) {
+  const analysisField = type === "body_exploration" ? "ai_body_exploration" : "ai_analysis";
+  const existingAnalysis = record?.[analysisField] || {};
+  const retainedAnalysis = { ...existingAnalysis };
+  delete retainedAnalysis._video_pass_findings;
+  delete retainedAnalysis._video_pass_findings_updated_at;
+  delete retainedAnalysis._video_pass_detail_flow;
+  delete retainedAnalysis._video_pass_digest;
+  delete retainedAnalysis.ai_audio_passes;
+  return { analysisField, retainedAnalysis };
+}
+
+function storedAIPassFindingCount(record, type) {
+  const analysisField = type === "body_exploration" ? "ai_body_exploration" : "ai_analysis";
+  const analysis = record?.[analysisField] || {};
+  const videoFindings = Array.isArray(analysis._video_pass_findings) ? analysis._video_pass_findings.length : 0;
+  const audioPasses = Array.isArray(analysis.ai_audio_passes) ? analysis.ai_audio_passes.length : 0;
+  return videoFindings + audioPasses;
+}
+
 export default function AIAnnotation() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -52,6 +72,7 @@ export default function AIAnnotation() {
   const [loadingRecord, setLoadingRecord] = useState(false);
   const [error, setError] = useState("");
   const [cursorSeconds, setCursorSeconds] = useState(0);
+  const [ignoreCompletedJobsBefore, setIgnoreCompletedJobsBefore] = useState(0);
   const records = selectedType === "body_exploration" ? explorations : sessions;
   const entity = selectedType === "body_exploration" ? base44.entities.BodyExploration : base44.entities.Session;
   const detailPath = record?.id
@@ -62,6 +83,11 @@ export default function AIAnnotation() {
     () => (record?.event_timeline || []).filter(isAIGeneratedAnnotation).length,
     [record?.event_timeline],
   );
+  const storedAIPassCount = useMemo(
+    () => storedAIPassFindingCount(record, selectedType),
+    [record, selectedType],
+  );
+  const clearableAIPassCount = aiGeneratedEventCount + storedAIPassCount;
 
   useEffect(() => {
     let cancelled = false;
@@ -161,10 +187,15 @@ export default function AIAnnotation() {
   };
 
   const clearAIGeneratedEvents = async () => {
-    if (!record?.id || !aiGeneratedEventCount) return;
+    if (!record?.id || !clearableAIPassCount) return;
     const retainedEvents = (record.event_timeline || []).filter((event) => !isAIGeneratedAnnotation(event));
-    const updated = { event_timeline: retainedEvents };
+    const { analysisField, retainedAnalysis } = clearAIPassAnalysis(record, selectedType);
+    const updated = {
+      event_timeline: retainedEvents,
+      [analysisField]: retainedAnalysis,
+    };
     await entity.update(record.id, updated);
+    setIgnoreCompletedJobsBefore(Date.now());
     setRecord((current) => (current ? { ...current, ...updated } : current));
     const updateList = (current) => current.map((item) => (
       item.id === record.id ? { ...item, ...updated } : item
@@ -198,17 +229,17 @@ export default function AIAnnotation() {
               <AlertDialogTrigger asChild>
                 <Button
                   variant="outline"
-                  disabled={aiGeneratedEventCount === 0}
+                  disabled={clearableAIPassCount === 0}
                   className="h-9 border-destructive/30 text-destructive hover:bg-destructive/10 disabled:border-border disabled:text-muted-foreground"
                 >
-                  <Trash2 className="mr-2 h-4 w-4" /> Clear AI Events ({aiGeneratedEventCount})
+                  <Trash2 className="mr-2 h-4 w-4" /> Clear AI Events ({clearableAIPassCount})
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
                   <AlertDialogTitle>Clear AI-generated annotations?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This removes {aiGeneratedEventCount} Sarah video/audio annotation{aiGeneratedEventCount === 1 ? "" : "s"} from this {selectedType === "body_exploration" ? "body exploration" : "session"} timeline. Manual notes and non-AI events are kept.
+                    This removes {aiGeneratedEventCount} accepted Sarah timeline annotation{aiGeneratedEventCount === 1 ? "" : "s"} and {storedAIPassCount} stored video/audio pass result{storedAIPassCount === 1 ? "" : "s"} from this {selectedType === "body_exploration" ? "body exploration" : "session"}. Manual notes and non-AI events are kept.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
@@ -303,6 +334,7 @@ export default function AIAnnotation() {
               recordType={selectedType}
               onSessionUpdate={(updated) => setRecord((current) => ({ ...(current || {}), ...updated }))}
               onCursorChange={setCursorSeconds}
+              ignoreCompletedJobsBefore={ignoreCompletedJobsBefore}
             />
           </section>
         </>

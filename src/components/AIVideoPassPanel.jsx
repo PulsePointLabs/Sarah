@@ -871,6 +871,7 @@ export default function AIVideoPassPanel({
   recordType = "session",
   onSessionUpdate,
   onCursorChange,
+  ignoreCompletedJobsBefore = 0,
 }) {
   const isExploration = recordType === "body_exploration" || session?.standalone_body_exploration;
   const recordLabel = isExploration ? "exploration" : "session";
@@ -897,7 +898,7 @@ export default function AIVideoPassPanel({
   const [audioMaxSnippets, setAudioMaxSnippets] = useState(10);
   const [audioResult, setAudioResult] = useState(null);
   const [audioAccepted, setAudioAccepted] = useState(false);
-  const freshRunStartedAtRef = useRef(0);
+  const freshRunStartedAtRef = useRef(ignoreCompletedJobsBefore || 0);
 
   const selectedVideo = availableVideos.find((video) => video.path === selectedPath) || availableVideos[0];
   const selectedVideoOffset = timelineOffsetSeconds(selectedVideo);
@@ -917,6 +918,15 @@ export default function AIVideoPassPanel({
     () => (session?.event_timeline || []).filter(isAIGeneratedPassEvent).length,
     [session?.event_timeline],
   );
+  useEffect(() => {
+    if (!ignoreCompletedJobsBefore) return;
+    freshRunStartedAtRef.current = ignoreCompletedJobsBefore;
+    setCards([]);
+    setAcceptedIds(new Set());
+    setAudioResult(null);
+    setAudioAccepted(false);
+  }, [ignoreCompletedJobsBefore]);
+
   const resetStoredAIPassState = async ({ message = "" } = {}) => {
     freshRunStartedAtRef.current = Date.now();
     const existingAnalysis = session?.[analysisField] || {};
