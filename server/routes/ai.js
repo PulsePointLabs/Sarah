@@ -9,6 +9,11 @@ const MODEL_MAP = {
   claude_sonnet_4_5: 'claude-sonnet-4-5-20250929',
 };
 
+function anthropicTimeoutMs() {
+  const configured = Number(process.env.ANTHROPIC_TIMEOUT_MS || 600000);
+  return Number.isFinite(configured) && configured > 0 ? configured : 600000;
+}
+
 aiRouter.post('/forensics/:captureId/final', (req, res) => {
   if (!isAIForensicsEnabled()) return res.json({ captured: false });
   try {
@@ -74,7 +79,10 @@ aiRouter.post('/invoke', async (req, res) => {
     if (!process.env.ANTHROPIC_API_KEY) {
       return res.status(500).json({ error: 'Missing ANTHROPIC_API_KEY' });
     }
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const anthropic = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      timeout: anthropicTimeoutMs(),
+    });
     const { prompt, response_json_schema, model, add_context_from_internet, images = [], ...rest } = req.body || {};
     if (!prompt) return res.status(400).json({ error: 'Missing prompt' });
 

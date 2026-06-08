@@ -2140,9 +2140,30 @@ function ProfileImageReviewPanel({
             .filter(isFailedFinalReviewJob)
             .sort(newestFirst)[0];
           if (failedFinal && isNewerCompletedJob({ ...failedFinal, status: "complete" }, result)) {
+            const failedStatus = finalSynthesisFailureStatus(failedFinal, recoverable);
             setJobStatus(failedFinal);
             setRecoverableBatchSet(recoverable);
-            setLatestAttemptStatus(finalSynthesisFailureStatus(failedFinal, recoverable));
+            setLatestAttemptStatus(failedStatus);
+            if (recoverable?.batches?.length) {
+              const batchParsedResults = recoverable.batches
+                .map((batchJob) => normalizeImageReviewResult(batchJob?.result))
+                .filter((item) => item?.overview);
+              if (batchParsedResults.length) {
+                await saveBatchAssembledReview(
+                  batchParsedResults,
+                  `Final synthesis timed out, so PulsePoint saved the completed ${config.shortTitle} batch findings as the latest interim review. No additional image review was rerun.`,
+                  recoverable,
+                  {
+                    ...failedStatus,
+                    state: "final_synthesis_timeout_recovered_locally",
+                    synthesis_stage: "local_batch_assembly_after_failed_final",
+                    older_saved_review_showing: false,
+                    latest_batch_findings_available: true,
+                  },
+                );
+                return;
+              }
+            }
             setError(`Latest ${config.title.toLowerCase()} final synthesis failed: ${failedFinal.error || failedFinal.progress?.message || failedFinal.status}. The batch reviews completed, but the older saved review is still being shown until a final synthesis succeeds.`);
             return;
           }
@@ -2194,27 +2215,29 @@ function ProfileImageReviewPanel({
     setImages((current) => current.filter((image) => image.id !== id));
   };
 
-  const saveBatchAssembledReview = async (batchParsedResults, note = "") => {
+  const saveBatchAssembledReview = async (batchParsedResults, note = "", batchSetOverride = null, attemptStatusOverride = null) => {
     if (!batchParsedResults?.length) throw new Error("No completed batch outputs are available to assemble.");
+    const batchSet = batchSetOverride || recoverableBatchSet || {};
     const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
-    const assembled = buildBatchAssembledImageReview(config, batchParsedResults, recoverableBatchSet);
+    const assembled = buildBatchAssembledImageReview(config, batchParsedResults, batchSet);
     const storedResult = {
       ...assembled,
-      _meta: buildImageReviewMeta([], sessions, result?._meta, visualEvidence.counts, new Date().toISOString(), recoverableBatchSet?.reviewed_images || [], {
-        fresh_image_count: recoverableBatchSet?.fresh_image_count || 0,
-        reused_saved_image_count: recoverableBatchSet?.reused_saved_image_count || 0,
-        image_count: recoverableBatchSet?.image_count || recoverableBatchSet?.reviewed_images?.length || 0,
+      _meta: buildImageReviewMeta([], sessions, result?._meta, visualEvidence.counts, new Date().toISOString(), batchSet?.reviewed_images || [], {
+        fresh_image_count: batchSet?.fresh_image_count || 0,
+        reused_saved_image_count: batchSet?.reused_saved_image_count || 0,
+        image_count: batchSet?.image_count || batchSet?.reviewed_images?.length || 0,
       }),
     };
     storedResult._meta.recovered_from_batches = true;
     storedResult._meta.local_batch_assembled = true;
-    storedResult._meta.latest_attempt_status = latestAttemptStatus || {
+    storedResult._meta.latest_attempt_status = attemptStatusOverride || latestAttemptStatus || {
       state: "final_synthesis_timeout_recovered_locally",
       timestamp: new Date().toISOString(),
       synthesis_stage: "local_batch_assembly",
       batch_reviews_completed: true,
       older_saved_review_showing: Boolean(result),
       latest_batch_findings_available: true,
+      batch_count: batchSet?.total || batchParsedResults.length,
     };
     setResult(storedResult);
     const nextArchive = await saveProfileResultWithArchive({
@@ -2413,6 +2436,8 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
       },
     });
     setError("");
+    let batchParsedResults = [];
+    let activeBatchSet = null;
     try {
       const reviewUserProfile = (await refreshUserProfile?.().catch(() => null)) || userProfile;
       const isHeadToToeBodyReference = config.contextScope === "head_to_toe_body_reference";
@@ -2497,8 +2522,7 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
       const reviewedImageRefs = buildImageReviewReferences(imagePayload);
       const responseSchema = profileImageReviewResponseSchema(config);
       let raw;
-      let batchParsedResults = [];
-      if (imagePayload.length > PROFILE_IMAGE_REVIEW_BATCH_SIZE) {
+      if (imagePayload.length > 0) {
         const imageBatches = chunkArray(imagePayload, PROFILE_IMAGE_REVIEW_BATCH_SIZE);
         setJobStatus({
           status: "running",
@@ -2575,6 +2599,16 @@ ANNOTATED IMAGE OUTPUT RULES:
         }
 
         if (!batchParsedResults.length) throw new Error("Sarah returned empty image review batches.");
+        activeBatchSet = {
+          total: imageBatches.length,
+          batches: [],
+          reviewed_images: reviewedImageRefs,
+          fresh_image_count: freshImagePayload.length,
+          reused_saved_image_count: reusedSavedImages.length,
+          image_count: imagePayload.length,
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+        };
         raw = await runProfilerAIJob({
           model: "claude_sonnet_4_6",
           max_tokens: PROFILE_IMAGE_REVIEW_MAX_TOKENS,
@@ -2803,6 +2837,28 @@ ANNOTATED IMAGE OUTPUT RULES:
       setArchive(nextArchive);
     } catch (err) {
       console.error(`${config.title} failed:`, err);
+      if (/timed out|timeout|request timed out/i.test(err?.message || "") && batchParsedResults.length) {
+        try {
+          setLatestAttemptStatus({
+            state: "latest_final_synthesis_failed",
+            timestamp: new Date().toISOString(),
+            error_message: err?.message || "Final synthesis timed out.",
+            synthesis_stage: "final_synthesis",
+            batch_reviews_completed: true,
+            batch_count: activeBatchSet?.total || batchParsedResults.length,
+            older_saved_review_showing: Boolean(result),
+            latest_batch_findings_available: true,
+          });
+          await saveBatchAssembledReview(
+            batchParsedResults,
+            "Batch reviews completed, but final synthesis timed out. PulsePoint saved the latest batch findings as an interim review without rerunning image review.",
+            activeBatchSet,
+          );
+          return;
+        } catch (assembleError) {
+          console.error(`${config.title} immediate timeout fallback assembly failed:`, assembleError);
+        }
+      }
       setError(aiErrorMessage(err));
     } finally {
       setLoading(false);

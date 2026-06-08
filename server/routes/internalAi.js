@@ -6,6 +6,11 @@ const MODEL_MAP = {
   claude_sonnet_4_5: 'claude-sonnet-4-5-20250929',
 };
 
+function anthropicTimeoutMs() {
+  const configured = Number(process.env.ANTHROPIC_TIMEOUT_MS || 600000);
+  return Number.isFinite(configured) && configured > 0 ? configured : 600000;
+}
+
 function stripCodeFence(text = '') {
   const trimmed = String(text).trim();
   const match = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
@@ -108,7 +113,10 @@ export async function aiInvokeInternal({
   signal,
 }) {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('Missing ANTHROPIC_API_KEY');
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const anthropic = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    timeout: anthropicTimeoutMs(),
+  });
   const wantsJson = !!response_json_schema;
   const resolvedModel = MODEL_MAP[model] || process.env.ANTHROPIC_MODEL || model || 'claude-sonnet-4-6';
   const providerMessage = `${prompt}${jsonInstruction(response_json_schema, schema_mode)}`;

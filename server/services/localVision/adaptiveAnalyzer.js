@@ -256,9 +256,39 @@ function candidateFromQwen(candidate, qwenResult) {
     ...(qwenResult.visible_objects || []),
     ...(qwenResult.visible_actions || []),
   ].filter((item) => item.status === 'visible');
+  const uncertainRows = [
+    ...(qwenResult.visible_objects || []),
+    ...(qwenResult.visible_actions || []),
+  ].filter((item) => item.status === 'uncertain' || item.status === 'not_visible');
+  const qwenEvidence = {
+    qwen_summary: qwenResult.summary || '',
+    qwen_visible_rows: visibleRows.map((row) => ({
+      label: row.label,
+      status: row.status,
+      confidence: row.confidence,
+      reason: row.reason,
+      frame_refs: row.frame_refs || [],
+    })),
+    qwen_uncertain_rows: uncertainRows.slice(0, 8).map((row) => ({
+      label: row.label,
+      status: row.status,
+      confidence: row.confidence,
+      reason: row.reason,
+      frame_refs: row.frame_refs || [],
+    })),
+    qwen_stage_candidates: (qwenResult.stage_candidates || [])
+      .filter((stage) => stage.stage && stage.stage !== 'unknown')
+      .map((stage) => ({
+        stage: stage.stage,
+        confidence: stage.confidence,
+        basis: stage.basis,
+        frame_refs: stage.frame_refs || [],
+      })),
+  };
   if (confirmedEvents.length || promotedStages.length) {
     return {
       ...candidate,
+      ...qwenEvidence,
       lifecycle: [...new Set([...(candidate.lifecycle || []), 'qwen_reviewed', 'promoted_confirmed'])],
       confidence: Math.max(...confirmedEvents.map((event) => Number(event.confidence || 0)), ...promotedStages.map((stage) => Number(stage.confidence || 0)), candidate.review_score || candidate.score || 0),
       basis: qwenResult.summary,
@@ -268,6 +298,7 @@ function candidateFromQwen(candidate, qwenResult) {
   if (visibleRows.length || Number(candidate.review_score || candidate.score || 0) >= 0.45) {
     return {
       ...candidate,
+      ...qwenEvidence,
       lifecycle: [...new Set([...(candidate.lifecycle || []), 'qwen_reviewed', 'kept_as_strong_candidate'])],
       confidence: Math.max(Number(candidate.review_score || candidate.score || 0), Number(qwenResult.confidence?.overall || 0)),
       basis: visibleRows.length
@@ -278,6 +309,7 @@ function candidateFromQwen(candidate, qwenResult) {
   }
   return {
     ...candidate,
+    ...qwenEvidence,
     lifecycle: [...new Set([...(candidate.lifecycle || []), 'qwen_reviewed', 'rejected'])],
     confidence: Number(qwenResult.confidence?.overall || candidate.score || 0),
     rejection_reason: 'Targeted Qwen review did not confirm visible evidence above gates.',

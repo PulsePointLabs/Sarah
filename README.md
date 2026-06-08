@@ -126,7 +126,7 @@ npm run dev:all
 
 Default local URLs:
 
-- App: `http://localhost:5173`
+- App: `http://localhost:5174`
 - API: `http://localhost:8787`
 
 Run separately when useful:
@@ -261,7 +261,7 @@ For private mobile testing, Tailscale is the preferred path.
 Example Tailscale Serve command:
 
 ```bash
-tailscale serve --bg --https=443 http://127.0.0.1:5173
+tailscale serve --bg --https=443 http://127.0.0.1:5174
 ```
 
 If testing multiple local apps, keep each app on a distinct HTTPS origin/port so PWA installs and service workers do not collide.
@@ -306,6 +306,27 @@ AI APIs receive whatever text/media frames are sent for a requested analysis. Ke
 - Session and profile evidence is cumulative. When changing AI prompts, check whether Profile Q&A, visual evidence, session event timelines, body exploration, and entered metrics still flow through.
 - TTS/Nova cadence matters. Do not casually change chunking, sentence boundaries, or voice settings.
 - Restart `npm run server` after backend route, config, or job changes.
+
+## Current AI Direction and Collaborator Notes
+
+PulsePoint is being developed as a serious, private physiology and evidence-review tool. Adult anatomy, pelvic/genital reference review, masturbation physiology, Foley/procedure review, and body exploration are valid in-scope data domains when handled clinically and non-erotically.
+
+Near-term AI priorities:
+
+- **Local AI Annotation is the main active gap.** The target is Sarah-style chronological video/window cards with timestamp range, visible evidence, change from prior window, confidence/limitations, event tags, frame references, and provenance. Raw CV/Qwen rows should remain debug evidence, not the primary user-facing result.
+- **Cloud Sarah / Claude remains the reference path.** Claude video-pass and session-analysis outputs are currently the quality bar for chronological, evidence-based interpretation.
+- **Local Sarah synthesis is preserved but secondary right now.** The Ollama/local text synthesis path exists for private local synthesis from shared evidence packets, but it does not replace the need for better local video annotation cards.
+- **AI Profiler image review now preserves batch work when final synthesis times out.** If the final Pelvic & Genital or Head-to-Toe synthesis fails after batch reviews complete, the UI may show “Latest final synthesis failed” while also showing “recovered latest batch findings assembled locally.” That state means the batch-level visual review completed and the app is displaying an interim assembled review instead of losing paid-for or time-consuming batch evidence. Repeatedly retrying the same large final synthesis may time out again; use the recovered batch findings as the current working review unless a smaller or compressed synthesis pass is implemented.
+
+Evidence discipline rules:
+
+- Keep direct visual evidence, saved profile/prior-evidence reconciliation, telemetry evidence, user-reported context, and interpretation separate.
+- Do not infer subjective experience, intent, pain, arousal, orgasm, diagnosis, catheter advancement, fluid release, or device insertion unless the evidence actually supports that specific claim.
+- Local-only workflows must not silently fall back to cloud.
+- Do not loosen local vision gates to make results look more confident.
+- Do not touch TTS/Nova behavior casually.
+
+Female/woman-friendly expansion is planned. The same evidence-first approach should support female anatomy and session workflows with clinical, practical language: vulvar/labial visibility, clitoral hood/clitoral region visibility, vaginal introitus visibility, perineal body visibility, visible lubrication/fluid evidence, manual/device contact when visible, pelvic/leg/foot movement, tissue irritation/redness/swelling when visible, post-event cleanup/fluid presence, and clear limitations when visibility is inadequate. This should be built as first-class product support, not as a male-session afterthought.
 
 Useful validation:
 
