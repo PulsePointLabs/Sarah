@@ -14,6 +14,15 @@ import {
 } from "@/components/ui/alert-dialog";
 import { base44 } from "@/api/base44Client";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import {
+  compactFrameRefs,
+  buildSarahLocalAnnotationCards,
+  displayCandidate,
+  displayNotConfirmed,
+  humanizeLocalVisionLabel,
+  localVisionSummaryCounts,
+  localVisionVerdict,
+} from "@/lib/localVisionDisplay";
 import { sessionContextEvidenceText } from "@/lib/sessionContext";
 import { EXPLORATION_EVENT_CATEGORIES } from "@/components/session-form/EventTimelineSection";
 import {
@@ -81,11 +90,25 @@ function compactText(value, max = 1400) {
 }
 
 function humanStatus(value = "") {
+  if (value && typeof value === "object") {
+    return Object.entries(value)
+      .filter(([, entryValue]) => entryValue != null && entryValue !== "")
+      .slice(0, 5)
+      .map(([key, entryValue]) => `${key.replace(/_/g, " ")} ${String(entryValue).replace(/_/g, " ")}`)
+      .join(" · ");
+  }
   return String(value || "")
     .replace(/_/g, " ")
     .replace(/\bnot confirmed\b/gi, "not confirmed")
     .replace(/\bunknown\b/gi, "unknown")
     .trim();
+}
+
+function progressText(value = "") {
+  if (!value) return "";
+  if (typeof value === "string") return value.replace(/\s+/g, " ").trim();
+  if (typeof value === "object") return humanStatus(value);
+  return String(value).replace(/\s+/g, " ").trim();
 }
 
 function formatLocalVisionRollingState(state) {
@@ -106,10 +129,10 @@ function formatLocalVisionRollingState(state) {
 
 function formatLocalVisionProgressMessage(progress = {}) {
   const phase = String(progress.phase || "running").replace(/_/g, " ");
-  const message = String(progress.message || "").replace(/\s+/g, " ").trim();
+  const message = progressText(progress.message);
   const candidate = progress.latest_candidate_window;
   const rollingState = formatLocalVisionRollingState(progress.latest_rolling_state || progress.rolling_state);
-  const latestSummary = String(progress.latest_summary || "").replace(/\s+/g, " ").trim();
+  const latestSummary = progressText(progress.latest_summary);
   const candidateText = candidate?.type
     ? `${humanStatus(candidate.type)} near ${fmtMmSs((candidate.start_ms || 0) / 1000)}-${fmtMmSs((candidate.end_ms || candidate.start_ms || 0) / 1000)}`
     : "";
@@ -131,8 +154,8 @@ function formatLocalVisionProgressMessage(progress = {}) {
 
 function localVisionProgressLogEntry(progress = {}) {
   const phase = String(progress.phase || "running").replace(/_/g, " ");
-  const message = String(progress.message || "").replace(/\s+/g, " ").trim();
-  const latestSummary = String(progress.latest_summary || "").replace(/\s+/g, " ").trim();
+  const message = progressText(progress.message);
+  const latestSummary = progressText(progress.latest_summary);
   const rollingSummary = formatLocalVisionRollingState(progress.latest_rolling_state || progress.rolling_state);
   const latestFrame = progress.latest_frame;
   const candidate = progress.latest_candidate_window;
@@ -147,6 +170,7 @@ function localVisionProgressLogEntry(progress = {}) {
     progress.blocked_claims != null ? `${progress.blocked_claims} blocked claims` : null,
     candidate?.type ? `${humanStatus(candidate.type)} ${fmtMmSs((candidate.start_ms || 0) / 1000)}-${fmtMmSs((candidate.end_ms || candidate.start_ms || 0) / 1000)}` : null,
     candidate?.score != null ? `score ${Math.round(Number(candidate.score || 0) * 100)}%` : null,
+    candidate?.roi?.label ? `ROI ${candidate.roi.label}${candidate.roi.motion_score != null ? ` ${Math.round(Number(candidate.roi.motion_score || 0) * 100)}%` : ""}` : null,
     latestFrame?.frame_id ? `${latestFrame.frame_id} @ ${fmtMmSs((latestFrame.time_ms || 0) / 1000)}` : null,
   ].filter(Boolean);
   const text = formatLocalVisionProgressMessage(progress) || rollingSummary || latestSummary || message || details.join(" · ");
@@ -876,10 +900,67 @@ const LOCAL_ANALYSIS_TYPES = [
 ];
 
 const LOCAL_ANALYSIS_MODES = [
-  { value: "fast_preview", label: "Fast Preview", helper: "Cheap CV scan with only a few targeted Qwen checks." },
-  { value: "balanced", label: "Balanced Review", helper: "Recommended. CV pre-pass plus targeted Qwen candidate review." },
-  { value: "deep_forensic", label: "Deep Forensic Review", helper: "Slow/GPU-intensive. More candidate windows and Qwen calls." },
+  { value: "fast_preview", label: "Fast Forward Review", helper: "Cheap chronological CV scan with only a few targeted Qwen checks." },
+  { value: "balanced", label: "Balanced Forward Review", helper: "Recommended. Chronological CV scan plus targeted Qwen candidate review." },
+  { value: "deep_forensic", label: "Deep Forward Review", helper: "Slow/GPU-intensive. More candidate windows and Qwen calls." },
 ];
+
+const LOCAL_VISION_ROI_PRESETS = {
+  genital_hand_roi: {
+    label: "Genital / hand activity",
+    type: "genital_hand_roi",
+    x: 0.2,
+    y: 0.35,
+    width: 0.6,
+    height: 0.38,
+  },
+  feet_legs_roi: {
+    label: "Feet / legs",
+    type: "feet_legs_roi",
+    x: 0.05,
+    y: 0.55,
+    width: 0.9,
+    height: 0.38,
+  },
+  full_body_roi: {
+    label: "Full body / posture",
+    type: "full_body_roi",
+    x: 0.05,
+    y: 0.05,
+    width: 0.9,
+    height: 0.9,
+  },
+  foley_procedure_field_roi: {
+    label: "Procedure field",
+    type: "foley_procedure_field_roi",
+    x: 0.18,
+    y: 0.3,
+    width: 0.64,
+    height: 0.42,
+  },
+  tubing_bag_roi: {
+    label: "Tubing / bag field",
+    type: "tubing_bag_roi",
+    x: 0.55,
+    y: 0.2,
+    width: 0.4,
+    height: 0.55,
+  },
+};
+
+function normalizeUiRoi(roi, index = 0) {
+  const x = clamp(Number(roi?.x ?? 0), 0, 0.99);
+  const y = clamp(Number(roi?.y ?? 0), 0, 0.99);
+  return {
+    id: roi?.id || `roi_${Date.now()}_${index}`,
+    label: roi?.label || "Custom ROI",
+    type: roi?.type || "custom_roi",
+    x,
+    y,
+    width: clamp(Number(roi?.width ?? 0.25), 0.01, 1 - x),
+    height: clamp(Number(roi?.height ?? 0.25), 0.01, 1 - y),
+  };
+}
 
 function inferLocalAnalysisType(recordType, session) {
   const explicit = String(session?.local_vision_analysis_type || session?.analysis_type || session?.session_type || "").toLowerCase();
@@ -1101,9 +1182,7 @@ function localVisionSessionStory(result = {}) {
 }
 
 function candidateLabel(candidate = {}) {
-  return String(candidate.label || candidate.type || candidate.candidate_type || "candidate")
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+  return humanizeLocalVisionLabel(candidate.label || candidate.type || candidate.candidate_type || "candidate");
 }
 
 function progressCandidate(progress = {}) {
@@ -1204,6 +1283,40 @@ function localVisionFindingFromItem(item, prefix = "") {
   };
 }
 
+function localVisionDraftNote({ label, basis, refs = [], status = "confirmed" }) {
+  const cleanLabel = humanizeLocalVisionLabel(label || "local visual finding");
+  const cleanBasis = compactText(basis || "", 260);
+  const evidenceRefs = compactFrameRefs(refs, 5);
+  const evidence = evidenceRefs
+    ? ` Evidence frames: ${evidenceRefs}.`
+    : "";
+  if (status === "candidate") {
+    return `Possible visual activity candidate, not visually confirmed: ${cleanLabel}.${cleanBasis ? ` ${cleanBasis}` : ""}${evidence}`;
+  }
+  return `Local visual confirmed: ${cleanLabel}.${cleanBasis ? ` ${cleanBasis}` : ""}${evidence}`;
+}
+
+function localVisionEventFromItem(item, selectedVideo, windowInfo, isExploration, status = "confirmed", index = 0) {
+  if (!item) return null;
+  const range = localVisionMsRange(item);
+  const fallbackMs = Number(windowInfo.startMs ?? windowInfo.start_ms ?? 0);
+  const eventMs = Number.isFinite(range.start) ? range.start : fallbackMs;
+  const label = item.label || item.event_type || item.type || item.candidate_type || "local visual finding";
+  const refs = arrayFromMaybe(item.frame_refs || item.evidence_refs || item.frame_ref);
+  const basis = item.basis || item.reason || (Array.isArray(item.reasons) ? item.reasons.join("; ") : "") || item.summary || "";
+  return {
+    time_s: sessionTimeForSource(eventMs / 1000, selectedVideo),
+    note: localVisionDraftNote({ label, basis, refs, status }),
+    evidenceRefs: refs,
+    category: localVisionCategory(item.event_type || item.type || label, isExploration),
+    annotation_tags: status === "candidate"
+      ? ["local_vision", "visual_evidence", "candidate_not_confirmed"]
+      : ["local_vision", "visual_evidence", "confirmed"],
+    confidence: confidenceWord(item.confidence ?? item.score),
+    index,
+  };
+}
+
 function cardFromLocalVisionResult(result, selectedVideo, isExploration = false) {
   if (!result?.ok) return null;
   const windowInfo = result.window || result.range || {};
@@ -1246,7 +1359,7 @@ function cardFromLocalVisionResult(result, selectedVideo, isExploration = false)
     category: "other",
     confidence: confidenceWord(result.confidence?.overall),
   };
-  const events = (result.timeline_events || [])
+  const timelineEvents = (result.timeline_events || [])
     .map((event, index) => {
       const eventMs = Number(event.start_ms ?? event.time_ms ?? event.end_ms ?? windowInfo.startMs ?? 0);
       const time_s = sessionTimeForSource(eventMs / 1000, selectedVideo);
@@ -1268,7 +1381,24 @@ function cardFromLocalVisionResult(result, selectedVideo, isExploration = false)
       };
     })
     .filter((event) => event.note)
-    .slice(0, 6);
+    .slice(0, 8);
+  const promotedEvents = arrayFromMaybe(result.actionable_findings)
+    .map((item, index) => localVisionEventFromItem(item, selectedVideo, windowInfo, isExploration, "confirmed", index))
+    .filter(Boolean);
+  const candidateEvents = arrayFromMaybe(result.strong_candidates)
+    .slice(0, 8)
+    .map((item, index) => localVisionEventFromItem(item, selectedVideo, windowInfo, isExploration, "candidate", index))
+    .filter(Boolean);
+  const seenEventKeys = new Set();
+  const events = [...timelineEvents, ...promotedEvents, ...candidateEvents]
+    .filter((event) => {
+      const key = `${Math.round(Number(event.time_s || 0) * 10) / 10}|${String(event.note || "").toLowerCase().slice(0, 80)}`;
+      if (seenEventKeys.has(key)) return false;
+      seenEventKeys.add(key);
+      return true;
+    })
+    .sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0))
+    .slice(0, 12);
   const sampledFrames = (result.frame_evidence || result.evidence_frames || []).map((frame) => ({
     url: frame.image_path ? base44.integrations.Core.localVisionAssetUrl(frame.image_path) : "",
     frameTimeSeconds: Number(frame.time_ms || 0) / 1000,
@@ -1591,6 +1721,7 @@ export default function AIVideoPassPanel({
   const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
   const availableVideos = useMemo(() => linkedLocalVideos.filter((video) => video?.path && video.exists !== false), [linkedLocalVideos]);
   const previewVideoRef = useRef(null);
+  const roiOverlayRef = useRef(null);
   const [selectedPath, setSelectedPath] = useState(availableVideos[0]?.path || "");
   const [clipSeconds, setClipSeconds] = useState(24);
   const [windowCount, setWindowCount] = useState(5);
@@ -1615,9 +1746,13 @@ export default function AIVideoPassPanel({
   const [visionEngine, setVisionEngine] = useState("local_qwen25vl");
   const [localAnalysisType, setLocalAnalysisType] = useState(() => inferLocalAnalysisType(recordType, session));
   const [localAnalysisMode, setLocalAnalysisMode] = useState("balanced");
+  const [localVisionRois, setLocalVisionRois] = useState([]);
+  const [roiEditMode, setRoiEditMode] = useState(false);
+  const [activeRoiId, setActiveRoiId] = useState(null);
   const [localVisionFocus, setLocalVisionFocus] = useState(isExploration ? "foley" : "body");
   const [localVisionHealth, setLocalVisionHealth] = useState(null);
   const [localVisionRunning, setLocalVisionRunning] = useState(false);
+  const [hybridSarahVerifying, setHybridSarahVerifying] = useState(false);
   const [localVisionStatus, setLocalVisionStatus] = useState("");
   const [localVisionError, setLocalVisionError] = useState("");
   const [localVisionProgress, setLocalVisionProgress] = useState(null);
@@ -1630,6 +1765,81 @@ export default function AIVideoPassPanel({
   useEffect(() => {
     setLocalAnalysisType(inferLocalAnalysisType(recordType, session));
   }, [recordType, session?.id]);
+
+  const addLocalVisionRoi = (presetKey) => {
+    const preset = LOCAL_VISION_ROI_PRESETS[presetKey] || LOCAL_VISION_ROI_PRESETS.full_body_roi;
+    const id = `roi_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    setActiveRoiId(id);
+    setRoiEditMode(true);
+    setLocalVisionRois((current) => [
+      ...current,
+      normalizeUiRoi({ ...preset, id }, current.length),
+    ]);
+  };
+
+  const updateLocalVisionRoi = (id, patch) => {
+    setLocalVisionRois((current) => current.map((roi, index) => (
+      roi.id === id ? normalizeUiRoi({ ...roi, ...patch }, index) : roi
+    )));
+  };
+
+  const removeLocalVisionRoi = (id) => {
+    if (activeRoiId === id) setActiveRoiId(null);
+    setLocalVisionRois((current) => current.filter((roi) => roi.id !== id));
+  };
+
+  const pointFromRoiOverlay = useCallback((event) => {
+    const bounds = roiOverlayRef.current?.getBoundingClientRect();
+    if (!bounds?.width || !bounds?.height) return null;
+    return {
+      x: clamp((event.clientX - bounds.left) / bounds.width, 0, 1),
+      y: clamp((event.clientY - bounds.top) / bounds.height, 0, 1),
+    };
+  }, []);
+
+  const beginLocalVisionRoiDrag = useCallback((roi, mode, event) => {
+    const startPoint = pointFromRoiOverlay(event);
+    if (!startPoint) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    setActiveRoiId(roi.id);
+    setRoiEditMode(true);
+
+    const initial = normalizeUiRoi(roi);
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = "none";
+
+    const handleMove = (moveEvent) => {
+      const nextPoint = pointFromRoiOverlay(moveEvent);
+      if (!nextPoint) return;
+      moveEvent.preventDefault();
+      const dx = nextPoint.x - startPoint.x;
+      const dy = nextPoint.y - startPoint.y;
+      if (mode === "resize") {
+        updateLocalVisionRoi(roi.id, {
+          width: clamp(initial.width + dx, 0.03, 1 - initial.x),
+          height: clamp(initial.height + dy, 0.03, 1 - initial.y),
+        });
+      } else {
+        updateLocalVisionRoi(roi.id, {
+          x: clamp(initial.x + dx, 0, 1 - initial.width),
+          y: clamp(initial.y + dy, 0, 1 - initial.height),
+        });
+      }
+    };
+
+    const handleUp = () => {
+      document.body.style.userSelect = previousUserSelect;
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleUp);
+    };
+
+    window.addEventListener("pointermove", handleMove, { passive: false });
+    window.addEventListener("pointerup", handleUp, { once: true });
+    window.addEventListener("pointercancel", handleUp, { once: true });
+  }, [pointFromRoiOverlay]);
 
   const selectedVideo = availableVideos.find((video) => video.path === selectedPath) || availableVideos[0];
   const selectedVideoOffset = timelineOffsetSeconds(selectedVideo);
@@ -1771,7 +1981,8 @@ export default function AIVideoPassPanel({
         });
         if (cancelled) return;
         const job = (response.jobs || []).find((item) => (
-          item?.type === "local_vision_analyze_adaptive"
+          item?.type === "local_vision_analyze_forward"
+            || item?.type === "local_vision_analyze_adaptive"
             || item?.type === "local_vision_analyze_continuous"
             || item?.type === "local_vision_analyze_window"
             || item?.type === "local_vision_ask_video"
@@ -2385,7 +2596,251 @@ Return a corrected compact card for this same window. Keep timeline events only 
     return localAnalysisType || "general_session";
   }, [localAnalysisType]);
 
-  const analyzeAdaptiveLocally = async () => {
+  const localVisionVerificationWindows = useCallback((result, limit = 6) => {
+    const rows = [
+      ...arrayFromMaybe(result?.actionable_findings).map((item) => ({ item, priority: 0, status: "confirmed" })),
+      ...arrayFromMaybe(result?.strong_candidates).map((item) => ({ item, priority: 1, status: "candidate" })),
+      ...arrayFromMaybe(result?.session_analysis_export?.confirmed_findings).map((item) => ({ item, priority: 2, status: "confirmed" })),
+      ...arrayFromMaybe(result?.session_analysis_export?.strong_candidates).map((item) => ({ item, priority: 3, status: "candidate" })),
+    ];
+    const seen = new Set();
+    return rows
+      .map(({ item, priority, status }) => {
+        const startMs = Number(item.start_ms ?? item.startMs ?? item.time_ms ?? item.timeMs);
+        const endMs = Number(item.end_ms ?? item.endMs ?? item.start_ms ?? item.startMs ?? item.time_ms ?? item.timeMs);
+        if (!Number.isFinite(startMs)) return null;
+        const safeEndMs = Number.isFinite(endMs) ? Math.max(endMs, startMs + 1500) : startMs + 12000;
+        const label = humanizeLocalVisionLabel(item.label || item.type || item.event_type || "local candidate");
+        const startSeconds = Math.max(0, startMs / 1000 - 1.5);
+        const endSeconds = Math.max(startSeconds + 3, safeEndMs / 1000 + 1.5);
+        const key = `${Math.round(startSeconds / 2)}|${label.toLowerCase()}`;
+        if (seen.has(key)) return null;
+        seen.add(key);
+        return {
+          priority,
+          status,
+          label,
+          basis: item.basis || arrayFromMaybe(item.reasons).join("; ") || "Local CV selected this as a meaningful review window.",
+          confidence: item.confidence_label || confidenceWord(item.confidence ?? item.score),
+          frameRefs: arrayFromMaybe(item.frame_refs || item.evidence_refs || item.frame_ref),
+          sourceStart: startSeconds,
+          sourceEnd: endSeconds,
+          sessionStart: sessionTimeForSource(startSeconds, selectedVideo),
+          sessionEnd: sessionTimeForSource(endSeconds, selectedVideo),
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.priority - b.priority || a.sourceStart - b.sourceStart)
+      .slice(0, limit)
+      .sort((a, b) => a.sourceStart - b.sourceStart);
+  }, [selectedVideo]);
+
+  const verifyLocalWindowsWithSarah = async (result, { limit = 6 } = {}) => {
+    if (!selectedVideo?.path || hybridSarahVerifying) return [];
+    const windows = localVisionVerificationWindows(result, limit);
+    if (!windows.length) {
+      setStatus("Sarah verification skipped: local review did not produce candidate windows worth sending.");
+      return [];
+    }
+    setHybridSarahVerifying(true);
+    setError("");
+    const verifiedCards = [];
+    const videoContext = isExploration
+      ? buildBodyExplorationVideoContext(session, selectedVideo, timelineRows)
+      : buildSessionVideoContext(session, selectedVideo, timelineRows);
+    const localCards = arrayFromMaybe(result?.session_analysis_export?.local_annotation_cards)
+      .concat(result?.session_analysis_export?.local_annotation_cards?.length ? [] : buildSarahLocalAnnotationCards(result));
+    try {
+      for (let i = 0; i < windows.length; i += 1) {
+        const window = windows[i];
+        const label = `Sarah verify local window ${fmtMmSs(window.sessionStart)}-${fmtMmSs(window.sessionEnd)}`;
+        setStatus(`Sarah verifying local candidate ${i + 1}/${windows.length}: ${fmtMmSs(window.sessionStart)}-${fmtMmSs(window.sessionEnd)}`);
+        const preview = await base44.integrations.Core.ProcessLocalVideoClip({
+          path: selectedVideo.path,
+          startSeconds: window.sourceStart,
+          endSeconds: window.sourceEnd,
+          label,
+          frameCount: 10,
+        });
+        const reviewWindow = {
+          start: sessionTimeForSource(preview.startSeconds ?? window.sourceStart, selectedVideo),
+          end: sessionTimeForSource(preview.endSeconds ?? window.sourceEnd, selectedVideo),
+        };
+        const sourceStart = preview.startSeconds ?? window.sourceStart;
+        const sourceEnd = preview.endSeconds ?? window.sourceEnd;
+        const telemetry = nearestTelemetrySummary(timelineRows, reviewWindow.start, reviewWindow.end);
+        const frameTiming = (preview.frames || [])
+          .map((frame, index) => `frame ${index + 1} = ${recordLabel} ${fmtMmSs(sessionTimeForSource(frame.frameTimeSeconds, selectedVideo))} (source ${fmtMmSs(frame.frameTimeSeconds)})`)
+          .join(", ");
+        const nearbyLocalCards = localCards
+          .filter((card) => {
+            const startMs = Number(card.start_ms ?? 0);
+            const endMs = Number(card.end_ms ?? startMs);
+            return endMs >= window.sourceStart * 1000 - 5000 && startMs <= window.sourceEnd * 1000 + 5000;
+          })
+          .slice(0, 4)
+          .map((card) => `${card.timestamp_range || `${fmtMmSs((card.start_ms || 0) / 1000)}-${fmtMmSs((card.end_ms || 0) / 1000)}`}: ${card.title || "Local candidate"} | ${card.status || "candidate"} | ${card.summary || card.visible_evidence || ""}`)
+          .join("\n");
+        const continuityContext = compactCardContinuity(verifiedCards[verifiedCards.length - 1], isExploration)
+          || "No prior Sarah verification card is available in this hybrid run. Establish the visible state for this window and carry useful continuity forward.";
+        const images = (preview.frames || []).map((frame) => ({
+          filename: frame.filename,
+          media_type: frame.mimeType || "image/jpeg",
+          data: frame.data,
+        }));
+        const aiPayload = {
+          max_tokens: 2200,
+          response_json_schema: {
+            type: "object",
+            properties: {
+              summary: { type: "string" },
+              findings: {
+                type: "array",
+                maxItems: 4,
+                items: {
+                  type: "object",
+                  properties: {
+                    title: { type: "string" },
+                    text: { type: "string" },
+                    category: { type: "string", enum: isExploration ? ["instrumentation", "physiology", "physical", "movement", "comfort", "environment", "equipment", "other"] : ["stimulation", "physiology", "physical", "movement", "environment", "equipment", "other"] },
+                    confidence: { type: "string", enum: ["low", "moderate", "high"] },
+                  },
+                  required: ["title", "text", "category", "confidence"],
+                },
+              },
+              events: {
+                type: "array",
+                maxItems: 3,
+                items: {
+                  type: "object",
+                  properties: {
+                    time_s: { type: "number" },
+                    note: { type: "string" },
+                    category: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                        enum: isExploration ? EXPLORATION_EVENT_CATEGORIES.map((category) => category.value) : ["stimulation", "stimulation_started", "stimulation_paused", "stimulation_resumed", "stimulation_stopped", "motion_pause", "motion_resume", "movement_observed", "sensation", "physical", "other"],
+                      },
+                    },
+                    annotation_tags: { type: "array", items: { type: "string" } },
+                    confidence: { type: "string", enum: ["low", "moderate", "high"] },
+                  },
+                  required: ["time_s", "note", "category", "annotation_tags", "confidence"],
+                },
+              },
+            },
+            required: ["summary", "findings", "events"],
+          },
+          images,
+          prompt: `You are Sarah verifying a local GPU-selected video window for PulsePoint.
+
+This is a hybrid local-first review: local CV/Qwen selected this window as worth looking at, but the local result is only a selector. The sampled frames in this request are the visual evidence. Do not promote the local candidate into a fact unless the current sampled frames visibly support it.
+
+Write one Sarah-style annotation card for this reviewed window:
+- summary: 2 concise chronological sentences describing what is visible, what changed, and what remains uncertain.
+- findings: 2-4 useful clinical finding cards when supported by visible evidence; fewer or none if the frames do not add useful evidence.
+- events: 1-3 concise draft timeline events only for meaningful visible changes.
+
+Evidence discipline:
+- Separate direct visual evidence from telemetry support, user/session context, and hypothesis.
+- Do not infer orgasm, climax, ejaculation, fluid release, pain, pleasure, intent, edging, or causality from movement alone.
+- Use "possible" and low/moderate confidence when visibility, occlusion, blur, or camera angle limits certainty.
+- If the window does not visually confirm the local candidate, say that plainly and explain what was checked.
+- Do not use raw second-offset wording in prose. Use clock-style window labels or plain chronological wording.
+
+${isExploration ? `Body exploration / procedure mode:
+Use clinical procedure language. For Foley or urethral/procedure review, distinguish setup, prep, swabbing, lubrication/dilation, visible meatal contact, visible advancement, already-in-place catheter/tubing state, tubing/field handling, urine return, balloon/securement, and cleanup. Do not claim advancement, insertion, urine return, balloon inflation, or securement unless that exact action/item is visible or explicitly logged.` : `Session mode:
+Use clinical session language. Track visible hand/body/device contact, stimulation changes, pauses/resumptions, lubrication/device handling, posture/lower-body movement, visible genital/body state, and limitations. Do not label edging unless explicitly logged or unmistakably shown by repeated intended near-climax approach-and-withdraw cycles.`}
+
+Local selector packet for this window:
+Candidate label: ${window.label}
+Candidate status: ${window.status}
+Candidate strength: ${window.confidence}
+Local basis: ${window.basis}
+Local frame references: ${window.frameRefs.join(", ") || "none"}
+Nearby local annotation cards:
+${nearbyLocalCards || "None. Local annotation did not produce useful cards near this window."}
+
+Continuity from prior Sarah-verified window:
+${continuityContext}
+
+Limited ${recordLabel} context:
+${videoContext || `No additional ${recordLabel} context is available.`}
+
+Reviewed ${recordLabel} window: ${fmtMmSs(reviewWindow.start)} to ${fmtMmSs(reviewWindow.end)}.
+Source video window: ${fmtMmSs(sourceStart)} to ${fmtMmSs(sourceEnd)}.
+Sampled frame timing in image order: ${frameTiming || "No decoded frame timing was returned."}
+Telemetry in this window: ${telemetry}
+
+Return only the structured JSON matching the requested schema.`,
+        };
+        const completedJob = await runBackgroundAIVideoReview({
+          aiPayload,
+          cardMeta: {
+            label,
+            window: reviewWindow,
+            sourceWindow: { start: sourceStart, end: sourceEnd },
+            sourceVideo: selectedVideo,
+            sourceVideoRole: selectedVideoRole,
+            clipUrl: preview.clip_url || preview.url,
+            thumbnailUrl: preview.frames?.[0]?.url || "",
+            sampledFrames: (preview.frames || []).map((frame) => ({
+              url: frame.url || frame.file_url || "",
+              frameTimeSeconds: frame.frameTimeSeconds,
+              recordTimeSeconds: sessionTimeForSource(frame.frameTimeSeconds, selectedVideo),
+              frameIndex: frame.frameIndex,
+            })),
+            motionSummary: preview.motion_summary,
+            telemetry,
+          },
+          session,
+          recordType,
+          label,
+          onProgress: (job) => {
+            const progress = job?.progress || {};
+            if (progress.message) setStatus(progress.message);
+          },
+        });
+        const normalized = normalizeAIResult(completedJob.result, reviewWindow, selectedVideoRole, isExploration);
+        const verifiedCard = {
+          id: `hybrid-sarah-${completedJob.id || Date.now()}-${i}`,
+          label,
+          window: reviewWindow,
+          sourceWindow: { start: sourceStart, end: sourceEnd },
+          sourceVideo: selectedVideo,
+          sourceVideoRole: selectedVideoRole,
+          clipUrl: preview.clip_url || preview.url,
+          thumbnailUrl: preview.frames?.[0]?.url || "",
+          sampledFrames: (preview.frames || []).map((frame) => ({
+            url: frame.url || frame.file_url || "",
+            frameTimeSeconds: frame.frameTimeSeconds,
+            recordTimeSeconds: sessionTimeForSource(frame.frameTimeSeconds, selectedVideo),
+            frameIndex: frame.frameIndex,
+          })),
+          motionSummary: preview.motion_summary,
+          telemetry,
+          hybridSarahVerification: true,
+          localSelector: window,
+          ...normalized,
+        };
+        verifiedCards.push(verifiedCard);
+        setCards((current) => [...current.filter((card) => card.id !== verifiedCard.id), verifiedCard]);
+        setExpanded((prev) => ({ ...prev, [verifiedCard.id]: true }));
+      }
+      setStatus(`Sarah verification complete: ${verifiedCards.length} local-selected window${verifiedCards.length === 1 ? "" : "s"} reviewed.`);
+      return verifiedCards;
+    } catch (err) {
+      setError(err?.data?.error || err?.message || "Sarah verification of local windows failed.");
+      setStatus("");
+      return verifiedCards;
+    } finally {
+      setHybridSarahVerifying(false);
+    }
+  };
+
+  const analyzeAdaptiveLocally = async (options = {}) => {
+    const verifyWithSarah = options?.verifyWithSarah === true;
     if (!selectedVideo?.path || localVisionRunning || visionEngine === "cloud") return;
     const range = localVisionRange();
     const mode = localAnalysisMode || "balanced";
@@ -2398,13 +2853,15 @@ Return a corrected compact card for this same window. Keep timeline events only 
       phase: "starting",
       current: 0,
       total: mode === "fast_preview" ? 4 : 6,
-      message: `Starting ${modeLabel.toLowerCase()} adaptive local analysis...`,
+      message: `Starting ${modeLabel.toLowerCase()}...`,
       recordType: localVisionRecordType(),
       mode,
+      roiConfigured: localVisionRois.length > 0,
+      roiLabels: localVisionRois.map((roi) => roi.label),
     });
     setLocalVisionResult(null);
     setLocalVisionQaResult(null);
-    setLocalVisionStatus(`Starting ${modeLabel}: cheap CV pre-pass first, Qwen only on selected candidate windows.`);
+    setLocalVisionStatus(`Starting ${modeLabel}: chronological CV scan first, Qwen only on selected checkpoint windows.`);
     try {
       const payload = {
         sessionId: session.id,
@@ -2414,20 +2871,32 @@ Return a corrected compact card for this same window. Keep timeline events only 
         endMs: Math.round(range.sourceEnd * 1000),
         mode,
         engine: "local_qwen25vl",
+        workflow: "local_vision_forward_review",
         candidatePolicy,
         qwenPolicy,
+        forwardPolicy: {
+          baselineFps: candidatePolicy.baselineFps,
+          motionPeakFps: candidatePolicy.motionPeakFps,
+          windowSeconds: Math.round(((candidatePolicy.candidateWindowPreMs || 3000) + (candidatePolicy.candidateWindowPostMs || 3000)) / 1000),
+          stepSeconds: 10,
+          maxQwenWindows: qwenPolicy.maxQwenWindows,
+          maxFramesPerQwenWindow: qwenPolicy.maxFramesPerWindow,
+          maintainRollingState: true,
+          allowRetrospectiveRefinement: true,
+        },
+        regionsOfInterest: localVisionRois,
         scaleCalibration: { available: false, pixelsPerCm: null, source: null },
       };
-      const startedJob = await startBackgroundJob("local_vision_analyze_adaptive", payload, {
+      const startedJob = await startBackgroundJob("local_vision_analyze_forward", payload, {
         title: "Local vision annotation",
-        label: "Adaptive local vision",
+        label: "Local Vision Forward Review",
         sessionId: session.id,
         source: "AIVideoPassPanel",
         route: window.location.pathname,
         analysisType: localVisionRecordType(),
         mode,
       });
-      setLocalVisionStatus(`Queued ${modeLabel.toLowerCase()} local vision job ${startedJob.id.slice(0, 8)}...`);
+      setLocalVisionStatus(`Queued ${modeLabel.toLowerCase()} job ${startedJob.id.slice(0, 8)}...`);
       const completedJob = await waitForBackgroundJob(startedJob.id, {
         intervalMs: 1500,
         onProgress: (job) => {
@@ -2438,10 +2907,13 @@ Return a corrected compact card for this same window. Keep timeline events only 
           const candidateText = progress.candidatesFound != null
             ? ` · ${progress.candidatesFound} candidate${progress.candidatesFound === 1 ? "" : "s"}`
             : "";
+          const roiText = progress.roiConfigured || progress.roi_configured
+            ? ` · ROI ${arrayFromMaybe(progress.roiLabels || progress.roi_labels).join(", ") || "configured"}`
+            : "";
           const positionText = progress.scanPercent != null
             ? ` · ${Math.round(progress.scanPercent)}% scanned`
             : "";
-          setLocalVisionStatus(`${progress.message || "Adaptive local analysis running..."}${positionText}${candidateText}${qwenCount}`);
+          setLocalVisionStatus(`${progressText(progress.message) || "Forward local review running..."}${positionText}${candidateText}${qwenCount}${roiText}`);
           updateLocalVisionProgress(progress);
         },
       });
@@ -2455,10 +2927,13 @@ Return a corrected compact card for this same window. Keep timeline events only 
       setLocalVisionStatus(
         `${modeLabel} complete: ${result.actionable_findings?.length || 0} confirmed, ${result.strong_candidates?.length || 0} strong candidate${result.strong_candidates?.length === 1 ? "" : "s"}, ${result.not_confirmed?.length || 0} not confirmed.`,
       );
+      if (verifyWithSarah) {
+        await verifyLocalWindowsWithSarah(result, { limit: mode === "fast_preview" ? 4 : 6 });
+      }
     } catch (err) {
       const message = err?.data?.error || err?.message || "Adaptive local vision analysis failed.";
-      if (/Unknown background job type:\s*local_vision_analyze_adaptive/i.test(message)) {
-        setLocalVisionError("Backend needs a restart: the UI has the adaptive local vision button, but the running Node server has not loaded the adaptive job handler yet.");
+      if (/Unknown background job type:\s*local_vision_analyze_forward/i.test(message)) {
+        setLocalVisionError("Backend needs a restart: the UI has the Forward Review button, but the running Node server has not loaded the forward job handler yet.");
       } else {
         setLocalVisionError(message);
       }
@@ -2926,9 +3401,24 @@ Return a corrected compact card for this same window. Keep timeline events only 
           </Button>
           <Button type="button" onClick={analyzeAdaptiveLocally} disabled={localVisionRunning || !selectedVideo} className="h-8 w-full sm:w-auto">
             {localVisionRunning ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Eye className="mr-2 h-3.5 w-3.5" />}
-            Run Local Analysis
+            Run Forward Local Review
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => analyzeAdaptiveLocally({ verifyWithSarah: true })}
+            disabled={localVisionRunning || hybridSarahVerifying || !selectedVideo}
+            className="h-8 w-full border-primary/40 text-primary hover:bg-primary/10 sm:w-auto"
+            title="Local GPU selects candidate windows first; Sarah/Claude then reviews only sampled frames from those windows."
+          >
+            {(localVisionRunning || hybridSarahVerifying) ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
+            Run Local + Sarah Verify
           </Button>
         </div>
+      </div>
+
+      <div className="mt-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+        <span className="font-semibold text-foreground">Set-and-forget option:</span> Run Local + Sarah Verify uses local GPU/CV to scan first, then sends only the selected sampled windows to the configured Sarah/Claude provider for the higher-quality event cards. The plain Forward Local Review button stays local-only.
       </div>
 
       <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(16rem,1fr)_auto_auto_auto]">
@@ -2983,6 +3473,92 @@ Return a corrected compact card for this same window. Keep timeline events only 
         {localAnalysisModeHelper(localAnalysisMode)}
         {localAnalysisMode === "deep_forensic" ? " This is opt-in for slow, GPU-heavy review; Balanced is the normal default." : ""}
       </p>
+      <details className="mt-2 rounded-lg border border-emerald-500/15 bg-emerald-500/5">
+        <summary className="cursor-pointer px-3 py-2 text-xs font-semibold uppercase tracking-wider text-emerald-200">
+          Optional ROI Hints {localVisionRois.length ? `(${localVisionRois.length})` : ""}
+        </summary>
+        <div className="grid gap-2 border-t border-emerald-500/15 p-3">
+          <p className="text-xs text-muted-foreground">
+            ROI hints help the cheap forward scan prioritize motion in relevant areas. They are not evidence by themselves; Qwen and the gates still need frame support.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {(localAnalysisType === "foley_procedure"
+              ? ["foley_procedure_field_roi", "tubing_bag_roi", "full_body_roi"]
+              : ["genital_hand_roi", "feet_legs_roi", "full_body_roi"]
+            ).map((key) => (
+              <Button key={key} type="button" size="sm" variant="outline" onClick={() => addLocalVisionRoi(key)} className="h-8 border-emerald-500/35 text-emerald-100 hover:bg-emerald-500/10">
+                Add {LOCAL_VISION_ROI_PRESETS[key].label}
+              </Button>
+            ))}
+            {localVisionRois.length > 0 && (
+              <Button type="button" size="sm" variant="outline" onClick={() => setLocalVisionRois([])} className="h-8">
+                Clear ROI hints
+              </Button>
+            )}
+            {localVisionRois.length > 0 && (
+              <Button
+                type="button"
+                size="sm"
+                variant={roiEditMode ? "default" : "outline"}
+                onClick={() => setRoiEditMode((value) => !value)}
+                className="h-8"
+              >
+                {roiEditMode ? "Done editing boxes" : "Edit visually on preview"}
+              </Button>
+            )}
+          </div>
+          {localVisionRois.length > 0 && (
+            <p className="rounded-lg border border-emerald-500/15 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+              {roiEditMode
+                ? "Drag a box on the video preview to move it. Drag the blue corner handle to resize it. These boxes guide the cheap CV scan; they do not become visual claims by themselves."
+                : "Tap Edit visually on preview to position these regions directly over the video."}
+            </p>
+          )}
+          {localVisionRois.map((roi) => (
+            <div
+              key={roi.id}
+              className={`grid gap-2 rounded-lg border bg-background/70 p-2 text-xs ${activeRoiId === roi.id ? "border-primary/60" : "border-border"}`}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={roi.label}
+                  onChange={(event) => updateLocalVisionRoi(roi.id, { label: event.target.value })}
+                  onFocus={() => setActiveRoiId(roi.id)}
+                  className="min-w-[12rem] flex-1 rounded border border-border bg-muted/20 px-2 py-1 text-foreground"
+                  aria-label="ROI label"
+                />
+                <span className="rounded-full border border-primary/20 bg-primary/10 px-2 py-1 font-mono text-[10px] text-primary">
+                  {Math.round(roi.width * 100)}% x {Math.round(roi.height * 100)}%
+                </span>
+                <Button type="button" size="sm" variant="ghost" onClick={() => removeLocalVisionRoi(roi.id)} className="h-8 text-destructive hover:bg-destructive/10">
+                  Remove
+                </Button>
+              </div>
+              <details className="rounded-lg border border-border/70 bg-muted/10">
+                <summary className="cursor-pointer px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Exact values
+                </summary>
+                <div className="grid gap-2 border-t border-border/70 p-2 sm:grid-cols-4">
+                  {["x", "y", "width", "height"].map((field) => (
+                    <label key={field} className="grid gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                      {field}
+                      <input
+                        type="number"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={Number(roi[field]).toFixed(2)}
+                        onChange={(event) => updateLocalVisionRoi(roi.id, { [field]: Number(event.target.value) })}
+                        className="rounded border border-border bg-muted/20 px-2 py-1 font-mono text-xs text-foreground"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </details>
+            </div>
+          ))}
+        </div>
+      </details>
       {selectedVideoRoleHelper && (
         <p className="mt-2 rounded-lg border border-primary/15 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
           <span className="font-semibold text-primary">{videoRoleLabel(selectedVideoRole)} focus:</span> {selectedVideoRoleHelper}
@@ -3017,30 +3593,81 @@ Return a corrected compact card for this same window. Keep timeline events only 
           </Button>
         </div>
         {selectedVideoStreamUrl ? (
-          <video
-            key={selectedVideo?.path}
-            ref={previewVideoRef}
-            src={selectedVideoStreamUrl}
-            controls
-            preload="metadata"
-            className="max-h-[34rem] w-full rounded-lg bg-black object-contain"
-            onLoadedMetadata={(event) => {
-              const duration = Number(event.currentTarget.duration);
-              setMetadataDurationSeconds(Number.isFinite(duration) && duration > 0 ? duration : 0);
-              seekPreviewVideo(scanCursor);
-            }}
-            onSeeked={(event) => {
-              const nextCursor = clamp(
-                sessionTimeForSource(event.currentTarget.currentTime, selectedVideo),
-                0,
-                Math.max(0, sessionEnd - clipSeconds),
-              );
-              if (Math.abs(nextCursor - scanCursor) > 0.75) {
-                setScanCursor(nextCursor);
-                onCursorChange?.(nextCursor);
-              }
-            }}
-          />
+          <div className="relative overflow-hidden rounded-lg bg-black">
+            <video
+              key={selectedVideo?.path}
+              ref={previewVideoRef}
+              src={selectedVideoStreamUrl}
+              controls
+              preload="metadata"
+              className="max-h-[34rem] w-full bg-black object-contain"
+              onLoadedMetadata={(event) => {
+                const duration = Number(event.currentTarget.duration);
+                setMetadataDurationSeconds(Number.isFinite(duration) && duration > 0 ? duration : 0);
+                seekPreviewVideo(scanCursor);
+              }}
+              onSeeked={(event) => {
+                const nextCursor = clamp(
+                  sessionTimeForSource(event.currentTarget.currentTime, selectedVideo),
+                  0,
+                  Math.max(0, sessionEnd - clipSeconds),
+                );
+                if (Math.abs(nextCursor - scanCursor) > 0.75) {
+                  setScanCursor(nextCursor);
+                  onCursorChange?.(nextCursor);
+                }
+              }}
+            />
+            {localVisionRois.length > 0 && (
+              <div
+                ref={roiOverlayRef}
+                className={`absolute inset-0 ${roiEditMode ? "pointer-events-auto cursor-crosshair touch-none" : "pointer-events-none"}`}
+                aria-hidden={!roiEditMode}
+              >
+                {localVisionRois.map((roi, index) => {
+                  const active = activeRoiId === roi.id;
+                  return (
+                    <div
+                      key={roi.id}
+                      role="button"
+                      tabIndex={roiEditMode ? 0 : -1}
+                      aria-label={`Move ${roi.label} ROI`}
+                      onPointerDown={(event) => beginLocalVisionRoiDrag(roi, "move", event)}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setActiveRoiId(roi.id);
+                      }}
+                      className={`absolute rounded-lg border-2 bg-primary/10 shadow-[0_0_0_9999px_rgba(0,0,0,0.08)] transition ${active ? "border-primary" : "border-emerald-300/80"} ${roiEditMode ? "cursor-move" : ""}`}
+                      style={{
+                        left: `${roi.x * 100}%`,
+                        top: `${roi.y * 100}%`,
+                        width: `${roi.width * 100}%`,
+                        height: `${roi.height * 100}%`,
+                      }}
+                    >
+                      <div className="absolute left-2 top-2 max-w-[calc(100%-1rem)] rounded-full border border-black/20 bg-black/75 px-2 py-1 text-[10px] font-semibold text-white shadow">
+                        {index + 1}. {roi.label}
+                      </div>
+                      {roiEditMode && (
+                        <button
+                          type="button"
+                          aria-label={`Resize ${roi.label} ROI`}
+                          onPointerDown={(event) => beginLocalVisionRoiDrag(roi, "resize", event)}
+                          className="absolute bottom-0 right-0 h-8 w-8 translate-x-1/2 translate-y-1/2 rounded-full border-2 border-white bg-primary shadow-lg"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {localVisionRois.length > 0 && !roiEditMode && (
+              <div className="pointer-events-none absolute bottom-2 left-2 rounded-full border border-emerald-300/25 bg-black/70 px-2 py-1 text-[10px] font-semibold text-emerald-100">
+                {localVisionRois.length} ROI hint{localVisionRois.length === 1 ? "" : "s"} configured
+              </div>
+            )}
+          </div>
         ) : (
           <div className="flex aspect-video items-center justify-center rounded-lg bg-black text-sm text-muted-foreground">
             Select a linked local video to preview it here.
@@ -3160,6 +3787,8 @@ Return a corrected compact card for this same window. Keep timeline events only 
                 ["Candidates found", localVisionProgress.candidatesFound ?? localVisionProgress.candidates_found ?? localVisionProgress.candidate_events],
                 ["Qwen selected", localVisionProgress.candidatesSelectedForQwen ?? localVisionProgress.candidates_selected_for_qwen],
                 ["Qwen calls", localVisionProgress.qwenCallsTotal != null ? `${localVisionProgress.qwenCallsCompleted || 0}/${localVisionProgress.qwenCallsTotal}` : null],
+                ["ROI hints", (localVisionProgress.roiConfigured || localVisionProgress.roi_configured) ? arrayFromMaybe(localVisionProgress.roiLabels || localVisionProgress.roi_labels).join(", ") || `${localVisionProgress.roi_count || 0}` : null],
+                ["ROI motion", localVisionProgress.latest_candidate_window?.roi?.motion_score != null ? `${Math.round(Number(localVisionProgress.latest_candidate_window.roi.motion_score || 0) * 100)}%` : null],
                 ["Confirmed", localVisionProgress.confirmedFindingsCount ?? localVisionProgress.confirmed_findings_count],
                 ["Strong candidates", localVisionProgress.strongCandidatesCount ?? localVisionProgress.strong_candidates_count],
                 ["Not confirmed", localVisionProgress.notConfirmedCount ?? localVisionProgress.not_confirmed_count],
@@ -3186,6 +3815,11 @@ Return a corrected compact card for this same window. Keep timeline events only 
                         {candidate.score != null && (
                           <span className="rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 font-mono text-[10px] text-primary">
                             score {Math.round(Number(candidate.score || 0) * 100)}%
+                          </span>
+                        )}
+                        {candidate.roi?.label && (
+                          <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
+                            ROI {candidate.roi.label}
                           </span>
                         )}
                       </div>
@@ -3329,9 +3963,46 @@ Return a corrected compact card for this same window. Keep timeline events only 
         {localVisionResult && (
           <div className="mt-3 grid min-w-0 gap-3">
             <div className="max-w-full overflow-hidden rounded-lg border border-border bg-background/70 p-3">
+              {(() => {
+                const verdict = localVisionVerdict(localVisionResult);
+                const counts = localVisionSummaryCounts(localVisionResult);
+                return (
+                  <div className="mb-3 rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
+                    <div className="grid gap-2 sm:flex sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Local Vision Summary</p>
+                        <p className="mt-1 text-sm font-semibold text-foreground">{verdict.label}</p>
+                        <p className="mt-1 break-words text-sm leading-relaxed text-foreground/90">{verdict.text}</p>
+                      </div>
+                      <span className="w-fit rounded-full border border-border bg-background/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        {verdict.key.replace(/_/g, " ")}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                      <div className="rounded-md border border-border bg-background/70 px-2 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Confirmed visual events</p>
+                        <p className="font-mono text-base text-foreground">{counts.confirmed}</p>
+                      </div>
+                      <div className="rounded-md border border-border bg-background/70 px-2 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Strong candidate windows</p>
+                        <p className="font-mono text-base text-foreground">{counts.candidates}</p>
+                      </div>
+                      <div className="rounded-md border border-border bg-background/70 px-2 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Not visually confirmed</p>
+                        <p className="font-mono text-base text-foreground">{counts.notConfirmed}</p>
+                      </div>
+                    </div>
+                    {counts.confirmed === 0 && (
+                      <p className="mt-2 rounded-md border border-amber-400/25 bg-amber-400/10 px-2 py-1.5 text-xs leading-relaxed text-amber-100">
+                        No confirmed local visual events were promoted. Candidate markers are review aids only, not proof that the event happened.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
               <div className="grid min-w-0 gap-2 sm:flex sm:items-start sm:justify-between">
                 <div className="min-w-0">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Sarah Local Read</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Sarah Forward Local Review</p>
                   <p className="mt-1 break-words text-sm leading-relaxed text-foreground/90">{sarahLocalVisionSummary(localVisionResult)}</p>
                 </div>
                 <Button type="button" size="sm" variant="outline" onClick={copyLocalVisionJson} className="h-8 w-full justify-center sm:h-7 sm:w-auto sm:shrink-0">
@@ -3416,10 +4087,80 @@ Return a corrected compact card for this same window. Keep timeline events only 
               )}
             </div>
 
-            {localVisionResult.actionable_findings?.length > 0 && (
-              <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Actionable Findings</p>
-                <p className="mt-1 text-xs text-muted-foreground">Confirmed visual events only. These are safe to pass into AI Session Analysis as local visual findings.</p>
+            <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Sarah-Style Chronological Cards</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Readable local annotation cards for Session Analysis. Confirmed findings, candidates, and limitations stay explicitly separated.
+              </p>
+              {(() => {
+                const cards = arrayFromMaybe(localVisionResult.session_analysis_export?.local_annotation_cards)
+                  .concat(localVisionResult.session_analysis_export?.local_annotation_cards?.length ? [] : buildSarahLocalAnnotationCards(localVisionResult))
+                  .slice(0, 12);
+                if (!cards.length) {
+                  return (
+                    <p className="mt-2 rounded-md border border-border bg-background/70 px-2 py-1.5 text-sm text-foreground/90">
+                      Local annotation did not produce useful session events from this run.
+                    </p>
+                  );
+                }
+                return (
+                  <div className="mt-2 space-y-2">
+                    {cards.map((card, index) => (
+                      <button
+                        type="button"
+                        key={card.id || `${card.timestamp_range}-${index}`}
+                        onClick={() => seekPreviewVideo(sessionTimeForSource((card.start_ms || 0) / 1000, selectedVideo))}
+                        className="w-full rounded-md border border-border bg-background/70 px-2 py-2 text-left text-xs hover:border-primary/50"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-semibold text-foreground">{card.timestamp_range} · {card.title}</span>
+                          <span className="rounded-full border border-border bg-muted/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                            {String(card.status || "").replace(/_/g, " ")}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-foreground/90">{card.summary}</p>
+                        {card.window_summary && <p className="mt-1 text-muted-foreground">{card.window_summary}</p>}
+                        {!card.finding_rows?.length && <p className="mt-1 text-muted-foreground">{card.visible_evidence}</p>}
+                        <p className="mt-1 text-muted-foreground">{card.change_from_prior}</p>
+                        {card.finding_rows?.length > 0 && (
+                          <div className="mt-2 space-y-1">
+                            {card.finding_rows.map((row, rowIndex) => (
+                              <div key={`${row.label}-${rowIndex}`} className="rounded border border-border bg-muted/15 px-2 py-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-semibold text-primary">{row.label}</span>
+                                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{row.confidence_label}</span>
+                                </div>
+                                <p className="mt-0.5 text-muted-foreground">{row.detail}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {card.draft_video_sync_events?.length > 0 && (
+                          <div className="mt-2 rounded border border-emerald-500/20 bg-emerald-500/5 px-2 py-1">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Draft Video Sync Events</p>
+                            {card.draft_video_sync_events.map((event, eventIndex) => (
+                              <p key={`${event.timestamp}-${eventIndex}`} className="mt-1 text-muted-foreground">
+                                <span className="font-mono text-primary">{event.timestamp}</span> {event.note}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          Confidence: {card.confidence_label || "uncertain"} · Source: {String(card.evidence_type || "local_vision").replace(/_/g, " ")}
+                        </p>
+                        {card.limitation && <p className="mt-1 text-[11px] text-amber-100">{card.limitation}</p>}
+                        {card.frame_refs_text && <p className="mt-1 text-[11px] text-primary">Evidence frames: {card.frame_refs_text}</p>}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Confirmed by Local Visual Evidence</p>
+              <p className="mt-1 text-xs text-muted-foreground">Confirmed visual events only. These are the only local video items treated as facts for AI Session Analysis.</p>
+              {localVisionResult.actionable_findings?.length > 0 ? (
                 <div className="mt-2 space-y-2">
                   {localVisionTierRows(localVisionResult.actionable_findings).map((finding, index) => (
                     <button
@@ -3433,12 +4174,16 @@ Return a corrected compact card for this same window. Keep timeline events only 
                         <span className="font-mono text-muted-foreground">{Math.round((finding.confidence || 0) * 100)}%</span>
                       </div>
                       <p className="mt-1 text-muted-foreground">{finding.basis || finding.summary || "Confirmed by local visual evidence."}</p>
-                      {finding.frame_refs?.length > 0 && <p className="mt-1 font-mono text-[10px] text-emerald-200">{finding.frame_refs.join(", ")}</p>}
+                      {finding.frame_refs?.length > 0 && <p className="mt-1 text-[11px] text-emerald-200">Evidence frames: {compactFrameRefs(finding.frame_refs, 6)}</p>}
                     </button>
                   ))}
                 </div>
-              </div>
-            )}
+              ) : (
+                <p className="mt-2 rounded-md border border-border bg-background/70 px-2 py-1.5 text-sm text-foreground/90">
+                  No confirmed local visual events were promoted.
+                </p>
+              )}
+            </div>
 
             {localVisionResult.coverage_segments?.length > 0 && (
               <details open className="rounded-lg border border-border bg-background/70">
@@ -3478,19 +4223,26 @@ Return a corrected compact card for this same window. Keep timeline events only 
                 <p className="mt-1 text-xs text-muted-foreground">Likely windows worth review. These stay labeled as unconfirmed unless visual gates are met.</p>
                 <div className="mt-2 space-y-2">
                   {localVisionTierRows(localVisionResult.strong_candidates).map((candidate, index) => (
-                    <button
-                      type="button"
-                      key={candidate.candidate_id || `${candidate.type}-${candidate.start_ms}-${index}`}
-                      onClick={() => seekPreviewVideo(sessionTimeForSource((candidate.start_ms || 0) / 1000, selectedVideo))}
-                      className="w-full rounded-md border border-border bg-muted/15 px-2 py-1.5 text-left text-xs hover:border-primary/50"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-semibold text-foreground">{fmtMmSs((candidate.start_ms || 0) / 1000)}-{fmtMmSs((candidate.end_ms || candidate.start_ms || 0) / 1000)} · {candidateLabel(candidate)}</span>
-                        <span className="font-mono text-muted-foreground">{Math.round(((candidate.confidence ?? candidate.score) || 0) * 100)}%</span>
-                      </div>
-                      <p className="mt-1 text-muted-foreground">{candidate.basis || candidate.reasons?.join("; ") || "Candidate found by local CV/Qwen review."}</p>
-                      {candidate.frame_refs?.length > 0 && <p className="mt-1 font-mono text-[10px] text-primary">{candidate.frame_refs.join(", ")}</p>}
-                    </button>
+                    (() => {
+                      const display = displayCandidate(candidate);
+                      return (
+                        <button
+                          type="button"
+                          key={candidate.candidate_id || `${candidate.type}-${candidate.start_ms}-${index}`}
+                          onClick={() => seekPreviewVideo(sessionTimeForSource((candidate.start_ms || 0) / 1000, selectedVideo))}
+                          className="w-full rounded-md border border-border bg-muted/15 px-2 py-2 text-left text-xs hover:border-primary/50"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-semibold text-foreground">{fmtMmSs((candidate.start_ms || 0) / 1000)}-{fmtMmSs((candidate.end_ms || candidate.start_ms || 0) / 1000)} · {display.label}</span>
+                            <span className="rounded-full border border-border bg-background/70 px-2 py-0.5 font-mono text-[10px] text-muted-foreground">{Math.round((display.confidence || 0) * 100)}%</span>
+                          </div>
+                          <p className="mt-1 font-semibold text-primary">{display.status}</p>
+                          <p className="mt-1 text-muted-foreground">{display.reason}</p>
+                          {display.roiText && <p className="mt-1 text-[11px] text-muted-foreground">{display.roiText}</p>}
+                          {display.frameRefs && <p className="mt-1 text-[11px] text-primary">Evidence frames: {display.frameRefs}</p>}
+                        </button>
+                      );
+                    })()
                   ))}
                 </div>
               </div>
@@ -3498,21 +4250,44 @@ Return a corrected compact card for this same window. Keep timeline events only 
 
             {localVisionResult.not_confirmed?.length > 0 && (
               <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-destructive">Not Confirmed</p>
-                <p className="mt-1 text-xs text-muted-foreground">Important checks that did not have enough visible evidence. These are not fed to Session Analysis as facts.</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-destructive">Not Visually Confirmed</p>
+                <p className="mt-1 text-xs text-muted-foreground">Important checks that did not have enough visible evidence. This does not mean the event did not happen; it only means local vision cannot support it as a visual fact.</p>
                 <div className="mt-2 space-y-1.5">
                   {arrayFromMaybe(localVisionResult.not_confirmed).slice(0, 12).map((item, index) => {
-                    const label = typeof item === "string" ? item : item.label || item.claim || item.type || "not confirmed";
-                    const reason = typeof item === "string" ? "" : item.reason || item.basis || item.status || "";
+                    const display = displayNotConfirmed(item);
                     return (
-                      <div key={`${label}-${index}`} className="rounded-md border border-destructive/15 bg-background/70 px-2 py-1.5 text-xs">
-                        <p className="font-semibold text-foreground">{String(label).replace(/_/g, " ")}</p>
-                        {reason && <p className="mt-1 text-muted-foreground">{reason}</p>}
+                      <div key={`${display.label}-${index}`} className="rounded-md border border-destructive/15 bg-background/70 px-2 py-1.5 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="font-semibold text-foreground">{display.label}</p>
+                          <span className="rounded-full border border-destructive/20 bg-destructive/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-destructive">
+                            {display.status}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-muted-foreground">{display.reason}</p>
+                        {display.frameRefs && <p className="mt-1 text-[11px] text-muted-foreground">Checked frames: {display.frameRefs}</p>}
                       </div>
                     );
                   })}
                 </div>
               </div>
+            )}
+
+            {localVisionResult.not_confirmed?.length > 0 && (
+              <details className="rounded-lg border border-amber-400/25 bg-amber-400/5">
+                <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-amber-200">
+                  Why Confirmation Failed
+                </summary>
+                <div className="space-y-1.5 border-t border-border p-3">
+                  {arrayFromMaybe(localVisionResult.not_confirmed).slice(0, 8).map((item, index) => {
+                    const display = displayNotConfirmed(item);
+                    return (
+                      <p key={`${display.label}-why-${index}`} className="rounded-md border border-border bg-background/70 px-2 py-1.5 text-xs leading-relaxed text-foreground/90">
+                        <span className="font-semibold">{display.label}: </span>{display.reason}
+                      </p>
+                    );
+                  })}
+                </div>
+              </details>
             )}
 
             {localVisionResult.session_analysis_export && (
@@ -3543,25 +4318,84 @@ Return a corrected compact card for this same window. Keep timeline events only 
                       {localVisionResult.session_analysis_export.summary}
                     </p>
                   )}
+                  <div className="rounded-md border border-primary/20 bg-primary/5 p-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Readable Annotation Cards</p>
+                    <div className="mt-1 space-y-1">
+                      {arrayFromMaybe(localVisionResult.session_analysis_export?.local_annotation_cards).slice(0, 4).length ? (
+                        arrayFromMaybe(localVisionResult.session_analysis_export?.local_annotation_cards).slice(0, 4).map((card, index) => (
+                          <p key={`${card.timestamp_range}-${index}`} className="text-muted-foreground">
+                            {card.timestamp_range} · {card.title} · {String(card.status || "").replace(/_/g, " ")}
+                          </p>
+                        ))
+                      ) : (
+                        <p className="text-muted-foreground">Local annotation did not produce useful session events from this run.</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid gap-2 lg:grid-cols-3">
+                    <div className="rounded-md border border-border bg-muted/10 p-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Confirmed Facts</p>
+                      <div className="mt-1 space-y-1">
+                        {arrayFromMaybe(localVisionResult.session_analysis_export?.confirmed_findings).slice(0, 4).length ? (
+                          arrayFromMaybe(localVisionResult.session_analysis_export?.confirmed_findings).slice(0, 4).map((item, index) => (
+                            <p key={`${item.label}-${index}`} className="text-muted-foreground">{formatLocalVisionMs(item.start_ms)} · {humanizeLocalVisionLabel(item.label)}</p>
+                          ))
+                        ) : (
+                          <p className="text-muted-foreground">No confirmed local visual facts.</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="rounded-md border border-border bg-muted/10 p-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Candidate Evidence</p>
+                      <div className="mt-1 space-y-1">
+                        {arrayFromMaybe(localVisionResult.session_analysis_export?.strong_candidates).slice(0, 4).length ? (
+                          arrayFromMaybe(localVisionResult.session_analysis_export?.strong_candidates).slice(0, 4).map((item, index) => (
+                            <p key={`${item.label}-${index}`} className="text-muted-foreground">{formatLocalVisionMs(item.start_ms)} · {humanizeLocalVisionLabel(item.label)} (not confirmed)</p>
+                          ))
+                        ) : (
+                          <p className="text-muted-foreground">No strong candidates included.</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="rounded-md border border-border bg-muted/10 p-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-destructive">Limitations</p>
+                      <div className="mt-1 space-y-1">
+                        {arrayFromMaybe(localVisionResult.session_analysis_export?.not_confirmed).slice(0, 4).length ? (
+                          arrayFromMaybe(localVisionResult.session_analysis_export?.not_confirmed).slice(0, 4).map((item, index) => {
+                            const display = displayNotConfirmed(item);
+                            return <p key={`${display.label}-${index}`} className="text-muted-foreground">{display.label}: not visually confirmed</p>;
+                          })
+                        ) : (
+                          <p className="text-muted-foreground">No not-confirmed checks listed.</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </details>
             )}
 
             {localVisionResult.frame_evidence?.length > 0 && (
-              <details open className="rounded-lg border border-border bg-background/70">
+              <details className="rounded-lg border border-border bg-background/70">
                 <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Frame Evidence ({localVisionResult.frame_evidence.length})
+                  Evidence Frames ({localVisionResult.frame_evidence.length}, preview first {Math.min(localVisionResult.frame_evidence.length, 24)})
                 </summary>
                 <div className="grid grid-cols-2 gap-2 p-2 sm:grid-cols-4 lg:grid-cols-6">
-                  {localVisionResult.frame_evidence.map((frame) => (
+                  {localVisionResult.frame_evidence.slice(0, 24).map((frame) => (
                     <a key={frame.frame_id} href={base44.integrations.Core.localVisionAssetUrl(frame.image_path)} target="_blank" rel="noreferrer" className="overflow-hidden rounded-md border border-border bg-card">
                       <img src={base44.integrations.Core.localVisionAssetUrl(frame.image_path)} alt={`Local vision frame ${frame.frame_id}`} loading="lazy" className="aspect-video w-full object-cover" />
                       <span className="block px-1.5 py-1 text-[10px] text-muted-foreground">
-                        {frame.frame_id} · {fmtMmSs((frame.time_ms || 0) / 1000)}
+                        Evidence frame at {fmtMmSs((frame.time_ms || 0) / 1000)}
+                        {frame.frame_id ? <span className="block font-mono opacity-70">{frame.frame_id}</span> : null}
                       </span>
                     </a>
                   ))}
                 </div>
+                {localVisionResult.frame_evidence.length > 24 && (
+                  <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+                    Showing twenty-four thumbnails here to keep the page usable. Full frame paths remain in Copy JSON / debug output.
+                  </p>
+                )}
               </details>
             )}
 
@@ -4143,10 +4977,10 @@ Return a corrected compact card for this same window. Keep timeline events only 
                     {Array.isArray(card.sampledFrames) && card.sampledFrames.length > 0 && (
                       <details className="rounded-lg border border-border bg-muted/15">
                         <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                          {card.localVision ? "Local Frame Evidence" : "Sampled Frames Sarah Saw"} ({card.sampledFrames.length})
+                          {card.localVision ? "Local Frame Evidence" : "Sampled Frames Sarah Saw"} ({card.sampledFrames.length}, preview first {Math.min(card.sampledFrames.length, 18)})
                         </summary>
                         <div className="grid grid-cols-3 gap-2 p-2 sm:grid-cols-4 lg:grid-cols-6">
-                          {card.sampledFrames.map((frame, index) => (
+                          {card.sampledFrames.slice(0, 18).map((frame, index) => (
                             <a
                               key={`${frame.url || "frame"}-${index}`}
                               href={frame.url}
@@ -4167,6 +5001,11 @@ Return a corrected compact card for this same window. Keep timeline events only 
                             </a>
                           ))}
                         </div>
+                        {card.sampledFrames.length > 18 && (
+                          <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+                            Showing the first eighteen frames only. Full evidence refs are saved with the card and available in JSON/debug output.
+                          </p>
+                        )}
                       </details>
                     )}
                     <p className="text-sm leading-relaxed text-foreground/90">{card.summary}</p>

@@ -8,6 +8,45 @@ function restoreDecimalPoints(text) {
   return String(text || "").replaceAll(DECIMAL_POINT_TOKEN, ".");
 }
 
+export function formatSecondsAsWords(value) {
+  const total = Math.max(0, Math.round(Number(value) || 0));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  if (!minutes) return `${seconds} second${seconds === 1 ? "" : "s"}`;
+  if (!seconds) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  return `${minutes} minute${minutes === 1 ? "" : "s"} and ${seconds} second${seconds === 1 ? "" : "s"}`;
+}
+
+export function repairRawSecondTimeReferences(text) {
+  if (typeof text !== "string") return text;
+  return text
+    .replace(/\b(at|around|near|by|before|after|from|until|through|to)\s+(\d{2,5})\s*seconds?\b/gi, (match, prefix, seconds) => {
+      const value = Number(seconds);
+      if (!Number.isFinite(value) || value < 60) return match;
+      return `${prefix} ${formatSecondsAsWords(value)}`;
+    })
+    .replace(/\b(at|around|near|by|before|after|from|until|through|to)\s+(\d{2,5})\s*s\b/gi, (match, prefix, seconds) => {
+      const value = Number(seconds);
+      if (!Number.isFinite(value) || value < 60) return match;
+      return `${prefix} ${formatSecondsAsWords(value)}`;
+    })
+    .replace(/\[(\d{2,5})\s*s\]/gi, (match, seconds) => {
+      const value = Number(seconds);
+      if (!Number.isFinite(value) || value < 60) return match;
+      return `[${formatSecondsAsWords(value)}]`;
+    })
+    .replace(/\b(\d{3,5})\s*s\b/g, (match, seconds) => {
+      const value = Number(seconds);
+      if (!Number.isFinite(value) || value < 60) return match;
+      return formatSecondsAsWords(value);
+    })
+    .replace(/\b(\d{3,5})\s+seconds?\b/gi, (match, seconds) => {
+      const value = Number(seconds);
+      if (!Number.isFinite(value) || value < 60) return match;
+      return formatSecondsAsWords(value);
+    });
+}
+
 export function repairCharacterSplitParagraph(text) {
   if (typeof text !== "string") return text;
 
@@ -20,7 +59,7 @@ export function repairCharacterSplitParagraph(text) {
     singleCharLines / nonEmpty.length >= 0.65 &&
     shortLines / nonEmpty.length >= 0.85;
 
-  if (!looksCharacterSplit) return repairDecimalSpacing(text);
+  if (!looksCharacterSplit) return repairRawSecondTimeReferences(repairDecimalSpacing(text));
 
   const rebuilt = lines.reduce((acc, line) => {
     const trimmed = line.trim();
@@ -28,16 +67,16 @@ export function repairCharacterSplitParagraph(text) {
     return `${acc}${trimmed}`;
   }, "");
 
-  return rebuilt
+  return repairRawSecondTimeReferences(rebuilt
     .replace(/\s+/g, " ")
     .replace(/(\d+)\.\s+(\d+)/g, "$1.$2")
     .replace(/([.!?])([A-Z])/g, "$1 $2")
-    .trim();
+    .trim());
 }
 
 export function repairDecimalSpacing(text) {
   if (typeof text !== "string") return text;
-  return text.replace(/(\d+)\.\s+(\d+)/g, "$1.$2");
+  return repairRawSecondTimeReferences(text.replace(/(\d+)\.\s+(\d+)/g, "$1.$2"));
 }
 
 export function splitSentencesPreservingDecimals(text) {

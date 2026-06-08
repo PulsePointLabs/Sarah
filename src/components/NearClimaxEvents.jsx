@@ -9,7 +9,12 @@ import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
 function fmtSec(s) {
   if (s == null) return "—";
   const v = Math.round(Math.abs(s));
-  return v >= 60 ? `${Math.floor(v / 60)}m${v % 60}s` : `${v}s`;
+  if (v < 60) return `${v} second${v === 1 ? "" : "s"}`;
+  const minutes = Math.floor(v / 60);
+  const seconds = v % 60;
+  return seconds > 0
+    ? `${minutes} minute${minutes === 1 ? "" : "s"} and ${seconds} second${seconds === 1 ? "" : "s"}`
+    : `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
 function fmtMmSs(s) {
@@ -237,7 +242,7 @@ ${existingAnalysis ? `AI SESSION ANALYSIS (use this to identify arousal phases):
 
 ${cascadeContext ? `CASCADE ANALYSIS:\n${cascadeContext.slice(0, 800)}` : ""}
 
-${userEvents.length > 0 ? `USER-LOGGED EVENTS:\n${userEvents.map((e) => `[${e.t}s] ${e.category.join(",")} — ${e.note}`).join("\n")}` : ""}
+${userEvents.length > 0 ? `USER-LOGGED EVENTS:\n${userEvents.map((e) => `[${fmtSec(e.t)}] ${e.category.join(",")} — ${e.note}`).join("\n")}` : ""}
 
 ALGORITHMICALLY DETECTED EVENTS (starting hints — refine or reject based on HR data and context):
 ${algoEvents.length > 0 ? JSON.stringify(algoEvents, null, 2) : "None detected algorithmically."}
@@ -250,7 +255,8 @@ Instructions:
 2. Confirm, adjust, or reject algorithmic hints based on the full context. Add any events the algorithm missed.
 3. Exclude the climax window (${session.pre_climax_offset_s != null ? Math.round(session.pre_climax_offset_s) : session.climax_offset_s != null ? Math.round(session.climax_offset_s) - 90 : "N/A"}s onward).
 4. Be conservative — only include genuine arousal elevations, not noise or minor fluctuations.
-5. For each event: provide a short label (3-5 words) describing the physiological response — never use "edging", "edge", or intent-based language. Then write a 1-2 sentence interpretation grounded in HR data, the user's arousal profile, and logged events. Use "you"/"your", spell out numbers as words, no abbreviations, no digits starting a sentence.
+5. Never write raw second offsets such as "at 943 seconds" or "943s". Use minutes and seconds.
+6. For each event: provide a short label (3-5 words) describing the physiological response — never use "edging", "edge", or intent-based language. Then write a 1-2 sentence interpretation grounded in HR data, the user's arousal profile, and logged events. Use "you"/"your", spell out numbers as words, no abbreviations, no digits starting a sentence.
 
 Return an array of near-climax events. If none exist, return an empty array.`,
       response_json_schema: {

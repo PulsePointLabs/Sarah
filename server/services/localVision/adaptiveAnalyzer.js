@@ -270,7 +270,9 @@ function candidateFromQwen(candidate, qwenResult) {
       ...candidate,
       lifecycle: [...new Set([...(candidate.lifecycle || []), 'qwen_reviewed', 'kept_as_strong_candidate'])],
       confidence: Math.max(Number(candidate.review_score || candidate.score || 0), Number(qwenResult.confidence?.overall || 0)),
-      basis: visibleRows.length ? qwenResult.summary : 'CV candidate remained plausible, but Qwen did not confirm a gated event.',
+      basis: visibleRows.length
+        ? qwenResult.summary
+        : 'Local CV flagged this as a plausible motion window, but Qwen did not return enough specific visible evidence to pass the confirmation gate.',
       frame_refs: [...new Set([...frameRefs(visibleRows), ...(candidate.frame_refs || [])])],
     };
   }
@@ -316,6 +318,13 @@ function candidateProgressPayload(candidate = {}, extra = {}) {
     latest_candidate_reasons: candidate.reasons || [],
     latest_candidate_frame_refs: candidate.frame_refs || [],
   };
+}
+
+function mmssFromMs(ms) {
+  const totalSeconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 export async function analyzeLocalVisionAdaptive(body, { signal, onProgress } = {}) {
@@ -420,7 +429,7 @@ export async function analyzeLocalVisionAdaptive(body, { signal, onProgress } = 
       candidatesSelectedForQwen: qwenTargets.length,
       candidates_selected_for_qwen: qwenTargets.length,
       current_timestamp_ms: candidate.start_ms,
-      message: `Targeted Qwen review ${index + 1}/${qwenTargets.length}: ${String(candidate.type).replace(/_/g, ' ')} near ${Math.round(candidate.start_ms / 1000)}s...`,
+      message: `Targeted Qwen review ${index + 1}/${qwenTargets.length}: ${String(candidate.type).replace(/_/g, ' ')} near ${mmssFromMs(candidate.start_ms)}...`,
       latest_rolling_state: rollingState,
       ...candidateProgressPayload(candidate, {
         qwen_index: index + 1,

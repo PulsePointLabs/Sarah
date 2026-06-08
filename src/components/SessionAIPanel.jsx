@@ -6,11 +6,11 @@ import { Button } from "@/components/ui/button";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
-import { SESSION_CONTEXT_GROUNDING_RULE, structuredSessionContextForAI } from "@/lib/sessionContext";
-import { buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
+import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from "@/lib/sessionContext";
+import { buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, normalizeSessionVideoPassFindings } from "@/lib/visualEvidence";
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
-import { repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
+import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 function buildSessionContext(session, timelineRows) {
   const hrMin = timelineRows.length ? Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))) : null;
@@ -48,12 +48,13 @@ function buildSessionContext(session, timelineRows) {
     `Build type: ${session.build_type}${session.custom_build_type ? " — " + session.custom_build_type : ""}`,
     `Climax duration: ${session.climax_duration ?? "?"}`,
     `Mood: ${session.mood}, Hydration: ${session.hydration}`,
+    sessionContextEvidenceText(session) ? `Logged session context/influences: ${sessionContextEvidenceText(session)}` : null,
     hrMin != null ? `HR: min ${hrMin}, avg ${session.avg_hr ?? "?"}, max ${hrMax}, at climax ${session.hr_at_climax ?? "?"}` : null,
-    session.pre_climax_offset_s != null ? `Phase markers: pre-climax ${Math.round(session.pre_climax_offset_s)}s, climax ${Math.round(session.climax_offset_s)}s, recovery ${session.recovery_offset_s != null ? Math.round(session.recovery_offset_s) + "s" : "?"}` : null,
+    session.pre_climax_offset_s != null ? `Phase markers: pre-climax at ${formatSecondsAsWords(session.pre_climax_offset_s)}, climax at ${formatSecondsAsWords(session.climax_offset_s)}, recovery ${session.recovery_offset_s != null ? `at ${formatSecondsAsWords(session.recovery_offset_s)}` : "unknown"}` : null,
     session.ejaculate_volume ? `Ejaculate: ${session.ejaculate_volume}` : null,
     session.unusual_sensations ? `Unusual sensations: ${session.unusual_sensations}` : null,
     (session.discomfort_entries || []).length ? `Discomfort: ${session.discomfort_entries.map(e => `sev ${e.severity}/10 — ${e.note}`).join("; ")}` : null,
-    (session.event_timeline || []).length ? `Events: ${session.event_timeline.map(e => `[${e.time_s}s] ${e.note}`).join(" | ")}` : null,
+    (session.event_timeline || []).length ? `Events: ${session.event_timeline.map(e => `[${Math.floor(Number(e.time_s || 0) / 60)}:${String(Math.round(Number(e.time_s || 0) % 60)).padStart(2, "0")}] ${e.note}`).join(" | ")}` : null,
     session.notes ? `Session notes: ${session.notes}` : null,
     buildSessionVisualEvidenceDigest(session),
     buildSessionVideoPassDigest(session),
@@ -187,6 +188,34 @@ function repairSessionAnalysisResult(value) {
   return normalizeAnalysisShape(repairAITextBlocks(value));
 }
 
+function sessionAIPreflight(session, timelineRows = []) {
+  const events = Array.isArray(session?.event_timeline)
+    ? session.event_timeline.filter((event) => String(event?.note || "").trim())
+    : [];
+  const aiEvents = events.filter((event) => event?.source === "ai_video_pass" || event?.ai_annotation?.source);
+  const localCandidateEvents = events.filter((event) => /candidate,\s*not confirmed|candidate_not_confirmed/i.test(`${event?.note || ""} ${(event?.annotation_tags || []).join(" ")}`));
+  const videoPasses = normalizeSessionVideoPassFindings(session);
+  const videoDraftEventCount = videoPasses.reduce((sum, entry) => sum + (entry.draft_events?.length || 0), 0);
+  const videoFindingCount = videoPasses.reduce((sum, entry) => sum + (entry.findings?.length || 0), 0);
+  const usefulEventNotes = events.filter((event) => String(event.note || "").replace(/\s+/g, " ").trim().length >= 35);
+  const contextItems = sessionContextEvidenceItems(session);
+  const weakVisualContext = videoPasses.length === 0 || (videoDraftEventCount < 2 && aiEvents.length < 2);
+  const weakTimeline = usefulEventNotes.length < 3;
+  return {
+    eventCount: events.length,
+    usefulEventCount: usefulEventNotes.length,
+    aiEventCount: aiEvents.length,
+    localCandidateEventCount: localCandidateEvents.length,
+    videoPassCount: videoPasses.length,
+    videoDraftEventCount,
+    videoFindingCount,
+    contextItems,
+    contextEvidenceCount: contextItems.length,
+    hasTelemetry: Array.isArray(timelineRows) && timelineRows.length > 5,
+    creditRisk: weakTimeline && weakVisualContext,
+  };
+}
+
 function normalizeSessionAnalysis(res) {
   const raw = typeof res === "string" ? JSON.parse(res) : res;
   const parsed = raw?.response ?? raw;
@@ -265,6 +294,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
   const [result, setResult] = useState(repairSessionAnalysisResult(session[analysisField] ?? null));
   const [error, setError] = useState("");
   const resultStale = isSessionAIContentStale(result, session);
+  const evidencePreflight = sessionAIPreflight(session, timelineRows);
 
   useEffect(() => {
     setResult(repairSessionAnalysisResult(session[analysisField] ?? null));
@@ -366,8 +396,8 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
         const leftClipPct = leftPcts.length ? Math.round((leftPcts.filter((v) => v >= 99).length / leftPcts.length) * 100) : 0;
         const rightClipPct = rightPcts.length ? Math.round((rightPcts.filter((v) => v >= 99).length / rightPcts.length) * 100) : 0;
         // Trajectory (sampled as "time_s:pct" pairs)
-        const leftTraj = sampled.filter((r) => r.left_pct != null).map((r) => `${r.time_s.toFixed(1)}s:${Math.round(r.left_pct)}%`).join(" ");
-        const rightTraj = sampled.filter((r) => r.right_pct != null).map((r) => `${r.time_s.toFixed(1)}s:${Math.round(r.right_pct)}%`).join(" ");
+        const leftTraj = sampled.filter((r) => r.left_pct != null).map((r) => `at ${formatSecondsAsWords(r.time_s)}, ${Math.round(r.left_pct)}%`).join("; ");
+        const rightTraj = sampled.filter((r) => r.right_pct != null).map((r) => `at ${formatSecondsAsWords(r.time_s)}, ${Math.round(r.right_pct)}%`).join("; ");
         return {
           channel_mode: "dual",
           total_samples: emgRows.length,
@@ -400,7 +430,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
         const pcts = sampled.map((r) => r.level_pct).filter((v) => v != null);
         const avg = (arr) => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null;
         const clipPct = pcts.length ? Math.round((pcts.filter((v) => v >= 99).length / pcts.length) * 100) : 0;
-        const traj = sampled.filter((r) => r.level_pct != null).map((r) => `${r.time_s.toFixed(1)}s:${Math.round(r.level_pct)}%`).join(" ");
+        const traj = sampled.filter((r) => r.level_pct != null).map((r) => `at ${formatSecondsAsWords(r.time_s)}, ${Math.round(r.level_pct)}%`).join("; ");
         return {
           channel_mode: "single",
           total_samples: emgRows.length,
@@ -442,8 +472,8 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
       const step = Math.max(1, Math.floor(timelineRows.length / 60));
       return timelineRows
         .filter((_, i) => i % step === 0)
-        .map(r => `${Math.round(Number(r.time_offset_s))}s:${Math.round(Number(r.hr))}`)
-        .join("  ");
+        .map(r => `at ${formatSecondsAsWords(Number(r.time_offset_s))}, ${Math.round(Number(r.hr))} beats per minute`)
+        .join("; ");
     })();
 
     // Build a sorted HR lookup from timeline rows for nearest-HR matching
@@ -461,11 +491,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
     };
 
     const formatTimeWords = (seconds) => {
-      const m = Math.floor(seconds / 60);
-      const s = Math.round(seconds % 60);
-      if (m === 0) return `${s} second${s !== 1 ? 's' : ''}`;
-      if (s === 0) return `${m} minute${m !== 1 ? 's' : ''}`;
-      return `${m} minute${m !== 1 ? 's' : ''} and ${s} second${s !== 1 ? 's' : ''}`;
+      return formatSecondsAsWords(seconds);
     };
 
     const eventTimeline = (session.event_timeline || []).map(e => {
@@ -496,6 +522,7 @@ Use this arousal profile to personalize analysis: compare the observed build arc
     const groundingContext = buildAIGroundingContext(userProfile);
     const firstNameToneCue = !isTechnical ? buildOptionalFirstNameToneCue(userProfile) : "";
     const structuredSessionContext = structuredSessionContextForAI(session);
+    const structuredSessionContextText = sessionContextEvidenceText(session);
     const warmMotionEvidence = buildWarmMotionEvidence(session);
     const reviewedVisualEvidence = buildSessionVisualEvidenceDigest(session);
     const reviewedVideoPassEvidence = buildSessionVideoPassDigest(session);
@@ -545,7 +572,12 @@ TARGET SESSION ANALYSIS STYLE:
         : `You are an expert physiologist and anatomist specializing in sexual response, body-state interpretation, and careful review of intimate physiology data. Analyze this session by first identifying whether it is primarily masturbation/stimulation, body exploration, sensation mapping, recovery review, or mixed. Integrate anatomy, heart rate data, event timeline, motion evidence when present, subjective experience, and session intent into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally. Keep this natural, clinically grounded, and never forced. Let the narration feel warmly attentive and quietly familiar with the person's established patterns, noticing what stands out with natural human interest while staying grounded in the provided evidence.`}
 
 ${isTechnical ? groundingContext : ""}
-${!isTechnical ? SESSION_CONTEXT_GROUNDING_RULE : ""}
+${SESSION_CONTEXT_GROUNDING_RULE}
+${structuredSessionContextText ? `
+LOGGED SESSION CONTEXT / INFLUENCES (user-entered context, not telemetry or visual proof):
+${structuredSessionContextText}
+
+Use these fields as logged contextual influences. Keep alcohol and cannabis wording neutral and clinical. If logged alcohol or cannabis occurred near the session, say it may have influenced heart rate, arousal timing, sensory state, or autonomic tone; do not overclaim causality.` : ""}
 ${AI_SESSION_TYPE_GROUNDING_V1}
 ${BODY_STATE_INTERPRETIVE_STYLE_V1}
 ${reviewedVisualEvidence}
@@ -592,6 +624,7 @@ ${hrvIntegrationRules}
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Write all times as words: "ten minutes and thirty seconds" not "10:30"
+- Never write raw second offsets such as "at 943 seconds" or "943s". Convert them to minutes and seconds, such as "at fifteen minutes and forty-three seconds".
 - Spell out all numbers as words (e.g., "ten beats per minute" not "10 bpm")
 - Write in conversational, sentence-based prose with natural pauses
 - Use short sentences and simple grammar optimized for audio readability
@@ -612,7 +645,7 @@ Use time references when they anchor the arc, but each time reference should ans
 The best output should feel like: "Here is what was happening in the body during this phase, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."`
   : `This is primary evidence for the single Chronological Deep Dive. Group closely related events into meaningful body-state transitions rather than narrating every note separately. At each major transition, explain what the body appears to be doing and why that matters. Reserve movement telemetry synthesis, recurring patterns, hypotheses, and recommendations for their dedicated sections; do not retell this timeline there.`}` : ""}
 
-${hrTrajectory ? `HR TRAJECTORY (time_s:bpm, sampled):
+${hrTrajectory ? `HR TRAJECTORY (sampled readable time and heart rate):
 ${hrTrajectory}
 
 Use this to trace sympathetic activation patterns, body-state transitions, exploratory response, arousal plateaus when relevant, and correlation between HR changes and event timing. For non-climax body exploration sessions, HR still matters: use it to describe autonomic response, settling, activation, comfort/discomfort, or positional/sensory response rather than looking for a climax arc.` : ""}
@@ -662,7 +695,7 @@ ${JSON.stringify({
   ejaculate_volume: session.ejaculate_volume,
   hydration: session.hydration,
   substances: session.substances,
-  ...(!isTechnical && structuredSessionContext ? { session_context: structuredSessionContext } : {}),
+  ...(structuredSessionContext ? { session_context: structuredSessionContext } : {}),
   discomfort_entries: session.discomfort_entries?.length > 0 ? session.discomfort_entries : undefined,
   unusual_sensations: session.unusual_sensations,
   refractory_notes: session.refractory_notes,
@@ -781,11 +814,41 @@ Provide ${isTechnical
       {!collapsed && loading && <AnalysisStatus job={jobStatus} />}
 
       {!collapsed && !result && !loading && (
-        <p className="text-xs text-muted-foreground">
-          {isTechnical
-            ? "Click Analyze for the newer deeper technical pass across physiology, timeline structure, and session turning points. Uses Claude Sonnet."
-            : "Click Analyze to generate the original warm AI physiological session analysis. Uses Claude Sonnet."}
-        </p>
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            {isTechnical
+              ? "Click Analyze for the newer deeper technical pass across physiology, timeline structure, and session turning points. Uses Claude Sonnet."
+              : "Click Analyze to generate the original warm AI physiological session analysis. Uses Claude Sonnet."}
+          </p>
+          <div className={`rounded-lg border px-3 py-2 text-xs ${evidencePreflight.creditRisk ? "border-amber-400/35 bg-amber-400/10 text-amber-100" : "border-primary/20 bg-primary/5 text-muted-foreground"}`}>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-foreground">Evidence preflight</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.usefulEventCount} useful event notes</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.videoPassCount} saved video cards</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.videoDraftEventCount} video draft events</span>
+              {evidencePreflight.localCandidateEventCount > 0 && (
+                <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.localCandidateEventCount} local candidates</span>
+              )}
+              {evidencePreflight.contextEvidenceCount > 0 && (
+                <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.contextEvidenceCount} logged context fields</span>
+              )}
+            </div>
+            {evidencePreflight.contextItems?.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {evidencePreflight.contextItems.map((item) => (
+                  <span key={item} className="rounded-full border border-border bg-background/80 px-2 py-0.5 text-[10px] text-foreground/90">
+                    {item}
+                  </span>
+                ))}
+              </div>
+            )}
+            <p className="mt-1 leading-relaxed">
+              {evidencePreflight.creditRisk
+                ? "Credit caution: Sarah has telemetry/profile/logged context, but not much accepted video/event evidence. This run may be generic unless you save useful annotation findings first."
+                : "This looks usable for Session Analysis. Sarah will see accepted event notes, saved video-pass findings, telemetry, logged context/influences, and profile context."}
+            </p>
+          </div>
+        </div>
       )}
 
       {!collapsed && error && (

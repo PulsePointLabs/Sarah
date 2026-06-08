@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { analyzeLocalVisionWindow } from '../services/localVision/analyzeWindow.js';
 import { analyzeLocalVisionContinuous } from '../services/localVision/continuousAnalyzer.js';
 import { analyzeLocalVisionAdaptive } from '../services/localVision/adaptiveAnalyzer.js';
+import { analyzeLocalVisionForward } from '../services/localVision/forwardAnalyzer.js';
 import { askLocalVisionVideo } from '../services/localVision/videoQa.js';
 import { resolveCachedFramePath } from '../services/localVision/frameSampler.js';
 import { getLocalVisionHealth } from '../services/localVision/localVisionClient.js';
@@ -64,6 +65,23 @@ localVisionRouter.post('/analyze-adaptive', async (req, res) => {
     res.status(error?.status || 500).json({
       ok: false,
       error: error?.message || 'Adaptive local vision analysis failed.',
+      privacy: { localOnly: true, cloudUpload: false },
+      warnings: error?.warnings || [],
+    });
+  }
+});
+
+localVisionRouter.post('/analyze-forward', async (req, res) => {
+  if (process.env.LOCAL_VISION_ENABLED === 'false') {
+    return res.status(403).json({ error: 'Local vision is disabled by LOCAL_VISION_ENABLED=false.' });
+  }
+  try {
+    const result = await analyzeLocalVisionForward(req.body || {});
+    res.json(result);
+  } catch (error) {
+    res.status(error?.status || 500).json({
+      ok: false,
+      error: error?.message || 'Forward local vision review failed.',
       privacy: { localOnly: true, cloudUpload: false },
       warnings: error?.warnings || [],
     });

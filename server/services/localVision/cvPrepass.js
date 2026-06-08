@@ -31,8 +31,7 @@ function regionBounds(region) {
   return { x0: 0, x1: RAW_W, y0: 0, y1: RAW_H };
 }
 
-function diffRegion(a, b, region) {
-  const bounds = regionBounds(region);
+function diffBounds(a, b, bounds) {
   let sum = 0;
   let count = 0;
   for (let y = bounds.y0; y < bounds.y1; y += 1) {
@@ -46,8 +45,43 @@ function diffRegion(a, b, region) {
   return count ? sum / (count * 255) : 0;
 }
 
+function diffRegion(a, b, region) {
+  return diffBounds(a, b, regionBounds(region));
+}
+
+function roiBounds(roi = {}) {
+  const x0 = Math.max(0, Math.min(RAW_W - 1, Math.floor(Number(roi.x || 0) * RAW_W)));
+  const y0 = Math.max(0, Math.min(RAW_H - 1, Math.floor(Number(roi.y || 0) * RAW_H)));
+  const x1 = Math.max(x0 + 1, Math.min(RAW_W, Math.ceil((Number(roi.x || 0) + Number(roi.width || 0)) * RAW_W)));
+  const y1 = Math.max(y0 + 1, Math.min(RAW_H, Math.ceil((Number(roi.y || 0) + Number(roi.height || 0)) * RAW_H)));
+  return { x0, x1, y0, y1 };
+}
+
+function roiMotionMetrics(a, b, rois = []) {
+  const scored = rois.map((roi) => ({
+    id: roi.id,
+    label: roi.label,
+    type: roi.type,
+    score: diffBounds(a, b, roiBounds(roi)),
+  })).sort((left, right) => right.score - left.score);
+  const top = scored[0] || null;
+  const average = scored.length ? scored.reduce((sum, item) => sum + item.score, 0) / scored.length : 0;
+  return {
+    max: top?.score || 0,
+    average,
+    top,
+    all: scored,
+  };
+}
+
 function candidateTypeForRecord(recordType, metrics) {
   const type = String(recordType || '').toLowerCase();
+  const roiType = String(metrics.roiTop?.type || '').toLowerCase();
+  if (roiType === 'genital_hand_roi') return 'hand_genital_motion_candidate';
+  if (roiType === 'feet_legs_roi') return 'body_foot_movement_candidate';
+  if (roiType === 'foley_procedure_field_roi') return 'foley_tool_or_tubing_activity_candidate';
+  if (roiType === 'tubing_bag_roi') return 'tubing_or_bag_field_candidate';
+  if (roiType === 'full_body_roi' && metrics.roiMax > 0.1) return 'body_position_or_surface_visibility_candidate';
   if (type === 'foley_procedure') return metrics.lowerCenter > 0.11 ? 'foley_tool_or_tubing_activity_candidate' : 'procedure_field_change_candidate';
   if (type === 'masturbation') {
     if (metrics.lowerCenter > 0.12) return 'hand_genital_motion_candidate';
@@ -67,6 +101,7 @@ function reasonsFor(type, metrics) {
   if (metrics.scene > 0.2) reasons.push('large scene or posture change');
   if (metrics.lowerCenter > 0.1) reasons.push('localized motion near lower torso/genital region');
   if (metrics.lower > 0.1) reasons.push('lower-body or foot/leg motion signal');
+  if (metrics.roiTop?.score > 0.08) reasons.push(`ROI-weighted motion in ${metrics.roiTop.label || metrics.roiTop.type}`);
   if (type.includes('fluid') || (metrics.lowerCenter > 0.16 && metrics.global < 0.22)) reasons.push('localized appearance change worth checking for fluid or contact change');
   if (!reasons.length) reasons.push('visibility checkpoint selected from chronological scan');
   return reasons;
@@ -122,6 +157,7 @@ export async function runCvPrepass({ request, videoPath, sessionId, onProgress }
   });
 
   const pixels = [];
+  const rois = Array.isArray(request.regionsOfInterest) ? request.regionsOfInterest : [];
   for (let index = 0; index < sampled.frames.length; index += 1) {
     pixels.push(await frameGrayPixels(sampled.frames[index].file_path));
     if (index === 0 || (index + 1) % 10 === 0 || index === sampled.frames.length - 1) {
@@ -146,7 +182,14 @@ export async function runCvPrepass({ request, videoPath, sessionId, onProgress }
       lower: diffRegion(pixels[index - 1], pixels[index], 'lower'),
       scene: diffRegion(pixels[index - 1], pixels[index], 'edges'),
     };
-    const score = clamp01((metrics.global * 1.7) + (metrics.lowerCenter * 2.2) + (metrics.lower * 1.1) + (metrics.scene * 0.8));
+    const roiMetrics = roiMotionMetrics(pixels[index - 1], pixels[index], rois);
+    metrics.roiMax = roiMetrics.max;
+    metrics.roiAverage = roiMetrics.average;
+    metrics.roiTop = roiMetrics.top;
+    const score = clamp01(Math.max(
+      (metrics.global * 1.7) + (metrics.lowerCenter * 2.2) + (metrics.lower * 1.1) + (metrics.scene * 0.8),
+      metrics.roiMax * 2.4,
+    ));
     const isCheckpoint = index === 1 || index === sampled.frames.length - 1 || index % Math.max(4, Math.round(sampled.frames.length / 8)) === 0;
     if (score < 0.18 && !isCheckpoint) continue;
     const type = candidateTypeForRecord(request.recordType, metrics);
@@ -159,9 +202,23 @@ export async function runCvPrepass({ request, videoPath, sessionId, onProgress }
       reasons: reasonsFor(type, metrics),
       frame_refs: [prev.frame_id, frame.frame_id],
       lifecycle: ['detected_by_cv'],
+      roi: metrics.roiTop?.score > 0.04 ? {
+        id: metrics.roiTop.id,
+        label: metrics.roiTop.label,
+        type: metrics.roiTop.type,
+        motion_score: Number(metrics.roiTop.score.toFixed(4)),
+        contributed: metrics.roiTop.score > 0.08,
+      } : null,
       debug: {
         samples: 1,
-        metrics: Object.fromEntries(Object.entries(metrics).map(([key, value]) => [key, Number(value.toFixed(4))])),
+        metrics: {
+          global: Number(metrics.global.toFixed(4)),
+          lowerCenter: Number(metrics.lowerCenter.toFixed(4)),
+          lower: Number(metrics.lower.toFixed(4)),
+          scene: Number(metrics.scene.toFixed(4)),
+          roiMax: Number(metrics.roiMax.toFixed(4)),
+          roiAverage: Number(metrics.roiAverage.toFixed(4)),
+        },
       },
     });
   }
@@ -176,6 +233,9 @@ export async function runCvPrepass({ request, videoPath, sessionId, onProgress }
       raw_candidates: rawCandidates.length,
       candidate_windows: ranked.length,
       baseline_fps: candidatePolicy.baselineFps || 0.5,
+      roi_configured: rois.length > 0,
+      roi_count: rois.length,
+      roi_labels: rois.map((roi) => roi.label),
     },
   };
 }

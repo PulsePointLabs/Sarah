@@ -27,6 +27,13 @@ function eventKey(event) {
   return `${event.event_type || event.eventType}:${event.label}:${Math.round(Number(event.start_ms ?? event.time_ms ?? 0) / 1000)}`;
 }
 
+function mmssFromMs(ms) {
+  const totalSeconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
 function promoteEvent(event, index, fallbackStart, fallbackEnd) {
   const start = Number(event.start_ms ?? event.time_ms ?? fallbackStart ?? 0);
   const end = Number(event.end_ms ?? event.time_ms ?? fallbackEnd ?? start);
@@ -216,7 +223,7 @@ export async function analyzeLocalVisionContinuous(body, { signal, onProgress } 
       eta_total: refinementEtaTotal,
       refinement_event_current: index + 1,
       refinement_event_total: refinementTargets.length,
-      message: `Refining local evidence around ${Math.round(center / 1000)}s (${index + 1}/${refinementTargets.length})...`,
+      message: `Refining local evidence around ${mmssFromMs(center)} (${index + 1}/${refinementTargets.length})...`,
     });
     const refined = await sampleLocalVisionFrames({
       videoPath: video.path,
@@ -300,7 +307,7 @@ export async function analyzeLocalVisionContinuous(body, { signal, onProgress } 
     motion_quality: request.scanPolicy.baselineFps >= 1 ? 0.6 : 0.35,
   };
   const summary = [
-    `Continuous local Qwen scan reviewed ${frameEvidence.length} sampled frame${frameEvidence.length === 1 ? '' : 's'} from ${Math.round(request.startMs / 1000)}s to ${Math.round(request.endMs / 1000)}s.`,
+    `Continuous local Qwen scan reviewed ${frameEvidence.length} sampled frame${frameEvidence.length === 1 ? '' : 's'} from ${mmssFromMs(request.startMs)} to ${mmssFromMs(request.endMs)}.`,
     timelineEvents.length ? `${timelineEvents.length} gated timeline event${timelineEvents.length === 1 ? '' : 's'} assembled.` : 'No gated timeline event reached confidence; uncertainty preserved.',
     forbidden.length ? `${forbidden.length} unsafe or not-visible claim${forbidden.length === 1 ? '' : 's'} blocked.` : '',
   ].filter(Boolean).join(' ');

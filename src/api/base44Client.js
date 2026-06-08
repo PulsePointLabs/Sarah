@@ -164,6 +164,11 @@ export const base44 = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload || {}),
       }),
+      AnalyzeLocalVisionForward: async (payload) => request('/local-vision/analyze-forward', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+      }),
       ConvertVideoForPlayback: async ({ file, label = '' }) => {
         const form = new FormData();
         form.append('file', file);

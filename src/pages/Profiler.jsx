@@ -40,6 +40,42 @@ function briefText(value, max = 180) {
 }
 
 const PROFILE_ARCHIVE_LIMIT = 30;
+const PROFILE_IMAGE_REVIEW_MAX_TOKENS = 16000;
+const PROFILE_IMAGE_REVIEW_BATCH_SIZE = 5;
+const PROFILE_IMAGE_EVIDENCE_LAYER_RULE = `
+PROFILE IMAGE EVIDENCE LAYER RULE:
+- Keep the existing detailed A&P style, but keep evidence layers distinct.
+- Direct visual evidence means only what is visible in the currently reviewed/reloaded images. Use wording such as "visible", "appears", "is seen", "no visible", or "not visible in this frame/image set".
+- Profile or prior-evidence reconciliation means comparison with saved profile metrics, prior reviewed images, saved Q&A findings, or session evidence. Use wording such as "consistent with prior documentation", "aligns with saved profile findings", or "supports a previous observation".
+- Interpretation or clinical-functional relevance must be marked as interpretation. Use "may be relevant to", "is compatible with", "could contribute to", or "may reflect"; do not state it as direct visual fact.
+- Avoid "confirms" unless the current reviewed image directly confirms the specific claim.
+- A small clear/bright droplet at or near the meatus may be described as visible fluid. Reconcile separately with prior saved pre-ejaculate or urethral secretion findings. Do not claim continuous output unless the image sequence directly shows continuity.
+- Do not state "parasympathetic secretory state" as a visual fact. If relevant, say profile context may be compatible with prior reported secretory patterns.
+- For partially visible Hegar/dilator/device/catheter views, describe the visible part and relationship only. Say "No insertion is visible in this frame" rather than "the device is not inserted" unless the full relationship is visible.
+- For Foley absence, say "No Foley catheter is visible in these reviewed images" rather than "No Foley was present" unless the image set fully covers the relevant anatomy and period.
+- For tissue/safety observations, say "No visible irritation, fissuring, discoloration, or tissue stress is apparent in these images" rather than broad claims that no tissue stress exists.
+- For close-up pelvic/genital images, do not label the view as standing, upright, or anatomical-position unless the image actually shows weight-bearing stance or enough whole-body context to establish that posture. If only a close-up pelvis/genitals/table field is visible, use "close-up pelvic/genital view", "table-position view", "lithotomy-adjacent view", or "position not fully assessable from this close-up".
+- For annotated callouts, do not mark meatus, meatal fluid, urethral fluid, device insertion, Foley presence/absence, or fine tissue margins as high confidence unless the pin/box is on the visible structure and the surrounding prose states the visibility limits. If uncertain, label it possible/uncertain rather than visible/high.
+- Profiler baseline data can support anatomy/profile context, but dynamic video events still require video frame/time evidence. Static image findings do not prove stroking, erection-state change during a session, ejaculation/fluid release, Foley advancement, securement, urine confirmation, or body/foot tension events.
+`;
+
+const PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE = `
+CUMULATIVE PROFILE REVIEW SCOPE:
+- This artifact is a full cumulative profile assessment, not a one-time review of only the newest or directly attached images.
+- Treat directly attached/reloaded images as the current visual re-check subset. Use them to update, correct, and enrich the saved profile baseline.
+- The scope of the user-facing review is the whole cumulative evidence base: current direct image subset, saved Profile Q&A findings, prior Sarah visual reviews, session/body-exploration visual evidence, entered profile metrics, and relevant saved context.
+- Do not open the review with "based on five images", "based on X images", "these five images", "the recent images", or similar narrow framing.
+- Good scope wording: "This cumulative review integrates saved profile-reference images, prior visual findings, entered measurements, and the directly rechecked views from this run."
+- If exact image counts are useful, mention them only as evidence-method detail, not as the scope of the whole analysis.
+`;
+
+function chunkArray(items = [], size = 5) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
 
 function avg(values) {
   const nums = values.map(Number).filter(Number.isFinite);
@@ -85,6 +121,74 @@ function naturalizeSpokenDates(value) {
   return String(value || "").replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (match, year, month, day) => (
     fmtNarrativeDate(`${year}-${month}-${day}`) || match
   ));
+}
+
+function cleanImageReviewProse(value) {
+  return naturalizeSpokenDates(value)
+    .replace(/\bImage\s+\d+\s*(?:\([^)]+\))?\s*:\s*/gi, "")
+    .replace(/\b(?:IMG|VID|PXL|DSC|Photo|Screenshot)[-_ ]?\d{4,}\b/gi, "the referenced view")
+    .replace(/\b\d{7,}\b/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function isCloseUpPelvicImageText(value = "") {
+  const text = String(value || "").toLowerCase();
+  const closePelvic = /(close-up|close up|pelvic|genital|glans|meatus|meatal|foreskin|shaft|scrot|perine|perianal|anal verge|pubic)/i.test(text);
+  const fullBody = /(full body|full-body|whole body|whole-body|head-to-toe|head to toe|crown to feet|feet visible|standing full)/i.test(text);
+  return closePelvic && !fullBody;
+}
+
+function sanitizeImagePositionClaims(image = {}) {
+  const combined = [image.view_label, image.body_position, image.coverage, image.visibility_notes].filter(Boolean).join(" ");
+  if (!isCloseUpPelvicImageText(combined)) return image;
+  const postureAsserted = /(standing|upright|facing camera|legs slightly apart|anatomical position)/i.test(combined);
+  if (!postureAsserted) return image;
+  return {
+    ...image,
+    view_label: image.view_label
+      ? image.view_label
+        .replace(/\bstanding\s+anterior\s+/i, "")
+        .replace(/\bupright\s+/i, "")
+        .replace(/\bfacing camera\s*/i, "")
+        .replace(/^close-up/i, "Close-up")
+      : "Close-up pelvic/genital view",
+    body_position: "Close-up pelvic/genital reference view; whole-body standing posture is not established by this frame.",
+    visibility_notes: [
+      image.visibility_notes,
+      "Posture labels are intentionally conservative for close-up pelvic views.",
+    ].filter(Boolean).join(" "),
+  };
+}
+
+function isHighRiskMicroFinding(value = "") {
+  return /(meatus|meatal|urethral|aperture|fluid droplet|droplet|pre[- ]?ejaculate|secretion|h[ae]gar|dilator|insert(?:ed|ion)?|foley|catheter)/i.test(String(value || ""));
+}
+
+function softenHighRiskFindingText(value = "") {
+  return String(value || "")
+    .replace(/\bclearly visible\b/gi, "reported as visible")
+    .replace(/\bfully exposed\b/gi, "reported as exposed")
+    .replace(/\bis visible\b/gi, "may be visible")
+    .replace(/\bare visible\b/gi, "may be visible");
+}
+
+function sanitizeImageRegionFinding(finding = {}) {
+  const combined = [finding.label, finding.finding, finding.region].filter(Boolean).join(" ");
+  if (!isHighRiskMicroFinding(combined)) return finding;
+  const limitations = Array.isArray(finding.limitations) ? [...finding.limitations] : [];
+  limitations.push("Small-structure/device/fluid callout: verify directly against the displayed image before treating as confirmed.");
+  const label = /^possible\b/i.test(finding.label || "")
+    ? finding.label
+    : `Possible ${String(finding.label || finding.region || "visual detail").replace(/^possible\s+/i, "")}`;
+  return {
+    ...finding,
+    label,
+    finding: softenHighRiskFindingText(finding.finding || ""),
+    confidence: /high/i.test(finding.confidence || "") ? "verify visually" : (finding.confidence || "verify visually"),
+    evidence_level: finding.evidence_level || "needs_visual_verification",
+    limitations: [...new Set(limitations.filter(Boolean))],
+  };
 }
 
 function calmSpokenHeading(label) {
@@ -287,10 +391,51 @@ function normalizeImageReviewAnnotations(raw = {}) {
 function normalizeImageReviewResult(raw) {
   const parsed = normalizeAnatomicalProfileResult(raw);
   if (!parsed) return null;
-  return {
+  const normalized = {
     ...parsed,
     ...normalizeImageReviewAnnotations(parsed),
   };
+  const cleaned = { ...normalized };
+  if (cleaned.overview) cleaned.overview = cleanImageReviewProse(cleaned.overview);
+  if (cleaned.summary_card && typeof cleaned.summary_card === "object") {
+    cleaned.summary_card = {
+      baseline_quality: cleanImageReviewProse(cleaned.summary_card.baseline_quality || ""),
+      coverage: cleanImageReviewProse(cleaned.summary_card.coverage || ""),
+      primary_reference_value: Array.isArray(cleaned.summary_card.primary_reference_value)
+        ? cleaned.summary_card.primary_reference_value.map((item) => cleanImageReviewProse(item)).filter(Boolean)
+        : [],
+      key_direct_findings: Array.isArray(cleaned.summary_card.key_direct_findings)
+        ? cleaned.summary_card.key_direct_findings.map((item) => cleanImageReviewProse(item)).filter(Boolean)
+        : [],
+      key_limitations: Array.isArray(cleaned.summary_card.key_limitations)
+        ? cleaned.summary_card.key_limitations.map((item) => cleanImageReviewProse(item)).filter(Boolean)
+        : [],
+      evidence_note: cleanImageReviewProse(cleaned.summary_card.evidence_note || ""),
+    };
+  }
+  for (const section of [
+    ...HEAD_TO_TOE_IMAGE_REVIEW_CONFIG.sections,
+    ...PELVIC_GENITAL_IMAGE_REVIEW_CONFIG.sections,
+  ]) {
+    if (!Array.isArray(cleaned[section.key])) continue;
+    cleaned[section.key] = cleaned[section.key]
+      .map((item) => cleanImageReviewProse(item))
+      .filter(Boolean);
+  }
+  cleaned.annotated_images = (cleaned.annotated_images || []).map((image) => sanitizeImagePositionClaims({
+    ...image,
+    view_label: cleanImageReviewProse(image.view_label || ""),
+    body_position: cleanImageReviewProse(image.body_position || ""),
+    coverage: cleanImageReviewProse(image.coverage || ""),
+    visibility_notes: cleanImageReviewProse(image.visibility_notes || ""),
+  }));
+  cleaned.image_region_findings = (cleaned.image_region_findings || []).map((finding) => sanitizeImageRegionFinding({
+    ...finding,
+    label: cleanImageReviewProse(finding.label || ""),
+    finding: cleanImageReviewProse(finding.finding || ""),
+    region: cleanImageReviewProse(finding.region || ""),
+  }));
+  return cleaned;
 }
 
 function aiErrorMessage(error) {
@@ -374,11 +519,13 @@ async function saveProfileResultWithArchive({
   return archive;
 }
 
-async function runProfilerAIJob(payload, label, onProgress) {
+async function runProfilerAIJob(payload, label, onProgress, options = {}) {
   const startedJob = await startBackgroundJob("ai_invoke", { ...payload, label }, {
     source: "Profiler",
-    route: "/profiler",
+    route: "/ai-profiler",
     label,
+    priority: options.priority ?? 0,
+    ...options.meta,
   });
   onProgress?.(startedJob);
   const completedJob = await waitForBackgroundJob(startedJob.id, {
@@ -427,10 +574,32 @@ function ProfilerJobStatus({ job, fallback }) {
           </div>
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
             {job?.id && <span>Job {String(job.id).slice(0, 8)}</span>}
+            {job?.priority != null && <span>Priority {job.priority}</span>}
             {progress.model && <span>Model {progress.model}</span>}
             <span>You can leave this page while it finishes.</span>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ProfilerPanelLoadingStatus({ items = [] }) {
+  const activeItems = items.filter((item) => item && item.active);
+  if (!activeItems.length) return null;
+  return (
+    <div className="rounded-lg border border-blue-400/25 bg-blue-500/10 px-3 py-3 text-xs">
+      <div className="flex items-center gap-2 font-semibold text-blue-100">
+        <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-blue-300 border-t-transparent" />
+        Preparing this analysis panel
+      </div>
+      <div className="mt-2 grid gap-1.5">
+        {activeItems.map((item) => (
+          <div key={item.label} className="flex items-start justify-between gap-3 rounded-md bg-background/35 px-2 py-1.5">
+            <span className="text-blue-50">{item.label}</span>
+            <span className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-blue-200">{item.status || "loading"}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -765,6 +934,7 @@ function imageFileToPayload(file) {
       resolve({
         id: `${file.name}-${file.size}-${file.lastModified}`,
         filename: file.name,
+        file,
         media_type: file.type || "image/jpeg",
         data: base64,
         previewUrl: dataUrl,
@@ -821,7 +991,7 @@ function scoreSavedProfileImageGroup({ message, replyText = "", purpose = "gener
 function collectSavedProfileImageAttachments(userProfile, { limit = 5, purpose = "general" } = {}) {
   const messages = Array.isArray(userProfile?.profile_chat_messages) ? userProfile.profile_chat_messages : [];
   const seen = new Set();
-  const groups = [];
+  const items = [];
 
   for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
     const message = messages[messageIndex];
@@ -832,7 +1002,6 @@ function collectSavedProfileImageAttachments(userProfile, { limit = 5, purpose =
     const replyText = String(reply?.text || "");
     const groupScore = scoreSavedProfileImageGroup({ message, replyText, purpose });
     const createdAt = imageAttachments.map((attachment) => attachment.createdAt).filter(Boolean).sort().at(-1) || "";
-    const items = [];
     for (const attachment of imageAttachments) {
       if (attachment?.sourceVideo) continue;
       const url = attachment.previewUrl || attachment.storagePath || "";
@@ -849,18 +1018,34 @@ function collectSavedProfileImageAttachments(userProfile, { limit = 5, purpose =
         source: "saved_profile_qa_attachment",
         selection_score: groupScore,
         selection_context: purpose,
+        selection_group_created_at: createdAt,
       });
     }
-    if (items.length) groups.push({ score: groupScore, createdAt, items });
   }
 
-  const sortedGroups = groups
+  const byRelevance = [...items]
     .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0);
+      if (b.selection_score !== a.selection_score) return b.selection_score - a.selection_score;
+      return (Date.parse(b.saved_at || b.selection_group_created_at || 0) || 0) - (Date.parse(a.saved_at || a.selection_group_created_at || 0) || 0);
     });
+  const byRecency = [...items]
+    .sort((a, b) => (Date.parse(b.saved_at || b.selection_group_created_at || 0) || 0) - (Date.parse(a.saved_at || a.selection_group_created_at || 0) || 0));
 
-  return sortedGroups.flatMap((group) => group.items).slice(0, limit);
+  // Build a coverage-aware pool instead of letting one older high-scoring
+  // image set monopolize the review. New saved uploads and strongly relevant
+  // older references should both make it into the final batched synthesis.
+  const mixed = [];
+  const add = (attachment) => {
+    if (!attachment) return;
+    const key = attachment.storagePath || attachment.url || attachment.id || attachment.filename;
+    if (!key || mixed.some((item) => (item.storagePath || item.url || item.id || item.filename) === key)) return;
+    mixed.push(attachment);
+  };
+  const recentQuota = Math.min(byRecency.length, Math.max(3, Math.ceil(limit * 0.35)));
+  byRecency.slice(0, recentQuota).forEach(add);
+  byRelevance.forEach(add);
+  byRecency.forEach(add);
+  return mixed.slice(0, limit);
 }
 
 async function savedAttachmentToPayload(attachment) {
@@ -960,7 +1145,7 @@ function buildProfileImageReviewContext({ userProfile, sessions = [], bodyExplor
   const qaEntries = normalizeProfileQaFindings(userProfile?.profile_qa_findings);
   const qaCards = buildProfileQaFindingCards(userProfile?.profile_qa_findings, userProfile?.first_name).slice(0, 45);
   const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
-  const reusableProfileImages = collectSavedProfileImageAttachments(userProfile, { limit: 12, purpose: "pelvic_genital" });
+  const reusableProfileImages = collectSavedProfileImageAttachments(userProfile, { limit: 20, purpose: "pelvic_genital" });
   const compactMetrics = compactProfileJsonValue({
     anatomical_mechanical_profile: userProfile?.anatomical_mechanical_profile,
     profile_notes: userProfile?.profile_notes || userProfile?.notes,
@@ -1015,7 +1200,7 @@ function buildHeadToToeImageReviewContext({
   const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
   const qaEntries = normalizeProfileQaFindings(userProfile?.profile_qa_findings);
   const qaCards = buildProfileQaFindingCards(userProfile?.profile_qa_findings, userProfile?.first_name).slice(0, 36);
-  const reusableProfileImages = collectSavedProfileImageAttachments(userProfile, { limit: 12, purpose: "head_to_toe_body_reference" });
+  const reusableProfileImages = collectSavedProfileImageAttachments(userProfile, { limit: 20, purpose: "head_to_toe_body_reference" });
   const compactMetrics = compactProfileJsonValue({
     age: userProfile?.age,
     sex: userProfile?.sex,
@@ -1074,20 +1259,52 @@ function buildImageReviewReferences(images = []) {
     image_id: image.image_id || `img_${String(index + 1).padStart(3, "0")}`,
     display_label: image.display_label || `Reference view ${reviewImageLetter(index)}`,
     source: image.source || "fresh_upload",
-    preview_url: image.source === "saved_profile_qa_attachment" ? (image.storagePath || image.url || "") : "",
+    preview_url: image.storagePath || image.file_url || image.url || "",
     media_type: image.media_type || "image/jpeg",
   }));
 }
 
-function buildImageReviewMeta(images = [], sessions = [], previousMeta = null, evidenceCounts = {}) {
+async function prepareFreshImageForReview(image, index, { onProgress, total = 0 } = {}) {
+  let storagePath = image.storagePath || image.file_url || image.url || "";
+  if (!storagePath && image.file) {
+    onProgress?.({
+      status: "preparing",
+      progress: {
+        phase: "saving_images",
+        current: index + 1,
+        total,
+        message: `Saving reference image ${index + 1} for inline review...`,
+      },
+    });
+    const upload = await base44.integrations.Core.UploadFile({ file: image.file });
+    storagePath = upload?.file_url || upload?.url || "";
+  }
+  if (!storagePath) {
+    throw new Error(`Could not save a reusable preview for ${image.filename || `reference image ${index + 1}`}.`);
+  }
+  return {
+    ...image,
+    filename: image.filename || `profile-reference-${index + 1}.jpg`,
+    media_type: normalizeMediaType(image.media_type),
+    data: image.data,
+    storagePath,
+    url: storagePath,
+    previewUrl: image.previewUrl || storagePath,
+    source: "fresh_upload",
+  };
+}
+
+function buildImageReviewMeta(images = [], sessions = [], previousMeta = null, evidenceCounts = {}, generatedAtOverride = null, reviewedImageOverride = null, countOverrides = {}) {
   const freshImages = images.filter((image) => image.source !== "saved_profile_qa_attachment");
   const reusedImages = images.filter((image) => image.source === "saved_profile_qa_attachment");
-  const reviewedImages = buildImageReviewReferences(images);
+  const reviewedImages = Array.isArray(reviewedImageOverride) && reviewedImageOverride.length
+    ? reviewedImageOverride
+    : buildImageReviewReferences(images);
   return {
-    ...buildProfileAIContentMeta(sessions, previousMeta, null),
-    fresh_image_count: freshImages.length,
-    reused_saved_image_count: reusedImages.length,
-    image_count: images.length,
+    ...buildProfileAIContentMeta(sessions, previousMeta, generatedAtOverride),
+    fresh_image_count: countOverrides.fresh_image_count ?? freshImages.length,
+    reused_saved_image_count: countOverrides.reused_saved_image_count ?? reusedImages.length,
+    image_count: countOverrides.image_count ?? (images.length || reviewedImages.length),
     image_filenames: images.map((image) => image.filename).filter(Boolean),
     reused_saved_image_filenames: reusedImages.map((image) => image.filename).filter(Boolean),
     reviewed_images: reviewedImages,
@@ -1108,6 +1325,202 @@ function imageReviewReferencePromptLines(images = []) {
   )).join("\n");
 }
 
+function profileImageReviewResponseSchema(config) {
+  return {
+    type: "object",
+    properties: {
+      overview: { type: "string" },
+      summary_card: {
+        type: "object",
+        properties: {
+          baseline_quality: { type: "string" },
+          coverage: { type: "string" },
+          primary_reference_value: { type: "array", items: { type: "string" } },
+          key_direct_findings: { type: "array", items: { type: "string" } },
+          key_limitations: { type: "array", items: { type: "string" } },
+          evidence_note: { type: "string" },
+        },
+      },
+      ...Object.fromEntries(profileReviewResultSections(config).map((section) => [section.key, { type: "array", items: { type: "string" } }])),
+      annotated_images: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            image_id: { type: "string" },
+            view_label: { type: "string" },
+            body_position: { type: "string" },
+            coverage: { type: "string" },
+            visibility_notes: { type: "string" },
+            major_regions_visible: { type: "array", items: { type: "string" } },
+          },
+          required: ["image_id", "view_label", "coverage", "visibility_notes"],
+        },
+      },
+      image_region_findings: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            finding_id: { type: "string" },
+            image_id: { type: "string" },
+            section_key: { type: "string" },
+            region: { type: "string" },
+            label: { type: "string" },
+            finding: { type: "string" },
+            confidence: { type: "string" },
+            visibility: { type: "string" },
+            evidence_level: { type: "string" },
+            limitations: { type: "array", items: { type: "string" } },
+            pin: {
+              type: "object",
+              properties: {
+                x: { type: "number" },
+                y: { type: "number" },
+              },
+            },
+            box: {
+              type: "object",
+              properties: {
+                x: { type: "number" },
+                y: { type: "number" },
+                width: { type: "number" },
+                height: { type: "number" },
+              },
+            },
+          },
+          required: ["finding_id", "image_id", "region", "label", "finding", "confidence"],
+        },
+      },
+    },
+    required: ["overview", ...profileReviewResultSections(config).filter((section) => section.required !== false).map((section) => section.key)],
+  };
+}
+
+function compactImageReviewForSynthesis(result, index = 0) {
+  const sections = [
+    ...HEAD_TO_TOE_IMAGE_REVIEW_CONFIG.sections,
+    ...PELVIC_GENITAL_IMAGE_REVIEW_CONFIG.sections,
+  ];
+  const compactList = (items = [], limit = 4, maxChars = 700) => (
+    Array.isArray(items)
+      ? items.slice(0, limit).map((item) => briefText(item, maxChars)).filter(Boolean)
+      : []
+  );
+  const compactSummary = result?.summary_card && typeof result.summary_card === "object"
+    ? {
+      baseline_quality: briefText(result.summary_card.baseline_quality || "", 500),
+      coverage: briefText(result.summary_card.coverage || "", 500),
+      primary_reference_value: compactList(result.summary_card.primary_reference_value, 4, 420),
+      key_direct_findings: compactList(result.summary_card.key_direct_findings, 6, 420),
+      key_limitations: compactList(result.summary_card.key_limitations, 5, 360),
+      evidence_note: briefText(result.summary_card.evidence_note || "", 500),
+    }
+    : null;
+  return {
+    batch: index + 1,
+    overview: briefText(result?.overview || "", 900),
+    summary_card: compactSummary,
+    sections: Object.fromEntries(sections
+      .filter((section) => Array.isArray(result?.[section.key]) && result[section.key].length)
+      .map((section) => [section.key, compactList(result[section.key], 3, 650)])),
+    annotated_images: Array.isArray(result?.annotated_images)
+      ? result.annotated_images.slice(0, 20).map((image) => ({
+        image_id: image.image_id,
+        view_label: briefText(image.view_label || "", 180),
+        body_position: briefText(image.body_position || "", 180),
+        coverage: briefText(image.coverage || "", 260),
+        visibility_notes: briefText(image.visibility_notes || "", 300),
+        major_regions_visible: Array.isArray(image.major_regions_visible)
+          ? image.major_regions_visible.slice(0, 8)
+          : [],
+      }))
+      : [],
+    image_region_findings: Array.isArray(result?.image_region_findings)
+      ? result.image_region_findings.slice(0, 20).map((finding) => ({
+        finding_id: finding.finding_id,
+        image_id: finding.image_id,
+        section_key: finding.section_key,
+        region: briefText(finding.region || "", 120),
+        label: briefText(finding.label || "", 180),
+        finding: briefText(finding.finding || "", 520),
+        confidence: finding.confidence,
+        visibility: briefText(finding.visibility || "", 120),
+        evidence_level: briefText(finding.evidence_level || "", 160),
+        limitations: compactList(finding.limitations, 3, 180),
+        pin: finding.pin,
+        box: finding.box,
+      }))
+      : [],
+  };
+}
+
+function mergeImageReviewBatchArtifacts(synthesizedResult, batchResults = []) {
+  const result = synthesizedResult || {};
+  const batchAnnotated = batchResults.flatMap((item) => Array.isArray(item?.annotated_images) ? item.annotated_images : []);
+  const batchFindings = batchResults.flatMap((item) => Array.isArray(item?.image_region_findings) ? item.image_region_findings : []);
+  return {
+    ...result,
+    annotated_images: result.annotated_images?.length ? result.annotated_images : batchAnnotated,
+    image_region_findings: result.image_region_findings?.length ? result.image_region_findings : batchFindings,
+  };
+}
+
+function uniqueReviewItems(items = [], limit = 14, maxChars = 900) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    const text = cleanImageReviewProse(item);
+    if (!text || /^batch\s+\d+\s+of\s+\d+/i.test(text) || /^this is batch\s+\d+/i.test(text)) continue;
+    const key = text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().slice(0, 180);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(briefText(text, maxChars));
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function buildBatchAssembledImageReview(config, batchResults = [], batchSet = {}) {
+  const sections = profileReviewResultSections(config);
+  const directFindings = uniqueReviewItems(batchResults.flatMap((item) => item?.summary_card?.key_direct_findings || []), 10, 520);
+  const referenceValue = uniqueReviewItems(batchResults.flatMap((item) => item?.summary_card?.primary_reference_value || []), 8, 460);
+  const limitations = uniqueReviewItems(batchResults.flatMap((item) => item?.summary_card?.key_limitations || []), 8, 420);
+  const coverage = uniqueReviewItems(batchResults.map((item) => item?.summary_card?.coverage || item?.overview), 4, 520).join(" ");
+  const annotatedByKey = new Map();
+  for (const image of batchResults.flatMap((item) => Array.isArray(item?.annotated_images) ? item.annotated_images : [])) {
+    const key = image?.image_id || `${image?.view_label || ""}-${annotatedByKey.size}`;
+    if (!annotatedByKey.has(key)) annotatedByKey.set(key, sanitizeImagePositionClaims(image));
+  }
+  const findingsByKey = new Map();
+  for (const finding of batchResults.flatMap((item) => Array.isArray(item?.image_region_findings) ? item.image_region_findings : [])) {
+    const key = finding?.finding_id || `${finding?.image_id || ""}-${finding?.label || ""}-${findingsByKey.size}`;
+    if (!findingsByKey.has(key)) findingsByKey.set(key, sanitizeImageRegionFinding(finding));
+  }
+
+  const result = {
+    overview: `This cumulative ${config.shortTitle.toLowerCase()} review was recovered from ${batchSet.total || batchResults.length} completed Sarah batch reviews after the final synthesis request timed out. The batch-level visual review succeeded, so this assembled version preserves the paid-for direct image observations, annotated image callouts, limitations, and profile-context reconciliation without making another cloud request. It should be treated as a recovered cumulative review assembled from completed Sarah evidence rather than a freshly rewritten final narrative.`,
+    summary_card: {
+      baseline_quality: uniqueReviewItems(batchResults.map((item) => item?.summary_card?.baseline_quality), 2, 420).join(" ") || "Recovered from completed Sarah image-review batches.",
+      coverage: coverage || `${batchSet.image_count || batchSet.reviewed_images?.length || "Multiple"} saved/direct profile-reference views were reviewed across completed batches.`,
+      primary_reference_value: referenceValue,
+      key_direct_findings: directFindings,
+      key_limitations: limitations,
+      evidence_note: "Direct batch findings were preserved and locally assembled because the final Sarah synthesis timed out.",
+    },
+    annotated_images: Array.from(annotatedByKey.values()),
+    image_region_findings: Array.from(findingsByKey.values()),
+  };
+
+  for (const section of sections) {
+    const items = uniqueReviewItems(batchResults.flatMap((item) => Array.isArray(item?.[section.key]) ? item[section.key] : []), 14, 950);
+    result[section.key] = items.length
+      ? items
+      : [`No distinct recovered batch paragraph was available for ${section.label.toLowerCase()}; see the recovered overview, evidence summary, and annotated image callouts.`];
+  }
+  return normalizeImageReviewResult(result) || result;
+}
+
 function confidenceLabel(value = "") {
   const text = String(value || "").replace(/_/g, " ").trim();
   return text || "uncertain";
@@ -1115,6 +1528,57 @@ function confidenceLabel(value = "") {
 
 function sectionLabelForKey(sections = [], key = "") {
   return sections.find((section) => section.key === key)?.label || String(key || "").replace(/_/g, " ");
+}
+
+function ProfileImageSummaryCard({ summary, color = "hsl(var(--primary))" }) {
+  if (!summary || typeof summary !== "object") return null;
+  const direct = Array.isArray(summary.key_direct_findings) ? summary.key_direct_findings.filter(Boolean) : [];
+  const reference = Array.isArray(summary.primary_reference_value) ? summary.primary_reference_value.filter(Boolean) : [];
+  const limitations = Array.isArray(summary.key_limitations) ? summary.key_limitations.filter(Boolean) : [];
+  if (!summary.baseline_quality && !summary.coverage && !direct.length && !reference.length && !limitations.length && !summary.evidence_note) return null;
+  return (
+    <div className="rounded-xl border border-border bg-card/70 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color }}>Evidence Summary</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Direct visual findings are kept separate from saved profile context and interpretation.
+          </p>
+        </div>
+        {summary.baseline_quality && (
+          <Badge variant="outline" className="text-[10px]">{summary.baseline_quality}</Badge>
+        )}
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {summary.coverage && (
+          <div className="rounded-lg border border-border bg-background/60 p-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Coverage</p>
+            <p className="mt-1 text-xs leading-relaxed text-foreground">{summary.coverage}</p>
+          </div>
+        )}
+        {summary.evidence_note && (
+          <div className="rounded-lg border border-border bg-background/60 p-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Evidence Note</p>
+            <p className="mt-1 text-xs leading-relaxed text-foreground">{summary.evidence_note}</p>
+          </div>
+        )}
+      </div>
+      {[["Primary reference value", reference], ["Key direct findings", direct], ["Key limitations", limitations]].map(([label, values]) => (
+        values.length ? (
+          <div key={label} className="mt-2 rounded-lg border border-border bg-background/60 p-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {values.slice(0, 8).map((item) => (
+                <span key={item} className="rounded-full border border-border bg-muted/20 px-2 py-1 text-[11px] text-foreground/90">
+                  {item}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null
+      ))}
+    </div>
+  );
 }
 
 function profileImageById(result, imageId, transientImages = []) {
@@ -1128,11 +1592,17 @@ function profileImageById(result, imageId, transientImages = []) {
   const image = reviewed.find((item) => item.image_id === imageId) || {};
   const annotation = annotated.find((item) => item.image_id === imageId) || {};
   const transientImage = transient.find((item) => item.image_id === imageId) || {};
+  const previewUrl = image.preview_url || transientImage.preview_url || annotation.preview_url || "";
   return {
-    ...image,
     ...transientImage,
     ...annotation,
-    display_label: annotation.view_label || transientImage.display_label || image.display_label || "Reviewed view",
+    ...image,
+    preview_url: previewUrl,
+    display_label: annotation.view_label || image.display_label || transientImage.display_label || "Reviewed view",
+    body_position: annotation.body_position || image.body_position || transientImage.body_position || "",
+    coverage: annotation.coverage || image.coverage || transientImage.coverage || "",
+    visibility_notes: annotation.visibility_notes || image.visibility_notes || transientImage.visibility_notes || "",
+    major_regions_visible: annotation.major_regions_visible || image.major_regions_visible || transientImage.major_regions_visible || [],
   };
 }
 
@@ -1155,7 +1625,7 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
           <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color }}>
             <ImageIcon className="h-3.5 w-3.5" /> Annotated Anatomy Reference
           </h4>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <p className="mt-1 text-sm leading-relaxed text-foreground/85 dark:text-white/85">
             Sarah-linked body-region findings. Pins are approximate visual anchors, not measurement-grade anatomy marks.
           </p>
         </div>
@@ -1173,7 +1643,7 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
                 {image.preview_url ? (
                   <img src={serverUrl(image.preview_url)} alt={image.display_label || "Reviewed anatomy reference"} className="h-full w-full object-contain" />
                 ) : (
-                  <div className="flex h-full items-center justify-center px-4 text-center text-xs text-muted-foreground">
+                  <div className="flex h-full items-center justify-center px-4 text-center text-sm leading-relaxed text-foreground/85 dark:text-white/85">
                     Image preview is not available for this saved run. Re-run with saved or fresh images to attach view previews.
                   </div>
                 )}
@@ -1203,9 +1673,9 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
               </div>
               <div className="space-y-2 p-3">
                 <div>
-                  <p className="text-sm font-semibold text-foreground">{image.display_label || "Reviewed view"}</p>
+                  <p className="text-base font-semibold leading-snug text-foreground dark:text-white">{image.display_label || "Reviewed view"}</p>
                   {(image.body_position || image.coverage || image.visibility_notes) && (
-                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    <p className="mt-2 text-sm leading-relaxed text-foreground/90 dark:text-white/90">
                       {[image.body_position, image.coverage, image.visibility_notes].filter(Boolean).join(" · ")}
                     </p>
                   )}
@@ -1220,24 +1690,27 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
                 {imageFindings.length > 0 ? (
                   <div className="space-y-2">
                     {imageFindings.map((finding, index) => (
-                      <div key={finding.finding_id} className="rounded-lg border border-border bg-background/60 p-2">
+                      <div key={finding.finding_id} className="rounded-lg border border-border bg-background/70 p-3">
                         <div className="flex flex-wrap items-center gap-1.5">
                           {finding.pin && (
                             <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
                               {index + 1}
                             </span>
                           )}
-                          <span className="text-xs font-semibold text-foreground">{finding.label || finding.region || "Visible finding"}</span>
+                          <span className="text-base font-semibold leading-snug text-foreground dark:text-white">{finding.label || finding.region || "Visible finding"}</span>
                           <Badge variant="outline" className="h-5 text-[10px]">{confidenceLabel(finding.confidence)}</Badge>
+                          {finding.evidence_level && (
+                            <Badge variant="secondary" className="h-5 text-[10px]">{confidenceLabel(finding.evidence_level)}</Badge>
+                          )}
                           {finding.section_key && (
                             <Badge variant="secondary" className="h-5 text-[10px]">{sectionLabelForKey(sections, finding.section_key)}</Badge>
                           )}
                         </div>
                         {finding.finding && (
-                          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{finding.finding}</p>
+                          <p className="mt-2 text-[0.95rem] leading-relaxed text-foreground/90 dark:text-white/90">{finding.finding}</p>
                         )}
                         {finding.limitations?.length > 0 && (
-                          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                          <p className="mt-2 text-sm leading-relaxed text-foreground/80 dark:text-white/80">
                             Limits: {finding.limitations.join("; ")}
                           </p>
                         )}
@@ -1245,8 +1718,92 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
                     ))}
                   </div>
                 ) : (
-                  <p className="text-xs text-muted-foreground">No region-specific callouts were returned for this view.</p>
+                  <p className="text-sm leading-relaxed text-foreground/85 dark:text-white/85">No region-specific callouts were returned for this view.</p>
                 )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(var(--primary))", transientImages = [] }) {
+  const findings = Array.isArray(result?.image_region_findings)
+    ? result.image_region_findings.filter((finding) => finding.section_key === sectionKey)
+    : [];
+  if (!findings.length) return null;
+
+  const imageIds = [...new Set(findings.map((finding) => finding.image_id).filter(Boolean))].slice(0, 3);
+  const sectionLabel = sectionLabelForKey(sections, sectionKey);
+
+  return (
+    <div className="my-2 rounded-xl border border-border bg-card/70 p-2.5 sm:p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color }}>
+          <ImageIcon className="h-3.5 w-3.5" /> Visual reference for {sectionLabel}
+        </p>
+        <Badge variant="outline" className="h-5 text-[10px]">{findings.length} callout{findings.length === 1 ? "" : "s"}</Badge>
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        {imageIds.map((imageId) => {
+          const image = profileImageById(result, imageId, transientImages);
+          const imageFindings = findings.filter((finding) => finding.image_id === imageId).slice(0, 4);
+          const pinnedFindings = imageFindings.filter((finding) => finding.pin?.x != null && finding.pin?.y != null);
+          return (
+            <div key={`${sectionKey}-${imageId}`} className="overflow-hidden rounded-lg border border-border bg-background/70">
+              <div className="grid gap-2 sm:grid-cols-[minmax(130px,0.85fr)_1fr]">
+                <div className="relative min-h-36 bg-black sm:min-h-full">
+                  {image.preview_url ? (
+                    <img src={serverUrl(image.preview_url)} alt={image.display_label || "Reviewed anatomy reference"} className="h-full max-h-64 w-full object-contain sm:max-h-none" loading="lazy" />
+                  ) : (
+                    <div className="flex h-full min-h-36 items-center justify-center px-3 text-center text-sm leading-relaxed text-foreground/85 dark:text-white/85">
+                      Image preview unavailable for this saved run.
+                    </div>
+                  )}
+                  {pinnedFindings.map((finding, index) => (
+                    <div
+                      key={`${finding.finding_id}-inline-pin`}
+                      className="absolute flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/80 bg-primary text-[10px] font-bold text-primary-foreground shadow-lg"
+                      style={{ left: `${finding.pin.x}%`, top: `${finding.pin.y}%` }}
+                      title={finding.label}
+                    >
+                      {index + 1}
+                    </div>
+                  ))}
+                </div>
+                <div className="space-y-2 p-2.5">
+                  <div>
+                    <p className="text-base font-semibold leading-snug text-foreground dark:text-white">{image.display_label || "Reviewed view"}</p>
+                    {(image.body_position || image.coverage || image.visibility_notes) && (
+                      <p className="mt-2 text-sm leading-relaxed text-foreground/90 dark:text-white/90">
+                        {[image.body_position, image.coverage, image.visibility_notes].filter(Boolean).join(" · ")}
+                      </p>
+                    )}
+                  </div>
+                  <div className="space-y-1.5">
+                    {imageFindings.map((finding, index) => (
+                      <div key={`${finding.finding_id}-inline`} className="rounded-md border border-border bg-muted/20 p-3">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {finding.pin && (
+                            <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
+                              {index + 1}
+                            </span>
+                          )}
+                      <span className="text-base font-semibold leading-snug text-foreground dark:text-white">{finding.label || finding.region || "Visible finding"}</span>
+                      <Badge variant="outline" className="h-5 text-[10px]">{confidenceLabel(finding.confidence)}</Badge>
+                      {finding.evidence_level && (
+                        <Badge variant="secondary" className="h-5 text-[10px]">{confidenceLabel(finding.evidence_level)}</Badge>
+                      )}
+                    </div>
+                        {finding.finding && (
+                          <p className="mt-2 text-[0.95rem] leading-relaxed text-foreground/90 dark:text-white/90">{finding.finding}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           );
@@ -1264,7 +1821,7 @@ const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
   archiveKey: "head_to_toe_image_review_archive",
   ttsSessionId: "profile-head-to-toe-image-review",
   contextScope: "head_to_toe_body_reference",
-  maxImages: 5,
+  maxImages: 20,
   icon: <ImageIcon className="w-4 h-4" />,
   color: "hsl(var(--chart-4))",
   purpose: "Whole-body anatomical reference review in anatomical position, standing, prone, supine, seated, or supported positioning.",
@@ -1317,6 +1874,7 @@ const PELVIC_GENITAL_IMAGE_REVIEW_CONFIG = {
   resultKey: "pelvic_genital_image_review_result",
   archiveKey: "pelvic_genital_image_review_archive",
   ttsSessionId: "profile-pelvic-genital-image-review",
+  maxImages: 20,
   icon: <User className="w-4 h-4" />,
   color: "hsl(var(--chart-2))",
   purpose: "Detailed pelvis, external genital, anal/perianal, glans/meatus/foreskin, scrotal/perineal, tissue-state, physiology, and visible device-fit context review grounded in supplied photos and video clips.",
@@ -1349,21 +1907,275 @@ function ProfileImageReviewPanel({
   sessions = [],
   bodyExplorations = [],
   userProfile,
+  refreshUserProfile,
   profileLoading = false,
   evidenceLoading = false,
 }) {
   const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(null);
   const [archive, setArchive] = useState([]);
   const [error, setError] = useState("");
+  const [recoverableBatchSet, setRecoverableBatchSet] = useState(null);
+  const [latestAttemptStatus, setLatestAttemptStatus] = useState(null);
 
   useEffect(() => {
     base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
-      if (rows[0]?.[config.resultKey]) setResult(rows[0][config.resultKey]);
-      if (Array.isArray(rows[0]?.[config.archiveKey])) setArchive(rows[0][config.archiveKey]);
+      if (rows[0]?.[config.resultKey]) {
+        const loadedResult = normalizeImageReviewResult(rows[0][config.resultKey]) || rows[0][config.resultKey];
+        setResult(loadedResult);
+        if (loadedResult?._meta?.latest_attempt_status) setLatestAttemptStatus(loadedResult._meta.latest_attempt_status);
+      }
+      if (Array.isArray(rows[0]?.[config.archiveKey])) {
+        setArchive(rows[0][config.archiveKey].map((entry) => ({
+          ...entry,
+          result: normalizeImageReviewResult(entry.result) || entry.result,
+        })));
+      }
     });
   }, [config.archiveKey, config.resultKey]);
+
+  const jobLabel = `AI Profiler: ${config.title}`;
+
+  const storeCompletedReviewJob = async (completedJob, sourceImages = []) => {
+    const parsed = normalizeImageReviewResult(completedJob?.result);
+    if (!parsed?.overview) throw new Error("Sarah returned an empty image review.");
+    const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
+    const storedResult = {
+      ...parsed,
+      _meta: buildImageReviewMeta(
+        sourceImages,
+        sessions,
+        result?._meta,
+        visualEvidence.counts,
+        completedAt(completedJob),
+        completedJob?.meta?.reviewed_images,
+        {
+          fresh_image_count: completedJob?.meta?.fresh_image_count,
+          reused_saved_image_count: completedJob?.meta?.reused_saved_image_count,
+          image_count: completedJob?.meta?.image_count,
+        },
+      ),
+    };
+    setResult(storedResult);
+    const nextArchive = await saveProfileResultWithArchive({
+      resultKey: config.resultKey,
+      archiveKey: config.archiveKey,
+      kind: config.kind,
+      label: config.title,
+      result: storedResult,
+      sessionCount: sessions.length,
+    });
+    setArchive(nextArchive);
+    return storedResult;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    if (profileLoading || evidenceLoading || !userProfile) return undefined;
+
+    const jobTime = (job) => new Date(completedAt(job) || job?.updatedAt || job?.createdAt || 0).getTime() || 0;
+    const isMatchingReviewJob = (job) => {
+      const label = String(job?.meta?.label || "");
+      return job?.meta?.reviewType === config.kind ||
+        label === jobLabel ||
+        label.startsWith(`${jobLabel} `);
+    };
+    const looksLikePartialBatchResult = (job) => {
+      const overview = String(job?.result?.overview || "");
+      const evidenceNote = String(job?.result?.summary_card?.evidence_note || "");
+      return /^Batch\s+\d+\s+of\s+\d+/i.test(overview.trim()) ||
+        /^This batch/i.test(overview.trim()) ||
+        /\bbatch review\b/i.test(evidenceNote);
+    };
+    const isFinalOrSingleReviewJob = (job) => {
+      if (!isMatchingReviewJob(job)) return false;
+      if (looksLikePartialBatchResult(job)) return false;
+      if (job?.meta?.synthesis) return true;
+      if (job?.meta?.batch) return false;
+      return job?.meta?.reviewType === config.kind || job?.meta?.label === jobLabel;
+    };
+    const isFailedFinalReviewJob = (job) => (
+      isMatchingReviewJob(job) &&
+      (job?.status === "error" || job?.status === "cancelled") &&
+      (job?.meta?.synthesis || (!job?.meta?.batch && String(job?.meta?.label || "").includes("final synthesis")))
+    );
+    const finalSynthesisFailureStatus = (job, batchSet = null) => ({
+      state: "latest_final_synthesis_failed",
+      timestamp: job?.finishedAt || job?.updatedAt || new Date().toISOString(),
+      error_message: job?.error || job?.progress?.message || job?.status || "Final synthesis failed.",
+      synthesis_stage: job?.progress?.phase || "final_synthesis",
+      batch_reviews_completed: Boolean(batchSet?.batches?.length),
+      batch_count: batchSet?.total || job?.meta?.batch_count || null,
+      older_saved_review_showing: Boolean(result),
+      latest_batch_findings_available: Boolean(batchSet?.batches?.length),
+      job_id: job?.id || null,
+    });
+    const newestFirst = (a, b) => jobTime(b) - jobTime(a);
+    const describeIncompleteBatchedReview = (completedJobs) => {
+      const partials = (completedJobs || [])
+        .filter(isMatchingReviewJob)
+        .filter((job) => job?.meta?.batch || looksLikePartialBatchResult(job))
+        .filter((job) => Number(job?.meta?.batch_count || 0) > 1)
+        .sort(newestFirst);
+      const newestPartial = partials[0];
+      if (!newestPartial || !isNewerCompletedJob(newestPartial, result)) return false;
+      const total = Number(newestPartial.meta?.batch_count || 0);
+      const newestTime = jobTime(newestPartial);
+      const latestBatchOne = partials
+        .filter((job) => Number(job?.meta?.batch || 0) === 1)
+        .filter((job) => jobTime(job) <= newestTime)
+        .sort(newestFirst)[0];
+      const runStart = latestBatchOne ? jobTime(latestBatchOne) : newestTime;
+      const runPartials = partials.filter((job) => jobTime(job) >= runStart && jobTime(job) <= newestTime);
+      const completedBatches = new Set(runPartials.map((job) => Number(job?.meta?.batch || 0)).filter(Boolean));
+      const done = completedBatches.size || Number(newestPartial.meta?.batch || 0) || 1;
+      setJobStatus(newestPartial);
+      setError(`Latest ${config.title.toLowerCase()} review did not finish its final synthesis (${done}/${total} batches completed). The older saved review is still being shown. Run Re-review Evidence again and keep this page open until the final synthesis completes.`);
+      return true;
+    };
+    const findRecoverableBatchSet = (completedJobs = []) => {
+      const partials = (completedJobs || [])
+        .filter(isMatchingReviewJob)
+        .filter((job) => job?.status === "complete")
+        .filter((job) => Number(job?.meta?.batch || 0) > 0 && Number(job?.meta?.batch_count || 0) > 1)
+        .sort(newestFirst);
+      const finalBatch = partials.find((job) => Number(job?.meta?.batch || 0) === Number(job?.meta?.batch_count || 0));
+      if (!finalBatch) return null;
+      const total = Number(finalBatch.meta?.batch_count || 0);
+      const finalTime = jobTime(finalBatch);
+      const batchOne = partials
+        .filter((job) => Number(job?.meta?.batch || 0) === 1)
+        .filter((job) => Number(job?.meta?.batch_count || 0) === total)
+        .filter((job) => jobTime(job) <= finalTime)
+        .sort(newestFirst)[0];
+      const startTime = batchOne ? jobTime(batchOne) : 0;
+      const runJobs = partials
+        .filter((job) => Number(job?.meta?.batch_count || 0) === total)
+        .filter((job) => jobTime(job) >= startTime && jobTime(job) <= finalTime)
+        .sort((a, b) => Number(a?.meta?.batch || 0) - Number(b?.meta?.batch || 0));
+      const byBatch = new Map();
+      for (const job of runJobs) {
+        const batchNumber = Number(job?.meta?.batch || 0);
+        if (!byBatch.has(batchNumber) || jobTime(job) > jobTime(byBatch.get(batchNumber))) {
+          byBatch.set(batchNumber, job);
+        }
+      }
+      const batches = Array.from({ length: total }, (_, index) => byBatch.get(index + 1));
+      if (batches.some((job) => !job?.result?.overview)) return null;
+      const reviewedImages = batches.flatMap((job) => Array.isArray(job?.meta?.reviewed_images) ? job.meta.reviewed_images : []);
+      const latestFailedFinal = null;
+      return {
+        total,
+        batches,
+        reviewed_images: reviewedImages,
+        fresh_image_count: Math.max(...batches.map((job) => Number(job?.meta?.fresh_image_count || 0)), 0),
+        reused_saved_image_count: Math.max(...batches.map((job) => Number(job?.meta?.reused_saved_image_count || 0)), 0),
+        image_count: Math.max(...batches.map((job) => Number(job?.meta?.full_review_image_count || job?.meta?.image_count || 0)), reviewedImages.length),
+        startedAt: batchOne?.createdAt || batches[0]?.createdAt,
+        finishedAt: finalBatch.finishedAt || finalBatch.updatedAt,
+        latestFailedFinal,
+      };
+    };
+
+    const reconnect = async () => {
+      let keepLoading = false;
+      try {
+        const activeData = await listBackgroundJobs({
+          type: "ai_invoke",
+          status: "queued,running",
+          metaSource: "Profiler",
+          limit: 50,
+        });
+        if (cancelled) return;
+
+        const activeJobs = (activeData.jobs || [])
+          .filter(isMatchingReviewJob)
+          .sort((a, b) => {
+            const finalDelta = Number(isFinalOrSingleReviewJob(b)) - Number(isFinalOrSingleReviewJob(a));
+            return finalDelta || newestFirst(a, b);
+          });
+        const activeJob = activeJobs[0];
+        if (activeJob) {
+          setJobStatus(activeJob);
+          setLoading(true);
+          keepLoading = true;
+          if (!isFinalOrSingleReviewJob(activeJob)) return;
+
+          const completedJob = await waitForBackgroundJob(activeJob.id, {
+            intervalMs: 1200,
+            onProgress: (nextJob) => {
+              if (!cancelled) setJobStatus(nextJob);
+            },
+          });
+          keepLoading = false;
+          if (cancelled || !isNewerCompletedJob(completedJob, result)) return;
+          await storeCompletedReviewJob(completedJob, []);
+          return;
+        }
+
+        const completedData = await listBackgroundJobs({
+          type: "ai_invoke",
+          status: "complete",
+          metaSource: "Profiler",
+          limit: 50,
+        });
+        if (cancelled) return;
+        const completedJobs = completedData.jobs || [];
+        const recoverable = findRecoverableBatchSet(completedJobs);
+        setRecoverableBatchSet(recoverable);
+        const job = completedJobs
+          .filter(isFinalOrSingleReviewJob)
+          .sort(newestFirst)[0];
+        if (!job || !isNewerCompletedJob(job, result)) {
+          const failedData = await listBackgroundJobs({
+            type: "ai_invoke",
+            status: "error,cancelled",
+            metaSource: "Profiler",
+            limit: 50,
+          });
+          if (cancelled) return;
+          const failedFinal = (failedData.jobs || [])
+            .filter(isFailedFinalReviewJob)
+            .sort(newestFirst)[0];
+          if (failedFinal && isNewerCompletedJob({ ...failedFinal, status: "complete" }, result)) {
+            setJobStatus(failedFinal);
+            setRecoverableBatchSet(recoverable);
+            setLatestAttemptStatus(finalSynthesisFailureStatus(failedFinal, recoverable));
+            setError(`Latest ${config.title.toLowerCase()} final synthesis failed: ${failedFinal.error || failedFinal.progress?.message || failedFinal.status}. The batch reviews completed, but the older saved review is still being shown until a final synthesis succeeds.`);
+            return;
+          }
+          describeIncompleteBatchedReview(completedJobs);
+          return;
+        }
+
+        setJobStatus(job);
+        setRecoverableBatchSet(null);
+        setLatestAttemptStatus(null);
+        setError("");
+        await storeCompletedReviewJob(job, []);
+      } catch (err) {
+        if (!cancelled) console.warn(`${config.title} reconnect skipped:`, err);
+      } finally {
+        if (!cancelled && !keepLoading) setLoading(false);
+      }
+    };
+
+    reconnect();
+    const interval = setInterval(reconnect, 5000);
+    const onResume = () => {
+      if (document.visibilityState === "visible") reconnect();
+    };
+    window.addEventListener("focus", reconnect);
+    document.addEventListener("visibilitychange", onResume);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      window.removeEventListener("focus", reconnect);
+      document.removeEventListener("visibilitychange", onResume);
+    };
+  }, [config.kind, config.title, evidenceLoading, jobLabel, profileLoading, result, sessions.length, userProfile]);
 
   const handleImageFiles = async (event) => {
     const files = Array.from(event.target.files || []).filter((file) => file.type?.startsWith("image/"));
@@ -1382,28 +2194,255 @@ function ProfileImageReviewPanel({
     setImages((current) => current.filter((image) => image.id !== id));
   };
 
-  const analyze = async () => {
+  const saveBatchAssembledReview = async (batchParsedResults, note = "") => {
+    if (!batchParsedResults?.length) throw new Error("No completed batch outputs are available to assemble.");
+    const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
+    const assembled = buildBatchAssembledImageReview(config, batchParsedResults, recoverableBatchSet);
+    const storedResult = {
+      ...assembled,
+      _meta: buildImageReviewMeta([], sessions, result?._meta, visualEvidence.counts, new Date().toISOString(), recoverableBatchSet?.reviewed_images || [], {
+        fresh_image_count: recoverableBatchSet?.fresh_image_count || 0,
+        reused_saved_image_count: recoverableBatchSet?.reused_saved_image_count || 0,
+        image_count: recoverableBatchSet?.image_count || recoverableBatchSet?.reviewed_images?.length || 0,
+      }),
+    };
+    storedResult._meta.recovered_from_batches = true;
+    storedResult._meta.local_batch_assembled = true;
+    storedResult._meta.latest_attempt_status = latestAttemptStatus || {
+      state: "final_synthesis_timeout_recovered_locally",
+      timestamp: new Date().toISOString(),
+      synthesis_stage: "local_batch_assembly",
+      batch_reviews_completed: true,
+      older_saved_review_showing: Boolean(result),
+      latest_batch_findings_available: true,
+    };
+    setResult(storedResult);
+    const nextArchive = await saveProfileResultWithArchive({
+      resultKey: config.resultKey,
+      archiveKey: config.archiveKey,
+      kind: config.kind,
+      label: config.title,
+      result: storedResult,
+      sessionCount: sessions.length,
+    });
+    setArchive(nextArchive);
+    setRecoverableBatchSet(null);
+    setError(note || "Final synthesis timed out, so PulsePoint assembled and saved the completed Sarah batch reviews locally.");
+    return storedResult;
+  };
+
+  const assembleCompletedBatches = async () => {
+    if (!recoverableBatchSet?.batches?.length) {
+      setError("No complete batch set is available to assemble yet.");
+      return;
+    }
     setLoading(true);
     setError("");
+    setJobStatus({
+      status: "running",
+      progress: {
+        phase: "assembling",
+        current: 2,
+        total: 3,
+        message: `Assembling ${recoverableBatchSet.total}/${recoverableBatchSet.total} completed Sarah batches locally...`,
+      },
+    });
     try {
+      const batchParsedResults = recoverableBatchSet.batches
+        .map((job) => normalizeImageReviewResult(job?.result))
+        .filter((item) => item?.overview);
+      await saveBatchAssembledReview(batchParsedResults, "Saved a recovered review assembled from completed Sarah batch outputs. No additional Claude synthesis request was made.");
+    } catch (err) {
+      console.error(`${config.title} local batch assembly failed:`, err);
+      setError(aiErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const recoverFinalSynthesis = async () => {
+    if (!recoverableBatchSet?.batches?.length) {
+      setError("No complete batch set is available to recover yet.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    setJobStatus({
+      status: "starting",
+      progress: {
+        phase: "recovering",
+        current: 0,
+        total: 3,
+        message: `Recovering ${config.shortTitle} from ${recoverableBatchSet.total}/${recoverableBatchSet.total} completed batches...`,
+      },
+    });
+    let batchParsedResults = [];
+    try {
+      const reviewUserProfile = (await refreshUserProfile?.().catch(() => null)) || userProfile;
+      const isHeadToToeBodyReference = config.contextScope === "head_to_toe_body_reference";
+      batchParsedResults = recoverableBatchSet.batches
+        .map((job) => normalizeImageReviewResult(job?.result))
+        .filter((item) => item?.overview);
+      if (!batchParsedResults.length) throw new Error("Completed batch results could not be reloaded for recovery.");
+
+      const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
+      const groundingContext = isHeadToToeBodyReference ? "" : buildAIGroundingContext(reviewUserProfile);
+      const imageReviewContext = isHeadToToeBodyReference
+        ? buildHeadToToeImageReviewContext({
+          userProfile: reviewUserProfile,
+          sessions,
+          bodyExplorations,
+          hasFreshImages: Number(recoverableBatchSet.fresh_image_count || 0) > 0,
+          hasReusedSavedImages: Number(recoverableBatchSet.reused_saved_image_count || 0) > 0,
+        })
+        : buildProfileImageReviewContext({ userProfile: reviewUserProfile, sessions, bodyExplorations });
+      const firstNameToneCue = buildOptionalFirstNameToneCue(reviewUserProfile, { prioritizeProfileTone: true });
+      const anatomicalFocusRule = isHeadToToeBodyReference ? "" : ANATOMICAL_REFERENCE_FOCUS_RULE;
+      const sessionGroundingRule = isHeadToToeBodyReference ? "" : SESSION_CONTEXT_GROUNDING_RULE;
+      const responseSchema = profileImageReviewResponseSchema(config);
+      const raw = await runProfilerAIJob({
+        model: "claude_sonnet_4_6",
+        max_tokens: PROFILE_IMAGE_REVIEW_MAX_TOKENS,
+        attempts: 3,
+        prompt: `You are Sarah, recovering the final PulsePoint profile image review from completed image-review batch JSON.
+
+Review type: ${config.title}
+Review purpose: ${config.purpose}
+Recovery source: ${recoverableBatchSet.total} completed image-review batches from the previous run.
+Directly rechecked image subset across recovered batches: ${recoverableBatchSet.image_count || recoverableBatchSet.reviewed_images?.length || "unknown"}.
+
+No fresh images are attached to this recovery pass because the direct visual re-check already succeeded in the batch passes. Treat the recovered batch JSON below as directly reviewed visual evidence, then integrate it with saved profile/session context. Produce ONE final cumulative user-facing review, not a batch-by-batch report and not a review limited to the image subset.
+
+${groundingContext}
+${imageReviewContext}
+${anatomicalFocusRule}
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}
+${firstNameToneCue}
+${sessionGroundingRule}
+${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
+${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+
+RECOVERY SYNTHESIS RULES:
+- Do not mention filenames, camera-roll IDs, storage IDs, raw image numbers, job IDs, or batch job IDs.
+- Do not say only five images were reviewed, and do not frame the whole artifact as "based on X images." The recovered batches are a direct visual re-check subset inside a cumulative profile review.
+- Do not let any one batch dominate the final review. Synthesize all recovered batch results plus saved profile/session context into one whole-profile analysis.
+- Treat fresh images from the recovered run as additive updates to the saved baseline, not as a reset of prior anatomical/profile evidence.
+- Preserve direct visual evidence versus profile-context reconciliation versus interpretation.
+- Keep the output clinically rich, practical, non-erotic, and TTS-ready.
+- Preserve useful annotated_images and image_region_findings using image_id values from the recovered batch results.
+
+${config.reviewInstructions}
+
+Recovered compact batch review JSON:
+${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2)}`,
+        response_json_schema: responseSchema,
+      }, `${jobLabel} recovered final synthesis`, setJobStatus, {
+        priority: 35,
+        meta: {
+          reviewType: config.kind,
+          batch_count: recoverableBatchSet.total,
+          reviewed_images: recoverableBatchSet.reviewed_images || [],
+          image_count: recoverableBatchSet.image_count || recoverableBatchSet.reviewed_images?.length || 0,
+          fresh_image_count: recoverableBatchSet.fresh_image_count || 0,
+          reused_saved_image_count: recoverableBatchSet.reused_saved_image_count || 0,
+          synthesis: true,
+          recovered_from_batches: true,
+        },
+      });
+
+      const parsed = mergeImageReviewBatchArtifacts(
+        normalizeImageReviewResult(typeof raw === "string" ? JSON.parse(raw) : raw),
+        batchParsedResults,
+      );
+      if (!parsed?.overview) throw new Error("Sarah returned an empty recovered image review.");
+      const storedResult = {
+        ...parsed,
+        _meta: buildImageReviewMeta([], sessions, result?._meta, visualEvidence.counts, null, recoverableBatchSet.reviewed_images || [], {
+          fresh_image_count: recoverableBatchSet.fresh_image_count || 0,
+          reused_saved_image_count: recoverableBatchSet.reused_saved_image_count || 0,
+          image_count: recoverableBatchSet.image_count || recoverableBatchSet.reviewed_images?.length || 0,
+        }),
+      };
+      storedResult._meta.recovered_from_batches = true;
+      storedResult._meta.latest_attempt_status = {
+        ...(latestAttemptStatus || {}),
+        state: "retry_final_synthesis_succeeded",
+        timestamp: new Date().toISOString(),
+        synthesis_stage: "recovered_final_synthesis",
+        batch_reviews_completed: true,
+        older_saved_review_showing: false,
+        latest_batch_findings_available: true,
+      };
+      setResult(storedResult);
+      const nextArchive = await saveProfileResultWithArchive({
+        resultKey: config.resultKey,
+        archiveKey: config.archiveKey,
+        kind: config.kind,
+        label: config.title,
+        result: storedResult,
+        sessionCount: sessions.length,
+      });
+      setArchive(nextArchive);
+      setRecoverableBatchSet(null);
+    } catch (err) {
+      console.error(`${config.title} recovery failed:`, err);
+      if (/timed out|timeout|request timed out/i.test(err?.message || "") && batchParsedResults.length) {
+        try {
+          await saveBatchAssembledReview(batchParsedResults, "Final Sarah synthesis timed out again, so PulsePoint assembled and saved the completed Sarah batch reviews locally.");
+          return;
+        } catch (assembleError) {
+          console.error(`${config.title} timeout fallback assembly failed:`, assembleError);
+        }
+      }
+      setError(aiErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const analyze = async () => {
+    setLoading(true);
+    setLatestAttemptStatus(null);
+    setJobStatus({
+      status: "starting",
+      progress: {
+        phase: "building",
+        current: 0,
+        total: 3,
+        message: `Preparing ${config.shortTitle} review for the background queue...`,
+      },
+    });
+    setError("");
+    try {
+      const reviewUserProfile = (await refreshUserProfile?.().catch(() => null)) || userProfile;
       const isHeadToToeBodyReference = config.contextScope === "head_to_toe_body_reference";
       const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
-      const freshImagePayload = images
-        .map((image) => ({
-          filename: image.filename,
-          media_type: image.media_type,
-          data: image.data,
-          source: "fresh_upload",
-        }))
+      const maxReviewImages = config.maxImages || 5;
+      const allSavedAttachments = collectSavedProfileImageAttachments(reviewUserProfile, {
+        limit: maxReviewImages,
+        purpose: isHeadToToeBodyReference ? "head_to_toe_body_reference" : "pelvic_genital",
+      });
+      const savedReserve = images.length > 0 && allSavedAttachments.length > 0
+        ? Math.min(allSavedAttachments.length, Math.max(4, Math.ceil(maxReviewImages * 0.35)))
+        : allSavedAttachments.length;
+      const freshLimit = images.length > 0
+        ? Math.max(1, maxReviewImages - savedReserve)
+        : 0;
+      const freshSourceImages = images
         .filter((image) => image.media_type && image.data)
-        .slice(0, config.maxImages || 5);
+        .slice(0, freshLimit || maxReviewImages);
+      const freshImagePayload = [];
+      for (let imageIndex = 0; imageIndex < freshSourceImages.length; imageIndex += 1) {
+        freshImagePayload.push(await prepareFreshImageForReview(freshSourceImages[imageIndex], imageIndex, {
+          total: freshSourceImages.length,
+          onProgress: setJobStatus,
+        }));
+      }
       let reusedSavedImages = [];
       let savedImageLoadWarning = "";
-      if (!freshImagePayload.length) {
-        const savedAttachments = collectSavedProfileImageAttachments(userProfile, {
-          limit: config.maxImages || 5,
-          purpose: isHeadToToeBodyReference ? "head_to_toe_body_reference" : "pelvic_genital",
-        });
+      const savedImageSlots = Math.max(0, maxReviewImages - freshImagePayload.length);
+      if (savedImageSlots > 0) {
+        const savedAttachments = allSavedAttachments.slice(0, savedImageSlots);
         const loaded = [];
         for (const attachment of savedAttachments) {
           try {
@@ -1412,10 +2451,10 @@ function ProfileImageReviewPanel({
             savedImageLoadWarning = savedImageError?.message || "Some saved Profile Q&A images could not be reloaded.";
           }
         }
-        reusedSavedImages = loaded.slice(0, config.maxImages || 5);
+        reusedSavedImages = loaded.slice(0, savedImageSlots);
       }
-      const imagePayload = (freshImagePayload.length ? freshImagePayload : reusedSavedImages)
-        .slice(0, config.maxImages || 5)
+      const imagePayload = [...freshImagePayload, ...reusedSavedImages]
+        .slice(0, maxReviewImages)
         .map((image, index) => ({
           ...image,
           image_id: image.image_id || `img_${String(index + 1).padStart(3, "0")}`,
@@ -1423,34 +2462,173 @@ function ProfileImageReviewPanel({
         }));
       const hasFreshImages = freshImagePayload.length > 0;
       const hasImagePayload = imagePayload.length > 0;
-      const hasReusedSavedImages = !freshImagePayload.length && reusedSavedImages.length > 0;
-      const groundingContext = isHeadToToeBodyReference ? "" : buildAIGroundingContext(userProfile);
+      const hasReusedSavedImages = reusedSavedImages.length > 0;
+      const groundingContext = isHeadToToeBodyReference ? "" : buildAIGroundingContext(reviewUserProfile);
       const imageReviewContext = isHeadToToeBodyReference
-        ? buildHeadToToeImageReviewContext({ userProfile, sessions, bodyExplorations, hasFreshImages, hasReusedSavedImages })
-        : buildProfileImageReviewContext({ userProfile, sessions, bodyExplorations });
-      const firstNameToneCue = buildOptionalFirstNameToneCue(userProfile, { prioritizeProfileTone: true });
+        ? buildHeadToToeImageReviewContext({ userProfile: reviewUserProfile, sessions, bodyExplorations, hasFreshImages, hasReusedSavedImages })
+        : buildProfileImageReviewContext({ userProfile: reviewUserProfile, sessions, bodyExplorations });
+      const firstNameToneCue = buildOptionalFirstNameToneCue(reviewUserProfile, { prioritizeProfileTone: true });
       const anatomicalFocusRule = isHeadToToeBodyReference ? "" : ANATOMICAL_REFERENCE_FOCUS_RULE;
       const sessionGroundingRule = isHeadToToeBodyReference ? "" : SESSION_CONTEXT_GROUNDING_RULE;
       const imagePresenceRules = hasImagePayload
-        ? hasReusedSavedImages
-          ? `SAVED IMAGE REUSE DIRECTIVE - HIGHEST PRIORITY:
+        ? hasFreshImages && hasReusedSavedImages
+          ? `COMBINED IMAGE REVIEW DIRECTIVE - HIGHEST PRIORITY:
+- ${freshImagePayload.length} fresh image${freshImagePayload.length === 1 ? " is" : "s are"} attached as new direct visual evidence.
+- ${reusedSavedImages.length} saved Profile Q&A image${reusedSavedImages.length === 1 ? " has" : "s have"} also been reloaded and attached as direct saved visual evidence.
+- Review the complete attached image set as one combined profile-reference set. Fresh images enhance and update the existing profile; they do not replace the saved baseline.
+- Do not say prior photos are unavailable, that direct re-examination is not occurring, or that the review is based only on the newest images.
+- Reconcile fresh images, reused saved images, saved Profile Q&A findings, prior Sarah visual reviews, session/body-exploration evidence, and entered measurements into one coherent whole-picture analysis.`
+          : hasReusedSavedImages
+            ? `SAVED IMAGE REUSE DIRECTIVE - HIGHEST PRIORITY:
 - ${imagePayload.length} saved Profile Q&A image${imagePayload.length === 1 ? " has" : "s have"} been reloaded and attached to this request.
 - Review these saved images directly as reused profile evidence. They are not new uploads, but they are available to inspect in this run.
 - Do not say the prior photos are unavailable or that direct image review is not occurring.
 - Reconcile these saved images with saved Profile Q&A findings, prior Sarah visual reviews, session/body-exploration evidence, and entered measurements.`
-          : `FRESH IMAGE DIRECTIVE - HIGHEST PRIORITY:
+            : `FRESH IMAGE DIRECTIVE - HIGHEST PRIORITY:
 - ${imagePayload.length} fresh image${imagePayload.length === 1 ? " is" : "s are"} attached to this request and included in the model message.
-- Review those attached image${imagePayload.length === 1 ? "" : "s"} directly as the primary evidence.
+- Review those attached image${imagePayload.length === 1 ? "" : "s"} directly as new direct visual evidence, but do not let them replace the saved baseline.
 - Do not say "no fresh images are attached", "no fresh images are available", or "direct re-examination is not occurring."
-- Existing saved evidence is supporting context and must be reconciled with the attached photos.`
+- Existing saved evidence remains active evidence. Treat fresh uploads as additive evidence that can refine, extend, or correct the existing profile, not as a standalone replacement review.`
         : `SAVED EVIDENCE DIRECTIVE:
 - No fresh or reusable saved image payload is attached to this request.
 - Use previously reviewed/saved Profile Q&A visual findings, session/body-exploration visual findings, entered metrics, and saved media digests as the evidence base.
 - Say "saved reviewed evidence" or "previously reviewed evidence" instead of implying the profile has no images.
 - Do not frame additional photos as required; list them only as optional ways to improve coverage.`;
-      const raw = await base44.integrations.Core.InvokeLLM({
+      const reviewedImageRefs = buildImageReviewReferences(imagePayload);
+      const responseSchema = profileImageReviewResponseSchema(config);
+      let raw;
+      let batchParsedResults = [];
+      if (imagePayload.length > PROFILE_IMAGE_REVIEW_BATCH_SIZE) {
+        const imageBatches = chunkArray(imagePayload, PROFILE_IMAGE_REVIEW_BATCH_SIZE);
+        setJobStatus({
+          status: "running",
+          progress: {
+            phase: "batching",
+            current: 0,
+            total: imageBatches.length + 1,
+            message: `Reviewing ${imagePayload.length} images in ${imageBatches.length} batches, then Sarah will synthesize one final review...`,
+          },
+        });
+
+        for (let batchIndex = 0; batchIndex < imageBatches.length; batchIndex += 1) {
+          const batchImages = imageBatches[batchIndex];
+          const batchLabel = `${jobLabel} batch ${batchIndex + 1}/${imageBatches.length}`;
+          const batchRaw = await runProfilerAIJob({
+            model: "claude_sonnet_4_6",
+            max_tokens: PROFILE_IMAGE_REVIEW_MAX_TOKENS,
+            attempts: 3,
+            images: batchImages.map((image) => ({
+              filename: `${image.image_id || "profile_reference"}.jpg`,
+              media_type: image.media_type,
+              data: image.data,
+            })),
+            prompt: `You are Sarah, performing one batch of a larger PulsePoint profile image review.
+
+Review type: ${config.title}
+Review purpose: ${config.purpose}
+Batch: ${batchIndex + 1} of ${imageBatches.length}
+Images in this batch: ${batchImages.length}
+Total images in full review: ${imagePayload.length}
+Attached fresh image count in full review: ${freshImagePayload.length}.
+Attached reused saved image count in full review: ${reusedSavedImages.length}.
+${savedImageLoadWarning ? `Saved image reuse warning: ${savedImageLoadWarning}` : ""}
+
+${groundingContext}
+${imageReviewContext}
+${imagePresenceRules}
+${anatomicalFocusRule}
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}
+${firstNameToneCue}
+${sessionGroundingRule}
+${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
+${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+
+This is a batch review, not the final user-facing synthesis. Analyze only the attached images in this batch as direct visual evidence, while preserving the image_id values exactly. Do not mention filenames, storage IDs, camera-roll IDs, or raw image numbers. Do not claim that images outside this batch were inspected in this batch. Keep view labels anatomical and practical.
+
+${config.reviewInstructions}
+
+Attached image reference IDs for this batch:
+${imageReviewReferencePromptLines(batchImages)}
+
+ANNOTATED IMAGE OUTPUT RULES:
+- Return annotated_images and image_region_findings for directly reviewed images in this batch.
+- Use image_id values exactly as listed above.
+- Do not call close-up pelvic/genital/table-position frames standing or upright unless the image itself establishes weight-bearing standing posture.
+- For tiny structures or ambiguous findings such as meatus, meatal fluid/droplet, urethral fluid, device insertion, catheter/Foley presence, or fine tissue margins, use possible/uncertain unless the structure is unambiguous at the pin or box location.
+- Keep paragraphs complete and TTS-ready. Return structured JSON only.`,
+            response_json_schema: responseSchema,
+          }, batchLabel, setJobStatus, {
+            priority: 30,
+            meta: {
+              reviewType: config.kind,
+              batch: batchIndex + 1,
+              batch_count: imageBatches.length,
+              reviewed_images: buildImageReviewReferences(batchImages),
+              image_count: batchImages.length,
+              full_review_image_count: imagePayload.length,
+              fresh_image_count: freshImagePayload.length,
+              reused_saved_image_count: reusedSavedImages.length,
+            },
+          });
+          const batchParsed = normalizeImageReviewResult(typeof batchRaw === "string" ? JSON.parse(batchRaw) : batchRaw);
+          if (batchParsed?.overview) batchParsedResults.push(batchParsed);
+        }
+
+        if (!batchParsedResults.length) throw new Error("Sarah returned empty image review batches.");
+        raw = await runProfilerAIJob({
+          model: "claude_sonnet_4_6",
+          max_tokens: PROFILE_IMAGE_REVIEW_MAX_TOKENS,
+          attempts: 3,
+          prompt: `You are Sarah, synthesizing a final PulsePoint profile image review from completed image-review batch JSON.
+
+Review type: ${config.title}
+Review purpose: ${config.purpose}
+Directly rechecked image subset across batches: ${imagePayload.length}
+Batch count: ${batchParsedResults.length}
+
+No fresh images are attached to this synthesis pass because the direct visual re-check already occurred in the batch passes. Treat the batch JSON below as directly reviewed visual evidence, then integrate it with saved profile/session context. Produce ONE final cumulative user-facing review, not a batch-by-batch report and not a review limited to the image subset.
+
+${groundingContext}
+${imageReviewContext}
+${anatomicalFocusRule}
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}
+${firstNameToneCue}
+${sessionGroundingRule}
+${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
+${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+
+SYNTHESIS RULES:
+- Do not mention filenames, camera-roll IDs, storage IDs, or raw image numbers.
+- Do not say only five images were reviewed, and do not frame the whole artifact as "based on ${imagePayload.length} images." The direct image subset contains ${imagePayload.length} images across ${batchParsedResults.length} batches, but the review scope is the cumulative saved profile evidence base.
+- Do not let the newest batch dominate the final review. Synthesize all batch results plus saved profile/session context into one whole-profile analysis.
+- Treat fresh images as additive updates to the saved baseline, not as a reset of prior anatomical/profile evidence.
+- Integrate the views naturally into the anatomy sections.
+- Preserve direct visual evidence versus profile-context reconciliation versus interpretation.
+- Keep the output clinically rich, practical, non-erotic, and TTS-ready.
+- Preserve useful annotated_images and image_region_findings using image_id values from the batch results.
+
+${config.reviewInstructions}
+
+Batch review JSON:
+${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2)}`,
+          response_json_schema: responseSchema,
+        }, `${jobLabel} final synthesis`, setJobStatus, {
+          priority: 30,
+          meta: {
+            reviewType: config.kind,
+            batch_count: imageBatches.length,
+            reviewed_images: reviewedImageRefs,
+            image_count: imagePayload.length,
+            fresh_image_count: freshImagePayload.length,
+            reused_saved_image_count: reusedSavedImages.length,
+            synthesis: true,
+          },
+        });
+      } else {
+        raw = await runProfilerAIJob({
         model: "claude_sonnet_4_6",
-        max_tokens: 7000,
+        max_tokens: PROFILE_IMAGE_REVIEW_MAX_TOKENS,
+        attempts: 3,
         ...(imagePayload.length ? {
           images: imagePayload.map((image) => ({
             filename: `${image.image_id || "profile_reference"}.jpg`,
@@ -1463,7 +2641,7 @@ function ProfileImageReviewPanel({
 Review type: ${config.title}
 Review purpose: ${config.purpose}
 Attached fresh image count: ${freshImagePayload.length}.
-Attached reused saved image count: ${hasReusedSavedImages ? imagePayload.length : 0}.
+Attached reused saved image count: ${reusedSavedImages.length}.
 ${savedImageLoadWarning ? `Saved image reuse warning: ${savedImageLoadWarning}` : ""}
 
 ${groundingContext}
@@ -1473,12 +2651,15 @@ ${anatomicalFocusRule}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
+${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
+${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 
 IMAGE REVIEW RULES:
 - Treat these as consensual private profile-reference images for anatomical and physiological review.
-- If fresh images are attached to this request, analyze what is visible in those images first and reconcile cautiously with saved profile context where useful.
+- If fresh images are attached to this request, analyze what is visible in those images as new direct evidence, then integrate it into the existing saved profile/image evidence. Do not make the newest image set the whole story unless it is the only evidence available.
 - If saved Profile Q&A images are reloaded into this request, analyze them directly as saved/reused visual evidence and reconcile them with saved findings.
 - If no image payload is attached, analyze the existing uploaded/reviewed evidence from Q&A, sessions, body exploration sessions, entered metrics, and saved media findings. Say "previously reviewed evidence" rather than implying the profile has no images.
+- Produce a whole-picture cumulative review: current attached images, reloaded saved images, saved Profile Q&A findings, prior Sarah visual reviews, session/body-exploration evidence, and entered profile metrics should enhance one another instead of replacing one another.
 - Use existing Q&A findings, entered profile metrics, and session/video/body-exploration evidence as context, not as permission to invent visible findings.
 - Keep this artifact focused on anatomical/media-reference evidence. Do not expand into broad personal history, psychological backstory, reclaiming/history framing, whole-life meaning, or session optimization unless it directly explains a visible anatomical, mechanical, device-fit, safety, or session-specific physiological finding.
 - Do not eroticize the image or write arousal-focused prose.
@@ -1501,7 +2682,7 @@ Fresh uploaded images attached for this run:
 ${freshImagePayload.length ? `- ${freshImagePayload.length} fresh image${freshImagePayload.length === 1 ? "" : "s"} attached. Use plain view labels in the review, not filenames.` : "- None."}
 
 Reused saved Profile Q&A images attached for this run:
-${hasReusedSavedImages ? `- ${imagePayload.length} saved image${imagePayload.length === 1 ? "" : "s"} reloaded. Use plain view labels in the review, not filenames.` : "- None attached. Use saved reviewed findings and entered metrics."}
+${hasReusedSavedImages ? `- ${reusedSavedImages.length} saved image${reusedSavedImages.length === 1 ? "" : "s"} reloaded. Use plain view labels in the review, not filenames.` : "- None attached. Use saved reviewed findings and entered metrics."}
 
 Attached image reference IDs for structured callouts:
 ${imageReviewReferencePromptLines(imagePayload)}
@@ -1510,15 +2691,28 @@ ANNOTATED IMAGE OUTPUT RULES:
 - Also return annotated_images and image_region_findings when direct image payload is attached.
 - Use image_id values exactly as listed above.
 - Use natural clinical view labels such as anterior standing view, right lateral standing view, posterior standing view, supine/table-position view, lithotomy pelvic view, close-up pelvic view, perineal view, or genital close-up.
+- Do not call a close-up pelvic/genital/table-position frame "standing" or "upright" unless the image itself establishes weight-bearing standing posture. If posture is ambiguous, say position not fully assessable from this close-up.
 - Do not put filenames, storage IDs, camera roll IDs, or raw image numbers in annotated_images, image_region_findings, or the prose review.
 - image_region_findings should be concise, clinically useful callouts linked to the same sections used in the prose.
 - For pin and box coordinates, use approximate percentages from zero to one hundred with origin at the top-left of the displayed image. Only include pin or box when the location is reasonably clear; otherwise omit that field.
 - Callouts should stay anatomical and evidence-grounded: body region, visible posture/alignment, habitus/soft tissue, skin/surface finding, tissue state, visibility limitation, or clinical reference value.
+- For tiny structures or ambiguous findings such as meatus, meatal fluid/droplet, urethral fluid, device insertion, catheter/Foley presence, or fine tissue margins, use possible/uncertain unless the structure is unambiguous at the pin or box location.
 - For genital/pelvic regions, use neutral anatomical terms and do not infer arousal, pleasure, pain, intent, or function unless directly visible and relevant.`,
         response_json_schema: {
           type: "object",
           properties: {
             overview: { type: "string" },
+            summary_card: {
+              type: "object",
+              properties: {
+                baseline_quality: { type: "string" },
+                coverage: { type: "string" },
+                primary_reference_value: { type: "array", items: { type: "string" } },
+                key_direct_findings: { type: "array", items: { type: "string" } },
+                key_limitations: { type: "array", items: { type: "string" } },
+                evidence_note: { type: "string" },
+              },
+            },
             ...Object.fromEntries(profileReviewResultSections(config).map((section) => [section.key, { type: "array", items: { type: "string" } }])),
             annotated_images: {
               type: "array",
@@ -1573,12 +2767,29 @@ ANNOTATED IMAGE OUTPUT RULES:
           },
           required: ["overview", ...profileReviewResultSections(config).filter((section) => section.required !== false).map((section) => section.key)],
         },
+      }, jobLabel, setJobStatus, {
+        priority: 30,
+        meta: {
+          reviewType: config.kind,
+          reviewed_images: reviewedImageRefs,
+          fresh_image_count: freshImagePayload.length,
+          reused_saved_image_count: reusedSavedImages.length,
+          image_count: imagePayload.length,
+        },
       });
-      const parsed = normalizeImageReviewResult(typeof raw === "string" ? JSON.parse(raw) : raw);
+      }
+      const parsed = mergeImageReviewBatchArtifacts(
+        normalizeImageReviewResult(typeof raw === "string" ? JSON.parse(raw) : raw),
+        batchParsedResults,
+      );
       if (!parsed?.overview) throw new Error("Sarah returned an empty image review.");
       const storedResult = {
         ...parsed,
-        _meta: buildImageReviewMeta(imagePayload, sessions, result?._meta, visualEvidence.counts),
+        _meta: buildImageReviewMeta(imagePayload, sessions, result?._meta, visualEvidence.counts, null, null, {
+          fresh_image_count: freshImagePayload.length,
+          reused_saved_image_count: reusedSavedImages.length,
+          image_count: imagePayload.length,
+        }),
       };
       setResult(storedResult);
       const nextArchive = await saveProfileResultWithArchive({
@@ -1601,6 +2812,19 @@ ANNOTATED IMAGE OUTPUT RULES:
   const sections = profileReviewResultSections(config);
   const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
   const existingEvidenceCount = Object.values(visualEvidence.counts).reduce((sum, value) => sum + (Number(value) || 0), 0);
+  const reusableProfileAttachments = collectSavedProfileImageAttachments(userProfile, {
+    limit: 99,
+    purpose: config.contextScope === "head_to_toe_body_reference" ? "head_to_toe_body_reference" : "pelvic_genital",
+  });
+  const fallbackReferenceImages = reusableProfileAttachments.map((attachment, index) => ({
+    image_id: `img_${String(index + 1).padStart(3, "0")}`,
+    previewUrl: attachment.url,
+    storagePath: attachment.url,
+    display_label: `Saved Profile Q&A view ${reviewImageLetter(index)}`,
+    source: "saved_profile_qa_attachment",
+  }));
+  const hasPersistedReviewedImages = Array.isArray(result?._meta?.reviewed_images) && result._meta.reviewed_images.length > 0;
+  const inlineReferenceImages = hasPersistedReviewedImages ? images : [...images, ...fallbackReferenceImages];
   const paragraphs = [];
   const paragraphMeta = [];
   if (result) {
@@ -1637,16 +2861,36 @@ ANNOTATED IMAGE OUTPUT RULES:
                 ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Reviewing...</>
                 : <><ImageIcon className="h-3.5 w-3.5" />{images.length ? (result ? "Re-review Images" : "Review Images") : (result ? "Re-review Evidence" : "Review Existing Evidence")}</>}
             </Button>
+            {recoverableBatchSet?.batches?.length > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={recoverFinalSynthesis}
+                disabled={loading || profileLoading || evidenceLoading || !userProfile}
+                className="h-8 gap-1.5 text-xs"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Retry Final Synthesis
+              </Button>
+            )}
+            {recoverableBatchSet?.batches?.length > 0 && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={assembleCompletedBatches}
+                disabled={loading || profileLoading || evidenceLoading || !userProfile}
+                className="h-8 gap-1.5 text-xs"
+              >
+                View Latest Batch Findings
+              </Button>
+            )}
           </div>
         </div>
 
         <div className="flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
           <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{existingEvidenceCount} saved visual/video evidence items</Badge>
           <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-            {collectSavedProfileImageAttachments(userProfile, {
-              limit: 99,
-              purpose: config.contextScope === "head_to_toe_body_reference" ? "head_to_toe_body_reference" : "pelvic_genital",
-            }).length} relevant reusable Profile Q&A images
+            {reusableProfileAttachments.length} relevant reusable Profile Q&A images
           </Badge>
           <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{sessions.length} sessions loaded</Badge>
           {bodyExplorations.length > 0 && (
@@ -1655,25 +2899,66 @@ ANNOTATED IMAGE OUTPUT RULES:
           {images.length > 0 && (
             <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{images.length} fresh image{images.length === 1 ? "" : "s"} selected</Badge>
           )}
+          {recoverableBatchSet?.batches?.length > 0 && (
+            <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+              {recoverableBatchSet.total}/{recoverableBatchSet.total} batches recoverable
+            </Badge>
+          )}
+          <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">Priority background queue</Badge>
         </div>
+
+        {recoverableBatchSet?.batches?.length > 0 && (
+          <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-50">
+            Batch reviews completed, but final synthesis did not finish. You are viewing the previous saved final synthesis until retry or local assembly succeeds. Latest batch findings are available below the buttons and can be reused without rerunning image review.
+          </div>
+        )}
+
+        {(latestAttemptStatus || recoverableBatchSet?.batches?.length > 0) && (
+          <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-50">
+            <p className="font-semibold uppercase tracking-wider">Latest Attempt Status</p>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <div className="rounded-md border border-amber-300/20 bg-background/40 px-2 py-1.5">
+                <p className="text-[10px] uppercase tracking-wider text-amber-100/80">Final Synthesis</p>
+                <p>{latestAttemptStatus?.error_message ? `Failed: ${latestAttemptStatus.error_message}` : "Batch findings are recoverable; final synthesis is not currently saved as latest."}</p>
+              </div>
+              <div className="rounded-md border border-amber-300/20 bg-background/40 px-2 py-1.5">
+                <p className="text-[10px] uppercase tracking-wider text-amber-100/80">Current Display</p>
+                <p>{result?._meta?.local_batch_assembled
+                  ? "Showing recovered latest batch findings assembled locally."
+                  : result
+                    ? "Showing previous final synthesis until retry or local assembly succeeds."
+                    : "No previous final synthesis is available yet."}</p>
+              </div>
+              <div className="rounded-md border border-amber-300/20 bg-background/40 px-2 py-1.5">
+                <p className="text-[10px] uppercase tracking-wider text-amber-100/80">Latest Batch Findings</p>
+                <p>{recoverableBatchSet?.batches?.length ? `${recoverableBatchSet.total}/${recoverableBatchSet.total} completed batches available.` : "No completed batch set loaded."}</p>
+              </div>
+              <div className="rounded-md border border-amber-300/20 bg-background/40 px-2 py-1.5">
+                <p className="text-[10px] uppercase tracking-wider text-amber-100/80">Next Action</p>
+                <p>Retry Final Synthesis reuses completed batch JSON. View Latest Batch Findings assembles the batch evidence locally with no extra AI request.</p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {result && (
           <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
             <span>{result?._meta?.last_generated_at ? `Generated ${formatGeneratedAt(result._meta.last_generated_at)}` : "Generated time unavailable"}</span>
-            <span>Fresh images reviewed: {result?._meta?.fresh_image_count ?? result?._meta?.image_count ?? 0}</span>
-            <span>Saved images reused: {result?._meta?.reused_saved_image_count ?? 0}</span>
+            <span>Fresh images added this run: {result?._meta?.fresh_image_count ?? 0}</span>
+            <span>Saved image views rechecked: {result?._meta?.reused_saved_image_count ?? 0}</span>
             {Array.isArray(result?._meta?.reviewed_images) && result._meta.reviewed_images.length > 0 && (
-              <span>{result._meta.reviewed_images.length} reference view{result._meta.reviewed_images.length === 1 ? "" : "s"} linked</span>
+              <span>{result._meta.reviewed_images.length} direct view{result._meta.reviewed_images.length === 1 ? "" : "s"} linked into cumulative review</span>
             )}
           </div>
         )}
 
-        {profileLoading && !result && (
-          <p className="text-xs text-muted-foreground">Loading saved profile context...</p>
-        )}
-
-        {evidenceLoading && !result && (
-          <p className="text-xs text-muted-foreground">Loading saved session evidence...</p>
+        {!result && (
+          <ProfilerPanelLoadingStatus
+            items={[
+              { active: profileLoading, label: "Saved profile context", status: "loading" },
+              { active: evidenceLoading, label: "Session and body-exploration evidence", status: "loading" },
+            ]}
+          />
         )}
 
         {!profileLoading && !images.length && (
@@ -1682,21 +2967,15 @@ ANNOTATED IMAGE OUTPUT RULES:
 
         {images.length > 0 ? (
           <p className="text-xs text-muted-foreground">
-            Fresh image files stay attached only for this browser session. If you reload the page, re-add the photos before running review again.
+            Fresh image files will be saved locally before review so the annotated evidence cards can show the referenced views after reload.
           </p>
-        ) : collectSavedProfileImageAttachments(userProfile, {
-          limit: 99,
-          purpose: config.contextScope === "head_to_toe_body_reference" ? "head_to_toe_body_reference" : "pelvic_genital",
-        }).length > 0 ? (
+        ) : reusableProfileAttachments.length > 0 ? (
           <p className="text-xs text-muted-foreground">
             No fresh images selected. This review will reuse the most relevant saved Profile Q&A images when they can be reloaded, then synthesize saved visual findings and profile evidence.
           </p>
         ) : null}
 
-        {!images.length && collectSavedProfileImageAttachments(userProfile, {
-          limit: 99,
-          purpose: config.contextScope === "head_to_toe_body_reference" ? "head_to_toe_body_reference" : "pelvic_genital",
-        }).length === 0 && existingEvidenceCount > 0 && (
+        {!images.length && reusableProfileAttachments.length === 0 && existingEvidenceCount > 0 && (
           <p className="text-xs text-muted-foreground">
             Saved visual findings are available, but no reusable Profile Q&A image files were found in saved chat attachments.
           </p>
@@ -1725,13 +3004,15 @@ ANNOTATED IMAGE OUTPUT RULES:
 
         <CompactError message={error} />
 
-        {result && (
-          <ImageAnnotationBoard
-            result={result}
-            sections={sections}
-            color={config.color}
-            transientImages={images}
+        {loading && (
+          <ProfilerJobStatus
+            job={jobStatus}
+            fallback={`${config.shortTitle} review is running in the background queue...`}
           />
+        )}
+
+        {result?.summary_card && (
+          <ProfileImageSummaryCard summary={result.summary_card} color={config.color} />
         )}
 
         {result && (
@@ -1745,13 +3026,30 @@ ANNOTATED IMAGE OUTPUT RULES:
               if (!meta) return null;
               if (meta.type === "title" || meta.type === "section-title") {
                 const color = meta.section?.color || meta.color || config.color;
-                return (
+                const heading = (
                   <p
                     className="mt-4 border-t border-border pt-3 text-xs font-semibold transition-colors"
                     style={{ color, background: isActive ? `${color}18` : "transparent" }}
                   >
                     {meta.displayLabel || text}
                   </p>
+                );
+                if (meta.type === "section-title" && meta.section?.key) {
+                  return (
+                    <>
+                      {heading}
+                      <InlineImageEvidence
+                        result={result}
+                        sectionKey={meta.section.key}
+                        sections={sections}
+                        color={color}
+                        transientImages={inlineReferenceImages}
+                      />
+                    </>
+                  );
+                }
+                return (
+                  heading
                 );
               }
               if (meta.type === "overview") {
@@ -1787,7 +3085,7 @@ ANNOTATED IMAGE OUTPUT RULES:
           title={`${config.shortTitle} Run Archive`}
           archive={archive}
           currentResult={result}
-          onViewRun={(archivedResult) => archivedResult && setResult(archivedResult)}
+          onViewRun={(archivedResult) => archivedResult && setResult(normalizeImageReviewResult(archivedResult) || archivedResult)}
         />
       </div>
     </SectionCard>
@@ -2038,7 +3336,13 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
         required: ["profile_overview", "arousal_physiology", "stimulation_profile", "climax_and_recovery", "contextual_sensitivities", "behavioral_tendencies", "optimization_recommendations"],
       },
       max_tokens: 8192,
-    }, "AI Profiler: Comprehensive Profile", setJobStatus);
+    }, "AI Profiler: Comprehensive Profile", setJobStatus, {
+      priority: 20,
+      meta: {
+        reviewType: "comprehensive_profile",
+        session_count: sessions.length,
+      },
+    });
 
     const raw = typeof res === "string" ? JSON.parse(res) : res;
     const parsed = normalizeAIProfileResult(raw);
@@ -2117,10 +3421,12 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
         </div>
       )}
 
-      {evidenceLoading && !result && (
-        <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-          <span className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" /> Loading session evidence in the background...
-        </p>
+      {!result && (
+        <ProfilerPanelLoadingStatus
+          items={[
+            { active: evidenceLoading, label: "Session evidence and saved findings", status: "loading" },
+          ]}
+        />
       )}
 
       {!evidenceLoading && sessions.length < 2 && (
@@ -2372,7 +3678,13 @@ Write directly to the person in clear, clinically grounded language. Favor meani
           },
           required: ["overview", "limitations_and_data_gaps"],
         },
-      }, "AI Profiler: Anatomical & Physiological Profile", setJobStatus);
+      }, "AI Profiler: Anatomical & Physiological Profile", setJobStatus, {
+        priority: 20,
+        meta: {
+          reviewType: "anatomical_physiological_profile",
+          session_count: sessions.length,
+        },
+      });
 
       const parsed = normalizeAnatomicalProfileResult(typeof raw === "string" ? JSON.parse(raw) : raw);
       if (!parsed?.overview) throw new Error("Claude returned an empty anatomical and physiological profile.");
@@ -2458,10 +3770,16 @@ Write directly to the person in clear, clinically grounded language. Favor meani
 
       <CompactError message={error} />
       {loading && <ProfilerJobStatus job={jobStatus} fallback="The anatomical and physiological profile is running in the background..." />}
-      {!result && !loading && profileLoading && (
-        <p className="text-xs text-muted-foreground">Loading your saved profile context...</p>
+      {!result && !loading && (
+        <ProfilerPanelLoadingStatus
+          items={[
+            { active: profileLoading, label: "Saved profile context", status: "loading" },
+            { active: evidenceLoading, label: "Session and body-exploration evidence", status: "loading" },
+            { active: timelineLoading, label: "Heart-rate timelines", status: "loading" },
+          ]}
+        />
       )}
-      {!result && !loading && !profileLoading && (
+      {!result && !loading && !profileLoading && !evidenceLoading && !timelineLoading && (
         <p className="text-xs text-muted-foreground">
           Populate any relevant optional Profile fields, then generate this dedicated A&P synthesis. Unpopulated details will not be inferred.
         </p>
@@ -2538,6 +3856,7 @@ function NearClimaxPanel({ sessions, allTimelines, userProfile, timelineLoading 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [eventStats, setEventStats] = useState(null);
+  const [jobStatus, setJobStatus] = useState(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -2552,6 +3871,15 @@ function NearClimaxPanel({ sessions, allTimelines, userProfile, timelineLoading 
     setLoading(true);
     setResult(null);
     setError("");
+    setJobStatus({
+      status: "starting",
+      progress: {
+        phase: "building",
+        current: 0,
+        total: 3,
+        message: "Preparing near-climax event analysis for the background queue..."
+      }
+    });
 
     try {
     // Detect events across all sessions with HR data
@@ -2585,7 +3913,7 @@ function NearClimaxPanel({ sessions, allTimelines, userProfile, timelineLoading 
     setEventStats(stats);
     const groundingContext = buildAIGroundingContext(userProfile);
 
-    const res = await base44.integrations.Core.InvokeLLM({
+    const res = await runProfilerAIJob({
       model: "claude_sonnet_4_6",
       prompt: `You are a physiological research assistant analyzing near-climax events detected in heart rate data from sexual response sessions. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
@@ -2623,6 +3951,14 @@ Be interpretive, insightful, and speak directly to the person. Reference specifi
         },
         required: ["summary", "physiological_interpretation", "pattern_analysis", "contextual_triggers", "role_in_arousal_arc", "recommendations"]
       }
+    }, "AI Profiler: Near-Climax Event Analysis", setJobStatus, {
+      priority: 15,
+      meta: {
+        reviewType: "near_climax_events",
+        session_count: sessions.length,
+        sessions_with_events: sessionEvents.length,
+        event_count: totalEvents,
+      },
     });
 
     const raw = typeof res === "string" ? JSON.parse(res) : res;
@@ -2660,11 +3996,21 @@ Be interpretive, insightful, and speak directly to the person. Reference specifi
         </Button>
       </div>
 
-      {timelineLoading && !result && (
-        <p className="text-xs text-muted-foreground">Loading heart-rate timelines for event analysis...</p>
+      {!result && (
+        <ProfilerPanelLoadingStatus
+          items={[
+            { active: timelineLoading, label: "Heart-rate timelines", status: "loading" },
+          ]}
+        />
       )}
 
       <CompactError message={error} />
+      {loading && (
+        <ProfilerJobStatus
+          job={jobStatus}
+          fallback="Near-climax event analysis is running in the background queue..."
+        />
+      )}
 
       {displayStats &&
       <div className="grid grid-cols-3 gap-2">
@@ -2735,6 +4081,7 @@ Be interpretive, insightful, and speak directly to the person. Reference specifi
 function StimulationMethodsPanel({ sessions, userProfile, evidenceLoading = false }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
+  const [jobStatus, setJobStatus] = useState(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -2747,6 +4094,15 @@ function StimulationMethodsPanel({ sessions, userProfile, evidenceLoading = fals
     setLoading(true);
     setResult(null);
     setError("");
+    setJobStatus({
+      status: "starting",
+      progress: {
+        phase: "building",
+        current: 0,
+        total: 3,
+        message: "Preparing stimulation methods analysis for the background queue..."
+      }
+    });
 
     try {
     // Build per-method aggregates
@@ -2785,7 +4141,7 @@ function StimulationMethodsPanel({ sessions, userProfile, evidenceLoading = fals
     const profileContext = userProfile ? `USER PROFILE: Arousal style: ${userProfile.arousal_response_style || "—"} | Preferred stimulation: ${(userProfile.preferred_stimulation || []).join(", ") || "—"} | Climax sensitivity: ${userProfile.climax_sensitivity || "—"} | Arousal notes: ${userProfile.arousal_notes || "none"}` : "";
     const groundingContext = buildAIGroundingContext(userProfile);
 
-    const res = await base44.integrations.Core.InvokeLLM({
+    const res = await runProfilerAIJob({
       model: "claude_sonnet_4_6",
       prompt: `You are a physiological research analyst specializing in sexual response and stimulation science. Analyze how different stimulation methods affect this person's sensations and physiology based on their session data. Write directly to the person — use "you" and "your" throughout.
 
@@ -2827,6 +4183,13 @@ Each section should be 2-4 sentences of flowing, TTS-ready prose.`,
           recommendations: { type: "array", items: { type: "string" } },
         },
         required: ["overview", "method_effectiveness", "physiological_effects", "combination_effects", "arousal_and_climax_findings", "recommendations"],
+      },
+    }, "AI Profiler: Stimulation Methods Analysis", setJobStatus, {
+      priority: 15,
+      meta: {
+        reviewType: "stimulation_methods",
+        session_count: sessions.length,
+        method_count: methodStats.length,
       },
     });
 
@@ -2884,8 +4247,12 @@ Each section should be 2-4 sentences of flowing, TTS-ready prose.`,
         </Button>
       </div>
 
-      {evidenceLoading && !result && (
-        <p className="text-xs text-muted-foreground">Loading session evidence for method comparison...</p>
+      {!result && (
+        <ProfilerPanelLoadingStatus
+          items={[
+            { active: evidenceLoading, label: "Session evidence for method comparison", status: "loading" },
+          ]}
+        />
       )}
 
       {!evidenceLoading && sessions.length < 2 && (
@@ -2918,6 +4285,12 @@ Each section should be 2-4 sentences of flowing, TTS-ready prose.`,
       )}
 
       <CompactError message={error} />
+      {loading && (
+        <ProfilerJobStatus
+          job={jobStatus}
+          fallback="Stimulation methods analysis is running in the background queue..."
+        />
+      )}
 
       {result && (
         <AIOutputReader
@@ -3041,6 +4414,12 @@ export default function Profiler() {
     }
   };
 
+  const refreshUserProfileContext = async () => {
+    const me = await base44.auth.me();
+    setUserProfile(me);
+    return me;
+  };
+
   return (
     <div className="px-4 py-6 pb-24 space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -3081,6 +4460,7 @@ export default function Profiler() {
         sessions={sessions}
         bodyExplorations={bodyExplorations}
         userProfile={userProfile}
+        refreshUserProfile={refreshUserProfileContext}
         profileLoading={profileContextLoading}
         evidenceLoading={sessionEvidenceLoading}
       />
@@ -3089,6 +4469,7 @@ export default function Profiler() {
         sessions={sessions}
         bodyExplorations={bodyExplorations}
         userProfile={userProfile}
+        refreshUserProfile={refreshUserProfileContext}
         profileLoading={profileContextLoading}
         evidenceLoading={sessionEvidenceLoading}
       />

@@ -7,6 +7,7 @@ import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
+import { formatSecondsAsWords } from "@/utils/aiTextRepair";
 
 function getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -59,8 +60,8 @@ export default function SessionTimelineNarrative({ session, timelineRows, userPr
       const step = Math.max(1, Math.floor(sortedRows.length / 120));
       return sortedRows
         .filter((_, i) => i % step === 0)
-        .map(r => `${Math.round(Number(r.time_offset_s))}s:${Math.round(Number(r.hr))}bpm`)
-        .join("  ");
+        .map(r => `at ${formatSecondsAsWords(Number(r.time_offset_s))}, ${Math.round(Number(r.hr))} beats per minute`)
+        .join("; ");
     })();
 
     // Rate of change between sampled points
@@ -72,9 +73,9 @@ export default function SessionTimelineNarrative({ session, timelineRows, userPr
       for (let i = 1; i < sampled.length; i++) {
         const dt = Number(sampled[i].time_offset_s) - Number(sampled[i - 1].time_offset_s);
         const dhr = Number(sampled[i].hr) - Number(sampled[i - 1].hr);
-        if (dt > 0) out.push(`${Math.round(Number(sampled[i].time_offset_s))}s:${(dhr / dt * 60).toFixed(1)}bpm/min`);
+        if (dt > 0) out.push(`at ${formatSecondsAsWords(Number(sampled[i].time_offset_s))}, ${((dhr / dt) * 60).toFixed(1)} beats per minute per minute`);
       }
-      return out.join("  ");
+      return out.join("; ");
     })();
 
     // Overall HR stats
@@ -122,9 +123,9 @@ export default function SessionTimelineNarrative({ session, timelineRows, userPr
         const cats = Array.isArray(e.category) ? e.category : [e.category].filter(Boolean);
         const catLabels = cats.map(c => getCategoryMeta(c).label).join("+") || "Other";
         const relToClimax = session.climax_offset_s != null
-          ? `${Math.abs(Math.round(e.time_s - session.climax_offset_s))}s ${e.time_s < session.climax_offset_s ? "before" : "after"} climax`
+          ? `${formatTime(Math.abs(Math.round(e.time_s - session.climax_offset_s)))} ${e.time_s < session.climax_offset_s ? "before" : "after"} climax`
           : null;
-        const gap = i > 0 ? `+${Math.round(e.time_s - arr[i - 1].time_s)}s from prev` : "session start";
+        const gap = i > 0 ? `${formatTime(Math.round(e.time_s - arr[i - 1].time_s))} from previous event` : "session start";
         return [`[${catLabels}] @ ${formatTime(e.time_s)}`, hr ? `HR ${hr}bpm` : null, relToClimax, gap, `→ "${e.note}"`].filter(Boolean).join(" | ");
       });
 

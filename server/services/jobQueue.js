@@ -6,6 +6,12 @@ const queue = [];
 const running = new Set();
 const concurrency = Math.max(1, Number(process.env.BACKGROUND_JOB_CONCURRENCY || 3));
 
+function normalizeJobPriority(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(-100, Math.min(100, Math.round(numeric)));
+}
+
 function jobLane(type) {
   const name = String(type || '');
   if (name.startsWith('local_vision_')) return 'local_vision';
@@ -78,8 +84,20 @@ function patchProgress(job, progress = {}) {
   });
 }
 
+function compareQueuedJobs(a, b) {
+  const priorityDelta = normalizeJobPriority(b?.priority) - normalizeJobPriority(a?.priority);
+  if (priorityDelta) return priorityDelta;
+  return new Date(a?.createdAt || 0) - new Date(b?.createdAt || 0);
+}
+
+function enqueueJob(job) {
+  queue.push(job);
+  queue.sort(compareQueuedJobs);
+}
+
 function runNext() {
   while (running.size < concurrency && queue.length > 0) {
+    queue.sort(compareQueuedJobs);
     const queueIndex = queue.findIndex((candidate) => canStartJob(candidate));
     if (queueIndex < 0) return;
     const [job] = queue.splice(queueIndex, 1);
@@ -160,6 +178,7 @@ export function createJob(type, payload = {}, meta = {}) {
   if (!handlers.has(type)) throw new Error(`Unknown background job type: ${type}`);
   const id = crypto.randomUUID();
   const now = nowIso();
+  const priority = normalizeJobPriority(meta?.priority ?? payload?.priority);
   const job = {
     id,
     type,
@@ -173,7 +192,11 @@ export function createJob(type, payload = {}, meta = {}) {
     },
     result: null,
     error: null,
-    meta,
+    meta: {
+      ...meta,
+      priority,
+    },
+    priority,
     lane: jobLane(type),
     payload,
     createdAt: now,
@@ -184,7 +207,7 @@ export function createJob(type, payload = {}, meta = {}) {
   };
   jobs.set(id, job);
   saveJob(job);
-  queue.push(job);
+  enqueueJob(job);
   queueMicrotask(runNext);
   return publicJob(job);
 }
@@ -193,6 +216,7 @@ function hydratePersistedJob(record) {
   if (!record?.id) return null;
   return {
     ...record,
+    priority: normalizeJobPriority(record.priority ?? record.meta?.priority),
     lane: record.lane || jobLane(record.type),
     payload: record.payload || null,
     abortController: new AbortController(),
@@ -255,7 +279,7 @@ export function restorePersistedJobs() {
       updatedAt: nowIso(),
     });
     jobs.set(job.id, job);
-    queue.push(job);
+    enqueueJob(job);
     saveJob(job);
   }
 

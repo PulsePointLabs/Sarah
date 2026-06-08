@@ -8,6 +8,13 @@ import { runProcess } from '../ttsCore.js';
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.mkv', '.m4v', '.avi', '.wmv']);
 export const localVisionDataDir = path.join(dataDir, 'local_vision');
 
+function mmssFromMs(ms) {
+  const totalSeconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
 export function normalizeLocalVideoPath(value) {
   const raw = String(value || '').trim().replace(/^file:\/+/, '');
   if (!raw) return '';
@@ -146,7 +153,7 @@ export async function sampleLocalVisionFrames({ videoPath, sessionId, startMs, e
         });
       }
     } catch (error) {
-      warnings.push(`Could not sample frame near ${Math.round(timeMs / 1000)}s: ${error?.message || error}`);
+      warnings.push(`Could not sample frame near ${mmssFromMs(timeMs)}: ${error?.message || error}`);
       onProgress?.({
         phase: 'sampling',
         planned_frames: rawTimes.length,

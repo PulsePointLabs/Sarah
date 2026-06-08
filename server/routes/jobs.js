@@ -6,6 +6,7 @@ import { startAIForensicCapture } from '../services/aiForensics.js';
 import { analyzeLocalVisionWindow } from '../services/localVision/analyzeWindow.js';
 import { analyzeLocalVisionContinuous } from '../services/localVision/continuousAnalyzer.js';
 import { analyzeLocalVisionAdaptive } from '../services/localVision/adaptiveAnalyzer.js';
+import { analyzeLocalVisionForward } from '../services/localVision/forwardAnalyzer.js';
 import { askLocalVisionVideo } from '../services/localVision/videoQa.js';
 
 export const jobsRouter = express.Router();
@@ -146,6 +147,21 @@ registerJobHandler('local_vision_analyze_adaptive', async (payload, context) => 
     privacy: { localOnly: true, cloudUpload: false },
   });
   return analyzeLocalVisionAdaptive(payload, {
+    signal: context.signal,
+    onProgress: context.updateProgress,
+  });
+});
+
+registerJobHandler('local_vision_analyze_forward', async (payload, context) => {
+  context.updateProgress({
+    phase: 'preparing',
+    current: 0,
+    total: 6,
+    message: 'Preparing forward local vision review...',
+    privacy: { localOnly: true, cloudUpload: false },
+    workflow: 'local_vision_forward_review',
+  });
+  return analyzeLocalVisionForward(payload, {
     signal: context.signal,
     onProgress: context.updateProgress,
   });

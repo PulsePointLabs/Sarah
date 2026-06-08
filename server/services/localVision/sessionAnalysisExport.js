@@ -1,3 +1,5 @@
+import { buildSarahLocalAnnotationCards } from '../../../src/lib/localVisionDisplay.js';
+
 function array(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -91,10 +93,19 @@ export function buildSessionAnalysisExport({
   notConfirmed = [],
   limitations = [],
 }) {
+  const localAnnotationCards = buildSarahLocalAnnotationCards({
+    actionable_findings: actionableFindings,
+    strong_candidates: strongCandidates,
+    not_confirmed: notConfirmed,
+  });
   return {
     mode: 'adaptive_candidate_pipeline',
     analysis_mode: mode,
     analysis_type: recordType,
+    local_annotation_cards: localAnnotationCards,
+    annotation_summary: localAnnotationCards.length
+      ? `${localAnnotationCards.length} Sarah-style local annotation card${localAnnotationCards.length === 1 ? '' : 's'} prepared from confirmed findings, strong candidates, and not-confirmed checks.`
+      : 'Local annotation did not produce useful session events from this run.',
     confirmed_findings: actionableFindings.map(findingFromEvent).sort((a, b) => (a.start_ms || 0) - (b.start_ms || 0)),
     strong_candidates: strongCandidates.map((candidate) => candidateSummary(candidate, 'candidate_not_confirmed')).sort((a, b) => (a.start_ms || 0) - (b.start_ms || 0)),
     unresolved_candidates: unresolvedCandidates.map((candidate) => candidateSummary(candidate, 'unresolved')).sort((a, b) => (a.start_ms || 0) - (b.start_ms || 0)),

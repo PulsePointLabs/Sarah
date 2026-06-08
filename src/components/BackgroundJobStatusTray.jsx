@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bell, BellOff, CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Loader2, Square, X, XCircle } from "lucide-react";
 import { cancelBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
+import { stabilizeBackgroundJobEta } from "@/lib/backgroundJobEta";
 import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
 import {
   areBackgroundNotificationsEnabled,
@@ -30,18 +31,6 @@ function fmtTime(value) {
   } catch {
     return "";
   }
-}
-
-function fmtDuration(ms) {
-  const seconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
-  if (!seconds) return "";
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  if (minutes < 60) return remainingSeconds ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 }
 
 function jobLabel(job) {
@@ -118,27 +107,6 @@ function currentCandidateText(progress = {}) {
   return `${String(type).replace(/_/g, " ")}${scoreText}${reasons ? ` · ${reasons}` : ""}`;
 }
 
-function estimateJobEta(job) {
-  if (!["queued", "running"].includes(job?.status)) return null;
-  const progress = job?.progress || {};
-  const current = Number(progress.eta_current ?? progress.current ?? 0);
-  const total = Number(progress.eta_total ?? progress.total ?? 0);
-  if (!Number.isFinite(current) || !Number.isFinite(total) || current <= 0 || total <= current) return null;
-  const startedAt = new Date(job.startedAt || job.createdAt || 0).getTime();
-  if (!Number.isFinite(startedAt) || startedAt <= 0) return null;
-  const elapsedMs = Date.now() - startedAt;
-  if (elapsedMs < 15000) return null;
-  const msPerUnit = elapsedMs / current;
-  const etaMs = (total - current) * msPerUnit;
-  if (!Number.isFinite(etaMs) || etaMs < 1000) return null;
-  return {
-    etaMs,
-    elapsedMs,
-    label: `ETA ~ ${fmtDuration(etaMs)} left`,
-    elapsedLabel: `elapsed ${fmtDuration(elapsedMs)}`,
-  };
-}
-
 function activePhaseFallback(job) {
   if (!["queued", "running"].includes(job?.status)) return "";
   const progress = job?.progress || {};
@@ -167,6 +135,7 @@ export default function BackgroundJobStatusTray() {
   const previousActiveIdsRef = useRef(new Set());
   const previousJobIdsRef = useRef(new Set());
   const previousJobStatusesRef = useRef(new Map());
+  const etaCacheRef = useRef(new Map());
   const jobsInitializedRef = useRef(false);
   const dismissedTerminalIdsRef = useRef(dismissedTerminalIds);
   const wasHiddenSinceLastPollRef = useRef(
@@ -297,6 +266,10 @@ export default function BackgroundJobStatusTray() {
         previousActiveIdsRef.current = activeIds;
         previousJobIdsRef.current = new Set(loadedJobs.map((job) => job.id));
         previousJobStatusesRef.current = new Map(loadedJobs.map((job) => [job.id, job.status]));
+        const liveJobIds = new Set(loadedJobs.map((job) => job.id));
+        for (const jobId of etaCacheRef.current.keys()) {
+          if (!liveJobIds.has(jobId)) etaCacheRef.current.delete(jobId);
+        }
         jobsInitializedRef.current = true;
         setJobs(loadedJobs);
         setOffline(false);
@@ -324,7 +297,7 @@ export default function BackgroundJobStatusTray() {
   const activeCount = visibleJobs.filter((job) => ["queued", "running"].includes(job.status)).length;
   const completedJobs = visibleJobs.filter((job) => job.status === "complete");
   const primaryActiveJob = visibleJobs.find((job) => ["queued", "running"].includes(job.status));
-  const primaryEta = estimateJobEta(primaryActiveJob);
+  const primaryEta = stabilizeBackgroundJobEta(primaryActiveJob, etaCacheRef.current);
   const primaryPhaseFallback = activePhaseFallback(primaryActiveJob);
 
   const dismissFinished = (jobIds) => {
@@ -423,7 +396,7 @@ export default function BackgroundJobStatusTray() {
               const pct = !active ? 100 : total > 0 ? Math.max(8, Math.min(100, Math.round((current / total) * 100))) : 20;
               const target = jobTarget(job);
               const cancelling = cancellingIds.has(job.id);
-              const eta = estimateJobEta(job);
+              const eta = stabilizeBackgroundJobEta(job, etaCacheRef.current);
               const phaseFallback = activePhaseFallback(job);
               const counts = progressCounts(job);
               return (

@@ -2,6 +2,14 @@ import { LOCAL_VISION_STATUSES, questionsForIds } from './questionBank.js';
 
 export const LOCAL_VISION_RECORD_TYPES = ['general_session', 'body_exploration', 'masturbation', 'foley_procedure'];
 export const LOCAL_VISION_ANALYSIS_MODES = ['fast_preview', 'balanced', 'deep_forensic'];
+export const LOCAL_VISION_ROI_TYPES = [
+  'genital_hand_roi',
+  'feet_legs_roi',
+  'full_body_roi',
+  'foley_procedure_field_roi',
+  'tubing_bag_roi',
+  'custom_roi',
+];
 
 export const DEFAULT_LOCAL_VISION_QUESTIONS = [
   'foley_catheter_visible',
@@ -145,6 +153,31 @@ export function clamp01(value, fallback = 0) {
   return Math.max(0, Math.min(1, parsed));
 }
 
+export function normalizeRegionsOfInterest(value = []) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((roi, index) => {
+      if (!roi || typeof roi !== 'object') return null;
+      const x = clamp01(roi.x ?? roi.left, 0);
+      const y = clamp01(roi.y ?? roi.top, 0);
+      const width = Math.max(0.01, Math.min(1 - x, clamp01(roi.width ?? roi.w, 0.2)));
+      const height = Math.max(0.01, Math.min(1 - y, clamp01(roi.height ?? roi.h, 0.2)));
+      const rawType = String(roi.type || 'custom_roi').trim().toLowerCase();
+      const type = LOCAL_VISION_ROI_TYPES.includes(rawType) ? rawType : 'custom_roi';
+      const label = String(roi.label || type.replace(/_/g, ' ')).trim().slice(0, 80);
+      return {
+        id: String(roi.id || `roi_${String(index + 1).padStart(3, '0')}`).trim(),
+        label,
+        type,
+        x,
+        y,
+        width,
+        height,
+      };
+    })
+    .filter(Boolean);
+}
+
 export function normalizeStatus(value, fallback = 'uncertain') {
   const normalized = String(value || '').trim().toLowerCase();
   return LOCAL_VISION_STATUSES.includes(normalized) ? normalized : fallback;
@@ -179,6 +212,7 @@ export function normalizeLocalVisionRequest(body = {}) {
       ? body.previousVisualState
       : {},
     scaleCalibration: body.scaleCalibration || body.scale_calibration || { available: false, pixelsPerCm: null, source: null },
+    regionsOfInterest: normalizeRegionsOfInterest(body.regionsOfInterest || body.regions_of_interest || []),
   };
 }
 

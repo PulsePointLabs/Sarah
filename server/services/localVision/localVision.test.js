@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getQuestionBank } from './questionBank.js';
-import { normalizeAdaptiveVisionRequest, normalizeLocalVisionRecordType, normalizeVlmAnswers } from './schema.js';
+import { normalizeAdaptiveVisionRequest, normalizeLocalVisionRecordType, normalizeRegionsOfInterest, normalizeVlmAnswers } from './schema.js';
 import { deriveLocalVisionResult } from './stateMachine.js';
 import { rankCandidateWindows } from './cvPrepass.js';
 import { questionIdsForCandidate } from './adaptiveAnalyzer.js';
 import { buildSessionAnalysisExport } from './sessionAnalysisExport.js';
+import { adaptiveModeForForwardMode, buildForwardAdaptiveRequest, normalizeForwardMode } from './forwardAnalyzer.js';
 
 const frames = [
   { frame_id: 'f001', time_ms: 120000, image_path: '/api/local-vision/frame/test/window/f001.jpg' },
@@ -105,6 +106,47 @@ test('adaptive fast preview is not deep forensic by default', () => {
   assert.ok(request.qwenPolicy.maxQwenWindows <= 3);
 });
 
+test('forward review modes map to adaptive engine modes without making deep the default', () => {
+  assert.equal(normalizeForwardMode(), 'balanced');
+  assert.equal(adaptiveModeForForwardMode('fast'), 'fast_preview');
+  assert.equal(adaptiveModeForForwardMode('balanced'), 'balanced');
+  assert.equal(adaptiveModeForForwardMode('deep'), 'deep_forensic');
+});
+
+test('forward review normalizes ROI hints and carries them as hints only', () => {
+  const request = buildForwardAdaptiveRequest({
+    sessionId: 'test',
+    recordType: 'masturbation',
+    videoPath: 'C:/video.mp4',
+    startMs: 0,
+    endMs: 60000,
+    mode: 'balanced',
+    regionsOfInterest: [{
+      id: 'roi_test',
+      label: 'Genital / hand activity',
+      type: 'genital_hand_roi',
+      x: -1,
+      y: 0.5,
+      width: 2,
+      height: 0.4,
+    }],
+  });
+  assert.equal(request.workflow, 'local_vision_forward_review');
+  assert.equal(request.mode, 'balanced');
+  assert.equal(request.regionsOfInterest.length, 1);
+  assert.equal(request.regionsOfInterest[0].x, 0);
+  assert.ok(request.regionsOfInterest[0].width <= 1);
+});
+
+test('ROI normalization clamps coordinates and preserves allowed type labels', () => {
+  const rois = normalizeRegionsOfInterest([{ type: 'feet_legs_roi', label: 'Feet / legs', x: 0.9, y: 0.9, width: 0.5, height: 0.5 }]);
+  assert.equal(rois.length, 1);
+  assert.equal(rois[0].type, 'feet_legs_roi');
+  assert.equal(rois[0].label, 'Feet / legs');
+  assert.ok(rois[0].width <= 0.1);
+  assert.ok(rois[0].height <= 0.1);
+});
+
 test('session analysis export keeps uncertain raw rows out of confirmed findings', () => {
   const exportPayload = buildSessionAnalysisExport({
     mode: 'balanced',
@@ -117,6 +159,10 @@ test('session analysis export keeps uncertain raw rows out of confirmed findings
   assert.equal(exportPayload.confirmed_findings.length, 0);
   assert.equal(exportPayload.strong_candidates.length, 1);
   assert.equal(exportPayload.strong_candidates[0].status, 'candidate_not_confirmed');
+  assert.equal(exportPayload.local_annotation_cards.length, 2);
+  assert.equal(exportPayload.local_annotation_cards[0].timestamp_range, '0:01-0:03');
+  assert.match(exportPayload.local_annotation_cards[0].summary, /Strong local-CV candidate, not visually confirmed by Qwen/i);
+  assert.match(exportPayload.local_annotation_cards[1].summary, /Not visually confirmed/i);
   assert.equal(exportPayload.not_confirmed.length, 1);
 });
 
