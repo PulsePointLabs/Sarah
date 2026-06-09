@@ -2231,6 +2231,42 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
   );
 }
 
+function imageCalloutNarrationParagraphs(result, sectionKey, transientImages = []) {
+  const findings = Array.isArray(result?.image_region_findings)
+    ? result.image_region_findings.filter((finding) => finding.section_key === sectionKey)
+    : [];
+  if (!findings.length) return [];
+
+  const byImage = new Map();
+  for (const finding of findings) {
+    const imageId = finding.image_id || "unknown";
+    if (!byImage.has(imageId)) byImage.set(imageId, []);
+    byImage.get(imageId).push(finding);
+  }
+
+  const paragraphs = [];
+  for (const [imageId, imageFindings] of byImage.entries()) {
+    const image = profileImageById(result, imageId, transientImages);
+    const imageContext = [
+      image?.display_label || "Reviewed view",
+      image?.body_position,
+      image?.coverage,
+      image?.visibility_notes,
+    ].filter(Boolean).join(". ");
+    const callouts = imageFindings.slice(0, 4).map((finding, index) => {
+      const label = finding.label || finding.region || `Callout ${index + 1}`;
+      const confidence = confidenceLabel(finding.confidence);
+      const evidenceLevel = finding.evidence_level ? confidenceLabel(finding.evidence_level) : "";
+      const qualifier = [confidence, evidenceLevel].filter(Boolean).join(", ");
+      return `${index + 1}. ${label}${qualifier ? `, ${qualifier}` : ""}. ${finding.finding || ""}`.trim();
+    }).filter(Boolean);
+    if (callouts.length) {
+      paragraphs.push(naturalizeSpokenDates(`Visual callouts. ${imageContext}. ${callouts.join(" ")}`));
+    }
+  }
+  return paragraphs;
+}
+
 const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
   title: "Head-to-Toe Image Review",
   shortTitle: "Head-to-Toe",
@@ -3411,6 +3447,10 @@ ANNOTATED IMAGE OUTPUT RULES:
       if ((result[section.key] || []).length) {
         paragraphs.push(calmSpokenHeading(section.label));
         paragraphMeta.push({ type: "section-title", section, displayLabel: section.label });
+        for (const calloutParagraph of imageCalloutNarrationParagraphs(result, section.key, inlineReferenceImages)) {
+          paragraphs.push(calloutParagraph);
+          paragraphMeta.push({ type: "visual-callout", section });
+        }
       }
       for (const finding of (result[section.key] || [])) {
         paragraphs.push(naturalizeSpokenDates(finding));
@@ -3631,6 +3671,19 @@ ANNOTATED IMAGE OUTPUT RULES:
                 );
               }
               const { section } = meta;
+              if (meta.type === "visual-callout") {
+                return (
+                  <p
+                    className="rounded-md border border-border bg-muted/25 px-3 py-2 text-sm leading-relaxed transition-all duration-200"
+                    style={{
+                      borderColor: isActive ? section.color : "hsl(var(--border))",
+                      background: isActive ? `${section.color}18` : undefined,
+                    }}
+                  >
+                    {renderSentenceHighlightedText(text, activeSentenceIdx, startFromSentence)}
+                  </p>
+                );
+              }
               return (
                 <p
                   className="border-l-2 pl-3 py-1 text-sm leading-relaxed transition-all duration-200 rounded-r-md"
