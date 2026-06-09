@@ -17,6 +17,7 @@ import {
   buildSarahSessionSynthesisPrompt,
   buildSessionAnalysisEvidencePacket,
   evidencePacketPreview,
+  localSessionAnalysisNeedsPacketFallback,
   normalizeGoldStandardSessionAnalysis,
   requiredAnalysisSectionsPresent,
   SARAH_SESSION_ANALYSIS_SCHEMA,
@@ -227,6 +228,8 @@ function preflightFromPacket(packet) {
   const preview = evidencePacketPreview(packet);
   const localReady = Boolean(
     preview.contextPresent ||
+    preview.usefulEventNotesCount >= 3 ||
+    preview.aiVideoPassEventNotesCount >= 2 ||
     preview.savedSarahVideoCardsCount > 0 ||
     preview.localAnnotationCardsCount > 0 ||
     preview.hrPresent ||
@@ -364,6 +367,8 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
 
   const packetHasLocalSessionGrounding = useCallback((packet) => Boolean(
     packet?.user_logged_context?.present ||
+    Number(packet?.counts?.useful_event_notes || 0) >= 3 ||
+    Number(packet?.counts?.ai_video_pass_event_notes || 0) >= 2 ||
     packet?.visual_evidence?.saved_sarah_video_cards_count ||
     packet?.visual_evidence?.local_annotation_cards_count ||
     packet?.telemetry_findings?.heart_rate?.present ||
@@ -902,10 +907,7 @@ Provide ${isTechnical
       if (!packetHasLocalSessionGrounding(sharedEvidencePacket)) {
         throw new Error("Local Sarah did not run because the refreshed evidence packet is not grounded enough for a full local analysis. It needs at least one hard session-specific evidence stream: logged context, saved video/local annotation cards, or HR/HRV telemetry. Event notes or profile context alone are not enough for this local model.");
       }
-      const shouldAssembleLocally =
-        sharedEvidencePacket.readiness !== "ready_for_full_sarah_synthesis" ||
-        !sharedEvidencePacket.visual_evidence?.saved_sarah_video_cards_count ||
-        !localHealth?.ok;
+      const shouldAssembleLocally = !localHealth?.ok;
       if (shouldAssembleLocally) {
         const parsed = buildLocalEvidencePacketSessionAnalysis(sharedEvidencePacket);
         const sectionPresence = requiredAnalysisSectionsPresent(parsed);
@@ -964,18 +966,27 @@ Provide ${isTechnical
       const parsed = normalizeGoldStandardSessionAnalysis(completedJob.result, sharedEvidencePacket, {
         repairDetachedPersona: true,
       });
-      const sectionPresence = requiredAnalysisSectionsPresent(parsed);
+      const finalParsed = localSessionAnalysisNeedsPacketFallback(parsed, sharedEvidencePacket)
+        ? {
+          ...buildLocalEvidencePacketSessionAnalysis(sharedEvidencePacket),
+          _local_synthesis_rejected: true,
+          _local_synthesis_rejection_reason: "Local Sarah returned an empty or packet-contradicting synthesis, so PulsePoint used the grounded packet assembly instead.",
+        }
+        : parsed;
+      const sectionPresence = requiredAnalysisSectionsPresent(finalParsed);
       const storedResult = {
-        ...parsed,
+        ...finalParsed,
         _meta: {
           ...buildSessionAIContentMeta(session, session[analysisField]?._meta, completedAt(completedJob)),
-          source: "local_sarah_session_synthesis",
+          source: finalParsed._local_synthesis_rejected ? "local_sarah_packet_fallback_after_empty_synthesis" : "local_sarah_session_synthesis",
           local_only: true,
           cloud_fallback: false,
           provider: completedJob.result?._local_synthesis_meta?.provider || localHealth?.provider || null,
           model: completedJob.result?._local_synthesis_meta?.model || localHealth?.model || null,
           evidence_packet_readiness: sharedEvidencePacket.readiness,
           required_sections_present: sectionPresence,
+          local_synthesis_rejected: Boolean(finalParsed._local_synthesis_rejected),
+          local_synthesis_rejection_reason: finalParsed._local_synthesis_rejection_reason || null,
         },
       };
       const saveResult = mergeForSessionSave(storedResult, sourceSession);

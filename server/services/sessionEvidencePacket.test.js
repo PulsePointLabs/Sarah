@@ -5,6 +5,7 @@ import {
   buildLocalEvidencePacketSessionAnalysis,
   buildSarahSessionSynthesisPrompt,
   buildSessionAnalysisEvidencePacket,
+  localSessionAnalysisNeedsPacketFallback,
   normalizeGoldStandardSessionAnalysis,
   requiredAnalysisSectionsPresent,
 } from '../../src/lib/sessionEvidencePacket.js';
@@ -73,6 +74,9 @@ test('local synthesis prompt forbids invented visual findings and includes the s
   const prompt = buildSarahSessionSynthesisPrompt({ packet, local: true });
   assert.match(prompt, /You are not a visual model/i);
   assert.match(prompt, /Do not invent new visual findings/i);
+  assert.match(prompt, /accepted ai_video_pass event notes/i);
+  assert.match(prompt, /Write like Sarah, not like a validator log/i);
+  assert.match(prompt, /Group dense timestamped notes into coherent phases/i);
   assert.match(prompt, /never write detached labels like "the user," "this user," "the subject," "the individual," or "the patient/i);
   assert.match(prompt, /"your body," "your session," "your telemetry," "your lower body," "your heart rate," and "your logged context/i);
   assert.match(prompt, /forbidden unless explicitly present/i);
@@ -247,6 +251,105 @@ test('normalization preserves visual claims when saved video cards are present',
   assert.match(normalized.executive_summary, /saved Sarah video-pass evidence/i);
   assert.match(normalized.chronological_deep_dive[0].paragraph, /Your hands are seen/i);
   assert.doesNotMatch(JSON.stringify(normalized), /evidence-limited|specific movement or technique findings cannot be confirmed/i);
+});
+
+test('normalization preserves visual claims grounded in accepted video-pass event notes without saved cards', () => {
+  const packet = buildSessionAnalysisEvidencePacket({
+    session: {
+      ...session,
+      event_timeline: [
+        { time_s: 41, note: 'Right hand makes first visible contact with shaft and scrotal-base region.', category: ['stimulation'], source: 'ai_video_pass' },
+        { time_s: 432, note: 'Sleeve lifted and lubricant handled during a stimulation break.', category: ['stimulation_paused'], source: 'ai_video_pass' },
+      ],
+      ai_analysis: {},
+    },
+    timelineRows,
+    emgRows: [],
+  });
+  assert.equal(packet.visual_evidence.saved_sarah_video_cards_count, 0);
+  assert.equal(packet.counts.ai_video_pass_event_notes, 2);
+
+  const normalized = normalizeGoldStandardSessionAnalysis({
+    executive_summary: 'The accepted video-pass event notes show first visible contact and a later lubrication break, with HR telemetry available for cautious interpretation.',
+    chronological_deep_dive: [{ time_range: '0:41-7:12', paragraph: 'The accepted event notes show your right hand making first visible contact, then later describe the sleeve being lifted and lubricant handled during a stimulation break.', evidence_refs: ['event-0', 'event-1'], claim_types: ['visual_evidence'] }],
+    motion_evidence_interpretation: [{ paragraph: 'Motion evidence is grounded in accepted video-pass event notes rather than saved video cards.', evidence_refs: ['session_timeline'], claim_types: ['visual_evidence'] }],
+    telemetry_interpretation: [{ paragraph: 'Heart-rate and HRV evidence should be interpreted cautiously alongside the accepted event notes.', evidence_refs: ['hrv_findings'], claim_types: ['hrv_interpretation'] }],
+    emg_analysis: [{ paragraph: 'No EMG data was logged or captured in this session.', evidence_refs: ['emg_findings'], claim_types: ['limitation'] }],
+    patterns_hypotheses: [{ paragraph: 'The event timing may support a pause-and-resume pattern.', evidence_refs: ['session_timeline'], claim_types: ['hypothesis'] }],
+    recommendations_experiments: [{ paragraph: 'Keep accepting useful video-pass notes and note transition times next session.', evidence_refs: ['session_timeline'], claim_types: ['hypothesis'] }],
+    limitations: [{ paragraph: 'No saved video card is attached, so visual claims should stay tied to accepted event notes.', evidence_refs: ['visual_evidence'], claim_types: ['limitation'] }],
+    provenance_summary: [{ paragraph: 'Evidence came from accepted video-pass event notes and telemetry.', evidence_refs: ['session_evidence_packet'], claim_types: ['limitation'] }],
+  }, packet, { repairDetachedPersona: true });
+
+  const rendered = JSON.stringify(normalized);
+  assert.match(normalized.executive_summary, /accepted video-pass event notes/i);
+  assert.match(normalized.chronological_deep_dive[0].paragraph, /first visible contact/i);
+  assert.match(normalized.motion_evidence_interpretation[0].paragraph, /accepted video-pass event notes/i);
+  assert.doesNotMatch(rendered, /specific movement or technique findings cannot be confirmed/i);
+});
+
+test('local quality gate rejects empty synthesis that contradicts a populated packet', () => {
+  const packet = buildSessionAnalysisEvidencePacket({
+    session: {
+      ...session,
+      event_timeline: [
+        ...session.event_timeline,
+        { time_s: 210, note: 'Left foot plantar flexion and toe curl appear briefly, then return to resting position.', source: 'ai_video_pass' },
+        { time_s: 520, note: 'Right hand sleeve stroking resumes with left hand at scrotal base.', source: 'ai_video_pass' },
+      ],
+      ai_analysis: {},
+    },
+    timelineRows,
+    emgRows: [],
+  });
+  const emptyLocal = normalizeGoldStandardSessionAnalysis({
+    executive_summary: 'This local Sarah analysis is evidence-limited. No structured logged context was available. Heart-rate telemetry was not available. No saved visual evidence cards were available for direct visual grounding.',
+    chronological_deep_dive: [{ time_range: 'Evidence-limited', paragraph: 'During this period, you reported increased heart rate and breath holding as they approached a state of heightened arousal. HRV telemetry data indicated fluctuations in parasympathetic activity.', evidence_refs: [], claim_types: ['hypothesis'] }],
+    motion_evidence_interpretation: [{ paragraph: 'No saved visual evidence cards were available, so specific movement or technique findings cannot be confirmed from this local synthesis.', evidence_refs: [], claim_types: ['limitation'] }],
+    telemetry_interpretation: [{ paragraph: 'No RR-derived HRV evidence was available for telemetry interpretation.', evidence_refs: [], claim_types: ['limitation'] }],
+    emg_analysis: [{ paragraph: 'No EMG data was logged or captured in this session.', evidence_refs: ['emg_findings'], claim_types: ['limitation'] }],
+    patterns_hypotheses: [{ paragraph: 'Your high baseline stimulation threshold and frequent pre-ejaculation events suggest a heightened sensitivity to arousal triggers.', evidence_refs: [], claim_types: ['hypothesis'] }],
+    recommendations_experiments: [{ paragraph: 'Improve the underlying evidence packet before asking local synthesis for a richer analysis.', evidence_refs: [], claim_types: ['limitation'] }],
+    limitations: [],
+    provenance_summary: [{ paragraph: 'This analysis is based on user-logged context, AI-generated event notes, and HRV telemetry data.', evidence_refs: [], claim_types: ['limitation'] }],
+  }, packet, { repairDetachedPersona: true });
+
+  assert.equal(packet.counts.ai_video_pass_event_notes, 5);
+  assert.equal(packet.telemetry_findings.heart_rate.present, true);
+  assert.equal(packet.hrv_findings.source, 'RR-interval-derived rolling HRV');
+  assert.equal(localSessionAnalysisNeedsPacketFallback(emptyLocal, packet), true);
+});
+
+test('local quality gate accepts grounded concise local synthesis', () => {
+  const packet = buildSessionAnalysisEvidencePacket({
+    session: {
+      ...session,
+      event_timeline: [
+        ...session.event_timeline,
+        { time_s: 520, note: 'Right hand sleeve stroking resumes with left hand at scrotal base.', source: 'ai_video_pass' },
+      ],
+      ai_analysis: {},
+    },
+    timelineRows,
+    emgRows: [],
+  });
+  const grounded = normalizeGoldStandardSessionAnalysis({
+    executive_summary: 'Your accepted video-pass event notes and HR/HRV timeline show a short plateau-heavy session with first contact, a lubrication break, and a logged climax marker.',
+    chronological_deep_dive: [
+      { time_range: '0:41', paragraph: 'The accepted event notes show your right hand making first visible contact with shaft and scrotal-base region.', evidence_refs: ['event-0'], claim_types: ['visual_evidence'] },
+      { time_range: '7:12', paragraph: 'The accepted event notes describe the sleeve being lifted and lubricant handled during a stimulation break.', evidence_refs: ['event-1'], claim_types: ['visual_evidence'] },
+      { time_range: '10:24', paragraph: 'The session includes a logged climax marker with the event note describing visible whitish ejaculate.', evidence_refs: ['event-2'], claim_types: ['visual_evidence'] },
+    ],
+    motion_evidence_interpretation: [{ paragraph: 'Motion interpretation is grounded in accepted video-pass event notes.', evidence_refs: ['session_timeline'], claim_types: ['visual_evidence'] }],
+    telemetry_interpretation: [{ paragraph: 'HR and HRV are available and should be interpreted cautiously alongside the event notes.', evidence_refs: ['telemetry_findings.heart_rate', 'hrv_findings'], claim_types: ['telemetry_evidence', 'hrv_interpretation'] }],
+    emg_analysis: [{ paragraph: 'No EMG data was logged or captured in this session.', evidence_refs: ['emg_findings'], claim_types: ['limitation'] }],
+    patterns_hypotheses: [{ paragraph: 'Hypothesis: the accepted notes and HR/HRV trajectory may support a plateau-heavy pattern.', evidence_refs: ['session_timeline', 'hrv_findings'], claim_types: ['hypothesis'] }],
+    recommendations_experiments: [{ paragraph: 'Track sleeve transition timing next session.', evidence_refs: ['session_timeline'], claim_types: ['hypothesis'] }],
+    limitations: [{ paragraph: 'No saved video cards are attached, so visual claims stay tied to accepted event notes.', evidence_refs: ['session_timeline'], claim_types: ['limitation'] }],
+    provenance_summary: [{ paragraph: 'Evidence came from accepted video-pass event notes, HR/HRV, and session metadata.', evidence_refs: ['session_evidence_packet'], claim_types: ['limitation'] }],
+  }, packet, { repairDetachedPersona: true });
+
+  assert.equal(localSessionAnalysisNeedsPacketFallback(grounded, packet), false);
 });
 
 test('deterministic local assembly uses Claude video-pass event notes when saved cards are absent', () => {

@@ -133,12 +133,22 @@ function packetEvidenceText(packet) {
   return JSON.stringify(packet || {}).toLowerCase();
 }
 
+function hasAcceptedVideoPassEventNotes(packet = null) {
+  const count = Number(packet?.counts?.ai_video_pass_event_notes || 0);
+  if (count > 0) return true;
+  return Array.isArray(packet?.session_timeline) && packet.session_timeline.some((event) => (
+    event?.source === "ai_video_pass" || event?.ai_annotation?.source
+  ));
+}
+
 function unsupportedClaimReason(paragraph, evidenceText, packet = null) {
   const text = String(paragraph || "").toLowerCase();
   if (!text) return "";
   const evidence = String(evidenceText || "");
   const sessionHasClimax = packet?.session_metadata?.phase_markers_s?.climax != null;
   const hasVisualCards = Boolean(packet?.visual_evidence?.saved_sarah_video_cards_count || packet?.visual_evidence?.local_annotation_cards_count);
+  const hasVisualEventNotes = hasAcceptedVideoPassEventNotes(packet);
+  const hasVisualGrounding = hasVisualCards || hasVisualEventNotes;
 
   const guardedClaims = [
     { pattern: /\bprostate massage\b|\bperineum pressure\b/i, terms: ["prostate", "perineum"], reason: "prostate or perineal technique was not present in the evidence packet" },
@@ -157,11 +167,11 @@ function unsupportedClaimReason(paragraph, evidenceText, packet = null) {
     return "climax was not present in the evidence packet";
   }
 
-  if (/\bvisual evidence\b/i.test(text) && !hasVisualCards && !evidence.includes("visual_evidence")) {
+  if (/\bvisual evidence\b/i.test(text) && !hasVisualGrounding && !evidence.includes("visual_evidence")) {
     return "direct visual evidence was not present in the evidence packet";
   }
 
-  if (/\b(seen|visible|visually|hands?\s+(?:are\s+)?(?:seen|moving|moved)|manual stimulation|rhythmic(?:ally)?\s+mov)/i.test(text) && !hasVisualCards) {
+  if (/\b(seen|visible|visually|hands?\s+(?:are\s+)?(?:seen|moving|moved)|manual stimulation|rhythmic(?:ally)?\s+mov)/i.test(text) && !hasVisualGrounding) {
     return "direct visual evidence was not present in the evidence packet";
   }
 
@@ -190,6 +200,8 @@ function evidenceLimitedExecutiveSummary(packet = null, reason = "") {
     : "Heart-rate telemetry was not available.";
   const visualNote = packet?.visual_evidence?.present
     ? "Visual/event evidence is present in the packet and should be limited to the saved cards and event notes."
+    : hasAcceptedVideoPassEventNotes(packet)
+      ? `${packet?.counts?.ai_video_pass_event_notes || "Accepted"} video-pass event notes are present and can be used as visual/event grounding.`
     : "No saved visual evidence cards were available for direct visual grounding.";
   const reasonNote = reason ? ` The local model tried to exceed the evidence packet, so unsupported claims were removed (${reason}).` : "";
   return `This local Sarah analysis is evidence-limited${pieces.length ? ` (${pieces.join(", ")})` : ""}. ${contextNote} ${telemetryNote} ${visualNote}${reasonNote}`;
@@ -647,6 +659,35 @@ export function evidencePacketPreview(packet) {
   };
 }
 
+export function localSessionAnalysisNeedsPacketFallback(result = {}, packet = {}) {
+  const counts = packet?.counts || {};
+  const usefulEventCount = Number(counts.useful_event_notes || 0);
+  const aiVideoPassEventCount = Number(counts.ai_video_pass_event_notes || 0);
+  const hasHr = Boolean(packet?.telemetry_findings?.heart_rate);
+  const hasHrv = Boolean(packet?.hrv_findings);
+  const hasContext = Boolean(packet?.user_logged_context?.present);
+  const hasSavedCards = Boolean(packet?.visual_evidence?.saved_sarah_video_cards_count || packet?.visual_evidence?.local_annotation_cards_count);
+  const hasAcceptedEvents = usefulEventCount >= 3 || aiVideoPassEventCount >= 2;
+  const hasHardPacketEvidence = hasContext || hasHr || hasHrv || hasSavedCards || hasAcceptedEvents;
+  if (!hasHardPacketEvidence) return false;
+
+  const rendered = JSON.stringify(result || {}).toLowerCase();
+  const chronological = Array.isArray(result?.chronological_deep_dive) ? result.chronological_deep_dive : [];
+  const eventGroundedChronology = chronological.filter((item) => (
+    Array.isArray(item?.evidence_refs) && item.evidence_refs.some((ref) => /event|timeline|visual_evidence/i.test(String(ref || "")))
+  ));
+
+  if (hasContext && /no structured logged context was available|no structured session context/i.test(rendered)) return true;
+  if (hasHr && /heart-rate telemetry was not available|no heart-rate timeline was available/i.test(rendered)) return true;
+  if (hasHrv && /no rr-derived hrv evidence was available|no hrv evidence was available/i.test(rendered)) return true;
+  if ((hasSavedCards || hasAcceptedEvents) && /no saved visual evidence cards were available, so specific movement|specific movement or technique findings cannot be confirmed/i.test(rendered)) return true;
+  if (hasAcceptedEvents && chronological.length <= 1 && eventGroundedChronology.length === 0) return true;
+  if (hasAcceptedEvents && /during this period, you reported|they approached a state|heightened arousal/i.test(rendered)) return true;
+  if (usefulEventCount >= 8 && chronological.length < 3) return true;
+
+  return false;
+}
+
 function normalizeSectionItem(item, fallbackClaimTypes = [], options = {}) {
   if (!item) return null;
   if (typeof item === "string") {
@@ -790,10 +831,10 @@ Required sections:
 
 Evidence rules:
 - Use only evidence in the packet. Do not invent new visual findings.
-- New visual claims must come from saved Sarah video cards, accepted local annotation cards, explicit user/event notes, or visual evidence with frame references.
+- New visual claims must come from saved Sarah video cards, accepted local annotation cards, accepted ai_video_pass event notes, explicit user/event notes, or visual evidence with frame references.
 - The local text LLM is a synthesizer only. It cannot see the video and cannot create new observations from imagination.
 - Do not write a chronological visual narrative unless the packet contains timestamped event notes or video/annotation cards for those windows.
-- If a section lacks enough evidence, write the limitation directly instead of filling the section with generic physiology.
+- If a section lacks enough evidence, write the limitation directly, but do not lead with boilerplate limitations when the packet contains useful accepted event notes, HR/HRV, logged context, or profile context.
 - Separate user-logged context, visual evidence, telemetry evidence, HRV interpretation, EMG evidence, profile context, hypotheses, and limitations.
 - If evidence is weak, say so plainly. Do not fill gaps with confident prose.
 - If EMG is missing, explicitly say no EMG data was logged or captured.
@@ -803,6 +844,15 @@ Evidence rules:
 - Address Ben directly as "you" and "your"; never write detached labels like "the user," "this user," "the subject," "the individual," or "the patient."
 - Preferred phrasing: "you," "your body," "your session," "your telemetry," "your lower body," "your heart rate," and "your logged context." Use "Ben" sparingly, usually only in the opening if needed.
 - Keep the tone clinical, practical, evidence-based, and warm without erotic prose.
+
+Narrative quality target:
+- Write like Sarah, not like a validator log. The user should hear a grounded session read, not a packet inventory.
+- Start with the strongest actual session story: baseline/entry state, first visible changes, technique or contact changes, HR/HRV movement, lower-body motion, pauses/resumes, and the most important uncertainty.
+- Group dense timestamped notes into coherent phases. Do not mechanically list every event as one sentence unless the event sequence itself is the useful finding.
+- Use accepted ai_video_pass event notes as visual/event evidence, but phrase them as "the accepted event notes show/describe..." when there is no saved video card.
+- Make telemetry useful: identify rises, dips, plateaus, peaks, and HRV outliers when present. Keep causality cautious.
+- Limitations belong at the end unless a limitation directly changes the interpretation of a specific paragraph.
+- Avoid repetitive lines such as "No structured logged context was available" or "No saved visual evidence cards were available" when other usable evidence is present.
 
 Claims that are forbidden unless explicitly present in the packet:
 - prostate massage, perineum pressure technique, circular hand motion, first contact, technique shift, lubrication break, fluid/ejaculate, near-climax cycling, climax, orgasm, body relaxation, or arousal intent.
