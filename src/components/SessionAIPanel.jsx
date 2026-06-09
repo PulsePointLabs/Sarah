@@ -613,6 +613,8 @@ RR-DERIVED HRV INTEGRATION RULE:
 TARGET SESSION ANALYSIS STYLE:
 - Begin with a substantial overview that synthesizes the session's outcome, heart-rate arc, stimulation context, notable physiology, and why the session behaved the way it did.
 - When usable RR-derived HRV is present, integrate meaningful HRV changes into the overview and relevant windows instead of treating heart rate as the only autonomic signal.
+- In Technical Deep Dive, HRV may include exact RMSSD, SDNN, pNN50, quality, and timing values, but never as a bare metric list. For each HRV detail you cite, explain the likely physiological meaning, why it is notable in that window, and what competing explanations remain. A good technical sentence should read like: "The low RMSSD here supports a tightly loaded autonomic state because beat-to-beat variability is compressed during the same window that HR is rising and contact intensity is changing." Not: "RMSSD was low."
+- Technical does not mean number-heavy. It means mechanism-heavy, evidence-calibrated, and explicit about uncertainty. Use numbers as evidence anchors, then translate them into autonomic state, breathing/vagal release, sustained sympathetic drive, recovery quality, sensor artifact, or mixed-signal interpretation.
 - Then explain the session through meaningful physiological windows based on session intent: baseline/entry state, exploration or stimulation phase, sensory/body-state transitions, plateaus or settling, pre-climax when supported, climax or intentionally non-climax outcome, and recovery or end-state.
 - A window may be chronological when chronology explains the physiology. The point is not to avoid time; the point is to make each time window explain arousal state, autonomic loading, sensory input, technique effectiveness, or recovery.
 - Keep the older PulsePoint feel: detailed, insightful, physiology-forward, personally grounded, and useful for later comparison across sessions.
@@ -701,7 +703,7 @@ Use this to trace sympathetic activation patterns, body-state transitions, explo
 ${hrvEvidence ? `RR-DERIVED HRV EVIDENCE (interpret in context; do not dump numbers):
 ${JSON.stringify(hrvEvidence, null, 2)}
 
-Use this evidence to compare rolling HRV across meaningful session windows and explain what it adds to the HR/event/body-state interpretation. Treat quality and coverage as part of the claim. If the HRV pattern does not add a supported interpretation, say that briefly and move on.` : ""}
+Use this evidence to compare rolling HRV across meaningful session windows and explain what it adds to the HR/event/body-state interpretation. In Technical Deep Dive, cite exact values only after explaining what they mean physiologically. Treat quality and coverage as part of the claim. If the HRV pattern does not add a supported interpretation, say that briefly and move on.` : ""}
 
 SHARED SARAH SESSION EVIDENCE PACKET:
 Treat this as the authoritative structured evidence source for Claude Sarah analysis, and preserve provenance in the output.
