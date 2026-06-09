@@ -634,19 +634,27 @@ async function saveProfileResultWithArchive({
 }
 
 async function runProfilerAIJob(payload, label, onProgress, options = {}) {
-  const startedJob = await startBackgroundJob("ai_invoke", { ...payload, label }, {
+  const startedJob = await startProfilerAIJob(payload, label, options);
+  onProgress?.(startedJob);
+  const completedJob = await waitProfilerAIJob(startedJob, onProgress);
+  return completedJob.result;
+}
+
+async function startProfilerAIJob(payload, label, options = {}) {
+  return startBackgroundJob("ai_invoke", { ...payload, label }, {
     source: "Profiler",
     route: "/ai-profiler",
     label,
     priority: options.priority ?? 0,
     ...options.meta,
   });
-  onProgress?.(startedJob);
-  const completedJob = await waitForBackgroundJob(startedJob.id, {
+}
+
+async function waitProfilerAIJob(job, onProgress) {
+  return waitForBackgroundJob(job.id, {
     intervalMs: 1200,
     onProgress,
   });
-  return completedJob.result;
 }
 
 function completedAt(job) {
@@ -2333,6 +2341,7 @@ function ProfileImageReviewPanel({
   const [latestAttemptStatus, setLatestAttemptStatus] = useState(null);
   const [availableCompletedReviewJob, setAvailableCompletedReviewJob] = useState(null);
   const [selectedProfilerImageId, setSelectedProfilerImageId] = useState(null);
+  const autoRecoveredBatchSetRef = useRef("");
 
   useEffect(() => {
     base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
@@ -2446,7 +2455,7 @@ function ProfileImageReviewPanel({
       const completedBatches = new Set(runPartials.map((job) => Number(job?.meta?.batch || 0)).filter(Boolean));
       const done = completedBatches.size || Number(newestPartial.meta?.batch || 0) || 1;
       setJobStatus(newestPartial);
-      setError(`Latest ${config.title.toLowerCase()} review did not finish its final synthesis (${done}/${total} batches completed). The older saved review is still being shown. Run Re-review Evidence again and keep this page open until the final synthesis completes.`);
+      setError(`Latest ${config.title.toLowerCase()} review has ${done}/${total} completed batches available. PulsePoint will auto-assemble the completed batch set once all batches are finished; leave the desktop backend running and reopen this page to recover progress.`);
       return true;
     };
     const findRecoverableBatchSet = (completedJobs = []) => {
@@ -2505,6 +2514,38 @@ function ProfileImageReviewPanel({
         const completedJobs = completedData.jobs || [];
         const recoverable = findRecoverableBatchSet(completedJobs);
         setRecoverableBatchSet(recoverable);
+        if (
+          recoverable?.batches?.length &&
+          isNewerCompletedJob(recoverable.batches[recoverable.batches.length - 1], result) &&
+          autoRecoveredBatchSetRef.current !== `${config.kind}:${recoverable.startedAt || ""}:${recoverable.finishedAt || ""}`
+        ) {
+          autoRecoveredBatchSetRef.current = `${config.kind}:${recoverable.startedAt || ""}:${recoverable.finishedAt || ""}`;
+          const batchParsedResults = recoverable.batches
+            .map((batchJob) => remapBatchLocalImageIds(
+              normalizeImageReviewResult(batchJob?.result),
+              batchJob?.meta?.reviewed_images || [],
+            ))
+            .filter((item) => item?.overview);
+          if (batchParsedResults.length === recoverable.batches.length) {
+            await saveBatchAssembledReview(
+              batchParsedResults,
+              "Auto-saved the completed Sarah batch findings after the page reconnected. No extra Claude synthesis request was made.",
+              recoverable,
+              {
+                state: "batch_reviews_auto_saved_after_reconnect",
+                timestamp: new Date().toISOString(),
+                synthesis_stage: "local_batch_assembly_after_reconnect",
+                batch_reviews_completed: true,
+                older_saved_review_showing: false,
+                latest_batch_findings_available: true,
+                batch_count: recoverable.total || batchParsedResults.length,
+                final_synthesis_attempted: false,
+              },
+              { showErrorNotice: false, keepRecoverableBatchSet: true },
+            );
+            return;
+          }
+        }
         const job = completedJobs
           .filter(isFinalOrSingleReviewJob)
           .sort(newestFirst)[0];
@@ -2928,14 +2969,15 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
             phase: "batching",
             current: 0,
             total: imageBatches.length + 1,
-            message: `Reviewing ${imagePayload.length} images in ${imageBatches.length} batches, then Sarah will synthesize one final review...`,
+            message: `Queueing ${imagePayload.length} images in ${imageBatches.length} server-side batches. Keep the app open until all batches are queued; after that the desktop backend can continue the work.`,
           },
         });
 
+        const batchJobs = [];
         for (let batchIndex = 0; batchIndex < imageBatches.length; batchIndex += 1) {
           const batchImages = imageBatches[batchIndex];
           const batchLabel = `${jobLabel} batch ${batchIndex + 1}/${imageBatches.length}`;
-          const batchRaw = await runProfilerAIJob({
+          const startedBatchJob = await startProfilerAIJob({
             model: "claude_sonnet_4_6",
             max_tokens: PROFILE_IMAGE_REVIEW_MAX_TOKENS,
             attempts: 3,
@@ -2981,7 +3023,7 @@ ANNOTATED IMAGE OUTPUT RULES:
 - For tiny structures or ambiguous findings such as meatus, meatal fluid/droplet, urethral fluid, device insertion, catheter/Foley presence, or fine tissue margins, use possible/uncertain unless the structure is unambiguous at the pin or box location.
 - Keep paragraphs complete and TTS-ready. Return structured JSON only.`,
             response_json_schema: responseSchema,
-          }, batchLabel, setJobStatus, {
+          }, batchLabel, {
             priority: 30,
             meta: {
               reviewType: config.kind,
@@ -2994,9 +3036,34 @@ ANNOTATED IMAGE OUTPUT RULES:
               reused_saved_image_count: reusedSavedImages.length,
             },
           });
+          batchJobs.push({ job: startedBatchJob, batchIndex, batchImages, batchLabel });
+          setJobStatus({
+            ...startedBatchJob,
+            progress: {
+              ...(startedBatchJob.progress || {}),
+              phase: "batch_queued",
+              current: batchIndex + 1,
+              total: imageBatches.length,
+              message: `Queued ${batchIndex + 1}/${imageBatches.length} ${config.shortTitle} image batches. Server jobs can continue if Android backgrounds the app.`,
+            },
+          });
+        }
+
+        for (const batchJob of batchJobs) {
+          const { job, batchIndex, batchImages } = batchJob;
+          const completedBatchJob = await waitProfilerAIJob(job, (nextJob) => {
+            setJobStatus({
+              ...nextJob,
+              progress: {
+                ...(nextJob.progress || {}),
+                batch_current: batchIndex + 1,
+                batch_total: imageBatches.length,
+              },
+            });
+          });
           const batchReviewedImages = buildImageReviewReferences(batchImages);
           const batchParsed = remapBatchLocalImageIds(
-            normalizeImageReviewResult(typeof batchRaw === "string" ? JSON.parse(batchRaw) : batchRaw),
+            normalizeImageReviewResult(typeof completedBatchJob.result === "string" ? JSON.parse(completedBatchJob.result) : completedBatchJob.result),
             batchReviewedImages,
           );
           if (batchParsed?.overview) batchParsedResults.push(batchParsed);

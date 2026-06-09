@@ -98,7 +98,13 @@ export async function getReadyServiceWorkerRegistration({ timeoutMs = 1500 } = {
   if (readyRegistration?.showNotification) return readyRegistration;
 
   try {
-    return navigator.serviceWorker.getRegistration?.() || null;
+    const existing = await navigator.serviceWorker.getRegistration?.();
+    if (existing?.showNotification) return existing;
+    if (window.isSecureContext && navigator.serviceWorker.register) {
+      const registered = await navigator.serviceWorker.register("/sw.js");
+      if (registered?.showNotification) return registered;
+    }
+    return existing || null;
   } catch {
     return null;
   }
@@ -126,6 +132,8 @@ export async function notifyBackgroundJobFinished(job, { route, onOpen, force = 
       markNotified(job);
       return true;
     }
+
+    if ("serviceWorker" in navigator) return false;
 
     const notification = new window.Notification(message.title, options);
     notification.onclick = () => {

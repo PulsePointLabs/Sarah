@@ -178,6 +178,10 @@ async function showPulsePointNotification({ title, body, route = "/settings" }) 
     return;
   }
 
+  if ("serviceWorker" in navigator) {
+    throw new Error("Notification permission is granted, but the service worker is not ready yet. Close and reopen the installed app once, then send another test.");
+  }
+
   const notification = new Notification(title, options);
   notification.onclick = () => {
     window.focus();

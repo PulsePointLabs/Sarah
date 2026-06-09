@@ -13,8 +13,13 @@ const PWA_FOREGROUND_STABILITY_V1 = true;
 const PWA_KEEP_WORKER_REGISTERED_V1 = true;
 const PWA_DISABLE_SW_IN_DEV_V1 = true;
 
+function isStandalonePwa() {
+  return window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator?.standalone === true;
+}
+
 if (import.meta.env.DEV) {
   window.addEventListener('load', () => {
+    if (isStandalonePwa()) return;
     // Dev/Tailscale builds must not keep an old installed-app shell around.
     // Do this outside the secure-context gate so plain HTTP LAN/Tailscale
     // sessions can still clear Cache Storage even when SW APIs are unavailable.
