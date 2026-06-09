@@ -1433,6 +1433,10 @@ function profileReviewResultSections(config) {
   return config.sections || [];
 }
 
+function isHeadToToeReviewConfig(config = {}) {
+  return config.kind === "profile_head_to_toe_image_review";
+}
+
 function imageReviewReferencePromptLines(images = []) {
   const refs = buildImageReviewReferences(images);
   if (!refs.length) return "- No directly attached images in this run.";
@@ -1590,7 +1594,7 @@ function isLowValueAbsentRegionParagraph(value = "") {
     /\bno\s+(?:obvious|visible|apparent)\s+(?:lesions?|fissur|rash|bruis|swelling|asymmetry|deformity|irritation|discoloration|tissue stress|catheter|foley|device|mass|edema|hernia bulge)/i.test(text) ||
     /\bappears\s+(?:healthy|symmetric|broadly uniform|normal)\b/i.test(text);
   if (isPositiveAbsence) return false;
-  const absenceLanguage = /\b(?:not visible|not assessable|cannot be assessed|cannot be fully assessed|deferred to|not available|not present in this batch|no .*views? (?:are|is) present|missing .*views?|major limitation|must be deferred)\b/i.test(text);
+  const absenceLanguage = /\b(?:not visible|not assessable|cannot be assessed|cannot be fully assessed|deferred to|not available|not present in this batch|not provided in this batch|not included in this batch|no .*views? (?:are|is) present|missing .*views?|major limitation|must be deferred)\b/i.test(text);
   if (!absenceLanguage) return false;
   const usefulVisibleClaim = /\b(?:is visible|are visible|appears|show|shows|clearly visible|consistent with|scattered|level|symmetric|flat on floor|projects|flaccid|foreskin|raphe|perineal|scrot|abdomen|feet|shoulders|spine|skin)\b/i.test(text);
   const absentRegionInventory = /\b(?:head|neck|thorax|chest|upper limb|lower limb|lower leg|feet|foot|toe|torso|shoulder|spine|whole-body|standing|full-limb|skin surface findings|musculoskeletal|posture|alignment|body habitus)\b/i.test(text);
@@ -1603,6 +1607,8 @@ function uniqueReviewItems(items = [], limit = 14, maxChars = 900, batchSet = nu
   for (const item of items) {
     const text = cleanImageReviewProse(batchSet ? sanitizeRecoveredBatchScopeText(item, batchSet) : item);
     if (!text || /^batch\s+\d+\s+of\s+\d+/i.test(text) || /^this is batch\s+\d+/i.test(text)) continue;
+    if (/\b(?:these|the)\s+images?\s+(?:have|has)\s+not\s+been\s+(?:provided|included|attached)\s+in\s+this\s+batch\b/i.test(text)) continue;
+    if (/\b(?:not\s+provided|not\s+included|not\s+attached)\s+in\s+this\s+batch\b/i.test(text)) continue;
     if (isLowValueAbsentRegionParagraph(text)) continue;
     const key = text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().slice(0, 180);
     if (!key || seen.has(key)) continue;
@@ -1626,6 +1632,7 @@ function buildBatchAssembledImageReview(config, batchResults = [], batchSet = {}
   const referenceValue = uniqueReviewItems(batchResults.flatMap((item) => item?.summary_card?.primary_reference_value || []), 8, 460, batchSet);
   const limitations = uniqueReviewItems(batchResults.flatMap((item) => item?.summary_card?.key_limitations || []), 4, 360, batchSet);
   const coverage = uniqueReviewItems(batchResults.map((item) => item?.summary_card?.coverage || item?.overview), 4, 520, batchSet).join(" ");
+  const headToToe = isHeadToToeReviewConfig(config);
   const annotatedByKey = new Map();
   for (const image of batchResults.flatMap((item) => Array.isArray(item?.annotated_images) ? item.annotated_images : [])) {
     const key = image?.image_id || `${image?.view_label || ""}-${annotatedByKey.size}`;
@@ -1638,25 +1645,38 @@ function buildBatchAssembledImageReview(config, batchResults = [], batchSet = {}
   }
 
   const result = {
-    overview: `This cumulative ${config.shortTitle.toLowerCase()} review was assembled from ${batchSet.total || batchResults.length} completed Sarah batch reviews ${assemblyReason}. The batch-level visual review succeeded, so this assembled version leads with the paid-for direct image observations, annotated image callouts, and profile-context reconciliation without making another cloud request. It should be treated as a cumulative review assembled from completed Sarah evidence rather than a freshly rewritten final narrative.`,
+    overview: headToToe
+      ? "Cumulative head-to-toe anatomy review integrating the available full-body, regional, pelvic, and saved profile photo evidence into one body-centered summary."
+      : `This cumulative ${config.shortTitle.toLowerCase()} review was assembled from ${batchSet.total || batchResults.length} completed Sarah batch reviews ${assemblyReason}. The batch-level visual review succeeded, so this assembled version leads with the paid-for direct image observations, annotated image callouts, and profile-context reconciliation without making another cloud request. It should be treated as a cumulative review assembled from completed Sarah evidence rather than a freshly rewritten final narrative.`,
     summary_card: {
-      baseline_quality: uniqueReviewItems(batchResults.map((item) => item?.summary_card?.baseline_quality), 2, 420, batchSet).join(" ") || "Recovered from completed Sarah image-review batches.",
-      coverage: coverage || `${batchSet.image_count || batchSet.reviewed_images?.length || "Multiple"} saved/direct profile-reference views were reviewed across completed batches.`,
-      primary_reference_value: referenceValue,
+      baseline_quality: headToToe ? "" : uniqueReviewItems(batchResults.map((item) => item?.summary_card?.baseline_quality), 2, 420, batchSet).join(" ") || "Recovered from completed Sarah image-review batches.",
+      coverage: headToToe ? "" : coverage || `${batchSet.image_count || batchSet.reviewed_images?.length || "Multiple"} saved/direct profile-reference views were reviewed across completed batches.`,
+      primary_reference_value: headToToe ? [] : referenceValue,
       key_direct_findings: directFindings,
-      key_limitations: limitations,
-      evidence_note: `Direct batch findings were preserved and locally assembled ${evidenceReason}.`,
+      key_limitations: headToToe ? [] : limitations,
+      evidence_note: headToToe ? "" : `Direct batch findings were preserved and locally assembled ${evidenceReason}.`,
     },
     annotated_images: Array.from(annotatedByKey.values()),
     image_region_findings: Array.from(findingsByKey.values()),
   };
 
   for (const section of sections) {
-    const sectionLimit = /limit/i.test(section.key) ? 5 : 14;
-    const items = uniqueReviewItems(batchResults.flatMap((item) => Array.isArray(item?.[section.key]) ? item[section.key] : []), sectionLimit, 950, batchSet);
+    const sectionLimit = /missing|optional|request|limit/i.test(section.key) ? 5 : 14;
+    const sourceKeys = headToToe
+      ? {
+        pelvic_genital_perineal_anatomy: ["pelvic_genital_perineal_anatomy", "region_specific_anatomical_findings"],
+        missing_items_optional_image_requests: ["missing_items_optional_image_requests", "suggested_next_reference_images"],
+      }[section.key] || [section.key]
+      : [section.key];
+    const rawSectionItems = batchResults.flatMap((item) => sourceKeys.flatMap((key) => Array.isArray(item?.[key]) ? item[key] : []));
+    const items = uniqueReviewItems(rawSectionItems, sectionLimit, 950, batchSet);
+    if (headToToe && !items.length) {
+      result[section.key] = [];
+      continue;
+    }
     result[section.key] = items.length
       ? items
-      : [/limit/i.test(section.key)
+      : [/missing|optional|request|limit/i.test(section.key)
         ? "No additional material limitation was preserved from the completed batch findings beyond the confidence notes already attached to specific observations."
         : `No distinct recovered batch paragraph was available for ${section.label.toLowerCase()}; see the visible findings and annotated image callouts.`];
   }
@@ -1809,36 +1829,39 @@ function AnnotatedImageStage({
   );
 }
 
-function ProfileImageSummaryCard({ summary, color = "hsl(var(--primary))" }) {
+function ProfileImageSummaryCard({ summary, color = "hsl(var(--primary))", lean = false }) {
   if (!summary || typeof summary !== "object") return null;
   const direct = Array.isArray(summary.key_direct_findings) ? summary.key_direct_findings.filter(Boolean) : [];
-  const reference = Array.isArray(summary.primary_reference_value) ? summary.primary_reference_value.filter(Boolean) : [];
-  const limitations = Array.isArray(summary.key_limitations) ? summary.key_limitations.filter(Boolean) : [];
-  if (!summary.baseline_quality && !summary.coverage && !direct.length && !reference.length && !limitations.length && !summary.evidence_note) return null;
+  const reference = lean ? [] : Array.isArray(summary.primary_reference_value) ? summary.primary_reference_value.filter(Boolean) : [];
+  const limitations = lean ? [] : Array.isArray(summary.key_limitations) ? summary.key_limitations.filter(Boolean) : [];
+  const coverage = lean ? "" : summary.coverage;
+  const evidenceNote = lean ? "" : summary.evidence_note;
+  const baselineQuality = lean ? "" : summary.baseline_quality;
+  if (!baselineQuality && !coverage && !direct.length && !reference.length && !limitations.length && !evidenceNote) return null;
   return (
     <div className="rounded-xl border border-border bg-card/70 p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color }}>Evidence Summary</p>
+          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color }}>{lean ? "Key Visible Findings" : "Evidence Summary"}</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Direct visual findings are kept separate from saved profile context and interpretation.
+            {lean ? "Trimmed to the visible anatomy findings that matter for this review." : "Direct visual findings are kept separate from saved profile context and interpretation."}
           </p>
         </div>
-        {summary.baseline_quality && (
-          <Badge variant="outline" className="text-[10px]">{summary.baseline_quality}</Badge>
+        {baselineQuality && (
+          <Badge variant="outline" className="text-[10px]">{baselineQuality}</Badge>
         )}
       </div>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
-        {summary.coverage && (
+        {coverage && (
           <div className="rounded-lg border border-border bg-background/60 p-2">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Coverage</p>
-            <p className="mt-1 text-xs leading-relaxed text-foreground">{summary.coverage}</p>
+            <p className="mt-1 text-xs leading-relaxed text-foreground">{coverage}</p>
           </div>
         )}
-        {summary.evidence_note && (
+        {evidenceNote && (
           <div className="rounded-lg border border-border bg-background/60 p-2">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Evidence Note</p>
-            <p className="mt-1 text-xs leading-relaxed text-foreground">{summary.evidence_note}</p>
+            <p className="mt-1 text-xs leading-relaxed text-foreground">{evidenceNote}</p>
           </div>
         )}
       </div>
@@ -2216,8 +2239,13 @@ const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
   emptyText: "Review Existing Evidence uses saved profile/body-reference findings first. Add anatomical-position/body-reference images only when you want to expand the reference set; pelvic/session-specific evidence will stay limited here.",
   reviewInstructions: `
 HEAD-TO-TOE REVIEW SCOPE:
-- Produce a detailed anatomical and A&P-focused review of the image set while keeping the analysis centered on the body.
-- Preserve anatomical detail, posture discussion, habitus description, body symmetry assessment, musculoskeletal observations, skin/surface findings, and only the limitations that matter for confidence.
+- Produce one cumulative, body-centered head-to-toe anatomy review. The output should read like the final useful review, not a process note.
+- Include pelvic, genital, perineal, anal/perianal, pubic/inguinal, and lower abdominal anatomy when those findings are supported by saved or attached profile photo evidence.
+- Use all available saved visual evidence as first-class evidence: direct uploads in this run, reusable saved Profile Q&A image attachments, saved Profile Q&A visual findings, prior Sarah visual reviews, session/body-exploration visual evidence, and entered profile metrics where they help reconcile visible findings.
+- Never write "these images have not been provided in this batch", "not visible in this batch", "deferred to another batch", or equivalent batch-amnesia wording. If a body region has prior saved visual evidence, use that evidence. If a region truly has no evidence anywhere in the cumulative profile, mention it only at the very end as an optional image request.
+- Do not write provenance, batch, timeout, recovery, payment, cloud request, "assembled from", or "this batch" language in the user-facing review.
+- Do not make Image Set Overview, Reference Value for PulsePoint, or Limitations the main output. Mention missing coverage only at the very end under optional image requests.
+- Preserve anatomical detail, posture discussion, habitus description, body symmetry assessment, musculoskeletal observations, skin/surface findings, and pelvic anatomy.
 - Use the environment only as brief context for lighting quality, camera angle, image completeness, visibility limitations, posture/reference setup, or support surfaces that directly affect body position.
 - Do not write a room inventory. Do not identify, speculate about, or side-investigate incidental objects, pocket contents, phone outlines, equipment, screen details, clutter, waistband shapes, or holster/device prints unless they directly affect body visibility, positioning, safety of interpretation, image quality, or frame/reference context.
 - If an incidental object is visible but not clinically/image-review relevant, ignore it.
@@ -2225,32 +2253,28 @@ HEAD-TO-TOE REVIEW SCOPE:
 - Separate visible findings from interpretation. Do not infer psychology, arousal, pain, function, dominance, intent, or session state from static posture alone.
 - If nudity or genital anatomy is visible, describe only clinically relevant visibility, position, symmetry, skin/surface findings, resting state, and limitations. Use cautious terms such as flaccid, partial erection, erection, obscured, or uncertain only when visually assessable.
 - Do not use this head-to-toe review to summarize catheter, urethral, sound/dilator, Foley, sleeve, stimulation, ejaculation, arousal progression, foot-camera arousal recruitment, device-fit, or genital measurement history. Those belong in the pelvic/genital or session analysis artifacts.
-- If fresh images are absent or the available saved evidence does not include actual head-to-toe/body-reference views, keep the review appropriately short: state the usable evidence that exists, name the main coverage gap once, and list optional next images only if useful. Do not compensate by adding unrelated detailed pelvic/session findings.
+- If fresh images are absent, still use saved profile/body-reference image evidence and saved Q&A visual findings. Do not imply the profile has no images when saved images or reviewed findings exist.
 - Compare visible whole-body findings against saved Q&A findings, prior sessions, and entered metrics only where they help reconcile body reference evidence. Do not let profile context override fresh image evidence.
 - Organize the output using these body-centered sections:
-  1. Image Set Overview: number of images/views, body positions/views captured, clothing/nude status where relevant to visibility, image quality, lighting, adequacy for anatomical reference, and the one or two most important coverage limits only. Keep this concise and do not catalog the room.
-  2. Overall Body Overview: general frame/build, proportionality, visible muscularity, adipose distribution, broad symmetry, and stance/positioning that can actually be seen.
-  3. Posture & Alignment: visible head/neck, shoulder height, thoracic/lumbar contour, pelvic posture if visible, knee/ankle alignment, foot angle/stance, and anterior/posterior/lateral differences.
-  4. Body Habitus & Soft Tissue: torso contour, abdominal contour, chest/upper-body contour if visible, limb soft tissue distribution, muscular definition, central versus peripheral adipose distribution where visible, and confidence limits.
-  5. Skin & Surface Findings: visible skin tone, redness, bruising, rash, swelling, scars/marks, vascularity, surface asymmetry, and positive absence observations such as no obvious lesion or swelling where relevant. Do not invent skin findings.
-  6. Musculoskeletal / Limb Findings: upper limbs, forearms/hands, thighs/lower legs, feet/toes, symmetry, muscle bulk, joint alignment, swelling/deformity, resting foot/toe posture, and functional implications only when directly supported by visible evidence.
-  7. Region-Specific Anatomical Findings: head/neck, shoulders/upper back, chest/torso, abdomen, pelvis/genital region, gluteal/posterior pelvis, upper limbs/hands, lower limbs/feet when visible and appropriate.
-  8. Reference Value for PulsePoint: usefulness as a baseline for posture, body symmetry, limb alignment, body habitus, visible surface findings, future session comparison, and motion/telemetry/video interpretation.
-  9. Limitations: only the practical constraints that materially affect interpretation, such as clothing/shoes coverage, missing scale reference, camera angle/perspective, lighting/resolution, occluded regions, or static-image limits. Do not list every absent body region.
-  10. Suggested Next Reference Images: only if useful, recommend barefoot anterior/posterior/lateral views, anatomical position with arms relaxed, supine/prone/seated views, closer regional images for skin/surface findings, scale reference, and consistent lighting/camera distance.
+  1. Overall Body Overview: general frame/build, proportionality, visible muscularity, adipose distribution, broad symmetry, and stance/positioning that can actually be seen.
+  2. Posture & Alignment: visible head/neck, shoulder height, thoracic/lumbar contour, pelvic posture if visible, knee/ankle alignment, foot angle/stance, and anterior/posterior/lateral differences.
+  3. Body Habitus & Soft Tissue: torso contour, abdominal contour, chest/upper-body contour if visible, limb soft tissue distribution, muscular definition, central versus peripheral adipose distribution where visible.
+  4. Skin & Surface Findings: visible skin tone, redness, bruising, rash, swelling, scars/marks, vascularity, surface asymmetry, and positive absence observations such as no obvious lesion or swelling where relevant. Do not invent skin findings.
+  5. Musculoskeletal / Limb Findings: upper limbs, forearms/hands, thighs/lower legs, feet/toes, symmetry, muscle bulk, joint alignment, swelling/deformity, resting foot/toe posture, and functional implications only when directly supported by visible evidence.
+  6. Pelvic, Genital & Perineal Anatomy: lower abdomen, pubic mound, inguinal region/scars, penis/foreskin/glans/meatus when visible, scrotum/testes, scrotal raphe, perineal body/raphe, anal/perianal region, gluteal/posterior pelvis, and inner thighs.
+  7. Region-Specific Head-to-Toe Findings: head/neck, shoulders/upper back, chest/torso, abdomen, pelvis, upper limbs/hands, lower limbs/feet in anatomical order. Keep it concise and visible-finding centered.
+  8. Missing Items / Optional Image Requests: only the useful remaining photo requests or missing coverage items. Keep this at the end.
 - Every claim must be based on visible image evidence unless explicitly marked as profile/context interpretation. Prefer "appears", "is visible", "is consistent with", or "not visible in this specific view" over stronger wording, but do not overuse caveats.
 `,
   sections: [
-    { key: "image_set_overview", label: "Image Set Overview", color: "hsl(var(--chart-1))" },
     { key: "overall_body_overview", label: "Overall Body Overview", color: "hsl(var(--chart-4))" },
     { key: "posture_alignment", label: "Posture & Alignment", color: "hsl(var(--chart-2))" },
     { key: "body_habitus_soft_tissue", label: "Body Habitus & Soft Tissue", color: "hsl(var(--primary))" },
     { key: "skin_surface_findings", label: "Skin & Surface Findings", color: "hsl(var(--chart-3))" },
     { key: "musculoskeletal_and_limb_findings", label: "Musculoskeletal, Limb, Hand & Foot Findings", color: "hsl(var(--chart-5))" },
-    { key: "region_specific_anatomical_findings", label: "Region-Specific Anatomical Findings", color: "hsl(var(--chart-2))" },
-    { key: "reference_value_for_pulsepoint", label: "Reference Value for PulsePoint", color: "hsl(var(--chart-1))" },
-    { key: "limitations", label: "Limitations", color: "hsl(var(--muted-foreground))" },
-    { key: "suggested_next_reference_images", label: "Suggested Next Reference Images", color: "hsl(var(--muted-foreground))", required: false },
+    { key: "pelvic_genital_perineal_anatomy", label: "Pelvic, Genital & Perineal Anatomy", color: "hsl(var(--chart-2))" },
+    { key: "region_specific_anatomical_findings", label: "Region-Specific Head-to-Toe Findings", color: "hsl(var(--chart-2))" },
+    { key: "missing_items_optional_image_requests", label: "Missing Items / Optional Image Requests", color: "hsl(var(--muted-foreground))", required: false },
   ],
 };
 
@@ -3485,7 +3509,7 @@ ANNOTATED IMAGE OUTPUT RULES:
         )}
 
         {result?.summary_card && (
-          <ProfileImageSummaryCard summary={result.summary_card} color={config.color} />
+          <ProfileImageSummaryCard summary={result.summary_card} color={config.color} lean={isHeadToToeReviewConfig(config)} />
         )}
 
         {result && (
