@@ -164,27 +164,7 @@ function unsupportedClaimReason(paragraph, evidenceText, packet = null) {
 }
 
 function unsupportedClaimLimitation(reason) {
-  return `A specific claim was removed because ${reason}. Treat that gap as a limitation rather than a confirmed session finding.`;
-}
-
-function evidenceLimitedExecutiveSummary(packet = null, reason = "") {
-  const pieces = [];
-  const metadata = packet?.session_metadata || {};
-  if (metadata.duration_minutes != null) pieces.push(`duration ${metadata.duration_minutes} minutes`);
-  if (metadata.intensity != null) pieces.push(`intensity ${metadata.intensity}`);
-  if (metadata.satisfaction != null) pieces.push(`satisfaction ${metadata.satisfaction}`);
-  const contextText = packet?.user_logged_context?.text;
-  const contextNote = contextText ? "Logged context is available and should be interpreted separately from telemetry and visual evidence." : "No structured logged context was available.";
-  const telemetryNote = packet?.telemetry_findings?.heart_rate?.present
-    ? "Heart-rate telemetry is available for cautious autonomic interpretation."
-    : "Heart-rate telemetry was not available.";
-  const visualNote = packet?.visual_evidence?.present
-    ? "Visual/event evidence is present in the packet and should be limited to the saved cards and event notes."
-    : hasAcceptedVideoPassEventNotes(packet)
-      ? `${packet?.counts?.ai_video_pass_event_notes || "Accepted"} video-pass event notes are present and can be used as visual/event grounding.`
-    : "No saved visual evidence cards were available for direct visual grounding.";
-  const reasonNote = reason ? ` The local model tried to exceed the evidence packet, so unsupported claims were removed (${reason}).` : "";
-  return `This local Sarah analysis is evidence-limited${pieces.length ? ` (${pieces.join(", ")})` : ""}. ${contextNote} ${telemetryNote} ${visualNote}${reasonNote}`;
+  return `A generated interpretation was not retained because it was not supported by the evidence packet: ${reason}.`;
 }
 
 function eventCategories(event) {
@@ -537,10 +517,9 @@ export function normalizeGoldStandardSessionAnalysis(value, packet = null, optio
   const missingEmg = packet?.emg_findings?.missing_statement || "No EMG data was logged or captured in this session.";
   const evidenceText = packetEvidenceText(packet);
   const executiveSummary = repairSarahParagraph(source.executive_summary || source.summary || "", options);
-  const executiveUnsupportedReason = unsupportedClaimReason(executiveSummary, evidenceText, packet);
   const normalized = {
     ...source,
-    executive_summary: executiveUnsupportedReason ? evidenceLimitedExecutiveSummary(packet, executiveUnsupportedReason) : executiveSummary,
+    executive_summary: executiveSummary,
     chronological_deep_dive: (source.chronological_deep_dive || source.arousal_arc || source.phase_analysis || []).map((item) => normalizeChronologicalItem(item, packet, evidenceText, options)).filter(Boolean),
     motion_evidence_interpretation: (source.motion_evidence_interpretation || source.event_analysis || source.hr_analysis || []).map((item) => normalizeGuardedSectionItem(item, ["visual_evidence", "telemetry_evidence"], packet, evidenceText, options)).filter(Boolean),
     telemetry_interpretation: (source.telemetry_interpretation || []).map((item) => normalizeGuardedSectionItem(item, ["telemetry_evidence", "hrv_interpretation"], packet, evidenceText, options)).filter(Boolean),
@@ -549,7 +528,6 @@ export function normalizeGoldStandardSessionAnalysis(value, packet = null, optio
     recommendations_experiments: (source.recommendations_experiments || source.recommendations || []).map((item) => normalizeGuardedSectionItem(item, ["hypothesis"], packet, evidenceText, options)).filter(Boolean),
     limitations: [
       ...(source.limitations?.length ? source.limitations : (packet?.limitations || [])),
-      ...(executiveUnsupportedReason ? [{ paragraph: unsupportedClaimLimitation(executiveUnsupportedReason), evidence_refs: ["session_evidence_packet"], claim_types: ["limitation"] }] : []),
     ].map((item) => normalizeGuardedSectionItem(item, ["limitation"], packet, evidenceText, options)).filter(Boolean),
     provenance_summary: (source.provenance_summary?.length ? source.provenance_summary : [
       { paragraph: "This analysis was synthesized from the shared Sarah evidence packet, including user-logged context, event notes, saved visual evidence, telemetry, HRV when present, EMG status, profile context, and stated limitations.", evidence_refs: ["session_evidence_packet"], claim_types: ["limitation"] },
@@ -557,7 +535,7 @@ export function normalizeGoldStandardSessionAnalysis(value, packet = null, optio
   };
   if (!normalized.chronological_deep_dive.length) {
     normalized.chronological_deep_dive = [{
-      time_range: "Evidence-limited",
+      time_range: "Limited evidence",
       paragraph: "The shared evidence packet did not contain enough supported timestamped visual or event evidence for a reliable chronological deep dive. Sarah should not invent a session sequence from profile context or telemetry alone.",
       evidence_refs: ["session_evidence_packet"],
       claim_types: ["limitation"],
@@ -565,9 +543,9 @@ export function normalizeGoldStandardSessionAnalysis(value, packet = null, optio
   }
   if (!normalized.motion_evidence_interpretation.length) {
     normalized.motion_evidence_interpretation = [{
-      paragraph: packet?.visual_evidence?.present
+      paragraph: packet?.visual_evidence?.present || hasAcceptedVideoPassEventNotes(packet)
         ? "Motion and visual interpretation should be limited to the saved evidence cards and accepted event notes in the packet."
-        : "No saved visual evidence cards were available, so specific movement or technique findings cannot be confirmed from this evidence packet.",
+        : "No saved visual evidence cards or accepted video-pass event notes were available, so specific movement or technique findings cannot be confirmed from this evidence packet.",
       evidence_refs: ["visual_evidence"],
       claim_types: ["limitation"],
     }];
@@ -583,7 +561,7 @@ export function normalizeGoldStandardSessionAnalysis(value, packet = null, optio
   }
   if (!normalized.patterns_hypotheses.length) {
     normalized.patterns_hypotheses = [{
-      paragraph: "No reliable pattern or hypothesis should be promoted from this local output beyond the evidence streams present in the packet.",
+      paragraph: "No reliable pattern or hypothesis should be promoted beyond the evidence streams present in the packet.",
       evidence_refs: ["session_evidence_packet"],
       claim_types: ["limitation"],
     }];

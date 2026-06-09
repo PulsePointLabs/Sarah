@@ -107,7 +107,7 @@ test('normalization repairs third-person local wording into direct Sarah address
   assert.match(normalized.chronological_deep_dive[0].paragraph, /^You made/i);
 });
 
-test('local persona repair removes detached labels before rendering or saving', () => {
+test('persona repair removes detached labels before rendering or saving', () => {
   const packet = buildSessionAnalysisEvidencePacket({ session, timelineRows, emgRows: [] });
   const normalized = normalizeGoldStandardSessionAnalysis({
     executive_summary: "This user had context in the packet. The subject's telemetry is reviewed.",
@@ -127,7 +127,7 @@ test('local persona repair removes detached labels before rendering or saving', 
   assert.match(normalized.telemetry_interpretation[0].paragraph, /^Your HRV data suggests/i);
 });
 
-test('local persona repair fixes simple agreement after detached-label replacement', () => {
+test('persona repair fixes simple agreement after detached-label replacement', () => {
   const packet = buildSessionAnalysisEvidencePacket({ session, timelineRows, emgRows: [] });
   const normalized = normalizeGoldStandardSessionAnalysis({
     executive_summary: 'The patient is encouraged to log EMG data. The subject has HRV data.',
@@ -146,7 +146,7 @@ test('local persona repair fixes simple agreement after detached-label replaceme
   assert.match(normalized.executive_summary, /^You are encouraged/i);
 });
 
-test('normalization converts unsupported invented local claims into limitations', () => {
+test('normalization removes unsupported invented claims without overwriting executive summary', () => {
   const sparsePacket = buildSessionAnalysisEvidencePacket({
     session: {
       id: 'sparse',
@@ -171,10 +171,51 @@ test('normalization converts unsupported invented local claims into limitations'
   }, sparsePacket);
 
   const rendered = JSON.stringify(normalized);
-  assert.match(normalized.executive_summary, /evidence-limited/i);
+  assert.equal(normalized.executive_summary, 'The session involved prostate massage using a perineum pressure technique with multiple near-climax events.');
+  assert.doesNotMatch(rendered, /This local Sarah analysis is evidence-limited/i);
+  assert.doesNotMatch(rendered, /No structured logged context was available/i);
+  assert.doesNotMatch(rendered, /Heart-rate telemetry was not available/i);
+  assert.doesNotMatch(rendered, /The local model tried/i);
   assert.deepEqual(normalized.chronological_deep_dive[0].claim_types, ['limitation']);
   assert.match(normalized.motion_evidence_interpretation[0].paragraph, /cannot be confirmed/i);
   assert.match(normalized.recommendations_experiments[0].paragraph, /improve the underlying evidence packet/i);
+});
+
+test('normalization does not claim missing evidence when event notes and telemetry are present', () => {
+  const packet = buildSessionAnalysisEvidencePacket({
+    session: {
+      ...session,
+      ai_analysis: {},
+    },
+    timelineRows,
+    emgRows: [],
+  });
+  assert.equal(packet.counts.ai_video_pass_event_notes, 3);
+  assert.equal(packet.user_logged_context.present, true);
+  assert.equal(packet.telemetry_findings.heart_rate.present, true);
+  assert.equal(packet.hrv_findings.source, 'RR-interval-derived rolling HRV');
+  assert.equal(packet.visual_evidence.saved_sarah_video_cards_count, 0);
+
+  const normalized = normalizeGoldStandardSessionAnalysis({
+    executive_summary: 'Your session has accepted video-pass event notes, structured context, HR telemetry, and RR-derived HRV. Climax was not retained as a supported claim.',
+    chronological_deep_dive: [{ time_range: '0:41', paragraph: 'Accepted event notes show first visible contact at the shaft and scrotal-base region.', evidence_refs: ['event-0'], claim_types: ['visual_evidence'] }],
+    motion_evidence_interpretation: [],
+    telemetry_interpretation: [{ paragraph: 'Heart rate and HRV are available and should be interpreted cautiously.', evidence_refs: ['hrv_findings'], claim_types: ['hrv_interpretation'] }],
+    emg_analysis: [{ paragraph: 'No EMG data was logged or captured in this session.', evidence_refs: ['emg_findings'], claim_types: ['limitation'] }],
+    patterns_hypotheses: [],
+    recommendations_experiments: [],
+    limitations: [],
+    provenance_summary: [{ paragraph: 'Evidence came from accepted video-pass event notes, structured context, HR telemetry, and HRV.', evidence_refs: ['session_evidence_packet'], claim_types: ['limitation'] }],
+  }, packet);
+
+  const rendered = JSON.stringify(normalized);
+  assert.match(normalized.executive_summary, /accepted video-pass event notes/i);
+  assert.match(normalized.motion_evidence_interpretation[0].paragraph, /accepted event notes/i);
+  assert.doesNotMatch(rendered, /This local Sarah analysis is evidence-limited/i);
+  assert.doesNotMatch(rendered, /No structured logged context was available/i);
+  assert.doesNotMatch(rendered, /Heart-rate telemetry was not available/i);
+  assert.doesNotMatch(rendered, /No saved visual evidence cards were available/i);
+  assert.doesNotMatch(rendered, /The local model tried/i);
 });
 
 test('normalization removes unsupported visual and HRV certainty claims cleanly', () => {
