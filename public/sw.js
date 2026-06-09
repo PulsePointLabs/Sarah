@@ -6,45 +6,14 @@
 // PWA_NAVIGATE_CACHED_SHELL_FIRST_V1
 // PWA_NO_SKIP_WAITING_ON_INSTALL_V1
 // PWA_NOTIFICATION_FOCUS_NO_NAVIGATE_V1
-const CACHE_NAME = "pulsepoint-shell-v12";
-const SHELL_ASSETS = [
-  "/",
-  "/manifest.json",
-  "/icons/pulsepoint-icon.svg",
-  "/icons/pulsepoint-192.png",
-  "/icons/pulsepoint-512.png",
-  "/icons/pulsepoint-maskable-512.png"
-];
-
-function isSensitiveOrDynamicRequest(url) {
-  return (
-    url.pathname.startsWith("/api") ||
-    url.pathname.startsWith("/uploads") ||
-    url.pathname.startsWith("/data") ||
-    url.pathname.includes("/tts") ||
-    url.pathname.includes("/audio") ||
-    url.pathname.match(/\.(mp4|mov|webm|mkv|mp3|wav|m4a|ogg|csv|sqlite|db)$/i)
-  );
-}
-
-function isDevelopmentAsset(url) {
-  return (
-    url.pathname.startsWith("/src/") ||
-    url.pathname.startsWith("/@vite/") ||
-    url.pathname.startsWith("/@react-refresh") ||
-    url.pathname.startsWith("/node_modules/.vite/")
-  );
-}
+// PWA_MINIMAL_NOTIFICATION_WORKER_V1
+const CACHE_PREFIX = "pulsepoint-shell-";
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(SHELL_ASSETS))
-      // Do not call skipWaiting here. Android/Chrome can install an update
-      // when the PWA regains focus; immediately activating it can trigger
-      // controllerchange and effectively reload the installed app. Let the new
-      // worker wait until all existing app windows are closed.
-  );
+  // Keep this worker inert. It exists for Android notification delivery, not
+  // offline shell caching. Do not call skipWaiting here: Android/Chrome can
+  // install an update when the PWA regains focus, and immediately activating it
+  // can interrupt background jobs or audio playback in the installed app.
 });
 
 self.addEventListener("activate", (event) => {
@@ -54,7 +23,7 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(keys
-        .filter((key) => key.startsWith("pulsepoint-shell-") && key !== CACHE_NAME)
+        .filter((key) => key.startsWith(CACHE_PREFIX))
         .map((key) => caches.delete(key))))
   );
 });
@@ -65,49 +34,6 @@ self.addEventListener("message", (event) => {
     // PulsePoint. Ignore legacy skip-waiting messages from older bundles.
     return;
   }
-});
-
-self.addEventListener("fetch", (event) => {
-  const request = event.request;
-  if (request.method !== "GET") return;
-
-  const url = new URL(request.url);
-  if (url.origin !== self.location.origin) return;
-  if (isSensitiveOrDynamicRequest(url) || isDevelopmentAsset(url)) return;
-
-  if (request.mode === "navigate") {
-    const networkRefresh = fetch(request)
-      .then((response) => {
-        if (response.ok) {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put("/", copy));
-        }
-        return response;
-      })
-      .catch(() => null);
-
-    event.waitUntil(networkRefresh);
-    event.respondWith(
-      caches.match("/").then((cached) => cached || networkRefresh.then((response) => response || Response.error()))
-    );
-    return;
-  }
-
-  const isShellAsset = SHELL_ASSETS.includes(url.pathname) || url.pathname.startsWith("/icons/");
-  if (isShellAsset) {
-    event.respondWith(
-      caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-        if (response.ok) {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-        }
-        return response;
-      }))
-    );
-    return;
-  }
-
-  event.respondWith(fetch(request));
 });
 
 self.addEventListener("notificationclick", (event) => {
