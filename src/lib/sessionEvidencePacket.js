@@ -79,28 +79,8 @@ function compactText(value, max = 900) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
-function clockTime(value) {
-  const total = Math.max(0, Math.round(Number(value) || 0));
-  const minutes = Math.floor(total / 60);
-  const seconds = total % 60;
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-function sentenceJoin(parts = []) {
-  return parts.filter(Boolean).join(" ");
-}
-
 function cleanSentence(text) {
   return String(text || "").replace(/\s+/g, " ").trim().replace(/[.。]+$/, "");
-}
-
-function repairEventNotePersona(text) {
-  return repairSarahDirectAddress(cleanSentence(text))
-    .replace(/^Subject visibly begins\b/i, "You visibly begin")
-    .replace(/^Subject fully exits\b/i, "You fully exit")
-    .replace(/^Subject exits\b/i, "You exit")
-    .replace(/^Subject supine\b/i, "You are supine")
-    .replace(/^Subject\b/i, "You");
 }
 
 function repairSarahDirectAddress(text) {
@@ -205,158 +185,6 @@ function evidenceLimitedExecutiveSummary(packet = null, reason = "") {
     : "No saved visual evidence cards were available for direct visual grounding.";
   const reasonNote = reason ? ` The local model tried to exceed the evidence packet, so unsupported claims were removed (${reason}).` : "";
   return `This local Sarah analysis is evidence-limited${pieces.length ? ` (${pieces.join(", ")})` : ""}. ${contextNote} ${telemetryNote} ${visualNote}${reasonNote}`;
-}
-
-function eventClaimTypes(event) {
-  const source = String(event?.source || "");
-  const tags = Array.isArray(event?.annotation_tags) ? event.annotation_tags.join(" ") : "";
-  if (/ai_video_pass|visual|video/i.test(`${source} ${tags}`)) return ["visual_evidence"];
-  if (/manual|user/i.test(source)) return ["user_logged_context"];
-  return ["user_logged_context"];
-}
-
-function eventRef(event, index) {
-  return event?.id || `session_timeline.${index}`;
-}
-
-function importantTimelineEvents(packet, limit = 28) {
-  const events = Array.isArray(packet?.session_timeline) ? packet.session_timeline : [];
-  const useful = events
-    .map((event, index) => ({ event, index }))
-    .filter(({ event }) => compactText(event?.note, 9999).length >= 20);
-  if (useful.length <= limit) return useful;
-
-  const keep = new Map();
-  const add = (item) => keep.set(item.index, item);
-  useful.slice(0, 6).forEach(add);
-  useful.slice(-6).forEach(add);
-
-  const middle = useful.slice(6, -6);
-  const step = Math.max(1, Math.floor(middle.length / Math.max(1, limit - keep.size)));
-  for (let i = 0; i < middle.length && keep.size < limit; i += step) add(middle[i]);
-  return [...keep.values()].sort((a, b) => a.index - b.index);
-}
-
-function hasPhaseMarker(packet, key) {
-  return packet?.session_metadata?.phase_markers_s?.[key] != null;
-}
-
-export function buildLocalEvidencePacketSessionAnalysis(packet = {}) {
-  const metadata = packet.session_metadata || {};
-  const counts = packet.counts || {};
-  const hr = packet.telemetry_findings?.heart_rate;
-  const hrv = packet.hrv_findings;
-  const contextText = packet.user_logged_context?.text || "";
-  const visualCount = Number(packet.visual_evidence?.saved_sarah_video_cards_count || 0);
-  const localCardCount = Number(packet.visual_evidence?.local_annotation_cards_count || 0);
-  const aiVideoPassEventCount = Number(counts.ai_video_pass_event_notes || 0);
-  const usefulEventCount = Number(counts.useful_event_notes || 0);
-  const eventItems = importantTimelineEvents(packet);
-  const methods = Array.isArray(metadata.methods) && metadata.methods.length ? metadata.methods.join(", ") : "";
-  const sessionFacts = [
-    metadata.date ? `date ${metadata.date}` : null,
-    metadata.duration_minutes != null ? `duration ${metadata.duration_minutes} minutes` : null,
-    methods ? `methods logged as ${methods}` : null,
-    metadata.intensity != null ? `intensity ${metadata.intensity}` : null,
-    metadata.satisfaction != null ? `satisfaction ${metadata.satisfaction}` : null,
-    metadata.build_quality != null ? `build quality ${metadata.build_quality}` : null,
-    metadata.build_type ? `build type ${metadata.build_type}` : null,
-    hasPhaseMarker(packet, "climax") ? `a logged climax marker at ${clockTime(metadata.phase_markers_s.climax)}` : null,
-  ].filter(Boolean);
-
-  const executive = sentenceJoin([
-    `This local Sarah report is assembled directly from the evidence packet without a local text-model synthesis pass.`,
-    sessionFacts.length ? `Your session packet includes ${sessionFacts.join(", ")}.` : "Session metadata is limited.",
-    contextText ? `Your logged context is present: ${contextText}.` : "No structured logged context was available.",
-    hr ? `Heart-rate telemetry is present (${hr.total_points} points; ${hr.min_bpm}-${hr.max_bpm} bpm, average ${hr.avg_bpm} bpm).` : "Heart-rate telemetry was not available.",
-    hrv ? `RR-derived HRV evidence is present and should be interpreted cautiously (${hrv.interpretation_status}).` : "RR-derived HRV evidence was not available.",
-    visualCount || localCardCount
-      ? `${visualCount} saved Sarah video card${visualCount === 1 ? "" : "s"} and ${localCardCount} local annotation card${localCardCount === 1 ? "" : "s"} are available.`
-      : aiVideoPassEventCount
-        ? `${aiVideoPassEventCount} accepted Claude/Sarah video-pass event note${aiVideoPassEventCount === 1 ? "" : "s"} are available. No saved video cards are attached, so visual claims should stay tied to those accepted event notes.`
-        : "No saved Sarah video/local annotation cards were available, so motion and visual claims are limited to accepted timeline notes rather than direct card evidence.",
-  ]);
-
-  const chronological = eventItems.length
-    ? eventItems.map(({ event, index }) => ({
-      time_range: event.time_s != null ? clockTime(event.time_s) : event.time_label || "Time not recorded",
-      paragraph: sentenceJoin([
-        `At ${event.time_s != null ? clockTime(event.time_s) : event.time_label || "an unrecorded time"}, ${repairEventNotePersona(event.note)}.`,
-        event.hr_bpm_nearest != null ? `Nearest recorded heart rate was about ${event.hr_bpm_nearest} bpm.` : null,
-        event.source ? `Source: ${event.source}.` : null,
-      ]),
-      evidence_refs: [eventRef(event, index)],
-      claim_types: eventClaimTypes(event),
-    }))
-    : [{
-      time_range: "Timeline unavailable",
-      paragraph: "No useful timestamped event notes were available for a chronological local assembly.",
-      evidence_refs: ["session_timeline"],
-      claim_types: ["limitation"],
-    }];
-
-  const motionParagraph = visualCount || localCardCount
-    ? `Motion interpretation should prioritize the ${visualCount} saved Sarah video card${visualCount === 1 ? "" : "s"} and ${localCardCount} local annotation card${localCardCount === 1 ? "" : "s"} in the packet.`
-    : aiVideoPassEventCount
-      ? `No saved video/local annotation cards are attached, but ${aiVideoPassEventCount} accepted Claude/Sarah video-pass event note${aiVideoPassEventCount === 1 ? "" : "s"} are present. Motion and technique interpretation can use those accepted notes as visual/event evidence, but this local report should not add new visual claims beyond them.`
-      : `No saved video/local annotation cards are available in this packet. Motion and technique interpretation is therefore limited to ${usefulEventCount} accepted timeline note${usefulEventCount === 1 ? "" : "s"}; this local report should not add new visual claims beyond those notes.`;
-
-  const telemetryParagraph = hr
-    ? sentenceJoin([
-      `Your heart-rate timeline contains ${hr.total_points} recorded points over about ${formatSecondsAsWords(hr.duration_s)}.`,
-      `The recorded range was ${hr.min_bpm}-${hr.max_bpm} bpm with an average of ${hr.avg_bpm} bpm.`,
-      hr.hr_at_climax != null ? `The stored heart rate at climax is ${hr.hr_at_climax} bpm.` : null,
-      hrv ? `RR-derived HRV is available with ${hrv.overall?.usable_row_count ?? 0} usable rows; median RMSSD is ${hrv.overall?.median_rmssd_ms ?? "not available"} ms and median SDNN is ${hrv.overall?.median_sdnn_ms ?? "not available"} ms. These values support cautious within-session autonomic interpretation only.` : "RR-derived HRV was not available.",
-    ])
-    : "No heart-rate timeline was available for this local report.";
-
-  const emgParagraph = packet.emg_findings?.present
-    ? `EMG data is present (${packet.emg_findings.total_samples} samples, ${packet.emg_findings.channel_mode} channel mode). Interpret EMG timing only against the stored EMG summary and timeline.`
-    : packet.emg_findings?.missing_statement || "No EMG data was logged or captured in this session.";
-
-  return {
-    executive_summary: executive,
-    chronological_deep_dive: chronological,
-    motion_evidence_interpretation: [{
-      paragraph: motionParagraph,
-      evidence_refs: visualCount || localCardCount ? ["visual_evidence"] : ["session_timeline"],
-      claim_types: visualCount || localCardCount ? ["visual_evidence"] : ["limitation"],
-    }],
-    telemetry_interpretation: [{
-      paragraph: telemetryParagraph,
-      evidence_refs: hrv ? ["telemetry_findings.heart_rate", "hrv_findings"] : ["telemetry_findings.heart_rate"],
-      claim_types: hrv ? ["telemetry_evidence", "hrv_interpretation"] : ["telemetry_evidence"],
-    }],
-    emg_analysis: [{
-      paragraph: emgParagraph,
-      evidence_refs: ["emg_findings"],
-      claim_types: packet.emg_findings?.present ? ["emg_evidence"] : ["limitation"],
-    }],
-    patterns_hypotheses: [{
-      paragraph: contextText || hrv || hr
-        ? "Patterns should be treated as provisional: logged context, event timing, HR/HRV, and accepted notes can be compared across sessions, but this local assembly does not infer intent, arousal, pleasure, or visual events beyond the packet."
-        : "No reliable pattern should be inferred from this packet alone.",
-      evidence_refs: ["user_logged_context", "telemetry_findings", "session_timeline"],
-      claim_types: ["hypothesis", "limitation"],
-    }],
-    recommendations_experiments: [{
-      paragraph: visualCount || localCardCount
-        ? "For the next local run, keep saving accepted video/local annotation cards so the local report can distinguish direct visual evidence from timeline notes and telemetry."
-        : "For a stronger local report, accept or regenerate Sarah video/local annotation cards for key windows. The current local report can use context, HR/HRV, and event notes, but it cannot replace direct visual cards.",
-      evidence_refs: ["visual_evidence", "session_timeline"],
-      claim_types: ["limitation"],
-    }],
-    limitations: (packet.limitations?.length ? packet.limitations : ["Evidence packet limitations were not listed."]).map((item) => ({
-      paragraph: item,
-      evidence_refs: ["session_evidence_packet"],
-      claim_types: ["limitation"],
-    })),
-    provenance_summary: [{
-      paragraph: `This local report was assembled deterministically from the shared Sarah evidence packet: ${usefulEventCount} useful event notes, ${aiVideoPassEventCount} accepted Claude/Sarah video-pass event notes, ${visualCount} saved video cards, ${localCardCount} local annotation cards, ${counts.context_fields || 0} logged context fields, HR ${hr ? "present" : "missing"}, HRV ${hrv ? "present" : "missing"}, and EMG ${packet.emg_findings?.present ? "present" : "missing"}. No cloud call and no local text-model synthesis were used for this assembly.`,
-      evidence_refs: ["session_evidence_packet"],
-      claim_types: ["limitation"],
-    }],
-  };
 }
 
 function eventCategories(event) {
@@ -659,35 +487,6 @@ export function evidencePacketPreview(packet) {
   };
 }
 
-export function localSessionAnalysisNeedsPacketFallback(result = {}, packet = {}) {
-  const counts = packet?.counts || {};
-  const usefulEventCount = Number(counts.useful_event_notes || 0);
-  const aiVideoPassEventCount = Number(counts.ai_video_pass_event_notes || 0);
-  const hasHr = Boolean(packet?.telemetry_findings?.heart_rate);
-  const hasHrv = Boolean(packet?.hrv_findings);
-  const hasContext = Boolean(packet?.user_logged_context?.present);
-  const hasSavedCards = Boolean(packet?.visual_evidence?.saved_sarah_video_cards_count || packet?.visual_evidence?.local_annotation_cards_count);
-  const hasAcceptedEvents = usefulEventCount >= 3 || aiVideoPassEventCount >= 2;
-  const hasHardPacketEvidence = hasContext || hasHr || hasHrv || hasSavedCards || hasAcceptedEvents;
-  if (!hasHardPacketEvidence) return false;
-
-  const rendered = JSON.stringify(result || {}).toLowerCase();
-  const chronological = Array.isArray(result?.chronological_deep_dive) ? result.chronological_deep_dive : [];
-  const eventGroundedChronology = chronological.filter((item) => (
-    Array.isArray(item?.evidence_refs) && item.evidence_refs.some((ref) => /event|timeline|visual_evidence/i.test(String(ref || "")))
-  ));
-
-  if (hasContext && /no structured logged context was available|no structured session context/i.test(rendered)) return true;
-  if (hasHr && /heart-rate telemetry was not available|no heart-rate timeline was available/i.test(rendered)) return true;
-  if (hasHrv && /no rr-derived hrv evidence was available|no hrv evidence was available/i.test(rendered)) return true;
-  if ((hasSavedCards || hasAcceptedEvents) && /no saved visual evidence cards were available, so specific movement|specific movement or technique findings cannot be confirmed/i.test(rendered)) return true;
-  if (hasAcceptedEvents && chronological.length <= 1 && eventGroundedChronology.length === 0) return true;
-  if (hasAcceptedEvents && /during this period, you reported|they approached a state|heightened arousal/i.test(rendered)) return true;
-  if (usefulEventCount >= 8 && chronological.length < 3) return true;
-
-  return false;
-}
-
 function normalizeSectionItem(item, fallbackClaimTypes = [], options = {}) {
   if (!item) return null;
   if (typeof item === "string") {
@@ -759,7 +558,7 @@ export function normalizeGoldStandardSessionAnalysis(value, packet = null, optio
   if (!normalized.chronological_deep_dive.length) {
     normalized.chronological_deep_dive = [{
       time_range: "Evidence-limited",
-      paragraph: "The shared evidence packet did not contain enough supported timestamped visual or event evidence for a reliable chronological deep dive. Local Sarah should not invent a session sequence from profile context or telemetry alone.",
+      paragraph: "The shared evidence packet did not contain enough supported timestamped visual or event evidence for a reliable chronological deep dive. Sarah should not invent a session sequence from profile context or telemetry alone.",
       evidence_refs: ["session_evidence_packet"],
       claim_types: ["limitation"],
     }];
@@ -768,7 +567,7 @@ export function normalizeGoldStandardSessionAnalysis(value, packet = null, optio
     normalized.motion_evidence_interpretation = [{
       paragraph: packet?.visual_evidence?.present
         ? "Motion and visual interpretation should be limited to the saved evidence cards and accepted event notes in the packet."
-        : "No saved visual evidence cards were available, so specific movement or technique findings cannot be confirmed from this local synthesis.",
+        : "No saved visual evidence cards were available, so specific movement or technique findings cannot be confirmed from this evidence packet.",
       evidence_refs: ["visual_evidence"],
       claim_types: ["limitation"],
     }];
@@ -791,7 +590,7 @@ export function normalizeGoldStandardSessionAnalysis(value, packet = null, optio
   }
   if (!normalized.recommendations_experiments.length) {
     normalized.recommendations_experiments = [{
-      paragraph: "The useful next step is to improve the underlying evidence packet, especially timestamped event notes or accepted visual annotation cards, before asking local synthesis for a richer Sarah-style interpretation.",
+      paragraph: "The useful next step is to improve the underlying evidence packet, especially timestamped event notes or accepted visual annotation cards, before asking Sarah for a richer interpretation.",
       evidence_refs: ["session_evidence_packet"],
       claim_types: ["limitation"],
     }];
@@ -811,65 +610,4 @@ export function requiredAnalysisSectionsPresent(result) {
     const value = result?.[key];
     return [key, key === "executive_summary" ? Boolean(String(value || "").trim()) : Array.isArray(value) && value.length > 0];
   }));
-}
-
-export function buildSarahSessionSynthesisPrompt({ packet, mode = "companion", local = false } = {}) {
-  return `You are Sarah, PulsePoint's clinical physiology companion and session interpreter.
-
-Your job is to synthesize the provided shared evidence packet into the gold-standard Sarah Session Analysis structure. ${local ? "You are running as a local text synthesizer. You are not a visual model." : "You are the Claude/Sarah reference analysis path."}
-
-Required sections:
-1. executive_summary
-2. chronological_deep_dive
-3. motion_evidence_interpretation
-4. telemetry_interpretation
-5. emg_analysis
-6. patterns_hypotheses
-7. recommendations_experiments
-8. limitations
-9. provenance_summary
-
-Evidence rules:
-- Use only evidence in the packet. Do not invent new visual findings.
-- New visual claims must come from saved Sarah video cards, accepted local annotation cards, accepted ai_video_pass event notes, explicit user/event notes, or visual evidence with frame references.
-- The local text LLM is a synthesizer only. It cannot see the video and cannot create new observations from imagination.
-- Do not write a chronological visual narrative unless the packet contains timestamped event notes or video/annotation cards for those windows.
-- If a section lacks enough evidence, write the limitation directly, but do not lead with boilerplate limitations when the packet contains useful accepted event notes, HR/HRV, logged context, or profile context.
-- Separate user-logged context, visual evidence, telemetry evidence, HRV interpretation, EMG evidence, profile context, hypotheses, and limitations.
-- If evidence is weak, say so plainly. Do not fill gaps with confident prose.
-- If EMG is missing, explicitly say no EMG data was logged or captured.
-- Do not label edging unless explicitly logged or clearly supported by repeated intended near-climax approach-and-withdraw cycles.
-- Keep alcohol/cannabis wording neutral and clinical; frame influence as possible, not causal proof.
-- Never output raw second offsets. Use readable time language or clock-style ranges.
-- Address Ben directly as "you" and "your"; never write detached labels like "the user," "this user," "the subject," "the individual," or "the patient."
-- Preferred phrasing: "you," "your body," "your session," "your telemetry," "your lower body," "your heart rate," and "your logged context." Use "Ben" sparingly, usually only in the opening if needed.
-- Keep the tone clinical, practical, evidence-based, and warm without erotic prose.
-
-Narrative quality target:
-- Write like Sarah, not like a validator log. The user should hear a grounded session read, not a packet inventory.
-- Start with the strongest actual session story: baseline/entry state, first visible changes, technique or contact changes, HR/HRV movement, lower-body motion, pauses/resumes, and the most important uncertainty.
-- Group dense timestamped notes into coherent phases. Do not mechanically list every event as one sentence unless the event sequence itself is the useful finding.
-- Use accepted ai_video_pass event notes as visual/event evidence, but phrase them as "the accepted event notes show/describe..." when there is no saved video card.
-- Make telemetry useful: identify rises, dips, plateaus, peaks, and HRV outliers when present. Keep causality cautious.
-- Limitations belong at the end unless a limitation directly changes the interpretation of a specific paragraph.
-- Avoid repetitive lines such as "No structured logged context was available" or "No saved visual evidence cards were available" when other usable evidence is present.
-
-Claims that are forbidden unless explicitly present in the packet:
-- prostate massage, perineum pressure technique, circular hand motion, first contact, technique shift, lubrication break, fluid/ejaculate, near-climax cycling, climax, orgasm, body relaxation, or arousal intent.
-- HRV proving arousal, climax, orgasm, pleasure, pain, or intent. HRV may only support cautious autonomic interpretation.
-
-Bad output pattern:
-"The session involved a detailed analysis of visual and telemetry data. The user engaged in prostate massage. Multiple near-climax events were observed."
-
-Required alternative when evidence is thin:
-"The packet does not contain enough timestamped visual/event evidence to support a detailed chronological visual narrative. The available telemetry/context can be summarized cautiously, but unsupported technique or climax claims should remain limitations."
-
-Output shape:
-- Return only JSON matching the schema.
-- chronological_deep_dive entries must include time_range, paragraph, evidence_refs, and claim_types.
-- Other section entries must include paragraph, evidence_refs, and claim_types.
-- claim_types may include: ${CLAIM_TYPES.join(", ")}.
-
-Shared evidence packet:
-${JSON.stringify(packet, null, 2)}`;
 }

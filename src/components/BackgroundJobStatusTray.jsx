@@ -39,7 +39,6 @@ function jobLabel(job) {
   if (job?.type === "local_vision_analyze_continuous") return "Local vision annotation";
   if (job?.type === "local_vision_analyze_window") return "Diagnostic local vision";
   if (job?.type === "local_vision_ask_video") return "Local video question";
-  if (job?.type === "local_session_synthesis") return "Local Sarah analysis";
   if (job?.type === "ai_invoke" && job?.meta?.source === "ai_video_pass") return "Cloud Sarah annotation";
   if (job?.type === "tts_export") return "Audio render";
   if (job?.type === "ai_invoke") return "AI analysis";

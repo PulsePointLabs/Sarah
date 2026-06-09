@@ -13,13 +13,9 @@ import { buildSessionAIContentMeta, formatGeneratedAt, isSessionAIContentStale }
 import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import {
-  buildLocalEvidencePacketSessionAnalysis,
-  buildSarahSessionSynthesisPrompt,
   buildSessionAnalysisEvidencePacket,
   evidencePacketPreview,
-  localSessionAnalysisNeedsPacketFallback,
   normalizeGoldStandardSessionAnalysis,
-  requiredAnalysisSectionsPresent,
   SARAH_SESSION_ANALYSIS_SCHEMA,
 } from "@/lib/sessionEvidencePacket";
 function buildSessionContext(session, timelineRows) {
@@ -226,15 +222,6 @@ function sessionAIPreflight(session, timelineRows = []) {
 
 function preflightFromPacket(packet) {
   const preview = evidencePacketPreview(packet);
-  const localReady = Boolean(
-    preview.contextPresent ||
-    preview.usefulEventNotesCount >= 3 ||
-    preview.aiVideoPassEventNotesCount >= 2 ||
-    preview.savedSarahVideoCardsCount > 0 ||
-    preview.localAnnotationCardsCount > 0 ||
-    preview.hrPresent ||
-    preview.hrvPresent
-  );
   return {
     eventCount: preview.eventNotesCount,
     usefulEventCount: preview.usefulEventNotesCount,
@@ -255,7 +242,6 @@ function preflightFromPacket(packet) {
     limitations: preview.limitations,
     readiness: preview.readiness,
     readinessLabel: preview.readinessLabel,
-    localReady,
     creditRisk: preview.readiness !== "ready_for_full_sarah_synthesis",
   };
 }
@@ -339,8 +325,6 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
   const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(repairSessionAnalysisResult(session[analysisField] ?? null));
   const [error, setError] = useState("");
-  const [localHealth, setLocalHealth] = useState(null);
-  const [localEvidencePacket, setLocalEvidencePacket] = useState(null);
   const resultStale = isSessionAIContentStale(result, session);
   const evidencePacket = useMemo(
     () => buildSessionAnalysisEvidencePacket({ session, timelineRows, emgRows, userProfile, sessionJournal, mode }),
@@ -353,45 +337,9 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
       : value
   ), [analysisField, session]);
 
-  const refreshLocalEvidenceInputs = useCallback(async () => {
-    if (!session?.id) return { session, timelineRows };
-    const [freshSessions, freshTimelineRows] = await Promise.all([
-      base44.entities.Session.filter({ id: session.id }),
-      base44.entities.HeartRateTimeline.filter({ session: session.id }, "time_offset_s", 10000),
-    ]);
-    return {
-      session: freshSessions?.[0] || session,
-      timelineRows: Array.isArray(freshTimelineRows) ? freshTimelineRows : timelineRows,
-    };
-  }, [session, timelineRows]);
-
-  const packetHasLocalSessionGrounding = useCallback((packet) => Boolean(
-    packet?.user_logged_context?.present ||
-    Number(packet?.counts?.useful_event_notes || 0) >= 3 ||
-    Number(packet?.counts?.ai_video_pass_event_notes || 0) >= 2 ||
-    packet?.visual_evidence?.saved_sarah_video_cards_count ||
-    packet?.visual_evidence?.local_annotation_cards_count ||
-    packet?.telemetry_findings?.heart_rate?.present ||
-    packet?.hrv_findings
-  ), []);
-
   useEffect(() => {
     setResult(repairSessionAnalysisResult(session[analysisField] ?? null));
   }, [analysisField, session]);
-
-  useEffect(() => {
-    let cancelled = false;
-    base44.integrations.Core.GetLocalSarahHealth()
-      .then((health) => {
-        if (!cancelled) setLocalHealth(health);
-      })
-      .catch((err) => {
-        if (!cancelled) setLocalHealth({ ok: false, error: err?.message || "Local Sarah health check failed." });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -560,7 +508,6 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
     } : null;
     const hrvEvidence = buildSessionHrvEvidence(timelineRows, session);
     const sharedEvidencePacket = buildSessionAnalysisEvidencePacket({ session, timelineRows, emgRows, userProfile, sessionJournal, mode });
-    setLocalEvidencePacket(sharedEvidencePacket);
 
     // Sample HR trajectory for the prompt (~1 point every 15s)
     const hrTrajectory = (() => {
@@ -752,7 +699,7 @@ ${JSON.stringify(hrvEvidence, null, 2)}
 Use this evidence to compare rolling HRV across meaningful session windows and explain what it adds to the HR/event/body-state interpretation. Treat quality and coverage as part of the claim. If the HRV pattern does not add a supported interpretation, say that briefly and move on.` : ""}
 
 SHARED SARAH SESSION EVIDENCE PACKET:
-Claude and Local Sarah synthesis both receive this same packet for honest comparison. Treat it as the authoritative structured evidence source, and preserve provenance in the output.
+Treat this as the authoritative structured evidence source for Claude Sarah analysis, and preserve provenance in the output.
 ${JSON.stringify(sharedEvidencePacket, null, 2)}
 
 Session data:
@@ -876,156 +823,6 @@ Provide ${isTechnical
     }
   };
 
-  const analyzeLocally = async () => {
-    setLoading(true);
-    setError("");
-    setCollapsed(false);
-    setJobStatus({
-      status: "starting",
-      progress: {
-        phase: "building",
-        current: 0,
-        total: 3,
-        message: "Building shared evidence packet for local Sarah synthesis...",
-        local_only: true,
-        cloud_fallback: false,
-      },
-    });
-    try {
-      const refreshed = await refreshLocalEvidenceInputs();
-      const sourceSession = refreshed.session || session;
-      const sourceTimelineRows = refreshed.timelineRows || timelineRows;
-      const sharedEvidencePacket = buildSessionAnalysisEvidencePacket({
-        session: sourceSession,
-        timelineRows: sourceTimelineRows,
-        emgRows,
-        userProfile,
-        sessionJournal,
-        mode,
-      });
-      setLocalEvidencePacket(sharedEvidencePacket);
-      if (!packetHasLocalSessionGrounding(sharedEvidencePacket)) {
-        throw new Error("Local Sarah did not run because the refreshed evidence packet is not grounded enough for a full local analysis. It needs at least one hard session-specific evidence stream: logged context, saved video/local annotation cards, or HR/HRV telemetry. Event notes or profile context alone are not enough for this local model.");
-      }
-      const shouldAssembleLocally = !localHealth?.ok;
-      if (shouldAssembleLocally) {
-        const parsed = buildLocalEvidencePacketSessionAnalysis(sharedEvidencePacket);
-        const sectionPresence = requiredAnalysisSectionsPresent(parsed);
-        const storedResult = {
-          ...parsed,
-          _meta: {
-            ...buildSessionAIContentMeta(sourceSession, sourceSession[analysisField]?._meta, new Date().toISOString()),
-            source: "local_sarah_packet_assembly",
-            local_only: true,
-            cloud_fallback: false,
-            provider: "deterministic_packet_assembly",
-            model: "no_llm",
-            evidence_packet_readiness: sharedEvidencePacket.readiness,
-            required_sections_present: sectionPresence,
-            deterministic_packet_assembly: true,
-          },
-        };
-        const saveResult = mergeForSessionSave(storedResult, sourceSession);
-        setResult(saveResult);
-        await base44.entities.Session.update(session.id, { [analysisField]: saveResult });
-        onAnalysisSaved?.(analysisField, saveResult);
-        setJobStatus({
-          status: "complete",
-          progress: {
-            phase: "complete",
-            current: 3,
-            total: 3,
-            message: "Local Sarah packet assembly complete.",
-            local_only: true,
-            cloud_fallback: false,
-          },
-        });
-        return;
-      }
-      const prompt = buildSarahSessionSynthesisPrompt({
-        packet: sharedEvidencePacket,
-        mode,
-        local: true,
-      });
-      const startedJob = await startBackgroundJob("local_session_synthesis", {
-        prompt,
-        response_json_schema: SARAH_SESSION_ANALYSIS_SCHEMA,
-        evidence_packet: sharedEvidencePacket,
-        label: `Local ${analysisLabel}`,
-      }, {
-        sessionId: session.id,
-        label: `Local ${analysisLabel}`,
-        source: "local_sarah_session_synthesis",
-        route: window.location.pathname,
-      });
-      setJobStatus(startedJob);
-      const completedJob = await waitForBackgroundJob(startedJob.id, {
-        intervalMs: 1200,
-        onProgress: setJobStatus,
-      });
-      const parsed = normalizeGoldStandardSessionAnalysis(completedJob.result, sharedEvidencePacket, {
-        repairDetachedPersona: true,
-      });
-      const finalParsed = localSessionAnalysisNeedsPacketFallback(parsed, sharedEvidencePacket)
-        ? {
-          ...buildLocalEvidencePacketSessionAnalysis(sharedEvidencePacket),
-          _local_synthesis_rejected: true,
-          _local_synthesis_rejection_reason: "Local Sarah returned an empty or packet-contradicting synthesis, so PulsePoint used the grounded packet assembly instead.",
-        }
-        : parsed;
-      const sectionPresence = requiredAnalysisSectionsPresent(finalParsed);
-      const storedResult = {
-        ...finalParsed,
-        _meta: {
-          ...buildSessionAIContentMeta(session, session[analysisField]?._meta, completedAt(completedJob)),
-          source: finalParsed._local_synthesis_rejected ? "local_sarah_packet_fallback_after_empty_synthesis" : "local_sarah_session_synthesis",
-          local_only: true,
-          cloud_fallback: false,
-          provider: completedJob.result?._local_synthesis_meta?.provider || localHealth?.provider || null,
-          model: completedJob.result?._local_synthesis_meta?.model || localHealth?.model || null,
-          evidence_packet_readiness: sharedEvidencePacket.readiness,
-          required_sections_present: sectionPresence,
-          local_synthesis_rejected: Boolean(finalParsed._local_synthesis_rejected),
-          local_synthesis_rejection_reason: finalParsed._local_synthesis_rejection_reason || null,
-        },
-      };
-      const saveResult = mergeForSessionSave(storedResult, sourceSession);
-      setResult(saveResult);
-      await base44.entities.Session.update(session.id, { [analysisField]: saveResult });
-      onAnalysisSaved?.(analysisField, saveResult);
-      setJobStatus({
-        ...completedJob,
-        progress: {
-          ...(completedJob.progress || {}),
-          phase: "complete",
-          current: 3,
-          total: 3,
-          message: "Local Sarah synthesis complete.",
-          local_only: true,
-          cloud_fallback: false,
-        },
-      });
-    } catch (err) {
-      setError(`${aiErrorMessage(err)} Local Sarah synthesis failed; Claude analysis was not run.`);
-      setJobStatus((previous) => previous ? {
-        ...previous,
-        status: previous.status === "starting" ? "error" : previous.status,
-        progress: {
-          ...(previous.progress || {}),
-          phase: "error",
-          message: "Local Sarah synthesis failed; Claude analysis was not run.",
-          provider: localHealth?.provider,
-          model: localHealth?.model,
-          local_only: true,
-          cloud_fallback: false,
-          evidence_packet_preserved: true,
-        },
-      } : null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <div className="bg-card rounded-xl border border-border p-4 space-y-3">
       <div className="flex items-center justify-between">
@@ -1036,11 +833,6 @@ Provide ${isTechnical
           {collapsed ? <ChevronDown className="w-4 h-4 text-muted-foreground ml-1" /> : <ChevronUp className="w-4 h-4 text-muted-foreground ml-1" />}
         </button>
         <div className="flex flex-wrap justify-end gap-2">
-          <Button size="sm" variant="outline" onClick={analyzeLocally} disabled={loading || !localHealth?.ok || !evidencePreflight.localReady} className="h-7 text-xs gap-1.5">
-            {loading
-              ? <><span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />Working…</>
-              : <><Brain className="w-3 h-3" />Run Local Sarah</>}
-          </Button>
           <Button size="sm" onClick={analyze} disabled={loading} className="h-7 text-xs gap-1.5">
             {loading
               ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Working…</>
@@ -1055,8 +847,8 @@ Provide ${isTechnical
         <div className="space-y-2">
           <p className="text-xs text-muted-foreground">
             {isTechnical
-              ? "Run Local Sarah for private local synthesis, or Analyze with Claude for the reference/gold path. Both use the same shared evidence packet."
-              : "Run Local Sarah for private local synthesis, or Analyze with Claude for the reference/gold path. Both use the same shared evidence packet."}
+              ? "Analyze with Claude for the reference Sarah path. The shared evidence packet below shows what the analysis will receive."
+              : "Analyze with Claude for the reference Sarah path. The shared evidence packet below shows what the analysis will receive."}
           </p>
           <div className={`rounded-lg border px-3 py-2 text-xs ${evidencePreflight.creditRisk ? "border-amber-400/35 bg-amber-400/10 text-amber-100" : "border-primary/20 bg-primary/5 text-muted-foreground"}`}>
             <div className="flex flex-wrap items-center gap-2">
@@ -1085,12 +877,8 @@ Provide ${isTechnical
             )}
             <p className="mt-1 leading-relaxed">
               {evidencePreflight.creditRisk
-                ? "Evidence caution: Sarah has a shared packet, but this run may be limited unless more accepted visual/event evidence is saved. You can still run local or Claude analysis."
-                : "This looks usable for Session Analysis. Both local Sarah and Claude will see the same event notes, saved video-pass findings, telemetry, logged context/influences, and profile context."}
-            </p>
-            <p className="mt-1 leading-relaxed">
-              Local Sarah is private/local and model-dependent. Claude remains the reference path. Local mode will not silently fall back to cloud.
-              {!localHealth?.ok ? ` Local Sarah unavailable: ${localHealth?.error || "health check did not pass."}` : ` Local Sarah configured: ${localHealth.provider || "local"} / ${localHealth.model || "model unknown"}.`}
+                ? "Evidence caution: Sarah has a shared packet, but this run may be limited unless more accepted visual/event evidence is saved."
+                : "This looks usable for Session Analysis. Claude will see the same event notes, saved video-pass findings, telemetry, logged context/influences, and profile context."}
             </p>
             {evidencePreflight.limitations?.length > 0 && (
               <div className="mt-2 space-y-1">
@@ -1099,17 +887,12 @@ Provide ${isTechnical
                 ))}
               </div>
             )}
-            {!evidencePreflight.localReady && (
-              <p className="mt-2 rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-1.5 text-[10px] leading-relaxed text-amber-50">
-                Local Sarah is disabled for this packet because it does not have hard session-specific grounding yet. Save video/local annotation cards, confirm logged context, or load HR/HRV telemetry first. Event notes or profile context alone are too thin for this local model.
-              </p>
-            )}
             <details className="mt-2 rounded-md border border-border bg-background/60">
               <summary className="cursor-pointer px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Raw Evidence Packet / Debug
               </summary>
               <pre className="max-h-64 overflow-auto border-t border-border p-2 text-[10px] text-muted-foreground">
-                {JSON.stringify(localEvidencePacket || evidencePacket, null, 2)}
+                {JSON.stringify(evidencePacket, null, 2)}
               </pre>
             </details>
           </div>

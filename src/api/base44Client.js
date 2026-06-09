@@ -152,7 +152,6 @@ export const base44 = {
         body: JSON.stringify(payload || {}),
       }),
       GetLocalVisionHealth: async () => request('/local-vision/health'),
-      GetLocalSarahHealth: async () => request('/local-ai/health'),
       ListLocalVisionResults: async ({ sessionId, recordType = '', limit = 10 } = {}) => {
         const query = new URLSearchParams();
         if (sessionId) query.set('sessionId', sessionId);

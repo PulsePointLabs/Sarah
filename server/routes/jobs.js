@@ -8,7 +8,6 @@ import { analyzeLocalVisionContinuous } from '../services/localVision/continuous
 import { analyzeLocalVisionAdaptive } from '../services/localVision/adaptiveAnalyzer.js';
 import { analyzeLocalVisionForward } from '../services/localVision/forwardAnalyzer.js';
 import { askLocalVisionVideo } from '../services/localVision/videoQa.js';
-import { getLocalTextSynthesisHealth, invokeLocalTextSynthesis } from '../services/localTextSynthesis.js';
 
 export const jobsRouter = express.Router();
 
@@ -109,73 +108,6 @@ registerJobHandler('ai_invoke', async (payload, context) => {
     message: `${label}: validating structured output…`,
   });
   return result;
-});
-
-registerJobHandler('local_session_synthesis', async (payload, context) => {
-  const {
-    prompt,
-    response_json_schema,
-    evidence_packet,
-    label = 'Local Sarah Session Analysis',
-  } = payload || {};
-  if (!prompt) throw new Error('Local Sarah synthesis is missing a prompt');
-  if (!response_json_schema) throw new Error('Local Sarah synthesis is missing a response schema');
-  const health = await getLocalTextSynthesisHealth();
-  context.updateProgress({
-    phase: 'local_health_check',
-    current: 0,
-    total: 3,
-    message: `${label}: checking local model health...`,
-    provider: health.provider,
-    model: health.model,
-    local_only: true,
-    cloud_fallback: false,
-    evidence_packet_preserved: Boolean(evidence_packet),
-  });
-  if (!health.ok) {
-    const error = new Error(`Local Sarah synthesis failed; Claude analysis was not run. ${health.error || 'Local model is unavailable.'}`);
-    error.health = health;
-    throw error;
-  }
-  if (context.signal?.aborted) throw new Error('Cancelled');
-
-  context.updateProgress({
-    phase: 'local_synthesis',
-    current: 1,
-    total: 3,
-    message: `${label}: local model is synthesizing the shared evidence packet...`,
-    provider: health.provider,
-    model: health.model,
-    local_only: true,
-    cloud_fallback: false,
-  });
-  const result = await invokeLocalTextSynthesis({
-    prompt,
-    response_json_schema,
-    signal: context.signal,
-  });
-  if (context.signal?.aborted) throw new Error('Cancelled');
-
-  context.updateProgress({
-    phase: 'validating',
-    current: 2,
-    total: 3,
-    message: `${label}: validating local Sarah structured output...`,
-    provider: health.provider,
-    model: health.model,
-    local_only: true,
-    cloud_fallback: false,
-  });
-  return {
-    ...result,
-    _local_synthesis_meta: {
-      provider: health.provider,
-      model: health.model,
-      local_only: true,
-      cloud_fallback: false,
-      evidence_packet_readiness: evidence_packet?.readiness || null,
-    },
-  };
 });
 
 registerJobHandler('local_vision_analyze_window', async (payload, context) => {

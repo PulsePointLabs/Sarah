@@ -315,7 +315,7 @@ Near-term AI priorities:
 
 - **Local AI Annotation is the main active gap.** The target is Sarah-style chronological video/window cards with timestamp range, visible evidence, change from prior window, confidence/limitations, event tags, frame references, and provenance. Raw CV/Qwen rows should remain debug evidence, not the primary user-facing result.
 - **Cloud Sarah / Claude remains the reference path.** Claude video-pass and session-analysis outputs are currently the quality bar for chronological, evidence-based interpretation.
-- **Local Sarah synthesis is preserved but secondary right now.** The Ollama/local text synthesis path exists for private local synthesis from shared evidence packets, but it does not replace the need for better local video annotation cards.
+- **Session Analysis is Claude-only right now.** The attempted local Sarah text synthesis path is disabled because local packet summaries were too robotic and unreliable for the Sarah-quality narrative target.
 - **AI Profiler image review now preserves batch work when final synthesis times out.** If the final Pelvic & Genital or Head-to-Toe synthesis fails after batch reviews complete, the UI may show “Latest final synthesis failed” while also showing “recovered latest batch findings assembled locally.” That state means the batch-level visual review completed and the app is displaying an interim assembled review instead of losing paid-for or time-consuming batch evidence. Repeatedly retrying the same large final synthesis may time out again; use the recovered batch findings as the current working review unless a smaller or compressed synthesis pass is implemented.
 
 Evidence discipline rules:
