@@ -67,6 +67,8 @@ PROFILE IMAGE VISIBLE-FINDINGS-FIRST RULE:
 - Mention limitations only when they materially change confidence, prevent a specific requested claim, or define the practical reference value of the review.
 - If a section has little direct visual evidence, keep it short and move on instead of inventorying every missing region.
 - Treat absence of concerning visible findings as a positive visual observation when relevant, for example no obvious lesion, swelling, asymmetry, device, or tissue stress visible.
+- For audio quality, avoid repeating the same finding in the callout and the prose section. Use callouts as short anchors; use section prose for synthesis.
+- Do not include process narration about batches, final synthesis, recovered output, paid requests, cloud requests, image counts, or review mechanics in the user-facing review unless it is essential.
 `;
 
 const PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE = `
@@ -138,6 +140,14 @@ function cleanImageReviewProse(value) {
     .replace(/\bimg[_-]?0*(\d+)\b/gi, (_match, number) => `image ${Number(number) || number}`)
     .replace(/\bImage\s+\d+\s*(?:\([^)]+\))?\s*:\s*/gi, "")
     .replace(/\b(?:IMG|VID|PXL|DSC|Photo|Screenshot)[-_ ]?\d{4,}\b/gi, "the referenced view")
+    .replace(/\bAll\s+\d+\s+rechecked saved\/direct views are captured in\b/gi, "Reviewed saved/direct views include")
+    .replace(/\bposition not fully assessable from this close-up\.?\s*/gi, "")
+    .replace(/\bwhole-body standing posture is not established by this frame\.?\s*/gi, "")
+    .replace(/\bposture labels are intentionally conservative for close-up pelvic views\.?\s*/gi, "")
+    .replace(/\bnot visible in this batch\.?\s*/gi, "")
+    .replace(/\bnot visible in this image set\.?\s*/gi, "")
+    .replace(/\bcannot be assessed from these close-up pelvic views\.?\s*/gi, "")
+    .replace(/\bNo [^.]{0,80} assessment is possible from this batch\.?\s*/gi, "")
     .replace(/\b\d{7,}\b/g, "")
     .replace(/\s{2,}/g, " ")
     .trim();
@@ -1060,6 +1070,7 @@ function imageFileToPayload(file) {
         media_type: file.type || "image/jpeg",
         data: base64,
         previewUrl: dataUrl,
+        upload_note: "",
         size: file.size,
         lastModified: file.lastModified,
       });
@@ -1385,6 +1396,7 @@ function buildImageReviewReferences(images = []) {
     source: image.source || "fresh_upload",
     preview_url: image.storagePath || image.file_url || image.url || "",
     media_type: image.media_type || "image/jpeg",
+    upload_note: String(image.upload_note || "").trim(),
   }));
 }
 
@@ -1415,6 +1427,7 @@ async function prepareFreshImageForReview(image, index, { onProgress, total = 0 
     url: storagePath,
     previewUrl: image.previewUrl || storagePath,
     source: "fresh_upload",
+    upload_note: String(image.upload_note || "").trim(),
   };
 }
 
@@ -1449,7 +1462,7 @@ function imageReviewReferencePromptLines(images = []) {
   const refs = buildImageReviewReferences(images);
   if (!refs.length) return "- No directly attached images in this run.";
   return refs.map((ref) => (
-    `- ${ref.image_id}: ${ref.display_label}. Infer the anatomical view from the image content; do not use uploaded filenames, camera-roll numbers, or storage IDs in the user-facing review.`
+    `- ${ref.image_id}: ${ref.display_label}${ref.upload_note ? `. User note: ${briefText(ref.upload_note, 240)}` : ""}. Infer the anatomical view from the image content; do not use uploaded filenames, camera-roll numbers, or storage IDs in the user-facing review.`
   )).join("\n");
 }
 
@@ -2247,21 +2260,15 @@ function imageCalloutNarrationParagraphs(result, sectionKey, transientImages = [
   const paragraphs = [];
   for (const [imageId, imageFindings] of byImage.entries()) {
     const image = profileImageById(result, imageId, transientImages);
-    const imageContext = [
-      image?.display_label || "Reviewed view",
-      image?.body_position,
-      image?.coverage,
-      image?.visibility_notes,
-    ].filter(Boolean).join(". ");
+    const imageContext = image?.display_label || image?.view_label || "Reviewed view";
     const callouts = imageFindings.slice(0, 4).map((finding, index) => {
       const label = finding.label || finding.region || `Callout ${index + 1}`;
       const confidence = confidenceLabel(finding.confidence);
-      const evidenceLevel = finding.evidence_level ? confidenceLabel(finding.evidence_level) : "";
-      const qualifier = [confidence, evidenceLevel].filter(Boolean).join(", ");
-      return `${index + 1}. ${label}${qualifier ? `, ${qualifier}` : ""}. ${finding.finding || ""}`.trim();
+      const qualifier = /possible|uncertain|low/i.test(confidence) ? `${confidence}. ` : "";
+      return `${index + 1}. ${label}. ${qualifier}${finding.finding || ""}`.trim();
     }).filter(Boolean);
     if (callouts.length) {
-      paragraphs.push(naturalizeSpokenDates(`Visual callouts. ${imageContext}. ${callouts.join(" ")}`));
+      paragraphs.push(cleanImageReviewProse(naturalizeSpokenDates(`Visual callouts for ${imageContext}. ${callouts.join(" ")}`)));
     }
   }
   return paragraphs;
@@ -2284,11 +2291,13 @@ const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
   reviewInstructions: `
 HEAD-TO-TOE REVIEW SCOPE:
 - Produce one cumulative, body-centered head-to-toe anatomy review. The output should read like the final useful review, not a process note.
+- Make the review easy to listen to as downloaded audio: top-to-bottom flow, minimal repetition, short clear paragraphs, and no duplicate callout/prose narration.
+- Prioritize what is visible. Do not narrate every absent or limited body region. Put genuinely useful missing-image requests only at the end.
 - Include pelvic, genital, perineal, anal/perianal, pubic/inguinal, and lower abdominal anatomy when those findings are supported by saved or attached profile photo evidence.
 - Use all available saved visual evidence as first-class evidence: direct uploads in this run, reusable saved Profile Q&A image attachments, saved Profile Q&A visual findings, prior Sarah visual reviews, session/body-exploration visual evidence, and entered profile metrics where they help reconcile visible findings.
 - Never write "these images have not been provided in this batch", "not visible in this batch", "deferred to another batch", or equivalent batch-amnesia wording. If a body region has prior saved visual evidence, use that evidence. If a region truly has no evidence anywhere in the cumulative profile, mention it only at the very end as an optional image request.
 - Do not write provenance, batch, timeout, recovery, payment, cloud request, "assembled from", or "this batch" language in the user-facing review.
-- Do not make Image Set Overview, Reference Value for PulsePoint, or Limitations the main output. Mention missing coverage only at the very end under optional image requests.
+- Do not make Image Set Overview, Reference Value for PulsePoint, or Limitations the main output. Omit process sections entirely. Mention missing coverage only at the very end under optional image requests.
 - Preserve anatomical detail, posture discussion, habitus description, body symmetry assessment, musculoskeletal observations, skin/surface findings, and pelvic anatomy.
 - Use the environment only as brief context for lighting quality, camera angle, image completeness, visibility limitations, posture/reference setup, or support surfaces that directly affect body position.
 - Do not write a room inventory. Do not identify, speculate about, or side-investigate incidental objects, pocket contents, phone outlines, equipment, screen details, clutter, waistband shapes, or holster/device prints unless they directly affect body visibility, positioning, safety of interpretation, image quality, or frame/reference context.
@@ -2338,6 +2347,8 @@ const PELVIC_GENITAL_IMAGE_REVIEW_CONFIG = {
   reviewInstructions: `
 PELVIC / GENITAL REVIEW SCOPE:
 - Anchor this output in supplied and previously reviewed visual evidence from photos and video clips. Stay with anatomy, physiology, visible tissue state, state-dependent changes, device fit, and confidence limits that matter.
+- Make the review easy to listen to as downloaded audio: lead with visible pelvic/genital/perineal findings, use natural paragraph flow, avoid duplicate callout/prose wording, and keep caveats brief.
+- Do not narrate every absent structure, device, or limitation. Mention absence only when it is itself the relevant finding or materially changes interpretation.
 - Focus the anatomy-by-region section on shaft, glans, foreskin/retraction state, meatus, frenulum/frenular remnant, scrotum/testes, perineum/pelvic floor, anus/perianal region/anal verge when visible, and lower abdomen/groin only when it helps interpret the pelvic/genital evidence.
 - Include anal/perianal anatomy when it is visible or previously reviewed, especially where it matters for rectal stimulation context, perineal mechanics, tissue state, safety, or device/contact fit. If anal/perianal evidence is absent or limited, say that once only if it materially affects interpretation.
 - Do not make feet, lower-leg posture, hand positioning, or stimulation techniques standalone topics in this pelvic/genital artifact. Mention hands, feet, or technique only when they directly affect visibility, scale, occlusion, pelvic positioning, contact mechanics, device fit, or safety interpretation.
@@ -2649,6 +2660,12 @@ function ProfileImageReviewPanel({
 
   const removeImage = (id) => {
     setImages((current) => current.filter((image) => image.id !== id));
+  };
+
+  const updateImageNote = (id, upload_note) => {
+    setImages((current) => current.map((image) => (
+      image.id === id ? { ...image, upload_note } : image
+    )));
   };
 
   const saveBatchAssembledReview = async (batchParsedResults, note = "", batchSetOverride = null, attemptStatusOverride = null, options = {}) => {
@@ -3051,6 +3068,10 @@ ${config.reviewInstructions}
 Attached image reference IDs for this batch:
 ${imageReviewReferencePromptLines(batchImages)}
 
+USER IMAGE NOTE RULES:
+- User notes on attached images are context for orientation, focus, or comparison. Use them to guide attention, but do not quote them verbatim unless the wording itself matters.
+- If a user note identifies a target area, check that area directly and report the visible finding, not the note as evidence by itself.
+
 ANNOTATED IMAGE OUTPUT RULES:
 - Return annotated_images and image_region_findings for directly reviewed images in this batch.
 - Use image_id values exactly as listed above.
@@ -3267,6 +3288,10 @@ ${hasReusedSavedImages ? `- ${reusedSavedImages.length} saved image${reusedSaved
 
 Attached image reference IDs for structured callouts:
 ${imageReviewReferencePromptLines(imagePayload)}
+
+USER IMAGE NOTE RULES:
+- User notes on attached images are context for orientation, focus, or comparison. Use them to guide attention, but do not quote them verbatim unless the wording itself matters.
+- If a user note identifies a target area, check that area directly and report the visible finding, not the note as evidence by itself.
 
 ANNOTATED IMAGE OUTPUT RULES:
 - Also return annotated_images and image_region_findings when direct image payload is attached.
@@ -3601,6 +3626,18 @@ ANNOTATED IMAGE OUTPUT RULES:
                   </button>
                 </div>
                 <p className="truncate px-2 py-1.5 text-[10px] text-muted-foreground">{image.filename}</p>
+                <div className="border-t border-border px-2 py-2">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Image note
+                  </label>
+                  <textarea
+                    value={image.upload_note || ""}
+                    onChange={(event) => updateImageNote(image.id, event.target.value)}
+                    rows={3}
+                    placeholder="Optional context for Sarah: view, posture, scar/focus, what to compare..."
+                    className="mt-1 w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 text-xs leading-relaxed text-foreground outline-none focus:border-primary"
+                  />
+                </div>
               </div>
             ))}
           </div>
