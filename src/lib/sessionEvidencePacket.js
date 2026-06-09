@@ -319,16 +319,16 @@ export function buildSessionAnalysisEvidencePacket({
   const videoPassDigest = buildSessionVideoPassDigest(session);
   const motionSummary = getMotionEvidenceSummary(session);
   const motionDigest = motionSummary.hasAnyMotionEvidence ? getMotionEvidenceDigest(session) : "";
+  const acceptedVideoPassEventCount = aiVideoPassEvents.length;
   const limitations = [
-    !videoCards.length ? "No saved Sarah video-pass cards are available for direct visual grounding." : null,
-    !localAnnotationCards.length ? "No accepted local annotation cards are available." : null,
+    !videoCards.length && !acceptedVideoPassEventCount ? "No saved Sarah video-pass cards or accepted video-pass event notes are available for direct visual/event grounding." : null,
     !hrSummary ? "No heart-rate timeline was available." : null,
     !hrvEvidence ? "No RR-derived HRV evidence was available." : null,
     !emgSummary.present ? emgSummary.missing_statement : null,
     !contextItems.length ? "No structured session context/influences were logged." : null,
   ].filter(Boolean);
   const readiness = (() => {
-    const hasVisual = videoCards.length > 0 || visualEvidenceDigest;
+    const hasVisual = videoCards.length > 0 || visualEvidenceDigest || acceptedVideoPassEventCount >= 3;
     const hasEvents = usefulEvents.length >= 3 || videoDraftEventCount >= 2;
     if (hasVisual && hasEvents && hrSummary) return "ready_for_full_sarah_synthesis";
     if (hasVisual || hasEvents || hrSummary) return "partial_evidence_only";
@@ -382,11 +382,19 @@ export function buildSessionAnalysisEvidencePacket({
       };
     }),
     visual_evidence: {
-      present: Boolean(videoCards.length || visualEvidenceDigest),
+      present: Boolean(videoCards.length || visualEvidenceDigest || acceptedVideoPassEventCount),
       saved_sarah_video_cards_count: videoCards.length,
       saved_sarah_video_findings_count: videoFindingCount,
       saved_sarah_video_draft_events_count: videoDraftEventCount,
+      accepted_video_pass_event_notes_count: acceptedVideoPassEventCount,
       local_annotation_cards_count: localAnnotationCards.length,
+      grounding_source: videoCards.length
+        ? "saved_sarah_video_cards"
+        : acceptedVideoPassEventCount
+          ? "accepted_video_pass_event_notes"
+          : visualEvidenceDigest
+            ? "reviewed_visual_evidence_digest"
+            : "none",
       digest: [visualEvidenceDigest, videoPassDigest].filter(Boolean).join("\n\n"),
       cards: videoCards.map((card) => ({
         id: card.id,

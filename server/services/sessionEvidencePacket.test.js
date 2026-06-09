@@ -194,7 +194,12 @@ test('normalization does not claim missing evidence when event notes and telemet
   assert.equal(packet.user_logged_context.present, true);
   assert.equal(packet.telemetry_findings.heart_rate.present, true);
   assert.equal(packet.hrv_findings.source, 'RR-interval-derived rolling HRV');
+  assert.equal(packet.readiness, 'ready_for_full_sarah_synthesis');
+  assert.equal(packet.visual_evidence.present, true);
+  assert.equal(packet.visual_evidence.grounding_source, 'accepted_video_pass_event_notes');
+  assert.equal(packet.visual_evidence.accepted_video_pass_event_notes_count, 3);
   assert.equal(packet.visual_evidence.saved_sarah_video_cards_count, 0);
+  assert.doesNotMatch(packet.limitations.join('\n'), /No saved Sarah video-pass cards are available for direct visual grounding/i);
 
   const normalized = normalizeGoldStandardSessionAnalysis({
     executive_summary: 'Your session has accepted video-pass event notes, structured context, HR telemetry, and RR-derived HRV. Climax was not retained as a supported claim.',

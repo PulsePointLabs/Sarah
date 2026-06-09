@@ -855,10 +855,10 @@ Provide ${isTechnical
               <span className="font-semibold text-foreground">Evidence Packet Preview</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.readinessLabel}</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.usefulEventCount} useful event notes</span>
-              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.aiVideoPassEventNotesCount} Claude video-pass notes</span>
-              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.videoPassCount} saved video cards</span>
-              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.videoDraftEventCount} video draft events</span>
-              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.localCandidateEventCount} local annotation cards</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.aiVideoPassEventNotesCount} accepted Claude annotation notes</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.videoPassCount} promoted video cards</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.videoDraftEventCount} promoted-card draft events</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.localCandidateEventCount} local vision cards</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.contextEvidenceCount} logged context fields</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">HR {evidencePreflight.hasTelemetry ? "present" : "missing"}</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">HRV {evidencePreflight.hrvPresent ? "present" : "missing"}</span>
@@ -877,8 +877,8 @@ Provide ${isTechnical
             )}
             <p className="mt-1 leading-relaxed">
               {evidencePreflight.creditRisk
-                ? "Evidence caution: Sarah has a shared packet, but this run may be limited unless more accepted visual/event evidence is saved."
-                : "This looks usable for Session Analysis. Claude will see the same event notes, saved video-pass findings, telemetry, logged context/influences, and profile context."}
+                ? "Evidence caution: Sarah has a shared packet, but this run may be limited unless more timestamped visual/event evidence is available."
+                : "This looks usable for Session Analysis. Claude will see the accepted annotation notes, promoted video-card findings when present, telemetry, logged context/influences, and profile context."}
             </p>
             {evidencePreflight.limitations?.length > 0 && (
               <div className="mt-2 space-y-1">
