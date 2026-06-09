@@ -153,8 +153,10 @@ export function buildLongitudinalHrvEvidence(sessions = [], timelineMap = {}) {
 export const RR_HRV_INTERPRETATION_RULES = `
 RR-DERIVED HRV INTERPRETATION RULES:
 - HRV values labeled here as RMSSD, SDNN, or pNN50 come from recorded RR intervals. Do not confuse them with variability or roughness calculated from sampled beats-per-minute values.
+- Explain what each metric means before leaning on it. RMSSD reflects short-term beat-to-beat variability and is most useful here for brief settling, vagal rebound, breathing-linked release, or irregular-RR/artifact checks. SDNN reflects broader variability across the rolling window and is useful for whether the autonomic pattern is fluctuating or tightly constrained. pNN50 is supporting evidence only unless it clearly adds something.
 - Treat moderate- or high-quality rows as usable evidence. Low-quality-only HRV may be mentioned as unavailable or limited, but do not interpret its direction.
 - These are rolling within-session measurements, not a standardized resting morning HRV baseline. Use them to describe changes across this session or repeated session-linked patterns, not the person's general cardiovascular health.
 - Interpret HRV alongside heart rate, timing, movement, stimulation changes, breathing notes, and recovery markers. Do not claim that one HRV value proves sympathetic or parasympathetic state, arousal level, vagal tone, illness, fitness, or diagnosis.
-- Prefer cautious language such as "RR-derived HRV fell during this window" or "recovery showed a higher rolling RMSSD than the build phase" when the quality and repeated data support it.
+- Lead with the physiological meaning, then cite the metric as support. Prefer phrasing like "this window looked tightly autonomically loaded; the low rolling RMSSD supports that because beat-to-beat variability was compressed" or "the spike is interesting because HR stayed high while short-term variability briefly opened up, which can mean a breath-release/vagal blip or artifact depending on timing."
+- Prefer cautious language such as "RR-derived HRV fell during this window" or "recovery showed a higher rolling RMSSD than the build phase" when the quality and repeated data support it, but always explain why that change matters for the session arc.
 `;

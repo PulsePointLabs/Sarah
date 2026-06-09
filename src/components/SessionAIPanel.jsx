@@ -585,13 +585,18 @@ Factor the journal into your analysis — where the person's subjective experien
     const hrvIntegrationRules = hrvEvidence ? `
 RR-DERIVED HRV INTEGRATION RULE:
 - Use RR-derived HRV as interpreted autonomic evidence throughout the session analysis when quality and coverage support it, not as a detached metric list.
+- Translate HRV into body-state language first. RMSSD should usually be explained as short-term beat-to-beat variability, often useful for spotting brief settling, vagal rebound, breathing-linked release, or artifact. SDNN should usually be explained as broader variability across the rolling window, useful for seeing whether the system is fluctuating or locked into a narrow driven state. pNN50 is secondary and should only be mentioned if it adds something RMSSD/SDNN do not.
+- Lead with what appears to be happening physiologically, then include the number only as supporting evidence. Bad: "RMSSD was five point two milliseconds." Better: "Your system looked tightly loaded here; the very low rolling RMSSD supports that because there was little beat-to-beat variability left in the window."
+- Every HRV value you mention must answer "why is this interesting?" Tie it to a transition, mismatch, recovery response, breath/position possibility, stimulation change, or artifact caution. If the value does not change interpretation, leave it out.
 - Compare HRV by meaningful windows: baseline or entry state, build/exploration, stimulation or body-state transitions, pre-climax, climax-to-recovery, and recovery/end-state when those windows exist.
 - Tie HRV changes to heart rate direction, event notes, movement or EMG, stimulation changes, breathing/settling cues, discomfort, and recovery markers. The useful question is what the HRV pattern adds to the session story.
 - If HR rises while usable HRV falls, describe that as a supported sign of increasing autonomic load only when the timing and quality support it.
 - If recovery shows higher rolling RMSSD or SDNN than the build/climax window, use that to deepen the recovery interpretation instead of only saying HR came down.
+- If HRV spikes while HR is still high, treat that as notable because it is a mixed signal: it may reflect a brief vagal/breathing release, an irregular RR interval, or movement/contact artifact rather than simple relaxation. Explain the competing interpretations and why the timing matters.
+- If HRV stays very low across a sustained phase, explain that as a narrow, driven autonomic state or sustained sympathetic load when supported, not merely as "low HRV."
 - If HRV is flat, noisy, low-quality-only, or not aligned with a meaningful event window, say the HRV evidence does not add a strong interpretation rather than forcing one.
 - Put HRV where it belongs: overview if it changes the overall read, phase/window paragraphs when it explains a transition, notable findings when it forms a pattern, and recommendations only if it suggests a focused future comparison.
-- Do not write a separate HRV mini-report unless the session's strongest finding is HRV-specific. Do not list RMSSD, SDNN, or pNN50 values without explaining their timing, quality, and relationship to the body-state arc.
+- Do not write a separate HRV mini-report unless the session's strongest finding is HRV-specific. Do not list RMSSD, SDNN, or pNN50 values without explaining their timing, quality, body-state meaning, and relationship to the session arc.
 ` : "";
 
     const aiPayload = {
