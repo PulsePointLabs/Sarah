@@ -476,7 +476,19 @@ export default function SessionDetail() {
   }, []);
 
   const handleAnalysisSaved = useCallback((field, value) => {
-    setSession((current) => (current ? { ...current, [field]: value } : current));
+    setSession((current) => {
+      if (!current) return current;
+      if (field === "ai_analysis") {
+        return {
+          ...current,
+          ai_analysis: {
+            ...(current.ai_analysis || {}),
+            ...(value || {}),
+          },
+        };
+      }
+      return { ...current, [field]: value };
+    });
   }, []);
   const handleMotionVerificationUpdate = useCallback(async (eventIndex, verificationStatus) => {
     if (!session?.id) return;

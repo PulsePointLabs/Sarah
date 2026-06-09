@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { AlertCircle, Brain, Activity, Lightbulb, TrendingUp, Zap, ChevronDown, ChevronUp } from "lucide-react";
 import AIOutputReader from "./AIOutputReader";
@@ -13,6 +13,7 @@ import { buildSessionAIContentMeta, formatGeneratedAt, isSessionAIContentStale }
 import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import {
+  buildLocalEvidencePacketSessionAnalysis,
   buildSarahSessionSynthesisPrompt,
   buildSessionAnalysisEvidencePacket,
   evidencePacketPreview,
@@ -224,9 +225,17 @@ function sessionAIPreflight(session, timelineRows = []) {
 
 function preflightFromPacket(packet) {
   const preview = evidencePacketPreview(packet);
+  const localReady = Boolean(
+    preview.contextPresent ||
+    preview.savedSarahVideoCardsCount > 0 ||
+    preview.localAnnotationCardsCount > 0 ||
+    preview.hrPresent ||
+    preview.hrvPresent
+  );
   return {
     eventCount: preview.eventNotesCount,
     usefulEventCount: preview.usefulEventNotesCount,
+    aiVideoPassEventNotesCount: preview.aiVideoPassEventNotesCount || 0,
     aiEventCount: 0,
     localCandidateEventCount: preview.localAnnotationCardsCount,
     videoPassCount: preview.savedSarahVideoCardsCount,
@@ -243,6 +252,7 @@ function preflightFromPacket(packet) {
     limitations: preview.limitations,
     readiness: preview.readiness,
     readinessLabel: preview.readinessLabel,
+    localReady,
     creditRisk: preview.readiness !== "ready_for_full_sarah_synthesis",
   };
 }
@@ -334,6 +344,31 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
     [emgRows, mode, session, sessionJournal, timelineRows, userProfile],
   );
   const evidencePreflight = preflightFromPacket(evidencePacket);
+  const mergeForSessionSave = useCallback((value, baseSession = session) => (
+    analysisField === "ai_analysis"
+      ? { ...(baseSession?.ai_analysis || {}), ...(value || {}) }
+      : value
+  ), [analysisField, session]);
+
+  const refreshLocalEvidenceInputs = useCallback(async () => {
+    if (!session?.id) return { session, timelineRows };
+    const [freshSessions, freshTimelineRows] = await Promise.all([
+      base44.entities.Session.filter({ id: session.id }),
+      base44.entities.HeartRateTimeline.filter({ session: session.id }, "time_offset_s", 10000),
+    ]);
+    return {
+      session: freshSessions?.[0] || session,
+      timelineRows: Array.isArray(freshTimelineRows) ? freshTimelineRows : timelineRows,
+    };
+  }, [session, timelineRows]);
+
+  const packetHasLocalSessionGrounding = useCallback((packet) => Boolean(
+    packet?.user_logged_context?.present ||
+    packet?.visual_evidence?.saved_sarah_video_cards_count ||
+    packet?.visual_evidence?.local_annotation_cards_count ||
+    packet?.telemetry_findings?.heart_rate?.present ||
+    packet?.hrv_findings
+  ), []);
 
   useEffect(() => {
     setResult(repairSessionAnalysisResult(session[analysisField] ?? null));
@@ -389,7 +424,8 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
           ...parsed,
           _meta: buildSessionAIContentMeta(session, (result || session[analysisField])?._meta, completedAt(completedJob)),
         };
-        setResult(storedResult);
+        const saveResult = mergeForSessionSave(storedResult);
+        setResult(saveResult);
         setJobStatus({
           ...completedJob,
           progress: {
@@ -400,8 +436,8 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
             message: "Recovered complete analysis; saving it back to the session…",
           },
         });
-        await base44.entities.Session.update(session.id, { [analysisField]: storedResult });
-        onAnalysisSaved?.(analysisField, storedResult);
+        await base44.entities.Session.update(session.id, { [analysisField]: saveResult });
+        onAnalysisSaved?.(analysisField, saveResult);
       } catch (err) {
         if (!cancelled) {
           console.warn(`${analysisLabel} reconnect skipped:`, err);
@@ -415,7 +451,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
     return () => {
       cancelled = true;
     };
-  }, [analysisField, analysisLabel, evidencePacket, onAnalysisSaved, result, session, session.id]);
+  }, [analysisField, analysisLabel, evidencePacket, mergeForSessionSave, onAnalysisSaved, result, session, session.id]);
 
   const analyze = async () => {
     setLoading(true);
@@ -813,7 +849,8 @@ Provide ${isTechnical
       ...parsed,
       _meta: buildSessionAIContentMeta(session, session[analysisField]?._meta, completedAt(completedJob)),
     };
-    setResult(storedResult);
+    const saveResult = mergeForSessionSave(storedResult);
+    setResult(saveResult);
     setJobStatus({
       ...completedJob,
       progress: {
@@ -824,8 +861,8 @@ Provide ${isTechnical
         message: "Saving analysis to the session…",
       },
     });
-    await base44.entities.Session.update(session.id, { [analysisField]: storedResult });
-    onAnalysisSaved?.(analysisField, storedResult);
+    await base44.entities.Session.update(session.id, { [analysisField]: saveResult });
+    onAnalysisSaved?.(analysisField, saveResult);
     } catch (err) {
       console.error(`${analysisLabel} failed:`, err);
       setError(aiErrorMessage(err));
@@ -835,8 +872,6 @@ Provide ${isTechnical
   };
 
   const analyzeLocally = async () => {
-    const sharedEvidencePacket = buildSessionAnalysisEvidencePacket({ session, timelineRows, emgRows, userProfile, sessionJournal, mode });
-    setLocalEvidencePacket(sharedEvidencePacket);
     setLoading(true);
     setError("");
     setCollapsed(false);
@@ -852,6 +887,59 @@ Provide ${isTechnical
       },
     });
     try {
+      const refreshed = await refreshLocalEvidenceInputs();
+      const sourceSession = refreshed.session || session;
+      const sourceTimelineRows = refreshed.timelineRows || timelineRows;
+      const sharedEvidencePacket = buildSessionAnalysisEvidencePacket({
+        session: sourceSession,
+        timelineRows: sourceTimelineRows,
+        emgRows,
+        userProfile,
+        sessionJournal,
+        mode,
+      });
+      setLocalEvidencePacket(sharedEvidencePacket);
+      if (!packetHasLocalSessionGrounding(sharedEvidencePacket)) {
+        throw new Error("Local Sarah did not run because the refreshed evidence packet is not grounded enough for a full local analysis. It needs at least one hard session-specific evidence stream: logged context, saved video/local annotation cards, or HR/HRV telemetry. Event notes or profile context alone are not enough for this local model.");
+      }
+      const shouldAssembleLocally =
+        sharedEvidencePacket.readiness !== "ready_for_full_sarah_synthesis" ||
+        !sharedEvidencePacket.visual_evidence?.saved_sarah_video_cards_count ||
+        !localHealth?.ok;
+      if (shouldAssembleLocally) {
+        const parsed = buildLocalEvidencePacketSessionAnalysis(sharedEvidencePacket);
+        const sectionPresence = requiredAnalysisSectionsPresent(parsed);
+        const storedResult = {
+          ...parsed,
+          _meta: {
+            ...buildSessionAIContentMeta(sourceSession, sourceSession[analysisField]?._meta, new Date().toISOString()),
+            source: "local_sarah_packet_assembly",
+            local_only: true,
+            cloud_fallback: false,
+            provider: "deterministic_packet_assembly",
+            model: "no_llm",
+            evidence_packet_readiness: sharedEvidencePacket.readiness,
+            required_sections_present: sectionPresence,
+            deterministic_packet_assembly: true,
+          },
+        };
+        const saveResult = mergeForSessionSave(storedResult, sourceSession);
+        setResult(saveResult);
+        await base44.entities.Session.update(session.id, { [analysisField]: saveResult });
+        onAnalysisSaved?.(analysisField, saveResult);
+        setJobStatus({
+          status: "complete",
+          progress: {
+            phase: "complete",
+            current: 3,
+            total: 3,
+            message: "Local Sarah packet assembly complete.",
+            local_only: true,
+            cloud_fallback: false,
+          },
+        });
+        return;
+      }
       const prompt = buildSarahSessionSynthesisPrompt({
         packet: sharedEvidencePacket,
         mode,
@@ -873,7 +961,9 @@ Provide ${isTechnical
         intervalMs: 1200,
         onProgress: setJobStatus,
       });
-      const parsed = normalizeGoldStandardSessionAnalysis(completedJob.result, sharedEvidencePacket);
+      const parsed = normalizeGoldStandardSessionAnalysis(completedJob.result, sharedEvidencePacket, {
+        repairDetachedPersona: true,
+      });
       const sectionPresence = requiredAnalysisSectionsPresent(parsed);
       const storedResult = {
         ...parsed,
@@ -888,9 +978,10 @@ Provide ${isTechnical
           required_sections_present: sectionPresence,
         },
       };
-      setResult(storedResult);
-      await base44.entities.Session.update(session.id, { [analysisField]: storedResult });
-      onAnalysisSaved?.(analysisField, storedResult);
+      const saveResult = mergeForSessionSave(storedResult, sourceSession);
+      setResult(saveResult);
+      await base44.entities.Session.update(session.id, { [analysisField]: saveResult });
+      onAnalysisSaved?.(analysisField, saveResult);
       setJobStatus({
         ...completedJob,
         progress: {
@@ -934,7 +1025,7 @@ Provide ${isTechnical
           {collapsed ? <ChevronDown className="w-4 h-4 text-muted-foreground ml-1" /> : <ChevronUp className="w-4 h-4 text-muted-foreground ml-1" />}
         </button>
         <div className="flex flex-wrap justify-end gap-2">
-          <Button size="sm" variant="outline" onClick={analyzeLocally} disabled={loading || !localHealth?.ok} className="h-7 text-xs gap-1.5">
+          <Button size="sm" variant="outline" onClick={analyzeLocally} disabled={loading || !localHealth?.ok || !evidencePreflight.localReady} className="h-7 text-xs gap-1.5">
             {loading
               ? <><span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />Working…</>
               : <><Brain className="w-3 h-3" />Run Local Sarah</>}
@@ -961,6 +1052,7 @@ Provide ${isTechnical
               <span className="font-semibold text-foreground">Evidence Packet Preview</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.readinessLabel}</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.usefulEventCount} useful event notes</span>
+              <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.aiVideoPassEventNotesCount} Claude video-pass notes</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.videoPassCount} saved video cards</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.videoDraftEventCount} video draft events</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.localCandidateEventCount} local annotation cards</span>
@@ -995,6 +1087,11 @@ Provide ${isTechnical
                   <p key={item} className="rounded-md border border-border bg-background/70 px-2 py-1 text-[10px] text-muted-foreground">{item}</p>
                 ))}
               </div>
+            )}
+            {!evidencePreflight.localReady && (
+              <p className="mt-2 rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-1.5 text-[10px] leading-relaxed text-amber-50">
+                Local Sarah is disabled for this packet because it does not have hard session-specific grounding yet. Save video/local annotation cards, confirm logged context, or load HR/HRV telemetry first. Event notes or profile context alone are too thin for this local model.
+              </p>
             )}
             <details className="mt-2 rounded-md border border-border bg-background/60">
               <summary className="cursor-pointer px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">

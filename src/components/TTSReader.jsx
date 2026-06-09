@@ -41,6 +41,16 @@ const ttsExportStorageKey = (sessionId, title = "") =>
   `pulsepoint.ttsExport.${sessionId || String(title || "global").replace(/[^a-z0-9]+/gi, "_").slice(0, 80)}`;
 const ttsDownloadRecordKey = (sessionId, title = "") =>
   `pulsepoint.ttsDownload.${String(`${sessionId || "global"}-${title || "analysis"}`).replace(/[^a-z0-9]+/gi, "_").slice(0, 120)}`;
+const TTS_AUTO_SCROLL_STORAGE_KEY = "pulsepoint.tts.autoScroll";
+
+function loadTtsAutoScrollPreference() {
+  try {
+    const stored = localStorage.getItem(TTS_AUTO_SCROLL_STORAGE_KEY);
+    return stored == null ? true : stored !== "false";
+  } catch {
+    return true;
+  }
+}
 
 function formatDownloadTimestamp(value) {
   if (!value) return null;
@@ -342,6 +352,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const [audioCacheStatus, setAudioCacheStatus] = useState({ ready: 0, total: 0, fetching: 0 });
   const [cacheStatusMinimized, setCacheStatusMinimized] = useState(false);
   const [currentWordIdx, setCurrentWordIdx] = useState(-1); // index of highlighted word in current para
+  const [autoScrollEnabled, setAutoScrollEnabled] = useState(loadTtsAutoScrollPreference);
   const [copied, setCopied] = useState(false);
 
   const stateRef = useRef("idle");
@@ -374,6 +385,14 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     () => (Array.isArray(paragraphs) ? paragraphs : []).map(repairCharacterSplitParagraph),
     [paragraphs]
   );
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TTS_AUTO_SCROLL_STORAGE_KEY, autoScrollEnabled ? "true" : "false");
+    } catch {
+      // Preference persistence is optional.
+    }
+  }, [autoScrollEnabled]);
 
   useEffect(() => {
     try {
@@ -756,6 +775,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   };
 
   const scrollActiveReadingArea = (paraIdx, wordIdx = -1, sentenceIdx = -1) => {
+    if (!autoScrollEnabled) return;
     const scrollKey = `${paraIdx}:${wordIdx}:${sentenceIdx}`;
     if (scrollKey === lastAutoScrollKeyRef.current) return;
     lastAutoScrollKeyRef.current = scrollKey;
@@ -1432,6 +1452,21 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           {copied
             ? <><Check className="w-3.5 h-3.5 text-emerald-400" /> Copied</>
             : <><Copy className="w-3.5 h-3.5" /> Copy</>}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setAutoScrollEnabled((value) => !value)}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border active:opacity-70 transition-colors text-xs font-medium select-none ${
+            autoScrollEnabled
+              ? "border-primary/40 bg-primary/10 text-primary"
+              : "border-border bg-muted text-muted-foreground hover:text-foreground"
+          }`}
+          style={{ WebkitTapHighlightColor: "transparent", touchAction: "manipulation" }}
+          title={autoScrollEnabled ? "Disable automatic scrolling while TTS plays" : "Enable automatic scrolling while TTS plays"}
+          aria-pressed={autoScrollEnabled}
+        >
+          Auto-scroll {autoScrollEnabled ? "On" : "Off"}
         </button>
 
         <button

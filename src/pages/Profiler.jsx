@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
-import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, RefreshCw, History, Image as ImageIcon, Upload, X } from "lucide-react";
+import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, RefreshCw, History, Image as ImageIcon, Upload, X } from "lucide-react";
 import TTSReader from "../components/TTSReader";
 import AIOutputReader from "../components/AIOutputReader";
 import { normalizeJournalEntry } from "@/lib/journalEntry";
@@ -42,6 +42,7 @@ function briefText(value, max = 180) {
 const PROFILE_ARCHIVE_LIMIT = 30;
 const PROFILE_IMAGE_REVIEW_MAX_TOKENS = 16000;
 const PROFILE_IMAGE_REVIEW_BATCH_SIZE = 5;
+const PROFILE_IMAGE_ID_REPAIR_VERSION = 1;
 const PROFILE_IMAGE_EVIDENCE_LAYER_RULE = `
 PROFILE IMAGE EVIDENCE LAYER RULE:
 - Keep the existing detailed A&P style, but keep evidence layers distinct.
@@ -57,6 +58,15 @@ PROFILE IMAGE EVIDENCE LAYER RULE:
 - For close-up pelvic/genital images, do not label the view as standing, upright, or anatomical-position unless the image actually shows weight-bearing stance or enough whole-body context to establish that posture. If only a close-up pelvis/genitals/table field is visible, use "close-up pelvic/genital view", "table-position view", "lithotomy-adjacent view", or "position not fully assessable from this close-up".
 - For annotated callouts, do not mark meatus, meatal fluid, urethral fluid, device insertion, Foley presence/absence, or fine tissue margins as high confidence unless the pin/box is on the visible structure and the surrounding prose states the visibility limits. If uncertain, label it possible/uncertain rather than visible/high.
 - Profiler baseline data can support anatomy/profile context, but dynamic video events still require video frame/time evidence. Static image findings do not prove stroking, erection-state change during a session, ejaculation/fluid release, Foley advancement, securement, urine confirmation, or body/foot tension events.
+`;
+
+const PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE = `
+PROFILE IMAGE VISIBLE-FINDINGS-FIRST RULE:
+- Lead with what is directly visible and useful. Ben wants the point: concrete body/anatomy/posture/tissue observations before caveats.
+- Do not fill sections with repeated "not visible", "not assessable", "deferred", or "cannot be assessed" paragraphs for every absent body region.
+- Mention limitations only when they materially change confidence, prevent a specific requested claim, or define the practical reference value of the review.
+- If a section has little direct visual evidence, keep it short and move on instead of inventorying every missing region.
+- Treat absence of concerning visible findings as a positive visual observation when relevant, for example no obvious lesion, swelling, asymmetry, device, or tissue stress visible.
 `;
 
 const PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE = `
@@ -125,11 +135,55 @@ function naturalizeSpokenDates(value) {
 
 function cleanImageReviewProse(value) {
   return naturalizeSpokenDates(value)
+    .replace(/\bimg[_-]?0*(\d+)\b/gi, (_match, number) => `image ${Number(number) || number}`)
     .replace(/\bImage\s+\d+\s*(?:\([^)]+\))?\s*:\s*/gi, "")
     .replace(/\b(?:IMG|VID|PXL|DSC|Photo|Screenshot)[-_ ]?\d{4,}\b/gi, "the referenced view")
     .replace(/\b\d{7,}\b/g, "")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+function recoveredBatchImageScopeLabel(batchSet = {}) {
+  const reusedCount = Number(batchSet?.reused_saved_image_count || 0);
+  const imageCount = Number(batchSet?.image_count || batchSet?.reviewed_images?.length || 0);
+  if (reusedCount > 0) return `${reusedCount} rechecked saved/direct view${reusedCount === 1 ? "" : "s"}`;
+  if (imageCount > 0) return `${imageCount} rechecked saved/direct view${imageCount === 1 ? "" : "s"}`;
+  return "the rechecked saved/direct views";
+}
+
+function sanitizeRecoveredBatchScopeText(value, batchSet = {}) {
+  if (typeof value !== "string") return value;
+  const scopeLabel = recoveredBatchImageScopeLabel(batchSet);
+  const hasNoFreshImages = Number(batchSet?.fresh_image_count || 0) === 0;
+  let text = value;
+
+  text = text
+    .replace(/\bbased\s+on\s+(?:only\s+)?(?:the\s+)?(?:five|5|\d+)\s+(?:new|fresh|recent|newest)?\s*images?\b/gi, `grounded in ${scopeLabel}`)
+    .replace(/\b(?:only\s+)?(?:the\s+)?(?:five|5|\d+)\s+(?:new|fresh|recent|newest)\s+images?\b/gi, scopeLabel)
+    .replace(/\bthese\s+(?:five|5|\d+)\s+images?\b/gi, "these rechecked saved/direct views")
+    .replace(/\bthe\s+(?:five|5|\d+)\s+images?\b/gi, "the rechecked saved/direct views")
+    .replace(/\b(?:five|5)\s+images?\b/gi, scopeLabel)
+    .replace(/\bnewest\s+image\s+set\b/gi, "rechecked saved/direct image set")
+    .replace(/\brecent\s+images?\b/gi, "rechecked saved/direct images");
+
+  if (hasNoFreshImages) {
+    text = text
+      .replace(/\bfresh\s+images?\b/gi, "rechecked saved/direct images")
+      .replace(/\bnew\s+images?\b/gi, "rechecked saved/direct images")
+      .replace(/\bnewly\s+attached\s+images?\b/gi, "rechecked saved/direct images")
+      .replace(/\battached\s+images?\b/gi, "rechecked saved/direct images");
+  }
+
+  return text.replace(/\s{2,}/g, " ").trim();
+}
+
+function sanitizeRecoveredBatchResult(value, batchSet = {}) {
+  if (typeof value === "string") return sanitizeRecoveredBatchScopeText(value, batchSet);
+  if (Array.isArray(value)) return value.map((item) => sanitizeRecoveredBatchResult(item, batchSet));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, sanitizeRecoveredBatchResult(item, batchSet)]),
+  );
 }
 
 function isCloseUpPelvicImageText(value = "") {
@@ -141,13 +195,27 @@ function isCloseUpPelvicImageText(value = "") {
 
 function sanitizeImagePositionClaims(image = {}) {
   const combined = [image.view_label, image.body_position, image.coverage, image.visibility_notes].filter(Boolean).join(" ");
-  if (!isCloseUpPelvicImageText(combined)) return image;
+  let cleanedImage = image;
+  if (/close[- ]up/i.test(combined) && /perine|scrotal[- ]base|anal verge/i.test(combined)) {
+    const soften = (value = "") => String(value || "")
+      .replace(/\bflaccid\s+shaft\s+base\b/gi, "possible superior shaft-base/scrotal-base edge")
+      .replace(/\bshaft\s+base\b/gi, "possible superior shaft-base/scrotal-base edge")
+      .replace(/\bventral\s+shaft\s+surface\b/gi, "superior genital-edge surface")
+      .replace(/\bshaft\s+surface\b/gi, "superior genital-edge surface");
+    cleanedImage = {
+      ...cleanedImage,
+      view_label: soften(cleanedImage.view_label),
+      coverage: soften(cleanedImage.coverage),
+      visibility_notes: soften(cleanedImage.visibility_notes),
+    };
+  }
+  if (!isCloseUpPelvicImageText(combined)) return cleanedImage;
   const postureAsserted = /(standing|upright|facing camera|legs slightly apart|anatomical position)/i.test(combined);
-  if (!postureAsserted) return image;
+  if (!postureAsserted) return cleanedImage;
   return {
-    ...image,
-    view_label: image.view_label
-      ? image.view_label
+    ...cleanedImage,
+    view_label: cleanedImage.view_label
+      ? cleanedImage.view_label
         .replace(/\bstanding\s+anterior\s+/i, "")
         .replace(/\bupright\s+/i, "")
         .replace(/\bfacing camera\s*/i, "")
@@ -155,7 +223,7 @@ function sanitizeImagePositionClaims(image = {}) {
       : "Close-up pelvic/genital view",
     body_position: "Close-up pelvic/genital reference view; whole-body standing posture is not established by this frame.",
     visibility_notes: [
-      image.visibility_notes,
+      cleanedImage.visibility_notes,
       "Posture labels are intentionally conservative for close-up pelvic views.",
     ].filter(Boolean).join(" "),
   };
@@ -175,18 +243,32 @@ function softenHighRiskFindingText(value = "") {
 
 function sanitizeImageRegionFinding(finding = {}) {
   const combined = [finding.label, finding.finding, finding.region].filter(Boolean).join(" ");
-  if (!isHighRiskMicroFinding(combined)) return finding;
-  const limitations = Array.isArray(finding.limitations) ? [...finding.limitations] : [];
+  let cleanedFinding = finding;
+  if (/close[- ]up|perine|scrotal[- ]base|anal verge/i.test(combined)) {
+    const soften = (value = "") => String(value || "")
+      .replace(/\bflaccid\s+shaft\s+base\b/gi, "possible superior shaft-base/scrotal-base edge")
+      .replace(/\bshaft\s+base\b/gi, "possible superior shaft-base/scrotal-base edge")
+      .replace(/\bventral\s+shaft\s+surface\b/gi, "superior genital-edge surface")
+      .replace(/\bshaft\s+surface\b/gi, "superior genital-edge surface");
+    cleanedFinding = {
+      ...cleanedFinding,
+      label: soften(cleanedFinding.label),
+      finding: soften(cleanedFinding.finding),
+      region: soften(cleanedFinding.region),
+    };
+  }
+  if (!isHighRiskMicroFinding(combined)) return cleanedFinding;
+  const limitations = Array.isArray(cleanedFinding.limitations) ? [...cleanedFinding.limitations] : [];
   limitations.push("Small-structure/device/fluid callout: verify directly against the displayed image before treating as confirmed.");
-  const label = /^possible\b/i.test(finding.label || "")
-    ? finding.label
-    : `Possible ${String(finding.label || finding.region || "visual detail").replace(/^possible\s+/i, "")}`;
+  const label = /^possible\b/i.test(cleanedFinding.label || "")
+    ? cleanedFinding.label
+    : `Possible ${String(cleanedFinding.label || cleanedFinding.region || "visual detail").replace(/^possible\s+/i, "")}`;
   return {
-    ...finding,
+    ...cleanedFinding,
     label,
-    finding: softenHighRiskFindingText(finding.finding || ""),
-    confidence: /high/i.test(finding.confidence || "") ? "verify visually" : (finding.confidence || "verify visually"),
-    evidence_level: finding.evidence_level || "needs_visual_verification",
+    finding: softenHighRiskFindingText(cleanedFinding.finding || ""),
+    confidence: /high/i.test(cleanedFinding.confidence || "") ? "verify visually" : (cleanedFinding.confidence || "verify visually"),
+    evidence_level: cleanedFinding.evidence_level || "needs_visual_verification",
     limitations: [...new Set(limitations.filter(Boolean))],
   };
 }
@@ -338,6 +420,12 @@ function normalizeAnatomicalProfileResult(raw) {
 function normalizeImageReviewAnnotations(raw = {}) {
   const annotationImages = Array.isArray(raw.annotated_images) ? raw.annotated_images : [];
   const regionFindings = Array.isArray(raw.image_region_findings) ? raw.image_region_findings : [];
+  const normalizePercentCoordinate = (value) => {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return null;
+    const percent = number > 0 && number <= 1 ? number * 100 : number;
+    return Math.max(0, Math.min(100, percent));
+  };
   return {
     annotated_images: annotationImages
       .map((image, index) => ({
@@ -355,16 +443,16 @@ function normalizeImageReviewAnnotations(raw = {}) {
       .map((finding, index) => {
         const pin = finding?.pin && typeof finding.pin === "object"
           ? {
-            x: Number.isFinite(Number(finding.pin.x)) ? Math.max(0, Math.min(100, Number(finding.pin.x))) : null,
-            y: Number.isFinite(Number(finding.pin.y)) ? Math.max(0, Math.min(100, Number(finding.pin.y))) : null,
+            x: normalizePercentCoordinate(finding.pin.x),
+            y: normalizePercentCoordinate(finding.pin.y),
           }
           : null;
         const box = finding?.box && typeof finding.box === "object"
           ? {
-            x: Number.isFinite(Number(finding.box.x)) ? Math.max(0, Math.min(100, Number(finding.box.x))) : null,
-            y: Number.isFinite(Number(finding.box.y)) ? Math.max(0, Math.min(100, Number(finding.box.y))) : null,
-            width: Number.isFinite(Number(finding.box.width)) ? Math.max(0, Math.min(100, Number(finding.box.width))) : null,
-            height: Number.isFinite(Number(finding.box.height)) ? Math.max(0, Math.min(100, Number(finding.box.height))) : null,
+            x: normalizePercentCoordinate(finding.box.x),
+            y: normalizePercentCoordinate(finding.box.y),
+            width: normalizePercentCoordinate(finding.box.width),
+            height: normalizePercentCoordinate(finding.box.height),
           }
           : null;
         return {
@@ -391,9 +479,12 @@ function normalizeImageReviewAnnotations(raw = {}) {
 function normalizeImageReviewResult(raw) {
   const parsed = normalizeAnatomicalProfileResult(raw);
   if (!parsed) return null;
+  const scopeSanitized = parsed?._meta?.local_batch_assembled
+    ? sanitizeRecoveredBatchResult(parsed, parsed?._meta)
+    : parsed;
   const normalized = {
-    ...parsed,
-    ...normalizeImageReviewAnnotations(parsed),
+    ...scopeSanitized,
+    ...normalizeImageReviewAnnotations(scopeSanitized),
   };
   const cleaned = { ...normalized };
   if (cleaned.overview) cleaned.overview = cleanImageReviewProse(cleaned.overview);
@@ -436,6 +527,29 @@ function normalizeImageReviewResult(raw) {
     region: cleanImageReviewProse(finding.region || ""),
   }));
   return cleaned;
+}
+
+function remapBatchLocalImageIds(result, reviewedImages = []) {
+  if (!result || !Array.isArray(reviewedImages) || !reviewedImages.length) return result;
+  const refs = reviewedImages.filter((image) => image?.image_id);
+  if (!refs.length) return result;
+  const validIds = new Set(refs.map((image) => image.image_id));
+  const mapImageId = (imageId) => {
+    const raw = String(imageId || "").trim();
+    if (!raw || validIds.has(raw)) return raw;
+    const match = raw.match(/^img_(\d{1,3})$/i);
+    const localIndex = match ? Number(match[1]) - 1 : -1;
+    return refs[localIndex]?.image_id || raw;
+  };
+  return {
+    ...result,
+    annotated_images: Array.isArray(result.annotated_images)
+      ? result.annotated_images.map((image) => ({ ...image, image_id: mapImageId(image.image_id) }))
+      : result.annotated_images,
+    image_region_findings: Array.isArray(result.image_region_findings)
+      ? result.image_region_findings.map((finding) => ({ ...finding, image_id: mapImageId(finding.image_id) }))
+      : result.image_region_findings,
+  };
 }
 
 function aiErrorMessage(error) {
@@ -1169,6 +1283,7 @@ PROFILE IMAGE REVIEW SOURCE CONTEXT:
 - Use saved Q&A findings, reusable saved media, entered profile metrics, and session/body-exploration evidence as first-class profile evidence. Reconcile them with fresh images when present instead of ignoring them.
 - If saved context conflicts with fresh images or with another saved visual review, state the mismatch and explain which source is stronger for that claim.
 - Do not let profile history make you overcall something that is not visible.
+- Output priority: say what can be seen first. Do not spend the review cataloging absent regions unless that absence directly changes confidence or next-image planning.
 
 REUSABLE SAVED PROFILE Q&A IMAGE ATTACHMENTS:
 - Saved non-video Profile Q&A image attachments available for reuse: ${reusableProfileImages.length}.
@@ -1226,6 +1341,7 @@ HEAD-TO-TOE BODY REFERENCE SOURCE CONTEXT:
 - Genital/pelvic findings may be mentioned only briefly as a visible body region when fresh head-to-toe/body-reference images show them. Detailed meatal, catheter, sound/dilator, Foley, urethral accommodation, genital measurement, device-fit, arousal-state, ejaculation, or stimulation-mechanics material belongs in the dedicated pelvic/genital review, not here.
 - Foot and lower-limb observations should be anatomical reference observations only: resting posture, toe/foot alignment, symmetry, visible swelling/deformity, skin/surface findings, or image limitations. Do not turn session foot-camera motion history into arousal/climax physiology in this artifact.
 - Avoid dates, session names, event sequences, device sizes, sensory maps, stimulation techniques, and previously reviewed close-up genital chronology unless they are needed to explain why a region cannot be assessed in the head-to-toe reference.
+- Output priority: say what can be seen first. Do not spend the review cataloging absent regions unless that absence directly changes confidence or next-image planning.
 
 REUSABLE SAVED PROFILE Q&A IMAGE ATTACHMENTS:
 - Saved non-video Profile Q&A image attachments available for reuse: ${reusableProfileImages.length}.
@@ -1466,12 +1582,28 @@ function mergeImageReviewBatchArtifacts(synthesizedResult, batchResults = []) {
   };
 }
 
-function uniqueReviewItems(items = [], limit = 14, maxChars = 900) {
+function isLowValueAbsentRegionParagraph(value = "") {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return true;
+  const lower = text.toLowerCase();
+  const isPositiveAbsence =
+    /\bno\s+(?:obvious|visible|apparent)\s+(?:lesions?|fissur|rash|bruis|swelling|asymmetry|deformity|irritation|discoloration|tissue stress|catheter|foley|device|mass|edema|hernia bulge)/i.test(text) ||
+    /\bappears\s+(?:healthy|symmetric|broadly uniform|normal)\b/i.test(text);
+  if (isPositiveAbsence) return false;
+  const absenceLanguage = /\b(?:not visible|not assessable|cannot be assessed|cannot be fully assessed|deferred to|not available|not present in this batch|no .*views? (?:are|is) present|missing .*views?|major limitation|must be deferred)\b/i.test(text);
+  if (!absenceLanguage) return false;
+  const usefulVisibleClaim = /\b(?:is visible|are visible|appears|show|shows|clearly visible|consistent with|scattered|level|symmetric|flat on floor|projects|flaccid|foreskin|raphe|perineal|scrot|abdomen|feet|shoulders|spine|skin)\b/i.test(text);
+  const absentRegionInventory = /\b(?:head|neck|thorax|chest|upper limb|lower limb|lower leg|feet|foot|toe|torso|shoulder|spine|whole-body|standing|full-limb|skin surface findings|musculoskeletal|posture|alignment|body habitus)\b/i.test(text);
+  return absentRegionInventory && !usefulVisibleClaim;
+}
+
+function uniqueReviewItems(items = [], limit = 14, maxChars = 900, batchSet = null) {
   const seen = new Set();
   const out = [];
   for (const item of items) {
-    const text = cleanImageReviewProse(item);
+    const text = cleanImageReviewProse(batchSet ? sanitizeRecoveredBatchScopeText(item, batchSet) : item);
     if (!text || /^batch\s+\d+\s+of\s+\d+/i.test(text) || /^this is batch\s+\d+/i.test(text)) continue;
+    if (isLowValueAbsentRegionParagraph(text)) continue;
     const key = text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().slice(0, 180);
     if (!key || seen.has(key)) continue;
     seen.add(key);
@@ -1483,10 +1615,17 @@ function uniqueReviewItems(items = [], limit = 14, maxChars = 900) {
 
 function buildBatchAssembledImageReview(config, batchResults = [], batchSet = {}) {
   const sections = profileReviewResultSections(config);
-  const directFindings = uniqueReviewItems(batchResults.flatMap((item) => item?.summary_card?.key_direct_findings || []), 10, 520);
-  const referenceValue = uniqueReviewItems(batchResults.flatMap((item) => item?.summary_card?.primary_reference_value || []), 8, 460);
-  const limitations = uniqueReviewItems(batchResults.flatMap((item) => item?.summary_card?.key_limitations || []), 8, 420);
-  const coverage = uniqueReviewItems(batchResults.map((item) => item?.summary_card?.coverage || item?.overview), 4, 520).join(" ");
+  const finalAttempted = batchSet.final_synthesis_attempted !== false;
+  const assemblyReason = finalAttempted
+    ? "after the final synthesis request timed out"
+    : "without running the optional final synthesis request";
+  const evidenceReason = finalAttempted
+    ? "because the final Sarah synthesis timed out"
+    : "because the batch-level review completed and final synthesis is now an explicit optional retry";
+  const directFindings = uniqueReviewItems(batchResults.flatMap((item) => item?.summary_card?.key_direct_findings || []), 10, 520, batchSet);
+  const referenceValue = uniqueReviewItems(batchResults.flatMap((item) => item?.summary_card?.primary_reference_value || []), 8, 460, batchSet);
+  const limitations = uniqueReviewItems(batchResults.flatMap((item) => item?.summary_card?.key_limitations || []), 4, 360, batchSet);
+  const coverage = uniqueReviewItems(batchResults.map((item) => item?.summary_card?.coverage || item?.overview), 4, 520, batchSet).join(" ");
   const annotatedByKey = new Map();
   for (const image of batchResults.flatMap((item) => Array.isArray(item?.annotated_images) ? item.annotated_images : [])) {
     const key = image?.image_id || `${image?.view_label || ""}-${annotatedByKey.size}`;
@@ -1499,26 +1638,30 @@ function buildBatchAssembledImageReview(config, batchResults = [], batchSet = {}
   }
 
   const result = {
-    overview: `This cumulative ${config.shortTitle.toLowerCase()} review was recovered from ${batchSet.total || batchResults.length} completed Sarah batch reviews after the final synthesis request timed out. The batch-level visual review succeeded, so this assembled version preserves the paid-for direct image observations, annotated image callouts, limitations, and profile-context reconciliation without making another cloud request. It should be treated as a recovered cumulative review assembled from completed Sarah evidence rather than a freshly rewritten final narrative.`,
+    overview: `This cumulative ${config.shortTitle.toLowerCase()} review was assembled from ${batchSet.total || batchResults.length} completed Sarah batch reviews ${assemblyReason}. The batch-level visual review succeeded, so this assembled version leads with the paid-for direct image observations, annotated image callouts, and profile-context reconciliation without making another cloud request. It should be treated as a cumulative review assembled from completed Sarah evidence rather than a freshly rewritten final narrative.`,
     summary_card: {
-      baseline_quality: uniqueReviewItems(batchResults.map((item) => item?.summary_card?.baseline_quality), 2, 420).join(" ") || "Recovered from completed Sarah image-review batches.",
+      baseline_quality: uniqueReviewItems(batchResults.map((item) => item?.summary_card?.baseline_quality), 2, 420, batchSet).join(" ") || "Recovered from completed Sarah image-review batches.",
       coverage: coverage || `${batchSet.image_count || batchSet.reviewed_images?.length || "Multiple"} saved/direct profile-reference views were reviewed across completed batches.`,
       primary_reference_value: referenceValue,
       key_direct_findings: directFindings,
       key_limitations: limitations,
-      evidence_note: "Direct batch findings were preserved and locally assembled because the final Sarah synthesis timed out.",
+      evidence_note: `Direct batch findings were preserved and locally assembled ${evidenceReason}.`,
     },
     annotated_images: Array.from(annotatedByKey.values()),
     image_region_findings: Array.from(findingsByKey.values()),
   };
 
   for (const section of sections) {
-    const items = uniqueReviewItems(batchResults.flatMap((item) => Array.isArray(item?.[section.key]) ? item[section.key] : []), 14, 950);
+    const sectionLimit = /limit/i.test(section.key) ? 5 : 14;
+    const items = uniqueReviewItems(batchResults.flatMap((item) => Array.isArray(item?.[section.key]) ? item[section.key] : []), sectionLimit, 950, batchSet);
     result[section.key] = items.length
       ? items
-      : [`No distinct recovered batch paragraph was available for ${section.label.toLowerCase()}; see the recovered overview, evidence summary, and annotated image callouts.`];
+      : [/limit/i.test(section.key)
+        ? "No additional material limitation was preserved from the completed batch findings beyond the confidence notes already attached to specific observations."
+        : `No distinct recovered batch paragraph was available for ${section.label.toLowerCase()}; see the visible findings and annotated image callouts.`];
   }
-  return normalizeImageReviewResult(result) || result;
+  const scopedResult = sanitizeRecoveredBatchResult(result, batchSet);
+  return normalizeImageReviewResult(scopedResult) || scopedResult;
 }
 
 function confidenceLabel(value = "") {
@@ -1528,6 +1671,142 @@ function confidenceLabel(value = "") {
 
 function sectionLabelForKey(sections = [], key = "") {
   return sections.find((section) => section.key === key)?.label || String(key || "").replace(/_/g, " ");
+}
+
+function useContainedImageRect() {
+  const containerRef = useRef(null);
+  const [naturalSize, setNaturalSize] = useState(null);
+  const [containerSize, setContainerSize] = useState(null);
+
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node) return undefined;
+    const updateSize = () => {
+      const rect = node.getBoundingClientRect();
+      setContainerSize({ width: rect.width, height: rect.height });
+    };
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  const rect = (() => {
+    const cw = containerSize?.width || 0;
+    const ch = containerSize?.height || 0;
+    const nw = naturalSize?.width || 0;
+    const nh = naturalSize?.height || 0;
+    if (!cw || !ch || !nw || !nh) return null;
+    const scale = Math.min(cw / nw, ch / nh);
+    const width = nw * scale;
+    const height = nh * scale;
+    return {
+      left: (cw - width) / 2,
+      top: (ch - height) / 2,
+      width,
+      height,
+    };
+  })();
+
+  return { containerRef, rect, setNaturalSize };
+}
+
+function imagePointStyle(rect, pin) {
+  if (!rect || pin?.x == null || pin?.y == null) return { left: `${pin?.x || 0}%`, top: `${pin?.y || 0}%` };
+  const x = rect.left + (Number(pin.x) / 100) * rect.width;
+  const y = rect.top + (Number(pin.y) / 100) * rect.height;
+  const markerRadius = 12;
+  return {
+    left: `${Math.max(markerRadius, Math.min(rect.left + rect.width - markerRadius, x))}px`,
+    top: `${Math.max(markerRadius, Math.min(rect.top + rect.height - markerRadius, y))}px`,
+  };
+}
+
+function imageBoxStyle(rect, box) {
+  if (!rect || !box) {
+    return {
+      left: `${box?.x || 0}%`,
+      top: `${box?.y || 0}%`,
+      width: `${box?.width || 0}%`,
+      height: `${box?.height || 0}%`,
+    };
+  }
+  return {
+    left: `${rect.left + (Number(box.x) / 100) * rect.width}px`,
+    top: `${rect.top + (Number(box.y) / 100) * rect.height}px`,
+    width: `${(Number(box.width) / 100) * rect.width}px`,
+    height: `${(Number(box.height) / 100) * rect.height}px`,
+  };
+}
+
+function AnnotatedImageStage({
+  image,
+  pinnedFindings = [],
+  boxedFindings = [],
+  unavailableText = "Image preview is not available for this saved run.",
+  className = "relative aspect-[4/3] bg-black",
+  imageClassName = "",
+  onClick = null,
+}) {
+  const { containerRef, rect, setNaturalSize } = useContainedImageRect();
+  const imageUrl = image?.preview_url ? serverUrl(image.preview_url) : "";
+
+  return (
+    <div
+      ref={containerRef}
+      className={`${className} ${onClick ? "cursor-zoom-in" : ""}`}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={onClick || undefined}
+      onKeyDown={onClick ? (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        onClick();
+      } : undefined}
+      title={onClick ? "Open annotated image viewer" : undefined}
+    >
+      {imageUrl ? (
+        <img
+          src={imageUrl}
+          alt={image.display_label || "Reviewed anatomy reference"}
+          className={`absolute object-contain ${imageClassName}`}
+          style={rect ? {
+            left: `${rect.left}px`,
+            top: `${rect.top}px`,
+            width: `${rect.width}px`,
+            height: `${rect.height}px`,
+          } : { inset: 0, width: "100%", height: "100%" }}
+          loading="lazy"
+          onLoad={(event) => {
+            const img = event.currentTarget;
+            setNaturalSize({ width: img.naturalWidth || 1, height: img.naturalHeight || 1 });
+          }}
+        />
+      ) : (
+        <div className="flex h-full min-h-36 items-center justify-center px-4 text-center text-sm leading-relaxed text-foreground/85 dark:text-white/85">
+          {unavailableText}
+        </div>
+      )}
+      {pinnedFindings.map((finding, index) => (
+        <div
+          key={`${finding.finding_id}-pin`}
+          className="absolute z-10 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/80 bg-primary text-[10px] font-bold text-primary-foreground shadow-lg"
+          style={imagePointStyle(rect, finding.pin)}
+          title={finding.label}
+        >
+          {index + 1}
+        </div>
+      ))}
+      {boxedFindings.map((finding) => (
+        <div
+          key={`${finding.finding_id}-box`}
+          className="absolute z-10 rounded border-2 border-primary/80 bg-primary/10"
+          style={imageBoxStyle(rect, finding.box)}
+          title={finding.label}
+        />
+      ))}
+    </div>
+  );
 }
 
 function ProfileImageSummaryCard({ summary, color = "hsl(var(--primary))" }) {
@@ -1637,40 +1916,16 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
           const image = profileImageById(result, imageId, transientImages);
           const imageFindings = findings.filter((finding) => finding.image_id === imageId);
           const pinnedFindings = imageFindings.filter((finding) => finding.pin?.x != null && finding.pin?.y != null);
+          const boxedFindings = imageFindings.filter((finding) => finding.box);
           return (
             <div key={imageId} className="overflow-hidden rounded-lg border border-border bg-card/80">
-              <div className="relative aspect-[4/3] bg-black">
-                {image.preview_url ? (
-                  <img src={serverUrl(image.preview_url)} alt={image.display_label || "Reviewed anatomy reference"} className="h-full w-full object-contain" />
-                ) : (
-                  <div className="flex h-full items-center justify-center px-4 text-center text-sm leading-relaxed text-foreground/85 dark:text-white/85">
-                    Image preview is not available for this saved run. Re-run with saved or fresh images to attach view previews.
-                  </div>
-                )}
-                {pinnedFindings.map((finding, index) => (
-                  <div
-                    key={`${finding.finding_id}-pin`}
-                    className="absolute flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/80 bg-primary text-[10px] font-bold text-primary-foreground shadow-lg"
-                    style={{ left: `${finding.pin.x}%`, top: `${finding.pin.y}%` }}
-                    title={finding.label}
-                  >
-                    {index + 1}
-                  </div>
-                ))}
-                {imageFindings.filter((finding) => finding.box).map((finding) => (
-                  <div
-                    key={`${finding.finding_id}-box`}
-                    className="absolute rounded border-2 border-primary/80 bg-primary/10"
-                    style={{
-                      left: `${finding.box.x}%`,
-                      top: `${finding.box.y}%`,
-                      width: `${finding.box.width}%`,
-                      height: `${finding.box.height}%`,
-                    }}
-                    title={finding.label}
-                  />
-                ))}
-              </div>
+              <AnnotatedImageStage
+                image={image}
+                pinnedFindings={pinnedFindings}
+                boxedFindings={boxedFindings}
+                unavailableText="Image preview is not available for this saved run. Re-run with saved or fresh images to attach view previews."
+                className="relative aspect-[4/3] bg-black"
+              />
               <div className="space-y-2 p-3">
                 <div>
                   <p className="text-base font-semibold leading-snug text-foreground dark:text-white">{image.display_label || "Reviewed view"}</p>
@@ -1729,7 +1984,151 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
   );
 }
 
-function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(var(--primary))", transientImages = [] }) {
+function imageDisplayNumber(imageId = "") {
+  const match = String(imageId || "").match(/^img[_-]?0*(\d+)$/i);
+  return match ? `image ${Number(match[1])}` : "image";
+}
+
+function ProfileImageLightbox({
+  result,
+  imageIds = [],
+  selectedImageId,
+  onSelectImageId,
+  onClose,
+  sections = [],
+  color = "hsl(var(--primary))",
+  transientImages = [],
+}) {
+  const findings = Array.isArray(result?.image_region_findings) ? result.image_region_findings : [];
+  const selectedIndex = Math.max(0, imageIds.indexOf(selectedImageId));
+  const imageId = imageIds[selectedIndex] || selectedImageId;
+  const image = profileImageById(result, imageId, transientImages);
+  const imageFindings = findings.filter((finding) => finding.image_id === imageId);
+  const pinnedFindings = imageFindings.filter((finding) => finding.pin?.x != null && finding.pin?.y != null);
+  const boxedFindings = imageFindings.filter((finding) => finding.box);
+  const hasPrev = selectedIndex > 0;
+  const hasNext = selectedIndex >= 0 && selectedIndex < imageIds.length - 1;
+  const goPrev = () => {
+    if (!imageIds.length) return;
+    const nextIndex = hasPrev ? selectedIndex - 1 : imageIds.length - 1;
+    onSelectImageId?.(imageIds[nextIndex]);
+  };
+  const goNext = () => {
+    if (!imageIds.length) return;
+    const nextIndex = hasNext ? selectedIndex + 1 : 0;
+    onSelectImageId?.(imageIds[nextIndex]);
+  };
+
+  useEffect(() => {
+    if (!selectedImageId) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") onClose?.();
+      if (event.key === "ArrowLeft") goPrev();
+      if (event.key === "ArrowRight") goNext();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [selectedImageId, selectedIndex, imageIds.join("|")]);
+
+  if (!selectedImageId || !imageId) return null;
+
+  return (
+    <div className="fixed inset-0 z-[120] bg-background/95 backdrop-blur-sm">
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border bg-card/90 px-3 py-2">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color }}>
+              Annotated Image Viewer
+            </p>
+            <p className="truncate text-sm font-semibold text-foreground">
+              {imageDisplayNumber(imageId)}{image.display_label ? ` - ${image.display_label}` : ""}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Badge variant="outline" className="h-6 text-[10px]">
+              {selectedIndex + 1}/{imageIds.length}
+            </Badge>
+            <Button type="button" size="sm" variant="outline" onClick={goPrev} className="h-8 w-8 p-0" title="Previous image">
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <Button type="button" size="sm" variant="outline" onClick={goNext} className="h-8 w-8 p-0" title="Next image">
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button type="button" size="sm" variant="outline" onClick={onClose} className="h-8 w-8 p-0" title="Close viewer">
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto p-3 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+          <div className="min-h-[58vh] rounded-lg border border-border bg-black lg:min-h-0">
+            <AnnotatedImageStage
+              image={image}
+              pinnedFindings={pinnedFindings}
+              boxedFindings={boxedFindings}
+              unavailableText="Image preview unavailable for this saved run."
+              className="relative h-[62vh] min-h-[360px] bg-black lg:h-full"
+            />
+          </div>
+
+          <div className="min-h-0 space-y-3 overflow-y-auto rounded-lg border border-border bg-card/90 p-3">
+            <div>
+              <p className="text-base font-semibold leading-snug text-foreground">{image.display_label || "Reviewed view"}</p>
+              {(image.body_position || image.coverage || image.visibility_notes) && (
+                <p className="mt-2 text-sm leading-relaxed text-foreground/85">
+                  {[image.body_position, image.coverage, image.visibility_notes].filter(Boolean).join(" · ")}
+                </p>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <Badge variant="outline" className="text-[10px]">{imageFindings.length} linked note{imageFindings.length === 1 ? "" : "s"}</Badge>
+              <Badge variant="secondary" className="text-[10px]">{pinnedFindings.length} pin{pinnedFindings.length === 1 ? "" : "s"}</Badge>
+              {boxedFindings.length > 0 && <Badge variant="secondary" className="text-[10px]">{boxedFindings.length} box{boxedFindings.length === 1 ? "" : "es"}</Badge>}
+            </div>
+
+            {imageFindings.length ? (
+              <div className="space-y-2">
+                {imageFindings.map((finding) => {
+                  const markerIndex = pinnedFindings.findIndex((item) => item.finding_id === finding.finding_id);
+                  return (
+                    <div key={`${finding.finding_id}-lightbox`} className="rounded-lg border border-border bg-background/70 p-3">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {markerIndex >= 0 && (
+                          <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
+                            {markerIndex + 1}
+                          </span>
+                        )}
+                        <span className="text-sm font-semibold leading-snug text-foreground">{finding.label || finding.region || "Visible finding"}</span>
+                        <Badge variant="outline" className="h-5 text-[10px]">{confidenceLabel(finding.confidence)}</Badge>
+                        {finding.section_key && (
+                          <Badge variant="secondary" className="h-5 text-[10px]">{sectionLabelForKey(sections, finding.section_key)}</Badge>
+                        )}
+                      </div>
+                      {finding.finding && (
+                        <p className="mt-2 text-sm leading-relaxed text-foreground/90">{finding.finding}</p>
+                      )}
+                      {finding.limitations?.length > 0 && (
+                        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                          Limits: {finding.limitations.join("; ")}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="rounded-lg border border-border bg-background/70 p-3 text-sm text-muted-foreground">
+                No linked notes were returned for this view.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(var(--primary))", transientImages = [], onOpenImage = null }) {
   const findings = Array.isArray(result?.image_region_findings)
     ? result.image_region_findings.filter((finding) => finding.section_key === sectionKey)
     : [];
@@ -1754,25 +2153,13 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
           return (
             <div key={`${sectionKey}-${imageId}`} className="overflow-hidden rounded-lg border border-border bg-background/70">
               <div className="grid gap-2 sm:grid-cols-[minmax(130px,0.85fr)_1fr]">
-                <div className="relative min-h-36 bg-black sm:min-h-full">
-                  {image.preview_url ? (
-                    <img src={serverUrl(image.preview_url)} alt={image.display_label || "Reviewed anatomy reference"} className="h-full max-h-64 w-full object-contain sm:max-h-none" loading="lazy" />
-                  ) : (
-                    <div className="flex h-full min-h-36 items-center justify-center px-3 text-center text-sm leading-relaxed text-foreground/85 dark:text-white/85">
-                      Image preview unavailable for this saved run.
-                    </div>
-                  )}
-                  {pinnedFindings.map((finding, index) => (
-                    <div
-                      key={`${finding.finding_id}-inline-pin`}
-                      className="absolute flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/80 bg-primary text-[10px] font-bold text-primary-foreground shadow-lg"
-                      style={{ left: `${finding.pin.x}%`, top: `${finding.pin.y}%` }}
-                      title={finding.label}
-                    >
-                      {index + 1}
-                    </div>
-                  ))}
-                </div>
+                <AnnotatedImageStage
+                  image={image}
+                  pinnedFindings={pinnedFindings}
+                  unavailableText="Image preview unavailable for this saved run."
+                  className="relative min-h-36 bg-black sm:min-h-full"
+                  onClick={onOpenImage ? () => onOpenImage(imageId) : null}
+                />
                 <div className="space-y-2 p-2.5">
                   <div>
                     <p className="text-base font-semibold leading-snug text-foreground dark:text-white">{image.display_label || "Reviewed view"}</p>
@@ -1830,7 +2217,7 @@ const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
   reviewInstructions: `
 HEAD-TO-TOE REVIEW SCOPE:
 - Produce a detailed anatomical and A&P-focused review of the image set while keeping the analysis centered on the body.
-- Preserve anatomical detail, posture discussion, habitus description, body symmetry assessment, musculoskeletal observations, skin/surface findings, and limitations.
+- Preserve anatomical detail, posture discussion, habitus description, body symmetry assessment, musculoskeletal observations, skin/surface findings, and only the limitations that matter for confidence.
 - Use the environment only as brief context for lighting quality, camera angle, image completeness, visibility limitations, posture/reference setup, or support surfaces that directly affect body position.
 - Do not write a room inventory. Do not identify, speculate about, or side-investigate incidental objects, pocket contents, phone outlines, equipment, screen details, clutter, waistband shapes, or holster/device prints unless they directly affect body visibility, positioning, safety of interpretation, image quality, or frame/reference context.
 - If an incidental object is visible but not clinically/image-review relevant, ignore it.
@@ -1838,20 +2225,20 @@ HEAD-TO-TOE REVIEW SCOPE:
 - Separate visible findings from interpretation. Do not infer psychology, arousal, pain, function, dominance, intent, or session state from static posture alone.
 - If nudity or genital anatomy is visible, describe only clinically relevant visibility, position, symmetry, skin/surface findings, resting state, and limitations. Use cautious terms such as flaccid, partial erection, erection, obscured, or uncertain only when visually assessable.
 - Do not use this head-to-toe review to summarize catheter, urethral, sound/dilator, Foley, sleeve, stimulation, ejaculation, arousal progression, foot-camera arousal recruitment, device-fit, or genital measurement history. Those belong in the pelvic/genital or session analysis artifacts.
-- If fresh images are absent or the available saved evidence does not include actual head-to-toe/body-reference views, keep the review appropriately short: state what evidence exists, what body regions are not assessable, and what reference images are needed next. Do not compensate by adding unrelated detailed pelvic/session findings.
+- If fresh images are absent or the available saved evidence does not include actual head-to-toe/body-reference views, keep the review appropriately short: state the usable evidence that exists, name the main coverage gap once, and list optional next images only if useful. Do not compensate by adding unrelated detailed pelvic/session findings.
 - Compare visible whole-body findings against saved Q&A findings, prior sessions, and entered metrics only where they help reconcile body reference evidence. Do not let profile context override fresh image evidence.
 - Organize the output using these body-centered sections:
-  1. Image Set Overview: number of images/views, body positions/views captured, clothing/nude status where relevant to visibility, image quality, lighting, adequacy for anatomical reference, and major limitations. Keep this concise and do not catalog the room.
-  2. Overall Body Overview: general frame/build, proportionality, visible muscularity, adipose distribution, broad symmetry, stance/positioning, and what can/cannot be assessed.
-  3. Posture & Alignment: head/neck, shoulder height, thoracic/lumbar contour, pelvic posture if visible, knee/ankle alignment, foot angle/stance, anterior/posterior/lateral differences, and limitations from clothing/angle/stance.
+  1. Image Set Overview: number of images/views, body positions/views captured, clothing/nude status where relevant to visibility, image quality, lighting, adequacy for anatomical reference, and the one or two most important coverage limits only. Keep this concise and do not catalog the room.
+  2. Overall Body Overview: general frame/build, proportionality, visible muscularity, adipose distribution, broad symmetry, and stance/positioning that can actually be seen.
+  3. Posture & Alignment: visible head/neck, shoulder height, thoracic/lumbar contour, pelvic posture if visible, knee/ankle alignment, foot angle/stance, and anterior/posterior/lateral differences.
   4. Body Habitus & Soft Tissue: torso contour, abdominal contour, chest/upper-body contour if visible, limb soft tissue distribution, muscular definition, central versus peripheral adipose distribution where visible, and confidence limits.
-  5. Skin & Surface Findings: only visible skin tone, redness, bruising, rash, swelling, scars/marks, vascularity, surface asymmetry, and limitations. Do not invent skin findings.
+  5. Skin & Surface Findings: visible skin tone, redness, bruising, rash, swelling, scars/marks, vascularity, surface asymmetry, and positive absence observations such as no obvious lesion or swelling where relevant. Do not invent skin findings.
   6. Musculoskeletal / Limb Findings: upper limbs, forearms/hands, thighs/lower legs, feet/toes, symmetry, muscle bulk, joint alignment, swelling/deformity, resting foot/toe posture, and functional implications only when directly supported by visible evidence.
   7. Region-Specific Anatomical Findings: head/neck, shoulders/upper back, chest/torso, abdomen, pelvis/genital region, gluteal/posterior pelvis, upper limbs/hands, lower limbs/feet when visible and appropriate.
   8. Reference Value for PulsePoint: usefulness as a baseline for posture, body symmetry, limb alignment, body habitus, visible surface findings, future session comparison, and motion/telemetry/video interpretation.
-  9. Limitations: clothing/shoes coverage, missing scale reference, camera angle/perspective, lighting/resolution, occluded regions, static-image limitations, and what cannot be assessed.
+  9. Limitations: only the practical constraints that materially affect interpretation, such as clothing/shoes coverage, missing scale reference, camera angle/perspective, lighting/resolution, occluded regions, or static-image limits. Do not list every absent body region.
   10. Suggested Next Reference Images: only if useful, recommend barefoot anterior/posterior/lateral views, anatomical position with arms relaxed, supine/prone/seated views, closer regional images for skin/surface findings, scale reference, and consistent lighting/camera distance.
-- Every claim must be based on visible image evidence unless explicitly marked as profile/context interpretation. Prefer "appears", "is visible", "is consistent with", or "cannot be assessed" over stronger wording.
+- Every claim must be based on visible image evidence unless explicitly marked as profile/context interpretation. Prefer "appears", "is visible", "is consistent with", or "not visible in this specific view" over stronger wording, but do not overuse caveats.
 `,
   sections: [
     { key: "image_set_overview", label: "Image Set Overview", color: "hsl(var(--chart-1))" },
@@ -1882,13 +2269,14 @@ const PELVIC_GENITAL_IMAGE_REVIEW_CONFIG = {
   emptyText: "Click Review Existing Evidence to reuse saved Profile Q&A image evidence and synthesize saved pelvic/genital findings. Add focused images only when you want to add new evidence to the existing profile.",
   reviewInstructions: `
 PELVIC / GENITAL REVIEW SCOPE:
-- Anchor this output in supplied and previously reviewed visual evidence from photos and video clips. Stay with anatomy, physiology, visible tissue state, state-dependent changes, device fit, and evidence limitations.
+- Anchor this output in supplied and previously reviewed visual evidence from photos and video clips. Stay with anatomy, physiology, visible tissue state, state-dependent changes, device fit, and confidence limits that matter.
 - Focus the anatomy-by-region section on shaft, glans, foreskin/retraction state, meatus, frenulum/frenular remnant, scrotum/testes, perineum/pelvic floor, anus/perianal region/anal verge when visible, and lower abdomen/groin only when it helps interpret the pelvic/genital evidence.
-- Include anal/perianal anatomy when it is visible or previously reviewed, especially where it matters for rectal stimulation context, perineal mechanics, tissue state, safety, or device/contact fit. If anal/perianal evidence is absent or limited, say that plainly rather than skipping the region.
+- Include anal/perianal anatomy when it is visible or previously reviewed, especially where it matters for rectal stimulation context, perineal mechanics, tissue state, safety, or device/contact fit. If anal/perianal evidence is absent or limited, say that once only if it materially affects interpretation.
 - Do not make feet, lower-leg posture, hand positioning, or stimulation techniques standalone topics in this pelvic/genital artifact. Mention hands, feet, or technique only when they directly affect visibility, scale, occlusion, pelvic positioning, contact mechanics, device fit, or safety interpretation.
 - If catheters, urethral sounds, anal devices, rectal stimulation equipment, sleeves, markers, stickers, lubricant, or medical/procedural supplies are visible, describe their visible position, contact zone, fit, and tissue interaction cautiously. Do not invent insertion depth, advancement, discomfort, sensation, or procedure stage unless image evidence or saved context directly supports it.
-- Compare visible findings with entered measurements, Foley/sound/device profile fields, prior Q&A findings, and session/video evidence. Use this to explain continuity, mismatch, or what cannot be assessed, while keeping the output centered on visual anatomy and physiology.
-- Organize the review as a pelvic/genital reference artifact: evidence scope, anatomy by region, state-dependent changes, device/contact mechanics, tissue state and safety observations, measurement reconciliation, and limitations or optional evidence gaps.
+- Compare visible findings with entered measurements, Foley/sound/device profile fields, prior Q&A findings, and session/video evidence. Use this to explain continuity or mismatch while keeping the output centered on visual anatomy and physiology.
+- Organize the review as a pelvic/genital reference artifact: evidence scope, anatomy by region, state-dependent changes, device/contact mechanics, tissue state and safety observations, measurement reconciliation, and the small set of limitations or optional evidence gaps that actually matter.
+- Lead with visible pelvic/genital/perineal findings. Do not turn missing regions or absent devices into the dominant narrative unless that absence is the direct finding being checked.
 - Keep the language anatomical and practical. Do not eroticize the review or write arousal-focused prose.
 `,
   sections: [
@@ -1919,6 +2307,8 @@ function ProfileImageReviewPanel({
   const [error, setError] = useState("");
   const [recoverableBatchSet, setRecoverableBatchSet] = useState(null);
   const [latestAttemptStatus, setLatestAttemptStatus] = useState(null);
+  const [availableCompletedReviewJob, setAvailableCompletedReviewJob] = useState(null);
+  const [selectedProfilerImageId, setSelectedProfilerImageId] = useState(null);
 
   useEffect(() => {
     base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
@@ -2079,42 +2469,8 @@ function ProfileImageReviewPanel({
       };
     };
 
-    const reconnect = async () => {
-      let keepLoading = false;
+    const refreshRecoverableState = async () => {
       try {
-        const activeData = await listBackgroundJobs({
-          type: "ai_invoke",
-          status: "queued,running",
-          metaSource: "Profiler",
-          limit: 50,
-        });
-        if (cancelled) return;
-
-        const activeJobs = (activeData.jobs || [])
-          .filter(isMatchingReviewJob)
-          .sort((a, b) => {
-            const finalDelta = Number(isFinalOrSingleReviewJob(b)) - Number(isFinalOrSingleReviewJob(a));
-            return finalDelta || newestFirst(a, b);
-          });
-        const activeJob = activeJobs[0];
-        if (activeJob) {
-          setJobStatus(activeJob);
-          setLoading(true);
-          keepLoading = true;
-          if (!isFinalOrSingleReviewJob(activeJob)) return;
-
-          const completedJob = await waitForBackgroundJob(activeJob.id, {
-            intervalMs: 1200,
-            onProgress: (nextJob) => {
-              if (!cancelled) setJobStatus(nextJob);
-            },
-          });
-          keepLoading = false;
-          if (cancelled || !isNewerCompletedJob(completedJob, result)) return;
-          await storeCompletedReviewJob(completedJob, []);
-          return;
-        }
-
         const completedData = await listBackgroundJobs({
           type: "ai_invoke",
           status: "complete",
@@ -2129,6 +2485,7 @@ function ProfileImageReviewPanel({
           .filter(isFinalOrSingleReviewJob)
           .sort(newestFirst)[0];
         if (!job || !isNewerCompletedJob(job, result)) {
+          setAvailableCompletedReviewJob(null);
           const failedData = await listBackgroundJobs({
             type: "ai_invoke",
             status: "error,cancelled",
@@ -2144,57 +2501,35 @@ function ProfileImageReviewPanel({
             setJobStatus(failedFinal);
             setRecoverableBatchSet(recoverable);
             setLatestAttemptStatus(failedStatus);
-            if (recoverable?.batches?.length) {
-              const batchParsedResults = recoverable.batches
-                .map((batchJob) => normalizeImageReviewResult(batchJob?.result))
-                .filter((item) => item?.overview);
-              if (batchParsedResults.length) {
-                await saveBatchAssembledReview(
-                  batchParsedResults,
-                  `Final synthesis timed out, so PulsePoint saved the completed ${config.shortTitle} batch findings as the latest interim review. No additional image review was rerun.`,
-                  recoverable,
-                  {
-                    ...failedStatus,
-                    state: "final_synthesis_timeout_recovered_locally",
-                    synthesis_stage: "local_batch_assembly_after_failed_final",
-                    older_saved_review_showing: false,
-                    latest_batch_findings_available: true,
-                  },
-                );
-                return;
-              }
-            }
-            setError(`Latest ${config.title.toLowerCase()} final synthesis failed: ${failedFinal.error || failedFinal.progress?.message || failedFinal.status}. The batch reviews completed, but the older saved review is still being shown until a final synthesis succeeds.`);
+            setError(recoverable?.batches?.length
+              ? `Latest ${config.title.toLowerCase()} final synthesis failed, but completed batch findings are available. Press Show Latest Findings to display them.`
+              : `Latest ${config.title.toLowerCase()} final synthesis failed: ${failedFinal.error || failedFinal.progress?.message || failedFinal.status}.`);
             return;
           }
           describeIncompleteBatchedReview(completedJobs);
           return;
         }
 
-        setJobStatus(job);
-        setRecoverableBatchSet(null);
-        setLatestAttemptStatus(null);
-        setError("");
-        await storeCompletedReviewJob(job, []);
+        if (job && isNewerCompletedJob(job, result)) {
+          if (result?._meta?.local_batch_assembled) {
+            setAvailableCompletedReviewJob(null);
+            setError("");
+            return;
+          }
+          setJobStatus(job);
+          setAvailableCompletedReviewJob(job);
+          setRecoverableBatchSet(null);
+          setLatestAttemptStatus(null);
+          setError("A newer completed Profiler review is available. Press the main review button if you want to refresh the displayed output.");
+        }
       } catch (err) {
-        if (!cancelled) console.warn(`${config.title} reconnect skipped:`, err);
-      } finally {
-        if (!cancelled && !keepLoading) setLoading(false);
+        if (!cancelled) console.warn(`${config.title} background state refresh skipped:`, err);
       }
     };
 
-    reconnect();
-    const interval = setInterval(reconnect, 5000);
-    const onResume = () => {
-      if (document.visibilityState === "visible") reconnect();
-    };
-    window.addEventListener("focus", reconnect);
-    document.addEventListener("visibilitychange", onResume);
+    refreshRecoverableState();
     return () => {
       cancelled = true;
-      clearInterval(interval);
-      window.removeEventListener("focus", reconnect);
-      document.removeEventListener("visibilitychange", onResume);
     };
   }, [config.kind, config.title, evidenceLoading, jobLabel, profileLoading, result, sessions.length, userProfile]);
 
@@ -2215,7 +2550,7 @@ function ProfileImageReviewPanel({
     setImages((current) => current.filter((image) => image.id !== id));
   };
 
-  const saveBatchAssembledReview = async (batchParsedResults, note = "", batchSetOverride = null, attemptStatusOverride = null) => {
+  const saveBatchAssembledReview = async (batchParsedResults, note = "", batchSetOverride = null, attemptStatusOverride = null, options = {}) => {
     if (!batchParsedResults?.length) throw new Error("No completed batch outputs are available to assemble.");
     const batchSet = batchSetOverride || recoverableBatchSet || {};
     const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
@@ -2230,16 +2565,19 @@ function ProfileImageReviewPanel({
     };
     storedResult._meta.recovered_from_batches = true;
     storedResult._meta.local_batch_assembled = true;
-    storedResult._meta.latest_attempt_status = attemptStatusOverride || latestAttemptStatus || {
-      state: "final_synthesis_timeout_recovered_locally",
+    storedResult._meta.image_id_repair_version = PROFILE_IMAGE_ID_REPAIR_VERSION;
+    storedResult._meta.latest_attempt_status = attemptStatusOverride || {
+      state: "batch_reviews_saved_as_current_review",
       timestamp: new Date().toISOString(),
       synthesis_stage: "local_batch_assembly",
       batch_reviews_completed: true,
-      older_saved_review_showing: Boolean(result),
+      older_saved_review_showing: false,
       latest_batch_findings_available: true,
       batch_count: batchSet?.total || batchParsedResults.length,
+      final_synthesis_required: false,
     };
     setResult(storedResult);
+    setLatestAttemptStatus(storedResult._meta.latest_attempt_status);
     const nextArchive = await saveProfileResultWithArchive({
       resultKey: config.resultKey,
       archiveKey: config.archiveKey,
@@ -2249,8 +2587,14 @@ function ProfileImageReviewPanel({
       sessionCount: sessions.length,
     });
     setArchive(nextArchive);
-    setRecoverableBatchSet(null);
-    setError(note || "Final synthesis timed out, so PulsePoint assembled and saved the completed Sarah batch reviews locally.");
+    if (options.keepRecoverableBatchSet !== true) {
+      setRecoverableBatchSet(null);
+    }
+    if (options.showErrorNotice === false) {
+      setError("");
+    } else {
+      setError(note || "Final synthesis timed out, so PulsePoint assembled and saved the completed Sarah batch reviews locally.");
+    }
     return storedResult;
   };
 
@@ -2272,7 +2616,10 @@ function ProfileImageReviewPanel({
     });
     try {
       const batchParsedResults = recoverableBatchSet.batches
-        .map((job) => normalizeImageReviewResult(job?.result))
+        .map((job) => remapBatchLocalImageIds(
+          normalizeImageReviewResult(job?.result),
+          job?.meta?.reviewed_images || [],
+        ))
         .filter((item) => item?.overview);
       await saveBatchAssembledReview(batchParsedResults, "Saved a recovered review assembled from completed Sarah batch outputs. No additional Claude synthesis request was made.");
     } catch (err) {
@@ -2281,6 +2628,29 @@ function ProfileImageReviewPanel({
     } finally {
       setLoading(false);
     }
+  };
+
+  const hasRecoverableDisplayRepair = recoverableBatchSet?.batches?.length > 0 &&
+    result?._meta?.local_batch_assembled &&
+    result?._meta?.image_id_repair_version !== PROFILE_IMAGE_ID_REPAIR_VERSION;
+  const hasRecoverableUnshownBatchSet = recoverableBatchSet?.batches?.length > 0 && !result?._meta?.local_batch_assembled;
+  const handlePrimaryReviewAction = async () => {
+    if (availableCompletedReviewJob) {
+      setLoading(true);
+      setError("");
+      try {
+        await storeCompletedReviewJob(availableCompletedReviewJob, []);
+        setAvailableCompletedReviewJob(null);
+      } catch (err) {
+        console.error(`${config.title} saved completed review display failed:`, err);
+        setError(aiErrorMessage(err));
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+    if (hasRecoverableUnshownBatchSet || hasRecoverableDisplayRepair) return assembleCompletedBatches();
+    return analyze();
   };
 
   const recoverFinalSynthesis = async () => {
@@ -2304,7 +2674,10 @@ function ProfileImageReviewPanel({
       const reviewUserProfile = (await refreshUserProfile?.().catch(() => null)) || userProfile;
       const isHeadToToeBodyReference = config.contextScope === "head_to_toe_body_reference";
       batchParsedResults = recoverableBatchSet.batches
-        .map((job) => normalizeImageReviewResult(job?.result))
+        .map((job) => remapBatchLocalImageIds(
+          normalizeImageReviewResult(job?.result),
+          job?.meta?.reviewed_images || [],
+        ))
         .filter((item) => item?.overview);
       if (!batchParsedResults.length) throw new Error("Completed batch results could not be reloaded for recovery.");
 
@@ -2343,6 +2716,7 @@ ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
+${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 
 RECOVERY SYNTHESIS RULES:
@@ -2565,6 +2939,7 @@ ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
+${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 
 This is a batch review, not the final user-facing synthesis. Analyze only the attached images in this batch as direct visual evidence, while preserving the image_id values exactly. Do not mention filenames, storage IDs, camera-roll IDs, or raw image numbers. Do not claim that images outside this batch were inspected in this batch. Keep view labels anatomical and practical.
@@ -2578,6 +2953,7 @@ ANNOTATED IMAGE OUTPUT RULES:
 - Return annotated_images and image_region_findings for directly reviewed images in this batch.
 - Use image_id values exactly as listed above.
 - Do not call close-up pelvic/genital/table-position frames standing or upright unless the image itself establishes weight-bearing standing posture.
+- In close-up perineal or scrotal-base views, do not label shaft, glans, or ventral shaft surface as visible unless that anatomy is clearly in frame. If only the superior edge or scrotal-base transition is visible, say possible superior shaft-base/scrotal-base edge and mark the limitation.
 - For tiny structures or ambiguous findings such as meatus, meatal fluid/droplet, urethral fluid, device insertion, catheter/Foley presence, or fine tissue margins, use possible/uncertain unless the structure is unambiguous at the pin or box location.
 - Keep paragraphs complete and TTS-ready. Return structured JSON only.`,
             response_json_schema: responseSchema,
@@ -2594,21 +2970,63 @@ ANNOTATED IMAGE OUTPUT RULES:
               reused_saved_image_count: reusedSavedImages.length,
             },
           });
-          const batchParsed = normalizeImageReviewResult(typeof batchRaw === "string" ? JSON.parse(batchRaw) : batchRaw);
+          const batchReviewedImages = buildImageReviewReferences(batchImages);
+          const batchParsed = remapBatchLocalImageIds(
+            normalizeImageReviewResult(typeof batchRaw === "string" ? JSON.parse(batchRaw) : batchRaw),
+            batchReviewedImages,
+          );
           if (batchParsed?.overview) batchParsedResults.push(batchParsed);
         }
 
         if (!batchParsedResults.length) throw new Error("Sarah returned empty image review batches.");
         activeBatchSet = {
           total: imageBatches.length,
-          batches: [],
+          batches: batchParsedResults.map((batchResult, index) => ({
+            id: `current-batch-${index + 1}`,
+            status: "complete",
+            result: batchResult,
+            meta: {
+              batch: index + 1,
+              batch_count: imageBatches.length,
+              reviewed_images: buildImageReviewReferences(imageBatches[index] || []),
+            },
+          })),
           reviewed_images: reviewedImageRefs,
           fresh_image_count: freshImagePayload.length,
           reused_saved_image_count: reusedSavedImages.length,
           image_count: imagePayload.length,
+          final_synthesis_attempted: false,
           startedAt: new Date().toISOString(),
           finishedAt: new Date().toISOString(),
         };
+        await saveBatchAssembledReview(
+          batchParsedResults,
+          "Batch reviews completed and were saved as the current review. Final synthesis is available as an optional retry without rerunning image review.",
+          activeBatchSet,
+          {
+            state: "batch_reviews_saved_without_final_synthesis",
+            timestamp: new Date().toISOString(),
+            synthesis_stage: "batch_level_review_complete",
+            batch_reviews_completed: true,
+            older_saved_review_showing: false,
+            latest_batch_findings_available: true,
+            batch_count: imageBatches.length,
+            final_synthesis_attempted: false,
+          },
+          { showErrorNotice: false, keepRecoverableBatchSet: true },
+        );
+        setRecoverableBatchSet(activeBatchSet);
+        setLoading(false);
+        setJobStatus({
+          status: "complete",
+          progress: {
+            phase: "complete",
+            current: imageBatches.length + 1,
+            total: imageBatches.length + 1,
+            message: `${config.shortTitle} batch review complete. Saved assembled batch findings; final synthesis is optional.`,
+          },
+        });
+        return;
         raw = await runProfilerAIJob({
           model: "claude_sonnet_4_6",
           max_tokens: PROFILE_IMAGE_REVIEW_MAX_TOKENS,
@@ -2629,6 +3047,7 @@ ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
+${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 
 SYNTHESIS RULES:
@@ -2686,6 +3105,7 @@ ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
+${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 
 IMAGE REVIEW RULES:
@@ -2703,7 +3123,7 @@ IMAGE REVIEW RULES:
 - Write directly to the person using "you" and "your".
 - Separate direct visual observations from cautious profile implications.
 - Prefer specific observations over generic filler.
-- Preserve uncertainty. Use "appears", "is visible", "may reflect", or "cannot be assessed from this image" where appropriate.
+- Preserve uncertainty, but keep it lean. Use "appears", "is visible", "may reflect", or "not visible in this specific view" where appropriate.
 - Do not mention uploaded filenames, storage IDs, camera roll numbers, or raw image numbers in the user-facing review.
 - When distinguishing views, use plain view labels such as anterior standing view, posterior standing view, lateral view, table-position view, close-up pelvic view, or saved image set.
 - Do not write paragraphs that begin "Image 1", "Image 2", or a filename. Integrate the views into the anatomy sections naturally.
@@ -2728,6 +3148,7 @@ ANNOTATED IMAGE OUTPUT RULES:
 - Do not call a close-up pelvic/genital/table-position frame "standing" or "upright" unless the image itself establishes weight-bearing standing posture. If posture is ambiguous, say position not fully assessable from this close-up.
 - Do not put filenames, storage IDs, camera roll IDs, or raw image numbers in annotated_images, image_region_findings, or the prose review.
 - image_region_findings should be concise, clinically useful callouts linked to the same sections used in the prose.
+- In close-up perineal or scrotal-base views, do not label shaft, glans, or ventral shaft surface as visible unless that anatomy is clearly in frame. If only the superior edge or scrotal-base transition is visible, say possible superior shaft-base/scrotal-base edge and mark the limitation.
 - For pin and box coordinates, use approximate percentages from zero to one hundred with origin at the top-left of the displayed image. Only include pin or box when the location is reasonably clear; otherwise omit that field.
 - Callouts should stay anatomical and evidence-grounded: body region, visible posture/alignment, habitus/soft tissue, skin/surface finding, tissue state, visibility limitation, or clinical reference value.
 - For tiny structures or ambiguous findings such as meatus, meatal fluid/droplet, urethral fluid, device insertion, catheter/Foley presence, or fine tissue margins, use possible/uncertain unless the structure is unambiguous at the pin or box location.
@@ -2881,6 +3302,11 @@ ANNOTATED IMAGE OUTPUT RULES:
   }));
   const hasPersistedReviewedImages = Array.isArray(result?._meta?.reviewed_images) && result._meta.reviewed_images.length > 0;
   const inlineReferenceImages = hasPersistedReviewedImages ? images : [...images, ...fallbackReferenceImages];
+  const lightboxImageIds = result ? [...new Set([
+    ...(Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images.map((image) => image.image_id).filter(Boolean) : []),
+    ...(Array.isArray(result?.annotated_images) ? result.annotated_images.map((image) => image.image_id).filter(Boolean) : []),
+    ...(Array.isArray(result?.image_region_findings) ? result.image_region_findings.map((finding) => finding.image_id).filter(Boolean) : []),
+  ])] : [];
   const paragraphs = [];
   const paragraphMeta = [];
   if (result) {
@@ -2912,34 +3338,11 @@ ANNOTATED IMAGE OUTPUT RULES:
               <Upload className="h-3.5 w-3.5" /> Add Images
               <input type="file" accept="image/*" multiple className="hidden" onChange={handleImageFiles} />
             </label>
-            <Button size="sm" onClick={analyze} disabled={loading || profileLoading || evidenceLoading || !userProfile} className="h-8 gap-1.5 text-xs">
+            <Button size="sm" onClick={handlePrimaryReviewAction} disabled={loading || profileLoading || evidenceLoading || !userProfile} className="h-8 gap-1.5 text-xs">
               {loading
                 ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Reviewing...</>
-                : <><ImageIcon className="h-3.5 w-3.5" />{images.length ? (result ? "Re-review Images" : "Review Images") : (result ? "Re-review Evidence" : "Review Existing Evidence")}</>}
+                : <><ImageIcon className="h-3.5 w-3.5" />{hasRecoverableDisplayRepair ? "Refresh Findings" : (availableCompletedReviewJob || hasRecoverableUnshownBatchSet) ? "Show Latest Findings" : images.length ? (result ? "Re-review Images" : "Review Images") : (result ? "Re-review Evidence" : "Review Existing Evidence")}</>}
             </Button>
-            {recoverableBatchSet?.batches?.length > 0 && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={recoverFinalSynthesis}
-                disabled={loading || profileLoading || evidenceLoading || !userProfile}
-                className="h-8 gap-1.5 text-xs"
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-                Retry Final Synthesis
-              </Button>
-            )}
-            {recoverableBatchSet?.batches?.length > 0 && (
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={assembleCompletedBatches}
-                disabled={loading || profileLoading || evidenceLoading || !userProfile}
-                className="h-8 gap-1.5 text-xs"
-              >
-                View Latest Batch Findings
-              </Button>
-            )}
           </div>
         </div>
 
@@ -2955,7 +3358,7 @@ ANNOTATED IMAGE OUTPUT RULES:
           {images.length > 0 && (
             <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{images.length} fresh image{images.length === 1 ? "" : "s"} selected</Badge>
           )}
-          {recoverableBatchSet?.batches?.length > 0 && (
+          {recoverableBatchSet?.batches?.length > 0 && !result?._meta?.local_batch_assembled && (
             <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
               {recoverableBatchSet.total}/{recoverableBatchSet.total} batches recoverable
             </Badge>
@@ -2963,19 +3366,29 @@ ANNOTATED IMAGE OUTPUT RULES:
           <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">Priority background queue</Badge>
         </div>
 
-        {recoverableBatchSet?.batches?.length > 0 && (
+        {recoverableBatchSet?.batches?.length > 0 && !result?._meta?.local_batch_assembled && (
           <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-50">
-            Batch reviews completed, but final synthesis did not finish. You are viewing the previous saved final synthesis until retry or local assembly succeeds. Latest batch findings are available below the buttons and can be reused without rerunning image review.
+            {result?._meta?.local_batch_assembled
+              ? "Batch reviews completed and are saved as the current review. The main review button will run a fresh review only when you ask for it."
+              : latestAttemptStatus?.state === "batch_reviews_saved_without_final_synthesis"
+                ? "Batch reviews completed and were saved as the current review. The main review button will run a fresh review only when you ask for it."
+              : "Batch reviews completed, but the final rewrite did not finish. Press the main review button once to show the latest completed findings without rerunning image review."}
           </div>
         )}
 
-        {(latestAttemptStatus || recoverableBatchSet?.batches?.length > 0) && (
+        {(latestAttemptStatus || recoverableBatchSet?.batches?.length > 0) && !result?._meta?.local_batch_assembled && (
           <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-50">
             <p className="font-semibold uppercase tracking-wider">Latest Attempt Status</p>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
               <div className="rounded-md border border-amber-300/20 bg-background/40 px-2 py-1.5">
                 <p className="text-[10px] uppercase tracking-wider text-amber-100/80">Final Synthesis</p>
-                <p>{latestAttemptStatus?.error_message ? `Failed: ${latestAttemptStatus.error_message}` : "Batch findings are recoverable; final synthesis is not currently saved as latest."}</p>
+                <p>{result?._meta?.local_batch_assembled
+                  ? "Current batch-assembled review is saved."
+                  : latestAttemptStatus?.state === "batch_reviews_saved_without_final_synthesis"
+                    ? "Not needed for current output; completed batch findings are saved."
+                  : latestAttemptStatus?.error_message
+                    ? `Failed: ${latestAttemptStatus.error_message}`
+                    : "Completed batch findings can be shown from the main review button."}</p>
               </div>
               <div className="rounded-md border border-amber-300/20 bg-background/40 px-2 py-1.5">
                 <p className="text-[10px] uppercase tracking-wider text-amber-100/80">Current Display</p>
@@ -2991,7 +3404,11 @@ ANNOTATED IMAGE OUTPUT RULES:
               </div>
               <div className="rounded-md border border-amber-300/20 bg-background/40 px-2 py-1.5">
                 <p className="text-[10px] uppercase tracking-wider text-amber-100/80">Next Action</p>
-                <p>Retry Final Synthesis reuses completed batch JSON. View Latest Batch Findings assembles the batch evidence locally with no extra AI request.</p>
+                <p>{result?._meta?.local_batch_assembled
+                  ? "Use the main review button only when you want to run a fresh review."
+                  : latestAttemptStatus?.state === "batch_reviews_saved_without_final_synthesis"
+                  ? "The current batch-assembled review is already saved."
+                  : "Press the main review button once to show the latest completed findings."}</p>
               </div>
             </div>
           </div>
@@ -3017,21 +3434,21 @@ ANNOTATED IMAGE OUTPUT RULES:
           />
         )}
 
-        {!profileLoading && !images.length && (
+        {!result && !profileLoading && !images.length && (
           <p className="text-xs text-muted-foreground">{config.emptyText}</p>
         )}
 
-        {images.length > 0 ? (
+        {!result && images.length > 0 ? (
           <p className="text-xs text-muted-foreground">
             Fresh image files will be saved locally before review so the annotated evidence cards can show the referenced views after reload.
           </p>
-        ) : reusableProfileAttachments.length > 0 ? (
+        ) : !result && reusableProfileAttachments.length > 0 ? (
           <p className="text-xs text-muted-foreground">
             No fresh images selected. This review will reuse the most relevant saved Profile Q&A images when they can be reloaded, then synthesize saved visual findings and profile evidence.
           </p>
         ) : null}
 
-        {!images.length && reusableProfileAttachments.length === 0 && existingEvidenceCount > 0 && (
+        {!result && !images.length && reusableProfileAttachments.length === 0 && existingEvidenceCount > 0 && (
           <p className="text-xs text-muted-foreground">
             Saved visual findings are available, but no reusable Profile Q&A image files were found in saved chat attachments.
           </p>
@@ -3100,6 +3517,7 @@ ANNOTATED IMAGE OUTPUT RULES:
                         sections={sections}
                         color={color}
                         transientImages={inlineReferenceImages}
+                        onOpenImage={setSelectedProfilerImageId}
                       />
                     </>
                   );
@@ -3136,6 +3554,17 @@ ANNOTATED IMAGE OUTPUT RULES:
             }}
           />
         )}
+
+        <ProfileImageLightbox
+          result={result}
+          imageIds={lightboxImageIds}
+          selectedImageId={selectedProfilerImageId}
+          onSelectImageId={setSelectedProfilerImageId}
+          onClose={() => setSelectedProfilerImageId(null)}
+          sections={sections}
+          color={config.color}
+          transientImages={inlineReferenceImages}
+        />
 
         <ProfileArchiveList
           title={`${config.shortTitle} Run Archive`}

@@ -86,6 +86,18 @@ function recordedValue(value) {
   return value && value !== "unknown";
 }
 
+function firstRecorded(...values) {
+  return values.find(recordedValue);
+}
+
+function arrayValue(...values) {
+  for (const value of values) {
+    if (Array.isArray(value) && value.length) return value;
+    if (recordedValue(value)) return [value];
+  }
+  return [];
+}
+
 function substanceText(label, value) {
   if (!value || typeof value.used !== "boolean") return null;
   if (!value.used) return `${label}: explicitly logged as none`;
@@ -98,18 +110,23 @@ function substanceText(label, value) {
 }
 
 export function structuredSessionContextForAI(session) {
-  const context = session?.session_context;
+  const context = session?.session_context || {};
   if (!context || typeof context !== "object") return undefined;
   const cleaned = {};
   if (context.alcohol && typeof context.alcohol.used === "boolean") cleaned.alcohol = context.alcohol;
   if (context.cannabis && typeof context.cannabis.used === "boolean") cleaned.cannabis = context.cannabis;
-  ["fatigue", "hydration_state", "food_state", "privacy_interruptibility"].forEach((key) => {
-    if (recordedValue(context[key])) cleaned[key] = context[key];
-  });
-  if (Array.isArray(context.mental_state) && context.mental_state.length) cleaned.mental_state = context.mental_state;
-  if (Array.isArray(context.environmental_preparation) && context.environmental_preparation.length) {
-    cleaned.environmental_preparation = context.environmental_preparation;
-  }
+  const fatigue = firstRecorded(context.fatigue, session?.fatigue);
+  const hydration = firstRecorded(context.hydration_state, context.hydrationState, session?.hydration_state, session?.hydration);
+  const foodState = firstRecorded(context.food_state, context.foodState, session?.food_state, session?.foodState);
+  const privacy = firstRecorded(context.privacy_interruptibility, context.privacy, session?.privacy_interruptibility, session?.privacy);
+  if (fatigue) cleaned.fatigue = fatigue;
+  if (hydration) cleaned.hydration_state = hydration;
+  if (foodState) cleaned.food_state = foodState;
+  if (privacy) cleaned.privacy_interruptibility = privacy;
+  const mentalState = arrayValue(context.mental_state, context.mentalState, session?.mental_state, session?.mentalState, session?.mood);
+  if (mentalState.length) cleaned.mental_state = mentalState;
+  const preparation = arrayValue(context.environmental_preparation, context.preparation, session?.environmental_preparation, session?.preparation);
+  if (preparation.length) cleaned.environmental_preparation = preparation;
   return Object.keys(cleaned).length ? cleaned : undefined;
 }
 

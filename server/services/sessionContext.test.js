@@ -45,3 +45,23 @@ test('session context evidence text does not collapse populated context into no 
   assert.match(text, /Hydration: Intentionally hydrated \/ electrolyte supported/i);
   assert.doesNotMatch(text, /No influences/i);
 });
+
+test('structured session context accepts camelCase and legacy session fields', () => {
+  const context = structuredSessionContextForAI({
+    session_context: {
+      hydrationState: 'electrolyte_supported',
+      foodState: 'normal_meal',
+      mentalState: ['calm', 'meditative'],
+      privacy: 'fully_private',
+      preparation: ['tools_prepared', 'telemetry_active'],
+    },
+    fatigue: 'tired',
+  });
+
+  assert.equal(context.fatigue, 'tired');
+  assert.equal(context.hydration_state, 'electrolyte_supported');
+  assert.equal(context.food_state, 'normal_meal');
+  assert.deepEqual(context.mental_state, ['calm', 'meditative']);
+  assert.equal(context.privacy_interruptibility, 'fully_private');
+  assert.deepEqual(context.environmental_preparation, ['tools_prepared', 'telemetry_active']);
+});
