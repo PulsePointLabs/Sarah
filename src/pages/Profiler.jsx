@@ -1732,13 +1732,15 @@ function useContainedImageRect() {
     return () => observer.disconnect();
   }, []);
 
-  const rect = (() => {
+  const getRect = (fitMode = "contain") => {
     const cw = containerSize?.width || 0;
     const ch = containerSize?.height || 0;
     const nw = naturalSize?.width || 0;
     const nh = naturalSize?.height || 0;
     if (!cw || !ch || !nw || !nh) return null;
-    const scale = Math.min(cw / nw, ch / nh);
+    const scale = fitMode === "cover"
+      ? Math.max(cw / nw, ch / nh)
+      : Math.min(cw / nw, ch / nh);
     const width = nw * scale;
     const height = nh * scale;
     return {
@@ -1747,9 +1749,9 @@ function useContainedImageRect() {
       width,
       height,
     };
-  })();
+  };
 
-  return { containerRef, rect, setNaturalSize };
+  return { containerRef, getRect, setNaturalSize };
 }
 
 function imagePointStyle(rect, pin) {
@@ -1787,9 +1789,11 @@ function AnnotatedImageStage({
   unavailableText = "Image preview is not available for this saved run.",
   className = "relative aspect-[4/3] bg-black",
   imageClassName = "",
+  fitMode = "contain",
   onClick = null,
 }) {
-  const { containerRef, rect, setNaturalSize } = useContainedImageRect();
+  const { containerRef, getRect, setNaturalSize } = useContainedImageRect();
+  const rect = getRect(fitMode);
   const imageUrl = image?.preview_url ? serverUrl(image.preview_url) : "";
 
   return (
@@ -1798,10 +1802,15 @@ function AnnotatedImageStage({
       className={`${className} ${onClick ? "cursor-zoom-in" : ""}`}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
-      onClick={onClick || undefined}
+      onClick={onClick ? (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onClick();
+      } : undefined}
       onKeyDown={onClick ? (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
+        event.stopPropagation();
         onClick();
       } : undefined}
       title={onClick ? "Open annotated image viewer" : undefined}
@@ -1810,7 +1819,7 @@ function AnnotatedImageStage({
         <img
           src={imageUrl}
           alt={image.display_label || "Reviewed anatomy reference"}
-          className={`absolute object-contain ${imageClassName}`}
+          className={`absolute ${imageClassName}`}
           style={rect ? {
             left: `${rect.left}px`,
             top: `${rect.top}px`,
@@ -1968,7 +1977,8 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
                 pinnedFindings={pinnedFindings}
                 boxedFindings={boxedFindings}
                 unavailableText="Image preview is not available for this saved run. Re-run with saved or fresh images to attach view previews."
-                className="relative aspect-[4/3] bg-black"
+                className="relative h-72 min-h-72 overflow-hidden bg-black sm:h-80 lg:aspect-[4/3] lg:h-auto lg:min-h-0"
+                fitMode="cover"
               />
               <div className="space-y-2 p-3">
                 <div>
@@ -2196,12 +2206,13 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
           const pinnedFindings = imageFindings.filter((finding) => finding.pin?.x != null && finding.pin?.y != null);
           return (
             <div key={`${sectionKey}-${imageId}`} className="overflow-hidden rounded-lg border border-border bg-background/70">
-              <div className="grid gap-2 sm:grid-cols-[minmax(130px,0.85fr)_1fr]">
+              <div className="grid gap-2 xl:grid-cols-[minmax(260px,0.95fr)_1fr]">
                 <AnnotatedImageStage
                   image={image}
                   pinnedFindings={pinnedFindings}
                   unavailableText="Image preview unavailable for this saved run."
-                  className="relative min-h-36 bg-black sm:min-h-full"
+                  className="relative h-64 min-h-64 overflow-hidden bg-black sm:h-72 xl:h-full xl:min-h-full"
+                  fitMode="cover"
                   onClick={onOpenImage ? () => onOpenImage(imageId) : null}
                 />
                 <div className="space-y-2 p-2.5">
