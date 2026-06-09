@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { listBackgroundJobs } from "@/lib/backgroundJobs";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Play, Pause, Download, Trash2, Music } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,38 @@ const getRawAudioUrl = (export_) => (
   export_?.url ||
   ""
 );
+
+const virtualExportFromJob = (job) => {
+  if (!job?.result?.file_url) return null;
+  const title = job?.meta?.title || job?.payload?.title || job?.meta?.label || "Completed audio render";
+  return {
+    id: `job:${job.id}`,
+    title,
+    analysis_title: title,
+    file_url: job.result.file_url,
+    duration_seconds: Math.round(Number(job.result.duration_seconds || 0)),
+    voice: job?.payload?.voice,
+    speed: job?.payload?.speed,
+    model: job?.payload?.model,
+    format: job.result.format || job?.payload?.outputFormat || "mp3",
+    render_version: job.result.render_version,
+    silence_trim: job.result.silence_trim || null,
+    size: job.result.size,
+    filename: job.result.filename || String(job.result.file_url).split("/").pop(),
+    tts_session_key: job?.meta?.sessionId || null,
+    source_generated_at: job?.meta?.sourceGeneratedAt || null,
+    exported_at: job.finishedAt || job.updatedAt || job.createdAt,
+    created_date: job.finishedAt || job.updatedAt || job.createdAt,
+    has_chapters: Boolean(job.result.has_chapters),
+    chapter_format: job.result.chapter_format || "sidecar",
+    chapter_count: Number(job.result.chapter_count || 0),
+    sidecar_chapters_available: Boolean(job.result.sidecar_chapters_available),
+    chapter_json_url: job.result.chapter_json_url || null,
+    chapter_cue_url: job.result.chapter_cue_url || null,
+    chapter_txt_url: job.result.chapter_txt_url || null,
+    _source: "completed_tts_job",
+  };
+};
 
 const getAudioUrl = (export_) => serverUrl(getRawAudioUrl(export_));
 
@@ -99,12 +132,31 @@ export default function Library() {
     queryFn: () => base44.entities.AudioExport.list("-created_date", 250),
   });
 
+  const { data: completedJobs = [], isLoading: jobsLoading } = useQuery({
+    queryKey: ["completedTtsExportJobs"],
+    queryFn: async () => {
+      const result = await listBackgroundJobs({
+        type: "tts_export",
+        status: "complete",
+        metaSource: "TTSReader",
+        limit: 75,
+      });
+      return result.jobs || [];
+    },
+  });
+
   const downloadableExports = useMemo(() => (
-    exports
+    [
+      ...exports,
+      ...completedJobs
+        .map(virtualExportFromJob)
+        .filter(Boolean)
+        .filter((jobExport) => !exports.some((export_) => getRawAudioUrl(export_) === jobExport.file_url)),
+    ]
       .filter((export_) => Boolean(getRawAudioUrl(export_)))
       .sort((a, b) => timestampMs(b) - timestampMs(a))
       .slice(0, RECENT_AUDIO_LIMIT)
-  ), [exports]);
+  ), [completedJobs, exports]);
 
   const deleteExport = useMutation({
     mutationFn: (id) => base44.entities.AudioExport.delete(id),
@@ -164,7 +216,7 @@ export default function Library() {
     }
   };
 
-  if (isLoading) {
+  if (isLoading || jobsLoading) {
     return (
       <div className="flex items-center justify-center h-96">
         <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
@@ -229,6 +281,11 @@ export default function Library() {
                 {export_.filename && (
                   <p className="text-xs text-muted-foreground mt-2 truncate">{export_.filename}</p>
                 )}
+                {export_._source === "completed_tts_job" && (
+                  <p className="mt-2 rounded-md border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-xs text-amber-100">
+                    Recovered from a completed background render. Download works; saving to AudioExport was interrupted.
+                  </p>
+                )}
               </div>
 
               <div className="flex items-center gap-2 sm:ml-4 shrink-0">
@@ -269,6 +326,7 @@ export default function Library() {
                   size="sm"
                   variant="ghost"
                   onClick={() => handleDelete(export_.id)}
+                  disabled={export_._source === "completed_tts_job"}
                   className="text-destructive/60 hover:text-destructive hover:bg-destructive/10"
                 >
                   <Trash2 className="w-4 h-4" />

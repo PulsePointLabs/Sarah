@@ -405,7 +405,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     } catch {
       setLastDownloadRecord(null);
     }
-  }, [sessionId, title]);
+  }, [sessionId, sourceGeneratedAt, title]);
 
   const copyOutput = async () => {
     const renderedText = copyContentRef.current?.innerText || "";
@@ -1195,6 +1195,34 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         }
 
         if (!sessionId) return;
+        const completed = await listBackgroundJobs({
+          type: "tts_export",
+          status: "complete",
+          metaSessionId: sessionId,
+          metaSource: "TTSReader",
+          limit: 6,
+        });
+        const completedJob = (completed?.jobs || []).find((job) => (
+          job?.result?.file_url &&
+          (!sourceGeneratedAt || !job?.meta?.sourceGeneratedAt || job.meta.sourceGeneratedAt === sourceGeneratedAt)
+        ));
+        if (!cancelled && completedJob?.result?.file_url) {
+          setCompletedRender({
+            ...completedJob.result,
+            displayTitle: completedJob.meta?.title || getDownloadDisplayTitle(),
+            exportFormat: completedJob.result.format || runtimeRef.current.format,
+            sourceGeneratedAt: completedJob.meta?.sourceGeneratedAt || null,
+          });
+          setRequestStatus({ type: "ok", msg: "Recovered completed server audio render. Tap Download Ready to save it." });
+          saveActiveExportJob(completedJob, {
+            displayTitle: completedJob.meta?.title || getDownloadDisplayTitle(),
+            exportFormat: completedJob.result.format || runtimeRef.current.format,
+            chunks: completedJob.meta?.chunks || 0,
+            sourceGeneratedAt: completedJob.meta?.sourceGeneratedAt || null,
+          });
+          return;
+        }
+
         const recent = await listBackgroundJobs({
           type: "tts_export",
           status: "queued,running",
