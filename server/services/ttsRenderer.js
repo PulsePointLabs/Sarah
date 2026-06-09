@@ -15,6 +15,28 @@ import {
 } from './ttsCore.js';
 import { writeChapterSidecars } from './audioChapters.js';
 
+async function probeAudioDurationSeconds(filePath) {
+  const probe = await runProcess('ffprobe', [
+    '-v', 'error',
+    '-show_entries', 'format=duration',
+    '-of', 'default=noprint_wrappers=1:nokey=1',
+    filePath,
+  ]);
+  return Number(probe.stdout.trim()) || 0;
+}
+
+async function trimTtsChunkSilence(inputPath, outputPath) {
+  await runProcess('ffmpeg', [
+    '-hide_banner',
+    '-y',
+    '-i', inputPath,
+    '-map', '0:a:0',
+    '-af', 'silenceremove=start_periods=1:start_duration=0.20:start_threshold=-50dB:start_silence=0.05:stop_periods=1:stop_duration=2.00:stop_threshold=-50dB:stop_silence=0.45',
+    '-c:a', 'pcm_s16le',
+    outputPath,
+  ]);
+}
+
 export async function renderTTSExport(payload = {}, options = {}) {
   let workDir = null;
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
@@ -77,6 +99,7 @@ export async function renderTTSExport(payload = {}, options = {}) {
     await fs.mkdir(workDir, { recursive: true });
 
     const sourceFiles = [];
+    const chunkSilenceTrim = [];
     for (let i = 0; i < normalizedChunks.length; i++) {
       if (options.signal?.aborted) throw new Error('Cancelled');
       const chunk = normalizedChunks[i];
@@ -110,12 +133,43 @@ export async function renderTTSExport(payload = {}, options = {}) {
       const buffer = Buffer.from(await response.arrayBuffer());
       const chunkPath = path.join(workDir, `chunk-${String(i).padStart(4, '0')}.wav`);
       await fs.writeFile(chunkPath, buffer);
-      sourceFiles.push(chunkPath);
+      let sourcePath = chunkPath;
+      let trimMeta = { chunk: i, trimmed: false };
+      try {
+        const originalDuration = await probeAudioDurationSeconds(chunkPath);
+        const trimmedPath = path.join(workDir, `chunk-${String(i).padStart(4, '0')}-trimmed.wav`);
+        await trimTtsChunkSilence(chunkPath, trimmedPath);
+        const trimmedDuration = await probeAudioDurationSeconds(trimmedPath);
+        if (trimmedDuration > 0.25 && originalDuration - trimmedDuration > 0.75) {
+          sourcePath = trimmedPath;
+          trimMeta = {
+            chunk: i,
+            trimmed: true,
+            original_duration_seconds: Math.round(originalDuration * 10) / 10,
+            trimmed_duration_seconds: Math.round(trimmedDuration * 10) / 10,
+            removed_seconds: Math.round((originalDuration - trimmedDuration) * 10) / 10,
+          };
+        } else {
+          trimMeta = {
+            chunk: i,
+            trimmed: false,
+            original_duration_seconds: Math.round(originalDuration * 10) / 10,
+            trimmed_duration_seconds: Math.round(trimmedDuration * 10) / 10,
+          };
+        }
+      } catch (error) {
+        trimMeta = { chunk: i, trimmed: false, warning: error?.message || 'chunk silence trim failed' };
+        console.warn('[renderTTSExport] chunk silence trim skipped', trimMeta);
+      }
+      chunkSilenceTrim.push(trimMeta);
+      sourceFiles.push(sourcePath);
       onProgress({
         phase: 'generating',
         current: i + 1,
         total: normalizedChunks.length,
-        message: `Generated chunk ${i + 1} of ${normalizedChunks.length}`,
+        message: trimMeta.trimmed
+          ? `Generated chunk ${i + 1} of ${normalizedChunks.length}; trimmed ${trimMeta.removed_seconds}s boundary silence`
+          : `Generated chunk ${i + 1} of ${normalizedChunks.length}`,
       });
     }
 
@@ -156,14 +210,11 @@ export async function renderTTSExport(payload = {}, options = {}) {
     const stat = await fs.stat(finalPath);
     let durationSeconds = 0;
     try {
-      const probe = await runProcess('ffprobe', [
-        '-v', 'error',
-        '-show_entries', 'format=duration',
-        '-of', 'default=noprint_wrappers=1:nokey=1',
-        finalPath,
-      ]);
-      durationSeconds = Math.round(Number(probe.stdout.trim()) || 0);
+      durationSeconds = Math.round(await probeAudioDurationSeconds(finalPath));
     } catch {}
+
+    const trimmedChunks = chunkSilenceTrim.filter((item) => item.trimmed);
+    const removedSilenceSeconds = Math.round(trimmedChunks.reduce((sum, item) => sum + Number(item.removed_seconds || 0), 0) * 10) / 10;
 
     let chapterMeta = null;
     try {
@@ -187,12 +238,19 @@ export async function renderTTSExport(payload = {}, options = {}) {
       size: stat.size,
       format: outputFormat,
       mime: ttsExportMime(outputFormat),
+      render_version: 'tts_export_silence_trim_v1',
       duration_seconds: durationSeconds,
       model,
       voice,
       speed: finalSpeed,
       chunks: normalizedChunks.length,
       normalized: Boolean(normalize),
+      silence_trim: {
+        enabled: true,
+        trimmed_chunks: trimmedChunks.length,
+        removed_seconds: removedSilenceSeconds,
+        chunks: chunkSilenceTrim,
+      },
       ...(chapterMeta || {
         has_chapters: false,
         chapter_format: 'unavailable',

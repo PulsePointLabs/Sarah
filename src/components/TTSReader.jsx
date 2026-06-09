@@ -42,6 +42,11 @@ const ttsExportStorageKey = (sessionId, title = "") =>
 const ttsDownloadRecordKey = (sessionId, title = "") =>
   `pulsepoint.ttsDownload.${String(`${sessionId || "global"}-${title || "analysis"}`).replace(/[^a-z0-9]+/gi, "_").slice(0, 120)}`;
 const TTS_AUTO_SCROLL_STORAGE_KEY = "pulsepoint.tts.autoScroll";
+const TTS_EXPORT_RENDER_VERSION = "tts_export_silence_trim_v1";
+
+function isCurrentTtsExportRecord(entry) {
+  return entry?.render_version === TTS_EXPORT_RENDER_VERSION || entry?.silence_trim?.enabled === true;
+}
 
 function loadTtsAutoScrollPreference() {
   try {
@@ -1077,6 +1082,8 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       speed: runtime.speed,
       model: runtime.model,
       format: rendered.format || exportFormat,
+      render_version: rendered.render_version || TTS_EXPORT_RENDER_VERSION,
+      silence_trim: rendered.silence_trim || null,
       size: rendered.size,
       filename,
       tts_session_key: sessionId || null,
@@ -1223,12 +1230,13 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       try {
         const matchingTitle = await base44.entities.AudioExport.filter({ title: displayTitle }, "-created_date", 30);
         if (cancelled) return;
+        const usableExports = matchingTitle.filter((entry) => entry.file_url && isCurrentTtsExportRecord(entry));
         const exact = sourceGeneratedAt
-          ? matchingTitle.find((entry) => entry.file_url && entry.source_generated_at === sourceGeneratedAt)
-          : matchingTitle.find((entry) => entry.file_url);
+          ? usableExports.find((entry) => entry.source_generated_at === sourceGeneratedAt)
+          : usableExports.find((entry) => entry.file_url);
         const sourceTime = sourceGeneratedAt ? new Date(sourceGeneratedAt).getTime() : null;
         const compatibleLegacy = sourceGeneratedAt && Number.isFinite(sourceTime)
-          ? matchingTitle.find((entry) => (
+          ? usableExports.find((entry) => (
             entry.file_url &&
             !entry.source_generated_at &&
             new Date(entry.created_date).getTime() >= sourceTime
@@ -1255,6 +1263,11 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     completedRender?.file_url &&
     completedRender.sourceGeneratedAt !== sourceGeneratedAt
   );
+  const completedRenderIsCurrent = Boolean(
+    completedRender?.file_url &&
+    !completedRenderForOlderOutput &&
+    isCurrentTtsExportRecord(completedRender)
+  );
   const showFloatingFetchStatus = requestStatus?.type === "fetching" && !downloading;
   const cachePercent = audioCacheStatus.total
     ? Math.round((audioCacheStatus.ready / audioCacheStatus.total) * 100)
@@ -1271,7 +1284,12 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       return;
     }
 
-    if (completedRender?.file_url && !completedRenderForOlderOutput) {
+    if (completedRender?.file_url && !completedRenderIsCurrent) {
+      setCompletedRender(null);
+      clearSavedExportJob();
+    }
+
+    if (completedRenderIsCurrent) {
       try {
         setDownloading(true);
         await triggerRenderedDownload(
@@ -1483,7 +1501,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             </>
           ) : (
             <>
-              <Download className="w-3.5 h-3.5" /> {completedRenderForOlderOutput ? "Download Updated" : savedServerExport?.file_url ? "Download Existing" : completedRender?.file_url ? "Download Ready" : "Download"}
+              <Download className="w-3.5 h-3.5" /> {completedRenderForOlderOutput || (completedRender?.file_url && !completedRenderIsCurrent) ? "Download Updated" : savedServerExport?.file_url ? "Download Existing" : completedRenderIsCurrent ? "Download Ready" : "Download"}
             </>
           )}
         </button>

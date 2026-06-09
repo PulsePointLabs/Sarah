@@ -2,9 +2,11 @@
 // PWA_NO_FOCUS_RELOAD_V1
 // PWA_RESUME_NO_NAVIGATE_V1
 // PWA_FOREGROUND_STABILITY_V1
-// PWA_ACTIVATE_WITHOUT_CLAIM_V1
+// PWA_ACTIVATE_WITHOUT_CLAIM_V2
 // PWA_NAVIGATE_CACHED_SHELL_FIRST_V1
-const CACHE_NAME = "pulsepoint-shell-v11";
+// PWA_NO_SKIP_WAITING_ON_INSTALL_V1
+// PWA_NOTIFICATION_FOCUS_NO_NAVIGATE_V1
+const CACHE_NAME = "pulsepoint-shell-v12";
 const SHELL_ASSETS = [
   "/",
   "/manifest.json",
@@ -38,10 +40,10 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => cache.addAll(SHELL_ASSETS))
-      // Activate the new worker without claiming or navigating existing app
-      // windows. The current PulsePoint view keeps its controller and state;
-      // the new worker takes effect on the next real navigation.
-      .then(() => self.skipWaiting())
+      // Do not call skipWaiting here. Android/Chrome can install an update
+      // when the PWA regains focus; immediately activating it can trigger
+      // controllerchange and effectively reload the installed app. Let the new
+      // worker wait until all existing app windows are closed.
   );
 });
 
@@ -59,7 +61,9 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("message", (event) => {
   if (event.data?.type === "PULSEPOINT_SKIP_WAITING") {
-    event.waitUntil(self.skipWaiting());
+    // Foreground stability is more important than immediate SW updates in
+    // PulsePoint. Ignore legacy skip-waiting messages from older bundles.
+    return;
   }
 });
 
@@ -114,7 +118,6 @@ self.addEventListener("notificationclick", (event) => {
       const existingClient = clients[0];
       if (existingClient) {
         await existingClient.focus();
-        if ("navigate" in existingClient) return existingClient.navigate(route);
         return existingClient;
       }
       return self.clients.openWindow ? self.clients.openWindow(route) : null;
