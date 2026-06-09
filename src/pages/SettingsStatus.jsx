@@ -19,7 +19,11 @@ import TTSSettingsPanel from "@/components/TTSSettingsPanel";
 import { cancelBackgroundJob, clearBackgroundJobs, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
 import { getProviderStatus } from "@/lib/providerStatus";
-import { areBackgroundNotificationsEnabled, setBackgroundNotificationsEnabled } from "@/utils/backgroundJobNotifications";
+import {
+  areBackgroundNotificationsEnabled,
+  getReadyServiceWorkerRegistration,
+  setBackgroundNotificationsEnabled,
+} from "@/utils/backgroundJobNotifications";
 
 function fmtMoney(value) {
   const n = Number(value);
@@ -168,18 +172,15 @@ async function showPulsePointNotification({ title, body, route = "/settings" }) 
     data: { route },
   };
 
-  if ("serviceWorker" in navigator) {
-    const registration = await navigator.serviceWorker.ready;
-    if (registration?.showNotification) {
-      await registration.showNotification(title, options);
-      return;
-    }
+  const registration = await getReadyServiceWorkerRegistration({ timeoutMs: 1500 });
+  if (registration?.showNotification) {
+    await registration.showNotification(title, options);
+    return;
   }
 
   const notification = new Notification(title, options);
   notification.onclick = () => {
     window.focus();
-    if (route) window.location.assign(route);
     notification.close();
   };
 }

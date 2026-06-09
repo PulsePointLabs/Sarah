@@ -83,16 +83,25 @@ export function buildSafeJobNotification(job) {
   };
 }
 
-async function getReadyServiceWorkerRegistration() {
+function waitForNotificationRegistration(timeoutMs) {
+  if (!navigator.serviceWorker.ready) return Promise.resolve(null);
+  return Promise.race([
+    navigator.serviceWorker.ready.catch(() => null),
+    new Promise((resolve) => window.setTimeout(() => resolve(null), timeoutMs)),
+  ]);
+}
+
+export async function getReadyServiceWorkerRegistration({ timeoutMs = 1500 } = {}) {
   if (!("serviceWorker" in navigator)) return null;
-  if (navigator.serviceWorker.ready) {
-    try {
-      return await navigator.serviceWorker.ready;
-    } catch {
-      // Fall through to best-effort registration lookup.
-    }
+
+  const readyRegistration = await waitForNotificationRegistration(timeoutMs);
+  if (readyRegistration?.showNotification) return readyRegistration;
+
+  try {
+    return navigator.serviceWorker.getRegistration?.() || null;
+  } catch {
+    return null;
   }
-  return navigator.serviceWorker.getRegistration?.() || null;
 }
 
 export async function notifyBackgroundJobFinished(job, { route, onOpen, force = false } = {}) {
@@ -111,7 +120,7 @@ export async function notifyBackgroundJobFinished(job, { route, onOpen, force = 
   };
 
   try {
-    const registration = await getReadyServiceWorkerRegistration();
+    const registration = await getReadyServiceWorkerRegistration({ timeoutMs: force ? 2200 : 1500 });
     if (registration?.showNotification) {
       await registration.showNotification(message.title, options);
       markNotified(job);
