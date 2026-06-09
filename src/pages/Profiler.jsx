@@ -660,6 +660,16 @@ async function startProfilerAIJob(payload, label, options = {}) {
   });
 }
 
+async function startProfileImageReviewFullJob(payload, label, options = {}) {
+  return startBackgroundJob("profile_image_review_full", { ...payload, label }, {
+    source: "Profiler",
+    route: "/ai-profiler",
+    label,
+    priority: options.priority ?? 45,
+    ...options.meta,
+  });
+}
+
 async function waitProfilerAIJob(job, onProgress) {
   return waitForBackgroundJob(job.id, {
     intervalMs: 1200,
@@ -2439,6 +2449,10 @@ function ProfileImageReviewPanel({
         },
       ),
     };
+    if (parsed?._background_attempt_status) {
+      storedResult._meta.latest_attempt_status = parsed._background_attempt_status;
+      setLatestAttemptStatus(parsed._background_attempt_status);
+    }
     setResult(storedResult);
     const nextArchive = await saveProfileResultWithArchive({
       resultKey: config.resultKey,
@@ -2480,7 +2494,12 @@ function ProfileImageReviewPanel({
     const isFailedFinalReviewJob = (job) => (
       isMatchingReviewJob(job) &&
       (job?.status === "error" || job?.status === "cancelled") &&
-      (job?.meta?.synthesis || (!job?.meta?.batch && String(job?.meta?.label || "").includes("final synthesis")))
+      (
+        job?.type === "profile_image_review_full" ||
+        job?.meta?.full_background_review ||
+        job?.meta?.synthesis ||
+        (!job?.meta?.batch && String(job?.meta?.label || "").includes("final synthesis"))
+      )
     );
     const finalSynthesisFailureStatus = (job, batchSet = null) => ({
       state: "latest_final_synthesis_failed",
@@ -2562,14 +2581,40 @@ function ProfileImageReviewPanel({
 
     const refreshRecoverableState = async () => {
       try {
-        const completedData = await listBackgroundJobs({
+        const activeFullData = await listBackgroundJobs({
+          type: "profile_image_review_full",
+          status: "queued,running",
+          metaSource: "Profiler",
+          limit: 20,
+        });
+        if (cancelled) return;
+        const activeFullJob = (activeFullData.jobs || [])
+          .filter(isMatchingReviewJob)
+          .sort(newestFirst)[0];
+        if (activeFullJob) {
+          setJobStatus(activeFullJob);
+          setLoading(true);
+          setError(`Full ${config.shortTitle} review is running in the desktop background. You can leave this page and reopen it later.`);
+          return;
+        }
+
+        const completedAiData = await listBackgroundJobs({
           type: "ai_invoke",
           status: "complete",
           metaSource: "Profiler",
           limit: 50,
         });
+        const completedFullData = await listBackgroundJobs({
+          type: "profile_image_review_full",
+          status: "complete",
+          metaSource: "Profiler",
+          limit: 20,
+        });
         if (cancelled) return;
-        const completedJobs = completedData.jobs || [];
+        const completedJobs = [
+          ...(completedFullData.jobs || []),
+          ...(completedAiData.jobs || []),
+        ];
         const recoverable = findRecoverableBatchSet(completedJobs);
         setRecoverableBatchSet(recoverable);
         if (
@@ -2609,14 +2654,23 @@ function ProfileImageReviewPanel({
           .sort(newestFirst)[0];
         if (!job || !isNewerCompletedJob(job, result)) {
           setAvailableCompletedReviewJob(null);
-          const failedData = await listBackgroundJobs({
+          const failedAiData = await listBackgroundJobs({
             type: "ai_invoke",
             status: "error,cancelled",
             metaSource: "Profiler",
             limit: 50,
           });
+          const failedFullData = await listBackgroundJobs({
+            type: "profile_image_review_full",
+            status: "error,cancelled",
+            metaSource: "Profiler",
+            limit: 20,
+          });
           if (cancelled) return;
-          const failedFinal = (failedData.jobs || [])
+          const failedFinal = [
+            ...(failedFullData.jobs || []),
+            ...(failedAiData.jobs || []),
+          ]
             .filter(isFailedFinalReviewJob)
             .sort(newestFirst)[0];
           if (failedFinal && isNewerCompletedJob({ ...failedFinal, status: "complete" }, result)) {
@@ -2634,6 +2688,16 @@ function ProfileImageReviewPanel({
         }
 
         if (job && isNewerCompletedJob(job, result)) {
+          if (job.type === "profile_image_review_full" || job?.meta?.full_background_review) {
+            setJobStatus(job);
+            await storeCompletedReviewJob(job, []);
+            setAvailableCompletedReviewJob(null);
+            setRecoverableBatchSet(null);
+            setLatestAttemptStatus(job.result?._background_attempt_status || null);
+            setError("");
+            setLoading(false);
+            return;
+          }
           if (result?._meta?.local_batch_assembled) {
             setAvailableCompletedReviewJob(null);
             setError("");
@@ -2651,8 +2715,10 @@ function ProfileImageReviewPanel({
     };
 
     refreshRecoverableState();
+    const interval = window.setInterval(refreshRecoverableState, 5000);
     return () => {
       cancelled = true;
+      window.clearInterval(interval);
     };
   }, [config.kind, config.title, evidenceLoading, jobLabel, profileLoading, result, sessions.length, userProfile]);
 
@@ -3027,6 +3093,128 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
       let raw;
       if (imagePayload.length > 0) {
         const imageBatches = chunkArray(imagePayload, PROFILE_IMAGE_REVIEW_BATCH_SIZE);
+        const batchRequests = imageBatches.map((batchImages, batchIndex) => ({
+          model: "claude_sonnet_4_6",
+          max_tokens: PROFILE_IMAGE_REVIEW_MAX_TOKENS,
+          attempts: 3,
+          images: batchImages.map((image) => ({
+            filename: `${image.image_id || "profile_reference"}.jpg`,
+            media_type: image.media_type,
+            data: image.data,
+          })),
+          prompt: `You are Sarah, performing one batch of a larger PulsePoint profile image review.
+
+Review type: ${config.title}
+Review purpose: ${config.purpose}
+Batch: ${batchIndex + 1} of ${imageBatches.length}
+Images in this batch: ${batchImages.length}
+Total images in full review: ${imagePayload.length}
+Attached fresh image count in full review: ${freshImagePayload.length}.
+Attached reused saved image count in full review: ${reusedSavedImages.length}.
+${savedImageLoadWarning ? `Saved image reuse warning: ${savedImageLoadWarning}` : ""}
+
+${groundingContext}
+${imageReviewContext}
+${imagePresenceRules}
+${anatomicalFocusRule}
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}
+${firstNameToneCue}
+${sessionGroundingRule}
+${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
+${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+
+This is a batch review, not the final user-facing synthesis. Analyze only the attached images in this batch as direct visual evidence, while preserving the image_id values exactly. Do not mention filenames, storage IDs, camera-roll IDs, or raw image numbers. Do not claim that images outside this batch were inspected in this batch. Keep view labels anatomical and practical.
+
+${config.reviewInstructions}
+
+Attached image reference IDs for this batch:
+${imageReviewReferencePromptLines(batchImages)}
+
+USER IMAGE NOTE RULES:
+- User notes on attached images are context for orientation, focus, or comparison. Use them to guide attention, but do not quote them verbatim unless the wording itself matters.
+- If a user note identifies a target area, check that area directly and report the visible finding, not the note as evidence by itself.
+
+ANNOTATED IMAGE OUTPUT RULES:
+- Return annotated_images and image_region_findings for directly reviewed images in this batch.
+- Use image_id values exactly as listed above.
+- Do not call close-up pelvic/genital/table-position frames standing or upright unless the image itself establishes weight-bearing standing posture.
+- In close-up perineal or scrotal-base views, do not label shaft, glans, or ventral shaft surface as visible unless that anatomy is clearly in frame. If only the superior edge or scrotal-base transition is visible, say possible superior shaft-base/scrotal-base edge and mark the limitation.
+- For tiny structures or ambiguous findings such as meatus, meatal fluid/droplet, urethral fluid, device insertion, catheter/Foley presence, or fine tissue margins, use possible/uncertain unless the structure is unambiguous at the pin or box location.
+- Keep paragraphs complete and TTS-ready. Return structured JSON only.`,
+          response_json_schema: responseSchema,
+        }));
+        const synthesisRequest = {
+          model: "claude_sonnet_4_6",
+          max_tokens: PROFILE_IMAGE_REVIEW_MAX_TOKENS,
+          attempts: 3,
+          response_json_schema: responseSchema,
+          promptPrefix: `You are Sarah, synthesizing a final PulsePoint profile image review from completed image-review batch JSON.
+
+Review type: ${config.title}
+Review purpose: ${config.purpose}
+Directly rechecked image subset across batches: ${imagePayload.length}
+Batch count: ${imageBatches.length}
+
+No fresh images are attached to this synthesis pass because the direct visual re-check already occurred in the batch passes. Treat the batch JSON below as directly reviewed visual evidence, then integrate it with saved profile/session context. Produce ONE final cumulative user-facing review, not a batch-by-batch report and not a review limited to the image subset.
+
+${groundingContext}
+${imageReviewContext}
+${anatomicalFocusRule}
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}
+${firstNameToneCue}
+${sessionGroundingRule}
+${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
+${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+
+SYNTHESIS RULES:
+- Do not mention filenames, camera-roll IDs, storage IDs, or raw image numbers.
+- Do not say only five images were reviewed, and do not frame the whole artifact as "based on ${imagePayload.length} images." The direct image subset contains ${imagePayload.length} images across ${imageBatches.length} batches, but the review scope is the cumulative saved profile evidence base.
+- Do not let the newest batch dominate the final review. Synthesize all batch results plus saved profile/session context into one whole-profile analysis.
+- Treat fresh images as additive updates to the saved baseline, not as a reset of prior anatomical/profile evidence.
+- Integrate the views naturally into the anatomy sections.
+- Preserve direct visual evidence versus profile-context reconciliation versus interpretation.
+- Keep the output clinically rich, practical, non-erotic, and TTS-ready.
+- Preserve useful annotated_images and image_region_findings using image_id values from the batch results.
+
+${config.reviewInstructions}
+
+Batch review JSON:`,
+          promptSuffix: "",
+        };
+        const startedFullJob = await startProfileImageReviewFullJob({
+          mode: "batch",
+          reviewType: config.kind,
+          reviewTitle: config.title,
+          sections: profileReviewResultSections(config),
+          batchRequests,
+          synthesisRequest,
+          fallbackOverview: `Cumulative ${config.shortTitle.toLowerCase()} review assembled from completed Sarah image-review batches.`,
+        }, jobLabel, {
+          priority: 50,
+          meta: {
+            reviewType: config.kind,
+            reviewed_images: reviewedImageRefs,
+            image_count: imagePayload.length,
+            fresh_image_count: freshImagePayload.length,
+            reused_saved_image_count: reusedSavedImages.length,
+            full_background_review: true,
+          },
+        });
+        setJobStatus({
+          ...startedFullJob,
+          progress: {
+            ...(startedFullJob.progress || {}),
+            phase: "queued",
+            current: 0,
+            total: imageBatches.length + 1,
+            message: `Queued full ${config.shortTitle} review as one priority backend job. You can leave this page; reopen later to recover the completed output.`,
+          },
+        });
+        setLoading(false);
+        setError("");
+        return;
         setJobStatus({
           status: "running",
           progress: {
@@ -3237,6 +3425,117 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
           },
         });
       } else {
+        const singlePrompt = `You are Sarah, performing a dedicated profile image review for PulsePoint.
+
+Review type: ${config.title}
+Review purpose: ${config.purpose}
+Attached fresh image count: ${freshImagePayload.length}.
+Attached reused saved image count: ${reusedSavedImages.length}.
+${savedImageLoadWarning ? `Saved image reuse warning: ${savedImageLoadWarning}` : ""}
+
+${groundingContext}
+${imageReviewContext}
+${imagePresenceRules}
+${anatomicalFocusRule}
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}
+${firstNameToneCue}
+${sessionGroundingRule}
+${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
+${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+
+IMAGE REVIEW RULES:
+- Treat these as consensual private profile-reference images for anatomical and physiological review.
+- If fresh images are attached to this request, analyze what is visible in those images as new direct evidence, then integrate it into the existing saved profile/image evidence. Do not make the newest image set the whole story unless it is the only evidence available.
+- If saved Profile Q&A images are reloaded into this request, analyze them directly as saved/reused visual evidence and reconcile them with saved findings.
+- If no image payload is attached, analyze the existing uploaded/reviewed evidence from Q&A, sessions, body exploration sessions, entered metrics, and saved media findings. Say "previously reviewed evidence" rather than implying the profile has no images.
+- Produce a whole-picture cumulative review: current attached images, reloaded saved images, saved Profile Q&A findings, prior Sarah visual reviews, session/body-exploration evidence, and entered profile metrics should enhance one another instead of replacing one another.
+- Use existing Q&A findings, entered profile metrics, and session/video/body-exploration evidence as context, not as permission to invent visible findings.
+- Keep this artifact focused on anatomical/media-reference evidence. Do not expand into broad personal history, psychological backstory, reclaiming/history framing, whole-life meaning, or session optimization unless it directly explains a visible anatomical, mechanical, device-fit, safety, or session-specific physiological finding.
+- Do not eroticize the image or write arousal-focused prose.
+- Do not infer identity, diagnosis, pathology, intent, pain, force, or sexual activity.
+- If image quality, angle, lighting, posture, tissue state, cropping, or camera distortion limits confidence, say so clearly.
+- Use anatomical terminology naturally and clinically.
+- Write directly to the person using "you" and "your".
+- Separate direct visual observations from cautious profile implications.
+- Prefer specific observations over generic filler.
+- Preserve uncertainty, but keep it lean. Use "appears", "is visible", "may reflect", or "not visible in this specific view" where appropriate.
+- Do not mention uploaded filenames, storage IDs, camera roll numbers, or raw image numbers in the user-facing review.
+- When distinguishing views, use plain view labels such as anterior standing view, posterior standing view, lateral view, table-position view, close-up pelvic view, or saved image set.
+- Do not write paragraphs that begin "Image 1", "Image 2", or a filename. Integrate the views into the anatomy sections naturally.
+
+${config.reviewInstructions}
+
+Return a detailed structured review. Keep each paragraph TTS-ready: complete sentences, no markdown bullets, no clipped fragments.
+
+Fresh uploaded images attached for this run:
+${freshImagePayload.length ? `- ${freshImagePayload.length} fresh image${freshImagePayload.length === 1 ? "" : "s"} attached. Use plain view labels in the review, not filenames.` : "- None."}
+
+Reused saved Profile Q&A images attached for this run:
+${hasReusedSavedImages ? `- ${reusedSavedImages.length} saved image${reusedSavedImages.length === 1 ? "" : "s"} reloaded. Use plain view labels in the review, not filenames.` : "- None attached. Use saved reviewed findings and entered metrics."}
+
+Attached image reference IDs for structured callouts:
+${imageReviewReferencePromptLines(imagePayload)}
+
+USER IMAGE NOTE RULES:
+- User notes on attached images are context for orientation, focus, or comparison. Use them to guide attention, but do not quote them verbatim unless the wording itself matters.
+- If a user note identifies a target area, check that area directly and report the visible finding, not the note as evidence by itself.
+
+ANNOTATED IMAGE OUTPUT RULES:
+- Also return annotated_images and image_region_findings when direct image payload is attached.
+- Use image_id values exactly as listed above.
+- Use natural clinical view labels such as anterior standing view, right lateral standing view, posterior standing view, supine/table-position view, lithotomy pelvic view, close-up pelvic view, perineal view, or genital close-up.
+- Do not call a close-up pelvic/genital/table-position frame "standing" or "upright" unless the image itself establishes weight-bearing standing posture. If posture is ambiguous, say position not fully assessable from this close-up.
+- Do not put filenames, storage IDs, camera roll IDs, or raw image numbers in annotated_images, image_region_findings, or the prose review.
+- image_region_findings should be concise, clinically useful callouts linked to the same sections used in the prose.
+- In close-up perineal or scrotal-base views, do not label shaft, glans, or ventral shaft surface as visible unless that anatomy is clearly in frame. If only the superior edge or scrotal-base transition is visible, say possible superior shaft-base/scrotal-base edge and mark the limitation.
+- For pin and box coordinates, use approximate percentages from zero to one hundred with origin at the top-left of the displayed image. Only include pin or box when the location is reasonably clear; otherwise omit that field.
+- Callouts should stay anatomical and evidence-grounded: body region, visible posture/alignment, habitus/soft tissue, skin/surface finding, tissue state, visibility limitation, or clinical reference value.
+- For tiny structures or ambiguous findings such as meatus, meatal fluid/droplet, urethral fluid, device insertion, catheter/Foley presence, or fine tissue margins, use possible/uncertain unless the structure is unambiguous at the pin or box location.
+- For genital/pelvic regions, use neutral anatomical terms and do not infer arousal, pleasure, pain, intent, or function unless directly visible and relevant.`;
+        const startedFullJob = await startProfileImageReviewFullJob({
+          mode: "single",
+          reviewType: config.kind,
+          reviewTitle: config.title,
+          sections: profileReviewResultSections(config),
+          singleRequest: {
+            model: "claude_sonnet_4_6",
+            max_tokens: PROFILE_IMAGE_REVIEW_MAX_TOKENS,
+            attempts: 3,
+            ...(imagePayload.length ? {
+              images: imagePayload.map((image) => ({
+                filename: `${image.image_id || "profile_reference"}.jpg`,
+                media_type: image.media_type,
+                data: image.data,
+              })),
+            } : {}),
+            prompt: singlePrompt,
+            response_json_schema: responseSchema,
+          },
+        }, jobLabel, {
+          priority: 50,
+          meta: {
+            reviewType: config.kind,
+            reviewed_images: reviewedImageRefs,
+            fresh_image_count: freshImagePayload.length,
+            reused_saved_image_count: reusedSavedImages.length,
+            image_count: imagePayload.length,
+            full_background_review: true,
+          },
+        });
+        setJobStatus({
+          ...startedFullJob,
+          progress: {
+            ...(startedFullJob.progress || {}),
+            phase: "queued",
+            current: 0,
+            total: 1,
+            message: `Queued full ${config.shortTitle} review as one priority backend job. You can leave this page; reopen later to recover the completed output.`,
+          },
+        });
+        setLoading(false);
+        setError("");
+        return;
         raw = await runProfilerAIJob({
         model: "claude_sonnet_4_6",
         max_tokens: PROFILE_IMAGE_REVIEW_MAX_TOKENS,

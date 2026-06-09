@@ -110,6 +110,216 @@ registerJobHandler('ai_invoke', async (payload, context) => {
   return result;
 });
 
+async function runInternalAIRequest(request = {}, context, label = 'AI analysis', step = {}) {
+  const {
+    prompt,
+    response_json_schema,
+    model,
+    max_tokens,
+    temperature,
+    schema_mode,
+    images = [],
+  } = request || {};
+  if (!prompt) throw new Error(`${label} is missing a prompt`);
+  if (context.signal?.aborted) throw new Error('Cancelled');
+
+  context.updateProgress({
+    phase: step.phase || 'requesting',
+    current: step.current ?? 0,
+    total: step.total ?? 1,
+    message: step.message || `${label}: waiting for Claude…`,
+    model: model || process.env.ANTHROPIC_MODEL || 'claude_sonnet_4_6',
+    image_count: Array.isArray(images) ? images.length : 0,
+  });
+
+  try {
+    return await aiInvokeInternal({
+      prompt,
+      response_json_schema,
+      model,
+      max_tokens,
+      temperature,
+      schema_mode,
+      images,
+      invocationAttempt: 1,
+      signal: context.signal,
+    });
+  } catch (error) {
+    const message = error?.message || String(error);
+    const canRetryForLength = response_json_schema && /cut off|max_tokens|malformed JSON/i.test(message);
+    if (!canRetryForLength) throw error;
+    const retryMaxTokens = Math.max(Number(max_tokens || 0), Number(process.env.ANTHROPIC_LONG_MAX_TOKENS || 20000));
+    context.updateProgress({
+      phase: 'retrying',
+      current: step.current ?? 0,
+      total: step.total ?? 1,
+      message: `${label}: response was incomplete, retrying with a larger output budget…`,
+      retry_reason: message.slice(0, 240),
+      max_tokens: retryMaxTokens,
+    });
+    return aiInvokeInternal({
+      prompt,
+      response_json_schema,
+      model,
+      max_tokens: retryMaxTokens,
+      temperature,
+      schema_mode,
+      images,
+      invocationAttempt: 2,
+      signal: context.signal,
+    });
+  }
+}
+
+function parseAIResult(value) {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return { overview: value };
+  }
+}
+
+function fallbackAssembleProfileImageReview(payload = {}, batchResults = []) {
+  const sections = Array.isArray(payload.sections) ? payload.sections : [];
+  const result = {
+    overview: payload.fallbackOverview || `The ${payload.reviewTitle || 'profile image review'} completed its visual batches. Final synthesis was not available, so this result preserves the completed Sarah batch findings.`,
+    summary_card: {
+      baseline_quality: 'Batch findings complete',
+      coverage: `${batchResults.length} completed batch review${batchResults.length === 1 ? '' : 's'} preserved.`,
+      primary_reference_value: [],
+      key_direct_findings: [],
+      key_limitations: [],
+      evidence_note: 'Automatically assembled from completed background Sarah image-review batches.',
+    },
+    annotated_images: [],
+    image_region_findings: [],
+  };
+  for (const section of sections) result[section.key] = [];
+
+  const seenImages = new Set();
+  const seenFindings = new Set();
+  for (const batch of batchResults) {
+    const parsed = parseAIResult(batch) || {};
+    if (parsed.overview) result.overview += `\n\n${parsed.overview}`;
+    const card = parsed.summary_card || {};
+    for (const key of ['primary_reference_value', 'key_direct_findings', 'key_limitations']) {
+      if (Array.isArray(card[key])) {
+        result.summary_card[key].push(...card[key].filter(Boolean));
+      }
+    }
+    for (const section of sections) {
+      if (Array.isArray(parsed[section.key])) {
+        result[section.key].push(...parsed[section.key].filter(Boolean));
+      }
+    }
+    if (Array.isArray(parsed.annotated_images)) {
+      for (const image of parsed.annotated_images) {
+        const id = image?.image_id || JSON.stringify(image);
+        if (seenImages.has(id)) continue;
+        seenImages.add(id);
+        result.annotated_images.push(image);
+      }
+    }
+    if (Array.isArray(parsed.image_region_findings)) {
+      for (const finding of parsed.image_region_findings) {
+        const id = finding?.finding_id || `${finding?.image_id || ''}:${finding?.label || ''}:${finding?.finding || ''}`;
+        if (seenFindings.has(id)) continue;
+        seenFindings.add(id);
+        result.image_region_findings.push(finding);
+      }
+    }
+  }
+
+  result.summary_card.primary_reference_value = [...new Set(result.summary_card.primary_reference_value)].slice(0, 12);
+  result.summary_card.key_direct_findings = [...new Set(result.summary_card.key_direct_findings)].slice(0, 12);
+  result.summary_card.key_limitations = [...new Set(result.summary_card.key_limitations)].slice(0, 8);
+  for (const section of sections) {
+    result[section.key] = [...new Set(result[section.key])].slice(0, 24);
+  }
+  return result;
+}
+
+registerJobHandler('profile_image_review_full', async (payload, context) => {
+  const label = payload?.label || 'Profile image review';
+  const batchRequests = Array.isArray(payload?.batchRequests) ? payload.batchRequests : [];
+  const total = Math.max(1, batchRequests.length + (payload?.synthesisRequest ? 1 : 0));
+
+  context.updateProgress({
+    phase: 'queued',
+    current: 0,
+    total,
+    message: `${label}: running fully in the desktop background…`,
+  });
+
+  if (!batchRequests.length) {
+    const result = await runInternalAIRequest(payload?.singleRequest, context, label, {
+      phase: 'single_review',
+      current: 1,
+      total,
+      message: `${label}: running Sarah review…`,
+    });
+    return parseAIResult(result);
+  }
+
+  const batchResults = [];
+  for (let index = 0; index < batchRequests.length; index += 1) {
+    const batchNumber = index + 1;
+    const result = await runInternalAIRequest(batchRequests[index], context, `${label} batch ${batchNumber}/${batchRequests.length}`, {
+      phase: 'batch_review',
+      current: index,
+      total,
+      message: `${label}: Sarah batch ${batchNumber}/${batchRequests.length} running…`,
+    });
+    batchResults.push(parseAIResult(result));
+    context.updateProgress({
+      phase: 'batch_complete',
+      current: batchNumber,
+      total,
+      message: `${label}: completed batch ${batchNumber}/${batchRequests.length}.`,
+      batch_current: batchNumber,
+      batch_total: batchRequests.length,
+    });
+  }
+
+  if (payload?.synthesisRequest) {
+    try {
+      const synthesisPrompt = `${payload.synthesisRequest.promptPrefix || ''}\n${JSON.stringify(batchResults, null, 2)}\n${payload.synthesisRequest.promptSuffix || ''}`;
+      const result = await runInternalAIRequest({
+        ...payload.synthesisRequest,
+        prompt: synthesisPrompt,
+        images: [],
+      }, context, `${label} final synthesis`, {
+        phase: 'final_synthesis',
+        current: batchRequests.length,
+        total,
+        message: `${label}: synthesizing final review from completed batches…`,
+      });
+      return parseAIResult(result);
+    } catch (error) {
+      context.updateProgress({
+        phase: 'fallback_assembly',
+        current: total,
+        total,
+        message: `${label}: final synthesis failed, preserving completed batch findings…`,
+        synthesis_error: error?.message || String(error),
+      });
+      const assembled = fallbackAssembleProfileImageReview(payload, batchResults);
+      assembled._background_attempt_status = {
+        state: 'final_synthesis_failed_batch_findings_preserved',
+        timestamp: new Date().toISOString(),
+        error_message: error?.message || String(error),
+        batch_reviews_completed: true,
+        batch_count: batchResults.length,
+        final_synthesis_attempted: true,
+      };
+      return assembled;
+    }
+  }
+
+  return fallbackAssembleProfileImageReview(payload, batchResults);
+});
+
 registerJobHandler('local_vision_analyze_window', async (payload, context) => {
   context.updateProgress({
     phase: 'preparing',

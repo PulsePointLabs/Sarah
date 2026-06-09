@@ -15,7 +15,7 @@ function normalizeJobPriority(value) {
 function jobLane(type) {
   const name = String(type || '');
   if (name.startsWith('local_vision_')) return 'local_vision';
-  if (name === 'ai_invoke') return 'ai';
+  if (name === 'ai_invoke' || name === 'profile_image_review_full') return 'ai';
   if (name === 'tts_export') return 'tts';
   return 'general';
 }
