@@ -71,6 +71,20 @@ PROFILE IMAGE VISIBLE-FINDINGS-FIRST RULE:
 - Do not include process narration about batches, final synthesis, recovered output, paid requests, cloud requests, image counts, or review mechanics in the user-facing review unless it is essential.
 `;
 
+const PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE = `
+PROFILE IMAGE INSIGHT-EFFICIENCY RULE:
+- Before documenting any finding, ask whether it has already been documented with high confidence and appears unchanged. If yes, briefly reference the established baseline instead of regenerating a long description.
+- Maximize insight per token. Reserve detailed prose for newly visible structures, improved image quality, changes over time, healing or new skin findings, new posture findings, new anatomical coverage, or findings with educational value.
+- Do not repeat the same finding across multiple sections. Use concise cross-references instead of restating pelvic/genital, perineal, skin, posture, or habitus findings in every section.
+- Normal anatomy should be concise. Explain uncommon anatomical structures when first identified, but do not repeatedly explain the same landmark in future reports.
+- Consolidate recurring skin findings. If the same follicular or erythematous papules appear in multiple regions, summarize distribution and any change rather than repeating identical descriptions for each image.
+- Use confidence discipline: clearly separate directly observed, likely, possible, and not assessable. Avoid assumptions about fluids, secretions, device use, physiological state, or activities outside the image.
+- Ignore incidental objects unless they directly affect anatomical visibility, physiology, telemetry interpretation, device fit, tissue state, or safety interpretation.
+- For head-to-toe reviews, focus on body composition, posture, symmetry, stance, musculoskeletal/foot mechanics, skin, and notable visible findings. Avoid detailed genital or perineal repetition there.
+- For pelvic/genital reviews, consolidate by structure and report each landmark once unless a new view adds a genuinely new observation.
+- Do not add source/provenance/process sections to satisfy these rules. Apply them inside the existing anatomy-centered sections.
+`;
+
 const PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE = `
 CUMULATIVE PROFILE REVIEW SCOPE:
 - This artifact is a full cumulative profile assessment, not a one-time review of only the newest or directly attached images.
@@ -2049,10 +2063,11 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
   );
 }
 
-function FindingCorrectionControl({ finding, onCorrectFinding }) {
+function FindingCorrectionControl({ finding, onCorrectFinding, onRemoveFinding }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [error, setError] = useState("");
   const correction = finding?.user_correction;
   const correctedText = correction?.text || "";
@@ -2072,6 +2087,22 @@ function FindingCorrectionControl({ finding, onCorrectFinding }) {
       setError(err?.message || "Could not save this clarification.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const remove = async (event) => {
+    event?.preventDefault();
+    event?.stopPropagation();
+    if (!onRemoveFinding) return;
+    const ok = window.confirm("Remove this incorrect callout from the review?");
+    if (!ok) return;
+    setRemoving(true);
+    setError("");
+    try {
+      await onRemoveFinding(finding);
+    } catch (err) {
+      setError(err?.message || "Could not remove this callout.");
+      setRemoving(false);
     }
   };
 
@@ -2107,20 +2138,32 @@ function FindingCorrectionControl({ finding, onCorrectFinding }) {
           </div>
         </div>
       ) : (
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="mt-2 h-7 text-xs"
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            setOpen(true);
-            setText(correctedText || "");
-          }}
-        >
-          {correctedText ? "Edit clarification" : "Clarify / correct this callout"}
-        </Button>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setOpen(true);
+              setText(correctedText || "");
+            }}
+          >
+            {correctedText ? "Edit clarification" : "Clarify / correct"}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 border-destructive/40 text-xs text-destructive hover:bg-destructive/10"
+            onClick={remove}
+            disabled={removing}
+          >
+            {removing ? "Removing..." : "Remove callout"}
+          </Button>
+        </div>
       )}
     </div>
   );
@@ -2141,6 +2184,7 @@ function ProfileImageLightbox({
   color = "hsl(var(--primary))",
   transientImages = [],
   onCorrectFinding = null,
+  onRemoveFinding = null,
 }) {
   const findings = Array.isArray(result?.image_region_findings) ? result.image_region_findings : [];
   const selectedIndex = Math.max(0, imageIds.indexOf(selectedImageId));
@@ -2255,7 +2299,7 @@ function ProfileImageLightbox({
                           Limits: {finding.limitations.join("; ")}
                         </p>
                       )}
-                      <FindingCorrectionControl finding={finding} onCorrectFinding={onCorrectFinding} />
+                      <FindingCorrectionControl finding={finding} onCorrectFinding={onCorrectFinding} onRemoveFinding={onRemoveFinding} />
                     </div>
                   );
                 })}
@@ -2272,7 +2316,7 @@ function ProfileImageLightbox({
   );
 }
 
-function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(var(--primary))", transientImages = [], onOpenImage = null, onCorrectFinding = null }) {
+function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(var(--primary))", transientImages = [], onOpenImage = null, onCorrectFinding = null, onRemoveFinding = null }) {
   const findings = Array.isArray(result?.image_region_findings)
     ? result.image_region_findings.filter((finding) => finding.section_key === sectionKey)
     : [];
@@ -2332,7 +2376,7 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
                         {finding.finding && (
                           <p className="mt-2 text-[0.95rem] leading-relaxed text-foreground/90 dark:text-white/90">{finding.finding}</p>
                         )}
-                        <FindingCorrectionControl finding={finding} onCorrectFinding={onCorrectFinding} />
+                        <FindingCorrectionControl finding={finding} onCorrectFinding={onCorrectFinding} onRemoveFinding={onRemoveFinding} />
                       </div>
                     ))}
                   </div>
@@ -2931,6 +2975,77 @@ function ProfileImageReviewPanel({
     await refreshUserProfile?.().catch(() => null);
   };
 
+  const removeImageFindingCallout = async (finding) => {
+    if (!result || !finding?.finding_id) throw new Error("This callout is not available to remove.");
+    const removedAt = new Date().toISOString();
+    const removedRecord = {
+      removed_at: removedAt,
+      finding_id: finding.finding_id,
+      image_id: finding.image_id || "",
+      section_key: finding.section_key || "",
+      original_label: finding.original_label || finding.label || finding.region || "Image callout",
+      original_finding: finding.original_finding || finding.finding || "",
+      reason: "Removed by user as incorrect.",
+    };
+    const nextResult = {
+      ...result,
+      image_region_findings: (Array.isArray(result.image_region_findings) ? result.image_region_findings : [])
+        .filter((item) => item.finding_id !== finding.finding_id),
+      _meta: {
+        ...(result._meta || {}),
+        updated_at: removedAt,
+        removed_image_callouts: [
+          removedRecord,
+          ...(Array.isArray(result._meta?.removed_image_callouts) ? result._meta.removed_image_callouts : [])
+            .filter((item) => item?.finding_id !== finding.finding_id),
+        ].slice(0, 80),
+        image_clarifications: (Array.isArray(result._meta?.image_clarifications) ? result._meta.image_clarifications : [])
+          .filter((item) => item?.finding_id !== finding.finding_id),
+      },
+    };
+    setResult(nextResult);
+    const nextArchive = await saveProfileResultWithArchive({
+      resultKey: config.resultKey,
+      archiveKey: config.archiveKey,
+      kind: config.kind,
+      label: config.title,
+      result: nextResult,
+      sessionCount: sessions.length,
+    });
+    setArchive(nextArchive);
+
+    const currentProfile = (await refreshUserProfile?.().catch(() => null)) || userProfile;
+    const existingEntries = normalizeProfileQaFindings(currentProfile?.profile_qa_findings);
+    const removalEntry = makeProfileQaEntry(`Image callout removed from ${config.title}: ${removedRecord.original_label} was marked incorrect by the user. Original claim: ${removedRecord.original_finding || "No original claim text saved."}`, {
+      source: "profile_sarah_image_review",
+      persistence_status: "confirmed_user_correction",
+      needs_review: false,
+      image_count: 1,
+      structured_findings: [{
+        type: "image_callout_removed",
+        review_type: config.kind,
+        image_id: finding.image_id || "",
+        finding_id: finding.finding_id,
+        original_label: removedRecord.original_label,
+        original_finding: removedRecord.original_finding,
+        correction: "User removed this callout as incorrect.",
+      }],
+      media_context: {
+        review_type: config.kind,
+        review_label: config.title,
+        image_id: finding.image_id || "",
+        finding_id: finding.finding_id,
+      },
+    });
+    await base44.auth.updateMe({
+      profile_qa_findings: [
+        removalEntry,
+        ...existingEntries.filter((entry) => entry?.id !== removalEntry.id),
+      ].slice(0, 250),
+    });
+    await refreshUserProfile?.().catch(() => null);
+  };
+
   const saveBatchAssembledReview = async (batchParsedResults, note = "", batchSetOverride = null, attemptStatusOverride = null, options = {}) => {
     if (!batchParsedResults?.length) throw new Error("No completed batch outputs are available to assemble.");
     const batchSet = batchSetOverride || recoverableBatchSet || {};
@@ -3098,6 +3213,7 @@ ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 
 RECOVERY SYNTHESIS RULES:
@@ -3308,6 +3424,7 @@ ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 
 This is a batch review, not the final user-facing synthesis. Analyze only the attached images in this batch as direct visual evidence, while preserving the image_id values exactly. Do not mention filenames, storage IDs, camera-roll IDs, or raw image numbers. Do not claim that images outside this batch were inspected in this batch. Keep view labels anatomical and practical.
@@ -3352,6 +3469,7 @@ ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 
 SYNTHESIS RULES:
@@ -3444,6 +3562,7 @@ ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 
 This is a batch review, not the final user-facing synthesis. Analyze only the attached images in this batch as direct visual evidence, while preserving the image_id values exactly. Do not mention filenames, storage IDs, camera-roll IDs, or raw image numbers. Do not claim that images outside this batch were inspected in this batch. Keep view labels anatomical and practical.
@@ -3581,6 +3700,7 @@ ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 
 SYNTHESIS RULES:
@@ -3628,6 +3748,7 @@ ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 
 IMAGE REVIEW RULES:
@@ -3750,6 +3871,7 @@ ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 
 IMAGE REVIEW RULES:
@@ -4192,6 +4314,7 @@ ANNOTATED IMAGE OUTPUT RULES:
                         transientImages={inlineReferenceImages}
                         onOpenImage={setSelectedProfilerImageId}
                         onCorrectFinding={saveImageFindingClarification}
+                        onRemoveFinding={removeImageFindingCallout}
                       />
                     </>
                   );
@@ -4252,6 +4375,7 @@ ANNOTATED IMAGE OUTPUT RULES:
           color={config.color}
           transientImages={inlineReferenceImages}
           onCorrectFinding={saveImageFindingClarification}
+          onRemoveFinding={removeImageFindingCallout}
         />
 
         <ProfileArchiveList
