@@ -2409,7 +2409,22 @@ function ProfileImageReviewPanel({
   const [latestAttemptStatus, setLatestAttemptStatus] = useState(null);
   const [availableCompletedReviewJob, setAvailableCompletedReviewJob] = useState(null);
   const [selectedProfilerImageId, setSelectedProfilerImageId] = useState(null);
+  const [includeImageCalloutsInTts, setIncludeImageCalloutsInTts] = useState(() => {
+    try {
+      return window.localStorage.getItem("pulsepoint_profile_image_tts_callouts") === "true";
+    } catch {
+      return false;
+    }
+  });
   const autoRecoveredBatchSetRef = useRef("");
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("pulsepoint_profile_image_tts_callouts", includeImageCalloutsInTts ? "true" : "false");
+    } catch {
+      // Ignore storage failures; the toggle still works for the current render.
+    }
+  }, [includeImageCalloutsInTts]);
 
   useEffect(() => {
     base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
@@ -3778,9 +3793,11 @@ ANNOTATED IMAGE OUTPUT RULES:
       if ((result[section.key] || []).length) {
         paragraphs.push(calmSpokenHeading(section.label));
         paragraphMeta.push({ type: "section-title", section, displayLabel: section.label });
-        for (const calloutParagraph of imageCalloutNarrationParagraphs(result, section.key, inlineReferenceImages)) {
-          paragraphs.push(calloutParagraph);
-          paragraphMeta.push({ type: "visual-callout", section });
+        if (includeImageCalloutsInTts) {
+          for (const calloutParagraph of imageCalloutNarrationParagraphs(result, section.key, inlineReferenceImages)) {
+            paragraphs.push(calloutParagraph);
+            paragraphMeta.push({ type: "visual-callout", section });
+          }
         }
       }
       for (const finding of (result[section.key] || [])) {
@@ -3807,6 +3824,21 @@ ANNOTATED IMAGE OUTPUT RULES:
             </Button>
           </div>
         </div>
+
+        {result && (
+          <label className="inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-card/60 px-3 py-2 text-xs text-foreground">
+            <input
+              type="checkbox"
+              checked={includeImageCalloutsInTts}
+              onChange={(event) => setIncludeImageCalloutsInTts(event.target.checked)}
+              className="h-4 w-4 accent-primary"
+            />
+            <span>
+              Include visual callouts in TTS/audio
+              <span className="ml-1 text-muted-foreground">Screen callouts stay visible either way.</span>
+            </span>
+          </label>
+        )}
 
         <div className="flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
           <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{existingEvidenceCount} saved visual/video evidence items</Badge>
