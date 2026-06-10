@@ -14,7 +14,7 @@ import { getManualStimulationPauseResumeEvents, getMotionEvidenceSummary, summar
 import { buildProfileAIContentMeta, formatGeneratedAt, isProfileAIContentStale } from "@/utils/aiContentMetadata";
 import { splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 import { buildLongitudinalHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
-import { buildProfileQaFindingCards, normalizeProfileQaFindings } from "@/lib/profileQa";
+import { buildProfileQaFindingCards, makeProfileQaEntry, normalizeProfileQaFindings } from "@/lib/profileQa";
 import {
   buildBodyExplorationVideoPassDigest,
   buildBodyExplorationVisualEvidenceDigest,
@@ -252,6 +252,7 @@ function softenHighRiskFindingText(value = "") {
 }
 
 function sanitizeImageRegionFinding(finding = {}) {
+  if (finding?.user_correction?.text) return finding;
   const combined = [finding.label, finding.finding, finding.region].filter(Boolean).join(" ");
   let cleanedFinding = finding;
   if (/close[- ]up|perine|scrotal[- ]base|anal verge/i.test(combined)) {
@@ -2048,6 +2049,83 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
   );
 }
 
+function FindingCorrectionControl({ finding, onCorrectFinding }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const correction = finding?.user_correction;
+  const correctedText = correction?.text || "";
+
+  const save = async (event) => {
+    event?.preventDefault();
+    event?.stopPropagation();
+    const trimmed = text.trim();
+    if (!trimmed || !onCorrectFinding) return;
+    setSaving(true);
+    setError("");
+    try {
+      await onCorrectFinding(finding, trimmed);
+      setText("");
+      setOpen(false);
+    } catch (err) {
+      setError(err?.message || "Could not save this clarification.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 rounded-md border border-border bg-background/60 p-2">
+      {correctedText && (
+        <p className="text-xs leading-relaxed text-emerald-200">
+          <span className="font-semibold text-emerald-300">User clarification:</span> {correctedText}
+        </p>
+      )}
+      {open ? (
+        <div className="mt-2 space-y-2" onClick={(event) => event.stopPropagation()}>
+          <textarea
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            rows={2}
+            placeholder='Example: This is a shadow, not a device.'
+            className="w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 text-xs leading-relaxed text-foreground outline-none focus:border-primary"
+          />
+          {error && <p className="text-xs text-destructive">{error}</p>}
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" className="h-7 text-xs" onClick={save} disabled={saving || !text.trim()}>
+              {saving ? "Saving..." : "Save clarification"}
+            </Button>
+            <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setOpen(false);
+              setError("");
+            }}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-2 h-7 text-xs"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setOpen(true);
+            setText(correctedText || "");
+          }}
+        >
+          {correctedText ? "Edit clarification" : "Clarify / correct this callout"}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function imageDisplayNumber(imageId = "") {
   const match = String(imageId || "").match(/^img[_-]?0*(\d+)$/i);
   return match ? `image ${Number(match[1])}` : "image";
@@ -2062,6 +2140,7 @@ function ProfileImageLightbox({
   sections = [],
   color = "hsl(var(--primary))",
   transientImages = [],
+  onCorrectFinding = null,
 }) {
   const findings = Array.isArray(result?.image_region_findings) ? result.image_region_findings : [];
   const selectedIndex = Math.max(0, imageIds.indexOf(selectedImageId));
@@ -2176,6 +2255,7 @@ function ProfileImageLightbox({
                           Limits: {finding.limitations.join("; ")}
                         </p>
                       )}
+                      <FindingCorrectionControl finding={finding} onCorrectFinding={onCorrectFinding} />
                     </div>
                   );
                 })}
@@ -2192,7 +2272,7 @@ function ProfileImageLightbox({
   );
 }
 
-function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(var(--primary))", transientImages = [], onOpenImage = null }) {
+function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(var(--primary))", transientImages = [], onOpenImage = null, onCorrectFinding = null }) {
   const findings = Array.isArray(result?.image_region_findings)
     ? result.image_region_findings.filter((finding) => finding.section_key === sectionKey)
     : [];
@@ -2252,6 +2332,7 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
                         {finding.finding && (
                           <p className="mt-2 text-[0.95rem] leading-relaxed text-foreground/90 dark:text-white/90">{finding.finding}</p>
                         )}
+                        <FindingCorrectionControl finding={finding} onCorrectFinding={onCorrectFinding} />
                       </div>
                     ))}
                   </div>
@@ -2758,6 +2839,96 @@ function ProfileImageReviewPanel({
     setImages((current) => current.map((image) => (
       image.id === id ? { ...image, upload_note } : image
     )));
+  };
+
+  const saveImageFindingClarification = async (finding, correctionText) => {
+    const trimmed = String(correctionText || "").trim();
+    if (!trimmed) throw new Error("Enter a clarification first.");
+    if (!result || !finding?.finding_id) throw new Error("This callout is not available to correct.");
+    const correctedAt = new Date().toISOString();
+    const originalFinding = finding.original_finding || finding.finding || "";
+    const originalLabel = finding.original_label || finding.label || finding.region || "Image callout";
+    const correctionRecord = {
+      corrected_at: correctedAt,
+      text: trimmed,
+      finding_id: finding.finding_id,
+      image_id: finding.image_id || "",
+      section_key: finding.section_key || "",
+      original_label: originalLabel,
+      original_finding: originalFinding,
+    };
+    const nextResult = {
+      ...result,
+      image_region_findings: (Array.isArray(result.image_region_findings) ? result.image_region_findings : []).map((item) => {
+        if (item.finding_id !== finding.finding_id) return item;
+        return {
+          ...item,
+          original_label: item.original_label || item.label || item.region || "",
+          original_finding: item.original_finding || item.finding || "",
+          label: `Corrected: ${originalLabel}`,
+          finding: `User clarification: ${trimmed}`,
+          confidence: "user corrected",
+          evidence_level: "user clarification",
+          limitations: [
+            ...new Set([
+              ...(Array.isArray(item.limitations) ? item.limitations : []),
+              "Original Sarah callout corrected by user.",
+            ]),
+          ],
+          user_correction: correctionRecord,
+        };
+      }),
+      _meta: {
+        ...(result._meta || {}),
+        updated_at: correctedAt,
+        image_clarifications: [
+          correctionRecord,
+          ...(Array.isArray(result._meta?.image_clarifications) ? result._meta.image_clarifications : [])
+            .filter((item) => item?.finding_id !== finding.finding_id),
+        ].slice(0, 80),
+      },
+    };
+    setResult(nextResult);
+    const nextArchive = await saveProfileResultWithArchive({
+      resultKey: config.resultKey,
+      archiveKey: config.archiveKey,
+      kind: config.kind,
+      label: config.title,
+      result: nextResult,
+      sessionCount: sessions.length,
+    });
+    setArchive(nextArchive);
+
+    const currentProfile = (await refreshUserProfile?.().catch(() => null)) || userProfile;
+    const existingEntries = normalizeProfileQaFindings(currentProfile?.profile_qa_findings);
+    const correctionEntry = makeProfileQaEntry(`Image clarification for ${config.title}: ${trimmed}`, {
+      source: "profile_sarah_image_review",
+      persistence_status: "confirmed_user_correction",
+      needs_review: false,
+      image_count: 1,
+      structured_findings: [{
+        type: "image_callout_correction",
+        review_type: config.kind,
+        image_id: finding.image_id || "",
+        finding_id: finding.finding_id,
+        original_label: originalLabel,
+        original_finding: originalFinding,
+        correction: trimmed,
+      }],
+      media_context: {
+        review_type: config.kind,
+        review_label: config.title,
+        image_id: finding.image_id || "",
+        finding_id: finding.finding_id,
+      },
+    });
+    await base44.auth.updateMe({
+      profile_qa_findings: [
+        correctionEntry,
+        ...existingEntries.filter((entry) => entry?.id !== correctionEntry.id),
+      ].slice(0, 250),
+    });
+    await refreshUserProfile?.().catch(() => null);
   };
 
   const saveBatchAssembledReview = async (batchParsedResults, note = "", batchSetOverride = null, attemptStatusOverride = null, options = {}) => {
@@ -4020,6 +4191,7 @@ ANNOTATED IMAGE OUTPUT RULES:
                         color={color}
                         transientImages={inlineReferenceImages}
                         onOpenImage={setSelectedProfilerImageId}
+                        onCorrectFinding={saveImageFindingClarification}
                       />
                     </>
                   );
@@ -4079,6 +4251,7 @@ ANNOTATED IMAGE OUTPUT RULES:
           sections={sections}
           color={config.color}
           transientImages={inlineReferenceImages}
+          onCorrectFinding={saveImageFindingClarification}
         />
 
         <ProfileArchiveList
