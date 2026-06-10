@@ -2369,18 +2369,18 @@ const PELVIC_GENITAL_IMAGE_REVIEW_CONFIG = {
 PELVIC / GENITAL REVIEW SCOPE:
 - Anchor this output in supplied and previously reviewed visual evidence from photos and video clips. Stay with anatomy, physiology, visible tissue state, state-dependent changes, device fit, and confidence limits that matter.
 - Make the review easy to listen to as downloaded audio: lead with visible pelvic/genital/perineal findings, use natural paragraph flow, avoid duplicate callout/prose wording, and keep caveats brief.
+- Do not open with source details, evidence-scope logistics, batch/source/rechecked-image explanations, or provenance. Start with actual pelvic/genital/perineal anatomy.
 - Do not narrate every absent structure, device, or limitation. Mention absence only when it is itself the relevant finding or materially changes interpretation.
 - Focus the anatomy-by-region section on shaft, glans, foreskin/retraction state, meatus, frenulum/frenular remnant, scrotum/testes, perineum/pelvic floor, anus/perianal region/anal verge when visible, and lower abdomen/groin only when it helps interpret the pelvic/genital evidence.
 - Include anal/perianal anatomy when it is visible or previously reviewed, especially where it matters for rectal stimulation context, perineal mechanics, tissue state, safety, or device/contact fit. If anal/perianal evidence is absent or limited, say that once only if it materially affects interpretation.
 - Do not make feet, lower-leg posture, hand positioning, or stimulation techniques standalone topics in this pelvic/genital artifact. Mention hands, feet, or technique only when they directly affect visibility, scale, occlusion, pelvic positioning, contact mechanics, device fit, or safety interpretation.
 - If catheters, urethral sounds, anal devices, rectal stimulation equipment, sleeves, markers, stickers, lubricant, or medical/procedural supplies are visible, describe their visible position, contact zone, fit, and tissue interaction cautiously. Do not invent insertion depth, advancement, discomfort, sensation, or procedure stage unless image evidence or saved context directly supports it.
 - Compare visible findings with entered measurements, Foley/sound/device profile fields, prior Q&A findings, and session/video evidence. Use this to explain continuity or mismatch while keeping the output centered on visual anatomy and physiology.
-- Organize the review as a pelvic/genital reference artifact: evidence scope, anatomy by region, state-dependent changes, device/contact mechanics, tissue state and safety observations, measurement reconciliation, and the small set of limitations or optional evidence gaps that actually matter.
+- Organize the review as a pelvic/genital reference artifact: anatomy by region, state-dependent changes, device/contact mechanics, tissue state and safety observations, measurement reconciliation, and the small set of limitations or optional evidence gaps that actually matter.
 - Lead with visible pelvic/genital/perineal findings. Do not turn missing regions or absent devices into the dominant narrative unless that absence is the direct finding being checked.
 - Keep the language anatomical and practical. Do not eroticize the review or write arousal-focused prose.
 `,
   sections: [
-    { key: "evidence_scope_and_cutoff", label: "Evidence Scope & Cutoff", color: "hsl(var(--chart-2))" },
     { key: "anatomy_by_region", label: "Anatomy by Region", color: "hsl(var(--primary))" },
     { key: "state_dependent_changes", label: "State-Dependent Changes", color: "hsl(var(--chart-4))" },
     { key: "device_and_stimulation_mechanics", label: "Device & Contact Mechanics", color: "hsl(var(--chart-1))" },
@@ -3774,10 +3774,6 @@ ANNOTATED IMAGE OUTPUT RULES:
   if (result) {
     paragraphs.push(calmSpokenHeading(config.title));
     paragraphMeta.push({ type: "title", color: config.color, displayLabel: config.title });
-    if (result.overview) {
-      paragraphs.push(naturalizeSpokenDates(result.overview));
-      paragraphMeta.push({ type: "overview" });
-    }
     for (const section of sections) {
       if ((result[section.key] || []).length) {
         paragraphs.push(calmSpokenHeading(section.label));
@@ -3960,10 +3956,6 @@ ANNOTATED IMAGE OUTPUT RULES:
             job={jobStatus}
             fallback={`${config.shortTitle} review is running in the background queue...`}
           />
-        )}
-
-        {result?.summary_card && (
-          <ProfileImageSummaryCard summary={result.summary_card} color={config.color} lean={isHeadToToeReviewConfig(config)} />
         )}
 
         {result && (
