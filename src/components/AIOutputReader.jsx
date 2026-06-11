@@ -53,6 +53,40 @@ function SectionHeader({ section }) {
   );
 }
 
+function fmtMmSs(totalSeconds) {
+  const value = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const m = Math.floor(value / 60);
+  const s = value % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function InlineClipCard({ clip }) {
+  if (!clip?.url && !clip?.clip_url && !clip?.file_url) return null;
+  const src = clip.url || clip.clip_url || clip.file_url;
+  return (
+    <div
+      className="mt-2 overflow-hidden rounded-lg border border-primary/20 bg-background/80"
+      onClick={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+      onTouchStart={(event) => event.stopPropagation()}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-primary/5 px-2.5 py-1.5 text-[10px]">
+        <span className="font-semibold text-primary">{clip.label || "Key video moment"}</span>
+        <span className="font-mono text-muted-foreground">
+          {clip.session_time_s != null ? fmtMmSs(clip.session_time_s) : ""}
+          {clip.startSeconds != null && clip.endSeconds != null ? ` · clip ${fmtMmSs(clip.startSeconds)}-${fmtMmSs(clip.endSeconds)}` : ""}
+        </span>
+      </div>
+      <video
+        src={src}
+        controls
+        preload="metadata"
+        className="block w-full bg-black"
+      />
+    </div>
+  );
+}
+
 export default function AIOutputReader({
   paragraphs,
   paragraphMeta = [],
@@ -87,7 +121,7 @@ export default function AIOutputReader({
 
         if (isSummary) {
           return (
-            <p
+            <div
               className="ai-output-paragraph w-full min-w-0 max-w-full rounded-r-md border-l-2 py-1 pl-3 text-base font-medium leading-relaxed transition-all duration-200"
               style={{
                 borderColor: isActive ? color : colorWithAlpha(color, 0.5),
@@ -99,7 +133,10 @@ export default function AIOutputReader({
                 <span className="mr-2 inline-block h-3 w-3 rounded-full border-2 border-t-transparent align-[-1px] animate-spin" style={{ borderColor: color, borderTopColor: "transparent" }} />
               )}
               {renderSentenceHighlightedText(text, activeSentenceIdx, startFromSentence)}
-            </p>
+              {Array.isArray(meta.clips) && meta.clips.map((clip) => (
+                <InlineClipCard key={clip.id || clip.url || clip.clip_url} clip={clip} />
+              ))}
+            </div>
           );
         }
 
@@ -118,6 +155,9 @@ export default function AIOutputReader({
                 <span className="mr-2 inline-block h-3 w-3 rounded-full border-2 border-t-transparent align-[-1px] animate-spin" style={{ borderColor: color, borderTopColor: "transparent" }} />
               )}
               {renderSentenceHighlightedText(text, activeSentenceIdx, startFromSentence)}
+              {Array.isArray(meta.clips) && meta.clips.map((clip) => (
+                <InlineClipCard key={clip.id || clip.url || clip.clip_url} clip={clip} />
+              ))}
             </li>
           </div>
         );

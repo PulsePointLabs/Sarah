@@ -283,6 +283,194 @@ function AnalysisStatus({ job }) {
   );
 }
 
+function numberOrNull(value) {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function fmtMmSs(totalSeconds) {
+  const value = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const m = Math.floor(value / 60);
+  const s = value % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function timelineOffsetSeconds(video) {
+  return Number(video?.timelineOffsetSeconds) || 0;
+}
+
+function sourceTimeForSession(sessionSeconds, video) {
+  return Math.max(0, Number(sessionSeconds || 0) - timelineOffsetSeconds(video));
+}
+
+function sessionDurationSeconds(session, timelineRows = []) {
+  const candidates = [
+    numberOrNull(session?.duration_s),
+    numberOrNull(session?.duration_seconds),
+    numberOrNull(session?.recording_duration_s),
+    numberOrNull(session?.duration_minutes) != null ? numberOrNull(session.duration_minutes) * 60 : null,
+    numberOrNull(session?.recovery_offset_s) != null ? numberOrNull(session.recovery_offset_s) + 120 : null,
+    numberOrNull(session?.climax_offset_s) != null ? numberOrNull(session.climax_offset_s) + 180 : null,
+    ...timelineRows.map((row) => numberOrNull(row.time_offset_s)),
+  ].filter(Number.isFinite);
+  return candidates.length ? Math.max(...candidates) : 0;
+}
+
+function clipPriorityForEvent(event) {
+  const categories = Array.isArray(event?.category) ? event.category : [event?.category].filter(Boolean);
+  const note = String(event?.note || "").toLowerCase();
+  if (/\b(climax|orgasm|ejaculat|release)\b/.test(note)) return 95;
+  if (categories.includes("sensation")) return 75;
+  if (categories.includes("physical")) return 70;
+  if (categories.includes("stimulation_started") || categories.includes("stimulation_resumed")) return 64;
+  if (categories.includes("stimulation_paused") || categories.includes("stimulation_stopped")) return 58;
+  if (categories.includes("movement_observed")) return 52;
+  return 30;
+}
+
+function dedupeClipRequests(requests, minSpacingS = 22) {
+  const sorted = [...requests]
+    .filter((item) => Number.isFinite(item.session_time_s))
+    .sort((a, b) => b.priority - a.priority);
+  const accepted = [];
+  for (const request of sorted) {
+    if (accepted.some((item) => Math.abs(item.session_time_s - request.session_time_s) < minSpacingS)) continue;
+    accepted.push(request);
+  }
+  return accepted.sort((a, b) => a.session_time_s - b.session_time_s);
+}
+
+function buildKeyVideoClipRequests(session, timelineRows = []) {
+  const duration = sessionDurationSeconds(session, timelineRows);
+  const requests = [];
+  const add = (time, label, reason, priority, windowBefore = 5, windowAfter = 8) => {
+    const t = numberOrNull(time);
+    if (t == null || t < 0) return;
+    const clamped = duration ? Math.min(duration, Math.max(0, t)) : Math.max(0, t);
+    requests.push({
+      id: `${label}:${Math.round(clamped)}`,
+      label,
+      reason,
+      priority,
+      session_time_s: clamped,
+      window_before_s: windowBefore,
+      window_after_s: windowAfter,
+    });
+  };
+
+  add(session?.pre_climax_offset_s, "Pre-climax build", "Saved pre-climax marker", 88, 7, 9);
+  add(session?.climax_offset_s, "Climax window", "Saved climax marker", 100, 9, 11);
+  add(session?.recovery_offset_s, "Recovery shift", "Saved recovery marker", 82, 6, 10);
+
+  const hrRows = timelineRows
+    .map((row) => ({ t: numberOrNull(row.time_offset_s), hr: numberOrNull(row.hr) }))
+    .filter((row) => row.t != null && row.hr != null);
+  if (hrRows.length) {
+    const peak = hrRows.reduce((best, row) => (row.hr > best.hr ? row : best), hrRows[0]);
+    add(peak.t, `Peak HR ${Math.round(peak.hr)} bpm`, "Highest heart-rate point in the imported timeline", 74, 6, 8);
+  }
+
+  const eventRequests = (session?.event_timeline || [])
+    .map((event, index) => ({
+      event,
+      index,
+      priority: clipPriorityForEvent(event),
+    }))
+    .filter((item) => item.priority >= 55)
+    .sort((a, b) => b.priority - a.priority)
+    .slice(0, 5);
+  for (const { event, priority, index } of eventRequests) {
+    const note = String(event?.note || "").trim();
+    const label = note ? note.replace(/\s+/g, " ").slice(0, 54) : `Event ${index + 1}`;
+    add(event?.time_s, label, "Accepted event timeline note", priority, 5, 8);
+  }
+
+  return dedupeClipRequests(requests).slice(0, 5);
+}
+
+function chooseLinkedVideo(session) {
+  const videos = Array.isArray(session?.linked_local_videos) ? session.linked_local_videos : [];
+  const reachable = videos.filter((video) => video?.path && video.exists !== false);
+  const anyWithPath = videos.filter((video) => video?.path);
+  const candidates = reachable.length ? reachable : anyWithPath;
+  const roleText = (video) => [
+    video?.role,
+    video?.viewRole,
+    video?.source_video_role,
+    video?.cameraRole,
+    video?.camera,
+    video?.label,
+    video?.filename,
+    video?.path,
+  ].filter(Boolean).join(" ").toLowerCase();
+  const score = (video) => {
+    const text = roleText(video);
+    if (/\b(composite|pip|picture[-_\s]?in[-_\s]?picture|combined|obs)\b/.test(text)) return 120;
+    if (/\b(main|primary|focus|genital|close)\b/.test(text)) return 110;
+    if (/\b(lateral|side|full[-_\s]?body|whole[-_\s]?body)\b/.test(text)) return 80;
+    if (/\b(feet|foot|toe|toes|heel|heels|sole|soles|lower[-_\s]?body|lower[-_\s]?cam|legs?)\b/.test(text)) return 10;
+    if (/\b(body|session)\b/.test(text)) return 60;
+    return 50;
+  };
+  return [...candidates].sort((a, b) => score(b) - score(a))[0] || null;
+}
+
+async function generateSessionKeyVideoClips({ session, timelineRows, label, onProgress }) {
+  const video = chooseLinkedVideo(session);
+  if (!video?.path) return { clips: [], error: "No linked local recording is available for key clips." };
+  const requests = buildKeyVideoClipRequests(session, timelineRows);
+  if (!requests.length) return { clips: [], error: "No usable markers, events, or HR peaks were available for key clips." };
+
+  const clips = [];
+  for (let index = 0; index < requests.length; index += 1) {
+    const request = requests[index];
+    onProgress?.({
+      phase: "video_clips",
+      current: index,
+      total: requests.length,
+      message: `${label}: cutting key clip ${index + 1}/${requests.length} with ffmpeg…`,
+    });
+    const sourceCenter = sourceTimeForSession(request.session_time_s, video);
+    const startSeconds = Math.max(0, sourceCenter - request.window_before_s);
+    const endSeconds = sourceCenter + request.window_after_s;
+    const clip = await base44.integrations.Core.ProcessLocalVideoClip({
+      path: video.path,
+      startSeconds,
+      endSeconds,
+      label: `${label} ${request.label}`,
+      frameCount: 4,
+    });
+    clips.push({
+      id: `${request.id}:${index}`,
+      label: request.label,
+      reason: request.reason,
+      session_time_s: request.session_time_s,
+      source_video_label: video.label || video.filename || "Linked local video",
+      source_video_fingerprint: video.fingerprint || "",
+      timeline_offset_s: timelineOffsetSeconds(video),
+      url: clip.url || clip.clip_url || clip.file_url,
+      clip_url: clip.clip_url || clip.url || clip.file_url,
+      filename: clip.filename,
+      startSeconds: clip.startSeconds,
+      endSeconds: clip.endSeconds,
+      durationSeconds: clip.durationSeconds,
+      motion_summary: clip.motion_summary || null,
+    });
+  }
+  return { clips, error: "" };
+}
+
+function paragraphIndexForClip(clip, sections, totalParagraphs, durationS) {
+  const arousalSection = sections.find((section) => /chronological|arousal arc/i.test(section.label || ""));
+  if (arousalSection?.items?.length) {
+    const duration = durationS || Math.max(1, Number(clip.session_time_s) || 1);
+    const ratio = Math.max(0, Math.min(0.999, Number(clip.session_time_s || 0) / duration));
+    return arousalSection.start + Math.min(arousalSection.items.length - 1, Math.floor(ratio * arousalSection.items.length));
+  }
+  return Math.min(Math.max(1, totalParagraphs - 1), totalParagraphs - 1);
+}
+
 export default function SessionAIPanel({ session, timelineRows, emgRows = [], userProfile, sessionJournal, mode = "companion", onAnalysisSaved }) {
   const isTechnical = mode === "technical";
   const analysisField = isTechnical ? "ai_session_deep_dive" : "ai_analysis";
@@ -777,9 +965,30 @@ Provide ${isTechnical
     });
 
     const parsed = normalizeSessionAnalysis(completedJob.result);
+    const clipResult = await generateSessionKeyVideoClips({
+      session,
+      timelineRows,
+      label: analysisLabel,
+      onProgress: (progress) => {
+        setJobStatus({
+          ...completedJob,
+          progress: {
+            ...(completedJob.progress || {}),
+            ...progress,
+          },
+        });
+      },
+    }).catch((clipError) => ({
+      clips: [],
+      error: clipError?.message || "Could not generate key video clips.",
+    }));
     const storedResult = {
       ...parsed,
-      _meta: buildSessionAIContentMeta(session, session[analysisField]?._meta, completedAt(completedJob)),
+      _meta: {
+        ...buildSessionAIContentMeta(session, session[analysisField]?._meta, completedAt(completedJob)),
+        key_video_clips: clipResult.clips || [],
+        key_video_clip_error: clipResult.error || "",
+      },
     };
     setResult(storedResult);
     setJobStatus({
@@ -893,6 +1102,13 @@ Provide ${isTechnical
         if (emgItems.length) { sections.push({ label: "EMG Analysis", color: "chart-3", icon: <Activity className="w-3.5 h-3.5" />, items: emgItems, start: idx }); idx += emgItems.length; }
         if (notableItems.length) { sections.push({ label: isTechnical ? "Notable Findings" : "Patterns & Hypotheses", color: "chart-4", icon: <Zap className="w-3.5 h-3.5" />, items: notableItems, start: idx }); idx += notableItems.length; }
         if (recommendationItems.length) { sections.push({ label: isTechnical ? "Recommendations" : "Recommendations & Experiments", color: "accent", icon: <Lightbulb className="w-3.5 h-3.5" />, items: recommendationItems, start: idx }); }
+        const keyVideoClips = Array.isArray(result?._meta?.key_video_clips) ? result._meta.key_video_clips : [];
+        const clipsByParagraph = keyVideoClips.reduce((map, clip) => {
+          const paraIndex = paragraphIndexForClip(clip, sections, paras.length, sessionDurationSeconds(session, timelineRows));
+          if (!map.has(paraIndex)) map.set(paraIndex, []);
+          map.get(paraIndex).push(clip);
+          return map;
+        }, new Map());
 
         return (
           <div className="space-y-3">
@@ -919,10 +1135,12 @@ Provide ${isTechnical
                 for (const sec of sections) {
                   if (paraIdx >= sec.start) section = sec;
                 }
+                const clips = clipsByParagraph.get(paraIdx) || [];
                 return section.label === null
-                  ? { type: "summary", color: "hsl(var(--primary))" }
+                  ? { type: "summary", color: "hsl(var(--primary))", clips }
                   : {
                     type: "section",
+                    clips,
                     sec: {
                       key: section.label,
                       label: section.label,

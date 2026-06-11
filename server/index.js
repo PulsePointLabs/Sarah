@@ -8,7 +8,7 @@ import { aiRouter } from './routes/ai.js';
 import { filesRouter } from './routes/files.js';
 import { functionsRouter } from './routes/functions.js';
 import { authRouter } from './routes/auth.js';
-import { jobsRouter } from './routes/jobs.js';
+import { jobsRouter, largeJobsRouter } from './routes/jobs.js';
 import { statusRouter } from './routes/status.js';
 import { liveCaptureRouter } from './routes/liveCapture.js';
 import { localVisionRouter } from './routes/localVision.js';
@@ -23,6 +23,7 @@ restorePersistedJobs();
 await startHeartRateRelay();
 
 app.use(cors());
+app.use('/api/jobs/start-large', largeJobsRouter);
 app.use(express.json({ limit: '50mb' }));
 app.use('/uploads', express.static(uploadDir));
 

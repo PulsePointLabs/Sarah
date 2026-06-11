@@ -73,15 +73,59 @@ PROFILE IMAGE VISIBLE-FINDINGS-FIRST RULE:
 
 const PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE = `
 PROFILE IMAGE INSIGHT-EFFICIENCY RULE:
-- Before documenting any finding, ask whether it has already been documented with high confidence and appears unchanged. If yes, briefly reference the established baseline instead of regenerating a long description.
-- Maximize insight per token. Reserve detailed prose for newly visible structures, improved image quality, changes over time, healing or new skin findings, new posture findings, new anatomical coverage, or findings with educational value.
-- Do not repeat the same finding across multiple sections. Use concise cross-references instead of restating pelvic/genital, perineal, skin, posture, or habitus findings in every section.
-- Normal anatomy should be concise. Explain uncommon anatomical structures when first identified, but do not repeatedly explain the same landmark in future reports.
-- Consolidate recurring skin findings. If the same follicular or erythematous papules appear in multiple regions, summarize distribution and any change rather than repeating identical descriptions for each image.
-- Use confidence discipline: clearly separate directly observed, likely, possible, and not assessable. Avoid assumptions about fluids, secretions, device use, physiological state, or activities outside the image.
-- Ignore incidental objects unless they directly affect anatomical visibility, physiology, telemetry interpretation, device fit, tissue state, or safety interpretation.
-- For head-to-toe reviews, focus on body composition, posture, symmetry, stance, musculoskeletal/foot mechanics, skin, and notable visible findings. Avoid detailed genital or perineal repetition there.
-- For pelvic/genital reviews, consolidate by structure and report each landmark once unless a new view adds a genuinely new observation.
+Core goal: maximize insight per token, not words per report. Sarah should stay warm, clinical, evidence-based, and anatomically useful, but shorter, less repetitive, and more confidence-calibrated.
+
+BASELINE VS NEW FINDINGS:
+- Treat stable anatomy as baseline information. Before documenting any finding, ask whether it has already been documented with high confidence and appears unchanged. If yes, briefly say it remains stable from baseline and do not regenerate the full description.
+- Spend detail only on newly visible structures, changed findings, improved image coverage, healing/progression, new posture findings, new skin findings, or newly visible anatomical regions.
+- Do not turn stable anatomy into a fresh discovery every report. Stable scrotal anatomy, stable perineal raphe, stable central adiposity, and stable follicular papules should be summarized once unless something changed.
+
+DEDUPLICATION:
+- A unique finding should generally be described once. Do not repeat the same finding in Head-to-Toe, Skin, Habitus, Pelvic, Summary, and callouts.
+- Do not paste callout text again into narrative sections. Use callouts as visual anchors; use narrative sections for synthesis.
+- Use short cross-references such as "stable from prior baseline", "covered in the pelvic section", or "summarized under skin findings" instead of repeating paragraphs.
+- Convert repeated findings into "stable baseline finding" language during synthesis and final output.
+
+CONFIDENCE CALIBRATION:
+- Use and preserve the confidence levels: observed, likely, possible, and not assessable. Do not upgrade a possible finding later in the report.
+- Avoid assumptions about fluids, secretions, device use, physiological state, or activity outside the image.
+- For ambiguous meatal highlights, say "small bright meatal highlight or possible fluid point; static image cannot confirm secretion." Do not write "consistent with pre-ejaculate" unless a sequence or explicit context supports it.
+
+INTERNAL ANATOMY RULE:
+- External photography cannot assess bladder neck, prostate, internal sphincters, urethral course, pelvic floor musculature, or internal rectal structures.
+- Do not inventory internal anatomy as missing. Do not write "bladder neck not visualized", "prostate not visualized", or similar boilerplate.
+- Use one concise boundary only when needed: "Review is limited to externally visible anatomy."
+
+POSTURE RULES:
+- Resolve contradictions. Do not describe both reduced lumbar lordosis and increased lumbar lordosis unless you explicitly reconcile view, posture, or gravity differences.
+- Prefer cautious contour language: "body contour suggests mild anterior pelvic tilt" or "standing lateral view is compatible with..." when landmarks are not directly visible.
+- Do not claim ASIS, pubic symphysis, iliac crest position, or other hidden bony landmarks unless directly visible.
+
+SKIN RULES:
+- Consolidate recurring skin findings once by distribution and character. Example: "Scattered follicular-appearing erythematous papules are present across bilateral inguinal folds, proximal inner thighs, and adjacent gluteal/perianal skin."
+- Highlight change, progression, improvement, irritation, ulceration, crusting, vesicles, fissuring, tissue stress, or a new lesion. If unchanged, mark stable baseline.
+
+PELVIC / GENITAL / PERINEAL RULES:
+- Consolidate by structure. Report each structure once unless a new angle reveals a genuinely new observation.
+- Do not repeatedly rediscover normal anatomy such as scrotal raphe, perineal raphe, foreskin state, or stable scrotal symmetry.
+- Perianal review may cover pigmentation, symmetry, anal verge appearance, external hemorrhoids, fissures, skin tags, ulceration, and irritation. Do not assess internal hemorrhoids, prostate, or rectum beyond the visible opening.
+- Track meaningful coverage states only: flaccid foreskin covering glans, flaccid foreskin retracted, erect foreskin covering glans, erect foreskin retracted, ventral view, scrotum elevated during arousal, and perineal/perianal view. Missing states belong only in Coverage Gaps.
+
+INCIDENTAL OBJECT RULE:
+- Ignore headphones, furniture, room contents, clothing, and random background objects unless they directly affect anatomical visibility, physiology, telemetry interpretation, device fit, tissue state, or safety interpretation.
+- Do not spend report tokens clinically describing bone-conduction headphones or room setup.
+
+HEAD-TO-TOE SCOPING:
+- Focus on overall body composition, posture, symmetry, stance, musculoskeletal/foot mechanics, consolidated skin findings, and notable visible changes.
+- Avoid detailed genital or perineal repetition in Head-to-Toe. Use one brief pelvis/genital visibility note when relevant, then leave detail to the Pelvic review.
+
+PELVIC/GENITAL REVIEW SCOPING:
+- Focus on visible external pelvic, genital, perineal, and perianal anatomy; tissue health; surface findings; coverage states; symmetry; and meaningful changes from baseline.
+- Do not use the pelvic review to repeat whole-body habitus or posture unless it directly affects pelvic visibility or tissue interpretation.
+
+COST AND OUTPUT DISCIPLINE:
+- Generate: new findings, changed findings, stable baseline summary, significant findings, and coverage gaps.
+- Avoid: entire historical narrative, repeated anatomy descriptions, repeated confidence statements, repeated callout text, source/provenance/process narration, and internal anatomy boilerplate.
 - Do not add source/provenance/process sections to satisfy these rules. Apply them inside the existing anatomy-centered sections.
 `;
 
@@ -161,6 +205,8 @@ function cleanImageReviewProse(value) {
     .replace(/\bnot visible in this batch\.?\s*/gi, "")
     .replace(/\bnot visible in this image set\.?\s*/gi, "")
     .replace(/\bcannot be assessed from these close-up pelvic views\.?\s*/gi, "")
+    .replace(/\b(?:bladder neck|prostate|internal sphincters?|urethral course|pelvic floor musculature|internal rectal structures?|internal hemorrhoids?) (?:is|are|was|were)?\s*(?:not )?(?:visible|visualized|assessable|assessed)[^.]*\.?\s*/gi, "")
+    .replace(/\b(?:No|The)\s+(?:bladder neck|prostate|internal sphincters?|urethral course|pelvic floor musculature|internal rectal structures?|internal hemorrhoids?)[^.]*\.?\s*/gi, "")
     .replace(/\bNo [^.]{0,80} assessment is possible from this batch\.?\s*/gi, "")
     .replace(/\b\d{7,}\b/g, "")
     .replace(/\s{2,}/g, " ")
@@ -2455,17 +2501,21 @@ HEAD-TO-TOE REVIEW SCOPE:
 - If fresh images are absent, still use saved profile/body-reference image evidence and saved Q&A visual findings. Do not imply the profile has no images when saved images or reviewed findings exist.
 - Compare visible whole-body findings against saved Q&A findings, prior sessions, and entered metrics only where they help reconcile body reference evidence. Do not let profile context override fresh image evidence.
 - Organize the output using these body-centered sections:
-  1. Overall Body Overview: general frame/build, proportionality, visible muscularity, adipose distribution, broad symmetry, and stance/positioning that can actually be seen.
-  2. Posture & Alignment: visible head/neck, shoulder height, thoracic/lumbar contour, pelvic posture if visible, knee/ankle alignment, foot angle/stance, and anterior/posterior/lateral differences.
-  3. Body Habitus & Soft Tissue: torso contour, abdominal contour, chest/upper-body contour if visible, limb soft tissue distribution, muscular definition, central versus peripheral adipose distribution where visible.
-  4. Skin & Surface Findings: visible skin tone, redness, bruising, rash, swelling, scars/marks, vascularity, surface asymmetry, and positive absence observations such as no obvious lesion or swelling where relevant. Do not invent skin findings.
-  5. Musculoskeletal / Limb Findings: upper limbs, forearms/hands, thighs/lower legs, feet/toes, symmetry, muscle bulk, joint alignment, swelling/deformity, resting foot/toe posture, and functional implications only when directly supported by visible evidence.
-  6. Pelvic, Genital & Perineal Anatomy: lower abdomen, pubic mound, inguinal region/scars, penis/foreskin/glans/meatus when visible, scrotum/testes, scrotal raphe, perineal body/raphe, anal/perianal region, gluteal/posterior pelvis, and inner thighs.
-  7. Region-Specific Head-to-Toe Findings: head/neck, shoulders/upper back, chest/torso, abdomen, pelvis, upper limbs/hands, lower limbs/feet in anatomical order. Keep it concise and visible-finding centered.
-  8. Missing Items / Optional Image Requests: only the useful remaining photo requests or missing coverage items. Keep this at the end.
+  1. Coverage Map: one concise top-to-bottom map of what is covered well, partially covered, newly improved, and what remains useful to photograph. Do not include source/provenance mechanics.
+  2. Significant Findings: the most meaningful new, changed, or high-value stable findings. Use "stable baseline finding" for unchanged repeated anatomy.
+  3. Overall Body Overview: general frame/build, proportionality, visible muscularity, adipose distribution, broad symmetry, and stance/positioning that can actually be seen.
+  4. Posture & Alignment: visible head/neck, shoulder height, thoracic/lumbar contour, pelvic posture if visible, knee/ankle alignment, foot angle/stance, and anterior/posterior/lateral differences.
+  5. Body Habitus & Soft Tissue: torso contour, abdominal contour, chest/upper-body contour if visible, limb soft tissue distribution, muscular definition, central versus peripheral adipose distribution where visible.
+  6. Skin & Surface Findings: consolidated visible skin findings and meaningful changes only. Summarize stable repeated papules once by distribution. Do not invent skin findings.
+  7. Musculoskeletal / Limb Findings: upper limbs, forearms/hands, thighs/lower legs, feet/toes, symmetry, muscle bulk, joint alignment, swelling/deformity, resting foot/toe posture, and functional implications only when directly supported by visible evidence.
+  8. Pelvic, Genital & Perineal Anatomy: brief head-to-toe-level pelvic visibility summary only. Do not repeat the detailed pelvic/genital review.
+  9. Region-Specific Head-to-Toe Findings: head/neck, shoulders/upper back, chest/torso, abdomen, pelvis, upper limbs/hands, lower limbs/feet in anatomical order. Keep it concise and visible-finding centered.
+  10. Missing Items / Optional Image Requests: only the useful remaining photo requests or missing coverage items. Keep this at the end.
 - Every claim must be based on visible image evidence unless explicitly marked as profile/context interpretation. Prefer "appears", "is visible", "is consistent with", or "not visible in this specific view" over stronger wording, but do not overuse caveats.
 `,
   sections: [
+    { key: "coverage_map", label: "Coverage Map", color: "hsl(var(--chart-1))" },
+    { key: "significant_findings", label: "Significant Findings", color: "hsl(var(--primary))" },
     { key: "overall_body_overview", label: "Overall Body Overview", color: "hsl(var(--chart-4))" },
     { key: "posture_alignment", label: "Posture & Alignment", color: "hsl(var(--chart-2))" },
     { key: "body_habitus_soft_tissue", label: "Body Habitus & Soft Tissue", color: "hsl(var(--primary))" },
@@ -2501,11 +2551,15 @@ PELVIC / GENITAL REVIEW SCOPE:
 - Do not make feet, lower-leg posture, hand positioning, or stimulation techniques standalone topics in this pelvic/genital artifact. Mention hands, feet, or technique only when they directly affect visibility, scale, occlusion, pelvic positioning, contact mechanics, device fit, or safety interpretation.
 - If catheters, urethral sounds, anal devices, rectal stimulation equipment, sleeves, markers, stickers, lubricant, or medical/procedural supplies are visible, describe their visible position, contact zone, fit, and tissue interaction cautiously. Do not invent insertion depth, advancement, discomfort, sensation, or procedure stage unless image evidence or saved context directly supports it.
 - Compare visible findings with entered measurements, Foley/sound/device profile fields, prior Q&A findings, and session/video evidence. Use this to explain continuity or mismatch while keeping the output centered on visual anatomy and physiology.
-- Organize the review as a pelvic/genital reference artifact: anatomy by region, state-dependent changes, device/contact mechanics, tissue state and safety observations, measurement reconciliation, and the small set of limitations or optional evidence gaps that actually matter.
+- Organize the review as a pelvic/genital reference artifact: coverage map, significant findings, anatomy by region, state-dependent changes, device/contact mechanics, tissue state and safety observations, measurement reconciliation, and the small set of limitations or optional evidence gaps that actually matter.
+- Coverage Map should list meaningful visible states only: flaccid foreskin covering glans, flaccid foreskin retracted, erect foreskin covering glans, erect foreskin retracted, ventral view, scrotum elevated during arousal, perineal/perianal view, and any newly improved angle. Put missing states only in optional evidence gaps.
+- Significant Findings should lead with new, changed, or high-value stable baseline findings. Do not re-describe every stable structure.
 - Lead with visible pelvic/genital/perineal findings. Do not turn missing regions or absent devices into the dominant narrative unless that absence is the direct finding being checked.
 - Keep the language anatomical and practical. Do not eroticize the review or write arousal-focused prose.
 `,
   sections: [
+    { key: "coverage_map", label: "Coverage Map", color: "hsl(var(--chart-1))" },
+    { key: "significant_findings", label: "Significant Findings", color: "hsl(var(--primary))" },
     { key: "anatomy_by_region", label: "Anatomy by Region", color: "hsl(var(--primary))" },
     { key: "state_dependent_changes", label: "State-Dependent Changes", color: "hsl(var(--chart-4))" },
     { key: "device_and_stimulation_mechanics", label: "Device & Contact Mechanics", color: "hsl(var(--chart-1))" },

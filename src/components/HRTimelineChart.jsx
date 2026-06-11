@@ -41,6 +41,12 @@ function deltaSec(a, b) {
   return Math.round(Math.abs(b - a));
 }
 
+function numberOrNull(value) {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 function MarkerDot(props) {
   const { cx, cy, payload } = props;
   if (!payload?.marker || payload.marker === "build" || payload.marker === "recovery") return <g />;
@@ -139,7 +145,10 @@ export default function HRTimelineChart({
   const [showEvents, setShowEvents] = useState(true);
   const [showNearClimax, setShowNearClimax] = useState(true);
   const [visibleLines, setVisibleLines] = useState({ hr: true, smoothed: true, baseline: true });
+  const [showHrvGraph, setShowHrvGraph] = useState(true);
+  const [visibleHrvLines, setVisibleHrvLines] = useState({ rmssd: true, sdnn: true, pnn50: false });
   const toggleLine = (key) => setVisibleLines((v) => ({ ...v, [key]: !v[key] }));
+  const toggleHrvLine = (key) => setVisibleHrvLines((v) => ({ ...v, [key]: !v[key] }));
   const [markingPhase, setMarkingPhase] = useState(null); // null | 'pre_climax' | 'climax' | 'recovery'
   const [showPhaseMarkerTools, setShowPhaseMarkerTools] = useState(false);
   const [hoveredEventIdx, setHoveredEventIdx] = useState(null);
@@ -205,6 +214,25 @@ export default function HRTimelineChart({
 
   const hasSmoothed = rows.some((r) => r.hr_smoothed != null && r.hr_smoothed !== "");
   const hasBaseline = rows.some((r) => r.baseline_hr != null && r.baseline_hr !== "");
+  const hasHrv = rows.some((r) => numberOrNull(r.hrv_rmssd_ms) != null || numberOrNull(r.hrv_sdnn_ms) != null || numberOrNull(r.hrv_pnn50) != null);
+  const hasRmssd = rows.some((r) => numberOrNull(r.hrv_rmssd_ms) != null);
+  const hasSdnn = rows.some((r) => numberOrNull(r.hrv_sdnn_ms) != null);
+  const hasPnn50 = rows.some((r) => numberOrNull(r.hrv_pnn50) != null);
+
+  const hrvDisplayRows = useMemo(() => (
+    displayRows
+      .map((row) => ({
+        time_offset_s: numberOrNull(row.time_offset_s),
+        hrv_rmssd_ms: numberOrNull(row.hrv_rmssd_ms),
+        hrv_sdnn_ms: numberOrNull(row.hrv_sdnn_ms),
+        hrv_pnn50: numberOrNull(row.hrv_pnn50),
+        hrv_quality: row.hrv_quality,
+      }))
+      .filter((row) => (
+        row.time_offset_s != null
+        && (row.hrv_rmssd_ms != null || row.hrv_sdnn_ms != null || row.hrv_pnn50 != null)
+      ))
+  ), [displayRows]);
 
   // Build ref lines from data markers — only known types
   const KNOWN_DATA_MARKERS = new Set(["build", "climax", "recovery"]);
@@ -678,6 +706,159 @@ export default function HRTimelineChart({
           </LineChart>
         </ResponsiveContainer>
       </div>
+
+      {hasHrv && (
+        <div className="mt-3 rounded-lg border border-border bg-muted/15 p-3">
+          <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">RR-Derived HRV</p>
+              <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+                RMSSD shows fast beat-to-beat flexibility; SDNN shows broader rolling variability. Spikes often mark breath-release, settling, artifact, or a real autonomic shift worth checking against the video.
+              </p>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant={showHrvGraph ? "default" : "outline"}
+              className="h-6 text-[10px] px-2"
+              onClick={() => setShowHrvGraph((value) => !value)}
+            >
+              HRV
+            </Button>
+          </div>
+
+          {showHrvGraph && (
+            <>
+              <div className={`${compact ? "h-32" : "h-44"}`}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart
+                    data={hrvDisplayRows}
+                    margin={{ top: 8, right: 4, bottom: 0, left: -20 }}
+                    onMouseMove={handleInspectMove}
+                    onClick={(data) => {
+                      if (Number.isFinite(Number(data?.activeLabel))) {
+                        onInspectionTimeChange?.(Number(data.activeLabel));
+                      }
+                    }}
+                  >
+                    <XAxis
+                      dataKey="time_offset_s"
+                      type="number"
+                      domain={xDomain}
+                      tick={{ fontSize: 9 }}
+                      tickFormatter={fmtSec}
+                    />
+                    <YAxis tick={{ fontSize: 9 }} domain={["auto", "auto"]} />
+                    <Tooltip
+                      formatter={(val, name) => {
+                        if (name === "hrv_rmssd_ms") return [`${Math.round(val)} ms`, "RMSSD"];
+                        if (name === "hrv_sdnn_ms") return [`${Math.round(val)} ms`, "SDNN"];
+                        if (name === "hrv_pnn50") return [`${Math.round(val)}%`, "pNN50"];
+                        return [val, name];
+                      }}
+                      labelFormatter={(v) => `Time: ${fmtSec(Math.round(Number(v)))}`}
+                      contentStyle={{ fontSize: 11 }}
+                      labelStyle={{ color: '#111827', fontWeight: 600 }}
+                    />
+
+                    {isSelecting && selectRange && (
+                      <ReferenceArea
+                        x1={selectRange.x1}
+                        x2={selectRange.x2}
+                        fill="hsl(var(--primary))"
+                        fillOpacity={0.15}
+                        stroke="hsl(var(--primary))"
+                        strokeOpacity={0.5}
+                        strokeWidth={1}
+                      />
+                    )}
+
+                    {!noClimax && MARKING_PHASES.map((phase) =>
+                      localMarkers[phase] != null ? (
+                        <ReferenceLine
+                          key={`hrv-phase-${phase}`}
+                          x={localMarkers[phase]}
+                          stroke={PHASE_COLORS[phase]}
+                          strokeWidth={1.5}
+                          strokeDasharray="4 2"
+                          label={{ value: PHASE_LABELS[phase], fontSize: 8, fill: PHASE_COLORS[phase], position: "insideTopLeft" }}
+                        />
+                      ) : null
+                    )}
+
+                    {Number.isFinite(Number(playbackTime))
+                      && Number(playbackTime) >= visibleMin
+                      && Number(playbackTime) <= visibleMax && (
+                      <ReferenceLine
+                        x={Number(playbackTime)}
+                        stroke="#f43f5e"
+                        strokeWidth={2}
+                        strokeOpacity={0.9}
+                      />
+                    )}
+
+                    {Number.isFinite(Number(inspectionTime))
+                      && Number(inspectionTime) >= visibleMin
+                      && Number(inspectionTime) <= visibleMax
+                      && Number(inspectionTime) !== Number(playbackTime) && (
+                      <ReferenceLine
+                        x={Number(inspectionTime)}
+                        stroke="#f43f5e"
+                        strokeWidth={1.5}
+                        strokeDasharray="3 2"
+                        strokeOpacity={0.9}
+                      />
+                    )}
+
+                    {hasRmssd && visibleHrvLines.rmssd && (
+                      <Line type="monotone" dataKey="hrv_rmssd_ms" stroke="#14b8a6" strokeWidth={2} dot={false} activeDot={{ r: 3 }} connectNulls isAnimationActive={false} />
+                    )}
+                    {hasSdnn && visibleHrvLines.sdnn && (
+                      <Line type="monotone" dataKey="hrv_sdnn_ms" stroke="#a855f7" strokeWidth={1.8} dot={false} activeDot={{ r: 3 }} connectNulls isAnimationActive={false} />
+                    )}
+                    {hasPnn50 && visibleHrvLines.pnn50 && (
+                      <Line type="monotone" dataKey="hrv_pnn50" stroke="#f59e0b" strokeWidth={1.4} dot={false} activeDot={{ r: 3 }} strokeDasharray="4 2" connectNulls isAnimationActive={false} />
+                    )}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="mt-2 flex flex-wrap gap-3 px-1">
+                {hasRmssd && (
+                  <button
+                    type="button"
+                    onClick={() => toggleHrvLine("rmssd")}
+                    className={`text-[10px] flex items-center gap-1 transition-opacity ${visibleHrvLines.rmssd ? "" : "opacity-40"}`}
+                  >
+                    <span className="w-4 h-0.5 inline-block" style={{ borderTop: "2px solid #14b8a6" }} /> RMSSD
+                  </button>
+                )}
+                {hasSdnn && (
+                  <button
+                    type="button"
+                    onClick={() => toggleHrvLine("sdnn")}
+                    className={`text-[10px] flex items-center gap-1 transition-opacity ${visibleHrvLines.sdnn ? "" : "opacity-40"}`}
+                  >
+                    <span className="w-4 h-0.5 inline-block" style={{ borderTop: "2px solid #a855f7" }} /> SDNN
+                  </button>
+                )}
+                {hasPnn50 && (
+                  <button
+                    type="button"
+                    onClick={() => toggleHrvLine("pnn50")}
+                    className={`text-[10px] flex items-center gap-1 transition-opacity ${visibleHrvLines.pnn50 ? "" : "opacity-40"}`}
+                  >
+                    <span className="w-4 h-0.5 inline-block" style={{ borderTop: "2px dashed #f59e0b" }} /> pNN50
+                  </button>
+                )}
+                <span className="text-[10px] text-muted-foreground">
+                  {hrvDisplayRows.length} HRV points in view
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Near-climax event tooltip */}
       {hoveredEventIdx != null && nearClimaxEvents[hoveredEventIdx] && (() => {

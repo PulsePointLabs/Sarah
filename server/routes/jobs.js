@@ -8,8 +8,23 @@ import { analyzeLocalVisionContinuous } from '../services/localVision/continuous
 import { analyzeLocalVisionAdaptive } from '../services/localVision/adaptiveAnalyzer.js';
 import { analyzeLocalVisionForward } from '../services/localVision/forwardAnalyzer.js';
 import { askLocalVisionVideo } from '../services/localVision/videoQa.js';
+import { deleteJobPayload, loadJobPayload, saveJobPayload } from '../services/jobPayloadStore.js';
 
 export const jobsRouter = express.Router();
+export const largeJobsRouter = express.Router();
+
+async function resolvePayload(payload = {}) {
+  if (payload?.__payloadRef) {
+    return loadJobPayload(payload.__payloadRef);
+  }
+  return payload || {};
+}
+
+async function cleanupPayloadRef(payload = {}) {
+  if (payload?.__payloadRef) {
+    await deleteJobPayload(payload.__payloadRef);
+  }
+}
 
 registerJobHandler('tts_export', async (payload, context) => {
   return renderTTSExport(payload, {
@@ -241,83 +256,89 @@ function fallbackAssembleProfileImageReview(payload = {}, batchResults = []) {
 }
 
 registerJobHandler('profile_image_review_full', async (payload, context) => {
+  const originalPayload = payload || {};
+  payload = await resolvePayload(originalPayload);
   const label = payload?.label || 'Profile image review';
   const batchRequests = Array.isArray(payload?.batchRequests) ? payload.batchRequests : [];
   const total = Math.max(1, batchRequests.length + (payload?.synthesisRequest ? 1 : 0));
 
-  context.updateProgress({
-    phase: 'queued',
-    current: 0,
-    total,
-    message: `${label}: running fully in the desktop background…`,
-  });
-
-  if (!batchRequests.length) {
-    const result = await runInternalAIRequest(payload?.singleRequest, context, label, {
-      phase: 'single_review',
-      current: 1,
-      total,
-      message: `${label}: running Sarah review…`,
-    });
-    return parseAIResult(result);
-  }
-
-  const batchResults = [];
-  for (let index = 0; index < batchRequests.length; index += 1) {
-    const batchNumber = index + 1;
-    const result = await runInternalAIRequest(batchRequests[index], context, `${label} batch ${batchNumber}/${batchRequests.length}`, {
-      phase: 'batch_review',
-      current: index,
-      total,
-      message: `${label}: Sarah batch ${batchNumber}/${batchRequests.length} running…`,
-    });
-    batchResults.push(parseAIResult(result));
+  try {
     context.updateProgress({
-      phase: 'batch_complete',
-      current: batchNumber,
+      phase: 'queued',
+      current: 0,
       total,
-      message: `${label}: completed batch ${batchNumber}/${batchRequests.length}.`,
-      batch_current: batchNumber,
-      batch_total: batchRequests.length,
+      message: `${label}: running fully in the desktop background…`,
     });
-  }
 
-  if (payload?.synthesisRequest) {
-    try {
-      const synthesisPrompt = `${payload.synthesisRequest.promptPrefix || ''}\n${JSON.stringify(batchResults, null, 2)}\n${payload.synthesisRequest.promptSuffix || ''}`;
-      const result = await runInternalAIRequest({
-        ...payload.synthesisRequest,
-        prompt: synthesisPrompt,
-        images: [],
-      }, context, `${label} final synthesis`, {
-        phase: 'final_synthesis',
-        current: batchRequests.length,
+    if (!batchRequests.length) {
+      const result = await runInternalAIRequest(payload?.singleRequest, context, label, {
+        phase: 'single_review',
+        current: 1,
         total,
-        message: `${label}: synthesizing final review from completed batches…`,
+        message: `${label}: running Sarah review…`,
       });
       return parseAIResult(result);
-    } catch (error) {
-      context.updateProgress({
-        phase: 'fallback_assembly',
-        current: total,
-        total,
-        message: `${label}: final synthesis failed, preserving completed batch findings…`,
-        synthesis_error: error?.message || String(error),
-      });
-      const assembled = fallbackAssembleProfileImageReview(payload, batchResults);
-      assembled._background_attempt_status = {
-        state: 'final_synthesis_failed_batch_findings_preserved',
-        timestamp: new Date().toISOString(),
-        error_message: error?.message || String(error),
-        batch_reviews_completed: true,
-        batch_count: batchResults.length,
-        final_synthesis_attempted: true,
-      };
-      return assembled;
     }
-  }
 
-  return fallbackAssembleProfileImageReview(payload, batchResults);
+    const batchResults = [];
+    for (let index = 0; index < batchRequests.length; index += 1) {
+      const batchNumber = index + 1;
+      const result = await runInternalAIRequest(batchRequests[index], context, `${label} batch ${batchNumber}/${batchRequests.length}`, {
+        phase: 'batch_review',
+        current: index,
+        total,
+        message: `${label}: Sarah batch ${batchNumber}/${batchRequests.length} running…`,
+      });
+      batchResults.push(parseAIResult(result));
+      context.updateProgress({
+        phase: 'batch_complete',
+        current: batchNumber,
+        total,
+        message: `${label}: completed batch ${batchNumber}/${batchRequests.length}.`,
+        batch_current: batchNumber,
+        batch_total: batchRequests.length,
+      });
+    }
+
+    if (payload?.synthesisRequest) {
+      try {
+        const synthesisPrompt = `${payload.synthesisRequest.promptPrefix || ''}\n${JSON.stringify(batchResults, null, 2)}\n${payload.synthesisRequest.promptSuffix || ''}`;
+        const result = await runInternalAIRequest({
+          ...payload.synthesisRequest,
+          prompt: synthesisPrompt,
+          images: [],
+        }, context, `${label} final synthesis`, {
+          phase: 'final_synthesis',
+          current: batchRequests.length,
+          total,
+          message: `${label}: synthesizing final review from completed batches…`,
+        });
+        return parseAIResult(result);
+      } catch (error) {
+        context.updateProgress({
+          phase: 'fallback_assembly',
+          current: total,
+          total,
+          message: `${label}: final synthesis failed, preserving completed batch findings…`,
+          synthesis_error: error?.message || String(error),
+        });
+        const assembled = fallbackAssembleProfileImageReview(payload, batchResults);
+        assembled._background_attempt_status = {
+          state: 'final_synthesis_failed_batch_findings_preserved',
+          timestamp: new Date().toISOString(),
+          error_message: error?.message || String(error),
+          batch_reviews_completed: true,
+          batch_count: batchResults.length,
+          final_synthesis_attempted: true,
+        };
+        return assembled;
+      }
+    }
+
+    return fallbackAssembleProfileImageReview(payload, batchResults);
+  } finally {
+    await cleanupPayloadRef(originalPayload);
+  }
 });
 
 registerJobHandler('local_vision_analyze_window', async (payload, context) => {
@@ -391,13 +412,43 @@ registerJobHandler('local_vision_ask_video', async (payload, context) => {
   });
 });
 
-jobsRouter.post('/start', (req, res) => {
+function startJobFromBody(body, res) {
   try {
-    const { type, payload = {}, meta = {} } = req.body || {};
+    const { type, payload = {}, meta = {} } = body || {};
     if (!type) return res.status(400).json({ error: 'Job type is required' });
     const job = createJob(type, payload, meta);
     res.status(202).json(job);
   } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || String(error) });
+  }
+}
+
+jobsRouter.post('/start', (req, res) => {
+  startJobFromBody(req.body, res);
+});
+
+largeJobsRouter.post('/', express.raw({ type: 'application/json', limit: process.env.BACKGROUND_JOB_LARGE_BODY_LIMIT || '250mb' }), async (req, res) => {
+  let saved = null;
+  try {
+    const body = JSON.parse(req.body?.toString('utf8') || '{}');
+    const { type, payload = {}, meta = {} } = body || {};
+    if (!type) return res.status(400).json({ error: 'Job type is required' });
+    saved = await saveJobPayload(payload);
+    if (!type || !payload || !saved?.id) throw new Error('Invalid large job payload');
+    if (type && !['profile_image_review_full', 'ai_invoke', 'tts_export'].includes(type) && !String(type).startsWith('local_vision_')) {
+      throw new Error(`Unknown background job type: ${type}`);
+    }
+    startJobFromBody({
+      type,
+      payload: { __payloadRef: saved.id },
+      meta: {
+        ...meta,
+        payload_ref: saved.id,
+        payload_handoff: 'file',
+      },
+    }, res);
+  } catch (error) {
+    await deleteJobPayload(saved?.id);
     res.status(error.status || 400).json({ error: error.message || String(error) });
   }
 });

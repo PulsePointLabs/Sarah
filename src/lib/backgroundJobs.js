@@ -18,10 +18,13 @@ async function jobRequest(path, options = {}) {
 }
 
 export function startBackgroundJob(type, payload = {}, meta = {}) {
-  return jobRequest("/jobs/start", {
+  const body = JSON.stringify({ type, payload, meta });
+  const largeBodyThreshold = 42 * 1024 * 1024;
+  const path = body.length > largeBodyThreshold ? "/jobs/start-large" : "/jobs/start";
+  return jobRequest(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type, payload, meta }),
+    body,
   });
 }
 
