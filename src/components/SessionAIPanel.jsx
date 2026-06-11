@@ -471,6 +471,37 @@ function paragraphIndexForClip(clip, sections, totalParagraphs, durationS) {
   return Math.min(Math.max(1, totalParagraphs - 1), totalParagraphs - 1);
 }
 
+async function buildStoredSessionAnalysisResult({
+  parsed,
+  completedJob,
+  session,
+  analysisField,
+  timelineRows,
+  analysisLabel,
+  previousResult,
+  onProgress,
+}) {
+  const previousMeta = (previousResult || session?.[analysisField])?._meta || {};
+  const clipResult = await generateSessionKeyVideoClips({
+    session,
+    timelineRows,
+    label: analysisLabel,
+    onProgress,
+  }).catch((clipError) => ({
+    clips: [],
+    error: clipError?.message || "Could not generate key video clips.",
+  }));
+
+  return {
+    ...parsed,
+    _meta: {
+      ...buildSessionAIContentMeta(session, previousMeta, completedAt(completedJob)),
+      key_video_clips: clipResult.clips || [],
+      key_video_clip_error: clipResult.error || "",
+    },
+  };
+}
+
 export default function SessionAIPanel({ session, timelineRows, emgRows = [], userProfile, sessionJournal, mode = "companion", onAnalysisSaved }) {
   const isTechnical = mode === "technical";
   const analysisField = isTechnical ? "ai_session_deep_dive" : "ai_analysis";
@@ -520,10 +551,27 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
         if (!isNewerCompletedJob(completedJob, result || session[analysisField])) return;
 
         const parsed = normalizeSessionAnalysis(completedJob.result);
-        const storedResult = {
-          ...parsed,
-          _meta: buildSessionAIContentMeta(session, (result || session[analysisField])?._meta, completedAt(completedJob)),
-        };
+        const storedResult = await buildStoredSessionAnalysisResult({
+          parsed,
+          completedJob,
+          session,
+          analysisField,
+          timelineRows,
+          analysisLabel,
+          previousResult: result || session[analysisField],
+          onProgress: (progress) => {
+            if (!cancelled) {
+              setJobStatus({
+                ...completedJob,
+                progress: {
+                  ...(completedJob.progress || {}),
+                  ...progress,
+                },
+              });
+            }
+          },
+        });
+        if (cancelled) return;
         setResult(storedResult);
         setJobStatus({
           ...completedJob,
@@ -965,10 +1013,14 @@ Provide ${isTechnical
     });
 
     const parsed = normalizeSessionAnalysis(completedJob.result);
-    const clipResult = await generateSessionKeyVideoClips({
+    const storedResult = await buildStoredSessionAnalysisResult({
+      parsed,
+      completedJob,
       session,
+      analysisField,
       timelineRows,
-      label: analysisLabel,
+      analysisLabel,
+      previousResult: session[analysisField],
       onProgress: (progress) => {
         setJobStatus({
           ...completedJob,
@@ -978,18 +1030,7 @@ Provide ${isTechnical
           },
         });
       },
-    }).catch((clipError) => ({
-      clips: [],
-      error: clipError?.message || "Could not generate key video clips.",
-    }));
-    const storedResult = {
-      ...parsed,
-      _meta: {
-        ...buildSessionAIContentMeta(session, session[analysisField]?._meta, completedAt(completedJob)),
-        key_video_clips: clipResult.clips || [],
-        key_video_clip_error: clipResult.error || "",
-      },
-    };
+    });
     setResult(storedResult);
     setJobStatus({
       ...completedJob,

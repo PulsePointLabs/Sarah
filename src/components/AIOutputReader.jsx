@@ -1,5 +1,6 @@
 import { splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 import TTSReader from "./TTSReader";
+import { serverUrl } from "@/lib/mobileApiBase";
 
 export function renderSentenceHighlightedText(text, activeSentenceIdx = -1, onSentenceClick) {
   const sentences = splitSentencesPreservingDecimals(text);
@@ -62,7 +63,7 @@ function fmtMmSs(totalSeconds) {
 
 function InlineClipCard({ clip }) {
   if (!clip?.url && !clip?.clip_url && !clip?.file_url) return null;
-  const src = clip.url || clip.clip_url || clip.file_url;
+  const src = serverUrl(clip.url || clip.clip_url || clip.file_url);
   return (
     <div
       className="mt-2 overflow-hidden rounded-lg border border-primary/20 bg-background/80"

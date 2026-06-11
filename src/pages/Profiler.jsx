@@ -198,6 +198,9 @@ function cleanImageReviewProse(value) {
     .replace(/\bimg[_-]?0*(\d+)\b/gi, (_match, number) => `image ${Number(number) || number}`)
     .replace(/\bImage\s+\d+\s*(?:\([^)]+\))?\s*:\s*/gi, "")
     .replace(/\b(?:IMG|VID|PXL|DSC|Photo|Screenshot)[-_ ]?\d{4,}\b/gi, "the referenced view")
+    .replace(/\bThis batch does not include[^.]*\.?\s*/gi, "")
+    .replace(/\bThis image set does not include[^.]*\.?\s*/gi, "")
+    .replace(/\bNo (?:whole-body|full-body|torso|standing|posterior|anterior|lateral|upper limb|lower limb|foot|feet)[^.]*?(?:in this batch|in this image set|were included|were provided)[^.]*\.?\s*/gi, "")
     .replace(/\bAll\s+\d+\s+rechecked saved\/direct views are captured in\b/gi, "Reviewed saved/direct views include")
     .replace(/\bposition not fully assessable from this close-up\.?\s*/gi, "")
     .replace(/\bwhole-body standing posture is not established by this frame\.?\s*/gi, "")
@@ -1699,6 +1702,8 @@ function uniqueReviewItems(items = [], limit = 14, maxChars = 900, batchSet = nu
   for (const item of items) {
     const text = cleanImageReviewProse(batchSet ? sanitizeRecoveredBatchScopeText(item, batchSet) : item);
     if (!text || /^batch\s+\d+\s+of\s+\d+/i.test(text) || /^this is batch\s+\d+/i.test(text)) continue;
+    if (/\bthis\s+batch\s+does\s+not\s+include\b/i.test(String(item || ""))) continue;
+    if (/\bthis\s+image\s+set\s+does\s+not\s+include\b/i.test(String(item || ""))) continue;
     if (/\b(?:these|the)\s+images?\s+(?:have|has)\s+not\s+been\s+(?:provided|included|attached)\s+in\s+this\s+batch\b/i.test(text)) continue;
     if (/\b(?:not\s+provided|not\s+included|not\s+attached)\s+in\s+this\s+batch\b/i.test(text)) continue;
     if (isLowValueAbsentRegionParagraph(text)) continue;
@@ -1713,13 +1718,6 @@ function uniqueReviewItems(items = [], limit = 14, maxChars = 900, batchSet = nu
 
 function buildBatchAssembledImageReview(config, batchResults = [], batchSet = {}) {
   const sections = profileReviewResultSections(config);
-  const finalAttempted = batchSet.final_synthesis_attempted !== false;
-  const assemblyReason = finalAttempted
-    ? "after the final synthesis request timed out"
-    : "without running the optional final synthesis request";
-  const evidenceReason = finalAttempted
-    ? "because the final Sarah synthesis timed out"
-    : "because the batch-level review completed and final synthesis is now an explicit optional retry";
   const directFindings = uniqueReviewItems(batchResults.flatMap((item) => item?.summary_card?.key_direct_findings || []), 10, 520, batchSet);
   const referenceValue = uniqueReviewItems(batchResults.flatMap((item) => item?.summary_card?.primary_reference_value || []), 8, 460, batchSet);
   const limitations = uniqueReviewItems(batchResults.flatMap((item) => item?.summary_card?.key_limitations || []), 4, 360, batchSet);
@@ -1739,14 +1737,14 @@ function buildBatchAssembledImageReview(config, batchResults = [], batchSet = {}
   const result = {
     overview: headToToe
       ? "Cumulative head-to-toe anatomy review integrating the available full-body, regional, pelvic, and saved profile photo evidence into one body-centered summary."
-      : `This cumulative ${config.shortTitle.toLowerCase()} review was assembled from ${batchSet.total || batchResults.length} completed Sarah batch reviews ${assemblyReason}. The batch-level visual review succeeded, so this assembled version leads with the paid-for direct image observations, annotated image callouts, and profile-context reconciliation without making another cloud request. It should be treated as a cumulative review assembled from completed Sarah evidence rather than a freshly rewritten final narrative.`,
+      : `${config.shortTitle} visible anatomy review.`,
     summary_card: {
       baseline_quality: headToToe ? "" : uniqueReviewItems(batchResults.map((item) => item?.summary_card?.baseline_quality), 2, 420, batchSet).join(" ") || "Recovered from completed Sarah image-review batches.",
       coverage: headToToe ? "" : coverage || `${batchSet.image_count || batchSet.reviewed_images?.length || "Multiple"} saved/direct profile-reference views were reviewed across completed batches.`,
       primary_reference_value: headToToe ? [] : referenceValue,
       key_direct_findings: directFindings,
       key_limitations: headToToe ? [] : limitations,
-      evidence_note: headToToe ? "" : `Direct batch findings were preserved and locally assembled ${evidenceReason}.`,
+      evidence_note: "",
     },
     annotated_images: Array.from(annotatedByKey.values()),
     image_region_findings: Array.from(findingsByKey.values()),
@@ -3548,7 +3546,7 @@ Batch review JSON:`,
           sections: profileReviewResultSections(config),
           batchRequests,
           synthesisRequest,
-          fallbackOverview: `Cumulative ${config.shortTitle.toLowerCase()} review assembled from completed Sarah image-review batches.`,
+          fallbackOverview: `${config.shortTitle} visible anatomy review.`,
         }, jobLabel, {
           priority: 50,
           meta: {

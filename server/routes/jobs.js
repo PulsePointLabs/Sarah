@@ -195,17 +195,59 @@ function parseAIResult(value) {
   }
 }
 
+function cleanFallbackReviewText(value = '') {
+  return String(value || '')
+    .replace(/\bThis batch does not include[^.]*\.?\s*/gi, '')
+    .replace(/\bThis image set does not include[^.]*\.?\s*/gi, '')
+    .replace(/\bNo (?:whole-body|full-body|torso|standing|posterior|anterior|lateral|upper limb|lower limb|foot|feet)[^.]*?(?:in this batch|in this image set|were included|were provided)[^.]*\.?\s*/gi, '')
+    .replace(/\bnot visible in this batch\.?\s*/gi, '')
+    .replace(/\bnot provided in this batch\.?\s*/gi, '')
+    .replace(/\bnot included in this batch\.?\s*/gi, '')
+    .replace(/\bdeferred to (?:another|subsequent|later) batch[^.]*\.?\s*/gi, '')
+    .replace(/\b(?:bladder neck|prostate|internal sphincters?|urethral course|pelvic floor musculature|internal rectal structures?|internal hemorrhoids?)[^.]*?(?:not visible|not visualized|not assessable|not assessed)[^.]*\.?\s*/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function isLowValueFallbackReviewText(value = '') {
+  const raw = String(value || '').replace(/\s+/g, ' ').trim();
+  const text = cleanFallbackReviewText(raw);
+  if (!text) return true;
+  if (/^batch\s+\d+\s+of\s+\d+/i.test(raw) || /^this is batch\s+\d+/i.test(raw)) return true;
+  if (/\bthis\s+batch\s+does\s+not\s+include\b/i.test(raw)) return true;
+  if (/\bthis\s+image\s+set\s+does\s+not\s+include\b/i.test(raw)) return true;
+  if (/\b(?:not\s+provided|not\s+included|not\s+attached)\s+in\s+this\s+batch\b/i.test(raw)) return true;
+  const absenceLanguage = /\b(?:not visible|not assessable|cannot be assessed|deferred to|not available|not present in this batch|not provided in this batch|not included in this batch|missing .*views?)\b/i.test(raw);
+  const usefulVisibleClaim = /\b(?:is visible|are visible|appears|show|shows|clearly visible|consistent with|scattered|level|symmetric|flat on floor|projects|flaccid|foreskin|raphe|perineal|scrot|abdomen|feet|shoulders|spine|skin)\b/i.test(raw);
+  return absenceLanguage && !usefulVisibleClaim;
+}
+
+function uniqueFallbackReviewItems(items = [], limit = 14) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    if (isLowValueFallbackReviewText(item)) continue;
+    const text = cleanFallbackReviewText(item);
+    const key = text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 180);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(text.length > 900 ? `${text.slice(0, 897).trim()}...` : text);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 function fallbackAssembleProfileImageReview(payload = {}, batchResults = []) {
   const sections = Array.isArray(payload.sections) ? payload.sections : [];
   const result = {
-    overview: payload.fallbackOverview || `The ${payload.reviewTitle || 'profile image review'} completed its visual batches. Final synthesis was not available, so this result preserves the completed Sarah batch findings.`,
+    overview: payload.fallbackOverview || `${payload.reviewTitle || 'Profile image review'} visible anatomy review.`,
     summary_card: {
-      baseline_quality: 'Batch findings complete',
-      coverage: `${batchResults.length} completed batch review${batchResults.length === 1 ? '' : 's'} preserved.`,
+      baseline_quality: '',
+      coverage: '',
       primary_reference_value: [],
       key_direct_findings: [],
       key_limitations: [],
-      evidence_note: 'Automatically assembled from completed background Sarah image-review batches.',
+      evidence_note: '',
     },
     annotated_images: [],
     image_region_findings: [],
@@ -216,7 +258,6 @@ function fallbackAssembleProfileImageReview(payload = {}, batchResults = []) {
   const seenFindings = new Set();
   for (const batch of batchResults) {
     const parsed = parseAIResult(batch) || {};
-    if (parsed.overview) result.overview += `\n\n${parsed.overview}`;
     const card = parsed.summary_card || {};
     for (const key of ['primary_reference_value', 'key_direct_findings', 'key_limitations']) {
       if (Array.isArray(card[key])) {
@@ -246,11 +287,11 @@ function fallbackAssembleProfileImageReview(payload = {}, batchResults = []) {
     }
   }
 
-  result.summary_card.primary_reference_value = [...new Set(result.summary_card.primary_reference_value)].slice(0, 12);
-  result.summary_card.key_direct_findings = [...new Set(result.summary_card.key_direct_findings)].slice(0, 12);
-  result.summary_card.key_limitations = [...new Set(result.summary_card.key_limitations)].slice(0, 8);
+  result.summary_card.primary_reference_value = uniqueFallbackReviewItems(result.summary_card.primary_reference_value, 10);
+  result.summary_card.key_direct_findings = uniqueFallbackReviewItems(result.summary_card.key_direct_findings, 12);
+  result.summary_card.key_limitations = uniqueFallbackReviewItems(result.summary_card.key_limitations, 4);
   for (const section of sections) {
-    result[section.key] = [...new Set(result[section.key])].slice(0, 24);
+    result[section.key] = uniqueFallbackReviewItems(result[section.key], /missing|optional|request|limit/i.test(section.key) ? 5 : 14);
   }
   return result;
 }
