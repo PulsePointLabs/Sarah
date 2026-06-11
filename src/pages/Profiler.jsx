@@ -1168,6 +1168,66 @@ function imageFileToPayload(file) {
   });
 }
 
+const PROFILER_UPLOAD_QUEUE_LIMIT = 40;
+
+function profilerUploadQueueKey(kind = "profile") {
+  return `pulsepoint_profiler_upload_queue_${kind}`;
+}
+
+function serializeProfilerUploadQueue(images = []) {
+  return images
+    .filter((image) => image?.storagePath || image?.url || image?.previewUrl)
+    .map((image) => ({
+      id: image.id,
+      filename: image.filename,
+      media_type: image.media_type || "image/jpeg",
+      storagePath: image.storagePath || image.url || "",
+      url: image.url || image.storagePath || "",
+      previewUrl: image.previewUrl || image.storagePath || image.url || "",
+      upload_note: image.upload_note || "",
+      size: image.size || 0,
+      lastModified: image.lastModified || 0,
+      source: image.source || "fresh_upload",
+    }))
+    .slice(0, PROFILER_UPLOAD_QUEUE_LIMIT);
+}
+
+function restoreProfilerUploadQueue(kind) {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(profilerUploadQueueKey(kind)) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((image) => image?.storagePath || image?.url || image?.previewUrl)
+      .map((image, index) => {
+        const storagePath = image.storagePath || image.url || image.previewUrl || "";
+        return {
+          ...image,
+          id: image.id || `${kind}-restored-${index}-${storagePath}`,
+          media_type: normalizeMediaType(image.media_type),
+          storagePath,
+          url: image.url || storagePath,
+          previewUrl: serverUrl(image.previewUrl || storagePath),
+          source: "fresh_upload",
+          upload_note: String(image.upload_note || "").trim(),
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+function persistProfilerUploadQueue(kind, images = []) {
+  if (typeof window === "undefined") return;
+  try {
+    const serializable = serializeProfilerUploadQueue(images);
+    if (!serializable.length) window.localStorage.removeItem(profilerUploadQueueKey(kind));
+    else window.localStorage.setItem(profilerUploadQueueKey(kind), JSON.stringify(serializable));
+  } catch {
+    // Upload queue persistence is best-effort; active in-memory images still work.
+  }
+}
+
 function stripDataUrl(value) {
   return String(value || "").replace(/^data:[^;]+;base64,/, "");
 }
@@ -1490,6 +1550,7 @@ function buildImageReviewReferences(images = []) {
 
 async function prepareFreshImageForReview(image, index, { onProgress, total = 0 } = {}) {
   let storagePath = image.storagePath || image.file_url || image.url || "";
+  let data = image.data || "";
   if (!storagePath && image.file) {
     onProgress?.({
       status: "preparing",
@@ -1506,14 +1567,34 @@ async function prepareFreshImageForReview(image, index, { onProgress, total = 0 
   if (!storagePath) {
     throw new Error(`Could not save a reusable preview for ${image.filename || `reference image ${index + 1}`}.`);
   }
+  if (!data) {
+    onProgress?.({
+      status: "preparing",
+      progress: {
+        phase: "loading_images",
+        current: index + 1,
+        total,
+        message: `Loading saved reference image ${index + 1} for Sarah...`,
+      },
+    });
+    const response = await fetch(serverUrl(storagePath));
+    if (!response.ok) throw new Error(`Could not reload ${image.filename || `reference image ${index + 1}`}.`);
+    const blob = await response.blob();
+    data = stripDataUrl(await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error(`Could not read ${image.filename || storagePath}.`));
+      reader.readAsDataURL(blob);
+    }));
+  }
   return {
     ...image,
     filename: image.filename || `profile-reference-${index + 1}.jpg`,
     media_type: normalizeMediaType(image.media_type),
-    data: image.data,
+    data,
     storagePath,
     url: storagePath,
-    previewUrl: image.previewUrl || storagePath,
+    previewUrl: image.previewUrl || serverUrl(storagePath),
     source: "fresh_upload",
     upload_note: String(image.upload_note || "").trim(),
   };
@@ -2486,7 +2567,7 @@ const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
   archiveKey: "head_to_toe_image_review_archive",
   ttsSessionId: "profile-head-to-toe-image-review",
   contextScope: "head_to_toe_body_reference",
-  maxImages: 20,
+  maxImages: 30,
   icon: <ImageIcon className="w-4 h-4" />,
   color: "hsl(var(--chart-4))",
   purpose: "Whole-body anatomical reference review in anatomical position, standing, prone, supine, seated, or supported positioning.",
@@ -2616,6 +2697,16 @@ function ProfileImageReviewPanel({
       // Ignore storage failures; the toggle still works for the current render.
     }
   }, [includeImageCalloutsInTts]);
+
+  useEffect(() => {
+    const restored = restoreProfilerUploadQueue(config.kind);
+    if (!restored.length) return;
+    setImages((current) => current.length ? current : restored.slice(0, config.maxImages || PROFILER_UPLOAD_QUEUE_LIMIT));
+  }, [config.kind, config.maxImages]);
+
+  useEffect(() => {
+    persistProfilerUploadQueue(config.kind, images);
+  }, [config.kind, images]);
 
   useEffect(() => {
     base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
@@ -2933,9 +3024,23 @@ function ProfileImageReviewPanel({
     event.target.value = "";
     if (!files.length) return;
     setError("");
+    setAvailableCompletedReviewJob(null);
+    setRecoverableBatchSet(null);
+    setLatestAttemptStatus(null);
     try {
-      const loaded = await Promise.all(files.map(imageFileToPayload));
-      setImages((current) => [...current, ...loaded].slice(0, config.maxImages || 8));
+      const maxImages = config.maxImages || 8;
+      const loaded = (await Promise.all(files.slice(0, maxImages).map(imageFileToPayload)));
+      const saved = [];
+      for (let index = 0; index < loaded.length; index += 1) {
+        saved.push(await prepareFreshImageForReview(loaded[index], index, {
+          total: loaded.length,
+          onProgress: setJobStatus,
+        }));
+      }
+      setImages((current) => [...current, ...saved].slice(0, maxImages));
+      if (files.length > maxImages) {
+        setError(`Using the first ${maxImages} images for this review. Remove a few and add others if you want to swap coverage.`);
+      }
     } catch (err) {
       setError(err?.message || "Could not read one of the selected images.");
     }
@@ -3197,6 +3302,7 @@ function ProfileImageReviewPanel({
     result?._meta?.image_id_repair_version !== PROFILE_IMAGE_ID_REPAIR_VERSION;
   const hasRecoverableUnshownBatchSet = recoverableBatchSet?.batches?.length > 0 && !result?._meta?.local_batch_assembled;
   const handlePrimaryReviewAction = async () => {
+    if (images.length > 0) return analyze();
     if (availableCompletedReviewJob) {
       setLoading(true);
       setError("");
@@ -3384,14 +3490,12 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
         limit: maxReviewImages,
         purpose: isHeadToToeBodyReference ? "head_to_toe_body_reference" : "pelvic_genital",
       });
-      const savedReserve = images.length > 0 && allSavedAttachments.length > 0
-        ? Math.min(allSavedAttachments.length, Math.max(4, Math.ceil(maxReviewImages * 0.35)))
-        : allSavedAttachments.length;
+      const savedReserve = images.length > 0 ? 0 : allSavedAttachments.length;
       const freshLimit = images.length > 0
-        ? Math.max(1, maxReviewImages - savedReserve)
+        ? maxReviewImages
         : 0;
       const freshSourceImages = images
-        .filter((image) => image.media_type && image.data)
+        .filter((image) => image.media_type && (image.data || image.file || image.storagePath || image.url))
         .slice(0, freshLimit || maxReviewImages);
       const freshImagePayload = [];
       for (let imageIndex = 0; imageIndex < freshSourceImages.length; imageIndex += 1) {
@@ -4179,7 +4283,7 @@ ANNOTATED IMAGE OUTPUT RULES:
             <Button size="sm" onClick={handlePrimaryReviewAction} disabled={loading || profileLoading || evidenceLoading || !userProfile} className="h-8 gap-1.5 text-xs">
               {loading
                 ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Reviewing...</>
-                : <><ImageIcon className="h-3.5 w-3.5" />{hasRecoverableDisplayRepair ? "Refresh Findings" : (availableCompletedReviewJob || hasRecoverableUnshownBatchSet) ? "Show Latest Findings" : images.length ? (result ? "Re-review Images" : "Review Images") : (result ? "Re-review Evidence" : "Review Existing Evidence")}</>}
+                : <><ImageIcon className="h-3.5 w-3.5" />{images.length ? (result ? "Re-review Images" : "Review Images") : hasRecoverableDisplayRepair ? "Refresh Findings" : (availableCompletedReviewJob || hasRecoverableUnshownBatchSet) ? "Show Latest Findings" : (result ? "Re-review Evidence" : "Review Existing Evidence")}</>}
             </Button>
           </div>
         </div>
