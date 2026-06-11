@@ -1176,14 +1176,17 @@ function profilerUploadQueueKey(kind = "profile") {
 
 function serializeProfilerUploadQueue(images = []) {
   return images
-    .filter((image) => image?.storagePath || image?.url || image?.previewUrl)
+    .filter((image) => {
+      const path = image?.storagePath || image?.url || "";
+      return path && !String(path).startsWith("data:");
+    })
     .map((image) => ({
       id: image.id,
       filename: image.filename,
       media_type: image.media_type || "image/jpeg",
       storagePath: image.storagePath || image.url || "",
       url: image.url || image.storagePath || "",
-      previewUrl: image.previewUrl || image.storagePath || image.url || "",
+      previewUrl: image.storagePath || image.url || "",
       upload_note: image.upload_note || "",
       size: image.size || 0,
       lastModified: image.lastModified || 0,
@@ -2681,6 +2684,7 @@ function ProfileImageReviewPanel({
   const [latestAttemptStatus, setLatestAttemptStatus] = useState(null);
   const [availableCompletedReviewJob, setAvailableCompletedReviewJob] = useState(null);
   const [selectedProfilerImageId, setSelectedProfilerImageId] = useState(null);
+  const [imageUploadStatus, setImageUploadStatus] = useState(null);
   const [includeImageCalloutsInTts, setIncludeImageCalloutsInTts] = useState(() => {
     try {
       return window.localStorage.getItem("pulsepoint_profile_image_tts_callouts") === "true";
@@ -3029,20 +3033,62 @@ function ProfileImageReviewPanel({
     setLatestAttemptStatus(null);
     try {
       const maxImages = config.maxImages || 8;
-      const loaded = (await Promise.all(files.slice(0, maxImages).map(imageFileToPayload)));
-      const saved = [];
-      for (let index = 0; index < loaded.length; index += 1) {
-        saved.push(await prepareFreshImageForReview(loaded[index], index, {
-          total: loaded.length,
-          onProgress: setJobStatus,
-        }));
+      const selectedFiles = files.slice(0, maxImages);
+      const pending = selectedFiles.map((file) => ({
+        id: `${file.name}-${file.size}-${file.lastModified}`,
+        filename: file.name,
+        file,
+        media_type: file.type || "image/jpeg",
+        previewUrl: URL.createObjectURL(file),
+        upload_note: "",
+        size: file.size,
+        lastModified: file.lastModified,
+        source: "fresh_upload",
+        upload_status: "saving",
+      }));
+      setImages((current) => [...current, ...pending].slice(0, maxImages));
+      setImageUploadStatus({
+        current: 0,
+        total: pending.length,
+        message: `Saving ${pending.length} selected image${pending.length === 1 ? "" : "s"} for Head-to-Toe review...`,
+      });
+
+      for (let index = 0; index < pending.length; index += 1) {
+        const pendingImage = pending[index];
+        try {
+          setImageUploadStatus({
+            current: index + 1,
+            total: pending.length,
+            message: `Saving image ${index + 1}/${pending.length}...`,
+          });
+          const loaded = await imageFileToPayload(pendingImage.file);
+          const saved = await prepareFreshImageForReview({ ...pendingImage, ...loaded, upload_status: "saving" }, index, {
+            total: pending.length,
+            onProgress: setJobStatus,
+          });
+          setImages((current) => current.map((image) => (
+            image.id === pendingImage.id ? { ...saved, id: pendingImage.id, upload_status: "saved" } : image
+          )).slice(0, maxImages));
+        } catch (imageError) {
+          setImages((current) => current.map((image) => (
+            image.id === pendingImage.id
+              ? { ...image, upload_status: "error", upload_error: imageError?.message || "Could not save image." }
+              : image
+          )));
+        }
       }
-      setImages((current) => [...current, ...saved].slice(0, maxImages));
+      setImageUploadStatus({
+        current: pending.length,
+        total: pending.length,
+        message: `Saved ${pending.length} selected image${pending.length === 1 ? "" : "s"}.`,
+      });
       if (files.length > maxImages) {
         setError(`Using the first ${maxImages} images for this review. Remove a few and add others if you want to swap coverage.`);
       }
     } catch (err) {
       setError(err?.message || "Could not read one of the selected images.");
+    } finally {
+      window.setTimeout(() => setImageUploadStatus(null), 3500);
     }
   };
 
@@ -4411,12 +4457,38 @@ ANNOTATED IMAGE OUTPUT RULES:
           </p>
         )}
 
+        {imageUploadStatus && (
+          <div className="rounded-lg border border-primary/25 bg-primary/10 px-3 py-2 text-xs leading-relaxed text-foreground">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span>{imageUploadStatus.message}</span>
+              <span className="font-mono text-muted-foreground">{imageUploadStatus.current}/{imageUploadStatus.total}</span>
+            </div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-background">
+              <div
+                className="h-full rounded-full bg-primary transition-all"
+                style={{ width: `${Math.max(5, Math.min(100, (imageUploadStatus.current / Math.max(1, imageUploadStatus.total)) * 100))}%` }}
+              />
+            </div>
+          </div>
+        )}
+
         {images.length > 0 && (
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {images.map((image) => (
               <div key={image.id} className="overflow-hidden rounded-lg border border-border bg-muted/20">
                 <div className="relative aspect-[4/3] bg-black">
                   <img src={image.previewUrl} alt={image.filename} className="h-full w-full object-contain" />
+                  {image.upload_status && (
+                    <span className={`absolute left-1 top-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      image.upload_status === "saved"
+                        ? "bg-emerald-500/90 text-white"
+                        : image.upload_status === "error"
+                          ? "bg-destructive/90 text-white"
+                          : "bg-background/85 text-foreground"
+                    }`}>
+                      {image.upload_status === "saved" ? "Saved" : image.upload_status === "error" ? "Error" : "Saving"}
+                    </span>
+                  )}
                   <button
                     type="button"
                     onClick={() => removeImage(image.id)}
@@ -4427,6 +4499,9 @@ ANNOTATED IMAGE OUTPUT RULES:
                   </button>
                 </div>
                 <p className="truncate px-2 py-1.5 text-[10px] text-muted-foreground">{image.filename}</p>
+                {image.upload_error && (
+                  <p className="px-2 pb-1 text-[10px] leading-relaxed text-destructive">{image.upload_error}</p>
+                )}
                 <div className="border-t border-border px-2 py-2">
                   <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Image note
