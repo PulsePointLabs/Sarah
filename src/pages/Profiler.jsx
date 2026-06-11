@@ -1169,6 +1169,7 @@ function imageFileToPayload(file) {
 }
 
 const PROFILER_UPLOAD_QUEUE_LIMIT = 40;
+const PROFILER_IMAGE_SAVE_TIMEOUT_MS = 90000;
 
 function profilerUploadQueueKey(kind = "profile") {
   return `pulsepoint_profiler_upload_queue_${kind}`;
@@ -1229,6 +1230,14 @@ function persistProfilerUploadQueue(kind, images = []) {
   } catch {
     // Upload queue persistence is best-effort; active in-memory images still work.
   }
+}
+
+function withTimeout(promise, ms, message) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timeoutId));
 }
 
 function stripDataUrl(value) {
@@ -3062,10 +3071,14 @@ function ProfileImageReviewPanel({
             message: `Saving image ${index + 1}/${pending.length}...`,
           });
           const loaded = await imageFileToPayload(pendingImage.file);
-          const saved = await prepareFreshImageForReview({ ...pendingImage, ...loaded, upload_status: "saving" }, index, {
-            total: pending.length,
-            onProgress: setJobStatus,
-          });
+          const saved = await withTimeout(
+            prepareFreshImageForReview({ ...pendingImage, ...loaded, upload_status: "saving" }, index, {
+              total: pending.length,
+              onProgress: setJobStatus,
+            }),
+            PROFILER_IMAGE_SAVE_TIMEOUT_MS,
+            `Image ${index + 1} did not finish saving within ${Math.round(PROFILER_IMAGE_SAVE_TIMEOUT_MS / 1000)} seconds. Remove it and try that photo again.`,
+          );
           setImages((current) => current.map((image) => (
             image.id === pendingImage.id ? { ...saved, id: pendingImage.id, upload_status: "saved" } : image
           )).slice(0, maxImages));
@@ -3080,7 +3093,7 @@ function ProfileImageReviewPanel({
       setImageUploadStatus({
         current: pending.length,
         total: pending.length,
-        message: `Saved ${pending.length} selected image${pending.length === 1 ? "" : "s"}.`,
+        message: `Finished image save pass. Saved images are safe to use; any Error badges need reselecting.`,
       });
       if (files.length > maxImages) {
         setError(`Using the first ${maxImages} images for this review. Remove a few and add others if you want to swap coverage.`);
@@ -4288,6 +4301,8 @@ ANNOTATED IMAGE OUTPUT RULES:
   }));
   const hasPersistedReviewedImages = Array.isArray(result?._meta?.reviewed_images) && result._meta.reviewed_images.length > 0;
   const inlineReferenceImages = hasPersistedReviewedImages ? images : [...images, ...fallbackReferenceImages];
+  const imageSaveInProgress = images.some((image) => image.upload_status === "saving");
+  const imageSaveErrorCount = images.filter((image) => image.upload_status === "error").length;
   const lightboxImageIds = result ? [...new Set([
     ...(Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images.map((image) => image.image_id).filter(Boolean) : []),
     ...(Array.isArray(result?.annotated_images) ? result.annotated_images.map((image) => image.image_id).filter(Boolean) : []),
@@ -4326,9 +4341,11 @@ ANNOTATED IMAGE OUTPUT RULES:
               <Upload className="h-3.5 w-3.5" /> Add Images
               <input type="file" accept="image/*" multiple className="hidden" onChange={handleImageFiles} />
             </label>
-            <Button size="sm" onClick={handlePrimaryReviewAction} disabled={loading || profileLoading || evidenceLoading || !userProfile} className="h-8 gap-1.5 text-xs">
+            <Button size="sm" onClick={handlePrimaryReviewAction} disabled={loading || imageSaveInProgress || profileLoading || evidenceLoading || !userProfile} className="h-8 gap-1.5 text-xs">
               {loading
                 ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Reviewing...</>
+                : imageSaveInProgress
+                  ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Saving Images...</>
                 : <><ImageIcon className="h-3.5 w-3.5" />{images.length ? (result ? "Re-review Images" : "Review Images") : hasRecoverableDisplayRepair ? "Refresh Findings" : (availableCompletedReviewJob || hasRecoverableUnshownBatchSet) ? "Show Latest Findings" : (result ? "Re-review Evidence" : "Review Existing Evidence")}</>}
             </Button>
           </div>
@@ -4360,6 +4377,9 @@ ANNOTATED IMAGE OUTPUT RULES:
           )}
           {images.length > 0 && (
             <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{images.length} fresh image{images.length === 1 ? "" : "s"} selected</Badge>
+          )}
+          {imageSaveErrorCount > 0 && (
+            <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">{imageSaveErrorCount} image save error{imageSaveErrorCount === 1 ? "" : "s"}</Badge>
           )}
           {recoverableBatchSet?.batches?.length > 0 && !result?._meta?.local_batch_assembled && (
             <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
@@ -4443,7 +4463,7 @@ ANNOTATED IMAGE OUTPUT RULES:
 
         {!result && images.length > 0 ? (
           <p className="text-xs text-muted-foreground">
-            Fresh image files will be saved locally before review so the annotated evidence cards can show the referenced views after reload.
+            Keep this page open until selected images show Saved. After that, they are stored locally and can survive reload/focus changes.
           </p>
         ) : !result && reusableProfileAttachments.length > 0 ? (
           <p className="text-xs text-muted-foreground">
