@@ -16,6 +16,10 @@ import { splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 import { buildLongitudinalHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import { buildProfileQaFindingCards, makeProfileQaEntry, normalizeProfileQaFindings } from "@/lib/profileQa";
 import {
+  cleanProfileImageReviewText,
+  cleanupProfileImageReviewResult,
+} from "@/lib/profileImageReviewCleanup";
+import {
   buildBodyExplorationVideoPassDigest,
   buildBodyExplorationVisualEvidenceDigest,
   buildSessionVideoPassDigest,
@@ -46,6 +50,10 @@ const PROFILE_IMAGE_ID_REPAIR_VERSION = 1;
 const PROFILE_IMAGE_EVIDENCE_LAYER_RULE = `
 PROFILE IMAGE EVIDENCE LAYER RULE:
 - Keep the existing detailed A&P style, but keep evidence layers distinct.
+- Treat each finding as one of three evidence buckets: Current batch direct evidence, Prior saved evidence, or Profile/context only.
+- If a finding is visible in the images uploaded/rechecked for this run, identify it as directly visible/current evidence in the relevant section.
+- If a finding is not directly reassessed in the current images but is documented in saved profile/prior Sarah evidence, say "Not directly assessed in this batch; carried forward from prior saved evidence." Use this sparingly and only when the distinction matters.
+- If a finding comes only from user profile or historical context, label it as profile/context rather than visual evidence.
 - Direct visual evidence means only what is visible in the currently reviewed/reloaded images. Use wording such as "visible", "appears", "is seen", "no visible", or "not visible in this frame/image set".
 - Profile or prior-evidence reconciliation means comparison with saved profile metrics, prior reviewed images, saved Q&A findings, or session evidence. Use wording such as "consistent with prior documentation", "aligns with saved profile findings", or "supports a previous observation".
 - Interpretation or clinical-functional relevance must be marked as interpretation. Use "may be relevant to", "is compatible with", "could contribute to", or "may reflect"; do not state it as direct visual fact.
@@ -194,7 +202,7 @@ function naturalizeSpokenDates(value) {
 }
 
 function cleanImageReviewProse(value) {
-  return naturalizeSpokenDates(value)
+  const cleaned = naturalizeSpokenDates(value)
     .replace(/\bimg[_-]?0*(\d+)\b/gi, (_match, number) => `image ${Number(number) || number}`)
     .replace(/\bImage\s+\d+\s*(?:\([^)]+\))?\s*:\s*/gi, "")
     .replace(/\b(?:IMG|VID|PXL|DSC|Photo|Screenshot)[-_ ]?\d{4,}\b/gi, "the referenced view")
@@ -214,6 +222,7 @@ function cleanImageReviewProse(value) {
     .replace(/\b\d{7,}\b/g, "")
     .replace(/\s{2,}/g, " ")
     .trim();
+  return cleanProfileImageReviewText(cleaned);
 }
 
 function recoveredBatchImageScopeLabel(batchSet = {}) {
@@ -600,7 +609,12 @@ function normalizeImageReviewResult(raw) {
     finding: cleanImageReviewProse(finding.finding || ""),
     region: cleanImageReviewProse(finding.region || ""),
   }));
-  return cleaned;
+  return cleanupProfileImageReviewResult(cleaned, {
+    sections: [
+      ...HEAD_TO_TOE_IMAGE_REVIEW_CONFIG.sections,
+      ...PELVIC_GENITAL_IMAGE_REVIEW_CONFIG.sections,
+    ],
+  });
 }
 
 function remapBatchLocalImageIds(result, reviewedImages = []) {
@@ -2458,7 +2472,7 @@ function imageCalloutNarrationParagraphs(result, sectionKey, transientImages = [
       return `${index + 1}. ${label}. ${qualifier}${finding.finding || ""}`.trim();
     }).filter(Boolean);
     if (callouts.length) {
-      paragraphs.push(cleanImageReviewProse(naturalizeSpokenDates(`Visual callouts for ${imageContext}. ${callouts.join(" ")}`)));
+      paragraphs.push(cleanImageReviewProse(naturalizeSpokenDates(`${imageContext}. ${callouts.join(" ")}`)));
     }
   }
   return paragraphs;

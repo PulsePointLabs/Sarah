@@ -9,6 +9,11 @@ import { analyzeLocalVisionAdaptive } from '../services/localVision/adaptiveAnal
 import { analyzeLocalVisionForward } from '../services/localVision/forwardAnalyzer.js';
 import { askLocalVisionVideo } from '../services/localVision/videoQa.js';
 import { deleteJobPayload, loadJobPayload, saveJobPayload } from '../services/jobPayloadStore.js';
+import {
+  cleanProfileImageReviewText,
+  cleanupProfileImageReviewResult,
+  dedupeProfileImageReviewItems,
+} from '../../src/lib/profileImageReviewCleanup.js';
 
 export const jobsRouter = express.Router();
 export const largeJobsRouter = express.Router();
@@ -196,7 +201,7 @@ function parseAIResult(value) {
 }
 
 function cleanFallbackReviewText(value = '') {
-  return String(value || '')
+  return cleanProfileImageReviewText(String(value || '')
     .replace(/\bThis batch does not include[^.]*\.?\s*/gi, '')
     .replace(/\bThis image set does not include[^.]*\.?\s*/gi, '')
     .replace(/\bNo (?:whole-body|full-body|torso|standing|posterior|anterior|lateral|upper limb|lower limb|foot|feet)[^.]*?(?:in this batch|in this image set|were included|were provided)[^.]*\.?\s*/gi, '')
@@ -206,7 +211,7 @@ function cleanFallbackReviewText(value = '') {
     .replace(/\bdeferred to (?:another|subsequent|later) batch[^.]*\.?\s*/gi, '')
     .replace(/\b(?:bladder neck|prostate|internal sphincters?|urethral course|pelvic floor musculature|internal rectal structures?|internal hemorrhoids?)[^.]*?(?:not visible|not visualized|not assessable|not assessed)[^.]*\.?\s*/gi, '')
     .replace(/\s{2,}/g, ' ')
-    .trim();
+    .trim());
 }
 
 function isLowValueFallbackReviewText(value = '') {
@@ -223,18 +228,10 @@ function isLowValueFallbackReviewText(value = '') {
 }
 
 function uniqueFallbackReviewItems(items = [], limit = 14) {
-  const seen = new Set();
-  const out = [];
-  for (const item of items) {
-    if (isLowValueFallbackReviewText(item)) continue;
-    const text = cleanFallbackReviewText(item);
-    const key = text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 180);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push(text.length > 900 ? `${text.slice(0, 897).trim()}...` : text);
-    if (out.length >= limit) break;
-  }
-  return out;
+  return dedupeProfileImageReviewItems(
+    items.filter((item) => !isLowValueFallbackReviewText(item)).map(cleanFallbackReviewText),
+    { limit },
+  );
 }
 
 function fallbackAssembleProfileImageReview(payload = {}, batchResults = []) {
@@ -293,7 +290,7 @@ function fallbackAssembleProfileImageReview(payload = {}, batchResults = []) {
   for (const section of sections) {
     result[section.key] = uniqueFallbackReviewItems(result[section.key], /missing|optional|request|limit/i.test(section.key) ? 5 : 14);
   }
-  return result;
+  return cleanupProfileImageReviewResult(result, { sections });
 }
 
 registerJobHandler('profile_image_review_full', async (payload, context) => {
