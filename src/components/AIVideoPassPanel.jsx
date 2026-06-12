@@ -5095,23 +5095,23 @@ Return only the structured JSON matching the requested schema.`,
                       ))}
                     </div>
                     {card.events.length > 0 && (
-                      <div className="rounded-lg border border-primary/20 bg-primary/5 p-2">
-                        <div className="mb-1 flex items-center justify-between gap-2">
+                      <div className="min-w-0 rounded-lg border border-primary/20 bg-primary/5 p-2 sm:p-3">
+                        <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <span className="text-[10px] font-semibold uppercase tracking-wider text-primary">Draft Video Sync Events</span>
-                          <Button type="button" size="sm" variant="outline" className="h-7" onClick={() => acceptEvents(card)} disabled={accepted}>
+                          <Button type="button" size="sm" variant="outline" className="h-8 w-full justify-center sm:h-7 sm:w-auto" onClick={() => acceptEvents(card)} disabled={accepted}>
                             <Check className="mr-1 h-3.5 w-3.5" /> {accepted ? "Accepted" : "Save Findings + Events"}
                           </Button>
                         </div>
-                        <div className="space-y-1">
+                        <div className="space-y-2">
                           {card.events.map((event, index) => (
-                            <div key={`${event.time_s}-${index}`} className="flex items-start gap-2 rounded-md bg-background/60 px-2 py-1.5 text-xs">
-                              <span className="mt-1.5 shrink-0 font-mono font-bold text-primary">{fmtMmSs(event.time_s)}</span>
+                            <div key={`${event.time_s}-${index}`} className="min-w-0 rounded-md bg-background/60 px-2.5 py-2 text-xs sm:flex sm:items-start sm:gap-2">
+                              <span className="mb-1.5 block shrink-0 font-mono font-bold text-primary sm:mb-0 sm:mt-2">{fmtMmSs(event.time_s)}</span>
                               <textarea
                                 value={event.note || ""}
                                 onChange={(changeEvent) => updateCardEventNote(card.id, index, changeEvent.target.value)}
                                 disabled={accepted}
-                                rows={2}
-                                className="min-h-10 flex-1 resize-y rounded-md border border-border bg-background/80 px-2 py-1.5 leading-relaxed text-foreground/85 outline-none focus:border-primary/50 disabled:cursor-not-allowed disabled:opacity-70"
+                                rows={3}
+                                className="min-h-24 w-full min-w-0 resize-y rounded-md border border-border bg-background/80 px-3 py-2 leading-relaxed text-foreground/85 outline-none focus:border-primary/50 disabled:cursor-not-allowed disabled:opacity-70 sm:min-h-16 sm:flex-1"
                                 aria-label={`Edit draft event note ${index + 1}`}
                               />
                             </div>
@@ -5128,21 +5128,21 @@ Return only the structured JSON matching the requested schema.`,
             );
           })}
           {cards.some((card) => !isCardAccepted(card, session, acceptedIds, isExploration)) && (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/25 bg-primary/5 px-3 py-2">
-              <div>
+            <div className="flex flex-col gap-3 rounded-xl border border-primary/25 bg-primary/5 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
                 <p className="text-xs font-semibold uppercase tracking-wider text-primary">Batch Review Ready</p>
                 <p className="text-xs text-muted-foreground">
                   Saves all unaccepted {cards.some((card) => card.localVision) ? "local/Qwen or Sarah" : "Sarah"} video-pass finding cards and edited timeline events in this list.
                 </p>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
                 {isExploration && (
-                  <Button type="button" size="sm" variant="outline" onClick={reassessExplorationSequence} disabled={running || reassessing} className="h-8">
+                  <Button type="button" size="sm" variant="outline" onClick={reassessExplorationSequence} disabled={running || reassessing} className="h-9 w-full justify-center sm:h-8 sm:w-auto">
                     {reassessing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
                     Reassess Foley Sequence
                   </Button>
                 )}
-                <Button type="button" size="sm" onClick={acceptAllDraftCards} className="h-8">
+                <Button type="button" size="sm" onClick={acceptAllDraftCards} className="h-9 w-full justify-center sm:h-8 sm:w-auto">
                   <Check className="mr-2 h-3.5 w-3.5" /> Accept All Findings & Events
                 </Button>
               </div>
