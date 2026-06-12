@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Activity, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
+import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
 import {
   CartesianGrid,
   Legend,
@@ -206,7 +206,16 @@ function wait(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-async function getDirectH10Device() {
+async function getDirectH10Device({ preferSaved = false, silent = false } = {}) {
+  const grantedDevices = typeof navigator.bluetooth.getDevices === "function"
+    ? await navigator.bluetooth.getDevices().catch(() => [])
+    : [];
+  const pairedH10 = grantedDevices.find((device) => /polar\s+h10/i.test(device?.name || ""));
+  if (preferSaved && pairedH10) return pairedH10;
+  if (silent) {
+    throw new Error("No saved H10 Bluetooth permission is available for automatic reconnect.");
+  }
+
   try {
     return await navigator.bluetooth.requestDevice({
       filters: [{ namePrefix: "Polar H10" }],
@@ -216,10 +225,6 @@ async function getDirectH10Device() {
     if (/user cancelled|user canceled|cancelled|canceled/i.test(error?.message || "")) throw error;
   }
 
-  const grantedDevices = typeof navigator.bluetooth.getDevices === "function"
-    ? await navigator.bluetooth.getDevices().catch(() => [])
-    : [];
-  const pairedH10 = grantedDevices.find((device) => /polar\s+h10/i.test(device?.name || ""));
   if (pairedH10) return pairedH10;
   return navigator.bluetooth.requestDevice({
     acceptAllDevices: true,
@@ -741,6 +746,7 @@ export default function LiveCapture() {
     lastMessageAt: null,
     rrCount: 0,
   });
+  const [hrLossDialog, setHrLossDialog] = useState(null);
   const [captureMode, setCaptureMode] = useState(() => localStorage.getItem("pulsepoint.captureMode") || "full");
   const [telemetryNoticesEnabled, setTelemetryNoticesEnabled] = useState(() => localStorage.getItem("pulsepoint.telemetryNotices") !== "off");
   const [voiceWakeEnabled, setVoiceWakeEnabled] = useState(false);
@@ -785,6 +791,8 @@ export default function LiveCapture() {
   const directH10CharacteristicRef = useRef(null);
   const directH10NotificationHandlerRef = useRef(null);
   const directH10RrRef = useRef([]);
+  const directH10IntentionalDisconnectRef = useRef(false);
+  const directH10ReconnectAttemptRef = useRef(0);
 
   const appendTelemetryPoint = (nextHr = latestHrRef.current, nextEmg = latestEmgRef.current) => {
     if (!nextHr && !nextEmg) return;
@@ -848,6 +856,7 @@ export default function LiveCapture() {
   }, [hrSourceSettings]);
 
   const disconnectDirectH10 = useCallback(async ({ updateStatus = true } = {}) => {
+    directH10IntentionalDisconnectRef.current = true;
     const characteristic = directH10CharacteristicRef.current;
     const handler = directH10NotificationHandlerRef.current;
     if (characteristic && handler) {
@@ -886,9 +895,13 @@ export default function LiveCapture() {
         rrCount: 0,
       }));
     }
+    window.setTimeout(() => {
+      directH10IntentionalDisconnectRef.current = false;
+    }, 1500);
   }, []);
 
-  const connectDirectH10 = useCallback(async () => {
+  const connectDirectH10 = useCallback(async (options = {}) => {
+    const autoReconnect = options?.autoReconnect === true;
     if (hrSourceSettings.source !== "direct_h10") {
       setDirectH10Status((prev) => ({
         ...prev,
@@ -908,19 +921,30 @@ export default function LiveCapture() {
       ...prev,
       connecting: true,
       error: "",
-      message: "Opening the browser Bluetooth picker. Select the Polar H10, even if Windows already says paired.",
+      message: autoReconnect
+        ? "Trying to reconnect the saved H10 permission."
+        : "Opening the browser Bluetooth picker. Select the Polar H10, even if Windows already says paired.",
     }));
 
     try {
-      const devicePromise = getDirectH10Device();
+      const devicePromise = getDirectH10Device({ preferSaved: autoReconnect, silent: autoReconnect });
       await disconnectDirectH10({ updateStatus: false });
       const device = await devicePromise;
       directH10DeviceRef.current = device;
       const handleDisconnected = () => {
+        const intentionalDisconnect = directH10IntentionalDisconnectRef.current;
+        directH10IntentionalDisconnectRef.current = false;
         directH10CharacteristicRef.current = null;
         directH10NotificationHandlerRef.current = null;
         directH10DeviceRef.current = null;
         directH10RrRef.current = [];
+        if (!intentionalDisconnect) {
+          setHrLossDialog({
+            title: "H10 disconnected",
+            message: "The browser BLE connection dropped. Tap Reconnect H10 if it does not resume on its own.",
+            reconnecting: false,
+          });
+        }
         setDirectH10Status((prev) => ({
           ...prev,
           connected: false,
@@ -946,6 +970,8 @@ export default function LiveCapture() {
         const parsed = parseHeartRateMeasurement(event.target.value);
         if (!parsed.heartRate) return;
         const receivedAt = Date.now();
+        directH10ReconnectAttemptRef.current = 0;
+        setHrLossDialog(null);
         directH10RrRef.current = appendRollingRrIntervals(directH10RrRef.current, parsed.rrIntervalsMs);
         const hrv = computeHrvFromRr(directH10RrRef.current);
         const telemetry = {
@@ -1012,15 +1038,80 @@ export default function LiveCapture() {
         error: "",
       }));
     } catch (error) {
+      const message = friendlyDirectH10Error(error);
+      if (autoReconnect) {
+        setHrLossDialog({
+          title: "H10 needs a tap",
+          message,
+          reconnecting: false,
+        });
+      }
       setDirectH10Status((prev) => ({
         ...prev,
         connected: false,
         connecting: false,
         message: "Direct H10 not connected",
-        error: friendlyDirectH10Error(error),
+        error: message,
       }));
     }
   }, [disconnectDirectH10, hrSourceSettings.source]);
+
+  useEffect(() => {
+    if (hrSourceSettings.source !== "direct_h10") return undefined;
+    const timer = window.setInterval(() => {
+      const serverDirect = status?.hr?.directH10 || {};
+      const sourceStatus = status?.hr?.sourceStatus || {};
+      const lastMessageAt = directH10Status.lastMessageAt || serverDirect.lastMessageAt || sourceStatus.lastMessageAt;
+      const lastMs = Date.parse(lastMessageAt || "");
+      const connectedFlag = Boolean(directH10Status.connected || serverDirect.connected || sourceStatus.connected);
+      const signalLost = serverDirect.error && /signal lost|no hr packets/i.test(serverDirect.error);
+
+      if (signalLost) {
+        setHrLossDialog((prev) => prev || {
+          title: "H10 signal lost",
+          message: serverDirect.error,
+          reconnecting: false,
+        });
+      }
+
+      if (!connectedFlag || !Number.isFinite(lastMs)) return;
+      const ageMs = Date.now() - lastMs;
+      if (ageMs <= 9000) {
+        directH10ReconnectAttemptRef.current = 0;
+        return;
+      }
+
+      setHrLossDialog({
+        title: "H10 signal lost",
+        message: `No heart-rate packet has arrived for ${Math.round(ageMs / 1000)} seconds. PulsePoint will try the saved H10 once; tap reconnect if Chrome needs permission again.`,
+        reconnecting: directH10ReconnectAttemptRef.current < 2,
+      });
+      setDirectH10Status((prev) => ({
+        ...prev,
+        connected: false,
+        error: "Direct H10 signal lost - no HR packets received recently.",
+        message: "Trying to reconnect Direct H10.",
+      }));
+
+      if (directH10ReconnectAttemptRef.current < 2) {
+        directH10ReconnectAttemptRef.current += 1;
+        connectDirectH10({ autoReconnect: true }).catch(() => {
+          // Visible state is already updated by connectDirectH10.
+        });
+      }
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [
+    connectDirectH10,
+    directH10Status.connected,
+    directH10Status.lastMessageAt,
+    hrSourceSettings.source,
+    status?.hr?.directH10?.connected,
+    status?.hr?.directH10?.error,
+    status?.hr?.directH10?.lastMessageAt,
+    status?.hr?.sourceStatus?.connected,
+    status?.hr?.sourceStatus?.lastMessageAt,
+  ]);
 
   const forgetDirectH10 = useCallback(async () => {
     if (!navigator.bluetooth?.getDevices) {
@@ -2102,6 +2193,51 @@ export default function LiveCapture() {
 
   return (
     <div className={`${focusView ? "h-screen overflow-y-auto p-4" : "p-4 md:p-6"} space-y-4`}>
+      {hrLossDialog && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4">
+          <div
+            className="w-full max-w-md rounded-xl border border-destructive/40 bg-card p-4 shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="h10-loss-title"
+          >
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 rounded-full bg-destructive/15 p-2 text-destructive">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p id="h10-loss-title" className="text-base font-semibold text-foreground">{hrLossDialog.title}</p>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{hrLossDialog.message}</p>
+                {hrLossDialog.reconnecting && (
+                  <p className="mt-2 text-xs font-semibold uppercase tracking-wider text-primary">Trying automatic reconnect</p>
+                )}
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold text-muted-foreground hover:text-foreground"
+                onClick={() => setHrLossDialog(null)}
+              >
+                Dismiss
+              </button>
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground"
+                onClick={() => {
+                  directH10ReconnectAttemptRef.current = 0;
+                  setHrLossDialog(null);
+                  connectDirectH10();
+                }}
+              >
+                <RefreshCw className="h-4 w-4" />
+                Reconnect H10
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {!focusView && <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <PageHeader
           title="Live Capture"

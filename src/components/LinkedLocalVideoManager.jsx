@@ -143,7 +143,7 @@ export default function LinkedLocalVideoManager({
     }
   };
 
-  const applyDroppedPath = (path, file) => {
+  const applyDroppedPath = (path, file, allowFileOnly = true) => {
     const cleaned = cleanDroppedPath(path);
     if (cleaned) {
       setPathInput(cleaned);
@@ -151,7 +151,7 @@ export default function LinkedLocalVideoManager({
       setError("");
       return true;
     }
-    if (file?.name) {
+    if (allowFileOnly && file?.name) {
       setLabelInput((current) => current || file.name);
       setError("The browser accepted the video but did not expose its full Windows path. Try dropping copied path text, or paste the path from File Explorer / OBS.");
       return true;
@@ -159,7 +159,35 @@ export default function LinkedLocalVideoManager({
     return false;
   };
 
-  const handleDrop = (event) => {
+  const applyResolvedVideo = (meta, file) => {
+    if (!meta?.path) return false;
+    setPathInput(meta.path);
+    if (!labelInput.trim()) setLabelInput(meta.filename || file?.name || "");
+    setError("");
+    return true;
+  };
+
+  const resolveDroppedFile = async (file) => {
+    if (!file?.name) return false;
+    setBusy("resolve-drop");
+    setError("");
+    try {
+      const meta = await base44.integrations.Core.ResolveDroppedLocalVideo({
+        filename: file.name,
+        sizeBytes: file.size || 0,
+        modifiedAtMs: file.lastModified || 0,
+      });
+      return applyResolvedVideo(meta, file);
+    } catch (err) {
+      setLabelInput((current) => current || file.name);
+      setError(errorMessage(err, "Chrome hid the full Windows path and PulsePoint could not resolve that dropped video automatically. Use Browse or paste the full path."));
+      return true;
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const handleDrop = async (event) => {
     event.preventDefault();
     event.stopPropagation();
     setDragActive(false);
@@ -170,7 +198,8 @@ export default function LinkedLocalVideoManager({
     const item = [...(transfer.items || [])].find((entry) => entry.kind === "file");
     const file = item?.getAsFile?.() || transfer.files?.[0];
     const exposedPath = file?.path || file?.webkitRelativePath || "";
-    if (applyDroppedPath(exposedPath, file)) return;
+    if (applyDroppedPath(exposedPath, file, false)) return;
+    if (await resolveDroppedFile(file)) return;
     setError("Drop a local video file here, or paste its full path from File Explorer / OBS.");
   };
 

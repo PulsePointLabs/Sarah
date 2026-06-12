@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import WebSocket from 'ws';
 import { parse } from 'csv-parse/sync';
-import { bulkCreate, upsertEntity } from '../db.js';
+import { bulkCreate, getEntity, upsertEntity } from '../db.js';
 import { liveCaptureConfig, uploadDir } from '../config.js';
 import {
   HR_SOURCE_IDS,
@@ -48,6 +48,8 @@ let emgPollTimer = null;
 let lastEmgSignature = '';
 let pulsoidRecording = null;
 let directH10Recording = null;
+const HR_SOURCE_STALE_MS = 8000;
+const derivedHrState = new Map();
 
 const state = {
   startedAt: new Date().toISOString(),
@@ -158,6 +160,84 @@ function formatFilenameDate(date = new Date()) {
 
 function shouldUseTelemetrySource(source) {
   return state.hr.selectedSource === source;
+}
+
+function median(values = []) {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function enrichHrTelemetry(telemetry) {
+  const hr = cleanHr(telemetry?.heartRate || telemetry?.currentHr || telemetry?.hr);
+  if (hr == null) return telemetry;
+  const source = telemetry?.source || state.hr.selectedSource || 'unknown';
+  const now = Number(telemetry?.receivedAt) || Date.now();
+  const rows = (derivedHrState.get(source) || [])
+    .filter((row) => now - row.t <= 8 * 60 * 1000);
+  rows.push({ t: now, hr });
+  const trimmed = rows.slice(-240);
+  derivedHrState.set(source, trimmed);
+
+  const recent = trimmed.slice(-30).map((row) => row.hr);
+  const baselinePool = trimmed.length >= 20 ? trimmed.map((row) => row.hr) : recent;
+  const lowBand = [...baselinePool].sort((a, b) => a - b).slice(0, Math.max(5, Math.ceil(baselinePool.length * 0.35)));
+  const baselineHr = Math.round(median(lowBand) || hr);
+  const smoothedHr = Math.round(median(recent.slice(-5)) || hr);
+  const elevatedDelta = Math.max(0, smoothedHr - baselineHr);
+  const firstRecent = trimmed[Math.max(0, trimmed.length - 12)];
+  const slopeBpm30s = firstRecent && firstRecent.t !== now
+    ? ((smoothedHr - firstRecent.hr) / ((now - firstRecent.t) / 1000)) * 30
+    : 0;
+  const recentPeak = Math.max(...trimmed.slice(-45).map((row) => row.hr));
+  const dropFromPeak = Math.max(0, recentPeak - smoothedHr);
+  const phase = elevatedDelta >= 8 || slopeBpm30s >= 2
+    ? 'build'
+    : dropFromPeak >= 8 && elevatedDelta <= 10
+      ? 'recovery'
+      : 'baseline';
+  const buildConfidence = Math.round(Math.max(0, Math.min(100,
+    elevatedDelta * 7 + Math.max(0, slopeBpm30s) * 4 - (phase === 'recovery' ? dropFromPeak * 2 : 0)
+  )));
+
+  return {
+    ...telemetry,
+    currentHr: hr,
+    heartRate: hr,
+    hr,
+    smoothedHr,
+    hrSmoothed: smoothedHr,
+    baselineHr,
+    elevatedDelta,
+    phase,
+    buildConfidence,
+  };
+}
+
+function markSelectedHrStaleIfNeeded() {
+  const source = state.hr.selectedSource;
+  if (source === HR_SOURCE_IDS.DIRECT_H10) {
+    const last = Date.parse(state.hr.directH10.lastMessageAt || '');
+    if (state.hr.directH10.connected && (!Number.isFinite(last) || Date.now() - last > HR_SOURCE_STALE_MS)) {
+      state.hr.directH10 = {
+        ...state.hr.directH10,
+        connected: false,
+        error: 'Direct H10 signal lost - no HR packets received recently.',
+      };
+      state.hr.latestTelemetry = state.hr.latestTelemetry ? {
+        ...state.hr.latestTelemetry,
+        quality: {
+          ...(state.hr.latestTelemetry.quality || {}),
+          stale: true,
+          ageMs: Number.isFinite(last) ? Date.now() - last : null,
+        },
+      } : null;
+      refreshHrSourceStatus('Direct H10 signal lost - reconnect from Live Capture');
+      return true;
+    }
+  }
+  return false;
 }
 
 function sanitizeHrSourceSettings(body = {}) {
@@ -283,10 +363,10 @@ async function appendPulsoidTelemetryRow(telemetry) {
     csvEscape(timeOffsetMs),
     csvEscape((timeOffsetMs / 1000).toFixed(3)),
     csvEscape(hr),
-    csvEscape(hr),
-    '',
-    '',
-    '',
+    csvEscape(cleanNumber(telemetry.smoothedHr ?? telemetry.hrSmoothed ?? hr)),
+    csvEscape(cleanNumber(telemetry.baselineHr)),
+    csvEscape(cleanNumber(telemetry.elevatedDelta)),
+    csvEscape(telemetry.phase || ''),
     csvEscape(note),
     csvEscape(HR_SOURCE_IDS.PULSOID),
     csvEscape(telemetry.measuredAt || ''),
@@ -388,10 +468,10 @@ async function appendDirectH10TelemetryRow(telemetry) {
     csvEscape(timeOffsetMs),
     csvEscape((timeOffsetMs / 1000).toFixed(3)),
     csvEscape(hr),
-    csvEscape(hr),
-    '',
-    '',
-    '',
+    csvEscape(cleanNumber(telemetry.smoothedHr ?? telemetry.hrSmoothed ?? hr)),
+    csvEscape(cleanNumber(telemetry.baselineHr)),
+    csvEscape(cleanNumber(telemetry.elevatedDelta)),
+    csvEscape(telemetry.phase || ''),
     csvEscape(note),
     csvEscape(HR_SOURCE_IDS.DIRECT_H10),
     csvEscape(telemetry.measuredAt || ''),
@@ -656,7 +736,8 @@ async function finalizeLiveSession(recording) {
       capture_digest: buildCaptureDigest({ hrRows: hrImport.rawRows, hrImport, emgUpload, recording }),
     };
     Object.keys(update).forEach((key) => update[key] === undefined && delete update[key]);
-    upsertEntity('Session', sessionId, update);
+    const targetEntity = getEntity('BodyExploration', sessionId) ? 'BodyExploration' : 'Session';
+    upsertEntity(targetEntity, sessionId, update);
     state.session = {
       ...state.session,
       active: false,
@@ -752,9 +833,13 @@ function closePulsoidConnection({ quiet = false } = {}) {
 }
 
 function applySelectedHrTelemetry(telemetry) {
-  state.hr.latestTelemetry = telemetry;
+  const enriched = telemetry?.buildConfidence != null && telemetry?.baselineHr != null
+    ? telemetry
+    : enrichHrTelemetry(telemetry);
+  state.hr.latestTelemetry = enriched;
   state.hr.lastMessageAt = new Date().toISOString();
-  broadcast('hr_telemetry', telemetry);
+  broadcast('hr_telemetry', enriched);
+  return enriched;
 }
 
 function handlePulsoidTelemetry(telemetry) {
@@ -1155,11 +1240,12 @@ liveCaptureRouter.post('/hr-source', (req, res) => {
 });
 
 liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
-  const telemetry = normalizeDirectH10Telemetry(req.body || {});
+  let telemetry = normalizeDirectH10Telemetry(req.body || {});
   if (!telemetry) {
     res.status(400).json({ error: 'Direct H10 telemetry did not include a valid heart rate.' });
     return;
   }
+  telemetry = enrichHrTelemetry(telemetry);
   const receivedIso = new Date(telemetry.receivedAt || Date.now()).toISOString();
   state.hr.directH10 = {
     ...state.hr.directH10,
@@ -1171,7 +1257,7 @@ liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
   };
   if (shouldUseTelemetrySource(HR_SOURCE_IDS.DIRECT_H10)) {
     refreshHrSourceStatus('Direct H10 HR + RR live');
-    applySelectedHrTelemetry(telemetry);
+    telemetry = applySelectedHrTelemetry(telemetry);
     appendDirectH10TelemetryRow(telemetry).catch((error) => {
       state.hr.directH10.error = `Direct H10 CSV write failed: ${error.message || error}`;
       refreshHrSourceStatus();
@@ -1218,6 +1304,7 @@ liveCaptureRouter.post('/emg/calibration-command', async (req, res) => {
 });
 
 liveCaptureRouter.get('/status', (_req, res) => {
+  markSelectedHrStaleIfNeeded();
   res.json(state);
 });
 
@@ -1230,6 +1317,9 @@ liveCaptureRouter.get('/stream', (req, res) => {
   clients.add(res);
   sendSse(res, 'status', state);
   const keepAlive = setInterval(() => {
+    if (markSelectedHrStaleIfNeeded()) {
+      sendSse(res, 'status', state);
+    }
     res.write(': keepalive\n\n');
   }, 25000);
 

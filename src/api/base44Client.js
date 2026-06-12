@@ -126,10 +126,10 @@ export const base44 = {
         form.append('frameCount', String(frameCount));
         return request('/files/video-clip-preview', { method: 'POST', body: form });
       },
-      ProcessLocalVideoClip: async ({ path, startSeconds = 0, endSeconds = 8, label = '', frameCount = 12 }) => request('/files/local-video/clip-preview', {
+      ProcessLocalVideoClip: async ({ path, startSeconds = 0, endSeconds = 8, label = '', frameCount = 12, maxDurationSeconds }) => request('/files/local-video/clip-preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path, startSeconds, endSeconds, label, frameCount }),
+        body: JSON.stringify({ path, startSeconds, endSeconds, label, frameCount, maxDurationSeconds }),
       }),
       ProcessLocalVideoAudio: async ({ path, startSeconds = 0, windowSeconds = 300, maxSnippets = 10, transcribe = true }) => request('/files/local-video/audio-pass', {
         method: 'POST',
@@ -179,6 +179,11 @@ export const base44 = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path }),
+      }),
+      ResolveDroppedLocalVideo: async ({ filename, sizeBytes = 0, modifiedAtMs = 0 }) => request('/files/local-video/resolve-drop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, sizeBytes, modifiedAtMs }),
       }),
       BrowseLocalVideo: async () => request('/files/local-video/browse', { method: 'POST' }),
       localVideoStreamUrl: (path) => serverUrl(`/api/files/local-video/stream?path=${encodeURIComponent(path)}`),

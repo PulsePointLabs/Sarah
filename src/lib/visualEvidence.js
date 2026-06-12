@@ -318,6 +318,108 @@ export function buildSessionVideoPassDigest(session, { limit = 14, findingsPerCa
   return lines.length ? `Sarah video-pass findings applied to this session:\n${lines.join("\n")}` : "";
 }
 
+const LOWER_BODY_CLIP_SOURCE_RE = /(?:^|[^a-z0-9])(feet|foot|toe|toes|heel|heels|sole|soles|lower[-_\s]?body|lower[-_\s]?cam|legs?)(?:$|[^a-z0-9])/i;
+
+function clipSourceLooksLowerBody(clip) {
+  const text = [
+    clip?.source_video_label,
+    clip?.sourceVideoLabel,
+    clip?.filename,
+    clip?.url,
+    clip?.clip_url,
+    clip?.file_url,
+  ].filter(Boolean).join(" ").toLowerCase();
+  return LOWER_BODY_CLIP_SOURCE_RE.test(text);
+}
+
+function cameraAngleRank(cameraAngle) {
+  const angle = String(cameraAngle || "").toLowerCase();
+  if (angle === "composite" || angle === "main" || angle === "primary") return 0;
+  if (angle === "lower_body" || angle === "feet" || angle === "foot") return 2;
+  return 1;
+}
+
+function normalizeKeyVideoClip(clip, sourceLabel = "", index = 0) {
+  if (!clip) return null;
+  const start = Number(clip.startSeconds ?? clip.start_s);
+  const end = Number(clip.endSeconds ?? clip.end_s);
+  const sessionTime = Number(clip.session_time_s ?? clip.time_s);
+  const url = clip.url || clip.clip_url || clip.file_url || "";
+  const rawCameraAngle = clip.camera_angle || "";
+  const cameraAngle = rawCameraAngle === "primary" && clipSourceLooksLowerBody(clip)
+    ? "lower_body"
+    : rawCameraAngle;
+  return {
+    id: clip.id || `${sourceLabel || "key-clip"}-${index}`,
+    label: cleanText(clip.label || "Saved key video moment", 160),
+    reason: cleanText(clip.reason || "", 500),
+    session_time_s: Number.isFinite(sessionTime) ? sessionTime : null,
+    camera_angle: cameraAngle,
+    source_video_label: clip.source_video_label || clip.sourceVideoLabel || "",
+    source_video_fingerprint: clip.source_video_fingerprint || clip.sourceVideoFingerprint || "",
+    timeline_offset_s: Number(clip.timeline_offset_s || 0),
+    url,
+    clip_url: clip.clip_url || url,
+    file_url: clip.file_url || url,
+    filename: clip.filename || "",
+    startSeconds: Number.isFinite(start) ? start : null,
+    endSeconds: Number.isFinite(end) ? end : null,
+    durationSeconds: Number(clip.durationSeconds || clip.duration_s || (Number.isFinite(start) && Number.isFinite(end) ? end - start : 0)) || null,
+    motion_summary: clip.motion_summary || clip.motionSummary || null,
+    frames: Array.isArray(clip.frames) ? clip.frames : [],
+    source_panel: sourceLabel,
+  };
+}
+
+export function normalizeSessionKeyVideoClips(sessionOrClips) {
+  const rawClips = Array.isArray(sessionOrClips)
+    ? sessionOrClips
+    : [
+      ...(sessionOrClips?.ai_analysis?._meta?.key_video_clips || []),
+      ...(sessionOrClips?.ai_session_deep_dive?._meta?.key_video_clips || []),
+      ...(sessionOrClips?.ai_cascade?._meta?.key_video_clips || []),
+    ];
+  const seen = new Set();
+  return rawClips
+    .map((clip, index) => normalizeKeyVideoClip(clip, clip?.source_panel || "", index))
+    .filter((clip) => clip && (clip.url || clip.frames.length || clip.label))
+    .filter((clip) => {
+      const key = [
+        clip.url || clip.filename || clip.id,
+        clip.session_time_s ?? "",
+        clip.camera_angle || "",
+        clip.label.toLowerCase(),
+      ].join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => {
+      const at = a.session_time_s ?? Number.POSITIVE_INFINITY;
+      const bt = b.session_time_s ?? Number.POSITIVE_INFINITY;
+      if (at !== bt) return at - bt;
+      const ar = cameraAngleRank(a.camera_angle);
+      const br = cameraAngleRank(b.camera_angle);
+      if (ar !== br) return ar - br;
+      return String(a.label).localeCompare(String(b.label));
+    });
+}
+
+export function buildSessionKeyVideoClipDigest(session, { limit = 12 } = {}) {
+  const clips = normalizeSessionKeyVideoClips(session).slice(0, limit);
+  if (!clips.length) return "";
+  const lines = clips.map((clip) => {
+    const sessionTime = clip.session_time_s != null ? `session moment ${formatTimePhrase(clip.session_time_s)}` : "session moment not specified";
+    const source = [clip.source_video_label, clip.camera_angle].filter(Boolean).join(", ");
+    const range = clip.startSeconds != null && clip.endSeconds != null
+      ? `source clip ${formatTimePhrase(clip.startSeconds)} to ${formatTimePhrase(clip.endSeconds)}`
+      : "source clip range not specified";
+    const frames = clip.frames.length ? `${clip.frames.length} sampled frames available for direct visual Q&A` : "playable clip available; sampled frames may require regenerating the analysis";
+    return `- [${clip.label}; ${sessionTime}; ${source || "linked local video"}; ${range}] ${clip.reason || "Saved as a key session moment."} ${frames}.`;
+  });
+  return `Saved key video clips for this session:\n${lines.join("\n")}`;
+}
+
 export function buildBodyExplorationVideoPassDigest(exploration, { limit = 28, findingsPerCard = 4, eventsPerCard = 3 } = {}) {
   const entries = normalizeBodyExplorationVideoPassFindings(exploration).slice(0, limit);
   if (!entries.length) return cleanText(exploration?.ai_body_exploration?._video_pass_digest || "", 6000);

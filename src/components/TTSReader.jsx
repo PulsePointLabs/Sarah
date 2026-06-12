@@ -42,10 +42,10 @@ const ttsExportStorageKey = (sessionId, title = "") =>
 const ttsDownloadRecordKey = (sessionId, title = "") =>
   `pulsepoint.ttsDownload.${String(`${sessionId || "global"}-${title || "analysis"}`).replace(/[^a-z0-9]+/gi, "_").slice(0, 120)}`;
 const TTS_AUTO_SCROLL_STORAGE_KEY = "pulsepoint.tts.autoScroll";
-const TTS_EXPORT_RENDER_VERSION = "tts_export_silence_trim_v1";
+const TTS_EXPORT_RENDER_VERSION = "tts_export_leading_trim_v2";
 
 function isCurrentTtsExportRecord(entry) {
-  return entry?.render_version === TTS_EXPORT_RENDER_VERSION || entry?.silence_trim?.enabled === true;
+  return entry?.render_version === TTS_EXPORT_RENDER_VERSION;
 }
 
 function loadTtsAutoScrollPreference() {
@@ -1182,6 +1182,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             return;
           }
           if (job.status === "complete" && job.result?.file_url) {
+            if (!isCurrentTtsExportRecord(job.result)) {
+              clearSavedExportJob();
+              return;
+            }
             setCompletedRender({
               ...job.result,
               displayTitle: saved.displayTitle || job.meta?.title || getDownloadDisplayTitle(),
@@ -1204,6 +1208,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         });
         const completedJob = (completed?.jobs || []).find((job) => (
           job?.result?.file_url &&
+          isCurrentTtsExportRecord(job.result) &&
           (!sourceGeneratedAt || !job?.meta?.sourceGeneratedAt || job.meta.sourceGeneratedAt === sourceGeneratedAt)
         ));
         if (!cancelled && completedJob?.result?.file_url) {

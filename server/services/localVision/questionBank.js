@@ -7,8 +7,8 @@ export const LOCAL_VISION_QUESTIONS = [
     category: 'object',
     domain: 'foley',
     requiredFrameEvidence: true,
-    prompt: 'Is a Foley catheter visibly present? Answer only from visible frame evidence. Use uncertain if the catheter is partially obscured or cannot be distinguished from other tubing/tools.',
-    hallucinationWarning: 'Do not infer a catheter from procedure notes alone.',
+    prompt: 'Is the actual Foley catheter shaft or tip visibly present? Answer only from visible frame evidence. Use uncertain if the catheter is partially obscured or cannot be distinguished from other tubing/tools. Do not count a blue lubricant bottle, blue cap, tray-side blue object, detached tubing, or drainage bag/tubing away from the meatus as the catheter shaft/tip.',
+    hallucinationWarning: 'Do not infer a catheter from procedure notes alone, and do not identify tray-side blue lubricant/prep material as a blue-tipped Foley.',
   },
   {
     id: 'foley_tubing_visible',
@@ -16,8 +16,8 @@ export const LOCAL_VISION_QUESTIONS = [
     category: 'object',
     domain: 'foley',
     requiredFrameEvidence: true,
-    prompt: 'Is Foley/drainage tubing visibly present? Answer only from visible tubing evidence.',
-    hallucinationWarning: 'Tubing visibility does not imply insertion, advancement, securement, or urine return.',
+    prompt: 'Is Foley/drainage tubing visibly present? Answer only from visible tubing evidence that is actually tubing, not a bottle/cap/object on the tray. Tubing away from the meatus is equipment/field evidence only; it does not prove insertion.',
+    hallucinationWarning: 'Tubing visibility does not imply insertion, advancement, securement, or urine return. Do not identify a blue lubricant bottle or tray-side blue object as tubing.',
   },
   {
     id: 'statlock_visible',
@@ -61,8 +61,8 @@ export const LOCAL_VISION_QUESTIONS = [
     category: 'action',
     domain: 'foley',
     requiredFrameEvidence: true,
-    prompt: 'Is a catheter/tool tip visibly at or entering the meatus? Use uncertain if the meatus or tip is blocked.',
-    hallucinationWarning: 'Do not infer tip position from tubing elsewhere in the frame.',
+    prompt: 'Is a catheter/tool tip visibly at, touching, aligned with, or entering the meatus? Use uncertain if the meatus or tip is blocked. The relevant evidence must be at the meatus, not tubing elsewhere and not a tray-side object. If the tip is only approaching but not at the meatus, answer uncertain and explain approach.',
+    hallucinationWarning: 'Do not infer tip position from tubing elsewhere in the frame, procedure timing, or a blue lubricant/prep object on the tray.',
   },
   {
     id: 'visible_advancement_motion',
@@ -70,7 +70,7 @@ export const LOCAL_VISION_QUESTIONS = [
     category: 'action',
     domain: 'foley',
     requiredFrameEvidence: true,
-    prompt: 'Across the sampled frames, is there visible catheter/tool advancement motion? Advancement requires visible tip movement, tool motion toward/into the meatus, or clear positional change across frames.',
+    prompt: 'Across the sampled frames, is there visible catheter/tool advancement through the meatus? Advancement requires visible tip or shaft movement entering/passing through the meatus across frames. Tool motion merely toward the meatus is approach, not advancement.',
     hallucinationWarning: 'Do not infer advancement from tubing presence alone.',
   },
   {

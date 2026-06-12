@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
-import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, RefreshCw, History, Image as ImageIcon, Upload, X } from "lucide-react";
+import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, RefreshCw, History, Film, Image as ImageIcon, Upload, X } from "lucide-react";
 import TTSReader from "../components/TTSReader";
 import AIOutputReader from "../components/AIOutputReader";
 import { normalizeJournalEntry } from "@/lib/journalEntry";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
+import { loadLatestProfilerAnalysis, loadUserProfileWithProfilerResults, mergeProfilerResultsIntoProfile } from "@/lib/profileContext";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionContextFactorLabels } from "@/lib/sessionContext";
 import { getManualStimulationPauseResumeEvents, getMotionEvidenceSummary, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
@@ -79,6 +80,15 @@ PROFILE IMAGE VISIBLE-FINDINGS-FIRST RULE:
 - Do not include process narration about batches, final synthesis, recovered output, paid requests, cloud requests, image counts, or review mechanics in the user-facing review unless it is essential.
 `;
 
+const PROFILE_VIDEO_FRAME_EVIDENCE_RULE = `
+PROFILE VIDEO FRAME EVIDENCE RULE:
+- Uploaded videos are represented to Sarah as sampled still frames with source-video timing metadata.
+- Treat same-video sampled frames as sequence evidence for visible posture change, gait phase, device/contact position changes, or ruler/measurement alignment only when the sampled frames show it.
+- Do not claim full continuous video review, exact timing between unsampled moments, insertion depth, force, pain, intent, or completed device/procedure steps unless the sampled frames and user note directly support it.
+- For gait or movement, describe visible mechanics cautiously: stance, stride phase, weight shift, limb alignment, foot placement, balance, and asymmetry visible across frames.
+- For ruler/measurement videos, reconcile only visible ruler alignment and scale relationship. Do not invent exact measurements from unclear or oblique frames.
+`;
+
 const PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE = `
 PROFILE IMAGE INSIGHT-EFFICIENCY RULE:
 Core goal: maximize insight per token, not words per report. Sarah should stay warm, clinical, evidence-based, and anatomically useful, but shorter, less repetitive, and more confidence-calibrated.
@@ -146,6 +156,58 @@ CUMULATIVE PROFILE REVIEW SCOPE:
 - Good scope wording: "This cumulative review integrates saved profile-reference images, prior visual findings, entered measurements, and the directly rechecked views from this run."
 - If exact image counts are useful, mention them only as evidence-method detail, not as the scope of the whole analysis.
 `;
+
+const PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE = `
+LONGITUDINAL EVIDENCE / CREDIT DISCIPLINE RULE - HIGHEST PRIORITY:
+- PulsePoint is building a longitudinal anatomical record. Do not rediscover stable anatomy during every review.
+- Use the established evidence records below as memory. Treat directly attached images as a change-detection pass against that baseline.
+- Step 1: identify which anatomical regions are actually visible in the current images.
+- Step 2: compare visible regions against established evidence records.
+- Step 3: spend detailed analysis only on new anatomy, changed anatomy, suspected pathology, contradicted evidence, substantially better image quality, meaningful longitudinal progression, or a user-requested detailed re-review.
+- If stable anatomy is unchanged, summarize it briefly. Good: "Previously established genital and perineal baseline remains visually consistent; no significant change detected."
+- Do not spend meaningful output budget repeatedly proving that the perineal raphe, foreskin, glans, scrotum, anal baseline, or flaccid genital baseline still exists once established.
+- High-priority changes: new or changing scars, new lesions, mole changes, edema, bruising, surgical changes, skin changes, weight/body-composition progression, respiratory pattern changes, and postural changes.
+- Medium-priority changes: muscle development, symmetry, pelvic alignment, stance, limb/foot morphology, and posture profile.
+- Low-priority repeats: normal raphe visibility, unchanged foreskin coverage, unchanged glans/scrotal appearance, unchanged anal verge, unchanged buttock/perineal baseline.
+- Visual callouts should represent the best evidence ever obtained or the newest image showing meaningful change. Do not create a new callout only because another identical view exists.
+- Prefer evidence quality over recency. New images should be promoted to callouts when they improve coverage, clarify uncertainty, contradict baseline, or show change.
+- If no meaningful change is visible, the final report should be shorter, more comparative, and less descriptive than the original baseline-building report.
+- Each new or updated evidence finding should preserve confidence, first observed date, last confirmed date, source images, and evidence strength when possible.
+`;
+
+const PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE = `
+ANATOMICAL LEFT / RIGHT ORIENTATION RULE - HIGH PRIORITY:
+- Use anatomical left/right, meaning the subject's own left and right, not viewer-left/viewer-right.
+- For anterior or front-facing photos where the person is facing the camera, the image's screen-left side is the subject's anatomical right, and the image's screen-right side is the subject's anatomical left.
+- For posterior or back-facing photos where the person's back faces the camera, screen-left is the subject's anatomical left, and screen-right is the subject's anatomical right.
+- For true lateral views, label the visible side only when the side is clear from the image, user note, or saved context. Otherwise say lateral view without assigning left or right.
+- For mirror/reflection images, rotated images, close crops, or unclear orientation, do not guess anatomical side. Use "screen-left", "screen-right", "one side", or "the opposite side" and mark side assignment uncertain.
+- User image notes such as "facing camera", "right side scar", "left lateral", or "posterior view" are orientation context and should guide anatomical side labeling when consistent with the visible image.
+- Do not convert viewer-side observations into anatomical left/right unless the view orientation is clear. If there is any doubt, preserve uncertainty rather than assigning the wrong side.
+`;
+
+const EVIDENCE_STRENGTH_ORDER = ["provisional", "baseline", "established", "strongly_established"];
+const STRONGLY_ESTABLISHED_EVIDENCE_KEYS = new Set([
+  "perineal_raphe",
+  "foreskin_mobility",
+  "flaccid_genital_baseline",
+  "anal_baseline",
+  "scrotal_baseline",
+  "glans_baseline",
+  "meatal_baseline",
+]);
+const ESTABLISHED_EVIDENCE_KEYS = new Set([
+  "right_inguinal_scar",
+  "abdominal_mole",
+  "left_abdominal_scar",
+]);
+const BASELINE_EVIDENCE_KEYS = new Set([
+  "shoulder_alignment",
+  "posture_profile",
+  "foot_morphology",
+  "central_adiposity",
+  "skin_papules",
+]);
 
 function chunkArray(items = [], size = 5) {
   const chunks = [];
@@ -267,7 +329,6 @@ function sanitizeRecoveredBatchResult(value, batchSet = {}) {
     Object.entries(value).map(([key, item]) => [key, sanitizeRecoveredBatchResult(item, batchSet)]),
   );
 }
-
 function isCloseUpPelvicImageText(value = "") {
   const text = String(value || "").toLowerCase();
   const closePelvic = /(close-up|close up|pelvic|genital|glans|meatus|meatal|foreskin|shaft|scrot|perine|perianal|anal verge|pubic)/i.test(text);
@@ -609,6 +670,9 @@ function normalizeImageReviewResult(raw) {
     finding: cleanImageReviewProse(finding.finding || ""),
     region: cleanImageReviewProse(finding.region || ""),
   }));
+  cleaned.anatomical_evidence_records = Array.isArray(cleaned.anatomical_evidence_records)
+    ? mergeAnatomicalEvidenceRecords(cleaned.anatomical_evidence_records, [])
+    : [];
   return cleanupProfileImageReviewResult(cleaned, {
     sections: [
       ...HEAD_TO_TOE_IMAGE_REVIEW_CONFIG.sections,
@@ -1168,8 +1232,101 @@ function imageFileToPayload(file) {
   });
 }
 
+function dataUrlToFile(dataUrl, filename, mimeType = "image/jpeg") {
+  const binary = atob(stripDataUrl(dataUrl));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], filename, { type: mimeType });
+}
+
+function formatVideoTimestamp(seconds = 0) {
+  const safe = Math.max(0, Number(seconds) || 0);
+  const minutes = Math.floor(safe / 60);
+  const wholeSeconds = Math.floor(safe % 60);
+  const tenths = Math.round((safe - Math.floor(safe)) * 10);
+  return minutes ? `${minutes}:${String(wholeSeconds).padStart(2, "0")}${tenths ? `.${tenths}` : ""}` : `${wholeSeconds}${tenths ? `.${tenths}` : ""}s`;
+}
+
+function formatFileSize(bytes = 0) {
+  const value = Number(bytes) || 0;
+  if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
+}
+
+function seekProfilerVideo(video, time) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      video.removeEventListener("seeked", handleSeeked);
+      video.removeEventListener("error", handleError);
+    };
+    const handleSeeked = () => {
+      cleanup();
+      resolve();
+    };
+    const handleError = () => {
+      cleanup();
+      reject(new Error("Could not sample this video."));
+    };
+    video.addEventListener("seeked", handleSeeked);
+    video.addEventListener("error", handleError);
+    video.currentTime = time;
+  });
+}
+
+async function sampleProfilerVideoFrames({ file, label, maxFrames = PROFILER_VIDEO_SAMPLE_COUNT }) {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.preload = "auto";
+  video.muted = true;
+  video.playsInline = true;
+  const loaded = new Promise((resolve, reject) => {
+    video.onloadedmetadata = resolve;
+    video.onerror = () => reject(new Error("Could not load this video for sampling."));
+  });
+  video.src = url;
+  try {
+    await loaded;
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    const frameCount = Math.max(1, Math.min(maxFrames, PROFILER_VIDEO_SAMPLE_COUNT));
+    const width = Math.min(960, video.videoWidth || 960);
+    const height = Math.max(1, Math.round(width * ((video.videoHeight || 540) / (video.videoWidth || 960))));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    const frames = [];
+    for (let index = 0; index < frameCount; index += 1) {
+      const ratio = frameCount === 1 ? 0.5 : index / (frameCount - 1);
+      const time = duration > 0 ? Math.min(duration, Math.max(0, duration * ratio)) : 0;
+      await seekProfilerVideo(video, time);
+      ctx.drawImage(video, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.84);
+      const safeLabel = String(label || file.name || "profile-video").replace(/[^a-z0-9_-]+/gi, "-").slice(0, 52);
+      const filename = `${safeLabel}-frame-${String(index + 1).padStart(2, "0")}.jpg`;
+      frames.push({
+        dataUrl,
+        filename,
+        file: dataUrlToFile(dataUrl, filename, "image/jpeg"),
+        time,
+        duration,
+        frameIndex: index + 1,
+        frameCount,
+      });
+    }
+    return frames;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 const PROFILER_UPLOAD_QUEUE_LIMIT = 40;
 const PROFILER_IMAGE_SAVE_TIMEOUT_MS = 90000;
+const PROFILER_IMAGE_RELOAD_TIMEOUT_MS = 30000;
+const PROFILER_VIDEO_SAVE_TIMEOUT_MS = 180000;
+const PROFILER_VIDEO_SAMPLE_COUNT = 12;
+const PROFILER_VIDEO_UPLOAD_LIMIT = 4;
 
 function profilerUploadQueueKey(kind = "profile") {
   return `pulsepoint_profiler_upload_queue_${kind}`;
@@ -1238,6 +1395,30 @@ function withTimeout(promise, ms, message) {
     timeoutId = window.setTimeout(() => reject(new Error(message)), ms);
   });
   return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timeoutId));
+}
+
+async function fetchWithTimeout(url, ms, message) {
+  const controller = new AbortController();
+  let timeoutId;
+  try {
+    timeoutId = window.setTimeout(() => controller.abort(), ms);
+    const response = await fetch(url, { signal: controller.signal });
+    return response;
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error(message);
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+function readBlobAsDataUrl(blob, label = "image", timeoutMs = PROFILER_IMAGE_RELOAD_TIMEOUT_MS) {
+  return withTimeout(new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error(`Could not read ${label}.`));
+    reader.readAsDataURL(blob);
+  }), timeoutMs, `${label} did not finish decoding within ${Math.round(timeoutMs / 1000)} seconds.`);
 }
 
 function stripDataUrl(value) {
@@ -1344,16 +1525,20 @@ function collectSavedProfileImageAttachments(userProfile, { limit = 5, purpose =
 async function savedAttachmentToPayload(attachment) {
   const url = serverUrl(attachment.url);
   if (!url) throw new Error(`Saved image ${attachment.filename || ""} has no reusable URL.`);
-  const response = await fetch(url);
+  const label = attachment.filename || "saved image";
+  const response = await fetchWithTimeout(
+    url,
+    PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
+    `${label} did not finish loading within ${Math.round(PROFILER_IMAGE_RELOAD_TIMEOUT_MS / 1000)} seconds.`,
+  );
   if (!response.ok) throw new Error(`Could not load saved image ${attachment.filename || url}.`);
-  const blob = await response.blob();
+  const blob = await withTimeout(
+    response.blob(),
+    PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
+    `${label} did not finish reading within ${Math.round(PROFILER_IMAGE_RELOAD_TIMEOUT_MS / 1000)} seconds.`,
+  );
   const mediaType = normalizeMediaType(blob.type || attachment.media_type);
-  const dataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(reader.error || new Error(`Could not read saved image ${attachment.filename || url}.`));
-    reader.readAsDataURL(blob);
-  });
+  const dataUrl = await readBlobAsDataUrl(blob, label);
   return {
     id: attachment.id || `${attachment.filename}-${attachment.saved_at || ""}`,
     filename: attachment.filename || "saved-profile-image.jpg",
@@ -1557,6 +1742,15 @@ function buildImageReviewReferences(images = []) {
     preview_url: image.storagePath || image.file_url || image.url || "",
     media_type: image.media_type || "image/jpeg",
     upload_note: String(image.upload_note || "").trim(),
+    source_video: image.sourceVideo ? {
+      video_id: image.sourceVideo.videoId || image.sourceVideo.id || "",
+      frame_index: image.sourceVideo.frameIndex || null,
+      frame_count: image.sourceVideo.frameCount || null,
+      frame_time_seconds: image.sourceVideo.frameTimeSeconds ?? null,
+      duration_seconds: image.sourceVideo.durationSeconds ?? null,
+      purpose: image.sourceVideo.purpose || "",
+      note: image.sourceVideo.note || "",
+    } : null,
   }));
 }
 
@@ -1589,15 +1783,18 @@ async function prepareFreshImageForReview(image, index, { onProgress, total = 0 
         message: `Loading saved reference image ${index + 1} for Sarah...`,
       },
     });
-    const response = await fetch(serverUrl(storagePath));
+    const response = await fetchWithTimeout(
+      serverUrl(storagePath),
+      PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
+      `${image.filename || `Reference image ${index + 1}`} did not finish loading within ${Math.round(PROFILER_IMAGE_RELOAD_TIMEOUT_MS / 1000)} seconds.`,
+    );
     if (!response.ok) throw new Error(`Could not reload ${image.filename || `reference image ${index + 1}`}.`);
-    const blob = await response.blob();
-    data = stripDataUrl(await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ""));
-      reader.onerror = () => reject(reader.error || new Error(`Could not read ${image.filename || storagePath}.`));
-      reader.readAsDataURL(blob);
-    }));
+    const blob = await withTimeout(
+      response.blob(),
+      PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
+      `${image.filename || `Reference image ${index + 1}`} did not finish reading within ${Math.round(PROFILER_IMAGE_RELOAD_TIMEOUT_MS / 1000)} seconds.`,
+    );
+    data = stripDataUrl(await readBlobAsDataUrl(blob, image.filename || `reference image ${index + 1}`));
   }
   return {
     ...image,
@@ -1631,6 +1828,210 @@ function buildImageReviewMeta(images = [], sessions = [], previousMeta = null, e
   };
 }
 
+function buildImageReviewMetaWithEvidence({
+  images = [],
+  sessions = [],
+  previousResult = null,
+  currentResult = null,
+  evidenceCounts = {},
+  generatedAtOverride = null,
+  reviewedImageOverride = null,
+  countOverrides = {},
+} = {}) {
+  const meta = buildImageReviewMeta(
+    images,
+    sessions,
+    previousResult?._meta,
+    evidenceCounts,
+    generatedAtOverride,
+    reviewedImageOverride,
+    countOverrides,
+  );
+  return {
+    ...meta,
+    anatomical_evidence_records: buildAnatomicalEvidenceRecords({
+      previousResult,
+      currentResult,
+      generatedAt: meta.generated_at || meta.last_generated_at || generatedAtOverride || new Date().toISOString(),
+    }),
+  };
+}
+
+function compareEvidenceStrength(a = "provisional", b = "provisional") {
+  return EVIDENCE_STRENGTH_ORDER.indexOf(a) - EVIDENCE_STRENGTH_ORDER.indexOf(b);
+}
+
+function strongerEvidenceStrength(a = "provisional", b = "provisional") {
+  return compareEvidenceStrength(a, b) >= 0 ? a : b;
+}
+
+function normalizedEvidenceImageRefs(items = []) {
+  return [...new Set((Array.isArray(items) ? items : [])
+    .map((item) => {
+      if (!item) return "";
+      if (typeof item === "string") return item;
+      return item.image_id || item.display_label || item.filename || "";
+    })
+    .map((item) => String(item || "").trim())
+    .filter(Boolean))]
+    .slice(0, 12);
+}
+
+function inferAnatomicalEvidenceKey(value = "") {
+  const text = String(value || "").toLowerCase();
+  if (/\bperineal\s+raphe\b|\bmidline\s+raphe\b.*\bperine/i.test(text)) return "perineal_raphe";
+  if (/\bscrotal\s+raphe\b|\bscrotum\b|\btestes?\b|\bhemiscrotum\b/i.test(text)) return "scrotal_baseline";
+  if (/\bforeskin\b|\bprepuce\b|\bretract(?:ed|ion|able|s)?\b/i.test(text)) return "foreskin_mobility";
+  if (/\bglans\b/i.test(text)) return "glans_baseline";
+  if (/\bmeatus\b|\bmeatal\b/i.test(text)) return "meatal_baseline";
+  if (/\bflaccid\b.*\b(?:penis|shaft|genital)|\bpenis\b.*\bflaccid\b/i.test(text)) return "flaccid_genital_baseline";
+  if (/\banal\b|\bperianal\b|\banal verge\b|\banal opening\b/i.test(text)) return "anal_baseline";
+  if (/\bright\s+inguinal\s+scar\b|\bhernia\s+repair\s+scar\b/i.test(text)) return "right_inguinal_scar";
+  if (/\bleft\s+abdominal\s+scar\b/i.test(text)) return "left_abdominal_scar";
+  if (/\babdominal\s+(?:mole|nevus|naevus|pigmented)\b|\btorso\b.*\bpigmented\b/i.test(text)) return "abdominal_mole";
+  if (/\bshoulder\b.*\b(?:level|symmetr|asymmetr|alignment)\b/i.test(text)) return "shoulder_alignment";
+  if (/\bposture\b|\bkyphosis\b|\blordosis\b|\bpelvic\s+tilt\b|\bforward\s+head\b/i.test(text)) return "posture_profile";
+  if (/\bfoot\b|\bfeet\b|\btoe\b|\btoes\b|\barch\b|\bheel\b/i.test(text)) return "foot_morphology";
+  if (/\babdomen\b|\babdominal\b|\bpannus\b|\bcentral\s+adip/i.test(text)) return "central_adiposity";
+  if (/\bpapules?\b|\bfollicul|\bkeratosis\b|\berythematous\b.*\b(?:spots?|papules?)\b/i.test(text)) return "skin_papules";
+  return "";
+}
+
+function defaultEvidenceStrengthForKey(key, confidence = "", confirmations = 1) {
+  const highConfidence = /\bhigh\b/i.test(String(confidence || ""));
+  if (STRONGLY_ESTABLISHED_EVIDENCE_KEYS.has(key) && (highConfidence || confirmations >= 2)) return "strongly_established";
+  if (ESTABLISHED_EVIDENCE_KEYS.has(key) && (highConfidence || confirmations >= 2)) return "established";
+  if (BASELINE_EVIDENCE_KEYS.has(key)) return confirmations >= 2 || highConfidence ? "baseline" : "provisional";
+  if (highConfidence && confirmations >= 2) return "baseline";
+  return "provisional";
+}
+
+function normalizeAnatomicalEvidenceRecord(record = {}, fallbackDate = null) {
+  const text = [
+    record.key,
+    record.label,
+    record.region,
+    record.summary,
+    record.finding,
+  ].filter(Boolean).join(" ");
+  const key = String(record.key || inferAnatomicalEvidenceKey(text) || "").trim();
+  if (!key) return null;
+  const confidence = String(record.confidence || "moderate").trim();
+  const sourceImages = normalizedEvidenceImageRefs(record.source_images || record.sourceImages || []);
+  const confirmations = Math.max(1, Number(record.confirmations || record.confirmation_count || sourceImages.length || 1));
+  const evidenceStrength = EVIDENCE_STRENGTH_ORDER.includes(record.evidence_strength)
+    ? record.evidence_strength
+    : defaultEvidenceStrengthForKey(key, confidence, confirmations);
+  return {
+    key,
+    label: briefText(record.label || record.region || key.replace(/_/g, " "), 120),
+    region: briefText(record.region || record.section_key || "", 120),
+    summary: briefText(cleanImageReviewProse(record.summary || record.finding || record.description || ""), 360),
+    confidence,
+    first_observed_date: sessionDateKey(record.first_observed_date || record.firstObservedDate || fallbackDate) || fallbackDate || "",
+    last_confirmed_date: sessionDateKey(record.last_confirmed_date || record.lastConfirmedDate || fallbackDate) || fallbackDate || "",
+    source_images: sourceImages,
+    evidence_strength: evidenceStrength,
+    confirmations,
+  };
+}
+
+function evidenceRecordFromFinding(finding = {}, generatedAt = null) {
+  const combined = [
+    finding.section_key,
+    finding.region,
+    finding.label,
+    finding.finding,
+    finding.evidence_level,
+  ].filter(Boolean).join(" ");
+  const key = inferAnatomicalEvidenceKey(combined);
+  if (!key) return null;
+  return normalizeAnatomicalEvidenceRecord({
+    key,
+    label: finding.label || finding.region,
+    region: finding.region || finding.section_key,
+    summary: finding.finding,
+    confidence: finding.confidence || "moderate",
+    first_observed_date: generatedAt,
+    last_confirmed_date: generatedAt,
+    source_images: finding.image_id ? [finding.image_id] : [],
+    confirmations: 1,
+  }, generatedAt);
+}
+
+function mergeAnatomicalEvidenceRecords(existingRecords = [], newRecords = []) {
+  const byKey = new Map();
+  for (const raw of [...existingRecords, ...newRecords]) {
+    const record = normalizeAnatomicalEvidenceRecord(raw);
+    if (!record) continue;
+    const existing = byKey.get(record.key);
+    if (!existing) {
+      byKey.set(record.key, record);
+      continue;
+    }
+    const confirmations = Math.max(1, Number(existing.confirmations || 1) + Number(record.confirmations || 1));
+    const sourceImages = normalizedEvidenceImageRefs([...(existing.source_images || []), ...(record.source_images || [])]);
+    byKey.set(record.key, {
+      ...existing,
+      label: existing.label || record.label,
+      region: existing.region || record.region,
+      summary: record.summary || existing.summary,
+      confidence: /\bhigh\b/i.test(record.confidence || "") ? record.confidence : existing.confidence,
+      first_observed_date: [existing.first_observed_date, record.first_observed_date].filter(Boolean).sort()[0] || "",
+      last_confirmed_date: [existing.last_confirmed_date, record.last_confirmed_date].filter(Boolean).sort().slice(-1)[0] || "",
+      source_images: sourceImages,
+      evidence_strength: strongerEvidenceStrength(
+        defaultEvidenceStrengthForKey(record.key, record.confidence, confirmations),
+        strongerEvidenceStrength(existing.evidence_strength, record.evidence_strength),
+      ),
+      confirmations,
+    });
+  }
+  return [...byKey.values()]
+    .sort((a, b) => compareEvidenceStrength(b.evidence_strength, a.evidence_strength) || String(a.key).localeCompare(String(b.key)))
+    .slice(0, 80);
+}
+
+function buildAnatomicalEvidenceRecords({ previousResult = null, currentResult = null, generatedAt = null } = {}) {
+  const previousRecords = Array.isArray(previousResult?._meta?.anatomical_evidence_records)
+    ? previousResult._meta.anatomical_evidence_records
+    : [];
+  const previousGeneratedAt = previousResult?._meta?.generated_at || previousResult?._meta?.last_generated_at || generatedAt;
+  const previousDerivedRecords = previousRecords.length
+    ? []
+    : (Array.isArray(previousResult?.image_region_findings)
+      ? previousResult.image_region_findings.map((finding) => evidenceRecordFromFinding(finding, previousGeneratedAt)).filter(Boolean)
+      : []);
+  const currentRecords = Array.isArray(currentResult?.image_region_findings)
+    ? currentResult.image_region_findings.map((finding) => evidenceRecordFromFinding(finding, generatedAt)).filter(Boolean)
+    : [];
+  const modelRecords = Array.isArray(currentResult?.anatomical_evidence_records)
+    ? currentResult.anatomical_evidence_records
+    : [];
+  return mergeAnatomicalEvidenceRecords([...previousRecords, ...previousDerivedRecords], [...modelRecords, ...currentRecords]);
+}
+
+function existingAnatomicalEvidenceRecordsForPrompt(result = null) {
+  if (Array.isArray(result?._meta?.anatomical_evidence_records) && result._meta.anatomical_evidence_records.length) {
+    return result._meta.anatomical_evidence_records;
+  }
+  return buildAnatomicalEvidenceRecords({
+    currentResult: result,
+    generatedAt: result?._meta?.generated_at || result?._meta?.last_generated_at || null,
+  });
+}
+
+function formatIncrementalEvidenceRecordsForPrompt(records = [], { limit = 28 } = {}) {
+  const normalized = mergeAnatomicalEvidenceRecords(records, []);
+  if (!normalized.length) {
+    return "ESTABLISHED ANATOMICAL EVIDENCE RECORDS:\n- None stored yet. This review may establish baseline findings, but should still avoid repetition.";
+  }
+  const lines = normalized.slice(0, limit).map((record) => (
+    `- ${record.label || record.key}: ${record.evidence_strength}; confidence ${record.confidence}; first observed ${record.first_observed_date || "unknown"}; last confirmed ${record.last_confirmed_date || "unknown"}; source images ${record.source_images?.length ? record.source_images.join(", ") : "not linked"}${record.summary ? `. ${briefText(record.summary, 260)}` : ""}`
+  ));
+  return `ESTABLISHED ANATOMICAL EVIDENCE RECORDS:\n${lines.join("\n")}`;
+}
+
 function profileReviewResultSections(config) {
   return config.sections || [];
 }
@@ -1642,9 +2043,13 @@ function isHeadToToeReviewConfig(config = {}) {
 function imageReviewReferencePromptLines(images = []) {
   const refs = buildImageReviewReferences(images);
   if (!refs.length) return "- No directly attached images in this run.";
-  return refs.map((ref) => (
-    `- ${ref.image_id}: ${ref.display_label}${ref.upload_note ? `. User note: ${briefText(ref.upload_note, 240)}` : ""}. Infer the anatomical view from the image content; do not use uploaded filenames, camera-roll numbers, or storage IDs in the user-facing review.`
-  )).join("\n");
+  return refs.map((ref) => {
+    const video = ref.source_video;
+    const videoContext = video
+      ? ` Sampled video frame ${video.frame_index || "?"}/${video.frame_count || "?"}${video.frame_time_seconds != null ? ` at ${formatVideoTimestamp(video.frame_time_seconds)}` : ""}${video.duration_seconds ? ` of a ${formatVideoTimestamp(video.duration_seconds)} uploaded video` : " from an uploaded video"}. Use same-video frame sequences cautiously for visible motion, gait, measurement, or device-position changes; do not claim full continuous video review beyond sampled frames.`
+      : "";
+    return `- ${ref.image_id}: ${ref.display_label}${videoContext}${ref.upload_note ? `. User note: ${briefText(ref.upload_note, 240)}` : ""}. Infer the anatomical view from the image content; do not use uploaded filenames, camera-roll numbers, or storage IDs in the user-facing review.`;
+  }).join("\n");
 }
 
 function profileImageReviewResponseSchema(config) {
@@ -1714,6 +2119,25 @@ function profileImageReviewResponseSchema(config) {
           required: ["finding_id", "image_id", "region", "label", "finding", "confidence"],
         },
       },
+      anatomical_evidence_records: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            key: { type: "string" },
+            label: { type: "string" },
+            region: { type: "string" },
+            summary: { type: "string" },
+            confidence: { type: "string" },
+            first_observed_date: { type: "string" },
+            last_confirmed_date: { type: "string" },
+            source_images: { type: "array", items: { type: "string" } },
+            evidence_strength: { type: "string" },
+            confirmations: { type: "number" },
+          },
+          required: ["key", "label", "confidence", "evidence_strength"],
+        },
+      },
     },
     required: ["overview", ...profileReviewResultSections(config).filter((section) => section.required !== false).map((section) => section.key)],
   };
@@ -1772,6 +2196,20 @@ function compactImageReviewForSynthesis(result, index = 0) {
         limitations: compactList(finding.limitations, 3, 180),
         pin: finding.pin,
         box: finding.box,
+      }))
+      : [],
+    anatomical_evidence_records: Array.isArray(result?.anatomical_evidence_records)
+      ? mergeAnatomicalEvidenceRecords(result.anatomical_evidence_records, []).slice(0, 16).map((record) => ({
+        key: record.key,
+        label: briefText(record.label || "", 120),
+        region: briefText(record.region || "", 120),
+        summary: briefText(record.summary || "", 260),
+        confidence: record.confidence,
+        first_observed_date: record.first_observed_date,
+        last_confirmed_date: record.last_confirmed_date,
+        source_images: normalizedEvidenceImageRefs(record.source_images),
+        evidence_strength: record.evidence_strength,
+        confirmations: record.confirmations,
       }))
       : [],
   };
@@ -2583,52 +3021,56 @@ const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
   icon: <ImageIcon className="w-4 h-4" />,
   color: "hsl(var(--chart-4))",
   purpose: "Whole-body anatomical reference review in anatomical position, standing, prone, supine, seated, or supported positioning.",
-  helper: "Review saved whole-body/profile evidence from Q&A, sessions, body exploration, entered metrics, and prior Sarah media reviews. Fresh images are optional add-on evidence for posture, alignment, body habitus, skin/surface findings, body symmetry, and reference quality.",
-  emptyText: "Review Existing Evidence uses saved profile/body-reference findings first. Add anatomical-position/body-reference images only when you want to expand the reference set; pelvic/session-specific evidence will stay limited here.",
+  helper: "Review saved whole-body/profile evidence from Q&A, sessions, body exploration, entered metrics, and prior Sarah media reviews. Fresh images or videos are optional add-on evidence for posture, gait, alignment, body habitus, skin/surface findings, body symmetry, and reference quality.",
+  emptyText: "Review Existing Evidence uses saved profile/body-reference findings first. Add anatomical-position/body-reference images or videos only when you want to expand the reference set; pelvic/session-specific evidence will stay limited here.",
   reviewInstructions: `
 HEAD-TO-TOE REVIEW SCOPE:
-- Produce one cumulative, body-centered head-to-toe anatomy review. The output should read like the final useful review, not a process note.
+- Produce one cumulative anatomical profile. This is not a batch report, image audit, provenance report, or process note.
+- Start with anatomy. Do not open with source details, image counts, batch status, timeout/recovery language, payment/cloud language, or "assembled from" language.
 - Make the review easy to listen to as downloaded audio: top-to-bottom flow, minimal repetition, short clear paragraphs, and no duplicate callout/prose narration.
-- Prioritize what is visible. Do not narrate every absent or limited body region. Put genuinely useful missing-image requests only at the end.
-- Include pelvic, genital, perineal, anal/perianal, pubic/inguinal, and lower abdominal anatomy when those findings are supported by saved or attached profile photo evidence.
-- Use all available saved visual evidence as first-class evidence: direct uploads in this run, reusable saved Profile Q&A image attachments, saved Profile Q&A visual findings, prior Sarah visual reviews, session/body-exploration visual evidence, and entered profile metrics where they help reconcile visible findings.
-- Never write "these images have not been provided in this batch", "not visible in this batch", "deferred to another batch", or equivalent batch-amnesia wording. If a body region has prior saved visual evidence, use that evidence. If a region truly has no evidence anywhere in the cumulative profile, mention it only at the very end as an optional image request.
-- Do not write provenance, batch, timeout, recovery, payment, cloud request, "assembled from", or "this batch" language in the user-facing review.
-- Do not make Image Set Overview, Reference Value for PulsePoint, or Limitations the main output. Omit process sections entirely. Mention missing coverage only at the very end under optional image requests.
-- Preserve anatomical detail, posture discussion, habitus description, body symmetry assessment, musculoskeletal observations, skin/surface findings, and pelvic anatomy.
-- Use the environment only as brief context for lighting quality, camera angle, image completeness, visibility limitations, posture/reference setup, or support surfaces that directly affect body position.
-- Do not write a room inventory. Do not identify, speculate about, or side-investigate incidental objects, pocket contents, phone outlines, equipment, screen details, clutter, waistband shapes, or holster/device prints unless they directly affect body visibility, positioning, safety of interpretation, image quality, or frame/reference context.
-- If an incidental object is visible but not clinically/image-review relevant, ignore it.
+- Prioritize visible anatomy, posture, symmetry, skin findings, and meaningful changes. Stable baseline findings should be brief.
+- Use all available reviewed evidence as cumulative evidence. Do not frame findings around "this batch", "prior batch", "subsequent batch", "image set", "rechecked saved/direct views", or image numbers.
+- Do not write camera-location descriptions, room/environment commentary, ECG/chest strap commentary, headphones commentary, foot-camera commentary, table-paper commentary, or duplicate visual-reference/callout dumps.
+- Ignore incidental objects unless they directly affect anatomical visibility, tissue safety, or device-contact interpretation.
 - Keep the language clinical, neutral, practical, and anatomically literate. Adult anatomy and nudity are in scope when present, but the review must not become erotic or moralizing.
 - Separate visible findings from interpretation. Do not infer psychology, arousal, pain, function, dominance, intent, or session state from static posture alone.
-- If nudity or genital anatomy is visible, describe only clinically relevant visibility, position, symmetry, skin/surface findings, resting state, and limitations. Use cautious terms such as flaccid, partial erection, erection, obscured, or uncertain only when visually assessable.
-- Do not use this head-to-toe review to summarize catheter, urethral, sound/dilator, Foley, sleeve, stimulation, ejaculation, arousal progression, foot-camera arousal recruitment, device-fit, or genital measurement history. Those belong in the pelvic/genital or session analysis artifacts.
-- If fresh images are absent, still use saved profile/body-reference image evidence and saved Q&A visual findings. Do not imply the profile has no images when saved images or reviewed findings exist.
+- If nudity or genital anatomy is visible, keep Head-to-Toe genital/perineal discussion brief. Detailed pelvic/genital anatomy belongs in the dedicated Pelvic/Genital review.
+- Do not summarize catheter, urethral, sound/dilator, Foley, sleeve, stimulation, ejaculation, arousal progression, foot-camera arousal recruitment, or genital measurement history in Head-to-Toe.
 - Compare visible whole-body findings against saved Q&A findings, prior sessions, and entered metrics only where they help reconcile body reference evidence. Do not let profile context override fresh image evidence.
-- Organize the output using these body-centered sections:
-  1. Coverage Map: one concise top-to-bottom map of what is covered well, partially covered, newly improved, and what remains useful to photograph. Do not include source/provenance mechanics.
-  2. Significant Findings: the most meaningful new, changed, or high-value stable findings. Use "stable baseline finding" for unchanged repeated anatomy.
-  3. Overall Body Overview: general frame/build, proportionality, visible muscularity, adipose distribution, broad symmetry, and stance/positioning that can actually be seen.
-  4. Posture & Alignment: visible head/neck, shoulder height, thoracic/lumbar contour, pelvic posture if visible, knee/ankle alignment, foot angle/stance, and anterior/posterior/lateral differences.
-  5. Body Habitus & Soft Tissue: torso contour, abdominal contour, chest/upper-body contour if visible, limb soft tissue distribution, muscular definition, central versus peripheral adipose distribution where visible.
-  6. Skin & Surface Findings: consolidated visible skin findings and meaningful changes only. Summarize stable repeated papules once by distribution. Do not invent skin findings.
-  7. Musculoskeletal / Limb Findings: upper limbs, forearms/hands, thighs/lower legs, feet/toes, symmetry, muscle bulk, joint alignment, swelling/deformity, resting foot/toe posture, and functional implications only when directly supported by visible evidence.
-  8. Pelvic, Genital & Perineal Anatomy: brief head-to-toe-level pelvic visibility summary only. Do not repeat the detailed pelvic/genital review.
-  9. Region-Specific Head-to-Toe Findings: head/neck, shoulders/upper back, chest/torso, abdomen, pelvis, upper limbs/hands, lower limbs/feet in anatomical order. Keep it concise and visible-finding centered.
-  10. Missing Items / Optional Image Requests: only the useful remaining photo requests or missing coverage items. Keep this at the end.
+- Organize the output exactly as a top-to-bottom anatomical profile:
+  1. Executive Summary: 5 to 10 bullets maximum. Most meaningful cumulative findings only.
+  2. Head & Face: hair, face, glasses only if relevant to body profile, visible skin findings, symmetry if visible.
+  3. Neck: contour, posture, visible masses or asymmetry if any.
+  4. Shoulders & Upper Back: shoulder level/symmetry, thoracic posture, visible skin findings.
+  5. Chest: chest contour, pectoral soft tissue, nipples if relevant, visible skin findings. Ignore ECG/chest strap unless explicitly requested.
+  6. Abdomen: abdominal contour, central adiposity or pannus, umbilicus, scars, lesions, hernia bulges if visible.
+  7. Pelvis / Pubic Region: pubic mound, pubic hair distribution, inguinal creases, scars such as hernia repair scar if visible. Do not deep-dive genital anatomy here.
+  8. Genitals / Perineum: brief summary only; details belong in Pelvic/Genital review.
+  9. Buttocks / Perianal Region: gluteal contour and visible perianal skin only when represented.
+  10. Upper Limbs & Hands: symmetry, soft tissue bulk, hand/finger findings if visible.
+  11. Lower Limbs: thigh/calf symmetry, knee alignment, edema, varicosities, skin findings if visible.
+  12. Feet & Toes: resting foot posture, toe alignment, visible deformity or swelling. Avoid dynamic gait claims from still images.
+  13. Posture & Alignment: concise cumulative summary; avoid contradictory lumbar/pelvic statements and hidden bony landmark claims.
+  14. Skin Summary: consolidated skin findings only. Do not repeat them by image.
+  15. Limitations / Useful Future Coverage: only truly useful missing views. Do not request views already adequately represented.
 - Every claim must be based on visible image evidence unless explicitly marked as profile/context interpretation. Prefer "appears", "is visible", "is consistent with", or "not visible in this specific view" over stronger wording, but do not overuse caveats.
 `,
   sections: [
-    { key: "coverage_map", label: "Coverage Map", color: "hsl(var(--chart-1))" },
-    { key: "significant_findings", label: "Significant Findings", color: "hsl(var(--primary))" },
-    { key: "overall_body_overview", label: "Overall Body Overview", color: "hsl(var(--chart-4))" },
+    { key: "executive_summary", label: "Executive Summary", color: "hsl(var(--primary))" },
+    { key: "head_face", label: "Head & Face", color: "hsl(var(--chart-1))" },
+    { key: "neck", label: "Neck", color: "hsl(var(--chart-1))" },
+    { key: "shoulders_upper_back", label: "Shoulders & Upper Back", color: "hsl(var(--chart-2))" },
+    { key: "chest", label: "Chest", color: "hsl(var(--chart-2))" },
+    { key: "abdomen", label: "Abdomen", color: "hsl(var(--chart-4))" },
+    { key: "pelvis_pubic_region", label: "Pelvis / Pubic Region", color: "hsl(var(--chart-4))" },
+    { key: "genitals_perineum", label: "Genitals / Perineum", color: "hsl(var(--chart-5))" },
+    { key: "buttocks_perianal_region", label: "Buttocks / Perianal Region", color: "hsl(var(--chart-5))" },
+    { key: "upper_limbs_hands", label: "Upper Limbs & Hands", color: "hsl(var(--chart-3))" },
+    { key: "lower_limbs", label: "Lower Limbs", color: "hsl(var(--chart-3))" },
+    { key: "feet_toes", label: "Feet & Toes", color: "hsl(var(--chart-3))" },
     { key: "posture_alignment", label: "Posture & Alignment", color: "hsl(var(--chart-2))" },
-    { key: "body_habitus_soft_tissue", label: "Body Habitus & Soft Tissue", color: "hsl(var(--primary))" },
-    { key: "skin_surface_findings", label: "Skin & Surface Findings", color: "hsl(var(--chart-3))" },
-    { key: "musculoskeletal_and_limb_findings", label: "Musculoskeletal, Limb, Hand & Foot Findings", color: "hsl(var(--chart-5))" },
-    { key: "pelvic_genital_perineal_anatomy", label: "Pelvic, Genital & Perineal Anatomy", color: "hsl(var(--chart-2))" },
-    { key: "region_specific_anatomical_findings", label: "Region-Specific Head-to-Toe Findings", color: "hsl(var(--chart-2))" },
-    { key: "missing_items_optional_image_requests", label: "Missing Items / Optional Image Requests", color: "hsl(var(--muted-foreground))", required: false },
+    { key: "skin_summary", label: "Skin Summary", color: "hsl(var(--chart-3))" },
+    { key: "limitations_future_coverage", label: "Limitations / Useful Future Coverage", color: "hsl(var(--muted-foreground))", required: false },
   ],
 };
 
@@ -2643,34 +3085,56 @@ const PELVIC_GENITAL_IMAGE_REVIEW_CONFIG = {
   icon: <User className="w-4 h-4" />,
   color: "hsl(var(--chart-2))",
   purpose: "Detailed pelvis, external genital, anal/perianal, glans/meatus/foreskin, scrotal/perineal, tissue-state, physiology, and visible device-fit context review grounded in supplied photos and video clips.",
-  helper: "Review saved pelvic/genital visual evidence from Q&A photos, sessions, body exploration, entered measurements, and prior Sarah media reviews. Saved evidence is the default; fresh focused images are optional add-on evidence.",
-  emptyText: "Click Review Existing Evidence to reuse saved Profile Q&A image evidence and synthesize saved pelvic/genital findings. Add focused images only when you want to add new evidence to the existing profile.",
+  helper: "Review saved pelvic/genital visual evidence from Q&A photos/videos, sessions, body exploration, entered measurements, and prior Sarah media reviews. Saved evidence is the default; fresh focused images or videos are optional add-on evidence.",
+  emptyText: "Click Review Existing Evidence to reuse saved Profile Q&A image evidence and synthesize saved pelvic/genital findings. Add focused images or videos only when you want to add new evidence to the existing profile.",
   reviewInstructions: `
 PELVIC / GENITAL REVIEW SCOPE:
-- Anchor this output in supplied and previously reviewed visual evidence from photos and video clips. Stay with anatomy, physiology, visible tissue state, state-dependent changes, device fit, and confidence limits that matter.
-- Make the review easy to listen to as downloaded audio: lead with visible pelvic/genital/perineal findings, use natural paragraph flow, avoid duplicate callout/prose wording, and keep caveats brief.
-- Do not open with source details, evidence-scope logistics, batch/source/rechecked-image explanations, or provenance. Start with actual pelvic/genital/perineal anatomy.
-- Do not narrate every absent structure, device, or limitation. Mention absence only when it is itself the relevant finding or materially changes interpretation.
-- Focus the anatomy-by-region section on shaft, glans, foreskin/retraction state, meatus, frenulum/frenular remnant, scrotum/testes, perineum/pelvic floor, anus/perianal region/anal verge when visible, and lower abdomen/groin only when it helps interpret the pelvic/genital evidence.
-- Include anal/perianal anatomy when it is visible or previously reviewed, especially where it matters for rectal stimulation context, perineal mechanics, tissue state, safety, or device/contact fit. If anal/perianal evidence is absent or limited, say that once only if it materially affects interpretation.
+- Produce one cumulative pelvic/genital/perineal anatomical profile. This is not a batch report, image audit, source report, or process note.
+- Start with actual pelvic/genital/perineal findings. Do not open with source details, image counts, evidence-scope logistics, batch/source/rechecked-image explanations, or provenance.
+- Make the review easy to listen to as downloaded audio: natural anatomical flow, minimal repetition, short paragraphs, and no duplicate callout/prose wording.
+- Use all available reviewed evidence cumulatively. Do not write "this batch", "prior batch", "subsequent batch", "rechecked saved/direct views", or image-number narration.
+- Do not narrate camera locations, room setup, table paper, ECG/chest strap, headphones, foot cameras, or incidental background objects.
+- Do not narrate every absent structure, device, or limitation. Mention absence only when it is materially relevant.
+- Focus on pubic mound/lower abdomen, inguinal folds/groin skin, penis, foreskin, glans/meatus, scrotum/testes, perineum, anal/perianal region, gluteal skin, visible tissue health, and relevant device/contact findings.
+- Include anal/perianal anatomy when visible: pigmentation, anal verge appearance, symmetry, resting closure/gaping/prolapse if visible, external hemorrhoids, fissures, skin tags, ulceration, bleeding, crusting, and relevant hair distribution.
+- Do not assess internal hemorrhoids, prostate, bladder neck, internal sphincters, pelvic floor musculature, internal urethral course, or internal rectal structures.
 - Do not make feet, lower-leg posture, hand positioning, or stimulation techniques standalone topics in this pelvic/genital artifact. Mention hands, feet, or technique only when they directly affect visibility, scale, occlusion, pelvic positioning, contact mechanics, device fit, or safety interpretation.
 - If catheters, urethral sounds, anal devices, rectal stimulation equipment, sleeves, markers, stickers, lubricant, or medical/procedural supplies are visible, describe their visible position, contact zone, fit, and tissue interaction cautiously. Do not invent insertion depth, advancement, discomfort, sensation, or procedure stage unless image evidence or saved context directly supports it.
-- Compare visible findings with entered measurements, Foley/sound/device profile fields, prior Q&A findings, and session/video evidence. Use this to explain continuity or mismatch while keeping the output centered on visual anatomy and physiology.
-- Organize the review as a pelvic/genital reference artifact: coverage map, significant findings, anatomy by region, state-dependent changes, device/contact mechanics, tissue state and safety observations, measurement reconciliation, and the small set of limitations or optional evidence gaps that actually matter.
-- Coverage Map should list meaningful visible states only: flaccid foreskin covering glans, flaccid foreskin retracted, erect foreskin covering glans, erect foreskin retracted, ventral view, scrotum elevated during arousal, perineal/perianal view, and any newly improved angle. Put missing states only in optional evidence gaps.
-- Significant Findings should lead with new, changed, or high-value stable baseline findings. Do not re-describe every stable structure.
-- Lead with visible pelvic/genital/perineal findings. Do not turn missing regions or absent devices into the dominant narrative unless that absence is the direct finding being checked.
+- Use user-provided upload context to avoid bad assumptions. If context says fresh from shower, sweat, or no lubricant, do not call moisture lubricant. If context says documentation photo, do not infer active stimulation.
+- Bright meatal points remain uncertain unless clearly visible: "small bright meatal highlight or possible fluid point; static image cannot confirm secretion."
+- Measurements should be reconciled only when meaningful. Use: "Visually compatible with entered measurement, but not independently measurable from this image."
+- Organize the review exactly by anatomy:
+  1. Executive Summary: 5 to 10 bullets maximum.
+  2. Pubic Mound & Lower Abdomen: adipose fullness, pubic hair distribution, lower abdominal overhang, inguinal visibility, visible scars or hernia bulges.
+  3. Inguinal Folds & Groin Skin: scars, follicular papules/friction irritation, redness, lesions, swelling, fissures if visible.
+  4. Penis: resting/flaccid appearance, shaft contour/symmetry, curvature if visible, erect or partial erect state if available, meatus only if visible.
+  5. Foreskin: coverage pattern, visually supported retraction, tissue appearance, visible scarring/phimotic banding if present.
+  6. Glans & Meatus: glans color/texture, meatal orientation/shape if visible, uncertain bright point wording.
+  7. Scrotum & Testes: size/shape, bilateral fullness/symmetry, rugosity/pigmentation, visible swelling/masses/lesions if present.
+  8. Perineum: perineal body appearance, skin integrity, neutral surface sheen/moisture language.
+  9. Anal Opening & Perianal Region: visible external anal/perianal findings only.
+  10. Buttocks / Gluteal Skin: contour, spread, skin lesions, pressure marks, irritation if visible.
+  11. Device / Contact Findings: only relevant anatomy/tissue-safety contact findings.
+  12. Tissue Health / Safety Observations: concise visible tissue integrity summary.
+  13. Measurement Reconciliation: meaningful measurement notes only.
+  14. Limitations / Future Useful Coverage: only truly useful missing states/views; do not list views already represented.
 - Keep the language anatomical and practical. Do not eroticize the review or write arousal-focused prose.
 `,
   sections: [
-    { key: "coverage_map", label: "Coverage Map", color: "hsl(var(--chart-1))" },
-    { key: "significant_findings", label: "Significant Findings", color: "hsl(var(--primary))" },
-    { key: "anatomy_by_region", label: "Anatomy by Region", color: "hsl(var(--primary))" },
-    { key: "state_dependent_changes", label: "State-Dependent Changes", color: "hsl(var(--chart-4))" },
-    { key: "device_and_stimulation_mechanics", label: "Device & Contact Mechanics", color: "hsl(var(--chart-1))" },
-    { key: "tissue_state_and_safety_observations", label: "Tissue State & Safety Observations", color: "hsl(var(--chart-3))" },
+    { key: "executive_summary", label: "Executive Summary", color: "hsl(var(--primary))" },
+    { key: "pubic_mound_lower_abdomen", label: "Pubic Mound & Lower Abdomen", color: "hsl(var(--chart-1))" },
+    { key: "inguinal_folds_groin_skin", label: "Inguinal Folds & Groin Skin", color: "hsl(var(--chart-3))" },
+    { key: "penis", label: "Penis", color: "hsl(var(--chart-2))" },
+    { key: "foreskin", label: "Foreskin", color: "hsl(var(--chart-2))" },
+    { key: "glans_meatus", label: "Glans & Meatus", color: "hsl(var(--chart-2))" },
+    { key: "scrotum_testes", label: "Scrotum & Testes", color: "hsl(var(--chart-2))" },
+    { key: "perineum", label: "Perineum", color: "hsl(var(--chart-4))" },
+    { key: "anal_opening_perianal_region", label: "Anal Opening & Perianal Region", color: "hsl(var(--chart-4))" },
+    { key: "buttocks_gluteal_skin", label: "Buttocks / Gluteal Skin", color: "hsl(var(--chart-5))" },
+    { key: "device_contact_findings", label: "Device / Contact Findings", color: "hsl(var(--chart-1))" },
+    { key: "tissue_health_safety_observations", label: "Tissue Health / Safety Observations", color: "hsl(var(--chart-3))" },
     { key: "measurement_reconciliation", label: "Measurement Reconciliation", color: "hsl(var(--chart-5))" },
-    { key: "limitations_and_optional_evidence_gaps", label: "Limitations & Optional Evidence Gaps", color: "hsl(var(--muted-foreground))", required: false },
+    { key: "limitations_future_coverage", label: "Limitations / Future Useful Coverage", color: "hsl(var(--muted-foreground))", required: false },
   ],
 };
 
@@ -2684,6 +3148,7 @@ function ProfileImageReviewPanel({
   evidenceLoading = false,
 }) {
   const [images, setImages] = useState([]);
+  const [videos, setVideos] = useState([]);
   const [loading, setLoading] = useState(false);
   const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(null);
@@ -2694,6 +3159,7 @@ function ProfileImageReviewPanel({
   const [availableCompletedReviewJob, setAvailableCompletedReviewJob] = useState(null);
   const [selectedProfilerImageId, setSelectedProfilerImageId] = useState(null);
   const [imageUploadStatus, setImageUploadStatus] = useState(null);
+  const [videoUploadStatus, setVideoUploadStatus] = useState(null);
   const [includeImageCalloutsInTts, setIncludeImageCalloutsInTts] = useState(() => {
     try {
       return window.localStorage.getItem("pulsepoint_profile_image_tts_callouts") === "true";
@@ -2722,7 +3188,9 @@ function ProfileImageReviewPanel({
   }, [config.kind, images]);
 
   useEffect(() => {
+    let cancelled = false;
     base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
+      if (cancelled) return;
       if (rows[0]?.[config.resultKey]) {
         const loadedResult = normalizeImageReviewResult(rows[0][config.resultKey]) || rows[0][config.resultKey];
         setResult(loadedResult);
@@ -2734,8 +3202,22 @@ function ProfileImageReviewPanel({
           result: normalizeImageReviewResult(entry.result) || entry.result,
         })));
       }
+    }).catch((err) => {
+      console.warn(`${config.title} saved result load skipped:`, err);
     });
+    return () => {
+      cancelled = true;
+    };
   }, [config.archiveKey, config.resultKey]);
+
+  useEffect(() => {
+    const profileResult = userProfile?.[config.resultKey];
+    if (!profileResult) return;
+    const loadedResult = normalizeImageReviewResult(profileResult) || profileResult;
+    if (!loadedResult?.overview) return;
+    setResult((current) => current?.overview ? current : loadedResult);
+    if (loadedResult?._meta?.latest_attempt_status) setLatestAttemptStatus(loadedResult._meta.latest_attempt_status);
+  }, [config.resultKey, userProfile]);
 
   const jobLabel = `AI Profiler: ${config.title}`;
 
@@ -2745,24 +3227,31 @@ function ProfileImageReviewPanel({
     const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
     const storedResult = {
       ...parsed,
-      _meta: buildImageReviewMeta(
-        sourceImages,
+      _meta: buildImageReviewMetaWithEvidence({
+        images: sourceImages,
         sessions,
-        result?._meta,
-        visualEvidence.counts,
-        completedAt(completedJob),
-        completedJob?.meta?.reviewed_images,
-        {
+        previousResult: result,
+        currentResult: parsed,
+        evidenceCounts: visualEvidence.counts,
+        generatedAtOverride: completedAt(completedJob),
+        reviewedImageOverride: completedJob?.meta?.reviewed_images,
+        countOverrides: {
           fresh_image_count: completedJob?.meta?.fresh_image_count,
           reused_saved_image_count: completedJob?.meta?.reused_saved_image_count,
           image_count: completedJob?.meta?.image_count,
         },
-      ),
+      }),
     };
     if (parsed?._background_attempt_status) {
       storedResult._meta.latest_attempt_status = parsed._background_attempt_status;
       setLatestAttemptStatus(parsed._background_attempt_status);
+      if (parsed._background_attempt_status?.batch_reviews_completed && parsed._background_attempt_status?.final_synthesis_attempted !== false) {
+        storedResult._meta.recovered_from_batches = true;
+        storedResult._meta.local_batch_assembled = true;
+      }
     }
+    if (parsed?._meta?.recovered_from_batches) storedResult._meta.recovered_from_batches = true;
+    if (parsed?._meta?.local_batch_assembled) storedResult._meta.local_batch_assembled = true;
     setResult(storedResult);
     const nextArchive = await saveProfileResultWithArchive({
       resultKey: config.resultKey,
@@ -2778,7 +3267,7 @@ function ProfileImageReviewPanel({
 
   useEffect(() => {
     let cancelled = false;
-    if (profileLoading || evidenceLoading || !userProfile) return undefined;
+    if (!userProfile && !result) return undefined;
 
     const jobTime = (job) => new Date(completedAt(job) || job?.updatedAt || job?.createdAt || 0).getTime() || 0;
     const isMatchingReviewJob = (job) => {
@@ -2962,7 +3451,7 @@ function ProfileImageReviewPanel({
         const job = completedJobs
           .filter(isFinalOrSingleReviewJob)
           .sort(newestFirst)[0];
-        if (!job || !isNewerCompletedJob(job, result)) {
+        if (!job || (result && !isNewerCompletedJob(job, result))) {
           setAvailableCompletedReviewJob(null);
           const failedAiData = await listBackgroundJobs({
             type: "ai_invoke",
@@ -2997,7 +3486,7 @@ function ProfileImageReviewPanel({
           return;
         }
 
-        if (job && isNewerCompletedJob(job, result)) {
+        if (job && (!result || isNewerCompletedJob(job, result))) {
           if (job.type === "profile_image_review_full" || job?.meta?.full_background_review) {
             setJobStatus(job);
             await storeCompletedReviewJob(job, []);
@@ -3105,14 +3594,187 @@ function ProfileImageReviewPanel({
     }
   };
 
+  const handleVideoFiles = async (event) => {
+    const files = Array.from(event.target.files || []).filter((file) => file.type?.startsWith("video/"));
+    event.target.value = "";
+    if (!files.length) return;
+    setError("");
+    setAvailableCompletedReviewJob(null);
+    setRecoverableBatchSet(null);
+    setLatestAttemptStatus(null);
+
+    const maxImages = config.maxImages || 8;
+    let remainingFrameSlots = Math.max(0, maxImages - images.length);
+    if (remainingFrameSlots <= 0) {
+      setError(`This review already has ${maxImages} selected review frames/images. Remove a few before adding video evidence.`);
+      return;
+    }
+
+    const selectedFiles = files.slice(0, PROFILER_VIDEO_UPLOAD_LIMIT);
+    const pendingVideos = selectedFiles.map((file) => {
+      const id = `video-${file.name}-${file.size}-${file.lastModified}`;
+      return {
+        id,
+        filename: file.name,
+        file,
+        media_type: file.type || "video/mp4",
+        previewUrl: URL.createObjectURL(file),
+        upload_note: "",
+        size: file.size,
+        lastModified: file.lastModified,
+        source: "fresh_video_upload",
+        upload_status: "saving",
+        storagePath: "",
+        sampledFrameCount: 0,
+      };
+    });
+    setVideos((current) => [...current, ...pendingVideos].slice(0, PROFILER_VIDEO_UPLOAD_LIMIT));
+    setVideoUploadStatus({
+      current: 0,
+      total: pendingVideos.length,
+      message: `Saving and sampling ${pendingVideos.length} selected video${pendingVideos.length === 1 ? "" : "s"}...`,
+    });
+
+    for (let index = 0; index < pendingVideos.length; index += 1) {
+      const pendingVideo = pendingVideos[index];
+      try {
+        setVideoUploadStatus({
+          current: index + 1,
+          total: pendingVideos.length,
+          message: `Uploading video ${index + 1}/${pendingVideos.length}...`,
+        });
+        const upload = await withTimeout(
+          base44.integrations.Core.UploadFile({ file: pendingVideo.file }),
+          PROFILER_VIDEO_SAVE_TIMEOUT_MS,
+          `Video ${index + 1} did not finish saving within ${Math.round(PROFILER_VIDEO_SAVE_TIMEOUT_MS / 1000)} seconds.`,
+        );
+        const storagePath = upload?.file_url || upload?.url || "";
+        if (!storagePath) throw new Error(`Could not save ${pendingVideo.filename || `video ${index + 1}`}.`);
+
+        const maxFrames = Math.min(PROFILER_VIDEO_SAMPLE_COUNT, remainingFrameSlots);
+        if (maxFrames <= 0) {
+          setVideos((current) => current.map((video) => (
+            video.id === pendingVideo.id
+              ? { ...video, storagePath, url: storagePath, upload_status: "saved", sampledFrameCount: 0, upload_error: "Video saved, but no review-frame slots were available." }
+              : video
+          )));
+          continue;
+        }
+
+        setVideoUploadStatus({
+          current: index + 1,
+          total: pendingVideos.length,
+          message: `Sampling video ${index + 1}/${pendingVideos.length} into review frames...`,
+        });
+        const frames = await sampleProfilerVideoFrames({
+          file: pendingVideo.file,
+          label: pendingVideo.filename,
+          maxFrames,
+        });
+
+        const savedFrames = [];
+        for (let frameIndex = 0; frameIndex < frames.length; frameIndex += 1) {
+          const frame = frames[frameIndex];
+          const frameImage = {
+            id: `${pendingVideo.id}-frame-${frame.frameIndex}`,
+            filename: frame.filename,
+            file: frame.file,
+            media_type: "image/jpeg",
+            data: stripDataUrl(frame.dataUrl),
+            previewUrl: frame.dataUrl,
+            upload_note: `Sampled frame ${frame.frameIndex}/${frame.frameCount} from uploaded video evidence at ${formatVideoTimestamp(frame.time)}.${pendingVideo.upload_note ? ` ${pendingVideo.upload_note}` : ""}`,
+            size: frame.file.size,
+            lastModified: pendingVideo.lastModified,
+            source: "fresh_video_frame",
+            upload_status: "saving",
+            sourceVideo: {
+              videoId: pendingVideo.id,
+              storagePath,
+              frameIndex: frame.frameIndex,
+              frameCount: frame.frameCount,
+              frameTimeSeconds: Number(frame.time.toFixed(2)),
+              durationSeconds: Number(frame.duration.toFixed(2)),
+              purpose: config.title,
+              note: pendingVideo.upload_note || "",
+            },
+          };
+          const saved = await prepareFreshImageForReview(frameImage, frameIndex, {
+            total: frames.length,
+            onProgress: setJobStatus,
+          });
+          savedFrames.push({ ...saved, id: frameImage.id, upload_status: "saved" });
+        }
+
+        remainingFrameSlots = Math.max(0, remainingFrameSlots - savedFrames.length);
+        setImages((current) => [...current, ...savedFrames].slice(0, maxImages));
+        setVideos((current) => current.map((video) => (
+          video.id === pendingVideo.id
+            ? {
+                ...video,
+                storagePath,
+                url: storagePath,
+                previewUrl: serverUrl(storagePath) || video.previewUrl,
+                upload_status: "saved",
+                sampledFrameCount: savedFrames.length,
+                durationSeconds: savedFrames[0]?.sourceVideo?.durationSeconds || null,
+              }
+            : video
+        )));
+      } catch (videoError) {
+        setVideos((current) => current.map((video) => (
+          video.id === pendingVideo.id
+            ? { ...video, upload_status: "error", upload_error: videoError?.message || "Could not save or sample video." }
+            : video
+        )));
+      }
+    }
+
+    setVideoUploadStatus({
+      current: pendingVideos.length,
+      total: pendingVideos.length,
+      message: `Finished video save/sampling pass. Saved videos are previewable; sampled frames are ready for Sarah.`,
+    });
+    if (files.length > PROFILER_VIDEO_UPLOAD_LIMIT) {
+      setError(`Using the first ${PROFILER_VIDEO_UPLOAD_LIMIT} videos. Add the rest after this pass if needed.`);
+    }
+    window.setTimeout(() => setVideoUploadStatus(null), 4500);
+  };
+
   const removeImage = (id) => {
     setImages((current) => current.filter((image) => image.id !== id));
+  };
+
+  const removeVideo = (id) => {
+    setVideos((current) => {
+      const target = current.find((video) => video.id === id);
+      if (target?.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(target.previewUrl);
+      return current.filter((video) => video.id !== id);
+    });
+    setImages((current) => current.filter((image) => image.sourceVideo?.videoId !== id));
   };
 
   const updateImageNote = (id, upload_note) => {
     setImages((current) => current.map((image) => (
       image.id === id ? { ...image, upload_note } : image
     )));
+  };
+
+  const updateVideoNote = (id, upload_note) => {
+    const note = String(upload_note || "");
+    setVideos((current) => current.map((video) => (
+      video.id === id ? { ...video, upload_note: note } : video
+    )));
+    setImages((current) => current.map((image) => {
+      if (image.sourceVideo?.videoId !== id) return image;
+      return {
+        ...image,
+        upload_note: `Sampled frame ${image.sourceVideo.frameIndex || "?"}/${image.sourceVideo.frameCount || "?"} from uploaded video evidence${image.sourceVideo.frameTimeSeconds != null ? ` at ${formatVideoTimestamp(image.sourceVideo.frameTimeSeconds)}` : ""}.${note ? ` ${note}` : ""}`,
+        sourceVideo: {
+          ...image.sourceVideo,
+          note,
+        },
+      };
+    }));
   };
 
   const saveImageFindingClarification = async (finding, correctionText) => {
@@ -3208,6 +3870,12 @@ function ProfileImageReviewPanel({
   const removeImageFindingCallout = async (finding) => {
     if (!result || !finding?.finding_id) throw new Error("This callout is not available to remove.");
     const removedAt = new Date().toISOString();
+    const removedEvidenceKey = inferAnatomicalEvidenceKey([
+      finding.section_key,
+      finding.region,
+      finding.label,
+      finding.finding,
+    ].filter(Boolean).join(" "));
     const removedRecord = {
       removed_at: removedAt,
       finding_id: finding.finding_id,
@@ -3229,6 +3897,10 @@ function ProfileImageReviewPanel({
           ...(Array.isArray(result._meta?.removed_image_callouts) ? result._meta.removed_image_callouts : [])
             .filter((item) => item?.finding_id !== finding.finding_id),
         ].slice(0, 80),
+        anatomical_evidence_records: removedEvidenceKey
+          ? (Array.isArray(result._meta?.anatomical_evidence_records) ? result._meta.anatomical_evidence_records : [])
+            .filter((item) => item?.key !== removedEvidenceKey)
+          : result._meta?.anatomical_evidence_records,
         image_clarifications: (Array.isArray(result._meta?.image_clarifications) ? result._meta.image_clarifications : [])
           .filter((item) => item?.finding_id !== finding.finding_id),
       },
@@ -3283,10 +3955,19 @@ function ProfileImageReviewPanel({
     const assembled = buildBatchAssembledImageReview(config, batchParsedResults, batchSet);
     const storedResult = {
       ...assembled,
-      _meta: buildImageReviewMeta([], sessions, result?._meta, visualEvidence.counts, new Date().toISOString(), batchSet?.reviewed_images || [], {
-        fresh_image_count: batchSet?.fresh_image_count || 0,
-        reused_saved_image_count: batchSet?.reused_saved_image_count || 0,
-        image_count: batchSet?.image_count || batchSet?.reviewed_images?.length || 0,
+      _meta: buildImageReviewMetaWithEvidence({
+        images: [],
+        sessions,
+        previousResult: result,
+        currentResult: assembled,
+        evidenceCounts: visualEvidence.counts,
+        generatedAtOverride: new Date().toISOString(),
+        reviewedImageOverride: batchSet?.reviewed_images || [],
+        countOverrides: {
+          fresh_image_count: batchSet?.fresh_image_count || 0,
+          reused_saved_image_count: batchSet?.reused_saved_image_count || 0,
+          image_count: batchSet?.image_count || batchSet?.reviewed_images?.length || 0,
+        },
       }),
     };
     storedResult._meta.recovered_from_batches = true;
@@ -3360,8 +4041,9 @@ function ProfileImageReviewPanel({
     result?._meta?.local_batch_assembled &&
     result?._meta?.image_id_repair_version !== PROFILE_IMAGE_ID_REPAIR_VERSION;
   const hasRecoverableUnshownBatchSet = recoverableBatchSet?.batches?.length > 0 && !result?._meta?.local_batch_assembled;
+  const hasCachedOrRecoverableReview = Boolean(result || availableCompletedReviewJob || hasRecoverableUnshownBatchSet || hasRecoverableDisplayRepair);
+  const primaryReviewNeedsFreshContext = !availableCompletedReviewJob && !hasRecoverableUnshownBatchSet && !hasRecoverableDisplayRepair;
   const handlePrimaryReviewAction = async () => {
-    if (images.length > 0) return analyze();
     if (availableCompletedReviewJob) {
       setLoading(true);
       setError("");
@@ -3377,6 +4059,7 @@ function ProfileImageReviewPanel({
       return;
     }
     if (hasRecoverableUnshownBatchSet || hasRecoverableDisplayRepair) return assembleCompletedBatches();
+    if (images.length > 0) return analyze();
     return analyze();
   };
 
@@ -3419,6 +4102,7 @@ function ProfileImageReviewPanel({
           hasReusedSavedImages: Number(recoverableBatchSet.reused_saved_image_count || 0) > 0,
         })
         : buildProfileImageReviewContext({ userProfile: reviewUserProfile, sessions, bodyExplorations });
+      const establishedEvidenceContext = formatIncrementalEvidenceRecordsForPrompt(existingAnatomicalEvidenceRecordsForPrompt(result));
       const firstNameToneCue = buildOptionalFirstNameToneCue(reviewUserProfile, { prioritizeProfileTone: true });
       const anatomicalFocusRule = isHeadToToeBodyReference ? "" : ANATOMICAL_REFERENCE_FOCUS_RULE;
       const sessionGroundingRule = isHeadToToeBodyReference ? "" : SESSION_CONTEXT_GROUNDING_RULE;
@@ -3444,8 +4128,12 @@ ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
+${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
+${establishedEvidenceContext}
 
 RECOVERY SYNTHESIS RULES:
 - Do not mention filenames, camera-roll IDs, storage IDs, raw image numbers, job IDs, or batch job IDs.
@@ -3482,10 +4170,18 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
       if (!parsed?.overview) throw new Error("Sarah returned an empty recovered image review.");
       const storedResult = {
         ...parsed,
-        _meta: buildImageReviewMeta([], sessions, result?._meta, visualEvidence.counts, null, recoverableBatchSet.reviewed_images || [], {
-          fresh_image_count: recoverableBatchSet.fresh_image_count || 0,
-          reused_saved_image_count: recoverableBatchSet.reused_saved_image_count || 0,
-          image_count: recoverableBatchSet.image_count || recoverableBatchSet.reviewed_images?.length || 0,
+        _meta: buildImageReviewMetaWithEvidence({
+          images: [],
+          sessions,
+          previousResult: result,
+          currentResult: parsed,
+          evidenceCounts: visualEvidence.counts,
+          reviewedImageOverride: recoverableBatchSet.reviewed_images || [],
+          countOverrides: {
+            fresh_image_count: recoverableBatchSet.fresh_image_count || 0,
+            reused_saved_image_count: recoverableBatchSet.reused_saved_image_count || 0,
+            image_count: recoverableBatchSet.image_count || recoverableBatchSet.reviewed_images?.length || 0,
+          },
         }),
       };
       storedResult._meta.recovered_from_batches = true;
@@ -3557,11 +4253,21 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
         .filter((image) => image.media_type && (image.data || image.file || image.storagePath || image.url))
         .slice(0, freshLimit || maxReviewImages);
       const freshImagePayload = [];
+      const skippedImageMessages = [];
       for (let imageIndex = 0; imageIndex < freshSourceImages.length; imageIndex += 1) {
-        freshImagePayload.push(await prepareFreshImageForReview(freshSourceImages[imageIndex], imageIndex, {
-          total: freshSourceImages.length,
-          onProgress: setJobStatus,
-        }));
+        try {
+          const prepared = await withTimeout(
+            prepareFreshImageForReview(freshSourceImages[imageIndex], imageIndex, {
+              total: freshSourceImages.length,
+              onProgress: setJobStatus,
+            }),
+            PROFILER_IMAGE_SAVE_TIMEOUT_MS,
+            `Reference image ${imageIndex + 1} did not finish preparing within ${Math.round(PROFILER_IMAGE_SAVE_TIMEOUT_MS / 1000)} seconds.`,
+          );
+          freshImagePayload.push(prepared);
+        } catch (freshImageError) {
+          skippedImageMessages.push(`Image ${imageIndex + 1}: ${freshImageError?.message || "Could not prepare image."}`);
+        }
       }
       let reusedSavedImages = [];
       let savedImageLoadWarning = "";
@@ -3578,6 +4284,9 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
         }
         reusedSavedImages = loaded.slice(0, savedImageSlots);
       }
+      if (!freshImagePayload.length && !reusedSavedImages.length && skippedImageMessages.length) {
+        throw new Error(`No images could be prepared for review. ${skippedImageMessages[0]}`);
+      }
       const imagePayload = [...freshImagePayload, ...reusedSavedImages]
         .slice(0, maxReviewImages)
         .map((image, index) => ({
@@ -3588,10 +4297,15 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
       const hasFreshImages = freshImagePayload.length > 0;
       const hasImagePayload = imagePayload.length > 0;
       const hasReusedSavedImages = reusedSavedImages.length > 0;
+      const imagePreparationWarning = [
+        skippedImageMessages.length ? `${skippedImageMessages.length} selected image${skippedImageMessages.length === 1 ? "" : "s"} could not be prepared and were skipped.` : "",
+        savedImageLoadWarning,
+      ].filter(Boolean).join(" ");
       const groundingContext = isHeadToToeBodyReference ? "" : buildAIGroundingContext(reviewUserProfile);
       const imageReviewContext = isHeadToToeBodyReference
         ? buildHeadToToeImageReviewContext({ userProfile: reviewUserProfile, sessions, bodyExplorations, hasFreshImages, hasReusedSavedImages })
         : buildProfileImageReviewContext({ userProfile: reviewUserProfile, sessions, bodyExplorations });
+      const establishedEvidenceContext = formatIncrementalEvidenceRecordsForPrompt(existingAnatomicalEvidenceRecordsForPrompt(result));
       const firstNameToneCue = buildOptionalFirstNameToneCue(reviewUserProfile, { prioritizeProfileTone: true });
       const anatomicalFocusRule = isHeadToToeBodyReference ? "" : ANATOMICAL_REFERENCE_FOCUS_RULE;
       const sessionGroundingRule = isHeadToToeBodyReference ? "" : SESSION_CONTEXT_GROUNDING_RULE;
@@ -3642,7 +4356,7 @@ Images in this batch: ${batchImages.length}
 Total images in full review: ${imagePayload.length}
 Attached fresh image count in full review: ${freshImagePayload.length}.
 Attached reused saved image count in full review: ${reusedSavedImages.length}.
-${savedImageLoadWarning ? `Saved image reuse warning: ${savedImageLoadWarning}` : ""}
+${imagePreparationWarning ? `Image preparation warning: ${imagePreparationWarning}` : ""}
 
 ${groundingContext}
 ${imageReviewContext}
@@ -3653,8 +4367,12 @@ ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
+${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
+${establishedEvidenceContext}
 
 This is a batch review, not the final user-facing synthesis. Analyze only the attached images in this batch as direct visual evidence, while preserving the image_id values exactly. Do not mention filenames, storage IDs, camera-roll IDs, or raw image numbers. Do not claim that images outside this batch were inspected in this batch. Keep view labels anatomical and practical.
 
@@ -3698,8 +4416,12 @@ ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
+${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
+${establishedEvidenceContext}
 
 SYNTHESIS RULES:
 - Do not mention filenames, camera-roll IDs, storage IDs, or raw image numbers.
@@ -3780,7 +4502,7 @@ Images in this batch: ${batchImages.length}
 Total images in full review: ${imagePayload.length}
 Attached fresh image count in full review: ${freshImagePayload.length}.
 Attached reused saved image count in full review: ${reusedSavedImages.length}.
-${savedImageLoadWarning ? `Saved image reuse warning: ${savedImageLoadWarning}` : ""}
+${imagePreparationWarning ? `Image preparation warning: ${imagePreparationWarning}` : ""}
 
 ${groundingContext}
 ${imageReviewContext}
@@ -3791,8 +4513,12 @@ ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
+${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
+${establishedEvidenceContext}
 
 This is a batch review, not the final user-facing synthesis. Analyze only the attached images in this batch as direct visual evidence, while preserving the image_id values exactly. Do not mention filenames, storage IDs, camera-roll IDs, or raw image numbers. Do not claim that images outside this batch were inspected in this batch. Keep view labels anatomical and practical.
 
@@ -3929,8 +4655,12 @@ ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
+${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
+${establishedEvidenceContext}
 
 SYNTHESIS RULES:
 - Do not mention filenames, camera-roll IDs, storage IDs, or raw image numbers.
@@ -3966,7 +4696,7 @@ Review type: ${config.title}
 Review purpose: ${config.purpose}
 Attached fresh image count: ${freshImagePayload.length}.
 Attached reused saved image count: ${reusedSavedImages.length}.
-${savedImageLoadWarning ? `Saved image reuse warning: ${savedImageLoadWarning}` : ""}
+${imagePreparationWarning ? `Image preparation warning: ${imagePreparationWarning}` : ""}
 
 ${groundingContext}
 ${imageReviewContext}
@@ -3977,8 +4707,12 @@ ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
+${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
+${establishedEvidenceContext}
 
 IMAGE REVIEW RULES:
 - Treat these as consensual private profile-reference images for anatomical and physiological review.
@@ -4089,7 +4823,7 @@ Review type: ${config.title}
 Review purpose: ${config.purpose}
 Attached fresh image count: ${freshImagePayload.length}.
 Attached reused saved image count: ${reusedSavedImages.length}.
-${savedImageLoadWarning ? `Saved image reuse warning: ${savedImageLoadWarning}` : ""}
+${imagePreparationWarning ? `Image preparation warning: ${imagePreparationWarning}` : ""}
 
 ${groundingContext}
 ${imageReviewContext}
@@ -4100,8 +4834,12 @@ ${firstNameToneCue}
 ${sessionGroundingRule}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
+${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
+${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
+${establishedEvidenceContext}
 
 IMAGE REVIEW RULES:
 - Treat these as consensual private profile-reference images for anatomical and physiological review.
@@ -4239,10 +4977,17 @@ ANNOTATED IMAGE OUTPUT RULES:
       if (!parsed?.overview) throw new Error("Sarah returned an empty image review.");
       const storedResult = {
         ...parsed,
-        _meta: buildImageReviewMeta(imagePayload, sessions, result?._meta, visualEvidence.counts, null, null, {
-          fresh_image_count: freshImagePayload.length,
-          reused_saved_image_count: reusedSavedImages.length,
-          image_count: imagePayload.length,
+        _meta: buildImageReviewMetaWithEvidence({
+          images: imagePayload,
+          sessions,
+          previousResult: result,
+          currentResult: parsed,
+          evidenceCounts: visualEvidence.counts,
+          countOverrides: {
+            fresh_image_count: freshImagePayload.length,
+            reused_saved_image_count: reusedSavedImages.length,
+            image_count: imagePayload.length,
+          },
         }),
       };
       setResult(storedResult);
@@ -4302,7 +5047,9 @@ ANNOTATED IMAGE OUTPUT RULES:
   const hasPersistedReviewedImages = Array.isArray(result?._meta?.reviewed_images) && result._meta.reviewed_images.length > 0;
   const inlineReferenceImages = hasPersistedReviewedImages ? images : [...images, ...fallbackReferenceImages];
   const imageSaveInProgress = images.some((image) => image.upload_status === "saving");
+  const videoSaveInProgress = videos.some((video) => video.upload_status === "saving");
   const imageSaveErrorCount = images.filter((image) => image.upload_status === "error").length;
+  const videoSaveErrorCount = videos.filter((video) => video.upload_status === "error").length;
   const lightboxImageIds = result ? [...new Set([
     ...(Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images.map((image) => image.image_id).filter(Boolean) : []),
     ...(Array.isArray(result?.annotated_images) ? result.annotated_images.map((image) => image.image_id).filter(Boolean) : []),
@@ -4341,12 +5088,18 @@ ANNOTATED IMAGE OUTPUT RULES:
               <Upload className="h-3.5 w-3.5" /> Add Images
               <input type="file" accept="image/*" multiple className="hidden" onChange={handleImageFiles} />
             </label>
-            <Button size="sm" onClick={handlePrimaryReviewAction} disabled={loading || imageSaveInProgress || profileLoading || evidenceLoading || !userProfile} className="h-8 gap-1.5 text-xs">
+            <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground hover:bg-muted/60">
+              <Film className="h-3.5 w-3.5" /> Add Videos
+              <input type="file" accept="video/*" multiple className="hidden" onChange={handleVideoFiles} />
+            </label>
+            <Button size="sm" onClick={handlePrimaryReviewAction} disabled={loading || imageSaveInProgress || videoSaveInProgress || (primaryReviewNeedsFreshContext && (profileLoading || evidenceLoading || !userProfile))} className="h-8 gap-1.5 text-xs">
               {loading
                 ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Reviewing...</>
                 : imageSaveInProgress
                   ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Saving Images...</>
-                : <><ImageIcon className="h-3.5 w-3.5" />{images.length ? (result ? "Re-review Images" : "Review Images") : hasRecoverableDisplayRepair ? "Refresh Findings" : (availableCompletedReviewJob || hasRecoverableUnshownBatchSet) ? "Show Latest Findings" : (result ? "Re-review Evidence" : "Review Existing Evidence")}</>}
+                : videoSaveInProgress
+                  ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Sampling Video...</>
+                : <><ImageIcon className="h-3.5 w-3.5" />{(availableCompletedReviewJob || hasRecoverableUnshownBatchSet) ? "Show Latest Findings" : hasRecoverableDisplayRepair ? "Refresh Findings" : images.length ? (result ? "Re-review Images" : "Review Images") : (result ? "Re-review Evidence" : "Review Existing Evidence")}</>}
             </Button>
           </div>
         </div>
@@ -4378,8 +5131,14 @@ ANNOTATED IMAGE OUTPUT RULES:
           {images.length > 0 && (
             <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{images.length} fresh image{images.length === 1 ? "" : "s"} selected</Badge>
           )}
+          {videos.length > 0 && (
+            <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{videos.length} video{videos.length === 1 ? "" : "s"} uploaded/sampled</Badge>
+          )}
           {imageSaveErrorCount > 0 && (
             <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">{imageSaveErrorCount} image save error{imageSaveErrorCount === 1 ? "" : "s"}</Badge>
+          )}
+          {videoSaveErrorCount > 0 && (
+            <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">{videoSaveErrorCount} video save error{videoSaveErrorCount === 1 ? "" : "s"}</Badge>
           )}
           {recoverableBatchSet?.batches?.length > 0 && !result?._meta?.local_batch_assembled && (
             <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
@@ -4395,7 +5154,7 @@ ANNOTATED IMAGE OUTPUT RULES:
               ? "Batch reviews completed and are saved as the current review. The main review button will run a fresh review only when you ask for it."
               : latestAttemptStatus?.state === "batch_reviews_saved_without_final_synthesis"
                 ? "Batch reviews completed and were saved as the current review. The main review button will run a fresh review only when you ask for it."
-              : "Batch reviews completed, but the final rewrite did not finish. Press the main review button once to show the latest completed findings without rerunning image review."}
+              : "Batch reviews completed, but the final rewrite did not finish. Tap Show Latest Findings to display the completed findings without rerunning image review."}
           </div>
         )}
 
@@ -4411,7 +5170,7 @@ ANNOTATED IMAGE OUTPUT RULES:
                     ? "Not needed for current output; completed batch findings are saved."
                   : latestAttemptStatus?.error_message
                     ? `Failed: ${latestAttemptStatus.error_message}`
-                    : "Completed batch findings can be shown from the main review button."}</p>
+                    : "Completed batch findings are ready to show."}</p>
               </div>
               <div className="rounded-md border border-amber-300/20 bg-background/40 px-2 py-1.5">
                 <p className="text-[10px] uppercase tracking-wider text-amber-100/80">Current Display</p>
@@ -4431,7 +5190,7 @@ ANNOTATED IMAGE OUTPUT RULES:
                   ? "Use the main review button only when you want to run a fresh review."
                   : latestAttemptStatus?.state === "batch_reviews_saved_without_final_synthesis"
                   ? "The current batch-assembled review is already saved."
-                  : "Press the main review button once to show the latest completed findings."}</p>
+                  : "Tap Show Latest Findings. This will not rerun image review."}</p>
               </div>
             </div>
           </div>
@@ -4448,7 +5207,7 @@ ANNOTATED IMAGE OUTPUT RULES:
           </div>
         )}
 
-        {!result && (
+        {!hasCachedOrRecoverableReview && (
           <ProfilerPanelLoadingStatus
             items={[
               { active: profileLoading, label: "Saved profile context", status: "loading" },
@@ -4457,13 +5216,13 @@ ANNOTATED IMAGE OUTPUT RULES:
           />
         )}
 
-        {!result && !profileLoading && !images.length && (
+        {!result && !profileLoading && !images.length && !videos.length && (
           <p className="text-xs text-muted-foreground">{config.emptyText}</p>
         )}
 
-        {!result && images.length > 0 ? (
+        {!result && (images.length > 0 || videos.length > 0) ? (
           <p className="text-xs text-muted-foreground">
-            Keep this page open until selected images show Saved. After that, they are stored locally and can survive reload/focus changes.
+            Keep this page open until selected images/videos show Saved. After that, video previews and sampled review frames are stored locally for this Profiler run.
           </p>
         ) : !result && reusableProfileAttachments.length > 0 ? (
           <p className="text-xs text-muted-foreground">
@@ -4489,6 +5248,73 @@ ANNOTATED IMAGE OUTPUT RULES:
                 style={{ width: `${Math.max(5, Math.min(100, (imageUploadStatus.current / Math.max(1, imageUploadStatus.total)) * 100))}%` }}
               />
             </div>
+          </div>
+        )}
+
+        {videoUploadStatus && (
+          <div className="rounded-lg border border-primary/25 bg-primary/10 px-3 py-2 text-xs leading-relaxed text-foreground">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span>{videoUploadStatus.message}</span>
+              <span className="font-mono text-muted-foreground">{videoUploadStatus.current}/{videoUploadStatus.total}</span>
+            </div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-background">
+              <div
+                className="h-full rounded-full bg-primary transition-all"
+                style={{ width: `${Math.max(5, Math.min(100, (videoUploadStatus.current / Math.max(1, videoUploadStatus.total)) * 100))}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {videos.length > 0 && (
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {videos.map((video) => (
+              <div key={video.id} className="overflow-hidden rounded-lg border border-border bg-muted/20">
+                <div className="relative aspect-video bg-black">
+                  <video src={video.previewUrl} className="h-full w-full object-contain" controls playsInline preload="metadata" />
+                  {video.upload_status && (
+                    <span className={`absolute left-1 top-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      video.upload_status === "saved"
+                        ? "bg-emerald-500/90 text-white"
+                        : video.upload_status === "error"
+                          ? "bg-destructive/90 text-white"
+                          : "bg-background/85 text-foreground"
+                    }`}>
+                      {video.upload_status === "saved" ? "Saved" : video.upload_status === "error" ? "Error" : "Saving"}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => removeVideo(video.id)}
+                    className="absolute right-1 top-1 rounded-full bg-background/85 p-1 text-muted-foreground hover:text-destructive"
+                    aria-label={`Remove ${video.filename}`}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="px-2 py-1.5">
+                  <p className="truncate text-[10px] text-muted-foreground">{video.filename}</p>
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">
+                    {formatFileSize(video.size)} · {video.sampledFrameCount || 0} sampled review frame{video.sampledFrameCount === 1 ? "" : "s"}
+                  </p>
+                </div>
+                {video.upload_error && (
+                  <p className="px-2 pb-1 text-[10px] leading-relaxed text-destructive">{video.upload_error}</p>
+                )}
+                <div className="border-t border-border px-2 py-2">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Video note
+                  </label>
+                  <textarea
+                    value={video.upload_note || ""}
+                    onChange={(event) => updateVideoNote(video.id, event.target.value)}
+                    rows={3}
+                    placeholder="Optional context for Sarah: gait, device insertion, ruler/measurement, movement to compare..."
+                    className="mt-1 w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 text-xs leading-relaxed text-foreground outline-none focus:border-primary"
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -5938,8 +6764,15 @@ export default function Profiler() {
     let cancelled = false;
     setProfileContextLoading(true);
     base44.auth.me()
-      .then((me) => {
-        if (!cancelled) setUserProfile(me);
+      .then((profile) => {
+        if (cancelled) return null;
+        setUserProfile(profile);
+        setProfileContextLoading(false);
+        return loadLatestProfilerAnalysis().then((latestProfilerAnalysis) => {
+          if (!cancelled && latestProfilerAnalysis) {
+            setUserProfile((current) => mergeProfilerResultsIntoProfile(current || profile, latestProfilerAnalysis));
+          }
+        });
       })
       .catch(() => {
         if (!cancelled) setUserProfile(null);
@@ -5977,7 +6810,7 @@ export default function Profiler() {
   };
 
   const refreshUserProfileContext = async () => {
-    const me = await base44.auth.me();
+    const me = await loadUserProfileWithProfilerResults();
     setUserProfile(me);
     return me;
   };

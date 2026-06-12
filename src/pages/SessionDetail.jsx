@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { loadUserProfileWithProfilerResults } from "@/lib/profileContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Activity, ArrowLeft, Star, Trash2, Heart, Clock, Zap, Pencil, XCircle, Clapperboard, Sparkles } from "lucide-react";
@@ -36,7 +37,7 @@ import SavedMotionSummaryCard from "../components/SavedMotionSummaryCard";
 import JournalRecorder from "../components/JournalRecorder";
 import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
 import { sessionContextDisplayRows } from "@/lib/sessionContext";
-import { buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, getReviewedVisualClips, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionVisualEvidence } from "@/lib/visualEvidence";
+import { buildSessionKeyVideoClipDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, getReviewedVisualClips, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionKeyVideoClips, normalizeSessionVisualEvidence } from "@/lib/visualEvidence";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "../components/session-form/EventTimelineSection";
 import { hasMixedPauseResumeEvidence, isVerifiedMotionEvent } from "@/utils/sessionMotionEvidence";
 
@@ -87,6 +88,37 @@ function EmptyPanelNote({ children }) {
     <p className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
       {children}
     </p>
+  );
+}
+
+function SessionKeyVideoMoments({ session }) {
+  const clips = normalizeSessionKeyVideoClips(session);
+  if (!clips.length) return null;
+  return (
+    <div className="rounded-xl border border-primary/20 bg-primary/[0.04] p-3">
+      <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-primary">
+        Key Video Moments
+      </p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {clips.slice(0, 8).map((clip) => {
+          const src = serverUrl(clip.url || clip.clip_url || clip.file_url);
+          if (!src) return null;
+          return (
+            <article key={`${clip.id}-${clip.url}`} className="overflow-hidden rounded-lg border border-border bg-card">
+              <div className="px-2 py-1 text-[10px]">
+                <p className="truncate font-semibold text-primary">{clip.label || "Saved key moment"}</p>
+                <p className="truncate text-muted-foreground">
+                  {clip.session_time_s != null ? _fmtMmSs(clip.session_time_s) : "time?"}
+                  {clip.camera_angle ? ` · ${clip.camera_angle}` : ""}
+                  {clip.frames?.length ? ` · ${clip.frames.length} frames for Sarah Q&A` : " · playable clip"}
+                </p>
+              </div>
+              <video src={src} controls preload="metadata" className="block max-h-64 w-full bg-black object-contain" />
+            </article>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -576,7 +608,7 @@ export default function SessionDetail() {
     (async () => {
       const [all, me] = await Promise.all([
         base44.entities.Session.filter({ id }),
-        base44.auth.me(),
+        loadUserProfileWithProfilerResults(),
       ]);
       const s = all[0];
       sessionRef.current = s;
@@ -1504,6 +1536,7 @@ export default function SessionDetail() {
               {((session.event_timeline || []).length > 0 || timelineRows.length > 0) && (
                 <ArousalEventChart session={s} timelineRows={timelineRows} />
               )}
+              <SessionKeyVideoMoments session={s} />
             </div>
           </details>
         )}
@@ -1552,8 +1585,10 @@ export default function SessionDetail() {
             (s.event_timeline || []).length ? `Events: ${s.event_timeline.map(e => { const m = Math.floor(e.time_s / 60); const sec = Math.round(e.time_s % 60); return `[${m}:${sec.toString().padStart(2,"0")}] ${e.note}`; }).join(" | ")}` : null,
             buildSessionVisualEvidenceDigest(s),
             buildSessionVideoPassDigest(s),
+            buildSessionKeyVideoClipDigest(s),
             s.notes ? `Session notes: ${s.notes}` : null,
           ].filter(Boolean).join("\n")}
+          savedVideoClips={normalizeSessionKeyVideoClips(s)}
           savedMessages={chatMessages}
           savedNotes={sessionNotes}
           defaultOpen={chatMessages.length > 0}

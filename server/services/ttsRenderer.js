@@ -31,7 +31,9 @@ async function trimTtsChunkSilence(inputPath, outputPath) {
     '-y',
     '-i', inputPath,
     '-map', '0:a:0',
-    '-af', 'silenceremove=start_periods=1:start_duration=0.20:start_threshold=-50dB:start_silence=0.05:stop_periods=1:stop_duration=2.00:stop_threshold=-50dB:stop_silence=0.45',
+    // Only trim leading boundary silence. End-trimming can cut off speech after
+    // a natural long pause inside a chunk, creating missing narration sections.
+    '-af', 'silenceremove=start_periods=1:start_duration=0.20:start_threshold=-50dB:start_silence=0.05',
     '-c:a', 'pcm_s16le',
     outputPath,
   ]);
@@ -238,7 +240,7 @@ export async function renderTTSExport(payload = {}, options = {}) {
       size: stat.size,
       format: outputFormat,
       mime: ttsExportMime(outputFormat),
-      render_version: 'tts_export_silence_trim_v1',
+      render_version: 'tts_export_leading_trim_v2',
       duration_seconds: durationSeconds,
       model,
       voice,

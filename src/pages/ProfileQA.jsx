@@ -4,6 +4,7 @@ import { ArrowLeft, ClipboardList, MessageCircle } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import AIChat from "@/components/AIChat";
+import { loadUserProfileWithProfilerResults } from "@/lib/profileContext";
 import { richTextToPlainText } from "@/lib/richText";
 import {
   backfillImageReviewFindingsFromChat,
@@ -49,7 +50,7 @@ export default function ProfileQA() {
   const [qaFindingsOpen, setQaFindingsOpen] = useState(true);
 
   useEffect(() => {
-    base44.auth.me().then((u) => {
+    loadUserProfileWithProfilerResults().then((u) => {
       const savedQaFindings = normalizeProfileQaFindings(u.profile_qa_findings);
       const importedQaFindings = savedQaFindings.length ? savedQaFindings : parseProfileQaFindingsFromText(u.arousal_notes);
       const savedChatMessages = u.profile_chat_messages || [];

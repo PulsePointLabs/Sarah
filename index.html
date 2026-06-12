@@ -21,8 +21,29 @@
   <body>
     <div id="root"></div>
     <script>
+      function pulsePointIsStandalone() {
+        return (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true;
+      }
+
+      (function guardPulsePointStandaloneReloads() {
+        if (!pulsePointIsStandalone()) return;
+        window.addEventListener("vite:beforeFullReload", function (event) {
+          event.preventDefault();
+          console.warn("PulsePoint blocked a dev full reload while running as an installed app.");
+        });
+        window.addEventListener("beforeunload", function (event) {
+          var activeAudio = Array.prototype.some.call(document.querySelectorAll("audio"), function (audio) {
+            return audio && !audio.paused && !audio.ended;
+          });
+          if (!activeAudio) return;
+          event.preventDefault();
+          event.returnValue = "";
+        }, { capture: true });
+      })();
+
       (function clearPulsePointDevShell() {
         if (window.location.port !== "5174") return;
+        if (pulsePointIsStandalone()) return;
         if ("serviceWorker" in navigator) {
           navigator.serviceWorker.getRegistrations()
             .then(function (registrations) {

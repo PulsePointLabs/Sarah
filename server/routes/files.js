@@ -5,7 +5,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { uploadDir } from '../config.js';
+import { liveCaptureConfig, uploadDir } from '../config.js';
 import { runProcess, runProcessBinary, slugifyFilePart } from '../services/ttsCore.js';
 
 export const filesRouter = express.Router();
@@ -30,6 +30,17 @@ const LOCAL_VIDEO_MIME = {
   '.avi': 'video/x-msvideo',
   '.wmv': 'video/x-ms-wmv',
 };
+const LOCAL_VIDEO_SEARCH_SKIP_DIRS = new Set([
+  '$recycle.bin',
+  'appdata',
+  'node_modules',
+  'program files',
+  'program files (x86)',
+  'programdata',
+  'recovery',
+  'system volume information',
+  'windows',
+]);
 
 const AUDIO_PASS_WHISPER_PROMPT = [
   'PulsePoint session audio note.',
@@ -41,6 +52,111 @@ function normalizeLocalVideoPath(value) {
   const raw = String(value || '').trim().replace(/^file:\/+/, '');
   if (!raw) return '';
   return process.platform === 'win32' ? decodeURIComponent(raw).replace(/\//g, '\\') : decodeURIComponent(raw);
+}
+
+function splitPathList(value) {
+  return String(value || '')
+    .split(/[;,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function likelyLocalVideoSearchRoots() {
+  const roots = [];
+  const add = (value) => {
+    if (!value) return;
+    const resolved = path.resolve(String(value));
+    if (!roots.some((item) => item.toLowerCase() === resolved.toLowerCase())) roots.push(resolved);
+  };
+
+  splitPathList(process.env.PULSEPOINT_VIDEO_DIRS || process.env.OBS_RECORDINGS_DIR).forEach(add);
+
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  [
+    home && path.join(home, 'Videos'),
+    home && path.join(home, 'Videos', 'Captures'),
+    home && path.join(home, 'Desktop'),
+    home && path.join(home, 'Documents'),
+    home && path.join(home, 'Downloads'),
+    home && path.join(home, 'OneDrive', 'Videos'),
+    home && path.join(home, 'OneDrive', 'Documents'),
+    path.resolve(liveCaptureConfig.hrRecordingsDir, '..'),
+    path.resolve(process.cwd(), '..'),
+  ].forEach(add);
+
+  if (process.platform === 'win32') {
+    ['D:\\OBS', 'D:\\OBS\\Sessions', 'D:\\Videos', 'E:\\OBS', 'E:\\Videos'].forEach(add);
+  }
+
+  return roots;
+}
+
+async function existingDirectories(paths) {
+  const results = [];
+  for (const candidate of paths) {
+    try {
+      const stat = await fsp.stat(candidate);
+      if (stat.isDirectory()) results.push(candidate);
+    } catch {
+      // Ignore missing common folders.
+    }
+  }
+  return results;
+}
+
+async function findLocalVideoCandidates({ filename, sizeBytes, modifiedAtMs }) {
+  const targetName = String(filename || '').trim();
+  if (!targetName || targetName.includes('/') || targetName.includes('\\')) return [];
+  const ext = path.extname(targetName).toLowerCase();
+  if (!LOCAL_VIDEO_EXTENSIONS.has(ext)) return [];
+
+  const roots = await existingDirectories(likelyLocalVideoSearchRoots());
+  const matches = [];
+  const startedAt = Date.now();
+  const maxDirs = Number(process.env.PULSEPOINT_VIDEO_SEARCH_MAX_DIRS || 3500);
+  const maxMs = Number(process.env.PULSEPOINT_VIDEO_SEARCH_TIMEOUT_MS || 8000);
+  const size = Number(sizeBytes) || 0;
+  const modified = Number(modifiedAtMs) || 0;
+  let visited = 0;
+
+  async function walk(dir, depth = 0) {
+    if (matches.length >= 8 || visited >= maxDirs || Date.now() - startedAt > maxMs || depth > 5) return;
+    visited += 1;
+    let entries;
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (matches.length >= 8 || Date.now() - startedAt > maxMs) return;
+      const entryName = entry.name || '';
+      const fullPath = path.join(dir, entryName);
+      if (entry.isFile() && entryName.toLowerCase() === targetName.toLowerCase()) {
+        try {
+          const stat = await fsp.stat(fullPath);
+          const sizeMatches = !size || Math.abs(stat.size - size) <= 16;
+          const modifiedMatches = !modified || Math.abs(stat.mtimeMs - modified) < 5000;
+          if (sizeMatches && modifiedMatches) matches.push(fullPath);
+        } catch {
+          // Ignore files that disappear while scanning.
+        }
+      } else if (entry.isDirectory()) {
+        const lower = entryName.toLowerCase();
+        if (!LOCAL_VIDEO_SEARCH_SKIP_DIRS.has(lower) && !lower.startsWith('.')) {
+          await walk(fullPath, depth + 1);
+        }
+      }
+    }
+  }
+
+  for (const root of roots) {
+    await walk(root, 0);
+    if (matches.length >= 8 || Date.now() - startedAt > maxMs) break;
+  }
+
+  return [...new Set(matches)];
 }
 
 function assertLocalVideoPath(filePath) {
@@ -324,6 +440,34 @@ filesRouter.post('/local-video/metadata', async (req, res) => {
   }
 });
 
+filesRouter.post('/local-video/resolve-drop', async (req, res) => {
+  try {
+    const filename = String(req.body?.filename || '').trim();
+    if (!filename) return res.status(400).json({ error: 'The browser did not provide a video filename to resolve.' });
+    const matches = await findLocalVideoCandidates({
+      filename,
+      sizeBytes: req.body?.sizeBytes,
+      modifiedAtMs: req.body?.modifiedAtMs,
+    });
+    if (matches.length === 1) {
+      return res.json(await localVideoMetadata(matches[0]));
+    }
+    if (matches.length > 1) {
+      return res.status(409).json({
+        error: `Found ${matches.length} possible local videos named ${filename}. Paste the full path or set PULSEPOINT_VIDEO_DIRS to the folder that contains the recording.`,
+        candidates: matches,
+      });
+    }
+    return res.status(404).json({
+      error: `Chrome hid the full Windows path, and PulsePoint could not find ${filename} in the usual video folders. Use Browse, paste the full path, or set PULSEPOINT_VIDEO_DIRS to your recording folder.`,
+      exists: false,
+      checkedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    await handleLocalVideoError(res, error);
+  }
+});
+
 filesRouter.post('/video-playback-preview', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No video uploaded' });
 
@@ -379,13 +523,21 @@ $dialog = New-Object System.Windows.Forms.OpenFileDialog
 $dialog.Title = 'Select local session video'
 $dialog.Filter = 'Video files (*.mp4;*.webm;*.mov;*.mkv;*.m4v;*.avi;*.wmv)|*.mp4;*.webm;*.mov;*.mkv;*.m4v;*.avi;*.wmv|All files (*.*)|*.*'
 $dialog.Multiselect = $false
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+$dialog.RestoreDirectory = $true
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.ShowInTaskbar = $false
+$owner.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
+$owner.Show()
+$owner.Activate()
+if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
   Write-Output $dialog.FileName
 }
+$owner.Dispose()
 `;
 
   try {
-    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-Command', script], {
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-Command', script], {
       timeout: 120000,
       windowsHide: false,
     });
@@ -438,6 +590,7 @@ async function generateVideoClipPreview({
   endSeconds,
   label = 'video-clip',
   frameCount = 12,
+  maxDurationSeconds = 30,
   sourceDeleted = false,
   sourceType = 'upload',
 }) {
@@ -447,7 +600,8 @@ async function generateVideoClipPreview({
   const requestedEnd = Number(endSeconds || start + 8);
   const unclampedEnd = Math.max(start + 0.25, requestedEnd);
   const end = mediaDuration ? Math.min(mediaDuration, unclampedEnd) : unclampedEnd;
-  const duration = Math.min(30, Math.max(0.25, end - start));
+  const maxDuration = Math.max(1, Math.min(90, Number(maxDurationSeconds || 30)));
+  const duration = Math.min(maxDuration, Math.max(0.25, end - start));
   const safeLabel = slugifyFilePart(label || 'video-clip');
   const stem = `${Date.now()}-${crypto.randomUUID()}-${safeLabel}`;
   const clipFilename = `${stem}.mp4`;
@@ -542,6 +696,7 @@ filesRouter.post('/local-video/clip-preview', async (req, res) => {
       endSeconds: req.body?.endSeconds,
       label: req.body?.label || meta.filename || 'local-video-clip',
       frameCount: req.body?.frameCount,
+      maxDurationSeconds: req.body?.maxDurationSeconds,
       sourceDeleted: false,
       sourceType: 'linked_local_video',
     });

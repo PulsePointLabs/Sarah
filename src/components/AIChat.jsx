@@ -6,6 +6,7 @@ import { base44 } from "@/api/base44Client";
 import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
 import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext } from "@/lib/aiGrounding";
 import { extractVisualMediaContextFromConversation } from "@/lib/visualEvidence";
+import { serverUrl } from "@/lib/mobileApiBase";
 import { cleanWhisperTranscript } from "@/utils/whisperTranscript";
 
 const PROFILE_CATEGORIES = [
@@ -36,6 +37,36 @@ const VIDEO_FRAME_SAMPLE_COUNT = 12;
 const TTS_CACHE_DB_NAME = "pulsepoint-ai-chat-tts";
 const TTS_CACHE_DB_VERSION = 1;
 const TTS_CACHE_STORE_NAME = "audioChunks";
+const VOICE_AUTO_STOP_ENABLED = false;
+
+function extractProviderErrorMessage(error) {
+  const candidates = [
+    error?.data?.error,
+    error?.data?.message,
+    error?.message,
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const raw = typeof candidate === "string" ? candidate : JSON.stringify(candidate);
+    try {
+      const parsed = JSON.parse(raw);
+      const nested = parsed?.error?.message || parsed?.message || parsed?.error;
+      if (nested) return String(nested);
+    } catch {
+      // Not JSON; use the raw provider message below.
+    }
+    if (raw) return raw;
+  }
+  return "";
+}
+
+function friendlySarahError(error) {
+  const message = extractProviderErrorMessage(error) || "Sarah response failed.";
+  if (/credit balance is too low|plans\s*&\s*billing|purchase credits|anthropic api/i.test(message)) {
+    return "Sarah could not answer because Anthropic says the API credit balance is too low. Add credits in Anthropic Plans & Billing, then try again.";
+  }
+  return message;
+}
 
 function makeId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -297,6 +328,7 @@ export default function AIChat({
   visualEvidenceScope = mode,
   subjectLabel,
   clipTimelineOffsetSeconds = 0,
+  savedVideoClips = [],
   onSaveMessages,
   onSaveNotes,
 }) {
@@ -697,6 +729,81 @@ export default function AIChat({
     setSelectedImages((prev) => prev.filter((image) => image.id !== id));
   };
 
+  const attachSavedVideoClipFrames = async (clip) => {
+    const frames = Array.isArray(clip?.frames) ? clip.frames : [];
+    if (!frames.length) {
+      setImageError("This saved clip can be referenced in context, but it does not have sampled frames yet. Regenerate Session Analysis or Technical Deep Dive once to refresh it.");
+      return;
+    }
+    const slots = MAX_IMAGE_COUNT - selectedImages.length;
+    if (slots <= 0) {
+      setImageError(`Attach up to ${MAX_IMAGE_COUNT} images per message.`);
+      return;
+    }
+    const usableFrames = frames.filter((frame) => frame?.data || frame?.file_url || frame?.url).slice(0, slots);
+    const accepted = [];
+    setProcessingVideoClip(true);
+    try {
+      for (let index = 0; index < usableFrames.length; index += 1) {
+        const frame = usableFrames[index];
+        const frameUrl = frame.file_url || frame.url || "";
+        let base64Data = frame.data || "";
+        let previewUrl = frameUrl ? serverUrl(frameUrl) : `data:${frame.mimeType || "image/jpeg"};base64,${frame.data}`;
+        if (!base64Data && previewUrl) {
+          const response = await fetch(previewUrl);
+          if (!response.ok) throw new Error("Could not load saved clip frame.");
+          const dataUrl = await fileToDataUrl(await response.blob());
+          base64Data = stripDataUrl(dataUrl);
+          previewUrl = dataUrl;
+        }
+        const frameTimeSeconds = Number(frame.frameTimeSeconds);
+        accepted.push({
+          id: makeId("saved-clip-frame"),
+          filename: frame.filename || `${clip.label || "saved-clip"}-frame-${index + 1}.jpg`,
+          mimeType: frame.mimeType || "image/jpeg",
+          sizeBytes: frame.sizeBytes || 0,
+          storagePath: frameUrl,
+          previewUrl,
+          base64Data,
+          createdAt: new Date().toISOString(),
+          sourceVideo: {
+            filename: clip.filename || clip.source_video_label || "saved key clip",
+            label: clip.label || "Saved key video moment",
+            startSeconds: clip.startSeconds ?? 0,
+            endSeconds: clip.endSeconds ?? clip.durationSeconds ?? 0,
+            frameTimeSeconds: Number.isFinite(frameTimeSeconds) ? frameTimeSeconds : null,
+            timelineStartSeconds: clip.session_time_s != null && clip.durationSeconds != null
+              ? Math.max(0, Number(clip.session_time_s) - Number(clip.durationSeconds) / 2)
+              : clip.session_time_s,
+            timelineEndSeconds: clip.session_time_s != null && clip.durationSeconds != null
+              ? Number(clip.session_time_s) + Number(clip.durationSeconds) / 2
+              : clip.session_time_s,
+            frameTimelineSeconds: Number.isFinite(frameTimeSeconds)
+              ? Number((frameTimeSeconds - Number(clip.timeline_offset_s || 0)).toFixed(2))
+              : clip.session_time_s,
+            timelineLabel: "saved session key clip",
+            frameIndex: frame.frameIndex || index + 1,
+            processedClipUrl: serverUrl(clip.clip_url || clip.url || clip.file_url || ""),
+            motionSummary: clip.motion_summary || null,
+          },
+        });
+      }
+    } catch (error) {
+      setImageError(error?.message || "Could not attach saved clip frames.");
+      return;
+    } finally {
+      setProcessingVideoClip(false);
+    }
+    if (!accepted.length) {
+      setImageError("This saved clip did not expose usable sampled frames.");
+      return;
+    }
+    setSelectedImages((prev) => [...prev, ...accepted].slice(0, MAX_IMAGE_COUNT));
+    setImageError("");
+    const clipPrompt = `Please review the saved key clip "${clip.label || "session moment"}"${clip.session_time_s != null ? ` at ${formatTimePhrase(clip.session_time_s)}` : ""}. Focus on visible technique, grip, movement cadence, and body response.`;
+    setInput((current) => current.trim() ? current : clipPrompt);
+  };
+
   const seekVideoPreview = (seconds) => {
     const next = Math.max(0, Number(seconds) || 0);
     setVideoPlayheadSeconds(next);
@@ -1044,7 +1151,7 @@ export default function AIChat({
         silenceStartRef.current = null;
       } else if (speechDetectedRef.current) {
         if (!silenceStartRef.current) silenceStartRef.current = now;
-        if (now - silenceStartRef.current > 2400 && mediaRecorderRef.current?.state === "recording") {
+        if (VOICE_AUTO_STOP_ENABLED && now - silenceStartRef.current > 2400 && mediaRecorderRef.current?.state === "recording") {
           mediaRecorderRef.current.stop();
           return;
         }
@@ -1077,18 +1184,28 @@ export default function AIChat({
         return;
       }
       setTranscribing(true);
-      const blob = new Blob(audioChunksRef.current, { type: mimeType });
-      const ab = await blob.arrayBuffer();
-      const bytes = new Uint8Array(ab);
-      let bin = "";
-      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-      const base64 = btoa(bin);
-      const res = await base44.functions.invoke("whisperSTT", { audio_base64: base64, mime_type: mimeType, prompt: WHISPER_PROMPT });
-      const rawText = res.data?.text?.trim() || "";
-      const text = cleanWhisperTranscript(rawText);
-      if (text) setInput((prev) => (prev ? `${prev} ${text}` : text));
-      setTranscribing(false);
-      setTimeout(() => inputRef.current?.focus(), 100);
+      try {
+        const chunks = audioChunksRef.current.slice();
+        if (!chunks.length) throw new Error("No audio was captured.");
+        const blob = new Blob(chunks, { type: mimeType });
+        const ab = await blob.arrayBuffer();
+        const bytes = new Uint8Array(ab);
+        let bin = "";
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        const base64 = btoa(bin);
+        const res = await base44.functions.invoke("whisperSTT", { audio_base64: base64, mime_type: mimeType, prompt: WHISPER_PROMPT });
+        const rawText = res.data?.text?.trim() || "";
+        const text = cleanWhisperTranscript(rawText);
+        if (text) setInput((prev) => (prev ? `${prev} ${text}` : text));
+        setTimeout(() => inputRef.current?.focus(), 100);
+      } catch (error) {
+        const message = extractProviderErrorMessage(error) || "Whisper transcription failed.";
+        setImageError(message);
+        setChatProcessingStatus({ phase: "error", message: "Whisper transcription failed", detail: message });
+      } finally {
+        audioChunksRef.current = [];
+        setTranscribing(false);
+      }
     };
     mr.start();
     setRecording(true);
@@ -1273,31 +1390,36 @@ BANNED QUESTION TYPES — never ask these:
 
 If nothing specific stands out, ask what surprised them most or what they'd most want to remember from this session.`;
 
+    const SARAH_QA_STYLE_RULE = `EMOJI STYLE RULE: In conversational Q&A replies, Sarah may use an occasional emoji when the user uses emojis or when one naturally fits the tone. Keep it light and human, not decorative or spammy. Do not put emojis in structured saved findings.`;
+
     const systemPrompt = messages.length === 1
       ? mode === "profile"
-        ? `You're having a genuine, immersive conversation with someone about their physiology and arousal — like a knowledgeable friend who has studied their data closely. They've just shared something. Respond naturally, ask ONE follow-up question that goes deeper. Curious, specific, engaged. 2–3 sentences. No bullets, no clinical jargon. ${ANATOMY_RULE}`
+        ? `You're having a genuine, immersive conversation with someone about their physiology and arousal — like a knowledgeable friend who has studied their data closely. They've just shared something. Respond naturally, ask ONE follow-up question that goes deeper. Curious, specific, engaged. 2–3 sentences. No bullets, no clinical jargon. ${ANATOMY_RULE} ${SARAH_QA_STYLE_RULE}`
         : `You're a curious, knowledgeable friend helping someone unpack a specific ${conversationSubject}. They just shared something. React briefly and naturally, then ask ONE question grounded in a real detail from this ${conversationSubject} — a method used, a logged event or note, a subjective metric gap, or something about the body response. Sound like you actually read the record, not like you're scanning a graph. Keep it casual and conversational.
 
 ${SESSION_SCOPE_RULE}
 ${QUESTION_QUALITY_RULE}
 ${ANATOMY_RULE}
+${SARAH_QA_STYLE_RULE}
 2–3 sentences total. No affirmations, no "great!", no formal phrasing.`
       : shouldPivot
         ? mode === "profile"
-          ? `You're having a warm conversation about someone's physiology. They just responded. Pivot to a DIFFERENT aspect of their profile not yet covered. ONE curious, specific question. No affirmations. 2–3 sentences. ${ANATOMY_RULE}`
+          ? `You're having a warm conversation about someone's physiology. They just responded. Pivot to a DIFFERENT aspect of their profile not yet covered. ONE curious, specific question. No affirmations. 2–3 sentences. ${ANATOMY_RULE} ${SARAH_QA_STYLE_RULE}`
           : `You're digging into THIS session with someone. They just responded. Switch to a fresh angle — pick something not yet discussed (a different stimulation method, a metric gap, a logged event, something about how the session ended or how they felt afterward) and ask ONE casual, pointed question. Sound like you spotted something worth exploring, not like you're following a checklist.
 
 ${SESSION_SCOPE_RULE}
 ${QUESTION_QUALITY_RULE}
 ${ANATOMY_RULE}
+${SARAH_QA_STYLE_RULE}
 No affirmations. 2–3 sentences.`
         : mode === "profile"
-          ? `Warm, immersive conversation about physiology. They just responded. Continue naturally — ONE follow-up that goes deeper on what they said. Curious, specific. No affirmations. 2–3 sentences. ${ANATOMY_RULE}`
+          ? `Warm, immersive conversation about physiology. They just responded. Continue naturally — ONE follow-up that goes deeper on what they said. Curious, specific. No affirmations. 2–3 sentences. ${ANATOMY_RULE} ${SARAH_QA_STYLE_RULE}`
           : `You're digging into THIS session with someone. They just answered. Pick up the thread and ask ONE casual follow-up that goes deeper — reference something specific from the session (a method, a sensation they mentioned, a logged event, a metric gap, or how things unfolded) and invite them to expand. Make it feel like a genuine back-and-forth, not a checklist.
 
 ${SESSION_SCOPE_RULE}
 ${QUESTION_QUALITY_RULE}
 ${ANATOMY_RULE}
+${SARAH_QA_STYLE_RULE}
 No affirmations or pleasantries. 2–3 sentences.`;
 
     const imageReviewPrompt = imagePayload.aiImages.length ? `SARAH IMAGE REVIEW MODE:
@@ -1310,6 +1432,7 @@ ${ANATOMICAL_REFERENCE_FOCUS_RULE}
 - Do not turn image/media review into broad personal history, psychological backstory, reclaiming/history framing, whole-life meaning, or a session optimization essay unless that context directly explains a visible/mechanical finding, device interaction, safety consideration, or session-specific physiological interpretation.
 - Circular dots or bright reflective spots on the feet/body are tracking markers by default, not electrodes. Call them "tracking markers", "reflective markers", or "visible dots" unless e-stim, TENS, electrode pads, electrode leads, or an electrode setup is explicitly mentioned in the session/profile context, clip caption, or nearby events. Never write "foot electrode markers" from appearance alone.
 - Use direct second-person language and be respectful, warm, and precise.
+- In the conversational chatResponse only, Sarah may use an occasional emoji when the user uses emojis or when one naturally fits. Do not put emojis in structured findings.
 - ${TIME_FORMAT_RULE}
 - In chatResponse and every findingText, use "you" and "your"; do not use the person's name, "the user", "he", "she", "his", or "her".
 - If you make any concrete visible observation that may matter later, include it in findings. Use persistTo "profile", "session", or "both" for durable evidence; use persistTo "none" with needsUserConfirmation true for cautious review candidates.
@@ -1376,7 +1499,7 @@ Return a conversational answer plus structured findings for review/persistence.`
       });
     }
     } catch (error) {
-      const message = error?.data?.error || error?.message || "Sarah response failed.";
+      const message = friendlySarahError(error);
       setLoading(false);
       setChatProcessingStatus({ phase: "error", message: "Sarah response failed", detail: message });
       setImageError(message);
@@ -1446,6 +1569,35 @@ Return a conversational answer plus structured findings for review/persistence.`
       ))}
     </div>
   ) : null;
+
+  const renderSavedVideoClips = () => {
+    const clips = Array.isArray(savedVideoClips) ? savedVideoClips.filter((clip) => clip?.url || clip?.clip_url || clip?.frames?.length) : [];
+    if (!clips.length || mode !== "session") return null;
+    return (
+      <div className="rounded-lg border border-primary/20 bg-primary/[0.05] p-2 text-xs">
+        <p className="mb-2 font-semibold text-primary">Saved key video moments</p>
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {clips.slice(0, 8).map((clip) => (
+            <button
+              key={clip.id || `${clip.label}-${clip.session_time_s}`}
+              type="button"
+              onClick={() => attachSavedVideoClipFrames(clip)}
+              disabled={loading || uploadingImages || processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
+              className="min-w-[11rem] rounded-lg border border-border bg-background/75 px-2 py-1.5 text-left transition-colors hover:border-primary disabled:opacity-45"
+              title={clip.reason || "Attach sampled frames from this saved moment"}
+            >
+              <span className="block truncate font-semibold text-foreground">{clip.label || "Saved clip"}</span>
+              <span className="block text-[10px] text-muted-foreground">
+                {clip.session_time_s != null ? formatSeconds(clip.session_time_s) : "time?"}
+                {clip.camera_angle ? ` · ${clip.camera_angle}` : ""}
+                {Array.isArray(clip.frames) && clip.frames.length ? ` · ${clip.frames.length} frames` : " · needs refresh"}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   const renderSelectedVideoClip = () => {
     if (!selectedVideoClip) return null;
@@ -1877,6 +2029,7 @@ Return a conversational answer plus structured findings for review/persistence.`
           {/* Message thread or input prompt */}
           {messages.length === 0 ? (
             <div className={`${fullScreen ? "mx-auto mt-auto w-full max-w-4xl pb-4" : ""} space-y-2`}>
+              {renderSavedVideoClips()}
               {renderSelectedImages()}
               {imageError && <p className="text-xs text-destructive">{imageError}</p>}
               <textarea
@@ -1988,6 +2141,7 @@ Return a conversational answer plus structured findings for review/persistence.`
               <div ref={bottomRef} />
 
               {/* Input — shown after messages start */}
+              {renderSavedVideoClips()}
               {renderSelectedImages()}
               {imageError && <p className="text-xs text-destructive">{imageError}</p>}
               <div className={composerClass}>

@@ -1,27 +1,74 @@
 const INTERNAL_ANATOMY_RE = /\b(?:bladder neck|prostate|internal sphincters?|urethral course|pelvic floor musculature|internal rectal structures?|internal hemorrhoids?)\b/i;
-const CALLOUT_DUMP_RE = /^\s*(?:visual\s+)?callouts?\s+for\b/i;
-const INCIDENTAL_OBJECT_RE = /\b(?:headphones?|bone[-\s]?conduction|room contents?|furniture|background objects?)\b/i;
+const CALLOUT_DUMP_RE = /^\s*(?:(?:visual\s+)?(?:callouts?|references?)\s+for|visual reference for)\b/i;
+const INCIDENTAL_OBJECT_RE = /\b(?:ecg|chest[-\s]?strap|polar\s*h10|heart[-\s]?rate monitor|headphones?|bone[-\s]?conduction|foot cameras?|camera devices?|table paper|stirrups?|clinician perspective|room contents?|room setup|furniture|background objects?|environmental objects?)\b/i;
+const PROVENANCE_RE = /\b(?:in this batch|this batch|prior batches?|subsequent batches?|later batch|rechecked saved\/direct views?|saved\/direct views?|direct views linked into cumulative review|fresh images added this run|generated at|image set overview|reference value for pulsepoint|coverage map: no distinct recovered batch paragraph|no distinct recovered batch paragraph|assembled from|source details?|provenance)\b/i;
+const CAMERA_SETUP_RE = /\b(?:foot-of-table|camera angle|camera location|clinician perspective|table-position|session table|treatment table|table paper|stirrups?|lighting is|well-lit|image quality|frame edge|field of view|background)\b/i;
+const DEVICE_KEEP_RE = /\b(?:catheter|foley|urethral|sound|dilator|rectal|anal device|sleeve|device contact|contact zone|fit|tissue interaction|marker)\b/i;
+
+function normalizeForbiddenPhrasing(value = "") {
+  return String(value || "")
+    .replace(/\bfrom (?:a )?foot-of-table (?:clinician )?perspective\b/gi, "")
+    .replace(/\bin (?:the )?(?:right|left)?\s*lateral standing view\b/gi, "in standing profile")
+    .replace(/\bin (?:the )?anterior standing view\b/gi, "in standing posture")
+    .replace(/\bin (?:the )?posterior standing view\b/gi, "from posterior standing posture")
+    .replace(/\bin (?:image|photo)\s+\d+\b/gi, "")
+    .replace(/\b(?:image|photo)\s+\d+\s*(?:and|,)?\s*/gi, "")
+    .replace(/\b(?:this|the)\s+(?:image|photo|view)\s+(?:shows|provides|confirms)\b/gi, "visible findings show")
+    .replace(/\b(?:this|the)\s+(?:batch|image set|review run)\b/gi, "the cumulative review")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function sentenceChunks(value = "") {
+  return String(value || "")
+    .split(/(?<=[.!?])\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function shouldDropSentence(sentence = "") {
+  const text = String(sentence || "");
+  if (!text.trim()) return true;
+  if (CALLOUT_DUMP_RE.test(text)) return true;
+  if (INTERNAL_ANATOMY_RE.test(text)) return true;
+  if (PROVENANCE_RE.test(text)) return true;
+  if (INCIDENTAL_OBJECT_RE.test(text) && !DEVICE_KEEP_RE.test(text)) return true;
+  if (CAMERA_SETUP_RE.test(text) && !/\b(?:posture|alignment|supine|standing|prone|seated|lithotomy|abduction|flexion|extension)\b/i.test(text)) return true;
+  if (/\bthe cumulative review does not include\b/i.test(text)) return true;
+  if (/\b(?:not visible|not included|not provided|not available|deferred)\b/i.test(text) && /\b(?:batch|image set|prior|subsequent|later|rechecked)\b/i.test(text)) return true;
+  return false;
+}
 
 export function cleanProfileImageReviewText(value = "") {
   const raw = String(value || "");
   if (!raw.trim()) return "";
   if (CALLOUT_DUMP_RE.test(raw)) return "";
-  if (INCIDENTAL_OBJECT_RE.test(raw) && !/\b(?:chest strap|polar|marker|catheter|foley|device|contact|fit|visibility|occlusion)\b/i.test(raw)) return "";
+  if (INCIDENTAL_OBJECT_RE.test(raw) && !DEVICE_KEEP_RE.test(raw)) return "";
 
-  let text = raw
+  let text = normalizeForbiddenPhrasing(raw)
     .replace(/\bThis batch does not include[^.]*\.?\s*/gi, "")
     .replace(/\bThis image set does not include[^.]*\.?\s*/gi, "")
+    .replace(/\bAll \d+ rechecked saved\/direct views[^.]*\.?\s*/gi, "")
+    .replace(/\b\d+ direct views linked into cumulative review\.?\s*/gi, "")
+    .replace(/\bNo distinct recovered batch paragraph[^.]*\.?\s*/gi, "")
+    .replace(/\bCoverage Map:\s*No distinct recovered batch paragraph[^.]*\.?\s*/gi, "")
     .replace(/\bNo (?:whole-body|full-body|torso|standing|posterior|anterior|lateral|upper limb|lower limb|foot|feet)[^.]*?(?:in this batch|in this image set|were included|were provided)[^.]*\.?\s*/gi, "")
     .replace(/\bnot visible in this batch\.?\s*/gi, "")
     .replace(/\bnot provided in this batch\.?\s*/gi, "")
     .replace(/\bnot included in this batch\.?\s*/gi, "")
     .replace(/\bdeferred to (?:another|subsequent|later) batch[^.]*\.?\s*/gi, "")
+    .replace(/\b(?:prior|subsequent|later) batches?[^.]*\.?\s*/gi, "")
+    .replace(/\b(?:ECG|Polar H10|chest[-\s]?strap|heart[-\s]?rate monitor|bone[-\s]?conduction headphones?|headphones?|foot cameras?|camera devices?|table paper|stirrups?)[^.]*\.?\s*/gi, "")
     .replace(/\b(?:No|The)\s+(?:bladder neck|prostate|internal sphincters?|urethral course|pelvic floor musculature|internal rectal structures?|internal hemorrhoids?)[^.]*\.?\s*/gi, "")
     .replace(/\b(?:bladder neck|prostate|internal sphincters?|urethral course|pelvic floor musculature|internal rectal structures?|internal hemorrhoids?)[^.]*?(?:not visible|not visualized|not assessable|not assessed)[^.]*\.?\s*/gi, "")
+    .replace(/\b(?:lubricant residue|possible lubricant residue|natural moisture or possible lubricant residue)\b/gi, "surface sheen/moisture; source cannot be determined from static image")
     .replace(/\s{2,}/g, " ")
     .trim();
 
+  text = sentenceChunks(text).filter((sentence) => !shouldDropSentence(sentence)).join(" ").trim();
   if (!text || INTERNAL_ANATOMY_RE.test(text)) return "";
+  if (PROVENANCE_RE.test(text)) return "";
+  if (INCIDENTAL_OBJECT_RE.test(text) && !DEVICE_KEEP_RE.test(text)) return "";
   if (/\bmeat(?:al|us)\b/i.test(text) && /\b(?:bright|highlight|fluid|droplet|secretion|pre[-\s]?ejaculate)\b/i.test(text)) {
     return "Small bright meatal highlight or possible fluid point; static image cannot confirm secretion.";
   }
@@ -35,9 +82,9 @@ export function profileImageReviewTopicKey(value = "") {
   if (/\bshoulders?\b.*\b(level|symmetric|symmetry|asymmetry)|\b(level|symmetric)\b.*\bshoulders?\b/.test(text)) return "shoulder-symmetry";
   if (/\b(limb proportionality|limbs? appear proportionate|gross limb asymmetry|limb symmetry|bilaterally symmetric in length|lower limbs? appear symmetric)\b/.test(text)) return "limb-proportionality";
   if (/\b(follicular|erythematous papules?|papular|keratosis|inguinal|inner thigh|gluteal|perianal)\b/.test(text) && /\b(papules?|spots?|follicular|erythematous)\b/.test(text)) return "follicular-papules";
-  if (/\b(chest[-\s]?strap|polar h10|heart[-\s]?rate monitor)\b/.test(text)) return "chest-strap";
   if (/\b(flaccid|foreskin|glans|penile|penis|scrotum|testes|testicular)\b/.test(text) && /\b(stable|baseline|resting|normal|symmetric|foreskin|flaccid)\b/.test(text)) return "stable-genital-baseline";
   if (/\b(raphe|perineal body|scrotal raphe|perineal raphe|midline)\b/.test(text)) return "perineal-scrotal-midline";
+  if (/\b(anal verge|anal opening|perianal)\b/.test(text) && /\b(hemorrhoid|fissure|skin tag|lesion|symmetric|intact|normal)\b/.test(text)) return "anal-verge";
   if (/\bmeat(?:al|us)\b/.test(text) && /\b(bright|highlight|fluid|droplet|secretion)\b/.test(text)) return "meatal-highlight";
   if (/\b(anterior pelvic tilt|lumbar lordosis|lordotic|sagittal posture)\b/.test(text)) return "sagittal-posture";
   return text.replace(/[^a-z0-9]+/g, " ").trim().slice(0, 180);

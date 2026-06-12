@@ -3,6 +3,8 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, ReferenceLine,
 } from "recharts";
 import moment from "moment";
+import { serverUrl } from "@/lib/mobileApiBase";
+import { normalizeSessionKeyVideoClips } from "@/lib/visualEvidence";
 
 const COLORS = [
   "hsl(var(--chart-1))",
@@ -38,6 +40,40 @@ function downsample(rows, target = 300) {
   if (rows.length <= target) return rows;
   const step = Math.ceil(rows.length / target);
   return rows.filter((_, i) => i % step === 0);
+}
+
+function KeyVideoClipStrip({ sessions = [] }) {
+  const clips = sessions.flatMap((session) => (
+    normalizeSessionKeyVideoClips(session).map((clip) => ({
+      ...clip,
+      sessionLabel: session.date ? moment(session.date).format("M/D/YY") : "Session",
+    }))
+  ));
+  if (!clips.length) return null;
+  return (
+    <div className="mt-3 rounded-lg border border-primary/20 bg-primary/[0.04] p-2">
+      <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-primary">Key Video Moments</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {clips.slice(0, 6).map((clip) => {
+          const src = serverUrl(clip.url || clip.clip_url || clip.file_url);
+          if (!src) return null;
+          return (
+            <article key={`${clip.id}-${clip.url}`} className="overflow-hidden rounded-lg border border-border bg-card">
+              <div className="px-2 py-1 text-[10px]">
+                <p className="truncate font-semibold text-primary">{clip.label || "Saved key moment"}</p>
+                <p className="truncate text-muted-foreground">
+                  {clip.sessionLabel}
+                  {clip.session_time_s != null ? ` · ${fmtSec(clip.session_time_s)}` : ""}
+                  {clip.camera_angle ? ` · ${clip.camera_angle}` : ""}
+                </p>
+              </div>
+              <video src={src} controls preload="metadata" className="block max-h-56 w-full bg-black object-contain" />
+            </article>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 const ALIGN_OPTIONS = [
@@ -197,6 +233,7 @@ export default function ComparativeArousalTimeline({ timelines, sessions = [] })
               </LineChart>
             </ResponsiveContainer>
           </div>
+          <KeyVideoClipStrip sessions={sessions} />
         </>
       )}
     </div>

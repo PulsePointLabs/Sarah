@@ -1,5 +1,6 @@
 import { richTextToPlainText } from "@/lib/richText";
 import { isVisualReviewProfileQaEntry } from "@/lib/profileQa";
+import { cleanProfileImageReviewText } from "@/lib/profileImageReviewCleanup";
 
 export const PERSONALIZED_ANATOMY_OUTPUT_RULE = `
 PERSONALIZED ANATOMY OUTPUT RULE - HIGH PRIORITY:
@@ -59,6 +60,121 @@ function addLine(lines, label, value, maxLength) {
 function addMeasurementLine(lines, label, measurement) {
   if (!measurement || measurement.value == null || !measurement.unit) return;
   addLine(lines, label, `${measurement.value} ${measurement.unit}`);
+}
+
+const LATEST_REVIEW_SECTION_LABELS = {
+  executive_summary: "Executive summary",
+  head_face: "Head and face",
+  neck: "Neck",
+  shoulders_upper_back: "Shoulders and upper back",
+  chest: "Chest",
+  abdomen: "Abdomen",
+  pelvis_pubic_region: "Pelvis and pubic region",
+  genitals_perineum: "Genitals and perineum",
+  buttocks_perianal_region: "Buttocks and perianal region",
+  upper_limbs_hands: "Upper limbs and hands",
+  lower_limbs: "Lower limbs",
+  feet_toes: "Feet and toes",
+  posture_alignment: "Posture and alignment",
+  skin_summary: "Skin summary",
+  pubic_mound_lower_abdomen: "Pubic mound and lower abdomen",
+  inguinal_folds_groin_skin: "Inguinal folds and groin skin",
+  penis: "Penis",
+  foreskin: "Foreskin",
+  glans_meatus: "Glans and meatus",
+  scrotum_testes: "Scrotum and testes",
+  perineum: "Perineum",
+  anal_opening_perianal_region: "Anal opening and perianal region",
+  buttocks_gluteal_skin: "Buttocks and gluteal skin",
+  device_contact_findings: "Device and contact findings",
+  tissue_health_safety_observations: "Tissue health and safety observations",
+  measurement_reconciliation: "Measurement reconciliation",
+  constitutional_and_systemic_context: "Constitutional and systemic context",
+  cardiovascular_and_autonomic_context: "Cardiovascular and autonomic context",
+  sensory_and_biomechanical_context: "Sensory and biomechanical context",
+  pelvic_and_external_anatomy: "Pelvic and external anatomy",
+  dynamic_anatomical_function: "Dynamic anatomical function",
+  instrumentation_and_fit_findings: "Instrumentation and fit",
+  session_linked_interpretations: "Session-linked interpretations",
+};
+
+const LATEST_REVIEW_SECTION_ORDER = [
+  "executive_summary",
+  "posture_alignment",
+  "abdomen",
+  "pelvis_pubic_region",
+  "genitals_perineum",
+  "skin_summary",
+  "feet_toes",
+  "pubic_mound_lower_abdomen",
+  "inguinal_folds_groin_skin",
+  "penis",
+  "foreskin",
+  "glans_meatus",
+  "scrotum_testes",
+  "perineum",
+  "anal_opening_perianal_region",
+  "buttocks_gluteal_skin",
+  "device_contact_findings",
+  "tissue_health_safety_observations",
+  "measurement_reconciliation",
+  "constitutional_and_systemic_context",
+  "cardiovascular_and_autonomic_context",
+  "sensory_and_biomechanical_context",
+  "pelvic_and_external_anatomy",
+  "dynamic_anatomical_function",
+  "instrumentation_and_fit_findings",
+  "session_linked_interpretations",
+];
+
+function cleanReviewDigestText(value, maxLength = 520) {
+  const cleaned = cleanProfileImageReviewText(value);
+  return cleanText(cleaned, maxLength);
+}
+
+function addReviewDigestItems(lines, label, items, { limit = 3, maxLength = 520 } = {}) {
+  if (!Array.isArray(items) || !items.length) return;
+  const seen = new Set();
+  for (const item of items) {
+    const text = cleanReviewDigestText(item, maxLength);
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    lines.push(`- ${label}: ${text}`);
+    if (seen.size >= limit) break;
+  }
+}
+
+function buildLatestReviewDigest(result, label, { maxLines = 26 } = {}) {
+  if (!result || typeof result !== "object") return [];
+  const lines = [];
+  const generated = result?._meta?.last_generated_at || result?._meta?.generated_at || result?.generated_at;
+  const suffix = generated ? ` (${generated})` : "";
+  const overview = cleanReviewDigestText(result.overview, 700);
+  if (overview) lines.push(`- ${label}${suffix} overview: ${overview}`);
+  addReviewDigestItems(lines, `${label} key finding`, result.summary_card?.key_direct_findings, { limit: 4, maxLength: 520 });
+  addReviewDigestItems(lines, `${label} reference value`, result.summary_card?.primary_reference_value, { limit: 3, maxLength: 460 });
+
+  for (const key of LATEST_REVIEW_SECTION_ORDER) {
+    if (lines.length >= maxLines) break;
+    const items = Array.isArray(result[key]) ? result[key] : [];
+    if (!items.length) continue;
+    addReviewDigestItems(lines, `${label} ${LATEST_REVIEW_SECTION_LABELS[key] || key}`, items, {
+      limit: key === "executive_summary" ? 5 : 2,
+      maxLength: 520,
+    });
+  }
+  return lines.slice(0, maxLines);
+}
+
+function buildLatestAnatomicalReferenceContext(userProfile) {
+  if (!userProfile) return [];
+  const lines = [
+    ...buildLatestReviewDigest(userProfile.head_to_toe_image_review_result, "Latest Head-to-Toe review", { maxLines: 18 }),
+    ...buildLatestReviewDigest(userProfile.pelvic_genital_image_review_result, "Latest Pelvic/Genital review", { maxLines: 22 }),
+    ...buildLatestReviewDigest(userProfile.anatomical_physiological_profile_result, "Latest A&P profile", { maxLines: 18 }),
+  ];
+  return lines.slice(0, 44);
 }
 
 function buildProfileQaFindingLines(findings = [], { visualOnly = false } = {}) {
@@ -168,6 +284,10 @@ export function buildGlobalProfileContext(userProfile) {
   addLine(lines, "Anatomical context", userProfile.anatomical_context || userProfile.anatomy_notes, 900);
   const mechanicalLines = buildMechanicalProfileContext(userProfile.anatomical_mechanical_profile);
   if (mechanicalLines.length) lines.push("Functional mechanical profile:", ...mechanicalLines);
+  const latestAnatomicalReferenceLines = buildLatestAnatomicalReferenceContext(userProfile);
+  if (latestAnatomicalReferenceLines.length) {
+    lines.push("Latest cumulative anatomical reference reviews:", ...latestAnatomicalReferenceLines);
+  }
 
   return lines.length ? lines.join("\n") : "";
 }

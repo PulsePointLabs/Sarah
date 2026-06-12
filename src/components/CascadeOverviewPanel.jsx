@@ -4,8 +4,10 @@ import { Button } from "@/components/ui/button";
 import { AlertCircle, TrendingUp, Zap, Activity, Flag, Brain, ChevronDown, ChevronUp } from "lucide-react";
 import AIOutputReader from "./AIOutputReader";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
+import { generateSessionKeyVideoClips } from "./SessionAIPanel";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
+import { buildSessionAIContentMeta, formatGeneratedAt } from "@/utils/aiContentMetadata";
 
 function getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -48,6 +50,20 @@ function normalizeCascadeOverview(res) {
   }
 
   return parsed;
+}
+
+function paragraphIndexForCascadeClip(clip, paras, session) {
+  const time = Number(clip?.session_time_s);
+  if (!Number.isFinite(time)) return Math.min(1, Math.max(0, paras.length - 1));
+  const climax = Number(session?.climax_offset_s);
+  const recovery = Number(session?.recovery_offset_s);
+  const pre = Number(session?.pre_climax_offset_s);
+  let targetKey = "build_phase";
+  if (Number.isFinite(climax) && Math.abs(time - climax) <= 30) targetKey = "climax_phase";
+  else if (Number.isFinite(recovery) && time >= recovery) targetKey = "recovery_phase";
+  else if (Number.isFinite(pre) && time >= pre) targetKey = "pre_climax_phase";
+  const index = paras.findIndex((para) => para.key === targetKey);
+  return index >= 0 ? index : Math.min(1, Math.max(0, paras.length - 1));
 }
 
 function PhaseBlock({ color, icon, title, items }) {
@@ -413,8 +429,24 @@ ${annotatedEvents.length > 0 ? `\nAnnotated event timeline (with HR at each mome
     });
 
     const parsed = normalizeCascadeOverview(res);
-    setResult(parsed);
-    await base44.entities.Session.update(session.id, { ai_cascade: parsed });
+    const clipResult = await generateSessionKeyVideoClips({
+      session,
+      timelineRows,
+      label: "Cascade Overview",
+    }).catch((clipError) => ({
+      clips: [],
+      error: clipError?.message || "Could not generate key video clips.",
+    }));
+    const stored = {
+      ...parsed,
+      _meta: {
+        ...buildSessionAIContentMeta(session, session.ai_cascade?._meta || {}),
+        key_video_clips: clipResult.clips || [],
+        key_video_clip_error: clipResult.error || "",
+      },
+    };
+    setResult(stored);
+    await base44.entities.Session.update(session.id, { ai_cascade: stored });
     } catch (err) {
       console.error("AI Cascade overview failed:", err);
       setError(aiErrorMessage(err));
@@ -500,37 +532,67 @@ ${annotatedEvents.length > 0 ? `\nAnnotated event timeline (with HR at each mome
         // Build flat paragraph list with metadata for rendering
         // phases are now strings (prose), support both string and legacy array format
         const paras = [];
-        if (result.summary) paras.push({ text: result.summary, type: "summary", color: null });
+        if (result.summary) paras.push({ key: "summary", text: result.summary, type: "summary", color: null });
         for (const ph of PHASES) {
           const val = result[ph.key];
           if (!val) continue;
           if (Array.isArray(val)) {
-            for (const item of val) paras.push({ text: item, type: "phase", color: ph.color, title: ph.title });
+            for (const item of val) paras.push({ key: ph.key, text: item, type: "phase", color: ph.color, title: ph.title });
           } else {
-            paras.push({ text: val, type: "phase", color: ph.color, title: ph.title });
+            paras.push({ key: ph.key, text: val, type: "phase", color: ph.color, title: ph.title });
           }
         }
-        if (result.cascade_quality) paras.push({ text: result.cascade_quality, type: "quality", color: null });
+        if (result.cascade_quality) paras.push({ key: "cascade_quality", text: result.cascade_quality, type: "quality", color: null });
+        const keyVideoClips = Array.isArray(result?._meta?.key_video_clips) ? result._meta.key_video_clips : [];
+        const keyVideoClipError = result?._meta?.key_video_clip_error || "";
+        const clipsByParagraph = keyVideoClips.reduce((map, clip) => {
+          const paraIndex = paragraphIndexForCascadeClip(clip, paras, session);
+          if (!map.has(paraIndex)) map.set(paraIndex, []);
+          map.get(paraIndex).push(clip);
+          return map;
+        }, new Map());
 
         return (
-          <AIOutputReader
-            sessionId={session.id}
-            title="Cascade Overview"
-            sessionDate={session.date}
-            paragraphs={paras.map((p) => p.text)}
-            paragraphMeta={paras.map((meta) => (
-              meta.type === "summary"
-                ? { type: "summary" }
-                : {
-                  type: meta.type === "quality" ? "section" : "phase",
-                  sec: {
-                    key: meta.type === "quality" ? "cascade_quality" : meta.title,
-                    label: meta.type === "quality" ? "Cascade Quality Assessment" : meta.title,
-                    color: meta.color || "hsl(var(--primary))",
-                  },
-                }
-            ))}
-          />);
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+              <span>
+                {result?._meta?.last_generated_at
+                  ? `Generated ${formatGeneratedAt(result._meta.last_generated_at)}`
+                  : "Generated time unavailable"}
+              </span>
+              {keyVideoClips.length > 0 && (
+                <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 font-semibold text-primary">
+                  {keyVideoClips.length} key video clip{keyVideoClips.length === 1 ? "" : "s"}
+                </span>
+              )}
+            </div>
+            {!keyVideoClips.length && keyVideoClipError && (
+              <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
+                Key video clips were not added: {keyVideoClipError}
+              </div>
+            )}
+            <AIOutputReader
+              sessionId={session.id}
+              title="Cascade Overview"
+              sessionDate={session.date}
+              sourceGeneratedAt={result?._meta?.last_generated_at}
+              paragraphs={paras.map((p) => p.text)}
+              paragraphMeta={paras.map((meta, paraIdx) => {
+                const clips = clipsByParagraph.get(paraIdx) || [];
+                return meta.type === "summary"
+                  ? { type: "summary", clips }
+                  : {
+                    type: meta.type === "quality" ? "section" : "phase",
+                    clips,
+                    sec: {
+                      key: meta.type === "quality" ? "cascade_quality" : meta.title,
+                      label: meta.type === "quality" ? "Cascade Quality Assessment" : meta.title,
+                      color: meta.color || "hsl(var(--primary))",
+                    },
+                  };
+              })}
+            />
+          </div>);
 
 
       })()}

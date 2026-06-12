@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { AlertCircle, Brain, Activity, Lightbulb, TrendingUp, Zap, ChevronDown, ChevronUp } from "lucide-react";
 import AIOutputReader from "./AIOutputReader";
@@ -154,6 +154,71 @@ function isNewerCompletedJob(job, savedResult) {
   const jobTime = new Date(completedAt(job) || 0).getTime();
   const savedTime = new Date(savedResult?._meta?.last_generated_at || savedResult?._meta?.updated_at || 0).getTime();
   return Number.isFinite(jobTime) && jobTime > (Number.isFinite(savedTime) ? savedTime : 0);
+}
+
+function hasKeyVideoClipMeta(savedResult) {
+  const meta = savedResult?._meta || {};
+  return Array.isArray(meta.key_video_clips) && meta.key_video_clips.length > 0
+    || Boolean(meta.key_video_clip_error);
+}
+
+const LOWER_BODY_VIDEO_RE = /(?:^|[^a-z0-9])(feet|foot|toe|toes|heel|heels|sole|soles|lower[-_\s]?body|lower[-_\s]?cam|legs?)(?:$|[^a-z0-9])/i;
+const LOWER_BODY_EVENT_RE = /(?:^|[^a-z0-9])(feet|foot|toe|toes|curl|plantar|heel|heels|sole|soles|leg|legs|thigh|thighs|knee|knees|ankle|ankles|lower[-_\s]?body|tremor|shudder|spasm|bracing|braced|plant(?:ed|ing)?)(?:$|[^a-z0-9])/i;
+const KEY_VIDEO_CLIP_SCHEMA_VERSION = 3;
+
+function hasLowerBodyVideoToken(value) {
+  return LOWER_BODY_VIDEO_RE.test(String(value || "").toLowerCase());
+}
+
+function hasLowerBodyEventToken(value) {
+  return LOWER_BODY_EVENT_RE.test(String(value || "").toLowerCase());
+}
+
+function clipLooksLowerBodyOnly(clip) {
+  return clip?.camera_angle === "lower_body"
+    || hasLowerBodyVideoToken([
+      clip?.label,
+      clip?.source_video_label,
+      clip?.filename,
+      clip?.url,
+      clip?.clip_url,
+    ].filter(Boolean).join(" "));
+}
+
+function hasPrimaryKeyVideoClipMeta(savedResult) {
+  const clips = savedResult?._meta?.key_video_clips;
+  return Array.isArray(clips) && clips.some((clip) => !clipLooksLowerBodyOnly(clip));
+}
+
+function hasLegacyTruncatedKeyVideoClipLabel(savedResult) {
+  const clips = savedResult?._meta?.key_video_clips;
+  if (!Array.isArray(clips)) return false;
+  return clips.some((clip) => {
+    const label = String(clip?.label || "").trim();
+    if (label.length < 48 || /(\.\.\.|[.!?])$/.test(label)) return false;
+    if (/^(Pre-climax build|Climax window|Recovery shift|Peak HR\b)/i.test(label)) return false;
+    return /\b(partial(?:ly)?|appears?\s+to|consistent\s+with|visible|continues?|remains?|moves?|contact|shaft|glans|sleeve|hand|catheter|foley)\b/i.test(label);
+  });
+}
+
+function hasOutdatedKeyVideoClipSchema(savedResult) {
+  return hasKeyVideoClipMeta(savedResult)
+    && Number(savedResult?._meta?.key_video_clip_schema_version || 0) < KEY_VIDEO_CLIP_SCHEMA_VERSION;
+}
+
+function needsKeyVideoClipRepair(savedResult) {
+  return hasKeyVideoClipMeta(savedResult)
+    && (
+      !hasPrimaryKeyVideoClipMeta(savedResult)
+      || hasLegacyTruncatedKeyVideoClipLabel(savedResult)
+      || hasOutdatedKeyVideoClipSchema(savedResult)
+    );
+}
+
+function shouldProcessCompletedJob(job, savedResult) {
+  if (isNewerCompletedJob(job, savedResult)) return true;
+  if (job?.status === "complete" && savedResult && needsKeyVideoClipRepair(savedResult)) return true;
+  return job?.status === "complete" && savedResult && !hasKeyVideoClipMeta(savedResult);
 }
 
 function toAnalysisTextArray(value) {
@@ -329,6 +394,35 @@ function clipPriorityForEvent(event) {
   return 30;
 }
 
+function isClimaxClipText(text) {
+  return /\b(climax|orgasm|ejaculat|release)\b/i.test(String(text || ""));
+}
+
+function clipWindowForEvent(event) {
+  const text = [
+    event?.note,
+    Array.isArray(event?.category) ? event.category.join(" ") : event?.category,
+    Array.isArray(event?.annotation_tags) ? event.annotation_tags.join(" ") : event?.annotation_tags,
+  ].filter(Boolean).join(" ");
+  if (isClimaxClipText(text)) return { before: 0, after: 45, maxDurationSeconds: 45 };
+  if (hasLowerBodyEventToken(text)) return { before: 8, after: 18 };
+  return { before: 6, after: 14 };
+}
+
+function keyClipLabelFromNote(note, fallback, maxLength = 96) {
+  const normalized = String(note || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return fallback;
+  if (normalized.length <= maxLength) return normalized;
+  const punctuationCut = Math.max(
+    normalized.lastIndexOf("; ", maxLength),
+    normalized.lastIndexOf(". ", maxLength),
+    normalized.lastIndexOf(", ", maxLength),
+  );
+  const wordCut = normalized.lastIndexOf(" ", maxLength - 3);
+  const cutAt = punctuationCut >= 36 ? punctuationCut + 1 : wordCut >= 36 ? wordCut : maxLength - 3;
+  return `${normalized.slice(0, cutAt).trim()}...`;
+}
+
 function dedupeClipRequests(requests, minSpacingS = 22) {
   const sorted = [...requests]
     .filter((item) => Number.isFinite(item.session_time_s))
@@ -344,7 +438,7 @@ function dedupeClipRequests(requests, minSpacingS = 22) {
 function buildKeyVideoClipRequests(session, timelineRows = []) {
   const duration = sessionDurationSeconds(session, timelineRows);
   const requests = [];
-  const add = (time, label, reason, priority, windowBefore = 5, windowAfter = 8) => {
+  const add = (time, label, reason, priority, windowBefore = 5, windowAfter = 8, maxDurationSeconds = 30) => {
     const t = numberOrNull(time);
     if (t == null || t < 0) return;
     const clamped = duration ? Math.min(duration, Math.max(0, t)) : Math.max(0, t);
@@ -356,19 +450,40 @@ function buildKeyVideoClipRequests(session, timelineRows = []) {
       session_time_s: clamped,
       window_before_s: windowBefore,
       window_after_s: windowAfter,
+      max_duration_s: maxDurationSeconds,
+      include_lower_body_view: shouldIncludeLowerBodyClip(session, clamped, `${label} ${reason}`),
     });
   };
 
-  add(session?.pre_climax_offset_s, "Pre-climax build", "Saved pre-climax marker", 88, 7, 9);
-  add(session?.climax_offset_s, "Climax window", "Saved climax marker", 100, 9, 11);
-  add(session?.recovery_offset_s, "Recovery shift", "Saved recovery marker", 82, 6, 10);
+  add(session?.pre_climax_offset_s, "Pre-climax build", "Saved pre-climax marker", 88, 10, 16);
+  add(session?.climax_offset_s, "Climax window", "Saved climax marker; starts at the logged climax moment so the visible orgasm/release is not lost to pre-roll", 100, 0, 45, 45);
+  if (session?.climax_offset_s != null) {
+    add(
+      Number(session.climax_offset_s) + 22,
+      "Release follow-through",
+      "Post-climax ejaculation/release follow-through window",
+      99,
+      6,
+      45,
+      45,
+    );
+  }
+  add(session?.recovery_offset_s, "Recovery shift", "Saved recovery marker", 82, 10, 20);
 
   const hrRows = timelineRows
     .map((row) => ({ t: numberOrNull(row.time_offset_s), hr: numberOrNull(row.hr) }))
     .filter((row) => row.t != null && row.hr != null);
   if (hrRows.length) {
     const peak = hrRows.reduce((best, row) => (row.hr > best.hr ? row : best), hrRows[0]);
-    add(peak.t, `Peak HR ${Math.round(peak.hr)} bpm`, "Highest heart-rate point in the imported timeline", 74, 6, 8);
+    const nearClimax = session?.climax_offset_s != null && Math.abs(Number(peak.t) - Number(session.climax_offset_s)) <= 45;
+    add(
+      peak.t,
+      `Peak HR ${Math.round(peak.hr)} bpm`,
+      "Highest heart-rate point in the imported timeline",
+      nearClimax ? 92 : 74,
+      nearClimax ? 6 : 8,
+      nearClimax ? 30 : 16,
+    );
   }
 
   const eventRequests = (session?.event_timeline || [])
@@ -382,19 +497,16 @@ function buildKeyVideoClipRequests(session, timelineRows = []) {
     .slice(0, 5);
   for (const { event, priority, index } of eventRequests) {
     const note = String(event?.note || "").trim();
-    const label = note ? note.replace(/\s+/g, " ").slice(0, 54) : `Event ${index + 1}`;
-    add(event?.time_s, label, "Accepted event timeline note", priority, 5, 8);
+    const label = keyClipLabelFromNote(note, `Event ${index + 1}`);
+    const clipWindow = clipWindowForEvent(event);
+    add(event?.time_s, label, "Accepted event timeline note", priority, clipWindow.before, clipWindow.after, clipWindow.maxDurationSeconds || 30);
   }
 
   return dedupeClipRequests(requests).slice(0, 5);
 }
 
-function chooseLinkedVideo(session) {
-  const videos = Array.isArray(session?.linked_local_videos) ? session.linked_local_videos : [];
-  const reachable = videos.filter((video) => video?.path && video.exists !== false);
-  const anyWithPath = videos.filter((video) => video?.path);
-  const candidates = reachable.length ? reachable : anyWithPath;
-  const roleText = (video) => [
+function linkedVideoRoleText(video) {
+  return [
     video?.role,
     video?.viewRole,
     video?.source_video_role,
@@ -404,32 +516,79 @@ function chooseLinkedVideo(session) {
     video?.filename,
     video?.path,
   ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function isLowerBodyVideo(video) {
+  return hasLowerBodyVideoToken(linkedVideoRoleText(video));
+}
+
+function lowerBodySignalText(session, timeS, baseText = "") {
+  const nearby = (session?.event_timeline || [])
+    .filter((event) => Math.abs(Number(event?.time_s) - Number(timeS)) <= 28)
+    .map((event) => [
+      event?.note,
+      Array.isArray(event?.category) ? event.category.join(" ") : event?.category,
+      Array.isArray(event?.annotation_tags) ? event.annotation_tags.join(" ") : event?.annotation_tags,
+    ].filter(Boolean).join(" "))
+    .join(" ");
+  return `${baseText} ${nearby}`.toLowerCase();
+}
+
+function shouldIncludeLowerBodyClip(session, timeS, baseText = "") {
+  const text = lowerBodySignalText(session, timeS, baseText);
+  return hasLowerBodyEventToken(text);
+}
+
+function chooseLinkedVideo(session, preference = "primary") {
+  const videos = Array.isArray(session?.linked_local_videos) ? session.linked_local_videos : [];
+  const reachable = videos.filter((video) => video?.path && video.exists !== false);
+  const anyWithPath = videos.filter((video) => video?.path);
+  const candidates = reachable.length ? reachable : anyWithPath;
+  const preferredCandidates = preference === "lower_body"
+    ? candidates.filter(isLowerBodyVideo)
+    : candidates.filter((video) => !isLowerBodyVideo(video));
+  const pool = preferredCandidates.length ? preferredCandidates : candidates;
   const score = (video) => {
-    const text = roleText(video);
+    const text = linkedVideoRoleText(video);
     if (/\b(composite|pip|picture[-_\s]?in[-_\s]?picture|combined|obs)\b/.test(text)) return 120;
     if (/\b(main|primary|focus|genital|close)\b/.test(text)) return 110;
     if (/\b(lateral|side|full[-_\s]?body|whole[-_\s]?body)\b/.test(text)) return 80;
-    if (/\b(feet|foot|toe|toes|heel|heels|sole|soles|lower[-_\s]?body|lower[-_\s]?cam|legs?)\b/.test(text)) return 10;
+    if (hasLowerBodyVideoToken(text)) return 10;
     if (/\b(body|session)\b/.test(text)) return 60;
     return 50;
   };
-  return [...candidates].sort((a, b) => score(b) - score(a))[0] || null;
+  return [...pool].sort((a, b) => score(b) - score(a))[0] || null;
 }
 
-async function generateSessionKeyVideoClips({ session, timelineRows, label, onProgress }) {
-  const video = chooseLinkedVideo(session);
-  if (!video?.path) return { clips: [], error: "No linked local recording is available for key clips." };
+export async function generateSessionKeyVideoClips({ session, timelineRows, label, onProgress }) {
+  const primaryVideo = chooseLinkedVideo(session, "primary");
+  const lowerBodyVideo = chooseLinkedVideo(session, "lower_body");
+  if (!primaryVideo?.path && !lowerBodyVideo?.path) return { clips: [], error: "No linked local recording is available for key clips." };
   const requests = buildKeyVideoClipRequests(session, timelineRows);
   if (!requests.length) return { clips: [], error: "No usable markers, events, or HR peaks were available for key clips." };
 
   const clips = [];
-  for (let index = 0; index < requests.length; index += 1) {
-    const request = requests[index];
+  const clipJobs = requests.flatMap((request) => {
+    const jobs = [];
+    const main = primaryVideo || lowerBodyVideo;
+    if (main?.path) jobs.push({ request, video: main, angle: "primary" });
+    if (
+      request.include_lower_body_view &&
+      lowerBodyVideo?.path &&
+      lowerBodyVideo.path !== main?.path
+    ) {
+      jobs.push({ request, video: lowerBodyVideo, angle: "lower_body" });
+    }
+    return jobs;
+  });
+
+  for (let index = 0; index < clipJobs.length; index += 1) {
+    const { request, video, angle } = clipJobs[index];
     onProgress?.({
       phase: "video_clips",
       current: index,
-      total: requests.length,
-      message: `${label}: cutting key clip ${index + 1}/${requests.length} with ffmpeg…`,
+      total: clipJobs.length,
+      message: `${label}: cutting key clip ${index + 1}/${clipJobs.length} with ffmpeg…`,
     });
     const sourceCenter = sourceTimeForSession(request.session_time_s, video);
     const startSeconds = Math.max(0, sourceCenter - request.window_before_s);
@@ -438,14 +597,16 @@ async function generateSessionKeyVideoClips({ session, timelineRows, label, onPr
       path: video.path,
       startSeconds,
       endSeconds,
-      label: `${label} ${request.label}`,
+      label: `${label} ${request.label}${angle === "lower_body" ? " lower-body view" : ""}`,
       frameCount: 4,
+      maxDurationSeconds: request.max_duration_s || 30,
     });
     clips.push({
-      id: `${request.id}:${index}`,
-      label: request.label,
-      reason: request.reason,
+      id: `${request.id}:${angle}:${index}`,
+      label: angle === "lower_body" ? `${request.label} - lower-body view` : request.label,
+      reason: angle === "lower_body" ? `${request.reason}; lower-body angle included for foot/leg/climax context` : request.reason,
       session_time_s: request.session_time_s,
+      camera_angle: angle,
       source_video_label: video.label || video.filename || "Linked local video",
       source_video_fingerprint: video.fingerprint || "",
       timeline_offset_s: timelineOffsetSeconds(video),
@@ -456,12 +617,22 @@ async function generateSessionKeyVideoClips({ session, timelineRows, label, onPr
       endSeconds: clip.endSeconds,
       durationSeconds: clip.durationSeconds,
       motion_summary: clip.motion_summary || null,
+      frames: Array.isArray(clip.frames)
+        ? clip.frames.map((frame) => ({
+          filename: frame.filename,
+          file_url: frame.file_url || frame.url,
+          url: frame.url || frame.file_url,
+          mimeType: frame.mimeType || "image/jpeg",
+          frameTimeSeconds: frame.frameTimeSeconds,
+          frameIndex: frame.frameIndex,
+        }))
+        : [],
     });
   }
   return { clips, error: "" };
 }
 
-function paragraphIndexForClip(clip, sections, totalParagraphs, durationS) {
+export function paragraphIndexForClip(clip, sections, totalParagraphs, durationS) {
   const arousalSection = sections.find((section) => /chronological|arousal arc/i.test(section.label || ""));
   if (arousalSection?.items?.length) {
     const duration = durationS || Math.max(1, Number(clip.session_time_s) || 1);
@@ -496,6 +667,7 @@ async function buildStoredSessionAnalysisResult({
     ...parsed,
     _meta: {
       ...buildSessionAIContentMeta(session, previousMeta, completedAt(completedJob)),
+      key_video_clip_schema_version: KEY_VIDEO_CLIP_SCHEMA_VERSION,
       key_video_clips: clipResult.clips || [],
       key_video_clip_error: clipResult.error || "",
     },
@@ -512,6 +684,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
   const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(repairSessionAnalysisResult(session[analysisField] ?? null));
   const [error, setError] = useState("");
+  const clipRepairRef = useRef("");
   const resultStale = isSessionAIContentStale(result, session);
   const evidencePreflight = sessionAIPreflight(session, timelineRows);
 
@@ -533,7 +706,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
         if (cancelled) return;
         const job = (data.jobs || []).find((item) => item.meta?.label === analysisLabel);
         if (!job) return;
-        if (job.status === "complete" && !isNewerCompletedJob(job, result || session[analysisField])) return;
+        if (job.status === "complete" && !shouldProcessCompletedJob(job, result || session[analysisField])) return;
 
         setCollapsed(false);
         setJobStatus(job);
@@ -548,7 +721,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
             },
           });
         if (cancelled) return;
-        if (!isNewerCompletedJob(completedJob, result || session[analysisField])) return;
+        if (!shouldProcessCompletedJob(completedJob, result || session[analysisField])) return;
 
         const parsed = normalizeSessionAnalysis(completedJob.result);
         const storedResult = await buildStoredSessionAnalysisResult({
@@ -599,6 +772,96 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
       cancelled = true;
     };
   }, [analysisField, analysisLabel, onAnalysisSaved, result, session, session.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const repairKeyClips = async () => {
+      const currentResult = result || session[analysisField];
+      if (!currentResult || !needsKeyVideoClipRepair(currentResult)) return;
+      const primaryVideo = chooseLinkedVideo(session, "primary");
+      if (!primaryVideo?.path) return;
+      const repairReason = !hasPrimaryKeyVideoClipMeta(currentResult)
+        ? "Replaced stale clips sourced from lower-body/feet video as primary."
+        : hasOutdatedKeyVideoClipSchema(currentResult)
+          ? "Rebuilt key video clips with current timing and clip-window rules."
+        : "Rebuilt legacy key video clip labels that were cut off mid-phrase.";
+      const repairKey = [
+        session.id,
+        analysisField,
+        currentResult?._meta?.last_generated_at || currentResult?._meta?.updated_at || "unknown",
+        repairReason,
+        primaryVideo.path,
+      ].join("|");
+      if (clipRepairRef.current === repairKey) return;
+      clipRepairRef.current = repairKey;
+      try {
+        setJobStatus({
+          status: "running",
+          progress: {
+            phase: "video_clip_repair",
+            current: 0,
+            total: 1,
+            message: `${analysisLabel}: refreshing saved key video clips...`,
+          },
+        });
+        const clipResult = await generateSessionKeyVideoClips({
+          session,
+          timelineRows,
+          label: analysisLabel,
+          onProgress: (progress) => {
+            if (!cancelled) {
+              setJobStatus({
+                status: "running",
+                progress,
+              });
+            }
+          },
+        }).catch((clipError) => ({
+          clips: [],
+          error: clipError?.message || "Could not regenerate key video clips.",
+        }));
+        if (cancelled) return;
+        if (!clipResult.clips?.length) {
+          setJobStatus(null);
+          return;
+        }
+        const repairedResult = {
+          ...currentResult,
+          _meta: {
+            ...(currentResult._meta || {}),
+            key_video_clip_schema_version: KEY_VIDEO_CLIP_SCHEMA_VERSION,
+            key_video_clips: clipResult.clips,
+            key_video_clip_error: clipResult.error || "",
+            key_video_clip_repaired_at: new Date().toISOString(),
+            key_video_clip_repair_reason: repairReason,
+          },
+        };
+        setResult(repairedResult);
+        await base44.entities.Session.update(session.id, { [analysisField]: repairedResult });
+        onAnalysisSaved?.(analysisField, repairedResult);
+        if (!cancelled) {
+          setJobStatus({
+            status: "complete",
+            progress: {
+              phase: "video_clip_repair",
+              current: 1,
+              total: 1,
+              message: "Key video clips repaired with main/composite source.",
+            },
+          });
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.warn(`${analysisLabel} key video clip repair skipped:`, err);
+          setJobStatus(null);
+        }
+      }
+    };
+    repairKeyClips();
+    return () => {
+      cancelled = true;
+    };
+  }, [analysisField, analysisLabel, onAnalysisSaved, result, session, session.id, timelineRows]);
 
   const analyze = async () => {
     setLoading(true);
@@ -1144,6 +1407,7 @@ Provide ${isTechnical
         if (notableItems.length) { sections.push({ label: isTechnical ? "Notable Findings" : "Patterns & Hypotheses", color: "chart-4", icon: <Zap className="w-3.5 h-3.5" />, items: notableItems, start: idx }); idx += notableItems.length; }
         if (recommendationItems.length) { sections.push({ label: isTechnical ? "Recommendations" : "Recommendations & Experiments", color: "accent", icon: <Lightbulb className="w-3.5 h-3.5" />, items: recommendationItems, start: idx }); }
         const keyVideoClips = Array.isArray(result?._meta?.key_video_clips) ? result._meta.key_video_clips : [];
+        const keyVideoClipError = result?._meta?.key_video_clip_error || "";
         const clipsByParagraph = keyVideoClips.reduce((map, clip) => {
           const paraIndex = paragraphIndexForClip(clip, sections, paras.length, sessionDurationSeconds(session, timelineRows));
           if (!map.has(paraIndex)) map.set(paraIndex, []);
@@ -1164,7 +1428,17 @@ Provide ${isTechnical
                   May be stale - newer saved evidence exists
                 </span>
               )}
+              {keyVideoClips.length > 0 && (
+                <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 font-semibold text-primary">
+                  {keyVideoClips.length} key video clip{keyVideoClips.length === 1 ? "" : "s"}
+                </span>
+              )}
             </div>
+            {!keyVideoClips.length && keyVideoClipError && (
+              <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
+                Key video clips were not added: {keyVideoClipError}
+              </div>
+            )}
             <AIOutputReader
               sessionId={session.id}
               title={analysisTitle}
