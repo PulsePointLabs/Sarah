@@ -54,6 +54,58 @@ const SORT_OPTIONS = [
   { value: "events", label: "Events" },
   { value: "needs_review", label: "Needs Review" },
 ];
+const INITIAL_RENDER_COUNT = 40;
+const SESSION_LIST_FIELDS = [
+  "id",
+  "created_date",
+  "updated_date",
+  "date",
+  "start_time",
+  "end_time",
+  "duration_minutes",
+  "avg_hr",
+  "max_hr",
+  "hr_at_climax",
+  "methods",
+  "tags",
+  "build_type",
+  "custom_build_type",
+  "intensity",
+  "build_quality",
+  "satisfaction",
+  "climax_duration",
+  "mood",
+  "environment",
+  "hydration",
+  "substances",
+  "notes",
+  "unusual_sensations",
+  "primary_limiting_factor",
+  "no_climax",
+  "is_quick_entry",
+  "is_favorite",
+  "ai_analysis",
+  "emg_enabled",
+  "emg_general_notes",
+  "emg_left_placement_notes",
+  "emg_right_placement_notes",
+  "video_link",
+  "video_file",
+  "discomfort",
+  "discomfort_entries",
+  "discomfort_interference",
+  "release_completeness",
+  "arousal_depth",
+  "erection_stability",
+  "stimulation_fit",
+  "sensory_immersion",
+  "recovery_quality",
+  "control",
+  "live_foot_tracking",
+  "live_foot_tracking_updated_at",
+  "motion_analysis",
+  "motion_telemetry",
+];
 
 const num = (value) => {
   const parsed = Number(value);
@@ -147,6 +199,9 @@ export default function Sessions() {
   const [sessions, setSessions] = useState([]);
   const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [hydrating, setHydrating] = useState(false);
+  const [hydrateError, setHydrateError] = useState("");
+  const [visibleLimit, setVisibleLimit] = useState(INITIAL_RENDER_COUNT);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeProgress, setAnalyzeProgress] = useState(0);
   const [backfilling, setBackfilling] = useState(false);
@@ -171,13 +226,33 @@ export default function Sessions() {
   }, []);
 
   const loadSessions = async () => {
-    const [data, profile] = await Promise.all([
+    setHydrateError("");
+    try {
+      const firstPass = await base44.entities.Session.listFields(SESSION_LIST_FIELDS, "-date", 200);
+      setSessions(firstPass);
+      setLoading(false);
+    } catch (error) {
+      setHydrateError(error?.message || "Could not load sessions.");
+      setLoading(false);
+      return;
+    }
+
+    setHydrating(true);
+    Promise.all([
       base44.entities.Session.list("-date", 200),
       base44.auth.me().catch(() => null),
-    ]);
-    setSessions(data);
-    setUserProfile(profile);
-    setLoading(false);
+    ]).then(([fullRows, profile]) => {
+      setSessions((current) => {
+        const localById = new Map(current.map((session) => [session.id, session]));
+        return fullRows.map((session) => ({ ...(localById.get(session.id) || {}), ...session }));
+      });
+      setUserProfile(profile);
+      setHydrateError("");
+    }).catch((error) => {
+      setHydrateError(error?.message || "Background session details did not finish loading.");
+    }).finally(() => {
+      setHydrating(false);
+    });
   };
 
   const stats = useMemo(() => {
@@ -303,6 +378,25 @@ export default function Sessions() {
     sortMode,
     viewMode,
   ]);
+
+  const displayedSessions = useMemo(
+    () => visibleSessions.slice(0, visibleLimit),
+    [visibleLimit, visibleSessions],
+  );
+
+  useEffect(() => {
+    setVisibleLimit(INITIAL_RENDER_COUNT);
+  }, [search, sortMode, viewMode, filterMethod, filterBuildType, filterIntMin, filterIntMax, filterBQMin, filterBQMax, filterDateFrom, filterDateTo]);
+
+  useEffect(() => {
+    if (visibleLimit >= visibleSessions.length) return undefined;
+    const schedule = window.requestIdleCallback || ((callback) => window.setTimeout(callback, 80));
+    const cancel = window.cancelIdleCallback || window.clearTimeout;
+    const id = schedule(() => {
+      setVisibleLimit((current) => Math.min(visibleSessions.length, current + 80));
+    });
+    return () => cancel(id);
+  }, [visibleLimit, visibleSessions.length]);
 
   const analyzeAll = async () => {
     const toAnalyze = sessions.filter((session) => !session.ai_analysis?.summary);
@@ -464,7 +558,10 @@ ${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+        <div className="space-y-3 text-center">
+          <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          <p className="text-xs text-muted-foreground">Loading compact session list…</p>
+        </div>
       </div>
     );
   }
@@ -518,6 +615,17 @@ ${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
       />
 
       <div className="space-y-4 px-4 pb-6">
+        {(hydrating || hydrateError) && (
+          <div className={`rounded-xl border px-4 py-3 text-xs ${
+            hydrateError
+              ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
+              : "border-primary/20 bg-primary/[0.05] text-muted-foreground"
+          }`}>
+            {hydrateError
+              ? `Showing the fast session list. Background detail refresh hit: ${hydrateError}`
+              : "Showing sessions now. Background details, profile context, and heavier pattern panels are still hydrating."}
+          </div>
+        )}
         {stats.motion.any > 0 && (
           <div className="rounded-xl border border-primary/20 bg-primary/[0.05] px-4 py-3 text-xs text-muted-foreground">
             <span className="font-semibold text-primary">Motion evidence:</span> {stats.motion.any} session{stats.motion.any === 1 ? "" : "s"} · {stats.motion.saved} saved telemetry · {stats.motion.promoted} with promoted findings
@@ -659,7 +767,9 @@ ${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
           </div>
         )}
 
-        <RoutinePatternAnalysis sessions={sessions} userProfile={userProfile} />
+        {!hydrating && userProfile && (
+          <RoutinePatternAnalysis sessions={sessions} userProfile={userProfile} />
+        )}
 
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -682,9 +792,14 @@ ${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
               <button onClick={clearFilters} className="mt-1 text-sm text-primary">Clear filters</button>
             </div>
           ) : (
-            visibleSessions.map((session) => (
+            displayedSessions.map((session) => (
               <SessionCard key={session.id} session={session} onDelete={deleteSession} />
             ))
+          )}
+          {displayedSessions.length < visibleSessions.length && (
+            <div className="rounded-xl border border-border bg-card py-4 text-center text-xs text-muted-foreground">
+              Showing {displayedSessions.length} of {visibleSessions.length}. More sessions are being added in the background.
+            </div>
           )}
         </div>
       </div>

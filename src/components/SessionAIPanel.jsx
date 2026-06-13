@@ -1,17 +1,267 @@
 import { useEffect, useRef, useState } from "react";
 import { base44 } from "@/api/base44Client";
-import { AlertCircle, Brain, Activity, Lightbulb, TrendingUp, Zap, ChevronDown, ChevronUp } from "lucide-react";
+import { AlertCircle, Brain, Activity, Lightbulb, TrendingUp, Zap, ChevronDown, ChevronUp, Download, Loader2, Video } from "lucide-react";
 import AIOutputReader from "./AIOutputReader";
 import { Button } from "@/components/ui/button";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import { buildAudioChapterBundle } from "@/lib/audioChapters";
+import { serverUrl } from "@/lib/mobileApiBase";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from "@/lib/sessionContext";
 import { buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, normalizeSessionVideoPassFindings } from "@/lib/visualEvidence";
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
+import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "./TTSButton";
+
+const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v2";
+
+function trailingContext(text, maxChars = 320) {
+  const cleaned = String(text || "").replace(/\s+/g, " ").trim();
+  return cleaned.length > maxChars ? cleaned.slice(-maxChars) : cleaned;
+}
+
+function buildReviewVideoChunks(paragraphs = []) {
+  const chunks = [];
+  let previousText = "";
+  paragraphs.forEach((paragraph) => {
+    const cleaned = cleanTextForSpeech(paragraph);
+    if (!cleaned) return;
+    splitIntoChunks(cleaned, TTS_CHUNK_TARGET_CHARS).forEach((part) => {
+      const text = prepareTTSInput(part);
+      if (!text) return;
+      chunks.push({
+        text,
+        previousContext: trailingContext(previousText),
+      });
+      previousText = previousText ? `${previousText} ${part}` : part;
+    });
+  });
+  return chunks;
+}
+
+function reviewFilename(title = "Session Review Video") {
+  return `${String(title || "Session Review Video")
+    .replace(/^AI\s+/i, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 60) || "Session-Review-Video"}.mp4`;
+}
+
+function sanitizeReviewClip(clip = {}) {
+  return {
+    id: clip.id || null,
+    label: clip.label || "",
+    reason: clip.reason || "",
+    session_time_s: clip.session_time_s ?? clip.sessionTimeSeconds ?? clip.timeline_offset_s ?? null,
+    camera_angle: clip.camera_angle || null,
+    source_video_label: clip.source_video_label || null,
+    source_video_fingerprint: clip.source_video_fingerprint || null,
+    timeline_offset_s: clip.timeline_offset_s ?? null,
+    url: clip.url || clip.clip_url || clip.file_url || "",
+    clip_url: clip.clip_url || clip.url || clip.file_url || "",
+    file_url: clip.file_url || clip.url || clip.clip_url || "",
+    filename: clip.filename || "",
+    startSeconds: clip.startSeconds ?? null,
+    endSeconds: clip.endSeconds ?? null,
+    durationSeconds: clip.durationSeconds ?? null,
+  };
+}
+
+function SessionReviewVideoExportButton({
+  session,
+  analysisTitle,
+  sourceGeneratedAt,
+  paragraphs = [],
+  paragraphMeta = [],
+}) {
+  const [status, setStatus] = useState({ type: "idle", message: "" });
+  const [rendered, setRendered] = useState(null);
+  const [existingVideo, setExistingVideo] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadExisting = async () => {
+      if (!session?.id) return;
+      try {
+        const [records, jobsResult] = await Promise.all([
+          base44.entities.SessionReviewVideo.filter({ session_id: session.id }, "-created_date", 20),
+          listBackgroundJobs({
+            type: "session_review_video",
+            status: "complete",
+            metaSessionId: session.id,
+            includeCleared: true,
+            limit: 20,
+          }),
+        ]);
+        if (cancelled) return;
+        const matchingRecord = (records || []).find((record) => (
+          record?.file_url &&
+          record?.render_version === REVIEW_VIDEO_RENDER_VERSION &&
+          (!sourceGeneratedAt || !record.source_generated_at || record.source_generated_at === sourceGeneratedAt)
+        ));
+        const matchingJob = (jobsResult?.jobs || []).find((job) => (
+          job?.result?.file_url &&
+          job?.result?.render_version === REVIEW_VIDEO_RENDER_VERSION &&
+          (!sourceGeneratedAt || !job?.meta?.sourceGeneratedAt || job.meta.sourceGeneratedAt === sourceGeneratedAt)
+        ));
+        const recovered = matchingRecord || (matchingJob ? {
+          id: `job:${matchingJob.id}`,
+          file_url: matchingJob.result.file_url,
+          filename: matchingJob.result.filename || String(matchingJob.result.file_url).split("/").pop(),
+          duration_seconds: matchingJob.result.duration_seconds,
+          audio_reused: matchingJob.result.audio_reused,
+          source_generated_at: matchingJob.meta?.sourceGeneratedAt || null,
+          _source: "completed_review_video_job",
+        } : null);
+        setExistingVideo(recovered);
+      } catch (error) {
+        if (!cancelled) console.warn("Could not load existing review video:", error);
+      }
+    };
+    loadExisting();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.id, sourceGeneratedAt]);
+
+  const startRender = async () => {
+    const readableParagraphs = paragraphs.map((paragraph) => String(paragraph || "").trim()).filter(Boolean);
+    if (!readableParagraphs.length) {
+      setStatus({ type: "error", message: "No analysis text is available for a review video." });
+      return;
+    }
+    setRendered(null);
+    try {
+      const runtime = getTTSRuntime(loadTTSSettings());
+      const chunks = buildReviewVideoChunks(readableParagraphs);
+      const chapters = buildAudioChapterBundle({
+        title: analysisTitle || "Session Review Video",
+        audioFilename: reviewFilename(analysisTitle),
+        paragraphs: readableParagraphs,
+        source: "session_review_video",
+      }).chapters;
+      const reviewParagraphMeta = paragraphMeta.map((meta = {}) => ({
+        type: meta.type || "section",
+        sec: meta.sec ? { label: meta.sec.label || "", color: meta.sec.color || "" } : null,
+        clips: Array.isArray(meta.clips) ? meta.clips.map(sanitizeReviewClip) : [],
+      }));
+      const payload = {
+        sessionId: session?.id || null,
+        sessionDate: session?.date || null,
+        title: analysisTitle || "Session Review Video",
+        sourceGeneratedAt: sourceGeneratedAt || null,
+        session: {
+          id: session?.id || null,
+          date: session?.date || null,
+          linked_local_videos: Array.isArray(session?.linked_local_videos) ? session.linked_local_videos : [],
+        },
+        paragraphs: readableParagraphs,
+        paragraphMeta: reviewParagraphMeta,
+        chunks,
+        chapters,
+        voice: "nova",
+        model: runtime.model,
+        speed: runtime.speed,
+        instructions: runtime.instructions,
+        outputFormat: runtime.format,
+        normalize: runtime.settings.normalizeExport,
+      };
+
+      setStatus({ type: "working", message: "Starting review video render..." });
+      const job = await startBackgroundJob("session_review_video", payload, {
+        title: `${analysisTitle || "Session Analysis"} review video`,
+        source: "SessionAIPanel",
+        sessionId: session?.id || null,
+        sourceGeneratedAt: sourceGeneratedAt || null,
+      });
+      const completed = await waitForBackgroundJob(job.id, {
+        intervalMs: 1500,
+        onProgress: (nextJob) => {
+          const progress = nextJob.progress || {};
+          setStatus({
+            type: nextJob.status === "error" ? "error" : "working",
+            message: progress.message || "Rendering review video...",
+          });
+        },
+      });
+      if (!completed.result?.file_url) throw new Error("Review render did not return an MP4.");
+      setRendered(completed.result);
+      setExistingVideo(completed.result);
+      setStatus({
+        type: "ok",
+        message: completed.result.audio_reused
+          ? "Review video ready. Reused matching narration."
+          : "Review video ready. Narration was rendered for this export.",
+      });
+    } catch (error) {
+      setStatus({ type: "error", message: error?.message || "Review video render failed." });
+    }
+  };
+
+  const download = () => {
+    const target = rendered?.file_url ? rendered : existingVideo;
+    if (!target?.file_url) return;
+    const a = document.createElement("a");
+    a.href = serverUrl(target.file_url);
+    a.download = target.filename || reviewFilename(analysisTitle);
+    a.click();
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-background/60 px-3 py-2">
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={startRender}
+        disabled={status.type === "working" || !paragraphs.length}
+        className="h-8 gap-1.5 text-xs"
+      >
+        {status.type === "working" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Video className="h-3.5 w-3.5" />}
+        Build review video
+      </Button>
+      {rendered?.file_url && (
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={download}
+          className="h-8 gap-1.5 text-xs"
+        >
+          <Download className="h-3.5 w-3.5" />
+          Download MP4
+        </Button>
+      )}
+      {!rendered?.file_url && existingVideo?.file_url && (
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={download}
+          className="h-8 gap-1.5 text-xs"
+        >
+          <Download className="h-3.5 w-3.5" />
+          Download Existing
+        </Button>
+      )}
+      {existingVideo?._source === "completed_review_video_job" && (
+        <span className="text-xs text-amber-200">
+          Recovered from completed background render
+        </span>
+      )}
+      {status.message && (
+        <span className={`text-xs ${status.type === "error" ? "text-destructive" : status.type === "ok" ? "text-emerald-400" : "text-muted-foreground"}`}>
+          {status.message}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function buildSessionContext(session, timelineRows) {
   const hrMin = timelineRows.length ? Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))) : null;
   const hrMax = timelineRows.length ? Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))) : null;
@@ -106,6 +356,22 @@ BODY-STATE INTERPRETIVE STYLE - RESTORE PULSEPOINT FEEL:
 - In body exploration sessions, "what your body is doing" may mean mapping sensation, testing comfort, observing HR response, position tolerance, device fit, movement patterns, or nervous-system settling rather than arousal escalation.
 `;
 
+const HUMANIZED_PHYSIOLOGY_NARRATION_V1 = `
+HUMANIZED PHYSIOLOGY NARRATION - HIGH PRIORITY:
+- Do not shorten the analysis. Do not reduce technical depth. Do not remove physiological discussion. Improve how the physiology is explained.
+- Metrics are evidence; the body-state story is the product. Heart rate, HRV, RR intervals, EMG, and telemetry should support the explanation rather than become the explanation.
+- Before naming a number or metric, answer: "what does this suggest the body was doing?" Then use the number only as support when useful.
+- Describe the person, not the graph. Prefer "your body repeatedly approached higher-intensity states, backed away slightly, and rebuilt again" over "heart rate oscillated between two values."
+- Whenever HRV, RR intervals, EMG, or heart rate are discussed, explain why the user should care: commitment to stimulation, release of tension, efficient recovery, sustained effort, artifact caution, mismatch between body cues, or a useful future comparison.
+- Connect physiology to possible lived experience cautiously when appropriate. Examples: "While the data cannot confirm subjective experience, this pattern often corresponds to increasing focus, effort, or immersion" or "this recovery pattern is often associated with a feeling of release or reduced effort."
+- Use technical terms when they add precision, but do not let them dominate. Rotate language naturally: focused, loaded, engaged, activated, settled, relaxed, flexible, sustained, rebuilding, recovering, releasing tension, backing away from intensity, reloading, maintaining effort.
+- Reduce repetition of these phrases: "beat-to-beat variability", "autonomic system", "compressed", "sympathetic drive", "parasympathetic activation", "physiological state", "consistent with". They are allowed, but no single one should become the default wording.
+- Prefer "may fit with", "may point toward", "supports the idea that", "aligns with", "could reflect", "looks like", and "suggests" over repeating "consistent with."
+- HRV example target: instead of "The HRV signal remained tightly compressed," write "Your physiology appeared highly focused during this phase. Rather than alternating between activation and recovery, your body stayed locked into a sustained build state."
+- Recovery example target: instead of "beat-to-beat variability opened dramatically," write "Within seconds, your body appeared to let go of the effort it had been maintaining. Recovery was rapid, with cardiovascular flexibility returning almost immediately."
+- Brief spike example target: instead of "intermittent HRV spikes appeared," write "Several brief moments suggest your body may have been trying to release tension before returning to the sustained build that characterized most of the session."
+`;
+
 const WARM_COMPANION_OUTPUT_DISCIPLINE = `
 COMPANION VOICE AND SINGLE-PASS STRUCTURE - HIGH PRIORITY:
 - Address the person directly throughout. Never write "the user," "the user's notes," "the subject," "the participant," or "the patient." Say "your notes," "you observed," "your body," "your pattern," or "your recovery."
@@ -117,7 +383,7 @@ COMPANION VOICE AND SINGLE-PASS STRUCTURE - HIGH PRIORITY:
   * event_analysis = Motion Telemetry Interpretation and evidence integration: asymmetry, cadence proxy, movement patterns, conflicts between sources, and new implications only; do not replay chronology.
   * notable_findings = Pattern Recognition / Cross-Session Context and clearly identified hypotheses.
   * recommendations = Recommendations / Experiments: focused next steps grounded in supported findings.
-- Prefix speculative mechanisms with "Hypothesis:" or "One possible explanation:" and qualify them with wording such as "may suggest" or "is consistent with."
+- Prefix speculative mechanisms with "Hypothesis:" or "One possible explanation:" and qualify them with varied wording such as "may suggest", "may fit with", "aligns with", or "could reflect." Do not lean on "consistent with" or "consistently"; use those phrases sparingly.
 - Describe observed findings confidently, but never say evidence "proves," "confirms," or "indicates definitively" an inferred physiological mechanism.
 - If a subjective note conflicts with stronger direct visual review, reviewed media-derived evidence, telemetry, or a corrected later observation, prefer the stronger evidence and explicitly acknowledge the discrepancy. Do not build recommendations on a disputed note as though it were settled fact.
 `;
@@ -385,7 +651,7 @@ function sessionDurationSeconds(session, timelineRows = []) {
 function clipPriorityForEvent(event) {
   const categories = Array.isArray(event?.category) ? event.category : [event?.category].filter(Boolean);
   const note = String(event?.note || "").toLowerCase();
-  if (/\b(climax|orgasm|ejaculat|release)\b/.test(note)) return 95;
+  if (isExplicitClimaxOrEjaculationText(note)) return 95;
   if (categories.includes("sensation")) return 75;
   if (categories.includes("physical")) return 70;
   if (categories.includes("stimulation_started") || categories.includes("stimulation_resumed")) return 64;
@@ -394,8 +660,14 @@ function clipPriorityForEvent(event) {
   return 30;
 }
 
+function isExplicitClimaxOrEjaculationText(text) {
+  const value = String(text || "").toLowerCase();
+  if (/\brelease follow[-\s]?through\b/.test(value)) return false;
+  return /\b(climax(?:ed|ing)?|orgasm(?:ed|ic)?|ejaculat(?:e|ed|ion|ing)?|cum(?:ming|med)?|came|semen|emission|expulsion|visible ejaculate|whitish ejaculate|fluid release|release of semen|full release)\b/.test(value);
+}
+
 function isClimaxClipText(text) {
-  return /\b(climax|orgasm|ejaculat|release)\b/i.test(String(text || ""));
+  return isExplicitClimaxOrEjaculationText(text);
 }
 
 function clipWindowForEvent(event) {
@@ -456,16 +728,16 @@ function buildKeyVideoClipRequests(session, timelineRows = []) {
   };
 
   add(session?.pre_climax_offset_s, "Pre-climax build", "Saved pre-climax marker", 88, 10, 16);
-  add(session?.climax_offset_s, "Climax window", "Saved climax marker; starts at the logged climax moment so the visible orgasm/release is not lost to pre-roll", 100, 0, 45, 45);
+  add(session?.climax_offset_s, "Climax / ejaculation evidence window", "Saved climax marker; includes pre-roll so visible release or ejaculation evidence is not clipped off. Do not assume orgasm is visually occurring unless the clip itself shows it.", 100, 8, 38, 46);
   if (session?.climax_offset_s != null) {
     add(
       Number(session.climax_offset_s) + 22,
-      "Release follow-through",
-      "Post-climax ejaculation/release follow-through window",
-      99,
-      6,
-      45,
-      45,
+      "After-marker continuation",
+      "Continued contact/motion after the saved climax marker; not automatically post-climax or orgasm evidence unless visible fluid/recovery signs confirm it.",
+      78,
+      8,
+      22,
+      30,
     );
   }
   add(session?.recovery_offset_s, "Recovery shift", "Saved recovery marker", 82, 10, 20);
@@ -1040,19 +1312,22 @@ Factor the journal into your analysis — where the person's subjective experien
 
     const hrvIntegrationRules = hrvEvidence ? `
 RR-DERIVED HRV INTEGRATION RULE:
-- Use RR-derived HRV as interpreted autonomic evidence throughout the session analysis when quality and coverage support it, not as a detached metric list.
-- Translate HRV into body-state language first. RMSSD should usually be explained as short-term beat-to-beat variability, often useful for spotting brief settling, vagal rebound, breathing-linked release, or artifact. SDNN should usually be explained as broader variability across the rolling window, useful for seeing whether the system is fluctuating or locked into a narrow driven state. pNN50 is secondary and should only be mentioned if it adds something RMSSD/SDNN do not.
-- Lead with what appears to be happening physiologically, then include the number only as supporting evidence. Bad: "RMSSD was five point two milliseconds." Better: "Your system looked tightly loaded here; the very low rolling RMSSD supports that because there was little beat-to-beat variability left in the window."
+- Use RR-derived HRV as interpreted body-state evidence throughout the session analysis when quality and coverage support it, not as a detached metric list.
+- Sarah should use HRV values to understand what the body appeared to be doing, then explain that clearly. The user should not have to decode RMSSD, SDNN, or pNN50 to understand the point.
+- In companion/default analysis, translate HRV into body-state language first: focused, loaded, engaged, settled, flexible, releasing tension, backing away from intensity, reloading, recovering, mixed signal, or artifact/noisy signal. Only name RMSSD, SDNN, or pNN50 if the exact metric is necessary to support the claim.
+- In Technical Deep Dive, you may name exact metrics, but still lead with the body-state interpretation before the value.
+- Lead with what appears to be happening physiologically, then include the number only as supporting evidence. Bad: "RMSSD was five point two milliseconds." Better: "Your body looked highly focused here; the low rolling RMSSD supports that sustained-build read."
 - Every HRV value you mention must answer "why is this interesting?" Tie it to a transition, mismatch, recovery response, breath/position possibility, stimulation change, or artifact caution. If the value does not change interpretation, leave it out.
 - Compare HRV by meaningful windows: baseline or entry state, build/exploration, stimulation or body-state transitions, pre-climax, climax-to-recovery, and recovery/end-state when those windows exist.
 - Tie HRV changes to heart rate direction, event notes, movement or EMG, stimulation changes, breathing/settling cues, discomfort, and recovery markers. The useful question is what the HRV pattern adds to the session story.
-- If HR rises while usable HRV falls, describe that as a supported sign of increasing autonomic load only when the timing and quality support it.
-- If recovery shows higher rolling RMSSD or SDNN than the build/climax window, use that to deepen the recovery interpretation instead of only saying HR came down.
-- If HRV spikes while HR is still high, treat that as notable because it is a mixed signal: it may reflect a brief vagal/breathing release, an irregular RR interval, or movement/contact artifact rather than simple relaxation. Explain the competing interpretations and why the timing matters.
-- If HRV stays very low across a sustained phase, explain that as a narrow, driven autonomic state or sustained sympathetic load when supported, not merely as "low HRV."
+- If HR rises while usable HRV falls, describe what that means in human terms: the body may have been committing more fully to the ongoing experience rather than alternating between engagement and recovery.
+- If recovery shows higher rolling RMSSD or SDNN than the build/climax window, use that to explain whether the body released effort efficiently rather than only saying HR came down.
+- If HRV spikes while HR is still high, treat that as notable because it is a mixed signal: it may reflect a brief breath-release/tension-release moment, an irregular RR interval, or movement/contact artifact rather than simple relaxation. Explain the competing interpretations and why the timing matters.
+- If HRV stays very low across a sustained phase, explain that as a focused, sustained, loaded build state when supported, not merely as "low HRV."
 - If HRV is flat, noisy, low-quality-only, or not aligned with a meaningful event window, say the HRV evidence does not add a strong interpretation rather than forcing one.
 - Put HRV where it belongs: overview if it changes the overall read, phase/window paragraphs when it explains a transition, notable findings when it forms a pattern, and recommendations only if it suggests a focused future comparison.
 - Do not write a separate HRV mini-report unless the session's strongest finding is HRV-specific. Do not list RMSSD, SDNN, or pNN50 values without explaining their timing, quality, body-state meaning, and relationship to the session arc.
+- For default Sarah analysis, prefer sentences like "your body looked more locked-in here," "there was a brief release signal while HR stayed elevated," or "your system seemed to back away from intensity briefly before reloading" over metric-first wording.
 ` : "";
 
     const aiPayload = {
@@ -1064,18 +1339,20 @@ RR-DERIVED HRV INTEGRATION RULE:
       } : {}),
       ...(estimScreenshots.length > 0 ? { file_urls: estimScreenshots } : {}),
       prompt: `${isTechnical
-        ? `You are an expert physiologist and anatomist specializing in sexual response, body-state interpretation, and careful review of intimate physiology data. Analyze this session as a rich, cohesive physiological story. Integrate session intent, arousal or exploration context, anatomy, heart rate data, stimulation or body-mapping technique, event notes, motion evidence when present, and subjective experience. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
+        ? `You are Sarah, an expert physiologist and anatomist specializing in sexual response, body-state interpretation, and careful review of intimate physiology data. Analyze this session as a rich, cohesive physiological story. Integrate session intent, arousal or exploration context, anatomy, heart rate data, stimulation or body-mapping technique, event notes, motion evidence when present, and subjective experience. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 TARGET SESSION ANALYSIS STYLE:
 - Begin with a substantial overview that synthesizes the session's outcome, heart-rate arc, stimulation context, notable physiology, and why the session behaved the way it did.
 - When usable RR-derived HRV is present, integrate meaningful HRV changes into the overview and relevant windows instead of treating heart rate as the only autonomic signal.
-- In Technical Deep Dive, HRV may include exact RMSSD, SDNN, pNN50, quality, and timing values, but never as a bare metric list. For each HRV detail you cite, explain the likely physiological meaning, why it is notable in that window, and what competing explanations remain. A good technical sentence should read like: "The low RMSSD here supports a tightly loaded autonomic state because beat-to-beat variability is compressed during the same window that HR is rising and contact intensity is changing." Not: "RMSSD was low."
-- Technical does not mean number-heavy. It means mechanism-heavy, evidence-calibrated, and explicit about uncertainty. Use numbers as evidence anchors, then translate them into autonomic state, breathing/vagal release, sustained sympathetic drive, recovery quality, sensor artifact, or mixed-signal interpretation.
+- In Technical Deep Dive, HRV may include exact RMSSD, SDNN, pNN50, quality, and timing values, but never as a bare metric list. For each HRV detail you cite, explain the likely body-state meaning, why it is notable in that window, and what competing explanations remain. A good technical sentence should read like: "Your body looked highly focused during this window; the low rolling RMSSD supports that sustained-build interpretation because it occurred while HR was rising and contact intensity was changing." Not: "RMSSD was low."
+- Technical does not mean number-heavy. It means mechanism-heavy, evidence-calibrated, and explicit about uncertainty. Use numbers as evidence anchors, then translate them into focus, load, release, reloading, recovery quality, sensor artifact, or mixed-signal interpretation.
 - Then explain the session through meaningful physiological windows based on session intent: baseline/entry state, exploration or stimulation phase, sensory/body-state transitions, plateaus or settling, pre-climax when supported, climax or intentionally non-climax outcome, and recovery or end-state.
 - A window may be chronological when chronology explains the physiology. The point is not to avoid time; the point is to make each time window explain arousal state, autonomic loading, sensory input, technique effectiveness, or recovery.
 - Keep the older PulsePoint feel: detailed, insightful, physiology-forward, personally grounded, and useful for later comparison across sessions.
 - Do not flatten the analysis into generic observations or a short summary. This is a deep session interpretation.`
-        : `You are an expert physiologist and anatomist specializing in sexual response, body-state interpretation, and careful review of intimate physiology data. Analyze this session by first identifying whether it is primarily masturbation/stimulation, body exploration, sensation mapping, recovery review, or mixed. Integrate anatomy, heart rate data, event timeline, motion evidence when present, subjective experience, and session intent into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally. Keep this natural, clinically grounded, and never forced. Let the narration feel warmly attentive and quietly familiar with the person's established patterns, noticing what stands out with natural human interest while staying grounded in the provided evidence.`}
+        : `You are Sarah, an expert physiologist and anatomist specializing in sexual response, body-state interpretation, and careful review of intimate physiology data. Analyze this session by first identifying whether it is primarily masturbation/stimulation, body exploration, sensation mapping, recovery review, or mixed. Integrate anatomy, heart rate data, event timeline, motion evidence when present, subjective experience, and session intent into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally. Keep this natural, clinically grounded, and never forced. Let the narration feel warmly attentive and quietly familiar with the person's established patterns, noticing what stands out with natural human interest while staying grounded in the provided evidence.
+
+Default HRV style: use HRV as Sarah's behind-the-scenes physiological signal. Explain what it suggests about load, settling, breath-release, recovery, or artifact in plain language. Do not make the user wade through RMSSD, SDNN, pNN50, or dense HRV numbers unless one value is essential and immediately translated.`}
 
 ${isTechnical ? groundingContext : ""}
 ${SESSION_CONTEXT_GROUNDING_RULE}
@@ -1090,20 +1367,22 @@ ${reviewedVisualEvidence}
 ${reviewedVideoPassEvidence}
 ${warmMotionEvidence}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
+${HUMANIZED_PHYSIOLOGY_NARRATION_V1}
 ${firstNameToneCue}
 ${!isTechnical ? WARM_COMPANION_OUTPUT_DISCIPLINE : ""}
 
 PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — CONDITIONAL USE ONLY:"}
 - Only mention specific physiological phases (e.g. emission, expulsion, plateau) or anatomical structures (e.g. pudendal nerve, bulbocavernosus, prostatic urethra) when the session data — an event note, HR pattern, subjective metric, or logged sensation — gives you a concrete reason to do so. Never insert these as generic background explanation.
+- A saved climax marker is a timing anchor, not visual proof that orgasm, ejaculation, emission, expulsion, or recovery is visibly occurring throughout the surrounding clip. Distinguish exact visible/logged ejaculation or orgasm evidence from continued stimulation/contact, release follow-through, and after-marker continuation. Do not call a window post-climax unless visible recovery/cleanup/de-escalation or an accepted event note supports that state.
 ${isTechnical
-  ? "- Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery)."
-  : "- Interpret HR trajectory as a real-time window into sympathetic/parasympathetic balance — but only narrate a mechanism if the HR data actually shows it (e.g. a clear spike, an unexpected plateau, a slow recovery)."}
-${hrvEvidence ? "- Use usable RR-derived HRV as an additional within-session signal where it changes or strengthens the interpretation; weave it into the relevant body-state, stimulation, and recovery windows instead of merely listing HRV numbers." : ""}
+  ? "- Interpret HR trajectory as a window into what the body was doing — loading, sustaining effort, backing away, rebuilding, settling, or recovering — but only narrate a mechanism if the HR data actually shows it."
+  : "- Interpret HR trajectory as a window into what the body was doing — loading, sustaining effort, backing away, rebuilding, settling, or recovering — but only narrate a mechanism if the HR data actually shows it."}
+${hrvEvidence ? "- Use usable RR-derived HRV as an additional within-session signal where it changes or strengthens the interpretation; weave it into the relevant body-state, stimulation, and recovery windows instead of merely listing HRV numbers. Translate the HRV pattern into clear body-state language before naming metrics." : ""}
 ${isTechnical
   ? `- Preserve the explanatory "why" as the center of the answer. When stimulation changes, heart-rate movement, physical cues, or subjective metrics line up, explain the likely mechanism behind the pattern instead of merely restating that it happened.
 - Discuss stimulation-to-body links when supported: how pressure, friction, suction, vibration, e-stim, foley/urethral input, perineal contact, or technique shifts likely changed sensory input, pelvic floor tone, autonomic loading, or climax threshold.
 - Preserve timeline awareness without becoming a transcript. Use time windows, HR ranges, plateaus, marker timing, and major transitions when they clarify the physiology. Do not list every note in order unless each one changes the interpretation.
-- When the data allows more than one explanation, state the most plausible possibilities without inventing certainty. For example, a HR change after a technique shift may reflect sensory novelty, increased stimulation efficiency, pelvic floor recruitment, breath/position change, or sympathetic loading depending on the notes around it.`
+- When the data allows more than one explanation, state the most plausible possibilities without inventing certainty. For example, a HR change after a technique shift may reflect sensory novelty, increased stimulation efficiency, pelvic floor recruitment, breath/position change, increased load, or reloading after a pause depending on the notes around it.`
   : ""}
 - If foley or urethral stimulation is logged, discuss urethral sensory dynamics — but only in terms of what actually happened (logged sensations, HR response, notes). Skip if there's nothing to connect it to.
 - If e-stim is present, discuss fiber recruitment and frequency effects only if the e-stim notes or settings screenshots give you something specific to work with.
@@ -1146,7 +1425,7 @@ ${eventTimeline.join('\n')}
 ${isTechnical
   ? `This is evidence for the physiological arc. Do not write a note-by-note transcript. Use the timeline to identify major transitions, clusters, body findings, stimulation shifts, phase markers, and recovery cues, then explain how those details connect to the HR trajectory and subjective outcome.
 
-Use time references when they anchor the arc, but each time reference should answer "what changed and why might it matter?" Connect stimulation changes, physical findings, HR movement, and subjective context into mechanism-level interpretation. If a technique shift appears to change arousal, explain the plausible sensory/autonomic reason. If HR rises, plateaus, or drops, explain what that likely says about sympathetic load, parasympathetic settling, pelvic floor engagement, sensory novelty, stimulation efficiency, or recovery state.
+Use time references when they anchor the arc, but each time reference should answer "what changed and why might it matter?" Connect stimulation changes, physical findings, HR movement, and subjective context into mechanism-level interpretation. If a technique shift appears to change arousal, explain the plausible sensory or body-state reason. If HR rises, plateaus, or drops, explain what that likely says about load, sustained effort, backing away from intensity, pelvic floor engagement, sensory novelty, stimulation efficiency, or recovery state.
 
 The best output should feel like: "Here is what was happening in the body during this phase, here is why this stimulation/body cue mattered, and here is how it shaped the next phase" — not "at this timestamp, then at this timestamp."`
   : `This is primary evidence for the single Chronological Deep Dive. Group closely related events into meaningful body-state transitions rather than narrating every note separately. At each major transition, explain what the body appears to be doing and why that matters. Reserve movement telemetry synthesis, recurring patterns, hypotheses, and recommendations for their dedicated sections; do not retell this timeline there.`}` : ""}
@@ -1154,12 +1433,14 @@ The best output should feel like: "Here is what was happening in the body during
 ${hrTrajectory ? `HR TRAJECTORY (sampled readable time and heart rate):
 ${hrTrajectory}
 
-Use this to trace sympathetic activation patterns, body-state transitions, exploratory response, arousal plateaus when relevant, and correlation between HR changes and event timing. For non-climax body exploration sessions, HR still matters: use it to describe autonomic response, settling, activation, comfort/discomfort, or positional/sensory response rather than looking for a climax arc.` : ""}
+Use this to trace body-state transitions, exploratory response, arousal plateaus when relevant, and correlation between HR changes and event timing. Describe what the person’s body appeared to be doing: becoming engaged, holding effort, backing away, rebuilding, settling, or recovering. For non-climax body exploration sessions, HR still matters: use it to describe activation, settling, comfort/discomfort, or positional/sensory response rather than looking for a climax arc.` : ""}
 
 ${hrvEvidence ? `RR-DERIVED HRV EVIDENCE (interpret in context; do not dump numbers):
 ${JSON.stringify(hrvEvidence, null, 2)}
 
-Use this evidence to compare rolling HRV across meaningful session windows and explain what it adds to the HR/event/body-state interpretation. Treat quality and coverage as part of the claim. If the HRV pattern does not add a supported interpretation, say that briefly and move on.` : ""}
+Use this evidence to compare rolling HRV across meaningful session windows and explain what it adds to the HR/event/body-state interpretation. Treat quality and coverage as part of the claim. If the HRV pattern does not add a supported interpretation, say that briefly and move on.
+
+Plain-language requirement: Sarah should use these values to improve the physiological read, but the final analysis should sound like a clear explanation of focus, load, release, reloading, recovery, mixed signals, or artifact. Avoid metric-first wording and avoid repeating "beat-to-beat variability", "compressed", or "autonomic" when more natural language would carry the same meaning.` : ""}
 
 Session data:
 ${JSON.stringify({
@@ -1235,15 +1516,15 @@ Provide ${isTechnical
         type: "object",
         properties: {
           summary: isTechnical
-            ? { type: "string", description: "One cohesive overview emphasizing physiology, arousal pattern, stimulation effectiveness, HR/HRV-supported autonomic interpretation when available, and why the session behaved the way it did." }
-            : { type: "string", description: "Executive Summary: a rich but concise overview of the session arc and defining findings, including HRV only when it changes or strengthens the interpretation, without retelling the full chronology." },
+            ? { type: "string", description: "One cohesive overview emphasizing what the body appeared to be doing, arousal pattern, stimulation effectiveness, HR/HRV-supported interpretation when available, and why the session behaved the way it did. Metrics support the story; they are not the story." }
+            : { type: "string", description: "Executive Summary: a rich but concise overview of the session arc and defining findings. Use HRV behind the scenes to explain focus, load, release, reloading, recovery, or mixed signals in plain language; avoid HRV metric lists." },
           arousal_arc: isTechnical
-            ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining the HR and usable HRV autonomic arc, exploration or stimulation links, supported anatomy, body-state transitions, pre-climax/climax/recovery shifts when present, and why the session progressed as it did." }
-            : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: the only detailed ordered pass through the session arc; group related events into meaningful body-state transitions and explain what the body appears to be doing at those moments, weaving in usable HRV when it clarifies a transition." },
+            ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining HR and usable HRV as evidence for body-state transitions, exploration or stimulation links, supported anatomy, pre-climax/climax/recovery shifts when present, and why the session progressed as it did. Preserve technical depth without becoming metric narration." }
+            : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: group related events into meaningful body-state transitions and explain what the body appears to be doing. Weave in usable HRV as plain physiology when it clarifies a transition, not as raw values." },
           event_analysis: isTechnical
-            ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, HR/HRV-supported turning points, and what made the session notable. Use time anchors when they strengthen the interpretation." }
-            : { type: "array", items: { type: "string" }, description: "Motion Telemetry Interpretation and evidence synthesis: interpret asymmetry, cadence proxy, movement patterns, HRV where relevant, and evidence discrepancies without replaying the chronology." },
-          emg_analysis: { type: "array", items: { type: "string" }, description: "EMG signal quality, activation patterns, L/R comparison, EMG vs HR, calibration notes — only if EMG data present" },
+            ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, HR/HRV-supported turning points, and what made the session notable. Use time and numbers as evidence anchors, then explain why they matter to the body-state story." }
+            : { type: "array", items: { type: "string" }, description: "Motion Telemetry Interpretation and evidence synthesis: interpret asymmetry, cadence proxy, movement patterns, and HRV-informed body state where relevant, without raw HRV number dumps or chronology replay." },
+          emg_analysis: { type: "array", items: { type: "string" }, description: "EMG signal quality, activation patterns, L/R comparison, EMG vs HR, calibration notes, and practical meaning for muscle engagement or relaxation — only if EMG data present" },
           notable_findings: isTechnical
             ? { type: "array", items: { type: "string" } }
             : { type: "array", items: { type: "string" }, description: "Pattern recognition, cross-session context when supported, and clearly labelled hypotheses with calibrated mechanism language." },
@@ -1439,6 +1720,29 @@ Provide ${isTechnical
                 Key video clips were not added: {keyVideoClipError}
               </div>
             )}
+            <SessionReviewVideoExportButton
+              session={session}
+              analysisTitle={analysisTitle}
+              sourceGeneratedAt={result?._meta?.last_generated_at}
+              paragraphs={paras}
+              paragraphMeta={paras.map((_, paraIdx) => {
+                let section = sections[0];
+                for (const sec of sections) {
+                  if (paraIdx >= sec.start) section = sec;
+                }
+                const clips = clipsByParagraph.get(paraIdx) || [];
+                return section.label === null
+                  ? { type: "summary", clips }
+                  : {
+                    type: "section",
+                    clips,
+                    sec: {
+                      label: section.label,
+                      color: SECTION_COLORS[section.color] || "hsl(var(--primary))",
+                    },
+                  };
+              })}
+            />
             <AIOutputReader
               sessionId={session.id}
               title={analysisTitle}

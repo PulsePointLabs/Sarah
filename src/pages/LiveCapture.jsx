@@ -18,6 +18,7 @@ import { base44 } from "@/api/base44Client";
 import { useToast } from "@/components/ui/use-toast";
 import { HR_SOURCE_OPTIONS, PULSOID_MODE_OPTIONS, computeHrvFromRr, maskPulsoidToken, readHrSourceSettings, writeHrSourceSettings } from "@/lib/hrSources";
 import { apiUrl } from "@/lib/mobileApiBase";
+import { computeLiveClimaxPrediction } from "@/utils/liveClimaxPrediction";
 
 const MAX_TELEMETRY_POINTS = 240;
 const MAX_VOICE_NOTE_MS = 12000;
@@ -34,6 +35,48 @@ const CAPTURE_MODES = [
   { value: "hr_emg", label: "HR + EMG", helper: "Telemetry-focused capture" },
   { value: "hr", label: "HR Only / Main Telemetry", helper: "Distance-readable HR and EMG dashboard" },
   { value: "video", label: "Video sync", helper: "OBS-first review workflow" },
+];
+const EMG_SENSOR_CONFIGS = [
+  {
+    value: "generic",
+    label: "Generic EMG",
+    helper: "Use the running single or dual EMG helper without placement-specific session defaults.",
+    targetArea: "",
+    sensorType: "MyoWare 2.0",
+    channels: null,
+    leftLabel: "Left EMG",
+    rightLabel: "Right EMG",
+    leftHelper: "normalized activation",
+    rightHelper: "side-to-side comparison",
+    trendTitle: "EMG Activation",
+    trendSubtitle: "Left, right, and side-to-side differential",
+    calibrationIntro: "These controls send calibration actions to the running local EMG helper and record each intentional maneuver for review and AI grounding. Confirm an applied acknowledgement below before relying on the new scale.",
+    placementPatch: {},
+  },
+  {
+    value: "perineal_body_small_electrodes",
+    label: "Perineal Body EMG",
+    helper: "Small surface electrodes over the perineal body; displays normalized contraction estimate from the local EMG feed.",
+    targetArea: "Perineal body / pelvic floor",
+    sensorType: "Small surface EMG electrodes (perineal body)",
+    channels: "single",
+    leftLabel: "Perineal EMG",
+    rightLabel: "Aux EMG",
+    leftHelper: "normalized contraction estimate",
+    rightHelper: "optional second channel",
+    trendTitle: "Perineal Body EMG",
+    trendSubtitle: "Normalized contraction estimate from small-electrode perineal-body placement",
+    calibrationIntro: "This preset treats the EMG feed as a best-effort perineal-body contraction estimate, not absolute force. Calibrate a quiet relaxed baseline first, then a brief comfortable contraction, and confirm the helper acknowledgement before relying on the scale.",
+    placementPatch: {
+      emg_enabled: true,
+      emg_target_area: "Perineal body / pelvic floor",
+      emg_sensor_type: "Small surface EMG electrodes (perineal body)",
+      emg_channels: "single",
+      emg_left_placement_notes: "Small surface electrode pair centered over the perineal body. Use normalized activation as a best-effort contraction estimate; expect movement/contact artifact and confirm with calibration.",
+      emg_right_placement_notes: "Optional second channel only if using dual electrodes for lateral comparison or adjacent pelvic-floor reference.",
+      emg_general_notes: "Live Capture preset: perineal-body small-electrode EMG. Interpret as normalized relative activation, not direct force. Best signal comes from a clean relaxed baseline, a brief comfortable contraction reference, stable electrode contact, and event notes for movement/contact changes.",
+    },
+  },
 ];
 const MEDIA_VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov", ".mkv", ".m4v", ".avi", ".wmv"];
 const MEDIA_TRANSCODE_EXTENSIONS = [".wmv"];
@@ -555,6 +598,7 @@ function parseLiveCommand(text) {
 
 function makeTelemetryPoint(hrTelemetry, emgTelemetry) {
   const now = Date.now();
+  const hrv = hrTelemetry?.hrv || {};
   return {
     ts: now,
     time: new Date(now).toLocaleTimeString([], { minute: "2-digit", second: "2-digit" }),
@@ -563,7 +607,10 @@ function makeTelemetryPoint(hrTelemetry, emgTelemetry) {
     baseline: readNumber(hrTelemetry?.baselineHr, hrTelemetry?.baseline_hr),
     build: readNumber(hrTelemetry?.buildConfidence, hrTelemetry?.build_confidence),
     hrSource: hrTelemetry?.source || hrTelemetry?.hr_source || null,
-    hrvQuality: hrTelemetry?.hrv?.quality || hrTelemetry?.hrv_quality || null,
+    hrvRmssd: readNumber(hrv.rmssdMs, hrTelemetry?.hrv_rmssd_ms),
+    hrvSdnn: readNumber(hrv.sdnnMs, hrTelemetry?.hrv_sdnn_ms),
+    hrvPnn50: readNumber(hrv.pnn50, hrTelemetry?.hrv_pnn50),
+    hrvQuality: hrv.quality || hrTelemetry?.hrv_quality || null,
     left: readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct),
     right: readNumber(emgTelemetry?.right_pct),
     diff: readNumber(emgTelemetry?.diff_pct),
@@ -668,57 +715,6 @@ function TrendPanel({ title, subtitle, children, empty, heightClass = "h-56", di
   );
 }
 
-function computePrediction(hrTelemetry, emgTelemetry, history = []) {
-  const phase = String(hrTelemetry?.phase || "").toLowerCase();
-  const buildConfidence = Number(hrTelemetry?.buildConfidence || 0);
-  const currentHr = Number(hrTelemetry?.currentHr || 0);
-  const baselineHr = Number(hrTelemetry?.baselineHr || 0);
-  const elevatedDelta = Number(hrTelemetry?.elevatedDelta || (currentHr && baselineHr ? currentHr - baselineHr : 0));
-  const left = Number(emgTelemetry?.left_pct || emgTelemetry?.level_pct || 0);
-  const right = Number(emgTelemetry?.right_pct || 0);
-  const emgPeak = Math.max(left, right);
-  const recent = history.slice(-12).filter((point) => point.hr != null);
-  const firstRecent = recent[0];
-  const lastRecent = recent[recent.length - 1];
-  const recentSlope = firstRecent && lastRecent && lastRecent.ts !== firstRecent.ts
-    ? ((lastRecent.hr - firstRecent.hr) / ((lastRecent.ts - firstRecent.ts) / 1000)) * 30
-    : 0;
-  const recentPeak = recent.length ? Math.max(...recent.map((point) => point.hr)) : currentHr;
-  const dropFromRecentPeak = currentHr && recentPeak ? recentPeak - currentHr : 0;
-
-  let nearClimax = 0;
-  nearClimax += Math.min(buildConfidence, 100) * 0.45;
-  nearClimax += Math.max(0, Math.min(elevatedDelta * 4, 35));
-  nearClimax += Math.min(emgPeak * 0.2, 20);
-  if (recentSlope > 2) nearClimax += Math.min(12, recentSlope * 2);
-  if (dropFromRecentPeak > 8) nearClimax -= 12;
-  if (phase.includes("build")) nearClimax += 12;
-  if (phase.includes("recovery")) nearClimax = Math.min(nearClimax, 25);
-  nearClimax = Math.round(Math.max(0, Math.min(100, nearClimax)));
-
-  const recovery = phase.includes("recovery")
-    ? Math.max(65, Math.min(100, 65 + Math.max(0, 100 - buildConfidence) * 0.25))
-    : Math.max(0, Math.min(100, Math.round((buildConfidence < 25 && elevatedDelta < 6 ? 35 : 0) + (emgPeak < 10 ? 10 : 0) + (dropFromRecentPeak > 8 ? 20 : 0))));
-
-  const label = phase.includes("recovery")
-    ? "Recovery likely"
-    : nearClimax >= 75
-      ? "Near-climax watch"
-      : nearClimax >= 45
-        ? "Build intensifying"
-        : "Baseline/build";
-
-  const reason = [
-    buildConfidence ? `build ${Math.round(buildConfidence)}%` : null,
-    elevatedDelta ? `HR +${Math.round(elevatedDelta)} over baseline` : null,
-    recentSlope > 1 ? `rising ${recentSlope.toFixed(1)} bpm/30s` : null,
-    dropFromRecentPeak > 8 ? `drop ${Math.round(dropFromRecentPeak)} from recent peak` : null,
-    emgPeak ? `EMG ${Math.round(emgPeak)}%` : null,
-  ].filter(Boolean).join(" · ");
-
-  return { nearClimax, recovery: Math.round(recovery), label, reason, recentSlope, dropFromRecentPeak };
-}
-
 export default function LiveCapture() {
   const [searchParams, setSearchParams] = useSearchParams();
   const focusView = searchParams.get("display") === "focus";
@@ -748,6 +744,7 @@ export default function LiveCapture() {
   });
   const [hrLossDialog, setHrLossDialog] = useState(null);
   const [captureMode, setCaptureMode] = useState(() => localStorage.getItem("pulsepoint.captureMode") || "full");
+  const [emgSensorConfig, setEmgSensorConfig] = useState(() => localStorage.getItem("pulsepoint.emgSensorConfig") || "generic");
   const [telemetryNoticesEnabled, setTelemetryNoticesEnabled] = useState(() => localStorage.getItem("pulsepoint.telemetryNotices") !== "off");
   const [voiceWakeEnabled, setVoiceWakeEnabled] = useState(false);
   const [wakeListening, setWakeListening] = useState(false);
@@ -809,6 +806,10 @@ export default function LiveCapture() {
       ) {
         return prev;
       }
+      const pointPrediction = computeLiveClimaxPrediction(nextHr, nextEmg, [...prev, point]);
+      point.nearClimax = pointPrediction.nearClimax;
+      point.recovery = pointPrediction.recovery;
+      point.hrvSignal = pointPrediction.hrvSignal;
       return [...prev, point].slice(-MAX_TELEMETRY_POINTS);
     });
   };
@@ -1234,6 +1235,10 @@ export default function LiveCapture() {
   }, [captureMode]);
 
   useEffect(() => {
+    localStorage.setItem("pulsepoint.emgSensorConfig", emgSensorConfig);
+  }, [emgSensorConfig]);
+
+  useEffect(() => {
     localStorage.setItem("pulsepoint.telemetryNotices", telemetryNoticesEnabled ? "on" : "off");
   }, [telemetryNoticesEnabled]);
 
@@ -1292,7 +1297,7 @@ export default function LiveCapture() {
     });
   }, [calibrationCommandStatus, liveSession?.activeSessionId]);
 
-  const prediction = useMemo(() => computePrediction(hrTelemetry, emgTelemetry, telemetryHistory), [hrTelemetry, emgTelemetry, telemetryHistory]);
+  const prediction = useMemo(() => computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory), [hrTelemetry, emgTelemetry, telemetryHistory]);
   const recordingActive = Boolean(recording?.active);
   const hrConnected = Boolean(status?.hr?.sourceStatus?.connected ?? status?.hr?.connected);
   const emgSourceAt = emgTelemetry?.source_at || status?.emg?.lastSourceAt || status?.emg?.lastMessageAt;
@@ -1318,6 +1323,42 @@ export default function LiveCapture() {
   const recentLiveEvents = useMemo(() => [...liveEvents].sort((a, b) => Number(b.time_s || 0) - Number(a.time_s || 0)).slice(0, 8), [liveEvents]);
   const recentPhaseMarkers = useMemo(() => [...phaseMarkers].reverse().slice(0, 5), [phaseMarkers]);
   const selectedCaptureMode = CAPTURE_MODES.find((mode) => mode.value === captureMode) || CAPTURE_MODES[0];
+  const selectedEmgConfig = EMG_SENSOR_CONFIGS.find((config) => config.value === emgSensorConfig) || EMG_SENSOR_CONFIGS[0];
+  const usingPerinealEmgConfig = selectedEmgConfig.value === "perineal_body_small_electrodes";
+  const emgCalibrationSteps = useMemo(() => {
+    if (!usingPerinealEmgConfig) return EMG_CALIBRATION_STEPS;
+    return EMG_CALIBRATION_STEPS.map((step) => {
+      if (step.key === "neutral") {
+        return {
+          ...step,
+          label: "Relaxed baseline",
+          instruction: "Relax the pelvic floor/perineal body and hold still for a quiet reference.",
+        };
+      }
+      if (step.key === "both_max") {
+        return {
+          ...step,
+          label: "Comfortable contraction",
+          instruction: "Briefly contract the perineal body/pelvic floor as clearly as is comfortable, then release.",
+        };
+      }
+      if (step.key === "left_max") {
+        return {
+          ...step,
+          label: "Primary channel contraction",
+          instruction: "Use this only with dual-channel placement when the primary perineal channel should be calibrated separately.",
+        };
+      }
+      if (step.key === "right_max") {
+        return {
+          ...step,
+          label: "Aux channel contraction",
+          instruction: "Use this only with dual-channel placement when the aux/reference channel should be calibrated separately.",
+        };
+      }
+      return step;
+    });
+  }, [usingPerinealEmgConfig]);
   const maxHr = useMemo(() => {
     const values = telemetryHistory.map((point) => point.hr).filter((value) => value != null);
     const current = readNumber(hrTelemetry?.currentHr, hrTelemetry?.hr, hrTelemetry?.heartRate);
@@ -1544,6 +1585,23 @@ export default function LiveCapture() {
     return sessionId;
   }, [ensureSession, liveSession]);
 
+  const applyEmgSensorConfig = useCallback(async (config) => {
+    if (!config) return;
+    setEmgSensorConfig(config.value);
+    setCalibrationStatus("");
+    setCalibrationError("");
+    if (!config.placementPatch || !Object.keys(config.placementPatch).length) {
+      return;
+    }
+    try {
+      const sessionId = await updateActiveSession(config.placementPatch);
+      setCalibrationStatus(`${config.label} configuration saved to this live session.`);
+      setLiveSession((prev) => prev ? { ...prev, activeSessionId: sessionId } : prev);
+    } catch (err) {
+      setCalibrationError(err?.message || "Unable to save the EMG sensor configuration to this session.");
+    }
+  }, [updateActiveSession]);
+
   const handleFootTrackingSnapshot = useCallback(async (summary) => {
     if (!summary || !liveSession?.activeSessionId) return;
     const patch = {
@@ -1613,6 +1671,13 @@ export default function LiveCapture() {
         emg_calibration_notes: [session.emg_calibration_notes, calibrationLine].filter(Boolean).join("\n"),
         event_timeline: [...(session.event_timeline || []), nextEvent].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0)),
       };
+      if (selectedEmgConfig?.placementPatch && selectedEmgConfig.value !== "generic") {
+        Object.entries(selectedEmgConfig.placementPatch).forEach(([key, value]) => {
+          if (patch[key] == null && (session[key] == null || session[key] === "")) {
+            patch[key] = value;
+          }
+        });
+      }
       if (reading.right) patch.emg_channels = "dual";
       await base44.entities.Session.update(sessionId, patch);
       setLiveEvents(patch.event_timeline);
@@ -1623,7 +1688,7 @@ export default function LiveCapture() {
     } finally {
       setCalibrationSaving("");
     }
-  }, [ensureSession, getCurrentSessionTime, liveSession, telemetryHistory]);
+  }, [ensureSession, getCurrentSessionTime, liveSession, selectedEmgConfig, telemetryHistory]);
 
   const undoLastVoiceAnnotation = useCallback(async () => {
     const sessionId = liveSession?.activeSessionId;
@@ -2119,10 +2184,10 @@ export default function LiveCapture() {
               <CompactStat label="Max HR" value={fmtNumber(maxHr, 0)} helper="session peak" level={hrLevelPercent(maxHr, hrTelemetry?.baselineHr)} emphasis />
               <CompactStat label="Build" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "phase"} level={buildLevel} />
               <CompactStat
-                label={hrTelemetry?.source === "direct_h10" ? "RR / HRV" : "Near-Climax Watch"}
-                value={hrTelemetry?.source === "direct_h10" ? `${fmtNumber(rrCount, 0)} RR` : `${prediction.nearClimax}%`}
-                helper={hrTelemetry?.source === "direct_h10" ? `RMSSD ${fmtNumber(hrvRmssd, 1)} · ${hrvQuality || "waiting"}` : prediction.label}
-                level={hrTelemetry?.source === "direct_h10" ? Math.min(100, (Number(rrCount) || 0) * 1.25) : prediction.nearClimax}
+                label="AI Magic"
+                value={`${prediction.nearClimax}%`}
+                helper={prediction.hrvUsable ? `${prediction.label} · HRV ${prediction.hrvSignal}` : prediction.label}
+                level={prediction.nearClimax}
               />
             </div>
 
@@ -2141,6 +2206,9 @@ export default function LiveCapture() {
                 <div className="h-full rounded-full transition-all" style={{ width: `${prediction.nearClimax}%`, backgroundColor: levelColor(prediction.nearClimax) }} />
               </div>
               {prediction.reason && <p className="mt-3 line-clamp-3 text-sm leading-relaxed text-muted-foreground">{prediction.reason}</p>}
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {prediction.hrvExplanation}
+              </p>
             </div>
 
             <TrendPanel title="HR Trend" subtitle="Compact live view" empty={!hasHrTrend} heightClass="h-48" distanceView>
@@ -2148,7 +2216,8 @@ export default function LiveCapture() {
                 <LineChart data={telemetryHistory} margin={{ top: 8, right: 8, bottom: 0, left: -22 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.35} />
                   <XAxis dataKey="time" hide />
-                  <YAxis hide domain={["dataMin - 4", "dataMax + 4"]} />
+                  <YAxis yAxisId="hr" hide domain={["dataMin - 4", "dataMax + 4"]} />
+                  <YAxis yAxisId="watch" hide orientation="right" domain={[0, 100]} />
                   <Tooltip content={<ChartTooltip />} />
                   {phaseMarkers.map((marker, index) => marker.chartTime ? (
                     <ReferenceLine
@@ -2159,9 +2228,10 @@ export default function LiveCapture() {
                       ifOverflow="extendDomain"
                     />
                   ) : null)}
-                  <Line type="monotone" dataKey="baseline" name="Baseline" stroke="hsl(var(--muted-foreground))" strokeDasharray="5 5" strokeWidth={1.25} dot={false} connectNulls />
-                  <Line type="monotone" dataKey="hrSmoothed" name="Smoothed" stroke="hsl(var(--chart-2))" strokeWidth={1.75} dot={false} connectNulls />
-                  <Line type="monotone" dataKey="hr" name="HR" stroke="hsl(var(--primary))" strokeWidth={2.25} dot={false} connectNulls />
+                  <Line yAxisId="hr" type="monotone" dataKey="baseline" name="Baseline" stroke="hsl(var(--muted-foreground))" strokeDasharray="5 5" strokeWidth={1.25} dot={false} connectNulls />
+                  <Line yAxisId="hr" type="monotone" dataKey="hrSmoothed" name="Smoothed" stroke="hsl(var(--chart-2))" strokeWidth={1.75} dot={false} connectNulls />
+                  <Line yAxisId="hr" type="monotone" dataKey="hr" name="HR" stroke="hsl(var(--primary))" strokeWidth={2.25} dot={false} connectNulls />
+                  <Line yAxisId="watch" type="monotone" dataKey="nearClimax" name="Approach" stroke="hsl(var(--destructive))" strokeWidth={1.75} dot={false} connectNulls />
                 </LineChart>
               </ResponsiveContainer>
             </TrendPanel>
@@ -2313,6 +2383,41 @@ export default function LiveCapture() {
                 </button>
               ))}
             </div>
+            <div className="mt-5 border-t border-border pt-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">EMG Sensor Configuration</p>
+                  <p className="mt-1 text-sm text-muted-foreground">Choose how Live Capture labels and saves EMG placement context.</p>
+                </div>
+                {activeSessionDoc?.emg_target_area && (
+                  <span className="rounded-full border border-primary/25 bg-primary/10 px-2 py-1 text-[10px] font-semibold text-primary">
+                    {activeSessionDoc.emg_target_area}
+                  </span>
+                )}
+              </div>
+              <div className="mt-3 grid gap-2">
+                {EMG_SENSOR_CONFIGS.map((config) => (
+                  <button
+                    key={config.value}
+                    type="button"
+                    onClick={() => applyEmgSensorConfig(config)}
+                    className={`rounded-lg border px-3 py-3 text-left transition-colors ${
+                      emgSensorConfig === config.value
+                        ? "border-primary bg-primary/12 text-foreground"
+                        : "border-border bg-muted/30 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                    }`}
+                  >
+                    <span className="block text-sm font-semibold">{config.label}</span>
+                    <span className="mt-1 block text-xs leading-relaxed">{config.helper}</span>
+                    {config.value !== "generic" && (
+                      <span className="mt-2 block text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                        Saves target area, sensor type, and placement notes to the active session
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -2432,9 +2537,13 @@ export default function LiveCapture() {
           >
             <Activity className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
             <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-wider text-primary">EMG Calibration Reference Capture</p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-primary">
+                {usingPerinealEmgConfig ? "Perineal Body EMG Reference Capture" : "EMG Calibration Reference Capture"}
+              </p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Record neutral and intentional contraction references so later AI interpretation can recognize calibration maneuvers.
+                {usingPerinealEmgConfig
+                  ? "Track best-effort perineal-body contraction changes from small electrodes with explicit calibration context."
+                  : "Record neutral and intentional contraction references so later AI interpretation can recognize calibration maneuvers."}
               </p>
             </div>
             <ChevronDown className={`ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform ${calibrationOpen ? "rotate-180" : ""}`} />
@@ -2442,19 +2551,19 @@ export default function LiveCapture() {
           {calibrationOpen && (
             <div className="space-y-4 border-t border-border p-4">
               <div className="rounded-lg border border-primary/20 bg-primary/[0.06] p-3 text-xs text-muted-foreground">
-                These controls send calibration actions to the running local EMG helper and record each intentional maneuver for review and AI grounding. Confirm an applied acknowledgement below before relying on the new scale.
+                {selectedEmgConfig.calibrationIntro}
               </div>
 
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-lg border border-border bg-muted/20 p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Live Left</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{selectedEmgConfig.leftLabel}</p>
                   <p className="mt-1 text-2xl font-bold text-primary">{calibrationReading.left ? `${fmtNumber(calibrationReading.left.value)}%` : "—"}</p>
                   <p className="mt-1 text-[10px] text-muted-foreground">
                     {calibrationReading.left ? `Recent spread ${fmtNumber(calibrationReading.left.spread)}%` : "No live sample"}
                   </p>
                 </div>
                 <div className="rounded-lg border border-border bg-muted/20 p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Live Right</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{selectedEmgConfig.rightLabel}</p>
                   <p className="mt-1 text-2xl font-bold text-chart-2">{calibrationReading.right ? `${fmtNumber(calibrationReading.right.value)}%` : "—"}</p>
                   <p className="mt-1 text-[10px] text-muted-foreground">
                     {calibrationReading.right ? `Recent spread ${fmtNumber(calibrationReading.right.spread)}%` : "Single channel or no sample"}
@@ -2478,7 +2587,7 @@ export default function LiveCapture() {
               </div>
 
               <div className="grid gap-2 lg:grid-cols-2">
-                {EMG_CALIBRATION_STEPS.map((step) => {
+                {emgCalibrationSteps.map((step) => {
                   const requiresDualChannel = step.key === "left_max" || step.key === "right_max";
                   const hasReference = step.key === "neutral"
                     ? activeSessionDoc?.emg_rest_left != null || activeSessionDoc?.emg_rest_right != null
@@ -2526,10 +2635,10 @@ export default function LiveCapture() {
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Stored Raw Calibration Values</p>
                   <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {[
-                      ["Left neutral", activeSessionDoc?.emg_rest_left],
-                      ["Right neutral", activeSessionDoc?.emg_rest_right],
-                      ["Left max", activeSessionDoc?.emg_max_left],
-                      ["Right max", activeSessionDoc?.emg_max_right],
+                      [usingPerinealEmgConfig ? "Perineal baseline" : "Left neutral", activeSessionDoc?.emg_rest_left],
+                      [usingPerinealEmgConfig ? "Aux baseline" : "Right neutral", activeSessionDoc?.emg_rest_right],
+                      [usingPerinealEmgConfig ? "Perineal max" : "Left max", activeSessionDoc?.emg_max_left],
+                      [usingPerinealEmgConfig ? "Aux max" : "Right max", activeSessionDoc?.emg_max_right],
                     ].map(([label, value]) => (
                       <div key={label} className="rounded-md bg-card px-3 py-2">
                         <p className="text-[10px] text-muted-foreground">{label}</p>
@@ -2718,9 +2827,18 @@ export default function LiveCapture() {
           </div>
         </div>
 
-        <div className={`grid gap-3 sm:grid-cols-2 ${telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4" : "lg:grid-cols-2"}`}>
+        <div className={`grid gap-3 sm:grid-cols-2 ${telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`}>
           <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large />
           <MetricCard icon={<Zap className="w-4 h-4" />} label="Build Confidence" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "No HR phase"} active={Number(hrTelemetry?.buildConfidence) > 40} level={buildLevel} large />
+          <MetricCard
+            icon={<Brain className="w-4 h-4" />}
+            label="AI Magic"
+            value={`${prediction.nearClimax}%`}
+            helper={prediction.confidenceBand}
+            active={prediction.nearClimax >= 42}
+            level={prediction.nearClimax}
+            large
+          />
           {hrTelemetry?.source === "direct_h10" && (
             <>
               <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="RR Samples" value={fmtNumber(rrCount, 0)} helper="rolling H10 interval window" active={Number(rrCount) > 0} level={Math.min(100, (Number(rrCount) || 0) * 1.25)} large />
@@ -2729,8 +2847,8 @@ export default function LiveCapture() {
           )}
           {telemetryEmgLive && (
             <>
-              <MetricCard icon={<Activity className="w-4 h-4" />} label="Left EMG" value={`${fmtNumber(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct)}%`} helper="normalized activation" active={(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct) != null} level={leftEmgLevel} large />
-              <MetricCard icon={<Activity className="w-4 h-4" />} label="Right EMG" value={`${fmtNumber(emgTelemetry?.right_pct)}%`} helper={`diff ${fmtNumber(emgTelemetry?.diff_pct)}%`} active={emgTelemetry?.right_pct != null} level={rightEmgLevel} large />
+              <MetricCard icon={<Activity className="w-4 h-4" />} label={selectedEmgConfig.leftLabel} value={`${fmtNumber(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct)}%`} helper={selectedEmgConfig.leftHelper} active={(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct) != null} level={leftEmgLevel} large />
+              <MetricCard icon={<Activity className="w-4 h-4" />} label={selectedEmgConfig.rightLabel} value={`${fmtNumber(emgTelemetry?.right_pct)}%`} helper={emgTelemetry?.right_pct != null ? `diff ${fmtNumber(emgTelemetry?.diff_pct)}%` : selectedEmgConfig.rightHelper} active={emgTelemetry?.right_pct != null} level={rightEmgLevel} large />
             </>
           )}
         </div>
@@ -2742,6 +2860,9 @@ export default function LiveCapture() {
                 <Brain className="w-4 h-4" /> Real-Time Phase Watch
               </p>
               <p className="mt-1 text-lg font-medium text-foreground">{prediction.label}</p>
+              <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+                {prediction.hrvExplanation}
+              </p>
             </div>
             <div className="grid grid-cols-2 gap-2 text-right">
               <div className="rounded-lg border px-4 py-3" style={{ borderColor: `${levelColor(prediction.nearClimax)}80`, backgroundColor: `${levelColor(prediction.nearClimax)}20` }}>
@@ -2795,7 +2916,8 @@ export default function LiveCapture() {
             <LineChart data={telemetryHistory} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.45} />
               <XAxis dataKey="time" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} minTickGap={28} />
-              <YAxis tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} domain={["dataMin - 4", "dataMax + 4"]} width={distanceTelemetryView ? 44 : 34} />
+              <YAxis yAxisId="hr" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} domain={["dataMin - 4", "dataMax + 4"]} width={distanceTelemetryView ? 44 : 34} />
+              <YAxis yAxisId="watch" orientation="right" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--destructive))" }} tickLine={false} axisLine={false} domain={[0, 100]} width={distanceTelemetryView ? 44 : 34} />
               <Tooltip content={<ChartTooltip />} />
               <Legend wrapperStyle={{ fontSize: distanceTelemetryView ? 14 : 11 }} />
               {phaseMarkers.map((marker, index) => marker.chartTime ? (
@@ -2808,15 +2930,16 @@ export default function LiveCapture() {
                   label={{ value: marker.label, position: "top", fill: phaseMarkerColor(marker.label), fontSize: 10 }}
                 />
               ) : null)}
-              <Line type="monotone" dataKey="baseline" name="Baseline" stroke="hsl(var(--muted-foreground))" strokeDasharray="5 5" strokeWidth={1.5} dot={false} connectNulls />
-              <Line type="monotone" dataKey="hrSmoothed" name="Smoothed" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} connectNulls />
-              <Line type="monotone" dataKey="hr" name="HR" stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} connectNulls />
+              <Line yAxisId="hr" type="monotone" dataKey="baseline" name="Baseline" stroke="hsl(var(--muted-foreground))" strokeDasharray="5 5" strokeWidth={1.5} dot={false} connectNulls />
+              <Line yAxisId="hr" type="monotone" dataKey="hrSmoothed" name="Smoothed" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} connectNulls />
+              <Line yAxisId="hr" type="monotone" dataKey="hr" name="HR" stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} connectNulls />
+              <Line yAxisId="watch" type="monotone" dataKey="nearClimax" name="Approach" stroke="hsl(var(--destructive))" strokeWidth={2} dot={false} connectNulls />
             </LineChart>
           </ResponsiveContainer>
         </TrendPanel>
 
         {telemetryEmgLive && (
-          <TrendPanel title="EMG Activation" subtitle="Left, right, and side-to-side differential" empty={!hasEmgTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-64 md:h-72"} distanceView={distanceTelemetryView}>
+          <TrendPanel title={selectedEmgConfig.trendTitle} subtitle={selectedEmgConfig.trendSubtitle} empty={!hasEmgTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-64 md:h-72"} distanceView={distanceTelemetryView}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={telemetryHistory} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.45} />
@@ -2824,8 +2947,8 @@ export default function LiveCapture() {
                 <YAxis tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} domain={[0, 100]} width={distanceTelemetryView ? 44 : 34} />
                 <Tooltip content={<ChartTooltip />} />
                 <Legend wrapperStyle={{ fontSize: distanceTelemetryView ? 14 : 11 }} />
-                <Line type="monotone" dataKey="left" name="Left" stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} connectNulls />
-                <Line type="monotone" dataKey="right" name="Right" stroke="hsl(var(--chart-2))" strokeWidth={2.5} dot={false} connectNulls />
+                <Line type="monotone" dataKey="left" name={usingPerinealEmgConfig ? "Perineal" : "Left"} stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} connectNulls />
+                <Line type="monotone" dataKey="right" name={usingPerinealEmgConfig ? "Aux" : "Right"} stroke="hsl(var(--chart-2))" strokeWidth={2.5} dot={false} connectNulls />
                 <Line type="monotone" dataKey="diff" name="Diff" stroke="hsl(var(--chart-4))" strokeWidth={1.75} dot={false} connectNulls />
               </LineChart>
             </ResponsiveContainer>

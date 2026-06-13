@@ -31,6 +31,15 @@ import {
   normalizeBodyExplorationVideoPassFindings,
   normalizeSessionVideoPassFindings,
 } from "@/lib/visualEvidence";
+import {
+  deviceEvidenceStageForText,
+  hasUnsupportedMeatusContactClaim as hasUnsupportedMeatusContactClaimGuard,
+  hasUnsupportedSleeveUseClaim as hasUnsupportedSleeveUseClaimGuard,
+  sanitizeFoleyProcedureText as sanitizeFoleyProcedureTextGuard,
+  sanitizeSecondPersonProcedureLanguage,
+  sanitizeSleeveSessionText,
+} from "@/lib/videoPassTextGuards";
+import { reduceConsistencyPhraseRepetition } from "@/utils/aiTextRepair";
 
 function fmtMmSs(totalSeconds) {
   const v = Math.max(0, Math.round(Number(totalSeconds) || 0));
@@ -426,7 +435,7 @@ function hasUnsupportedFoleyStageForecast(item) {
   const text = `${item?.title || ""} ${item?.text || item?.findingText || ""} ${item?.note || ""}`.toLowerCase();
   return /(meatal engagement|catheter engagement|foley engagement|insertion|advancement|advanced|entering|passes? (?:the )?meatus|catheter positioning|foley positioning)/.test(text)
     && /(imminent|about to|appears to|appears imminent|suggesting|consistent with|prepar(?:e|ing)|nearby|toward|lowering toward|positioning)/.test(text)
-    && !/(visible advancement|visibly advancing|visible tip|tip visibly|tip at|entering the meatus is visible|through the meatus)/.test(text);
+    && !/(visible advancement|visibly advancing|visible tip|tip visibly|tip at|entering the meatus is visible|through the meatus|less (?:of the )?(?:foley|catheter) (?:is )?visible|external (?:foley|catheter|shaft) (?:length )?(?:shortens|decreases|reduces)|progressive(?:ly)? (?:shortening|less visible)|remaining visible length)/.test(text);
 }
 
 function hasBlueObjectFoleyMislabel(item) {
@@ -445,71 +454,19 @@ function hasUnsupportedAlreadyPlacedClaim(item) {
 
 function sanitizeExplorationFoleyText(text) {
   const value = neutralizeIntentLanguage(text);
-  let next = value;
-  if (hasBlueObjectFoleyMislabel({ text: next })) {
-    next = next
-      .replace(/\bblue[-\s]?tipped\s+object\s+consistent\s+with\s+(?:the\s+)?(?:Dover\s+18\s*Fr\s+)?Foley\s+drainage\s+tubing\s+or\s+catheter\s+port\b/gi, "blue item on the procedure tray, most consistent with lubricant/prep material")
-      .replace(/\bblue[-\s]?tipped\s+(?:Foley|catheter|drainage tubing|catheter port)\b/gi, "blue tray item")
-      .replace(/\bblue\s+(?:Foley|catheter|drainage tubing|catheter port)\b/gi, "blue tray item")
-      .replace(/\b(?:Dover\s+18\s*Fr\s+)?Foley\s+drainage\s+tubing\s+or\s+catheter\s+port\s+(?:becomes|is|remains)\s+visible\b/gi, "procedure-tray item remains visible")
-      .replace(/\bFoley\s+appears\s+already\s+in\s+place\b/gi, "Foley placement is not confirmed from this tray-side object")
-      .replace(/\bcatheter\s+already\s+(?:in\s+place|present)\b/gi, "catheter placement not confirmed from this tray-side object");
-  }
-  if (hasUnsupportedAlreadyPlacedClaim({ text: next })) {
-    next = next
-      .replace(/\b(?:the\s+)?Foley\s+catheter\s+(?:is\s+)?already\s+in\s+place\s+at\s+(?:the\s+)?glans\/meatus\b/gi, "the Foley/catheter is visible at the glans/meatus")
-      .replace(/\b(?:the\s+)?catheter\s+(?:is\s+)?already\s+in\s+place\s+at\s+(?:the\s+)?glans\/meatus\b/gi, "the catheter is visible at the glans/meatus")
-      .replace(/\b(?:the\s+)?Foley\s+catheter\s+(?:is\s+)?already\s+in\s+place\s+at\s+(?:the\s+)?meatus\b/gi, "the Foley/catheter is visible at the meatus")
-      .replace(/\b(?:the\s+)?catheter\s+(?:is\s+)?already\s+in\s+place\s+at\s+(?:the\s+)?meatus\b/gi, "the catheter is visible at the meatus")
-      .replace(/\b(?:yellow\s+)?(?:Foley\s+)?tubing\s+exits?\s+(?:the\s+)?glans\b/gi, "Foley/tubing is visible at the glans/meatus region")
-      .replace(/\b(?:yellow\s+)?(?:Foley\s+)?tubing\s+exits?\s+(?:the\s+)?meatus\b/gi, "Foley/tubing is visible at the meatus")
-      .replace(/\b(?:the\s+)?catheter\s+(?:is\s+)?seated\b/gi, "catheter seating is not confirmed from this window alone")
-      .replace(/\bseated\s+catheter\b/gi, "visible catheter/Foley-at-meatus state")
-      .replace(/\b(?:the\s+)?catheter\s+has\s+been\s+placed\b/gi, "catheter placement is not confirmed from this window alone")
-      .replace(/\b(?:the\s+)?Foley\s+catheter\s+(?:is\s+)?already\s+in\s+place\b/gi, "Foley/catheter placement is not confirmed from this window alone")
-      .replace(/\b(?:the\s+)?catheter\s+(?:is\s+)?already\s+in\s+place\b/gi, "catheter placement is not confirmed from this window alone")
-      .replace(/\bconfirming\s+(?:the\s+)?catheter\s+(?:is\s+)?already\s+in\s+place\b/gi, "showing catheter/Foley material at the meatus without proving completed placement")
-      .replace(/\bcontinued\s+post[-\s]?placement\s+dwell\s+state\b/gi, "visible catheter/Foley-at-meatus state")
-      .replace(/\bpost[-\s]?placement\s+dwell\s+state\b/gi, "visible catheter/Foley-at-meatus state")
-      .replace(/\bcontinued\s+dwell\s+interval\b/gi, "visible catheter/Foley-at-meatus interval")
-      .replace(/\bdwell\s+interval\b/gi, "visible catheter/Foley-at-meatus interval")
-      .replace(/\balready\s+(?:in\s+place|placed|inserted)\b/gi, "visible at the meatus/glans region");
-  }
-  if (hasUnsupportedFoleySecurementClaim({ text: next })) {
-    next = next
-    .replace(/\bStatLock\b/gi, "Foley/tubing")
-    .replace(/\b(?:adhesive\s+)?securement\s+(?:device\s+)?(?:application|finalization|work|step|process|anchor|anchoring)?\b/gi, "tubing/field handling")
-    .replace(/\bsecurement\b/gi, "tubing/field handling")
-    .replace(/\banchoring\b/gi, "routing")
-    .replace(/\banchored\b/gi, "routed")
-    .replace(/\banchor\b/gi, "route")
-    .replace(/\bfinal\s+routing\b/gi, "routing")
-    .replace(/\bfinalized\b/gi, "handled")
-    .replace(/\bfinalization\b/gi, "handling")
-    .replace(/\bFoley\/tubing\s+tubing\b/gi, "Foley tubing")
-    .replace(/\btubing\/field handling\s+tubing\/field handling\b/gi, "tubing/field handling")
-  }
-  if (hasUnsupportedFoleyStageForecast({ text: next })) {
-    next = next
-      .replace(/\b(?:meatal|catheter|foley)\s+engagement\s+(?:appears\s+)?imminent\b/gi, "field preparation continues")
-      .replace(/\b(?:meatal|catheter|foley)\s+engagement\b/gi, "field preparation")
-      .replace(/\bcatheter\s+positioning\b/gi, "field/tool positioning")
-      .replace(/\bfoley\s+positioning\b/gi, "field/tool positioning")
-      .replace(/\bvisible\s+advancement\s+appears\s+imminent\b/gi, "field preparation continues")
-      .replace(/\b(?:insertion|advancement)\s+(?:appears\s+)?imminent\b/gi, "field preparation continues")
-      .replace(/\b(?:insertion|advancement)\b/gi, "field preparation")
-      .replace(/\bpasses?\s+(?:the\s+)?meatus\b/gi, "near the field")
-      .replace(/\bentering\b/gi, "near")
-      .replace(/\bappears\s+imminent\b/gi, "is not yet visible")
-      .replace(/\bimminent\b/gi, "not yet visible");
-  }
-  return next
+  const { text: next } = sanitizeFoleyProcedureTextGuard(value);
+  return reduceConsistencyPhraseRepetition(sanitizeSecondPersonProcedureLanguage(next)
     .replace(/\bleft\s+(blue-gloved\s+)?hand\b/gi, "one $1hand")
     .replace(/\bright\s+(blue-gloved\s+)?hand\b/gi, "the other $1hand")
     .replace(/\bleft\s+hand\b/gi, "one hand")
     .replace(/\bright\s+hand\b/gi, "the other hand")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim(), 1);
+}
+
+function sanitizeRegularSessionDeviceText(text) {
+  const value = neutralizeIntentLanguage(text);
+  return reduceConsistencyPhraseRepetition(sanitizeSleeveSessionText(value).text, 1);
 }
 
 function isGenericControlObjectMention(item) {
@@ -763,7 +720,7 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
     }];
   const events = Array.isArray(value?.events) ? value.events : [];
   const cleanTextForMode = (text) => (
-    isExploration ? sanitizeExplorationFoleyText(text) : neutralizeIntentLanguage(text)
+    isExploration ? sanitizeExplorationFoleyText(text) : sanitizeRegularSessionDeviceText(text)
   );
   return {
     summary: cleanTextForMode(value?.summary || findings[0]?.text || "Review complete."),
@@ -771,17 +728,23 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
       title: hasUnsupportedFoleySecurementClaim(finding)
         ? "Tubing/field handling"
         : hasUnsupportedAlreadyPlacedClaim(finding)
-        ? "Catheter at meatus"
+        ? "Placement not confirmed"
+        : hasUnsupportedMeatusContactClaimGuard(finding)
+        ? "Meatus contact not confirmed"
         : hasUnsupportedFoleyStageForecast(finding)
         ? "Field preparation"
+        : hasUnsupportedSleeveUseClaimGuard(finding)
+        ? "Sleeve use not confirmed"
         : cleanTextForMode(finding.title || "Finding"),
       text: cleanTextForMode(finding.text || finding.findingText || ""),
-      confidence: (hasUnsupportedFoleySecurementClaim(finding) || hasUnsupportedFoleyStageForecast(finding) || hasUnsupportedAlreadyPlacedClaim(finding)) && finding.confidence === "high" ? "moderate" : finding.confidence || "moderate",
+      confidence: (hasUnsupportedFoleySecurementClaim(finding) || hasUnsupportedFoleyStageForecast(finding) || hasUnsupportedAlreadyPlacedClaim(finding) || hasUnsupportedMeatusContactClaimGuard(finding) || hasUnsupportedSleeveUseClaimGuard(finding)) && finding.confidence === "high" ? "moderate" : finding.confidence || "moderate",
       category: finding.category || "other",
     })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding) && !isTelemetryOnlyFinding(finding) && !isGenericControlObjectMention(finding) && !isLowValueNoChangeForRole(finding, selectedRole) && !isOutOfLaneForRole(finding, selectedRole)),
     events: events.map((event) => {
       const unsupportedFoleyForecast = isExploration && hasUnsupportedFoleyStageForecast(event);
       const unsupportedAlreadyPlaced = isExploration && hasUnsupportedAlreadyPlacedClaim(event);
+      const unsupportedMeatusClaim = isExploration && hasUnsupportedMeatusContactClaimGuard(event);
+      const unsupportedSleeveUse = !isExploration && hasUnsupportedSleeveUseClaimGuard(event);
       const note = cleanTextForMode(cleanDraftEventNote(event.note || event.text || ""));
       return {
         time_s: clamp(
@@ -790,9 +753,9 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
           fallbackWindow.end,
         ),
         note,
-        category: unsupportedFoleyForecast ? ["setup"] : normalizeDraftEventCategories(event.category, note, fallbackWindow, isExploration),
+        category: (unsupportedFoleyForecast || unsupportedMeatusClaim) ? ["setup"] : normalizeDraftEventCategories(event.category, note, fallbackWindow, isExploration),
         annotation_tags: Array.isArray(event.annotation_tags) ? event.annotation_tags : ["other_context"],
-        confidence: (unsupportedFoleyForecast || unsupportedAlreadyPlaced) && event.confidence === "high" ? "moderate" : event.confidence || "moderate",
+        confidence: (unsupportedFoleyForecast || unsupportedAlreadyPlaced || unsupportedMeatusClaim || unsupportedSleeveUse) && event.confidence === "high" ? "moderate" : event.confidence || "moderate",
       };
     }).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note }) && !isTelemetryOnlyFinding({ title: "", text: event.note }) && !isGenericControlObjectMention(event) && !isLowValueNoChangeForRole(event, selectedRole) && !isOutOfLaneForRole(event, selectedRole)),
   };
@@ -1492,6 +1455,15 @@ function cardFromAIVideoJob(job, isExploration = false) {
     telemetry: cardMeta.telemetry || "",
     ...normalized,
   };
+}
+
+function cardDeviceEvidenceStatus(card) {
+  const text = [
+    card?.summary,
+    ...(card?.findings || []).flatMap((finding) => [finding.title, finding.text]),
+    ...(card?.events || []).map((event) => event.note),
+  ].filter(Boolean).join(" ");
+  return deviceEvidenceStageForText(text);
 }
 
 async function runBackgroundAIVideoReview({ aiPayload, cardMeta, session, recordType, label, onProgress }) {
@@ -2215,7 +2187,7 @@ export default function AIVideoPassPanel({
 This is a Body Exploration / instrumentation review, not an active-stimulation session analysis. Watch for procedure, setup, device position, genital/body state, tissue appearance, Foley catheter or urethral sound/dilator presence, insertion/withdrawal/adjustment, meatal/urethral context when visible or logged, comfort/tolerance cues, breathing/legs/body response, and telemetry-supported autonomic response.
 Do not force a stimulation lifecycle. Do not create stimulation start/pause/resume/stop events. If masturbation or active stimulation is not visibly present and not logged, treat hands/devices as procedure/instrumentation context, not stimulation. Interpret Foley/sound/catheter evidence through the exploration notes and mechanical profile context when provided, while staying strict about what is visible.
 
-Foley placement sequence to track when visible: positioning on the table; draping and field setup; swabbing/antiseptic prep; lubrication or possible urethral dilation with a syringe; initial Foley handling away from the body; penis/glans stabilization; catheter approach toward the meatus; catheter tip positioned at the meatus; insertion begins when the tip visibly enters the meatus; active advancement when catheter motion through the meatus is visible; seated/in-place state only after visible advancement/placement evidence or a completion marker; bladder entry or urine confirmation; balloon inflation; drape removal; urine collected in the bag. Treat these as possible stages, not a script.
+Foley placement sequence to track when visible: positioning on the table; draping and field setup; swabbing/antiseptic prep; lubrication or possible urethral dilation with a syringe; initial Foley handling away from the body; penis/glans stabilization; catheter approach toward the meatus; catheter tip positioned at the meatus; insertion begins when the tip visibly enters the meatus; active advancement when catheter motion through the meatus is visible OR when the visible external catheter/shaft length progressively shortens across sampled frames while remaining aligned with the meatus/glans; seated/in-place state only after visible advancement/placement evidence plus a completion marker; bladder entry or urine confirmation; balloon inflation; drape removal; urine collected in the bag. Treat these as possible stages, not a script.
 
 Foley state-versus-action rule: Foley catheter/tubing already being visible means "Foley/tubing remains present", not "inserted", "placed", "advanced", or "secured". Yellow tubing being moved, lifted, routed, or resting across the field is tubing handling unless the catheter shaft is visibly advancing at the meatus or balloon hardware is visible. Do not mention StatLock, adhesive securement, securement finalization, balloon inflation, bladder entry, urine confirmation, or urine collection unless that exact item/action is visible in the sampled frames or explicitly logged in nearby manual notes. Prior AI-generated events/findings do not count as manual evidence.
 
@@ -2223,15 +2195,18 @@ Known object correction: the blue item on the procedure tray/right field edge is
 
 Already-in-place gate: do not use "already in place", "post-placement", "seated", or "dwell interval" just because Foley/catheter material is first visible at the glans or meatus. First clear visibility at the meatus/glans is usually "catheter tip at the meatus" or "insertion beginning" if the tip is entering. Use "already in place" only if an earlier manual note/current-run corrected reviewed window explicitly confirmed advancement/placement, or if urine return, balloon inflation, drape removal after placement, bag collection, or another completion marker is visible. Prior AI-generated claims do not count as confirmation.
 
-Foley action evidence gates: use "glove change/prep" when hands are changing gloves or fresh gloves appear without a Foley/catheter in hand; use "swabbing/prep" only for visible wipe/swab/applicator contact; use "lubrication/dilation" only when a syringe, gel, lubricant, instillation, or urethral prep action is visible/supported; use "catheter approach" when the catheter is being brought toward the meatus but has not reached it; use "catheter tip at the meatus" when the tip is visibly touching or aligned at the meatus; use "insertion beginning" when the tip first visibly enters the meatus; use "active advancement" only when catheter/tool motion through the meatus is visible in this current window; use "visible catheter/Foley-at-meatus state" when Foley/catheter material is visible at the glans/meatus but active advancement is not proven; use "already in place" only after the already-in-place gate above is satisfied; use "positioning/tubing handling" when gloved hands are arranging tubing, drape, gauze, or field materials away from the meatus. If unsure between prep/glove change and Foley handling, choose prep/glove change. If unsure between approach and tip-at-meatus, choose "catheter approach." If unsure between tip-at-meatus and advancement, choose "catheter tip at the meatus" rather than generic tubing handling or advancement. If unsure between insertion and already-in-place, choose "insertion beginning", "active advancement", or "visible catheter/Foley-at-meatus state" instead of already-in-place.
+Foley action evidence gates: use "glove change/prep" when hands are changing gloves or fresh gloves appear without a Foley/catheter in hand; use "swabbing/prep" only for visible wipe/swab/applicator contact; use "lubrication/dilation" only when a syringe, gel, lubricant, instillation, or urethral prep action is visible/supported; use "catheter not visible" when the actual catheter/tool tip is outside the frame, hidden by hands/body/drape, or cannot be separated from nearby materials; use "catheter approach" only when the actual catheter/tool is visible and being brought toward the meatus but has not reached it; use "catheter tip at the meatus" only when the actual tip is visibly touching or aligned at the meatus; use "insertion beginning" when the actual tip first visibly enters the meatus; use "active advancement" when catheter/tool motion through the meatus is visible OR when less external catheter/shaft remains visible across sampled frames while the visible catheter stays continuous/aligned with the meatus/glans; use "visible catheter/Foley-at-meatus state" only when Foley/catheter material is visibly at the glans/meatus but active advancement is not proven; use "already in place" only after the already-in-place gate above is satisfied; use "positioning/tubing handling" when gloved hands are arranging tubing, drape, gauze, or field materials away from the meatus. If unsure between prep/glove change and Foley handling, choose prep/glove change. If the Foley is not in frame, say it is not visible in this window. If unsure between not visible and approach, choose "catheter not visible." If unsure between approach and tip-at-meatus, choose "catheter approach." If unsure between tip-at-meatus and advancement, choose "catheter tip at the meatus" only when the tip/contact itself is visible and catheter length is not changing; choose "active advancement" when the external visible catheter length is progressively shortening at the meatus/glans. If unsure between insertion and already-in-place, choose "insertion beginning", "active advancement", or "visible catheter/Foley-at-meatus state" instead of already-in-place.
+
+Foley advancement-length cue: actively compare sampled frames inside the current window and adjacent-window continuity. If the catheter/shaft is visibly aligned with the meatus/glans and progressively less of it remains outside the body, that is evidence of active advancement even if the exact tip is partly hidden by a hand or drape. Describe it as "visible/progressive Foley advancement" or "external catheter length shortens during insertion." Do not require the tip to be visible in every frame once insertion has begun. Still do not call the catheter fully seated, in bladder, or dwell/placed until urine return, balloon-port handling, bag collection, or a manual/current-run corrected completion marker supports that later stage.
 
 No forecasted Foley stages: do not write "meatal engagement appears imminent", "catheter positioning", "advancement is about to begin", "preparing for insertion", or similar future-stage language. If the catheter/tool tip is not visibly at the meatus and advancement is not visible, describe the current visible action only: glove change, field prep, hand position, drape/gauze handling, packaging/tool handling, or tubing handling.
 
-Meatal contact is its own stage: if the sampled frames show a catheter/Foley/tool tip touching or aligned at the meatus but do not prove motion through the meatus, say "catheter tip at the meatus" or "visible meatal contact/engagement." Do not downgrade that to generic tubing/field handling. Do not upgrade it to advancement unless frame-to-frame motion through the meatus is visible. Do not upgrade it to already-in-place unless the already-in-place gate is satisfied.
+Meatal contact is its own stage: if the sampled frames show the actual catheter/Foley/tool tip touching or aligned at the meatus but do not prove motion through the meatus, say "catheter tip at the meatus" or "visible meatal contact/engagement." If the tip or meatus is out of frame, occluded, cropped, or ambiguous, do not say "at", "contacting", "touching", "entering", or "advancing through" the meatus. Do not downgrade true visible meatal contact to generic tubing/field handling. Upgrade meatal contact to active advancement when frame-to-frame catheter motion or progressive external-length shortening is visible. Do not upgrade it to already-in-place unless the already-in-place gate is satisfied.
 
 Handedness/camera rule: do not label hands as left or right unless the camera orientation makes anatomical handedness unambiguous. Prefer "one hand", "the other hand", "upper hand", "lower hand", "near hand", or "far hand" for visual tracking.
+Personal language rule: write about Ben directly as "you" and "your". Never call him "the subject", "subject", "patient", or "the person". Do not call the gloved helper/hand "the operator"; use "a gloved hand", "gloved hands", or "the gloved person" only when that is visually relevant.
 Use exploration event categories only: instrumentation, instrumentation_change, physical, sensation, comfort, setup, or other.
-Draft event examples for this mode: "Fresh gloves/glove change visible during prep", "Draping and field setup continue", "Swabbing/prep continues around the meatus", "Lubrication or dilation syringe is used near the meatus", "One hand stabilizes the penis while the other brings the catheter toward the meatus" only if a Foley is visibly in hand, "Catheter tip is visible at the meatus" when contact/engagement is visible without confirmed advancement, "Foley insertion begins at the meatus" when the tip first visibly enters, "Foley advancement is visible at the meatus" only if frame-to-frame advancement is visible, "Foley/tubing is being handled after insertion" only after completion is established, "Urine appears in the tubing/bag", "Drape is removed while urine collects in the bag".` : ""}
+Draft event examples for this mode: "Fresh gloves/glove change visible during prep", "Draping and field setup continue", "Swabbing/prep continues around the meatus", "Lubrication or dilation syringe is used near the meatus", "One hand stabilizes the penis while the other brings the catheter toward the meatus" only if a Foley is visibly in hand, "Catheter tip is visible at the meatus" when contact/engagement is visible without confirmed advancement, "Foley insertion begins at the meatus" when the tip first visibly enters, "Foley advancement is visible at the meatus" when frame-to-frame advancement or progressive external-length shortening is visible, "Foley/tubing is being handled after insertion" only after completion is established, "Urine appears in the tubing/bag", "Drape is removed while urine collects in the bag".` : ""}
 
 You are Sarah, reviewing sampled frames from a linked local ${recordLabel} video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
 
@@ -2239,7 +2214,7 @@ ${isExploration ? "Exploration/procedure context grounding" : "Session context g
 
 Current-frame override rule: the sampled frames in this request are the primary evidence. Prior summaries, accepted cards, and continuity text can orient the sequence, but they must not override the current frames. If the prior window said "resting", "no stimulation", "no visible movement", or "HR rising without visible cause", actively re-check the current frames for hand/device contact, visible stroke or device motion, perineal contact, glans/shaft movement, sleeve/lubricant interaction, body/leg response, or procedure action before repeating that claim.
 
-Positive action tracking rule: describe visible contact or motion before describing absence. For regular session reviews, if any sampled frame shows hand contact with the penis, glans, shaft, scrotal-base/perineal region, sleeve/device, or visible stimulation-related motion, treat the window as active stimulation/contact or a stimulation transition unless the sequence clearly shows a pause. For body exploration reviews, if any sampled frame shows glove change, swab/wipe/applicator/tool/catheter/tubing contact, or setup movement, describe that procedural action rather than saying nothing is happening. For Foley reviews, prefer the exact visible action: table positioning, glove change/prep, drape/setup, swabbing, lubrication/dilation, penis stabilization, catheter approach, catheter tip at the meatus, insertion beginning, active advancement, visible catheter/Foley-at-meatus state, tubing handling, balloon inflation, drape removal, or urine collection. Do not use already-in-place unless completion evidence is visible or manually logged.
+Positive action tracking rule: describe visible contact or motion before describing absence. For regular session reviews, if any sampled frame shows hand contact with the penis, glans, shaft, scrotal-base/perineal region, sleeve/device, or visible stimulation-related motion, treat the window as active stimulation/contact or a stimulation transition unless the sequence clearly shows a pause. Do not claim sleeve-based stimulation, sleeve stroking, or sleeve placement until the sleeve is visibly placed on/over the shaft or visibly used around the penis; if the sleeve is only nearby, in hand, or outside the frame, describe hand contact/prep instead. For body exploration reviews, if any sampled frame shows glove change, swab/wipe/applicator/tool/catheter/tubing contact, or setup movement, describe that procedural action rather than saying nothing is happening. For Foley reviews, prefer the exact visible action: table positioning, glove change/prep, drape/setup, swabbing, lubrication/dilation, penis stabilization, catheter not visible, catheter approach, catheter tip at the meatus, insertion beginning, active advancement from visible motion or shortening external catheter length, visible catheter/Foley-at-meatus state, tubing handling, balloon inflation, drape removal, or urine collection. Do not use already-in-place unless completion evidence is visible or manually logged.
 
 Hard wording rule: do not use "edging", "edging maneuver", "intentional edging", "holding back", "delaying climax", or similar intent language unless the nearby session event, session note, or user caption explicitly uses that exact concept. If the visible behavior is a hand lift, withdrawal, pause, restart, speed change, or contact change, describe the observable behavior only.
 
@@ -2268,8 +2243,10 @@ Observation priorities, in order:
 Generic object rule: ignore mouse, remote, keyboard, phone, dark handheld object, side-table object, or generic "control object" details. Do not write "reaches for control object", "returns to control object", "handheld controller", or similar language in findings or draft events. If the hand leaves or returns to the body, describe only the relevant body/${isExploration ? "procedure" : "session"} change, such as ${isExploration ? "\"prep contact pauses\", \"tool handling resumes\", \"hand stabilizes the glans\", or \"tubing is repositioned\"" : "\"genital contact pauses\", \"stimulation resumes\", \"hand leaves genital contact\", or \"hand returns to genital contact\""}. Only identify an object when it is a known or clearly visible session-relevant item such as a silicone sleeve, vibrator, lubricant bottle, Foley catheter, TENS/e-stim component, pump, towel, or explicitly user-labeled device.
 
 Output style: write the summary as a flowing chronological observation with the most useful visible physiology and ${isExploration ? "procedure/device landmark" : "stimulation"} changes first. Keep it to 2 concise sentences. Return 2-4 finding cards only when there are useful non-repetitive observations; return fewer or none when the window adds nothing. Each finding title should be under 9 words, and each finding text should be 1 concise sentence. Return 1-3 timeline events only when there is a meaningful change or useful timestampable observation. Avoid spending a finding slot on HR overlay text, static background objects, unchanged setup, no-change filler, or the mere presence of a control object.
+Language variety rule: do not make "consistent with" or "consistently" your default evidence phrase. Use them at most once in this window, then vary with "fits with", "aligns with", "matches", "supports", "stable", "repeated", or direct observation language.
+Use direct, personal language: "you", "your glans", "your lower body", "a gloved hand". Do not use detached research wording such as "subject", "the subject", "patient", or "operator".
 
-Draft event style: write events like concise manual timeline notes, not analysis paragraphs. Prefer observations such as ${isExploration ? "\"Drape/setup position is visible\", \"Antiseptic prep continues around the meatus\", \"Lubrication/tool handling begins\", \"Catheter tip is visible at the meatus\", \"Visible Foley advancement continues\", \"Foley appears already in place while tubing is handled\", or \"Dwell comfort appears stable\"" : "\"Left foot plants further while legs tense\", \"Pelvis lifts briefly then drops\", \"Lubrication applied to glans\", \"Perineal contact resumes below scrotum\", \"Stimulation resumes with mid-shaft to glans strokes\", \"Glans remains engorged with visible sheen\", \"Deep exhale visible through abdominal drop\", or \"Whitish ejaculate clearly visible after confirmed climax marker\""} only when strongly supported by context plus visible sequence. Do not include HR/BPM/overlay/timer language in event notes unless no visible body/${isExploration ? "procedure" : "stimulation"} change exists. Do not begin event notes with "this window opens", "window opens", "this window closes", or "window closes"; write the actual observed change directly.
+Draft event style: write events like concise manual timeline notes, not analysis paragraphs. Prefer observations such as ${isExploration ? "\"Drape/setup position is visible\", \"Antiseptic prep continues around the meatus\", \"Lubrication/tool handling begins\", \"Catheter is not visible in this window\", \"Catheter tip is visible at the meatus\" only when the actual tip is visible there, \"Visible Foley advancement continues\" only when frame-to-frame advancement is visible, or \"Tubing/field handling continues\"" : "\"Left foot plants further while legs tense\", \"Pelvis lifts briefly then drops\", \"Lubrication applied to glans\", \"Perineal contact resumes below scrotum\", \"Stimulation resumes with mid-shaft to glans strokes\", \"Glans remains engorged with visible sheen\", \"Sleeve use becomes visible\" only after visible placement/use, \"Deep exhale visible through abdominal drop\", or \"Whitish ejaculate clearly visible after confirmed climax marker\""} only when strongly supported by context plus visible sequence. Do not include HR/BPM/overlay/timer language in event notes unless no visible body/${isExploration ? "procedure" : "stimulation"} change exists. Do not begin event notes with "this window opens", "window opens", "this window closes", or "window closes"; write the actual observed change directly.
 
 Visible tools and materials matter when supported: identify lubrication bottles or lubricant application only when a bottle, gel/fluid, hand motion, shine, or user/session context makes that reasonably clear. ${isExploration ? "For body exploration, avoid generic \"object\" wording when the visible material is more likely swab, gauze, wipe, drape, towel, applicator, tubing, catheter shaft, lubricant, or syringe. Use the session context to name procedure-relevant materials when the sequence and visuals make that reasonable, but do not make every frame about the final device. Do not name securement hardware, StatLock, balloon, urine return, or bag collection unless visible in current sampled frames or explicitly stated in nearby manual notes." : "Identify devices such as a silicone sleeve, Foley catheter, e-stim/TENS leads, pump, towel, table, or camera/monitor setup when visible or strongly supported by session context."} If uncertain, say "possible" and mark confidence low or moderate. Write findings in direct second person using "you" and "your".
 
@@ -2464,16 +2441,19 @@ Telemetry: ${card.telemetry || "None"}
 
 Foley correction rules:
 - Foley/tubing visible means present/state, not newly inserted, placed, advanced, secured, or finalized.
-- Use catheter approach when the tool is moving toward the meatus but has not reached it.
-- Use catheter tip at the meatus when the tip is touching/aligned at the meatus but not visibly entering.
-- Use insertion beginning when the tip first visibly enters the meatus.
-- Use active advancement only if the sampled frames show catheter/tool movement through the meatus in this current window.
+- Use catheter not visible when the actual catheter/tool tip is outside the frame, cropped, hidden, blocked by hands/body/drape, or cannot be distinguished from field materials.
+- Use catheter approach only when the actual catheter/tool is visible moving toward the meatus but has not reached it.
+- Use catheter tip at the meatus only when the actual tip is touching/aligned at the meatus but not visibly entering.
+- Use insertion beginning only when the actual tip first visibly enters the meatus.
+- Use active advancement if the sampled frames show catheter/tool movement through the meatus OR progressive shortening of the visible external catheter/shaft while it remains aligned/continuous at the meatus or glans.
+- Do not require the exact tip to remain visible after insertion has begun; less external Foley visible across frames is useful advancement evidence.
 - Do not use already-in-place/dwell/post-placement when the first clear evidence is Foley/catheter material at the glans or meatus. First visibility at the meatus/glans should be corrected to catheter tip at the meatus, insertion beginning, or active advancement depending on what the frames show.
 - Use already-in-place only if an earlier manual note or earlier corrected reviewed window explicitly confirmed advancement/placement, or if urine return, balloon inflation, or another completion marker is visible. Prior AI-generated already-in-place language does not count as confirmation.
 - Use tubing/field handling when tubing or catheter is visible away from the meatus and the catheter is not visibly advancing.
 - Do not mention StatLock, securement, adhesive securement, securement finalization, balloon inflation, bladder entry, urine confirmation, or urine collection unless that exact thing is visible in the sampled frames or explicitly stated in nearby manual notes. Prior AI-generated events/findings do not count as manual evidence.
 - If a prior card already claimed a Foley stage, do not repeat it as newly happening here unless the current frames independently show a new repeat.
 - Prefer conservative procedure labels: drape/setup, swabbing/prep, lubrication/dilation syringe, penis stabilization, catheter approach, catheter tip at the meatus, insertion beginning, active advancement, visible catheter/Foley-at-meatus state, tubing/field handling, drape removal, urine collection.
+- If the Foley is not in frame, say it is not visible in this window. Do not write "at the meatus", "contacting the meatus", "entering the meatus", or "advancing" unless the actual tip/contact/motion or progressive external-length shortening is visible in sampled frames.
 - If the original card overclaimed, rewrite it more conservatively. If it was already accurate, keep it concise.
 
 Return a corrected compact card for this same window. Keep timeline events only for meaningful visible changes; if there is no timestampable change, return an empty events array.`,
@@ -4938,6 +4918,7 @@ Return only the structured JSON matching the requested schema.`,
             const compactAccepted = accepted && !isExpanded;
             const showCardVideoPreview = Boolean(card.clipUrl) && !card.localVision;
             const cardFramePreview = card.thumbnailUrl || card.sampledFrames?.[0]?.url || "";
+            const deviceStatus = cardDeviceEvidenceStatus(card);
             return (
               <article key={card.id} className={`overflow-hidden rounded-xl border bg-card transition-opacity ${accepted ? "border-primary/25 opacity-80" : "border-border"}`}>
                 <div className={`${compactAccepted ? "p-3" : "grid gap-3 p-3 lg:grid-cols-[minmax(15rem,22rem)_1fr]"}`}>
@@ -4949,6 +4930,11 @@ Return only the structured JSON matching the requested schema.`,
                           <span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
                             Accepted
                           </span>
+                          {deviceStatus && (
+                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${deviceStatus.blocked ? "border-amber-400/40 bg-amber-400/10 text-amber-300" : "border-border bg-background/70 text-muted-foreground"}`}>
+                              {deviceStatus.stage}
+                            </span>
+                          )}
                         </div>
                         <p className="mt-1 text-xs text-muted-foreground">
                           {card.sourceVideo?.label || card.sourceVideo?.filename} · {fmtMmSs(card.window.start)} to {fmtMmSs(card.window.end)} · {card.events.length} timeline event{card.events.length === 1 ? "" : "s"}
@@ -5012,6 +4998,11 @@ Return only the structured JSON matching the requested schema.`,
                           {card.reassessed && (
                             <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
                               Reassessed
+                            </span>
+                          )}
+                          {deviceStatus && (
+                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${deviceStatus.blocked ? "border-amber-400/40 bg-amber-400/10 text-amber-300" : "border-border bg-background/70 text-muted-foreground"}`}>
+                              {deviceStatus.stage}
                             </span>
                           )}
                         </div>

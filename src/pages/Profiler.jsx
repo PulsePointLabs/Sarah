@@ -56,7 +56,7 @@ PROFILE IMAGE EVIDENCE LAYER RULE:
 - If a finding is not directly reassessed in the current images but is documented in saved profile/prior Sarah evidence, say "Not directly assessed in this batch; carried forward from prior saved evidence." Use this sparingly and only when the distinction matters.
 - If a finding comes only from user profile or historical context, label it as profile/context rather than visual evidence.
 - Direct visual evidence means only what is visible in the currently reviewed/reloaded images. Use wording such as "visible", "appears", "is seen", "no visible", or "not visible in this frame/image set".
-- Profile or prior-evidence reconciliation means comparison with saved profile metrics, prior reviewed images, saved Q&A findings, or session evidence. Use wording such as "consistent with prior documentation", "aligns with saved profile findings", or "supports a previous observation".
+- Profile or prior-evidence reconciliation means comparison with saved profile metrics, prior reviewed images, saved Q&A findings, or session evidence. Use varied wording such as "aligns with saved profile findings", "matches prior documentation", "supports a previous observation", or "remains stable from baseline". Do not overuse "consistent with" or "consistently".
 - Interpretation or clinical-functional relevance must be marked as interpretation. Use "may be relevant to", "is compatible with", "could contribute to", or "may reflect"; do not state it as direct visual fact.
 - Avoid "confirms" unless the current reviewed image directly confirms the specific claim.
 - A small clear/bright droplet at or near the meatus may be described as visible fluid. Reconcile separately with prior saved pre-ejaculate or urethral secretion findings. Do not claim continuous output unless the image sequence directly shows continuity.
@@ -164,7 +164,7 @@ LONGITUDINAL EVIDENCE / CREDIT DISCIPLINE RULE - HIGHEST PRIORITY:
 - Step 1: identify which anatomical regions are actually visible in the current images.
 - Step 2: compare visible regions against established evidence records.
 - Step 3: spend detailed analysis only on new anatomy, changed anatomy, suspected pathology, contradicted evidence, substantially better image quality, meaningful longitudinal progression, or a user-requested detailed re-review.
-- If stable anatomy is unchanged, summarize it briefly. Good: "Previously established genital and perineal baseline remains visually consistent; no significant change detected."
+- If stable anatomy is unchanged, summarize it briefly. Good: "Previously established genital and perineal baseline remains stable; no significant change detected."
 - Do not spend meaningful output budget repeatedly proving that the perineal raphe, foreskin, glans, scrotum, anal baseline, or flaccid genital baseline still exists once established.
 - High-priority changes: new or changing scars, new lesions, mole changes, edema, bruising, surgical changes, skin changes, weight/body-composition progression, respiratory pattern changes, and postural changes.
 - Medium-priority changes: muscle development, symmetry, pelvic alignment, stance, limb/foot morphology, and posture profile.
@@ -3053,7 +3053,7 @@ HEAD-TO-TOE REVIEW SCOPE:
   13. Posture & Alignment: concise cumulative summary; avoid contradictory lumbar/pelvic statements and hidden bony landmark claims.
   14. Skin Summary: consolidated skin findings only. Do not repeat them by image.
   15. Limitations / Useful Future Coverage: only truly useful missing views. Do not request views already adequately represented.
-- Every claim must be based on visible image evidence unless explicitly marked as profile/context interpretation. Prefer "appears", "is visible", "is consistent with", or "not visible in this specific view" over stronger wording, but do not overuse caveats.
+- Every claim must be based on visible image evidence unless explicitly marked as profile/context interpretation. Prefer calibrated wording such as "appears", "is visible", "aligns with", "matches", or "not visible in this specific view" over stronger wording, but do not overuse caveats.
 `,
   sections: [
     { key: "executive_summary", label: "Executive Summary", color: "hsl(var(--primary))" },
@@ -5665,7 +5665,7 @@ For this longitudinal profile, preserve the warm, personalized interpretive voic
 
 MECHANISTIC DISCIPLINE:
 Describing repeated patterns is preferred over inventing internal mechanisms.
-Allowed phrasing includes "your body repeatedly shows", "this pattern appears consistent with", and "your data suggests".
+Allowed phrasing includes "your body repeatedly shows", "this pattern appears to fit", "this aligns with prior entries", and "your data suggests".
 Use caution with autonomic nervous system explanations, cardiovascular gating claims, endocrine explanations, neurological localization, and muscle imbalance claims.
 Mechanistic explanations should only be used when directly supported by strong repeated evidence or clearly framed as exploratory hypotheses.
 Prefer pattern description over mechanistic storytelling.
@@ -5685,7 +5685,7 @@ Explanations of why require caution and evidence-calibrated language.
 SUBSTANCE INTERPRETATION:
 User-reported effects of THC, alcohol, nicotine, or other modifiers should be treated as individualized observations unless objectively confirmed.
 Do not convert the person's beliefs into universal physiological facts.
-Prefer wording like "you consistently report improved recovery with THC" over "THC improves parasympathetic recovery".
+Prefer wording like "you repeatedly report improved recovery with THC" over "THC improves parasympathetic recovery".
 
 CONFIDENT INTERPRETATION:
 When a pattern is strongly repeated across telemetry, notes, interviews, and journal entries, confident narrative interpretation is appropriate.

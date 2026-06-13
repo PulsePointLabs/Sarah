@@ -79,6 +79,79 @@ export function repairDecimalSpacing(text) {
   return repairRawSecondTimeReferences(text.replace(/(\d+)\.\s+(\d+)/g, "$1.$2"));
 }
 
+const CONSISTENCY_WITH_REPLACEMENTS = [
+  "fits with",
+  "aligns with",
+  "matches",
+  "supports",
+  "tracks with",
+  "echoes",
+];
+
+const CONSISTENT_REPLACEMENTS = [
+  "stable",
+  "repeated",
+  "steady",
+  "matching",
+  "reliable",
+];
+
+const CONSISTENTLY_REPLACEMENTS = [
+  "repeatedly",
+  "reliably",
+  "regularly",
+  "often",
+];
+
+function preserveInitialCapital(original, replacement) {
+  if (!original || original[0] !== original[0].toUpperCase()) return replacement;
+  return `${replacement.slice(0, 1).toUpperCase()}${replacement.slice(1)}`;
+}
+
+export function reduceConsistencyPhraseRepetition(text, allowedUses = 2) {
+  if (typeof text !== "string" || !text) return text;
+
+  let count = 0;
+  let rotation = 0;
+  const keptPhrases = [];
+  const keepPhrase = (match) => {
+    const index = keptPhrases.push(match) - 1;
+    return `__PULSEPOINT_KEEP_CONSISTENCY_${index}__`;
+  };
+  const shouldKeep = () => {
+    count += 1;
+    return count <= allowedUses;
+  };
+  const nextReplacement = (options, match) => {
+    const value = options[rotation % options.length];
+    rotation += 1;
+    return preserveInitialCapital(match.trimStart(), value);
+  };
+
+  const repaired = text
+    .replace(/\b(?:(?:is|are|was|were|appears|appear|appeared|seems|seem|seemed)\s+)?consistent\s+with\b/gi, (match) => {
+      if (shouldKeep()) return keepPhrase(match);
+      const replacement = nextReplacement(CONSISTENCY_WITH_REPLACEMENTS, match);
+      return replacement;
+    })
+    .replace(/\bconsistent\s+across\b/gi, (match) => {
+      if (shouldKeep()) return keepPhrase(match);
+      return preserveInitialCapital(match, "stable across");
+    })
+    .replace(/\bconsistently\b/gi, (match) => {
+      if (shouldKeep()) return keepPhrase(match);
+      return nextReplacement(CONSISTENTLY_REPLACEMENTS, match);
+    })
+    .replace(/\bconsistent\b/gi, (match) => {
+      if (shouldKeep()) return keepPhrase(match);
+      return nextReplacement(CONSISTENT_REPLACEMENTS, match);
+    });
+
+  return repaired.replace(/__PULSEPOINT_KEEP_CONSISTENCY_(\d+)__/g, (match, index) => (
+    keptPhrases[Number(index)] ?? match
+  ));
+}
+
 export function splitSentencesPreservingDecimals(text) {
   const repaired = repairDecimalSpacing(text);
   const protectedText = protectDecimalPoints(repaired);

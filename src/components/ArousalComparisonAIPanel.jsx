@@ -150,7 +150,7 @@ YOUR FOCUS AREAS:
 3. Peak arousal dynamics — how high did arousal climb (relative to each session's range)? How quickly?
 4. Build-to-peak mechanics — what drove the most productive arousal periods? What patterns correlate with higher satisfaction?
 5. Recovery arc — how quickly did arousal resolve after climax? What does that suggest?
-6. Cross-session patterns — what is consistent across sessions? What varies? What does the variation reveal?
+6. Cross-session patterns — what stays stable across sessions? What varies? What does the variation reveal?
 
 The normalized HR trajectory data (0–100% of each session's HR range) is your primary arousal signal. Use it to tell the story of how arousal moved.
 
@@ -173,7 +173,7 @@ ${JSON.stringify(sessionSummaries, null, 2)}`,
             momentum_and_pacing: { type: "array", items: { type: "string" }, description: "3-4 insights about how arousal momentum built, stalled, or recovered in each session" },
             peak_dynamics: { type: "array", items: { type: "string" }, description: "2-3 observations about how arousal peaked — speed, height, and duration of peak states" },
             what_drove_arousal: { type: "array", items: { type: "string" }, description: "2-4 specific patterns or events that most strongly drove arousal in these sessions" },
-            cross_session_patterns: { type: "array", items: { type: "string" }, description: "2-3 insights about what is consistent vs different across sessions and what that reveals" },
+            cross_session_patterns: { type: "array", items: { type: "string" }, description: "2-3 insights about what stays stable vs different across sessions and what that reveals" },
           },
           required: ["summary", "trajectory_comparison", "momentum_and_pacing", "peak_dynamics", "what_drove_arousal", "cross_session_patterns"],
         },

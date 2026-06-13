@@ -1,0 +1,25 @@
+{
+  "name": "SessionReviewVideo",
+  "type": "object",
+  "properties": {
+    "title": { "type": "string" },
+    "session_id": { "type": "string" },
+    "analysis_title": { "type": "string" },
+    "source_generated_at": { "type": "string" },
+    "file_url": { "type": "string" },
+    "filename": { "type": "string" },
+    "mimeType": { "type": "string" },
+    "size": { "type": "number" },
+    "duration_seconds": { "type": "number" },
+    "audio_file_url": { "type": "string" },
+    "audio_reused": { "type": "boolean" },
+    "voice": { "type": "string" },
+    "model": { "type": "string" },
+    "speed": { "type": "number" },
+    "clip_count": { "type": "number" },
+    "cited_time_count": { "type": "number" },
+    "manifest_url": { "type": "string" },
+    "render_version": { "type": "string" },
+    "exported_at": { "type": "string" }
+  }
+}

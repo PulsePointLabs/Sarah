@@ -52,23 +52,44 @@ function limitRows(rows, limit, skip = 0) {
   return rows.slice(start, start + lim);
 }
 
+function parseFields(value) {
+  if (!value) return null;
+  const fields = Array.isArray(value) ? value : String(value).split(',');
+  const cleaned = fields.map((field) => String(field || '').trim()).filter(Boolean);
+  return cleaned.length ? cleaned : null;
+}
+
 function publicEntity(entity, doc) {
   if (entity !== 'ProcessingJob' || !doc) return doc;
   const { payload: _payload, ...rest } = doc;
   return rest;
 }
 
+function projectEntity(doc, fields) {
+  if (!fields?.length || !doc) return doc;
+  const out = {};
+  for (const field of fields) {
+    if (field in doc) out[field] = doc[field];
+  }
+  if (doc.id != null) out.id = doc.id;
+  if (doc.created_date != null) out.created_date = doc.created_date;
+  if (doc.updated_date != null) out.updated_date = doc.updated_date;
+  return out;
+}
+
 entitiesRouter.get('/:entity', (req, res) => {
   const entity = normalizeEntityName(req.params.entity);
+  const fields = parseFields(req.query.fields);
   const rows = sortRows(listEntities(entity), req.query.sort);
-  res.json(limitRows(rows, req.query.limit, req.query.skip).map((row) => publicEntity(entity, row)));
+  res.json(limitRows(rows, req.query.limit, req.query.skip).map((row) => projectEntity(publicEntity(entity, row), fields)));
 });
 
 entitiesRouter.post('/:entity/filter', (req, res) => {
   const entity = normalizeEntityName(req.params.entity);
-  const { criteria = {}, sort, limit, skip } = req.body || {};
+  const { criteria = {}, sort, limit, skip, fields: rawFields } = req.body || {};
+  const fields = parseFields(rawFields);
   const rows = sortRows(listEntities(entity).filter((r) => matches(r, criteria)), sort);
-  res.json(limitRows(rows, limit, skip).map((row) => publicEntity(entity, row)));
+  res.json(limitRows(rows, limit, skip).map((row) => projectEntity(publicEntity(entity, row), fields)));
 });
 
 entitiesRouter.post('/:entity', (req, res) => {

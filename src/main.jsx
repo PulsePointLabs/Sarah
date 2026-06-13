@@ -13,10 +13,9 @@ const PWA_FOREGROUND_STABILITY_V1 = true;
 const PWA_KEEP_WORKER_REGISTERED_V1 = true;
 const PWA_DISABLE_SW_IN_DEV_V1 = true;
 const PWA_REGISTER_FIXED_WORKER_IN_STANDALONE_DEV_V1 = true;
+const PWA_DISABLE_DEV_SW_REGISTRATION_V2 = true;
 
-function isStandalonePwa() {
-  return window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator?.standalone === true;
-}
+const PULSEPOINT_CACHE_PREFIXES = ['pulsepoint-shell-', 'workbox-', 'vite-'];
 
 function registerStableServiceWorker() {
   if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
@@ -32,29 +31,42 @@ function registerStableServiceWorker() {
   }
 }
 
-if (import.meta.env.DEV) {
-  window.addEventListener('load', () => {
-    if (isStandalonePwa()) {
-      registerStableServiceWorker();
-      return;
-    }
-    // Dev/Tailscale builds must not keep an old installed-app shell around.
-    // Do this outside the secure-context gate so plain HTTP LAN/Tailscale
-    // sessions can still clear Cache Storage even when SW APIs are unavailable.
-    if ('serviceWorker' in navigator) {
+async function cleanupPulsePointShell() {
+  const tasks = [];
+  if ('serviceWorker' in navigator) {
+    tasks.push(
       navigator.serviceWorker.getRegistrations?.()
-        .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+        .then((registrations = []) => Promise.all(registrations.map((registration) => registration.unregister())))
         .catch((error) => {
           console.warn('Service worker cleanup failed:', error);
-        });
+        })
+    );
+  }
+
+  if (window.caches?.keys) {
+    tasks.push(
+      window.caches.keys()
+        .then((keys = []) => Promise.all(keys
+          .filter((key) => PULSEPOINT_CACHE_PREFIXES.some((prefix) => key.startsWith(prefix)))
+          .map((key) => window.caches.delete(key))))
+        .catch((error) => {
+          console.warn('PulsePoint shell cache cleanup failed:', error);
+        })
+    );
+  }
+
+  await Promise.all(tasks);
+}
+
+if (typeof window !== 'undefined') {
+  window.pulsepointCleanupPwaShell = cleanupPulsePointShell;
+}
+
+if (import.meta.env.DEV) {
+  window.addEventListener('load', () => {
+    if (PWA_DISABLE_DEV_SW_REGISTRATION_V2) {
+      cleanupPulsePointShell();
     }
-    window.caches?.keys?.()
-      .then((keys) => Promise.all(keys
-        .filter((key) => key.startsWith('pulsepoint-shell-'))
-        .map((key) => window.caches.delete(key))))
-      .catch((error) => {
-        console.warn('PulsePoint shell cache cleanup failed:', error);
-      });
   });
 } else {
   registerStableServiceWorker();

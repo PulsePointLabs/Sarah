@@ -241,7 +241,7 @@ Provide a deep longitudinal analysis in five flowing sections:
 
 **Trend Analysis** — Describe week-over-week trends in cardiac and subjective metrics. What is improving, plateauing, declining? Paint a picture of how your response patterns are evolving. Weave in actual numbers naturally.
 
-**Method Insights** — Which method combinations consistently yield the highest response quality and buildup? What standout patterns emerge from your data? Which approaches seem to resonate most with your physiology?
+**Method Insights** — Which method combinations repeatedly yield the highest response quality and buildup? What standout patterns emerge from your data? Which approaches seem to resonate most with your physiology?
 
 **Correlations** — How do contextual variables like mood, hydration, and environment correlate with outcome quality? What patterns emerge? Are there surprising connections you should be aware of?
 

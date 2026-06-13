@@ -16,6 +16,7 @@ export const ENTITY_NAMES = [
   'HeartRateTimeline',
   'EMGTimeline',
   'AudioExport',
+  'SessionReviewVideo',
   'CompareAnalysisResult',
   'CascadeAnalysisResult',
   'SessionClusterAnalysis',

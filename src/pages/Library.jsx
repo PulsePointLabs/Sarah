@@ -1,9 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { listBackgroundJobs } from "@/lib/backgroundJobs";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Play, Pause, Download, Trash2, Music } from "lucide-react";
+import { Play, Pause, Download, Trash2, Music, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import PageHeader from "@/components/PageHeader";
 import { buildAudioExportFilename } from "@/utils/exportFilenames";
@@ -17,6 +17,7 @@ const formatDuration = (seconds) => {
 
 const RAW_SECTION_TITLE_RE = /^tts-section-\d+$/i;
 const RECENT_AUDIO_LIMIT = 75;
+const RECENT_VIDEO_LIMIT = 75;
 
 const getRawAudioUrl = (export_) => (
   export_?.file_url ||
@@ -58,7 +59,82 @@ const virtualExportFromJob = (job) => {
   };
 };
 
+const audioExportRecordFromJob = (job) => {
+  const export_ = virtualExportFromJob(job);
+  if (!export_) return null;
+  const created = getCreatedTimestamp(export_) || new Date().toISOString();
+  return {
+    id: `tts-job-${job.id}`,
+    title: export_.title,
+    analysis_title: export_.analysis_title,
+    file_url: export_.file_url,
+    duration_seconds: export_.duration_seconds,
+    voice: export_.voice || null,
+    speed: export_.speed || null,
+    model: export_.model || null,
+    format: export_.format,
+    render_version: export_.render_version || null,
+    silence_trim: export_.silence_trim || null,
+    size: export_.size || null,
+    filename: export_.filename || buildAudioExportFilename({
+      title: export_.title,
+      sessionDate: created,
+      extension: getDownloadExtension(export_),
+    }),
+    tts_session_key: export_.tts_session_key,
+    source_generated_at: export_.source_generated_at,
+    exported_at: export_.exported_at || created,
+    has_chapters: export_.has_chapters,
+    chapter_format: export_.chapter_format || "sidecar",
+    chapter_count: export_.chapter_count,
+    chapter_source: "tts_export",
+    sidecar_chapters_available: export_.sidecar_chapters_available,
+    chapter_json_url: export_.chapter_json_url,
+    chapter_cue_url: export_.chapter_cue_url,
+    chapter_txt_url: export_.chapter_txt_url,
+    audio_content_version: export_.source_generated_at,
+    recovered_from_job_id: job.id,
+    notes: "Recovered from a completed background audio render.",
+    created_date: created,
+  };
+};
+
 const getAudioUrl = (export_) => serverUrl(getRawAudioUrl(export_));
+
+const getRawVideoUrl = (video) => (
+  video?.file_url ||
+  video?.video_url ||
+  video?.download_url ||
+  video?.url ||
+  ""
+);
+
+const getVideoUrl = (video) => serverUrl(getRawVideoUrl(video));
+
+const virtualVideoFromJob = (job) => {
+  if (!job?.result?.file_url) return null;
+  const title = job?.meta?.title || job?.result?.record?.title || job?.payload?.title || "Completed review video";
+  return {
+    id: `job:${job.id}`,
+    title,
+    analysis_title: job?.result?.record?.analysis_title || title,
+    file_url: job.result.file_url,
+    filename: job.result.filename || String(job.result.file_url).split("/").pop(),
+    duration_seconds: Math.round(Number(job.result.duration_seconds || 0)),
+    size: job.result.size || null,
+    mimeType: "video/mp4",
+    session_id: job?.meta?.sessionId || job?.result?.record?.session_id || null,
+    source_generated_at: job?.meta?.sourceGeneratedAt || job?.result?.record?.source_generated_at || null,
+    exported_at: job.finishedAt || job.updatedAt || job.createdAt,
+    created_date: job.finishedAt || job.updatedAt || job.createdAt,
+    audio_reused: Boolean(job.result.audio_reused),
+    clip_count: Number(job.result.clip_count || 0),
+    cited_time_count: Number(job.result.cited_time_count || 0),
+    manifest_url: job.result.manifest_url || null,
+    visual_mode: job.result.record?.visual_mode || null,
+    _source: "completed_review_video_job",
+  };
+};
 
 const getCreatedTimestamp = (export_) => (
   export_?.exported_at ||
@@ -115,6 +191,17 @@ const cleanDisplayTitle = (export_) => {
   return usefulTitle || export_?.section_name || "TTS audio export";
 };
 
+const cleanVideoTitle = (video) => {
+  const candidates = [
+    video?.analysis_title,
+    video?.title,
+    titleFromFilename(video?.filename),
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  return candidates[0] || "Session review video";
+};
+
 const getDownloadExtension = (export_) => {
   if (export_?.format) return String(export_.format).replace(/^\./, "");
   const source = export_?.filename || getRawAudioUrl(export_);
@@ -126,6 +213,7 @@ export default function Library() {
   const queryClient = useQueryClient();
   const [playingId, setPlayingId] = useState(null);
   const [audioRef, setAudioRef] = useState(null);
+  const recoveringJobIdsRef = useRef(new Set());
 
   const { data: exports = [], isLoading } = useQuery({
     queryKey: ["audioExports"],
@@ -139,11 +227,60 @@ export default function Library() {
         type: "tts_export",
         status: "complete",
         metaSource: "TTSReader",
+        includeCleared: true,
         limit: 75,
       });
       return result.jobs || [];
     },
   });
+
+  const { data: reviewVideos = [], isLoading: videosLoading } = useQuery({
+    queryKey: ["sessionReviewVideos"],
+    queryFn: () => base44.entities.SessionReviewVideo.list("-created_date", 250),
+  });
+
+  const { data: completedVideoJobs = [], isLoading: videoJobsLoading } = useQuery({
+    queryKey: ["completedSessionReviewVideoJobs"],
+    queryFn: async () => {
+      const result = await listBackgroundJobs({
+        type: "session_review_video",
+        status: "complete",
+        includeCleared: true,
+        limit: 75,
+      });
+      return result.jobs || [];
+    },
+  });
+
+  useEffect(() => {
+    if (isLoading || jobsLoading) return;
+    const existingUrls = new Set(exports.map((export_) => getRawAudioUrl(export_)).filter(Boolean));
+    const missingJobs = completedJobs.filter((job) => (
+      job?.id &&
+      job?.result?.file_url &&
+      !existingUrls.has(job.result.file_url) &&
+      !recoveringJobIdsRef.current.has(job.id)
+    ));
+    if (!missingJobs.length) return;
+
+    let cancelled = false;
+    missingJobs.forEach(async (job) => {
+      recoveringJobIdsRef.current.add(job.id);
+      const record = audioExportRecordFromJob(job);
+      if (!record) return;
+      try {
+        await base44.entities.AudioExport.create(record);
+        if (!cancelled) queryClient.invalidateQueries({ queryKey: ["audioExports"] });
+      } catch (error) {
+        console.warn("Could not recover completed audio render into Audio Library:", error);
+        recoveringJobIdsRef.current.delete(job.id);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [completedJobs, exports, isLoading, jobsLoading, queryClient]);
 
   const downloadableExports = useMemo(() => (
     [
@@ -158,9 +295,27 @@ export default function Library() {
       .slice(0, RECENT_AUDIO_LIMIT)
   ), [completedJobs, exports]);
 
+  const downloadableVideos = useMemo(() => (
+    [
+      ...reviewVideos,
+      ...completedVideoJobs
+        .map(virtualVideoFromJob)
+        .filter(Boolean)
+        .filter((jobVideo) => !reviewVideos.some((video) => getRawVideoUrl(video) === jobVideo.file_url)),
+    ]
+      .filter((video) => Boolean(getRawVideoUrl(video)))
+      .sort((a, b) => timestampMs(b) - timestampMs(a))
+      .slice(0, RECENT_VIDEO_LIMIT)
+  ), [completedVideoJobs, reviewVideos]);
+
   const deleteExport = useMutation({
     mutationFn: (id) => base44.entities.AudioExport.delete(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["audioExports"] }),
+  });
+
+  const deleteReviewVideo = useMutation({
+    mutationFn: (id) => base44.entities.SessionReviewVideo.delete(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sessionReviewVideos"] }),
   });
 
   const handlePlay = (export_) => {
@@ -190,6 +345,23 @@ export default function Library() {
     a.click();
   };
 
+  const handleDownloadVideo = (video) => {
+    const url = getVideoUrl(video);
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = video.filename || `${cleanVideoTitle(video).replace(/[^a-zA-Z0-9_-]+/g, "-") || "Session-Review-Video"}.mp4`;
+    a.click();
+  };
+
+  const handleDownloadManifest = (video) => {
+    if (!video?.manifest_url) return;
+    const a = document.createElement("a");
+    a.href = serverUrl(video.manifest_url);
+    a.download = `${(video.filename || cleanVideoTitle(video)).replace(/\.[^.]+$/, "")}.review-manifest.json`;
+    a.click();
+  };
+
   const handleDownloadChapters = (export_) => {
     const baseFilename = buildAudioExportFilename({
       title: cleanDisplayTitle(export_),
@@ -216,7 +388,14 @@ export default function Library() {
     }
   };
 
-  if (isLoading || jobsLoading) {
+  const handleDeleteReviewVideo = (video) => {
+    if (String(video?.id || "").startsWith("job:")) return;
+    if (confirm("Delete this review video record? The uploaded MP4 file may remain on disk.")) {
+      deleteReviewVideo.mutate(video.id);
+    }
+  };
+
+  if (isLoading || jobsLoading || videosLoading || videoJobsLoading) {
     return (
       <div className="flex items-center justify-center h-96">
         <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
@@ -227,19 +406,102 @@ export default function Library() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Audio Library"
-        subtitle="Manage your TTS exports and past downloads"
+        title="Library"
+        subtitle="Manage your TTS audio exports, review videos, and past downloads"
       />
 
-      {downloadableExports.length === 0 ? (
+      {downloadableVideos.length > 0 && (
+        <section className="space-y-3">
+          <div className="flex items-center gap-2 px-1">
+            <Video className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-primary">Review Videos</h2>
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">{downloadableVideos.length}</span>
+          </div>
+          <div className="grid gap-4">
+            {downloadableVideos.map((video) => {
+              const title = cleanVideoTitle(video);
+              const created = getCreatedTimestamp(video);
+              const duration = formatDuration(video.duration_seconds);
+              return (
+                <div
+                  key={video.id}
+                  className="bg-card rounded-lg border border-border p-4 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between hover:shadow-md transition-shadow"
+                >
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-semibold text-foreground truncate">{title}</h3>
+                    <p className="text-xs text-primary mt-1">
+                      Created {formatCreatedTimestamp(created)}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs text-muted-foreground">
+                      {duration && <span>{duration}</span>}
+                      {video.audio_reused != null && <span>{video.audio_reused ? "Reused narration" : "Rendered narration"}</span>}
+                      {video.clip_count != null && <span>{video.clip_count} clips indexed</span>}
+                      {video.cited_time_count != null && <span>{video.cited_time_count} cited moments</span>}
+                      {video.visual_mode && <span>{String(video.visual_mode).replace(/_/g, " ")}</span>}
+                    </div>
+                    {video.filename && (
+                      <p className="text-xs text-muted-foreground mt-2 truncate">{video.filename}</p>
+                    )}
+                    {video._source === "completed_review_video_job" && (
+                      <p className="mt-2 rounded-md border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-xs text-amber-100">
+                        Recovered from a completed background video render. Download works; saving to SessionReviewVideo may have been interrupted.
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 sm:ml-4 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleDownloadVideo(video)}
+                      className="text-muted-foreground hover:text-foreground"
+                      title="Download review video"
+                    >
+                      <Download className="w-4 h-4" />
+                    </Button>
+                    {video.manifest_url && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleDownloadManifest(video)}
+                        className="text-muted-foreground hover:text-foreground"
+                        title="Download review manifest"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span className="sr-only">Download review manifest</span>
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleDeleteReviewVideo(video)}
+                      disabled={String(video.id || "").startsWith("job:")}
+                      className="text-destructive/60 hover:text-destructive hover:bg-destructive/10"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {downloadableExports.length === 0 && downloadableVideos.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12 text-center">
           <Music className="w-12 h-12 text-muted-foreground mb-3 opacity-50" />
-          <h3 className="text-lg font-semibold text-foreground mb-1">No downloadable audio exports yet</h3>
+          <h3 className="text-lg font-semibold text-foreground mb-1">No downloadable exports yet</h3>
           <p className="text-sm text-muted-foreground">
-            Export TTS audio from a session to add files to your library
+            Export TTS audio or build a review video from a session to add files to your library
           </p>
         </div>
-      ) : (
+      ) : downloadableExports.length > 0 ? (
+        <section className="space-y-3">
+        <div className="flex items-center gap-2 px-1">
+          <Music className="h-4 w-4 text-primary" />
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-primary">Audio Exports</h2>
+          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">{downloadableExports.length}</span>
+        </div>
         <div className="grid gap-4">
           <div className="text-xs text-muted-foreground px-1">
             Showing {downloadableExports.length} most recent downloadable audio export{downloadableExports.length === 1 ? "" : "s"}.
@@ -336,7 +598,8 @@ export default function Library() {
             );
           })}
         </div>
-      )}
+        </section>
+      ) : null}
     </div>
   );
 }

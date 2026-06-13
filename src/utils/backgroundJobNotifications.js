@@ -1,5 +1,6 @@
 const ENABLED_KEY = "pulsepoint.backgroundJobs.notificationsEnabled";
 const NOTIFIED_KEY = "pulsepoint.backgroundJobs.notifiedTerminalJobs.v1";
+const DEV_SERVICE_WORKER_DISABLED = import.meta.env.DEV && import.meta.env.VITE_ENABLE_DEV_SERVICE_WORKER !== "1";
 
 function storageValue(storage, key, fallback) {
   try {
@@ -20,6 +21,10 @@ export function getNotificationPermission() {
 export function areBackgroundNotificationsEnabled() {
   if (!isNotificationSupported() || getNotificationPermission() !== "granted") return false;
   return storageValue(window.localStorage, ENABLED_KEY, false) === true;
+}
+
+export function isNotificationServiceWorkerDisabled() {
+  return DEV_SERVICE_WORKER_DISABLED;
 }
 
 export function setBackgroundNotificationsEnabled(enabled) {
@@ -92,6 +97,7 @@ function waitForNotificationRegistration(timeoutMs) {
 }
 
 export async function getReadyServiceWorkerRegistration({ timeoutMs = 1500 } = {}) {
+  if (DEV_SERVICE_WORKER_DISABLED) return null;
   if (!("serviceWorker" in navigator)) return null;
 
   const readyRegistration = await waitForNotificationRegistration(timeoutMs);
@@ -133,7 +139,7 @@ export async function notifyBackgroundJobFinished(job, { route, onOpen, force = 
       return true;
     }
 
-    if ("serviceWorker" in navigator) return false;
+    if ("serviceWorker" in navigator && !DEV_SERVICE_WORKER_DISABLED) return false;
 
     const notification = new window.Notification(message.title, options);
     notification.onclick = () => {

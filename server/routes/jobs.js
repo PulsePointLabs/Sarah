@@ -1,6 +1,7 @@
 import express from 'express';
 import { cancelJob, clearJobs, createJob, getJob, listJobs, registerJobHandler } from '../services/jobQueue.js';
 import { renderTTSExport } from '../services/ttsRenderer.js';
+import { renderSessionReviewVideo } from '../services/sessionReviewVideoRenderer.js';
 import { aiInvokeInternal } from './internalAi.js';
 import { startAIForensicCapture } from '../services/aiForensics.js';
 import { analyzeLocalVisionWindow } from '../services/localVision/analyzeWindow.js';
@@ -33,6 +34,14 @@ async function cleanupPayloadRef(payload = {}) {
 
 registerJobHandler('tts_export', async (payload, context) => {
   return renderTTSExport(payload, {
+    jobId: context.jobId,
+    signal: context.signal,
+    onProgress: context.updateProgress,
+  });
+});
+
+registerJobHandler('session_review_video', async (payload, context) => {
+  return renderSessionReviewVideo(payload, {
     jobId: context.jobId,
     signal: context.signal,
     onProgress: context.updateProgress,
@@ -473,7 +482,7 @@ largeJobsRouter.post('/', express.raw({ type: 'application/json', limit: process
     if (!type) return res.status(400).json({ error: 'Job type is required' });
     saved = await saveJobPayload(payload);
     if (!type || !payload || !saved?.id) throw new Error('Invalid large job payload');
-    if (type && !['profile_image_review_full', 'ai_invoke', 'tts_export'].includes(type) && !String(type).startsWith('local_vision_')) {
+    if (type && !['profile_image_review_full', 'ai_invoke', 'tts_export', 'session_review_video'].includes(type) && !String(type).startsWith('local_vision_')) {
       throw new Error(`Unknown background job type: ${type}`);
     }
     startJobFromBody({
@@ -493,7 +502,7 @@ largeJobsRouter.post('/', express.raw({ type: 'application/json', limit: process
 
 jobsRouter.get('/', (req, res) => {
   try {
-    const { type, status, limit, metaSessionId, metaSource } = req.query || {};
+    const { type, status, limit, metaSessionId, metaSource, includeCleared } = req.query || {};
     const meta = {};
     if (metaSessionId) meta.sessionId = metaSessionId;
     if (metaSource) meta.source = metaSource;
@@ -503,6 +512,7 @@ jobsRouter.get('/', (req, res) => {
         status,
         limit,
         meta,
+        includeCleared: includeCleared === 'true',
       }),
     });
   } catch (error) {

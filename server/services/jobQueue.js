@@ -16,7 +16,7 @@ function jobLane(type) {
   const name = String(type || '');
   if (name.startsWith('local_vision_')) return 'local_vision';
   if (name === 'ai_invoke' || name === 'profile_image_review_full') return 'ai';
-  if (name === 'tts_export') return 'tts';
+  if (name === 'tts_export' || name === 'session_review_video') return 'tts';
   return 'general';
 }
 
@@ -292,7 +292,7 @@ export function getJob(id) {
   return publicJob(getEntity('ProcessingJob', id));
 }
 
-export function listJobs({ type, status, limit = 20, meta = {} } = {}) {
+export function listJobs({ type, status, limit = 20, meta = {}, includeCleared = false } = {}) {
   const merged = new Map();
   for (const job of listEntities('ProcessingJob')) {
     const pub = publicJob(job);
@@ -310,7 +310,7 @@ export function listJobs({ type, status, limit = 20, meta = {} } = {}) {
   const metaEntries = Object.entries(meta || {}).filter(([, value]) => value !== undefined && value !== null && value !== '');
 
   return [...merged.values()]
-    .filter((job) => !isCleared(job))
+    .filter((job) => includeCleared || !isCleared(job))
     .filter((job) => !type || job.type === type)
     .filter((job) => statuses.length === 0 || statuses.includes(job.status))
     .filter((job) => metaEntries.every(([key, value]) => String(job.meta?.[key] ?? '') === String(value)))

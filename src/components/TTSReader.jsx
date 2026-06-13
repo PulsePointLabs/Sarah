@@ -20,7 +20,7 @@ import { buildAudioChapterBundle, downloadChapterSidecars } from "@/lib/audioCha
 import { idbGet, idbSet } from "@/lib/ttsCache";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { serverUrl } from "@/lib/mobileApiBase";
-import { repairCharacterSplitParagraph, repairDecimalSpacing, splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
+import { repairCharacterSplitParagraph, repairDecimalSpacing, reduceConsistencyPhraseRepetition, splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
   if (signal?.aborted) {
@@ -387,7 +387,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const renderProgressTimerRef = useRef(null);
   const copyContentRef = useRef(null);
   const readableParagraphs = useMemo(
-    () => (Array.isArray(paragraphs) ? paragraphs : []).map(repairCharacterSplitParagraph),
+    () => (Array.isArray(paragraphs) ? paragraphs : [])
+      .map(repairCharacterSplitParagraph)
+      .map((text) => reduceConsistencyPhraseRepetition(text, 2)),
     [paragraphs]
   );
 

@@ -392,7 +392,7 @@ ${sessionEvidenceText}
 
 Provide a comprehensive, multi-layered analysis covering:
 
-1. CASCADE OVERVIEW: Paint a vivid picture of your physiological arc. How does the pre-climax buildup typically unfold — is it gradual or steep? What is the peak climax like — sharp and explosive, or sustained and rolling? How does recovery typically proceed? What remains consistent across sessions, and where do you see meaningful variation? ${avgRecoveryOnset ? `Average recovery onset is approximately ${avgRecoveryOnset >= 60 ? `${Math.floor(avgRecoveryOnset/60)} minute${Math.floor(avgRecoveryOnset/60) !== 1 ? "s" : ""}${avgRecoveryOnset % 60 > 0 ? ` and ${avgRecoveryOnset % 60} seconds` : ""}` : `${avgRecoveryOnset} seconds`} post-climax.` : ""}
+1. CASCADE OVERVIEW: Paint a vivid picture of your physiological arc. How does the pre-climax buildup typically unfold — is it gradual or steep? What is the peak climax like — sharp and explosive, or sustained and rolling? How does recovery typically proceed? What stays stable across sessions, and where do you see meaningful variation? ${avgRecoveryOnset ? `Average recovery onset is approximately ${avgRecoveryOnset >= 60 ? `${Math.floor(avgRecoveryOnset/60)} minute${Math.floor(avgRecoveryOnset/60) !== 1 ? "s" : ""}${avgRecoveryOnset % 60 > 0 ? ` and ${avgRecoveryOnset % 60} seconds` : ""}` : `${avgRecoveryOnset} seconds`} post-climax.` : ""}
 
 2. HEART RATE SIGNATURE: Deep analysis of your heart rate curves. Describe the characteristic rate of rise during buildup. What happens at the climax peak — is there a pronounced spike, a plateau, or something more subtle? What is the descent pattern? Are there inflection points or repeated micro-peaks that signal something physiologically meaningful?
 
@@ -406,7 +406,7 @@ Provide a comprehensive, multi-layered analysis covering:
 
 7. COMMON SIGNATURES: Recurring physiological fingerprints across your full cascade arc — patterns that appear again and again, even when other variables change.
 
-8. CONTEXTUAL CORRELATIONS: How do intensity, structured session context, mood, hydration, fatigue, food state, cannabis, alcohol, privacy/interruption risk, preparation, methods, and environment link to cascade shape? Does a "high intensity" session produce a different cascade than a "low intensity" one? Are there logged context states that consistently produce different physiological arcs?
+8. CONTEXTUAL CORRELATIONS: How do intensity, structured session context, mood, hydration, fatigue, food state, cannabis, alcohol, privacy/interruption risk, preparation, methods, and environment link to cascade shape? Does a "high intensity" session produce a different cascade than a "low intensity" one? Are there logged context states that repeatedly produce different physiological arcs?
 
 9. PREDICTIVE INSIGHTS: Which factors best predict cascade quality, peak heart rate, recovery speed, or satisfaction? Can you predict how a session will unfold based on early buildup dynamics?
 

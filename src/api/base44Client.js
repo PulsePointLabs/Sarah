@@ -75,9 +75,21 @@ function entityApi(entity) {
       if (skip != null) params.set('skip', skip);
       return request(`/entities/${entity}?${params.toString()}`);
     },
+    listFields: (fields = [], sort, limit, skip) => {
+      const params = new URLSearchParams();
+      if (sort) params.set('sort', sort);
+      if (limit != null) params.set('limit', limit);
+      if (skip != null) params.set('skip', skip);
+      if (Array.isArray(fields) && fields.length) params.set('fields', fields.join(','));
+      return request(`/entities/${entity}?${params.toString()}`);
+    },
     filter: (criteria = {}, sort, limit, skip) => request(`/entities/${entity}/filter`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ criteria, sort, limit, skip }),
+    }),
+    filterFields: (criteria = {}, fields = [], sort, limit, skip) => request(`/entities/${entity}/filter`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ criteria, fields, sort, limit, skip }),
     }),
     create: (data) => request(`/entities/${entity}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data || {}),
@@ -93,7 +105,7 @@ function entityApi(entity) {
 }
 
 const entityNames = [
-  'Session', 'BodyExploration', 'HeartRateTimeline', 'EMGTimeline', 'AudioExport', 'CompareAnalysisResult',
+  'Session', 'BodyExploration', 'HeartRateTimeline', 'EMGTimeline', 'AudioExport', 'SessionReviewVideo', 'CompareAnalysisResult',
   'CascadeAnalysisResult', 'SessionClusterAnalysis', 'Journal', 'CustomMethod', 'User',
 ];
 

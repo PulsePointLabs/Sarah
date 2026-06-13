@@ -22,6 +22,7 @@ import { getProviderStatus } from "@/lib/providerStatus";
 import {
   areBackgroundNotificationsEnabled,
   getReadyServiceWorkerRegistration,
+  isNotificationServiceWorkerDisabled,
   setBackgroundNotificationsEnabled,
 } from "@/utils/backgroundJobNotifications";
 
@@ -178,7 +179,7 @@ async function showPulsePointNotification({ title, body, route = "/settings" }) 
     return;
   }
 
-  if ("serviceWorker" in navigator) {
+  if ("serviceWorker" in navigator && !isNotificationServiceWorkerDisabled()) {
     throw new Error("Notification permission is granted, but the service worker is not ready yet. Close and reopen the installed app once, then send another test.");
   }
 
@@ -192,6 +193,7 @@ async function showPulsePointNotification({ title, body, route = "/settings" }) 
 // UI_OLD_MAN_ACCESSIBILITY_V1
 const UI_PREFS_STORAGE_KEY = "pulsepoint-ui-preferences-v1";
 const DEFAULT_UI_PREFS = { theme: "teal", fontScale: "comfortable" };
+const PWA_CACHE_PREFIXES = ["pulsepoint-shell-", "workbox-", "vite-"];
 
 const THEME_OPTIONS = [
   { value: "teal", label: "PulsePoint Teal", helper: "Default dark PulsePoint look." },
@@ -279,6 +281,8 @@ export default function SettingsStatus() {
   const [completionNotificationsEnabled, setCompletionNotificationsEnabled] = useState(areBackgroundNotificationsEnabled);
   const [notificationMessage, setNotificationMessage] = useState("");
   const [notificationBusy, setNotificationBusy] = useState(false);
+  const [pwaCleanupBusy, setPwaCleanupBusy] = useState(false);
+  const [pwaCleanupMessage, setPwaCleanupMessage] = useState("");
   const [uiPrefs, setUiPrefs] = useState(readUiPreferences);
 
   const updateUiPrefs = (patch) => {
@@ -369,6 +373,38 @@ export default function SettingsStatus() {
       setNotificationMessage(error?.message || "Could not send the test notification.");
     } finally {
       setNotificationBusy(false);
+    }
+  };
+
+  const resetPwaShell = async () => {
+    setPwaCleanupBusy(true);
+    setPwaCleanupMessage("");
+    try {
+      if (window.pulsepointCleanupPwaShell) {
+        await window.pulsepointCleanupPwaShell();
+      } else {
+        const tasks = [];
+        if ("serviceWorker" in navigator) {
+          tasks.push(
+            navigator.serviceWorker.getRegistrations?.()
+              .then((registrations = []) => Promise.all(registrations.map((registration) => registration.unregister())))
+          );
+        }
+        if (window.caches?.keys) {
+          tasks.push(
+            window.caches.keys()
+              .then((keys = []) => Promise.all(keys
+                .filter((key) => PWA_CACHE_PREFIXES.some((prefix) => key.startsWith(prefix)))
+                .map((key) => window.caches.delete(key))))
+          );
+        }
+        await Promise.all(tasks);
+      }
+      setPwaCleanupMessage("PWA shell cache cleared and service workers unregistered. Reopen the app once, then the focus-refresh loop should stop.");
+    } catch (error) {
+      setPwaCleanupMessage(error?.message || "Could not reset the PWA shell.");
+    } finally {
+      setPwaCleanupBusy(false);
     }
   };
 
@@ -612,6 +648,35 @@ export default function SettingsStatus() {
               ))}
             </div>
           </div>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-primary">
+              <Settings2 className="h-4 w-4" />
+              <h2 className="text-sm font-bold uppercase tracking-wider">App Shell</h2>
+            </div>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+              If the installed app refreshes shortly after returning to it, clear the local PWA shell. This leaves sessions, analyses, videos, and settings data alone.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={resetPwaShell}
+            disabled={pwaCleanupBusy}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80 disabled:opacity-50"
+          >
+            {pwaCleanupBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Reset Shell
+          </button>
+        </div>
+        <div className="mt-4 rounded-lg bg-muted/25 px-3 py-3 text-sm text-muted-foreground">
+          <p>
+            Dev/mobile builds now unregister service workers automatically so Chrome cannot swap an old shell back in while PulsePoint is running.
+          </p>
+          {pwaCleanupMessage && <p className="mt-2 text-xs font-semibold text-foreground">{pwaCleanupMessage}</p>}
         </div>
       </section>
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { LayoutDashboard, List, PlusCircle, GitCompare, TrendingUp, Waves, ScanSearch, GitMerge, LineChart, Menu, X, UserCircle, Grid3x3, Clapperboard, Music, BarChart2, FlaskConical, BookOpen, Radio, Settings2, Activity, MessageCircle, Sparkles } from "lucide-react";
 import InstallAppButton from "./InstallAppButton";
@@ -7,6 +7,8 @@ import BackgroundJobStatusTray from "./BackgroundJobStatusTray";
 // UI_OLD_MAN_ACCESSIBILITY_V1
 const UI_PREFS_STORAGE_KEY = "pulsepoint-ui-preferences-v1";
 const DEFAULT_UI_PREFS = { theme: "teal", fontScale: "comfortable" };
+const RESUME_STATE_KEY = "pulsepoint.resumeState.v1";
+const SCROLL_STATE_KEY = "pulsepoint.scrollState.v1";
 
 function readUiPreferences() {
   if (typeof window === "undefined") return DEFAULT_UI_PREFS;
@@ -81,10 +83,32 @@ function isPathActive(path, pathname) {
   return path === "/" ? pathname === "/" : pathname === path || pathname.startsWith(`${path}/`);
 }
 
+function routeKey(location) {
+  return `${location.pathname || "/"}${location.search || ""}${location.hash || ""}`;
+}
+
+function readJsonStorage(key, fallback) {
+  if (typeof window === "undefined") return fallback;
+  try {
+    return JSON.parse(window.sessionStorage.getItem(key) || window.localStorage.getItem(key) || "null") || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonStorage(key, value) {
+  if (typeof window === "undefined") return;
+  const json = JSON.stringify(value);
+  try { window.sessionStorage.setItem(key, json); } catch {}
+  try { window.localStorage.setItem(key, json); } catch {}
+}
+
 export default function Layout() {
   const location = useLocation();
   const [open, setOpen] = useState(false);
   const [uiPrefs, setUiPrefs] = useState(readUiPreferences);
+  const mainRef = useRef(null);
+  const saveTimerRef = useRef(null);
 
   useEffect(() => {
     const syncPrefs = () => setUiPrefs(readUiPreferences());
@@ -98,6 +122,86 @@ export default function Layout() {
 
   const isDisplayView = ["/capture", "/review-player"].includes(location.pathname)
     && new URLSearchParams(location.search).get("display") === "focus";
+
+  useEffect(() => {
+    const key = routeKey(location);
+    const saveResumeState = () => {
+      const main = mainRef.current;
+      const scrollTop = main?.scrollTop ?? window.scrollY ?? document.documentElement?.scrollTop ?? 0;
+      const scrollLeft = main?.scrollLeft ?? window.scrollX ?? document.documentElement?.scrollLeft ?? 0;
+      const allScroll = readJsonStorage(SCROLL_STATE_KEY, {});
+      const nextScroll = {
+        ...allScroll,
+        [key]: {
+          scrollTop,
+          scrollLeft,
+          savedAt: Date.now(),
+        },
+      };
+      writeJsonStorage(SCROLL_STATE_KEY, nextScroll);
+      writeJsonStorage(RESUME_STATE_KEY, {
+        route: key,
+        pathname: location.pathname,
+        search: location.search,
+        hash: location.hash,
+        scrollTop,
+        scrollLeft,
+        savedAt: Date.now(),
+      });
+    };
+
+    const throttledSave = () => {
+      if (saveTimerRef.current) return;
+      saveTimerRef.current = window.setTimeout(() => {
+        saveTimerRef.current = null;
+        saveResumeState();
+      }, 250);
+    };
+
+    const main = mainRef.current;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") saveResumeState();
+    };
+    main?.addEventListener("scroll", throttledSave, { passive: true });
+    window.addEventListener("pagehide", saveResumeState);
+    window.addEventListener("beforeunload", saveResumeState);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    saveResumeState();
+
+    return () => {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      saveResumeState();
+      main?.removeEventListener("scroll", throttledSave);
+      window.removeEventListener("pagehide", saveResumeState);
+      window.removeEventListener("beforeunload", saveResumeState);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [location.pathname, location.search, location.hash]);
+
+  useEffect(() => {
+    const key = routeKey(location);
+    const scroll = readJsonStorage(SCROLL_STATE_KEY, {})?.[key];
+    if (!scroll) return;
+    const restore = () => {
+      const main = mainRef.current;
+      if (!main) return;
+      main.scrollTo({
+        top: Math.max(0, Number(scroll.scrollTop || 0)),
+        left: Math.max(0, Number(scroll.scrollLeft || 0)),
+        behavior: "auto",
+      });
+    };
+    const frame = window.requestAnimationFrame(() => {
+      restore();
+      window.setTimeout(restore, 150);
+      window.setTimeout(restore, 600);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [location.pathname, location.search, location.hash]);
 
   return (
     <div className={`dark ${uiPreferenceClasses(uiPrefs)} min-h-screen min-w-0 overflow-x-hidden bg-background text-foreground flex flex-col`}>
@@ -161,7 +265,7 @@ export default function Layout() {
         <InstallAppButton />
       </aside>}
 
-      <main className={`min-w-0 flex-1 ${isDisplayView ? "overflow-hidden" : "pt-14 overflow-y-auto overflow-x-hidden"}`}>
+      <main ref={mainRef} className={`min-w-0 flex-1 ${isDisplayView ? "overflow-hidden" : "pt-14 overflow-y-auto overflow-x-hidden"}`}>
         <Outlet />
       </main>
       {!isDisplayView && <BackgroundJobStatusTray />}
