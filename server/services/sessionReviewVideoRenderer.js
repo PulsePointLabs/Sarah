@@ -7,7 +7,7 @@ import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart } from './ttsCore.js';
 import { buildReviewVideoPlan } from './sessionReviewVideoPlanner.js';
 
-const REVIEW_RENDER_VERSION = 'session_review_video_v4';
+const REVIEW_RENDER_VERSION = 'session_review_video_v5';
 
 function cleanParagraph(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -286,7 +286,41 @@ function sourceTimeForSession(sessionTime, video = {}) {
   return Math.max(0, Number(sessionTime || 0) + (Number.isFinite(offset) ? offset : 0));
 }
 
-async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, workDir, index }) {
+function formatTimestamp(seconds = 0) {
+  const totalSeconds = Math.max(0, Math.floor(Number(seconds || 0)));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+  if (hours) return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  return `${minutes}:${String(secs).padStart(2, '0')}`;
+}
+
+function drawTextSafe(value = '') {
+  return String(value || '')
+    .replace(/\\/g, '/')
+    .replace(/:/g, '\\:')
+    .replace(/'/g, "\\'")
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]')
+    .trim();
+}
+
+function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null } = {}) {
+  const fontPath = process.env.REVIEW_VIDEO_FONT || 'C\\:/Windows/Fonts/arial.ttf';
+  const sourceLabel = `source ${formatTimestamp(startSeconds)}`;
+  const sessionLabel = Number.isFinite(Number(sessionSeconds))
+    ? `session ${formatTimestamp(sessionSeconds)}`
+    : '';
+  const text = drawTextSafe([sessionLabel, sourceLabel].filter(Boolean).join('  |  '));
+  return [
+    'scale=1280:720:force_original_aspect_ratio=decrease',
+    'pad=1280:720:(ow-iw)/2:(oh-ih)/2',
+    'format=yuv420p',
+    `drawtext=fontfile='${fontPath}':text='${text}':x=24:y=h-58:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.68:boxborderw=10`,
+  ].join(',');
+}
+
+async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, workDir, index, sessionSeconds = null }) {
   const duration = Math.max(0.25, Math.min(180, Number(endSeconds || 0) - Number(startSeconds || 0)));
   const output = path.join(workDir, `segment-source-${String(index).padStart(3, '0')}.mp4`);
   await runProcess('ffmpeg', [
@@ -297,7 +331,7 @@ async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, work
     '-i', sourcePath,
     '-map', '0:v:0',
     '-an',
-    '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
+    '-vf', timestampOverlayFilter({ startSeconds, sessionSeconds }),
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
@@ -387,8 +421,15 @@ async function buildNarrationAlignedSegments({
       let slotVisualDuration = 0;
       for (const event of playableEvents) {
         const center = sourceTimeForSession(event.session_time_s, primaryVideo);
-        const start = Math.max(0, center - Math.min(4, sliceDuration * 0.25));
-        const end = start + sliceDuration;
+        const requestedStart = Number(event.source?.startSeconds);
+        const requestedEnd = Number(event.source?.endSeconds);
+        const sourceOffset = center - Number(event.session_time_s);
+        const start = Number.isFinite(requestedStart)
+          ? Math.max(0, requestedStart + sourceOffset)
+          : Math.max(0, center - Math.min(4, sliceDuration * 0.25));
+        const end = Number.isFinite(requestedEnd) && requestedEnd > requestedStart
+          ? Math.max(start + 1, requestedEnd + sourceOffset)
+          : start + sliceDuration;
         onProgress?.({
           phase: 'segments',
           current: 3,
@@ -403,6 +444,7 @@ async function buildNarrationAlignedSegments({
             label: event.label,
             workDir,
             index: segmentIndex++,
+            sessionSeconds: event.session_time_s,
           });
           segments.push(clip.path);
           const actualDuration = Number(clip.durationSeconds || sliceDuration);

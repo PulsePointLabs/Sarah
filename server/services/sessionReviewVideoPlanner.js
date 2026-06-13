@@ -59,11 +59,18 @@ function conceptScore(anchorText = '', paragraphText = '') {
     { score: 65, terms: [/\brecovery/, /\bsettled/, /\bsettling/, /\brecovered/] },
     { score: 50, terms: [/\bpeak hr\b/, /\bheart[-\s]?rate/, /\bbpm\b/] },
     { score: 50, terms: [/\bleft hand/, /\bright hand/, /\bsupported/, /\bsupporting/, /\bheld\b/, /\bgrip\b/] },
+    { score: 135, terms: [/\blubric/, /\blube\b/, /\bgel\b/, /\bbottle\b/, /\bpreparation\b/, /\bprep\b/] },
+    { score: 70, terms: [/\bpause/, /\bpaused/, /\breduced/, /\bwithdraw/, /\bcontact withdraw/, /\bno visible hand contact/] },
     { score: 40, terms: [/\bpelvic/, /\bperineal/, /\bcontraction/, /\bemg\b/] },
   ];
-  return concepts.reduce((sum, concept) => (
+  const positive = concepts.reduce((sum, concept) => (
     hasAny(anchorText, concept.terms) && hasAny(paragraphText, concept.terms) ? sum + concept.score : sum
   ), 0);
+  const paragraphWantsPause = hasAny(paragraphText, [/\bpause/, /\bpaused/, /\breduced/, /\bwithdraw/, /\bstop/, /\bstopped/, /\blubric/, /\blube\b/, /\bpreparation\b/, /\bprep\b/]);
+  const anchorLooksActive = hasAny(anchorText, [/\bactive/, /\bstroking/, /\bcontinues/, /\bongoing/, /\btwo-handed.*continues/, /\bcontact continues/]);
+  const anchorLooksOnlyVisibleObject = hasAny(anchorText, [/\bbottle visible/, /\bvisible in background/]) && !hasAny(anchorText, [/\bapply/, /\bapplication/, /\bprep/, /\bpreparation/, /\bhandling/]);
+  const penalty = (paragraphWantsPause && anchorLooksActive ? 90 : 0) + (paragraphWantsPause && anchorLooksOnlyVisibleObject ? 35 : 0);
+  return positive - penalty;
 }
 
 function anchorScore(anchor, paragraphText = '') {
@@ -89,6 +96,17 @@ function addAnchor(anchors, time, label, reason, extra = {}) {
     tags: extra.tags || '',
     source: extra.source || 'logged_session_event',
   });
+}
+
+function eventWindowForAnchor(anchor = {}, paragraphText = '') {
+  const text = [anchor.label, anchor.reason, anchor.note, anchor.category, anchor.tags, paragraphText].filter(Boolean).join(' ');
+  if (hasAny(text, [/\bpause/, /\bpaused/, /\breduced/, /\bwithdraw/, /\bno visible hand contact/, /\blubric/, /\blube\b/, /\bpreparation\b/, /\bprep\b/])) {
+    return { before: 1, after: 12 };
+  }
+  if (hasAny(text, [/\bejaculat/, /\bclimax/, /\borgasm/, /\bsemen/, /\bfluid release/])) {
+    return { before: 4, after: 22 };
+  }
+  return { before: 3, after: 12 };
 }
 
 function buildLoggedEventAnchors(session = {}) {
@@ -131,11 +149,13 @@ function buildLoggedEventRequests(paragraphs = [], session = {}, existingClips =
   const usedAnchors = new Set();
 
   (Array.isArray(paragraphs) ? paragraphs : []).forEach((paragraph, paragraphIndex) => {
+    const explicitTimes = extractCitedTimesFromText(paragraph);
+    const maxAnchors = explicitTimes.length > 1 ? 2 : 1;
     const candidates = anchors
       .map((anchor) => ({ anchor, score: anchorScore(anchor, paragraph) }))
       .filter(({ anchor, score }) => score >= 55 && !usedAnchors.has(anchor.id))
       .sort((a, b) => b.score - a.score)
-      .slice(0, 2);
+      .slice(0, maxAnchors);
 
     candidates.forEach(({ anchor }) => {
       const duplicateExisting = existingClips.some((clip) => (
@@ -145,6 +165,7 @@ function buildLoggedEventRequests(paragraphs = [], session = {}, existingClips =
       ));
       if (duplicateExisting) return;
       usedAnchors.add(anchor.id);
+      const window = eventWindowForAnchor(anchor, paragraph);
       requests.push({
         id: `logged-${anchor.id}`,
         paragraphIndex,
@@ -153,8 +174,8 @@ function buildLoggedEventRequests(paragraphs = [], session = {}, existingClips =
         label: anchor.label,
         reason: anchor.reason,
         source: anchor.source,
-        startSeconds: Math.max(0, anchor.session_time_s - 6),
-        endSeconds: anchor.session_time_s + 14,
+        startSeconds: Math.max(0, anchor.session_time_s - window.before),
+        endSeconds: anchor.session_time_s + window.after,
       });
     });
   });

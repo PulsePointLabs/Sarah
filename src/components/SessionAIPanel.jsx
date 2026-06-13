@@ -16,7 +16,7 @@ import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "./TTSButton";
 
-const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v4";
+const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v5";
 
 function trailingContext(text, maxChars = 320) {
   const cleaned = String(text || "").replace(/\s+/g, " ").trim();
@@ -322,7 +322,7 @@ function SessionReviewVideoExportButton({
             onSeeked={(event) => setPreviewTime(event.currentTarget.currentTime || 0)}
           />
           <div className="pointer-events-none absolute bottom-3 left-3 rounded-md bg-black/75 px-2 py-1 font-mono text-xs font-semibold text-white shadow">
-            {formatVideoClock(previewTime)}
+            player {formatVideoClock(previewTime)}
           </div>
         </div>
       )}

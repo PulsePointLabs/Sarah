@@ -55,3 +55,22 @@ test('buildReviewVideoPlan maps physiology language to logged event anchors', ()
   assert.equal(plan.generatedClipRequests[1].paragraphIndex, 1);
   assert.equal(plan.generatedClipRequests[1].session_time_s, 270);
 });
+
+test('buildReviewVideoPlan prefers pause/lubricant anchors over active stroking anchors', () => {
+  const plan = buildReviewVideoPlan({
+    paragraphs: [
+      'You pause and apply lubricant before returning to more active stimulation.',
+    ],
+    session: {
+      event_timeline: [
+        { time_s: 432, note: 'Right hand contact continues with ongoing active stroking or repositioning', category: 'stimulation' },
+        { time_s: 491, note: 'Lubricant bottle visible near glans; possible lubrication application or preparation around this point', category: 'physical' },
+        { time_s: 636, note: 'Hand contact withdraws; penis settles to lower lateral angle', category: 'stimulation_paused' },
+      ],
+    },
+  });
+
+  assert.equal(plan.generatedClipRequests.length, 1);
+  assert.equal(plan.generatedClipRequests[0].session_time_s, 491);
+  assert.equal(plan.generatedClipRequests[0].startSeconds, 490);
+});
