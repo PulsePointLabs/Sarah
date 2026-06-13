@@ -7,7 +7,7 @@ import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart } from './ttsCore.js';
 import { buildReviewVideoPlan } from './sessionReviewVideoPlanner.js';
 
-const REVIEW_RENDER_VERSION = 'session_review_video_v2';
+const REVIEW_RENDER_VERSION = 'session_review_video_v3';
 
 function cleanParagraph(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -287,7 +287,7 @@ function sourceTimeForSession(sessionTime, video = {}) {
 }
 
 async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, workDir, index }) {
-  const duration = Math.max(0.25, Math.min(46, Number(endSeconds || 0) - Number(startSeconds || 0)));
+  const duration = Math.max(0.25, Math.min(180, Number(endSeconds || 0) - Number(startSeconds || 0)));
   const output = path.join(workDir, `segment-source-${String(index).padStart(3, '0')}.mp4`);
   await runProcess('ffmpeg', [
     '-hide_banner',
@@ -307,6 +307,168 @@ async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, work
     path: output,
     label,
     durationSeconds: await mediaDurationSeconds(output).catch(() => duration),
+  };
+}
+
+function wordCount(value) {
+  return String(value || '').split(/\s+/).filter(Boolean).length;
+}
+
+function estimateParagraphSlots(paragraphs = [], durationSeconds = 0) {
+  const safeParagraphs = Array.isArray(paragraphs) ? paragraphs : [];
+  const totalDuration = Math.max(1, Number(durationSeconds || 1));
+  const weights = safeParagraphs.map((paragraph) => Math.max(6, wordCount(paragraph)));
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+  let cursor = 0;
+  return weights.map((weight, index) => {
+    const startSeconds = cursor;
+    const span = index === weights.length - 1
+      ? Math.max(1, totalDuration - cursor)
+      : Math.max(1, (weight / totalWeight) * totalDuration);
+    cursor += span;
+    return {
+      paragraphIndex: index,
+      startSeconds,
+      endSeconds: Math.min(totalDuration, startSeconds + span),
+      durationSeconds: Math.max(1, Math.min(totalDuration - startSeconds, span)),
+    };
+  });
+}
+
+function slotTitle(index, payloadTitle) {
+  return index === 0 ? payloadTitle || 'Session Review' : `Analysis section ${index + 1}`;
+}
+
+function clipSessionTime(clip = {}) {
+  const value = Number(clip.session_time_s ?? clip.sessionTimeSeconds ?? clip.timeline_offset_s ?? clip.startSeconds);
+  return Number.isFinite(value) ? value : null;
+}
+
+async function buildNarrationAlignedSegments({
+  paragraphs,
+  paragraphSlots,
+  plan,
+  primaryVideo,
+  clipByParagraph,
+  workDir,
+  payloadTitle,
+  onProgress,
+  signal,
+}) {
+  const segments = [];
+  const generatedClips = [];
+  let visualDuration = 0;
+  let segmentIndex = 1;
+
+  for (const slot of paragraphSlots) {
+    if (signal?.aborted) throw new Error('Cancelled');
+    const paragraphIndex = slot.paragraphIndex;
+    const generatedRequests = (plan.generatedClipRequests || [])
+      .filter((request) => Number(request.paragraphIndex) === paragraphIndex);
+    const existingClips = clipByParagraph.get(paragraphIndex) || [];
+    const timedExistingClips = existingClips.filter((clip) => Number.isFinite(Number(clipSessionTime(clip))));
+    const playableEvents = [
+      ...timedExistingClips.map((clip) => ({
+        type: 'existing_clip_time',
+        label: clip.label || 'Saved key clip',
+        session_time_s: clipSessionTime(clip),
+        source: clip,
+      })),
+      ...generatedRequests.map((request) => ({
+        type: 'cited_time',
+        label: request.label,
+        session_time_s: Number(request.session_time_s),
+        source: request,
+      })),
+    ].filter((event) => Number.isFinite(Number(event.session_time_s)));
+
+    if (primaryVideo?.path && playableEvents.length) {
+      const sliceDuration = Math.max(3, slot.durationSeconds / playableEvents.length);
+      let slotVisualDuration = 0;
+      for (const event of playableEvents) {
+        const center = sourceTimeForSession(event.session_time_s, primaryVideo);
+        const start = Math.max(0, center - Math.min(4, sliceDuration * 0.25));
+        const end = start + sliceDuration;
+        onProgress?.({
+          phase: 'segments',
+          current: 3,
+          total: 5,
+          message: `Cutting ${safeDrawText(event.label || 'cited moment', 36)} at ${Math.round(event.session_time_s)}s...`,
+        });
+        try {
+          const clip = await cutReviewClip({
+            sourcePath: primaryVideo.path,
+            startSeconds: start,
+            endSeconds: end,
+            label: event.label,
+            workDir,
+            index: segmentIndex++,
+          });
+          segments.push(clip.path);
+          const actualDuration = Number(clip.durationSeconds || sliceDuration);
+          visualDuration += actualDuration;
+          slotVisualDuration += actualDuration;
+          generatedClips.push({
+            ...event.source,
+            paragraphIndex,
+            session_time_s: event.session_time_s,
+            source_video_path: primaryVideo.path,
+            aligned_narration_start_s: Math.round(slot.startSeconds * 10) / 10,
+            aligned_narration_end_s: Math.round(slot.endSeconds * 10) / 10,
+            durationSeconds: Number(clip.durationSeconds || sliceDuration),
+          });
+        } catch (error) {
+          generatedClips.push({
+            ...event.source,
+            paragraphIndex,
+            session_time_s: event.session_time_s,
+            source_video_path: primaryVideo.path,
+            error: error?.message || 'Aligned clip cut failed',
+          });
+        }
+      }
+      if (slotVisualDuration <= 0) {
+        const card = await createTitleCard({
+          workDir,
+          index: segmentIndex++,
+          title: slotTitle(paragraphIndex, payloadTitle),
+          subtitle: paragraphs[paragraphIndex],
+          durationSeconds: slot.durationSeconds,
+        });
+        segments.push(card.path);
+        visualDuration += Number(card.durationSeconds || slot.durationSeconds);
+      }
+      continue;
+    }
+
+    const untimedExistingClip = existingClips.find((clip) => clip.path);
+    if (untimedExistingClip?.path) {
+      const output = path.join(workDir, `aligned-existing-${String(segmentIndex++).padStart(3, '0')}.mp4`);
+      await normalizeVideoSegment({
+        inputPath: untimedExistingClip.path,
+        outputPath: output,
+        durationSeconds: slot.durationSeconds,
+      });
+      segments.push(output);
+      visualDuration += await mediaDurationSeconds(output).catch(() => slot.durationSeconds);
+      continue;
+    }
+
+    const card = await createTitleCard({
+      workDir,
+      index: segmentIndex++,
+      title: slotTitle(paragraphIndex, payloadTitle),
+      subtitle: paragraphs[paragraphIndex],
+      durationSeconds: slot.durationSeconds,
+    });
+    segments.push(card.path);
+    visualDuration += Number(card.durationSeconds || slot.durationSeconds);
+  }
+
+  return {
+    segments,
+    visualDuration,
+    generatedClips,
   };
 }
 
@@ -491,26 +653,7 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
     const segments = [];
     const clipOutputs = [];
 
-    onProgress({ phase: 'clips', current: 2, total: 5, message: 'Cutting cited video moments...' });
-    for (const request of plan.generatedClipRequests.slice(0, 24)) {
-      if (options.signal?.aborted) throw new Error('Cancelled');
-      if (!primaryVideo?.path) continue;
-      const center = sourceTimeForSession(request.session_time_s, primaryVideo);
-      try {
-        const clip = await cutReviewClip({
-          sourcePath: primaryVideo.path,
-          startSeconds: Math.max(0, center - 6),
-          endSeconds: center + 10,
-          label: request.label,
-          workDir,
-          index: clipOutputs.length + 1,
-        });
-        clipOutputs.push({ ...request, ...clip, source_video_path: primaryVideo.path });
-      } catch (error) {
-        clipOutputs.push({ ...request, error: error?.message || 'Clip cut failed' });
-      }
-    }
-
+    onProgress({ phase: 'clips', current: 2, total: 5, message: 'Preparing cited moment map...' });
     const existingSegmentSources = [];
     for (const clip of plan.existingClips.slice(0, 24)) {
       const clipPath = uploadPathFromUrl(clip.file_url || clip.url || clip.clip_url);
@@ -521,12 +664,13 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
           path: normalizedPath,
           label: clip.label || 'Saved key clip',
           paragraphIndex: clip.paragraphIndex,
+          session_time_s: clipSessionTime(clip),
           durationSeconds: await mediaDurationSeconds(normalizedPath).catch(() => Number(clip.durationSeconds || 8)),
         });
       }
     }
 
-    const clipSources = [...existingSegmentSources, ...clipOutputs.filter((clip) => clip.path)];
+    const clipSources = [...existingSegmentSources];
     clipSources.sort((a, b) => {
       const aTime = Number(a.session_time_s ?? a.startSeconds ?? 0);
       const bTime = Number(b.session_time_s ?? b.startSeconds ?? 0);
@@ -539,51 +683,24 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       clipByParagraph.get(key).push(clip);
     });
 
-    onProgress({ phase: 'segments', current: 3, total: 5, message: primaryVideo?.path ? 'Building review video from full linked recording...' : 'Building review reel video segments...' });
+    onProgress({ phase: 'segments', current: 3, total: 5, message: primaryVideo?.path ? 'Building narration-aligned cited moment video...' : 'Building review video from saved clips/title cards...' });
     let visualDuration = 0;
-    let visualMode = 'title_cards_only';
-    if (primaryVideo?.path) {
-      const fullVideo = await buildFullVideoSegments({
-        sourcePath: primaryVideo.path,
-        workDir,
-        audioDuration,
-      });
-      segments.push(...fullVideo.segments);
-      visualDuration = fullVideo.visualDuration;
-      visualMode = fullVideo.sourceDuration && audioDuration && audioDuration > fullVideo.sourceDuration + 1
-        ? 'full_source_video_looped_to_narration'
-        : 'full_source_video';
-    } else if (clipSources.length) {
-      const clipDurations = [];
-      for (const clip of clipSources) {
-        const duration = Number(clip.durationSeconds || 0) || await mediaDurationSeconds(clip.path).catch(() => 0) || 8;
-        clipDurations.push(Math.max(0.25, duration));
-      }
-      let loopGuard = 0;
-      while (visualDuration < Math.max(1, audioDuration || 1) + 0.75 && loopGuard < 500) {
-        const index = loopGuard % clipSources.length;
-        segments.push(clipSources[index].path);
-        visualDuration += clipDurations[index];
-        loopGuard += 1;
-      }
-      visualMode = 'repeating_cited_clip_montage';
-    } else {
-      for (let index = 0; index < paragraphs.length; index += 1) {
-        const chapter = chapters[index] || {};
-        const next = chapters[index + 1];
-        const slotSeconds = Math.max(3, ((next?.startMs ?? (chapter.endMs || (chapter.startMs || 0) + 6000)) - (chapter.startMs || 0)) / 1000);
-        const card = await createTitleCard({
-          workDir,
-          index,
-          title: chapter.title || payload.title || 'Session Review',
-          subtitle: paragraphs[index],
-          durationSeconds: Math.min(8, slotSeconds),
-        });
-        segments.push(card.path);
-        visualDuration += Number(card.durationSeconds || 0);
-      }
-      visualMode = 'title_cards_only';
-    }
+    let visualMode = primaryVideo?.path ? 'narration_aligned_cited_moments' : 'narration_aligned_saved_clips_and_cards';
+    const paragraphSlots = estimateParagraphSlots(paragraphs, audioDuration);
+    const aligned = await buildNarrationAlignedSegments({
+      paragraphs,
+      paragraphSlots,
+      plan,
+      primaryVideo,
+      clipByParagraph,
+      workDir,
+      payloadTitle: payload.title,
+      onProgress,
+      signal: options.signal,
+    });
+    segments.push(...aligned.segments);
+    clipOutputs.push(...aligned.generatedClips);
+    visualDuration = aligned.visualDuration;
 
     if (!segments.length) {
       const card = await createTitleCard({
@@ -597,15 +714,16 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       visualDuration += Number(card.durationSeconds || 0);
     }
 
-    if (!primaryVideo?.path && !clipSources.length && audioDuration && visualDuration < audioDuration - 0.5) {
+    if (audioDuration && visualDuration < audioDuration - 0.5) {
       const pad = await createTitleCard({
         workDir,
-        index: paragraphs.length + 1,
+        index: segments.length + 1,
         title: payload.title || 'Session Review',
         subtitle: 'Narration continues.',
         durationSeconds: Math.max(2, audioDuration - visualDuration + 0.5),
       });
       segments.push(pad.path);
+      visualDuration += Number(pad.durationSeconds || 0);
     }
 
     const outputBase = `${slugifyFilePart(payload.title || 'session-review-video')}-${Date.now()}`;
@@ -629,6 +747,7 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       visual_mode: visualMode,
       visual_duration_seconds: Math.round(visualDuration),
       source_video_path: primaryVideo?.path || null,
+      paragraph_slots: paragraphSlots,
       cited_times: plan.citedTimes,
       generated_clip_requests: plan.generatedClipRequests,
       generated_clips: clipOutputs.map(({ path: _path, ...clip }) => clip),
