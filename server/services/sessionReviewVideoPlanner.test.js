@@ -35,3 +35,23 @@ test('buildReviewVideoPlan prefers existing clips over duplicate generated reque
   assert.equal(plan.generatedClipRequests[0].session_time_s, 720);
   assert.equal(plan.paragraphPlans[1].label, 'Events');
 });
+
+test('buildReviewVideoPlan maps physiology language to logged event anchors', () => {
+  const plan = buildReviewVideoPlan({
+    paragraphs: [
+      'During ejaculation, your body appeared to maintain effort briefly before release completed.',
+      'At 4:30, your penis was being supported by your left hand while the stimulation angle changed.',
+    ],
+    session: {
+      climax_offset_s: 612,
+      event_timeline: [
+        { time_s: 270, note: 'Penis supported by left hand; stimulation angle changed', category: 'physical' },
+      ],
+    },
+  });
+
+  assert.equal(plan.generatedClipRequests[0].paragraphIndex, 0);
+  assert.equal(plan.generatedClipRequests[0].session_time_s, 612);
+  assert.equal(plan.generatedClipRequests[1].paragraphIndex, 1);
+  assert.equal(plan.generatedClipRequests[1].session_time_s, 270);
+});

@@ -16,7 +16,7 @@ import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "./TTSButton";
 
-const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v3";
+const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v4";
 
 function trailingContext(text, maxChars = 320) {
   const cleaned = String(text || "").replace(/\s+/g, " ").trim();
@@ -58,6 +58,85 @@ function formatVideoClock(seconds = 0) {
   const secs = totalSeconds % 60;
   if (hours) return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
   return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+function reviewSecondsFromText(text = "") {
+  const source = String(text || "");
+  const times = [];
+  source.replace(/\b(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\b/g, (match, hours, minutes, seconds) => {
+    times.push((Number(hours || 0) * 3600) + (Number(minutes) * 60) + Number(seconds));
+    return match;
+  });
+  source.replace(/\b(\d{1,3}):(\d{2})\b/g, (match, minutes, seconds) => {
+    times.push((Number(minutes) * 60) + Number(seconds));
+    return match;
+  });
+  source.replace(/\b(\d+(?:\.\d+)?)\s*(?:m|min|mins|minute|minutes)\s*(?:and\s*)?(?:(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds))?\b/gi, (match, minutes, seconds) => {
+    times.push((Number(minutes) * 60) + Number(seconds || 0));
+    return match;
+  });
+  return [...new Set(times.filter((time) => Number.isFinite(time) && time >= 0))];
+}
+
+function reviewTextWords(text = "") {
+  const stop = new Set([
+    "about", "after", "again", "also", "around", "being", "during", "from", "into", "that", "this", "there", "these",
+    "those", "through", "while", "with", "within", "your", "session", "moment", "window", "evidence", "marker",
+    "saved", "video", "clip", "analysis", "section", "body", "physiology", "appeared", "suggests", "suggested",
+  ]);
+  return new Set(String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .map((word) => word.replace(/^-+|-+$/g, ""))
+    .filter((word) => word.length >= 4 && !stop.has(word)));
+}
+
+function hasAnyReviewTerm(text = "", terms = []) {
+  const value = String(text || "").toLowerCase();
+  return terms.some((term) => term.test(value));
+}
+
+function reviewConceptScore(clipText, paragraphText) {
+  const concepts = [
+    { score: 90, terms: [/\bejaculat/, /\bclimax/, /\borgasm/, /\bsemen/, /\bfluid release/, /\brelease\b/] },
+    { score: 60, terms: [/\bpre[-\s]?climax/, /\bbuild/, /\bapproach/] },
+    { score: 55, terms: [/\brecovery/, /\bsettled/, /\bsettling/, /\brecovered/] },
+    { score: 45, terms: [/\bpeak hr\b/, /\bheart[-\s]?rate/, /\bbpm\b/] },
+    { score: 35, terms: [/\bleft hand/, /\bright hand/, /\bsupported/, /\bsupporting/, /\bheld\b/, /\bgrip\b/] },
+    { score: 30, terms: [/\bpelvic/, /\bperineal/, /\bcontraction/, /\bemg\b/] },
+  ];
+  return concepts.reduce((sum, concept) => (
+    hasAnyReviewTerm(clipText, concept.terms) && hasAnyReviewTerm(paragraphText, concept.terms)
+      ? sum + concept.score
+      : sum
+  ), 0);
+}
+
+function bestParagraphIndexForClipByText(clip, paragraphs = []) {
+  const clipText = [
+    clip?.label,
+    clip?.reason,
+    clip?.motion_summary,
+    clip?.camera_angle,
+    clip?.source_video_label,
+  ].filter(Boolean).join(" ");
+  const clipWords = reviewTextWords(clipText);
+  const clipTime = Number(clip?.session_time_s);
+  let best = { index: -1, score: 0 };
+
+  paragraphs.forEach((paragraph, index) => {
+    const paragraphText = String(paragraph || "");
+    const paragraphWords = reviewTextWords(paragraphText);
+    const overlap = [...clipWords].filter((word) => paragraphWords.has(word)).length;
+    const paragraphTimes = reviewSecondsFromText(paragraphText);
+    const directTimeScore = Number.isFinite(clipTime) && paragraphTimes.some((time) => Math.abs(time - clipTime) <= 18) ? 120 : 0;
+    const conceptScore = reviewConceptScore(clipText, paragraphText);
+    const score = directTimeScore + conceptScore + (overlap * 10);
+    if (score > best.score) best = { index, score };
+  });
+
+  return best.score >= 35 ? best.index : -1;
 }
 
 function sanitizeReviewClip(clip = {}) {
@@ -170,6 +249,10 @@ function SessionReviewVideoExportButton({
           id: session?.id || null,
           date: session?.date || null,
           linked_local_videos: Array.isArray(session?.linked_local_videos) ? session.linked_local_videos : [],
+          event_timeline: Array.isArray(session?.event_timeline) ? session.event_timeline : [],
+          pre_climax_offset_s: session?.pre_climax_offset_s ?? null,
+          climax_offset_s: session?.climax_offset_s ?? null,
+          recovery_offset_s: session?.recovery_offset_s ?? null,
         },
         paragraphs: readableParagraphs,
         paragraphMeta: reviewParagraphMeta,
@@ -924,7 +1007,9 @@ export async function generateSessionKeyVideoClips({ session, timelineRows, labe
   return { clips, error: "" };
 }
 
-export function paragraphIndexForClip(clip, sections, totalParagraphs, durationS) {
+export function paragraphIndexForClip(clip, sections, totalParagraphs, durationS, paragraphs = []) {
+  const textMatchedIndex = bestParagraphIndexForClipByText(clip, paragraphs);
+  if (textMatchedIndex >= 0) return Math.min(totalParagraphs - 1, textMatchedIndex);
   const arousalSection = sections.find((section) => /chronological|arousal arc/i.test(section.label || ""));
   if (arousalSection?.items?.length) {
     const duration = durationS || Math.max(1, Number(clip.session_time_s) || 1);
@@ -1710,7 +1795,7 @@ Provide ${isTechnical
         const keyVideoClips = Array.isArray(result?._meta?.key_video_clips) ? result._meta.key_video_clips : [];
         const keyVideoClipError = result?._meta?.key_video_clip_error || "";
         const clipsByParagraph = keyVideoClips.reduce((map, clip) => {
-          const paraIndex = paragraphIndexForClip(clip, sections, paras.length, sessionDurationSeconds(session, timelineRows));
+          const paraIndex = paragraphIndexForClip(clip, sections, paras.length, sessionDurationSeconds(session, timelineRows), paras);
           if (!map.has(paraIndex)) map.set(paraIndex, []);
           map.get(paraIndex).push(clip);
           return map;

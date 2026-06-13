@@ -7,7 +7,7 @@ import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart } from './ttsCore.js';
 import { buildReviewVideoPlan } from './sessionReviewVideoPlanner.js';
 
-const REVIEW_RENDER_VERSION = 'session_review_video_v3';
+const REVIEW_RENDER_VERSION = 'session_review_video_v4';
 
 function cleanParagraph(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -632,6 +632,7 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
     paragraphs,
     paragraphMeta: payload.paragraphMeta || [],
     existingClips,
+    session,
   });
   const workDir = path.join(ttsRenderDir, `${Date.now()}-${jobId}-review-video`);
 
