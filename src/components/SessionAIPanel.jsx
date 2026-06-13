@@ -51,6 +51,15 @@ function reviewFilename(title = "Session Review Video") {
     .slice(0, 60) || "Session-Review-Video"}.mp4`;
 }
 
+function formatVideoClock(seconds = 0) {
+  const totalSeconds = Math.max(0, Math.floor(Number(seconds || 0)));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+  if (hours) return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
 function sanitizeReviewClip(clip = {}) {
   return {
     id: clip.id || null,
@@ -81,6 +90,9 @@ function SessionReviewVideoExportButton({
   const [status, setStatus] = useState({ type: "idle", message: "" });
   const [rendered, setRendered] = useState(null);
   const [existingVideo, setExistingVideo] = useState(null);
+  const [previewTime, setPreviewTime] = useState(0);
+  const activeVideo = rendered?.file_url ? rendered : existingVideo;
+  const activeVideoUrl = activeVideo?.file_url ? serverUrl(activeVideo.file_url) : "";
 
   useEffect(() => {
     let cancelled = false;
@@ -203,7 +215,7 @@ function SessionReviewVideoExportButton({
   };
 
   const download = () => {
-    const target = rendered?.file_url ? rendered : existingVideo;
+    const target = activeVideo;
     if (!target?.file_url) return;
     const a = document.createElement("a");
     a.href = serverUrl(target.file_url);
@@ -212,52 +224,60 @@ function SessionReviewVideoExportButton({
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-background/60 px-3 py-2">
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        onClick={startRender}
-        disabled={status.type === "working" || !paragraphs.length}
-        className="h-8 gap-1.5 text-xs"
-      >
-        {status.type === "working" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Video className="h-3.5 w-3.5" />}
-        Build review video
-      </Button>
-      {rendered?.file_url && (
+    <div className="space-y-2 rounded-lg border border-border bg-background/60 px-3 py-3">
+      {activeVideoUrl && (
+        <div className="relative overflow-hidden rounded-lg border border-border bg-black">
+          <video
+            key={activeVideoUrl}
+            src={activeVideoUrl}
+            controls
+            preload="metadata"
+            playsInline
+            className="aspect-video w-full bg-black object-contain"
+            onLoadedMetadata={(event) => setPreviewTime(event.currentTarget.currentTime || 0)}
+            onTimeUpdate={(event) => setPreviewTime(event.currentTarget.currentTime || 0)}
+            onSeeked={(event) => setPreviewTime(event.currentTarget.currentTime || 0)}
+          />
+          <div className="pointer-events-none absolute bottom-3 left-3 rounded-md bg-black/75 px-2 py-1 font-mono text-xs font-semibold text-white shadow">
+            {formatVideoClock(previewTime)}
+          </div>
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"
           size="sm"
-          variant="secondary"
-          onClick={download}
+          variant="outline"
+          onClick={startRender}
+          disabled={status.type === "working" || !paragraphs.length}
           className="h-8 gap-1.5 text-xs"
         >
-          <Download className="h-3.5 w-3.5" />
-          Download MP4
+          {status.type === "working" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Video className="h-3.5 w-3.5" />}
+          Build review video
         </Button>
-      )}
-      {!rendered?.file_url && existingVideo?.file_url && (
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          onClick={download}
-          className="h-8 gap-1.5 text-xs"
-        >
-          <Download className="h-3.5 w-3.5" />
-          Download Existing
-        </Button>
-      )}
-      {existingVideo?._source === "completed_review_video_job" && (
-        <span className="text-xs text-amber-200">
-          Recovered from completed background render
-        </span>
-      )}
-      {status.message && (
-        <span className={`text-xs ${status.type === "error" ? "text-destructive" : status.type === "ok" ? "text-emerald-400" : "text-muted-foreground"}`}>
-          {status.message}
-        </span>
-      )}
+        {activeVideo?.file_url && (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={download}
+            className="h-8 gap-1.5 text-xs"
+          >
+            <Download className="h-3.5 w-3.5" />
+            {rendered?.file_url ? "Download MP4" : "Download Existing"}
+          </Button>
+        )}
+        {existingVideo?._source === "completed_review_video_job" && (
+          <span className="text-xs text-amber-200">
+            Recovered from completed background render
+          </span>
+        )}
+        {status.message && (
+          <span className={`text-xs ${status.type === "error" ? "text-destructive" : status.type === "ok" ? "text-emerald-400" : "text-muted-foreground"}`}>
+            {status.message}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
