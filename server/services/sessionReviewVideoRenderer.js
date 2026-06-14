@@ -7,7 +7,7 @@ import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart, synthesizeTTSChunk } from './ttsCore.js';
 import { buildReviewVideoPlan, extractCitedTimesFromText } from './sessionReviewVideoPlanner.js';
 
-const REVIEW_RENDER_VERSION = 'session_review_video_v9';
+const REVIEW_RENDER_VERSION = 'session_review_video_v10';
 const TTS_REQUEST_TAIL = '\u200B';
 
 function cleanParagraph(value) {
@@ -306,22 +306,25 @@ function drawTextSafe(value = '') {
     .trim();
 }
 
-function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null } = {}) {
+function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playbackRate = 1 } = {}) {
   const fontPath = process.env.REVIEW_VIDEO_FONT || 'C\\:/Windows/Fonts/arial.ttf';
   const sourceLabel = `source ${formatTimestamp(startSeconds)}`;
   const sessionLabel = Number.isFinite(Number(sessionSeconds))
     ? `session ${formatTimestamp(sessionSeconds)}`
     : '';
-  const text = drawTextSafe([sessionLabel, sourceLabel].filter(Boolean).join('  |  '));
+  const rate = Number(playbackRate);
+  const slowMoLabel = Number.isFinite(rate) && rate > 0 && rate < 0.99 ? `${Math.round(rate * 100)}% speed` : '';
+  const text = drawTextSafe([sessionLabel, sourceLabel, slowMoLabel].filter(Boolean).join('  |  '));
   return [
     'scale=1280:720:force_original_aspect_ratio=decrease',
     'pad=1280:720:(ow-iw)/2:(oh-ih)/2',
     'format=yuv420p',
+    Number.isFinite(rate) && rate > 0 && rate < 0.99 ? `setpts=${(1 / rate).toFixed(4)}*PTS` : null,
     `drawtext=fontfile='${fontPath}':text='${text}':x=24:y=h-58:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.68:boxborderw=10`,
-  ].join(',');
+  ].filter(Boolean).join(',');
 }
 
-async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, workDir, index, sessionSeconds = null }) {
+async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, workDir, index, sessionSeconds = null, playbackRate = 1 }) {
   const duration = Math.max(0.25, Math.min(180, Number(endSeconds || 0) - Number(startSeconds || 0)));
   const output = path.join(workDir, `segment-source-${String(index).padStart(3, '0')}.mp4`);
   await runProcess('ffmpeg', [
@@ -332,7 +335,7 @@ async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, work
     '-i', sourcePath,
     '-map', '0:v:0',
     '-an',
-    '-vf', timestampOverlayFilter({ startSeconds, sessionSeconds }),
+    '-vf', timestampOverlayFilter({ startSeconds, sessionSeconds, playbackRate }),
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
@@ -871,6 +874,10 @@ function clampClipStart(startSeconds, durationSeconds, sourceDuration) {
   return Math.max(0, Math.min(maxStart, Number(startSeconds || 0)));
 }
 
+function isClimaxReviewSegment(segment = {}, event = {}) {
+  return /\b(climax|ejaculat|orgasm|semen|fluid release|release of semen|emission|expulsion)\b/i.test(`${segment.text || ''} ${eventText(event)}`);
+}
+
 function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, sourceDuration, fallbackCursor }) {
   const duration = Math.max(1.25, Number(audioDuration || 1) + 1.25);
   if (event) {
@@ -878,17 +885,23 @@ function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, s
     const sourceCenter = sourceTimeForSession(sessionTime, primaryVideo);
     const requestedStart = Number(event.startSeconds);
     const offset = sourceCenter - sessionTime;
-    const wantsClimax = /\b(climax|ejaculat|orgasm)\b/i.test(`${segment.text} ${eventText(event)}`);
-    const preroll = wantsClimax ? 5 : 2.5;
-    const rawStart = Number.isFinite(requestedStart)
+    const wantsClimax = isClimaxReviewSegment(segment, event);
+    const playbackRate = wantsClimax ? 0.5 : 1;
+    const sourceSliceDuration = playbackRate < 1 ? Math.max(2.5, duration * playbackRate) : duration;
+    const preroll = wantsClimax ? Math.min(3, sourceSliceDuration * 0.4) : 2.5;
+    const rawStart = wantsClimax
+      ? sourceCenter - preroll
+      : Number.isFinite(requestedStart)
       ? requestedStart + offset
       : sourceCenter - preroll;
-    const start = clampClipStart(rawStart, duration, sourceDuration);
+    const start = clampClipStart(rawStart, sourceSliceDuration, sourceDuration);
     return {
       start,
-      end: start + duration,
+      end: start + sourceSliceDuration,
       sessionSeconds: sessionTime,
       label: event.label || event.cited_text || 'Referenced moment',
+      playbackRate,
+      slowMotion: wantsClimax,
     };
   }
   const start = clampClipStart(fallbackCursor, duration, sourceDuration);
@@ -897,6 +910,8 @@ function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, s
     end: start + duration,
     sessionSeconds: start,
     label: 'Source video context',
+    playbackRate: 1,
+    slowMotion: false,
   };
 }
 
@@ -1007,6 +1022,7 @@ async function renderSegmentedSourceReviewVideo({
       workDir,
       index: index + 1,
       sessionSeconds: window.sessionSeconds,
+      playbackRate: window.playbackRate || 1,
     });
     const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
     await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
@@ -1024,6 +1040,8 @@ async function renderSegmentedSourceReviewVideo({
       reason: event?.reason || 'No exact event matched this spoken segment; using continuous source video context.',
       source_video_path: primaryVideo.path,
       audio_duration_seconds: Math.round(Number(audio.durationSeconds || 0) * 10) / 10,
+      playback_rate: Number(window.playbackRate || 1),
+      slow_motion: Boolean(window.slowMotion),
       matched_event: Boolean(event),
     });
     previousText = previousText ? `${previousText} ${segment.text}` : segment.text;
