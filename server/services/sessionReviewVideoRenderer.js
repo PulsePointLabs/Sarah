@@ -5,9 +5,9 @@ import { listEntities, upsertEntity } from '../db.js';
 import { normalizeAudioChapters } from './audioChapters.js';
 import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart } from './ttsCore.js';
-import { buildReviewVideoPlan } from './sessionReviewVideoPlanner.js';
+import { buildReviewVideoPlan, extractCitedTimesFromText } from './sessionReviewVideoPlanner.js';
 
-const REVIEW_RENDER_VERSION = 'session_review_video_v5';
+const REVIEW_RENDER_VERSION = 'session_review_video_v6';
 
 function cleanParagraph(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -383,6 +383,7 @@ async function buildNarrationAlignedSegments({
   paragraphSlots,
   plan,
   primaryVideo,
+  sourceDuration,
   clipByParagraph,
   workDir,
   payloadTitle,
@@ -393,12 +394,25 @@ async function buildNarrationAlignedSegments({
   const generatedClips = [];
   let visualDuration = 0;
   let segmentIndex = 1;
+  let continuitySourceCursor = 0;
 
   for (const slot of paragraphSlots) {
     if (signal?.aborted) throw new Error('Cancelled');
     const paragraphIndex = slot.paragraphIndex;
     const generatedRequests = (plan.generatedClipRequests || [])
       .filter((request) => Number(request.paragraphIndex) === paragraphIndex);
+    const fallbackExplicitTimes = !generatedRequests.length
+      ? extractCitedTimesFromText(paragraphs[paragraphIndex] || '', paragraphIndex).map((time, index) => ({
+        id: `paragraph-time-${paragraphIndex}-${index}`,
+        paragraphIndex,
+        session_time_s: time.seconds,
+        cited_text: time.text,
+        label: time.text ? `Referenced ${time.text}` : `Referenced moment ${index + 1}`,
+        reason: time.text ? `Referenced as ${time.text}` : 'Referenced in narration text',
+        startSeconds: Math.max(0, time.seconds - 2),
+        endSeconds: time.seconds + Math.max(8, Math.min(24, slot.durationSeconds)),
+      }))
+      : [];
     const existingClips = clipByParagraph.get(paragraphIndex) || [];
     const timedExistingClips = existingClips.filter((clip) => Number.isFinite(Number(clipSessionTime(clip))));
     const playableEvents = [
@@ -414,10 +428,16 @@ async function buildNarrationAlignedSegments({
         session_time_s: Number(request.session_time_s),
         source: request,
       })),
+      ...fallbackExplicitTimes.map((request) => ({
+        type: 'paragraph_time',
+        label: request.label,
+        session_time_s: Number(request.session_time_s),
+        source: request,
+      })),
     ].filter((event) => Number.isFinite(Number(event.session_time_s)));
 
     if (primaryVideo?.path && playableEvents.length) {
-      const sliceDuration = Math.max(3, slot.durationSeconds / playableEvents.length);
+      const sliceDuration = Math.max(4, slot.durationSeconds / playableEvents.length);
       let slotVisualDuration = 0;
       for (const event of playableEvents) {
         const center = sourceTimeForSession(event.session_time_s, primaryVideo);
@@ -459,6 +479,7 @@ async function buildNarrationAlignedSegments({
             aligned_narration_end_s: Math.round(slot.endSeconds * 10) / 10,
             durationSeconds: Number(clip.durationSeconds || sliceDuration),
           });
+          continuitySourceCursor = Math.min(Math.max(0, sourceDuration || Number.POSITIVE_INFINITY), start + actualDuration);
         } catch (error) {
           generatedClips.push({
             ...event.source,
@@ -470,16 +491,58 @@ async function buildNarrationAlignedSegments({
         }
       }
       if (slotVisualDuration <= 0) {
-        const card = await createTitleCard({
+        const fallbackStart = Math.max(0, Math.min(sourceDuration || continuitySourceCursor, continuitySourceCursor));
+        const fallbackEnd = fallbackStart + slot.durationSeconds;
+        const clip = await cutReviewClip({
+          sourcePath: primaryVideo.path,
+          startSeconds: fallbackStart,
+          endSeconds: fallbackEnd,
+          label: slotTitle(paragraphIndex, payloadTitle),
           workDir,
           index: segmentIndex++,
-          title: slotTitle(paragraphIndex, payloadTitle),
-          subtitle: paragraphs[paragraphIndex],
-          durationSeconds: slot.durationSeconds,
+          sessionSeconds: fallbackStart,
         });
-        segments.push(card.path);
-        visualDuration += Number(card.durationSeconds || slot.durationSeconds);
+        segments.push(clip.path);
+        visualDuration += Number(clip.durationSeconds || slot.durationSeconds);
+        continuitySourceCursor = fallbackStart + Number(clip.durationSeconds || slot.durationSeconds);
       }
+      continue;
+    }
+
+    if (primaryVideo?.path) {
+      const maxStart = Math.max(0, Number(sourceDuration || 0) - Math.max(1, slot.durationSeconds));
+      const fallbackStart = Math.max(0, Math.min(maxStart || continuitySourceCursor, continuitySourceCursor));
+      const fallbackEnd = fallbackStart + slot.durationSeconds;
+      onProgress?.({
+        phase: 'segments',
+        current: 3,
+        total: 5,
+        message: `Filling narration section ${paragraphIndex + 1} with source video context...`,
+      });
+      const clip = await cutReviewClip({
+        sourcePath: primaryVideo.path,
+        startSeconds: fallbackStart,
+        endSeconds: fallbackEnd,
+        label: slotTitle(paragraphIndex, payloadTitle),
+        workDir,
+        index: segmentIndex++,
+        sessionSeconds: fallbackStart,
+      });
+      segments.push(clip.path);
+      visualDuration += Number(clip.durationSeconds || slot.durationSeconds);
+      generatedClips.push({
+        id: `context-${paragraphIndex}`,
+        paragraphIndex,
+        session_time_s: Math.round(fallbackStart * 10) / 10,
+        cited_text: 'Continuous source video context',
+        label: slotTitle(paragraphIndex, payloadTitle),
+        reason: 'No exact logged event or explicit timestamp matched this narration slot; using source video instead of title-card filler.',
+        source_video_path: primaryVideo.path,
+        aligned_narration_start_s: Math.round(slot.startSeconds * 10) / 10,
+        aligned_narration_end_s: Math.round(slot.endSeconds * 10) / 10,
+        durationSeconds: Number(clip.durationSeconds || slot.durationSeconds),
+      });
+      continuitySourceCursor = fallbackStart + Number(clip.durationSeconds || slot.durationSeconds);
       continue;
     }
 
@@ -730,11 +793,13 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
     let visualDuration = 0;
     let visualMode = primaryVideo?.path ? 'narration_aligned_cited_moments' : 'narration_aligned_saved_clips_and_cards';
     const paragraphSlots = estimateParagraphSlots(paragraphs, audioDuration);
+    const primaryVideoDuration = primaryVideo?.path ? await mediaDurationSeconds(primaryVideo.path).catch(() => 0) : 0;
     const aligned = await buildNarrationAlignedSegments({
       paragraphs,
       paragraphSlots,
       plan,
       primaryVideo,
+      sourceDuration: primaryVideoDuration,
       clipByParagraph,
       workDir,
       payloadTitle: payload.title,
@@ -746,27 +811,57 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
     visualDuration = aligned.visualDuration;
 
     if (!segments.length) {
-      const card = await createTitleCard({
-        workDir,
-        index: 0,
-        title: payload.title || 'Session Review',
-        subtitle: 'No cited video clips were available; narration is included.',
-        durationSeconds: Math.max(6, Math.min(20, audioDuration || 8)),
-      });
-      segments.push(card.path);
-      visualDuration += Number(card.durationSeconds || 0);
+      if (primaryVideo?.path) {
+        const clip = await cutReviewClip({
+          sourcePath: primaryVideo.path,
+          startSeconds: 0,
+          endSeconds: Math.max(6, Math.min(primaryVideoDuration || 20, audioDuration || 8)),
+          label: payload.title || 'Session Review',
+          workDir,
+          index: 0,
+          sessionSeconds: 0,
+        });
+        segments.push(clip.path);
+        visualDuration += Number(clip.durationSeconds || 0);
+      } else {
+        const card = await createTitleCard({
+          workDir,
+          index: 0,
+          title: payload.title || 'Session Review',
+          subtitle: 'No cited video clips were available; narration is included.',
+          durationSeconds: Math.max(6, Math.min(20, audioDuration || 8)),
+        });
+        segments.push(card.path);
+        visualDuration += Number(card.durationSeconds || 0);
+      }
     }
 
     if (audioDuration && visualDuration < audioDuration - 0.5) {
-      const pad = await createTitleCard({
-        workDir,
-        index: segments.length + 1,
-        title: payload.title || 'Session Review',
-        subtitle: 'Narration continues.',
-        durationSeconds: Math.max(2, audioDuration - visualDuration + 0.5),
-      });
-      segments.push(pad.path);
-      visualDuration += Number(pad.durationSeconds || 0);
+      const padDuration = Math.max(2, audioDuration - visualDuration + 0.5);
+      if (primaryVideo?.path) {
+        const sourceStart = Math.max(0, Math.min(Math.max(0, primaryVideoDuration - padDuration), visualDuration % Math.max(1, primaryVideoDuration || visualDuration || 1)));
+        const pad = await cutReviewClip({
+          sourcePath: primaryVideo.path,
+          startSeconds: sourceStart,
+          endSeconds: sourceStart + padDuration,
+          label: payload.title || 'Session Review',
+          workDir,
+          index: segments.length + 1,
+          sessionSeconds: sourceStart,
+        });
+        segments.push(pad.path);
+        visualDuration += Number(pad.durationSeconds || 0);
+      } else {
+        const pad = await createTitleCard({
+          workDir,
+          index: segments.length + 1,
+          title: payload.title || 'Session Review',
+          subtitle: 'Narration continues.',
+          durationSeconds: padDuration,
+        });
+        segments.push(pad.path);
+        visualDuration += Number(pad.durationSeconds || 0);
+      }
     }
 
     const outputBase = `${slugifyFilePart(payload.title || 'session-review-video')}-${Date.now()}`;
