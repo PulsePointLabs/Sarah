@@ -4,10 +4,10 @@ import { uploadDir, ttsRenderDir } from '../config.js';
 import { listEntities, upsertEntity } from '../db.js';
 import { normalizeAudioChapters } from './audioChapters.js';
 import { renderTTSExport } from './ttsRenderer.js';
-import { q, runProcess, slugifyFilePart } from './ttsCore.js';
+import { q, runProcess, slugifyFilePart, synthesizeTTSChunk } from './ttsCore.js';
 import { buildReviewVideoPlan, extractCitedTimesFromText } from './sessionReviewVideoPlanner.js';
 
-const REVIEW_RENDER_VERSION = 'session_review_video_v6';
+const REVIEW_RENDER_VERSION = 'session_review_video_v7';
 
 function cleanParagraph(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -718,6 +718,405 @@ async function muxAudioVideo(videoPath, audioPath, outputPath) {
   ]);
 }
 
+async function concatAvSegments(segmentPaths, outputPath, workDir) {
+  const concatPath = path.join(workDir, 'av-segments.txt');
+  await fs.writeFile(concatPath, segmentPaths.map((file) => `file ${q(file.replace(/\\/g, '/'))}`).join('\n'), 'utf8');
+  await runProcess('ffmpeg', [
+    '-hide_banner',
+    '-y',
+    '-f', 'concat',
+    '-safe', '0',
+    '-i', concatPath,
+    '-map', '0:v:0',
+    '-map', '0:a:0',
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '22',
+    '-c:a', 'aac',
+    '-b:a', '192k',
+    '-movflags', '+faststart',
+    outputPath,
+  ]);
+}
+
+async function concatAudioSegments(audioPaths, outputPath, workDir) {
+  const concatPath = path.join(workDir, 'audio-segments.txt');
+  await fs.writeFile(concatPath, audioPaths.map((file) => `file ${q(file.replace(/\\/g, '/'))}`).join('\n'), 'utf8');
+  await runProcess('ffmpeg', [
+    '-hide_banner',
+    '-y',
+    '-f', 'concat',
+    '-safe', '0',
+    '-i', concatPath,
+    '-vn',
+    '-c:a', 'libmp3lame',
+    '-b:a', '192k',
+    outputPath,
+  ]);
+}
+
+function splitSentences(text = '') {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .match(/[^.!?]+[.!?]+(?:["')\]]+)?|[^.!?]+$/g)
+    ?.map((sentence) => sentence.trim())
+    .filter(Boolean) || [];
+}
+
+function isMomentSentence(text = '') {
+  return extractCitedTimesFromText(text).length > 0 || /\b(climax|ejaculat|orgasm|recovery|pre[-\s]?climax|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|\d{1,2}:\d{2})\b/i.test(text);
+}
+
+function buildReviewNarrationSegments(paragraphs = []) {
+  const output = [];
+  for (const [paragraphIndex, paragraph] of paragraphs.entries()) {
+    const sentences = splitSentences(paragraph);
+    if (!sentences.length) continue;
+    let buffer = [];
+    const flush = () => {
+      const text = buffer.join(' ').replace(/\s+/g, ' ').trim();
+      if (text) output.push({ paragraphIndex, text });
+      buffer = [];
+    };
+    for (const sentence of sentences) {
+      const moment = isMomentSentence(sentence);
+      const bufferedLength = buffer.join(' ').length;
+      if (moment) flush();
+      if (!moment && bufferedLength + sentence.length <= 520) {
+        buffer.push(sentence);
+        continue;
+      }
+      if (!moment) flush();
+      output.push({ paragraphIndex, text: sentence });
+    }
+    flush();
+  }
+  return output.slice(0, 64);
+}
+
+function eventText(event = {}) {
+  return [event.label, event.reason, event.note, event.category, event.tags, event.cited_text]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function segmentKeywordScore(event = {}, segmentText = '') {
+  const source = eventText(event);
+  const target = String(segmentText || '').toLowerCase();
+  const pairs = [
+    [/\bclimax|ejaculat|orgasm|semen|release\b/, 120],
+    [/\brecovery|recovered|settled|drop\b/, 80],
+    [/\bpre[-\s]?climax|build|approach|threshold\b/, 70],
+    [/\blubric|lube|pause|paused|prep|preparation\b/, 110],
+    [/\bheart rate|hrv|bpm|peak\b/, 35],
+    [/\bperineal|pelvic|contraction|foley|catheter\b/, 35],
+  ];
+  return pairs.reduce((sum, [pattern, score]) => (
+    pattern.test(source) && pattern.test(target) ? sum + score : sum
+  ), 0);
+}
+
+function collectSegmentEvents({ segment, plan, clipByParagraph }) {
+  const paragraphIndex = Number(segment.paragraphIndex);
+  const explicitTimes = extractCitedTimesFromText(segment.text, paragraphIndex);
+  const requests = (plan.generatedClipRequests || [])
+    .filter((request) => Number(request.paragraphIndex) === paragraphIndex);
+  const clips = (clipByParagraph.get(paragraphIndex) || [])
+    .filter((clip) => Number.isFinite(Number(clipSessionTime(clip))));
+  const synthetic = explicitTimes.map((time, index) => ({
+    id: `segment-time-${paragraphIndex}-${index}-${Math.round(time.seconds)}`,
+    paragraphIndex,
+    session_time_s: time.seconds,
+    cited_text: time.text,
+    label: time.text ? `Referenced ${time.text}` : 'Referenced moment',
+    reason: 'Explicitly referenced in spoken segment',
+    startSeconds: Math.max(0, time.seconds - 3),
+    endSeconds: time.seconds + 14,
+    source: 'spoken_segment_time',
+  }));
+  return [...requests, ...clips, ...synthetic]
+    .map((event) => ({
+      ...event,
+      session_time_s: Number(event.session_time_s ?? clipSessionTime(event)),
+    }))
+    .filter((event) => Number.isFinite(Number(event.session_time_s)));
+}
+
+function chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds }) {
+  const candidates = collectSegmentEvents({ segment, plan, clipByParagraph });
+  if (!candidates.length) return null;
+  const explicitTimes = extractCitedTimesFromText(segment.text, segment.paragraphIndex);
+  let best = null;
+  for (const event of candidates) {
+    const id = String(event.id || `${event.label}:${event.session_time_s}`);
+    const reusePenalty = usedEventIds.has(id) ? 45 : 0;
+    const directTimeScore = explicitTimes.some((time) => Math.abs(Number(time.seconds) - Number(event.session_time_s)) <= 14)
+      ? 220
+      : 0;
+    const score = directTimeScore + segmentKeywordScore(event, segment.text) - reusePenalty;
+    if (!best || score > best.score) best = { event, score, id };
+  }
+  if (!best || best.score < 20) return null;
+  usedEventIds.add(best.id);
+  return best.event;
+}
+
+function clampClipStart(startSeconds, durationSeconds, sourceDuration) {
+  const duration = Math.max(0.5, Number(durationSeconds || 0.5));
+  const maxStart = Math.max(0, Number(sourceDuration || 0) - duration);
+  return Math.max(0, Math.min(maxStart, Number(startSeconds || 0)));
+}
+
+function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, sourceDuration, fallbackCursor }) {
+  const duration = Math.max(1.25, Number(audioDuration || 1) + 0.35);
+  if (event) {
+    const sessionTime = Number(event.session_time_s);
+    const sourceCenter = sourceTimeForSession(sessionTime, primaryVideo);
+    const requestedStart = Number(event.startSeconds);
+    const offset = sourceCenter - sessionTime;
+    const wantsClimax = /\b(climax|ejaculat|orgasm)\b/i.test(`${segment.text} ${eventText(event)}`);
+    const preroll = wantsClimax ? 5 : 2.5;
+    const rawStart = Number.isFinite(requestedStart)
+      ? requestedStart + offset
+      : sourceCenter - preroll;
+    const start = clampClipStart(rawStart, duration, sourceDuration);
+    return {
+      start,
+      end: start + duration,
+      sessionSeconds: sessionTime,
+      label: event.label || event.cited_text || 'Referenced moment',
+    };
+  }
+  const start = clampClipStart(fallbackCursor, duration, sourceDuration);
+  return {
+    start,
+    end: start + duration,
+    sessionSeconds: start,
+    label: 'Source video context',
+  };
+}
+
+async function synthesizeReviewSegmentAudio({ segment, index, payload, workDir, previousText, jobId }) {
+  const rendered = await synthesizeTTSChunk({
+    text: segment.text,
+    voice: payload.voice || 'nova',
+    model: payload.model,
+    speed: payload.speed,
+    instructions: payload.instructions || '',
+    format: 'mp3',
+    previousContext: previousText,
+    meta: {
+      jobId,
+      chunkIndex: index,
+      source: 'session_review_video_segment',
+    },
+  });
+  const audioPath = path.join(workDir, `segment-audio-${String(index + 1).padStart(3, '0')}.mp3`);
+  await fs.writeFile(audioPath, rendered.buffer);
+  const duration = await mediaDurationSeconds(audioPath).catch(() => Math.max(1, wordCount(segment.text) / 2.25));
+  return { ...rendered, audioPath, durationSeconds: duration };
+}
+
+async function renderSegmentedSourceReviewVideo({
+  payload,
+  session,
+  paragraphs,
+  plan,
+  primaryVideo,
+  workDir,
+  jobId,
+  onProgress,
+  signal,
+}) {
+  const sourceDuration = await mediaDurationSeconds(primaryVideo.path).catch(() => 0);
+  const existingSegmentSources = [];
+  for (const clip of plan.existingClips.slice(0, 24)) {
+    const clipPath = uploadPathFromUrl(clip.file_url || clip.url || clip.clip_url);
+    if (await fileExists(clipPath)) {
+      existingSegmentSources.push({
+        ...clip,
+        path: clipPath,
+        label: clip.label || 'Saved key clip',
+        paragraphIndex: clip.paragraphIndex,
+        session_time_s: clipSessionTime(clip),
+      });
+    }
+  }
+  const clipByParagraph = new Map();
+  existingSegmentSources.forEach((clip) => {
+    const key = Number.isFinite(Number(clip.paragraphIndex)) ? Number(clip.paragraphIndex) : 0;
+    if (!clipByParagraph.has(key)) clipByParagraph.set(key, []);
+    clipByParagraph.get(key).push(clip);
+  });
+
+  const narrationSegments = buildReviewNarrationSegments(paragraphs);
+  const usedEventIds = new Set();
+  const avSegments = [];
+  const audioSegments = [];
+  const generatedClips = [];
+  let previousText = '';
+  let fallbackCursor = 0;
+  let totalAudioDuration = 0;
+  let ttsMeta = null;
+
+  for (const [index, segment] of narrationSegments.entries()) {
+    if (signal?.aborted) throw new Error('Cancelled');
+    onProgress?.({
+      phase: 'segmented_narration',
+      current: 1,
+      total: 5,
+      message: `Rendering spoken segment ${index + 1} of ${narrationSegments.length}...`,
+    });
+    const audio = await synthesizeReviewSegmentAudio({
+      segment,
+      index,
+      payload,
+      workDir,
+      previousText: previousText.slice(-320),
+      jobId,
+    });
+    ttsMeta = ttsMeta || audio;
+    audioSegments.push(audio.audioPath);
+    totalAudioDuration += Number(audio.durationSeconds || 0);
+
+    const event = chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds });
+    const window = sourceWindowForSegment({
+      event,
+      segment,
+      audioDuration: audio.durationSeconds,
+      primaryVideo,
+      sourceDuration,
+      fallbackCursor,
+    });
+    onProgress?.({
+      phase: 'segments',
+      current: 3,
+      total: 5,
+      message: `Cutting video for spoken segment ${index + 1} at ${formatTimestamp(window.sessionSeconds)}...`,
+    });
+    const videoClip = await cutReviewClip({
+      sourcePath: primaryVideo.path,
+      startSeconds: window.start,
+      endSeconds: window.end,
+      label: window.label,
+      workDir,
+      index: index + 1,
+      sessionSeconds: window.sessionSeconds,
+    });
+    const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
+    await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
+    avSegments.push(avPath);
+    fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
+    generatedClips.push({
+      id: event?.id || `context-${index + 1}`,
+      paragraphIndex: segment.paragraphIndex,
+      session_time_s: event ? Number(event.session_time_s) : Math.round(window.sessionSeconds * 10) / 10,
+      source_start_s: Math.round(window.start * 10) / 10,
+      source_end_s: Math.round(window.end * 10) / 10,
+      spoken_segment_index: index + 1,
+      spoken_text: segment.text.slice(0, 240),
+      label: window.label,
+      reason: event?.reason || 'No exact event matched this spoken segment; using continuous source video context.',
+      source_video_path: primaryVideo.path,
+      audio_duration_seconds: Math.round(Number(audio.durationSeconds || 0) * 10) / 10,
+      matched_event: Boolean(event),
+    });
+    previousText = previousText ? `${previousText} ${segment.text}` : segment.text;
+  }
+
+  const outputBase = `${slugifyFilePart(payload.title || 'session-review-video')}-${Date.now()}`;
+  const outputFilename = `${outputBase}.mp4`;
+  const outputPath = path.join(uploadDir, outputFilename);
+  const audioFilename = `${outputBase}.mp3`;
+  const audioOutputPath = path.join(uploadDir, audioFilename);
+
+  onProgress({ phase: 'muxing', current: 4, total: 5, message: 'Concatenating aligned spoken video segments...' });
+  await concatAvSegments(avSegments, outputPath, workDir);
+  await concatAudioSegments(audioSegments, audioOutputPath, workDir);
+
+  const stat = await fs.stat(outputPath);
+  const finalDuration = await mediaDurationSeconds(outputPath).catch(() => totalAudioDuration);
+  const audioStat = await fs.stat(audioOutputPath).catch(() => null);
+  const chapters = normalizeAudioChapters(
+    narrationSegments.map((segment, index) => ({
+      id: `review-segment-${index + 1}`,
+      title: index === 0 ? 'Summary' : `Spoken segment ${index + 1}`,
+      startMs: Math.round(generatedClips.slice(0, index).reduce((sum, clip) => sum + Number(clip.audio_duration_seconds || 0), 0) * 1000),
+      source: 'session_review_video_segment',
+      confidence: 'exact_segment_order',
+    })),
+    finalDuration
+  );
+  const manifest = {
+    version: 1,
+    render_version: REVIEW_RENDER_VERSION,
+    title: payload.title || 'Session Review Video',
+    session_id: payload.sessionId || session.id || null,
+    generated_at: new Date().toISOString(),
+    audio_reused: false,
+    audio_file_url: `/uploads/${audioFilename}`,
+    visual_mode: 'segmented_tts_source_video',
+    visual_duration_seconds: Math.round(finalDuration || 0),
+    source_video_path: primaryVideo.path,
+    source_video_duration_seconds: Math.round(sourceDuration || 0),
+    segment_count: narrationSegments.length,
+    cited_times: plan.citedTimes,
+    generated_clip_requests: plan.generatedClipRequests,
+    generated_clips: generatedClips,
+    existing_clip_count: existingSegmentSources.length,
+    chapters,
+  };
+  const manifest_url = await writeManifest(outputBase, manifest);
+  const record = upsertEntity('SessionReviewVideo', crypto.randomUUID(), {
+    title: payload.title || 'Session Review Video',
+    session_id: payload.sessionId || session.id || null,
+    analysis_title: payload.title || null,
+    source_generated_at: payload.sourceGeneratedAt || null,
+    file_url: `/uploads/${outputFilename}`,
+    filename: outputFilename,
+    mimeType: 'video/mp4',
+    size: stat.size,
+    duration_seconds: Math.round(finalDuration || 0),
+    audio_file_url: `/uploads/${audioFilename}`,
+    audio_reused: false,
+    audio_size: audioStat?.size || null,
+    voice: ttsMeta?.voice || payload.voice || 'nova',
+    model: ttsMeta?.model || payload.model || null,
+    speed: Number(ttsMeta?.speed || payload.speed || 1),
+    clip_count: generatedClips.filter((clip) => clip.matched_event).length,
+    cited_time_count: plan.citedTimes.length,
+    manifest_url,
+    render_version: REVIEW_RENDER_VERSION,
+    exported_at: new Date().toISOString(),
+  });
+  const result = {
+    ok: true,
+    jobId,
+    file_url: record.file_url,
+    filename: outputFilename,
+    size: stat.size,
+    duration_seconds: record.duration_seconds,
+    audio_file_url: record.audio_file_url,
+    audio_reused: false,
+    clip_count: record.clip_count,
+    cited_time_count: record.cited_time_count,
+    manifest_url,
+    record,
+    render_version: REVIEW_RENDER_VERSION,
+  };
+  onProgress({
+    phase: 'complete',
+    current: 5,
+    total: 5,
+    message: `Review video ready: ${outputFilename}`,
+    file_url: result.file_url,
+    filename: result.filename,
+  });
+  return result;
+}
+
 export async function renderSessionReviewVideo(payload = {}, options = {}) {
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
   const jobId = String(options.jobId || payload.jobId || crypto.randomUUID());
@@ -747,6 +1146,21 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
 
   try {
     onProgress({ phase: 'planning', current: 0, total: 5, message: 'Planning cited moments and review segments...' });
+    const primaryVideo = await choosePrimaryVideo(session, { workDir, onProgress });
+    if (primaryVideo?.path) {
+      return await renderSegmentedSourceReviewVideo({
+        payload,
+        session,
+        paragraphs,
+        plan,
+        primaryVideo,
+        workDir,
+        jobId,
+        onProgress,
+        signal: options.signal,
+      });
+    }
+
     const narration = await resolveNarration(payload, { jobId, signal: options.signal, onProgress });
     if (!narration.audioPath || !(await fileExists(narration.audioPath))) throw new Error('Narration audio file is unavailable.');
 
@@ -755,7 +1169,6 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       payload.chapters?.length ? payload.chapters : estimateChapterStarts(paragraphs, audioDuration),
       audioDuration
     );
-    const primaryVideo = await choosePrimaryVideo(session, { workDir, onProgress });
     const segments = [];
     const clipOutputs = [];
 
