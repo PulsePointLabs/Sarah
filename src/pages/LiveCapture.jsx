@@ -623,14 +623,15 @@ function StatusDot({ active }) {
   );
 }
 
-function MetricCard({ icon, label, value, helper, active, level, large = false }) {
+function MetricCard({ icon, label, value, helper, active, level, large = false, beatPulse = 0 }) {
   const hasLevel = Number.isFinite(Number(level));
   const color = hasLevel ? levelColor(level) : null;
   return (
     <div
-      className={`relative overflow-hidden rounded-xl border ${large ? "p-5" : "p-4"} ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"}`}
+      className={`relative overflow-hidden rounded-xl border transition-shadow ${large ? "p-5" : "p-4"} ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"} ${beatPulse ? "shadow-[0_0_30px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
       style={hasLevel ? { borderColor: `${color}9a`, background: `linear-gradient(135deg, ${color}38, ${color}10 55%, hsl(var(--card)) 100%)` } : undefined}
     >
+      {beatPulse ? <span key={`metric-beat-${label}-${beatPulse}`} className="pointer-events-none absolute right-4 top-4 h-5 w-5 rounded-full bg-rose-400/45 animate-ping" /> : null}
       {hasLevel && (
         <div
           className="absolute inset-x-0 bottom-0 h-1 transition-all"
@@ -650,14 +651,15 @@ function MetricCard({ icon, label, value, helper, active, level, large = false }
   );
 }
 
-function CompactStat({ label, value, helper, level, emphasis = false }) {
+function CompactStat({ label, value, helper, level, emphasis = false, beatPulse = 0 }) {
   const hasLevel = Number.isFinite(Number(level));
   const color = hasLevel ? levelColor(level) : null;
   return (
     <div
-      className={`relative overflow-hidden rounded-xl border px-4 py-3 ${emphasis ? "min-h-[7.5rem]" : "min-h-[6.75rem]"} ${hasLevel ? "" : "border-border bg-muted/25"}`}
+      className={`relative overflow-hidden rounded-xl border px-4 py-3 transition-shadow ${emphasis ? "min-h-[7.5rem]" : "min-h-[6.75rem]"} ${hasLevel ? "" : "border-border bg-muted/25"} ${beatPulse ? "shadow-[0_0_26px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
       style={hasLevel ? { borderColor: `${color}9a`, background: `linear-gradient(135deg, ${color}42, ${color}12 54%, hsl(var(--card)) 100%)` } : undefined}
     >
+      {beatPulse ? <span key={`compact-beat-${label}-${beatPulse}`} className="pointer-events-none absolute right-4 top-4 h-4 w-4 rounded-full bg-rose-400/45 animate-ping" /> : null}
       {hasLevel && <div className="absolute inset-x-0 bottom-0 h-1.5" style={{ backgroundColor: color }} />}
       <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
       <p className={`mt-2 font-bold tracking-tight text-foreground ${emphasis ? "text-5xl" : "text-4xl"}`}>{value}</p>
@@ -746,6 +748,8 @@ export default function LiveCapture() {
   const [captureMode, setCaptureMode] = useState(() => localStorage.getItem("pulsepoint.captureMode") || "full");
   const [emgSensorConfig, setEmgSensorConfig] = useState(() => localStorage.getItem("pulsepoint.emgSensorConfig") || "generic");
   const [telemetryNoticesEnabled, setTelemetryNoticesEnabled] = useState(() => localStorage.getItem("pulsepoint.telemetryNotices") !== "off");
+  const [heartbeatAudioEnabled, setHeartbeatAudioEnabled] = useState(() => localStorage.getItem("pulsepoint.heartbeatAudio") === "on");
+  const [heartbeatPulseId, setHeartbeatPulseId] = useState(0);
   const [voiceWakeEnabled, setVoiceWakeEnabled] = useState(false);
   const [wakeListening, setWakeListening] = useState(false);
   const [annotationRecording, setAnnotationRecording] = useState(false);
@@ -778,6 +782,10 @@ export default function LiveCapture() {
   const voiceAudioSourceRef = useRef(null);
   const voiceSilenceStartedRef = useRef(null);
   const audioContextRef = useRef(null);
+  const heartbeatAudioContextRef = useRef(null);
+  const heartbeatAudioEnabledRef = useRef(heartbeatAudioEnabled);
+  const lastHeartbeatAtRef = useRef(0);
+  const lastHeartbeatTelemetryKeyRef = useRef("");
   const lastPhaseMarkerRef = useRef({ label: "", ts: 0 });
   const mediaVideoRef = useRef(null);
   const mediaInputRef = useRef(null);
@@ -790,6 +798,63 @@ export default function LiveCapture() {
   const directH10RrRef = useRef([]);
   const directH10IntentionalDisconnectRef = useRef(false);
   const directH10ReconnectAttemptRef = useRef(0);
+
+  const getHeartbeatAudioContext = useCallback(async () => {
+    if (!heartbeatAudioContextRef.current || heartbeatAudioContextRef.current.state === "closed") {
+      const AudioCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtor) return null;
+      heartbeatAudioContextRef.current = new AudioCtor();
+    }
+    if (heartbeatAudioContextRef.current.state === "suspended") {
+      await heartbeatAudioContextRef.current.resume();
+    }
+    return heartbeatAudioContextRef.current;
+  }, []);
+
+  const playHeartbeatBeep = useCallback(async () => {
+    if (!heartbeatAudioEnabledRef.current) return;
+    try {
+      const ctx = await getHeartbeatAudioContext();
+      if (!ctx || ctx.state === "closed") return;
+      const t = ctx.currentTime + 0.006;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(880, t);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.026, t + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.055);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.065);
+    } catch {}
+  }, [getHeartbeatAudioContext]);
+
+  const triggerHeartbeatPulse = useCallback((telemetry = latestHrRef.current) => {
+    const hr = readNumber(telemetry?.currentHr, telemetry?.hr, telemetry?.heartRate);
+    if (hr == null) return;
+    const now = Date.now();
+    const minInterval = Math.max(240, Math.min(900, (60000 / Math.max(40, hr)) * 0.55));
+    if (now - lastHeartbeatAtRef.current < minInterval) return;
+    lastHeartbeatAtRef.current = now;
+    setHeartbeatPulseId((value) => value + 1);
+    playHeartbeatBeep();
+  }, [playHeartbeatBeep]);
+
+  const maybeTriggerHeartbeatFromTelemetry = useCallback((telemetry) => {
+    const hr = readNumber(telemetry?.currentHr, telemetry?.hr, telemetry?.heartRate);
+    if (hr == null) return;
+    const key = [
+      telemetry?.source || "",
+      telemetry?.measuredAt || telemetry?.source_at || telemetry?.receivedAt || telemetry?.lastMessageAt || "",
+      telemetry?.rrIntervalsMs?.join?.(":") || telemetry?.rr_intervals_ms?.join?.(":") || "",
+      hr,
+    ].join("|");
+    if (key && key === lastHeartbeatTelemetryKeyRef.current) return;
+    lastHeartbeatTelemetryKeyRef.current = key;
+    triggerHeartbeatPulse(telemetry);
+  }, [triggerHeartbeatPulse]);
 
   const appendTelemetryPoint = (nextHr = latestHrRef.current, nextEmg = latestEmgRef.current) => {
     if (!nextHr && !nextEmg) return;
@@ -1241,6 +1306,20 @@ export default function LiveCapture() {
   useEffect(() => {
     localStorage.setItem("pulsepoint.telemetryNotices", telemetryNoticesEnabled ? "on" : "off");
   }, [telemetryNoticesEnabled]);
+
+  useEffect(() => {
+    heartbeatAudioEnabledRef.current = heartbeatAudioEnabled;
+    localStorage.setItem("pulsepoint.heartbeatAudio", heartbeatAudioEnabled ? "on" : "off");
+    if (heartbeatAudioEnabled) getHeartbeatAudioContext();
+  }, [getHeartbeatAudioContext, heartbeatAudioEnabled]);
+
+  useEffect(() => () => {
+    heartbeatAudioContextRef.current?.close?.().catch?.(() => {});
+  }, []);
+
+  useEffect(() => {
+    maybeTriggerHeartbeatFromTelemetry(hrTelemetry);
+  }, [hrTelemetry, maybeTriggerHeartbeatFromTelemetry]);
 
   useEffect(() => {
     if (!presetModalOpen) return undefined;
@@ -2068,6 +2147,22 @@ export default function LiveCapture() {
             />
             Live notices
           </label>
+          <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm font-semibold text-foreground">
+            <input
+              type="checkbox"
+              checked={heartbeatAudioEnabled}
+              onChange={async (event) => {
+                const enabled = event.target.checked;
+                setHeartbeatAudioEnabled(enabled);
+                if (enabled) {
+                  await getHeartbeatAudioContext();
+                  triggerHeartbeatPulse(latestHrRef.current);
+                }
+              }}
+              className="h-4 w-4 accent-rose-400"
+            />
+            Beat beep
+          </label>
           <button
             type="button"
             onClick={() => setFocusView(!focusView)}
@@ -2180,7 +2275,7 @@ export default function LiveCapture() {
         {!mediaFullscreen && (
           <div className={`grid content-start gap-3 ${focusView ? "min-h-0 overflow-y-auto pr-1" : "xl:sticky xl:top-4 xl:max-h-[calc(100vh-9rem)] xl:overflow-hidden"}`}>
             <div className="grid grid-cols-2 gap-2">
-              <CompactStat label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="bpm" level={currentHrLevel} emphasis />
+              <CompactStat label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="bpm" level={currentHrLevel} emphasis beatPulse={heartbeatPulseId} />
               <CompactStat label="Max HR" value={fmtNumber(maxHr, 0)} helper="session peak" level={hrLevelPercent(maxHr, hrTelemetry?.baselineHr)} emphasis />
               <CompactStat label="Build" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "phase"} level={buildLevel} />
               <CompactStat
@@ -2804,6 +2899,22 @@ export default function LiveCapture() {
             <span className={`${distanceTelemetryView ? "text-sm" : "text-[10px]"} text-muted-foreground`}>
               HR {fmtTime(status?.hr?.lastMessageAt)}{telemetryEmgLive ? ` · EMG ${fmtTime(status?.emg?.lastMessageAt || status?.emg?.lastPollAt)}` : ""}
             </span>
+            <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm font-semibold text-foreground">
+              <input
+                type="checkbox"
+                checked={heartbeatAudioEnabled}
+                onChange={async (event) => {
+                  const enabled = event.target.checked;
+                  setHeartbeatAudioEnabled(enabled);
+                  if (enabled) {
+                    await getHeartbeatAudioContext();
+                    triggerHeartbeatPulse(latestHrRef.current);
+                  }
+                }}
+                className="h-4 w-4 accent-rose-400"
+              />
+              Beat beep
+            </label>
             {focusView && (
               <>
                 <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm font-semibold text-foreground">
@@ -2828,7 +2939,7 @@ export default function LiveCapture() {
         </div>
 
         <div className={`grid gap-3 sm:grid-cols-2 ${telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`}>
-          <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large />
+          <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large beatPulse={heartbeatPulseId} />
           <MetricCard icon={<Zap className="w-4 h-4" />} label="Build Confidence" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "No HR phase"} active={Number(hrTelemetry?.buildConfidence) > 40} level={buildLevel} large />
           <MetricCard
             icon={<Brain className="w-4 h-4" />}
