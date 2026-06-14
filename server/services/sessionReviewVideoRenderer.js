@@ -7,7 +7,8 @@ import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart, synthesizeTTSChunk } from './ttsCore.js';
 import { buildReviewVideoPlan, extractCitedTimesFromText } from './sessionReviewVideoPlanner.js';
 
-const REVIEW_RENDER_VERSION = 'session_review_video_v8';
+const REVIEW_RENDER_VERSION = 'session_review_video_v9';
+const TTS_REQUEST_TAIL = '\u200B';
 
 function cleanParagraph(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -711,7 +712,7 @@ async function muxAudioVideo(videoPath, audioPath, outputPath) {
     '-map', '1:a:0',
     '-c:v', 'copy',
     '-c:a', 'aac',
-    '-b:a', '192k',
+    '-b:a', '320k',
     '-shortest',
     '-movflags', '+faststart',
     outputPath,
@@ -733,7 +734,7 @@ async function concatAvSegments(segmentPaths, outputPath, workDir) {
     '-preset', 'veryfast',
     '-crf', '22',
     '-c:a', 'aac',
-    '-b:a', '192k',
+    '-b:a', '320k',
     '-movflags', '+faststart',
     outputPath,
   ]);
@@ -750,7 +751,8 @@ async function concatAudioSegments(audioPaths, outputPath, workDir) {
     '-i', concatPath,
     '-vn',
     '-c:a', 'libmp3lame',
-    '-b:a', '192k',
+    '-b:a', '320k',
+    '-compression_level', '0',
     outputPath,
   ]);
 }
@@ -899,13 +901,14 @@ function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, s
 }
 
 async function synthesizeReviewSegmentAudio({ segment, index, payload, workDir, previousText, jobId }) {
+  const inputText = `${String(segment.text || '').trim()}${TTS_REQUEST_TAIL}`;
   const rendered = await synthesizeTTSChunk({
-    text: segment.text,
+    text: inputText,
     voice: payload.voice || 'nova',
     model: payload.model,
     speed: payload.speed,
     instructions: payload.instructions || '',
-    format: 'mp3',
+    format: 'wav',
     previousContext: previousText,
     meta: {
       jobId,
@@ -913,7 +916,7 @@ async function synthesizeReviewSegmentAudio({ segment, index, payload, workDir, 
       source: 'session_review_video_segment',
     },
   });
-  const audioPath = path.join(workDir, `segment-audio-${String(index + 1).padStart(3, '0')}.mp3`);
+  const audioPath = path.join(workDir, `segment-audio-${String(index + 1).padStart(3, '0')}.wav`);
   await fs.writeFile(audioPath, rendered.buffer);
   const duration = await mediaDurationSeconds(audioPath).catch(() => Math.max(1, wordCount(segment.text) / 2.25));
   return { ...rendered, audioPath, durationSeconds: duration };
