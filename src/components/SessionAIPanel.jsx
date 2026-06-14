@@ -9,7 +9,7 @@ import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/
 import { buildAudioChapterBundle } from "@/lib/audioChapters";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from "@/lib/sessionContext";
-import { buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, normalizeSessionVideoPassFindings } from "@/lib/visualEvidence";
+import { buildSessionKeyVideoClipDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, normalizeSessionVideoPassFindings } from "@/lib/visualEvidence";
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
@@ -411,6 +411,7 @@ function buildSessionContext(session, timelineRows) {
     session.notes ? `Session notes: ${session.notes}` : null,
     buildSessionVisualEvidenceDigest(session),
     buildSessionVideoPassDigest(session),
+    buildSessionKeyVideoClipDigest(session),
     session.ai_analysis?.summary ? `AI analysis summary: ${session.ai_analysis.summary}` : null,
   ].filter(Boolean).join("\n");
 }
@@ -473,6 +474,16 @@ HUMANIZED PHYSIOLOGY NARRATION - HIGH PRIORITY:
 - HRV example target: instead of "The HRV signal remained tightly compressed," write "Your physiology appeared highly focused during this phase. Rather than alternating between activation and recovery, your body stayed locked into a sustained build state."
 - Recovery example target: instead of "beat-to-beat variability opened dramatically," write "Within seconds, your body appeared to let go of the effort it had been maintaining. Recovery was rapid, with cardiovascular flexibility returning almost immediately."
 - Brief spike example target: instead of "intermittent HRV spikes appeared," write "Several brief moments suggest your body may have been trying to release tension before returning to the sustained build that characterized most of the session."
+`;
+
+const GENITAL_STIMULATION_MECHANICS_RULE_V1 = `
+GENITAL STATUS AND STIMULATION MECHANICS - HIGH PRIORITY:
+- Do not let HR, HRV, or telemetry crowd out concrete session mechanics. When supported by notes, event timeline, reviewed visual evidence, video-pass findings, saved key clips, or subjective fields, include erection quality/stability, genital state, glans/shaft/meatus status, hand position, grip/contact geometry, stroke pattern, contact zone, pressure/friction/suction changes, device/foley interaction, and stimulation effectiveness.
+- For masturbation or stimulation sessions, Sarah should usually answer: what was the genital/stimulation situation, how did contact or technique change over time, how did your penis respond when visible or logged, and how did those mechanics shape arousal, plateauing, climax threshold, discomfort, or recovery?
+- If visual evidence supports grip, stroke, hand/genital contact, erection state, detumescence, genital visibility, sleeve/device fit, catheter/foley position, lubricant/preparation, or contact-location changes, mention the strongest supported findings in the Chronological Deep Dive or Motion & Evidence Interpretation. Use personal anatomy wording such as "your penis", "your shaft", "your glans", "your meatus", "your erection", and "your grip/contact pattern" when applicable.
+- If the data only gives subjective scores such as erection stability or stimulation fit, use them as subjective evidence and say what they suggest practically. For example, a high stimulation-fit score can support that the technique was effective; a lower erection-stability score can explain why grip, contact zone, or stimulation method may have shifted.
+- If these details are not visible or not logged, say that specific genital status, erection quality, grip, or stroke mechanics were not directly assessable rather than silently omitting the category. Do not invent a stroke pattern or erection state from HR alone.
+- Keep the tone clinical and observational, not erotic. The point is session analysis: visible mechanics, sensory input, effectiveness, and physiological consequence.
 `;
 
 const WARM_COMPANION_OUTPUT_DISCIPLINE = `
@@ -1473,6 +1484,7 @@ ${reviewedVideoPassEvidence}
 ${warmMotionEvidence}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${HUMANIZED_PHYSIOLOGY_NARRATION_V1}
+${GENITAL_STIMULATION_MECHANICS_RULE_V1}
 ${firstNameToneCue}
 ${!isTechnical ? WARM_COMPANION_OUTPUT_DISCIPLINE : ""}
 
@@ -1564,17 +1576,18 @@ ${JSON.stringify({
   intensity: session.intensity,
   satisfaction: session.satisfaction,
   build_quality: session.build_quality,
+  release_completeness: session.release_completeness,
+  arousal_depth: session.arousal_depth,
+  erection_stability: session.erection_stability,
+  stimulation_fit: session.stimulation_fit,
+  edge_control_quality: session.control,
+  sensory_immersion: session.sensory_immersion,
+  recovery_quality: session.recovery_quality,
+  discomfort_interruption_impact: session.discomfort_interference,
+  primary_limiting_factor: session.primary_limiting_factor,
+  subjective_notes: session.subjective_notes,
   ...(isTechnical ? {
-    release_completeness: session.release_completeness,
-    arousal_depth: session.arousal_depth,
-    erection_stability: session.erection_stability,
-    stimulation_fit: session.stimulation_fit,
-    edge_control_quality: session.control,
-    sensory_immersion: session.sensory_immersion,
-    recovery_quality: session.recovery_quality,
-    discomfort_interruption_impact: session.discomfort_interference,
-    primary_limiting_factor: session.primary_limiting_factor,
-    subjective_notes: session.subjective_notes,
+    technical_detail_mode: true,
   } : {}),
   build_type: session.build_type,
   climax_duration: session.climax_duration,
@@ -1621,14 +1634,14 @@ Provide ${isTechnical
         type: "object",
         properties: {
           summary: isTechnical
-            ? { type: "string", description: "One cohesive overview emphasizing what the body appeared to be doing, arousal pattern, stimulation effectiveness, HR/HRV-supported interpretation when available, and why the session behaved the way it did. Metrics support the story; they are not the story." }
-            : { type: "string", description: "Executive Summary: a rich but concise overview of the session arc and defining findings. Use HRV behind the scenes to explain focus, load, release, reloading, recovery, or mixed signals in plain language; avoid HRV metric lists." },
+            ? { type: "string", description: "One cohesive overview emphasizing what the body appeared to be doing, arousal pattern, genital/stimulation context when supported, stimulation effectiveness, HR/HRV-supported interpretation when available, and why the session behaved the way it did. Metrics support the story; they are not the story." }
+            : { type: "string", description: "Executive Summary: a rich but concise overview of the session arc and defining findings, including supported erection quality/genital status/stimulation mechanics when they materially shaped the session. Use HRV behind the scenes to explain focus, load, release, reloading, recovery, or mixed signals in plain language; avoid HRV metric lists." },
           arousal_arc: isTechnical
-            ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining HR and usable HRV as evidence for body-state transitions, exploration or stimulation links, supported anatomy, pre-climax/climax/recovery shifts when present, and why the session progressed as it did. Preserve technical depth without becoming metric narration." }
-            : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: group related events into meaningful body-state transitions and explain what the body appears to be doing. Weave in usable HRV as plain physiology when it clarifies a transition, not as raw values." },
+            ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining HR and usable HRV as evidence for body-state transitions, exploration or stimulation links, supported anatomy, genital state, erection/response quality, grip/contact/stroke mechanics, pre-climax/climax/recovery shifts when present, and why the session progressed as it did. Preserve technical depth without becoming metric narration." }
+            : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: group related events into meaningful body-state transitions and explain what the body appears to be doing. Include supported genital status, erection quality, grip/contact/stroke mechanics, and stimulation effectiveness where they explain the arousal arc. Weave in usable HRV as plain physiology when it clarifies a transition, not as raw values." },
           event_analysis: isTechnical
-            ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, HR/HRV-supported turning points, and what made the session notable. Use time and numbers as evidence anchors, then explain why they matter to the body-state story." }
-            : { type: "array", items: { type: "string" }, description: "Motion Telemetry Interpretation and evidence synthesis: interpret asymmetry, cadence proxy, movement patterns, and HRV-informed body state where relevant, without raw HRV number dumps or chronology replay." },
+            ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, visible or logged stimulation mechanics, genital/foley/device interaction, HR/HRV-supported turning points, and what made the session notable. Use time and numbers as evidence anchors, then explain why they matter to the body-state story." }
+            : { type: "array", items: { type: "string" }, description: "Motion Telemetry Interpretation and evidence synthesis: interpret asymmetry, cadence proxy, movement patterns, visible or logged grip/contact/stroke/genital-state findings, and HRV-informed body state where relevant, without raw HRV number dumps or chronology replay." },
           emg_analysis: { type: "array", items: { type: "string" }, description: "EMG signal quality, activation patterns, L/R comparison, EMG vs HR, calibration notes, and practical meaning for muscle engagement or relaxation — only if EMG data present" },
           notable_findings: isTechnical
             ? { type: "array", items: { type: "string" } }
