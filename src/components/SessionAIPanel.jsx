@@ -486,6 +486,24 @@ GENITAL STATUS AND STIMULATION MECHANICS - HIGH PRIORITY:
 - Keep the tone clinical and observational, not erotic. The point is session analysis: visible mechanics, sensory input, effectiveness, and physiological consequence.
 `;
 
+const BASELINE_ANATOMY_AND_DEVICE_SETUP_RULE_V1 = `
+BASELINE / ENTRY ANATOMY AND DEVICE SETUP - HIGH PRIORITY:
+- In the opening window of the Chronological Deep Dive, include a brief baseline physical setup read when evidence supports it. This may include visible or logged genital state, flaccid/partial/erect status, resting position relative to the scrotum or body, Foley/catheter visibility or size, electrode placement, lubricant/preparation, and whether stimulation had already begun.
+- Treat reviewed session media, reviewed profile/anatomy evidence, session notes, event timeline entries, and structured subjective fields as possible sources for this baseline read. Current-session evidence controls current-session claims. Established profile/anatomy context may be used as baseline context only when it is clearly marked as established context or when current evidence supports it.
+- Do not let the caution against invention erase supported visible anatomy. If the data supports that your penis was flaccid, partially erect, fully erect, resting on the scrotum, supported by a hand, catheterized, obscured, or not directly assessable at the start, say that plainly and clinically.
+- If current-session visual evidence is absent or unclear, do not invent a baseline genital state. Say what is known from logs and what is not directly assessable, then continue.
+- The goal is to preserve the old PulsePoint usefulness: the reader should understand the physical starting condition before HR, HRV, arousal arc, or device effects are interpreted.
+`;
+
+const ESTIM_WAVEFORM_AND_MODE_RULE_V1 = `
+E-STIM WAVEFORM AND MODE INTERPRETATION - HIGH PRIORITY:
+- If e-stim is listed in methods, e-stim notes exist, or e-stim screenshots are attached, do not silently drop the e-stim setup. Include the strongest supported details in the overview, Chronological Deep Dive, or Motion & Evidence Interpretation.
+- When screenshots or notes provide enough detail, name and interpret waveform type, mode/program, channel assignments, electrode path, frequency, pulse width, ramp/intensity behavior, and whether the likely effect was sensory input, motor recruitment, pelvic floor loading, urethral/prostatic awareness, abdominal bracing, or mixed.
+- If exact waveform or mode details are unavailable, say that the session confirms e-stim presence and placement but does not preserve the exact waveform/mode parameters. Then interpret only the supported placement, ramp, channel, or subjective effects.
+- Connect e-stim settings to practical physiology: what muscle or sensory territory was likely being engaged, how it may have shaped erection quality, plateauing, pelvic/perineal loading, climax threshold, discomfort, ejaculatory force, or recovery.
+- Keep uncertainty calibrated. E-stim settings are evidence, not proof of a single mechanism.
+`;
+
 const WARM_COMPANION_OUTPUT_DISCIPLINE = `
 COMPANION VOICE AND SINGLE-PASS STRUCTURE - HIGH PRIORITY:
 - Address the person directly throughout. Never write "the user," "the user's notes," "the subject," "the participant," or "the patient." Say "your notes," "you observed," "your body," "your pattern," or "your recovery."
@@ -1470,7 +1488,7 @@ TARGET SESSION ANALYSIS STYLE:
 
 Default HRV style: use HRV as Sarah's behind-the-scenes physiological signal. Explain what it suggests about load, settling, breath-release, recovery, or artifact in plain language. Do not make the user wade through RMSSD, SDNN, pNN50, or dense HRV numbers unless one value is essential and immediately translated.`}
 
-${isTechnical ? groundingContext : ""}
+${groundingContext}
 ${SESSION_CONTEXT_GROUNDING_RULE}
 ${structuredSessionContextText ? `
 LOGGED SESSION CONTEXT / INFLUENCES (user-entered context, not telemetry or visual proof):
@@ -1485,11 +1503,14 @@ ${warmMotionEvidence}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${HUMANIZED_PHYSIOLOGY_NARRATION_V1}
 ${GENITAL_STIMULATION_MECHANICS_RULE_V1}
+${BASELINE_ANATOMY_AND_DEVICE_SETUP_RULE_V1}
+${ESTIM_WAVEFORM_AND_MODE_RULE_V1}
 ${firstNameToneCue}
 ${!isTechnical ? WARM_COMPANION_OUTPUT_DISCIPLINE : ""}
 
-PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — CONDITIONAL USE ONLY:"}
+PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — EVIDENCE-GROUNDED USE:"}
 - Only mention specific physiological phases (e.g. emission, expulsion, plateau) or anatomical structures (e.g. pudendal nerve, bulbocavernosus, prostatic urethra) when the session data — an event note, HR pattern, subjective metric, or logged sensation — gives you a concrete reason to do so. Never insert these as generic background explanation.
+- This caution should prevent unsupported invention, not suppress supported baseline anatomy, visible genital status, stimulation mechanics, Foley/catheter setup, or e-stim settings. When those are supported, include them.
 - A saved climax marker is a timing anchor, not visual proof that orgasm, ejaculation, emission, expulsion, or recovery is visibly occurring throughout the surrounding clip. Distinguish exact visible/logged ejaculation or orgasm evidence from continued stimulation/contact, release follow-through, and after-marker continuation. Do not call a window post-climax unless visible recovery/cleanup/de-escalation or an accepted event note supports that state.
 ${isTechnical
   ? "- Interpret HR trajectory as a window into what the body was doing — loading, sustaining effort, backing away, rebuilding, settling, or recovering — but only narrate a mechanism if the HR data actually shows it."
@@ -1502,7 +1523,7 @@ ${isTechnical
 - When the data allows more than one explanation, state the most plausible possibilities without inventing certainty. For example, a HR change after a technique shift may reflect sensory novelty, increased stimulation efficiency, pelvic floor recruitment, breath/position change, increased load, or reloading after a pause depending on the notes around it.`
   : ""}
 - If foley or urethral stimulation is logged, discuss urethral sensory dynamics — but only in terms of what actually happened (logged sensations, HR response, notes). Skip if there's nothing to connect it to.
-- If e-stim is present, discuss fiber recruitment and frequency effects only if the e-stim notes or settings screenshots give you something specific to work with.
+- If e-stim is present, discuss waveform/mode, electrode path, channel behavior, fiber recruitment, and frequency effects when e-stim notes or settings screenshots give you something specific to work with. If they do not, explicitly state that exact waveform/mode details were not preserved instead of implying they were unavailable by omission.
 - Connect subjective sensations (pressure, throb, tightness, wave) to anatomical generators ONLY if the user actually logged those sensations.
 - When figures from saved session summaries and sampled timeline calculations differ, use the directly computed timeline figure for timeline interpretation and explicitly state that a stored summary differs or may reflect rounding. Never silently cite conflicting heart-rate maxima or averages.
 - Interpret discomfort anatomically ONLY if discomfort entries are present.
@@ -1597,6 +1618,7 @@ ${JSON.stringify({
   foley_size: session.foley_size,
   foley_type: session.foley_type,
   estim_notes: session.estim_notes,
+  estim_screenshots_attached: estimScreenshots.length,
   ejaculate_volume: session.ejaculate_volume,
   hydration: session.hydration,
   substances: session.substances,
@@ -1634,14 +1656,14 @@ Provide ${isTechnical
         type: "object",
         properties: {
           summary: isTechnical
-            ? { type: "string", description: "One cohesive overview emphasizing what the body appeared to be doing, arousal pattern, genital/stimulation context when supported, stimulation effectiveness, HR/HRV-supported interpretation when available, and why the session behaved the way it did. Metrics support the story; they are not the story." }
-            : { type: "string", description: "Executive Summary: a rich but concise overview of the session arc and defining findings, including supported erection quality/genital status/stimulation mechanics when they materially shaped the session. Use HRV behind the scenes to explain focus, load, release, reloading, recovery, or mixed signals in plain language; avoid HRV metric lists." },
+            ? { type: "string", description: "One cohesive overview emphasizing what the body appeared to be doing, arousal pattern, baseline anatomy/device setup when relevant, genital/stimulation context when supported, e-stim waveform/mode interpretation when available, stimulation effectiveness, HR/HRV-supported interpretation when available, and why the session behaved the way it did. Metrics support the story; they are not the story." }
+            : { type: "string", description: "Executive Summary: a rich but concise overview of the session arc and defining findings, including supported baseline anatomy/device setup, erection quality/genital status/stimulation mechanics, and e-stim waveform/mode details when they materially shaped the session. Use HRV behind the scenes to explain focus, load, release, reloading, recovery, or mixed signals in plain language; avoid HRV metric lists." },
           arousal_arc: isTechnical
-            ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining HR and usable HRV as evidence for body-state transitions, exploration or stimulation links, supported anatomy, genital state, erection/response quality, grip/contact/stroke mechanics, pre-climax/climax/recovery shifts when present, and why the session progressed as it did. Preserve technical depth without becoming metric narration." }
-            : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: group related events into meaningful body-state transitions and explain what the body appears to be doing. Include supported genital status, erection quality, grip/contact/stroke mechanics, and stimulation effectiveness where they explain the arousal arc. Weave in usable HRV as plain physiology when it clarifies a transition, not as raw values." },
+            ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining HR and usable HRV as evidence for body-state transitions, beginning with a supported baseline physical setup read when available. Include exploration or stimulation links, supported anatomy, genital state, erection/response quality, grip/contact/stroke mechanics, e-stim waveform/mode or electrode-path details when available, pre-climax/climax/recovery shifts when present, and why the session progressed as it did. Preserve technical depth without becoming metric narration." }
+            : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: group related events into meaningful body-state transitions and explain what the body appears to be doing. Start with supported baseline physical setup when available, including genital state, Foley/catheter or e-stim setup, and whether stimulation had begun. Include supported erection quality, grip/contact/stroke mechanics, e-stim settings/electrode path, and stimulation effectiveness where they explain the arousal arc. Weave in usable HRV as plain physiology when it clarifies a transition, not as raw values." },
           event_analysis: isTechnical
-            ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, visible or logged stimulation mechanics, genital/foley/device interaction, HR/HRV-supported turning points, and what made the session notable. Use time and numbers as evidence anchors, then explain why they matter to the body-state story." }
-            : { type: "array", items: { type: "string" }, description: "Motion Telemetry Interpretation and evidence synthesis: interpret asymmetry, cadence proxy, movement patterns, visible or logged grip/contact/stroke/genital-state findings, and HRV-informed body state where relevant, without raw HRV number dumps or chronology replay." },
+            ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, visible or logged stimulation mechanics, genital/foley/device interaction, e-stim waveform/mode/electrode-path implications, HR/HRV-supported turning points, and what made the session notable. Use time and numbers as evidence anchors, then explain why they matter to the body-state story." }
+            : { type: "array", items: { type: "string" }, description: "Motion Telemetry Interpretation and evidence synthesis: interpret asymmetry, cadence proxy, movement patterns, visible or logged grip/contact/stroke/genital-state findings, e-stim waveform/mode/electrode-path implications when available, and HRV-informed body state where relevant, without raw HRV number dumps or chronology replay." },
           emg_analysis: { type: "array", items: { type: "string" }, description: "EMG signal quality, activation patterns, L/R comparison, EMG vs HR, calibration notes, and practical meaning for muscle engagement or relaxation — only if EMG data present" },
           notable_findings: isTechnical
             ? { type: "array", items: { type: "string" } }
