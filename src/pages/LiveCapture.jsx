@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { BleClient } from "@capacitor-community/bluetooth-le";
 import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
 import {
   CartesianGrid,
@@ -29,6 +30,10 @@ const WHISPER_PROMPT =
   "PulsePoint live session annotation. Timestamped observation during physiological recording. " +
   "Heart rate, arousal, stimulation, physical finding, legs tense, feet planted, toe curl, tremor, breathing, " +
   "stroke speed, grip pressure, repositioning, comfort adjustment, nearing climax, ejaculation, climax, recovery.";
+const HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb";
+const HEART_RATE_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb";
+const BATTERY_SERVICE_UUID = "0000180f-0000-1000-8000-00805f9b34fb";
+const DEVICE_INFORMATION_SERVICE_UUID = "0000180a-0000-1000-8000-00805f9b34fb";
 const CAPTURE_MODES = [
   { value: "full", label: "Full telemetry", helper: "HR, EMG, OBS, and voice notes" },
   { value: "media", label: "Media", helper: "Video-first live review" },
@@ -268,6 +273,10 @@ function isCapacitorAndroidShell() {
   );
 }
 
+function canUseNativeAndroidBle() {
+  return isCapacitorAndroidShell();
+}
+
 function isAndroidRuntime() {
   return isCapacitorAndroidShell() || /android/i.test(window.navigator?.userAgent || "");
 }
@@ -295,6 +304,25 @@ async function getDirectH10Device({ preferSaved = false, silent = false } = {}) 
   return navigator.bluetooth.requestDevice({
     acceptAllDevices: true,
     optionalServices: ["heart_rate", "battery_service", "device_information"],
+  });
+}
+
+async function getNativeDirectH10Device() {
+  await BleClient.initialize({ androidNeverForLocation: true });
+  if (typeof BleClient.isLocationEnabled === "function") {
+    const enabled = await BleClient.isLocationEnabled().catch(() => true);
+    if (!enabled) {
+      throw new Error("Android Location services are off. Turn Location on, then try Connect H10 again so Android can scan for BLE devices.");
+    }
+  }
+  return BleClient.requestDevice({
+    services: [HEART_RATE_SERVICE_UUID],
+    optionalServices: [
+      HEART_RATE_SERVICE_UUID,
+      BATTERY_SERVICE_UUID,
+      DEVICE_INFORMATION_SERVICE_UUID,
+    ],
+    namePrefix: "Polar H10",
   });
 }
 
@@ -426,15 +454,19 @@ function HrSourceSelector({
   const directH10Status = status?.hr?.directH10 || {};
   const isPulsoid = settings.source === "pulsoid";
   const isDirectH10 = settings.source === "direct_h10";
-  const directH10BlockedOnAndroid = isDirectH10 && isAndroidRuntime();
+  const nativeAndroidBleAvailable = canUseNativeAndroidBle();
+  const directH10BlockedOnAndroid = isDirectH10 && isAndroidRuntime() && !nativeAndroidBleAvailable;
   const connected = Boolean(sourceStatus.connected);
-  const tokenSummary = isPulsoid && settings.pulsoidToken
-    ? `Token ${maskPulsoidToken(settings.pulsoidToken)}`
-    : isDirectH10
-      ? directH10BlockedOnAndroid
-        ? "Direct H10 browser Bluetooth is blocked on Android because it can crash during H10 BLE connect."
-        : "Pairs locally through this browser. RR intervals feed HRV when available."
-      : "Token stays local to this browser and server session.";
+  let tokenSummary = "Token stays local to this browser and server session.";
+  if (isPulsoid && settings.pulsoidToken) {
+    tokenSummary = `Token ${maskPulsoidToken(settings.pulsoidToken)}`;
+  } else if (isDirectH10 && directH10BlockedOnAndroid) {
+    tokenSummary = "Direct H10 browser Bluetooth is blocked on Android because it can crash during H10 BLE connect.";
+  } else if (isDirectH10 && nativeAndroidBleAvailable) {
+    tokenSummary = "Uses native Android BLE for Polar H10 HR + RR intervals.";
+  } else if (isDirectH10) {
+    tokenSummary = "Pairs locally through this browser. RR intervals feed HRV when available.";
+  }
 
   return (
     <div className="rounded-xl border border-border bg-card p-4">
@@ -540,7 +572,8 @@ function HrSourceSelector({
         {isPulsoid && pulsoidStatus.error && <span className="text-destructive">{pulsoidStatus.error}</span>}
         {(directStatus?.lastMessageAt || directH10Status.lastMessageAt) && <span>Last H10 HR {fmtTime(directStatus?.lastMessageAt || directH10Status.lastMessageAt)}</span>}
         {isDirectH10 && <span>ECG waveform is not enabled yet; this pass captures standard H10 HR + RR intervals for HRV.</span>}
-        {directH10BlockedOnAndroid && <span className="text-amber-300">Use Pulsoid on Android for now. Native Direct H10 needs a Capacitor BLE bridge; browser Bluetooth is staying disabled on phones to avoid crashes.</span>}
+        {nativeAndroidBleAvailable && isDirectH10 && <span className="text-primary">Android native BLE bridge enabled for Direct H10.</span>}
+        {directH10BlockedOnAndroid && <span className="text-amber-300">Use Pulsoid on Android browser for now. Install/open the PulsePoint app for native Direct H10; browser Bluetooth stays disabled on phones to avoid crashes.</span>}
         {(directStatus?.error || directH10Status.error) && <span className="text-destructive">{directStatus?.error || directH10Status.error}</span>}
         {error && <span className="text-destructive">{error}</span>}
         {recordingActive && <span>Stop recording before switching HR sources.</span>}
@@ -841,6 +874,8 @@ export default function LiveCapture() {
   const appliedCalibrationCommandRef = useRef("");
   const pendingCalibrationCommandRef = useRef("");
   const directH10DeviceRef = useRef(null);
+  const directH10NativeDeviceIdRef = useRef("");
+  const directH10TransportRef = useRef("");
   const directH10CharacteristicRef = useRef(null);
   const directH10NotificationHandlerRef = useRef(null);
   const directH10RrRef = useRef([]);
@@ -903,6 +938,65 @@ export default function LiveCapture() {
     lastHeartbeatTelemetryKeyRef.current = key;
     triggerHeartbeatPulse(telemetry);
   }, [triggerHeartbeatPulse]);
+
+  const publishDirectH10Measurement = useCallback((parsed, deviceName = "Polar H10") => {
+    if (!parsed?.heartRate) return;
+    const receivedAt = Date.now();
+    directH10ReconnectAttemptRef.current = 0;
+    setHrLossDialog(null);
+    directH10RrRef.current = appendRollingRrIntervals(directH10RrRef.current, parsed.rrIntervalsMs);
+    const hrv = computeHrvFromRr(directH10RrRef.current);
+    const telemetry = {
+      source: "direct_h10",
+      sourceLabel: "Direct Polar H10",
+      deviceName,
+      measuredAt: receivedAt,
+      receivedAt,
+      heartRate: parsed.heartRate,
+      currentHr: parsed.heartRate,
+      hr: parsed.heartRate,
+      rrIntervalsMs: parsed.rrIntervalsMs,
+      hrv,
+      quality: {
+        stale: false,
+        ageMs: 0,
+        rrCount: directH10RrRef.current.length,
+        hrvQuality: hrv?.quality || "unavailable",
+      },
+    };
+
+    setDirectH10Status((prev) => ({
+      ...prev,
+      connected: true,
+      connecting: false,
+      deviceName: telemetry.deviceName,
+      message: parsed.rrIntervalsMs.length ? "Direct H10 HR + RR live" : "Direct H10 HR live; waiting for RR intervals",
+      error: "",
+      lastMessageAt: new Date(receivedAt).toISOString(),
+      rrCount: directH10RrRef.current.length,
+    }));
+
+    fetch(apiUrl("/live-capture/hr-direct-h10/telemetry"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(telemetry),
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const text = await response.text();
+          if (response.status === 404 && text.includes("Cannot POST /api/live-capture/hr-direct-h10/telemetry")) {
+            throw new Error("PulsePoint server needs a restart to receive Direct H10 telemetry.");
+          }
+          throw new Error(text?.startsWith("<!DOCTYPE") ? "Direct H10 telemetry was rejected by the server." : text || "Direct H10 telemetry was rejected.");
+        }
+      })
+      .catch((error) => {
+        setDirectH10Status((prev) => ({
+          ...prev,
+          error: error.message || String(error),
+        }));
+      });
+  }, []);
 
   const appendTelemetryPoint = (nextHr = latestHrRef.current, nextEmg = latestEmgRef.current) => {
     if (!nextHr && !nextEmg) return;
@@ -971,6 +1065,20 @@ export default function LiveCapture() {
 
   const disconnectDirectH10 = useCallback(async ({ updateStatus = true } = {}) => {
     directH10IntentionalDisconnectRef.current = true;
+    const nativeDeviceId = directH10NativeDeviceIdRef.current;
+    if (nativeDeviceId) {
+      try {
+        await BleClient.stopNotifications(nativeDeviceId, HEART_RATE_SERVICE_UUID, HEART_RATE_MEASUREMENT_UUID);
+      } catch {
+        // Native BLE notifications may already be stopped.
+      }
+      try {
+        await BleClient.disconnect(nativeDeviceId);
+      } catch {
+        // Native BLE may already be disconnected.
+      }
+    }
+
     const characteristic = directH10CharacteristicRef.current;
     const handler = directH10NotificationHandlerRef.current;
     if (characteristic && handler) {
@@ -998,6 +1106,8 @@ export default function LiveCapture() {
     directH10CharacteristicRef.current = null;
     directH10NotificationHandlerRef.current = null;
     directH10DeviceRef.current = null;
+    directH10NativeDeviceIdRef.current = "";
+    directH10TransportRef.current = "";
     directH10RrRef.current = [];
     if (updateStatus) {
       setDirectH10Status((prev) => ({
@@ -1023,14 +1133,99 @@ export default function LiveCapture() {
       }));
       return;
     }
-    if (isAndroidRuntime()) {
+    const useNativeAndroidBle = canUseNativeAndroidBle();
+    if (isAndroidRuntime() && !useNativeAndroidBle) {
       setDirectH10Status((prev) => ({
         ...prev,
         connected: false,
         connecting: false,
         message: "Native BLE needed for Android H10.",
-        error: "Direct H10 browser Bluetooth is disabled on Android because it can crash during BLE connect. Use Pulsoid on the phone for now. Native Direct H10 support needs a Capacitor BLE bridge.",
+        error: "Direct H10 browser Bluetooth is disabled on Android because it can crash during BLE connect. Use the installed PulsePoint app for native H10, or Pulsoid in mobile Chrome.",
       }));
+      return;
+    }
+    if (useNativeAndroidBle) {
+      setDirectH10Status((prev) => ({
+        ...prev,
+        connecting: true,
+        error: "",
+        message: autoReconnect
+          ? "Trying native Android H10 reconnect."
+          : "Opening Android BLE picker for Polar H10.",
+      }));
+
+      try {
+        await disconnectDirectH10({ updateStatus: false });
+        const device = await getNativeDirectH10Device();
+        const deviceName = device?.name || "Polar H10";
+        directH10TransportRef.current = "native";
+        directH10NativeDeviceIdRef.current = device.deviceId;
+        directH10DeviceRef.current = device;
+
+        const handleNativeDisconnected = () => {
+          const intentionalDisconnect = directH10IntentionalDisconnectRef.current;
+          directH10IntentionalDisconnectRef.current = false;
+          directH10NativeDeviceIdRef.current = "";
+          directH10TransportRef.current = "";
+          directH10DeviceRef.current = null;
+          directH10RrRef.current = [];
+          if (!intentionalDisconnect) {
+            setHrLossDialog({
+              title: "H10 disconnected",
+              message: "The native Android BLE connection dropped. Tap Reconnect H10 if it does not resume on its own.",
+              reconnecting: false,
+            });
+          }
+          setDirectH10Status((prev) => ({
+            ...prev,
+            connected: false,
+            connecting: false,
+            message: "Direct H10 disconnected",
+            rrCount: 0,
+          }));
+        };
+
+        setDirectH10Status((prev) => ({
+          ...prev,
+          connecting: true,
+          deviceName,
+          message: "Opening native H10 heart-rate service.",
+          error: "",
+        }));
+
+        // Android can keep stale BLE state after prior attempts; disconnect first when possible.
+        await BleClient.disconnect(device.deviceId).catch(() => {});
+        await BleClient.connect(device.deviceId, handleNativeDisconnected, { timeout: 15000 });
+        await BleClient.startNotifications(
+          device.deviceId,
+          HEART_RATE_SERVICE_UUID,
+          HEART_RATE_MEASUREMENT_UUID,
+          (value) => publishDirectH10Measurement(parseHeartRateMeasurement(value), deviceName),
+          { timeout: 12000 },
+        );
+
+        setDirectH10Status((prev) => ({
+          ...prev,
+          connected: true,
+          connecting: false,
+          deviceName,
+          message: "Native Direct H10 connected. Waiting for first HR packet.",
+          error: "",
+        }));
+      } catch (error) {
+        const message = friendlyDirectH10Error(error);
+        directH10NativeDeviceIdRef.current = "";
+        directH10TransportRef.current = "";
+        directH10DeviceRef.current = null;
+        directH10RrRef.current = [];
+        setDirectH10Status((prev) => ({
+          ...prev,
+          connected: false,
+          connecting: false,
+          message: "Direct H10 not connected",
+          error: message,
+        }));
+      }
       return;
     }
     if (!navigator.bluetooth) {
@@ -1092,62 +1287,7 @@ export default function LiveCapture() {
 
       const handleMeasurement = (event) => {
         const parsed = parseHeartRateMeasurement(event.target.value);
-        if (!parsed.heartRate) return;
-        const receivedAt = Date.now();
-        directH10ReconnectAttemptRef.current = 0;
-        setHrLossDialog(null);
-        directH10RrRef.current = appendRollingRrIntervals(directH10RrRef.current, parsed.rrIntervalsMs);
-        const hrv = computeHrvFromRr(directH10RrRef.current);
-        const telemetry = {
-          source: "direct_h10",
-          sourceLabel: "Direct Polar H10",
-          deviceName: device.name || "Polar H10",
-          measuredAt: receivedAt,
-          receivedAt,
-          heartRate: parsed.heartRate,
-          currentHr: parsed.heartRate,
-          hr: parsed.heartRate,
-          rrIntervalsMs: parsed.rrIntervalsMs,
-          hrv,
-          quality: {
-            stale: false,
-            ageMs: 0,
-            rrCount: directH10RrRef.current.length,
-            hrvQuality: hrv?.quality || "unavailable",
-          },
-        };
-
-        setDirectH10Status((prev) => ({
-          ...prev,
-          connected: true,
-          connecting: false,
-          deviceName: telemetry.deviceName,
-          message: parsed.rrIntervalsMs.length ? "Direct H10 HR + RR live" : "Direct H10 HR live; waiting for RR intervals",
-          error: "",
-          lastMessageAt: new Date(receivedAt).toISOString(),
-          rrCount: directH10RrRef.current.length,
-        }));
-
-        fetch(apiUrl("/live-capture/hr-direct-h10/telemetry"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(telemetry),
-        })
-          .then(async (response) => {
-            if (!response.ok) {
-              const text = await response.text();
-              if (response.status === 404 && text.includes("Cannot POST /api/live-capture/hr-direct-h10/telemetry")) {
-                throw new Error("PulsePoint server needs a restart to receive Direct H10 telemetry.");
-              }
-              throw new Error(text?.startsWith("<!DOCTYPE") ? "Direct H10 telemetry was rejected by the server." : text || "Direct H10 telemetry was rejected.");
-            }
-          })
-          .catch((error) => {
-            setDirectH10Status((prev) => ({
-              ...prev,
-              error: error.message || String(error),
-            }));
-          });
+        publishDirectH10Measurement(parsed, device.name || "Polar H10");
       };
 
       directH10NotificationHandlerRef.current = handleMeasurement;
@@ -1182,7 +1322,7 @@ export default function LiveCapture() {
         error: message,
       }));
     }
-  }, [disconnectDirectH10, hrSourceSettings.source]);
+  }, [disconnectDirectH10, hrSourceSettings.source, publishDirectH10Measurement]);
 
   useEffect(() => {
     if (hrSourceSettings.source !== "direct_h10") return undefined;
@@ -1211,17 +1351,19 @@ export default function LiveCapture() {
 
       setHrLossDialog({
         title: "H10 signal lost",
-        message: `No heart-rate packet has arrived for ${Math.round(ageMs / 1000)} seconds. PulsePoint will try the saved H10 once; tap reconnect if Chrome needs permission again.`,
-        reconnecting: directH10ReconnectAttemptRef.current < 2,
+        message: canUseNativeAndroidBle()
+          ? `No heart-rate packet has arrived for ${Math.round(ageMs / 1000)} seconds. Tap Reconnect H10 to reopen the native Android BLE session.`
+          : `No heart-rate packet has arrived for ${Math.round(ageMs / 1000)} seconds. PulsePoint will try the saved H10 once; tap reconnect if Chrome needs permission again.`,
+        reconnecting: !canUseNativeAndroidBle() && directH10ReconnectAttemptRef.current < 2,
       });
       setDirectH10Status((prev) => ({
         ...prev,
         connected: false,
         error: "Direct H10 signal lost - no HR packets received recently.",
-        message: "Trying to reconnect Direct H10.",
+        message: canUseNativeAndroidBle() ? "Direct H10 signal lost." : "Trying to reconnect Direct H10.",
       }));
 
-      if (directH10ReconnectAttemptRef.current < 2) {
+      if (!canUseNativeAndroidBle() && directH10ReconnectAttemptRef.current < 2) {
         directH10ReconnectAttemptRef.current += 1;
         connectDirectH10({ autoReconnect: true }).catch(() => {
           // Visible state is already updated by connectDirectH10.
@@ -1242,6 +1384,21 @@ export default function LiveCapture() {
   ]);
 
   const forgetDirectH10 = useCallback(async () => {
+    if (canUseNativeAndroidBle()) {
+      await disconnectDirectH10({ updateStatus: false });
+      directH10RrRef.current = [];
+      setDirectH10Status((prev) => ({
+        ...prev,
+        connected: false,
+        connecting: false,
+        deviceName: "",
+        message: "Native H10 disconnected. Android manages BLE permission through the system picker/app settings.",
+        error: "",
+        lastMessageAt: null,
+        rrCount: 0,
+      }));
+      return;
+    }
     if (!navigator.bluetooth?.getDevices) {
       setDirectH10Status((prev) => ({
         ...prev,

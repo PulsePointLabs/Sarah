@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.59.0",
+    "@capacitor-community/bluetooth-le": "^8.2.0",
     "@capacitor/android": "^8.4.0",
     "@capacitor/core": "^8.4.0",
     "@hello-pangea/dnd": "^17.0.0",
