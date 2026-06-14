@@ -7,7 +7,7 @@ import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart, synthesizeTTSChunk } from './ttsCore.js';
 import { buildReviewVideoPlan, extractCitedTimesFromText } from './sessionReviewVideoPlanner.js';
 
-const REVIEW_RENDER_VERSION = 'session_review_video_v7';
+const REVIEW_RENDER_VERSION = 'session_review_video_v8';
 
 function cleanParagraph(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -792,7 +792,7 @@ function buildReviewNarrationSegments(paragraphs = []) {
     }
     flush();
   }
-  return output.slice(0, 64);
+  return output;
 }
 
 function eventText(event = {}) {
@@ -870,7 +870,7 @@ function clampClipStart(startSeconds, durationSeconds, sourceDuration) {
 }
 
 function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, sourceDuration, fallbackCursor }) {
-  const duration = Math.max(1.25, Number(audioDuration || 1) + 0.35);
+  const duration = Math.max(1.25, Number(audioDuration || 1) + 1.25);
   if (event) {
     const sessionTime = Number(event.session_time_s);
     const sourceCenter = sourceTimeForSession(sessionTime, primaryVideo);

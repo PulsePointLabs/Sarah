@@ -16,7 +16,7 @@ import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "./TTSButton";
 
-const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v7";
+const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v8";
 
 function trailingContext(text, maxChars = 320) {
   const cleaned = String(text || "").replace(/\s+/g, " ").trim();
