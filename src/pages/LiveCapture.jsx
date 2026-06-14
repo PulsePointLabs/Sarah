@@ -249,6 +249,25 @@ function wait(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function withTimeout(promise, ms, message) {
+  let timer = null;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = window.setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]).finally(() => {
+    if (timer) window.clearTimeout(timer);
+  });
+}
+
+function isCapacitorAndroidShell() {
+  return Boolean(
+    window.Capacitor?.isNativePlatform?.()
+    && /android/i.test(window.Capacitor?.getPlatform?.() || "")
+  );
+}
+
 async function getDirectH10Device({ preferSaved = false, silent = false } = {}) {
   const grantedDevices = typeof navigator.bluetooth.getDevices === "function"
     ? await navigator.bluetooth.getDevices().catch(() => [])
@@ -280,10 +299,24 @@ async function getHeartRateMeasurementCharacteristic(device) {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
       await wait(attempt === 0 ? 400 : 900);
-      const server = device.gatt.connected ? device.gatt : await device.gatt.connect();
+      const server = device.gatt.connected
+        ? device.gatt
+        : await withTimeout(
+          device.gatt.connect(),
+          12000,
+          "Timed out connecting to the H10 GATT server.",
+        );
       if (!server.connected) throw new Error("H10 GATT connection did not stay open.");
-      const service = await server.getPrimaryService("heart_rate");
-      return service.getCharacteristic("heart_rate_measurement");
+      const service = await withTimeout(
+        server.getPrimaryService("heart_rate"),
+        12000,
+        "Timed out opening the H10 heart-rate service.",
+      );
+      return withTimeout(
+        service.getCharacteristic("heart_rate_measurement"),
+        12000,
+        "Timed out opening the H10 heart-rate measurement stream.",
+      );
     } catch (error) {
       lastError = error;
       try {
@@ -299,8 +332,15 @@ async function getHeartRateMeasurementCharacteristic(device) {
 
 function friendlyDirectH10Error(error) {
   const message = error?.message || String(error || "");
+  if (/timed out/i.test(message)) {
+    return isCapacitorAndroidShell()
+      ? `${message} Android app Bluetooth can stall in the embedded WebView; make sure the strap is awake and not held by Polar Beat, Pulsoid, or another phone app. If this keeps happening, Direct H10 needs the native BLE bridge rather than browser Web Bluetooth.`
+      : `${message} Wake the strap, make sure no other app is holding the H10, then tap Connect H10 again.`;
+  }
   if (/gatt server is disconnected|cannot retrieve services|networkerror/i.test(message)) {
-    return "The browser paired with the H10 but the live BLE session dropped before services opened. Wake the strap, make sure Pulsoid/phone apps are not holding it, then tap Connect H10 again.";
+    return isCapacitorAndroidShell()
+      ? "The app paired with the H10 but the live BLE session dropped before services opened. Wake the strap, make sure Pulsoid/Polar apps are not holding it, then tap Connect H10 again. If this repeats, the phone build needs the native BLE bridge."
+      : "The browser paired with the H10 but the live BLE session dropped before services opened. Wake the strap, make sure Pulsoid/phone apps are not holding it, then tap Connect H10 again.";
   }
   if (/user cancelled|user canceled|cancelled|canceled/i.test(message)) {
     return "H10 pairing was cancelled.";
@@ -1094,7 +1134,11 @@ export default function LiveCapture() {
 
       directH10NotificationHandlerRef.current = handleMeasurement;
       characteristic.addEventListener("characteristicvaluechanged", handleMeasurement);
-      await characteristic.startNotifications();
+      await withTimeout(
+        characteristic.startNotifications(),
+        12000,
+        "Timed out starting H10 heart-rate notifications.",
+      );
       setDirectH10Status((prev) => ({
         ...prev,
         connected: true,
