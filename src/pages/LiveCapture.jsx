@@ -268,6 +268,10 @@ function isCapacitorAndroidShell() {
   );
 }
 
+function isAndroidRuntime() {
+  return isCapacitorAndroidShell() || /android/i.test(window.navigator?.userAgent || "");
+}
+
 async function getDirectH10Device({ preferSaved = false, silent = false } = {}) {
   const grantedDevices = typeof navigator.bluetooth.getDevices === "function"
     ? await navigator.bluetooth.getDevices().catch(() => [])
@@ -333,13 +337,13 @@ async function getHeartRateMeasurementCharacteristic(device) {
 function friendlyDirectH10Error(error) {
   const message = error?.message || String(error || "");
   if (/timed out/i.test(message)) {
-    return isCapacitorAndroidShell()
-      ? `${message} Android app Bluetooth can stall in the embedded WebView; make sure the strap is awake and not held by Polar Beat, Pulsoid, or another phone app. If this keeps happening, Direct H10 needs the native BLE bridge rather than browser Web Bluetooth.`
+    return isAndroidRuntime()
+      ? `${message} Android browser Bluetooth is unstable with this H10 path on this device. Use Pulsoid for phone capture until native BLE support is added.`
       : `${message} Wake the strap, make sure no other app is holding the H10, then tap Connect H10 again.`;
   }
   if (/gatt server is disconnected|cannot retrieve services|networkerror/i.test(message)) {
-    return isCapacitorAndroidShell()
-      ? "The app paired with the H10 but the live BLE session dropped before services opened. Wake the strap, make sure Pulsoid/Polar apps are not holding it, then tap Connect H10 again. If this repeats, the phone build needs the native BLE bridge."
+    return isAndroidRuntime()
+      ? "The phone paired with the H10 but the live BLE session dropped before services opened. Use Pulsoid for phone capture until native Direct H10 support is added."
       : "The browser paired with the H10 but the live BLE session dropped before services opened. Wake the strap, make sure Pulsoid/phone apps are not holding it, then tap Connect H10 again.";
   }
   if (/user cancelled|user canceled|cancelled|canceled/i.test(message)) {
@@ -422,13 +426,13 @@ function HrSourceSelector({
   const directH10Status = status?.hr?.directH10 || {};
   const isPulsoid = settings.source === "pulsoid";
   const isDirectH10 = settings.source === "direct_h10";
-  const directH10BlockedInAndroidApp = isDirectH10 && isCapacitorAndroidShell();
+  const directH10BlockedOnAndroid = isDirectH10 && isAndroidRuntime();
   const connected = Boolean(sourceStatus.connected);
   const tokenSummary = isPulsoid && settings.pulsoidToken
     ? `Token ${maskPulsoidToken(settings.pulsoidToken)}`
     : isDirectH10
-      ? directH10BlockedInAndroidApp
-        ? "Direct H10 browser Bluetooth is blocked in the installed Android app until the native BLE bridge is added."
+      ? directH10BlockedOnAndroid
+        ? "Direct H10 browser Bluetooth is blocked on Android because it can crash during H10 BLE connect."
         : "Pairs locally through this browser. RR intervals feed HRV when available."
       : "Token stays local to this browser and server session.";
 
@@ -490,10 +494,10 @@ function HrSourceSelector({
               <button
                 type="button"
                 className="h-10 rounded-lg border border-border bg-background px-4 text-sm font-semibold text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={selectedSource !== "direct_h10" || directStatus?.connecting || directH10BlockedInAndroidApp}
+                disabled={selectedSource !== "direct_h10" || directStatus?.connecting || directH10BlockedOnAndroid}
                 onClick={directStatus?.connected ? onDisconnectDirectH10 : onConnectDirectH10}
               >
-                {directStatus?.connecting ? "Connecting" : directStatus?.connected ? "Disconnect" : directH10BlockedInAndroidApp ? "Native BLE needed" : "Connect H10"}
+                {directStatus?.connecting ? "Connecting" : directStatus?.connected ? "Disconnect" : directH10BlockedOnAndroid ? "Native BLE needed" : "Connect H10"}
               </button>
               <button
                 type="button"
@@ -536,7 +540,7 @@ function HrSourceSelector({
         {isPulsoid && pulsoidStatus.error && <span className="text-destructive">{pulsoidStatus.error}</span>}
         {(directStatus?.lastMessageAt || directH10Status.lastMessageAt) && <span>Last H10 HR {fmtTime(directStatus?.lastMessageAt || directH10Status.lastMessageAt)}</span>}
         {isDirectH10 && <span>ECG waveform is not enabled yet; this pass captures standard H10 HR + RR intervals for HRV.</span>}
-        {directH10BlockedInAndroidApp && <span className="text-amber-300">Use Pulsoid on the installed app for now, or open PulsePoint in Chrome for browser Bluetooth. Native Direct H10 is the next bridge.</span>}
+        {directH10BlockedOnAndroid && <span className="text-amber-300">Use Pulsoid on Android for now. Native Direct H10 needs a Capacitor BLE bridge; browser Bluetooth is staying disabled on phones to avoid crashes.</span>}
         {(directStatus?.error || directH10Status.error) && <span className="text-destructive">{directStatus?.error || directH10Status.error}</span>}
         {error && <span className="text-destructive">{error}</span>}
         {recordingActive && <span>Stop recording before switching HR sources.</span>}
@@ -1019,13 +1023,13 @@ export default function LiveCapture() {
       }));
       return;
     }
-    if (isCapacitorAndroidShell()) {
+    if (isAndroidRuntime()) {
       setDirectH10Status((prev) => ({
         ...prev,
         connected: false,
         connecting: false,
-        message: "Native BLE needed for installed Android app.",
-        error: "Direct H10 browser Bluetooth is disabled in the installed Android app because the embedded WebView can crash during BLE connect. Use Pulsoid in the app for now, or open PulsePoint in Chrome for browser Bluetooth. Native Direct H10 support needs a Capacitor BLE bridge.",
+        message: "Native BLE needed for Android H10.",
+        error: "Direct H10 browser Bluetooth is disabled on Android because it can crash during BLE connect. Use Pulsoid on the phone for now. Native Direct H10 support needs a Capacitor BLE bridge.",
       }));
       return;
     }
