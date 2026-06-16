@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
-import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, RefreshCw, History, Film, Image as ImageIcon, Upload, X } from "lucide-react";
+import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, RefreshCw, History, Film, Image as ImageIcon, Upload, X, Download, Loader2, Video } from "lucide-react";
 import TTSReader from "../components/TTSReader";
 import AIOutputReader from "../components/AIOutputReader";
 import { normalizeJournalEntry } from "@/lib/journalEntry";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
+import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE, PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
 import { loadLatestProfilerAnalysis, loadUserProfileWithProfilerResults, mergeProfilerResultsIntoProfile } from "@/lib/profileContext";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionContextFactorLabels } from "@/lib/sessionContext";
@@ -16,9 +16,12 @@ import { buildProfileAIContentMeta, formatGeneratedAt, isProfileAIContentStale }
 import { splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 import { buildLongitudinalHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import { buildProfileQaFindingCards, makeProfileQaEntry, normalizeProfileQaFindings } from "@/lib/profileQa";
+import { buildAudioChapterBundle } from "@/lib/audioChapters";
+import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "@/components/TTSButton";
 import {
   cleanProfileImageReviewText,
   cleanupProfileImageReviewResult,
+  profileImageReviewTopicKey,
 } from "@/lib/profileImageReviewCleanup";
 import {
   buildBodyExplorationVideoPassDigest,
@@ -44,19 +47,63 @@ function briefText(value, max = 180) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+function trailingTtsContext(text, maxChars = 320) {
+  const cleaned = String(text || "").replace(/\s+/g, " ").trim();
+  return cleaned.length > maxChars ? cleaned.slice(-maxChars) : cleaned;
+}
+
+function buildProfilerVideoChunks(paragraphs = []) {
+  const chunks = [];
+  let previousText = "";
+  paragraphs.forEach((paragraph) => {
+    const cleaned = cleanTextForSpeech(paragraph);
+    if (!cleaned) return;
+    splitIntoChunks(cleaned, TTS_CHUNK_TARGET_CHARS).forEach((part) => {
+      const text = prepareTTSInput(part);
+      if (!text) return;
+      chunks.push({
+        text,
+        previousContext: trailingTtsContext(previousText),
+      });
+      previousText = previousText ? `${previousText} ${part}` : part;
+    });
+  });
+  return chunks;
+}
+
+function profileVideoFilename(title = "Profile Anatomy Video") {
+  return `${String(title || "Profile Anatomy Video")
+    .replace(/^AI\s+/i, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 60) || "Profile-Anatomy-Video"}.mp4`;
+}
+
 const PROFILE_ARCHIVE_LIMIT = 30;
 const PROFILE_IMAGE_REVIEW_MAX_TOKENS = 16000;
 const PROFILE_IMAGE_REVIEW_BATCH_SIZE = 5;
 const PROFILE_IMAGE_ID_REPAIR_VERSION = 1;
+const PROFILE_OBSERVATION_PRODUCT_RULE = `
+PROFILE OBSERVATION PRODUCT RULE - HIGHEST PRIORITY:
+- The person is the subject. The upload is only new evidence entering the library.
+- Use the full saved anatomical evidence library when reasoning: images, videos, sampled frames, annotations, prior Sarah reviews, measurements, Q&A findings, session/body-exploration evidence, and telemetry-linked evidence.
+- The user-facing review should describe the current body/anatomy picture. Do not narrate evidence bookkeeping, database state, confidence accumulation, batch mechanics, source reconciliation, prior corrections, or invalidated findings unless Ben explicitly asks for that audit trail.
+- Default mode is OBSERVE, not defend or prove. Write what is seen and what has meaningfully changed. Stop there.
+- Corrections silently update the current truth. Never remind the reader about previous mistakes, invalidated scars/findings, or left/right correction history in the review text.
+- Comparison mode is allowed only for meaningful change: healing, bruising, swelling, lesion/wound evolution, new asymmetry, device/tissue change, or explicit user request. Otherwise describe current findings only.
+- Avoid database phrases in final prose: "evidence record", "prior documentation", "strongly established", "confidence accumulation", "baseline establishment", "current batch", "current pass", "image subset", "rechecked saved/direct views", "invalidated", "correction", and "remains consistent with prior".
+- Good output: "The catheter exits centrally from the meatus and the surrounding tissue appears healthy." Bad output: "This remains consistent with the strongly established catheter accommodation baseline."
+`;
 const PROFILE_IMAGE_EVIDENCE_LAYER_RULE = `
 PROFILE IMAGE EVIDENCE LAYER RULE:
-- Keep the existing detailed A&P style, but keep evidence layers distinct.
-- Treat each finding as one of three evidence buckets: Current batch direct evidence, Prior saved evidence, or Profile/context only.
-- If a finding is visible in the images uploaded/rechecked for this run, identify it as directly visible/current evidence in the relevant section.
-- If a finding is not directly reassessed in the current images but is documented in saved profile/prior Sarah evidence, say "Not directly assessed in this batch; carried forward from prior saved evidence." Use this sparingly and only when the distinction matters.
-- If a finding comes only from user profile or historical context, label it as profile/context rather than visual evidence.
-- Direct visual evidence means only what is visible in the currently reviewed/reloaded images. Use wording such as "visible", "appears", "is seen", "no visible", or "not visible in this frame/image set".
-- Profile or prior-evidence reconciliation means comparison with saved profile metrics, prior reviewed images, saved Q&A findings, or session evidence. Use varied wording such as "aligns with saved profile findings", "matches prior documentation", "supports a previous observation", or "remains stable from baseline". Do not overuse "consistent with" or "consistently".
+- Keep evidence layers distinct internally, but do not turn them into the product.
+- Treat each finding as direct visual evidence, saved visual/profile evidence, or cautious interpretation while reasoning. In final prose, write the observation rather than the evidence bucket unless the source materially changes the meaning.
+- If a finding is visible in the newest upload, describe it as visible now.
+- If a finding is not freshly visible but is already part of the saved anatomical graph, include the current anatomical truth briefly without saying the region was absent from this upload.
+- If a finding comes only from profile/history, use it sparingly and only when useful to understand the person.
+- Direct visual evidence means only what is visible in reviewed images/frames. Use wording such as "visible", "appears", "is seen", or "no visible" when it helps.
+- Profile or saved-evidence reconciliation should stay behind the scenes unless there is a meaningful change. Do not overuse "consistent with" or "consistently".
 - Interpretation or clinical-functional relevance must be marked as interpretation. Use "may be relevant to", "is compatible with", "could contribute to", or "may reflect"; do not state it as direct visual fact.
 - Avoid "confirms" unless the current reviewed image directly confirms the specific claim.
 - A small clear/bright droplet at or near the meatus may be described as visible fluid. Reconcile separately with prior saved pre-ejaculate or urethral secretion findings. Do not claim continuous output unless the image sequence directly shows continuity.
@@ -78,6 +125,7 @@ PROFILE IMAGE VISIBLE-FINDINGS-FIRST RULE:
 - Treat absence of concerning visible findings as a positive visual observation when relevant, for example no obvious lesion, swelling, asymmetry, device, or tissue stress visible.
 - For audio quality, avoid repeating the same finding in the callout and the prose section. Use callouts as short anchors; use section prose for synthesis.
 - Do not include process narration about batches, final synthesis, recovered output, paid requests, cloud requests, image counts, or review mechanics in the user-facing review unless it is essential.
+- Write like an experienced anatomical observer, not a database export. Short present-tense observations are better than long proof paragraphs.
 `;
 
 const PROFILE_VIDEO_FRAME_EVIDENCE_RULE = `
@@ -94,15 +142,15 @@ PROFILE IMAGE INSIGHT-EFFICIENCY RULE:
 Core goal: maximize insight per token, not words per report. Sarah should stay warm, clinical, evidence-based, and anatomically useful, but shorter, less repetitive, and more confidence-calibrated.
 
 BASELINE VS NEW FINDINGS:
-- Treat stable anatomy as baseline information. Before documenting any finding, ask whether it has already been documented with high confidence and appears unchanged. If yes, briefly say it remains stable from baseline and do not regenerate the full description.
+- Treat stable anatomy as part of the current body map. Before documenting any finding, ask whether the reader needs detail now. If it appears unchanged, summarize the current appearance briefly without narrating how it was established.
 - Spend detail only on newly visible structures, changed findings, improved image coverage, healing/progression, new posture findings, new skin findings, or newly visible anatomical regions.
 - Do not turn stable anatomy into a fresh discovery every report. Stable scrotal anatomy, stable perineal raphe, stable central adiposity, and stable follicular papules should be summarized once unless something changed.
 
 DEDUPLICATION:
 - A unique finding should generally be described once. Do not repeat the same finding in Head-to-Toe, Skin, Habitus, Pelvic, Summary, and callouts.
 - Do not paste callout text again into narrative sections. Use callouts as visual anchors; use narrative sections for synthesis.
-- Use short cross-references such as "stable from prior baseline", "covered in the pelvic section", or "summarized under skin findings" instead of repeating paragraphs.
-- Convert repeated findings into "stable baseline finding" language during synthesis and final output.
+- Use short cross-references such as "details belong in the pelvic section" or "summarized under skin findings" instead of repeating paragraphs.
+- Convert repeated findings into concise current-observation language during synthesis and final output.
 
 CONFIDENCE CALIBRATION:
 - Use and preserve the confidence levels: observed, likely, possible, and not assessable. Do not upgrade a possible finding later in the report.
@@ -143,18 +191,34 @@ PELVIC/GENITAL REVIEW SCOPING:
 
 COST AND OUTPUT DISCIPLINE:
 - Generate: new findings, changed findings, stable baseline summary, significant findings, and coverage gaps.
-- Avoid: entire historical narrative, repeated anatomy descriptions, repeated confidence statements, repeated callout text, source/provenance/process narration, and internal anatomy boilerplate.
+- Avoid: entire historical narrative, repeated anatomy descriptions, repeated confidence statements, repeated callout text, source/provenance/process narration, correction chatter, and internal anatomy boilerplate.
 - Do not add source/provenance/process sections to satisfy these rules. Apply them inside the existing anatomy-centered sections.
 `;
 
 const PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE = `
 CUMULATIVE PROFILE REVIEW SCOPE:
-- This artifact is a full cumulative profile assessment, not a one-time review of only the newest or directly attached images.
-- Treat directly attached/reloaded images as the current visual re-check subset. Use them to update, correct, and enrich the saved profile baseline.
-- The scope of the user-facing review is the whole cumulative evidence base: current direct image subset, saved Profile Q&A findings, prior Sarah visual reviews, session/body-exploration visual evidence, entered profile metrics, and relevant saved context.
+- This artifact is a full profile assessment of Ben, not a one-time review of only the newest or directly attached images.
+- Treat directly attached/reloaded images as new evidence objects. Use them to update, correct, and enrich the saved anatomical graph.
+- The scope of the user-facing review is the person across the whole cumulative evidence base: direct images, saved Profile Q&A findings, prior Sarah visual reviews, session/body-exploration visual evidence, entered profile metrics, and relevant saved context.
 - Do not open the review with "based on five images", "based on X images", "these five images", "the recent images", or similar narrow framing.
-- Good scope wording: "This cumulative review integrates saved profile-reference images, prior visual findings, entered measurements, and the directly rechecked views from this run."
+- Do not use pass-scoped language in the user-facing review. Banned phrases include "this pass", "current pass", "recent photos", "newest photos", "current image subset", "image subset", "not represented in this pass", and "not visible in this pass".
+- If scope must be mentioned, say it briefly: "This review reflects the current saved anatomical profile with the newest evidence folded in."
 - If exact image counts are useful, mention them only as evidence-method detail, not as the scope of the whole analysis.
+`;
+
+const PROFILE_IMAGE_COMPLETE_MAP_RULE = `
+COMPLETE BODY MAP + CHANGE LAYER RULE - HIGHEST PRIORITY:
+- Ben expects each Head-to-Toe or Pelvic/Genital review to preserve the whole established anatomical picture, not to replace it with only the newest image subset.
+- For every required section, write the best current cumulative understanding first, then layer new, changed, newly rechecked, or newly contradicted findings on top.
+- Do not make "not visible in this image subset" the main content of a region if saved evidence exists. Instead, describe the current anatomical picture and add a short visibility note only if it affects confidence.
+- Do not degrade established findings into absence just because the newest photos do not cover that region. A region can be "stable from established baseline" without being directly rephotographed today.
+- Never write a section whose main content is "Not represented in this pass", "Not visible in this pass", "Not directly reassessed in this pass", "Stable from prior established baseline", or "Baseline carried forward." Those are implementation notes, not an assessment.
+- If a required region has saved evidence, the section must summarize the actual finding in plain anatomical language. Example: "Neck contour appears unremarkable with no saved finding of mass, asymmetry, or skin concern." Do not stop at saying the region was absent from the latest photos.
+- If a required region has no evidence anywhere in the cumulative library, say "No established baseline yet for this region" and move on. Do not describe that as a current-pass limitation.
+- New/current images are change detection and quality improvement evidence. They should update the cumulative map, not narrow the report's scope.
+- Each section should answer two questions in this order: "What is the current body/anatomy picture here?" and then "What, if anything, is new, changing, or better documented?"
+- Avoid producing a patch-note report. The reader should come away with one coherent head-to-toe or pelvic/genital profile plus a clear sense of what changed.
+- Avoid long absence inventories. If a body region has no useful evidence at all, use one concise sentence. If it has prior evidence, summarize that prior baseline instead of saying only that it is not visible now.
 `;
 
 const PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE = `
@@ -181,6 +245,9 @@ ANATOMICAL LEFT / RIGHT ORIENTATION RULE - HIGH PRIORITY:
 - For anterior or front-facing photos where the person is facing the camera, the image's screen-left side is the subject's anatomical right, and the image's screen-right side is the subject's anatomical left.
 - For posterior or back-facing photos where the person's back faces the camera, screen-left is the subject's anatomical left, and screen-right is the subject's anatomical right.
 - For true lateral views, label the visible side only when the side is clear from the image, user note, or saved context. Otherwise say lateral view without assigning left or right.
+- Preserve anatomical identity across poses and camera angles. A bruise, mole, scar, catheter/tubing position, pelvic finding, genital finding, or skin mark on the person's anatomical right remains right-sided when they move from supine to standing, turn toward the camera, rotate, or appear in a different crop. Do not relabel the same physical finding left/right just because it moves to the opposite side of the screen.
+- When reconciling multiple views, track stable landmarks such as the umbilicus, sternum, pubic mound, inguinal creases, thighs, known scars, moles, bruises, catheter exit angle, and user-labeled side notes. Use those landmarks to preserve side identity before assigning a new left/right label.
+- For supine, foot-of-table, overhead, mirrored, rotated, composite, close-cropped pelvic/genital, or partial abdomen views, assume screen position may be misleading. If the same finding appears in another orientation, keep the anatomical label from the clearest labeled view unless stronger landmarks prove otherwise.
 - For mirror/reflection images, rotated images, close crops, or unclear orientation, do not guess anatomical side. Use "screen-left", "screen-right", "one side", or "the opposite side" and mark side assignment uncertain.
 - User image notes such as "facing camera", "right side scar", "left lateral", or "posterior view" are orientation context and should guide anatomical side labeling when consistent with the visible image.
 - Do not convert viewer-side observations into anatomical left/right unless the view orientation is clear. If there is any doubt, preserve uncertainty rather than assigning the wrong side.
@@ -332,11 +399,43 @@ function sanitizeRecoveredBatchResult(value, batchSet = {}) {
 function isCloseUpPelvicImageText(value = "") {
   const text = String(value || "").toLowerCase();
   const closePelvic = /(close-up|close up|pelvic|genital|glans|meatus|meatal|foreskin|shaft|scrot|perine|perianal|anal verge|pubic)/i.test(text);
+  const nonPelvicRegion = /(foot|feet|toe|toes|ankle|heel|lower leg|calf|knee|thigh|abdomen|abdominal|chest|shoulder|back|neck|face|head)/i.test(text);
   const fullBody = /(full body|full-body|whole body|whole-body|head-to-toe|head to toe|crown to feet|feet visible|standing full)/i.test(text);
-  return closePelvic && !fullBody;
+  return closePelvic && !fullBody && !nonPelvicRegion;
+}
+
+function inferAnatomyViewLabel(image = {}) {
+  const combined = [image.view_label, image.body_position, image.coverage, image.visibility_notes, ...(Array.isArray(image.major_regions_visible) ? image.major_regions_visible : [])]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const label = String(image.view_label || "");
+  if (!/close-up pelvic\/genital reference view|whole-body standing posture is not established|posture labels are intentionally conservative/i.test([image.body_position, image.visibility_notes, label].filter(Boolean).join(" "))) {
+    return image;
+  }
+  const cleanMeta = (value = "") => String(value || "")
+    .replace(/\bclose-up pelvic\/genital reference view;\s*/gi, "")
+    .replace(/\bclose-up pelvic\/genital reference view\.?\s*/gi, "")
+    .replace(/\bwhole-body standing posture is not established by this frame\.?\s*/gi, "")
+    .replace(/\bposture labels are intentionally conservative for close-up pelvic views\.?\s*/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  let inferredLabel = "";
+  if (/\b(feet|foot|toes?|ankles?|heels?)\b/.test(combined)) inferredLabel = "Foot and ankle reference view";
+  else if (/\b(lower leg|calf|knee|thigh|lower limb)\b/.test(combined)) inferredLabel = "Lower-limb reference view";
+  else if (/\b(abdomen|abdominal|flank|umbilicus|bite wound)\b/.test(combined)) inferredLabel = "Abdominal reference view";
+  else if (/\b(chest|shoulder|back|neck|face|head)\b/.test(combined)) inferredLabel = "Body-reference view";
+  return {
+    ...image,
+    view_label: inferredLabel || cleanMeta(image.view_label) || "Reviewed anatomy view",
+    body_position: cleanMeta(image.body_position),
+    coverage: cleanMeta(image.coverage),
+    visibility_notes: cleanMeta(image.visibility_notes),
+  };
 }
 
 function sanitizeImagePositionClaims(image = {}) {
+  image = inferAnatomyViewLabel(image);
   const combined = [image.view_label, image.body_position, image.coverage, image.visibility_notes].filter(Boolean).join(" ");
   let cleanedImage = image;
   if (/close[- ]up/i.test(combined) && /perine|scrotal[- ]base|anal verge/i.test(combined)) {
@@ -753,6 +852,146 @@ function buildProfileArchiveEntry(kind, label, result) {
   };
 }
 
+function archiveEntryResult(entryOrResult) {
+  return entryOrResult?.result || entryOrResult || null;
+}
+
+function isFinalSynthesisFallbackResult(result) {
+  const status = result?._background_attempt_status || result?._meta?.latest_attempt_status;
+  const state = String(status?.state || "");
+  return Boolean(
+    status?.final_synthesis_attempted &&
+    status?.batch_reviews_completed &&
+    /final_synthesis_failed|failed_batch_findings_preserved/i.test(state)
+  );
+}
+
+function isInterimLocalImageReview(result) {
+  return Boolean(result?._meta?.local_batch_assembled || isFinalSynthesisFallbackResult(result));
+}
+
+function latestUsableArchiveResult(archive = []) {
+  return (Array.isArray(archive) ? archive : [])
+    .map((entry) => archiveEntryResult(entry))
+    .filter((entryResult) => entryResult?.overview && !isInterimLocalImageReview(entryResult))
+    .sort((a, b) => new Date(b?._meta?.last_generated_at || b?._meta?.updated_at || 0) - new Date(a?._meta?.last_generated_at || a?._meta?.updated_at || 0))[0] || null;
+}
+
+function cumulativeReviewResultCandidates({ result, archive, userProfile, config } = {}) {
+  const candidates = [
+    result,
+    userProfile?.[config?.resultKey],
+    ...(Array.isArray(archive) ? archive.map((entry) => archiveEntryResult(entry)) : []),
+  ];
+  const seen = new Set();
+  return candidates
+    .map((candidate) => normalizeImageReviewResult(candidate))
+    .filter((candidate) => candidate?.overview && !isInterimLocalImageReview(candidate))
+    .filter((candidate) => {
+      const key = [
+        candidate?._meta?.last_generated_at,
+        candidate?._meta?.updated_at,
+        candidate?.overview?.slice?.(0, 80),
+      ].filter(Boolean).join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => new Date(b?._meta?.last_generated_at || b?._meta?.updated_at || 0) - new Date(a?._meta?.last_generated_at || a?._meta?.updated_at || 0));
+}
+
+function selectCumulativeBaselineResult({ result, archive, userProfile, config } = {}) {
+  return cumulativeReviewResultCandidates({ result, archive, userProfile, config })[0] || latestUsableArchiveResult(archive);
+}
+
+function aggregateCumulativeAnatomyEvidence({ result, archive, userProfile, config } = {}) {
+  const candidates = cumulativeReviewResultCandidates({ result, archive, userProfile, config });
+  const records = candidates.flatMap((candidate) => existingAnatomicalEvidenceRecordsForPrompt(candidate));
+  return mergeAnatomicalEvidenceRecords(records, []);
+}
+
+function sectionItemsFromCumulativeResults(candidates = [], sectionKey, limit = 8) {
+  const seen = new Set();
+  const items = [];
+  for (const candidate of candidates) {
+    const sectionItems = Array.isArray(candidate?.[sectionKey]) ? candidate[sectionKey] : [];
+    for (const item of sectionItems) {
+      const text = cleanProfileImageReviewText(item);
+      if (!text) continue;
+      if (isLowValueAbsentRegionParagraph(text)) continue;
+      const key = profileImageReviewTopicKey(text);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      items.push(text);
+      if (items.length >= limit) return items;
+    }
+  }
+  return items;
+}
+
+function formatCanonicalAnatomyPacketForPrompt({ result, archive, userProfile, config } = {}) {
+  const candidates = cumulativeReviewResultCandidates({ result, archive, userProfile, config });
+  const records = aggregateCumulativeAnatomyEvidence({ result, archive, userProfile, config });
+  if (!candidates.length && !records.length) {
+    return `CANONICAL CUMULATIVE ANATOMY PACKET:
+- No final cumulative profile review is available yet. Build the first full profile from all saved evidence available in this run.
+- Even without a prior final review, the output must still be a full ${config?.shortTitle || "anatomy"} profile, not a report about only the newest upload.`;
+  }
+
+  const lines = [
+    `CANONICAL CUMULATIVE ANATOMY PACKET - PRIMARY WRITING SOURCE:`,
+    `- Write the ${config?.shortTitle || "anatomy"} review from this packet as the current profile of Ben.`,
+    `- Treat newest uploaded/reloaded images as update evidence only. They may update relevant sections, but they must not become the structure or scope of the report.`,
+    `- Do not mention absent regions from the newest upload when this packet already contains usable cumulative evidence for that region.`,
+    `- Do not copy source/provenance/callout wording. Convert packet items into clean anatomical observations.`,
+    `- Prior final review candidates available: ${candidates.length}. Aggregated anatomical evidence records: ${records.length}.`,
+  ];
+
+  const latestOverview = cleanProfileImageReviewText(candidates[0]?.overview || "");
+  if (latestOverview) lines.push(`Current profile overview seed: ${briefText(latestOverview, 900)}`);
+
+  for (const section of profileReviewResultSections(config)) {
+    const items = sectionItemsFromCumulativeResults(candidates, section.key, 5);
+    if (!items.length) continue;
+    lines.push(`${section.label}:`);
+    for (const item of items) lines.push(`- ${briefText(item, 420)}`);
+  }
+
+  if (records.length) {
+    lines.push(`Aggregated anatomical evidence records:`);
+    for (const record of records.slice(0, 32)) {
+      lines.push(`- ${record.label || record.key}: ${briefText(record.summary || record.region || "", 260)}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function formatCumulativeBaselineReviewForPrompt(result = null, config = {}) {
+  const normalized = normalizeImageReviewResult(result);
+  if (!normalized?.overview) {
+    return "CURRENT CUMULATIVE BASELINE REVIEW:\n- No prior final cumulative review is available yet. Establish the baseline from all saved evidence available in this run.";
+  }
+  const cleanBaselineText = (value) => cleanProfileImageReviewText(value || "");
+  const overview = cleanBaselineText(normalized.overview) || "Prior cumulative review exists, but its overview did not contain reusable anatomical baseline text.";
+  const lines = [
+    `CURRENT CUMULATIVE BASELINE REVIEW - TREAT AS THE ESTABLISHED MAP TO UPDATE, NOT AS TEXT TO REPEAT VERBATIM:`,
+    `Overview: ${briefText(overview, 900)}`,
+    `Do not copy pass-scoped placeholders from older output. If older sections say only that a region was not represented in a pass, ignore that phrasing and rebuild the section from saved evidence plus profile context.`,
+  ];
+  for (const section of profileReviewResultSections(config)) {
+    const items = Array.isArray(normalized[section.key])
+      ? normalized[section.key].map(cleanBaselineText).filter(Boolean)
+      : [];
+    if (!items.length) continue;
+    lines.push(`${section.label}:`);
+    for (const item of items.slice(0, 4)) {
+      lines.push(`- ${briefText(item, 420)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 function mergeProfileArchive(existingArchive = [], entry) {
   const archive = Array.isArray(existingArchive) ? existingArchive : [];
   return [
@@ -1135,7 +1374,7 @@ function SectionCard({ icon, title, color, children, defaultCollapsed = false })
 }
 
 function profileArchivePreview(entry) {
-  const result = entry?.result || {};
+  const result = archiveEntryResult(entry) || {};
   const firstArrayText = [
     result.arousal_physiology,
     result.constitutional_and_systemic_context,
@@ -1196,7 +1435,7 @@ function ProfileArchiveList({ title = "Profile Run Archive", archive = [], curre
                   size="sm"
                   variant="outline"
                   className="h-7 text-xs"
-                  onClick={() => onViewRun?.(entry.result)}
+                  onClick={() => onViewRun?.(entry)}
                 >
                   View This Run
                 </Button>
@@ -1492,6 +1731,8 @@ function collectSavedProfileImageAttachments(userProfile, { limit = 5, purpose =
         source: "saved_profile_qa_attachment",
         selection_score: groupScore,
         selection_context: purpose,
+        selection_prompt: briefText(String(message?.text || ""), 420),
+        selection_review_context: briefText(replyText, 900),
         selection_group_created_at: createdAt,
       });
     }
@@ -1642,12 +1883,12 @@ function buildProfileImageReviewContext({ userProfile, sessions = [], bodyExplor
 
   return `
 PROFILE IMAGE REVIEW SOURCE CONTEXT:
-- If fresh images are attached in this run, use them as the primary source for directly visible anatomy, position, tissue state, and image-limited observations.
-- If no fresh images are attached, make existing saved evidence the primary evidence base: saved Profile Q&A visual reviews, reusable saved Profile Q&A image attachments when available, session image/video findings, body-exploration image/video findings, entered profile metrics, and session evidence.
-- Use saved Q&A findings, reusable saved media, entered profile metrics, and session/body-exploration evidence as first-class profile evidence. Reconcile them with fresh images when present instead of ignoring them.
+- The current cumulative profile is the primary subject. Fresh images, when attached, are new evidence/delta inputs that update relevant anatomical sections.
+- Existing saved evidence is first-class evidence: saved Profile Q&A visual reviews, reusable saved Profile Q&A image attachments when available, session image/video findings, body-exploration image/video findings, entered profile metrics, and session evidence.
+- Use saved Q&A findings, reusable saved media, entered profile metrics, and session/body-exploration evidence as the standing anatomy library. Reconcile fresh images with that library instead of replacing it.
 - If saved context conflicts with fresh images or with another saved visual review, state the mismatch and explain which source is stronger for that claim.
 - Do not let profile history make you overcall something that is not visible.
-- Output priority: say what can be seen first. Do not spend the review cataloging absent regions unless that absence directly changes confidence or next-image planning.
+- Output priority: describe the current anatomy profile first. Mention fresh/reloaded image visibility only where it changes or sharpens the current profile.
 
 REUSABLE SAVED PROFILE Q&A IMAGE ATTACHMENTS:
 - Saved non-video Profile Q&A image attachments available for reuse: ${reusableProfileImages.length}.
@@ -1695,9 +1936,11 @@ function buildHeadToToeImageReviewContext({
 HEAD-TO-TOE BODY REFERENCE SOURCE CONTEXT:
 - Fresh images attached in this run: ${hasFreshImages ? "yes" : "no"}.
 - Saved Profile Q&A images reloaded in this run: ${hasReusedSavedImages ? "yes" : "no"}.
-- Use fresh attached images, when present, as the primary source for directly visible whole-body anatomy, posture, habitus, alignment, skin/surface findings, and reference quality.
+- This Head-to-Toe output must read like the current complete body-reference chart, not a report about only the attached/reloaded images.
+- Use fresh attached images, when present, as new update evidence for directly visible whole-body anatomy, posture, habitus, alignment, skin/surface findings, and reference quality. Do not make them the whole report.
 - If saved Profile Q&A images were reloaded, review them directly as saved/reused body-reference evidence. Do not act as if prior photos are absent.
 - If no image payload is attached, use saved Profile Q&A visual findings and saved media-review digests as previously reviewed evidence. Do not reduce them to "nothing available."
+- For regions not covered by the newest/reloaded images, summarize the best established baseline from saved profile findings and prior reviewed evidence. Do not write "not represented in this pass" or equivalent wording.
 - Saved profile metrics may provide limited context for age, height, weight, general fitness/body context, or known non-visual limitations, but they do not create visible findings.
 - Existing reviewed visual evidence is allowed as evidence when it directly describes whole-body, torso, abdomen, posture, limb, foot, skin/surface, habitus, symmetry, or body-reference visibility.
 - Do not mine saved evidence for a long pelvic, device-fit, urethral, stimulation, ejaculation, session chronology, or foot-arousal-history narrative in this head-to-toe artifact.
@@ -1705,7 +1948,7 @@ HEAD-TO-TOE BODY REFERENCE SOURCE CONTEXT:
 - Genital/pelvic findings may be mentioned only briefly as a visible body region when fresh head-to-toe/body-reference images show them. Detailed meatal, catheter, sound/dilator, Foley, urethral accommodation, genital measurement, device-fit, arousal-state, ejaculation, or stimulation-mechanics material belongs in the dedicated pelvic/genital review, not here.
 - Foot and lower-limb observations should be anatomical reference observations only: resting posture, toe/foot alignment, symmetry, visible swelling/deformity, skin/surface findings, or image limitations. Do not turn session foot-camera motion history into arousal/climax physiology in this artifact.
 - Avoid dates, session names, event sequences, device sizes, sensory maps, stimulation techniques, and previously reviewed close-up genital chronology unless they are needed to explain why a region cannot be assessed in the head-to-toe reference.
-- Output priority: say what can be seen first. Do not spend the review cataloging absent regions unless that absence directly changes confidence or next-image planning.
+- Output priority: describe the current complete body-reference profile first. Mention newest/reloaded view coverage only where it changes confidence, reveals a meaningful update, or supports next-image planning.
 
 REUSABLE SAVED PROFILE Q&A IMAGE ATTACHMENTS:
 - Saved non-video Profile Q&A image attachments available for reuse: ${reusableProfileImages.length}.
@@ -2915,14 +3158,17 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
   const sectionLabel = sectionLabelForKey(sections, sectionKey);
 
   return (
-    <div className="my-2 rounded-xl border border-border bg-card/70 p-2.5 sm:p-3">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color }}>
-          <ImageIcon className="h-3.5 w-3.5" /> Visual reference for {sectionLabel}
-        </p>
-        <Badge variant="outline" className="h-5 text-[10px]">{findings.length} callout{findings.length === 1 ? "" : "s"}</Badge>
-      </div>
-      <div className="grid gap-2 md:grid-cols-2">
+    <details className="my-2 rounded-xl border border-border bg-card/60 p-2.5 sm:p-3">
+      <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 rounded-lg px-1 py-1">
+        <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color }}>
+          <ImageIcon className="h-3.5 w-3.5" /> Evidence for {sectionLabel}
+        </span>
+        <span className="flex items-center gap-2">
+          <Badge variant="outline" className="h-5 text-[10px]">{findings.length} linked note{findings.length === 1 ? "" : "s"}</Badge>
+          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+        </span>
+      </summary>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
         {imageIds.map((imageId) => {
           const image = profileImageById(result, imageId, transientImages);
           const imageFindings = findings.filter((finding) => finding.image_id === imageId).slice(0, 4);
@@ -2975,7 +3221,7 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
           );
         })}
       </div>
-    </div>
+    </details>
   );
 }
 
@@ -3025,11 +3271,18 @@ const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
   emptyText: "Review Existing Evidence uses saved profile/body-reference findings first. Add anatomical-position/body-reference images or videos only when you want to expand the reference set; pelvic/session-specific evidence will stay limited here.",
   reviewInstructions: `
 HEAD-TO-TOE REVIEW SCOPE:
-- Produce one cumulative anatomical profile. This is not a batch report, image audit, provenance report, or process note.
+- Produce one cumulative anatomical profile of Ben. This is not a batch report, image audit, provenance report, or process note.
 - Start with anatomy. Do not open with source details, image counts, batch status, timeout/recovery language, payment/cloud language, or "assembled from" language.
 - Make the review easy to listen to as downloaded audio: top-to-bottom flow, minimal repetition, short clear paragraphs, and no duplicate callout/prose narration.
-- Prioritize visible anatomy, posture, symmetry, skin findings, and meaningful changes. Stable baseline findings should be brief.
+- Prioritize observations: visible anatomy, posture, symmetry, skin findings, and meaningful changes. Default mode is observe, not defend or prove.
+- Write short present-tense findings. Good: "Mild bilateral ankle swelling. Small follicular papules on the lower legs. Skin otherwise appears healthy." Avoid paragraphs that explain why the database believes the finding.
 - Use all available reviewed evidence as cumulative evidence. Do not frame findings around "this batch", "prior batch", "subsequent batch", "image set", "rechecked saved/direct views", or image numbers.
+- Preserve the full established head-to-toe picture every run. The newest images are the update layer, not the whole report.
+- If a section has saved evidence but no direct fresh view, summarize the current anatomical finding in one useful sentence only if it adds value. Do not write only "not visible", "not represented in this pass", "stable from prior established baseline", or "baseline carried forward."
+- If a section has no established evidence anywhere, write "No established baseline yet for this region" once. Do not describe that as a failure of the current pass.
+- When a current image shows a meaningful update, describe the update in relation to the existing body map. Example: "The right lateral abdominal bite zone is now in yellow-green bruise resolution, while the rest of the established abdominal baseline remains unchanged."
+- Do not mention prior corrections, invalidated findings, evidence conflicts, confidence accumulation, or historical mistakes unless Ben explicitly asks for an audit trail.
+- Comparison should appear only when it adds value: healing, bruising, swelling, wound/lesion evolution, a new finding, or an explicit comparison request.
 - Do not write camera-location descriptions, room/environment commentary, ECG/chest strap commentary, headphones commentary, foot-camera commentary, table-paper commentary, or duplicate visual-reference/callout dumps.
 - Ignore incidental objects unless they directly affect anatomical visibility, tissue safety, or device-contact interpretation.
 - Keep the language clinical, neutral, practical, and anatomically literate. Adult anatomy and nudity are in scope when present, but the review must not become erotic or moralizing.
@@ -3038,7 +3291,7 @@ HEAD-TO-TOE REVIEW SCOPE:
 - Do not summarize catheter, urethral, sound/dilator, Foley, sleeve, stimulation, ejaculation, arousal progression, foot-camera arousal recruitment, or genital measurement history in Head-to-Toe.
 - Compare visible whole-body findings against saved Q&A findings, prior sessions, and entered metrics only where they help reconcile body reference evidence. Do not let profile context override fresh image evidence.
 - Organize the output exactly as a top-to-bottom anatomical profile:
-  1. Executive Summary: 5 to 10 bullets maximum. Most meaningful cumulative findings only.
+  1. Executive Summary: 5 to 10 bullets maximum. Most meaningful cumulative findings and current changes only.
   2. Head & Face: hair, face, glasses only if relevant to body profile, visible skin findings, symmetry if visible.
   3. Neck: contour, posture, visible masses or asymmetry if any.
   4. Shoulders & Upper Back: shoulder level/symmetry, thoracic posture, visible skin findings.
@@ -3089,10 +3342,18 @@ const PELVIC_GENITAL_IMAGE_REVIEW_CONFIG = {
   emptyText: "Click Review Existing Evidence to reuse saved Profile Q&A image evidence and synthesize saved pelvic/genital findings. Add focused images or videos only when you want to add new evidence to the existing profile.",
   reviewInstructions: `
 PELVIC / GENITAL REVIEW SCOPE:
-- Produce one cumulative pelvic/genital/perineal anatomical profile. This is not a batch report, image audit, source report, or process note.
+- Produce one cumulative pelvic/genital/perineal anatomical profile of Ben. This is not a batch report, image audit, source report, or process note.
 - Start with actual pelvic/genital/perineal findings. Do not open with source details, image counts, evidence-scope logistics, batch/source/rechecked-image explanations, or provenance.
 - Make the review easy to listen to as downloaded audio: natural anatomical flow, minimal repetition, short paragraphs, and no duplicate callout/prose wording.
+- Default mode is observe, not defend or prove. Describe visible anatomy, visible findings, meaningful changes, and tissue/device relationships. Stop there.
+- Good: "The catheter exits centrally from the meatus." "The glans appears healthy." "The scrotum appears symmetric." Bad: "This remains consistent with the strongly established glans baseline."
 - Use all available reviewed evidence cumulatively. Do not write "this batch", "prior batch", "subsequent batch", "rechecked saved/direct views", or image-number narration.
+- Preserve the full established pelvic/genital/perineal picture every run. Fresh focused images, session visuals, and body-exploration visuals are update layers on top of the cumulative baseline, not replacements for it.
+- Each anatomical section should state the current anatomical finding, then note what is new or meaningfully changed when relevant. Do not collapse the report into only the newest Foley/device or close-up finding.
+- If a region is not freshly visible but has saved evidence, summarize the actual finding briefly only if it adds value. Do not write "not represented in this pass", "stable from prior established baseline", or "baseline carried forward" as section content.
+- If a pelvic/genital region has no established evidence anywhere, say "No established baseline yet for this region" once. Do not describe that as a current-pass limitation.
+- Do not mention prior corrections, invalidated findings, evidence conflicts, confidence accumulation, or historical mistakes unless Ben explicitly asks for an audit trail.
+- Comparison should appear only when it adds value: tissue change, healing, irritation, swelling, device-fit change, lesion/wound evolution, or an explicit comparison request.
 - Do not narrate camera locations, room setup, table paper, ECG/chest strap, headphones, foot cameras, or incidental background objects.
 - Do not narrate every absent structure, device, or limitation. Mention absence only when it is materially relevant.
 - Focus on pubic mound/lower abdomen, inguinal folds/groin skin, penis, foreskin, glans/meatus, scrotum/testes, perineum, anal/perianal region, gluteal skin, visible tissue health, and relevant device/contact findings.
@@ -3158,11 +3419,14 @@ function ProfileImageReviewPanel({
   const [latestAttemptStatus, setLatestAttemptStatus] = useState(null);
   const [availableCompletedReviewJob, setAvailableCompletedReviewJob] = useState(null);
   const [selectedProfilerImageId, setSelectedProfilerImageId] = useState(null);
+  const [viewingArchiveRunId, setViewingArchiveRunId] = useState("");
+  const [anatomyVideo, setAnatomyVideo] = useState(null);
+  const [anatomyVideoStatus, setAnatomyVideoStatus] = useState({ type: "", message: "" });
   const [imageUploadStatus, setImageUploadStatus] = useState(null);
   const [videoUploadStatus, setVideoUploadStatus] = useState(null);
   const [includeImageCalloutsInTts, setIncludeImageCalloutsInTts] = useState(() => {
     try {
-      return window.localStorage.getItem("pulsepoint_profile_image_tts_callouts") === "true";
+      return window.localStorage.getItem("pulsepoint_profile_image_tts_callouts_v2") === "true";
     } catch {
       return false;
     }
@@ -3171,7 +3435,7 @@ function ProfileImageReviewPanel({
 
   useEffect(() => {
     try {
-      window.localStorage.setItem("pulsepoint_profile_image_tts_callouts", includeImageCalloutsInTts ? "true" : "false");
+      window.localStorage.setItem("pulsepoint_profile_image_tts_callouts_v2", includeImageCalloutsInTts ? "true" : "false");
     } catch {
       // Ignore storage failures; the toggle still works for the current render.
     }
@@ -3224,6 +3488,18 @@ function ProfileImageReviewPanel({
   const storeCompletedReviewJob = async (completedJob, sourceImages = []) => {
     const parsed = normalizeImageReviewResult(completedJob?.result);
     if (!parsed?.overview) throw new Error("Sarah returned an empty image review.");
+    if (isFinalSynthesisFallbackResult(parsed)) {
+      const fallbackStatus = parsed._background_attempt_status || {
+        state: "final_synthesis_failed_batch_findings_preserved",
+        timestamp: completedAt(completedJob) || new Date().toISOString(),
+        batch_reviews_completed: true,
+        final_synthesis_attempted: true,
+      };
+      setLatestAttemptStatus(fallbackStatus);
+      setJobStatus(completedJob);
+      setError(`Latest ${config.title.toLowerCase()} batch review finished, but final cumulative synthesis failed. Keeping the existing cumulative review visible; use Recover Final Synthesis when credits are available.`);
+      return result || parsed;
+    }
     const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
     const storedResult = {
       ...parsed,
@@ -3253,6 +3529,7 @@ function ProfileImageReviewPanel({
     if (parsed?._meta?.recovered_from_batches) storedResult._meta.recovered_from_batches = true;
     if (parsed?._meta?.local_batch_assembled) storedResult._meta.local_batch_assembled = true;
     setResult(storedResult);
+    setViewingArchiveRunId("");
     const nextArchive = await saveProfileResultWithArchive({
       resultKey: config.resultKey,
       archiveKey: config.archiveKey,
@@ -3422,31 +3699,16 @@ function ProfileImageReviewPanel({
           autoRecoveredBatchSetRef.current !== `${config.kind}:${recoverable.startedAt || ""}:${recoverable.finishedAt || ""}`
         ) {
           autoRecoveredBatchSetRef.current = `${config.kind}:${recoverable.startedAt || ""}:${recoverable.finishedAt || ""}`;
-          const batchParsedResults = recoverable.batches
-            .map((batchJob) => remapBatchLocalImageIds(
-              normalizeImageReviewResult(batchJob?.result),
-              batchJob?.meta?.reviewed_images || [],
-            ))
-            .filter((item) => item?.overview);
-          if (batchParsedResults.length === recoverable.batches.length) {
-            await saveBatchAssembledReview(
-              batchParsedResults,
-              "Auto-saved the completed Sarah batch findings after the page reconnected. No extra Claude synthesis request was made.",
-              recoverable,
-              {
-                state: "batch_reviews_auto_saved_after_reconnect",
-                timestamp: new Date().toISOString(),
-                synthesis_stage: "local_batch_assembly_after_reconnect",
-                batch_reviews_completed: true,
-                older_saved_review_showing: false,
-                latest_batch_findings_available: true,
-                batch_count: recoverable.total || batchParsedResults.length,
-                final_synthesis_attempted: false,
-              },
-              { showErrorNotice: false, keepRecoverableBatchSet: true },
-            );
-            return;
-          }
+          setLatestAttemptStatus({
+            state: "batch_reviews_recoverable_after_reconnect",
+            timestamp: new Date().toISOString(),
+            synthesis_stage: "waiting_for_final_synthesis",
+            batch_reviews_completed: true,
+            older_saved_review_showing: Boolean(result),
+            latest_batch_findings_available: true,
+            batch_count: recoverable.total || recoverable.batches.length,
+            final_synthesis_attempted: false,
+          });
         }
         const job = completedJobs
           .filter(isFinalOrSingleReviewJob)
@@ -3487,6 +3749,11 @@ function ProfileImageReviewPanel({
         }
 
         if (job && (!result || isNewerCompletedJob(job, result))) {
+          if (viewingArchiveRunId) {
+            setAvailableCompletedReviewJob(job);
+            setError("Viewing an archived profiler run. A newer completed review is available, but PulsePoint will not switch away until you ask.");
+            return;
+          }
           if (job.type === "profile_image_review_full" || job?.meta?.full_background_review) {
             setJobStatus(job);
             await storeCompletedReviewJob(job, []);
@@ -3519,7 +3786,47 @@ function ProfileImageReviewPanel({
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [config.kind, config.title, evidenceLoading, jobLabel, profileLoading, result, sessions.length, userProfile]);
+  }, [config.kind, config.title, evidenceLoading, jobLabel, profileLoading, result, sessions.length, userProfile, viewingArchiveRunId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const sourceGeneratedAt = result?._meta?.last_generated_at || result?._meta?.updated_at || "";
+    if (!sourceGeneratedAt) return undefined;
+
+    const reconnectProfileVideo = async () => {
+      try {
+        const jobs = await listBackgroundJobs({
+          type: "profile_anatomy_video",
+          status: "queued,running,complete",
+          metaSource: "Profiler",
+          limit: 20,
+        });
+        if (cancelled) return;
+        const matching = (jobs.jobs || [])
+          .filter((job) => job?.meta?.reviewType === config.kind && String(job?.meta?.sourceGeneratedAt || "") === String(sourceGeneratedAt))
+          .sort((a, b) => String(b.finishedAt || b.updatedAt || b.createdAt || "").localeCompare(String(a.finishedAt || a.updatedAt || a.createdAt || "")))[0];
+        if (!matching) return;
+        if (matching.status === "complete" && matching.result?.file_url) {
+          setAnatomyVideo(matching.result);
+          setAnatomyVideoStatus({ type: "ok", message: "Anatomy video ready." });
+        } else if (matching.status === "queued" || matching.status === "running") {
+          setAnatomyVideoStatus({
+            type: "working",
+            message: matching.progress?.message || "Anatomy video is rendering in the background...",
+          });
+        }
+      } catch (err) {
+        if (!cancelled) console.warn("Profile anatomy video reconnect skipped:", err);
+      }
+    };
+
+    reconnectProfileVideo();
+    const interval = window.setInterval(reconnectProfileVideo, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [config.kind, result?._meta?.last_generated_at, result?._meta?.updated_at]);
 
   const handleImageFiles = async (event) => {
     const files = Array.from(event.target.files || []).filter((file) => file.type?.startsWith("image/"));
@@ -3984,6 +4291,7 @@ function ProfileImageReviewPanel({
       final_synthesis_required: false,
     };
     setResult(storedResult);
+    setViewingArchiveRunId("");
     setLatestAttemptStatus(storedResult._meta.latest_attempt_status);
     const nextArchive = await saveProfileResultWithArchive({
       resultKey: config.resultKey,
@@ -4058,7 +4366,7 @@ function ProfileImageReviewPanel({
       }
       return;
     }
-    if (hasRecoverableUnshownBatchSet || hasRecoverableDisplayRepair) return assembleCompletedBatches();
+    if (hasRecoverableUnshownBatchSet || hasRecoverableDisplayRepair) return recoverFinalSynthesis();
     if (images.length > 0) return analyze();
     return analyze();
   };
@@ -4102,7 +4410,15 @@ function ProfileImageReviewPanel({
           hasReusedSavedImages: Number(recoverableBatchSet.reused_saved_image_count || 0) > 0,
         })
         : buildProfileImageReviewContext({ userProfile: reviewUserProfile, sessions, bodyExplorations });
-      const establishedEvidenceContext = formatIncrementalEvidenceRecordsForPrompt(existingAnatomicalEvidenceRecordsForPrompt(result));
+      const cumulativeBaselineContext = formatCumulativeBaselineReviewForPrompt(
+        selectCumulativeBaselineResult({ result, archive, userProfile: reviewUserProfile, config }),
+        config,
+      );
+      const canonicalAnatomyPacket = formatCanonicalAnatomyPacketForPrompt({ result, archive, userProfile: reviewUserProfile, config });
+      const establishedEvidenceContext = formatIncrementalEvidenceRecordsForPrompt(
+        aggregateCumulativeAnatomyEvidence({ result, archive, userProfile: reviewUserProfile, config }),
+        { limit: 48 },
+      );
       const firstNameToneCue = buildOptionalFirstNameToneCue(reviewUserProfile, { prioritizeProfileTone: true });
       const anatomicalFocusRule = isHeadToToeBodyReference ? "" : ANATOMICAL_REFERENCE_FOCUS_RULE;
       const sessionGroundingRule = isHeadToToeBodyReference ? "" : SESSION_CONTEXT_GROUNDING_RULE;
@@ -4122,15 +4438,20 @@ No fresh images are attached to this recovery pass because the direct visual re-
 
 ${groundingContext}
 ${imageReviewContext}
+${canonicalAnatomyPacket}
+${cumulativeBaselineContext}
 ${anatomicalFocusRule}
+${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
+${PROFILE_OBSERVATION_PRODUCT_RULE}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
 ${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+${PROFILE_IMAGE_COMPLETE_MAP_RULE}
 ${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${establishedEvidenceContext}
@@ -4223,6 +4544,7 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
 
   const analyze = async () => {
     setLoading(true);
+    setViewingArchiveRunId("");
     setLatestAttemptStatus(null);
     setJobStatus({
       status: "starting",
@@ -4305,7 +4627,15 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
       const imageReviewContext = isHeadToToeBodyReference
         ? buildHeadToToeImageReviewContext({ userProfile: reviewUserProfile, sessions, bodyExplorations, hasFreshImages, hasReusedSavedImages })
         : buildProfileImageReviewContext({ userProfile: reviewUserProfile, sessions, bodyExplorations });
-      const establishedEvidenceContext = formatIncrementalEvidenceRecordsForPrompt(existingAnatomicalEvidenceRecordsForPrompt(result));
+      const cumulativeBaselineContext = formatCumulativeBaselineReviewForPrompt(
+        selectCumulativeBaselineResult({ result, archive, userProfile: reviewUserProfile, config }),
+        config,
+      );
+      const canonicalAnatomyPacket = formatCanonicalAnatomyPacketForPrompt({ result, archive, userProfile: reviewUserProfile, config });
+      const establishedEvidenceContext = formatIncrementalEvidenceRecordsForPrompt(
+        aggregateCumulativeAnatomyEvidence({ result, archive, userProfile: reviewUserProfile, config }),
+        { limit: 48 },
+      );
       const firstNameToneCue = buildOptionalFirstNameToneCue(reviewUserProfile, { prioritizeProfileTone: true });
       const anatomicalFocusRule = isHeadToToeBodyReference ? "" : ANATOMICAL_REFERENCE_FOCUS_RULE;
       const sessionGroundingRule = isHeadToToeBodyReference ? "" : SESSION_CONTEXT_GROUNDING_RULE;
@@ -4314,7 +4644,7 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
           ? `COMBINED IMAGE REVIEW DIRECTIVE - HIGHEST PRIORITY:
 - ${freshImagePayload.length} fresh image${freshImagePayload.length === 1 ? " is" : "s are"} attached as new direct visual evidence.
 - ${reusedSavedImages.length} saved Profile Q&A image${reusedSavedImages.length === 1 ? " has" : "s have"} also been reloaded and attached as direct saved visual evidence.
-- Review the complete attached image set as one combined profile-reference set. Fresh images enhance and update the existing profile; they do not replace the saved baseline.
+- Review the attached image set as update evidence against the canonical anatomy packet. Fresh images enhance and update the existing profile; they do not replace the saved baseline or define the report scope.
 - Do not say prior photos are unavailable, that direct re-examination is not occurring, or that the review is based only on the newest images.
 - Reconcile fresh images, reused saved images, saved Profile Q&A findings, prior Sarah visual reviews, session/body-exploration evidence, and entered measurements into one coherent whole-picture analysis.`
           : hasReusedSavedImages
@@ -4325,7 +4655,7 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
 - Reconcile these saved images with saved Profile Q&A findings, prior Sarah visual reviews, session/body-exploration evidence, and entered measurements.`
             : `FRESH IMAGE DIRECTIVE - HIGHEST PRIORITY:
 - ${imagePayload.length} fresh image${imagePayload.length === 1 ? " is" : "s are"} attached to this request and included in the model message.
-- Review those attached image${imagePayload.length === 1 ? "" : "s"} directly as new direct visual evidence, but do not let them replace the saved baseline.
+- Review those attached image${imagePayload.length === 1 ? "" : "s"} directly as new direct visual evidence, but use them only to update the canonical anatomy packet. Do not let them replace the saved baseline or define the report scope.
 - Do not say "no fresh images are attached", "no fresh images are available", or "direct re-examination is not occurring."
 - Existing saved evidence remains active evidence. Treat fresh uploads as additive evidence that can refine, extend, or correct the existing profile, not as a standalone replacement review.`
         : `SAVED EVIDENCE DIRECTIVE:
@@ -4360,16 +4690,21 @@ ${imagePreparationWarning ? `Image preparation warning: ${imagePreparationWarnin
 
 ${groundingContext}
 ${imageReviewContext}
+${canonicalAnatomyPacket}
 ${imagePresenceRules}
+${cumulativeBaselineContext}
 ${anatomicalFocusRule}
+${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
+${PROFILE_OBSERVATION_PRODUCT_RULE}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
 ${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+${PROFILE_IMAGE_COMPLETE_MAP_RULE}
 ${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${establishedEvidenceContext}
@@ -4410,15 +4745,20 @@ No fresh images are attached to this synthesis pass because the direct visual re
 
 ${groundingContext}
 ${imageReviewContext}
+${canonicalAnatomyPacket}
+${cumulativeBaselineContext}
 ${anatomicalFocusRule}
+${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
+${PROFILE_OBSERVATION_PRODUCT_RULE}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
 ${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+${PROFILE_IMAGE_COMPLETE_MAP_RULE}
 ${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${establishedEvidenceContext}
@@ -4506,16 +4846,20 @@ ${imagePreparationWarning ? `Image preparation warning: ${imagePreparationWarnin
 
 ${groundingContext}
 ${imageReviewContext}
+${canonicalAnatomyPacket}
 ${imagePresenceRules}
 ${anatomicalFocusRule}
+${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
+${PROFILE_OBSERVATION_PRODUCT_RULE}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
 ${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+${PROFILE_IMAGE_COMPLETE_MAP_RULE}
 ${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${establishedEvidenceContext}
@@ -4649,15 +4993,20 @@ No fresh images are attached to this synthesis pass because the direct visual re
 
 ${groundingContext}
 ${imageReviewContext}
+${canonicalAnatomyPacket}
+${cumulativeBaselineContext}
 ${anatomicalFocusRule}
+${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
+${PROFILE_OBSERVATION_PRODUCT_RULE}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
 ${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+${PROFILE_IMAGE_COMPLETE_MAP_RULE}
 ${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${establishedEvidenceContext}
@@ -4700,23 +5049,28 @@ ${imagePreparationWarning ? `Image preparation warning: ${imagePreparationWarnin
 
 ${groundingContext}
 ${imageReviewContext}
+${canonicalAnatomyPacket}
 ${imagePresenceRules}
+${cumulativeBaselineContext}
 ${anatomicalFocusRule}
+${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
+${PROFILE_OBSERVATION_PRODUCT_RULE}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
 ${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+${PROFILE_IMAGE_COMPLETE_MAP_RULE}
 ${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${establishedEvidenceContext}
 
 IMAGE REVIEW RULES:
 - Treat these as consensual private profile-reference images for anatomical and physiological review.
-- If fresh images are attached to this request, analyze what is visible in those images as new direct evidence, then integrate it into the existing saved profile/image evidence. Do not make the newest image set the whole story unless it is the only evidence available.
+- If fresh images are attached to this request, analyze what is visible in those images as new direct evidence, then use those observations only to update the canonical anatomy packet. Do not make the update evidence the story.
 - If saved Profile Q&A images are reloaded into this request, analyze them directly as saved/reused visual evidence and reconcile them with saved findings.
 - If no image payload is attached, analyze the existing uploaded/reviewed evidence from Q&A, sessions, body exploration sessions, entered metrics, and saved media findings. Say "previously reviewed evidence" rather than implying the profile has no images.
 - Produce a whole-picture cumulative review: current attached images, reloaded saved images, saved Profile Q&A findings, prior Sarah visual reviews, session/body-exploration evidence, and entered profile metrics should enhance one another instead of replacing one another.
@@ -4827,23 +5181,27 @@ ${imagePreparationWarning ? `Image preparation warning: ${imagePreparationWarnin
 
 ${groundingContext}
 ${imageReviewContext}
+${canonicalAnatomyPacket}
 ${imagePresenceRules}
 ${anatomicalFocusRule}
+${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
+${PROFILE_OBSERVATION_PRODUCT_RULE}
 ${PROFILE_IMAGE_EVIDENCE_LAYER_RULE}
 ${PROFILE_IMAGE_VISIBLE_FINDINGS_FIRST_RULE}
 ${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
+${PROFILE_IMAGE_COMPLETE_MAP_RULE}
 ${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${establishedEvidenceContext}
 
 IMAGE REVIEW RULES:
 - Treat these as consensual private profile-reference images for anatomical and physiological review.
-- If fresh images are attached to this request, analyze what is visible in those images as new direct evidence, then integrate it into the existing saved profile/image evidence. Do not make the newest image set the whole story unless it is the only evidence available.
+- If fresh images are attached to this request, analyze what is visible in those images as new direct evidence, then use those observations only to update the canonical anatomy packet. Do not make the update evidence the story.
 - If saved Profile Q&A images are reloaded into this request, analyze them directly as saved/reused visual evidence and reconcile them with saved findings.
 - If no image payload is attached, analyze the existing uploaded/reviewed evidence from Q&A, sessions, body exploration sessions, entered metrics, and saved media findings. Say "previously reviewed evidence" rather than implying the profile has no images.
 - Produce a whole-picture cumulative review: current attached images, reloaded saved images, saved Profile Q&A findings, prior Sarah visual reviews, session/body-exploration evidence, and entered profile metrics should enhance one another instead of replacing one another.
@@ -5038,14 +5396,54 @@ ANNOTATED IMAGE OUTPUT RULES:
     purpose: config.contextScope === "head_to_toe_body_reference" ? "head_to_toe_body_reference" : "pelvic_genital",
   });
   const fallbackReferenceImages = reusableProfileAttachments.map((attachment, index) => ({
-    image_id: `img_${String(index + 1).padStart(3, "0")}`,
+    image_id: `saved_ref_${String(index + 1).padStart(3, "0")}`,
     previewUrl: attachment.url,
     storagePath: attachment.url,
-    display_label: `Saved Profile Q&A view ${reviewImageLetter(index)}`,
+    display_label: attachment.filename || `Saved Profile Q&A view ${reviewImageLetter(index)}`,
+    coverage: cleanImageReviewProse([
+      attachment.selection_prompt,
+      attachment.selection_review_context,
+    ].filter(Boolean).join(". ")),
     source: "saved_profile_qa_attachment",
   }));
-  const hasPersistedReviewedImages = Array.isArray(result?._meta?.reviewed_images) && result._meta.reviewed_images.length > 0;
-  const inlineReferenceImages = hasPersistedReviewedImages ? images : [...images, ...fallbackReferenceImages];
+  const archiveReferenceImages = (Array.isArray(archive) ? archive : [])
+    .flatMap((entry, runIndex) => {
+      const archivedResult = archiveEntryResult(entry);
+      const reviewed = Array.isArray(archivedResult?._meta?.reviewed_images) ? archivedResult._meta.reviewed_images : [];
+      const annotated = Array.isArray(archivedResult?.annotated_images) ? archivedResult.annotated_images : [];
+      return reviewed.map((image, imageIndex) => {
+        const originalId = image.image_id || `image_${imageIndex + 1}`;
+        const annotation = annotated.find((item) => item?.image_id === originalId) || {};
+        const archiveId = entry?.id || archivedResult?._meta?.last_generated_at || archivedResult?._meta?.updated_at || `run_${runIndex + 1}`;
+        return {
+          image_id: `archive_${runIndex + 1}_${String(originalId).replace(/[^a-z0-9_-]+/gi, "_")}`,
+          original_image_id: originalId,
+          previewUrl: image.preview_url || annotation.preview_url || "",
+          storagePath: image.preview_url || annotation.preview_url || "",
+          display_label: annotation.view_label || image.display_label || `Archived profile view ${reviewImageLetter(imageIndex)}`,
+          coverage: cleanImageReviewProse([
+            annotation.view_label,
+            annotation.coverage,
+            annotation.visibility_notes,
+            Array.isArray(annotation.major_regions_visible) ? annotation.major_regions_visible.join(", ") : "",
+            image.upload_note,
+            image.source_video?.note,
+            image.source_video?.purpose,
+          ].filter(Boolean).join(". ")),
+          source: image.source_video ? "profile_review_archive_video_frame" : "profile_review_archive",
+          archive_id: archiveId,
+          source_video: image.source_video || null,
+        };
+      });
+    })
+    .filter((image) => image.previewUrl || image.storagePath);
+  const inlineReferenceImages = [...images, ...fallbackReferenceImages, ...archiveReferenceImages]
+    .reduce((items, image) => {
+      const key = image.image_id || image.storagePath || image.previewUrl;
+      if (!key || items.some((item) => (item.image_id || item.storagePath || item.previewUrl) === key)) return items;
+      items.push(image);
+      return items;
+    }, []);
   const imageSaveInProgress = images.some((image) => image.upload_status === "saving");
   const videoSaveInProgress = videos.some((video) => video.upload_status === "saving");
   const imageSaveErrorCount = images.filter((image) => image.upload_status === "error").length;
@@ -5072,11 +5470,165 @@ ANNOTATED IMAGE OUTPUT RULES:
         }
       }
       for (const finding of (result[section.key] || [])) {
-        paragraphs.push(naturalizeSpokenDates(finding));
+        const cleanedFinding = cleanImageReviewProse(naturalizeSpokenDates(finding));
+        if (!cleanedFinding) continue;
+        paragraphs.push(cleanedFinding);
         paragraphMeta.push({ type: "section", section });
       }
     }
   }
+
+  const buildAnatomyVideoImages = () => {
+    if (!result) return [];
+    const imageIds = [...new Set([
+      ...lightboxImageIds,
+      ...inlineReferenceImages.map((image, index) => image.image_id || `profile-image-${index + 1}`),
+    ].filter(Boolean))];
+    const sectionsByImage = new Map();
+    const regionsByImage = new Map();
+    (Array.isArray(result.image_region_findings) ? result.image_region_findings : []).forEach((finding) => {
+      if (!finding?.image_id) return;
+      const section = sections.find((item) => item.key === finding.section_key);
+      if (section?.label) {
+        if (!sectionsByImage.has(finding.image_id)) sectionsByImage.set(finding.image_id, new Map());
+        sectionsByImage.get(finding.image_id).set(section.key, section.label);
+      }
+      const region = cleanImageReviewProse(finding.region || finding.label || "");
+      if (region) {
+        if (!regionsByImage.has(finding.image_id)) regionsByImage.set(finding.image_id, new Set());
+        regionsByImage.get(finding.image_id).add(region);
+      }
+    });
+    const annotatedByImage = new Map();
+    (Array.isArray(result.annotated_images) ? result.annotated_images : []).forEach((image) => {
+      if (image?.image_id) annotatedByImage.set(image.image_id, image);
+    });
+    return imageIds
+      .map((imageId) => profileImageById(result, imageId, inlineReferenceImages))
+      .filter((image) => image?.preview_url)
+      .map((image, index) => {
+        const imageId = image.image_id || `profile-image-${index + 1}`;
+        const sectionMap = sectionsByImage.get(imageId) || new Map();
+        const sectionKeys = [...sectionMap.keys()];
+        const sectionLabels = [...sectionMap.values()];
+        const annotated = annotatedByImage.get(imageId) || {};
+        return {
+          image_id: imageId,
+          display_label: image.display_label || annotated.view_label || `Reference view ${reviewImageLetter(index)}`,
+          section_key: sectionKeys[0] || "",
+          section_label: sectionLabels[0] || "",
+          section_labels: sectionLabels,
+          regions: [...(regionsByImage.get(imageId) || new Set())],
+          coverage: cleanImageReviewProse([
+            image.coverage,
+            annotated.view_label,
+            annotated.coverage,
+            annotated.visibility_notes,
+            Array.isArray(annotated.major_regions_visible) ? annotated.major_regions_visible.join(", ") : "",
+          ].filter(Boolean).join(". ")),
+          preview_url: image.preview_url,
+          source: image.source || "profile_review",
+        };
+      })
+      .slice(0, 80);
+  };
+
+  const startAnatomyVideoRender = async () => {
+    if (!result || !paragraphs.length) {
+      setAnatomyVideoStatus({ type: "error", message: "No profile review is available for an anatomy video." });
+      return;
+    }
+    const videoImages = buildAnatomyVideoImages();
+    if (!videoImages.length) {
+      setAnatomyVideoStatus({ type: "error", message: "No linked review images are available for this anatomy video yet." });
+      return;
+    }
+    try {
+      setAnatomyVideo(null);
+      setAnatomyVideoStatus({ type: "working", message: "Starting anatomy video render..." });
+      const runtime = getTTSRuntime(loadTTSSettings());
+      const readableItems = paragraphs
+        .map((paragraph, index) => ({
+          text: String(paragraph || "").trim(),
+          meta: paragraphMeta[index] || {},
+        }))
+        .filter((item) => item.text);
+      const readableParagraphs = readableItems.map((item) => item.text);
+      const readableParagraphMeta = readableItems.map((item) => ({
+        type: item.meta.type || "",
+        displayLabel: item.meta.displayLabel || "",
+        section_key: item.meta.section?.key || "",
+        section_label: item.meta.section?.label || item.meta.displayLabel || "",
+      }));
+      const title = `${config.shortTitle} Anatomy Video`;
+      const chunks = buildProfilerVideoChunks(readableParagraphs);
+      const chapters = buildAudioChapterBundle({
+        title,
+        audioFilename: profileVideoFilename(title),
+        paragraphs: readableParagraphs,
+        source: "profile_anatomy_video",
+      }).chapters;
+      const sourceGeneratedAt = result?._meta?.last_generated_at || result?._meta?.updated_at || new Date().toISOString();
+      const job = await startBackgroundJob("profile_anatomy_video", {
+        sessionId: `${config.ttsSessionId}-video`,
+        title,
+        sourceGeneratedAt,
+        reviewType: config.kind,
+        images: videoImages,
+        paragraphs: readableParagraphs,
+        paragraphMeta: readableParagraphMeta,
+        chunks,
+        chapters,
+        voice: "nova",
+        model: runtime.model,
+        speed: runtime.speed,
+        instructions: runtime.instructions,
+        outputFormat: runtime.format,
+        normalize: runtime.settings.normalizeExport,
+      }, {
+        title,
+        source: "Profiler",
+        route: "/profiler",
+        reviewType: config.kind,
+        sourceGeneratedAt,
+      });
+      const completed = await waitForBackgroundJob(job.id, {
+        intervalMs: 1500,
+        onProgress: (nextJob) => {
+          const progress = nextJob.progress || {};
+          setAnatomyVideoStatus({
+            type: nextJob.status === "error" ? "error" : "working",
+            message: progress.message || "Rendering anatomy video...",
+          });
+        },
+      });
+      if (!completed.result?.file_url) throw new Error("Anatomy video render did not return an MP4.");
+      setAnatomyVideo(completed.result);
+      setAnatomyVideoStatus({
+        type: "ok",
+        message: completed.result.audio_reused
+          ? "Anatomy video ready. Reused matching narration."
+          : "Anatomy video ready. Narration was rendered for this export.",
+      });
+    } catch (err) {
+      const message = String(err?.message || "");
+      const staleApiJobType = /Unknown background job type:\s*profile_anatomy_video/i.test(message);
+      setAnatomyVideoStatus({
+        type: "error",
+        message: staleApiJobType
+          ? "Anatomy video support is installed in the app code, but the local API has not reloaded it yet. Let the current render/analysis finish, then restart the local API to enable this button."
+          : message || "Anatomy video render failed.",
+      });
+    }
+  };
+
+  const downloadAnatomyVideo = () => {
+    if (!anatomyVideo?.file_url) return;
+    const a = document.createElement("a");
+    a.href = serverUrl(anatomyVideo.file_url);
+    a.download = anatomyVideo.filename || profileVideoFilename(`${config.shortTitle} Anatomy Video`);
+    a.click();
+  };
 
   return (
     <SectionCard icon={config.icon} title={config.title} color={config.color} defaultCollapsed={true}>
@@ -5099,7 +5651,7 @@ ANNOTATED IMAGE OUTPUT RULES:
                   ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Saving Images...</>
                 : videoSaveInProgress
                   ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Sampling Video...</>
-                : <><ImageIcon className="h-3.5 w-3.5" />{(availableCompletedReviewJob || hasRecoverableUnshownBatchSet) ? "Show Latest Findings" : hasRecoverableDisplayRepair ? "Refresh Findings" : images.length ? (result ? "Re-review Images" : "Review Images") : (result ? "Re-review Evidence" : "Review Existing Evidence")}</>}
+                : <><ImageIcon className="h-3.5 w-3.5" />{(hasRecoverableUnshownBatchSet || hasRecoverableDisplayRepair) ? "Recover Final Synthesis" : availableCompletedReviewJob ? "Show Completed Review" : images.length ? (result ? "Re-review Images" : "Review Images") : (result ? "Re-review Evidence" : "Review Existing Evidence")}</>}
             </Button>
           </div>
         </div>
@@ -5155,6 +5707,12 @@ ANNOTATED IMAGE OUTPUT RULES:
               : latestAttemptStatus?.state === "batch_reviews_saved_without_final_synthesis"
                 ? "Batch reviews completed and were saved as the current review. The main review button will run a fresh review only when you ask for it."
               : "Batch reviews completed, but the final rewrite did not finish. Tap Show Latest Findings to display the completed findings without rerunning image review."}
+          </div>
+        )}
+
+        {result?._meta?.local_batch_assembled && (
+          <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-50">
+            This displayed review is an interim local batch assembly, not a full Sarah cumulative synthesis. Use the archive below to view an older final review, or recover final synthesis when credits are available.
           </div>
         )}
 
@@ -5456,6 +6014,50 @@ ANNOTATED IMAGE OUTPUT RULES:
           />
         )}
 
+        {result && (
+          <div className="rounded-lg border border-border bg-card/70 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={startAnatomyVideoRender}
+                disabled={anatomyVideoStatus.type === "working" || !paragraphs.length}
+                className="h-8 gap-1.5 text-xs"
+              >
+                {anatomyVideoStatus.type === "working" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Video className="h-3.5 w-3.5" />}
+                Build anatomy video
+              </Button>
+              {anatomyVideo?.file_url && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={downloadAnatomyVideo}
+                  className="h-8 gap-1.5 text-xs"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Download MP4
+                </Button>
+              )}
+              {anatomyVideoStatus.message && (
+                <span className={`text-xs ${
+                  anatomyVideoStatus.type === "error"
+                    ? "text-destructive"
+                    : anatomyVideoStatus.type === "ok"
+                      ? "text-emerald-400"
+                      : "text-muted-foreground"
+                }`}>
+                  {anatomyVideoStatus.message}
+                </span>
+              )}
+            </div>
+            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+              Builds a narrated HD anatomy review from the current Sarah text and linked profile images/video-sampled frames with slow pan and zoom movement.
+            </p>
+          </div>
+        )}
+
         <ProfileImageLightbox
           result={result}
           imageIds={lightboxImageIds}
@@ -5473,7 +6075,13 @@ ANNOTATED IMAGE OUTPUT RULES:
           title={`${config.shortTitle} Run Archive`}
           archive={archive}
           currentResult={result}
-          onViewRun={(archivedResult) => archivedResult && setResult(normalizeImageReviewResult(archivedResult) || archivedResult)}
+          onViewRun={(entryOrResult) => {
+            const archivedResult = archiveEntryResult(entryOrResult);
+            if (!archivedResult) return;
+            setResult(normalizeImageReviewResult(archivedResult) || archivedResult);
+            setViewingArchiveRunId(entryOrResult?.id || archivedResult?._meta?.last_generated_at || archivedResult?._meta?.updated_at || "archived");
+            setError("");
+          }}
         />
       </div>
     </SectionCard>
@@ -5637,7 +6245,9 @@ AI PROFILER PRIORITY RULE:
 - Hydration, THC/cannabis, fatigue, preparation, and environment are important modifiers, but they are seasoning, not the steak. The profile should still primarily be about the person's observable arousal physiology, stimulation response, anatomy/device interaction, motion evidence, climax mechanics, and recovery behavior.
 ${SESSION_DATE_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}
+${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
+${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${firstNameToneCue}
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
@@ -6019,7 +6629,9 @@ ${SESSION_CONTEXT_GROUNDING_RULE}
 ${SESSION_DATE_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}
 ${ANATOMICAL_REFERENCE_FOCUS_RULE}
+${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
+${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${firstNameToneCue}
 ${longitudinalHrvEvidence ? RR_HRV_INTERPRETATION_RULES : ""}
 

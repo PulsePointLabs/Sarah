@@ -1,6 +1,63 @@
 const ENABLED_KEY = "pulsepoint.backgroundJobs.notificationsEnabled";
 const NOTIFIED_KEY = "pulsepoint.backgroundJobs.notifiedTerminalJobs.v1";
-const DEV_SERVICE_WORKER_DISABLED = import.meta.env.DEV && import.meta.env.VITE_ENABLE_DEV_SERVICE_WORKER !== "1";
+const NATIVE_CHANNEL_ID = "pulsepoint-background-jobs";
+const DEV_SERVICE_WORKER_DISABLED = false;
+
+let nativeBridgePromise = null;
+let nativeChannelReady = false;
+
+function isNativeAppShell() {
+  if (typeof window === "undefined") return false;
+  if (window.location?.protocol === "capacitor:") return true;
+  try {
+    if (window.Capacitor?.isNativePlatform?.()) return true;
+    return ["android", "ios"].includes(window.Capacitor?.getPlatform?.());
+  } catch {
+    return false;
+  }
+}
+
+async function getNativeBridge() {
+  if (!isNativeAppShell()) return null;
+  if (!nativeBridgePromise) {
+    nativeBridgePromise = Promise.all([
+      import("@capacitor/core"),
+      import("@capacitor/local-notifications"),
+    ]).then(([core, notifications]) => {
+      const Capacitor = core.Capacitor;
+      if (Capacitor?.isNativePlatform && !Capacitor.isNativePlatform()) return null;
+      return { Capacitor, LocalNotifications: notifications.LocalNotifications };
+    }).catch(() => null);
+  }
+  return nativeBridgePromise;
+}
+
+function stableNotificationId(job) {
+  const seed = `${job?.id || "pulsepoint"}:${job?.status || "complete"}`;
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = ((hash << 5) - hash + seed.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash % 2147480000) || 1001;
+}
+
+async function ensureNativeChannel(LocalNotifications) {
+  if (nativeChannelReady || !LocalNotifications?.createChannel) return;
+  try {
+    await LocalNotifications.createChannel({
+      id: NATIVE_CHANNEL_ID,
+      name: "PulsePoint Background Jobs",
+      description: "Completion alerts for PulsePoint analysis, audio, and video renders.",
+      importance: 4,
+      visibility: 1,
+      lights: true,
+      vibration: true,
+    });
+    nativeChannelReady = true;
+  } catch {
+    nativeChannelReady = true;
+  }
+}
 
 function storageValue(storage, key, fallback) {
   try {
@@ -11,14 +68,18 @@ function storageValue(storage, key, fallback) {
 }
 
 export function isNotificationSupported() {
-  return typeof window !== "undefined" && "Notification" in window;
+  return isNativeAppShell() || (typeof window !== "undefined" && "Notification" in window);
 }
 
 export function getNotificationPermission() {
+  if (isNativeAppShell()) {
+    return storageValue(window.localStorage, ENABLED_KEY, false) === true ? "granted" : "default";
+  }
   return isNotificationSupported() ? window.Notification.permission : "unsupported";
 }
 
 export function areBackgroundNotificationsEnabled() {
+  if (isNativeAppShell()) return storageValue(window.localStorage, ENABLED_KEY, false) === true;
   if (!isNotificationSupported() || getNotificationPermission() !== "granted") return false;
   return storageValue(window.localStorage, ENABLED_KEY, false) === true;
 }
@@ -36,6 +97,18 @@ export function setBackgroundNotificationsEnabled(enabled) {
 }
 
 export async function requestBackgroundNotificationPermission() {
+  const nativeBridge = await getNativeBridge();
+  if (nativeBridge?.LocalNotifications) {
+    const { LocalNotifications } = nativeBridge;
+    const existing = await LocalNotifications.checkPermissions().catch(() => null);
+    const next = existing?.display === "granted"
+      ? existing
+      : await LocalNotifications.requestPermissions().catch(() => null);
+    const permission = next?.display === "granted" ? "granted" : next?.display === "denied" ? "denied" : "default";
+    setBackgroundNotificationsEnabled(permission === "granted");
+    if (permission === "granted") await ensureNativeChannel(LocalNotifications);
+    return permission;
+  }
   if (!isNotificationSupported()) return "unsupported";
   const permission = await window.Notification.requestPermission();
   setBackgroundNotificationsEnabled(permission === "granted");
@@ -116,6 +189,32 @@ export async function getReadyServiceWorkerRegistration({ timeoutMs = 1500 } = {
   }
 }
 
+async function showNativeNotification(job, message, { route } = {}) {
+  const nativeBridge = await getNativeBridge();
+  if (!nativeBridge?.LocalNotifications) return false;
+  const { LocalNotifications } = nativeBridge;
+  const permission = await LocalNotifications.checkPermissions().catch(() => null);
+  if (permission?.display !== "granted") return false;
+  await ensureNativeChannel(LocalNotifications);
+  await LocalNotifications.schedule({
+    notifications: [
+      {
+        id: stableNotificationId(job),
+        title: message.title,
+        body: message.body,
+        channelId: NATIVE_CHANNEL_ID,
+        schedule: { at: new Date(Date.now() + 100) },
+        extra: {
+          route: route || "/",
+          jobId: job?.id || null,
+          jobStatus: job?.status || null,
+        },
+      },
+    ],
+  });
+  return true;
+}
+
 export async function notifyBackgroundJobFinished(job, { route, onOpen, force = false } = {}) {
   if (!["complete", "error"].includes(job?.status) || !canNotifyForBackgroundJob({ force }) || hasNotified(job)) {
     return false;
@@ -132,6 +231,12 @@ export async function notifyBackgroundJobFinished(job, { route, onOpen, force = 
   };
 
   try {
+    const nativeSent = await showNativeNotification(job, message, { route });
+    if (nativeSent) {
+      markNotified(job);
+      return true;
+    }
+
     const registration = await getReadyServiceWorkerRegistration({ timeoutMs: force ? 2200 : 1500 });
     if (registration?.showNotification) {
       await registration.showNotification(message.title, options);
@@ -152,4 +257,61 @@ export async function notifyBackgroundJobFinished(job, { route, onOpen, force = 
   } catch {
     return false;
   }
+}
+
+export async function sendBackgroundTestNotification({ route = "/settings", onOpen } = {}) {
+  const job = {
+    id: `test-${Date.now()}`,
+    status: "complete",
+  };
+  const message = {
+    title: "PulsePoint is ready",
+    body: "Local notifications are working. Tap to open Settings & Status.",
+  };
+
+  const nativeSent = await showNativeNotification(job, message, { route });
+  if (nativeSent) return true;
+
+  if (!isNotificationSupported() || getNotificationPermission() !== "granted") return false;
+  const options = {
+    body: message.body,
+    icon: "/icons/pulsepoint-192.png",
+    badge: "/icons/pulsepoint-192.png",
+    tag: "pulsepoint-test-notification",
+    renotify: true,
+    data: { route },
+  };
+  const registration = await getReadyServiceWorkerRegistration({ timeoutMs: 1500 });
+  if (registration?.showNotification) {
+    await registration.showNotification(message.title, options);
+    return true;
+  }
+  const notification = new window.Notification(message.title, options);
+  notification.onclick = () => {
+    notification.close();
+    window.focus();
+    onOpen?.(route);
+  };
+  return true;
+}
+
+export function listenForBackgroundNotificationActions(onOpen) {
+  let removeListener = null;
+  let cancelled = false;
+  getNativeBridge().then(async (nativeBridge) => {
+    if (cancelled || !nativeBridge?.LocalNotifications?.addListener) return;
+    const handle = await nativeBridge.LocalNotifications.addListener("localNotificationActionPerformed", (event) => {
+      const route = event?.notification?.extra?.route;
+      if (route) onOpen?.(route);
+    }).catch(() => null);
+    if (cancelled) {
+      handle?.remove?.();
+      return;
+    }
+    removeListener = () => handle?.remove?.();
+  });
+  return () => {
+    cancelled = true;
+    removeListener?.();
+  };
 }

@@ -1,9 +1,11 @@
 const INTERNAL_ANATOMY_RE = /\b(?:bladder neck|prostate|internal sphincters?|urethral course|pelvic floor musculature|internal rectal structures?|internal hemorrhoids?)\b/i;
 const CALLOUT_DUMP_RE = /^\s*(?:(?:visual\s+)?(?:callouts?|references?)\s+for|visual reference for)\b/i;
 const INCIDENTAL_OBJECT_RE = /\b(?:ecg|chest[-\s]?strap|polar\s*h10|heart[-\s]?rate monitor|headphones?|bone[-\s]?conduction|foot cameras?|camera devices?|table paper|stirrups?|clinician perspective|room contents?|room setup|furniture|background objects?|environmental objects?)\b/i;
-const PROVENANCE_RE = /\b(?:in this batch|this batch|prior batches?|subsequent batches?|later batch|rechecked saved\/direct views?|saved\/direct views?|direct views linked into cumulative review|fresh images added this run|generated at|image set overview|reference value for pulsepoint|coverage map: no distinct recovered batch paragraph|no distinct recovered batch paragraph|assembled from|source details?|provenance)\b/i;
+const PROVENANCE_RE = /\b(?:in this batch|this batch|this pass|current pass|latest pass|prior batches?|subsequent batches?|later batch|current image subset|current reviewed set|current reviewed images?|current image set|current \d+[-\s]?image set|image subset|recent photos?|newest photos?|rechecked saved\/direct views?|saved\/direct views?|direct views linked into cumulative review|fresh images added this run|generated at|image set overview|reference value for pulsepoint|coverage map: no distinct recovered batch paragraph|no distinct recovered batch paragraph|assembled from|source details?|provenance|evidence records?|prior documentation|confidence accumulation|baseline establishment|historical mistakes?|prior corrections?|invalidated findings?|correction history)\b/i;
 const CAMERA_SETUP_RE = /\b(?:foot-of-table|camera angle|camera location|clinician perspective|table-position|session table|treatment table|table paper|stirrups?|lighting is|well-lit|image quality|frame edge|field of view|background)\b/i;
 const DEVICE_KEEP_RE = /\b(?:catheter|foley|urethral|sound|dilator|rectal|anal device|sleeve|device contact|contact zone|fit|tissue interaction|marker)\b/i;
+const BOOKKEEPING_SENTENCE_RE = /\b(?:evidence records?|prior documentation|strongly established|confidence accumulation|baseline establishment|prior corrections?|invalidated findings?|correction history|historical mistakes?|profile reconciliation|saved\/direct views?|rechecked saved\/direct views?)\b/i;
+const UI_CALLOUT_RE = /\b(?:clarify\s*\/\s*correct|remove callout|visual reference for|callouts?|direct visual|directly rechecked|reviewed image|image reference ids?|structured callouts?)\b/i;
 
 function normalizeForbiddenPhrasing(value = "") {
   return String(value || "")
@@ -14,7 +16,25 @@ function normalizeForbiddenPhrasing(value = "") {
     .replace(/\bin (?:image|photo)\s+\d+\b/gi, "")
     .replace(/\b(?:image|photo)\s+\d+\s*(?:and|,)?\s*/gi, "")
     .replace(/\b(?:this|the)\s+(?:image|photo|view)\s+(?:shows|provides|confirms)\b/gi, "visible findings show")
-    .replace(/\b(?:this|the)\s+(?:batch|image set|review run)\b/gi, "the cumulative review")
+    .replace(/\b(?:this|the)\s+(?:batch|image set|review run|pass|current pass|latest pass)\b/gi, "the cumulative review")
+    .replace(/\b(?:the\s+)?(?:current\s+)?image subset\b/gi, "the cumulative review")
+    .replace(/\b(?:the\s+)?current reviewed set\b/gi, "the cumulative review")
+    .replace(/\b(?:the\s+)?current image set\b/gi, "the cumulative review")
+    .replace(/\b(?:the\s+)?current\s+\d+[-\s]?image set\b/gi, "the cumulative review")
+    .replace(/\b(?:recent|newest)\s+photos?\b/gi, "current update evidence")
+    .replace(/\b(?:remains|is|appears)\s+consistent\s+with\s+(?:the\s+)?(?:strongly\s+)?(?:established\s+)?(?:prior\s+)?(?:baseline|prior documentation|evidence records?)\b/gi, "appears unchanged")
+    .replace(/\bconsistent\s+with\s+(?:the\s+)?(?:strongly\s+)?(?:established\s+)?(?:prior\s+)?(?:baseline|prior documentation|evidence records?)\b/gi, "unchanged")
+    .replace(/\b(?:strongly\s+)?established\s+baseline\s+(?:finding|evidence|profile)\b/gi, "current finding")
+    .replace(/\b(?:prior|saved)\s+documentation\b/gi, "saved review")
+    .replace(/\bnot directly visible in any current image\b/gi, "not newly refreshed")
+    .replace(/\bnot directly visible in any current images\b/gi, "not newly refreshed")
+    .replace(/\bnot directly visible in any reviewed image\b/gi, "not newly refreshed")
+    .replace(/\bnot directly visible in any reviewed images\b/gi, "not newly refreshed")
+    .replace(/\bnot directly visible in any current view\b/gi, "not newly refreshed")
+    .replace(/\bnot directly visible in any current views\b/gi, "not newly refreshed")
+    .replace(/\bno direct coverage in the current[^.]*\./gi, "")
+    .replace(/\bno direct coverage from the current[^.]*\./gi, "")
+    .replace(/\b(?:the\s+)?current\s+\d+[-\s]?image\s+set\b/gi, "latest update evidence")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
@@ -30,12 +50,23 @@ function shouldDropSentence(sentence = "") {
   const text = String(sentence || "");
   if (!text.trim()) return true;
   if (CALLOUT_DUMP_RE.test(text)) return true;
+  if (UI_CALLOUT_RE.test(text)) return true;
   if (INTERNAL_ANATOMY_RE.test(text)) return true;
   if (PROVENANCE_RE.test(text)) return true;
+  if (/^\s*(?:not represented|not visible|not directly reassessed|not included|not available)\s+in\s+(?:this|the)\s+(?:pass|current pass|latest pass|image subset|current image subset|batch|image set)\.?\s*$/i.test(text)) return true;
+  if (/^\s*(?:head|neck|chest|shoulders?|upper limbs?|posterior trunk|head, neck, chest, upper limbs, and posterior trunk)(?:,\s*(?:head|neck|chest|shoulders?|upper limbs?|posterior trunk))*\s+have\s*\.?\s*$/i.test(text)) return true;
+  if (/^\s*(?:no\s+)?[a-z][a-z\s/&-]{1,60}\s+(?:images?\s+are\s+present|views?\s+are\s+present|coverage\s+is\s+present|is\s+not\s+directly\s+visible|are\s+not\s+directly\s+visible|not\s+directly\s+visible)\s+in\s+(?:the\s+)?current(?:ly)?\s+(?:reviewed\s+)?(?:set|images?|views?)\.?\s*$/i.test(text)) return true;
+  if (/^\s*(?:not represented|not visible|not directly reassessed|not included|not available)\s+in\s+the\s+cumulative\s+review\.?\s*$/i.test(text)) return true;
+  if (/^\s*[a-z][a-z\s/&-]{1,60}\s+(?:not represented|not visible|not directly reassessed|not included|not available)\s+in\s+(?:the cumulative|this|the)\s+(?:pass|current pass|latest pass|image subset|current image subset|batch|image set|review)\.?\s*$/i.test(text)) return true;
+  if (/^\s*(?:stable from prior established baseline|stable from established baseline|baseline carried forward|carried forward from prior baseline)\.?\s*$/i.test(text)) return true;
+  if (BOOKKEEPING_SENTENCE_RE.test(text) && !/\b(?:bruise|wound|healing|swelling|lesion|scar|catheter|foley|meatus|glans|penis|scrot|skin|edema|irritation|redness|fissure|ulcer|rash|papules?)\b/i.test(text)) return true;
+  if (/\b(?:correction|invalidated|historical mistake|profile reconciliation)\b/i.test(text)) return true;
   if (INCIDENTAL_OBJECT_RE.test(text) && !DEVICE_KEEP_RE.test(text)) return true;
   if (CAMERA_SETUP_RE.test(text) && !/\b(?:posture|alignment|supine|standing|prone|seated|lithotomy|abduction|flexion|extension)\b/i.test(text)) return true;
   if (/\bthe cumulative review does not include\b/i.test(text)) return true;
   if (/\b(?:not visible|not included|not provided|not available|deferred)\b/i.test(text) && /\b(?:batch|image set|prior|subsequent|later|rechecked)\b/i.test(text)) return true;
+  if (/\bnot newly refreshed\b/i.test(text) && !/\b(?:help|useful|future|next|refresh)\b/i.test(text)) return true;
+  if (/^\s*(?:this|the)\s+(?:finding|observation|region|section)\s+appears unchanged\.?\s*$/i.test(text)) return true;
   return false;
 }
 
@@ -43,22 +74,46 @@ export function cleanProfileImageReviewText(value = "") {
   const raw = String(value || "");
   if (!raw.trim()) return "";
   if (CALLOUT_DUMP_RE.test(raw)) return "";
+  if (UI_CALLOUT_RE.test(raw)) return "";
   if (INCIDENTAL_OBJECT_RE.test(raw) && !DEVICE_KEEP_RE.test(raw)) return "";
 
   let text = normalizeForbiddenPhrasing(raw)
     .replace(/\bThis batch does not include[^.]*\.?\s*/gi, "")
     .replace(/\bThis image set does not include[^.]*\.?\s*/gi, "")
+    .replace(/\bThis pass does not include[^.]*\.?\s*/gi, "")
+    .replace(/\bThe current pass does not include[^.]*\.?\s*/gi, "")
     .replace(/\bAll \d+ rechecked saved\/direct views[^.]*\.?\s*/gi, "")
     .replace(/\b\d+ direct views linked into cumulative review\.?\s*/gi, "")
     .replace(/\bNo distinct recovered batch paragraph[^.]*\.?\s*/gi, "")
     .replace(/\bCoverage Map:\s*No distinct recovered batch paragraph[^.]*\.?\s*/gi, "")
     .replace(/\bNo (?:whole-body|full-body|torso|standing|posterior|anterior|lateral|upper limb|lower limb|foot|feet)[^.]*?(?:in this batch|in this image set|were included|were provided)[^.]*\.?\s*/gi, "")
+    .replace(/\b(?:Head|Neck|Chest|Shoulders?|Upper limbs?|Posterior trunk|Head, neck, chest, upper limbs, and posterior trunk)[^.]*?(?:no direct coverage|not directly visible|not represented|not included)[^.]*?(?:current|reviewed|image set|images|views)[^.]*\.?\s*/gi, "")
+    .replace(/\b(?:Head|Neck|Chest|Shoulders?|Upper limbs?|Posterior trunk|Head, neck, chest, upper limbs, and posterior trunk)\s+have\s*\.?\s*/gi, "")
     .replace(/\bnot visible in this batch\.?\s*/gi, "")
+    .replace(/\bnot visible in this pass\.?\s*/gi, "")
+    .replace(/\bnot represented in this pass\.?\s*/gi, "")
+    .replace(/\bnot directly reassessed in this pass\.?\s*/gi, "")
+    .replace(/\bnot visible in the current image subset\.?\s*/gi, "")
+    .replace(/\bnot represented in the current image subset\.?\s*/gi, "")
+    .replace(/\b(?:No\s+)?[A-Z][A-Za-z\s/&-]{1,60}\s+(?:images?\s+are\s+present|views?\s+are\s+present|coverage\s+is\s+present|is\s+not\s+directly\s+visible|are\s+not\s+directly\s+visible|not\s+directly\s+visible)\s+in\s+(?:the\s+)?current(?:ly)?\s+(?:reviewed\s+)?(?:set|images?|views?)\.?\s*/g, "")
+    .replace(/\b(?:current reviewed set|current image set|current \d+[-\s]?image set)\b/gi, "cumulative review")
+    .replace(/\b[a-z][a-z\s/&-]{1,60}\s+(?:not represented|not visible|not directly reassessed|not included|not available)\s+in\s+(?:the cumulative|this|the)\s+(?:pass|current pass|latest pass|image subset|current image subset|batch|image set|review)\.?\s*/gi, "")
+    .replace(/\bnot visible in the cumulative review\.?\s*/gi, "")
+    .replace(/\bnot represented in the cumulative review\.?\s*/gi, "")
+    .replace(/\bnot directly reassessed in the cumulative review\.?\s*/gi, "")
     .replace(/\bnot provided in this batch\.?\s*/gi, "")
     .replace(/\bnot included in this batch\.?\s*/gi, "")
+    .replace(/\bStable from prior established baseline\.?\s*/gi, "")
+    .replace(/\bBaseline carried forward\.?\s*/gi, "")
+    .replace(/\b(?:This|The)\s+(?:finding|observation|region|section)\s+(?:remains|is)\s+consistent\s+with\s+(?:the\s+)?(?:strongly\s+)?(?:established\s+)?(?:baseline|prior documentation|evidence records?)[^.]*\.?\s*/gi, "")
+    .replace(/\b(?:Prior corrections?|Invalidated findings?|Correction history|Historical mistakes?)[^.]*\.?\s*/gi, "")
+    .replace(/\b(?:evidence records?|prior documentation|confidence accumulation|baseline establishment|profile reconciliation)[^.]*\.?\s*/gi, "")
+    .replace(/\b(?:remains|is|appears)\s+consistent\s+with\s+(?:the\s+)?(?:strongly\s+)?(?:established\s+)?(?:prior\s+)?(?:baseline|prior documentation|evidence records?)\b/gi, "appears unchanged")
+    .replace(/\bconsistent\s+with\s+(?:the\s+)?(?:strongly\s+)?(?:established\s+)?(?:prior\s+)?(?:baseline|prior documentation|evidence records?)\b/gi, "unchanged")
     .replace(/\bdeferred to (?:another|subsequent|later) batch[^.]*\.?\s*/gi, "")
     .replace(/\b(?:prior|subsequent|later) batches?[^.]*\.?\s*/gi, "")
     .replace(/\b(?:ECG|Polar H10|chest[-\s]?strap|heart[-\s]?rate monitor|bone[-\s]?conduction headphones?|headphones?|foot cameras?|camera devices?|table paper|stirrups?)[^.]*\.?\s*/gi, "")
+    .replace(/\b(?:Visual reference for|Clarify\s*\/\s*correct|Remove callout)[^.]*\.?\s*/gi, "")
     .replace(/\b(?:No|The)\s+(?:bladder neck|prostate|internal sphincters?|urethral course|pelvic floor musculature|internal rectal structures?|internal hemorrhoids?)[^.]*\.?\s*/gi, "")
     .replace(/\b(?:bladder neck|prostate|internal sphincters?|urethral course|pelvic floor musculature|internal rectal structures?|internal hemorrhoids?)[^.]*?(?:not visible|not visualized|not assessable|not assessed)[^.]*\.?\s*/gi, "")
     .replace(/\b(?:lubricant residue|possible lubricant residue|natural moisture or possible lubricant residue)\b/gi, "surface sheen/moisture; source cannot be determined from static image")
@@ -68,11 +123,54 @@ export function cleanProfileImageReviewText(value = "") {
   text = sentenceChunks(text).filter((sentence) => !shouldDropSentence(sentence)).join(" ").trim();
   if (!text || INTERNAL_ANATOMY_RE.test(text)) return "";
   if (PROVENANCE_RE.test(text)) return "";
+  if (UI_CALLOUT_RE.test(text)) return "";
   if (INCIDENTAL_OBJECT_RE.test(text) && !DEVICE_KEEP_RE.test(text)) return "";
   if (/\bmeat(?:al|us)\b/i.test(text) && /\b(?:bright|highlight|fluid|droplet|secretion|pre[-\s]?ejaculate)\b/i.test(text)) {
     return "Small bright meatal highlight or possible fluid point; static image cannot confirm secretion.";
   }
   return text;
+}
+
+function cleanProfileImageMetadataText(value = "") {
+  return normalizeForbiddenPhrasing(String(value || ""))
+    .replace(/\bwhole-body standing posture is not established by this frame\.?/gi, "")
+    .replace(/\bposture labels are intentionally conservative for close-up pelvic views\.?/gi, "")
+    .replace(/\bclose-up pelvic\/genital reference view;\s*/gi, "")
+    .replace(/\bclose-up pelvic\/genital reference view\.?/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+·\s+$/g, "")
+    .trim();
+}
+
+function normalizeProfileImageMetadata(image = {}) {
+  const combined = [
+    image.view_label,
+    image.body_position,
+    image.coverage,
+    image.visibility_notes,
+    ...(Array.isArray(image.major_regions_visible) ? image.major_regions_visible : []),
+  ].filter(Boolean).join(" ").toLowerCase();
+  const hasPelvicDisclaimer = /\bclose-up pelvic\/genital reference view\b|\bwhole-body standing posture is not established\b|\bposture labels are intentionally conservative for close-up pelvic views\b/i.test(
+    [image.view_label, image.body_position, image.visibility_notes].filter(Boolean).join(" ")
+  );
+  const cleaned = {
+    ...image,
+    view_label: cleanProfileImageMetadataText(image.view_label || ""),
+    body_position: cleanProfileImageMetadataText(image.body_position || ""),
+    coverage: cleanProfileImageMetadataText(image.coverage || ""),
+    visibility_notes: cleanProfileImageMetadataText(image.visibility_notes || ""),
+  };
+  if (!hasPelvicDisclaimer) return cleaned;
+  if (/\b(feet|foot|toes?|ankles?|heels?)\b/.test(combined)) {
+    return { ...cleaned, view_label: "Foot and ankle reference view" };
+  }
+  if (/\b(lower leg|calf|knee|thigh|lower limb)\b/.test(combined)) {
+    return { ...cleaned, view_label: "Lower-limb reference view" };
+  }
+  if (/\b(abdomen|abdominal|flank|umbilicus|bite wound)\b/.test(combined)) {
+    return { ...cleaned, view_label: "Abdominal reference view" };
+  }
+  return cleaned;
 }
 
 export function profileImageReviewTopicKey(value = "") {
@@ -199,13 +297,7 @@ export function cleanupProfileImageReviewResult(result = {}, { sections = [] } =
   }
 
   cleaned.annotated_images = Array.isArray(cleaned.annotated_images)
-    ? cleaned.annotated_images.map((image) => ({
-      ...image,
-      view_label: cleanProfileImageReviewText(image.view_label || ""),
-      body_position: cleanProfileImageReviewText(image.body_position || ""),
-      coverage: cleanProfileImageReviewText(image.coverage || ""),
-      visibility_notes: cleanProfileImageReviewText(image.visibility_notes || ""),
-    }))
+    ? cleaned.annotated_images.map((image) => normalizeProfileImageMetadata(image))
     : [];
   cleaned.image_region_findings = Array.isArray(cleaned.image_region_findings)
     ? dedupeImageRegionFindings(cleaned.image_region_findings)

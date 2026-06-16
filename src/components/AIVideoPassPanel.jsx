@@ -31,6 +31,7 @@ import {
   normalizeBodyExplorationVideoPassFindings,
   normalizeSessionVideoPassFindings,
 } from "@/lib/visualEvidence";
+import { PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
 import {
   deviceEvidenceStageForText,
   hasUnsupportedMeatusContactClaim as hasUnsupportedMeatusContactClaimGuard,
@@ -119,6 +120,10 @@ function progressText(value = "") {
   if (typeof value === "object") return humanStatus(value);
   return String(value).replace(/\s+/g, " ").trim();
 }
+
+const ANATOMICAL_LATERALITY_RULE = `Anatomical laterality rule: "your left" and "your right" must always mean Ben's anatomical left/right, not the viewer's screen-left/screen-right. When you are facing the camera, your anatomical right appears on the viewer's left; when the view is from your feet, overhead, mirrored, supine, rotated, close-cropped, or composite, laterality can flip or become ambiguous. Do not guess left/right from image position alone. Preserve anatomical identity across views: a bruise, mole, scar, catheter/tubing position, pelvic finding, genital finding, or skin mark on your anatomical right remains right-sided when you move from supine to standing, turn toward the camera, rotate, or appear in another camera lane. Track stable landmarks such as your umbilicus, sternum, pubic mound, inguinal creases, thighs, known scars, moles, bruises, catheter exit angle, and manual side notes before assigning side. If anatomical laterality is not unmistakable from body landmarks, camera orientation, tracking labels, or manual notes, use "screen-left/screen-right", "near/far", "upper/lower", "one hand/the other hand", or "one leg/the other leg" instead of anatomical left/right. For head-to-toe, masturbation, Foley/body exploration, and lower-body assessments, explicitly preserve this distinction.`;
+
+const PRODUCTION_PROCEDURE_ANNOTATION_RULE = `Production procedure narration rule: output should be useful for later viewer-facing review, not an internal correction log. Do not write "possible visual/timeline mismatch", "correction", "video-pass conflict", "timeline of record", "not directly documented", "not visible", or "could not confirm" unless the uncertainty changes safety or the event should be rejected. If manual notes resolve the sequence, silently use the manual notes and write the clean visible/procedural action. Visible hands are your hands; write "your hand" or "your hands". Use "your gloved hand" only when glove/sterile technique matters. Never write "a gloved hand", "the gloved hand", "operator", "operator's hand", "clinician", or "assistant". Do not infer povidone-iodine from natural tissue color, warm lighting, shadow, or camera tone; only call iodine/staining when the swab/applicator or nearby manual note supports iodine at that stage. If manual notes place swabbing after draping, do not describe swabbing or iodine staining before draping. If two swabbing passes are logged, describe two passes total, not an extra prep pass.`;
 
 function formatLocalVisionRollingState(state) {
   if (!state) return "";
@@ -456,6 +461,32 @@ function sanitizeExplorationFoleyText(text) {
   const value = neutralizeIntentLanguage(text);
   const { text: next } = sanitizeFoleyProcedureTextGuard(value);
   return reduceConsistencyPhraseRepetition(sanitizeSecondPersonProcedureLanguage(next)
+    .replace(/\bthe\s+subject'?s\b/gi, "your")
+    .replace(/\bsubject'?s\b/gi, "your")
+    .replace(/\bthe\s+subject\b/gi, "you")
+    .replace(/\bsubject\b/gi, "you")
+    .replace(/\bthe\s+patient'?s\b/gi, "your")
+    .replace(/\bpatient'?s\b/gi, "your")
+    .replace(/\bthe\s+patient\b/gi, "you")
+    .replace(/\bpatient\b/gi, "you")
+    .replace(/\bthe\s+participant'?s\b/gi, "your")
+    .replace(/\bparticipant'?s\b/gi, "your")
+    .replace(/\bthe\s+participant\b/gi, "you")
+    .replace(/\bparticipant\b/gi, "you")
+    .replace(/\bthe\s+operator'?s\b/gi, "your")
+    .replace(/\boperator'?s\b/gi, "your")
+    .replace(/\bthe\s+operator\b/gi, "your gloved hand")
+    .replace(/\boperator\b/gi, "your gloved hand")
+    .replace(/\bthe\s+user'?s\b/gi, "your")
+    .replace(/\buser'?s\b/gi, "your")
+    .replace(/\bthe\s+user\b/gi, "you")
+    .replace(/\buser\b/gi, "you")
+    .replace(/\bthe\s+gloved\s+person'?s\b/gi, "your")
+    .replace(/\bthe\s+gloved\s+person\b/gi, "your gloved hand")
+    .replace(/\bgloved\s+person\b/gi, "your gloved hand")
+    .replace(/\bthe\s+helper'?s\b/gi, "your")
+    .replace(/\bthe\s+helper\b/gi, "your gloved hand")
+    .replace(/\bhelper\b/gi, "your gloved hand")
     .replace(/\bleft\s+(blue-gloved\s+)?hand\b/gi, "one $1hand")
     .replace(/\bright\s+(blue-gloved\s+)?hand\b/gi, "the other $1hand")
     .replace(/\bleft\s+hand\b/gi, "one hand")
@@ -2091,10 +2122,10 @@ export default function AIVideoPassPanel({
     setError("");
     setCards([]);
     setAcceptedIds(new Set());
+    freshRunStartedAtRef.current = Date.now();
     try {
-      const workingSession = await resetStoredAIPassState({
-        message: `Starting fresh ${recordLabel} video analysis: cleared prior AI pass findings, audio pass notes, and AI-generated annotations.`,
-      });
+      const workingSession = session;
+      setStatus(`Starting ${recordLabel} Claude/Sarah video pass. Previously accepted evidence is preserved.`);
       const nextCards = [];
       const videoContext = isExploration
         ? buildBodyExplorationVideoContext(workingSession, selectedVideo, timelineRows)
@@ -2191,6 +2222,9 @@ Foley placement sequence to track when visible: positioning on the table; drapin
 
 Foley state-versus-action rule: Foley catheter/tubing already being visible means "Foley/tubing remains present", not "inserted", "placed", "advanced", or "secured". Yellow tubing being moved, lifted, routed, or resting across the field is tubing handling unless the catheter shaft is visibly advancing at the meatus or balloon hardware is visible. Do not mention StatLock, adhesive securement, securement finalization, balloon inflation, bladder entry, urine confirmation, or urine collection unless that exact item/action is visible in the sampled frames or explicitly logged in nearby manual notes. Prior AI-generated events/findings do not count as manual evidence.
 
+Procedure timeline authority rule: timestamped manual/user event notes are the procedural timeline of record. Use video to support, clarify, or flag uncertainty around those notes; do not let an AI visual guess move a procedural step earlier or later than the manual timeline. If a sampled frame appears to conflict with a nearby manual note, say there is a possible visual/timeline mismatch and keep the manual note as the anchor unless the current frames directly and unmistakably show otherwise. Do not describe povidone-iodine, lubricant, Foley contact, meatal engagement, bladder entry, balloon inflation, urine return, or securement before the first manual note or current-frame evidence that supports that specific item/action.
+${PRODUCTION_PROCEDURE_ANNOTATION_RULE}
+
 Known object correction: the blue item on the procedure tray/right field edge is a lubricant bottle or prep material, not a blue-tipped Foley. Do not identify that blue tray object as Foley tubing, catheter tip, catheter port, or evidence that the Foley is already inserted. A Foley/catheter claim requires the actual catheter shaft/tip, tubing connected to Foley hardware, or clear meatal contact/advancement visible in the current frames.
 
 Already-in-place gate: do not use "already in place", "post-placement", "seated", or "dwell interval" just because Foley/catheter material is first visible at the glans or meatus. First clear visibility at the meatus/glans is usually "catheter tip at the meatus" or "insertion beginning" if the tip is entering. Use "already in place" only if an earlier manual note/current-run corrected reviewed window explicitly confirmed advancement/placement, or if urine return, balloon inflation, drape removal after placement, bag collection, or another completion marker is visible. Prior AI-generated claims do not count as confirmation.
@@ -2203,14 +2237,21 @@ No forecasted Foley stages: do not write "meatal engagement appears imminent", "
 
 Meatal contact is its own stage: if the sampled frames show the actual catheter/Foley/tool tip touching or aligned at the meatus but do not prove motion through the meatus, say "catheter tip at the meatus" or "visible meatal contact/engagement." If the tip or meatus is out of frame, occluded, cropped, or ambiguous, do not say "at", "contacting", "touching", "entering", or "advancing through" the meatus. Do not downgrade true visible meatal contact to generic tubing/field handling. Upgrade meatal contact to active advancement when frame-to-frame catheter motion or progressive external-length shortening is visible. Do not upgrade it to already-in-place unless the already-in-place gate is satisfied.
 
-Handedness/camera rule: do not label hands as left or right unless the camera orientation makes anatomical handedness unambiguous. Prefer "one hand", "the other hand", "upper hand", "lower hand", "near hand", or "far hand" for visual tracking.
-Personal language rule: write about Ben directly as "you" and "your". Never call him "the subject", "subject", "patient", or "the person". Do not call the gloved helper/hand "the operator"; use "a gloved hand", "gloved hands", or "the gloved person" only when that is visually relevant.
+${ANATOMICAL_LATERALITY_RULE}
+${PRODUCTION_PROCEDURE_ANNOTATION_RULE}
+Handedness/camera rule: do not label hands, feet, legs, or body sides as left or right unless anatomical laterality is unambiguous. Prefer "one hand", "the other hand", "upper hand", "lower hand", "near hand", "far hand", "screen-left foot", or "screen-right leg" for visual tracking when camera perspective is uncertain.
+Hands and participation rule: assume visible hands are your hands unless another participant is clearly visible or explicitly logged as assisting. Do not introduce another person, helper, clinician, operator, or assistant from hands alone.
+Personal language rule: write about Ben directly as "you" and "your". Never call him "the subject", "subject", "patient", "participant", "operator", "the person", "the user", "the user's", "a gloved hand", or "the gloved hand". Use "your hand" or "your hands"; use "your gloved hand" only when glove/sterile technique matters.
 Use exploration event categories only: instrumentation, instrumentation_change, physical, sensation, comfort, setup, or other.
 Draft event examples for this mode: "Fresh gloves/glove change visible during prep", "Draping and field setup continue", "Swabbing/prep continues around the meatus", "Lubrication or dilation syringe is used near the meatus", "One hand stabilizes the penis while the other brings the catheter toward the meatus" only if a Foley is visibly in hand, "Catheter tip is visible at the meatus" when contact/engagement is visible without confirmed advancement, "Foley insertion begins at the meatus" when the tip first visibly enters, "Foley advancement is visible at the meatus" when frame-to-frame advancement or progressive external-length shortening is visible, "Foley/tubing is being handled after insertion" only after completion is established, "Urine appears in the tubing/bag", "Drape is removed while urine collects in the bag".` : ""}
 
 You are Sarah, reviewing sampled frames from a linked local ${recordLabel} video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
 
+${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
+
 ${isExploration ? "Exploration/procedure context grounding" : "Session context grounding"} has priority when it identifies known setup, devices, materials, or technique. Use the ${recordLabel} notes, methods, devices, and timestamped/manual notes below to interpret ambiguous visible objects and contact locations. ${isExploration ? "For example, if the exploration context says an 18 French Foley catheter or urethral sound is in use and the frames show a matching device at the meatus, identify it as that supported instrumentation rather than vague stimulation or generic object handling." : "For example, if the session context says a vibrator is held at the perineum during stimulation and the frames show a matching device/contact at that location, call it a perineal vibrator/contact rather than a vague \"blue device near the scrotum and genitals.\""} If context and visuals do not line up, state the uncertainty instead of forcing the label.
+
+${isExploration ? "Procedure chronology rule: manual/user timeline notes are stronger than prior AI video-pass cards for stage order and timing. Use the current sampled frames to describe what is visible now, but do not back-date iodine, lubricant, Foley-at-meatus contact, insertion, urine return, balloon fill, securement, or cleanup into a window unless either the current frames show it or a nearby manual note says it has happened. If the video appears to show something before the manual timeline allows it, label the visual as ambiguous or possible conflict instead of merging both claims." : ""}
 
 Current-frame override rule: the sampled frames in this request are the primary evidence. Prior summaries, accepted cards, and continuity text can orient the sequence, but they must not override the current frames. If the prior window said "resting", "no stimulation", "no visible movement", or "HR rising without visible cause", actively re-check the current frames for hand/device contact, visible stroke or device motion, perineal contact, glans/shaft movement, sleeve/lubricant interaction, body/leg response, or procedure action before repeating that claim.
 
@@ -2231,6 +2272,9 @@ ${videoFocusInstruction(selectedVideo, selectedVideoRole, isExploration)}
 
 Source-lane rule: treat the selected camera as its own evidence lane. Main/composite owns genital, stimulation, hand contact, device, lubricant, and technique observations. Feet/lower-body owns feet, toes, heels, soles, ankles, legs, planting, bracing, tremor, shudder, and lower-body tension/relaxation observations. Lateral/full-body owns posture, pelvic lift/drop, breathing cues, whole-body tension, and major body transitions. For a feet/lower-body pass, do not draft timeline events about right/left hand movement, genital contact, control objects, lube/device handling, erection/genital state, or stimulation pause/resume unless a visible foot/leg change is the main event.
 
+${ANATOMICAL_LATERALITY_RULE}
+${PRODUCTION_PROCEDURE_ANNOTATION_RULE}
+
 Feet-lane sensitivity rule: for feet/lower-body videos, look carefully for subtle but meaningful lower-body activity before claiming no change. Specifically compare toe curl/extension, toes pointing downward or relaxing, heel spread or lift, foot fan/splay, sole angle, ankle flexion, leg tension/relaxation, tremble, shudder, side-to-side oscillation, and left/right asymmetry. Downward planting, toe curl, tensing, trembling, or progressive foot fan are meaningful findings/events even if the body otherwise stays in place. Do not write repeated "no change", "stillness continues", "baseline unchanged", or "no lower-body response" findings/events across adjacent windows. If the only observation is static lower-body position, keep the summary to one brief sentence and return empty findings and empty events.
 
 Observation priorities, in order:
@@ -2238,17 +2282,18 @@ Observation priorities, in order:
 2. ${isExploration ? "Procedure/instrumentation state: what body area or device/material is involved, whether procedure contact continues, starts, pauses, resumes, or changes, and whether motion/position shows glove change/prep, setup, prep/swabbing, lubrication/dilation, visible meatal contact/engagement, visible advancement, already-in-place catheter state, tubing/field handling, balloon inflation, drape removal, urine collection, or post-procedure checking. Do not claim insertion/advancement/securement from Foley or tubing presence alone. Do not claim meatal engagement is imminent; either the tip/contact at the meatus is visible now or it is not. If tip-at-meatus contact is visible but advancement is not, preserve that as meatal contact rather than downgrading to tubing handling." : "Stimulation state and technique: what body area is contacted, whether contact continues, starts, pauses, resumes, or changes, and whether motion/position suggests a technique shift."}
 3. Whole-body and lower-body response: leg/foot activity, toe/heel/planting/bracing changes, abdominal/chest movement or breathing estimate only when enough body surface is visible, posture shifts, tremor, shudder, and relaxation/tension cues.
 4. Device/material use: lubrication application, visible lubricant sheen, sleeve/Foley/e-stim/TENS/device use, device introduction/removal, and contact/fit changes when visible or supported.
-5. Telemetry only as supporting context from stored session data. Do not visually analyze or report the HR overlay, phase label, trend chart, AVG, MAX, or timer as a finding/event unless it directly supports a visible physiological or ${isExploration ? "procedure" : "stimulation"} transition.
+5. PulsePoint app overlay interpretation when readable: if the visible PulsePoint overlay or captured app panel shows Current HR, AVG, MAX, RR samples, RMSSD, HRV quality, build confidence, AI Magic, near-climax, recovery, phase labels, timers, EMG levels, or heart-rate trend, treat it as app-generated telemetry evidence for this window. Use it to support physiological interpretation and timing correlation with visible body/procedure/stimulation changes. Do not make a standalone finding from overlay text alone unless the overlay change is itself the useful evidence.
+6. Device overlay interpretation when readable: if a visible Howl, Coyote-E, e-stim, TENS, or stim-control overlay/screenshot shows frequency, intensity, power level, waveform, mode/program, channel state, playback status, ramp/activity state, or stimulation on/off state, extract and interpret those values naturally as device evidence. Do not say the device cannot be interpreted when readable values are visible. If the text is too small/blurred, say it is unreadable rather than absent.
 
 Generic object rule: ignore mouse, remote, keyboard, phone, dark handheld object, side-table object, or generic "control object" details. Do not write "reaches for control object", "returns to control object", "handheld controller", or similar language in findings or draft events. If the hand leaves or returns to the body, describe only the relevant body/${isExploration ? "procedure" : "session"} change, such as ${isExploration ? "\"prep contact pauses\", \"tool handling resumes\", \"hand stabilizes the glans\", or \"tubing is repositioned\"" : "\"genital contact pauses\", \"stimulation resumes\", \"hand leaves genital contact\", or \"hand returns to genital contact\""}. Only identify an object when it is a known or clearly visible session-relevant item such as a silicone sleeve, vibrator, lubricant bottle, Foley catheter, TENS/e-stim component, pump, towel, or explicitly user-labeled device.
 
 Output style: write the summary as a flowing chronological observation with the most useful visible physiology and ${isExploration ? "procedure/device landmark" : "stimulation"} changes first. Keep it to 2 concise sentences. Return 2-4 finding cards only when there are useful non-repetitive observations; return fewer or none when the window adds nothing. Each finding title should be under 9 words, and each finding text should be 1 concise sentence. Return 1-3 timeline events only when there is a meaningful change or useful timestampable observation. Avoid spending a finding slot on HR overlay text, static background objects, unchanged setup, no-change filler, or the mere presence of a control object.
 Language variety rule: do not make "consistent with" or "consistently" your default evidence phrase. Use them at most once in this window, then vary with "fits with", "aligns with", "matches", "supports", "stable", "repeated", or direct observation language.
-Use direct, personal language: "you", "your glans", "your lower body", "a gloved hand". Do not use detached research wording such as "subject", "the subject", "patient", or "operator".
+Use direct, personal language: "you", "your glans", "your lower body", "your hand", or "your hands". Do not use detached research wording such as "subject", "the subject", "patient", "participant", "operator", "the person", "the user", "the user's", "a gloved hand", or "the gloved hand". Use "your gloved hand" only when glove/sterile technique matters. Assume the hand is yours unless another person is clearly visible or explicitly logged.
 
 Draft event style: write events like concise manual timeline notes, not analysis paragraphs. Prefer observations such as ${isExploration ? "\"Drape/setup position is visible\", \"Antiseptic prep continues around the meatus\", \"Lubrication/tool handling begins\", \"Catheter is not visible in this window\", \"Catheter tip is visible at the meatus\" only when the actual tip is visible there, \"Visible Foley advancement continues\" only when frame-to-frame advancement is visible, or \"Tubing/field handling continues\"" : "\"Left foot plants further while legs tense\", \"Pelvis lifts briefly then drops\", \"Lubrication applied to glans\", \"Perineal contact resumes below scrotum\", \"Stimulation resumes with mid-shaft to glans strokes\", \"Glans remains engorged with visible sheen\", \"Sleeve use becomes visible\" only after visible placement/use, \"Deep exhale visible through abdominal drop\", or \"Whitish ejaculate clearly visible after confirmed climax marker\""} only when strongly supported by context plus visible sequence. Do not include HR/BPM/overlay/timer language in event notes unless no visible body/${isExploration ? "procedure" : "stimulation"} change exists. Do not begin event notes with "this window opens", "window opens", "this window closes", or "window closes"; write the actual observed change directly.
 
-Visible tools and materials matter when supported: identify lubrication bottles or lubricant application only when a bottle, gel/fluid, hand motion, shine, or user/session context makes that reasonably clear. ${isExploration ? "For body exploration, avoid generic \"object\" wording when the visible material is more likely swab, gauze, wipe, drape, towel, applicator, tubing, catheter shaft, lubricant, or syringe. Use the session context to name procedure-relevant materials when the sequence and visuals make that reasonable, but do not make every frame about the final device. Do not name securement hardware, StatLock, balloon, urine return, or bag collection unless visible in current sampled frames or explicitly stated in nearby manual notes." : "Identify devices such as a silicone sleeve, Foley catheter, e-stim/TENS leads, pump, towel, table, or camera/monitor setup when visible or strongly supported by session context."} If uncertain, say "possible" and mark confidence low or moderate. Write findings in direct second person using "you" and "your".
+Visible tools and materials matter when supported: identify lubrication bottles or lubricant application only when a bottle, gel/fluid, hand motion, shine, or user/session context makes that reasonably clear. ${isExploration ? "For body exploration, avoid generic \"object\" wording when the visible material is more likely swab, gauze, wipe, drape, towel, applicator, tubing, catheter shaft, lubricant, or syringe. Use the session context to name procedure-relevant materials when the sequence and visuals make that reasonable, but do not make every frame about the final device. Do not name securement hardware, StatLock, balloon, urine return, or bag collection unless visible in current sampled frames or explicitly stated in nearby manual notes." : "Identify devices such as a silicone sleeve, Foley catheter, e-stim/TENS leads, pump, towel, table, Coyote-E/Howl overlay, stim-control display, or camera/monitor setup when visible or strongly supported by session context. When readable, preserve frequency, intensity, power, mode, waveform, channel, play/pause, and active/ramp state as concrete timeline evidence."} If uncertain, say "possible" and mark confidence low or moderate. Write findings in direct second person using "you" and "your".
 
 Foot and body tracking dots rule: circular dots or bright reflective spots on the feet/body are tracking markers by default, not electrodes. Call them "tracking markers", "reflective markers", or "visible dots" unless e-stim, TENS, electrode pads, electrode leads, or an electrode setup is explicitly mentioned in the session context, nearby events, or the user's caption. Never write "foot electrode markers" from appearance alone.
 
@@ -2441,6 +2486,10 @@ Telemetry: ${card.telemetry || "None"}
 
 Foley correction rules:
 - Foley/tubing visible means present/state, not newly inserted, placed, advanced, secured, or finalized.
+- Timestamped manual/user notes are the procedural timeline of record. Use the current sampled frames to correct visible evidence, but do not move iodine, lubricant, Foley-at-meatus contact, insertion, urine return, balloon inflation, or cleanup earlier/later than the manual timeline unless the current frames directly and unmistakably show that mismatch.
+- If the visual card conflicts with a manual note, call it a possible visual/timeline mismatch rather than merging both into a false sequence.
+- ${ANATOMICAL_LATERALITY_RULE}
+- Assume visible hands are your hands unless another participant is clearly visible or explicitly logged as assisting. Write "you", "your", "your gloved hand", "one gloved hand", or "the other gloved hand"; do not use detached labels for you or your hands.
 - Use catheter not visible when the actual catheter/tool tip is outside the frame, cropped, hidden, blocked by hands/body/drape, or cannot be distinguished from field materials.
 - Use catheter approach only when the actual catheter/tool is visible moving toward the meatus but has not reached it.
 - Use catheter tip at the meatus only when the actual tip is touching/aligned at the meatus but not visibly entering.
@@ -2567,14 +2616,6 @@ Return a corrected compact card for this same window. Keep timeline events only 
         const restored = { ...latest.result, id: latest.id, created_at: latest.created_at, analysis_type: latest.analysis_type };
         setLocalVisionResult(restored);
         setLocalVisionStatus(`Loaded saved local vision ${latest.analysis_type || "analysis"} from ${new Date(latest.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`);
-        const restoredCard = cardFromLocalVisionResult(restored, selectedVideo, isExploration);
-        if (restoredCard) {
-          setCards((current) => {
-            const withoutSame = current.filter((card) => card.id !== restoredCard.id && !card.localVision);
-            return [restoredCard, ...withoutSame];
-          });
-          setExpanded((prev) => ({ ...prev, [restoredCard.id]: true }));
-        }
       })
       .catch(() => {
         // Loading saved local results is best-effort; failed restores should not block fresh analysis.
@@ -2783,6 +2824,7 @@ Evidence discipline:
 - Use "possible" and low/moderate confidence when visibility, occlusion, blur, or camera angle limits certainty.
 - If the window does not visually confirm the local candidate, say that plainly and explain what was checked.
 - Do not use raw second-offset wording in prose. Use clock-style window labels or plain chronological wording.
+- ${ANATOMICAL_LATERALITY_RULE}
 
 ${isExploration ? `Body exploration / procedure mode:
 Use clinical procedure language. For Foley or urethral/procedure review, distinguish setup, prep, swabbing, lubrication/dilation, visible meatal contact, visible advancement, visible catheter/Foley-at-meatus state, tubing/field handling, urine return, balloon/securement, and cleanup. Do not claim advancement, insertion, urine return, balloon inflation, or securement unless that exact action/item is visible or explicitly logged. Do not claim already-in-place/dwell/post-placement merely because Foley/catheter material is first visible at the glans or meatus; first visibility at the meatus should be treated as meatal engagement or early insertion/advancement when motion supports it unless an earlier manual/corrected reviewed event confirms completed placement.` : `Session mode:
@@ -3400,10 +3442,10 @@ Return only the structured JSON matching the requested schema.`,
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary">
-            <ShieldCheck className="h-3.5 w-3.5" /> Local Vision Analysis
+            <Sparkles className="h-3.5 w-3.5" /> Claude Video Annotation
           </h4>
           <p className="mt-1 text-xs text-muted-foreground">
-            Primary local Qwen2.5-VL workflow for visible evidence, unified timelines, Foley/body exploration states, and not-visible safety gates.
+            Primary Sarah/Claude workflow for high-quality visual evidence cards. Accepted findings stay saved for Session Analysis until you explicitly clear them.
           </p>
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
@@ -3419,7 +3461,7 @@ Return only the structured JSON matching the requested schema.`,
                 <AlertDialogHeader>
                   <AlertDialogTitle>Clear stored AI-generated annotations?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This removes {storedAIPassEventCount} Sarah video/audio pass annotation{storedAIPassEventCount === 1 ? "" : "s"} from this {recordLabel}'s timeline. Manual event notes are kept.
+                    This removes {storedAIPassEventCount} accepted Sarah/Claude video/audio annotation{storedAIPassEventCount === 1 ? "" : "s"} and stored pass evidence from this {recordLabel}. Manual event notes are kept.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
@@ -3431,32 +3473,31 @@ Return only the structured JSON matching the requested schema.`,
               </AlertDialogContent>
             </AlertDialog>
           )}
-          <Button type="button" variant="outline" onClick={restoreLatestLocalVisionResult} disabled={!selectedVideo || localVisionRunning} className="h-8 w-full border-emerald-500/35 text-emerald-200 hover:bg-emerald-500/10 sm:w-auto">
-            Review Latest Local Results
-          </Button>
-          <Button type="button" onClick={analyzeAdaptiveLocally} disabled={localVisionRunning || !selectedVideo} className="h-8 w-full sm:w-auto">
-            {localVisionRunning ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Eye className="mr-2 h-3.5 w-3.5" />}
-            Run Forward Local Review
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => analyzeAdaptiveLocally({ verifyWithSarah: true })}
-            disabled={localVisionRunning || hybridSarahVerifying || !selectedVideo}
-            className="h-8 w-full border-primary/40 text-primary hover:bg-primary/10 sm:w-auto"
-            title="Local GPU selects candidate windows first; Sarah/Claude then reviews only sampled frames from those windows."
-          >
-            {(localVisionRunning || hybridSarahVerifying) ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
-            Run Local + Sarah Verify
+          {isExploration && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={reassessExplorationSequence}
+              disabled={!cards.length || running || reassessing}
+              className="h-8 w-full sm:w-auto"
+              title={!cards.length ? "Run a video pass first; reassessment appears once draft cards are loaded." : "Recheck the visible Foley sequence across the loaded draft cards."}
+            >
+              {reassessing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
+              {cards.length ? "Reassess Foley Sequence" : "Reassess after cards load"}
+            </Button>
+          )}
+          <Button type="button" onClick={runPass} disabled={running || reassessing || !selectedVideo || !plannedWindows.length} className="h-8 w-full sm:w-auto">
+            {running ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="mr-2 h-3.5 w-3.5" />}
+            {scanMode === "continue" ? (scanCursor > 0 ? "Run Next Claude Pass" : "Start Claude at 0:00") : "Run Claude Window Pass"}
           </Button>
         </div>
       </div>
 
       <div className="mt-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-        <span className="font-semibold text-foreground">Set-and-forget option:</span> Run Local + Sarah Verify uses local GPU/CV to scan first, then sends only the selected sampled windows to the configured Sarah/Claude provider for the higher-quality event cards. The plain Forward Local Review button stays local-only.
+        <span className="font-semibold text-foreground">Evidence-safe default:</span> starting a new Claude pass only clears the draft cards on this screen. Accepted timeline events and saved video-pass findings are preserved unless you explicitly use Clear AI Events.
       </div>
 
-      <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(16rem,1fr)_auto_auto_auto]">
+      <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(16rem,1fr)_auto]">
         <select
           value={selectedVideo?.path || selectedPath}
           onChange={(event) => setSelectedPath(event.target.value)}
@@ -3478,41 +3519,116 @@ Return only the structured JSON matching the requested schema.`,
             ))}
           </select>
         </label>
-        <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 text-xs text-muted-foreground">
-          Analysis Type
+      </div>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+          Claude Mode
           <select
-            value={localAnalysisType}
-            onChange={(event) => setLocalAnalysisType(event.target.value)}
-            className="max-w-44 bg-transparent text-foreground outline-none"
+            value={scanMode}
+            onChange={(event) => setScanMode(event.target.value)}
+            className="min-w-0 bg-transparent text-foreground outline-none"
           >
-            {LOCAL_ANALYSIS_TYPES.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
+            <option value="smart">Smart windows</option>
+            <option value="continue">Continue forward</option>
           </select>
         </label>
-        <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 text-xs text-muted-foreground">
-          Mode
-          <select
-            value={localAnalysisMode}
-            onChange={(event) => setLocalAnalysisMode(event.target.value)}
-            className="max-w-44 bg-transparent text-foreground outline-none"
-          >
-            {LOCAL_ANALYSIS_MODES.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
+        <label className={`flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs ${scanMode === "continue" ? "text-muted-foreground" : "text-muted-foreground/50"}`}>
+          <input
+            type="checkbox"
+            checked={autoContinue}
+            disabled={scanMode !== "continue"}
+            onChange={(event) => setAutoContinue(event.target.checked)}
+            className="h-3.5 w-3.5 accent-primary"
+          />
+          Auto-continue
+        </label>
+        <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+          Windows
+          <input
+            type="number"
+            min="1"
+            max="8"
+            value={windowCount}
+            onChange={(event) => setWindowCount(clamp(Number(event.target.value) || 1, 1, 8))}
+            className="w-12 bg-transparent text-foreground outline-none"
+          />
+        </label>
+        <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+          Seconds
+          <input
+            type="number"
+            min="8"
+            max="30"
+            value={clipSeconds}
+            onChange={(event) => setClipSeconds(clamp(Number(event.target.value) || 24, 8, 30))}
+            className="w-12 bg-transparent text-foreground outline-none"
+          />
         </label>
       </div>
-      <p className={`mt-2 rounded-lg border px-3 py-2 text-xs ${localAnalysisMode === "deep_forensic" ? "border-amber-400/25 bg-amber-400/5 text-amber-100" : "border-emerald-500/15 bg-emerald-500/5 text-muted-foreground"}`}>
-        <span className="font-semibold text-emerald-200">{localAnalysisTypeLabel(localAnalysisType)} · {localAnalysisModeLabel(localAnalysisMode)}:</span>{" "}
-        {localAnalysisModeHelper(localAnalysisMode)}
-        {localAnalysisMode === "deep_forensic" ? " This is opt-in for slow, GPU-heavy review; Balanced is the normal default." : ""}
-      </p>
-      <details className="mt-2 rounded-lg border border-emerald-500/15 bg-emerald-500/5">
-        <summary className="cursor-pointer px-3 py-2 text-xs font-semibold uppercase tracking-wider text-emerald-200">
-          Optional ROI Hints {localVisionRois.length ? `(${localVisionRois.length})` : ""}
+      <details className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5">
+        <summary className="cursor-pointer px-3 py-3 text-xs font-semibold uppercase tracking-wider text-emerald-200">
+          Local / Qwen Experimental Tools
         </summary>
-        <div className="grid gap-2 border-t border-emerald-500/15 p-3">
+        <div className="grid gap-3 border-t border-emerald-500/15 p-3">
+          <p className="text-xs text-muted-foreground">
+            Local vision stays available for experiments and troubleshooting, but Claude/Sarah is the primary annotation driver again.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={restoreLatestLocalVisionResult} disabled={!selectedVideo || localVisionRunning} className="h-8 w-full border-emerald-500/35 text-emerald-200 hover:bg-emerald-500/10 sm:w-auto">
+              Review Latest Local Results
+            </Button>
+            <Button type="button" variant="outline" onClick={analyzeAdaptiveLocally} disabled={localVisionRunning || !selectedVideo} className="h-8 w-full border-emerald-500/35 text-emerald-200 hover:bg-emerald-500/10 sm:w-auto">
+              {localVisionRunning ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Eye className="mr-2 h-3.5 w-3.5" />}
+              Run Forward Local Review
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => analyzeAdaptiveLocally({ verifyWithSarah: true })}
+              disabled={localVisionRunning || hybridSarahVerifying || !selectedVideo}
+              className="h-8 w-full border-primary/40 text-primary hover:bg-primary/10 sm:w-auto"
+              title="Local GPU selects candidate windows first; Sarah/Claude then reviews only sampled frames from those windows."
+            >
+              {(localVisionRunning || hybridSarahVerifying) ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
+              Run Local + Claude Verify
+            </Button>
+          </div>
+          <div className="grid gap-2 lg:grid-cols-2">
+            <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+              Analysis Type
+              <select
+                value={localAnalysisType}
+                onChange={(event) => setLocalAnalysisType(event.target.value)}
+                className="min-w-0 bg-transparent text-foreground outline-none"
+              >
+                {LOCAL_ANALYSIS_TYPES.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+              Mode
+              <select
+                value={localAnalysisMode}
+                onChange={(event) => setLocalAnalysisMode(event.target.value)}
+                className="min-w-0 bg-transparent text-foreground outline-none"
+              >
+                {LOCAL_ANALYSIS_MODES.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className={`rounded-lg border px-3 py-2 text-xs ${localAnalysisMode === "deep_forensic" ? "border-amber-400/25 bg-amber-400/5 text-amber-100" : "border-emerald-500/15 bg-emerald-500/5 text-muted-foreground"}`}>
+            <span className="font-semibold text-emerald-200">{localAnalysisTypeLabel(localAnalysisType)} · {localAnalysisModeLabel(localAnalysisMode)}:</span>{" "}
+            {localAnalysisModeHelper(localAnalysisMode)}
+            {localAnalysisMode === "deep_forensic" ? " This is opt-in for slow, GPU-heavy review; Balanced is the normal default." : ""}
+          </p>
+          <details className="rounded-lg border border-emerald-500/15 bg-background/60">
+            <summary className="cursor-pointer px-3 py-2 text-xs font-semibold uppercase tracking-wider text-emerald-200">
+              Optional ROI Hints {localVisionRois.length ? `(${localVisionRois.length})` : ""}
+            </summary>
+            <div className="grid gap-2 border-t border-emerald-500/15 p-3">
           <p className="text-xs text-muted-foreground">
             ROI hints help the cheap forward scan prioritize motion in relevant areas. They are not evidence by themselves; Qwen and the gates still need frame support.
           </p>
@@ -3592,6 +3708,8 @@ Return only the structured JSON matching the requested schema.`,
               </details>
             </div>
           ))}
+        </div>
+      </details>
         </div>
       </details>
       {selectedVideoRoleHelper && (
@@ -3756,7 +3874,12 @@ Return only the structured JSON matching the requested schema.`,
         </div>
       )}
 
-      <div className="mt-3 max-w-full overflow-hidden rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3">
+      {(localVisionRunning || localVisionResult || localVisionStatus || localVisionError || localVisionQaResult) && (
+      <details className="mt-3 max-w-full overflow-hidden rounded-xl border border-emerald-500/25 bg-emerald-500/5">
+        <summary className="cursor-pointer px-3 py-3 text-xs font-semibold uppercase tracking-wider text-emerald-200">
+          Local Results / Experimental Evidence
+        </summary>
+      <div className="border-t border-emerald-500/15 p-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <h5 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-emerald-300">
@@ -4630,87 +4753,14 @@ Return only the structured JSON matching the requested schema.`,
           </div>
         )}
       </div>
+      </details>
+      )}
 
       <details className="mt-3 rounded-xl border border-border bg-card/60">
         <summary className="cursor-pointer px-3 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Advanced / Legacy Tools
+          Advanced Local / Audio Tools
         </summary>
         <div className="grid gap-3 border-t border-border p-3">
-          <div className="rounded-lg border border-amber-400/25 bg-amber-400/5 p-3">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-200">Legacy / Cloud Analysis</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Existing Sarah/Claude window pass. May send sampled frames/context to the configured cloud provider. Useful for comparison, not the preferred local workflow.
-                </p>
-              </div>
-              <div className="flex w-full flex-wrap gap-2 sm:w-auto">
-                {isExploration && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={reassessExplorationSequence}
-                    disabled={!cards.length || running || reassessing}
-                    className="h-8 w-full sm:w-auto"
-                    title={!cards.length ? "Run a Body Exploration video pass first; reassessment appears once draft cards are loaded." : "Recheck the visible Foley sequence across the loaded draft cards."}
-                  >
-                    {reassessing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
-                    {cards.length ? "Reassess Foley Sequence" : "Reassess after cards load"}
-                  </Button>
-                )}
-                <Button type="button" onClick={runPass} disabled={running || reassessing || !selectedVideo || !plannedWindows.length} className="h-8 w-full sm:w-auto">
-                  {running ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="mr-2 h-3.5 w-3.5" />}
-                  {scanMode === "continue" ? (scanCursor > 0 ? "Run Next Sarah Pass" : "Start Sarah at 0:00") : "Run Sarah Window Pass"}
-                </Button>
-              </div>
-            </div>
-            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
-                Mode
-                <select
-                  value={scanMode}
-                  onChange={(event) => setScanMode(event.target.value)}
-                  className="min-w-0 bg-transparent text-foreground outline-none"
-                >
-                  <option value="smart">Smart windows</option>
-                  <option value="continue">Continue forward</option>
-                </select>
-              </label>
-              <label className={`flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs ${scanMode === "continue" ? "text-muted-foreground" : "text-muted-foreground/50"}`}>
-                <input
-                  type="checkbox"
-                  checked={autoContinue}
-                  disabled={scanMode !== "continue"}
-                  onChange={(event) => setAutoContinue(event.target.checked)}
-                  className="h-3.5 w-3.5 accent-primary"
-                />
-                Auto-continue
-              </label>
-              <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
-                Windows
-                <input
-                  type="number"
-                  min="1"
-                  max="8"
-                  value={windowCount}
-                  onChange={(event) => setWindowCount(clamp(Number(event.target.value) || 1, 1, 8))}
-                  className="w-12 bg-transparent text-foreground outline-none"
-                />
-              </label>
-              <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
-                Seconds
-                <input
-                  type="number"
-                  min="8"
-                  max="30"
-                  value={clipSeconds}
-                  onChange={(event) => setClipSeconds(clamp(Number(event.target.value) || 24, 8, 30))}
-                  className="w-12 bg-transparent text-foreground outline-none"
-                />
-              </label>
-            </div>
-          </div>
-
           <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">

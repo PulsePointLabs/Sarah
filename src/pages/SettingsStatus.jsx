@@ -21,8 +21,10 @@ import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
 import { getProviderStatus } from "@/lib/providerStatus";
 import {
   areBackgroundNotificationsEnabled,
-  getReadyServiceWorkerRegistration,
-  isNotificationServiceWorkerDisabled,
+  getNotificationPermission,
+  isNotificationSupported,
+  requestBackgroundNotificationPermission,
+  sendBackgroundTestNotification,
   setBackgroundNotificationsEnabled,
 } from "@/utils/backgroundJobNotifications";
 
@@ -158,35 +160,12 @@ function isPossiblyStale(job) {
 // PWA_LOCAL_NOTIFICATIONS_V1
 function getNotificationSupport() {
   if (typeof window === "undefined") return { supported: false, reason: "Unavailable during server render." };
-  if (!("Notification" in window)) return { supported: false, reason: "This browser does not expose the Notification API." };
-  if (!window.isSecureContext) return { supported: false, reason: "Notifications require HTTPS or localhost." };
-  return { supported: true, reason: "Local browser notifications are available." };
-}
-
-async function showPulsePointNotification({ title, body, route = "/settings" }) {
-  const options = {
-    body,
-    tag: "pulsepoint-test-notification",
-    renotify: true,
-    icon: "/icons/pulsepoint-192.png",
-    badge: "/icons/pulsepoint-192.png",
-    data: { route },
-  };
-
-  const registration = await getReadyServiceWorkerRegistration({ timeoutMs: 1500 });
-  if (registration?.showNotification) {
-    await registration.showNotification(title, options);
-    return;
-  }
-
-  if ("serviceWorker" in navigator && !isNotificationServiceWorkerDisabled()) {
-    throw new Error("Notification permission is granted, but the service worker is not ready yet. Close and reopen the installed app once, then send another test.");
-  }
-
-  const notification = new Notification(title, options);
-  notification.onclick = () => {
-    window.focus();
-    notification.close();
+  if (!isNotificationSupported()) return { supported: false, reason: "This install does not expose local notifications." };
+  return {
+    supported: true,
+    reason: window.location?.protocol === "capacitor:"
+      ? "Android local notifications are available in the APK."
+      : "Local browser notifications are available for this Chrome/PWA install.",
   };
 }
 
@@ -275,9 +254,7 @@ export default function SettingsStatus() {
   const [clearing, setClearing] = useState(false);
   const [stoppingIds, setStoppingIds] = useState(() => new Set());
   const notificationSupport = useMemo(() => getNotificationSupport(), []);
-  const [notificationPermission, setNotificationPermission] = useState(() => (
-    typeof Notification !== "undefined" ? Notification.permission : "unsupported"
-  ));
+  const [notificationPermission, setNotificationPermission] = useState(getNotificationPermission);
   const [completionNotificationsEnabled, setCompletionNotificationsEnabled] = useState(areBackgroundNotificationsEnabled);
   const [notificationMessage, setNotificationMessage] = useState("");
   const [notificationBusy, setNotificationBusy] = useState(false);
@@ -310,22 +287,22 @@ export default function SettingsStatus() {
   }, []);
 
   useEffect(() => {
-    if (!notificationSupport.supported || typeof Notification === "undefined") return;
-    setNotificationPermission(Notification.permission);
+    if (!notificationSupport.supported) return;
+    setNotificationPermission(getNotificationPermission());
     setCompletionNotificationsEnabled(areBackgroundNotificationsEnabled());
   }, [notificationSupport.supported]);
 
   const requestNotifications = async () => {
-    if (!notificationSupport.supported || typeof Notification === "undefined") {
+    if (!notificationSupport.supported) {
       setNotificationMessage(notificationSupport.reason);
       return;
     }
     setNotificationBusy(true);
     setNotificationMessage("");
     try {
-      const permission = Notification.permission === "granted"
+      const permission = getNotificationPermission() === "granted"
         ? "granted"
-        : await Notification.requestPermission();
+        : await requestBackgroundNotificationPermission();
       if (permission === "granted") {
         setBackgroundNotificationsEnabled(true);
         setCompletionNotificationsEnabled(true);
@@ -336,9 +313,9 @@ export default function SettingsStatus() {
       setNotificationPermission(permission);
       setNotificationMessage(
         permission === "granted"
-          ? "Notifications are enabled for this browser/app install, including background task completion alerts."
+          ? "Notifications are enabled for this install, including background task completion alerts."
           : permission === "denied"
-            ? "Notifications are blocked. Re-enable them from browser or Android app/site settings."
+            ? "Notifications are blocked. Re-enable them from Chrome or Android app settings."
             : "Notification permission was left undecided."
       );
     } catch (error) {
@@ -353,9 +330,9 @@ export default function SettingsStatus() {
       setNotificationMessage(notificationSupport.reason);
       return;
     }
-    if (Notification.permission !== "granted") {
+    if (getNotificationPermission() !== "granted") {
       setNotificationMessage("Enable notifications first, then send a test.");
-      setNotificationPermission(Notification.permission);
+      setNotificationPermission(getNotificationPermission());
       return;
     }
     setNotificationBusy(true);
@@ -363,10 +340,9 @@ export default function SettingsStatus() {
     try {
       setBackgroundNotificationsEnabled(true);
       setCompletionNotificationsEnabled(true);
-      await showPulsePointNotification({
-        title: "PulsePoint is ready 🫀",
-        body: "Local notifications are working. Tapping this should open Settings & Status.",
+      await sendBackgroundTestNotification({
         route: "/settings",
+        onOpen: (target) => navigate(target),
       });
       setNotificationMessage("Test notification sent.");
     } catch (error) {
@@ -688,7 +664,7 @@ export default function SettingsStatus() {
               <h2 className="text-sm font-bold uppercase tracking-wider">Notifications</h2>
             </div>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-              Enable local PulsePoint notifications for app-like alerts. This is browser/PWA notification support, not full remote push delivery yet.
+              Enable PulsePoint completion alerts. The APK uses Android local notifications; Chrome/PWA installs use browser notifications.
             </p>
           </div>
           <span className={`rounded-full px-2 py-1 text-xs font-semibold uppercase ${notificationPermission === "granted" ? "bg-emerald-500/10 text-emerald-300" : notificationPermission === "denied" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}>
@@ -700,7 +676,7 @@ export default function SettingsStatus() {
           <div className="rounded-lg bg-muted/25 px-3 py-3 text-sm text-muted-foreground">
             <p>{notificationSupport.reason}</p>
             <p className="mt-1 text-xs">
-              Use this first for local completion/test alerts. True background push can be added later with VAPID keys, subscription storage, and backend send routes.
+              These are local completion/test alerts for work the app is already tracking. Fully closed remote push can come later if we add subscription storage and backend push routes.
             </p>
             {notificationMessage && <p className="mt-2 text-xs font-semibold text-foreground">{notificationMessage}</p>}
           </div>

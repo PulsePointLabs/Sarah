@@ -5,6 +5,7 @@ import AIOutputReader from "./AIOutputReader";
 import moment from "moment";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
+import { recoverCompletedAIJob, startRecoverableAIJob, waitForRecoverableAIJob } from "@/lib/recoverableAIJobs";
 
 function fmtDurWords(sec) {
   if (sec == null) return null;
@@ -77,8 +78,29 @@ export default function ArousalComparisonAIPanel({ sessions, timelineMap = {}, u
   const [result, setResult] = useState(null);
 
   const sessionKey = "arousal_" + sessions.map((s) => s.id).sort().join(",");
+  const jobKey = `arousal-comparison:${sessionKey}`;
   const prevKeyRef = useRef(null);
   const generatedAt = getAIContentGeneratedAt(result);
+
+  const persistResult = async (rawResult) => {
+    const raw = typeof rawResult === "string" ? JSON.parse(rawResult) : rawResult;
+    const parsed = {
+      ...(raw?.response ?? raw),
+      _meta: buildGenericAIContentMeta(result?._meta, null, {
+        source_session_count: sessions.length,
+        source_session_ids: sessions.map((s) => s.id).filter(Boolean),
+      }),
+    };
+    setResult(parsed);
+
+    const existing = await base44.entities.CompareAnalysisResult.filter({ session_key: sessionKey }, "-updated_date", 1);
+    if (existing[0]) {
+      await base44.entities.CompareAnalysisResult.update(existing[0].id, { result: parsed, session_key: sessionKey });
+    } else {
+      await base44.entities.CompareAnalysisResult.create({ result: parsed, session_key: sessionKey });
+    }
+    return parsed;
+  };
 
   useEffect(() => {
     if (prevKeyRef.current === sessionKey) return;
@@ -88,6 +110,27 @@ export default function ArousalComparisonAIPanel({ sessions, timelineMap = {}, u
       if (rows[0]) setResult(rows[0].result);
     });
   }, [sessionKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const recover = async () => {
+      try {
+        const job = await recoverCompletedAIJob(jobKey);
+        if (!job || cancelled) return;
+        setLoading(true);
+        const completed = job.status === "complete"
+          ? job
+          : await waitForRecoverableAIJob(jobKey, job.id, { intervalMs: 1800 });
+        if (!cancelled && completed.result) await persistResult(completed.result);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    recover();
+    return () => {
+      cancelled = true;
+    };
+  }, [jobKey]);
 
   const runAnalysis = async () => {
     setLoading(true);
@@ -138,7 +181,7 @@ export default function ArousalComparisonAIPanel({ sessions, timelineMap = {}, u
         : "";
       const groundingContext = buildAIGroundingContext(userProfile);
 
-      const res = await base44.integrations.Core.InvokeLLM({
+      const aiPayload = {
         model: "claude_sonnet_4_6",
         prompt: `You are an expert in physiological arousal analysis. Your task is to deeply compare the AROUSAL PATTERNS across these ${sessions.length} sessions — focusing specifically on how arousal built, peaked, and resolved, not just final metrics.
 
@@ -177,24 +220,15 @@ ${JSON.stringify(sessionSummaries, null, 2)}`,
           },
           required: ["summary", "trajectory_comparison", "momentum_and_pacing", "peak_dynamics", "what_drove_arousal", "cross_session_patterns"],
         },
-      });
-
-      const raw = typeof res === "string" ? JSON.parse(res) : res;
-      const parsed = {
-        ...(raw?.response ?? raw),
-        _meta: buildGenericAIContentMeta(result?._meta, null, {
-          source_session_count: sessions.length,
-          source_session_ids: sessions.map((s) => s.id).filter(Boolean),
-        }),
       };
-      setResult(parsed);
-
-      const existing = await base44.entities.CompareAnalysisResult.filter({ session_key: sessionKey }, "-updated_date", 1);
-      if (existing[0]) {
-        await base44.entities.CompareAnalysisResult.update(existing[0].id, { result: parsed, session_key: sessionKey });
-      } else {
-        await base44.entities.CompareAnalysisResult.create({ result: parsed, session_key: sessionKey });
-      }
+      const job = await startRecoverableAIJob(jobKey, aiPayload, {
+        title: "Arousal comparison analysis",
+        label: "Arousal comparison analysis",
+        source: "arousal_comparison",
+        sessionKey,
+      });
+      const completed = await waitForRecoverableAIJob(jobKey, job.id, { intervalMs: 1800 });
+      await persistResult(completed.result);
     } finally {
       setLoading(false);
     }

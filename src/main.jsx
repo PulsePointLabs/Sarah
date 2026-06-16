@@ -13,7 +13,7 @@ const PWA_FOREGROUND_STABILITY_V1 = true;
 const PWA_KEEP_WORKER_REGISTERED_V1 = true;
 const PWA_DISABLE_SW_IN_DEV_V1 = true;
 const PWA_REGISTER_FIXED_WORKER_IN_STANDALONE_DEV_V1 = true;
-const PWA_DISABLE_DEV_SW_REGISTRATION_V2 = true;
+const PWA_ENABLE_DEV_NOTIFICATION_WORKER_V1 = true;
 
 const PULSEPOINT_CACHE_PREFIXES = ['pulsepoint-shell-', 'workbox-', 'vite-'];
 
@@ -33,7 +33,7 @@ function registerStableServiceWorker() {
 
 async function cleanupPulsePointShell() {
   const tasks = [];
-  if ('serviceWorker' in navigator) {
+  if ('serviceWorker' in navigator && !PWA_ENABLE_DEV_NOTIFICATION_WORKER_V1) {
     tasks.push(
       navigator.serviceWorker.getRegistrations?.()
         .then((registrations = []) => Promise.all(registrations.map((registration) => registration.unregister())))
@@ -64,9 +64,7 @@ if (typeof window !== 'undefined') {
 
 if (import.meta.env.DEV) {
   window.addEventListener('load', () => {
-    if (PWA_DISABLE_DEV_SW_REGISTRATION_V2) {
-      cleanupPulsePointShell();
-    }
+    cleanupPulsePointShell().finally(registerStableServiceWorker);
   });
 } else {
   registerStableServiceWorker();

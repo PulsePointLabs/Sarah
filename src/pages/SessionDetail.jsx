@@ -16,7 +16,7 @@ import HRZoneAnalysis from "../components/HRZoneAnalysis";
 import HRPhysiologicalAnalysis from "../components/HRPhysiologicalAnalysis";
 import NearClimaxEvents, { detectNearClimaxEvents } from "../components/NearClimaxEvents";
 import NearClimaxSessionOverview from "../components/NearClimaxSessionOverview";
-import SessionAIPanel from "../components/SessionAIPanel";
+import SessionAIPanel, { buildSessionAnalysisReaderData, SessionReviewVideoExportButton } from "../components/SessionAIPanel";
 import SessionEvidencePatternPanel from "../components/SessionEvidencePatternPanel";
 import SessionExecutiveSummary from "../components/SessionExecutiveSummary";
 import SessionSnapshotHero from "../components/SessionSnapshotHero";
@@ -802,6 +802,12 @@ export default function SessionDetail() {
   const hasTimelineSection = timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0 || !!s.motion_analysis_summary;
   const reviewedMediaClips = getReviewedVisualClips(s.ai_analysis?._visual_findings || []);
   const linkedLocalVideos = s.linked_local_videos || [];
+  const companionAnalysisData = buildSessionAnalysisReaderData({
+    result: s.ai_analysis,
+    session: s,
+    timelineRows,
+    isTechnical: false,
+  });
   const sectionLinks = [
     { id: "session-snapshot", label: "Session Snapshot", group: "Overview" },
     { id: "session-telemetry", label: "Evidence Dashboard", group: "Overview" },
@@ -809,6 +815,7 @@ export default function SessionDetail() {
     { id: "session-review", label: "Review Checklist", group: "Overview" },
     { id: "session-metrics-context", label: "Metrics & Context", group: "Overview" },
     ...(!s.no_climax ? [
+      ...(companionAnalysisData.paragraphs.length ? [{ id: "session-ai-video-chat", label: "Ask Sarah", group: "Session Story" }] : []),
       { id: "session-ai-companion", label: "Companion Analysis", group: "Session Story" },
       { id: "session-ai-technical", label: "Technical Deep Dive", group: "Session Story" },
       { id: "session-ai-support", label: "Supporting AI Views", group: "Session Story" },
@@ -1024,6 +1031,17 @@ export default function SessionDetail() {
         {/* Story & AI Analysis */}
         {!s.no_climax && (
           <section className="space-y-4">
+            {companionAnalysisData.paragraphs.length > 0 && (
+              <section id="session-ai-video-chat" className="scroll-mt-24">
+                <SessionReviewVideoExportButton
+                  session={s}
+                  analysisTitle="AI Session Analysis"
+                  sourceGeneratedAt={s.ai_analysis?._meta?.last_generated_at}
+                  paragraphs={companionAnalysisData.paragraphs}
+                  paragraphMeta={companionAnalysisData.paragraphMeta}
+                />
+              </section>
+            )}
             <section id="session-ai-companion" className="scroll-mt-24">
               <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} onAnalysisSaved={handleAnalysisSaved} />
             </section>

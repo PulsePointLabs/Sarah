@@ -105,7 +105,7 @@ function entityApi(entity) {
 }
 
 const entityNames = [
-  'Session', 'BodyExploration', 'HeartRateTimeline', 'EMGTimeline', 'AudioExport', 'SessionReviewVideo', 'CompareAnalysisResult',
+  'Session', 'BodyExploration', 'HeartRateTimeline', 'EMGTimeline', 'HowlTelemetry', 'AudioExport', 'SessionReviewVideo', 'CompareAnalysisResult',
   'CascadeAnalysisResult', 'SessionClusterAnalysis', 'Journal', 'CustomMethod', 'User',
 ];
 
@@ -121,9 +121,17 @@ export const base44 = {
   },
   integrations: {
     Core: {
-      InvokeLLM: (payload) => request('/ai/invoke', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload || {}),
-      }),
+      InvokeLLM: async (payload) => {
+        const { startBackgroundJob, waitForBackgroundJob } = await import('@/lib/backgroundJobs');
+        const label = payload?.label || 'AI analysis';
+        const job = await startBackgroundJob('ai_invoke', payload || {}, {
+          title: label,
+          label,
+          source: payload?.source || 'base44_invoke_llm',
+        });
+        const completed = await waitForBackgroundJob(job.id, { intervalMs: 1200 });
+        return completed.result;
+      },
       UploadFile: async ({ file }) => {
         const form = new FormData();
         form.append('file', file);
@@ -142,6 +150,11 @@ export const base44 = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path, startSeconds, endSeconds, label, frameCount, maxDurationSeconds }),
+      }),
+      ProcessUploadedVideoClip: async ({ file_url, url, startSeconds = 0, endSeconds = 8, label = '', frameCount = 12, maxDurationSeconds }) => request('/files/uploaded-video/clip-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_url, url, startSeconds, endSeconds, label, frameCount, maxDurationSeconds }),
       }),
       ProcessLocalVideoAudio: async ({ path, startSeconds = 0, windowSeconds = 300, maxSnippets = 10, transcribe = true }) => request('/files/local-video/audio-pass', {
         method: 'POST',

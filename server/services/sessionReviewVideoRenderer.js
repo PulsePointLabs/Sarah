@@ -7,8 +7,34 @@ import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart, synthesizeTTSChunk } from './ttsCore.js';
 import { buildReviewVideoPlan, extractCitedTimesFromText } from './sessionReviewVideoPlanner.js';
 
-const REVIEW_RENDER_VERSION = 'session_review_video_v10';
+const REVIEW_RENDER_VERSION = 'session_review_video_v11_hd';
 const TTS_REQUEST_TAIL = '\u200B';
+const REVIEW_VIDEO_WIDTH = Number(process.env.REVIEW_VIDEO_WIDTH || 1920);
+const REVIEW_VIDEO_HEIGHT = Number(process.env.REVIEW_VIDEO_HEIGHT || 1080);
+const REVIEW_VIDEO_PRESET = process.env.REVIEW_VIDEO_PRESET || 'slow';
+const REVIEW_VIDEO_INTERMEDIATE_CRF = String(process.env.REVIEW_VIDEO_INTERMEDIATE_CRF || 14);
+const REVIEW_VIDEO_FINAL_CRF = String(process.env.REVIEW_VIDEO_FINAL_CRF || 17);
+const REVIEW_VIDEO_CARD_CRF = String(process.env.REVIEW_VIDEO_CARD_CRF || 17);
+const REVIEW_VIDEO_TRANSITION_SECONDS = Math.max(0, Math.min(0.6, Number(process.env.REVIEW_VIDEO_TRANSITION_SECONDS || 0.22)));
+const REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS = Math.max(0, Math.min(1.5, Number(process.env.REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS || 0.25)));
+const REVIEW_VIDEO_TIME_TOLERANCE_SECONDS = Math.max(0, Math.min(30, Number(process.env.REVIEW_VIDEO_TIME_TOLERANCE_SECONDS || 8)));
+
+function reviewVideoFitFilter() {
+  return [
+    `scale=${REVIEW_VIDEO_WIDTH}:${REVIEW_VIDEO_HEIGHT}:force_original_aspect_ratio=decrease:flags=lanczos`,
+    `pad=${REVIEW_VIDEO_WIDTH}:${REVIEW_VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2`,
+  ].join(',');
+}
+
+function segmentFadeFilters(durationSeconds = 0, { fadeIn = true, fadeOut = true } = {}) {
+  const duration = Number(durationSeconds || 0);
+  const fade = Math.min(REVIEW_VIDEO_TRANSITION_SECONDS, Math.max(0, (duration - 0.35) / 2));
+  if (!fade) return [];
+  return [
+    fadeIn ? `fade=t=in:st=0:d=${fade.toFixed(3)}` : null,
+    fadeOut ? `fade=t=out:st=${Math.max(0, duration - fade).toFixed(3)}:d=${fade.toFixed(3)}` : null,
+  ].filter(Boolean);
+}
 
 function cleanParagraph(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -296,6 +322,83 @@ function formatTimestamp(seconds = 0) {
   return `${minutes}:${String(secs).padStart(2, '0')}`;
 }
 
+function roundedSeconds(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round(number * 10) / 10 : null;
+}
+
+function timestampRequirementForSegment(segment = {}) {
+  const times = extractCitedTimesFromText(segment?.text || '', segment?.paragraphIndex)
+    .filter((time) => Number.isFinite(Number(time.seconds)))
+    .sort((a, b) => Number(a.charIndex ?? 0) - Number(b.charIndex ?? 0));
+  return {
+    required: times.length > 0,
+    times,
+    primary: times[0] || null,
+  };
+}
+
+function nearestNarratedTime(segment = {}, selectedSessionSeconds = null) {
+  const requirement = timestampRequirementForSegment(segment);
+  if (!requirement.times.length) return null;
+  const selected = Number(selectedSessionSeconds);
+  if (!Number.isFinite(selected)) return requirement.primary;
+  return requirement.times
+    .map((time) => ({
+      ...time,
+      distance: Math.abs(Number(time.seconds) - selected),
+    }))
+    .sort((a, b) => a.distance - b.distance)[0] || requirement.primary;
+}
+
+function canRenderSessionTimeFromPrimary({ sessionSeconds, primaryVideo, sourceDuration }) {
+  const sessionTime = Number(sessionSeconds);
+  if (!Number.isFinite(sessionTime) || !primaryVideo?.path) return false;
+  const sourceTime = sourceTimeForSession(sessionTime, primaryVideo);
+  const duration = Number(sourceDuration || 0);
+  return duration <= 0 || sourceTime <= duration + REVIEW_VIDEO_TIME_TOLERANCE_SECONDS;
+}
+
+function buildTimelineTrace({
+  segment,
+  event = null,
+  window = null,
+  audio = null,
+  selectionReason = '',
+  fallbackUsed = false,
+  fallbackType = null,
+  visualSource = 'unknown',
+  violation = null,
+} = {}) {
+  const narrated = nearestNarratedTime(segment, event?.session_time_s ?? window?.sessionSeconds);
+  const selectedSessionSeconds = Number(event?.session_time_s ?? window?.sessionSeconds);
+  const narratedSeconds = Number(narrated?.seconds);
+  const hasNarrated = Number.isFinite(narratedSeconds);
+  const hasSelected = Number.isFinite(selectedSessionSeconds);
+  const delta = hasNarrated && hasSelected ? Math.abs(narratedSeconds - selectedSessionSeconds) : null;
+  return {
+    narration_section: Number.isFinite(Number(segment?.paragraphIndex)) ? Number(segment.paragraphIndex) : null,
+    spoken_segment_index: null,
+    narrated_timestamp_s: hasNarrated ? roundedSeconds(narratedSeconds) : null,
+    narrated_timestamp: hasNarrated ? formatTimestamp(narratedSeconds) : null,
+    narrated_text: narrated?.text || null,
+    selected_visual_timestamp_s: hasSelected ? roundedSeconds(selectedSessionSeconds) : null,
+    selected_visual_timestamp: hasSelected ? formatTimestamp(selectedSessionSeconds) : null,
+    delta_seconds: delta === null ? null : roundedSeconds(delta),
+    selection_reason: selectionReason,
+    fallback_used: Boolean(fallbackUsed),
+    fallback_type: fallbackType,
+    visual_source: visualSource,
+    timestamp_required: hasNarrated,
+    within_tolerance: delta === null ? null : delta <= REVIEW_VIDEO_TIME_TOLERANCE_SECONDS,
+    tolerance_seconds: REVIEW_VIDEO_TIME_TOLERANCE_SECONDS,
+    source_start_s: roundedSeconds(window?.start),
+    source_end_s: roundedSeconds(window?.end),
+    audio_duration_seconds: roundedSeconds(audio?.durationSeconds),
+    violation,
+  };
+}
+
 function drawTextSafe(value = '') {
   return String(value || '')
     .replace(/\\/g, '/')
@@ -306,7 +409,7 @@ function drawTextSafe(value = '') {
     .trim();
 }
 
-function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playbackRate = 1 } = {}) {
+function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playbackRate = 1, outputDurationSeconds = 0 } = {}) {
   const fontPath = process.env.REVIEW_VIDEO_FONT || 'C\\:/Windows/Fonts/arial.ttf';
   const sourceLabel = `source ${formatTimestamp(startSeconds)}`;
   const sessionLabel = Number.isFinite(Number(sessionSeconds))
@@ -316,16 +419,18 @@ function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playb
   const slowMoLabel = Number.isFinite(rate) && rate > 0 && rate < 0.99 ? `${Math.round(rate * 100)}% speed` : '';
   const text = drawTextSafe([sessionLabel, sourceLabel, slowMoLabel].filter(Boolean).join('  |  '));
   return [
-    'scale=1280:720:force_original_aspect_ratio=decrease',
-    'pad=1280:720:(ow-iw)/2:(oh-ih)/2',
+    reviewVideoFitFilter(),
     'format=yuv420p',
     Number.isFinite(rate) && rate > 0 && rate < 0.99 ? `setpts=${(1 / rate).toFixed(4)}*PTS` : null,
-    `drawtext=fontfile='${fontPath}':text='${text}':x=24:y=h-58:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.68:boxborderw=10`,
+    `drawtext=fontfile='${fontPath}':text='${text}':x=36:y=h-78:fontsize=34:fontcolor=white:box=1:boxcolor=black@0.68:boxborderw=12`,
+    ...segmentFadeFilters(outputDurationSeconds),
   ].filter(Boolean).join(',');
 }
 
 async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, workDir, index, sessionSeconds = null, playbackRate = 1 }) {
   const duration = Math.max(0.25, Math.min(180, Number(endSeconds || 0) - Number(startSeconds || 0)));
+  const rate = Number(playbackRate);
+  const outputDuration = Number.isFinite(rate) && rate > 0 && rate < 0.99 ? duration / rate : duration;
   const output = path.join(workDir, `segment-source-${String(index).padStart(3, '0')}.mp4`);
   await runProcess('ffmpeg', [
     '-hide_banner',
@@ -335,10 +440,13 @@ async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, work
     '-i', sourcePath,
     '-map', '0:v:0',
     '-an',
-    '-vf', timestampOverlayFilter({ startSeconds, sessionSeconds, playbackRate }),
+    '-vf', timestampOverlayFilter({ startSeconds, sessionSeconds, playbackRate, outputDurationSeconds: outputDuration }),
     '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '23',
+    '-preset', REVIEW_VIDEO_PRESET,
+    '-crf', REVIEW_VIDEO_INTERMEDIATE_CRF,
+    '-profile:v', 'high',
+    '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
     output,
   ]);
   return {
@@ -595,20 +703,24 @@ async function createTitleCard({ workDir, index, title, subtitle, durationSecond
   const fontPath = process.env.REVIEW_VIDEO_FONT || 'C\\:/Windows/Fonts/arial.ttf';
   const heading = safeDrawText(title || 'Session Review', 48);
   const body = safeDrawText(subtitle || '', 92);
+  const duration = Math.max(2, Number(durationSeconds || 3));
   const draw = [
     `drawtext=fontfile='${fontPath}':text='${heading}':fontcolor=white:fontsize=42:x=(w-text_w)/2:y=(h/2)-70`,
     body ? `drawtext=fontfile='${fontPath}':text='${body}':fontcolor=white@0.78:fontsize=24:x=(w-text_w)/2:y=(h/2)+8` : null,
+    ...segmentFadeFilters(duration),
   ].filter(Boolean).join(',');
   await runProcess('ffmpeg', [
     '-hide_banner',
     '-y',
     '-f', 'lavfi',
-    '-i', `color=c=#101418:s=1280x720:d=${Math.max(2, Number(durationSeconds || 3))}`,
+    '-i', `color=c=#101418:s=${REVIEW_VIDEO_WIDTH}x${REVIEW_VIDEO_HEIGHT}:d=${duration}`,
     '-vf', draw,
     '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '20',
+    '-preset', REVIEW_VIDEO_PRESET,
+    '-crf', REVIEW_VIDEO_CARD_CRF,
+    '-profile:v', 'high',
     '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
     output,
   ]);
   return {
@@ -620,6 +732,8 @@ async function createTitleCard({ workDir, index, title, subtitle, durationSecond
 
 async function normalizeVideoSegment({ inputPath, outputPath, durationSeconds = null }) {
   const durationArgs = durationSeconds ? ['-t', String(Math.max(0.5, Number(durationSeconds)))] : [];
+  const sourceDuration = Number(durationSeconds || await mediaDurationSeconds(inputPath).catch(() => 0));
+  const fadeFilters = segmentFadeFilters(sourceDuration);
   await runProcess('ffmpeg', [
     '-hide_banner',
     '-y',
@@ -627,11 +741,13 @@ async function normalizeVideoSegment({ inputPath, outputPath, durationSeconds = 
     ...durationArgs,
     '-map', '0:v:0',
     '-an',
-    '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
+    '-vf', [reviewVideoFitFilter(), 'format=yuv420p', ...fadeFilters].join(','),
     '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '23',
+    '-preset', REVIEW_VIDEO_PRESET,
+    '-crf', REVIEW_VIDEO_INTERMEDIATE_CRF,
+    '-profile:v', 'high',
     '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
     outputPath,
   ]);
   return outputPath;
@@ -698,9 +814,11 @@ async function concatSegments(segmentPaths, outputPath, workDir) {
     '-i', concatPath,
     '-vf', 'format=yuv420p',
     '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '22',
+    '-preset', REVIEW_VIDEO_PRESET,
+    '-crf', REVIEW_VIDEO_FINAL_CRF,
+    '-profile:v', 'high',
     '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
     outputPath,
   ]);
 }
@@ -734,8 +852,10 @@ async function concatAvSegments(segmentPaths, outputPath, workDir) {
     '-map', '0:v:0',
     '-map', '0:a:0',
     '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '22',
+    '-preset', REVIEW_VIDEO_PRESET,
+    '-crf', REVIEW_VIDEO_FINAL_CRF,
+    '-profile:v', 'high',
+    '-pix_fmt', 'yuv420p',
     '-c:a', 'aac',
     '-b:a', '320k',
     '-movflags', '+faststart',
@@ -756,6 +876,22 @@ async function concatAudioSegments(audioPaths, outputPath, workDir) {
     '-c:a', 'libmp3lame',
     '-b:a', '320k',
     '-compression_level', '0',
+    outputPath,
+  ]);
+}
+
+async function concatWavSegments(audioPaths, outputPath, workDir) {
+  const concatPath = path.join(workDir, 'audio-wav-segments.txt');
+  await fs.writeFile(concatPath, audioPaths.map((file) => `file ${q(file.replace(/\\/g, '/'))}`).join('\n'), 'utf8');
+  await runProcess('ffmpeg', [
+    '-hide_banner',
+    '-y',
+    '-f', 'concat',
+    '-safe', '0',
+    '-i', concatPath,
+    '-vn',
+    '-af', 'aresample=48000:async=1:first_pts=0,aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=stereo',
+    '-c:a', 'pcm_s16le',
     outputPath,
   ]);
 }
@@ -835,11 +971,15 @@ function collectSegmentEvents({ segment, plan, clipByParagraph }) {
     paragraphIndex,
     session_time_s: time.seconds,
     cited_text: time.text,
+    spoken_char_index: time.charIndex,
+    spoken_time_source: time.source,
     label: time.text ? `Referenced ${time.text}` : 'Referenced moment',
     reason: 'Explicitly referenced in spoken segment',
     startSeconds: Math.max(0, time.seconds - 3),
     endSeconds: time.seconds + 14,
     source: 'spoken_segment_time',
+    direct_spoken_time: true,
+    force_direct_cut: true,
   }));
   return [...requests, ...clips, ...synthetic]
     .map((event) => ({
@@ -853,6 +993,27 @@ function chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds }) {
   const candidates = collectSegmentEvents({ segment, plan, clipByParagraph });
   if (!candidates.length) return null;
   const explicitTimes = extractCitedTimesFromText(segment.text, segment.paragraphIndex);
+  if (explicitTimes.length) {
+    const explicitCandidate = candidates
+      .filter((event) => event.source === 'spoken_segment_time')
+      .map((event) => {
+        const sessionTime = Number(event.session_time_s);
+        const closest = explicitTimes.reduce((best, time) => {
+          const distance = Math.abs(Number(time.seconds) - sessionTime);
+          return !best || distance < best.distance ? { distance } : best;
+        }, null);
+        return {
+          event,
+          id: String(event.id || `${event.label}:${event.session_time_s}`),
+          distance: closest?.distance ?? Number.POSITIVE_INFINITY,
+        };
+      })
+      .sort((a, b) => a.distance - b.distance)[0];
+    if (explicitCandidate) {
+      usedEventIds.add(explicitCandidate.id);
+      return explicitCandidate.event;
+    }
+  }
   let best = null;
   for (const event of candidates) {
     const id = String(event.id || `${event.label}:${event.session_time_s}`);
@@ -874,22 +1035,196 @@ function clampClipStart(startSeconds, durationSeconds, sourceDuration) {
   return Math.max(0, Math.min(maxStart, Number(startSeconds || 0)));
 }
 
+function closestSpokenTimeInSegment(segment = {}, event = {}) {
+  const eventTime = Number(event?.session_time_s);
+  if (!Number.isFinite(eventTime)) return null;
+  const times = extractCitedTimesFromText(segment?.text || '', segment?.paragraphIndex);
+  if (!times.length) return null;
+  return times
+    .map((time) => ({
+      ...time,
+      distance: Math.abs(Number(time.seconds) - eventTime),
+    }))
+    .filter((time) => Number.isFinite(time.distance))
+    .sort((a, b) => a.distance - b.distance)[0] || null;
+}
+
+function estimateSpokenAnchorOffsetSeconds({ segment, event, audioDuration }) {
+  const duration = Math.max(0, Number(audioDuration || 0));
+  if (!duration) return 0;
+  const text = String(segment?.text || '');
+  const directIndex = Number(event?.spoken_char_index);
+  const nearest = closestSpokenTimeInSegment(segment, event);
+  const charIndex = Number.isFinite(directIndex) ? directIndex : Number(nearest?.charIndex);
+  if (!Number.isFinite(charIndex) || charIndex <= 0 || !text.trim()) return 0;
+  const beforeWords = wordCount(text.slice(0, Math.max(0, Math.min(text.length, charIndex))));
+  const totalWords = Math.max(1, wordCount(text));
+  const ratio = Math.max(0, Math.min(0.92, beforeWords / totalWords));
+  return Math.max(0, Math.min(Math.max(0, duration - 0.35), duration * ratio));
+}
+
 function isClimaxReviewSegment(segment = {}, event = {}) {
   return /\b(climax|ejaculat|orgasm|semen|fluid release|release of semen|emission|expulsion)\b/i.test(`${segment.text || ''} ${eventText(event)}`);
+}
+
+function isBodyExplorationReview(payload = {}, session = {}) {
+  const text = [
+    payload.recordType,
+    payload.record_type,
+    payload.source,
+    payload.title,
+    session.recordType,
+    session.record_type,
+    session.exploration_type,
+    session.devices,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return /\b(body[_\s-]?exploration|foley|catheter|instrumentation|urethral|sounding|dilation)\b/.test(text);
+}
+
+function procedureBrollScore(event = {}, segmentText = '') {
+  const text = eventText(event);
+  const segment = String(segmentText || '').toLowerCase();
+  let score = 0;
+  const positive = [
+    [/\b(table|supine|positioning|setup|tray|field|drape|underpad)\b/, 34],
+    [/\b(glove|gloved|sterile|prep|swab|swabbing|iodine|povidone|antiseptic|gauze|wipe|applicator)\b/, 58],
+    [/\b(lubric|lube|gel|syringe|instill|dilat|dilation)\b/, 62],
+    [/\b(foley|catheter|urethral|meatus|meatal|glans|penis|foreskin|shaft|scrotum)\b/, 72],
+    [/\b(advance|advancement|insert|insertion|sphincter|prostatic|bladder|urine|balloon|traction|seat|seated|drainage|bag|tubing)\b/, 82],
+    [/\b(comfort|discomfort|resistance|relax|relaxed|tension|bracing|leg|foot|toe)\b/, 24],
+  ];
+  const negative = [
+    [/\b(walk|walking|wander|wandering|around the room|room walk|butt|ass|rear|standing up|stood up|exit|exited|leaving|left the table)\b/, 160],
+    [/\boff[-\s]?camera\b/, 120],
+    [/\bstatlock\b.*\boff[-\s]?camera\b/, 180],
+    [/\bcamera (?:moved|shifted|repositioned)\b|\bcleanup only\b/, 65],
+  ];
+  for (const [pattern, value] of positive) {
+    if (pattern.test(text)) score += value;
+    if (pattern.test(text) && pattern.test(segment)) score += Math.round(value * 0.8);
+  }
+  for (const [pattern, value] of negative) {
+    if (pattern.test(text)) score -= value;
+  }
+  const eventTime = Number(event.session_time_s ?? event.time_s);
+  if (Number.isFinite(eventTime) && eventTime < 20) score += 10;
+  return score;
+}
+
+function procedureBrollTopic(event = {}) {
+  const text = eventText(event);
+  if (/\b(balloon|inflation|inflate|syringe|port|bypass|leak|escaped|escaping|troubleshoot|issue|problem|fumble)\b/.test(text)) return 'balloon_troubleshooting';
+  if (/\b(swab|swabbing|iodine|povidone|antiseptic|prep|gauze|wipe|applicator)\b/.test(text)) return 'prep_swab';
+  if (/\b(lubric|lube|gel)\b/.test(text)) return 'lubrication';
+  if (/\b(meatus|meatal|insert|insertion|advance|advancement|urethral|sphincter|prostatic|bladder entry)\b/.test(text)) return 'insertion_passage';
+  if (/\b(drape|field|table|supine|position|setup|tray|underpad)\b/.test(text)) return 'setup_positioning';
+  if (/\b(traction|seat|seated|drainage|bag|urine|tubing)\b/.test(text)) return 'drainage_seating';
+  if (/\b(remove|cleanup|clean up|glove removal|exit|statlock)\b/.test(text)) return 'cleanup';
+  return 'general';
+}
+
+function segmentWantsBrollTopic(segmentText = '', topic = '') {
+  const segment = String(segmentText || '').toLowerCase();
+  if (topic === 'balloon_troubleshooting') return /\b(balloon|inflation|inflate|syringe|port|bypass|leak|escaped|escaping|troubleshoot|issue|problem)\b/.test(segment);
+  if (topic === 'prep_swab') return /\b(swab|swabbing|iodine|povidone|antiseptic|prep|gauze|wipe|applicator)\b/.test(segment);
+  if (topic === 'lubrication') return /\b(lubric|lube|gel)\b/.test(segment);
+  if (topic === 'insertion_passage') return /\b(meatus|meatal|insert|insertion|advance|advancement|urethral|sphincter|prostatic|bladder)\b/.test(segment);
+  if (topic === 'setup_positioning') return /\b(drape|field|table|supine|position|setup|tray|underpad)\b/.test(segment);
+  if (topic === 'drainage_seating') return /\b(traction|seat|seated|drainage|bag|urine|tubing)\b/.test(segment);
+  if (topic === 'cleanup') return /\b(remove|cleanup|clean up|exit|statlock|securement)\b/.test(segment);
+  return false;
+}
+
+function procedureBrollRepetitionPenalty(event = {}, segmentText = '', usage = {}) {
+  const time = Number(event.session_time_s ?? event.time_s);
+  const topic = procedureBrollTopic(event);
+  let penalty = 0;
+  const usedTimes = Array.isArray(usage.usedTimes) ? usage.usedTimes : [];
+  const closeUses = usedTimes.filter((usedTime) => Number.isFinite(time) && Math.abs(Number(usedTime) - time) <= 22).length;
+  if (closeUses) penalty += 95 * closeUses;
+  const veryCloseUses = usedTimes.filter((usedTime) => Number.isFinite(time) && Math.abs(Number(usedTime) - time) <= 8).length;
+  if (veryCloseUses) penalty += 180 * veryCloseUses;
+  const topicCount = Number(usage.topicCounts?.[topic] || 0);
+  if (topicCount) penalty += topicCount * (topic === 'balloon_troubleshooting' ? 150 : 58);
+  if (topic === 'balloon_troubleshooting' && !segmentWantsBrollTopic(segmentText, topic)) penalty += 170;
+  if (topic === 'cleanup' && !segmentWantsBrollTopic(segmentText, topic)) penalty += 95;
+  return penalty;
+}
+
+function markProcedureBrollUsed(event = {}, usage = {}) {
+  const time = Number(event.session_time_s ?? event.time_s);
+  if (!Array.isArray(usage.usedTimes)) usage.usedTimes = [];
+  if (!usage.topicCounts || typeof usage.topicCounts !== 'object') usage.topicCounts = {};
+  if (Number.isFinite(time)) usage.usedTimes.push(time);
+  const topic = procedureBrollTopic(event);
+  usage.topicCounts[topic] = Number(usage.topicCounts[topic] || 0) + 1;
+  return usage;
+}
+
+function bodyExplorationBrollEvents(session = {}) {
+  const events = Array.isArray(session.event_timeline) ? session.event_timeline : [];
+  return events
+    .map((event, index) => ({
+      id: event?.id || `procedure-broll-${index + 1}`,
+      label: event?.note || `Procedure context ${index + 1}`,
+      reason: 'Procedure-safe B-roll from timestamped body exploration notes',
+      note: event?.note || '',
+      category: Array.isArray(event?.category) ? event.category.join(' ') : event?.category || '',
+      tags: Array.isArray(event?.annotation_tags) ? event.annotation_tags.join(' ') : event?.annotation_tags || '',
+      source: 'procedure_broll_event',
+      session_time_s: Number(event?.time_s),
+    }))
+    .filter((event) => Number.isFinite(Number(event.session_time_s)));
+}
+
+function chooseProcedureBrollEvent({ segment, session, usedEventIds, usage }) {
+  const candidates = bodyExplorationBrollEvents(session)
+    .map((event) => {
+      const id = String(event.id || `${event.label}:${event.session_time_s}`);
+      const reusePenalty = usedEventIds.has(id) ? 220 : 0;
+      const repetitionPenalty = procedureBrollRepetitionPenalty(event, segment?.text, usage);
+      return {
+        event,
+        id,
+        score: procedureBrollScore(event, segment?.text) - reusePenalty - repetitionPenalty,
+      };
+    })
+    .filter(({ score }) => score >= 35)
+    .sort((a, b) => b.score - a.score || Number(a.event.session_time_s) - Number(b.event.session_time_s));
+  if (!candidates.length) return null;
+  const chosen = candidates[0];
+  usedEventIds.add(chosen.id);
+  markProcedureBrollUsed(chosen.event, usage);
+  return {
+    ...chosen.event,
+    label: chosen.event.label || 'Procedure context',
+    reason: chosen.event.reason,
+    _broll_score: chosen.score,
+  };
 }
 
 function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, sourceDuration, fallbackCursor }) {
   const duration = Math.max(1.25, Number(audioDuration || 1) + 1.25);
   if (event) {
     const sessionTime = Number(event.session_time_s);
+    const directSpokenTime = event.source === 'spoken_segment_time' || event.force_direct_cut || event.direct_spoken_time;
     const sourceCenter = sourceTimeForSession(sessionTime, primaryVideo);
     const requestedStart = Number(event.startSeconds);
     const offset = sourceCenter - sessionTime;
     const wantsClimax = isClimaxReviewSegment(segment, event);
     const playbackRate = wantsClimax ? 0.5 : 1;
     const sourceSliceDuration = playbackRate < 1 ? Math.max(2.5, duration * playbackRate) : duration;
-    const preroll = wantsClimax ? Math.min(3, sourceSliceDuration * 0.4) : 2.5;
-    const rawStart = wantsClimax
+    const spokenAnchorOffset = directSpokenTime
+      ? estimateSpokenAnchorOffsetSeconds({ segment, event, audioDuration })
+      : 0;
+    const preroll = directSpokenTime
+      ? (spokenAnchorOffset + REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS) * playbackRate
+      : wantsClimax
+      ? Math.min(3, sourceSliceDuration * 0.4)
+      : 2.5;
+    const rawStart = directSpokenTime
+      ? sourceCenter - preroll
+      : wantsClimax
       ? sourceCenter - preroll
       : Number.isFinite(requestedStart)
       ? requestedStart + offset
@@ -902,6 +1237,9 @@ function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, s
       label: event.label || event.cited_text || 'Referenced moment',
       playbackRate,
       slowMotion: wantsClimax,
+      directSpokenTime,
+      spokenAnchorOffset,
+      spokenTimeLeadSeconds: REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS,
     };
   }
   const start = clampClipStart(fallbackCursor, duration, sourceDuration);
@@ -931,9 +1269,26 @@ async function synthesizeReviewSegmentAudio({ segment, index, payload, workDir, 
       source: 'session_review_video_segment',
     },
   });
+  const rawAudioPath = path.join(workDir, `segment-audio-${String(index + 1).padStart(3, '0')}-raw.wav`);
+  await fs.writeFile(rawAudioPath, rendered.buffer);
+  const rawDuration = await mediaDurationSeconds(rawAudioPath).catch(() => Math.max(1, wordCount(segment.text) / 2.25));
   const audioPath = path.join(workDir, `segment-audio-${String(index + 1).padStart(3, '0')}.wav`);
-  await fs.writeFile(audioPath, rendered.buffer);
-  const duration = await mediaDurationSeconds(audioPath).catch(() => Math.max(1, wordCount(segment.text) / 2.25));
+  const fade = Math.min(0.018, Math.max(0, (Number(rawDuration || 0) - 0.12) / 2));
+  const filters = [
+    'aresample=48000:async=1:first_pts=0',
+    'aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=stereo',
+    fade ? `afade=t=in:st=0:d=${fade.toFixed(3)}` : null,
+    fade ? `afade=t=out:st=${Math.max(0, rawDuration - fade).toFixed(3)}:d=${fade.toFixed(3)}` : null,
+  ].filter(Boolean).join(',');
+  await runProcess('ffmpeg', [
+    '-hide_banner',
+    '-y',
+    '-i', rawAudioPath,
+    '-af', filters,
+    '-c:a', 'pcm_s16le',
+    audioPath,
+  ]);
+  const duration = await mediaDurationSeconds(audioPath).catch(() => rawDuration);
   return { ...rendered, audioPath, durationSeconds: duration };
 }
 
@@ -971,9 +1326,12 @@ async function renderSegmentedSourceReviewVideo({
 
   const narrationSegments = buildReviewNarrationSegments(paragraphs);
   const usedEventIds = new Set();
+  const procedureBrollUsage = { usedTimes: [], topicCounts: {} };
   const avSegments = [];
+  const videoSegments = [];
   const audioSegments = [];
   const generatedClips = [];
+  const bodyExplorationMode = isBodyExplorationReview(payload, session);
   let previousText = '';
   let fallbackCursor = 0;
   let totalAudioDuration = 0;
@@ -999,7 +1357,84 @@ async function renderSegmentedSourceReviewVideo({
     audioSegments.push(audio.audioPath);
     totalAudioDuration += Number(audio.durationSeconds || 0);
 
-    const event = chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds });
+    const timestampRequirement = timestampRequirementForSegment(segment);
+    const matchedEvent = chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds });
+    const event = matchedEvent || (!timestampRequirement.required && bodyExplorationMode
+      ? chooseProcedureBrollEvent({ segment, session, usedEventIds, usage: procedureBrollUsage })
+      : null);
+    const eventRenderable = event
+      ? canRenderSessionTimeFromPrimary({
+        sessionSeconds: event.session_time_s,
+        primaryVideo,
+        sourceDuration,
+      })
+      : false;
+    const nearestTime = nearestNarratedTime(segment, event?.session_time_s);
+    const narratedDelta = nearestTime && event
+      ? Math.abs(Number(nearestTime.seconds) - Number(event.session_time_s))
+      : null;
+    const timestampViolation = timestampRequirement.required && (
+      !event
+      || !eventRenderable
+      || (Number.isFinite(narratedDelta) && narratedDelta > REVIEW_VIDEO_TIME_TOLERANCE_SECONDS)
+    );
+
+    if (timestampViolation) {
+      const narratedLabel = timestampRequirement.primary
+        ? formatTimestamp(timestampRequirement.primary.seconds)
+        : 'the referenced moment';
+      const reason = !event
+        ? 'No time-matched event or source frame was available for this timed narration segment.'
+        : !eventRenderable
+        ? `Referenced ${narratedLabel}, but that moment is outside the available source video range.`
+        : `Referenced ${narratedLabel}, but the nearest selected visual was ${formatTimestamp(event.session_time_s)}.`;
+      onProgress?.({
+        phase: 'segments',
+        current: 3,
+        total: 5,
+        message: `No aligned visual for ${narratedLabel}; using a neutral card...`,
+      });
+      const card = await createTitleCard({
+        workDir,
+        index: index + 1,
+        title: 'No Time-Matched Visual',
+        subtitle: reason,
+        durationSeconds: audio.durationSeconds,
+      });
+      videoSegments.push(card.path);
+      const trace = buildTimelineTrace({
+        segment,
+        event: event || null,
+        window: null,
+        audio,
+        selectionReason: reason,
+        fallbackUsed: true,
+        fallbackType: 'neutral_card_no_time_match',
+        visualSource: 'neutral_card',
+        violation: 'TIMESTAMP_VISUAL_MISMATCH_PREVENTED',
+      });
+      generatedClips.push({
+        id: event?.id || `neutral-card-${index + 1}`,
+        paragraphIndex: segment.paragraphIndex,
+        session_time_s: event ? roundedSeconds(event.session_time_s) : null,
+        spoken_segment_index: index + 1,
+        spoken_text: segment.text.slice(0, 240),
+        label: 'No time-matched visual',
+        reason,
+        source_video_path: primaryVideo.path,
+        audio_duration_seconds: roundedSeconds(audio.durationSeconds),
+        playback_rate: 1,
+        slow_motion: false,
+        direct_spoken_time: false,
+        source_time_strategy: 'neutral_card_required_by_timeline_validation',
+        matched_event: Boolean(matchedEvent),
+        procedural_broll: false,
+        timeline_trace: { ...trace, spoken_segment_index: index + 1 },
+      });
+      previousText = previousText ? `${previousText} ${segment.text}` : segment.text;
+      continue;
+    }
+
     const window = sourceWindowForSegment({
       event,
       segment,
@@ -1024,10 +1459,36 @@ async function renderSegmentedSourceReviewVideo({
       sessionSeconds: window.sessionSeconds,
       playbackRate: window.playbackRate || 1,
     });
+    videoSegments.push(videoClip.path);
     const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
     await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
     avSegments.push(avPath);
     fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
+    const selectionReason = event?.reason || (bodyExplorationMode && !matchedEvent && event
+      ? 'No exact event matched this untimed spoken segment; using procedure-safe timestamped B-roll.'
+      : !matchedEvent && !event
+      ? 'No exact event matched this untimed spoken segment; using continuous source video context.'
+      : 'Matched narration segment to timestamped source video.');
+    const timelineTrace = buildTimelineTrace({
+      segment,
+      event,
+      window,
+      audio,
+      selectionReason,
+      fallbackUsed: !matchedEvent,
+      fallbackType: !matchedEvent
+        ? event
+          ? 'procedure_broll'
+          : 'continuous_source_context'
+        : null,
+      visualSource: matchedEvent
+        ? event?.source === 'spoken_segment_time'
+          ? 'explicit_spoken_timestamp'
+          : 'matched_event'
+        : event
+        ? 'procedure_broll'
+        : 'continuous_source_context',
+    });
     generatedClips.push({
       id: event?.id || `context-${index + 1}`,
       paragraphIndex: segment.paragraphIndex,
@@ -1037,12 +1498,19 @@ async function renderSegmentedSourceReviewVideo({
       spoken_segment_index: index + 1,
       spoken_text: segment.text.slice(0, 240),
       label: window.label,
-      reason: event?.reason || 'No exact event matched this spoken segment; using continuous source video context.',
+      reason: selectionReason,
       source_video_path: primaryVideo.path,
       audio_duration_seconds: Math.round(Number(audio.durationSeconds || 0) * 10) / 10,
       playback_rate: Number(window.playbackRate || 1),
       slow_motion: Boolean(window.slowMotion),
-      matched_event: Boolean(event),
+      direct_spoken_time: Boolean(window.directSpokenTime),
+      spoken_anchor_offset_seconds: Math.round(Number(window.spokenAnchorOffset || 0) * 10) / 10,
+      spoken_time_lead_seconds: Math.round(Number(window.spokenTimeLeadSeconds || 0) * 10) / 10,
+      source_time_strategy: window.directSpokenTime ? 'spoken_time_phrase_aligned_to_source' : 'session_offset_or_event',
+      matched_event: Boolean(matchedEvent),
+      procedural_broll: Boolean(!matchedEvent && event),
+      procedural_broll_score: event?._broll_score ?? null,
+      timeline_trace: { ...timelineTrace, spoken_segment_index: index + 1 },
     });
     previousText = previousText ? `${previousText} ${segment.text}` : segment.text;
   }
@@ -1052,9 +1520,13 @@ async function renderSegmentedSourceReviewVideo({
   const outputPath = path.join(uploadDir, outputFilename);
   const audioFilename = `${outputBase}.mp3`;
   const audioOutputPath = path.join(uploadDir, audioFilename);
+  const silentVideoPath = path.join(workDir, 'review-video-continuous-video.mp4');
+  const continuousWavPath = path.join(workDir, 'review-video-continuous-audio.wav');
 
-  onProgress({ phase: 'muxing', current: 4, total: 5, message: 'Concatenating aligned spoken video segments...' });
-  await concatAvSegments(avSegments, outputPath, workDir);
+  onProgress({ phase: 'muxing', current: 4, total: 5, message: 'Concatenating aligned video and smoothing narration audio...' });
+  await concatSegments(videoSegments.length ? videoSegments : avSegments, silentVideoPath, workDir);
+  await concatWavSegments(audioSegments, continuousWavPath, workDir);
+  await muxAudioVideo(silentVideoPath, continuousWavPath, outputPath);
   await concatAudioSegments(audioSegments, audioOutputPath, workDir);
 
   const stat = await fs.stat(outputPath);
@@ -1086,6 +1558,7 @@ async function renderSegmentedSourceReviewVideo({
     cited_times: plan.citedTimes,
     generated_clip_requests: plan.generatedClipRequests,
     generated_clips: generatedClips,
+    timeline_trace: generatedClips.map((clip) => clip.timeline_trace || null).filter(Boolean),
     existing_clip_count: existingSegmentSources.length,
     chapters,
   };
@@ -1124,6 +1597,7 @@ async function renderSegmentedSourceReviewVideo({
     clip_count: record.clip_count,
     cited_time_count: record.cited_time_count,
     manifest_url,
+    timeline_trace: generatedClips.map((clip) => clip.timeline_trace || null).filter(Boolean),
     record,
     render_version: REVIEW_RENDER_VERSION,
   };
@@ -1323,6 +1797,9 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       cited_times: plan.citedTimes,
       generated_clip_requests: plan.generatedClipRequests,
       generated_clips: clipOutputs.map(({ path: _path, ...clip }) => clip),
+      timeline_trace: clipOutputs
+        .map((clip) => clip.timeline_trace || null)
+        .filter(Boolean),
       existing_clip_count: existingSegmentSources.length,
       chapters,
     };
@@ -1361,6 +1838,9 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       clip_count: record.clip_count,
       cited_time_count: record.cited_time_count,
       manifest_url,
+      timeline_trace: clipOutputs
+        .map((clip) => clip.timeline_trace || null)
+        .filter(Boolean),
       record,
       render_version: REVIEW_RENDER_VERSION,
     };

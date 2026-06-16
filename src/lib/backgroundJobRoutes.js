@@ -20,6 +20,7 @@ export function backgroundJobRoute(job) {
   }
 
   if (sessionId) return `/sessions/${encodeURIComponent(sessionId)}`;
+  if (job?.type === "profile_anatomy_video") return "/profiler";
   if (job?.type === "session_review_video") return "/library";
   if (job?.type === "tts_export") return "/library";
   if (job?.type === "ai_invoke") return "/sessions";

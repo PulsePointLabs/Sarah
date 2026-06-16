@@ -11,6 +11,7 @@ import AIOutputReader from "../components/AIOutputReader";
 import CascadeTrendPanel from "../components/CascadeTrendPanel";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText } from "@/lib/sessionContext";
+import { recoverCompletedAIJob, startRecoverableAIJob, waitForRecoverableAIJob } from "@/lib/recoverableAIJobs";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -97,6 +98,25 @@ function AIInsightPanel({ sessions }) {
   const [savedId, setSavedId] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
   const [error, setError] = useState("");
+  const jobKey = `cascade-analysis:${sessions.map((s) => s.id).sort().join(",")}`;
+
+  const persistCascadeAnalysis = async (rawResult) => {
+    const parsed = normalizeCascadeAnalysisResult(rawResult);
+    setResult(parsed);
+    if (savedId) {
+      await base44.entities.CascadeAnalysisResult.update(savedId, { result: parsed, session_count: sessions.length });
+      return parsed;
+    }
+    const existing = await base44.entities.CascadeAnalysisResult.list("-updated_date", 1);
+    if (existing[0]) {
+      await base44.entities.CascadeAnalysisResult.update(existing[0].id, { result: parsed, session_count: sessions.length });
+      setSavedId(existing[0].id);
+    } else {
+      const created = await base44.entities.CascadeAnalysisResult.create({ result: parsed, session_count: sessions.length });
+      setSavedId(created.id);
+    }
+    return parsed;
+  };
 
   useEffect(() => {
     base44.entities.CascadeAnalysisResult.list("-updated_date", 1).then((rows) => {
@@ -113,6 +133,33 @@ function AIInsightPanel({ sessions }) {
     });
     base44.auth.me().then((u) => setUserProfile(u)).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!sessions.length) return;
+    let cancelled = false;
+    const recover = async () => {
+      try {
+        const job = await recoverCompletedAIJob(jobKey);
+        if (!job || cancelled) return;
+        setLoading(true);
+        const completed = job.status === "complete"
+          ? job
+          : await waitForRecoverableAIJob(jobKey, job.id, { intervalMs: 1800 });
+        if (!cancelled && completed.result) {
+          await persistCascadeAnalysis(completed.result);
+          setError("");
+        }
+      } catch (err) {
+        if (!cancelled) setError(aiErrorMessage(err));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    recover();
+    return () => {
+      cancelled = true;
+    };
+  }, [jobKey, sessions.length]);
 
   const analyze = async () => {
     setLoading(true);
@@ -347,7 +394,7 @@ Arousal notes: ${briefText(userProfile.arousal_notes, 500) || "none"}.
       ].filter(Boolean).join("; ");
     }).join("\n");
 
-    const res = await base44.integrations.Core.InvokeLLM({
+    const aiPayload = {
       model: "claude_sonnet_4_6",
       max_tokens: 12000,
       prompt: `You are a physiological research assistant analyzing sexual response cascade data across ${sessions.length} sessions. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
@@ -442,17 +489,16 @@ Be specific and reference actual values — but always written as spoken words, 
         },
         required: ["summary", "cascade_overview", "heart_rate_signature", "event_note_patterns", "build_phase_analysis", "climax_dynamics", "recovery_trajectory", "common_signatures", "contextual_correlations", "predictive_insights", "phenotype_clusters", "temporal_evolution", "physiological_findings", "cascade_health_score"]
       }
-    });
+    };
 
-    console.log("AI Cascade result:", res);
-    const parsed = normalizeCascadeAnalysisResult(res);
-    setResult(parsed);
-    if (savedId) {
-      await base44.entities.CascadeAnalysisResult.update(savedId, { result: parsed, session_count: sessions.length });
-    } else {
-      const created = await base44.entities.CascadeAnalysisResult.create({ result: parsed, session_count: sessions.length });
-      setSavedId(created.id);
-    }
+    const job = await startRecoverableAIJob(jobKey, aiPayload, {
+      title: "AI Cascade Analysis",
+      label: "AI Cascade Analysis",
+      source: "cascade_analysis",
+      sessionKey: jobKey,
+    });
+    const completed = await waitForRecoverableAIJob(jobKey, job.id, { intervalMs: 1800 });
+    await persistCascadeAnalysis(completed.result);
     } catch (err) {
       console.error("AI Cascade analysis failed:", err);
       setError(aiErrorMessage(err));

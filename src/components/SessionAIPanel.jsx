@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { base44 } from "@/api/base44Client";
-import { AlertCircle, Brain, Activity, Lightbulb, TrendingUp, Zap, ChevronDown, ChevronUp, Download, Loader2, Video } from "lucide-react";
+import { AlertCircle, Brain, Activity, Lightbulb, TrendingUp, Zap, ChevronDown, ChevronUp, Download, Loader2, MessageCircle, Video } from "lucide-react";
 import AIOutputReader from "./AIOutputReader";
 import { Button } from "@/components/ui/button";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
@@ -9,14 +9,14 @@ import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/
 import { buildAudioChapterBundle } from "@/lib/audioChapters";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from "@/lib/sessionContext";
-import { buildSessionKeyVideoClipDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, normalizeSessionVideoPassFindings } from "@/lib/visualEvidence";
+import { buildSessionKeyVideoClipDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, normalizeSessionKeyVideoClips, normalizeSessionVideoPassFindings } from "@/lib/visualEvidence";
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "./TTSButton";
 
-const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v10";
+export const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v11_hd";
 
 function trailingContext(text, maxChars = 320) {
   const cleaned = String(text || "").replace(/\s+/g, " ").trim();
@@ -58,6 +58,207 @@ function formatVideoClock(seconds = 0) {
   const secs = totalSeconds % 60;
   if (hours) return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
   return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+function cleanReviewAnswerForDisplay(text = "") {
+  return String(text || "")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/\*(.*?)\*/g, "$1")
+    .replace(/^\s*[-*]\s+/gm, "• ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function isProviderRefusalText(text = "") {
+  const value = String(text || "").toLowerCase();
+  return [
+    "i'm not able to provide analysis of this content",
+    "i am not able to provide analysis of this content",
+    "explicit sexual material",
+    "can't review, describe, or analyze",
+    "cannot review, describe, or analyze",
+    "i can’t assist with that request",
+    "i can't assist with that request",
+  ].some((needle) => value.includes(needle));
+}
+
+function shouldUseEvidenceOnlyQuestion(question = "") {
+  return /\b(ejaculat|spurt|semen|cum|fluid|orgasm|climax|penis|shaft|glans|foley|catheter|meatus|stroke|stroking|grip|hand|masturbat|genital|visible|see|show|confirm)\b/i
+    .test(String(question || ""));
+}
+
+function overlapSeconds(aStart, aEnd, bStart, bEnd) {
+  const start = Math.max(Number(aStart), Number(bStart));
+  const end = Math.min(Number(aEnd), Number(bEnd));
+  return Math.max(0, end - start);
+}
+
+function cleanEvidenceText(value = "", maxLength = 360) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function reviewManifestSegmentsForPlayback(manifest, windowStart, windowEnd) {
+  const clips = Array.isArray(manifest?.generated_clips) ? manifest.generated_clips : [];
+  const chapters = Array.isArray(manifest?.chapters) ? manifest.chapters : [];
+  let cursor = 0;
+  return clips.map((clip, index) => {
+    const chapterStart = Number(chapters[index]?.startMs);
+    const playerStart = Number.isFinite(chapterStart) ? chapterStart / 1000 : cursor;
+    const duration = Math.max(0.2, Number(clip.audio_duration_seconds || 0) || 0);
+    const nextChapterStart = Number(chapters[index + 1]?.startMs);
+    const playerEnd = Number.isFinite(nextChapterStart) ? nextChapterStart / 1000 : playerStart + duration;
+    cursor = playerEnd;
+    return {
+      ...clip,
+      player_start_s: playerStart,
+      player_end_s: playerEnd,
+      overlap_s: overlapSeconds(playerStart, playerEnd, windowStart, windowEnd),
+    };
+  }).filter((clip) => clip.overlap_s > 0.05);
+}
+
+function buildSessionRangesFromManifestSegments(segments = [], fallbackStart, fallbackEnd) {
+  const ranges = segments
+    .map((segment) => {
+      const center = Number(segment.session_time_s);
+      if (!Number.isFinite(center)) return null;
+      const radius = Math.max(8, Number(segment.audio_duration_seconds || 0) / Math.max(0.5, Number(segment.playback_rate || 1)) + 4);
+      return {
+        start: Math.max(0, center - radius),
+        end: center + radius,
+        center,
+        label: segment.label || "Review-video segment",
+      };
+    })
+    .filter(Boolean);
+  if (ranges.length) return ranges;
+  return [{
+    start: Math.max(0, Number(fallbackStart || 0) - 8),
+    end: Math.max(0, Number(fallbackEnd || 0) + 8),
+    center: Math.max(0, (Number(fallbackStart || 0) + Number(fallbackEnd || 0)) / 2),
+    label: "Playback window fallback",
+  }];
+}
+
+function timeInRanges(time, ranges = [], pad = 0) {
+  const value = Number(time);
+  return Number.isFinite(value) && ranges.some((range) => value >= range.start - pad && value <= range.end + pad);
+}
+
+function rangeOverlapsRanges(start, end, ranges = [], pad = 0) {
+  const a = Number(start);
+  const b = Number(end);
+  if (!Number.isFinite(a) && !Number.isFinite(b)) return false;
+  const safeStart = Number.isFinite(a) ? a : b;
+  const safeEnd = Number.isFinite(b) ? b : a;
+  return ranges.some((range) => overlapSeconds(safeStart, safeEnd, range.start - pad, range.end + pad) > 0);
+}
+
+function buildReviewWindowEvidencePacket({ session, manifest, windowStart, windowEnd, question }) {
+  const manifestSegments = reviewManifestSegmentsForPlayback(manifest, windowStart, windowEnd);
+  const sessionRanges = buildSessionRangesFromManifestSegments(manifestSegments, windowStart, windowEnd);
+  const eventTimeline = Array.isArray(session?.event_timeline) ? session.event_timeline : [];
+  const events = eventTimeline
+    .filter((event) => timeInRanges(event?.time_s ?? event?.offset_s ?? event?.timestamp_s, sessionRanges, 10))
+    .sort((a, b) => Number(a.time_s ?? a.offset_s ?? a.timestamp_s) - Number(b.time_s ?? b.offset_s ?? b.timestamp_s))
+    .slice(0, 12)
+    .map((event) => ({
+      time_s: Number(event.time_s ?? event.offset_s ?? event.timestamp_s),
+      text: cleanEvidenceText(event.note || event.label || event.description || event.text || event.event || "Saved timeline event", 520),
+      category: Array.isArray(event.category) ? event.category.join(", ") : event.category || "",
+      source: event.source || "event_timeline",
+    }));
+  const videoPasses = normalizeSessionVideoPassFindings(session)
+    .filter((entry) => (
+      rangeOverlapsRanges(entry.clip.start_s, entry.clip.end_s, sessionRanges, 12)
+      || entry.draft_events.some((event) => timeInRanges(event.time_s, sessionRanges, 12))
+    ))
+    .slice(0, 8)
+    .map((entry) => ({
+      range: entry.clip.start_s != null && entry.clip.end_s != null ? `${formatVideoClock(entry.clip.start_s)}-${formatVideoClock(entry.clip.end_s)}` : "range unavailable",
+      label: entry.label,
+      summary: cleanEvidenceText(entry.summary, 520),
+      findings: entry.findings.slice(0, 5).map((finding) => cleanEvidenceText(finding, 420)),
+      draft_events: entry.draft_events.slice(0, 5).map((event) => `${formatVideoClock(event.time_s)}: ${cleanEvidenceText(event.note, 360)}`),
+      source_video: entry.source_video.label || entry.source_video.filename || "",
+    }));
+  const keyClips = normalizeSessionKeyVideoClips(session)
+    .filter((clip) => (
+      timeInRanges(clip.session_time_s, sessionRanges, 18)
+      || rangeOverlapsRanges(clip.startSeconds, clip.endSeconds, sessionRanges, 18)
+    ))
+    .slice(0, 8)
+    .map((clip) => ({
+      time: clip.session_time_s != null ? formatVideoClock(clip.session_time_s) : "time unavailable",
+      source_range: clip.startSeconds != null && clip.endSeconds != null ? `${formatVideoClock(clip.startSeconds)}-${formatVideoClock(clip.endSeconds)}` : "",
+      label: clip.label,
+      reason: cleanEvidenceText(clip.reason, 520),
+      camera: [clip.source_video_label, clip.camera_angle].filter(Boolean).join(", "),
+    }));
+  const visualFindings = (Array.isArray(session?.ai_analysis?._visual_findings) ? session.ai_analysis._visual_findings : [])
+    .flatMap((entry) => Array.isArray(entry?.findings) ? entry.findings : [])
+    .map((finding) => cleanEvidenceText(finding, 360))
+    .filter(Boolean)
+    .slice(0, 8);
+  const explicitNeedles = String(question || "").toLowerCase().match(/\b(ejaculat\w*|spurt\w*|semen|fluid|climax|orgasm|stroke\w*|grip|catheter|foley|glans|shaft|hand\w*)\b/g) || [];
+  const allText = JSON.stringify({ events, videoPasses, keyClips, visualFindings }).toLowerCase();
+  const keywordHits = [...new Set(explicitNeedles)].filter((word) => allText.includes(word.replace(/\W+/g, "")) || allText.includes(word));
+
+  return {
+    player_window: `${formatVideoClock(windowStart)}-${formatVideoClock(windowEnd)}`,
+    mapped_session_ranges: sessionRanges.map((range) => `${formatVideoClock(range.start)}-${formatVideoClock(range.end)} (${range.label})`),
+    manifest_segments: manifestSegments.slice(0, 5).map((segment) => ({
+      player_range: `${formatVideoClock(segment.player_start_s)}-${formatVideoClock(segment.player_end_s)}`,
+      source_range: segment.source_start_s != null && segment.source_end_s != null ? `${formatVideoClock(segment.source_start_s)}-${formatVideoClock(segment.source_end_s)}` : "",
+      session_time: segment.session_time_s != null ? formatVideoClock(segment.session_time_s) : "",
+      label: segment.label || "",
+      spoken_text: cleanEvidenceText(segment.spoken_text, 420),
+      matched_event: Boolean(segment.matched_event),
+      slow_motion: Boolean(segment.slow_motion),
+    })),
+    events,
+    video_passes: videoPasses,
+    key_clips: keyClips,
+    visual_findings: visualFindings,
+    keyword_hits: keywordHits,
+    evidence_count: events.length + videoPasses.length + keyClips.length + visualFindings.length,
+  };
+}
+
+function formatEvidencePacketForPrompt(packet) {
+  return JSON.stringify(packet, null, 2).slice(0, 10000);
+}
+
+function deterministicEvidenceAnswer(packet, question = "") {
+  const lines = [
+    `I checked the saved evidence mapped to player ${packet.player_window}.`,
+  ];
+  if (packet.manifest_segments?.length) {
+    lines.push(`That playback window maps to session/source context around ${packet.mapped_session_ranges.join("; ")}.`);
+  }
+  if (packet.events?.length) {
+    lines.push("", "Nearest saved timeline notes:");
+    packet.events.slice(0, 5).forEach((event) => lines.push(`• ${formatVideoClock(event.time_s)}: ${event.text}`));
+  }
+  if (packet.video_passes?.length) {
+    lines.push("", "Accepted video-pass evidence near that moment:");
+    packet.video_passes.slice(0, 3).forEach((entry) => {
+      lines.push(`• ${entry.range}: ${entry.summary || entry.label}`);
+      entry.findings?.slice(0, 2).forEach((finding) => lines.push(`  - ${finding}`));
+      entry.draft_events?.slice(0, 2).forEach((event) => lines.push(`  - ${event}`));
+    });
+  }
+  if (packet.key_clips?.length) {
+    lines.push("", "Saved key clips near that moment:");
+    packet.key_clips.slice(0, 3).forEach((clip) => lines.push(`• ${clip.time}: ${clip.label}${clip.reason ? ` — ${clip.reason}` : ""}`));
+  }
+  if (!packet.evidence_count) {
+    lines.push("", "I do not have accepted local/timeline evidence close enough to answer that window confidently.");
+  } else if (/\b(spurt|ejaculat|semen|fluid)\b/i.test(question) && !packet.keyword_hits.some((hit) => /spurt|ejaculat|semen|fluid/i.test(hit))) {
+    lines.push("", "I do not have accepted evidence in this window that specifically confirms a visible ejaculatory spurt. The app needs a saved local annotation or timestamp note for that exact visual claim.");
+  }
+  return lines.join("\n");
 }
 
 function reviewSecondsFromText(text = "") {
@@ -139,6 +340,76 @@ function bestParagraphIndexForClipByText(clip, paragraphs = []) {
   return best.score >= 35 ? best.index : -1;
 }
 
+export function buildSessionAnalysisReaderData({ result, session, timelineRows = [], isTechnical = false }) {
+  if (!result) {
+    return {
+      paragraphs: [],
+      paragraphMeta: [],
+      keyVideoClips: [],
+      keyVideoClipError: "",
+      sections: [],
+      clipsByParagraph: new Map(),
+    };
+  }
+
+  const arousalItems = toAnalysisTextArray(result.arousal_arc?.length ? result.arousal_arc : result.phase_analysis);
+  const eventItems = toAnalysisTextArray(result.event_analysis?.length ? result.event_analysis : result.hr_analysis);
+  const emgItems = toAnalysisTextArray(result.emg_analysis);
+  const notableItems = toAnalysisTextArray(result.notable_findings);
+  const recommendationItems = toAnalysisTextArray(result.recommendations);
+
+  const paragraphs = [
+    result.summary,
+    ...arousalItems,
+    ...eventItems,
+    ...emgItems,
+    ...notableItems,
+    ...recommendationItems,
+  ]
+    .filter(Boolean)
+    .map(repairCharacterSplitParagraph);
+
+  let idx = 0;
+  const sections = [];
+  if (result.summary) sections.push({ label: null, color: "primary", items: [result.summary], start: idx++ });
+  if (arousalItems.length) { sections.push({ label: isTechnical ? "Arousal Arc" : "Chronological Deep Dive", color: "chart-2", icon: <TrendingUp className="w-3.5 h-3.5" />, items: arousalItems, start: idx }); idx += arousalItems.length; }
+  if (eventItems.length) { sections.push({ label: isTechnical ? "Event Analysis" : "Motion & Evidence Interpretation", color: "chart-1", icon: <Activity className="w-3.5 h-3.5" />, items: eventItems, start: idx }); idx += eventItems.length; }
+  if (emgItems.length) { sections.push({ label: "EMG Analysis", color: "chart-3", icon: <Activity className="w-3.5 h-3.5" />, items: emgItems, start: idx }); idx += emgItems.length; }
+  if (notableItems.length) { sections.push({ label: isTechnical ? "Notable Findings" : "Patterns & Hypotheses", color: "chart-4", icon: <Zap className="w-3.5 h-3.5" />, items: notableItems, start: idx }); idx += notableItems.length; }
+  if (recommendationItems.length) { sections.push({ label: isTechnical ? "Recommendations" : "Recommendations & Experiments", color: "accent", icon: <Lightbulb className="w-3.5 h-3.5" />, items: recommendationItems, start: idx }); }
+
+  const keyVideoClips = Array.isArray(result?._meta?.key_video_clips) ? result._meta.key_video_clips : [];
+  const keyVideoClipError = result?._meta?.key_video_clip_error || "";
+  const clipsByParagraph = keyVideoClips.reduce((map, clip) => {
+    const paraIndex = paragraphIndexForClip(clip, sections, paragraphs.length, sessionDurationSeconds(session, timelineRows), paragraphs);
+    if (!map.has(paraIndex)) map.set(paraIndex, []);
+    map.get(paraIndex).push(clip);
+    return map;
+  }, new Map());
+
+  const paragraphMeta = paragraphs.map((_, paraIdx) => {
+    let section = sections[0];
+    for (const sec of sections) {
+      if (paraIdx >= sec.start) section = sec;
+    }
+    const clips = clipsByParagraph.get(paraIdx) || [];
+    return section?.label === null
+      ? { type: "summary", color: "hsl(var(--primary))", clips }
+      : {
+        type: "section",
+        clips,
+        sec: {
+          key: section?.label,
+          label: section?.label,
+          color: SECTION_COLORS[section?.color] || "hsl(var(--primary))",
+          icon: section?.icon,
+        },
+      };
+  });
+
+  return { paragraphs, paragraphMeta, keyVideoClips, keyVideoClipError, sections, clipsByParagraph };
+}
+
 function sanitizeReviewClip(clip = {}) {
   return {
     id: clip.id || null,
@@ -159,19 +430,33 @@ function sanitizeReviewClip(clip = {}) {
   };
 }
 
-function SessionReviewVideoExportButton({
+export function SessionReviewVideoExportButton({
   session,
   analysisTitle,
   sourceGeneratedAt,
   paragraphs = [],
   paragraphMeta = [],
+  recordType = "session",
 }) {
   const [status, setStatus] = useState({ type: "idle", message: "" });
   const [rendered, setRendered] = useState(null);
   const [existingVideo, setExistingVideo] = useState(null);
   const [previewTime, setPreviewTime] = useState(0);
+  const [reviewQuestion, setReviewQuestion] = useState("");
+  const [chatMessages, setChatMessages] = useState([]);
+  const [reviewStatus, setReviewStatus] = useState({ type: "idle", message: "" });
+  const chatStorageLoadedRef = useRef("");
   const activeVideo = rendered?.file_url ? rendered : existingVideo;
   const activeVideoUrl = activeVideo?.file_url ? serverUrl(activeVideo.file_url) : "";
+  const chatStorageKey = session?.id
+    ? [
+      "pulsepoint",
+      "reviewVideoChat",
+      session.id,
+      sourceGeneratedAt || "latest",
+      activeVideo?.file_url || "pending",
+    ].join(":")
+    : "";
 
   useEffect(() => {
     let cancelled = false;
@@ -219,6 +504,31 @@ function SessionReviewVideoExportButton({
     };
   }, [session?.id, sourceGeneratedAt]);
 
+  useEffect(() => {
+    if (!chatStorageKey) return;
+    chatStorageLoadedRef.current = "";
+    try {
+      const stored = window.localStorage?.getItem(chatStorageKey);
+      const parsed = stored ? JSON.parse(stored) : [];
+      setChatMessages(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setChatMessages([]);
+    }
+    const timer = window.setTimeout(() => {
+      chatStorageLoadedRef.current = chatStorageKey;
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [chatStorageKey]);
+
+  useEffect(() => {
+    if (!chatStorageKey || chatStorageLoadedRef.current !== chatStorageKey) return;
+    try {
+      window.localStorage?.setItem(chatStorageKey, JSON.stringify(chatMessages.slice(-40)));
+    } catch {
+      // Local persistence is best-effort only.
+    }
+  }, [chatMessages, chatStorageKey]);
+
   const startRender = async () => {
     const readableParagraphs = paragraphs.map((paragraph) => String(paragraph || "").trim()).filter(Boolean);
     if (!readableParagraphs.length) {
@@ -245,9 +555,18 @@ function SessionReviewVideoExportButton({
         sessionDate: session?.date || null,
         title: analysisTitle || "Session Review Video",
         sourceGeneratedAt: sourceGeneratedAt || null,
+        recordType,
         session: {
           id: session?.id || null,
           date: session?.date || null,
+          record_type: recordType,
+          title: session?.title || null,
+          exploration_type: session?.exploration_type || null,
+          methods: session?.methods || [],
+          devices: session?.devices || null,
+          foley_size: session?.foley_size || null,
+          foley_type: session?.foley_type || null,
+          notes: session?.notes || null,
           linked_local_videos: Array.isArray(session?.linked_local_videos) ? session.linked_local_videos : [],
           event_timeline: Array.isArray(session?.event_timeline) ? session.event_timeline : [],
           pre_climax_offset_s: session?.pre_climax_offset_s ?? null,
@@ -271,6 +590,7 @@ function SessionReviewVideoExportButton({
         title: `${analysisTitle || "Session Analysis"} review video`,
         source: "SessionAIPanel",
         sessionId: session?.id || null,
+        recordType,
         sourceGeneratedAt: sourceGeneratedAt || null,
       });
       const completed = await waitForBackgroundJob(job.id, {
@@ -292,7 +612,7 @@ function SessionReviewVideoExportButton({
           ? "Review video ready. Reused matching narration."
           : "Review video ready. Narration was rendered for this export.",
       });
-    } catch (error) {
+    } catch {
       setStatus({ type: "error", message: error?.message || "Review video render failed." });
     }
   };
@@ -306,8 +626,223 @@ function SessionReviewVideoExportButton({
     a.click();
   };
 
+  const loadActiveManifest = async () => {
+    if (!activeVideo?.manifest_url) return null;
+    try {
+      const res = await fetch(serverUrl(activeVideo.manifest_url));
+      if (!res.ok) throw new Error(`Manifest request failed: ${res.status}`);
+      return await res.json();
+    } catch (error) {
+      console.warn("Could not load review video manifest:", error);
+      return null;
+    }
+  };
+
+  const askSarahFromEvidencePacket = async ({ question, windowStart, windowEnd, reason = "evidence_only" }) => {
+    setReviewStatus({
+      type: "working",
+      message: reason === "provider_refusal"
+        ? "Building a saved-evidence answer after provider refusal..."
+        : "Reviewing saved local/timeline evidence for this window...",
+    });
+    const manifest = await loadActiveManifest();
+    const packet = buildReviewWindowEvidencePacket({ session, manifest, windowStart, windowEnd, question });
+    const deterministic = deterministicEvidenceAnswer(packet, question);
+    if (!packet.evidence_count) {
+      setChatMessages((messages) => [
+        ...messages,
+        {
+          id: `assistant-local-${Date.now()}`,
+          role: "assistant",
+          text: deterministic,
+          windowStart,
+          windowEnd,
+          error: true,
+        },
+      ]);
+      setReviewStatus({ type: "error", message: "No accepted local/timeline evidence was close enough to answer this window." });
+      return;
+    }
+    try {
+      const conversationContext = chatMessages.slice(-8).map((message) => (
+        `${message.role === "assistant" ? "Sarah" : "Ben"} (${formatVideoClock(message.windowStart)}-${formatVideoClock(message.windowEnd)}): ${message.text}`
+      )).join("\n");
+      const response = await base44.integrations.Core.InvokeLLM({
+        model: "claude_sonnet_4_6",
+        max_tokens: 1400,
+        label: "Review video local-evidence Q&A",
+        source: "session_review_video_window_local_evidence_qa",
+        prompt: `You are Sarah answering a PulsePoint review-video follow-up using saved evidence only.
+
+Do not claim you are directly inspecting frames in this request. No images are attached. Use only the saved local/timeline evidence packet below.
+
+Question:
+${question}
+
+Recent conversation:
+${conversationContext || "- This is the first evidence-only answer in this review thread."}
+
+Saved evidence packet:
+${formatEvidencePacketForPrompt(packet)}
+
+Answer directly and practically. If the evidence specifically supports the user's visual question, say so and cite the timestamp/source in natural language. If it does not support the specific visual claim, say that clearly and explain what the saved evidence does support. Keep the tone conversational, clinical, and not erotic. Do not include policy language. Do not invent visual confirmation beyond the packet. Do not lean on "consistent with", "consistent", or "consistently"; use direct observation or varied wording such as "matches", "supports", "fits with", "points toward", or "tracks with".`,
+      });
+      const text = typeof response === "string" ? response : response?.response || "";
+      if (isProviderRefusalText(text)) throw new Error("Provider refused text-only evidence synthesis.");
+      setChatMessages((messages) => [
+        ...messages,
+        {
+          id: `assistant-local-${Date.now()}`,
+          role: "assistant",
+          text: cleanReviewAnswerForDisplay(text) || deterministic,
+          windowStart,
+          windowEnd,
+        },
+      ]);
+      setReviewStatus({ type: "ok", message: "Sarah answered from saved local/timeline evidence." });
+    } catch {
+      setChatMessages((messages) => [
+        ...messages,
+        {
+          id: `assistant-local-fallback-${Date.now()}`,
+          role: "assistant",
+          text: deterministic,
+          windowStart,
+          windowEnd,
+          error: true,
+        },
+      ]);
+      setReviewStatus({ type: "error", message: "Cloud synthesis did not complete; showing saved-evidence packet instead." });
+    }
+  };
+
+  const askSarahAboutCurrentWindow = async () => {
+    const fileUrl = activeVideo?.file_url || "";
+    if (!fileUrl) return;
+    const windowStart = Math.max(0, Number(previewTime || 0) - 2);
+    const windowEnd = windowStart + 12;
+    const question = reviewQuestion.trim() || "What do you notice about the visible body mechanics and stimulation pattern in this window?";
+    const userMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      text: question,
+      windowStart,
+      windowEnd,
+    };
+    setChatMessages((messages) => [...messages, userMessage]);
+    setReviewQuestion("");
+    if (shouldUseEvidenceOnlyQuestion(question)) {
+      await askSarahFromEvidencePacket({ question, windowStart, windowEnd, reason: "explicit_visual_question" });
+      return;
+    }
+    setReviewStatus({ type: "working", message: "Sampling the processed review video window..." });
+    try {
+      const clip = await base44.integrations.Core.ProcessUploadedVideoClip({
+        file_url: fileUrl,
+        startSeconds: windowStart,
+        endSeconds: windowEnd,
+        label: `${analysisTitle || "Review video"} current window`,
+        frameCount: 12,
+        maxDurationSeconds: 18,
+      });
+      const frames = Array.isArray(clip.frames) ? clip.frames.slice(0, 12) : [];
+      if (!frames.length) throw new Error("No frames were sampled from this video window.");
+      setReviewStatus({ type: "working", message: "Sarah is reviewing the sampled frames..." });
+      const conversationContext = chatMessages.slice(-8).map((message) => (
+        `${message.role === "assistant" ? "Sarah" : "Ben"} (${formatVideoClock(message.windowStart)}-${formatVideoClock(message.windowEnd)}): ${message.text}`
+      )).join("\n");
+      const response = await base44.integrations.Core.InvokeLLM({
+        model: "claude_sonnet_4_6",
+        max_tokens: 1600,
+        label: "Review video window Q&A",
+        source: "session_review_video_window_qa",
+        images: frames.map((frame) => ({
+          filename: frame.filename || `review-video-frame-${frame.frameIndex || 1}.jpg`,
+          media_type: frame.mimeType || "image/jpeg",
+          data: frame.data,
+        })).filter((frame) => frame.data),
+        prompt: `You are Sarah reviewing sampled frames from a processed PulsePoint review video.
+
+The user is asking about the visible moment currently being played in the exported review video.
+
+Question:
+${question}
+
+Recent conversation for follow-up continuity:
+${conversationContext || "- This is the first question in this review thread."}
+
+Video context:
+- Review video title: ${analysisTitle || "Review video"}
+- Processed video playback window: ${formatVideoClock(windowStart)} to ${formatVideoClock(windowEnd)}
+- Source record type: ${recordType}
+- Sampled frame count: ${frames.length}
+- Manifest URL if available: ${activeVideo?.manifest_url || "not available"}
+
+Content handling:
+- Treat this as consensual private physiology/session review for PulsePoint, not erotic writing.
+- Keep any answer clinical, observational, and evidence-based.
+- Do not sexualize, embellish, or produce arousal-oriented prose.
+- If provider policy prevents visual review of these frames, say only: "Provider refused direct visual review for this window." Do not produce a long refusal paragraph.
+
+Anatomical laterality rule: "your left" and "your right" must mean Ben's anatomical left/right, not viewer screen-left/screen-right. If the view is facing Ben, his anatomical right appears on viewer-left. If the camera perspective, supine positioning, mirroring, rotation, crop, or composite layout makes laterality uncertain, say screen-left/screen-right, near/far, upper/lower, one hand/the other hand, or one leg/the other leg instead of anatomical left/right. Preserve anatomical identity across poses and camera angles: a bruise, mole, scar, catheter/tubing position, pelvic finding, genital finding, or skin mark on Ben's anatomical right remains right-sided when he moves from supine to standing, turns toward the camera, rotates, or appears in another crop/camera lane.
+
+Answer directly and practically in conversational prose, not markdown. Describe only what is visible in the sampled frames, plus cautious interpretation of body mechanics, stroke/contact pattern, positioning, device interaction, or timing if supported. If the frames are unclear, say exactly what cannot be confirmed in one short sentence, then focus on what is visible. If a useful follow-up would clarify the review, ask one concise follow-up question at the end. Do not invent sensations or intent. Do not lean on "consistent with", "consistent", or "consistently"; use direct observation or varied wording such as "matches", "supports", "fits with", "points toward", or "tracks with".`,
+      });
+      const text = typeof response === "string" ? response : response?.response || "";
+      if (isProviderRefusalText(text)) {
+        await askSarahFromEvidencePacket({ question, windowStart, windowEnd, reason: "provider_refusal" });
+        return;
+      }
+      setChatMessages((messages) => [
+        ...messages,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          text: cleanReviewAnswerForDisplay(text) || "Sarah did not return a visible-window answer.",
+          windowStart,
+          windowEnd,
+        },
+      ]);
+      setReviewStatus({ type: "ok", message: "Sarah reviewed this processed-video window." });
+    } catch (error) {
+      setChatMessages((messages) => [
+        ...messages,
+        {
+          id: `assistant-error-${Date.now()}`,
+          role: "assistant",
+          text: error?.message || "Could not review this video window.",
+          windowStart,
+          windowEnd,
+          error: true,
+        },
+      ]);
+      setReviewStatus({ type: "error", message: error?.message || "Could not review this video window." });
+    }
+  };
+
   return (
-    <div className="space-y-2 rounded-lg border border-border bg-background/60 px-3 py-3">
+    <div className="space-y-3 rounded-xl border border-primary/20 bg-card p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary">
+            <MessageCircle className="h-3.5 w-3.5" /> Ask Sarah About The Review Video
+          </h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Ask about the current playback window. Sarah samples that moment and keeps the thread open for follow-up questions.
+          </p>
+        </div>
+        {chatMessages.length > 0 && (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => setChatMessages([])}
+            className="h-8 text-xs"
+          >
+            Clear chat
+          </Button>
+        )}
+      </div>
       {activeVideoUrl && (
         <div className="relative overflow-hidden rounded-lg border border-border bg-black">
           <video
@@ -324,6 +859,75 @@ function SessionReviewVideoExportButton({
           <div className="pointer-events-none absolute bottom-3 left-3 rounded-md bg-black/75 px-2 py-1 font-mono text-xs font-semibold text-white shadow">
             player {formatVideoClock(previewTime)}
           </div>
+        </div>
+      )}
+      {activeVideoUrl && (
+        <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-3">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              value={reviewQuestion}
+              onChange={(event) => setReviewQuestion(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && reviewStatus.type !== "working") {
+                  event.preventDefault();
+                  askSarahAboutCurrentWindow();
+                }
+              }}
+              placeholder="Ask Sarah about the current video window..."
+              className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 text-xs text-foreground outline-none focus:border-primary"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={askSarahAboutCurrentWindow}
+              disabled={reviewStatus.type === "working"}
+              className="h-9 gap-1.5 text-xs"
+            >
+              {reviewStatus.type === "working" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageCircle className="h-3.5 w-3.5" />}
+              Review Window
+            </Button>
+          </div>
+          {chatMessages.length > 0 && (
+            <div className="space-y-3">
+              {chatMessages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`max-w-[92%] rounded-xl border px-3 py-2 ${
+                    message.role === "user"
+                      ? "ml-auto border-primary/25 bg-primary/10 text-foreground"
+                      : message.error
+                        ? "mr-auto border-amber-400/30 bg-amber-400/10 text-amber-100"
+                        : "mr-auto border-border bg-background/80 text-foreground"
+                  }`}
+                >
+                  <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <span>{message.role === "user" ? "You" : "Sarah"}</span>
+                    <span className="font-mono normal-case tracking-normal">
+                      {formatVideoClock(message.windowStart)}-{formatVideoClock(message.windowEnd)}
+                    </span>
+                  </div>
+                  {message.role === "assistant" && !message.error ? (
+                    <AIOutputReader
+                      sessionId={`${session?.id || "session"}-review-video-chat-${message.id}`}
+                      title="Sarah Review Window"
+                      sessionDate={session?.date}
+                      sourceGeneratedAt={message.id}
+                      paragraphs={[message.text]}
+                      paragraphMeta={[{ type: "summary", color: "hsl(var(--primary))" }]}
+                    />
+                  ) : (
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.text}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {reviewStatus.message && (
+            <p className={`text-[11px] ${reviewStatus.type === "error" ? "text-amber-300" : reviewStatus.type === "ok" ? "text-emerald-400" : "text-muted-foreground"}`}>
+              {reviewStatus.message}
+            </p>
+          )}
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -476,6 +1080,14 @@ HUMANIZED PHYSIOLOGY NARRATION - HIGH PRIORITY:
 - Brief spike example target: instead of "intermittent HRV spikes appeared," write "Several brief moments suggest your body may have been trying to release tension before returning to the sustained build that characterized most of the session."
 `;
 
+const SARAH_LANGUAGE_VARIETY_RULE_V1 = `
+SARAH LANGUAGE VARIETY RULE - HIGH PRIORITY:
+- Do not make "consistent with", "consistent", or "consistently" your default evidence phrase. In a full analysis, use this word family at most twice unless quoting a saved source.
+- Prefer direct clinical narration and varied connectors: "fits with", "aligns with", "matches", "supports", "points toward", "may reflect", "helps explain", "tracks with", "stays stable", "repeats across", "holds steady", or simply state the observation without a qualifier.
+- Avoid stacking evidence caveats in the same rhythm. Instead of repeating "This is consistent with..." across paragraphs, explain what your body appears to be doing and why the evidence matters.
+- Before returning final output, scan for repeated phrasing. If "consistent" appears repeatedly, rewrite most instances with more natural wording or direct observation language.
+`;
+
 const GENITAL_STIMULATION_MECHANICS_RULE_V1 = `
 GENITAL STATUS AND STIMULATION MECHANICS - HIGH PRIORITY:
 - Do not let HR, HRV, or telemetry crowd out concrete session mechanics. When supported by notes, event timeline, reviewed visual evidence, video-pass findings, saved key clips, or subjective fields, include erection quality/stability, genital state, glans/shaft/meatus status, hand position, grip/contact geometry, stroke pattern, contact zone, pressure/friction/suction changes, device/foley interaction, and stimulation effectiveness.
@@ -495,10 +1107,23 @@ BASELINE / ENTRY ANATOMY AND DEVICE SETUP - HIGH PRIORITY:
 - The goal is to preserve the old PulsePoint usefulness: the reader should understand the physical starting condition before HR, HRV, arousal arc, or device effects are interpreted.
 `;
 
+const ANATOMICAL_LATERALITY_RULE_V1 = `
+ANATOMICAL LEFT/RIGHT DISCIPLINE - HIGH PRIORITY:
+- "Your left" and "your right" must mean Ben's anatomical left/right, not the viewer's screen-left/screen-right.
+- When you are facing the camera, your anatomical right appears on the viewer's left. In foot-of-table, overhead, supine, mirrored, rotated, composite, or cropped views, left/right can be ambiguous.
+- Preserve anatomical identity across poses and camera angles. A bruise, mole, scar, catheter/tubing position, pelvic finding, genital finding, or skin mark on your anatomical right remains right-sided when you move from supine to standing, turn toward the camera, rotate, or appear in another crop or camera lane.
+- Track stable landmarks such as your umbilicus, sternum, pubic mound, inguinal creases, thighs, known scars, moles, bruises, catheter exit angle, and manual side notes before assigning side.
+- Do not convert screen position into anatomical laterality unless the evidence clearly establishes camera orientation from body landmarks, tracking labels, manual notes, or source metadata.
+- If laterality is uncertain, say "screen-left", "screen-right", "near/far", "upper/lower", "one hand/the other hand", or "one leg/the other leg" instead of anatomical left/right.
+- Apply this to masturbation/stimulation mechanics, body exploration, Foley/procedure review, head-to-toe assessments, lower-body/foot findings, hand grip/stroke descriptions, and posture/asymmetry comments.
+- If older video-pass evidence uses left/right but the camera perspective is unclear, treat the side label as uncertain and preserve the visible action without repeating the possibly flipped side.
+`;
+
 const ESTIM_WAVEFORM_AND_MODE_RULE_V1 = `
 E-STIM WAVEFORM AND MODE INTERPRETATION - HIGH PRIORITY:
 - If e-stim is listed in methods, e-stim notes exist, or e-stim screenshots are attached, do not silently drop the e-stim setup. Include the strongest supported details in the overview, Chronological Deep Dive, or Motion & Evidence Interpretation.
-- When screenshots or notes provide enough detail, name and interpret waveform type, mode/program, channel assignments, electrode path, frequency, pulse width, ramp/intensity behavior, and whether the likely effect was sensory input, motor recruitment, pelvic floor loading, urethral/prostatic awareness, abdominal bracing, or mixed.
+- When screenshots, notes, readable video overlays, or reviewed visual evidence provide enough detail, name and interpret waveform type, mode/program, channel assignments, electrode path, frequency, pulse width, power level, intensity, channel state, playback/activity state, ramp/intensity behavior, and whether the likely effect was sensory input, motor recruitment, pelvic floor loading, urethral/prostatic awareness, abdominal bracing, or mixed.
+- Treat readable Howl, Coyote-E, e-stim, TENS, or stim-control overlays as device telemetry evidence. If frequency, intensity, power, mode, waveform, channel, play/pause, active state, or ramp state is visible, integrate it naturally into the session timeline instead of saying the device cannot be interpreted.
 - If exact waveform or mode details are unavailable, say that the session confirms e-stim presence and placement but does not preserve the exact waveform/mode parameters. Then interpret only the supported placement, ramp, channel, or subjective effects.
 - Connect e-stim settings to practical physiology: what muscle or sensory territory was likely being engaged, how it may have shaped erection quality, plateauing, pelvic/perineal loading, climax threshold, discomfort, ejaculatory force, or recovery.
 - Keep uncertainty calibrated. E-stim settings are evidence, not proof of a single mechanism.
@@ -1502,8 +2127,10 @@ ${reviewedVideoPassEvidence}
 ${warmMotionEvidence}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${HUMANIZED_PHYSIOLOGY_NARRATION_V1}
+${SARAH_LANGUAGE_VARIETY_RULE_V1}
 ${GENITAL_STIMULATION_MECHANICS_RULE_V1}
 ${BASELINE_ANATOMY_AND_DEVICE_SETUP_RULE_V1}
+${ANATOMICAL_LATERALITY_RULE_V1}
 ${ESTIM_WAVEFORM_AND_MODE_RULE_V1}
 ${firstNameToneCue}
 ${!isTechnical ? WARM_COMPANION_OUTPUT_DISCIPLINE : ""}
@@ -1800,41 +2427,12 @@ Provide ${isTechnical
       )}
 
       {!collapsed && result && (() => {
-        // Support both old schema (hr_analysis/phase_analysis) and new schema (arousal_arc/event_analysis)
-        const arousalItems = toAnalysisTextArray(result.arousal_arc?.length ? result.arousal_arc : result.phase_analysis);
-        const eventItems = toAnalysisTextArray(result.event_analysis?.length ? result.event_analysis : result.hr_analysis);
-        const emgItems = toAnalysisTextArray(result.emg_analysis);
-        const notableItems = toAnalysisTextArray(result.notable_findings);
-        const recommendationItems = toAnalysisTextArray(result.recommendations);
-
-        const paras = [
-          result.summary,
-          ...arousalItems,
-          ...eventItems,
-          ...emgItems,
-          ...notableItems,
-          ...recommendationItems,
-        ]
-          .filter(Boolean)
-          .map(repairCharacterSplitParagraph);
-
-        // Build a flat index → section label map for rendering
-        let idx = 0;
-        const sections = [];
-        if (result.summary) sections.push({ label: null, color: "primary", items: [result.summary], start: idx++ });
-        if (arousalItems.length) { sections.push({ label: isTechnical ? "Arousal Arc" : "Chronological Deep Dive", color: "chart-2", icon: <TrendingUp className="w-3.5 h-3.5" />, items: arousalItems, start: idx }); idx += arousalItems.length; }
-        if (eventItems.length) { sections.push({ label: isTechnical ? "Event Analysis" : "Motion & Evidence Interpretation", color: "chart-1", icon: <Activity className="w-3.5 h-3.5" />, items: eventItems, start: idx }); idx += eventItems.length; }
-        if (emgItems.length) { sections.push({ label: "EMG Analysis", color: "chart-3", icon: <Activity className="w-3.5 h-3.5" />, items: emgItems, start: idx }); idx += emgItems.length; }
-        if (notableItems.length) { sections.push({ label: isTechnical ? "Notable Findings" : "Patterns & Hypotheses", color: "chart-4", icon: <Zap className="w-3.5 h-3.5" />, items: notableItems, start: idx }); idx += notableItems.length; }
-        if (recommendationItems.length) { sections.push({ label: isTechnical ? "Recommendations" : "Recommendations & Experiments", color: "accent", icon: <Lightbulb className="w-3.5 h-3.5" />, items: recommendationItems, start: idx }); }
-        const keyVideoClips = Array.isArray(result?._meta?.key_video_clips) ? result._meta.key_video_clips : [];
-        const keyVideoClipError = result?._meta?.key_video_clip_error || "";
-        const clipsByParagraph = keyVideoClips.reduce((map, clip) => {
-          const paraIndex = paragraphIndexForClip(clip, sections, paras.length, sessionDurationSeconds(session, timelineRows), paras);
-          if (!map.has(paraIndex)) map.set(paraIndex, []);
-          map.get(paraIndex).push(clip);
-          return map;
-        }, new Map());
+        const {
+          paragraphs: paras,
+          paragraphMeta,
+          keyVideoClips,
+          keyVideoClipError,
+        } = buildSessionAnalysisReaderData({ result, session, timelineRows, isTechnical });
 
         return (
           <div className="space-y-3">
@@ -1860,54 +2458,13 @@ Provide ${isTechnical
                 Key video clips were not added: {keyVideoClipError}
               </div>
             )}
-            <SessionReviewVideoExportButton
-              session={session}
-              analysisTitle={analysisTitle}
-              sourceGeneratedAt={result?._meta?.last_generated_at}
-              paragraphs={paras}
-              paragraphMeta={paras.map((_, paraIdx) => {
-                let section = sections[0];
-                for (const sec of sections) {
-                  if (paraIdx >= sec.start) section = sec;
-                }
-                const clips = clipsByParagraph.get(paraIdx) || [];
-                return section.label === null
-                  ? { type: "summary", clips }
-                  : {
-                    type: "section",
-                    clips,
-                    sec: {
-                      label: section.label,
-                      color: SECTION_COLORS[section.color] || "hsl(var(--primary))",
-                    },
-                  };
-              })}
-            />
             <AIOutputReader
               sessionId={session.id}
               title={analysisTitle}
               sessionDate={session.date}
               sourceGeneratedAt={result?._meta?.last_generated_at}
               paragraphs={paras}
-              paragraphMeta={paras.map((_, paraIdx) => {
-                let section = sections[0];
-                for (const sec of sections) {
-                  if (paraIdx >= sec.start) section = sec;
-                }
-                const clips = clipsByParagraph.get(paraIdx) || [];
-                return section.label === null
-                  ? { type: "summary", color: "hsl(var(--primary))", clips }
-                  : {
-                    type: "section",
-                    clips,
-                    sec: {
-                      key: section.label,
-                      label: section.label,
-                      color: SECTION_COLORS[section.color] || "hsl(var(--primary))",
-                      icon: section.icon,
-                    },
-                  };
-              })}
+              paragraphMeta={paragraphMeta}
             />
           </div>
         );

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { AlertCircle, TrendingUp, Zap, Activity, Flag, Brain, ChevronDown, ChevronUp } from "lucide-react";
@@ -8,6 +8,7 @@ import { generateSessionKeyVideoClips } from "./SessionAIPanel";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt } from "@/utils/aiContentMetadata";
+import { recoverCompletedAIJob, startRecoverableAIJob, waitForRecoverableAIJob } from "@/lib/recoverableAIJobs";
 
 function getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -87,8 +88,58 @@ export default function CascadeOverviewPanel({ session, timelineRows, emgRows = 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(session.ai_cascade ?? null);
   const [error, setError] = useState("");
+  const jobKey = `cascade-overview:${session.id}`;
 
   const hasMarkers = session.climax_offset_s != null;
+
+  const persistCascadeResult = async (rawResult) => {
+    const parsed = normalizeCascadeOverview(rawResult);
+    const clipResult = await generateSessionKeyVideoClips({
+      session,
+      timelineRows,
+      label: "Cascade Overview",
+    }).catch((clipError) => ({
+      clips: [],
+      error: clipError?.message || "Could not generate key video clips.",
+    }));
+    const stored = {
+      ...parsed,
+      _meta: {
+        ...buildSessionAIContentMeta(session, session.ai_cascade?._meta || {}),
+        key_video_clips: clipResult.clips || [],
+        key_video_clip_error: clipResult.error || "",
+      },
+    };
+    setResult(stored);
+    await base44.entities.Session.update(session.id, { ai_cascade: stored });
+    return stored;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const recover = async () => {
+      try {
+        const job = await recoverCompletedAIJob(jobKey);
+        if (!job || cancelled) return;
+        setLoading(true);
+        const completed = job.status === "complete"
+          ? job
+          : await waitForRecoverableAIJob(jobKey, job.id, { intervalMs: 1800 });
+        if (!cancelled && completed.result) {
+          await persistCascadeResult(completed.result);
+          setError("");
+        }
+      } catch (err) {
+        if (!cancelled) setError(aiErrorMessage(err));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    recover();
+    return () => {
+      cancelled = true;
+    };
+  }, [jobKey]);
 
   // Nearest HR lookup from timeline
   const nearestHR = (time_s) => {
@@ -301,10 +352,10 @@ ${JSON.stringify({
       ...(session.estim_screenshot && !(session.estim_screenshots?.includes(session.estim_screenshot)) ? [session.estim_screenshot] : []),
     ].filter(Boolean);
 
-    const res = await base44.integrations.Core.InvokeLLM({
+    const aiPayload = {
       model: "claude_sonnet_4_6",
       max_tokens: 7000,
-      ...(estimScreenshots.length > 0 ? { file_urls: estimScreenshots } : {}),
+      ...(estimScreenshots.length > 0 ? { images: estimScreenshots } : {}),
       prompt: `You are a physiological research assistant and anatomist specializing in sexual response. Analyze the climax cascade arc of this single session in depth, integrating HR data, EMG data (if present), anatomy, and event timing. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 ${groundingContext}
@@ -426,27 +477,15 @@ ${annotatedEvents.length > 0 ? `\nAnnotated event timeline (with HR at each mome
         },
         required: ["summary", "build_phase", "pre_climax_phase", "climax_phase", "recovery_phase", "physiological_findings", "event_sequence_analysis", "cascade_quality"]
       }
-    });
-
-    const parsed = normalizeCascadeOverview(res);
-    const clipResult = await generateSessionKeyVideoClips({
-      session,
-      timelineRows,
-      label: "Cascade Overview",
-    }).catch((clipError) => ({
-      clips: [],
-      error: clipError?.message || "Could not generate key video clips.",
-    }));
-    const stored = {
-      ...parsed,
-      _meta: {
-        ...buildSessionAIContentMeta(session, session.ai_cascade?._meta || {}),
-        key_video_clips: clipResult.clips || [],
-        key_video_clip_error: clipResult.error || "",
-      },
     };
-    setResult(stored);
-    await base44.entities.Session.update(session.id, { ai_cascade: stored });
+    const job = await startRecoverableAIJob(jobKey, aiPayload, {
+      title: "Cascade Overview",
+      label: "Cascade Overview",
+      source: "cascade_overview",
+      sessionId: session.id,
+    });
+    const completed = await waitForRecoverableAIJob(jobKey, job.id, { intervalMs: 1800 });
+    await persistCascadeResult(completed.result);
     } catch (err) {
       console.error("AI Cascade overview failed:", err);
       setError(aiErrorMessage(err));

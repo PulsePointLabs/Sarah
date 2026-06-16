@@ -2,6 +2,7 @@ import express from 'express';
 import { cancelJob, clearJobs, createJob, getJob, listJobs, registerJobHandler } from '../services/jobQueue.js';
 import { renderTTSExport } from '../services/ttsRenderer.js';
 import { renderSessionReviewVideo } from '../services/sessionReviewVideoRenderer.js';
+import { renderProfileAnatomyVideo } from '../services/profileAnatomyVideoRenderer.js';
 import { aiInvokeInternal } from './internalAi.js';
 import { startAIForensicCapture } from '../services/aiForensics.js';
 import { analyzeLocalVisionWindow } from '../services/localVision/analyzeWindow.js';
@@ -42,6 +43,14 @@ registerJobHandler('tts_export', async (payload, context) => {
 
 registerJobHandler('session_review_video', async (payload, context) => {
   return renderSessionReviewVideo(payload, {
+    jobId: context.jobId,
+    signal: context.signal,
+    onProgress: context.updateProgress,
+  });
+});
+
+registerJobHandler('profile_anatomy_video', async (payload, context) => {
+  return renderProfileAnatomyVideo(payload, {
     jobId: context.jobId,
     signal: context.signal,
     onProgress: context.updateProgress,
@@ -482,7 +491,7 @@ largeJobsRouter.post('/', express.raw({ type: 'application/json', limit: process
     if (!type) return res.status(400).json({ error: 'Job type is required' });
     saved = await saveJobPayload(payload);
     if (!type || !payload || !saved?.id) throw new Error('Invalid large job payload');
-    if (type && !['profile_image_review_full', 'ai_invoke', 'tts_export', 'session_review_video'].includes(type) && !String(type).startsWith('local_vision_')) {
+    if (type && !['profile_image_review_full', 'ai_invoke', 'tts_export', 'session_review_video', 'profile_anatomy_video'].includes(type) && !String(type).startsWith('local_vision_')) {
       throw new Error(`Unknown background job type: ${type}`);
     }
     startJobFromBody({

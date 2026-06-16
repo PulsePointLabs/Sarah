@@ -707,6 +707,33 @@ filesRouter.post('/local-video/clip-preview', async (req, res) => {
   }
 });
 
+filesRouter.post('/uploaded-video/clip-preview', async (req, res) => {
+  try {
+    const rawUrl = String(req.body?.file_url || req.body?.url || '').trim();
+    if (!rawUrl) return res.status(400).json({ error: 'Missing uploaded video URL.' });
+    if (!rawUrl.startsWith('/uploads/')) return res.status(400).json({ error: 'Only /uploads video URLs can be clipped.' });
+    const filename = path.basename(decodeURIComponent(rawUrl.replace(/^\/uploads\//, '')));
+    const sourcePath = path.join(uploadDir, filename);
+    const ext = path.extname(filename).toLowerCase();
+    if (!LOCAL_VIDEO_EXTENSIONS.has(ext)) return res.status(400).json({ error: 'Uploaded file is not a supported video type.' });
+    await fsp.access(sourcePath, fs.constants.R_OK);
+    const result = await generateVideoClipPreview({
+      sourcePath,
+      startSeconds: req.body?.startSeconds,
+      endSeconds: req.body?.endSeconds,
+      label: req.body?.label || filename || 'uploaded-video-clip',
+      frameCount: req.body?.frameCount,
+      maxDurationSeconds: req.body?.maxDurationSeconds,
+      sourceDeleted: false,
+      sourceType: 'uploaded_review_video',
+    });
+    res.json({ ...result, source_filename: filename, source_url: rawUrl });
+  } catch (error) {
+    const status = error?.code === 'ENOENT' ? 404 : 500;
+    res.status(status).json({ error: error?.message || 'Could not generate uploaded video clip preview' });
+  }
+});
+
 filesRouter.post('/local-video/audio-pass', async (req, res) => {
   const tempFiles = [];
   try {

@@ -94,6 +94,12 @@ export function sanitizeSecondPersonProcedureLanguage(text) {
     .replace(/\boperator hands\b/gi, "gloved hands")
     .replace(/\bthe operator\b/gi, "the gloved person")
     .replace(/\boperator\b/gi, "gloved person")
+    .replace(/\b(?:a|the)\s+gloved\s+hand\b/gi, "your hand")
+    .replace(/\b(?:a|the)\s+gloved\s+hands\b/gi, "your hands")
+    .replace(/\bone\s+gloved\s+hand\b/gi, "one hand")
+    .replace(/\bthe\s+other\s+gloved\s+hand\b/gi, "the other hand")
+    .replace(/\bgloved\s+person\b/gi, "your hand")
+    .replace(/\bvisible\s+gloved\s+hand\b/gi, "your hand")
     .replace(/\byou visible\b/gi, "you are visible")
     .replace(/\byou seated\b/gi, "you are seated")
     .replace(/\byou positioned\b/gi, "you are positioned");

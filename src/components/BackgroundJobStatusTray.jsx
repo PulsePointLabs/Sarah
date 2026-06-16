@@ -8,6 +8,7 @@ import {
   areBackgroundNotificationsEnabled,
   getNotificationPermission,
   isNotificationSupported,
+  listenForBackgroundNotificationActions,
   notifyBackgroundJobFinished,
   requestBackgroundNotificationPermission,
   setBackgroundNotificationsEnabled,
@@ -41,6 +42,7 @@ function jobLabel(job) {
   if (job?.type === "local_vision_ask_video") return "Local video question";
   if (job?.type === "ai_invoke" && job?.meta?.source === "ai_video_pass") return "Cloud Sarah annotation";
   if (job?.type === "session_review_video") return "Review video render";
+  if (job?.type === "profile_anatomy_video") return "Anatomy video render";
   if (job?.type === "tts_export") return "Audio render";
   if (job?.type === "ai_invoke") return "AI analysis";
   return job?.type || "Background job";
@@ -142,6 +144,12 @@ export default function BackgroundJobStatusTray() {
   const wasHiddenSinceLastPollRef = useRef(
     typeof document !== "undefined" && (document.hidden || document.visibilityState !== "visible" || !document.hasFocus())
   );
+
+  useEffect(() => {
+    return listenForBackgroundNotificationActions((target) => {
+      if (target) navigate(target);
+    });
+  }, [navigate]);
 
   useEffect(() => {
     dismissedTerminalIdsRef.current = dismissedTerminalIds;
@@ -386,7 +394,7 @@ export default function BackgroundJobStatusTray() {
             )}
             {notificationsEnabled && (
               <p className="px-1 text-[10px] leading-relaxed text-muted-foreground">
-                Notifications work while PulsePoint is open or running in the background. Fully closed-app delivery may require future service worker support.
+                Notifications work while PulsePoint is open or backgrounded. The APK uses Android local notifications; Chrome uses browser notifications.
               </p>
             )}
             {visibleJobs.map((job) => {

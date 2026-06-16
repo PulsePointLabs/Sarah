@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { BleClient } from "@capacitor-community/bluetooth-le";
-import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
+import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, Footprints, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
 import {
   CartesianGrid,
   Legend,
@@ -113,6 +113,7 @@ const EMG_CALIBRATION_ACTIONS = {
   left_max: "set_left_max",
   right_max: "set_right_max",
 };
+const HOWL_TELEMETRY_POLL_MS = 2500;
 
 function playToneSequence(audioContext, frequencies) {
   if (!audioContext || audioContext.state === "closed") return;
@@ -798,6 +799,30 @@ function TrendPanel({ title, subtitle, children, empty, heightClass = "h-56", di
   );
 }
 
+function SetupTile({ icon, label, value, helper, active, tone = "default", children }) {
+  const toneClass = active
+    ? "border-primary/35 bg-primary/10"
+    : tone === "warn"
+      ? "border-amber-400/35 bg-amber-400/10"
+      : "border-border bg-card/80";
+  return (
+    <div className={`rounded-xl border p-3 ${toneClass}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {icon}
+            <span>{label}</span>
+          </div>
+          <p className="mt-2 text-lg font-bold tracking-tight text-foreground">{value}</p>
+          {helper && <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{helper}</p>}
+        </div>
+        <StatusDot active={active} />
+      </div>
+      {children && <div className="mt-3 flex flex-wrap gap-2">{children}</div>}
+    </div>
+  );
+}
+
 export default function LiveCapture() {
   const [searchParams, setSearchParams] = useSearchParams();
   const focusView = searchParams.get("display") === "focus";
@@ -848,6 +873,10 @@ export default function LiveCapture() {
   const [calibrationStatus, setCalibrationStatus] = useState("");
   const [calibrationError, setCalibrationError] = useState("");
   const [calibrationCommandStatus, setCalibrationCommandStatus] = useState(null);
+  const [howlTelemetry, setHowlTelemetry] = useState(null);
+  const [howlCapabilities, setHowlCapabilities] = useState(null);
+  const [howlError, setHowlError] = useState("");
+  const [howlRefreshing, setHowlRefreshing] = useState(false);
   const latestHrRef = useRef(null);
   const latestEmgRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -938,6 +967,26 @@ export default function LiveCapture() {
     lastHeartbeatTelemetryKeyRef.current = key;
     triggerHeartbeatPulse(telemetry);
   }, [triggerHeartbeatPulse]);
+
+  const refreshHowlTelemetry = useCallback(async ({ quiet = false } = {}) => {
+    if (!quiet) setHowlRefreshing(true);
+    try {
+      const [recentResponse, capabilitiesResponse] = await Promise.all([
+        fetch(apiUrl("/howl/telemetry/recent?limit=1")),
+        fetch(apiUrl("/howl/control-capabilities")),
+      ]);
+      if (!recentResponse.ok) throw new Error("Howl telemetry route is not responding.");
+      const recent = await recentResponse.json();
+      const capabilities = capabilitiesResponse.ok ? await capabilitiesResponse.json() : null;
+      setHowlTelemetry(recent?.samples?.[0] || null);
+      setHowlCapabilities(capabilities);
+      setHowlError("");
+    } catch (error) {
+      setHowlError(error?.message || "Howl telemetry is unavailable.");
+    } finally {
+      if (!quiet) setHowlRefreshing(false);
+    }
+  }, []);
 
   const publishDirectH10Measurement = useCallback((parsed, deviceName = "Polar H10") => {
     if (!parsed?.heartRate) return;
@@ -1523,6 +1572,14 @@ export default function LiveCapture() {
   }, [emgSensorConfig]);
 
   useEffect(() => {
+    refreshHowlTelemetry({ quiet: true });
+    const timer = window.setInterval(() => {
+      refreshHowlTelemetry({ quiet: true });
+    }, HOWL_TELEMETRY_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [refreshHowlTelemetry]);
+
+  useEffect(() => {
     localStorage.setItem("pulsepoint.telemetryNotices", telemetryNoticesEnabled ? "on" : "off");
   }, [telemetryNoticesEnabled]);
 
@@ -1623,6 +1680,17 @@ export default function LiveCapture() {
   const selectedCaptureMode = CAPTURE_MODES.find((mode) => mode.value === captureMode) || CAPTURE_MODES[0];
   const selectedEmgConfig = EMG_SENSOR_CONFIGS.find((config) => config.value === emgSensorConfig) || EMG_SENSOR_CONFIGS[0];
   const usingPerinealEmgConfig = selectedEmgConfig.value === "perineal_body_small_electrodes";
+  const selectedHrSource = HR_SOURCE_OPTIONS.find((option) => option.value === hrSourceSettings.source) || HR_SOURCE_OPTIONS[0];
+  const howlMeasuredAt = howlTelemetry?.measured_at || howlTelemetry?.received_at || null;
+  const howlLive = isRecent(howlMeasuredAt, 10000);
+  const howlModeSummary = [
+    howlTelemetry?.mode,
+    howlTelemetry?.waveform,
+    howlTelemetry?.frequency_hz != null ? `${fmtNumber(howlTelemetry.frequency_hz, 0)} Hz` : null,
+    howlTelemetry?.intensity != null ? `intensity ${fmtNumber(howlTelemetry.intensity, 0)}` : null,
+    howlTelemetry?.power_level != null ? `power ${fmtNumber(howlTelemetry.power_level, 0)}` : null,
+  ].filter(Boolean).join(" · ");
+  const howlEndpointText = `${apiUrl("/howl/telemetry").replace(/^https?:\/\/[^/]+/, "")}`;
   const emgCalibrationSteps = useMemo(() => {
     if (!usingPerinealEmgConfig) return EMG_CALIBRATION_STEPS;
     return EMG_CALIBRATION_STEPS.map((step) => {
@@ -2236,6 +2304,16 @@ export default function LiveCapture() {
     }
   }, [appendVoiceAnnotation, getAudioContext, getCurrentSessionTime, startWakeListening, stopVoiceAnnotation, stopWakeListening, voiceRecordingSupported]);
 
+  const toggleVoiceWake = useCallback(async () => {
+    await getAudioContext();
+    if (voiceWakeEnabled) playVoiceFeedback("stop");
+    setVoiceWakeEnabled((value) => !value);
+  }, [getAudioContext, playVoiceFeedback, voiceWakeEnabled]);
+
+  const startManualVoiceNote = useCallback(() => {
+    startVoiceAnnotation();
+  }, [startVoiceAnnotation]);
+
   useEffect(() => {
     if (voiceWakeEnabled) startWakeListening();
     else {
@@ -2536,6 +2614,7 @@ export default function LiveCapture() {
                   {phaseMarkers.map((marker, index) => marker.chartTime ? (
                     <ReferenceLine
                       key={`${marker.label}-${marker.chartTime}-media-${index}`}
+                      yAxisId="hr"
                       x={marker.chartTime}
                       stroke={phaseMarkerColor(marker.label)}
                       strokeDasharray="4 3"
@@ -2754,13 +2833,206 @@ export default function LiveCapture() {
         </div>
       )}
 
-      <LiveFootLandmarkTracker
-        sessionId={liveSession?.activeSessionId}
-        recordingActive={recordingActive}
-        getSessionTimeS={getCurrentSessionTime}
-        onTrackingSnapshot={handleFootTrackingSnapshot}
-        compact
-      />
+      {!focusView && !mainTelemetryView && (
+        <div className="rounded-2xl border border-primary/25 bg-card p-4 shadow-sm">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary">
+                <Radio className="h-4 w-4" />
+                Session Start
+              </p>
+              <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+                Start here: confirm HR acquisition, OBS boundary, EMG target, Howl ingest, and annotation readiness before the recording gets rolling.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setPresetModalOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                Presets
+              </button>
+              {!liveSession?.activeSessionId && (
+                <button
+                  type="button"
+                  onClick={ensureSession}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+                >
+                  <FileText className="h-4 w-4" />
+                  Create Shell
+                </button>
+              )}
+              {liveSession?.activeSessionId && (
+                <Link
+                  to={`/sessions/${liveSession.activeSessionId}`}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  Open Session
+                </Link>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <SetupTile
+              icon={<HeartPulse className="h-3.5 w-3.5 text-primary" />}
+              label="Heart Rate Acquisition"
+              value={hrConnected ? `${fmtNumber(hrTelemetry?.currentHr, 0)} bpm` : selectedHrSource.label}
+              helper={hrConnected
+                ? `${status?.hr?.sourceStatus?.label || selectedHrSource.label} live${rrCount ? ` · ${rrCount} RR samples` : ""}`
+                : status?.hr?.sourceStatus?.message || selectedHrSource.helper}
+              active={hrConnected}
+              tone={hrConnected ? "default" : "warn"}
+            >
+              <button
+                type="button"
+                onClick={() => setPresetModalOpen(true)}
+                className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted"
+              >
+                Provider
+              </button>
+              <button
+                type="button"
+                onClick={() => applyHrSourceSettings()}
+                disabled={hrSourceSaving}
+                className="rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 disabled:opacity-50"
+              >
+                {hrSourceSaving ? "Applying..." : "Apply HR"}
+              </button>
+              {hrSourceSettings.source === "direct_h10" && (
+                <button
+                  type="button"
+                  onClick={() => connectDirectH10()}
+                  disabled={directH10Status.connecting}
+                  className="rounded-md bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                >
+                  {directH10Status.connecting ? "Connecting..." : "Connect H10"}
+                </button>
+              )}
+            </SetupTile>
+
+            <SetupTile
+              icon={<Video className="h-3.5 w-3.5 text-primary" />}
+              label="OBS Session Boundary"
+              value={recordingActive ? "Recording" : obsReady ? "Ready" : "Waiting"}
+              helper={recordingActive
+                ? recording?.filename || "OBS recording is driving the live session."
+                : obsReady
+                  ? "OBS relay identified. Start recording when ready."
+                  : embeddedObsStatus?.error || "OBS relay status will appear here once identified."}
+              active={obsReady}
+              tone={obsReady ? "default" : "warn"}
+            >
+              <button
+                type="button"
+                onClick={refreshFiles}
+                className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted"
+              >
+                Refresh Files
+              </button>
+            </SetupTile>
+
+            <SetupTile
+              icon={<Activity className="h-3.5 w-3.5 text-primary" />}
+              label="EMG Target"
+              value={usingPerinealEmgConfig ? "Perineum" : selectedEmgConfig.label}
+              helper={emgRecent
+                ? `${selectedEmgConfig.leftLabel} live at ${fmtNumber(leftEmgLevel)}%`
+                : usingPerinealEmgConfig
+                  ? "Perineal-body preset saved; start the EMG helper for live signal."
+                  : "Choose Perineal Body EMG here when tracking pelvic-floor/perineal activation."}
+              active={usingPerinealEmgConfig || emgRecent}
+            >
+              <button
+                type="button"
+                onClick={() => applyEmgSensorConfig(EMG_SENSOR_CONFIGS.find((config) => config.value === "perineal_body_small_electrodes"))}
+                className="rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20"
+              >
+                Track Perineum
+              </button>
+              <button
+                type="button"
+                onClick={() => setCalibrationOpen(true)}
+                className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted"
+              >
+                Calibrate
+              </button>
+            </SetupTile>
+
+            <SetupTile
+              icon={<Zap className="h-3.5 w-3.5 text-primary" />}
+              label="Howl Telemetry"
+              value={howlLive ? "Live" : "Read-only"}
+              helper={howlLive
+                ? howlModeSummary || `Last sample ${fmtTime(howlMeasuredAt)}`
+                : howlError || `POST device state to ${howlEndpointText}`}
+              active={howlLive}
+            >
+              <button
+                type="button"
+                onClick={() => refreshHowlTelemetry()}
+                disabled={howlRefreshing}
+                className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
+              >
+                {howlRefreshing ? "Checking..." : "Refresh"}
+              </button>
+              <span className="rounded-md bg-muted px-2.5 py-1.5 text-xs font-semibold text-muted-foreground">
+                {howlCapabilities?.mode || "read_only"}
+              </span>
+            </SetupTile>
+
+            <SetupTile
+              icon={voiceWakeEnabled ? <Mic className="h-3.5 w-3.5 text-primary" /> : <MicOff className="h-3.5 w-3.5 text-primary" />}
+              label="Voice Notes"
+              value={annotationRecording ? "Recording" : voiceWakeEnabled ? "Listening" : "Manual"}
+              helper={voiceReady ? "Timestamp notes during the session." : "Microphone capture unavailable in this browser context."}
+              active={annotationRecording || voiceWakeEnabled}
+            >
+              <button
+                type="button"
+                onClick={toggleVoiceWake}
+                disabled={!voiceReady}
+                className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
+              >
+                {voiceWakeEnabled ? "Wake Off" : "Wake On"}
+              </button>
+              <button
+                type="button"
+                onClick={startManualVoiceNote}
+                disabled={!voiceRecordingSupported || annotationRecording}
+                className="rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 disabled:opacity-50"
+              >
+                Record Note
+              </button>
+            </SetupTile>
+
+            <SetupTile
+              icon={<Brain className="h-3.5 w-3.5 text-primary" />}
+              label="Phase Watch"
+              value={`${prediction.nearClimax}%`}
+              helper={prediction.reason || prediction.label}
+              active={prediction.nearClimax >= 35 || prediction.recovery >= 35}
+            >
+              <button
+                type="button"
+                onClick={() => setFocusView(true)}
+                className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted"
+              >
+                Display View
+              </button>
+            </SetupTile>
+          </div>
+
+          {(hrSourceError || directH10Status.error || calibrationError || howlError) && (
+            <div className="mt-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
+              {[hrSourceError, directH10Status.error, calibrationError, howlError].filter(Boolean)[0]}
+            </div>
+          )}
+        </div>
+      )}
 
       {mediaPanel}
 
@@ -3109,6 +3381,27 @@ export default function LiveCapture() {
         )}
       </div>}
 
+      {!focusView && !mainTelemetryView && (
+        <div className="rounded-xl border border-border bg-card p-4">
+          <div className="mb-3 flex flex-col gap-1">
+            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
+              <Footprints className="h-4 w-4" />
+              Lower-Body Tracker
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Optional live foot/leg landmark capture. Keep it available, but out of the startup lane.
+            </p>
+          </div>
+          <LiveFootLandmarkTracker
+            sessionId={liveSession?.activeSessionId}
+            recordingActive={recordingActive}
+            getSessionTimeS={getCurrentSessionTime}
+            onTrackingSnapshot={handleFootTrackingSnapshot}
+            compact
+          />
+        </div>
+      )}
+
       <div className={`rounded-xl border border-border bg-card ${distanceTelemetryView ? "p-5 md:p-6 space-y-6" : "p-4 space-y-4"} ${focusView ? "h-[calc(100vh-2rem)] overflow-y-auto" : ""}`}>
         <div className="flex items-center justify-between gap-3">
           <h3 className={`${distanceTelemetryView ? "text-lg" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex items-center gap-2`}>
@@ -3253,6 +3546,7 @@ export default function LiveCapture() {
               {phaseMarkers.map((marker, index) => marker.chartTime ? (
                 <ReferenceLine
                   key={`${marker.label}-${marker.chartTime}-${index}`}
+                  yAxisId="hr"
                   x={marker.chartTime}
                   stroke={phaseMarkerColor(marker.label)}
                   strokeDasharray="4 3"

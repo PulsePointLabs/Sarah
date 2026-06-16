@@ -30,6 +30,7 @@ function pushTime(times, seconds, meta = {}) {
     source: meta.source || 'analysis_text',
     text: String(meta.text || '').trim().slice(0, 160),
     paragraphIndex: Number.isFinite(Number(meta.paragraphIndex)) ? Number(meta.paragraphIndex) : null,
+    charIndex: Number.isFinite(Number(meta.charIndex)) ? Number(meta.charIndex) : null,
   });
 }
 
@@ -187,35 +188,35 @@ export function extractCitedTimesFromText(text, paragraphIndex = null) {
   const source = String(text || '');
   const times = [];
 
-  source.replace(/\b(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\b/g, (match, hours, minutes, seconds) => {
+  source.replace(/\b(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\b/g, (match, hours, minutes, seconds, offset) => {
     const total = (Number(hours || 0) * 3600) + (Number(minutes) * 60) + Number(seconds);
-    pushTime(times, total, { text: match, paragraphIndex, source: 'clock_time' });
+    pushTime(times, total, { text: match, paragraphIndex, source: 'clock_time', charIndex: offset });
     return match;
   });
 
-  source.replace(/\b(\d{1,3}):(\d{2})\b/g, (match, minutes, seconds) => {
+  source.replace(/\b(\d{1,3}):(\d{2})\b/g, (match, minutes, seconds, offset) => {
     const total = (Number(minutes) * 60) + Number(seconds);
-    pushTime(times, total, { text: match, paragraphIndex, source: 'minute_second_time' });
+    pushTime(times, total, { text: match, paragraphIndex, source: 'minute_second_time', charIndex: offset });
     return match;
   });
 
-  source.replace(/\b(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b/gi, (match, seconds) => {
-    pushTime(times, Number(seconds), { text: match, paragraphIndex, source: 'seconds_text' });
+  source.replace(/\b(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b/gi, (match, seconds, offset) => {
+    pushTime(times, Number(seconds), { text: match, paragraphIndex, source: 'seconds_text', charIndex: offset });
     return match;
   });
 
-  source.replace(/\b(\d+(?:\.\d+)?)\s*(?:m|min|mins|minute|minutes)\s*(?:and\s*)?(?:(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds))?\b/gi, (match, minutes, seconds) => {
-    pushTime(times, (Number(minutes) * 60) + Number(seconds || 0), { text: match, paragraphIndex, source: 'numeric_minute_text' });
+  source.replace(/\b(\d+(?:\.\d+)?)\s*(?:m|min|mins|minute|minutes)\s*(?:and\s*)?(?:(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds))?\b/gi, (match, minutes, seconds, offset) => {
+    pushTime(times, (Number(minutes) * 60) + Number(seconds || 0), { text: match, paragraphIndex, source: 'numeric_minute_text', charIndex: offset });
     return match;
   });
 
   const numberWord = '(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\\s](?:one|two|three|four|five|six|seven|eight|nine))?';
   const wordTime = new RegExp(`\\b(${numberWord}|\\d+)\\s+(?:minute|minutes)\\s*(?:and\\s*)?(?:(${numberWord}|\\d+)\\s+(?:second|seconds))?\\b`, 'gi');
-  source.replace(wordTime, (match, minuteText, secondText) => {
+  source.replace(wordTime, (match, minuteText, secondText, offset) => {
     const minutes = wordNumber(minuteText);
     const seconds = secondText ? wordNumber(secondText) : 0;
     if (minutes != null && seconds != null) {
-      pushTime(times, (minutes * 60) + seconds, { text: match, paragraphIndex, source: 'word_minute_text' });
+      pushTime(times, (minutes * 60) + seconds, { text: match, paragraphIndex, source: 'word_minute_text', charIndex: offset });
     }
     return match;
   });
@@ -240,6 +241,7 @@ export function dedupeTimes(times = [], thresholdSeconds = 12) {
     const previous = deduped[deduped.length - 1];
     if (previous && Math.abs(Number(item.seconds) - Number(previous.seconds)) <= thresholdSeconds) {
       if (previous.paragraphIndex == null && item.paragraphIndex != null) previous.paragraphIndex = item.paragraphIndex;
+      if (previous.charIndex == null && item.charIndex != null) previous.charIndex = item.charIndex;
       continue;
     }
     deduped.push({ ...item, seconds: Number(item.seconds) });
