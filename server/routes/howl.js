@@ -458,8 +458,12 @@ howlRouter.post('/control/settings', (req, res) => {
 });
 
 howlRouter.post('/control/test', async (req, res) => {
-  const result = await testHowlConnection(req.body || {});
-  res.status(result.ok ? 200 : result.status || 502).json(result);
+  try {
+    const result = await testHowlConnection(req.body || {});
+    res.status(result.ok ? 200 : result.status || 502).json(result);
+  } catch (error) {
+    res.status(error?.status || 400).json({ ok: false, message: error?.message || String(error), raw: '' });
+  }
 });
 
 howlRouter.get('/control/commands', (req, res) => {

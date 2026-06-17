@@ -1251,7 +1251,18 @@ export default function LiveCapture() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(howlControlForm),
       });
-      const data = await response.json().catch(() => ({}));
+      const responseText = await response.text();
+      let data = {};
+      try {
+        data = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        if (response.status === 404 || responseText.includes("Cannot POST /api/howl/control/test")) {
+          throw new Error("PulsePoint server needs a restart to load the new Howl connection test route.");
+        }
+        throw new Error(responseText?.startsWith("<!DOCTYPE")
+          ? "PulsePoint server returned an unexpected page instead of a Howl test result. Restart the server and try again."
+          : responseText || "Howl connection test returned an unreadable response.");
+      }
       if (!response.ok || data.ok === false) {
         throw new Error(data.message || data.error || "Howl connection test failed.");
       }
