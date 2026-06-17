@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  repairAITextBlocks,
   reduceConsistencyPhraseRepetition,
   repairRawSecondTimeReferences,
 } from '../../src/utils/aiTextRepair.js';
@@ -13,7 +14,7 @@ test('raw large second offsets are repaired in AI-facing/user-facing prose', () 
   assert.doesNotMatch(repaired, /\[943s\]/);
 });
 
-test('repeated consistency wording is varied after the first allowed uses', () => {
+test('repeated consistency wording is varied after the first allowed use', () => {
   const repaired = reduceConsistencyPhraseRepetition(
     [
       'This is consistent with prior evidence.',
@@ -22,13 +23,37 @@ test('repeated consistency wording is varied after the first allowed uses', () =
       'You consistently show the same pattern.',
       'The profile remains consistent across sessions.',
     ].join(' '),
-    2
+    1
   );
 
   assert.match(repaired, /This is consistent with prior evidence/);
-  assert.match(repaired, /That is consistent with your notes/);
+  assert.doesNotMatch(repaired, /That is consistent with your notes/i);
   assert.doesNotMatch(repaired, /next finding is consistent with baseline/i);
   assert.doesNotMatch(repaired, /You consistently show/i);
   assert.match(repaired, /\b(fits with|aligns with|matches|supports|tracks with|echoes)\b/i);
-  assert.match(repaired, /\b(repeatedly|reliably|regularly|often)\b/i);
+  assert.match(repaired, /\b(repeatedly|reliably|regularly|often|steadily|again and again|throughout)\b/i);
+});
+
+test('AI text block repair limits consistency wording across nested analysis fields', () => {
+  const repaired = repairAITextBlocks({
+    summary: 'This is consistent with the visible pattern.',
+    findings: [
+      'The motion is consistent with the session notes.',
+      'The response consistently builds after stimulation resumes.',
+    ],
+    recommendations: {
+      next: 'Use a consistent setup next time.',
+    },
+  });
+
+  const allText = [
+    repaired.summary,
+    ...repaired.findings,
+    repaired.recommendations.next,
+  ].join(' ');
+
+  const remainingUses = allText.match(/\bconsistent(?:ly)?\b/gi) || [];
+  assert.equal(remainingUses.length, 1);
+  assert.match(allText, /\b(fits with|aligns with|matches|supports|tracks with|echoes|points toward|helps explain)\b/i);
+  assert.match(allText, /\b(repeatedly|reliably|regularly|often|steadily|again and again|throughout)\b/i);
 });

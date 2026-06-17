@@ -42,9 +42,9 @@ PRODUCTION-FACING BODY EXPLORATION STYLE:
 
 const SARAH_LANGUAGE_VARIETY_RULE = `
 SARAH LANGUAGE VARIETY RULE:
-- Do not make "consistent with", "consistent", or "consistently" your default evidence phrase. In the full analysis, use this word family at most twice unless quoting a saved source.
+- Do not make "consistent with", "consistent", or "consistently" your default evidence phrase. In the full analysis, use this word family at most once unless quoting a saved source or preserving a user quote.
 - Prefer direct procedural and physiological narration: "matches", "aligns with", "supports", "fits with", "helps explain", "tracks with", "remains stable", "holds steady", "repeats across", "points toward", or simply state the observation.
-- Before returning final output, scan for repeated phrasing and rewrite most repeated "consistent" constructions into natural viewer-facing language.
+- Before returning final output, scan for repeated phrasing and rewrite any extra "consistent" constructions into natural viewer-facing language.
 `;
 
 function categoryLabel(value) {

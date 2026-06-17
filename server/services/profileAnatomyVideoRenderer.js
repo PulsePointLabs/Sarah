@@ -54,7 +54,7 @@ const SECTION_REGION_ALIASES = [
   },
   {
     key: 'lower_limbs',
-    aliases: ['lower limb', 'lower limbs', 'lower leg', 'lower legs', 'leg', 'legs', 'calf', 'calves', 'knee', 'knees', 'shin', 'shins'],
+    aliases: ['lower limb', 'lower limbs', 'lower extremity', 'lower extremities', 'lower leg', 'lower legs', 'leg', 'legs', 'calf', 'calves', 'knee', 'knees', 'shin', 'shins'],
   },
   {
     key: 'feet_toes',
@@ -103,6 +103,36 @@ const SECTION_KEY_REGION_MAP = new Map([
 const MIXED_SECTION_KEYS = new Set([
   'executive_summary',
   'limitations_future_coverage',
+]);
+
+const PELVIC_GENITAL_REVIEW_ALLOWED_REGIONS = new Set([
+  'pelvis_pubic_region',
+  'genitals_perineum',
+  'buttocks_perianal',
+]);
+
+const PELVIC_GENITAL_REVIEW_FORBIDDEN_REGIONS = new Set([
+  'head_face',
+  'neck',
+  'shoulders_upper_back',
+  'chest',
+  'abdomen',
+  'lower_limbs',
+  'feet_toes',
+]);
+
+const NEGATED_REGION_PATTERNS = [
+  ['genitals_perineum', /\b(?:no|not|without|lacks?|absent)\s+(?:visible\s+|direct\s+|clear\s+|obvious\s+|confirmed\s+){0,4}(?:genital|genitals|penis|penile|glans|meatus|foreskin|shaft|scrotum|testes|testicle|perineum|perineal|foley|catheter|urethra|urethral)\b/i],
+  ['pelvis_pubic_region', /\b(?:no|not|without|lacks?|absent)\s+(?:visible\s+|direct\s+|clear\s+|obvious\s+|confirmed\s+){0,4}(?:pelvis|pelvic|pubic|inguinal|groin|statlock|penile base)\b/i],
+  ['buttocks_perianal', /\b(?:no|not|without|lacks?|absent)\s+(?:visible\s+|direct\s+|clear\s+|obvious\s+|confirmed\s+){0,4}(?:anal|anus|perianal|rectal|buttock|buttocks|gluteal)\b/i],
+  ['abdomen', /\b(?:no|not|without|lacks?|absent)\s+(?:visible\s+|direct\s+|clear\s+|obvious\s+|confirmed\s+){0,4}(?:abdomen|abdominal|belly|flank|umbilicus|bite wound|bruise|bruising|striae|hernia scar)\b/i],
+  ['feet_toes', /\b(?:no|not|without|lacks?|absent)\s+(?:visible\s+|direct\s+|clear\s+|obvious\s+|confirmed\s+){0,4}(?:foot|feet|toe|toes|ankle|ankles|heel|heels|plantar|dorsal foot|edema)\b/i],
+  ['lower_limbs', /\b(?:no|not|without|lacks?|absent)\s+(?:visible\s+|direct\s+|clear\s+|obvious\s+|confirmed\s+){0,4}(?:lower limb|lower limbs|lower extremity|lower extremities|lower leg|lower legs|leg|legs|calf|calves|knee|knees|shin|shins)\b/i],
+];
+
+const IMAGE_SECTION_KEYS_WITHOUT_REGION_AUTHORITY = new Set([
+  'executive_summary',
+  'limitations_future_coverage',
   'tissue_health_safety_observations',
   'measurement_reconciliation',
 ]);
@@ -143,9 +173,9 @@ const STRICT_ALLOWED_IMAGE_REGIONS = new Map([
   ['shoulders_upper_back', new Set(['shoulders_upper_back', 'posture_alignment', 'skin_summary'])],
   ['chest', new Set(['chest', 'posture_alignment', 'skin_summary'])],
   ['abdomen', new Set(['abdomen', 'skin_summary'])],
-  ['pelvis_pubic_region', new Set(['pelvis_pubic_region', 'genitals_perineum', 'skin_summary'])],
+  ['pelvis_pubic_region', new Set(['pelvis_pubic_region', 'genitals_perineum'])],
   ['genitals_perineum', new Set(['genitals_perineum', 'pelvis_pubic_region'])],
-  ['buttocks_perianal', new Set(['buttocks_perianal', 'genitals_perineum', 'pelvis_pubic_region', 'skin_summary'])],
+  ['buttocks_perianal', new Set(['buttocks_perianal', 'genitals_perineum', 'pelvis_pubic_region'])],
   ['upper_limbs_hands', new Set(['upper_limbs_hands', 'skin_summary'])],
   ['lower_limbs', new Set(['lower_limbs', 'skin_summary'])],
   ['feet_toes', new Set(['feet_toes', 'skin_summary'])],
@@ -223,27 +253,72 @@ function collectRegionKeys(value = '') {
   return keys;
 }
 
-function sectionRegionResolutionFromMeta(meta = {}, paragraphText = '') {
+function reviewScopeFromPayload(payload = {}) {
+  const raw = normalizeText([
+    payload.reviewType,
+    payload.review_type,
+    payload.title,
+    payload.kind,
+  ].filter(Boolean).join(' '));
+  if (/\b(pelvic|genital|pubic|perineum|perineal|foley|catheter|meatus|glans|scrotum)\b/i.test(raw)) {
+    return 'pelvic_genital';
+  }
+  return 'head_to_toe';
+}
+
+function pelvicGenitalRegionFromText(meta = {}, paragraphText = '') {
+  const text = normalizeText([
+    meta.section_key,
+    meta.sectionKey,
+    meta.section_label,
+    meta.sectionLabel,
+    meta.displayLabel,
+    meta.label,
+    paragraphText,
+  ].filter(Boolean).join(' '));
+  if (/\b(anal|anus|perianal|rectal|buttock|buttocks|gluteal)\b/i.test(text)) return 'buttocks_perianal';
+  if (/\b(penis|penile|glans|meatus|foreskin|shaft|scrotum|testes|testicle|perineum|perineal|foley|catheter|urethra|urethral)\b/i.test(text)) return 'genitals_perineum';
+  if (/\b(pelvis|pelvic|pubic|inguinal|groin|statlock|penile base|lower abdomen)\b/i.test(text)) return 'pelvis_pubic_region';
+  return 'pelvis_pubic_region';
+}
+
+function constrainRegionForReview(regionKey = '', meta = {}, paragraphText = '', reviewScope = '') {
+  if (reviewScope !== 'pelvic_genital') return regionKey;
+  if (regionKey && PELVIC_GENITAL_REVIEW_ALLOWED_REGIONS.has(regionKey)) return regionKey;
+  return pelvicGenitalRegionFromText(meta, paragraphText);
+}
+
+function sectionRegionResolutionFromMeta(meta = {}, paragraphText = '', reviewScope = '') {
   const explicitKey = normalizeText(meta.section_key || meta.sectionKey || '').replace(/\s+/g, '_');
   const paragraphRegion = sectionRegionKeyFromText(paragraphText);
   if (MIXED_SECTION_KEYS.has(explicitKey)) {
+    const rawKey = paragraphRegion || 'overview';
     return {
-      key: paragraphRegion || 'overview',
+      key: constrainRegionForReview(rawKey, meta, paragraphText, reviewScope),
       source: paragraphRegion ? 'paragraph_text_in_mixed_section' : 'mixed_section_overview',
     };
   }
   if ((meta.type === 'section-title' || meta.type === 'title') && SECTION_KEY_REGION_MAP.has(explicitKey)) {
-    return { key: SECTION_KEY_REGION_MAP.get(explicitKey), source: 'section_title_key' };
+    const rawKey = SECTION_KEY_REGION_MAP.get(explicitKey);
+    return { key: constrainRegionForReview(rawKey, meta, paragraphText, reviewScope), source: 'section_title_key' };
   }
-  if (SECTION_KEY_REGION_MAP.has(explicitKey)) return { key: SECTION_KEY_REGION_MAP.get(explicitKey), source: 'section_key' };
+  if (SECTION_KEY_REGION_MAP.has(explicitKey)) {
+    const rawKey = SECTION_KEY_REGION_MAP.get(explicitKey);
+    return { key: constrainRegionForReview(rawKey, meta, paragraphText, reviewScope), source: 'section_key' };
+  }
   const explicitLabel = sectionRegionKeyFromText([
     meta.section_label,
     meta.sectionLabel,
     meta.displayLabel,
     meta.label,
   ].filter(Boolean).join(' '));
-  if (explicitLabel) return { key: explicitLabel, source: 'section_label' };
-  return { key: paragraphRegion, source: paragraphRegion ? 'paragraph_text' : 'unresolved' };
+  if (explicitLabel) {
+    return { key: constrainRegionForReview(explicitLabel, meta, paragraphText, reviewScope), source: 'section_label' };
+  }
+  return {
+    key: constrainRegionForReview(paragraphRegion, meta, paragraphText, reviewScope),
+    source: paragraphRegion ? 'paragraph_text' : 'unresolved',
+  };
 }
 
 function sectionRegionKeyFromMeta(meta = {}, paragraphText = '') {
@@ -252,20 +327,34 @@ function sectionRegionKeyFromMeta(meta = {}, paragraphText = '') {
 
 function regionKeysForImage(image = {}) {
   const keys = new Set();
-  for (const key of collectRegionKeys(image.label)) keys.add(key);
-  for (const key of collectRegionKeys(image.coverage)) keys.add(key);
-  for (const key of collectRegionKeys([
-    image.section,
-    image.regions,
-    image.regionLabels,
-    image.source,
-  ].filter(Boolean).flat().join(' '))) keys.add(key);
+  const negatedKeys = new Set();
+  const textFields = {
+    label: image.label,
+    coverage: image.coverage,
+    meta: [
+      image.section,
+      image.regions,
+      image.regionLabels,
+      image.source,
+    ].filter(Boolean).flat().join(' '),
+  };
+  for (const key of collectRegionKeys(textFields.label)) keys.add(key);
+  for (const key of collectRegionKeys(textFields.coverage)) keys.add(key);
+  for (const key of collectRegionKeys(textFields.meta)) keys.add(key);
+  for (const [key, pattern] of NEGATED_REGION_PATTERNS) {
+    if (pattern.test(String(textFields.label || '')) || pattern.test(String(textFields.coverage || '')) || pattern.test(String(textFields.meta || ''))) {
+      negatedKeys.add(key);
+    }
+  }
   const sectionKey = normalizeText(image.sectionKey || '').replace(/\s+/g, '_');
-  if (SECTION_KEY_REGION_MAP.has(sectionKey)) keys.add(SECTION_KEY_REGION_MAP.get(sectionKey));
+  if (SECTION_KEY_REGION_MAP.has(sectionKey) && !IMAGE_SECTION_KEYS_WITHOUT_REGION_AUTHORITY.has(sectionKey)) {
+    keys.add(SECTION_KEY_REGION_MAP.get(sectionKey));
+  }
   for (const label of image.regionLabels || []) {
     const key = normalizeText(label).replace(/\s+/g, '_');
     if (SECTION_KEY_REGION_MAP.has(key)) keys.add(SECTION_KEY_REGION_MAP.get(key));
   }
+  for (const key of negatedKeys) keys.delete(key);
   return keys;
 }
 
@@ -342,6 +431,29 @@ function scoreImageForSection(image, targetKey, meta = {}, paragraphText = '') {
   return score;
 }
 
+function isImageAllowedForReviewScope(image, reviewScope = '') {
+  if (reviewScope !== 'pelvic_genital') return true;
+  const keys = regionKeysForImage(image);
+  if (![...keys].some((key) => PELVIC_GENITAL_REVIEW_ALLOWED_REGIONS.has(key))) return false;
+  if ([...keys].some((key) => PELVIC_GENITAL_REVIEW_FORBIDDEN_REGIONS.has(key))) return false;
+  return true;
+}
+
+function scoreImageForReviewFallback(image, targetKey, meta = {}, paragraphText = '', reviewScope = '') {
+  if (!isImageAllowedForReviewScope(image, reviewScope)) return -1000;
+  const score = scoreImageForSection(image, targetKey, meta, paragraphText);
+  if (score > 0) return score;
+  if (reviewScope !== 'pelvic_genital') return score;
+  const keys = regionKeysForImage(image);
+  const allowed = STRICT_ALLOWED_IMAGE_REGIONS.get(targetKey);
+  if (!allowed?.size || ![...keys].some((key) => allowed.has(key))) return -1000;
+  if (keys.has(targetKey)) return 80;
+  if (targetKey === 'genitals_perineum' && keys.has('pelvis_pubic_region')) return 52;
+  if (targetKey === 'pelvis_pubic_region' && keys.has('genitals_perineum')) return 48;
+  if (targetKey === 'buttocks_perianal' && (keys.has('genitals_perineum') || keys.has('pelvis_pubic_region'))) return 35;
+  return 25;
+}
+
 function imageRegionTrace(image = {}) {
   const keys = [...regionKeysForImage(image)];
   return {
@@ -360,15 +472,17 @@ function textPreview(value = '', maxLength = 180) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
 }
 
-function candidateTrace(images = [], targetKey, meta = {}, paragraphText = '') {
+function candidateTrace(images = [], targetKey, meta = {}, paragraphText = '', reviewScope = '') {
   return images.map((image) => ({
     ...imageRegionTrace(image),
-    score: scoreImageForSection(image, targetKey, meta, paragraphText),
+    score: scoreImageForReviewFallback(image, targetKey, meta, paragraphText, reviewScope),
+    review_scope_allowed: isImageAllowedForReviewScope(image, reviewScope),
   }));
 }
 
-function isImageAllowedForRegion(image, targetKey) {
+function isImageAllowedForRegion(image, targetKey, reviewScope = '') {
   if (!image || !targetKey || targetKey === 'overview') return false;
+  if (!isImageAllowedForReviewScope(image, reviewScope)) return false;
   const keys = regionKeysForImage(image);
   const allowed = STRICT_ALLOWED_IMAGE_REGIONS.get(targetKey);
   if (!allowed?.size) return false;
@@ -388,6 +502,7 @@ function traceLine(trace = {}) {
     `Narration Section: ${trace.sectionLabel || trace.targetRegion || 'Unknown'}`,
     `Narration Preview: ${trace.paragraphPreview || ''}`,
     `Resolved From: ${trace.resolvedFrom || 'unknown'}`,
+    `Review Scope: ${trace.reviewScope || 'head_to_toe'}`,
     `Allowed Regions: ${(trace.allowedRegions || []).join(', ') || 'none/title-card'}`,
     `Candidate Images:\n  ${candidates || 'none'}`,
     `Selected Image: ${trace.selectedImage?.id || 'section title card'}${trace.selectedImage?.path ? ` (${trace.selectedImage.path})` : ''}`,
@@ -770,7 +885,7 @@ async function renderSectionCardSegment({ outputPath, durationSeconds, label, in
   ]);
 }
 
-function buildNarrationVisualTimeline({ paragraphs = [], paragraphMeta = [], images = [], audioDuration = 0 }) {
+function buildNarrationVisualTimeline({ paragraphs = [], paragraphMeta = [], images = [], audioDuration = 0, reviewScope = '' }) {
   const items = (Array.isArray(paragraphs) ? paragraphs : [])
     .map((text, index) => ({
       text: String(text || '').trim(),
@@ -806,11 +921,12 @@ function buildNarrationVisualTimeline({ paragraphs = [], paragraphMeta = [], ima
     : 1;
 
   let lastByRegion = new Map();
+  let lastInReviewScope = null;
   return items.map((item, index) => {
-    const regionResolution = sectionRegionResolutionFromMeta(item.meta, item.text);
+    const regionResolution = sectionRegionResolutionFromMeta(item.meta, item.text, reviewScope);
     const targetKey = regionResolution.key;
     const label = displayLabelForMeta(item.meta, item.text);
-    const candidates = candidateTrace(images, targetKey, item.meta, item.text);
+    const candidates = candidateTrace(images, targetKey, item.meta, item.text, reviewScope);
     const ranked = candidates
       .map((candidate) => ({
         image: images.find((image) => image.id === candidate.id),
@@ -821,16 +937,26 @@ function buildNarrationVisualTimeline({ paragraphs = [], paragraphMeta = [], ima
       .sort((a, b) => b.score - a.score);
     const best = ranked[0] || null;
     const last = targetKey && targetKey !== 'overview' ? lastByRegion.get(targetKey) : null;
-    const selected = best?.image || (last && isImageAllowedForRegion(last, targetKey) ? last : null);
-    if (targetKey && targetKey !== 'overview' && selected && isImageAllowedForRegion(selected, targetKey)) {
+    const reviewScopeFallback = reviewScope === 'pelvic_genital' && lastInReviewScope && isImageAllowedForRegion(lastInReviewScope, targetKey, reviewScope)
+      ? lastInReviewScope
+      : null;
+    const selected = best?.image
+      || (last && isImageAllowedForRegion(last, targetKey, reviewScope) ? last : null)
+      || reviewScopeFallback;
+    if (targetKey && targetKey !== 'overview' && selected && isImageAllowedForRegion(selected, targetKey, reviewScope)) {
       lastByRegion.set(targetKey, selected);
+    }
+    if (selected && isImageAllowedForReviewScope(selected, reviewScope)) {
+      lastInReviewScope = selected;
     }
     const selectedTrace = selected ? imageRegionTrace(selected) : null;
     const allowedRegions = [...(STRICT_ALLOWED_IMAGE_REGIONS.get(targetKey) || new Set())];
     const selectionReason = selected
       ? best?.image === selected
         ? `Selected highest scoring compatible image for ${REGION_LABELS.get(targetKey) || targetKey}.`
-        : `Reused previous compatible image for ${REGION_LABELS.get(targetKey) || targetKey}; no better current candidate was available.`
+        : reviewScopeFallback === selected
+          ? `Reused prior ${reviewScope.replace(/_/g, '/')} image; no exact section image was available, and unrelated anatomy fallback is disabled.`
+          : `Reused previous compatible image for ${REGION_LABELS.get(targetKey) || targetKey}; no better current candidate was available.`
       : targetKey === 'overview'
         ? 'Overview/title/limitations paragraph uses a section card.'
         : `No compatible image found for ${REGION_LABELS.get(targetKey) || targetKey}; section card selected.`;
@@ -849,6 +975,7 @@ function buildNarrationVisualTimeline({ paragraphs = [], paragraphMeta = [], ima
         sectionLabel: label,
         paragraphPreview,
         resolvedFrom: regionResolution.source,
+        reviewScope,
         targetRegion: targetKey,
         allowedRegions,
         candidates,
@@ -859,11 +986,11 @@ function buildNarrationVisualTimeline({ paragraphs = [], paragraphMeta = [], ima
   });
 }
 
-function validateVisualTimeline(visualTimeline = []) {
+function validateVisualTimeline(visualTimeline = [], reviewScope = '') {
   const violations = [];
   for (const [index, item] of visualTimeline.entries()) {
     if (item.type !== 'image') continue;
-    if (!isImageAllowedForRegion(item.image, item.targetKey)) {
+    if (!isImageAllowedForRegion(item.image, item.targetKey, reviewScope)) {
       const imageTags = [...regionKeysForImage(item.image)];
       violations.push({
         index,
@@ -873,6 +1000,7 @@ function validateVisualTimeline(visualTimeline = []) {
         image_label: item.image?.label || null,
         image_tags: imageTags,
         allowed_regions: [...(STRICT_ALLOWED_IMAGE_REGIONS.get(item.targetKey) || new Set())],
+        review_scope: reviewScope || null,
       });
     }
   }
@@ -897,6 +1025,7 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
     await fs.mkdir(workDir, { recursive: true });
 
     const payloadImages = Array.isArray(payload.images) ? payload.images : [];
+    const reviewScope = reviewScopeFromPayload(payload);
     const expandedImages = augmentAnatomyImagesFromDatabase(payload, payloadImages);
     const imageItems = safeImageItems(expandedImages);
     if (!imageItems.length) {
@@ -913,8 +1042,9 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
       paragraphMeta: payload.paragraphMeta || payload.paragraph_meta || [],
       images: imageItems,
       audioDuration,
+      reviewScope,
     });
-    validateVisualTimeline(visualTimeline);
+    validateVisualTimeline(visualTimeline, reviewScope);
     const totalSegments = visualTimeline.length;
     const regionTrace = visualTimeline.map((item, index) => ({
       segment: index + 1,
@@ -923,6 +1053,7 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
       narration_section: item.label || null,
       narration_preview: item.paragraphPreview || null,
       resolved_from: item.resolvedFrom || null,
+      review_scope: reviewScope,
       selected_image_id: item.image?.id || null,
       selected_image_label: item.image?.label || null,
       selected_image_tags: item.image ? [...regionKeysForImage(item.image)] : [],
@@ -938,6 +1069,7 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
       image_count: imageItems.length,
       payload_image_count: payloadImages.length,
       database_augmented_image_count: Math.max(0, imageItems.length - payloadImages.length),
+      review_scope: reviewScope,
       audio_duration_seconds: Math.round(audioDuration),
     });
 
@@ -975,6 +1107,7 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
         label: item.label || null,
         narration_preview: item.paragraphPreview || null,
         resolved_from: item.resolvedFrom || null,
+        review_scope: reviewScope,
         duration_seconds: Number(item.durationSeconds.toFixed(3)),
         image_id: item.image?.id || null,
         image_label: item.image?.label || null,
@@ -1048,6 +1181,7 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
       payload_image_count: payloadImages.length,
       database_augmented_image_count: Math.max(0, imageItems.length - payloadImages.length),
       visual_segment_count: totalSegments,
+      review_scope: reviewScope,
       source_images: imageItems.map((image) => ({
         id: image.id,
         label: image.label,

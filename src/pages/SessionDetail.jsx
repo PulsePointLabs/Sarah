@@ -808,6 +808,36 @@ export default function SessionDetail() {
     timelineRows,
     isTechnical: false,
   });
+  const technicalAnalysisData = buildSessionAnalysisReaderData({
+    result: s.ai_session_deep_dive,
+    session: s,
+    timelineRows,
+    isTechnical: true,
+  });
+  const technicalVideoSourceGeneratedAt = s.ai_session_deep_dive?._meta?.last_generated_at
+    ? `${s.ai_session_deep_dive._meta.last_generated_at}:technical-deep-dive`
+    : `${s.id || s.date || "session"}:technical-deep-dive`;
+  const arousalTimelineSourceGeneratedAt = s.ai_analysis?._meta?.last_generated_at
+    ? `${s.ai_analysis._meta.last_generated_at}:arousal-timeline`
+    : `${s.id || s.date || "session"}:arousal-timeline`;
+  const arousalTimelineData = buildSessionAnalysisReaderData({
+    result: s.ai_analysis ? {
+      summary: s.ai_analysis.summary ? `Arousal timeline overview: ${s.ai_analysis.summary}` : "Arousal timeline overview.",
+      arousal_arc: s.ai_analysis.arousal_arc?.length ? s.ai_analysis.arousal_arc : s.ai_analysis.phase_analysis,
+      event_analysis: [],
+      emg_analysis: [],
+      notable_findings: [],
+      recommendations: [],
+      _meta: {
+        ...(s.ai_analysis._meta || {}),
+        last_generated_at: arousalTimelineSourceGeneratedAt,
+        key_video_clips: s.ai_analysis._meta?.key_video_clips || [],
+      },
+    } : null,
+    session: s,
+    timelineRows,
+    isTechnical: false,
+  });
   const sectionLinks = [
     { id: "session-snapshot", label: "Session Snapshot", group: "Overview" },
     { id: "session-telemetry", label: "Evidence Dashboard", group: "Overview" },
@@ -815,7 +845,7 @@ export default function SessionDetail() {
     { id: "session-review", label: "Review Checklist", group: "Overview" },
     { id: "session-metrics-context", label: "Metrics & Context", group: "Overview" },
     ...(!s.no_climax ? [
-      ...(companionAnalysisData.paragraphs.length ? [{ id: "session-ai-video-chat", label: "Ask Sarah", group: "Session Story" }] : []),
+      ...((companionAnalysisData.paragraphs.length || technicalAnalysisData.paragraphs.length) ? [{ id: "session-ai-video-chat", label: "Review Videos", group: "Session Story" }] : []),
       { id: "session-ai-companion", label: "Companion Analysis", group: "Session Story" },
       { id: "session-ai-technical", label: "Technical Deep Dive", group: "Session Story" },
       { id: "session-ai-support", label: "Supporting AI Views", group: "Session Story" },
@@ -1039,6 +1069,17 @@ export default function SessionDetail() {
                   sourceGeneratedAt={s.ai_analysis?._meta?.last_generated_at}
                   paragraphs={companionAnalysisData.paragraphs}
                   paragraphMeta={companionAnalysisData.paragraphMeta}
+                />
+              </section>
+            )}
+            {technicalAnalysisData.paragraphs.length > 0 && (
+              <section id={companionAnalysisData.paragraphs.length ? undefined : "session-ai-video-chat"} className="scroll-mt-24 space-y-3">
+                <SessionReviewVideoExportButton
+                  session={s}
+                  analysisTitle="Technical Deep Dive"
+                  sourceGeneratedAt={technicalVideoSourceGeneratedAt}
+                  paragraphs={technicalAnalysisData.paragraphs}
+                  paragraphMeta={technicalAnalysisData.paragraphMeta}
                 />
               </section>
             )}
@@ -1551,6 +1592,23 @@ export default function SessionDetail() {
             <div className="mt-3 space-y-3">
               <InteractiveSessionTimeline session={s} timelineRows={timelineRows} />
               {timelineRows.length > 0 && <UnifiedSessionTimeline session={s} timelineRows={timelineRows} />}
+              {arousalTimelineData.paragraphs.length > 0 && (
+                <div className="rounded-xl border border-primary/20 bg-primary/[0.045] p-3">
+                  <div className="mb-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-primary">Arousal Timeline Video</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Builds a narrated MP4 from the arousal/phase timeline using the same review-video renderer as AI Session Analysis.
+                    </p>
+                  </div>
+                  <SessionReviewVideoExportButton
+                    session={s}
+                    analysisTitle="Arousal Timeline"
+                    sourceGeneratedAt={arousalTimelineSourceGeneratedAt}
+                    paragraphs={arousalTimelineData.paragraphs}
+                    paragraphMeta={arousalTimelineData.paragraphMeta}
+                  />
+                </div>
+              )}
               {((session.event_timeline || []).length > 0 || timelineRows.length > 0) && (
                 <ArousalEventChart session={s} timelineRows={timelineRows} />
               )}

@@ -309,8 +309,8 @@ async function choosePrimaryVideo(session = {}, { workDir, onProgress } = {}) {
 }
 
 function sourceTimeForSession(sessionTime, video = {}) {
-  const offset = Number(video.timeline_offset_s ?? video.offset_seconds ?? video.session_time_offset_s ?? 0);
-  return Math.max(0, Number(sessionTime || 0) + (Number.isFinite(offset) ? offset : 0));
+  const offset = Number(video.timelineOffsetSeconds ?? video.timeline_offset_s ?? video.offset_seconds ?? video.session_time_offset_s ?? 0);
+  return Math.max(0, Number(sessionTime || 0) - (Number.isFinite(offset) ? offset : 0));
 }
 
 function formatTimestamp(seconds = 0) {

@@ -222,6 +222,7 @@ function normalizeControlCommand(body = {}, settings = getSettings()) {
     'set_frequency',
     'set_mode',
     'set_playback',
+    'load_activity',
     'increment_power',
     'decrement_power',
     'set_power',
@@ -240,6 +241,7 @@ function normalizeControlCommand(body = {}, settings = getSettings()) {
   const frequency_hz = body.frequency_hz == null && body.frequencyHz == null && body.frequency == null
     ? null
     : clampNumber(body.frequency_hz ?? body.frequencyHz ?? body.frequency, 0, 300, null);
+  const activityName = body.activity_name ?? body.activityName ?? body.name ?? null;
 
   return {
     id: body.id || randomUUID(),
@@ -250,6 +252,9 @@ function normalizeControlCommand(body = {}, settings = getSettings()) {
     intensity_delta: body.intensity_delta == null && body.intensityDelta == null ? null : clampNumber(body.intensity_delta ?? body.intensityDelta, -25, 25, null),
     frequency_hz,
     mode: body.mode == null ? null : String(body.mode).trim(),
+    activity_name: activityName == null ? null : String(activityName).trim().toUpperCase(),
+    activity_display_name: body.activity_display_name == null && body.activityDisplayName == null ? null : String(body.activity_display_name ?? body.activityDisplayName).trim(),
+    play: body.play == null ? null : Boolean(body.play),
     waveform: body.waveform == null ? null : String(body.waveform).trim(),
     enabled: body.enabled == null ? null : Boolean(body.enabled),
     value: body.value == null ? null : Boolean(body.value),
@@ -283,6 +288,9 @@ function commandPayload(command) {
     intensity_delta: command.intensity_delta,
     frequency_hz: command.frequency_hz,
     mode: command.mode,
+    activity_name: command.activity_name,
+    activity_display_name: command.activity_display_name,
+    play: command.play,
     waveform: command.waveform,
     enabled: command.enabled,
     value: command.value,
@@ -310,6 +318,12 @@ function directHowlRequestForCommand(command) {
     const power = command.intensity == null ? 0 : command.intensity;
     if (command.channel === 'all') return { endpoint: '/set_power', body: { power_a: power, power_b: power } };
     return { endpoint: '/set_power', body: channel === 1 ? { power_b: power } : { power_a: power } };
+  }
+  if (command.action === 'load_activity') {
+    if (!command.activity_name) {
+      throw new Error('Howl activity name is required.');
+    }
+    return { endpoint: '/load_activity', body: { name: command.activity_name, play: command.play === true } };
   }
   return { endpoint: '/status', body: {} };
 }

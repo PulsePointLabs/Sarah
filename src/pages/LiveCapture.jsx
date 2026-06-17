@@ -141,6 +141,24 @@ const HOWL_DEFAULT_COMMAND_FORM = {
   waveform: "",
   enabled: true,
 };
+const HOWL_ACTIVITY_MODES = [
+  { name: "LICKS", displayName: "Infinite licks", aliases: ["licks", "infinite licks", "lick"], description: "Repeating tongue-like pulse patterns with bidirectional, unidirectional, consistent, dip, ramp, and flick variations." },
+  { name: "PENETRATION", displayName: "Penetration", aliases: ["penetration", "penetrate"], description: "Rhythmic penetration-style in/out pulse movement." },
+  { name: "VIBRATOR", displayName: "Sliding vibrator", aliases: ["vibrator", "sliding vibrator", "vibe", "vibes"], description: "Vibration-focused sliding stimulation with pulse/hold behavior." },
+  { name: "MILKMASTER", displayName: "Milkmaster 3000", aliases: ["milkmaster", "milk master", "milkmaster 3000", "milk master 3000"], description: "Milking-style waves with womp and buzz components." },
+  { name: "CHAOS", displayName: "Chaos", aliases: ["chaos", "random"], description: "Unpredictable changing stimulation driven by short random cycles." },
+  { name: "HJ", displayName: "Luxury HJ", aliases: ["hj", "handjob", "hand job", "luxury hj", "luxury handjob", "luxury hand job"], description: "Hand-stimulation style pattern with jitter and optional bonus pulses." },
+  { name: "OPPOSITES", displayName: "Opposites", aliases: ["opposites", "opposite"], description: "A/B channels move in contrasting or opposing patterns." },
+  { name: "CALIBRATION1", displayName: "Calibration 1", aliases: ["calibration one", "calibration 1", "cal one"], description: "Calibration pattern for checking channel behavior and range." },
+  { name: "CALIBRATION2", displayName: "Calibration 2", aliases: ["calibration two", "calibration 2", "cal two"], description: "Second calibration pattern for checking output response." },
+  { name: "BJ", displayName: "BJ Megamix", aliases: ["bj", "bj megamix", "blowjob", "blow job"], description: "Mixed mouth-stimulation style patterns with position and direction components." },
+  { name: "FASTSLOW", displayName: "Fast/slow", aliases: ["fast slow", "fastslow", "fast and slow"], description: "Alternates speed using sawtooth-style ramp patterns." },
+  { name: "SIMPLEX", displayName: "Simplex", aliases: ["simplex"], description: "Preset-driven waveform mode for clean, regular stimulation shapes." },
+  { name: "RELENTLESS", displayName: "Relentless", aliases: ["relentless"], description: "Persistent long/short wave pattern with random-wave options." },
+  { name: "OVERFLOWING", displayName: "Overflowing", aliases: ["overflowing", "overflow"], description: "Layered long and short waves with swelling/overflowing motion." },
+  { name: "SUCCUBUS", displayName: "Succubus", aliases: ["succubus"], description: "Patterned wave mode with randomized wave behavior." },
+  { name: "SINETIME", displayName: "Sine time", aliases: ["sine time", "sinetime", "sine"], description: "Smooth sine-wave timing pattern." },
+];
 
 function playToneSequence(audioContext, frequencies) {
   if (!audioContext || audioContext.state === "closed") return;
@@ -678,7 +696,7 @@ function normalizeVoiceAnnotationText(value) {
     .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
     .replace(/\s+/g, " ")
     .trim();
-  text = text.replace(/^(pulse\s*point|pulsepoint)[,:\-\s]+/i, "").trim();
+  text = text.replace(/^(sarah|pulse\s*point|pulsepoint)[,:\-\s]+/i, "").trim();
   text = text.replace(/\b(?:stop|end|done|save|stop recording|end recording)\b[\s.!?]*$/i, "").trim();
   text = text.replace(/\s+([,.!?;:])/g, "$1").trim();
   return text;
@@ -721,8 +739,81 @@ function isEndListeningCommand(text) {
   if (!phrase) return false;
   if (phrase === "end" || phrase === "stop") return true;
   if (phrase.includes("end listening") || phrase.includes("stop listening")) return true;
+  if (phrase.includes("sarah end")) return true;
   if (phrase.includes("pulse point end") || phrase.includes("pulsepoint end")) return true;
   return words.includes("end") && words.length <= 3;
+}
+
+function normalizeHowlVoicePhrase(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function getHowlActivityByVoicePhrase(phrase) {
+  const normalized = normalizeHowlVoicePhrase(phrase);
+  if (!normalized) return null;
+  return HOWL_ACTIVITY_MODES.find((mode) => {
+    const names = [mode.name, mode.displayName, ...(mode.aliases || [])].map(normalizeHowlVoicePhrase);
+    return names.some((alias) => alias && new RegExp(`\\b${alias.replace(/\s+/g, "\\s+")}\\b`).test(normalized));
+  }) || null;
+}
+
+function parseHowlVoiceCommand(text, { ceiling = 20 } = {}) {
+  const phrase = normalizeHowlVoicePhrase(text);
+  if (!phrase || !/\bsarah\b/.test(phrase)) return null;
+
+  if (/\b(emergency stop|panic|kill|mute|stop howl|howl stop)\b/.test(phrase)) {
+    return {
+      action: "emergency_stop",
+      extra: { reason: "voice_howl_emergency_stop" },
+      status: "Sarah heard emergency stop.",
+      requiresConnection: false,
+    };
+  }
+
+  const activity = getHowlActivityByVoicePhrase(phrase);
+  if (activity && /\b(switch|change|load|select|start|play|mode)\b/.test(phrase)) {
+    return {
+      action: "load_activity",
+      extra: { activityName: activity.name, activityDisplayName: activity.displayName, play: /\b(start|play|run)\b/.test(phrase), reason: "voice_howl_activity" },
+      status: `Sarah switching Howl to ${activity.displayName}.`,
+      requiresConnection: true,
+    };
+  }
+
+  const numberMatch = phrase.match(/\b(?:to|level|intensity|power)?\s*(\d{1,3})\b/);
+  if (numberMatch && /\b(howl|intensity|power|level)\b/.test(phrase)) {
+    const requested = Number(numberMatch[1]);
+    const capped = Math.max(0, Math.min(Number.isFinite(Number(ceiling)) ? Number(ceiling) : 20, requested));
+    const channel = /\b(channel )?b\b/.test(phrase) ? "b" : /\b(channel )?a\b/.test(phrase) ? "a" : "all";
+    return {
+      action: "set_power",
+      extra: { channel, intensity: capped, requestedIntensity: requested, reason: "voice_howl_intensity" },
+      status: requested === capped ? `Sarah setting Howl to ${capped}.` : `Sarah capped Howl at ${capped}.`,
+      requiresConnection: true,
+    };
+  }
+
+  if (/\b(power|turn|bump|step|increase|raise|up|decrease|lower|down)\b/.test(phrase)) {
+    const channel = /\b(channel )?b\b/.test(phrase) ? "b" : "a";
+    if (/\b(up|increase|raise|bump)\b/.test(phrase)) {
+      return {
+        action: "increment_power",
+        extra: { channel, step: 1, reason: "voice_howl_power_up" },
+        status: `Sarah powering up channel ${channel.toUpperCase()}.`,
+        requiresConnection: true,
+      };
+    }
+    if (/\b(down|decrease|lower|reduce)\b/.test(phrase)) {
+      return {
+        action: "decrement_power",
+        extra: { channel, step: 1, reason: "voice_howl_power_down" },
+        status: `Sarah powering down channel ${channel.toUpperCase()}.`,
+        requiresConnection: true,
+      };
+    }
+  }
+
+  return null;
 }
 
 function parseLiveCommand(text) {
@@ -917,7 +1008,7 @@ export default function LiveCapture() {
   const [voiceWakeEnabled, setVoiceWakeEnabled] = useState(false);
   const [wakeListening, setWakeListening] = useState(false);
   const [annotationRecording, setAnnotationRecording] = useState(false);
-  const [voiceStatus, setVoiceStatus] = useState("Say “Pulse Point” to start a voice annotation. Say “end” to stop listening.");
+  const [voiceStatus, setVoiceStatus] = useState("Say “Sarah” to start a voice annotation. Say “end” to stop listening.");
   const [voiceError, setVoiceError] = useState("");
   const [lastVoiceNote, setLastVoiceNote] = useState("");
   const [mediaVideo, setMediaVideo] = useState(null);
@@ -1332,6 +1423,37 @@ export default function LiveCapture() {
       setHowlControlBusy("");
     }
   }, [activeSessionDoc?.id, liveSession?.activeSessionId, refreshHowlTelemetry]);
+
+  const runHowlVoiceCommand = useCallback(async (voiceCommand) => {
+    if (!voiceCommand) return false;
+    const manualControlEnabled = Boolean(howlControlForm.controlEnabled);
+    const manualControlsUnlocked = manualControlEnabled && howlConnectionTest.status === "ok";
+    if (voiceCommand.action === "emergency_stop") {
+      if (!manualControlEnabled) {
+        setVoiceStatus("Sarah heard the stop command, but Howl manual control is not enabled.");
+        setVoiceError("Enable manual Howl control before voice commands can control the device.");
+        return true;
+      }
+      setVoiceStatus(voiceCommand.status);
+      await sendHowlEmergencyStop();
+      setVoiceStatus("Sarah sent mute / emergency stop to Howl.");
+      return true;
+    }
+
+    if (!manualControlsUnlocked) {
+      setVoiceStatus("Sarah heard the Howl command, but manual control is locked.");
+      setVoiceError("Test the Howl connection, then enable manual control before using voice Howl commands.");
+      return true;
+    }
+
+    setVoiceStatus(voiceCommand.status);
+    const result = await sendHowlControlCommand(voiceCommand.action, voiceCommand.extra);
+    if (result) {
+      setVoiceStatus(voiceCommand.status || "Sarah sent the Howl command.");
+      setVoiceError("");
+    }
+    return true;
+  }, [howlConnectionTest.status, howlControlForm.controlEnabled, sendHowlControlCommand, sendHowlEmergencyStop]);
 
   const disconnectDirectH10 = useCallback(async ({ updateStatus = true } = {}) => {
     directH10IntentionalDisconnectRef.current = true;
@@ -1921,6 +2043,7 @@ export default function LiveCapture() {
   const howlRemoteKeyReady = Boolean(String(howlControlForm.remoteAccessKey || "").trim());
   const howlConnectionSucceeded = howlConnectionTest.status === "ok";
   const howlManualControlsUnlocked = howlControlEnabled && howlConnectionSucceeded;
+  const selectedHowlActivity = HOWL_ACTIVITY_MODES.find((mode) => mode.name === howlCommandForm.mode) || HOWL_ACTIVITY_MODES.find((mode) => mode.name === "MILKMASTER");
   const howlControlModeLabel = howlControlEnabled
     ? howlControlForm.dispatchMode === "direct_http"
       ? "Direct HTTP"
@@ -2476,7 +2599,7 @@ export default function LiveCapture() {
     recognition.lang = "en-US";
     recognition.onstart = () => {
       setWakeListening(true);
-      setVoiceStatus("Listening for “Pulse Point”… say “end” to stop.");
+      setVoiceStatus("Listening for “Sarah”… say “end” to stop.");
       setVoiceError("");
     };
     recognition.onerror = (event) => {
@@ -2490,14 +2613,23 @@ export default function LiveCapture() {
     };
     recognition.onresult = (event) => {
       let heard = "";
+      let hasFinal = false;
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
         heard += event.results[i][0]?.transcript || "";
+        if (event.results[i].isFinal) hasFinal = true;
       }
+      if (!hasFinal) return;
       const normalized = heard.toLowerCase().replace(/[^a-z]+/g, " ").trim();
       if (isEndListeningCommand(normalized)) {
         setVoiceWakeEnabled(false);
         setVoiceStatus("Wake listening stopped.");
         playVoiceFeedback("stop");
+        try { recognition.stop(); } catch {}
+        return;
+      }
+      const howlVoiceCommand = parseHowlVoiceCommand(heard, { ceiling: howlControlCeiling });
+      if (howlVoiceCommand) {
+        runHowlVoiceCommand(howlVoiceCommand).catch((error) => setVoiceError(error.message || String(error)));
         try { recognition.stop(); } catch {}
         return;
       }
@@ -2507,7 +2639,7 @@ export default function LiveCapture() {
         try { recognition.stop(); } catch {}
         return;
       }
-      if (normalized.includes("pulse point") || normalized.includes("pulsepoint")) {
+      if (/\bsarah\b/.test(normalized)) {
         setVoiceStatus("Wake phrase heard. Recording annotation…");
         playVoiceFeedback("wake");
         try { recognition.stop(); } catch {}
@@ -2534,7 +2666,7 @@ export default function LiveCapture() {
       setWakeListening(false);
       wakeRestartTimerRef.current = window.setTimeout(startWakeListening, 1500);
     }
-  }, [playVoiceFeedback, speechRecognitionSupported, stopWakeListening]);
+  }, [howlControlCeiling, playVoiceFeedback, runHowlVoiceCommand, speechRecognitionSupported, stopWakeListening]);
 
   const startVoiceAnnotation = useCallback(async () => {
     if (!voiceRecordingSupported || annotationRecordingRef.current) return;
@@ -2575,9 +2707,9 @@ export default function LiveCapture() {
           const text = normalizeVoiceAnnotationText(res.data?.text);
           if (text) {
             await appendVoiceAnnotation(text, voiceNoteTimeRef.current);
-            setVoiceStatus("Annotation saved. Listening for “Pulse Point”… say “end” to stop.");
+            setVoiceStatus("Annotation saved. Listening for “Sarah”… say “end” to stop.");
           } else {
-            setVoiceStatus("No speech detected. Listening for “Pulse Point”… say “end” to stop.");
+            setVoiceStatus("No speech detected. Listening for “Sarah”… say “end” to stop.");
           }
         } catch (error) {
           setVoiceError(error.message || String(error));
@@ -2652,7 +2784,7 @@ export default function LiveCapture() {
     else {
       stopWakeListening();
       stopVoiceAnnotation();
-      setVoiceStatus("Say “Pulse Point” to start a voice annotation. Say “end” to stop listening.");
+      setVoiceStatus("Say “Sarah” to start a voice annotation. Say “end” to stop listening.");
     }
     return () => {
       stopWakeListening();
@@ -2727,7 +2859,7 @@ export default function LiveCapture() {
       </div>
       <div className="mt-3 rounded-lg border border-border bg-muted/25 px-3 py-2">
         <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Commands: “Pulse Point”, “end”, “undo last”, “mark climax”, “mark recovery”
+          Commands: “Sarah”, “end”, “undo last”, “mark climax”, “Sarah set Howl intensity to 10”, “Sarah switch to milkmaster mode”
         </p>
       </div>
       {recentLiveEvents.length > 0 && (
@@ -3666,9 +3798,32 @@ export default function LiveCapture() {
                         onChange={(event) => updateHowlControlForm({ intensityCeiling: Number(event.target.value) }, { resetConnection: false })}
                       />
                     </label>
+                    <label className="space-y-1 sm:col-span-2">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Howl activity mode</span>
+                      <select
+                        className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                        value={selectedHowlActivity?.name || ""}
+                        onChange={(event) => setHowlCommandForm((prev) => ({ ...prev, mode: event.target.value }))}
+                      >
+                        {HOWL_ACTIVITY_MODES.map((mode) => (
+                          <option key={mode.name} value={mode.name}>{mode.displayName}</option>
+                        ))}
+                      </select>
+                      {selectedHowlActivity && (
+                        <span className="block text-[11px] text-muted-foreground">{selectedHowlActivity.description}</span>
+                      )}
+                    </label>
                   </div>
 
                   <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => sendHowlControlCommand("load_activity", { activityName: selectedHowlActivity?.name, activityDisplayName: selectedHowlActivity?.displayName, play: false })}
+                      disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy) || !selectedHowlActivity}
+                      className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      Load activity
+                    </button>
                     <button
                       type="button"
                       onClick={() => sendHowlControlCommand("increment_power", { channel: "a", step: 1 })}
@@ -3715,6 +3870,17 @@ export default function LiveCapture() {
                       Test the Howl connection, then enable manual control. Closed-loop remains off until you explicitly arm it later.
                     </p>
                   )}
+                  <details className="mt-3 rounded-lg border border-border bg-background/70 px-3 py-2 text-xs text-muted-foreground">
+                    <summary className="cursor-pointer font-semibold text-foreground">Howl modes Sarah understands</summary>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {HOWL_ACTIVITY_MODES.map((mode) => (
+                        <div key={mode.name} className="rounded-md border border-border/70 bg-muted/20 p-2">
+                          <p className="font-semibold text-foreground">{mode.displayName}</p>
+                          <p>{mode.description}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
                 </div>
               </div>
 

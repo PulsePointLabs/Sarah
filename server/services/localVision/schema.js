@@ -30,6 +30,9 @@ export const DEFAULT_LOCAL_VISION_QUESTIONS = [
   'anatomy_obscured_or_unclear',
   'genital_state_visible',
   'erection_state_visible',
+  'scrotal_position_visible',
+  'scrotal_lift_or_relaxation_change_visible',
+  'scrotal_tissue_color_or_tension_change_visible',
   'genital_visibility_obscured',
   'hand_contact_with_genitals_visible',
   'stroking_motion_visible',
@@ -92,6 +95,9 @@ const FOLEY_DIAGNOSTIC_QUESTIONS = [
 const BODY_DIAGNOSTIC_QUESTIONS = [
   'genital_state_visible',
   'erection_state_visible',
+  'scrotal_position_visible',
+  'scrotal_lift_or_relaxation_change_visible',
+  'scrotal_tissue_color_or_tension_change_visible',
   'genital_visibility_obscured',
   'hand_contact_with_genitals_visible',
   'stroking_motion_visible',
@@ -123,6 +129,9 @@ export function defaultQuestionsForRecordType(recordType) {
   if (type === 'body_exploration') {
     return [
       'genital_state_visible',
+      'scrotal_position_visible',
+      'scrotal_lift_or_relaxation_change_visible',
+      'scrotal_tissue_color_or_tension_change_visible',
       'genital_visibility_obscured',
       'pelvic_motion_visible',
       'body_tension_or_relaxation_visible',
@@ -140,6 +149,9 @@ export function defaultQuestionsForRecordType(recordType) {
   return [
     'anatomy_obscured_or_unclear',
     'genital_state_visible',
+    'scrotal_position_visible',
+    'scrotal_lift_or_relaxation_change_visible',
+    'scrotal_tissue_color_or_tension_change_visible',
     'genital_visibility_obscured',
     'leg_or_foot_position_visible',
     'device_or_toy_visible',

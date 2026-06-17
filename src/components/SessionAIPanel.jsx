@@ -1082,10 +1082,10 @@ HUMANIZED PHYSIOLOGY NARRATION - HIGH PRIORITY:
 
 const SARAH_LANGUAGE_VARIETY_RULE_V1 = `
 SARAH LANGUAGE VARIETY RULE - HIGH PRIORITY:
-- Do not make "consistent with", "consistent", or "consistently" your default evidence phrase. In a full analysis, use this word family at most twice unless quoting a saved source.
+- Do not make "consistent with", "consistent", or "consistently" your default evidence phrase. In a full analysis, use this word family at most once unless quoting a saved source or preserving a user quote.
 - Prefer direct clinical narration and varied connectors: "fits with", "aligns with", "matches", "supports", "points toward", "may reflect", "helps explain", "tracks with", "stays stable", "repeats across", "holds steady", or simply state the observation without a qualifier.
 - Avoid stacking evidence caveats in the same rhythm. Instead of repeating "This is consistent with..." across paragraphs, explain what your body appears to be doing and why the evidence matters.
-- Before returning final output, scan for repeated phrasing. If "consistent" appears repeatedly, rewrite most instances with more natural wording or direct observation language.
+- Before returning final output, scan for repeated phrasing. If the "consistent" word family appears more than once, rewrite the extra instances with more natural wording or direct observation language.
 `;
 
 const GENITAL_STIMULATION_MECHANICS_RULE_V1 = `

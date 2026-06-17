@@ -309,6 +309,9 @@ export function deriveLocalVisionResult({
   const obscured = get('genital_visibility_obscured');
   const genitalState = get('genital_state_visible');
   const erectionState = get('erection_state_visible');
+  const scrotalPosition = get('scrotal_position_visible');
+  const scrotalLiftChange = get('scrotal_lift_or_relaxation_change_visible');
+  const scrotalTissueChange = get('scrotal_tissue_color_or_tension_change_visible');
   const handContact = get('hand_contact_with_genitals_visible');
   const stroking = get('stroking_motion_visible');
   const gripChange = get('grip_or_contact_change_visible');
@@ -332,6 +335,21 @@ export function deriveLocalVisionResult({
     addStage(stageCandidates, 'genital_state_change', clamp01(erectionState.confidence), `Erection/genital state is visually assessable${state}.`, refs(genitalState, erectionState));
   } else if (bodyAsked) {
     addForbidden(forbidden, 'specific erection state', 'Genital visibility is insufficient or the local visual answer was uncertain.', allFrameIds);
+  }
+  if (bodyAsked && !isVisible(obscured, 0.5) && (isVisible(scrotalPosition, 0.55) || isVisible(scrotalLiftChange, 0.55) || isVisible(scrotalTissueChange, 0.6))) {
+    const position = scrotalPosition?.attributes?.position ? ` (${scrotalPosition.attributes.position})` : '';
+    const confidence = Math.max(clamp01(scrotalPosition?.confidence), clamp01(scrotalLiftChange?.confidence), clamp01(scrotalTissueChange?.confidence));
+    const basis = [
+      isVisible(scrotalLiftChange, 0.55) ? 'visible scrotal/testicular lift, relaxation, or position change' : null,
+      isVisible(scrotalTissueChange, 0.6) ? 'visible scrotal tissue color/tension change' : null,
+      isVisible(scrotalPosition, 0.55) ? `scrotal/testicular position assessable${position}` : null,
+    ].filter(Boolean).join('; ');
+    addStage(stageCandidates, 'scrotal_state_change', confidence, basis || 'Scrotal/testicular state is visually assessable.', refs(scrotalPosition, scrotalLiftChange, scrotalTissueChange));
+    if (isVisible(scrotalLiftChange, 0.55) || isVisible(scrotalTissueChange, 0.6)) {
+      addEvent(events, request, 'physical', 'Scrotal/testicular state change visible', confidence, refs(scrotalLiftChange, scrotalTissueChange, scrotalPosition)[0]);
+    }
+  } else if (bodyAsked) {
+    addForbidden(forbidden, 'specific scrotal/testicular state', 'Scrotal/testicular visibility or frame-to-frame change is not confirmed.', allFrameIds);
   }
   if (bodyAsked && (isVisible(fluidRelease, 0.65) || isVisible(visibleFluid, 0.75) || isVisible(streamDroplet, 0.65))) {
     addStage(stageCandidates, 'ejaculation_or_fluid_event', Math.max(clamp01(fluidRelease?.confidence), clamp01(visibleFluid?.confidence) * 0.85, clamp01(streamDroplet?.confidence) * 0.85), 'Visible fluid release, stream/droplet evidence, or high-confidence new fluid presence is confirmed. This is a visual fluid event only, not a subjective-state inference.', refs(fluidRelease, visibleFluid, streamDroplet));

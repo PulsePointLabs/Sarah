@@ -47,7 +47,7 @@ export function repairRawSecondTimeReferences(text) {
     });
 }
 
-export function repairCharacterSplitParagraph(text) {
+export function repairCharacterSplitParagraph(text, consistencyContext = null) {
   if (typeof text !== "string") return text;
 
   const lines = text.split(/\r?\n/);
@@ -59,7 +59,13 @@ export function repairCharacterSplitParagraph(text) {
     singleCharLines / nonEmpty.length >= 0.65 &&
     shortLines / nonEmpty.length >= 0.85;
 
-  if (!looksCharacterSplit) return repairRawSecondTimeReferences(repairDecimalSpacing(text));
+  if (!looksCharacterSplit) {
+    return reduceConsistencyPhraseRepetition(
+      repairRawSecondTimeReferences(repairDecimalSpacing(text)),
+      1,
+      consistencyContext
+    );
+  }
 
   const rebuilt = lines.reduce((acc, line) => {
     const trimmed = line.trim();
@@ -67,11 +73,15 @@ export function repairCharacterSplitParagraph(text) {
     return `${acc}${trimmed}`;
   }, "");
 
-  return repairRawSecondTimeReferences(rebuilt
-    .replace(/\s+/g, " ")
-    .replace(/(\d+)\.\s+(\d+)/g, "$1.$2")
-    .replace(/([.!?])([A-Z])/g, "$1 $2")
-    .trim());
+  return reduceConsistencyPhraseRepetition(
+    repairRawSecondTimeReferences(rebuilt
+      .replace(/\s+/g, " ")
+      .replace(/(\d+)\.\s+(\d+)/g, "$1.$2")
+      .replace(/([.!?])([A-Z])/g, "$1 $2")
+      .trim()),
+    1,
+    consistencyContext
+  );
 }
 
 export function repairDecimalSpacing(text) {
@@ -86,6 +96,8 @@ const CONSISTENCY_WITH_REPLACEMENTS = [
   "supports",
   "tracks with",
   "echoes",
+  "points toward",
+  "helps explain",
 ];
 
 const CONSISTENT_REPLACEMENTS = [
@@ -94,6 +106,8 @@ const CONSISTENT_REPLACEMENTS = [
   "steady",
   "matching",
   "reliable",
+  "unchanged",
+  "regular",
 ];
 
 const CONSISTENTLY_REPLACEMENTS = [
@@ -101,6 +115,9 @@ const CONSISTENTLY_REPLACEMENTS = [
   "reliably",
   "regularly",
   "often",
+  "steadily",
+  "again and again",
+  "throughout",
 ];
 
 function preserveInitialCapital(original, replacement) {
@@ -108,23 +125,22 @@ function preserveInitialCapital(original, replacement) {
   return `${replacement.slice(0, 1).toUpperCase()}${replacement.slice(1)}`;
 }
 
-export function reduceConsistencyPhraseRepetition(text, allowedUses = 2) {
+export function reduceConsistencyPhraseRepetition(text, allowedUses = 1, context = null) {
   if (typeof text !== "string" || !text) return text;
 
-  let count = 0;
-  let rotation = 0;
+  const state = context || { count: 0, rotation: 0 };
   const keptPhrases = [];
   const keepPhrase = (match) => {
     const index = keptPhrases.push(match) - 1;
     return `__PULSEPOINT_KEEP_CONSISTENCY_${index}__`;
   };
   const shouldKeep = () => {
-    count += 1;
-    return count <= allowedUses;
+    state.count = (state.count || 0) + 1;
+    return state.count <= allowedUses;
   };
   const nextReplacement = (options, match) => {
-    const value = options[rotation % options.length];
-    rotation += 1;
+    const value = options[(state.rotation || 0) % options.length];
+    state.rotation = (state.rotation || 0) + 1;
     return preserveInitialCapital(match.trimStart(), value);
   };
 
@@ -162,18 +178,22 @@ export function splitSentencesPreservingDecimals(text) {
   return sentences.length ? sentences : [repaired].filter(Boolean);
 }
 
-export function repairAITextBlocks(value) {
-  if (typeof value === "string") return repairCharacterSplitParagraph(value);
+function repairAITextBlocksWithContext(value, consistencyContext) {
+  if (typeof value === "string") return repairCharacterSplitParagraph(value, consistencyContext);
 
   if (Array.isArray(value)) {
-    return value.map((item) => repairAITextBlocks(item));
+    return value.map((item) => repairAITextBlocksWithContext(item, consistencyContext));
   }
 
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, repairAITextBlocks(item)])
+      Object.entries(value).map(([key, item]) => [key, repairAITextBlocksWithContext(item, consistencyContext)])
     );
   }
 
   return value;
+}
+
+export function repairAITextBlocks(value) {
+  return repairAITextBlocksWithContext(value, { count: 0, rotation: 0 });
 }

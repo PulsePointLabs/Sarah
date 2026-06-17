@@ -660,6 +660,180 @@ function normalizeAnatomicalProfileResult(raw) {
   return parsed;
 }
 
+const PELVIC_GENITAL_REVIEW_KIND = "profile_pelvic_genital_image_review";
+const PELVIC_GENITAL_SCOPE_SECTION_KEYS = new Set([
+  "executive_summary",
+  "pubic_mound_lower_abdomen",
+  "inguinal_folds_groin_skin",
+  "penis",
+  "foreskin",
+  "glans_meatus",
+  "scrotum_testes",
+  "perineum",
+  "anal_opening_perianal_region",
+  "buttocks_gluteal_skin",
+  "device_contact_findings",
+  "tissue_health_safety_observations",
+  "measurement_reconciliation",
+  "limitations_future_coverage",
+]);
+const PELVIC_GENITAL_STRONGLY_POSITIVE_RE = /\b(pubic|inguinal|groin|genital|genitals|penis|penile|shaft|foreskin|glans|meatus|meatal|urethra|urethral|scrotum|scrotal|testes|testicle|perineum|perineal|anal|anus|perianal|buttock|gluteal|foley|catheter|statlock|rectal|prostate|pelvic)\b/i;
+const PELVIC_GENITAL_FORBIDDEN_EVIDENCE_RE = /\b(foot|feet|toe|toes|ankle|ankles|heel|heels|dorsal foot|plantar|lower leg|lower legs|lower limb|lower limbs|lower extremity|lower extremities|calf|calves|shin|shins|knee|knees|malleolar|ankle edema|foot edema|lower-leg edema|lower limb edema|lower-limb edema|lower extremity edema|lower-extremity edema|venous engorgement|dog bite|bite wound|dog nip|bite zone|abdominal bite|abdominal wound|standing abdominal view|right lateral abdominal|right lateral lower abdominal|abdomen bite|abdominal bruise|ecchymosis|ecchymotic|yellow-green bruise|puncture point)\b/i;
+const PELVIC_GENITAL_NEGATED_SCOPE_RE = /\b(no|not|without|absent|lacks|lack)\s+(?:visible\s+|direct\s+|clear\s+|obvious\s+|discernible\s+|meaningful\s+){0,4}(?:pubic|inguinal|groin|genital|pelvic|penis|penile|glans|meatus|scrotum|perineum|anal|perianal|foley|catheter)\b/i;
+
+function compactEvidenceText(...parts) {
+  return parts.flatMap((part) => {
+    if (!part) return [];
+    if (Array.isArray(part)) return part;
+    if (typeof part === "object") return Object.values(part);
+    return [part];
+  }).map((part) => String(part || "").trim()).filter(Boolean).join(" ");
+}
+
+function isPelvicGenitalReviewResult(result = null, config = null) {
+  if (config?.kind === PELVIC_GENITAL_REVIEW_KIND) return true;
+  if (result?._meta?.reviewType === PELVIC_GENITAL_REVIEW_KIND) return true;
+  return [
+    "pubic_mound_lower_abdomen",
+    "inguinal_folds_groin_skin",
+    "penis",
+    "foreskin",
+    "glans_meatus",
+    "scrotum_testes",
+    "perineum",
+    "anal_opening_perianal_region",
+  ].some((key) => Array.isArray(result?.[key]));
+}
+
+function pelvicGenitalImageEvidenceText(result, imageId, transientImages = [], finding = null) {
+  const image = imageId ? rawProfileImageById(result, imageId, transientImages) : {};
+  const annotation = Array.isArray(result?.annotated_images)
+    ? result.annotated_images.find((item) => item?.image_id === imageId) || {}
+    : {};
+  const sourceText = compactEvidenceText(
+    image?.display_label,
+    image?.body_position,
+    image?.coverage,
+    image?.visibility_notes,
+    image?.major_regions_visible,
+    image?.upload_note,
+    image?.source_video?.note,
+    image?.source_video?.purpose,
+  );
+  const sourceHasScopeSignal = sourceText.trim() && (
+    isPelvicGenitalTextOutOfScope(sourceText) ||
+    PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(sourceText)
+  );
+  return compactEvidenceText(
+    sourceText,
+    sourceHasScopeSignal ? "" : annotation.view_label,
+    sourceHasScopeSignal ? "" : annotation.body_position,
+    sourceHasScopeSignal ? "" : annotation.coverage,
+    sourceHasScopeSignal ? "" : annotation.visibility_notes,
+    sourceHasScopeSignal ? [] : annotation.major_regions_visible,
+    image?.display_label,
+    image?.body_position,
+    image?.coverage,
+    image?.visibility_notes,
+    image?.major_regions_visible,
+    finding?.section_key,
+    finding?.region,
+    finding?.label,
+    finding?.finding,
+    finding?.limitations,
+  );
+}
+
+function isPelvicGenitalTextOutOfScope(text = "") {
+  const raw = String(text || "");
+  if (!raw.trim()) return false;
+  if (PELVIC_GENITAL_NEGATED_SCOPE_RE.test(raw)) return true;
+  return PELVIC_GENITAL_FORBIDDEN_EVIDENCE_RE.test(raw);
+}
+
+function isPelvicGenitalFindingInScope(result, finding, transientImages = []) {
+  if (!finding || !PELVIC_GENITAL_SCOPE_SECTION_KEYS.has(String(finding.section_key || ""))) return true;
+  const evidenceText = pelvicGenitalImageEvidenceText(result, finding.image_id, transientImages, finding);
+  if (!evidenceText.trim()) return true;
+  if (isPelvicGenitalTextOutOfScope(evidenceText)) return false;
+  return PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(evidenceText);
+}
+
+function removePelvicGenitalOutOfScopeSentences(text = "") {
+  const raw = String(text || "").trim();
+  if (!raw) return "";
+  const chunks = raw.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [raw];
+  const kept = chunks
+    .map((chunk) => chunk.trim())
+    .filter((chunk) => chunk && !isPelvicGenitalTextOutOfScope(chunk));
+  return kept.join(" ").trim();
+}
+
+function cleanPelvicGenitalScopeProseItem(item = "") {
+  const cleaned = removePelvicGenitalOutOfScopeSentences(item);
+  if (!cleaned || isPelvicGenitalTextOutOfScope(cleaned)) return "";
+  return cleaned;
+}
+
+function scopePelvicGenitalImageReviewResult(result = {}) {
+  if (!result || typeof result !== "object") return result;
+  const next = { ...result };
+  if (next.overview) next.overview = cleanPelvicGenitalScopeProseItem(next.overview);
+  if (next.summary_card && typeof next.summary_card === "object") {
+    next.summary_card = {
+      ...next.summary_card,
+      coverage: cleanPelvicGenitalScopeProseItem(next.summary_card.coverage || ""),
+      evidence_note: cleanPelvicGenitalScopeProseItem(next.summary_card.evidence_note || ""),
+      primary_reference_value: Array.isArray(next.summary_card.primary_reference_value)
+        ? next.summary_card.primary_reference_value.map(cleanPelvicGenitalScopeProseItem).filter(Boolean)
+        : [],
+      key_direct_findings: Array.isArray(next.summary_card.key_direct_findings)
+        ? next.summary_card.key_direct_findings.map(cleanPelvicGenitalScopeProseItem).filter(Boolean)
+        : [],
+      key_limitations: Array.isArray(next.summary_card.key_limitations)
+        ? next.summary_card.key_limitations.map(cleanPelvicGenitalScopeProseItem).filter(Boolean)
+        : [],
+    };
+  }
+  for (const sectionKey of PELVIC_GENITAL_SCOPE_SECTION_KEYS) {
+    if (!Array.isArray(next[sectionKey])) continue;
+    next[sectionKey] = next[sectionKey].map(cleanPelvicGenitalScopeProseItem).filter(Boolean);
+  }
+  const scopedFindings = Array.isArray(next.image_region_findings)
+    ? next.image_region_findings.filter((finding) => isPelvicGenitalFindingInScope(next, finding, []))
+    : [];
+  const scopedFindingImageIds = new Set(scopedFindings.map((finding) => finding.image_id).filter(Boolean));
+  next.image_region_findings = scopedFindings;
+  next.annotated_images = Array.isArray(next.annotated_images)
+    ? next.annotated_images.filter((image) => {
+      const text = compactEvidenceText(
+        image.view_label,
+        image.body_position,
+        image.coverage,
+        image.visibility_notes,
+        image.major_regions_visible,
+      );
+      if (scopedFindingImageIds.has(image.image_id)) return true;
+      if (isPelvicGenitalTextOutOfScope(text)) return false;
+      return PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(text);
+    })
+    : [];
+  next.anatomical_evidence_records = Array.isArray(next.anatomical_evidence_records)
+    ? next.anatomical_evidence_records.filter((record) => {
+      const text = compactEvidenceText(
+        record.key,
+        record.label,
+        record.region,
+        record.summary,
+        record.source_images,
+      );
+      if (isPelvicGenitalTextOutOfScope(text)) return false;
+      return PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(text);
+    })
+    : [];
+  return next;
+}
+
 function normalizeImageReviewAnnotations(raw = {}) {
   const annotationImages = Array.isArray(raw.annotated_images) ? raw.annotated_images : [];
   const regionFindings = Array.isArray(raw.image_region_findings) ? raw.image_region_findings : [];
@@ -719,7 +893,7 @@ function normalizeImageReviewAnnotations(raw = {}) {
   };
 }
 
-function normalizeImageReviewResult(raw) {
+function normalizeImageReviewResult(raw, config = null) {
   const parsed = normalizeAnatomicalProfileResult(raw);
   if (!parsed) return null;
   const scopeSanitized = parsed?._meta?.local_batch_assembled
@@ -772,7 +946,10 @@ function normalizeImageReviewResult(raw) {
   cleaned.anatomical_evidence_records = Array.isArray(cleaned.anatomical_evidence_records)
     ? mergeAnatomicalEvidenceRecords(cleaned.anatomical_evidence_records, [])
     : [];
-  return cleanupProfileImageReviewResult(cleaned, {
+  const reviewScoped = isPelvicGenitalReviewResult(cleaned, config)
+    ? scopePelvicGenitalImageReviewResult(cleaned)
+    : cleaned;
+  return cleanupProfileImageReviewResult(reviewScoped, {
     sections: [
       ...HEAD_TO_TOE_IMAGE_REVIEW_CONFIG.sections,
       ...PELVIC_GENITAL_IMAGE_REVIEW_CONFIG.sections,
@@ -885,7 +1062,7 @@ function cumulativeReviewResultCandidates({ result, archive, userProfile, config
   ];
   const seen = new Set();
   return candidates
-    .map((candidate) => normalizeImageReviewResult(candidate))
+    .map((candidate) => normalizeImageReviewResult(candidate, config))
     .filter((candidate) => candidate?.overview && !isInterimLocalImageReview(candidate))
     .filter((candidate) => {
       const key = [
@@ -968,7 +1145,7 @@ function formatCanonicalAnatomyPacketForPrompt({ result, archive, userProfile, c
 }
 
 function formatCumulativeBaselineReviewForPrompt(result = null, config = {}) {
-  const normalized = normalizeImageReviewResult(result);
+  const normalized = normalizeImageReviewResult(result, config);
   if (!normalized?.overview) {
     return "CURRENT CUMULATIVE BASELINE REVIEW:\n- No prior final cumulative review is available yet. Establish the baseline from all saved evidence available in this run.";
   }
@@ -1722,6 +1899,17 @@ function collectSavedProfileImageAttachments(userProfile, { limit = 5, purpose =
       const key = attachment.storagePath || attachment.previewUrl || attachment.id || attachment.filename;
       if (!key || seen.has(key)) continue;
       seen.add(key);
+      const selectionPrompt = briefText(String(message?.text || ""), 420);
+      const selectionReviewContext = briefText(replyText, 900);
+      const scopeText = compactEvidenceText(
+        attachment.filename,
+        selectionPrompt,
+        selectionReviewContext,
+      );
+      if (purpose === "pelvic_genital") {
+        if (isPelvicGenitalTextOutOfScope(scopeText)) continue;
+        if (!PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(scopeText)) continue;
+      }
       items.push({
         id: attachment.id || key,
         filename: attachment.filename || "saved-profile-image.jpg",
@@ -1731,8 +1919,8 @@ function collectSavedProfileImageAttachments(userProfile, { limit = 5, purpose =
         source: "saved_profile_qa_attachment",
         selection_score: groupScore,
         selection_context: purpose,
-        selection_prompt: briefText(String(message?.text || ""), 420),
-        selection_review_context: briefText(replyText, 900),
+        selection_prompt: selectionPrompt,
+        selection_review_context: selectionReviewContext,
         selection_group_created_at: createdAt,
       });
     }
@@ -1763,10 +1951,279 @@ function collectSavedProfileImageAttachments(userProfile, { limit = 5, purpose =
   return mixed.slice(0, limit);
 }
 
+function collectSavedProfileImageAttachmentContexts(userProfile) {
+  const messages = Array.isArray(userProfile?.profile_chat_messages) ? userProfile.profile_chat_messages : [];
+  const seen = new Set();
+  const items = [];
+
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
+    const message = messages[messageIndex];
+    const attachments = Array.isArray(message?.imageAttachments) ? message.imageAttachments : [];
+    const imageAttachments = attachments.filter((attachment) => !attachment?.sourceVideo);
+    if (!imageAttachments.length) continue;
+    const reply = messages.slice(messageIndex + 1).find((candidate) => candidate?.role !== "user" && String(candidate?.text || "").trim());
+    const selectionPrompt = briefText(String(message?.text || ""), 420);
+    const selectionReviewContext = briefText(String(reply?.text || ""), 900);
+    for (const attachment of imageAttachments) {
+      const url = attachment.previewUrl || attachment.storagePath || "";
+      if (!url) continue;
+      const key = attachment.storagePath || attachment.previewUrl || attachment.id || attachment.filename;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      items.push({
+        id: attachment.id || key,
+        filename: attachment.filename || "saved-profile-image.jpg",
+        url,
+        saved_at: attachment.createdAt || message.createdAt || null,
+        source: "saved_profile_qa_context",
+        selection_prompt: selectionPrompt,
+        selection_review_context: selectionReviewContext,
+      });
+    }
+  }
+
+  return items;
+}
+
+function evidenceUrlKey(value = "") {
+  return String(value || "").trim().replace(/^https?:\/\/[^/]+/i, "");
+}
+
+function savedProfileContextMapByUrl(contexts = []) {
+  const map = new Map();
+  for (const context of Array.isArray(contexts) ? contexts : []) {
+    const key = evidenceUrlKey(context?.url);
+    if (!key || map.has(key)) continue;
+    map.set(key, context);
+  }
+  return map;
+}
+
+function savedEvidenceAttachmentScopeText(attachment = {}) {
+  return compactEvidenceText(
+    attachment.display_label,
+    attachment.filename,
+    attachment.body_position,
+    attachment.coverage,
+    attachment.visibility_notes,
+    attachment.major_regions_visible,
+    attachment.selection_prompt,
+    attachment.selection_review_context,
+    attachment.source_video?.note,
+    attachment.source_video?.purpose,
+  );
+}
+
+function savedEvidenceAttachmentInScope(attachment, { purpose = "general", sourceContextByUrl = new Map() } = {}) {
+  if (purpose !== "pelvic_genital") return true;
+  const sourceContext = sourceContextByUrl.get(evidenceUrlKey(attachment?.url || attachment?.previewUrl || attachment?.storagePath));
+  const sourceContextText = compactEvidenceText(
+    sourceContext?.selection_prompt,
+    sourceContext?.selection_review_context,
+    sourceContext?.coverage,
+    sourceContext?.upload_note,
+  );
+  if (sourceContextText.trim()) {
+    if (isPelvicGenitalTextOutOfScope(sourceContextText)) return false;
+    if (!PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(sourceContextText)) return false;
+  }
+  const scopeText = savedEvidenceAttachmentScopeText(attachment);
+  if (isPelvicGenitalTextOutOfScope(scopeText)) return false;
+  return PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(sourceContextText || scopeText);
+}
+
+function reviewedProfileImageAttachmentsFromResult(result, {
+  prefix = "profile_review",
+  purpose = "general",
+  sourceContextByUrl = new Map(),
+  generatedAt = "",
+} = {}) {
+  const reviewed = Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images : [];
+  const annotated = Array.isArray(result?.annotated_images) ? result.annotated_images : [];
+  return reviewed
+    .map((image, index) => {
+      const originalId = image?.image_id || `img_${index + 1}`;
+      const annotation = annotated.find((item) => item?.image_id === originalId) || {};
+      const url = image?.preview_url || image?.previewUrl || annotation?.preview_url || annotation?.previewUrl || "";
+      const majorRegions = Array.isArray(annotation?.major_regions_visible)
+        ? annotation.major_regions_visible
+        : [];
+      const coverage = cleanImageReviewProse([
+        annotation.view_label,
+        annotation.body_position,
+        annotation.coverage,
+        annotation.visibility_notes,
+        majorRegions.join(", "),
+        image.upload_note,
+        image.source_video?.note,
+        image.source_video?.purpose,
+      ].filter(Boolean).join(". "));
+      return {
+        id: `${prefix}_${String(originalId).replace(/[^a-z0-9_-]+/gi, "_")}_${index + 1}`,
+        filename: image.filename || `${prefix}-${String(index + 1).padStart(3, "0")}.jpg`,
+        media_type: normalizeMediaType(image.media_type),
+        url,
+        saved_at: generatedAt || result?._meta?.generated_at || result?._meta?.last_generated_at || null,
+        source: image.source_video ? "profile_review_video_frame" : "profile_review_image",
+        display_label: annotation.view_label || image.display_label || `Saved profile review view ${reviewImageLetter(index)}`,
+        body_position: annotation.body_position || "",
+        coverage,
+        visibility_notes: annotation.visibility_notes || "",
+        major_regions_visible: majorRegions,
+        selection_score: purpose === "pelvic_genital"
+          ? (PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(coverage) ? 30 : 0)
+          : 15,
+        selection_context: purpose,
+        selection_prompt: annotation.view_label || image.display_label || "",
+        selection_review_context: coverage,
+        source_video: image.source_video || null,
+      };
+    })
+    .filter((attachment) => attachment.url && savedEvidenceAttachmentInScope(attachment, { purpose, sourceContextByUrl }));
+}
+
+function collectSavedProfileReviewImageAttachments({
+  result,
+  archive,
+  userProfile,
+  config,
+  limit = 20,
+  purpose = "general",
+  savedProfileContexts = [],
+} = {}) {
+  const sourceContextByUrl = savedProfileContextMapByUrl(savedProfileContexts);
+  const candidates = [];
+  const addResult = (candidate, prefix, generatedAt = "") => {
+    if (!candidate || typeof candidate !== "object") return;
+    candidates.push(...reviewedProfileImageAttachmentsFromResult(candidate, {
+      prefix,
+      purpose,
+      sourceContextByUrl,
+      generatedAt,
+    }));
+  };
+
+  addResult(result, "current_profile_review");
+  addResult(userProfile?.[config?.resultKey], `saved_${config?.resultKey || "profile_review"}`);
+  (Array.isArray(archive) ? archive : []).forEach((entry, index) => {
+    const archivedResult = archiveEntryResult(entry);
+    addResult(
+      archivedResult,
+      `archive_${index + 1}_${config?.archiveKey || "profile_review"}`,
+      entry?.generated_at || entry?.created_at || entry?.updated_at || "",
+    );
+  });
+  (Array.isArray(userProfile?.[config?.archiveKey]) ? userProfile[config.archiveKey] : []).forEach((entry, index) => {
+    const archivedResult = archiveEntryResult(entry);
+    addResult(
+      archivedResult,
+      `saved_archive_${index + 1}_${config?.archiveKey || "profile_review"}`,
+      entry?.generated_at || entry?.created_at || entry?.updated_at || "",
+    );
+  });
+
+  const seen = new Set();
+  return candidates
+    .sort((a, b) => {
+      if (b.selection_score !== a.selection_score) return b.selection_score - a.selection_score;
+      return (Date.parse(b.saved_at || 0) || 0) - (Date.parse(a.saved_at || 0) || 0);
+    })
+    .filter((attachment) => {
+      const key = evidenceUrlKey(attachment.url);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
+}
+
+function collectBodyExplorationFrameAttachments(bodyExplorations = [], { limit = 20, purpose = "general" } = {}) {
+  const rows = [...(Array.isArray(bodyExplorations) ? bodyExplorations : [])]
+    .sort((a, b) => new Date(b.date || b.created_date || 0) - new Date(a.date || a.created_date || 0));
+  const candidates = [];
+  for (const exploration of rows) {
+    const cards = Array.isArray(exploration?.ai_body_exploration?._video_pass_findings)
+      ? exploration.ai_body_exploration._video_pass_findings
+      : [];
+    cards.forEach((card, cardIndex) => {
+      const findings = Array.isArray(card?.findings) ? card.findings : [];
+      const draftEvents = Array.isArray(card?.draft_events) ? card.draft_events : [];
+      const cardText = compactEvidenceText(
+        card?.label,
+        card?.summary,
+        findings.join(" "),
+        draftEvents.map((event) => event?.note).filter(Boolean).join(" "),
+        card?.source_video?.label,
+        card?.source_video?.filename,
+      );
+      const frameUrl = card?.clip?.thumbnail_url
+        || card?.sampled_frames?.[Math.floor((card?.sampled_frames?.length || 1) / 2)]?.url
+        || card?.sampled_frames?.[0]?.url
+        || "";
+      if (!frameUrl) return;
+      const attachment = {
+        id: `body_exploration_frame_${exploration.id || "unknown"}_${card.id || cardIndex}`,
+        filename: `body-exploration-${String(candidates.length + 1).padStart(3, "0")}.jpg`,
+        media_type: "image/jpeg",
+        url: frameUrl,
+        saved_at: card?.saved_at || exploration?.date || exploration?.created_date || null,
+        source: "body_exploration_video_frame",
+        display_label: card?.label || "Body exploration sampled frame",
+        coverage: cleanImageReviewProse(cardText),
+        visibility_notes: cleanImageReviewProse(card?.summary || ""),
+        selection_score: purpose === "pelvic_genital"
+          ? (PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(cardText) ? 20 : 0)
+          : 8,
+        selection_context: purpose,
+        selection_prompt: card?.label || "",
+        selection_review_context: cleanImageReviewProse(cardText),
+        source_video: {
+          video_id: card?.source_video?.id || "",
+          note: card?.summary || "",
+          purpose: "body exploration sampled video frame",
+          frame_time_seconds: card?.clip?.start_s ?? card?.sampled_frames?.[0]?.recordTimeSeconds ?? null,
+          start_s: card?.clip?.start_s ?? null,
+          end_s: card?.clip?.end_s ?? null,
+        },
+      };
+      if (!savedEvidenceAttachmentInScope(attachment, { purpose })) return;
+      candidates.push(attachment);
+    });
+  }
+  const seen = new Set();
+  return candidates
+    .sort((a, b) => {
+      if (b.selection_score !== a.selection_score) return b.selection_score - a.selection_score;
+      return (Date.parse(b.saved_at || 0) || 0) - (Date.parse(a.saved_at || 0) || 0);
+    })
+    .filter((attachment) => {
+      const key = evidenceUrlKey(attachment.url);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
+}
+
+function mergeSavedReviewImageCandidates(candidateGroups = [], limit = 20) {
+  const merged = [];
+  const seen = new Set();
+  for (const group of candidateGroups) {
+    for (const attachment of Array.isArray(group) ? group : []) {
+      const key = evidenceUrlKey(attachment?.url || attachment?.previewUrl || attachment?.storagePath);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(attachment);
+      if (merged.length >= limit) return merged;
+    }
+  }
+  return merged;
+}
+
 async function savedAttachmentToPayload(attachment) {
   const url = serverUrl(attachment.url);
   if (!url) throw new Error(`Saved image ${attachment.filename || ""} has no reusable URL.`);
-  const label = attachment.filename || "saved image";
+  const label = attachment.display_label || attachment.filename || "saved image";
   const response = await fetchWithTimeout(
     url,
     PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
@@ -1787,6 +2244,23 @@ async function savedAttachmentToPayload(attachment) {
     data: stripDataUrl(dataUrl),
     previewUrl: dataUrl,
     storagePath: attachment.url || "",
+    display_label: attachment.display_label || attachment.filename || "saved profile evidence image",
+    upload_note: cleanImageReviewProse([
+      attachment.display_label,
+      attachment.coverage,
+      attachment.visibility_notes,
+      Array.isArray(attachment.major_regions_visible) ? attachment.major_regions_visible.join(", ") : "",
+      attachment.selection_prompt,
+      attachment.selection_review_context,
+    ].filter(Boolean).join(". ")),
+    coverage: cleanImageReviewProse([
+      attachment.display_label,
+      attachment.coverage,
+      attachment.visibility_notes,
+      Array.isArray(attachment.major_regions_visible) ? attachment.major_regions_visible.join(", ") : "",
+      attachment.selection_prompt,
+      attachment.selection_review_context,
+    ].filter(Boolean).join(". ")),
     source: attachment.source || "saved_profile_qa_attachment",
     saved_at: attachment.saved_at || null,
   };
@@ -2053,8 +2527,8 @@ async function prepareFreshImageForReview(image, index, { onProgress, total = 0 
 }
 
 function buildImageReviewMeta(images = [], sessions = [], previousMeta = null, evidenceCounts = {}, generatedAtOverride = null, reviewedImageOverride = null, countOverrides = {}) {
-  const freshImages = images.filter((image) => image.source !== "saved_profile_qa_attachment");
-  const reusedImages = images.filter((image) => image.source === "saved_profile_qa_attachment");
+  const freshImages = images.filter((image) => image.source === "fresh_upload");
+  const reusedImages = images.filter((image) => image.source !== "fresh_upload");
   const reviewedImages = Array.isArray(reviewedImageOverride) && reviewedImageOverride.length
     ? reviewedImageOverride
     : buildImageReviewReferences(images);
@@ -2770,18 +3244,65 @@ function ProfileImageSummaryCard({ summary, color = "hsl(var(--primary))", lean 
   );
 }
 
+function rawProfileImageById(result, imageId, transientImages = []) {
+  const reviewed = Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images : [];
+  const transient = transientImages.map((image, index) => ({
+    image_id: image.image_id || `img_${String(index + 1).padStart(3, "0")}`,
+    preview_url: image.previewUrl || image.preview_url || image.storagePath || "",
+    display_label: image.display_label || `Reference view ${reviewImageLetter(index)}`,
+    body_position: image.body_position || "",
+    coverage: image.coverage || image.upload_note || "",
+    visibility_notes: image.visibility_notes || "",
+    major_regions_visible: image.major_regions_visible || image.regions || [],
+    upload_note: image.upload_note || "",
+    source_video: image.source_video || null,
+    source: image.source || "",
+  }));
+  const image = reviewed.find((item) => item.image_id === imageId) || {};
+  const imageUrl = image.preview_url || image.storagePath || image.url || "";
+  const transientImage = transient.find((item) => (
+    item.image_id === imageId ||
+    (imageUrl && item.preview_url === imageUrl)
+  )) || {};
+  const previewUrl = imageUrl || transientImage.preview_url || "";
+  return {
+    ...transientImage,
+    ...image,
+    preview_url: previewUrl,
+    display_label: image.display_label || transientImage.display_label || "Reviewed view",
+    body_position: image.body_position || transientImage.body_position || "",
+    coverage: image.coverage || image.upload_note || transientImage.coverage || "",
+    visibility_notes: image.visibility_notes || transientImage.visibility_notes || "",
+    major_regions_visible: image.major_regions_visible || transientImage.major_regions_visible || [],
+    upload_note: image.upload_note || transientImage.upload_note || "",
+    source_video: image.source_video || transientImage.source_video || null,
+    source: image.source || transientImage.source || "",
+  };
+}
+
 function profileImageById(result, imageId, transientImages = []) {
   const reviewed = Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images : [];
   const annotated = Array.isArray(result?.annotated_images) ? result.annotated_images : [];
   const transient = transientImages.map((image, index) => ({
     image_id: image.image_id || `img_${String(index + 1).padStart(3, "0")}`,
-    preview_url: image.previewUrl || "",
+    preview_url: image.previewUrl || image.preview_url || image.storagePath || "",
     display_label: image.display_label || `Reference view ${reviewImageLetter(index)}`,
+    body_position: image.body_position || "",
+    coverage: image.coverage || image.upload_note || "",
+    visibility_notes: image.visibility_notes || "",
+    major_regions_visible: image.major_regions_visible || image.regions || [],
+    upload_note: image.upload_note || "",
+    source_video: image.source_video || null,
+    source: image.source || "",
   }));
   const image = reviewed.find((item) => item.image_id === imageId) || {};
   const annotation = annotated.find((item) => item.image_id === imageId) || {};
-  const transientImage = transient.find((item) => item.image_id === imageId) || {};
-  const previewUrl = image.preview_url || transientImage.preview_url || annotation.preview_url || "";
+  const imageUrl = image.preview_url || image.storagePath || image.url || "";
+  const transientImage = transient.find((item) => (
+    item.image_id === imageId ||
+    (imageUrl && item.preview_url === imageUrl)
+  )) || {};
+  const previewUrl = imageUrl || transientImage.preview_url || annotation.preview_url || "";
   return {
     ...transientImage,
     ...annotation,
@@ -2796,12 +3317,22 @@ function profileImageById(result, imageId, transientImages = []) {
 }
 
 function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primary))", transientImages = [] }) {
-  const findings = Array.isArray(result?.image_region_findings) ? result.image_region_findings : [];
+  const pelvicScoped = isPelvicGenitalReviewResult(result);
+  const findings = Array.isArray(result?.image_region_findings)
+    ? result.image_region_findings.filter((finding) => !pelvicScoped || isPelvicGenitalFindingInScope(result, finding, transientImages))
+    : [];
   const annotated = Array.isArray(result?.annotated_images) ? result.annotated_images : [];
   const reviewed = Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images : [];
   const imageIds = [...new Set([
-    ...reviewed.map((image) => image.image_id).filter(Boolean),
-    ...annotated.map((image) => image.image_id).filter(Boolean),
+    ...(pelvicScoped ? [] : reviewed.map((image) => image.image_id).filter(Boolean)),
+    ...annotated
+      .map((image) => image.image_id)
+      .filter((imageId) => {
+        if (!imageId) return false;
+        if (!pelvicScoped) return true;
+        const text = pelvicGenitalImageEvidenceText(result, imageId, transientImages, null);
+        return !isPelvicGenitalTextOutOfScope(text) && PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(text);
+      }),
     ...findings.map((finding) => finding.image_id).filter(Boolean),
   ])];
 
@@ -2823,7 +3354,9 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
 
       <div className="grid gap-3 lg:grid-cols-2">
         {imageIds.map((imageId) => {
-          const image = profileImageById(result, imageId, transientImages);
+          const image = pelvicScoped
+            ? rawProfileImageById(result, imageId, transientImages)
+            : profileImageById(result, imageId, transientImages);
           const imageFindings = findings.filter((finding) => finding.image_id === imageId);
           const pinnedFindings = imageFindings.filter((finding) => finding.pin?.x != null && finding.pin?.y != null);
           const boxedFindings = imageFindings.filter((finding) => finding.box);
@@ -3018,10 +3551,15 @@ function ProfileImageLightbox({
   onCorrectFinding = null,
   onRemoveFinding = null,
 }) {
-  const findings = Array.isArray(result?.image_region_findings) ? result.image_region_findings : [];
+  const pelvicScoped = isPelvicGenitalReviewResult(result);
+  const findings = Array.isArray(result?.image_region_findings)
+    ? result.image_region_findings.filter((finding) => !pelvicScoped || isPelvicGenitalFindingInScope(result, finding, transientImages))
+    : [];
   const selectedIndex = Math.max(0, imageIds.indexOf(selectedImageId));
   const imageId = imageIds[selectedIndex] || selectedImageId;
-  const image = profileImageById(result, imageId, transientImages);
+  const image = pelvicScoped
+    ? rawProfileImageById(result, imageId, transientImages)
+    : profileImageById(result, imageId, transientImages);
   const imageFindings = findings.filter((finding) => finding.image_id === imageId);
   const pinnedFindings = imageFindings.filter((finding) => finding.pin?.x != null && finding.pin?.y != null);
   const boxedFindings = imageFindings.filter((finding) => finding.box);
@@ -3149,8 +3687,9 @@ function ProfileImageLightbox({
 }
 
 function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(var(--primary))", transientImages = [], onOpenImage = null, onCorrectFinding = null, onRemoveFinding = null }) {
+  const pelvicScoped = isPelvicGenitalReviewResult(result);
   const findings = Array.isArray(result?.image_region_findings)
-    ? result.image_region_findings.filter((finding) => finding.section_key === sectionKey)
+    ? result.image_region_findings.filter((finding) => finding.section_key === sectionKey && (!pelvicScoped || isPelvicGenitalFindingInScope(result, finding, transientImages)))
     : [];
   if (!findings.length) return null;
 
@@ -3170,7 +3709,9 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
       </summary>
       <div className="mt-3 grid gap-2 md:grid-cols-2">
         {imageIds.map((imageId) => {
-          const image = profileImageById(result, imageId, transientImages);
+          const image = pelvicScoped
+            ? rawProfileImageById(result, imageId, transientImages)
+            : profileImageById(result, imageId, transientImages);
           const imageFindings = findings.filter((finding) => finding.image_id === imageId).slice(0, 4);
           const pinnedFindings = imageFindings.filter((finding) => finding.pin?.x != null && finding.pin?.y != null);
           return (
@@ -3226,8 +3767,9 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
 }
 
 function imageCalloutNarrationParagraphs(result, sectionKey, transientImages = []) {
+  const pelvicScoped = isPelvicGenitalReviewResult(result);
   const findings = Array.isArray(result?.image_region_findings)
-    ? result.image_region_findings.filter((finding) => finding.section_key === sectionKey)
+    ? result.image_region_findings.filter((finding) => finding.section_key === sectionKey && (!pelvicScoped || isPelvicGenitalFindingInScope(result, finding, transientImages)))
     : [];
   if (!findings.length) return [];
 
@@ -3240,7 +3782,9 @@ function imageCalloutNarrationParagraphs(result, sectionKey, transientImages = [
 
   const paragraphs = [];
   for (const [imageId, imageFindings] of byImage.entries()) {
-    const image = profileImageById(result, imageId, transientImages);
+    const image = pelvicScoped
+      ? rawProfileImageById(result, imageId, transientImages)
+      : profileImageById(result, imageId, transientImages);
     const imageContext = image?.display_label || image?.view_label || "Reviewed view";
     const callouts = imageFindings.slice(0, 4).map((finding, index) => {
       const label = finding.label || finding.region || `Callout ${index + 1}`;
@@ -3357,6 +3901,11 @@ PELVIC / GENITAL REVIEW SCOPE:
 - Do not narrate camera locations, room setup, table paper, ECG/chest strap, headphones, foot cameras, or incidental background objects.
 - Do not narrate every absent structure, device, or limitation. Mention absence only when it is materially relevant.
 - Focus on pubic mound/lower abdomen, inguinal folds/groin skin, penis, foreskin, glans/meatus, scrotum/testes, perineum, anal/perianal region, gluteal skin, visible tissue health, and relevant device/contact findings.
+- HARD SCOPE BOUNDARY: this pelvic/genital review must not include foot, ankle, toe, lower-leg, lower-extremity, knee, calf, lower-limb edema, lower-extremity edema, venous, dog-bite, abdominal wound, abdominal bruise, or non-pelvic skin follow-up findings. Those belong only in the head-to-toe review.
+- Pubic mound/lower abdomen means the immediate suprapubic/pubic-base region. Do not use right lateral abdominal wound or general abdomen images as pelvic/genital evidence.
+- Inguinal folds/groin skin means actual groin, inguinal fold, pubic, inner-thigh, penile-base, or scrotal-base evidence. Never attach feet, ankles, lower legs, or standing foot comparison views to this section.
+- For annotated_images and image_region_findings, include only images where pelvic/genital/perineal/anal/pubic/groin anatomy or relevant device contact is actually visible. If an image says no genital/pelvic anatomy is visible, do not create a pelvic/genital callout for it.
+- If a saved image contains no relevant pelvic/genital anatomy, ignore it for this review even if it exists in the wider evidence library.
 - Include anal/perianal anatomy when visible: pigmentation, anal verge appearance, symmetry, resting closure/gaping/prolapse if visible, external hemorrhoids, fissures, skin tags, ulceration, bleeding, crusting, and relevant hair distribution.
 - Do not assess internal hemorrhoids, prostate, bladder neck, internal sphincters, pelvic floor musculature, internal urethral course, or internal rectal structures.
 - Do not make feet, lower-leg posture, hand positioning, or stimulation techniques standalone topics in this pelvic/genital artifact. Mention hands, feet, or technique only when they directly affect visibility, scale, occlusion, pelvic positioning, contact mechanics, device fit, or safety interpretation.
@@ -3456,14 +4005,14 @@ function ProfileImageReviewPanel({
     base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
       if (cancelled) return;
       if (rows[0]?.[config.resultKey]) {
-        const loadedResult = normalizeImageReviewResult(rows[0][config.resultKey]) || rows[0][config.resultKey];
+        const loadedResult = normalizeImageReviewResult(rows[0][config.resultKey], config) || rows[0][config.resultKey];
         setResult(loadedResult);
         if (loadedResult?._meta?.latest_attempt_status) setLatestAttemptStatus(loadedResult._meta.latest_attempt_status);
       }
       if (Array.isArray(rows[0]?.[config.archiveKey])) {
         setArchive(rows[0][config.archiveKey].map((entry) => ({
           ...entry,
-          result: normalizeImageReviewResult(entry.result) || entry.result,
+          result: normalizeImageReviewResult(entry.result, config) || entry.result,
         })));
       }
     }).catch((err) => {
@@ -3477,7 +4026,7 @@ function ProfileImageReviewPanel({
   useEffect(() => {
     const profileResult = userProfile?.[config.resultKey];
     if (!profileResult) return;
-    const loadedResult = normalizeImageReviewResult(profileResult) || profileResult;
+    const loadedResult = normalizeImageReviewResult(profileResult, config) || profileResult;
     if (!loadedResult?.overview) return;
     setResult((current) => current?.overview ? current : loadedResult);
     if (loadedResult?._meta?.latest_attempt_status) setLatestAttemptStatus(loadedResult._meta.latest_attempt_status);
@@ -3486,7 +4035,7 @@ function ProfileImageReviewPanel({
   const jobLabel = `AI Profiler: ${config.title}`;
 
   const storeCompletedReviewJob = async (completedJob, sourceImages = []) => {
-    const parsed = normalizeImageReviewResult(completedJob?.result);
+    const parsed = normalizeImageReviewResult(completedJob?.result, config);
     if (!parsed?.overview) throw new Error("Sarah returned an empty image review.");
     if (isFinalSynthesisFallbackResult(parsed)) {
       const fallbackStatus = parsed._background_attempt_status || {
@@ -4332,7 +4881,7 @@ function ProfileImageReviewPanel({
     try {
       const batchParsedResults = recoverableBatchSet.batches
         .map((job) => remapBatchLocalImageIds(
-          normalizeImageReviewResult(job?.result),
+          normalizeImageReviewResult(job?.result, config),
           job?.meta?.reviewed_images || [],
         ))
         .filter((item) => item?.overview);
@@ -4393,7 +4942,7 @@ function ProfileImageReviewPanel({
       const isHeadToToeBodyReference = config.contextScope === "head_to_toe_body_reference";
       batchParsedResults = recoverableBatchSet.batches
         .map((job) => remapBatchLocalImageIds(
-          normalizeImageReviewResult(job?.result),
+          normalizeImageReviewResult(job?.result, config),
           job?.meta?.reviewed_images || [],
         ))
         .filter((item) => item?.overview);
@@ -4485,7 +5034,7 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
       });
 
       const parsed = mergeImageReviewBatchArtifacts(
-        normalizeImageReviewResult(typeof raw === "string" ? JSON.parse(raw) : raw),
+        normalizeImageReviewResult(typeof raw === "string" ? JSON.parse(raw) : raw, config),
         batchParsedResults,
       );
       if (!parsed?.overview) throw new Error("Sarah returned an empty recovered image review.");
@@ -4563,11 +5112,29 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
       const isHeadToToeBodyReference = config.contextScope === "head_to_toe_body_reference";
       const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
       const maxReviewImages = config.maxImages || 5;
-      const allSavedAttachments = collectSavedProfileImageAttachments(reviewUserProfile, {
+      const savedProfileContexts = collectSavedProfileImageAttachmentContexts(reviewUserProfile);
+      const savedProfileQaAttachments = collectSavedProfileImageAttachments(reviewUserProfile, {
         limit: maxReviewImages,
         purpose: isHeadToToeBodyReference ? "head_to_toe_body_reference" : "pelvic_genital",
       });
-      const savedReserve = images.length > 0 ? 0 : allSavedAttachments.length;
+      const savedProfileReviewAttachments = collectSavedProfileReviewImageAttachments({
+        result,
+        archive,
+        userProfile: reviewUserProfile,
+        config,
+        limit: maxReviewImages * 2,
+        purpose: isHeadToToeBodyReference ? "head_to_toe_body_reference" : "pelvic_genital",
+        savedProfileContexts,
+      });
+      const bodyExplorationFrameAttachments = collectBodyExplorationFrameAttachments(bodyExplorations, {
+        limit: maxReviewImages * 2,
+        purpose: isHeadToToeBodyReference ? "head_to_toe_body_reference" : "pelvic_genital",
+      });
+      const allSavedAttachments = mergeSavedReviewImageCandidates([
+        savedProfileReviewAttachments,
+        bodyExplorationFrameAttachments,
+        savedProfileQaAttachments,
+      ], maxReviewImages * 3);
       const freshLimit = images.length > 0
         ? maxReviewImages
         : 0;
@@ -4643,14 +5210,14 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
         ? hasFreshImages && hasReusedSavedImages
           ? `COMBINED IMAGE REVIEW DIRECTIVE - HIGHEST PRIORITY:
 - ${freshImagePayload.length} fresh image${freshImagePayload.length === 1 ? " is" : "s are"} attached as new direct visual evidence.
-- ${reusedSavedImages.length} saved Profile Q&A image${reusedSavedImages.length === 1 ? " has" : "s have"} also been reloaded and attached as direct saved visual evidence.
+- ${reusedSavedImages.length} saved profile/media evidence image${reusedSavedImages.length === 1 ? " has" : "s have"} also been reloaded and attached as direct saved visual evidence. These may include prior profile-review images, body-exploration sampled frames, or saved Profile Q&A images.
 - Review the attached image set as update evidence against the canonical anatomy packet. Fresh images enhance and update the existing profile; they do not replace the saved baseline or define the report scope.
 - Do not say prior photos are unavailable, that direct re-examination is not occurring, or that the review is based only on the newest images.
 - Reconcile fresh images, reused saved images, saved Profile Q&A findings, prior Sarah visual reviews, session/body-exploration evidence, and entered measurements into one coherent whole-picture analysis.`
           : hasReusedSavedImages
             ? `SAVED IMAGE REUSE DIRECTIVE - HIGHEST PRIORITY:
-- ${imagePayload.length} saved Profile Q&A image${imagePayload.length === 1 ? " has" : "s have"} been reloaded and attached to this request.
-- Review these saved images directly as reused profile evidence. They are not new uploads, but they are available to inspect in this run.
+- ${imagePayload.length} saved profile/media evidence image${imagePayload.length === 1 ? " has" : "s have"} been reloaded and attached to this request.
+- Review these saved images directly as reused profile evidence. They are not new uploads, but they are available to inspect in this run. They may include prior profile-review images, body-exploration sampled frames, or saved Profile Q&A images.
 - Do not say the prior photos are unavailable or that direct image review is not occurring.
 - Reconcile these saved images with saved Profile Q&A findings, prior Sarah visual reviews, session/body-exploration evidence, and entered measurements.`
             : `FRESH IMAGE DIRECTIVE - HIGHEST PRIORITY:
@@ -4923,7 +5490,7 @@ ANNOTATED IMAGE OUTPUT RULES:
           });
           const batchReviewedImages = buildImageReviewReferences(batchImages);
           const batchParsed = remapBatchLocalImageIds(
-            normalizeImageReviewResult(typeof completedBatchJob.result === "string" ? JSON.parse(completedBatchJob.result) : completedBatchJob.result),
+            normalizeImageReviewResult(typeof completedBatchJob.result === "string" ? JSON.parse(completedBatchJob.result) : completedBatchJob.result, config),
             batchReviewedImages,
           );
           if (batchParsed?.overview) batchParsedResults.push(batchParsed);
@@ -5329,7 +5896,7 @@ ANNOTATED IMAGE OUTPUT RULES:
       });
       }
       const parsed = mergeImageReviewBatchArtifacts(
-        normalizeImageReviewResult(typeof raw === "string" ? JSON.parse(raw) : raw),
+        normalizeImageReviewResult(typeof raw === "string" ? JSON.parse(raw) : raw, config),
         batchParsedResults,
       );
       if (!parsed?.overview) throw new Error("Sarah returned an empty image review.");
@@ -5395,6 +5962,35 @@ ANNOTATED IMAGE OUTPUT RULES:
     limit: 99,
     purpose: config.contextScope === "head_to_toe_body_reference" ? "head_to_toe_body_reference" : "pelvic_genital",
   });
+  const savedProfileAttachmentContexts = collectSavedProfileImageAttachmentContexts(userProfile);
+  const reusableProfileReviewAttachments = collectSavedProfileReviewImageAttachments({
+    result,
+    archive,
+    userProfile,
+    config,
+    limit: 99,
+    purpose: config.contextScope === "head_to_toe_body_reference" ? "head_to_toe_body_reference" : "pelvic_genital",
+    savedProfileContexts: savedProfileAttachmentContexts,
+  });
+  const reusableBodyExplorationFrameAttachments = collectBodyExplorationFrameAttachments(bodyExplorations, {
+    limit: 99,
+    purpose: config.contextScope === "head_to_toe_body_reference" ? "head_to_toe_body_reference" : "pelvic_genital",
+  });
+  const savedProfileContextImages = savedProfileAttachmentContexts.map((attachment, index) => ({
+    image_id: `saved_context_${String(index + 1).padStart(3, "0")}`,
+    previewUrl: attachment.url,
+    storagePath: attachment.url,
+    display_label: attachment.filename || `Saved Profile Q&A context ${reviewImageLetter(index)}`,
+    coverage: cleanImageReviewProse([
+      attachment.selection_prompt,
+      attachment.selection_review_context,
+    ].filter(Boolean).join(". ")),
+    upload_note: cleanImageReviewProse([
+      attachment.selection_prompt,
+      attachment.selection_review_context,
+    ].filter(Boolean).join(". ")),
+    source: attachment.source || "saved_profile_qa_context",
+  }));
   const fallbackReferenceImages = reusableProfileAttachments.map((attachment, index) => ({
     image_id: `saved_ref_${String(index + 1).padStart(3, "0")}`,
     previewUrl: attachment.url,
@@ -5436,8 +6032,27 @@ ANNOTATED IMAGE OUTPUT RULES:
         };
       });
     })
-    .filter((image) => image.previewUrl || image.storagePath);
+    .filter((image) => {
+      if (!(image.previewUrl || image.storagePath)) return false;
+      if (config.kind !== PELVIC_GENITAL_REVIEW_KIND) return true;
+      const sourceContext = savedProfileContextImages.find((contextImage) => (
+        contextImage.previewUrl && contextImage.previewUrl === (image.previewUrl || image.storagePath)
+      ));
+      const sourceText = compactEvidenceText(sourceContext?.coverage, sourceContext?.upload_note);
+      if (sourceText && isPelvicGenitalTextOutOfScope(sourceText)) return false;
+      if (sourceText && !PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(sourceText)) return false;
+      const archiveText = compactEvidenceText(image.display_label, image.coverage);
+      if (isPelvicGenitalTextOutOfScope(archiveText)) return false;
+      return PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(sourceText || archiveText);
+    });
   const inlineReferenceImages = [...images, ...fallbackReferenceImages, ...archiveReferenceImages]
+    .reduce((items, image) => {
+      const key = image.image_id || image.storagePath || image.previewUrl;
+      if (!key || items.some((item) => (item.image_id || item.storagePath || item.previewUrl) === key)) return items;
+      items.push(image);
+      return items;
+    }, []);
+  const evidenceLookupImages = [...inlineReferenceImages, ...savedProfileContextImages]
     .reduce((items, image) => {
       const key = image.image_id || image.storagePath || image.previewUrl;
       if (!key || items.some((item) => (item.image_id || item.storagePath || item.previewUrl) === key)) return items;
@@ -5448,28 +6063,36 @@ ANNOTATED IMAGE OUTPUT RULES:
   const videoSaveInProgress = videos.some((video) => video.upload_status === "saving");
   const imageSaveErrorCount = images.filter((image) => image.upload_status === "error").length;
   const videoSaveErrorCount = videos.filter((video) => video.upload_status === "error").length;
+  const pelvicResultScoped = isPelvicGenitalReviewResult(result, config);
   const lightboxImageIds = result ? [...new Set([
     ...(Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images.map((image) => image.image_id).filter(Boolean) : []),
     ...(Array.isArray(result?.annotated_images) ? result.annotated_images.map((image) => image.image_id).filter(Boolean) : []),
     ...(Array.isArray(result?.image_region_findings) ? result.image_region_findings.map((finding) => finding.image_id).filter(Boolean) : []),
-  ])] : [];
+  ])].filter((imageId) => {
+    if (!pelvicResultScoped) return true;
+    const text = pelvicGenitalImageEvidenceText(result, imageId, evidenceLookupImages, null);
+    return text.trim() && !isPelvicGenitalTextOutOfScope(text) && PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(text);
+  }) : [];
   const paragraphs = [];
   const paragraphMeta = [];
   if (result) {
     paragraphs.push(calmSpokenHeading(config.title));
     paragraphMeta.push({ type: "title", color: config.color, displayLabel: config.title });
     for (const section of sections) {
-      if ((result[section.key] || []).length) {
+      const sectionFindings = pelvicResultScoped
+        ? (result[section.key] || []).map(cleanPelvicGenitalScopeProseItem).filter(Boolean)
+        : (result[section.key] || []);
+      if (sectionFindings.length) {
         paragraphs.push(calmSpokenHeading(section.label));
         paragraphMeta.push({ type: "section-title", section, displayLabel: section.label });
         if (includeImageCalloutsInTts) {
-          for (const calloutParagraph of imageCalloutNarrationParagraphs(result, section.key, inlineReferenceImages)) {
+          for (const calloutParagraph of imageCalloutNarrationParagraphs(result, section.key, evidenceLookupImages)) {
             paragraphs.push(calloutParagraph);
             paragraphMeta.push({ type: "visual-callout", section });
           }
         }
       }
-      for (const finding of (result[section.key] || [])) {
+      for (const finding of sectionFindings) {
         const cleanedFinding = cleanImageReviewProse(naturalizeSpokenDates(finding));
         if (!cleanedFinding) continue;
         paragraphs.push(cleanedFinding);
@@ -5480,13 +6103,16 @@ ANNOTATED IMAGE OUTPUT RULES:
 
   const buildAnatomyVideoImages = () => {
     if (!result) return [];
+    const pelvicScoped = isPelvicGenitalReviewResult(result, config);
     const imageIds = [...new Set([
       ...lightboxImageIds,
       ...inlineReferenceImages.map((image, index) => image.image_id || `profile-image-${index + 1}`),
     ].filter(Boolean))];
     const sectionsByImage = new Map();
     const regionsByImage = new Map();
-    (Array.isArray(result.image_region_findings) ? result.image_region_findings : []).forEach((finding) => {
+    (Array.isArray(result.image_region_findings) ? result.image_region_findings : [])
+      .filter((finding) => !pelvicScoped || isPelvicGenitalFindingInScope(result, finding, evidenceLookupImages))
+      .forEach((finding) => {
       if (!finding?.image_id) return;
       const section = sections.find((item) => item.key === finding.section_key);
       if (section?.label) {
@@ -5504,27 +6130,63 @@ ANNOTATED IMAGE OUTPUT RULES:
       if (image?.image_id) annotatedByImage.set(image.image_id, image);
     });
     return imageIds
-      .map((imageId) => profileImageById(result, imageId, inlineReferenceImages))
-      .filter((image) => image?.preview_url)
-      .map((image, index) => {
+      .map((imageId) => {
+        const image = pelvicScoped
+          ? rawProfileImageById(result, imageId, evidenceLookupImages)
+          : profileImageById(result, imageId, evidenceLookupImages);
+        const rawImage = rawProfileImageById(result, imageId, evidenceLookupImages);
+        return { image, rawImage };
+      })
+      .filter(({ image, rawImage }) => {
+        if (!image?.preview_url) return false;
+        if (!pelvicScoped) return true;
+        const sourceText = compactEvidenceText(
+          rawImage?.display_label,
+          rawImage?.body_position,
+          rawImage?.coverage,
+          rawImage?.visibility_notes,
+          rawImage?.major_regions_visible,
+          rawImage?.upload_note,
+          rawImage?.source_video?.note,
+          rawImage?.source_video?.purpose,
+        );
+        if (isPelvicGenitalTextOutOfScope(sourceText)) return false;
+        return PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(sourceText);
+      })
+      .map(({ image, rawImage }, index) => {
         const imageId = image.image_id || `profile-image-${index + 1}`;
         const sectionMap = sectionsByImage.get(imageId) || new Map();
         const sectionKeys = [...sectionMap.keys()];
         const sectionLabels = [...sectionMap.values()];
         const annotated = annotatedByImage.get(imageId) || {};
+        const sourceText = cleanImageReviewProse([
+          rawImage.coverage,
+          rawImage.upload_note,
+          rawImage.visibility_notes,
+          Array.isArray(rawImage.major_regions_visible) ? rawImage.major_regions_visible.join(", ") : "",
+          rawImage.source_video?.note,
+          rawImage.source_video?.purpose,
+        ].filter(Boolean).join(". "));
+        const sourceHasScopeSignal = sourceText && (
+          isPelvicGenitalTextOutOfScope(sourceText) ||
+          PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(sourceText)
+        );
         return {
           image_id: imageId,
-          display_label: image.display_label || annotated.view_label || `Reference view ${reviewImageLetter(index)}`,
+          display_label: pelvicScoped
+            ? (rawImage.display_label || image.display_label || `Reference view ${reviewImageLetter(index)}`)
+            : (image.display_label || annotated.view_label || `Reference view ${reviewImageLetter(index)}`),
           section_key: sectionKeys[0] || "",
           section_label: sectionLabels[0] || "",
           section_labels: sectionLabels,
           regions: [...(regionsByImage.get(imageId) || new Set())],
           coverage: cleanImageReviewProse([
-            image.coverage,
-            annotated.view_label,
-            annotated.coverage,
-            annotated.visibility_notes,
-            Array.isArray(annotated.major_regions_visible) ? annotated.major_regions_visible.join(", ") : "",
+            sourceText,
+            sourceHasScopeSignal ? "" : image.coverage,
+            sourceHasScopeSignal ? "" : annotated.view_label,
+            sourceHasScopeSignal ? "" : annotated.coverage,
+            sourceHasScopeSignal ? "" : annotated.visibility_notes,
+            sourceHasScopeSignal ? "" : Array.isArray(annotated.major_regions_visible) ? annotated.major_regions_visible.join(", ") : "",
           ].filter(Boolean).join(". ")),
           preview_url: image.preview_url,
           source: image.source || "profile_review",
@@ -5675,6 +6337,9 @@ ANNOTATED IMAGE OUTPUT RULES:
           <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{existingEvidenceCount} saved visual/video evidence items</Badge>
           <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
             {reusableProfileAttachments.length} relevant reusable Profile Q&A images
+          </Badge>
+          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+            {reusableProfileReviewAttachments.length + reusableBodyExplorationFrameAttachments.length} reusable saved review/frame images
           </Badge>
           <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{sessions.length} sessions loaded</Badge>
           {bodyExplorations.length > 0 && (
@@ -5960,7 +6625,7 @@ ANNOTATED IMAGE OUTPUT RULES:
                         sectionKey={meta.section.key}
                         sections={sections}
                         color={color}
-                        transientImages={inlineReferenceImages}
+                        transientImages={evidenceLookupImages}
                         onOpenImage={setSelectedProfilerImageId}
                         onCorrectFinding={saveImageFindingClarification}
                         onRemoveFinding={removeImageFindingCallout}
@@ -6066,7 +6731,7 @@ ANNOTATED IMAGE OUTPUT RULES:
           onClose={() => setSelectedProfilerImageId(null)}
           sections={sections}
           color={config.color}
-          transientImages={inlineReferenceImages}
+          transientImages={evidenceLookupImages}
           onCorrectFinding={saveImageFindingClarification}
           onRemoveFinding={removeImageFindingCallout}
         />
@@ -6078,7 +6743,7 @@ ANNOTATED IMAGE OUTPUT RULES:
           onViewRun={(entryOrResult) => {
             const archivedResult = archiveEntryResult(entryOrResult);
             if (!archivedResult) return;
-            setResult(normalizeImageReviewResult(archivedResult) || archivedResult);
+            setResult(normalizeImageReviewResult(archivedResult, config) || archivedResult);
             setViewingArchiveRunId(entryOrResult?.id || archivedResult?._meta?.last_generated_at || archivedResult?._meta?.updated_at || "archived");
             setError("");
           }}

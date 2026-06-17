@@ -18,6 +18,23 @@ export default defineConfig({
     strictPort: true,
     allowedHosts: true,
     hmr: hmrEnabled ? undefined : false,
+    watch: {
+      ignored: [
+        '**/data/**',
+        '**/android/**',
+        '**/dist/**',
+        '**/*.mp4',
+        '**/*.m4v',
+        '**/*.mov',
+        '**/*.webm',
+        '**/*.mkv',
+        '**/*.wav',
+        '**/*.mp3',
+        '**/*.m4a',
+        '**/*.sqlite',
+        '**/*.sqlite-*',
+      ],
+    },
     proxy: {
       '/api': 'http://localhost:8787',
       '/uploads': 'http://localhost:8787',
