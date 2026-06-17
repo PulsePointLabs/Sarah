@@ -40,7 +40,7 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith(
     fetch(request, { cache: "no-store" }).catch(() => new Response(
-      `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>PulsePoint offline</title></head><body style="margin:0;background:#111827;color:#e5e7eb;font-family:system-ui,sans-serif;display:grid;min-height:100vh;place-items:center;text-align:center;padding:24px"><main><h1 style="font-size:20px">PulsePoint is offline</h1><p style="color:#9ca3af">The local server or Tailscale route is not reachable. Reopen or reload once the desktop app is online.</p></main></body></html>`,
+      `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sarah offline</title></head><body style="margin:0;background:#f7f1fa;color:#281f30;font-family:system-ui,sans-serif;display:grid;min-height:100vh;place-items:center;text-align:center;padding:24px"><main><h1 style="font-size:20px">Sarah is offline</h1><p style="color:#6b5a76">The local server or Tailscale route is not reachable. Reopen or reload once the desktop app is online.</p></main></body></html>`,
       {
         status: 503,
         headers: {

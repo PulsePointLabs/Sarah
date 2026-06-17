@@ -3,8 +3,10 @@ import { ChevronDown, ChevronUp, Clapperboard, Crosshair, HeartPulse, Pause, Pla
 import { Button } from "@/components/ui/button";
 import HRTimelineChart from "./HRTimelineChart";
 import EMGTimelineChart from "./EMGTimelineChart";
+import PerinealEmgPanel from "./PerinealEmgPanel";
 import SavedMotionSummaryCard from "./SavedMotionSummaryCard";
 import ClimaxMotionSnapshotCard from "./ClimaxMotionSnapshotCard";
+import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
 
 function formatTime(seconds) {
   const total = Math.max(0, Math.round(Number(seconds) || 0));
@@ -45,7 +47,8 @@ export default function SessionTelemetryDashboard({
   const [inspectorDockOpen, setInspectorDockOpen] = useState(false);
   const [inspectorDockExpanded, setInspectorDockExpanded] = useState(false);
   const inspectionTimeRef = useRef(Number(inspectionTime) || 0);
-  const events = session.event_timeline || [];
+  const events = Array.isArray(session.event_timeline) ? session.event_timeline : [];
+  const perinealEmgSummary = useMemo(() => summarizePerinealEmg(session), [session]);
   const orderedEvents = useMemo(
     () => events
       .map((event, index) => ({ event, index, timeS: Number(event.time_s) }))
@@ -218,6 +221,16 @@ export default function SessionTelemetryDashboard({
             onInspectionTimeChange={onInspectionTimeChange}
           />
         </div>
+      )}
+
+      {(perinealEmgSummary.hasPerinealEvents || perinealEmgSummary.hasPerinealSetup) && (
+        <PerinealEmgPanel
+          session={session}
+          summary={perinealEmgSummary}
+          emgRows={emgRows}
+          inspectionTime={inspectionTime}
+          onInspectionTimeChange={onInspectionTimeChange}
+        />
       )}
 
       {session.motion_analysis_summary && (

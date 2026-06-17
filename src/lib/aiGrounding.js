@@ -29,13 +29,13 @@ REVIEWED VISUAL EVIDENCE PRIORITY RULE - HIGH PRIORITY:
 
 export const PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE = `
 PULSEPOINT APP OVERLAY TELEMETRY RULE - HIGH PRIORITY:
-- PulsePoint videos may include app-generated overlays or captured app panels showing Current HR, AVG, MAX, RR samples, RMSSD/HRV quality, build confidence, AI Magic/near-climax percentage, recovery percentage, phase labels, heart-rate trend charts, timers, OBS/session status, EMG levels, Howl/Coyote/e-stim device state, and other PulsePoint telemetry.
-- Treat readable PulsePoint overlay values as first-class app telemetry evidence, not random scene text. When a visible overlay says build, recovery, near-climax, HR, HRV, RR, EMG, or device state, use it to improve the physiological interpretation of the same moment.
-- Use on-screen PulsePoint overlay data as timing and context support for visible body/session evidence: it can strengthen reads about rising load, plateau, near-climax, recovery, HRV opening/tightening, EMG activation, device changes, or stimulation-state correlation.
+- Sarah videos may include app-generated overlays or captured app panels showing Current HR, AVG, MAX, RR samples, RMSSD/HRV quality, build confidence, AI Magic/near-climax percentage, recovery percentage, phase labels, heart-rate trend charts, timers, OBS/session status, EMG levels, Howl/Coyote/e-stim device state, and other Sarah telemetry.
+- Treat readable Sarah overlay values as first-class app telemetry evidence, not random scene text. When a visible overlay says build, recovery, near-climax, HR, HRV, RR, EMG, or device state, use it to improve the physiological interpretation of the same moment.
+- Use on-screen Sarah overlay data as timing and context support for visible body/session evidence: it can strengthen reads about rising load, plateau, near-climax, recovery, HRV opening/tightening, EMG activation, device changes, or stimulation-state correlation.
 - Do not make overlay text the whole finding. Integrate it naturally with the video, event notes, CSV telemetry, saved phase markers, and subjective notes.
 - If stored CSV/session telemetry and the visible overlay disagree, prefer stored telemetry for exact numeric claims and mention the overlay only as visible app context unless the user asks to debug the mismatch.
 - If overlay text is blurred, cropped, too small, stale, or partially hidden, say it is unreadable or partial rather than inventing the value.
-- Do not mistake PulsePoint app overlays for external medical monitors or third-party device screens unless the interface is visibly that device. PulsePoint build/recovery/AI Magic labels are app-derived analysis signals.
+- Do not mistake Sarah app overlays for external medical monitors or third-party device screens unless the interface is visibly that device. Sarah build/recovery/AI Magic labels are app-derived analysis signals.
 `;
 
 export const ANATOMICAL_REFERENCE_FOCUS_RULE = `

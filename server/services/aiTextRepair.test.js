@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   repairAITextBlocks,
+  repairCharacterSplitParagraph,
   reduceConsistencyPhraseRepetition,
   repairRawSecondTimeReferences,
 } from '../../src/utils/aiTextRepair.js';
@@ -56,4 +57,14 @@ test('AI text block repair limits consistency wording across nested analysis fie
   assert.equal(remainingUses.length, 1);
   assert.match(allText, /\b(fits with|aligns with|matches|supports|tracks with|echoes|points toward|helps explain)\b/i);
   assert.match(allText, /\b(repeatedly|reliably|regularly|often|steadily|again and again|throughout)\b/i);
+});
+
+test('paragraph repair ignores accidental Array.map index argument', () => {
+  const repaired = [
+    'This is consistent with one thing.',
+    'This is consistent with another thing.',
+  ].map(repairCharacterSplitParagraph);
+
+  assert.equal(repaired.length, 2);
+  assert.match(repaired.join(' '), /consistent with/i);
 });

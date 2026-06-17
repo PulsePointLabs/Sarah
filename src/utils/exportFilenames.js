@@ -17,12 +17,12 @@ export function buildSessionExportFilename({ session, outputType, extension, gen
   const sessionDate = datePart(session?.date);
   const output = sanitizeFilenamePart(outputType) || "Export";
   const generated = datePart(generatedAt);
-  return `PulsePoint_${output}_${sessionDate}_generated-${generated}.${extension}`;
+  return `Sarah_${output}_${sessionDate}_generated-${generated}.${extension}`;
 }
 
 export function buildProfileExportFilename({ outputType, extension, generatedAt = new Date() }) {
   const output = sanitizeFilenamePart(outputType) || "Profile";
-  return `PulsePoint_${output}_generated-${datePart(generatedAt)}.${extension}`;
+  return `Sarah_${output}_generated-${datePart(generatedAt)}.${extension}`;
 }
 
 function audioTitleParts(value) {
@@ -47,12 +47,12 @@ export function buildAudioExportFilename({ title, sessionDate, extension = "mp3"
 
 export function buildExportMetadataHeader({ type, session, generatedAt, evidenceStatus }) {
   return [
-    "PulsePoint Export",
+    "Sarah Export",
     `Type: ${type}`,
     session?.date ? `Session Date: ${datePart(session.date)}` : null,
     `Generated: ${datePart(generatedAt || new Date())}`,
     evidenceStatus ? `Motion Evidence: ${evidenceStatus}` : null,
-    "Source: PulsePoint Standalone local export",
+    "Source: Sarah local export",
     "",
   ].filter((value) => value != null).join("\n");
 }

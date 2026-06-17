@@ -40,6 +40,7 @@ import { sessionContextDisplayRows } from "@/lib/sessionContext";
 import { buildSessionKeyVideoClipDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, getReviewedVisualClips, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionKeyVideoClips, normalizeSessionVisualEvidence } from "@/lib/visualEvidence";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "../components/session-form/EventTimelineSection";
 import { hasMixedPauseResumeEvidence, isVerifiedMotionEvent } from "@/utils/sessionMotionEvidence";
+import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
 
 function _getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -799,6 +800,7 @@ export default function SessionDetail() {
     s.barrier_to_completion ? { label: "Barrier to Completion", value: s.barrier_to_completion } : null,
   ].filter(Boolean);
   const hasMetricContent = metricBadges.length > 0 || metricInfoRows.length > 0;
+  const perinealEmgSummary = summarizePerinealEmg(s);
   const hasTimelineSection = timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0 || !!s.motion_analysis_summary;
   const reviewedMediaClips = getReviewedVisualClips(s.ai_analysis?._visual_findings || []);
   const linkedLocalVideos = s.linked_local_videos || [];
@@ -851,7 +853,7 @@ export default function SessionDetail() {
       { id: "session-ai-support", label: "Supporting AI Views", group: "Session Story" },
     ] : []),
     ...(s.no_climax ? [{ id: "session-ai-companion", label: "No-Climax Analysis", group: "Session Story" }] : []),
-    ...((emgRows.length > 0 || s.emg_enabled) ? [{ id: "session-emg", label: "EMG", group: "Physiology" }] : []),
+    ...((emgRows.length > 0 || s.emg_enabled || perinealEmgSummary.hasPerinealEvents || perinealEmgSummary.hasPerinealSetup) ? [{ id: "session-emg", label: "EMG", group: "Physiology" }] : []),
     ...(hasTimelineSection ? [
       { id: "session-timeline", label: "Timeline Player", group: "Timeline & Events" },
       { id: "session-event-notes", label: "Event Notes", group: "Timeline & Events" },
@@ -1240,7 +1242,7 @@ export default function SessionDetail() {
         </div>}
 
         {/* EMG */}
-        {(emgRows.length > 0 || s.emg_enabled) && (
+        {(emgRows.length > 0 || s.emg_enabled || perinealEmgSummary.hasPerinealEvents || perinealEmgSummary.hasPerinealSetup) && (
           <details id="session-emg" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
             <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">EMG</summary>
             <div className="mt-3 space-y-3">

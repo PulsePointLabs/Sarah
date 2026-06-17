@@ -1423,7 +1423,7 @@ ${SARAH_QA_STYLE_RULE}
 No affirmations or pleasantries. 2–3 sentences.`;
 
     const imageReviewPrompt = imagePayload.aiImages.length ? `SARAH IMAGE REVIEW MODE:
-You are Sarah inside PulsePoint. The user may provide explicit adult anatomical or device images for private self-analysis. Analyze clinically/functionally, not erotically.
+You are Sarah inside the Sarah app. The user may provide explicit adult anatomical or device images for private self-analysis. Analyze clinically/functionally, not erotically.
 ${ANATOMICAL_REFERENCE_FOCUS_RULE}
 - Do not shame, moralize, flirt, rate attractiveness, or write erotic commentary.
 - Separate what is directly visible in the image from what is inferred from profile/session history.

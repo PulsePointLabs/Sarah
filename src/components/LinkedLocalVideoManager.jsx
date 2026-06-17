@@ -180,7 +180,7 @@ export default function LinkedLocalVideoManager({
       return applyResolvedVideo(meta, file);
     } catch (err) {
       setLabelInput((current) => current || file.name);
-      setError(errorMessage(err, "Chrome hid the full Windows path and PulsePoint could not resolve that dropped video automatically. Use Browse or paste the full path."));
+      setError(errorMessage(err, "Chrome hid the full Windows path and Sarah could not resolve that dropped video automatically. Use Browse or paste the full path."));
       return true;
     } finally {
       setBusy("");

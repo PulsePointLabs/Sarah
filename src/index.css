@@ -152,6 +152,41 @@
   }
 }
 
+.theme-sarah-lavender {
+  --background: 286 38% 97%;
+  --foreground: 260 22% 16%;
+  --card: 0 0% 100%;
+  --card-foreground: 260 22% 16%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 260 22% 16%;
+  --primary: 270 58% 56%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 282 42% 93%;
+  --secondary-foreground: 260 24% 24%;
+  --muted: 280 36% 94%;
+  --muted-foreground: 260 14% 42%;
+  --accent: 326 52% 58%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 350 72% 48%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 278 28% 86%;
+  --input: 278 28% 86%;
+  --ring: 270 58% 56%;
+  --chart-1: 270 58% 56%;
+  --chart-2: 326 52% 58%;
+  --chart-3: 198 68% 45%;
+  --chart-4: 38 86% 52%;
+  --chart-5: 156 50% 38%;
+  --sidebar-background: 0 0% 100%;
+  --sidebar-foreground: 260 22% 20%;
+  --sidebar-primary: 270 58% 56%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 282 42% 93%;
+  --sidebar-accent-foreground: 260 24% 24%;
+  --sidebar-border: 278 28% 86%;
+  --sidebar-ring: 270 58% 56%;
+}
+
 
 /* UI_OLD_MAN_ACCESSIBILITY_V1 */
 @layer base {
@@ -216,6 +251,27 @@
     --sidebar-foreground: 0 0% 98%;
     --sidebar-primary: 170 95% 55%;
     --sidebar-border: 0 0% 32%;
+  }
+
+  .theme-sarah-lavender .text-emerald-300 {
+    color: hsl(156 52% 31%);
+  }
+
+  .theme-sarah-lavender .text-amber-300 {
+    color: hsl(35 82% 38%);
+  }
+
+  .theme-sarah-lavender .text-sky-300 {
+    color: hsl(198 70% 36%);
+  }
+
+  .theme-sarah-lavender .text-violet-300 {
+    color: hsl(270 54% 46%);
+  }
+
+  .theme-sarah-lavender .text-rose-300,
+  .theme-sarah-lavender .text-rose-400 {
+    color: hsl(342 62% 46%);
   }
 
   .text-scale-large {

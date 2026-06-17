@@ -1,6 +1,6 @@
 {
-  "name": "PulsePoint Standalone",
-  "short_name": "PulsePoint",
+  "name": "Sarah",
+  "short_name": "Sarah",
   "description": "Private local physiology, session review, Motion Lab, AI analysis, and audio summaries.",
   "start_url": "/?source=pwa",
   "scope": "/",
@@ -11,8 +11,8 @@
     "minimal-ui"
   ],
   "orientation": "any",
-  "background_color": "#090d14",
-  "theme_color": "#10161f",
+  "background_color": "#f7f1fa",
+  "theme_color": "#f5eff9",
   "categories": [
     "health",
     "lifestyle",
@@ -60,7 +60,7 @@
     {
       "name": "New Session",
       "short_name": "New",
-      "description": "Create a new PulsePoint session.",
+      "description": "Create a new Sarah session.",
       "url": "/new?source=pwa-shortcut",
       "icons": [
         {

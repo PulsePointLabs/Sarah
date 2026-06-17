@@ -6,7 +6,7 @@ import BackgroundJobStatusTray from "./BackgroundJobStatusTray";
 
 // UI_OLD_MAN_ACCESSIBILITY_V1
 const UI_PREFS_STORAGE_KEY = "pulsepoint-ui-preferences-v1";
-const DEFAULT_UI_PREFS = { theme: "teal", fontScale: "comfortable" };
+const DEFAULT_UI_PREFS = { theme: "sarah-lavender", fontScale: "comfortable" };
 const RESUME_STATE_KEY = "pulsepoint.resumeState.v1";
 const SCROLL_STATE_KEY = "pulsepoint.scrollState.v1";
 
@@ -24,6 +24,10 @@ function uiPreferenceClasses(prefs) {
     `theme-${prefs.theme || DEFAULT_UI_PREFS.theme}`,
     `text-scale-${prefs.fontScale || DEFAULT_UI_PREFS.fontScale}`,
   ].join(" ");
+}
+
+function uiColorSchemeClass(prefs) {
+  return prefs.theme === "sarah-lavender" ? "" : "dark";
 }
 
 const navGroups = [
@@ -204,7 +208,7 @@ export default function Layout() {
   }, [location.pathname, location.search, location.hash]);
 
   return (
-    <div className={`dark ${uiPreferenceClasses(uiPrefs)} min-h-screen min-w-0 overflow-x-hidden bg-background text-foreground flex flex-col`}>
+    <div className={`${uiColorSchemeClass(uiPrefs)} ${uiPreferenceClasses(uiPrefs)} min-h-screen min-w-0 overflow-x-hidden bg-background text-foreground flex flex-col`}>
       {/* Top bar */}
       {!isDisplayView && <header className="fixed top-0 left-0 right-0 z-50 h-14 bg-card border-b border-border flex items-center px-2 gap-2">
         <button
@@ -214,8 +218,10 @@ export default function Layout() {
           
           {open ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
         </button>
-        <span className="text-sm font-semibold text-foreground tracking-tight">
-          {navItems.find((n) => isPathActive(n.path, location.pathname))?.label ?? "App"}
+        <span className="min-w-0 text-sm font-semibold text-foreground tracking-tight">
+          <span className="text-primary">Sarah</span>
+          <span className="text-muted-foreground"> / </span>
+          <span>{navItems.find((n) => isPathActive(n.path, location.pathname))?.label ?? "App"}</span>
         </span>
       </header>}
 
@@ -234,7 +240,7 @@ export default function Layout() {
         }>
         
         <div className="flex items-center justify-between px-4 h-12 border-b border-border shrink-0">
-          <span className="text-sm font-bold text-primary tracking-tight">Menu</span>
+          <span className="text-sm font-bold text-primary tracking-tight">Sarah</span>
           <button onClick={() => setOpen(false)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground">
             <X className="w-4 h-4" />
           </button>

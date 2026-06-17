@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, Sparkles, Maximize2, Minimize2 } from "lucide-react";
+import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, Sparkles, Maximize2, Minimize2, Heart } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
   Dialog,
@@ -459,6 +459,7 @@ export default function VideoSyncPlayer({
   const fullscreenSurfaceRef = useRef(null);
   const [fullscreenActive, setFullscreenActive] = useState(false);
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
+  const [mobileEventSheetOpen, setMobileEventSheetOpen] = useState(false);
   const fullscreenControlsTimerRef = useRef(null);
   const suppressNextFullscreenVideoToggleRef = useRef(false);
   const widthDragStartRef = useRef({ x: 0, width: 66, layoutWidth: 1 });
@@ -1006,6 +1007,10 @@ export default function VideoSyncPlayer({
     return clearFullscreenControlsTimer;
   }, [clearFullscreenControlsTimer, fullscreenActive, isPlaying, showFullscreenControls]);
 
+  useEffect(() => {
+    if (isPlaying && mobileEventSheetOpen) setMobileEventSheetOpen(false);
+  }, [isPlaying, mobileEventSheetOpen]);
+
   const toggleFullscreenOverlay = useCallback(async () => {
     const surface = fullscreenSurfaceRef.current;
     if (!surface) return;
@@ -1175,8 +1180,29 @@ export default function VideoSyncPlayer({
     () => closestVisibleEvent ? nearestHR(chartData, Number(closestVisibleEvent.ev.time_s)) : null,
     [chartData, closestVisibleEvent],
   );
+  const closestVisibleEventCategories = closestVisibleEvent
+    ? normalizeCategoryArray(closestVisibleEvent.ev.category)
+    : [];
+  const closestVisibleEventPrimaryCategory = closestVisibleEventCategories[0] || "other";
+  const closestVisibleEventPrimaryMeta = getCategoryMeta(closestVisibleEventPrimaryCategory);
+  const closestVisibleEventDeltaSeconds = closestVisibleEvent
+    ? Math.round(Math.abs(Number(closestVisibleEvent.ev.time_s) - playheadS))
+    : 0;
+  const closestVisibleEventRelativeText = closestVisibleEvent
+    ? closestVisibleEventDeltaSeconds < 1
+      ? "At current playback position"
+      : `${closestVisibleEventDeltaSeconds}s ${Number(closestVisibleEvent.ev.time_s) < playheadS ? "ago" : "ahead"}`
+    : "";
+  const closestVisibleEventHrText = closestVisibleEventHR != null && currentHR != null
+    ? `HR ${closestVisibleEventHR} → Now ${currentHR}`
+    : closestVisibleEventHR != null
+      ? `HR ${closestVisibleEventHR}`
+      : currentHR != null
+        ? `Now ${currentHR}`
+        : "";
   const hasSidebarContent = chartData.length > 0 || events.length > 0 || !!savedMotionSummary;
   const showSidebar = hasSidebarContent && telemetryDisplayMode === "sidebar";
+  const showMobileEventPanel = telemetryDisplayMode === "overlay" && closestVisibleEvent;
   const displayedFeeds = videoLayout === "multi"
     ? loadedFeeds
     : loadedFeeds.filter((feed) => feed.key === activeFeedKey);
@@ -1521,7 +1547,7 @@ export default function VideoSyncPlayer({
           <div className="space-y-3">
             <div
               ref={fullscreenSurfaceRef}
-              className={`relative w-full bg-black overflow-hidden ${fullscreenActive ? "h-screen rounded-none" : "rounded-lg"} ${videoLayout === "multi" && displayedFeeds.length > 1 ? "grid gap-px bg-border md:grid-cols-2" : ""}`}
+              className={`relative flex w-full flex-col overflow-hidden bg-black ${fullscreenActive ? "h-screen rounded-none" : "rounded-lg"}`}
               style={fullscreenActive ? undefined : { height: `${playerHeight}vh`, minHeight: 280, maxHeight: "82vh" }}
               onPointerMove={() => {
                 if (fullscreenActive) showFullscreenControls();
@@ -1536,6 +1562,7 @@ export default function VideoSyncPlayer({
                 if (fullscreenActive) showFullscreenControls();
               }}
             >
+              <div className={`relative min-h-0 min-w-0 flex-1 bg-black ${videoLayout === "multi" && displayedFeeds.length > 1 ? "grid gap-px bg-border md:grid-cols-2" : ""}`}>
               {displayedFeeds.map((feed) => {
                 const isMaster = feed.key === activeFeedKey;
                 return (
@@ -1580,52 +1607,33 @@ export default function VideoSyncPlayer({
                 );
               })}
               {telemetryDisplayMode === "overlay" && closestVisibleEvent && (
-                <div className="pointer-events-none absolute right-3 top-3 z-20 max-h-[42vh] w-[min(27rem,calc(100%-1.5rem))] overflow-hidden rounded-lg border border-white/15 bg-black/60 p-3 text-white shadow-xl backdrop-blur-sm max-[950px]:left-14 max-[950px]:right-2 max-[950px]:top-2 max-[950px]:max-h-[30vh] max-[950px]:w-auto max-[950px]:rounded-xl max-[950px]:p-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="min-w-0 truncate text-[9px] font-semibold uppercase tracking-wider text-white/65 max-[950px]:tracking-wide">Closest Event Marker</p>
-                    <span className="shrink-0 font-mono text-xs font-semibold text-primary max-[950px]:text-[11px]">
-                      {fmtMmSs(closestVisibleEvent.ev.time_s)}
-                    </span>
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-1 max-[950px]:mt-1">
-                    {normalizeCategoryArray(closestVisibleEvent.ev.category).map((category) => {
-                      const meta = getCategoryMeta(category);
-                      return (
-                        <span
-                          key={category}
-                          className="rounded-full border px-1.5 py-0.5 text-[9px] font-semibold max-[950px]:px-1.5 max-[950px]:py-0.5 max-[950px]:text-[8px]"
-                          style={{ color: meta.color, borderColor: `${meta.color}66`, background: `${meta.color}25` }}
-                        >
-                          {meta.label}
-                        </span>
-                      );
-                    })}
-                    {closestVisibleEvent.ev.source === "motion_derived" && <MotionDerivedBadge event={closestVisibleEvent.ev} />}
-                    {isAIGeneratedAnnotation(closestVisibleEvent.ev) && <AIGeneratedBadge />}
-                  </div>
-                  {(closestVisibleEventHR != null || currentHR != null) && (
-                    <div className="mt-2 flex flex-wrap gap-1.5 max-[950px]:mt-1">
-                      {closestVisibleEventHR != null && (
-                        <span className="rounded-full border border-rose-300/30 bg-rose-400/15 px-2 py-0.5 font-mono text-[10px] font-bold text-rose-200 max-[950px]:px-1.5 max-[950px]:text-[8px]">
-                          marker HR {closestVisibleEventHR} bpm
-                        </span>
-                      )}
-                      {currentHR != null && Math.abs(Number(closestVisibleEvent.ev.time_s) - playheadS) >= 1 && (
-                        <span className="rounded-full border border-white/15 bg-white/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-white/75 max-[950px]:px-1.5 max-[950px]:text-[8px]">
-                          now {currentHR} bpm
-                        </span>
-                      )}
+                <>
+                  <div className="pointer-events-none absolute right-3 top-3 z-20 hidden w-[min(18rem,calc(100%-1.5rem))] overflow-hidden rounded-full border border-white/15 bg-black/70 px-3 py-2 text-white shadow-lg min-[951px]:block">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="min-w-0 truncate text-[10px] font-semibold text-white">
+                        {closestVisibleEventPrimaryMeta.label || "Event"}
+                      </p>
+                      <span className="shrink-0 font-mono text-xs font-semibold text-primary">
+                        {fmtMmSs(closestVisibleEvent.ev.time_s)}
+                      </span>
                     </div>
-                  )}
-                  <p className="mt-2 text-xs leading-relaxed text-white/90 line-clamp-3 max-[950px]:mt-1 max-[950px]:text-[10px] max-[950px]:leading-snug max-[950px]:line-clamp-2">
-                    {closestVisibleEvent.ev.note || "Event note"}
-                  </p>
-                  <p className="mt-1 text-[10px] text-white/60 max-[950px]:text-[8px]">
-                    {Math.abs(Number(closestVisibleEvent.ev.time_s) - playheadS) < 1
-                      ? "At current playback position"
-                      : `${Math.round(Math.abs(Number(closestVisibleEvent.ev.time_s) - playheadS))}s ${Number(closestVisibleEvent.ev.time_s) < playheadS ? "ago" : "ahead"}`}
-                  </p>
-                </div>
+                    {(closestVisibleEventHR != null || currentHR != null) && (
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {closestVisibleEventHR != null && (
+                          <span className="font-mono text-[10px] font-bold text-rose-200">
+                            HR {closestVisibleEventHR}
+                          </span>
+                        )}
+                        {currentHR != null && closestVisibleEventDeltaSeconds >= 1 && (
+                          <span className="font-mono text-[10px] font-semibold text-white/75">
+                            → {currentHR}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                </>
               )}
               {telemetryDisplayMode === "overlay" && savedMotionSummary && (
                 <div className={`absolute right-3 z-10 w-[min(24rem,calc(100%-1.5rem))] pointer-events-none max-[950px]:hidden ${closestVisibleEvent ? (fullscreenActive ? "bottom-28" : "bottom-3") : "top-3"}`}>
@@ -1640,9 +1648,11 @@ export default function VideoSyncPlayer({
                 </div>
               )}
               {telemetryDisplayMode === "overlay" && currentHR != null && (!savedMotionSummary || fullscreenActive) && (
-                <div className={`pointer-events-none absolute rounded-lg border border-white/15 bg-black/65 px-3 py-2 backdrop-blur-sm max-[950px]:left-2 max-[950px]:right-auto max-[950px]:top-12 max-[950px]:px-2 max-[950px]:py-1.5 ${closestVisibleEvent && fullscreenActive ? "left-3 top-14 max-[950px]:top-12" : "right-3 top-3"}`}>
-                  <p className="text-[9px] font-semibold uppercase tracking-wider text-white/65">Heart Rate</p>
-                  <p className="mt-1 font-mono text-lg font-bold text-rose-400 max-[950px]:text-sm">{currentHR} bpm</p>
+                <div className={`pointer-events-none absolute z-20 rounded-full border border-rose-200/20 bg-black/58 px-2.5 py-1.5 text-white shadow-lg backdrop-blur-md max-[950px]:px-2 max-[950px]:py-1 ${closestVisibleEvent && fullscreenActive ? "left-3 top-14 max-[950px]:left-auto max-[950px]:right-2 max-[950px]:top-2" : "right-3 top-3 max-[950px]:right-2 max-[950px]:top-2"}`}>
+                  <div className="flex items-center gap-1.5">
+                    <Heart className="h-3.5 w-3.5 fill-rose-400 text-rose-400 max-[950px]:h-3 max-[950px]:w-3" />
+                    <span className="font-mono text-sm font-bold text-rose-200 max-[950px]:text-xs">{currentHR}</span>
+                  </div>
                 </div>
               )}
               {fullscreenActive && (
@@ -1715,6 +1725,81 @@ export default function VideoSyncPlayer({
                       <Plus className="h-3.5 w-3.5" />
                       <span className="max-[950px]:hidden">Add Event at </span>{fmtMmSs(playheadS)}
                     </button>
+                  </div>
+                </div>
+              )}
+              </div>
+              {showMobileEventPanel && (
+                <div className={`min-[951px]:hidden shrink-0 border-t border-border bg-card text-foreground shadow-2xl ${fullscreenActive ? "max-h-[42vh] pb-[calc(env(safe-area-inset-bottom)+0.5rem)]" : "max-h-[46vh]"} ${mobileEventSheetOpen ? "overflow-y-auto" : "overflow-hidden"}`}>
+                  <button
+                    type="button"
+                    onClick={() => setMobileEventSheetOpen((value) => !value)}
+                    className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left"
+                    aria-expanded={mobileEventSheetOpen}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: closestVisibleEventPrimaryMeta.color }}
+                        />
+                        <p className="truncate text-sm font-semibold leading-none">
+                          {closestVisibleEventPrimaryMeta.label || "Event"}
+                        </p>
+                      </div>
+                      <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                        {closestVisibleEventHrText || "Telemetry unavailable"} · {fmtMmSs(closestVisibleEvent.ev.time_s)}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <span className="rounded-full bg-muted px-2 py-1 font-mono text-[10px] font-semibold text-muted-foreground">
+                        {closestVisibleEventRelativeText}
+                      </span>
+                      {mobileEventSheetOpen ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
+                    </div>
+                  </button>
+                  <div className={`px-3 ${mobileEventSheetOpen ? "pb-3" : "pb-2"}`}>
+                    <p className={`${mobileEventSheetOpen ? "text-base leading-relaxed" : "line-clamp-1 text-xs"} text-foreground`}>
+                      {closestVisibleEvent.ev.note || "Event note"}
+                    </p>
+                    {mobileEventSheetOpen && (
+                      <div className="mt-3 space-y-3">
+                        <div className="flex flex-wrap gap-1.5">
+                          {closestVisibleEventCategories.map((category) => {
+                            const meta = getCategoryMeta(category);
+                            return (
+                              <span
+                                key={category}
+                                className="rounded-full border px-2 py-1 text-[10px] font-semibold"
+                                style={{ color: meta.color, borderColor: `${meta.color}66`, background: `${meta.color}18` }}
+                              >
+                                {meta.label}
+                              </span>
+                            );
+                          })}
+                          {closestVisibleEvent.ev.source === "motion_derived" && <MotionDerivedBadge event={closestVisibleEvent.ev} />}
+                          {isAIGeneratedAnnotation(closestVisibleEvent.ev) && <AIGeneratedBadge />}
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-[11px]">
+                          <div className="rounded-lg border border-border bg-muted/35 px-2.5 py-2">
+                            <p className="text-muted-foreground">Timestamp</p>
+                            <p className="mt-0.5 font-mono font-semibold text-foreground">{fmtMmSs(closestVisibleEvent.ev.time_s)}</p>
+                          </div>
+                          <div className="rounded-lg border border-border bg-muted/35 px-2.5 py-2">
+                            <p className="text-muted-foreground">Position</p>
+                            <p className="mt-0.5 font-semibold text-foreground">{closestVisibleEventRelativeText}</p>
+                          </div>
+                          <div className="rounded-lg border border-border bg-muted/35 px-2.5 py-2">
+                            <p className="text-muted-foreground">Marker HR</p>
+                            <p className="mt-0.5 font-mono font-semibold text-rose-500">{closestVisibleEventHR != null ? `${closestVisibleEventHR} bpm` : "No data"}</p>
+                          </div>
+                          <div className="rounded-lg border border-border bg-muted/35 px-2.5 py-2">
+                            <p className="text-muted-foreground">Now</p>
+                            <p className="mt-0.5 font-mono font-semibold text-rose-500">{currentHR != null ? `${currentHR} bpm` : "No data"}</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

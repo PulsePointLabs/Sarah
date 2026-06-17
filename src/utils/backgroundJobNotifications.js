@@ -46,8 +46,8 @@ async function ensureNativeChannel(LocalNotifications) {
   try {
     await LocalNotifications.createChannel({
       id: NATIVE_CHANNEL_ID,
-      name: "PulsePoint Background Jobs",
-      description: "Completion alerts for PulsePoint analysis, audio, and video renders.",
+      name: "Sarah Background Jobs",
+      description: "Completion alerts for Sarah analysis, audio, and video renders.",
       importance: 4,
       visibility: 1,
       lights: true,
@@ -151,12 +151,12 @@ function markNotified(job) {
 export function buildSafeJobNotification(job) {
   if (job?.status === "error") {
     return {
-      title: "PulsePoint job failed",
-      body: "Open PulsePoint for details.",
+      title: "Sarah job failed",
+      body: "Open Sarah for details.",
     };
   }
   return {
-    title: "PulsePoint analysis complete",
+    title: "Sarah analysis complete",
     body: "Your analysis is ready.",
   };
 }
@@ -265,7 +265,7 @@ export async function sendBackgroundTestNotification({ route = "/settings", onOp
     status: "complete",
   };
   const message = {
-    title: "PulsePoint is ready",
+    title: "Sarah is ready",
     body: "Local notifications are working. Tap to open Settings & Status.",
   };
 

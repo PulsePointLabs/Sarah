@@ -50,7 +50,7 @@ async function cleanupPulsePointShell() {
           .filter((key) => PULSEPOINT_CACHE_PREFIXES.some((prefix) => key.startsWith(prefix)))
           .map((key) => window.caches.delete(key))))
         .catch((error) => {
-          console.warn('PulsePoint shell cache cleanup failed:', error);
+          console.warn('Sarah shell cache cleanup failed:', error);
         })
     );
   }
@@ -72,7 +72,7 @@ if (import.meta.env.DEV) {
 
 if ('serviceWorker' in navigator) {
   // PWA_NO_FOCUS_RELOAD_V1
-  // Do not auto-reload or prompt for service-worker swaps while PulsePoint is
+  // Do not auto-reload or prompt for service-worker swaps while Sarah is
   // open. Android/Chrome can check for SW updates when the installed app
   // regains focus, and foreground update bookkeeping can interrupt live capture,
   // Motion Lab analysis, AI jobs, or TTS.

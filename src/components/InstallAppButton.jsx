@@ -61,7 +61,7 @@ export default function InstallAppButton() {
   };
 
   const helpText = (() => {
-    if (installed) return "PulsePoint is already running as an installed app.";
+    if (installed) return "Sarah is already running as an installed app.";
     if (!platform.secure && !platform.local) {
       return "Use the HTTPS Tailscale address, not an HTTP address. Install support only appears on secure pages.";
     }
@@ -69,7 +69,7 @@ export default function InstallAppButton() {
       return "On iPhone or iPad, open this in Safari, tap Share, then Add to Home Screen.";
     }
     if (installPrompt) {
-      return "Tap Install App to add PulsePoint to your home screen.";
+      return "Tap Install App to add Sarah to your home screen.";
     }
     return "If Chrome does not show the install option yet, reload once on the HTTPS Tailscale page, then open the menu and choose Install app or Add to Home screen.";
   })();

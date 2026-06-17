@@ -24,6 +24,24 @@ const MARKER_COLORS = {
   recovery: "#3b82f6",
 };
 
+const PERINEAL_EVENT_COLORS = {
+  light: "#38bdf8",
+  moderate: "#22c55e",
+  strong: "#f97316",
+  sustained: "#eab308",
+  possible_artifact: "#f43f5e",
+};
+
+function perinealEventType(event = {}) {
+  if (event?.source !== "perineal_emg" && !event?.perineal_emg) return null;
+  return event?.perineal_emg?.contraction_type || event?.contraction_type || "moderate";
+}
+
+function eventMarkerColor(event = {}) {
+  const type = perinealEventType(event);
+  return type ? (PERINEAL_EVENT_COLORS[type] || PERINEAL_EVENT_COLORS.moderate) : "hsl(var(--chart-4))";
+}
+
 export default function EMGTimelineChart({
   rows = [],
   channelMode = "single",
@@ -238,17 +256,20 @@ export default function EMGTimelineChart({
             )}
 
             {/* Event markers */}
-            {showEvents && events.map((ev, i) => (
-              <ReferenceLine
-                key={i}
-                yAxisId="emg"
-                x={ev.time_s}
-                stroke="hsl(var(--chart-4))"
-                strokeWidth={1}
-                strokeOpacity={0.6}
-                strokeDasharray="2 3"
-              />
-            ))}
+            {showEvents && events.map((ev, i) => {
+              const perinealType = perinealEventType(ev);
+              return (
+                <ReferenceLine
+                  key={ev.id || i}
+                  yAxisId="emg"
+                  x={ev.time_s}
+                  stroke={eventMarkerColor(ev)}
+                  strokeWidth={perinealType ? 1.6 : 1}
+                  strokeOpacity={perinealType ? 0.9 : 0.6}
+                  strokeDasharray={perinealType === "possible_artifact" ? "1 3" : "2 3"}
+                />
+              );
+            })}
 
             {channelMode === "single" && (
               <Line

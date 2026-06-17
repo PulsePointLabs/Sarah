@@ -20,6 +20,14 @@ import { useToast } from "@/components/ui/use-toast";
 import { HR_SOURCE_OPTIONS, PULSOID_MODE_OPTIONS, computeHrvFromRr, maskPulsoidToken, readHrSourceSettings, writeHrSourceSettings } from "@/lib/hrSources";
 import { apiUrl } from "@/lib/mobileApiBase";
 import { computeLiveClimaxPrediction } from "@/utils/liveClimaxPrediction";
+import {
+  buildPerinealEmgCalibration,
+  calibrationFromSession,
+  createPerinealEmgDetector,
+  perinealEventNote,
+  processPerinealEmgSample,
+  signalQualityFromCalibration,
+} from "@/utils/perinealEmgDetector";
 
 const MAX_TELEMETRY_POINTS = 240;
 const MAX_VOICE_NOTE_MS = 12000;
@@ -27,7 +35,7 @@ const VOICE_NOTE_MIN_MS = 900;
 const VOICE_NOTE_SILENCE_MS = 1300;
 const VOICE_NOTE_SILENCE_RMS = 0.018;
 const WHISPER_PROMPT =
-  "PulsePoint live session annotation. Timestamped observation during physiological recording. " +
+  "Sarah live session annotation. Timestamped observation during physiological recording. " +
   "Heart rate, arousal, stimulation, physical finding, legs tense, feet planted, toe curl, tremor, breathing, " +
   "stroke speed, grip pressure, repositioning, comfort adjustment, nearing climax, ejaculation, climax, recovery.";
 const HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb";
@@ -113,6 +121,64 @@ const EMG_CALIBRATION_ACTIONS = {
   left_max: "set_left_max",
   right_max: "set_right_max",
 };
+const PERINEAL_EMG_PROTOCOL_PHASES = [
+  {
+    key: "baseline_initial",
+    label: "Relaxed baseline",
+    instruction: "Relax pelvic floor/perineum, stay still, breathe normally.",
+    durationS: 10,
+    captureKey: "baseline",
+  },
+  {
+    key: "light_kegels",
+    label: "Light Kegels",
+    instruction: "Perform 5 gentle Kegels, each about 1 second, separated by 2–3 seconds of relaxation.",
+    durationS: 18,
+    captureKey: "light",
+  },
+  {
+    key: "strong_kegels",
+    label: "Strong Kegels",
+    instruction: "Perform 5 clear but comfortable strong Kegels, each about 1 second, separated by 2–3 seconds of relaxation.",
+    durationS: 18,
+    captureKey: "strong",
+  },
+  {
+    key: "long_hold",
+    label: "Long hold",
+    instruction: "Perform one comfortable sustained Kegel hold for 5–10 seconds, then relax.",
+    durationS: 12,
+    captureKey: "hold",
+  },
+  {
+    key: "cough_artifact",
+    label: "Artifact check: cough",
+    instruction: "Perform one cough, then relax.",
+    durationS: 5,
+    captureKey: "cough",
+  },
+  {
+    key: "glute_artifact",
+    label: "Artifact check: glute squeeze",
+    instruction: "Perform one glute squeeze, then relax.",
+    durationS: 5,
+    captureKey: "glute",
+  },
+  {
+    key: "adductor_artifact",
+    label: "Artifact check: thigh/adductor squeeze",
+    instruction: "Perform one thigh/adductor squeeze, then relax.",
+    durationS: 5,
+    captureKey: "adductor",
+  },
+  {
+    key: "baseline_final",
+    label: "Final relaxed baseline",
+    instruction: "Relax pelvic floor/perineum again for a final quiet reference.",
+    durationS: 10,
+    captureKey: "baseline",
+  },
+];
 const HOWL_TELEMETRY_POLL_MS = 2500;
 const HOWL_DEFAULT_CONTROL_FORM = {
   controlEnabled: false,
@@ -650,7 +716,7 @@ function HrSourceSelector({
         {(directStatus?.lastMessageAt || directH10Status.lastMessageAt) && <span>Last H10 HR {fmtTime(directStatus?.lastMessageAt || directH10Status.lastMessageAt)}</span>}
         {isDirectH10 && <span>ECG waveform is not enabled yet; this pass captures standard H10 HR + RR intervals for HRV.</span>}
         {nativeAndroidBleAvailable && isDirectH10 && <span className="text-primary">Android native BLE bridge enabled for Direct H10.</span>}
-        {directH10BlockedOnAndroid && <span className="text-amber-300">Use Pulsoid on Android browser for now. Install/open the PulsePoint app for native Direct H10; browser Bluetooth stays disabled on phones to avoid crashes.</span>}
+        {directH10BlockedOnAndroid && <span className="text-amber-300">Use Pulsoid on Android browser for now. Install/open Sarah for native Direct H10; browser Bluetooth stays disabled on phones to avoid crashes.</span>}
         {(directStatus?.error || directH10Status.error) && <span className="text-destructive">{directStatus?.error || directH10Status.error}</span>}
         {error && <span className="text-destructive">{error}</span>}
         {recordingActive && <span>Stop recording before switching HR sources.</span>}
@@ -1022,6 +1088,15 @@ export default function LiveCapture() {
   const [calibrationStatus, setCalibrationStatus] = useState("");
   const [calibrationError, setCalibrationError] = useState("");
   const [calibrationCommandStatus, setCalibrationCommandStatus] = useState(null);
+  const [perinealDetectorSnapshot, setPerinealDetectorSnapshot] = useState(() => createPerinealEmgDetector());
+  const [perinealProtocol, setPerinealProtocol] = useState({
+    running: false,
+    phaseIndex: -1,
+    phaseStartedAtMs: null,
+    phaseEndsAtMs: null,
+    captures: {},
+    message: "Ready",
+  });
   const [howlTelemetry, setHowlTelemetry] = useState(null);
   const [howlCapabilities, setHowlCapabilities] = useState(null);
   const [howlError, setHowlError] = useState("");
@@ -1038,6 +1113,10 @@ export default function LiveCapture() {
   const [howlAdvancedOpen, setHowlAdvancedOpen] = useState(false);
   const latestHrRef = useRef(null);
   const latestEmgRef = useRef(null);
+  const perinealDetectorRef = useRef(createPerinealEmgDetector());
+  const perinealProtocolRef = useRef(perinealProtocol);
+  const perinealSaveQueueRef = useRef(Promise.resolve());
+  const lastPerinealSampleSignatureRef = useRef("");
   const recognitionRef = useRef(null);
   const wakeRestartTimerRef = useRef(null);
   const voiceWakeEnabledRef = useRef(false);
@@ -1228,7 +1307,7 @@ export default function LiveCapture() {
         if (!response.ok) {
           const text = await response.text();
           if (response.status === 404 && text.includes("Cannot POST /api/live-capture/hr-direct-h10/telemetry")) {
-            throw new Error("PulsePoint server needs a restart to receive Direct H10 telemetry.");
+            throw new Error("Sarah server needs a restart to receive Direct H10 telemetry.");
           }
           throw new Error(text?.startsWith("<!DOCTYPE") ? "Direct H10 telemetry was rejected by the server." : text || "Direct H10 telemetry was rejected.");
         }
@@ -1291,14 +1370,14 @@ export default function LiveCapture() {
       const data = responseText ? JSON.parse(responseText) : {};
       if (!response.ok) {
         if (response.status === 404 && responseText.includes("Cannot POST /api/live-capture/hr-source")) {
-          throw new Error("PulsePoint server needs a restart to load the new heart-rate source route.");
+          throw new Error("Sarah server needs a restart to load the new heart-rate source route.");
         }
         throw new Error(data.error || "Could not apply HR source.");
       }
       setStatus((prev) => ({ ...(prev || {}), hr: { ...(prev?.hr || {}), ...(data.hr || {}) } }));
     } catch (error) {
       const message = error instanceof SyntaxError
-        ? "PulsePoint server returned an unexpected response. Restart the server and try again."
+        ? "Sarah server returned an unexpected response. Restart the server and try again."
         : error.message || String(error);
       setHrSourceError(message);
     } finally {
@@ -1348,10 +1427,10 @@ export default function LiveCapture() {
         data = responseText ? JSON.parse(responseText) : {};
       } catch {
         if (response.status === 404 || responseText.includes("Cannot POST /api/howl/control/test")) {
-          throw new Error("PulsePoint server needs a restart to load the new Howl connection test route.");
+          throw new Error("Sarah server needs a restart to load the new Howl connection test route.");
         }
         throw new Error(responseText?.startsWith("<!DOCTYPE")
-          ? "PulsePoint server returned an unexpected page instead of a Howl test result. Restart the server and try again."
+          ? "Sarah server returned an unexpected page instead of a Howl test result. Restart the server and try again."
           : responseText || "Howl connection test returned an unreadable response.");
       }
       if (!response.ok || data.ok === false) {
@@ -1532,7 +1611,7 @@ export default function LiveCapture() {
         connected: false,
         connecting: false,
         message: "Native BLE needed for Android H10.",
-        error: "Direct H10 browser Bluetooth is disabled on Android because it can crash during BLE connect. Use the installed PulsePoint app for native H10, or Pulsoid in mobile Chrome.",
+        error: "Direct H10 browser Bluetooth is disabled on Android because it can crash during BLE connect. Use the installed Sarah app for native H10, or Pulsoid in mobile Chrome.",
       }));
       return;
     }
@@ -1745,7 +1824,7 @@ export default function LiveCapture() {
         title: "H10 signal lost",
         message: canUseNativeAndroidBle()
           ? `No heart-rate packet has arrived for ${Math.round(ageMs / 1000)} seconds. Tap Reconnect H10 to reopen the native Android BLE session.`
-          : `No heart-rate packet has arrived for ${Math.round(ageMs / 1000)} seconds. PulsePoint will try the saved H10 once; tap reconnect if Chrome needs permission again.`,
+          : `No heart-rate packet has arrived for ${Math.round(ageMs / 1000)} seconds. Sarah will try the saved H10 once; tap reconnect if Chrome needs permission again.`,
         reconnecting: !canUseNativeAndroidBle() && directH10ReconnectAttemptRef.current < 2,
       });
       setDirectH10Status((prev) => ({
@@ -2023,6 +2102,11 @@ export default function LiveCapture() {
   const selectedCaptureMode = CAPTURE_MODES.find((mode) => mode.value === captureMode) || CAPTURE_MODES[0];
   const selectedEmgConfig = EMG_SENSOR_CONFIGS.find((config) => config.value === emgSensorConfig) || EMG_SENSOR_CONFIGS[0];
   const usingPerinealEmgConfig = selectedEmgConfig.value === "perineal_body_small_electrodes";
+  const perinealCalibration = useMemo(() => calibrationFromSession(activeSessionDoc || {}), [activeSessionDoc]);
+  const perinealSignalQuality = useMemo(
+    () => signalQualityFromCalibration(perinealCalibration, calibrationReading.left?.spread ?? null),
+    [calibrationReading.left?.spread, perinealCalibration],
+  );
   const selectedHrSource = HR_SOURCE_OPTIONS.find((option) => option.value === hrSourceSettings.source) || HR_SOURCE_OPTIONS[0];
   const howlMeasuredAt = howlTelemetry?.measured_at || howlTelemetry?.received_at || null;
   const howlLive = isRecent(howlMeasuredAt, 10000);
@@ -2311,6 +2395,289 @@ export default function LiveCapture() {
     if (!startMs || Number.isNaN(startMs)) return 0;
     return Math.max(0, Math.round((Date.now() - startMs) / 1000));
   }, [liveSession?.startedAt, recording?.startedAtMs]);
+
+  useEffect(() => {
+    perinealProtocolRef.current = perinealProtocol;
+  }, [perinealProtocol]);
+
+  useEffect(() => {
+    const detector = createPerinealEmgDetector({ calibration: perinealCalibration });
+    perinealDetectorRef.current = detector;
+    setPerinealDetectorSnapshot({ ...detector, counts: { ...detector.counts } });
+    lastPerinealSampleSignatureRef.current = "";
+  }, [
+    perinealCalibration?.id,
+    perinealCalibration?.baseline_mean_pct,
+    perinealCalibration?.suggested_detection_threshold_pct,
+    perinealCalibration?.suggested_strong_threshold_pct,
+  ]);
+
+  const appendLiveSessionEvents = useCallback(async (eventsToAdd, extraPatch = {}) => {
+    const additions = Array.isArray(eventsToAdd) ? eventsToAdd.filter(Boolean) : [eventsToAdd].filter(Boolean);
+    if (!additions.length && !Object.keys(extraPatch).length) return;
+    const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();
+    const sessionId = sessionState?.activeSessionId;
+    if (!sessionId) throw new Error("No active live session is available.");
+    const rows = await base44.entities.Session.filter({ id: sessionId });
+    const session = rows[0] || activeSessionDoc || {};
+    const existing = Array.isArray(session.event_timeline) ? session.event_timeline : [];
+    const seen = new Set(existing.map((event) => event.id).filter(Boolean));
+    const merged = [...existing];
+    for (const event of additions) {
+      if (event.id && seen.has(event.id)) continue;
+      if (event.id) seen.add(event.id);
+      merged.push(event);
+    }
+    const patch = {
+      ...extraPatch,
+      event_timeline: merged.sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0)),
+    };
+    await base44.entities.Session.update(sessionId, patch);
+    setLiveEvents(patch.event_timeline);
+    setActiveSessionDoc((prev) => ({ ...(prev || session), ...patch }));
+  }, [activeSessionDoc, ensureSession, liveSession]);
+
+  const queuePerinealSessionEvents = useCallback((eventsToAdd, extraPatch = {}) => {
+    perinealSaveQueueRef.current = perinealSaveQueueRef.current
+      .catch(() => {})
+      .then(() => appendLiveSessionEvents(eventsToAdd, extraPatch))
+      .catch((err) => {
+        setCalibrationError(err?.message || "Unable to save perineal EMG timeline event.");
+      });
+  }, [appendLiveSessionEvents]);
+
+  const perinealTimelineEventFromDetection = useCallback((event) => {
+    const timeS = Math.max(0, Math.round(Number(event.peak_time_s ?? event.start_time_s ?? getCurrentSessionTime()) || 0));
+    return {
+      id: `perineal_emg_${event.event_type}_${Math.round(Number(event.start_time_s || 0) * 10)}_${Math.round(Number(event.peak_time_s || 0) * 10)}`,
+      time_s: timeS,
+      note: perinealEventNote(event),
+      category: ["physical"],
+      annotation_tags: ["emg", "perineal_emg", "pelvic_floor", event.contraction_type, event.confidence].filter(Boolean),
+      source: "perineal_emg",
+      created_at: new Date().toISOString(),
+      perineal_emg: event,
+      ai_annotation: {
+        source: "perineal_emg_detector",
+        rationale: "Automatically detected from calibrated perineal-body EMG signal.",
+      },
+    };
+  }, [getCurrentSessionTime]);
+
+  const perinealProtocolAnchorEvent = useCallback((phase, boundary, timeS = getCurrentSessionTime()) => ({
+    id: `perineal_protocol_${phase.key}_${boundary}_${Math.round(Number(timeS || 0) * 10)}`,
+    time_s: Math.max(0, Math.round(Number(timeS) || 0)),
+    note: `Perineal EMG test ${boundary}: ${phase.label}`,
+    category: ["other"],
+    annotation_tags: ["emg", "perineal_emg", "calibration", "test_protocol", phase.key, boundary],
+    source: "perineal_emg_protocol",
+    created_at: new Date().toISOString(),
+    perineal_emg_protocol: {
+      phase_key: phase.key,
+      phase_label: phase.label,
+      boundary,
+      instruction: phase.instruction,
+      duration_s: phase.durationS,
+    },
+  }), [getCurrentSessionTime]);
+
+  useEffect(() => {
+    if (!usingPerinealEmgConfig || !recordingActive || !emgTelemetry) return;
+    const pct = readNumber(emgTelemetry.level_pct, emgTelemetry.left_pct);
+    if (pct == null) return;
+    const timeS = getCurrentSessionTime();
+    const signature = [
+      emgTelemetry.source_at || status?.emg?.lastSourceAt || "",
+      timeS,
+      Math.round(Number(pct) * 10),
+    ].join(":");
+    if (lastPerinealSampleSignatureRef.current === signature) return;
+    lastPerinealSampleSignatureRef.current = signature;
+
+    const sample = {
+      time_s: timeS,
+      pct,
+      source_at: emgTelemetry.source_at || null,
+    };
+    const protocolState = perinealProtocolRef.current;
+    if (protocolState?.running) {
+      const phase = PERINEAL_EMG_PROTOCOL_PHASES[protocolState.phaseIndex];
+      if (phase?.captureKey) {
+        const captures = {
+          ...(protocolState.captures || {}),
+          [phase.captureKey]: [
+            ...((protocolState.captures || {})[phase.captureKey] || []),
+            sample,
+          ],
+        };
+        const nextProtocol = { ...protocolState, captures };
+        perinealProtocolRef.current = nextProtocol;
+        setPerinealProtocol(nextProtocol);
+      }
+    }
+
+    const result = processPerinealEmgSample(perinealDetectorRef.current, sample, {
+      calibration: perinealCalibration,
+    });
+    perinealDetectorRef.current = result.detector;
+    setPerinealDetectorSnapshot({
+      ...result.detector,
+      counts: { ...result.detector.counts },
+      current: result.detector.current ? { ...result.detector.current, samples: [] } : null,
+    });
+    if (result.event) {
+      queuePerinealSessionEvents(perinealTimelineEventFromDetection(result.event));
+    }
+  }, [
+    emgTelemetry,
+    getCurrentSessionTime,
+    perinealCalibration,
+    perinealTimelineEventFromDetection,
+    queuePerinealSessionEvents,
+    recordingActive,
+    status?.emg?.lastSourceAt,
+    usingPerinealEmgConfig,
+  ]);
+
+  const startPerinealProtocol = useCallback(async () => {
+    if (!usingPerinealEmgConfig) {
+      setCalibrationError("Select Perineal Body EMG before starting the pelvic-floor test protocol.");
+      return;
+    }
+    if (!emgRecent) {
+      setCalibrationError("Start the EMG feed first. Sarah needs a recent perineal EMG signal before the protocol can run.");
+      return;
+    }
+    await ensureSession();
+    const firstPhase = PERINEAL_EMG_PROTOCOL_PHASES[0];
+    const nowMs = Date.now();
+    const timeS = getCurrentSessionTime();
+    const nextProtocol = {
+      running: true,
+      phaseIndex: 0,
+      phaseStartedAtMs: nowMs,
+      phaseEndsAtMs: nowMs + firstPhase.durationS * 1000,
+      captures: {},
+      message: firstPhase.instruction,
+      startedAt: new Date().toISOString(),
+    };
+    perinealProtocolRef.current = nextProtocol;
+    setPerinealProtocol(nextProtocol);
+    setCalibrationStatus(`Perineal EMG test started: ${firstPhase.label}.`);
+    setCalibrationError("");
+    queuePerinealSessionEvents(perinealProtocolAnchorEvent(firstPhase, "start", timeS));
+  }, [emgRecent, ensureSession, getCurrentSessionTime, perinealProtocolAnchorEvent, queuePerinealSessionEvents, usingPerinealEmgConfig]);
+
+  const stopPerinealProtocol = useCallback(() => {
+    const protocolState = perinealProtocolRef.current;
+    const phase = PERINEAL_EMG_PROTOCOL_PHASES[protocolState?.phaseIndex];
+    if (protocolState?.running && phase) {
+      queuePerinealSessionEvents(perinealProtocolAnchorEvent(phase, "stopped", getCurrentSessionTime()));
+    }
+    const nextProtocol = {
+      running: false,
+      phaseIndex: -1,
+      phaseStartedAtMs: null,
+      phaseEndsAtMs: null,
+      captures: protocolState?.captures || {},
+      message: "Stopped",
+    };
+    perinealProtocolRef.current = nextProtocol;
+    setPerinealProtocol(nextProtocol);
+    setCalibrationStatus("Perineal EMG test protocol stopped.");
+  }, [getCurrentSessionTime, perinealProtocolAnchorEvent, queuePerinealSessionEvents]);
+
+  useEffect(() => {
+    if (!perinealProtocol.running) return undefined;
+    const timer = setInterval(() => {
+      const protocolState = perinealProtocolRef.current;
+      if (!protocolState?.running) return;
+      const phase = PERINEAL_EMG_PROTOCOL_PHASES[protocolState.phaseIndex];
+      if (!phase || Date.now() < Number(protocolState.phaseEndsAtMs || 0)) return;
+      const timeS = getCurrentSessionTime();
+      const endEvent = perinealProtocolAnchorEvent(phase, "end", timeS);
+      const nextIndex = protocolState.phaseIndex + 1;
+      const nextPhase = PERINEAL_EMG_PROTOCOL_PHASES[nextIndex];
+      if (!nextPhase) {
+        const calibration = buildPerinealEmgCalibration({
+          baseline: protocolState.captures?.baseline || [],
+          light: protocolState.captures?.light || [],
+          strong: protocolState.captures?.strong || [],
+          hold: protocolState.captures?.hold || [],
+          artifacts: {
+            cough: protocolState.captures?.cough || [],
+            glute: protocolState.captures?.glute || [],
+            adductor: protocolState.captures?.adductor || [],
+          },
+        });
+        const completedEvent = {
+          id: `perineal_protocol_completed_${Math.round(Number(timeS || 0) * 10)}`,
+          time_s: Math.max(0, Math.round(Number(timeS) || 0)),
+          note: "Perineal EMG test protocol completed",
+          category: ["other"],
+          annotation_tags: ["emg", "perineal_emg", "calibration", "test_protocol", "completed"],
+          source: "perineal_emg_protocol",
+          created_at: new Date().toISOString(),
+          perineal_emg_protocol: {
+            completed: true,
+            calibration_id: calibration.id,
+            baseline_sample_count: calibration.baseline_sample_count,
+            detection_threshold_pct: calibration.suggested_detection_threshold_pct,
+            strong_threshold_pct: calibration.suggested_strong_threshold_pct,
+          },
+        };
+        const calibrationLine = `[${fmtMmSs(timeS)}] Perineal EMG protocol completed. Baseline ${fmtNumber(calibration.baseline_mean_pct)}% +/- ${fmtNumber(calibration.baseline_std_pct)}%; detection threshold ${fmtNumber(calibration.suggested_detection_threshold_pct)}%; strong threshold ${fmtNumber(calibration.suggested_strong_threshold_pct)}%.`;
+        queuePerinealSessionEvents([endEvent, completedEvent], {
+          emg_enabled: true,
+          emg_target_area: "Perineal body / pelvic floor",
+          emg_sensor_type: "Small surface EMG electrodes (perineal body)",
+          emg_channels: "single",
+          emg_perineal_calibration: calibration,
+          emg_rest_left: calibration.baseline_mean_pct,
+          emg_max_left: calibration.strong_median_peak_pct ?? calibration.suggested_strong_threshold_pct,
+          emg_calibration_notes: [activeSessionDoc?.emg_calibration_notes, calibrationLine].filter(Boolean).join("\n"),
+        });
+        const detector = createPerinealEmgDetector({ calibration });
+        perinealDetectorRef.current = detector;
+        setPerinealDetectorSnapshot({ ...detector, counts: { ...detector.counts } });
+        const doneProtocol = {
+          running: false,
+          phaseIndex: -1,
+          phaseStartedAtMs: null,
+          phaseEndsAtMs: null,
+          captures: protocolState.captures || {},
+          message: "Completed",
+          completedAt: new Date().toISOString(),
+        };
+        perinealProtocolRef.current = doneProtocol;
+        setPerinealProtocol(doneProtocol);
+        setCalibrationStatus("Perineal EMG test protocol completed and calibration values queued for saving.");
+        return;
+      }
+      const nowMs = Date.now();
+      const nextProtocol = {
+        ...protocolState,
+        phaseIndex: nextIndex,
+        phaseStartedAtMs: nowMs,
+        phaseEndsAtMs: nowMs + nextPhase.durationS * 1000,
+        message: nextPhase.instruction,
+      };
+      perinealProtocolRef.current = nextProtocol;
+      setPerinealProtocol(nextProtocol);
+      setCalibrationStatus(`Perineal EMG test: ${nextPhase.label}.`);
+      queuePerinealSessionEvents([
+        endEvent,
+        perinealProtocolAnchorEvent(nextPhase, "start", timeS),
+      ]);
+    }, 500);
+    return () => clearInterval(timer);
+  }, [
+    activeSessionDoc?.emg_calibration_notes,
+    getCurrentSessionTime,
+    perinealProtocol.running,
+    perinealProtocolAnchorEvent,
+    queuePerinealSessionEvents,
+  ]);
 
   useEffect(() => {
     if (!recordingActive || !telemetryHistory.length) return;
@@ -3560,7 +3927,7 @@ export default function LiveCapture() {
           <ReadinessItem
             label="HR Source"
             value={hrConnected ? "Ready" : "Waiting"}
-            helper={status?.hr?.sourceStatus?.message || (hrConnected ? "Live Capture is connected to the selected HR source." : status?.hr?.error || status?.hr?.url || "Start the PulsePoint server and HR source.")}
+            helper={status?.hr?.sourceStatus?.message || (hrConnected ? "Live Capture is connected to the selected HR source." : status?.hr?.error || status?.hr?.url || "Start the Sarah server and HR source.")}
             ready={hrConnected}
           />
           <ReadinessItem
@@ -4075,6 +4442,117 @@ export default function LiveCapture() {
                 {selectedEmgConfig.calibrationIntro}
               </div>
 
+              {usingPerinealEmgConfig && (
+                <div className="rounded-lg border border-primary/25 bg-primary/[0.05] p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-primary">Perineal contraction detector</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Automatic Kegel markers are saved only while recording is active and this preset is selected.
+                      </p>
+                    </div>
+                    <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider ${
+                      perinealSignalQuality.tone === "good"
+                        ? "border-primary/30 bg-primary/10 text-primary"
+                        : perinealSignalQuality.tone === "warn"
+                          ? "border-amber-400/30 bg-amber-400/10 text-amber-300"
+                          : "border-border bg-muted/30 text-muted-foreground"
+                    }`}>
+                      {perinealSignalQuality.label}
+                    </span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <div className="rounded-md bg-card px-3 py-2">
+                      <p className="text-[10px] text-muted-foreground">Current</p>
+                      <p className="mt-1 font-mono text-lg font-semibold text-foreground">{leftEmgLevel != null ? `${fmtNumber(leftEmgLevel)}%` : "--"}</p>
+                    </div>
+                    <div className="rounded-md bg-card px-3 py-2">
+                      <p className="text-[10px] text-muted-foreground">Baseline</p>
+                      <p className="mt-1 font-mono text-lg font-semibold text-foreground">{fmtNumber(perinealCalibration.baseline_mean_pct)}%</p>
+                    </div>
+                    <div className="rounded-md bg-card px-3 py-2">
+                      <p className="text-[10px] text-muted-foreground">Detect</p>
+                      <p className="mt-1 font-mono text-lg font-semibold text-foreground">{fmtNumber(perinealCalibration.suggested_detection_threshold_pct)}%</p>
+                    </div>
+                    <div className="rounded-md bg-card px-3 py-2">
+                      <p className="text-[10px] text-muted-foreground">State</p>
+                      <p className="mt-1 text-sm font-semibold capitalize text-foreground">{perinealDetectorSnapshot.phase || "relaxed"}</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                    {[
+                      ["Total", perinealDetectorSnapshot.counts?.total || 0],
+                      ["Light", perinealDetectorSnapshot.counts?.light || 0],
+                      ["Moderate", perinealDetectorSnapshot.counts?.moderate || 0],
+                      ["Strong", perinealDetectorSnapshot.counts?.strong || 0],
+                      ["Hold", perinealDetectorSnapshot.counts?.sustained || 0],
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-md border border-border bg-muted/20 px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+                        <p className="mt-1 font-mono text-base font-semibold text-foreground">{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                  {perinealDetectorSnapshot.lastEvent && (
+                    <p className="mt-3 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
+                      Last: <span className="font-semibold text-foreground">{perinealEventNote(perinealDetectorSnapshot.lastEvent)}</span>{" "}
+                      at {fmtMmSs(perinealDetectorSnapshot.lastEvent.peak_time_s)} · peak {fmtNumber(perinealDetectorSnapshot.lastEvent.peak_pct)}% · {perinealDetectorSnapshot.lastEvent.confidence} confidence
+                    </p>
+                  )}
+                  <div className="mt-3 rounded-md border border-border bg-card px-3 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">
+                          {perinealProtocol.running
+                            ? PERINEAL_EMG_PROTOCOL_PHASES[perinealProtocol.phaseIndex]?.label || "Protocol running"
+                            : "Guided calibration/test protocol"}
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {perinealProtocol.running
+                            ? perinealProtocol.message
+                            : "Runs baseline, light Kegels, strong Kegels, long hold, artifact checks, and final baseline."}
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        {perinealProtocol.running ? (
+                          <button
+                            type="button"
+                            onClick={stopPerinealProtocol}
+                            className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs font-semibold text-destructive"
+                          >
+                            Stop protocol
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={startPerinealProtocol}
+                            disabled={!emgRecent}
+                            className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Start Perineal EMG Test Protocol
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-3 grid gap-1.5">
+                      {PERINEAL_EMG_PROTOCOL_PHASES.map((phase, index) => (
+                        <div
+                          key={phase.key}
+                          className={`rounded border px-2 py-1.5 text-[10px] ${
+                            perinealProtocol.running && index === perinealProtocol.phaseIndex
+                              ? "border-primary/40 bg-primary/10 text-primary"
+                              : "border-border bg-muted/20 text-muted-foreground"
+                          }`}
+                        >
+                          <span className="font-semibold">{phase.label}</span>
+                          <span className="ml-2">{phase.durationS}s</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-lg border border-border bg-muted/20 p-3">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{selectedEmgConfig.leftLabel}</p>
@@ -4219,7 +4697,7 @@ export default function LiveCapture() {
         status={connected && hrConnected ? "Core feeds connected" : "Review connections"}
       >
         <div className={`grid gap-3 ${emgLive ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
-          <MetricCard icon={<Radio className="w-4 h-4" />} label="PulsePoint Stream" value={connected ? "Live" : "Offline"} helper="App telemetry bridge" active={connected} />
+          <MetricCard icon={<Radio className="w-4 h-4" />} label="Sarah Stream" value={connected ? "Live" : "Offline"} helper="App telemetry bridge" active={connected} />
           <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="HR Source" value={hrConnected ? "Connected" : "Waiting"} helper={status?.hr?.sourceStatus?.label || status?.hr?.url || "ws://127.0.0.1:8765"} active={hrConnected} />
           {emgLive && <MetricCard icon={<Activity className="w-4 h-4" />} label="EMG Feed" value="Live" helper={status?.emg?.textDir || "EMG text files"} active />}
           <MetricCard icon={<Video className="w-4 h-4" />} label="OBS Recording" value={recordingActive ? "Recording" : "Stopped"} helper={recording?.filename || "No active capture"} active={recordingActive} />
@@ -4237,7 +4715,7 @@ export default function LiveCapture() {
                 ? liveSession.importing
                   ? "Finalizing telemetry and attaching capture files…"
                   : liveSession.active
-                    ? "Recording into a new PulsePoint session shell."
+                    ? "Recording into a new Sarah session shell."
                     : "Capture session ready for review and detail entry."
                 : "A new session will be created automatically when OBS recording starts."}
             </p>

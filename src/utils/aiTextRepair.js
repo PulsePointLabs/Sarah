@@ -128,7 +128,7 @@ function preserveInitialCapital(original, replacement) {
 export function reduceConsistencyPhraseRepetition(text, allowedUses = 1, context = null) {
   if (typeof text !== "string" || !text) return text;
 
-  const state = context || { count: 0, rotation: 0 };
+  const state = context && typeof context === "object" ? context : { count: 0, rotation: 0 };
   const keptPhrases = [];
   const keepPhrase = (match) => {
     const index = keptPhrases.push(match) - 1;

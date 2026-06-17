@@ -221,14 +221,14 @@ export default function HROverlay() {
       const data = responseText ? JSON.parse(responseText) : {};
       if (!response.ok) {
         if (response.status === 404 && responseText.includes("Cannot POST /api/live-capture/hr-source")) {
-          throw new Error("PulsePoint server needs a restart to load the new Pulsoid route.");
+          throw new Error("Sarah server needs a restart to load the new Pulsoid route.");
         }
         throw new Error(data.error || "Could not apply HR source.");
       }
       setHrSourceStatus(data.hr?.sourceStatus?.message || "Heart-rate source updated.");
     } catch (error) {
       const message = error instanceof SyntaxError
-        ? "PulsePoint server returned an unexpected response. Restart the server and try again."
+        ? "Sarah server returned an unexpected response. Restart the server and try again."
         : error.message || String(error);
       setHrSourceError(message);
     } finally {

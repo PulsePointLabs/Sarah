@@ -137,7 +137,7 @@ export default function TTSSettingsPanel() {
     const next = saveTTSSettings(draftSettings);
     setSavedSettings(next);
     setDraftSettings(next);
-    setMessage({ type: "ok", text: "TTS settings saved for all PulsePoint narration." });
+    setMessage({ type: "ok", text: "TTS settings saved for all Sarah narration." });
   };
 
   const reset = () => {
@@ -155,7 +155,7 @@ export default function TTSSettingsPanel() {
             <h2 className="text-sm font-bold uppercase tracking-wider">TTS Settings</h2>
           </div>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            One Nova tuning surface for reads, samples, and premium downloads across PulsePoint.
+            One Nova tuning surface for reads, samples, and premium downloads across Sarah. Expressive mode also follows saved Sarah Personality instructions for inflection and tone.
           </p>
         </div>
         <div className="flex flex-wrap gap-1.5 text-[11px]">
@@ -182,7 +182,7 @@ export default function TTSSettingsPanel() {
                   </button>
                 ))}
               </div>
-              {draftSettings.engine === "hd" && <p className="mt-2 text-xs text-muted-foreground">HD Crisp prioritizes fidelity; tone controls have less influence.</p>}
+              {draftSettings.engine === "hd" && <p className="mt-2 text-xs text-muted-foreground">HD Crisp prioritizes fidelity; tone controls and Sarah Personality instructions have less influence.</p>}
             </div>
 
             <div className="rounded-lg border border-border bg-muted/20 p-3">

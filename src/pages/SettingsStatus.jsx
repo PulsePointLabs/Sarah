@@ -3,8 +3,10 @@ import { useNavigate } from "react-router-dom";
 import {
   Activity,
   BellRing,
+  Brain,
   CircleDollarSign,
   Palette,
+  Sparkles,
   Type,
   ExternalLink,
   KeyRound,
@@ -16,9 +18,17 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import TTSSettingsPanel from "@/components/TTSSettingsPanel";
+import { Textarea } from "@/components/ui/textarea";
 import { cancelBackgroundJob, clearBackgroundJobs, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
 import { getProviderStatus } from "@/lib/providerStatus";
+import {
+  DEFAULT_SARAH_PERSONALITY,
+  readSarahPersonalitySettings,
+  SARAH_DETAIL_OPTIONS,
+  SARAH_TONE_PRESETS,
+  saveSarahPersonalitySettings,
+} from "@/utils/sarahPersonality";
 import {
   areBackgroundNotificationsEnabled,
   getNotificationPermission,
@@ -171,11 +181,12 @@ function getNotificationSupport() {
 
 // UI_OLD_MAN_ACCESSIBILITY_V1
 const UI_PREFS_STORAGE_KEY = "pulsepoint-ui-preferences-v1";
-const DEFAULT_UI_PREFS = { theme: "teal", fontScale: "comfortable" };
+const DEFAULT_UI_PREFS = { theme: "sarah-lavender", fontScale: "comfortable" };
 const PWA_CACHE_PREFIXES = ["pulsepoint-shell-", "workbox-", "vite-"];
 
 const THEME_OPTIONS = [
-  { value: "teal", label: "PulsePoint Teal", helper: "Default dark PulsePoint look." },
+  { value: "sarah-lavender", label: "Sarah Lavender", helper: "Light, soft lavender with warm readable contrast." },
+  { value: "teal", label: "Classic Teal", helper: "Original dark physiology-dashboard look." },
   { value: "blue", label: "Clinical Blue", helper: "Cooler blue accents with softer contrast." },
   { value: "warm", label: "Warm Amber", helper: "Warmer highlights for late-night reading." },
   { value: "high-contrast", label: "High Contrast", helper: "Bigger contrast, brighter borders, old-man approved." },
@@ -186,6 +197,29 @@ const FONT_SCALE_OPTIONS = [
   { value: "large", label: "Large", helper: "A little bigger everywhere." },
   { value: "xl", label: "Extra Large", helper: "Less squinting, more dignity." },
   { value: "old-man", label: "Old Man", helper: "Maximum readability. Buttons and tiny labels get boosted too." },
+];
+
+const SARAH_PERSONALITY_TOGGLES = [
+  {
+    key: "feminineWarmth",
+    label: "Feminine warmth",
+    helper: "More attentive, warm, and personally aware while staying grounded.",
+  },
+  {
+    key: "sexualSpecificity",
+    label: "Use specific anatomy",
+    helper: "Say penis, glans, scrotum, perineum, arousal, climax, etc. when evidence supports it.",
+  },
+  {
+    key: "arousalTimelineStory",
+    label: "Story-driven arousal timeline",
+    helper: "Explain what the body appears to be doing through each phase instead of listing events.",
+  },
+  {
+    key: "ttsFriendly",
+    label: "TTS-friendly writing",
+    helper: "Avoid block quotes, tables, dense formatting, and awkward spoken symbols.",
+  },
 ];
 
 function readUiPreferences() {
@@ -200,6 +234,22 @@ function readUiPreferences() {
 function saveUiPreferences(nextPrefs) {
   window.localStorage.setItem(UI_PREFS_STORAGE_KEY, JSON.stringify(nextPrefs));
   window.dispatchEvent(new CustomEvent("pulsepoint:ui-preferences-changed", { detail: nextPrefs }));
+}
+
+function ToggleControl({ checked, disabled, onChange, label }) {
+  return (
+    <label className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${checked ? "border-primary bg-primary" : "border-border bg-input"} ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        aria-label={label}
+        className="sr-only"
+      />
+      <span className={`h-5 w-5 rounded-full bg-background shadow-sm transition-transform ${checked ? "translate-x-5" : "translate-x-0"}`} />
+    </label>
+  );
 }
 
 function ProviderCard({ status }) {
@@ -261,6 +311,9 @@ export default function SettingsStatus() {
   const [pwaCleanupBusy, setPwaCleanupBusy] = useState(false);
   const [pwaCleanupMessage, setPwaCleanupMessage] = useState("");
   const [uiPrefs, setUiPrefs] = useState(readUiPreferences);
+  const [sarahPersonality, setSarahPersonality] = useState(readSarahPersonalitySettings);
+  const [sarahPersonalityDirty, setSarahPersonalityDirty] = useState(false);
+  const [sarahPersonalityMessage, setSarahPersonalityMessage] = useState("");
 
   const updateUiPrefs = (patch) => {
     setUiPrefs((previous) => {
@@ -350,6 +403,25 @@ export default function SettingsStatus() {
     } finally {
       setNotificationBusy(false);
     }
+  };
+
+  const updateSarahPersonality = (patch) => {
+    setSarahPersonality((previous) => ({ ...previous, ...patch }));
+    setSarahPersonalityDirty(true);
+    setSarahPersonalityMessage("");
+  };
+
+  const saveSarahPersonality = () => {
+    const saved = saveSarahPersonalitySettings(sarahPersonality);
+    setSarahPersonality(saved);
+    setSarahPersonalityDirty(false);
+    setSarahPersonalityMessage("Sarah settings saved. New analyses will use this style.");
+  };
+
+  const resetSarahPersonality = () => {
+    setSarahPersonality(DEFAULT_SARAH_PERSONALITY);
+    setSarahPersonalityDirty(true);
+    setSarahPersonalityMessage("Starter instructions restored. Press Save Sarah Settings to keep them.");
   };
 
   const resetPwaShell = async () => {
@@ -519,7 +591,7 @@ export default function SettingsStatus() {
             <Settings2 className="h-5 w-5" />
             <p className="text-sm font-bold uppercase tracking-wider">Settings & Status</p>
           </div>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight text-foreground">PulsePoint control room</h1>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight text-foreground">Sarah control room</h1>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
             Tune narration once, check API cost visibility, and manage background AI or audio work without hunting through individual cards.
           </p>
@@ -572,11 +644,138 @@ export default function SettingsStatus() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-primary">
+              <Brain className="h-4 w-4" />
+              <h2 className="text-sm font-bold uppercase tracking-wider">Sarah Personality</h2>
+            </div>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+              Tune how Sarah writes and speaks session analysis: warmer, more feminine, more clinical, more plain-English, or your own short instruction.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 rounded-full border border-border bg-muted/20 px-3 py-1.5">
+            <span className="text-xs font-semibold text-muted-foreground">Use style settings</span>
+            <ToggleControl
+              checked={sarahPersonality.enabled}
+              onChange={(enabled) => updateSarahPersonality({ enabled })}
+              label="Enable Sarah personality settings"
+            />
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={saveSarahPersonality}
+            disabled={!sarahPersonalityDirty}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            Save Sarah Settings
+          </button>
+          <span className={`text-xs ${sarahPersonalityDirty ? "text-amber-700" : sarahPersonalityMessage ? "text-emerald-700" : "text-muted-foreground"}`}>
+            {sarahPersonalityDirty ? "Unsaved changes" : sarahPersonalityMessage || "Saved settings are used the next time you generate Sarah analysis or expressive narration."}
+          </span>
+        </div>
+
+        <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+          <div className="space-y-4">
+            <div className="rounded-xl border border-border bg-muted/20 p-3">
+              <div className="flex items-center gap-2 text-foreground">
+                <Sparkles className="h-4 w-4 text-primary" />
+                <h3 className="text-sm font-bold">Base style and tone</h3>
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {SARAH_TONE_PRESETS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    disabled={!sarahPersonality.enabled}
+                    onClick={() => updateSarahPersonality({ tonePreset: option.value })}
+                    className={`rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-50 ${sarahPersonality.tonePreset === option.value ? "border-primary bg-primary/10 text-foreground" : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground"}`}
+                  >
+                    <span className="block text-sm font-semibold">{option.label}</span>
+                    <span className="mt-0.5 block text-xs opacity-85">{option.helper}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border bg-muted/20 p-3">
+              <div className="flex items-center gap-2 text-foreground">
+                <Type className="h-4 w-4 text-primary" />
+                <h3 className="text-sm font-bold">Clinical detail</h3>
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                {SARAH_DETAIL_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    disabled={!sarahPersonality.enabled}
+                    onClick={() => updateSarahPersonality({ detailLevel: option.value })}
+                    className={`rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-50 ${sarahPersonality.detailLevel === option.value ? "border-primary bg-primary/10 text-foreground" : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground"}`}
+                  >
+                    <span className="block text-sm font-semibold">{option.label}</span>
+                    <span className="mt-0.5 block text-xs opacity-85">{option.helper}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="rounded-xl border border-border bg-muted/20 p-3">
+              <h3 className="text-sm font-bold text-foreground">Characteristics</h3>
+              <div className="mt-3 space-y-2">
+                {SARAH_PERSONALITY_TOGGLES.map((item) => (
+                  <div key={item.key} className="flex items-start justify-between gap-3 rounded-lg border border-border bg-card px-3 py-2.5">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-foreground">{item.label}</p>
+                      <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{item.helper}</p>
+                    </div>
+                    <ToggleControl
+                      checked={Boolean(sarahPersonality[item.key])}
+                      disabled={!sarahPersonality.enabled}
+                      onChange={(checked) => updateSarahPersonality({ [item.key]: checked })}
+                      label={item.label}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border bg-muted/20 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-bold text-foreground">Custom instructions</h3>
+                <button
+                  type="button"
+                  disabled={!sarahPersonality.enabled}
+                  onClick={resetSarahPersonality}
+                  className="rounded-md px-2 py-1 text-xs font-semibold text-muted-foreground hover:bg-muted disabled:opacity-50"
+                >
+                  Reset
+                </button>
+              </div>
+              <Textarea
+                disabled={!sarahPersonality.enabled}
+                value={sarahPersonality.customInstructions}
+                onChange={(event) => updateSarahPersonality({ customInstructions: event.target.value })}
+                placeholder="Example: Read the arousal timeline with more feminine warmth and plain English, but keep the clinical claims tight."
+                className="mt-3 min-h-28 resize-y bg-card text-sm"
+              />
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                Press Save Sarah Settings after editing. These instructions affect Sarah analysis style and expressive TTS delivery. Evidence rules, privacy rules, and no-invention safeguards stay on.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-primary">
               <Palette className="h-4 w-4" />
               <h2 className="text-sm font-bold uppercase tracking-wider">Display & Readability</h2>
             </div>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-              Old man version controls: pick a color theme and bump the app-wide font size without touching browser zoom.
+              Pick a color theme and bump the app-wide font size without touching browser zoom.
             </p>
           </div>
           <span className="rounded-full bg-primary/10 px-2 py-1 text-xs font-semibold uppercase text-primary">
@@ -650,7 +849,7 @@ export default function SettingsStatus() {
         </div>
         <div className="mt-4 rounded-lg bg-muted/25 px-3 py-3 text-sm text-muted-foreground">
           <p>
-            Dev/mobile builds now unregister service workers automatically so Chrome cannot swap an old shell back in while PulsePoint is running.
+            Dev/mobile builds now unregister service workers automatically so Chrome cannot swap an old shell back in while Sarah is running.
           </p>
           {pwaCleanupMessage && <p className="mt-2 text-xs font-semibold text-foreground">{pwaCleanupMessage}</p>}
         </div>
@@ -664,7 +863,7 @@ export default function SettingsStatus() {
               <h2 className="text-sm font-bold uppercase tracking-wider">Notifications</h2>
             </div>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-              Enable PulsePoint completion alerts. The APK uses Android local notifications; Chrome/PWA installs use browser notifications.
+              Enable Sarah completion alerts. The APK uses Android local notifications; Chrome/PWA installs use browser notifications.
             </p>
           </div>
           <span className={`rounded-full px-2 py-1 text-xs font-semibold uppercase ${notificationPermission === "granted" ? "bg-emerald-500/10 text-emerald-300" : notificationPermission === "denied" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}>
@@ -744,8 +943,8 @@ export default function SettingsStatus() {
           </div>
         </div>
 
-        <div className="mt-4 flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+        <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-300/70 bg-amber-100 px-3 py-2 text-sm text-amber-900">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
           <span>Clear All stops active jobs and removes tasks from the status surfaces. Use it when a render or analysis should not keep spending API time.</span>
         </div>
       </section>

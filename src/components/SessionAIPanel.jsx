@@ -13,6 +13,8 @@ import { buildSessionKeyVideoClipDigest, buildSessionVideoPassDigest, buildSessi
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
+import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
+import { buildSarahPersonalityPrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "./TTSButton";
 
@@ -367,7 +369,7 @@ export function buildSessionAnalysisReaderData({ result, session, timelineRows =
     ...recommendationItems,
   ]
     .filter(Boolean)
-    .map(repairCharacterSplitParagraph);
+    .map((paragraph) => repairCharacterSplitParagraph(paragraph));
 
   let idx = 0;
   const sections = [];
@@ -672,7 +674,7 @@ export function SessionReviewVideoExportButton({
         max_tokens: 1400,
         label: "Review video local-evidence Q&A",
         source: "session_review_video_window_local_evidence_qa",
-        prompt: `You are Sarah answering a PulsePoint review-video follow-up using saved evidence only.
+        prompt: `You are Sarah answering a Sarah review-video follow-up using saved evidence only.
 
 Do not claim you are directly inspecting frames in this request. No images are attached. Use only the saved local/timeline evidence packet below.
 
@@ -761,7 +763,7 @@ Answer directly and practically. If the evidence specifically supports the user'
           media_type: frame.mimeType || "image/jpeg",
           data: frame.data,
         })).filter((frame) => frame.data),
-        prompt: `You are Sarah reviewing sampled frames from a processed PulsePoint review video.
+        prompt: `You are Sarah reviewing sampled frames from a processed Sarah review video.
 
 The user is asking about the visible moment currently being played in the exported review video.
 
@@ -779,7 +781,7 @@ Video context:
 - Manifest URL if available: ${activeVideo?.manifest_url || "not available"}
 
 Content handling:
-- Treat this as consensual private physiology/session review for PulsePoint, not erotic writing.
+- Treat this as consensual private physiology/session review for Sarah, not erotic writing.
 - Keep any answer clinical, observational, and evidence-based.
 - Do not sexualize, embellish, or produce arousal-oriented prose.
 - If provider policy prevents visual review of these frames, say only: "Provider refused direct visual review for this window." Do not produce a long refusal paragraph.
@@ -1104,7 +1106,7 @@ BASELINE / ENTRY ANATOMY AND DEVICE SETUP - HIGH PRIORITY:
 - Treat reviewed session media, reviewed profile/anatomy evidence, session notes, event timeline entries, and structured subjective fields as possible sources for this baseline read. Current-session evidence controls current-session claims. Established profile/anatomy context may be used as baseline context only when it is clearly marked as established context or when current evidence supports it.
 - Do not let the caution against invention erase supported visible anatomy. If the data supports that your penis was flaccid, partially erect, fully erect, resting on the scrotum, supported by a hand, catheterized, obscured, or not directly assessable at the start, say that plainly and clinically.
 - If current-session visual evidence is absent or unclear, do not invent a baseline genital state. Say what is known from logs and what is not directly assessable, then continue.
-- The goal is to preserve the old PulsePoint usefulness: the reader should understand the physical starting condition before HR, HRV, arousal arc, or device effects are interpreted.
+- The goal is to preserve the classic app usefulness: the reader should understand the physical starting condition before HR, HRV, arousal arc, or device effects are interpreted.
 `;
 
 const ANATOMICAL_LATERALITY_RULE_V1 = `
@@ -1912,7 +1914,37 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
 
     // Build EMG summary for AI
     const emgSummary = (() => {
-      if (!emgRows.length) return null;
+      const perinealSummary = summarizePerinealEmg(session);
+      const perinealDetectionSummary = perinealSummary.hasPerinealEvents ? {
+        detector: "perineal_body_emg",
+        quality_label: perinealSummary.qualityLabel,
+        quality_display_label: perinealSummary.qualityDisplayLabel,
+        story_summary: perinealSummary.storySentence,
+        total_detected_contractions: perinealSummary.total,
+        light_count: perinealSummary.byType.light,
+        moderate_count: perinealSummary.byType.moderate,
+        strong_count: perinealSummary.byType.strong,
+        sustained_hold_count: perinealSummary.byType.sustained,
+        possible_artifact_count: perinealSummary.possibleArtifactCount,
+        strongest_contraction: perinealSummary.strongestEvent,
+        strongest_contraction_type_label: perinealSummary.strongestEventTypeLabel,
+        sustained_holds: perinealSummary.events.filter((event) => event.contraction_type === "sustained"),
+        artifact_warnings: perinealSummary.artifactEvents,
+        notable_events: perinealSummary.notableEvents,
+        average_duration_s: perinealSummary.averageDurationSeconds,
+        total_active_s: perinealSummary.totalActiveSeconds,
+        average_confidence: perinealSummary.averageConfidence,
+        calibration: session.emg_perineal_calibration || null,
+        evidence_rule: "Only describe these as detected perineal EMG events when they appear in this detector summary or the event timeline. Treat them as pelvic-floor/perineal muscle activation evidence only. Do not infer orgasm, arousal, ejaculation, emotional state, intent, or lower-body/foot movement from perineal EMG alone.",
+      } : null;
+      if (!emgRows.length) {
+        return perinealDetectionSummary ? {
+          channel_mode: "perineal_events_only",
+          target_area: session.emg_target_area || undefined,
+          sensor_type: session.emg_sensor_type || undefined,
+          perineal_detection: perinealDetectionSummary,
+        } : null;
+      }
       const isDual = emgRows.some((r) => r.left_pct != null || r.right_pct != null);
       const step = Math.max(1, Math.floor(emgRows.length / 200));
       const sampled = emgRows.filter((_, i) => i % step === 0);
@@ -1954,6 +1986,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
             calibration: session.emg_calibration_notes,
             general: session.emg_general_notes,
           },
+          perineal_detection: perinealDetectionSummary,
           placement_photo_tags: (session.emg_placement_photos || []).map((p) => `${p.tag}: ${p.caption}`).filter(Boolean),
         };
       } else {
@@ -1974,9 +2007,11 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
             rest: session.emg_rest_left,
             max: session.emg_max_left,
             calibration_notes: session.emg_calibration_notes,
+            perineal: session.emg_perineal_calibration || undefined,
           },
           placement_notes: session.emg_left_placement_notes,
           general_notes: session.emg_general_notes,
+          perineal_detection: perinealDetectionSummary,
           placement_photo_tags: (session.emg_placement_photos || []).map((p) => `${p.tag}: ${p.caption}`).filter(Boolean),
         };
       }
@@ -2051,6 +2086,7 @@ Use this arousal profile to personalize analysis: compare the observed build arc
 
     const groundingContext = buildAIGroundingContext(userProfile);
     const firstNameToneCue = !isTechnical ? buildOptionalFirstNameToneCue(userProfile) : "";
+    const sarahPersonalityPrompt = buildSarahPersonalityPrompt(readSarahPersonalitySettings(), { isTechnical });
     const structuredSessionContext = structuredSessionContextForAI(session);
     const structuredSessionContextText = sessionContextEvidenceText(session);
     const warmMotionEvidence = buildWarmMotionEvidence(session);
@@ -2107,7 +2143,7 @@ TARGET SESSION ANALYSIS STYLE:
 - Technical does not mean number-heavy. It means mechanism-heavy, evidence-calibrated, and explicit about uncertainty. Use numbers as evidence anchors, then translate them into focus, load, release, reloading, recovery quality, sensor artifact, or mixed-signal interpretation.
 - Then explain the session through meaningful physiological windows based on session intent: baseline/entry state, exploration or stimulation phase, sensory/body-state transitions, plateaus or settling, pre-climax when supported, climax or intentionally non-climax outcome, and recovery or end-state.
 - A window may be chronological when chronology explains the physiology. The point is not to avoid time; the point is to make each time window explain arousal state, autonomic loading, sensory input, technique effectiveness, or recovery.
-- Keep the older PulsePoint feel: detailed, insightful, physiology-forward, personally grounded, and useful for later comparison across sessions.
+- Keep the established Sarah feel: detailed, insightful, physiology-forward, personally grounded, and useful for later comparison across sessions.
 - Do not flatten the analysis into generic observations or a short summary. This is a deep session interpretation.`
         : `You are Sarah, an expert physiologist and anatomist specializing in sexual response, body-state interpretation, and careful review of intimate physiology data. Analyze this session by first identifying whether it is primarily masturbation/stimulation, body exploration, sensation mapping, recovery review, or mixed. Integrate anatomy, heart rate data, event timeline, motion evidence when present, subjective experience, and session intent into a cohesive narrative. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally. Keep this natural, clinically grounded, and never forced. Let the narration feel warmly attentive and quietly familiar with the person's established patterns, noticing what stands out with natural human interest while staying grounded in the provided evidence.
 
@@ -2134,6 +2170,7 @@ ${ANATOMICAL_LATERALITY_RULE_V1}
 ${ESTIM_WAVEFORM_AND_MODE_RULE_V1}
 ${firstNameToneCue}
 ${!isTechnical ? WARM_COMPANION_OUTPUT_DISCIPLINE : ""}
+${sarahPersonalityPrompt}
 
 PHYSIOLOGICAL & ANATOMICAL LENS${isTechnical ? ":" : " — EVIDENCE-GROUNDED USE:"}
 - Only mention specific physiological phases (e.g. emission, expulsion, plateau) or anatomical structures (e.g. pudendal nerve, bulbocavernosus, prostatic urethra) when the session data — an event note, HR pattern, subjective metric, or logged sensation — gives you a concrete reason to do so. Never insert these as generic background explanation.
@@ -2168,6 +2205,12 @@ EMG INTERPRETATION RULES — apply carefully:
 - If one side rises earlier, describe it as a lead/phase difference.
 - If EMG peaks precede HR rise, describe EMG leading the HR response.
 - If HR rises without EMG change, note this as a possible autonomic or non-muscular response.
+- Perineal Body EMG detector events are first-class timeline evidence when present. Report contraction counts, strongest contraction, sustained holds, artifact warnings, and timing relative to HR, stimulation events, climax marker, and recovery.
+- Do not invent pelvic-floor contractions when no event with source "perineal_emg" exists. Distinguish "detected perineal EMG event" from your interpretation of nonspecific EMG activity.
+- Treat perineal EMG as muscle activation evidence only. Do not infer orgasm, arousal, ejaculation, emotional state, or intent from perineal EMG alone.
+- Never describe perineal EMG as foot, toe, leg, or lower-body movement evidence unless separate foot/lower-body motion telemetry or visual evidence is explicitly present.
+- If perineal events are mostly possible_artifact, lead with artifact uncertainty instead of treating them as true contractions.
+- Use cautious wording for perineal EMG: "detected perineal EMG activation", "suggests", "appears", or "EMG activity consistent with pelvic-floor contraction". Avoid "definitely contracted" or "confirmed".
 - Describe the likely target muscle based on placement notes and photo tags when available.` : ""}
 ${hrvEvidence ? RR_HRV_INTERPRETATION_RULES : ""}
 ${hrvIntegrationRules}

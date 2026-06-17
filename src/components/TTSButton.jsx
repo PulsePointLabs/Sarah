@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import { Play, Pause, Square } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 import { repairDecimalSpacing, splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
+import { buildSarahTTSVoicePrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
 
 const TTS_SETTINGS_KEY = "pulsepoint_tts_settings_v1";
 const TTS_REQUEST_TAIL = "\u200B";
@@ -257,8 +258,29 @@ Avoid hard emphasis on section starts or first words.
 Do not sound robotic, theatrical, exaggerated, documentary-like, overly analytical, clinical-dictation-like, overly clinical, customer-service-like, or performative.`;
 }
 
-export function getTTSRuntime(settings = loadTTSSettings()) {
+function compactInstructionHash(value = "") {
+  const text = String(value || "");
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+export function getTTSRuntime(settings = loadTTSSettings(), sarahPersonality = readSarahPersonalitySettings()) {
   const normalized = normalizeTTSSettings(settings);
+  const baseInstructions = buildVoiceInstructions(normalized);
+  const sarahVoiceInstructions = buildSarahTTSVoicePrompt(sarahPersonality);
+  const instructions = sarahVoiceInstructions
+    ? `${baseInstructions}
+
+${sarahVoiceInstructions}
+
+Priority: the TTS slider settings define the base voice. The Sarah voice delivery settings should meaningfully shape inflection, emphasis, and tone on top of those sliders.`
+    : baseInstructions;
+  const sarahVoiceProfile = sarahVoiceInstructions
+    ? `-sarah-${compactInstructionHash(sarahVoiceInstructions)}`
+    : "-sarah-off";
   return {
     settings: normalized,
     speed: normalized.speed,
@@ -266,8 +288,9 @@ export function getTTSRuntime(settings = loadTTSSettings()) {
     model: TTS_ENGINES[normalized.engine].model,
     format: normalized.audioFormat,
     supportsInstructions: TTS_ENGINES[normalized.engine].supportsInstructions,
-    instructions: buildVoiceInstructions(normalized),
-    cacheProfile: `settings-v6-${normalized.engine}-${normalized.audioFormat}-speed-${normalized.speed}-w${normalized.warmth}-e${normalized.enthusiasm}-s${normalized.soothing}-l${normalized.lightness}-f${normalized.femininity}-c${normalized.continuity}-n${normalized.naturalness}-p${normalized.pauses}-ss${normalized.softStart}`,
+    instructions,
+    sarahVoiceInstructions,
+    cacheProfile: `settings-v7-${normalized.engine}-${normalized.audioFormat}-speed-${normalized.speed}-w${normalized.warmth}-e${normalized.enthusiasm}-s${normalized.soothing}-l${normalized.lightness}-f${normalized.femininity}-c${normalized.continuity}-n${normalized.naturalness}-p${normalized.pauses}-ss${normalized.softStart}${sarahVoiceProfile}`,
   };
 }
 

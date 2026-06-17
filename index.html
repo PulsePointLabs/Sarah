@@ -3,20 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#10161f" />
-    <meta name="application-name" content="PulsePoint" />
+    <meta name="theme-color" content="#f5eff9" />
+    <meta name="application-name" content="Sarah" />
     <meta name="description" content="Private local physiology, session review, Motion Lab, AI analysis, and audio summaries." />
     <meta name="color-scheme" content="dark light" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="PulsePoint" />
+    <meta name="apple-mobile-web-app-title" content="Sarah" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="icon" type="image/svg+xml" href="/icons/pulsepoint-icon.svg" />
     <link rel="apple-touch-icon" href="/icons/pulsepoint-180.png" />
     <link rel="manifest" href="/manifest.json" />
     <meta name="msapplication-TileColor" content="#10161f" />
     <meta name="msapplication-config" content="/browserconfig.xml" />
-    <title>PulsePoint</title>
+    <title>Sarah</title>
   </head>
   <body>
     <div id="root"></div>
@@ -29,7 +29,7 @@
         if (!pulsePointIsStandalone()) return;
         window.addEventListener("vite:beforeFullReload", function (event) {
           event.preventDefault();
-          console.warn("PulsePoint blocked a dev full reload while running as an installed app.");
+          console.warn("Sarah blocked a dev full reload while running as an installed app.");
         });
         window.addEventListener("beforeunload", function (event) {
           var activeAudio = Array.prototype.some.call(document.querySelectorAll("audio"), function (audio) {
@@ -52,7 +52,7 @@
               }));
             })
             .catch(function (error) {
-              console.warn("PulsePoint dev SW cleanup failed:", error);
+              console.warn("Sarah dev SW cleanup failed:", error);
             });
         }
         if ("caches" in window) {
@@ -63,7 +63,7 @@
                 .map(function (key) { return caches.delete(key); }));
             })
             .catch(function (error) {
-              console.warn("PulsePoint dev shell cache cleanup failed:", error);
+              console.warn("Sarah dev shell cache cleanup failed:", error);
             });
         }
       })();

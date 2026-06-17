@@ -394,7 +394,7 @@ export default function BackgroundJobStatusTray() {
             )}
             {notificationsEnabled && (
               <p className="px-1 text-[10px] leading-relaxed text-muted-foreground">
-                Notifications work while PulsePoint is open or backgrounded. The APK uses Android local notifications; Chrome uses browser notifications.
+                Notifications work while Sarah is open or backgrounded. The APK uses Android local notifications; Chrome uses browser notifications.
               </p>
             )}
             {visibleJobs.map((job) => {
