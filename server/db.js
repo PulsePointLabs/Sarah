@@ -16,6 +16,8 @@ export const ENTITY_NAMES = [
   'HeartRateTimeline',
   'EMGTimeline',
   'HowlTelemetry',
+  'HowlControlCommand',
+  'HowlControlSettings',
   'AudioExport',
   'SessionReviewVideo',
   'CompareAnalysisResult',

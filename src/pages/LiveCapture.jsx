@@ -114,6 +114,33 @@ const EMG_CALIBRATION_ACTIONS = {
   right_max: "set_right_max",
 };
 const HOWL_TELEMETRY_POLL_MS = 2500;
+const HOWL_DEFAULT_CONTROL_FORM = {
+  controlEnabled: false,
+  sarahAutoEnabled: false,
+  dispatchMode: "direct_http",
+  controlUrl: "",
+  remoteAccessKey: "",
+  intensityFloor: 0,
+  intensityCeiling: 20,
+  rampRateLimitPerSecond: 5,
+  buildRampEnabled: true,
+  nearClimaxReductionEnabled: true,
+  recoveryReductionEnabled: true,
+  buildStep: 1,
+  reduceStep: 2,
+  nearClimaxThreshold: 72,
+  buildThreshold: 32,
+  recoveryThreshold: 55,
+  autoCooldownSeconds: 8,
+};
+const HOWL_DEFAULT_COMMAND_FORM = {
+  channel: "a",
+  intensity: 0,
+  frequency_hz: 20,
+  mode: "",
+  waveform: "",
+  enabled: true,
+};
 
 function playToneSequence(audioContext, frequencies) {
   if (!audioContext || audioContext.state === "closed") return;
@@ -167,6 +194,37 @@ function readNumber(...values) {
     if (Number.isFinite(n)) return n;
   }
   return null;
+}
+
+function readHowlChannelIntensity(telemetry, channel) {
+  const normalized = String(channel || "").toLowerCase();
+  const channelState = telemetry?.channel_state || telemetry?.channelState || telemetry?.channels || null;
+  if (channelState && typeof channelState === "object") {
+    const direct = channelState[normalized] || channelState[normalized.toUpperCase()];
+    const value = readNumber(direct?.intensity, direct?.level, direct?.power);
+    if (value != null) return value;
+  }
+  return readNumber(telemetry?.intensity, telemetry?.power_level);
+}
+
+function previewHowlControlUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const withProtocol = /^https?:\/\//i.test(text) ? text : `http://${text}`;
+  try {
+    const parsed = new URL(withProtocol);
+    const port = parsed.port || "4695";
+    return `${parsed.protocol}//${parsed.hostname}${port ? `:${port}` : ""}`;
+  } catch {
+    return withProtocol;
+  }
+}
+
+function maskHowlKey(value) {
+  const text = String(value || "").trim();
+  if (!text) return "not saved";
+  if (text.length <= 4) return "saved";
+  return `saved (${text.slice(0, 2)}...${text.slice(-2)})`;
 }
 
 function summarizeEmgCalibrationReading(history, telemetry) {
@@ -877,6 +935,16 @@ export default function LiveCapture() {
   const [howlCapabilities, setHowlCapabilities] = useState(null);
   const [howlError, setHowlError] = useState("");
   const [howlRefreshing, setHowlRefreshing] = useState(false);
+  const [howlControlOpen, setHowlControlOpen] = useState(false);
+  const [howlControlForm, setHowlControlForm] = useState(HOWL_DEFAULT_CONTROL_FORM);
+  const [howlCommandForm, setHowlCommandForm] = useState(HOWL_DEFAULT_COMMAND_FORM);
+  const [howlControlBusy, setHowlControlBusy] = useState("");
+  const [howlControlStatus, setHowlControlStatus] = useState("");
+  const [howlCommandHistory, setHowlCommandHistory] = useState([]);
+  const [howlAutoStatus, setHowlAutoStatus] = useState("Sarah auto-control is off.");
+  const [howlSettingsDirty, setHowlSettingsDirty] = useState(false);
+  const [howlConnectionTest, setHowlConnectionTest] = useState({ status: "idle", message: "" });
+  const [howlAdvancedOpen, setHowlAdvancedOpen] = useState(false);
   const latestHrRef = useRef(null);
   const latestEmgRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -910,6 +978,9 @@ export default function LiveCapture() {
   const directH10RrRef = useRef([]);
   const directH10IntentionalDisconnectRef = useRef(false);
   const directH10ReconnectAttemptRef = useRef(0);
+  const howlAutoLastActionRef = useRef({ at: 0, intensity: null, reason: "" });
+  const howlSettingsDirtyRef = useRef(false);
+  const howlFocusedFieldRef = useRef("");
 
   const getHeartbeatAudioContext = useCallback(async () => {
     if (!heartbeatAudioContextRef.current || heartbeatAudioContextRef.current.state === "closed") {
@@ -968,25 +1039,57 @@ export default function LiveCapture() {
     triggerHeartbeatPulse(telemetry);
   }, [triggerHeartbeatPulse]);
 
-  const refreshHowlTelemetry = useCallback(async ({ quiet = false } = {}) => {
+  const markHowlSettingsDirty = useCallback((dirty) => {
+    howlSettingsDirtyRef.current = Boolean(dirty);
+    setHowlSettingsDirty(Boolean(dirty));
+  }, []);
+
+  const updateHowlControlForm = useCallback((patch = {}, { resetConnection = true } = {}) => {
+    setHowlControlForm((prev) => ({ ...prev, ...patch }));
+    markHowlSettingsDirty(true);
+    if (resetConnection) {
+      setHowlConnectionTest({ status: "idle", message: "Connection needs a fresh test after these edits." });
+    }
+  }, [markHowlSettingsDirty]);
+
+  const refreshHowlTelemetry = useCallback(async ({ quiet = false, forceSettings = false } = {}) => {
     if (!quiet) setHowlRefreshing(true);
     try {
-      const [recentResponse, capabilitiesResponse] = await Promise.all([
+      const [recentResponse, capabilitiesResponse, settingsResponse, commandsResponse] = await Promise.all([
         fetch(apiUrl("/howl/telemetry/recent?limit=1")),
         fetch(apiUrl("/howl/control-capabilities")),
+        fetch(apiUrl("/howl/control/settings")),
+        fetch(apiUrl("/howl/control/commands?limit=5")),
       ]);
       if (!recentResponse.ok) throw new Error("Howl telemetry route is not responding.");
       const recent = await recentResponse.json();
       const capabilities = capabilitiesResponse.ok ? await capabilitiesResponse.json() : null;
+      const settingsPayload = settingsResponse.ok ? await settingsResponse.json() : null;
+      const commandsPayload = commandsResponse.ok ? await commandsResponse.json() : null;
       setHowlTelemetry(recent?.samples?.[0] || null);
       setHowlCapabilities(capabilities);
+      if (settingsPayload?.settings) {
+        const canApplySettings = forceSettings || (!howlSettingsDirtyRef.current && !howlFocusedFieldRef.current);
+        if (canApplySettings) {
+          setHowlControlForm((prev) => ({ ...prev, ...settingsPayload.settings }));
+          markHowlSettingsDirty(false);
+          if (forceSettings) {
+            setHowlConnectionTest((prev) => prev.status === "ok"
+              ? prev
+              : { status: "idle", message: "Saved Howl settings reloaded. Test the connection before manual control." });
+          }
+        }
+      }
+      if (commandsPayload?.commands) {
+        setHowlCommandHistory(commandsPayload.commands);
+      }
       setHowlError("");
     } catch (error) {
       setHowlError(error?.message || "Howl telemetry is unavailable.");
     } finally {
       if (!quiet) setHowlRefreshing(false);
     }
-  }, []);
+  }, [markHowlSettingsDirty]);
 
   const publishDirectH10Measurement = useCallback((parsed, deviceName = "Polar H10") => {
     if (!parsed?.heartRate) return;
@@ -1111,6 +1214,113 @@ export default function LiveCapture() {
       setHrSourceSaving(false);
     }
   }, [hrSourceSettings]);
+
+  const saveHowlControlSettings = useCallback(async (patch = {}) => {
+    const nextSettings = { ...howlControlForm, ...patch };
+    setHowlControlBusy("settings");
+    setHowlError("");
+    try {
+      const response = await fetch(apiUrl("/howl/control/settings"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(nextSettings),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not save Howl control settings.");
+      setHowlControlForm((prev) => ({ ...prev, ...(data.settings || nextSettings) }));
+      markHowlSettingsDirty(false);
+      setHowlControlStatus(data.settings?.controlEnabled ? "Howl manual control enabled." : "Howl manual control disabled.");
+      await refreshHowlTelemetry({ quiet: true, forceSettings: true });
+      return data.settings;
+    } catch (error) {
+      setHowlError(error?.message || "Unable to save Howl control settings.");
+      return null;
+    } finally {
+      setHowlControlBusy("");
+    }
+  }, [howlControlForm, markHowlSettingsDirty, refreshHowlTelemetry]);
+
+  const testHowlConnection = useCallback(async () => {
+    setHowlControlBusy("test");
+    setHowlError("");
+    setHowlControlStatus("");
+    setHowlConnectionTest({ status: "testing", message: "Testing Howl /status..." });
+    try {
+      const response = await fetch(apiUrl("/howl/control/test"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(howlControlForm),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok === false) {
+        throw new Error(data.message || data.error || "Howl connection test failed.");
+      }
+      setHowlConnectionTest({ status: "ok", message: "Howl connection works. Manual control can be enabled." });
+      setHowlControlStatus("Howl /status responded successfully.");
+      return data;
+    } catch (error) {
+      setHowlConnectionTest({ status: "error", message: error?.message || "Howl connection test failed." });
+      setHowlError(error?.message || "Howl connection test failed.");
+      return null;
+    } finally {
+      setHowlControlBusy("");
+    }
+  }, [howlControlForm]);
+
+  const sendHowlControlCommand = useCallback(async (action = "set_state", extra = {}) => {
+    setHowlControlBusy(action);
+    setHowlError("");
+    try {
+      const payload = {
+        action,
+        ...howlCommandForm,
+        ...extra,
+        session: liveSession?.activeSessionId || activeSessionDoc?.id || null,
+      };
+      const response = await fetch(apiUrl("/howl/control"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Howl command was rejected.");
+      setHowlControlStatus(data.dispatch?.message || "Howl command queued.");
+      await refreshHowlTelemetry({ quiet: true });
+      return data;
+    } catch (error) {
+      setHowlError(error?.message || "Unable to send Howl command.");
+      return null;
+    } finally {
+      setHowlControlBusy("");
+    }
+  }, [activeSessionDoc?.id, howlCommandForm, liveSession?.activeSessionId, refreshHowlTelemetry]);
+
+  const sendHowlEmergencyStop = useCallback(async () => {
+    setHowlControlBusy("emergency_stop");
+    setHowlError("");
+    try {
+      const response = await fetch(apiUrl("/howl/control/emergency-stop"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel: "all",
+          session: liveSession?.activeSessionId || activeSessionDoc?.id || null,
+          reason: "manual_live_capture_emergency_stop",
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Emergency stop was rejected.");
+      setHowlCommandForm((prev) => ({ ...prev, intensity: 0, enabled: false }));
+      setHowlControlStatus(data.dispatch?.message || "Emergency stop queued.");
+      await refreshHowlTelemetry({ quiet: true });
+      return data;
+    } catch (error) {
+      setHowlError(error?.message || "Unable to send emergency stop.");
+      return null;
+    } finally {
+      setHowlControlBusy("");
+    }
+  }, [activeSessionDoc?.id, liveSession?.activeSessionId, refreshHowlTelemetry]);
 
   const disconnectDirectH10 = useCallback(async ({ updateStatus = true } = {}) => {
     directH10IntentionalDisconnectRef.current = true;
@@ -1691,6 +1901,118 @@ export default function LiveCapture() {
     howlTelemetry?.power_level != null ? `power ${fmtNumber(howlTelemetry.power_level, 0)}` : null,
   ].filter(Boolean).join(" · ");
   const howlEndpointText = `${apiUrl("/howl/telemetry").replace(/^https?:\/\/[^/]+/, "")}`;
+  const howlControlEnabled = Boolean(howlControlForm.controlEnabled);
+  const howlSarahAutoEnabled = Boolean(howlControlForm.sarahAutoEnabled);
+  const howlControlCeiling = readNumber(howlControlForm.intensityCeiling) ?? 20;
+  const howlControlFloor = readNumber(howlControlForm.intensityFloor) ?? 0;
+  const howlHelperPollPath = apiUrl("/howl/control/next?client=howl-helper").replace(/^https?:\/\/[^/]+/, "");
+  const howlControlUrlPreview = previewHowlControlUrl(howlControlForm.controlUrl);
+  const howlRemoteKeyReady = Boolean(String(howlControlForm.remoteAccessKey || "").trim());
+  const howlConnectionSucceeded = howlConnectionTest.status === "ok";
+  const howlManualControlsUnlocked = howlControlEnabled && howlConnectionSucceeded;
+  const howlControlModeLabel = howlControlEnabled
+    ? howlControlForm.dispatchMode === "direct_http"
+      ? "Direct HTTP"
+      : howlControlForm.dispatchMode === "queue_and_direct"
+        ? "Queue + direct"
+        : "Helper queue"
+    : "Disabled";
+
+  useEffect(() => {
+    if (!howlManualControlsUnlocked || !howlSarahAutoEnabled) {
+      setHowlAutoStatus(howlManualControlsUnlocked ? "Sarah auto-control is off." : "Manual Howl control must be enabled and tested first.");
+      return;
+    }
+    if (!hrTelemetry || !hrConnected) {
+      setHowlAutoStatus("Sarah is armed, waiting for live HR/HRV.");
+      return;
+    }
+    if (howlControlBusy) return;
+
+    const now = Date.now();
+    const cooldownMs = Math.max(2000, (readNumber(howlControlForm.autoCooldownSeconds) ?? 8) * 1000);
+    const last = howlAutoLastActionRef.current || { at: 0, intensity: null };
+    if (now - last.at < cooldownMs) {
+      const remaining = Math.ceil((cooldownMs - (now - last.at)) / 1000);
+      setHowlAutoStatus(`Sarah holding for ${remaining}s after last adjustment.`);
+      return;
+    }
+
+    const channel = howlCommandForm.channel || "a";
+    const observedIntensity = readHowlChannelIntensity(howlTelemetry, channel);
+    const currentIntensity = readNumber(observedIntensity, last.intensity, howlCommandForm.intensity, 0) ?? 0;
+    const floor = Math.max(0, howlControlFloor);
+    const ceiling = Math.max(floor, howlControlCeiling);
+    const buildStep = Math.max(0, readNumber(howlControlForm.buildStep) ?? 1);
+    const reduceStep = Math.max(0, readNumber(howlControlForm.reduceStep) ?? 2);
+    const nearThreshold = readNumber(howlControlForm.nearClimaxThreshold) ?? 72;
+    const buildThreshold = readNumber(howlControlForm.buildThreshold) ?? 32;
+    const recoveryThreshold = readNumber(howlControlForm.recoveryThreshold) ?? 55;
+
+    let target = currentIntensity;
+    let reason = "";
+    if (howlControlForm.recoveryReductionEnabled !== false && prediction.recovery >= recoveryThreshold) {
+      target = Math.max(floor, currentIntensity - reduceStep);
+      reason = `sarah_auto_recovery_reduce recovery=${prediction.recovery} near=${prediction.nearClimax}`;
+    } else if (howlControlForm.nearClimaxReductionEnabled !== false && prediction.nearClimax >= nearThreshold) {
+      target = Math.max(floor, currentIntensity - reduceStep);
+      reason = `sarah_auto_near_climax_reduce near=${prediction.nearClimax} recovery=${prediction.recovery}`;
+    } else if (howlControlForm.buildRampEnabled !== false && prediction.nearClimax >= buildThreshold && prediction.nearClimax < Math.max(buildThreshold + 6, nearThreshold - 10)) {
+      target = Math.min(ceiling, currentIntensity + buildStep);
+      reason = `sarah_auto_gradual_build near=${prediction.nearClimax} recovery=${prediction.recovery}`;
+    }
+
+    target = Math.max(floor, Math.min(ceiling, Math.round(target)));
+    if (target === Math.round(currentIntensity)) {
+      setHowlAutoStatus(`Sarah holding intensity ${Math.round(currentIntensity)}. ${prediction.reason || prediction.label}`);
+      return;
+    }
+
+    howlAutoLastActionRef.current = { at: now, intensity: target, reason };
+    setHowlCommandForm((prev) => ({ ...prev, intensity: target }));
+    setHowlAutoStatus(`Sarah ${target > currentIntensity ? "increased" : "reduced"} Howl intensity to ${target}.`);
+    sendHowlControlCommand("set_intensity", {
+      channel,
+      intensity: target,
+      reason,
+      controller: {
+        source: "sarah_live_hrv_controller",
+        nearClimax: prediction.nearClimax,
+        recovery: prediction.recovery,
+        label: prediction.label,
+        hrvSignal: prediction.hrvSignal,
+        hrvUsable: prediction.hrvUsable,
+        rmssd: prediction.rmssd,
+        rrCount: prediction.rrCount,
+        currentHr: readNumber(hrTelemetry?.currentHr, hrTelemetry?.hr, hrTelemetry?.heartRate),
+        observedIntensity,
+        previousIntensity: currentIntensity,
+        targetIntensity: target,
+      },
+    });
+  }, [
+    howlCommandForm.channel,
+    howlCommandForm.intensity,
+    howlControlBusy,
+    howlControlCeiling,
+    howlControlFloor,
+    howlControlForm.autoCooldownSeconds,
+    howlControlForm.buildRampEnabled,
+    howlControlForm.buildStep,
+    howlControlForm.buildThreshold,
+    howlControlForm.nearClimaxReductionEnabled,
+    howlControlForm.nearClimaxThreshold,
+    howlControlForm.recoveryReductionEnabled,
+    howlControlForm.recoveryThreshold,
+    howlControlForm.reduceStep,
+    howlManualControlsUnlocked,
+    howlSarahAutoEnabled,
+    howlTelemetry,
+    hrConnected,
+    hrTelemetry,
+    prediction,
+    sendHowlControlCommand,
+  ]);
   const emgCalibrationSteps = useMemo(() => {
     if (!usingPerinealEmgConfig) return EMG_CALIBRATION_STEPS;
     return EMG_CALIBRATION_STEPS.map((step) => {
@@ -2964,23 +3286,40 @@ export default function LiveCapture() {
 
             <SetupTile
               icon={<Zap className="h-3.5 w-3.5 text-primary" />}
-              label="Howl Telemetry"
-              value={howlLive ? "Live" : "Read-only"}
+              label="Howl Control"
+              value={howlSarahAutoEnabled ? "Sarah armed" : howlManualControlsUnlocked ? "Manual ready" : howlConnectionSucceeded ? "Tested" : howlLive ? "Telemetry live" : "Setup needed"}
               helper={howlLive
-                ? howlModeSummary || `Last sample ${fmtTime(howlMeasuredAt)}`
-                : howlError || `POST device state to ${howlEndpointText}`}
-              active={howlLive}
+                ? `${howlModeSummary || `Last sample ${fmtTime(howlMeasuredAt)}`} · ${howlSarahAutoEnabled ? howlAutoStatus : howlControlModeLabel}`
+                : howlError || `Direct HTTP ${howlControlUrlPreview || "http://PHONE_IP:4695"}; telemetry POST ${howlEndpointText}`}
+              active={howlLive || howlControlEnabled || howlSarahAutoEnabled || howlConnectionSucceeded}
             >
               <button
                 type="button"
-                onClick={() => refreshHowlTelemetry()}
+                onClick={() => setHowlControlOpen((open) => !open)}
+                className="rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20"
+              >
+                Controls
+              </button>
+              {howlControlEnabled && (
+                <button
+                  type="button"
+                  onClick={sendHowlEmergencyStop}
+                  disabled={howlControlBusy === "emergency_stop"}
+                  className="rounded-md bg-destructive/15 px-2.5 py-1.5 text-xs font-semibold text-destructive hover:bg-destructive/25 disabled:opacity-50"
+                >
+                  Stop
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => refreshHowlTelemetry({ forceSettings: true })}
                 disabled={howlRefreshing}
                 className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
               >
                 {howlRefreshing ? "Checking..." : "Refresh"}
               </button>
               <span className="rounded-md bg-muted px-2.5 py-1.5 text-xs font-semibold text-muted-foreground">
-                {howlCapabilities?.mode || "read_only"}
+                {howlCapabilities?.mode || "manual_control"}
               </span>
             </SetupTile>
 
@@ -3110,6 +3449,425 @@ export default function LiveCapture() {
           />
         </div>
       </CollapsibleControlSection>}
+
+      {!focusView && !mainTelemetryView && (
+        <div className="rounded-xl border border-border bg-card">
+          <button
+            type="button"
+            onClick={() => setHowlControlOpen((open) => !open)}
+            className="flex w-full items-start gap-3 p-4 text-left"
+            aria-expanded={howlControlOpen}
+          >
+            <Zap className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wider text-primary">Howl Connection Setup</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Connect to Howl remote access, test /status, then unlock bounded manual controls.
+              </p>
+            </div>
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                howlControlEnabled ? "border-primary/35 bg-primary/10 text-primary" : "border-border bg-muted/30 text-muted-foreground"
+              }`}>
+                {howlControlModeLabel}
+              </span>
+              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${howlControlOpen ? "rotate-180" : ""}`} />
+            </div>
+          </button>
+          {howlControlOpen && (
+            <div className="space-y-4 border-t border-border p-4">
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <div className="rounded-lg border border-primary/20 bg-primary/[0.06] p-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">Howl Connection Setup</p>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        Open Howl settings on the phone, enable Allow remote access, then copy the remote access key here.
+                      </p>
+                    </div>
+                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider ${
+                      howlConnectionSucceeded ? "bg-emerald-500/10 text-emerald-300" : "bg-muted text-muted-foreground"
+                    }`}>
+                      {howlConnectionSucceeded ? "Connection tested" : "Needs test"}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 space-y-4">
+                    <div className="rounded-lg border border-border bg-background/70 p-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Step 1</p>
+                      <p className="mt-1 text-sm font-semibold text-foreground">Enable remote access in Howl</p>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        Open Howl settings, turn on Allow remote access, then copy the remote access key.
+                      </p>
+                    </div>
+
+                    <label className="block space-y-1">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Step 2 · Phone IP or Howl URL</span>
+                      <input
+                        className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                        value={howlControlForm.controlUrl}
+                        placeholder="192.168.1.42 or http://192.168.1.42:4695"
+                        onFocus={() => { howlFocusedFieldRef.current = "controlUrl"; }}
+                        onBlur={() => { howlFocusedFieldRef.current = ""; }}
+                        onChange={(event) => updateHowlControlForm({ controlUrl: event.target.value })}
+                      />
+                      <span className="block text-[11px] text-muted-foreground">
+                        URL preview: <span className="font-mono text-foreground">{howlControlUrlPreview || "http://PHONE_IP:4695"}</span>
+                      </span>
+                    </label>
+
+                    <label className="block space-y-1">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Step 3 · Remote access key</span>
+                      <input
+                        className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                        type="password"
+                        value={howlControlForm.remoteAccessKey || ""}
+                        placeholder="Paste Howl remote access key"
+                        autoComplete="off"
+                        onFocus={() => { howlFocusedFieldRef.current = "remoteAccessKey"; }}
+                        onBlur={() => { howlFocusedFieldRef.current = ""; }}
+                        onChange={(event) => updateHowlControlForm({ remoteAccessKey: event.target.value })}
+                      />
+                      <span className="block text-[11px] text-muted-foreground">Local setting: {maskHowlKey(howlControlForm.remoteAccessKey)}</span>
+                    </label>
+
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <label className="space-y-1">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Intensity ceiling</span>
+                        <input
+                          className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                          type="number"
+                          min="0"
+                          max="100"
+                          value={howlControlForm.intensityCeiling}
+                          onChange={(event) => updateHowlControlForm({ intensityCeiling: event.target.value }, { resetConnection: false })}
+                        />
+                      </label>
+                      <label className="space-y-1">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Default dispatch</span>
+                        <div className="flex h-10 items-center rounded-lg border border-border bg-background px-3 text-sm font-semibold text-foreground">
+                          Direct HTTP
+                        </div>
+                      </label>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setHowlAdvancedOpen((open) => !open)}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground"
+                    >
+                      <ChevronDown className={`h-3.5 w-3.5 transition-transform ${howlAdvancedOpen ? "rotate-180" : ""}`} />
+                      Advanced dispatch modes
+                    </button>
+                    {howlAdvancedOpen && (
+                      <div className="rounded-lg border border-border bg-background/70 p-3">
+                        <label className="space-y-1">
+                          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Dispatch mode</span>
+                          <select
+                            className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                            value={howlControlForm.dispatchMode}
+                            onChange={(event) => updateHowlControlForm({ dispatchMode: event.target.value }, { resetConnection: false })}
+                          >
+                            <option value="direct_http">Direct HTTP</option>
+                            <option value="queue">Helper queue</option>
+                            <option value="queue_and_direct">Queue + direct</option>
+                          </select>
+                        </label>
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          Helper queue exposes commands at <span className="font-mono text-foreground">{howlHelperPollPath}</span>. Normal setup should stay on Direct HTTP.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={testHowlConnection}
+                      disabled={howlControlBusy === "test" || !howlControlForm.controlUrl || !howlRemoteKeyReady}
+                      className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      {howlControlBusy === "test" ? "Testing..." : "Test Howl Connection"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => saveHowlControlSettings()}
+                      disabled={howlControlBusy === "settings"}
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
+                    >
+                      {howlControlBusy === "settings" ? "Saving..." : "Save bridge settings"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => refreshHowlTelemetry({ forceSettings: true })}
+                      disabled={howlRefreshing}
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
+                    >
+                      {howlRefreshing ? "Checking..." : "Refresh state"}
+                    </button>
+                  </div>
+                  {(howlSettingsDirty || howlConnectionTest.message) && (
+                    <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+                      howlConnectionTest.status === "ok"
+                        ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+                        : howlConnectionTest.status === "error"
+                          ? "border-destructive/30 bg-destructive/10 text-destructive"
+                          : "border-border bg-background/70 text-muted-foreground"
+                    }`}>
+                      {howlConnectionTest.message || "Unsaved Howl settings."}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-border bg-muted/20 p-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">Step 5 · Manual control</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Manual control unlocks after /status succeeds. Commands are capped at {fmtNumber(howlControlCeiling, 0)} server-side and client-side.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => saveHowlControlSettings({ controlEnabled: !howlControlEnabled, sarahAutoEnabled: false })}
+                      disabled={howlControlBusy === "settings" || (!howlControlEnabled && !howlConnectionSucceeded)}
+                      className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                        howlControlEnabled ? "bg-primary/15 text-primary hover:bg-primary/25" : "bg-primary text-primary-foreground hover:bg-primary/90"
+                      }`}
+                    >
+                      {howlControlBusy === "settings" ? "Saving..." : howlControlEnabled ? "Disable manual control" : "Enable manual control"}
+                    </button>
+                  </div>
+
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <label className="space-y-1 sm:col-span-2">
+                      <span className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        <span>Intensity ceiling</span>
+                        <span>{fmtNumber(howlControlCeiling, 0)}</span>
+                      </span>
+                      <input
+                        className="w-full accent-primary"
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={Math.max(0, Math.min(100, Number(howlControlForm.intensityCeiling) || 0))}
+                        onChange={(event) => updateHowlControlForm({ intensityCeiling: Number(event.target.value) }, { resetConnection: false })}
+                      />
+                    </label>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => sendHowlControlCommand("increment_power", { channel: "a", step: 1 })}
+                      disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy)}
+                      className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      Power up A
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => sendHowlControlCommand("decrement_power", { channel: "a", step: 1 })}
+                      disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy)}
+                      className="rounded-lg bg-primary/10 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      Power down A
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => sendHowlControlCommand("increment_power", { channel: "b", step: 1 })}
+                      disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy)}
+                      className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      Power up B
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => sendHowlControlCommand("decrement_power", { channel: "b", step: 1 })}
+                      disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy)}
+                      className="rounded-lg bg-primary/10 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      Power down B
+                    </button>
+                    <button
+                      type="button"
+                      onClick={sendHowlEmergencyStop}
+                      disabled={!howlControlEnabled || Boolean(howlControlBusy)}
+                      className="rounded-lg bg-destructive px-3 py-2 text-xs font-semibold text-destructive-foreground hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      Mute / emergency stop
+                    </button>
+                  </div>
+                  {!howlManualControlsUnlocked && (
+                    <p className="mt-3 rounded-lg border border-border bg-background/70 px-3 py-2 text-xs text-muted-foreground">
+                      Test the Howl connection, then enable manual control. Closed-loop remains off until you explicitly arm it later.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-primary/20 bg-primary/[0.045] p-3">
+                <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Sarah HR/HRV controller</p>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      Closed-loop stays off by default. Manual Howl control must be tested and enabled before Sarah can be armed.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => saveHowlControlSettings({ sarahAutoEnabled: !howlSarahAutoEnabled })}
+                    disabled={!howlManualControlsUnlocked || howlControlBusy === "settings"}
+                    className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                      howlSarahAutoEnabled ? "bg-primary/15 text-primary hover:bg-primary/25" : "bg-primary text-primary-foreground hover:bg-primary/90"
+                    }`}
+                  >
+                    {howlSarahAutoEnabled ? "Sarah auto off" : "Arm Sarah auto"}
+                  </button>
+                </div>
+
+                <div className="mt-3 grid gap-2 md:grid-cols-5">
+                  <label className="space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Build starts</span>
+                    <input
+                      className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={howlControlForm.buildThreshold}
+                      onChange={(event) => updateHowlControlForm({ buildThreshold: event.target.value }, { resetConnection: false })}
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Reduce near</span>
+                    <input
+                      className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={howlControlForm.nearClimaxThreshold}
+                      onChange={(event) => updateHowlControlForm({ nearClimaxThreshold: event.target.value }, { resetConnection: false })}
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Recovery</span>
+                    <input
+                      className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={howlControlForm.recoveryThreshold}
+                      onChange={(event) => updateHowlControlForm({ recoveryThreshold: event.target.value }, { resetConnection: false })}
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Step up</span>
+                    <input
+                      className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                      type="number"
+                      min="0"
+                      max="10"
+                      value={howlControlForm.buildStep}
+                      onChange={(event) => updateHowlControlForm({ buildStep: event.target.value }, { resetConnection: false })}
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Step down</span>
+                    <input
+                      className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                      type="number"
+                      min="0"
+                      max="25"
+                      value={howlControlForm.reduceStep}
+                      onChange={(event) => updateHowlControlForm({ reduceStep: event.target.value }, { resetConnection: false })}
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Cooldown sec</span>
+                    <input
+                      className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                      type="number"
+                      min="2"
+                      max="120"
+                      value={howlControlForm.autoCooldownSeconds}
+                      onChange={(event) => updateHowlControlForm({ autoCooldownSeconds: event.target.value }, { resetConnection: false })}
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground md:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={howlControlForm.buildRampEnabled !== false}
+                      onChange={(event) => updateHowlControlForm({ buildRampEnabled: event.target.checked }, { resetConnection: false })}
+                    />
+                    Gradually increase during build
+                  </label>
+                  <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground md:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={howlControlForm.nearClimaxReductionEnabled !== false}
+                      onChange={(event) => updateHowlControlForm({ nearClimaxReductionEnabled: event.target.checked }, { resetConnection: false })}
+                    />
+                    Reduce during near-climax watch
+                  </label>
+                  <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={howlControlForm.recoveryReductionEnabled !== false}
+                      onChange={(event) => updateHowlControlForm({ recoveryReductionEnabled: event.target.checked }, { resetConnection: false })}
+                    />
+                    Recovery
+                  </label>
+                </div>
+
+                <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
+                    <span className="font-semibold text-foreground">Sarah status:</span> {howlAutoStatus}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => saveHowlControlSettings()}
+                    disabled={howlControlBusy === "settings"}
+                    className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
+                  >
+                    Save Sarah controller
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-2">
+                <div className="rounded-lg border border-border bg-muted/20 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Latest Howl telemetry</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">{howlLive ? howlModeSummary || "Howl sample received" : "No recent Howl sample"}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Telemetry ingest: <span className="font-mono text-foreground">{howlEndpointText}</span>
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/20 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Recent commands</p>
+                  <div className="mt-2 space-y-1">
+                    {howlCommandHistory.length ? howlCommandHistory.slice(0, 4).map((command) => (
+                      <div key={command.id} className="flex items-center justify-between gap-2 rounded-md bg-card px-2 py-1.5 text-xs">
+                        <span className="truncate text-foreground">{command.action} · {command.channel}{command.intensity != null ? ` · ${command.intensity}` : ""}</span>
+                        <span className="shrink-0 text-muted-foreground">{command.status}</span>
+                      </div>
+                    )) : (
+                      <p className="text-xs text-muted-foreground">No commands sent yet.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {howlControlStatus && (
+                <div className="rounded-lg border border-primary/25 bg-primary/10 px-3 py-2 text-xs text-primary">{howlControlStatus}</div>
+              )}
+              {howlError && (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">{howlError}</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {!focusView && !mainTelemetryView && voiceAnnotationPanel}
 

@@ -105,7 +105,7 @@ function entityApi(entity) {
 }
 
 const entityNames = [
-  'Session', 'BodyExploration', 'HeartRateTimeline', 'EMGTimeline', 'HowlTelemetry', 'AudioExport', 'SessionReviewVideo', 'CompareAnalysisResult',
+  'Session', 'BodyExploration', 'HeartRateTimeline', 'EMGTimeline', 'HowlTelemetry', 'HowlControlCommand', 'HowlControlSettings', 'AudioExport', 'SessionReviewVideo', 'CompareAnalysisResult',
   'CascadeAnalysisResult', 'SessionClusterAnalysis', 'Journal', 'CustomMethod', 'User',
 ];
 

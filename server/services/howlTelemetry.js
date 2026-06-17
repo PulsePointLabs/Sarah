@@ -59,12 +59,12 @@ function normalizeChannelState(input = {}) {
 }
 
 export const HOWL_CONTROL_DEFAULT_LIMITS = Object.freeze({
-  readOnly: true,
+  readOnly: false,
   manualOverrideRequired: true,
   emergencyStopRequired: true,
   intensityFloor: 0,
-  intensityCeiling: null,
-  rampRateLimitPerSecond: null,
+  intensityCeiling: 20,
+  rampRateLimitPerSecond: 5,
 });
 
 export function normalizeHowlTelemetrySample(input = {}) {
