@@ -152,6 +152,54 @@
   }
 }
 
+@layer components {
+  @media (max-width: 950px) {
+    .video-sync-surface:not(.video-sync-fullscreen) {
+      height: auto !important;
+      min-height: 0 !important;
+      max-height: none !important;
+    }
+
+    .video-sync-media {
+      flex: 0 0 auto !important;
+      aspect-ratio: 16 / 9;
+      max-height: min(58svh, 26rem);
+    }
+
+    .video-sync-event-panel {
+      max-height: min(38svh, 18rem);
+    }
+  }
+
+  @media (orientation: landscape) and (max-height: 650px) and (pointer: coarse),
+    (orientation: landscape) and (max-height: 650px) and (max-width: 1400px) {
+    .video-sync-surface {
+      display: grid !important;
+      grid-template-columns: minmax(0, 1fr) minmax(17rem, 34vw);
+      height: 100svh !important;
+      min-height: 0 !important;
+      max-height: 100svh !important;
+    }
+
+    .video-sync-media {
+      aspect-ratio: auto;
+      height: 100%;
+      min-height: 0;
+      max-height: none;
+    }
+
+    .video-sync-event-panel {
+      display: block !important;
+      height: 100%;
+      max-height: 100svh !important;
+      overflow-y: auto !important;
+      border-top: 0;
+      border-left: 1px solid hsl(var(--border));
+      padding-bottom: calc(env(safe-area-inset-bottom) + 0.5rem);
+    }
+  }
+}
+
 .theme-sarah-lavender {
   --background: 286 38% 97%;
   --foreground: 260 22% 16%;

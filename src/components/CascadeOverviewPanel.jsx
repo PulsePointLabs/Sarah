@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { AlertCircle, TrendingUp, Zap, Activity, Flag, Brain, ChevronDown, ChevronUp } from "lucide-react";
 import AIOutputReader from "./AIOutputReader";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
-import { generateSessionKeyVideoClips } from "./SessionAIPanel";
+import { generateSessionKeyVideoClips, SessionReviewVideoExportButton } from "./SessionAIPanel";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt } from "@/utils/aiContentMetadata";
@@ -25,6 +25,15 @@ function fmtDur(s) {
   const v = Math.round(Math.abs(s));
   return v >= 60 ? `${Math.floor(v / 60)}m ${v % 60}s` : `${v}s`;
 }
+
+const CASCADE_PHASES = [
+  { key: "build_phase", color: "#6366f1", title: "Build Phase", icon: <Activity className="w-3.5 h-3.5" /> },
+  { key: "pre_climax_phase", color: "#a855f7", title: "Pre-Climax", icon: <Zap className="w-3.5 h-3.5" /> },
+  { key: "climax_phase", color: "#ef4444", title: "Climax", icon: <Flag className="w-3.5 h-3.5" /> },
+  { key: "recovery_phase", color: "#3b82f6", title: "Recovery", icon: <TrendingUp className="w-3.5 h-3.5" style={{ transform: "scaleY(-1)" }} /> },
+  { key: "physiological_findings", color: "#10b981", title: "Physiological Findings", icon: <Brain className="w-3.5 h-3.5" /> },
+  { key: "event_sequence_analysis", color: "#f59e0b", title: "Event Sequence Analysis", icon: <Zap className="w-3.5 h-3.5" /> },
+];
 
 function aiErrorMessage(error) {
   const raw = error?.data?.error || error?.message || String(error || "Analysis failed");
@@ -84,13 +93,50 @@ function PhaseBlock({ color, icon, title, items }) {
 }
 
 export default function CascadeOverviewPanel({ session, timelineRows, emgRows = [], userProfile, sessionJournal }) {
-  const [collapsed, setCollapsed] = useState(true);
+  const [collapsed, setCollapsed] = useState(!session.ai_cascade);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(session.ai_cascade ?? null);
   const [error, setError] = useState("");
   const jobKey = `cascade-overview:${session.id}`;
 
   const hasMarkers = session.climax_offset_s != null;
+  const cascadeReaderData = (() => {
+    if (!result) return { paras: [], paraMeta: [] };
+    const paras = [];
+    const paraMeta = [];
+    if (result.summary) {
+      paras.push(result.summary);
+      paraMeta.push({ type: "summary" });
+    }
+    for (const ph of CASCADE_PHASES) {
+      const val = result[ph.key];
+      if (!val) continue;
+      const values = Array.isArray(val) ? val : [val];
+      for (const text of values) {
+        paras.push(text);
+        paraMeta.push({
+          type: ph.key === "cascade_quality" ? "section" : "phase",
+          sec: {
+            key: ph.key,
+            label: ph.title,
+            color: ph.color,
+          },
+        });
+      }
+    }
+    if (result.cascade_quality) {
+      paras.push(result.cascade_quality);
+      paraMeta.push({
+        type: "section",
+        sec: {
+          key: "cascade_quality",
+          label: "Cascade Quality Assessment",
+          color: "hsl(var(--primary))",
+        },
+      });
+    }
+    return { paras, paraMeta };
+  })();
 
   const persistCascadeResult = async (rawResult) => {
     const parsed = normalizeCascadeOverview(rawResult);
@@ -559,20 +605,11 @@ ${annotatedEvents.length > 0 ? `\nAnnotated event timeline (with HR at each mome
       }
 
       {!collapsed && result && (() => {
-        const PHASES = [
-        { key: "build_phase", color: "#6366f1", title: "Build Phase", icon: <Activity className="w-3.5 h-3.5" /> },
-        { key: "pre_climax_phase", color: "#a855f7", title: "Pre-Climax", icon: <Zap className="w-3.5 h-3.5" /> },
-        { key: "climax_phase", color: "#ef4444", title: "Climax", icon: <Flag className="w-3.5 h-3.5" /> },
-        { key: "recovery_phase", color: "#3b82f6", title: "Recovery", icon: <TrendingUp className="w-3.5 h-3.5" style={{ transform: "scaleY(-1)" }} /> },
-        { key: "physiological_findings", color: "#10b981", title: "Physiological Findings", icon: <Brain className="w-3.5 h-3.5" /> },
-        { key: "event_sequence_analysis", color: "#f59e0b", title: "Event Sequence Analysis", icon: <Zap className="w-3.5 h-3.5" /> }];
-
-
         // Build flat paragraph list with metadata for rendering
         // phases are now strings (prose), support both string and legacy array format
         const paras = [];
         if (result.summary) paras.push({ key: "summary", text: result.summary, type: "summary", color: null });
-        for (const ph of PHASES) {
+        for (const ph of CASCADE_PHASES) {
           const val = result[ph.key];
           if (!val) continue;
           if (Array.isArray(val)) {
@@ -608,6 +645,23 @@ ${annotatedEvents.length > 0 ? `\nAnnotated event timeline (with HR at each mome
             {!keyVideoClips.length && keyVideoClipError && (
               <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
                 Key video clips were not added: {keyVideoClipError}
+              </div>
+            )}
+            {cascadeReaderData.paras.length > 0 && (
+              <div className="rounded-xl border border-primary/20 bg-primary/[0.045] p-3">
+                <div className="mb-2">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">Climax Cascade Video</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Builds a narrated MP4 from this cascade overview and phase analysis.
+                  </p>
+                </div>
+                <SessionReviewVideoExportButton
+                  session={session}
+                  analysisTitle="Climax Cascade"
+                  sourceGeneratedAt={result?._meta?.last_generated_at ? `${result._meta.last_generated_at}:climax-cascade` : `${session.id || session.date || "session"}:climax-cascade`}
+                  paragraphs={cascadeReaderData.paras}
+                  paragraphMeta={cascadeReaderData.paraMeta}
+                />
               </div>
             )}
             <AIOutputReader

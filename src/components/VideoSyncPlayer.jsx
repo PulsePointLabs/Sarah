@@ -1203,6 +1203,12 @@ export default function VideoSyncPlayer({
   const hasSidebarContent = chartData.length > 0 || events.length > 0 || !!savedMotionSummary;
   const showSidebar = hasSidebarContent && telemetryDisplayMode === "sidebar";
   const showMobileEventPanel = telemetryDisplayMode === "overlay" && closestVisibleEvent;
+  const mobileEventPanelExpanded = mobileEventSheetOpen || fullscreenActive;
+  const mobileNearbyEventEntries = useMemo(() => visibleEventEntries
+    .map(({ ev, i }) => ({ ev, i, dist: Math.abs(Number(ev.time_s) - playheadS) }))
+    .filter(({ dist }) => dist <= 120)
+    .sort((a, b) => a.dist - b.dist)
+    .slice(0, 5), [playheadS, visibleEventEntries]);
   const displayedFeeds = videoLayout === "multi"
     ? loadedFeeds
     : loadedFeeds.filter((feed) => feed.key === activeFeedKey);
@@ -1547,7 +1553,7 @@ export default function VideoSyncPlayer({
           <div className="space-y-3">
             <div
               ref={fullscreenSurfaceRef}
-              className={`relative flex w-full flex-col overflow-hidden bg-black ${fullscreenActive ? "h-screen rounded-none" : "rounded-lg"}`}
+              className={`video-sync-surface relative flex w-full flex-col overflow-hidden bg-black ${fullscreenActive ? "video-sync-fullscreen h-screen rounded-none" : "rounded-lg"}`}
               style={fullscreenActive ? undefined : { height: `${playerHeight}vh`, minHeight: 280, maxHeight: "82vh" }}
               onPointerMove={() => {
                 if (fullscreenActive) showFullscreenControls();
@@ -1562,7 +1568,7 @@ export default function VideoSyncPlayer({
                 if (fullscreenActive) showFullscreenControls();
               }}
             >
-              <div className={`relative min-h-0 min-w-0 flex-1 bg-black ${videoLayout === "multi" && displayedFeeds.length > 1 ? "grid gap-px bg-border md:grid-cols-2" : ""}`}>
+              <div className={`video-sync-media relative min-h-0 min-w-0 flex-1 bg-black ${videoLayout === "multi" && displayedFeeds.length > 1 ? "grid gap-px bg-border md:grid-cols-2" : ""}`}>
               {displayedFeeds.map((feed) => {
                 const isMaster = feed.key === activeFeedKey;
                 return (
@@ -1730,12 +1736,12 @@ export default function VideoSyncPlayer({
               )}
               </div>
               {showMobileEventPanel && (
-                <div className={`min-[951px]:hidden shrink-0 border-t border-border bg-card text-foreground shadow-2xl ${fullscreenActive ? "max-h-[42vh] pb-[calc(env(safe-area-inset-bottom)+0.5rem)]" : "max-h-[46vh]"} ${mobileEventSheetOpen ? "overflow-y-auto" : "overflow-hidden"}`}>
+                <div className={`video-sync-event-panel min-[951px]:hidden shrink-0 border-t border-border bg-card text-foreground shadow-2xl ${fullscreenActive ? "max-h-[42vh] pb-[calc(env(safe-area-inset-bottom)+0.5rem)]" : "max-h-[46vh]"} ${mobileEventPanelExpanded ? "overflow-y-auto" : "overflow-hidden"}`}>
                   <button
                     type="button"
                     onClick={() => setMobileEventSheetOpen((value) => !value)}
                     className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left"
-                    aria-expanded={mobileEventSheetOpen}
+                    aria-expanded={mobileEventPanelExpanded}
                   >
                     <div className="min-w-0">
                       <div className="flex min-w-0 items-center gap-2">
@@ -1755,14 +1761,14 @@ export default function VideoSyncPlayer({
                       <span className="rounded-full bg-muted px-2 py-1 font-mono text-[10px] font-semibold text-muted-foreground">
                         {closestVisibleEventRelativeText}
                       </span>
-                      {mobileEventSheetOpen ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
+                      {mobileEventPanelExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
                     </div>
                   </button>
-                  <div className={`px-3 ${mobileEventSheetOpen ? "pb-3" : "pb-2"}`}>
-                    <p className={`${mobileEventSheetOpen ? "text-base leading-relaxed" : "line-clamp-1 text-xs"} text-foreground`}>
+                  <div className={`px-3 ${mobileEventPanelExpanded ? "pb-3" : "pb-2"}`}>
+                    <p className={`${mobileEventPanelExpanded ? "text-base leading-relaxed" : "line-clamp-1 text-xs"} text-foreground`}>
                       {closestVisibleEvent.ev.note || "Event note"}
                     </p>
-                    {mobileEventSheetOpen && (
+                    {mobileEventPanelExpanded && (
                       <div className="mt-3 space-y-3">
                         <div className="flex flex-wrap gap-1.5">
                           {closestVisibleEventCategories.map((category) => {
@@ -1798,6 +1804,38 @@ export default function VideoSyncPlayer({
                             <p className="mt-0.5 font-mono font-semibold text-rose-500">{currentHR != null ? `${currentHR} bpm` : "No data"}</p>
                           </div>
                         </div>
+                        {mobileNearbyEventEntries.length > 1 && (
+                          <div className="space-y-1.5">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Nearby events</p>
+                            {mobileNearbyEventEntries.map(({ ev, i, dist }) => {
+                              const color = EVENT_COLORS[i % EVENT_COLORS.length];
+                              const cats = normalizeCategoryArray(ev.category);
+                              const primaryMeta = getCategoryMeta(cats[0] || "other");
+                              return (
+                                <button
+                                  key={`${i}-${ev.time_s}`}
+                                  type="button"
+                                  onClick={() => seekToEvent(ev, i)}
+                                  className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors"
+                                  style={{ background: `${color}14`, borderLeft: `3px solid ${color}` }}
+                                >
+                                  <span className="shrink-0 font-mono text-[10px] font-bold" style={{ color }}>
+                                    {fmtMmSs(ev.time_s)}
+                                  </span>
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block truncate text-[10px] font-semibold uppercase tracking-wide" style={{ color: primaryMeta.color }}>
+                                      {primaryMeta.label}
+                                    </span>
+                                    <span className="line-clamp-2 text-foreground">{ev.note || "Event note"}</span>
+                                  </span>
+                                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                                    {dist < 1 ? "now" : `${Math.round(dist)}s`}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

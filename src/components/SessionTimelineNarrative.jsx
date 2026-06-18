@@ -8,6 +8,7 @@ import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
 import { buildSessionAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 import { formatSecondsAsWords } from "@/utils/aiTextRepair";
+import { SessionReviewVideoExportButton } from "./SessionAIPanel";
 
 function getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -22,7 +23,7 @@ const SECTION_DEFS = [
 ];
 
 export default function SessionTimelineNarrative({ session, timelineRows, userProfile, sessionJournal }) {
-  const [collapsed, setCollapsed] = useState(true);
+  const [collapsed, setCollapsed] = useState(!session.ai_timeline_narrative);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(session.ai_timeline_narrative ?? null);
   const generatedAt = getAIContentGeneratedAt(result);
@@ -307,6 +308,23 @@ ${JSON.stringify({
               </span>
             )}
           </div>
+          {paras.length > 0 && (
+            <div className="rounded-xl border border-primary/20 bg-primary/[0.045] p-3">
+              <div className="mb-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Arousal Timeline Video</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Builds a narrated MP4 from this timeline and arousal narrative.
+                </p>
+              </div>
+              <SessionReviewVideoExportButton
+                session={session}
+                analysisTitle="Arousal Timeline"
+                sourceGeneratedAt={generatedAt ? `${generatedAt}:arousal-timeline` : `${session.id || session.date || "session"}:arousal-timeline`}
+                paragraphs={paras}
+                paragraphMeta={paraMeta}
+              />
+            </div>
+          )}
           <AIOutputReader
             sessionId={session.id + "_timeline"}
             title="Timeline & Arousal Narrative"

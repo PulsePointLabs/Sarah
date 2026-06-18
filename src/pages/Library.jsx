@@ -3,7 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { listBackgroundJobs } from "@/lib/backgroundJobs";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Play, Pause, Download, Trash2, Music, Video } from "lucide-react";
+import { Play, Pause, Download, Trash2, Music, Video, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import PageHeader from "@/components/PageHeader";
 import { buildAudioExportFilename } from "@/utils/exportFilenames";
@@ -202,6 +202,30 @@ const cleanVideoTitle = (video) => {
   return candidates[0] || "Session review video";
 };
 
+function LibrarySection({ icon, title, count, helper, open, onToggle, children }) {
+  return (
+    <section className="rounded-xl border border-border bg-card overflow-hidden">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/35 transition-colors"
+        aria-expanded={open}
+      >
+        <span className="text-primary">{icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold uppercase tracking-wider text-primary">{title}</span>
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">{count}</span>
+          </span>
+          {helper && <span className="mt-1 block text-xs text-muted-foreground">{helper}</span>}
+        </span>
+        {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+      </button>
+      {open && <div className="border-t border-border p-3 md:p-4">{children}</div>}
+    </section>
+  );
+}
+
 const getDownloadExtension = (export_) => {
   if (export_?.format) return String(export_.format).replace(/^\./, "");
   const source = export_?.filename || getRawAudioUrl(export_);
@@ -213,6 +237,8 @@ export default function Library() {
   const queryClient = useQueryClient();
   const [playingId, setPlayingId] = useState(null);
   const [audioRef, setAudioRef] = useState(null);
+  const [videosOpen, setVideosOpen] = useState(false);
+  const [audioOpen, setAudioOpen] = useState(false);
   const recoveringJobIdsRef = useRef(new Set());
 
   const { data: exports = [], isLoading } = useQuery({
@@ -406,17 +432,19 @@ export default function Library() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Library"
-        subtitle="Manage your TTS audio exports, review videos, and past downloads"
+        title="Multimedia Library"
+        subtitle="Manage review videos, narrated audio exports, manifests, chapters, and past downloads"
       />
 
       {downloadableVideos.length > 0 && (
-        <section className="space-y-3">
-          <div className="flex items-center gap-2 px-1">
-            <Video className="h-4 w-4 text-primary" />
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-primary">Review Videos</h2>
-            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">{downloadableVideos.length}</span>
-          </div>
+        <LibrarySection
+          icon={<Video className="h-4 w-4" />}
+          title="Review Videos"
+          count={downloadableVideos.length}
+          helper="Narrated MP4 review videos, manifests, and completed background renders."
+          open={videosOpen}
+          onToggle={() => setVideosOpen((value) => !value)}
+        >
           <div className="grid gap-4">
             {downloadableVideos.map((video) => {
               const title = cleanVideoTitle(video);
@@ -484,7 +512,7 @@ export default function Library() {
               );
             })}
           </div>
-        </section>
+        </LibrarySection>
       )}
 
       {downloadableExports.length === 0 && downloadableVideos.length === 0 ? (
@@ -496,12 +524,14 @@ export default function Library() {
           </p>
         </div>
       ) : downloadableExports.length > 0 ? (
-        <section className="space-y-3">
-        <div className="flex items-center gap-2 px-1">
-          <Music className="h-4 w-4 text-primary" />
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-primary">Audio Exports</h2>
-          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">{downloadableExports.length}</span>
-        </div>
+        <LibrarySection
+          icon={<Music className="h-4 w-4" />}
+          title="Audio Exports"
+          count={downloadableExports.length}
+          helper="Narrated TTS exports, chapter sidecars, and recoverable completed renders."
+          open={audioOpen}
+          onToggle={() => setAudioOpen((value) => !value)}
+        >
         <div className="grid gap-4">
           <div className="text-xs text-muted-foreground px-1">
             Showing {downloadableExports.length} most recent downloadable audio export{downloadableExports.length === 1 ? "" : "s"}.
@@ -598,7 +628,7 @@ export default function Library() {
             );
           })}
         </div>
-        </section>
+        </LibrarySection>
       ) : null}
     </div>
   );

@@ -74,7 +74,7 @@ const navGroups = [
   {
     label: "Library & System",
     items: [
-      { path: "/library", icon: Music, label: "Audio Library" },
+      { path: "/library", icon: Music, label: "Multimedia Library" },
       { path: "/profile", icon: UserCircle, label: "My Profile" },
       { path: "/settings", icon: Settings2, label: "Settings & Status" },
     ],

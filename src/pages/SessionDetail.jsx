@@ -819,27 +819,6 @@ export default function SessionDetail() {
   const technicalVideoSourceGeneratedAt = s.ai_session_deep_dive?._meta?.last_generated_at
     ? `${s.ai_session_deep_dive._meta.last_generated_at}:technical-deep-dive`
     : `${s.id || s.date || "session"}:technical-deep-dive`;
-  const arousalTimelineSourceGeneratedAt = s.ai_analysis?._meta?.last_generated_at
-    ? `${s.ai_analysis._meta.last_generated_at}:arousal-timeline`
-    : `${s.id || s.date || "session"}:arousal-timeline`;
-  const arousalTimelineData = buildSessionAnalysisReaderData({
-    result: s.ai_analysis ? {
-      summary: s.ai_analysis.summary ? `Arousal timeline overview: ${s.ai_analysis.summary}` : "Arousal timeline overview.",
-      arousal_arc: s.ai_analysis.arousal_arc?.length ? s.ai_analysis.arousal_arc : s.ai_analysis.phase_analysis,
-      event_analysis: [],
-      emg_analysis: [],
-      notable_findings: [],
-      recommendations: [],
-      _meta: {
-        ...(s.ai_analysis._meta || {}),
-        last_generated_at: arousalTimelineSourceGeneratedAt,
-        key_video_clips: s.ai_analysis._meta?.key_video_clips || [],
-      },
-    } : null,
-    session: s,
-    timelineRows,
-    isTechnical: false,
-  });
   const sectionLinks = [
     { id: "session-snapshot", label: "Session Snapshot", group: "Overview" },
     { id: "session-telemetry", label: "Evidence Dashboard", group: "Overview" },
@@ -879,6 +858,65 @@ export default function SessionDetail() {
     };
     if (idByTarget[target]) setPendingSectionId(idByTarget[target]);
   };
+  const sessionStorySection = !s.no_climax ? (
+    <section className="space-y-4">
+      {companionAnalysisData.paragraphs.length > 0 && (
+        <section id="session-ai-video-chat" className="scroll-mt-24">
+          <SessionReviewVideoExportButton
+            session={s}
+            analysisTitle="AI Session Analysis"
+            sourceGeneratedAt={s.ai_analysis?._meta?.last_generated_at}
+            paragraphs={companionAnalysisData.paragraphs}
+            paragraphMeta={companionAnalysisData.paragraphMeta}
+          />
+        </section>
+      )}
+      <section id="session-ai-companion" className="scroll-mt-24">
+        <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} onAnalysisSaved={handleAnalysisSaved} />
+      </section>
+      <section id="session-ai-technical" className="scroll-mt-24">
+        <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" onAnalysisSaved={handleAnalysisSaved} />
+      </section>
+      <section id="session-ai-support" className="scroll-mt-24 rounded-xl border border-primary/20 bg-card p-4 space-y-3">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">Timeline & Cascade Analysis</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Main story cards for phase timing, arousal narrative, and climax cascade video generation.
+          </p>
+        </div>
+        <CascadeOverviewPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />
+        <SessionTimelineNarrative session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />
+        {technicalAnalysisData.paragraphs.length > 0 && (
+          <details className="rounded-xl border border-border bg-muted/10 p-3">
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+              Technical Deep Dive Video
+            </summary>
+            <div className="mt-3">
+              <SessionReviewVideoExportButton
+                session={s}
+                analysisTitle="Technical Deep Dive"
+                sourceGeneratedAt={technicalVideoSourceGeneratedAt}
+                paragraphs={technicalAnalysisData.paragraphs}
+                paragraphMeta={technicalAnalysisData.paragraphMeta}
+              />
+            </div>
+          </details>
+        )}
+        <details className="rounded-xl border border-border bg-muted/10 p-3">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+            Supporting Evidence Pattern View
+          </summary>
+          <div className="mt-3">
+            <SessionEvidencePatternPanel session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />
+          </div>
+        </details>
+      </section>
+    </section>
+  ) : (
+    <section id="session-ai-companion" className="scroll-mt-24">
+      <NoClimaxAIPanel session={s} timelineRows={timelineRows} userProfile={userProfile} />
+    </section>
+  );
 
   return (
     <div>
@@ -1007,6 +1045,8 @@ export default function SessionDetail() {
           </div>
         )}
 
+        {sessionStorySection}
+
         {/* Executive Summary */}
         <section id="session-summary" className="scroll-mt-24 space-y-4">
           <SessionExecutiveSummary
@@ -1059,55 +1099,6 @@ export default function SessionDetail() {
           )}
         </div>
         </section>
-
-        {/* Story & AI Analysis */}
-        {!s.no_climax && (
-          <section className="space-y-4">
-            {companionAnalysisData.paragraphs.length > 0 && (
-              <section id="session-ai-video-chat" className="scroll-mt-24">
-                <SessionReviewVideoExportButton
-                  session={s}
-                  analysisTitle="AI Session Analysis"
-                  sourceGeneratedAt={s.ai_analysis?._meta?.last_generated_at}
-                  paragraphs={companionAnalysisData.paragraphs}
-                  paragraphMeta={companionAnalysisData.paragraphMeta}
-                />
-              </section>
-            )}
-            {technicalAnalysisData.paragraphs.length > 0 && (
-              <section id={companionAnalysisData.paragraphs.length ? undefined : "session-ai-video-chat"} className="scroll-mt-24 space-y-3">
-                <SessionReviewVideoExportButton
-                  session={s}
-                  analysisTitle="Technical Deep Dive"
-                  sourceGeneratedAt={technicalVideoSourceGeneratedAt}
-                  paragraphs={technicalAnalysisData.paragraphs}
-                  paragraphMeta={technicalAnalysisData.paragraphMeta}
-                />
-              </section>
-            )}
-            <section id="session-ai-companion" className="scroll-mt-24">
-              <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} onAnalysisSaved={handleAnalysisSaved} />
-            </section>
-            <section id="session-ai-technical" className="scroll-mt-24">
-              <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" onAnalysisSaved={handleAnalysisSaved} />
-            </section>
-            <details id="session-ai-support" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
-              <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
-                Supporting AI Views
-              </summary>
-              <div className="mt-3 space-y-4">
-                <SessionEvidencePatternPanel session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />
-                <CascadeOverviewPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />
-                <SessionTimelineNarrative session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />
-              </div>
-            </details>
-          </section>
-        )}
-        {s.no_climax && (
-          <section id="session-ai-companion" className="scroll-mt-24">
-            <NoClimaxAIPanel session={s} timelineRows={timelineRows} userProfile={userProfile} />
-          </section>
-        )}
 
         {/* Heart Rate + Most Recent Side-by-Side */}
         {false && <div id="session-telemetry-legacy" className="scroll-mt-24 bg-card rounded-xl border border-border p-4">
@@ -1594,23 +1585,6 @@ export default function SessionDetail() {
             <div className="mt-3 space-y-3">
               <InteractiveSessionTimeline session={s} timelineRows={timelineRows} />
               {timelineRows.length > 0 && <UnifiedSessionTimeline session={s} timelineRows={timelineRows} />}
-              {arousalTimelineData.paragraphs.length > 0 && (
-                <div className="rounded-xl border border-primary/20 bg-primary/[0.045] p-3">
-                  <div className="mb-2">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-primary">Arousal Timeline Video</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Builds a narrated MP4 from the arousal/phase timeline using the same review-video renderer as AI Session Analysis.
-                    </p>
-                  </div>
-                  <SessionReviewVideoExportButton
-                    session={s}
-                    analysisTitle="Arousal Timeline"
-                    sourceGeneratedAt={arousalTimelineSourceGeneratedAt}
-                    paragraphs={arousalTimelineData.paragraphs}
-                    paragraphMeta={arousalTimelineData.paragraphMeta}
-                  />
-                </div>
-              )}
               {((session.event_timeline || []).length > 0 || timelineRows.length > 0) && (
                 <ArousalEventChart session={s} timelineRows={timelineRows} />
               )}
