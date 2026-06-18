@@ -113,6 +113,11 @@ export const base44 = {
   entities: Object.fromEntries(entityNames.map((name) => [name, entityApi(name)])),
   auth: {
     me: () => request('/auth/me'),
+    meFields: (fields = []) => {
+      const params = new URLSearchParams();
+      if (Array.isArray(fields) && fields.length) params.set('fields', fields.join(','));
+      return request(`/auth/me${params.toString() ? `?${params}` : ''}`);
+    },
     updateMe: (data) => request('/auth/me', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data || {}),
     }),

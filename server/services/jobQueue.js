@@ -46,9 +46,16 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function publicJob(job) {
+function publicJob(job, { includeResult = true } = {}) {
   if (!job) return null;
   const { payload: _payload, abortController: _abortController, ...rest } = job;
+  if (!includeResult) {
+    const { result: _result, ...summary } = rest;
+    return {
+      ...summary,
+      hasResult: rest.result != null,
+    };
+  }
   return rest;
 }
 
@@ -295,11 +302,11 @@ export function getJob(id) {
 export function listJobs({ type, status, limit = 20, meta = {}, includeCleared = false } = {}) {
   const merged = new Map();
   for (const job of listEntities('ProcessingJob')) {
-    const pub = publicJob(job);
+    const pub = publicJob(job, { includeResult: false });
     if (pub?.id) merged.set(pub.id, pub);
   }
   for (const job of jobs.values()) {
-    const pub = publicJob(job);
+    const pub = publicJob(job, { includeResult: false });
     if (pub?.id) merged.set(pub.id, pub);
   }
 

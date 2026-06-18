@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { BleClient } from "@capacitor-community/bluetooth-le";
-import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, Footprints, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
+import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, Footprints, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, ScanSearch, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
 import {
   CartesianGrid,
   Legend,
@@ -48,6 +48,10 @@ const CAPTURE_MODES = [
   { value: "hr_emg", label: "HR + EMG", helper: "Telemetry-focused capture" },
   { value: "hr", label: "HR Only / Main Telemetry", helper: "Distance-readable HR and EMG dashboard" },
   { value: "video", label: "Video sync", helper: "OBS-first review workflow" },
+];
+const CAPTURE_KINDS = [
+  { value: "session", label: "Session", helper: "Climax/build/recovery workflow with phase markers and Sarah session analysis." },
+  { value: "body_exploration", label: "Body Exploration", helper: "Instrumentation/body observation workflow; suppresses climax and pre-climax prompts." },
 ];
 const EMG_SENSOR_CONFIGS = [
   {
@@ -266,6 +270,13 @@ function fmtNumber(value, digits = 1) {
   return Number.isFinite(n) ? n.toFixed(digits) : "—";
 }
 
+function fmtAgeMs(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  if (n < 1000) return `${Math.round(n)} ms`;
+  return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)} s`;
+}
+
 function isRecent(value, maxAgeMs = 5000) {
   if (!value) return false;
   const t = new Date(value).getTime();
@@ -424,6 +435,10 @@ function isAndroidRuntime() {
   return isCapacitorAndroidShell() || /android/i.test(window.navigator?.userAgent || "");
 }
 
+function isSarahDesktopRuntime() {
+  return Boolean(window.sarahDesktop?.isDesktop);
+}
+
 async function getDirectH10Device({ preferSaved = false, silent = false } = {}) {
   const grantedDevices = typeof navigator.bluetooth.getDevices === "function"
     ? await navigator.bluetooth.getDevices().catch(() => [])
@@ -518,7 +533,15 @@ function friendlyDirectH10Error(error) {
       : "The browser paired with the H10 but the live BLE session dropped before services opened. Wake the strap, make sure Pulsoid/phone apps are not holding it, then tap Connect H10 again.";
   }
   if (/user cancelled|user canceled|cancelled|canceled/i.test(message)) {
+    if (isSarahDesktopRuntime()) {
+      return "Sarah desktop did not find a Polar H10 during the Bluetooth scan. Wet/wear the strap, make sure another app is not holding it, then tap Connect H10 again.";
+    }
     return "H10 pairing was cancelled.";
+  }
+  if (/no device selected|no device found|notfounderror/i.test(message)) {
+    return isSarahDesktopRuntime()
+      ? "Sarah desktop could not find the Polar H10. Wake the strap, keep it close to the PC, and make sure Windows Bluetooth is on."
+      : "No Polar H10 was selected.";
   }
   return message || "Could not connect to the Direct H10 source.";
 }
@@ -1066,6 +1089,8 @@ export default function LiveCapture() {
     rrCount: 0,
   });
   const [hrLossDialog, setHrLossDialog] = useState(null);
+  const [captureKind, setCaptureKind] = useState(() => localStorage.getItem("pulsepoint.captureKind") || "session");
+  const [captureKindError, setCaptureKindError] = useState("");
   const [captureMode, setCaptureMode] = useState(() => localStorage.getItem("pulsepoint.captureMode") || "full");
   const [emgSensorConfig, setEmgSensorConfig] = useState(() => localStorage.getItem("pulsepoint.emgSensorConfig") || "generic");
   const [telemetryNoticesEnabled, setTelemetryNoticesEnabled] = useState(() => localStorage.getItem("pulsepoint.telemetryNotices") !== "off");
@@ -1151,6 +1176,9 @@ export default function LiveCapture() {
   const howlAutoLastActionRef = useRef({ at: 0, intensity: null, reason: "" });
   const howlSettingsDirtyRef = useRef(false);
   const howlFocusedFieldRef = useRef("");
+  const liveRecordEntity = liveSession?.entity || (captureKind === "body_exploration" ? "BodyExploration" : "Session");
+  const liveRecordApi = base44.entities[liveRecordEntity] || base44.entities.Session;
+  const captureIsBodyExploration = liveRecordEntity === "BodyExploration" || captureKind === "body_exploration";
 
   const getHeartbeatAudioContext = useCallback(async () => {
     if (!heartbeatAudioContextRef.current || heartbeatAudioContextRef.current.state === "closed") {
@@ -1963,14 +1991,21 @@ export default function LiveCapture() {
     events.addEventListener("hr_telemetry", (event) => {
       const data = JSON.parse(event.data);
       latestHrRef.current = data;
-      setHrTelemetry(data);
-      appendTelemetryPoint(data, latestEmgRef.current);
     });
     events.addEventListener("emg_telemetry", (event) => {
       const data = JSON.parse(event.data);
       latestEmgRef.current = data;
-      setEmgTelemetry(data);
-      appendTelemetryPoint(latestHrRef.current, data);
+    });
+    events.addEventListener("telemetry_snapshot", (event) => {
+      const snapshot = JSON.parse(event.data);
+      const nextHr = snapshot.hr || latestHrRef.current;
+      const nextEmg = snapshot.emg || latestEmgRef.current;
+      latestHrRef.current = nextHr;
+      latestEmgRef.current = nextEmg;
+      setStatus((prev) => ({ ...(prev || {}), engine: snapshot.engine || null }));
+      setHrTelemetry(nextHr);
+      setEmgTelemetry(nextEmg);
+      appendTelemetryPoint(nextHr, nextEmg);
     });
     events.addEventListener("emg_calibration_status", (event) => {
       setCalibrationCommandStatus(JSON.parse(event.data));
@@ -1984,6 +2019,24 @@ export default function LiveCapture() {
     });
     return () => events.close();
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem("pulsepoint.captureKind", captureKind);
+    setCaptureKindError("");
+    fetch(apiUrl("/live-capture/capture-kind"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ captureKind }),
+    })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Could not update capture type.");
+        if (data.session) setLiveSession((prev) => ({ ...(prev || {}), ...data.session }));
+      })
+      .catch((error) => {
+        setCaptureKindError(error?.message || "Could not update capture type.");
+      });
+  }, [captureKind]);
 
   useEffect(() => {
     localStorage.setItem("pulsepoint.captureMode", captureMode);
@@ -2035,13 +2088,13 @@ export default function LiveCapture() {
       setActiveSessionDoc(null);
       return;
     }
-    base44.entities.Session.filter({ id: sessionId }).then((rows) => {
+    liveRecordApi.filter({ id: sessionId }).then((rows) => {
       const session = rows[0] || null;
       setActiveSessionDoc(session);
       const events = session?.event_timeline || [];
       setLiveEvents([...events].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0)));
     }).catch(() => {});
-  }, [liveSession?.activeSessionId, liveSession?.lastImportedAt]);
+  }, [liveRecordApi, liveSession?.activeSessionId, liveSession?.lastImportedAt]);
 
   useEffect(() => {
     const sessionId = liveSession?.activeSessionId;
@@ -2066,13 +2119,13 @@ export default function LiveCapture() {
     if (calibration.max_contract != null) patch.emg_max_left = calibration.max_contract;
     if (calibration.flip_lr != null) patch.emg_left_right_flipped = calibration.flip_lr;
     if (!Object.keys(patch).length) return;
-    base44.entities.Session.update(sessionId, patch).then(() => {
+    liveRecordApi.update(sessionId, patch).then(() => {
       setActiveSessionDoc((prev) => (prev ? { ...prev, ...patch } : prev));
       setCalibrationStatus(`${calibrationCommandStatus.message} Calibration values have been saved with this session.`);
     }).catch(() => {
       setCalibrationError("Calibration was applied by the helper, but its raw reference values could not be saved to this session.");
     });
-  }, [calibrationCommandStatus, liveSession?.activeSessionId]);
+  }, [calibrationCommandStatus, liveRecordApi, liveSession?.activeSessionId]);
 
   const prediction = useMemo(() => computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory), [hrTelemetry, emgTelemetry, telemetryHistory]);
   const recordingActive = Boolean(recording?.active);
@@ -2092,6 +2145,15 @@ export default function LiveCapture() {
   const hrvQuality = hrv.quality || hrTelemetry?.hrv_quality || null;
   const leftEmgLevel = readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct);
   const rightEmgLevel = readNumber(emgTelemetry?.right_pct);
+  const engineStatus = status?.engine || null;
+  const engineRunning = Boolean(engineStatus?.running);
+  const engineStorageOk = engineStatus?.storage?.ok !== false && Number(engineStatus?.queue?.droppedStored || 0) === 0;
+  const engineBufferFill = Math.max(
+    Number(engineStatus?.buffers?.hr?.fillRatio || 0),
+    Number(engineStatus?.buffers?.emg?.fillRatio || 0),
+    Number(engineStatus?.buffers?.events?.fillRatio || 0),
+  );
+  const engineBufferPct = Math.round(engineBufferFill * 100);
   const calibrationReading = useMemo(
     () => summarizeEmgCalibrationReading(telemetryHistory, emgTelemetry),
     [emgTelemetry, telemetryHistory],
@@ -2365,7 +2427,7 @@ export default function LiveCapture() {
     const res = await fetch(apiUrl("/live-capture/ensure-session"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ recording }),
+      body: JSON.stringify({ recording, captureKind }),
     });
     if (res.ok) {
       const data = await res.json();
@@ -2418,7 +2480,7 @@ export default function LiveCapture() {
     const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();
     const sessionId = sessionState?.activeSessionId;
     if (!sessionId) throw new Error("No active live session is available.");
-    const rows = await base44.entities.Session.filter({ id: sessionId });
+    const rows = await liveRecordApi.filter({ id: sessionId });
     const session = rows[0] || activeSessionDoc || {};
     const existing = Array.isArray(session.event_timeline) ? session.event_timeline : [];
     const seen = new Set(existing.map((event) => event.id).filter(Boolean));
@@ -2432,10 +2494,10 @@ export default function LiveCapture() {
       ...extraPatch,
       event_timeline: merged.sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0)),
     };
-    await base44.entities.Session.update(sessionId, patch);
+    await liveRecordApi.update(sessionId, patch);
     setLiveEvents(patch.event_timeline);
     setActiveSessionDoc((prev) => ({ ...(prev || session), ...patch }));
-  }, [activeSessionDoc, ensureSession, liveSession]);
+  }, [activeSessionDoc, ensureSession, liveRecordApi, liveSession]);
 
   const queuePerinealSessionEvents = useCallback((eventsToAdd, extraPatch = {}) => {
     perinealSaveQueueRef.current = perinealSaveQueueRef.current
@@ -2680,7 +2742,7 @@ export default function LiveCapture() {
   ]);
 
   useEffect(() => {
-    if (!recordingActive || !telemetryHistory.length) return;
+    if (captureIsBodyExploration || !recordingActive || !telemetryHistory.length) return;
     const strongLabel = prediction.nearClimax >= 75
       ? "Near-climax possibility"
       : prediction.recovery >= 70
@@ -2713,7 +2775,7 @@ export default function LiveCapture() {
         className: "min-w-[22rem] border-primary/50 bg-card/95 p-5 shadow-2xl",
       });
     }
-  }, [buildLevel, getCurrentSessionTime, prediction, recordingActive, telemetryHistory, telemetryNoticesEnabled, toast]);
+  }, [buildLevel, captureIsBodyExploration, getCurrentSessionTime, prediction, recordingActive, telemetryHistory, telemetryNoticesEnabled, toast]);
 
   const getAudioContext = useCallback(async () => {
     if (!audioContextRef.current || audioContextRef.current.state === "closed") {
@@ -2743,7 +2805,7 @@ export default function LiveCapture() {
     const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();
     const sessionId = sessionState?.activeSessionId;
     if (!sessionId) throw new Error("No active live session is available for the annotation.");
-    const rows = await base44.entities.Session.filter({ id: sessionId });
+    const rows = await liveRecordApi.filter({ id: sessionId });
     const session = rows[0] || {};
     const nextEvent = {
       time_s: Math.max(0, Math.round(Number(timeS) || 0)),
@@ -2759,20 +2821,20 @@ export default function LiveCapture() {
       hr_bpm: readNumber(latestHrRef.current?.currentHr, latestHrRef.current?.hr),
     };
     const updated = [...(session.event_timeline || []), nextEvent].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0));
-    await base44.entities.Session.update(sessionId, { event_timeline: updated });
+    await liveRecordApi.update(sessionId, { event_timeline: updated });
     setLiveEvents(updated);
     setActiveSessionDoc((prev) => (prev ? { ...prev, event_timeline: updated } : prev));
     setLastVoiceNote(`[${Math.floor(nextEvent.time_s / 60)}:${String(nextEvent.time_s % 60).padStart(2, "0")}] ${clean}`);
-  }, [ensureSession, liveSession]);
+  }, [ensureSession, liveRecordApi, liveSession]);
 
   const updateActiveSession = useCallback(async (patch) => {
     const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();
     const sessionId = sessionState?.activeSessionId;
     if (!sessionId) throw new Error("No active live session is available.");
-    await base44.entities.Session.update(sessionId, patch);
+    await liveRecordApi.update(sessionId, patch);
     setActiveSessionDoc((prev) => (prev ? { ...prev, ...patch } : prev));
     return sessionId;
-  }, [ensureSession, liveSession]);
+  }, [ensureSession, liveRecordApi, liveSession]);
 
   const applyEmgSensorConfig = useCallback(async (config) => {
     if (!config) return;
@@ -2798,12 +2860,12 @@ export default function LiveCapture() {
       live_foot_tracking_updated_at: summary.updated_at || new Date().toISOString(),
     };
     try {
-      await base44.entities.Session.update(liveSession.activeSessionId, patch);
+      await liveRecordApi.update(liveSession.activeSessionId, patch);
       setActiveSessionDoc((prev) => (prev ? { ...prev, ...patch } : prev));
     } catch (err) {
       console.warn("Unable to save live foot tracking summary", err);
     }
-  }, [liveSession?.activeSessionId]);
+  }, [liveRecordApi, liveSession?.activeSessionId]);
 
   const captureEmgCalibrationReference = useCallback(async (step) => {
     const reading = summarizeEmgCalibrationReading(telemetryHistory, latestEmgRef.current);
@@ -2827,7 +2889,7 @@ export default function LiveCapture() {
       if (!commandResponse.ok) throw new Error(commandStatus?.error || "Unable to send calibration command to the EMG helper.");
       pendingCalibrationCommandRef.current = commandStatus.id;
       setCalibrationCommandStatus(commandStatus);
-      const rows = await base44.entities.Session.filter({ id: sessionId });
+      const rows = await liveRecordApi.filter({ id: sessionId });
       const session = rows[0] || {};
       const timeS = getCurrentSessionTime();
       const leftText = reading.left ? `left ${reading.left.value}%` : "left unavailable";
@@ -2868,7 +2930,7 @@ export default function LiveCapture() {
         });
       }
       if (reading.right) patch.emg_channels = "dual";
-      await base44.entities.Session.update(sessionId, patch);
+      await liveRecordApi.update(sessionId, patch);
       setLiveEvents(patch.event_timeline);
       setActiveSessionDoc((prev) => ({ ...(prev || session), ...patch }));
       setCalibrationStatus(`${step.label} sent at ${fmtMmSs(timeS)}. Waiting for the running EMG helper to confirm it applied the new calibration.`);
@@ -2877,12 +2939,12 @@ export default function LiveCapture() {
     } finally {
       setCalibrationSaving("");
     }
-  }, [ensureSession, getCurrentSessionTime, liveSession, selectedEmgConfig, telemetryHistory]);
+  }, [ensureSession, getCurrentSessionTime, liveRecordApi, liveSession, selectedEmgConfig, telemetryHistory]);
 
   const undoLastVoiceAnnotation = useCallback(async () => {
     const sessionId = liveSession?.activeSessionId;
     if (!sessionId) return;
-    const rows = await base44.entities.Session.filter({ id: sessionId });
+    const rows = await liveRecordApi.filter({ id: sessionId });
     const session = rows[0] || {};
     const events = [...(session.event_timeline || [])].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0));
     const idx = [...events].reverse().findIndex((event) => event.source === "live_voice_annotation");
@@ -2893,11 +2955,11 @@ export default function LiveCapture() {
     const removeIndex = events.length - 1 - idx;
     const removed = events[removeIndex];
     const updated = events.filter((_event, index) => index !== removeIndex);
-    await base44.entities.Session.update(sessionId, { event_timeline: updated });
+    await liveRecordApi.update(sessionId, { event_timeline: updated });
     setLiveEvents(updated);
     setActiveSessionDoc((prev) => (prev ? { ...prev, event_timeline: updated } : prev));
     setVoiceStatus(`Removed last voice note at ${fmtMmSs(removed.time_s)}.`);
-  }, [liveSession?.activeSessionId]);
+  }, [liveRecordApi, liveSession?.activeSessionId]);
 
   const applyLiveCommand = useCallback(async (command) => {
     if (!command) return false;
@@ -2911,6 +2973,10 @@ export default function LiveCapture() {
       return true;
     }
     if (command.type === "mark_phase") {
+      if (captureIsBodyExploration) {
+        setVoiceStatus("Body Exploration mode is active; climax phase marks are disabled.");
+        return false;
+      }
       const timeS = getCurrentSessionTime();
       const chartTime = telemetryHistory[telemetryHistory.length - 1]?.time;
       await updateActiveSession({ [command.key]: timeS });
@@ -2919,7 +2985,7 @@ export default function LiveCapture() {
       return true;
     }
     return false;
-  }, [getCurrentSessionTime, telemetryHistory, undoLastVoiceAnnotation, updateActiveSession]);
+  }, [captureIsBodyExploration, getCurrentSessionTime, telemetryHistory, undoLastVoiceAnnotation, updateActiveSession]);
 
   useEffect(() => {
     applyLiveCommandRef.current = applyLiveCommand;
@@ -3406,34 +3472,40 @@ export default function LiveCapture() {
             <div className="grid grid-cols-2 gap-2">
               <CompactStat label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="bpm" level={currentHrLevel} emphasis beatPulse={heartbeatPulseId} />
               <CompactStat label="Max HR" value={fmtNumber(maxHr, 0)} helper="session peak" level={hrLevelPercent(maxHr, hrTelemetry?.baselineHr)} emphasis />
-              <CompactStat label="Build" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "phase"} level={buildLevel} />
-              <CompactStat
-                label="AI Magic"
-                value={`${prediction.nearClimax}%`}
-                helper={prediction.hrvUsable ? `${prediction.label} · HRV ${prediction.hrvSignal}` : prediction.label}
-                level={prediction.nearClimax}
-              />
+              {!captureIsBodyExploration && (
+                <>
+                  <CompactStat label="Build" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "phase"} level={buildLevel} />
+                  <CompactStat
+                    label="AI Magic"
+                    value={`${prediction.nearClimax}%`}
+                    helper={prediction.hrvUsable ? `${prediction.label} · HRV ${prediction.hrvSignal}` : prediction.label}
+                    level={prediction.nearClimax}
+                  />
+                </>
+              )}
             </div>
 
-            <div
-              className="rounded-xl border p-4"
-              style={{ borderColor: `${levelColor(prediction.nearClimax)}80`, background: `linear-gradient(135deg, ${levelColor(prediction.nearClimax)}28, hsl(var(--card)) 65%)` }}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <p className="text-sm font-semibold uppercase tracking-wider text-primary">Real-Time Phase Watch</p>
-                  <p className="mt-1 text-base font-medium text-foreground">{prediction.label}</p>
+            {!captureIsBodyExploration && (
+              <div
+                className="rounded-xl border p-4"
+                style={{ borderColor: `${levelColor(prediction.nearClimax)}80`, background: `linear-gradient(135deg, ${levelColor(prediction.nearClimax)}28, hsl(var(--card)) 65%)` }}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold uppercase tracking-wider text-primary">Real-Time Phase Watch</p>
+                    <p className="mt-1 text-base font-medium text-foreground">{prediction.label}</p>
+                  </div>
+                  <Brain className="h-5 w-5 text-primary" />
                 </div>
-                <Brain className="h-5 w-5 text-primary" />
+                <div className="mt-3 h-3 overflow-hidden rounded-full bg-muted">
+                  <div className="h-full rounded-full transition-all" style={{ width: `${prediction.nearClimax}%`, backgroundColor: levelColor(prediction.nearClimax) }} />
+                </div>
+                {prediction.reason && <p className="mt-3 line-clamp-3 text-sm leading-relaxed text-muted-foreground">{prediction.reason}</p>}
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  {prediction.hrvExplanation}
+                </p>
               </div>
-              <div className="mt-3 h-3 overflow-hidden rounded-full bg-muted">
-                <div className="h-full rounded-full transition-all" style={{ width: `${prediction.nearClimax}%`, backgroundColor: levelColor(prediction.nearClimax) }} />
-              </div>
-              {prediction.reason && <p className="mt-3 line-clamp-3 text-sm leading-relaxed text-muted-foreground">{prediction.reason}</p>}
-              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                {prediction.hrvExplanation}
-              </p>
-            </div>
+            )}
 
             <TrendPanel title="HR Trend" subtitle="Compact live view" empty={!hasHrTrend} heightClass="h-48" distanceView>
               <ResponsiveContainer width="100%" height="100%">
@@ -3456,30 +3528,32 @@ export default function LiveCapture() {
                   <Line yAxisId="hr" type="monotone" dataKey="baseline" name="Baseline" stroke="hsl(var(--muted-foreground))" strokeDasharray="5 5" strokeWidth={1.25} dot={false} connectNulls />
                   <Line yAxisId="hr" type="monotone" dataKey="hrSmoothed" name="Smoothed" stroke="hsl(var(--chart-2))" strokeWidth={1.75} dot={false} connectNulls />
                   <Line yAxisId="hr" type="monotone" dataKey="hr" name="HR" stroke="hsl(var(--primary))" strokeWidth={2.25} dot={false} connectNulls />
-                  <Line yAxisId="watch" type="monotone" dataKey="nearClimax" name="Approach" stroke="hsl(var(--destructive))" strokeWidth={1.75} dot={false} connectNulls />
+                  {!captureIsBodyExploration && <Line yAxisId="watch" type="monotone" dataKey="nearClimax" name="Approach" stroke="hsl(var(--destructive))" strokeWidth={1.75} dot={false} connectNulls />}
                 </LineChart>
               </ResponsiveContainer>
             </TrendPanel>
 
-            <div className="rounded-xl border border-border bg-muted/20 p-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Quick Phase Marks</p>
-              <div className="mt-2 grid grid-cols-3 gap-1.5">
-                {[
-                  { key: "pre_climax_offset_s", label: "Pre" },
-                  { key: "climax_offset_s", label: "Climax" },
-                  { key: "recovery_offset_s", label: "Recovery" },
-                ].map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={() => applyLiveCommand({ type: "mark_phase", key: item.key, label: item.label === "Pre" ? "Pre-climax" : item.label })}
-                    className="rounded-lg bg-muted px-2 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
-                  >
-                    {item.label}
-                  </button>
-                ))}
+            {!captureIsBodyExploration && (
+              <div className="rounded-xl border border-border bg-muted/20 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Quick Phase Marks</p>
+                <div className="mt-2 grid grid-cols-3 gap-1.5">
+                  {[
+                    { key: "pre_climax_offset_s", label: "Pre" },
+                    { key: "climax_offset_s", label: "Climax" },
+                    { key: "recovery_offset_s", label: "Recovery" },
+                  ].map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => applyLiveCommand({ type: "mark_phase", key: item.key, label: item.label === "Pre" ? "Pre-climax" : item.label })}
+                      className="rounded-lg bg-muted px-2 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
       </div>
@@ -3536,10 +3610,34 @@ export default function LiveCapture() {
       {!focusView && <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <PageHeader
           title="Live Capture"
-          subtitle="Real-time HR, EMG, OBS recording state, and prediction telemetry"
+          subtitle={captureIsBodyExploration
+            ? "Real-time HR, EMG, OBS recording state, and body exploration telemetry"
+            : "Real-time HR, EMG, OBS recording state, and prediction telemetry"}
           icon={Radio}
         />
         <div className="flex flex-wrap items-center gap-2 md:mt-1">
+          <div className="inline-flex shrink-0 rounded-lg border border-border bg-card p-1 shadow-sm">
+            {CAPTURE_KINDS.map((kind) => {
+              const active = captureKind === kind.value;
+              return (
+                <button
+                  key={kind.value}
+                  type="button"
+                  disabled={recordingActive}
+                  title={kind.helper}
+                  onClick={() => setCaptureKind(kind.value)}
+                  className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-semibold transition-colors ${
+                    active
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+                  }`}
+                >
+                  {kind.value === "body_exploration" ? <ScanSearch className="h-3.5 w-3.5" /> : <Radio className="h-3.5 w-3.5" />}
+                  {kind.label}
+                </button>
+              );
+            })}
+          </div>
           <label className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground shadow-sm">
             <input
               type="checkbox"
@@ -3567,6 +3665,12 @@ export default function LiveCapture() {
           </button>
         </div>
       </div>}
+
+      {!focusView && captureKindError && (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {captureKindError}
+        </div>
+      )}
 
       {!focusView && presetModalOpen && (
         <div className="fixed inset-0 z-50 flex items-start justify-end bg-black/20 p-4 pt-20 md:p-6 md:pt-24" onMouseDown={() => setPresetModalOpen(false)}>
@@ -3858,21 +3962,23 @@ export default function LiveCapture() {
               </button>
             </SetupTile>
 
-            <SetupTile
-              icon={<Brain className="h-3.5 w-3.5 text-primary" />}
-              label="Phase Watch"
-              value={`${prediction.nearClimax}%`}
-              helper={prediction.reason || prediction.label}
-              active={prediction.nearClimax >= 35 || prediction.recovery >= 35}
-            >
-              <button
-                type="button"
-                onClick={() => setFocusView(true)}
-                className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted"
+            {!captureIsBodyExploration && (
+              <SetupTile
+                icon={<Brain className="h-3.5 w-3.5 text-primary" />}
+                label="Phase Watch"
+                value={`${prediction.nearClimax}%`}
+                helper={prediction.reason || prediction.label}
+                active={prediction.nearClimax >= 35 || prediction.recovery >= 35}
               >
-                Display View
-              </button>
-            </SetupTile>
+                <button
+                  type="button"
+                  onClick={() => setFocusView(true)}
+                  className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted"
+                >
+                  Display View
+                </button>
+              </SetupTile>
+            )}
           </div>
 
           {(hrSourceError || directH10Status.error || calibrationError || howlError) && (
@@ -4863,18 +4969,55 @@ export default function LiveCapture() {
           </div>
         </div>
 
+        <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3 text-xs sm:grid-cols-2 lg:grid-cols-6">
+          <div className="flex items-center gap-2">
+            {engineRunning ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : <AlertTriangle className="h-4 w-4 text-amber-500" />}
+            <div>
+              <p className="font-semibold text-foreground">Engine</p>
+              <p className="text-muted-foreground">{engineRunning ? "Running" : "Waiting"}</p>
+            </div>
+          </div>
+          <div>
+            <p className="font-semibold text-foreground">Rates</p>
+            <p className="text-muted-foreground">HR {fmtNumber(engineStatus?.sampleRate?.hrHz, 1)} Hz · EMG {fmtNumber(engineStatus?.sampleRate?.emgHz, 1)} Hz</p>
+          </div>
+          <div>
+            <p className="font-semibold text-foreground">Latest HR</p>
+            <p className="text-muted-foreground">{fmtAgeMs(engineStatus?.latest?.hrAgeMs)} old</p>
+          </div>
+          <div>
+            <p className="font-semibold text-foreground">Buffer</p>
+            <p className="text-muted-foreground">{engineBufferPct}% used · queue {engineStatus?.queue?.pending ?? 0}</p>
+          </div>
+          <div>
+            <p className="font-semibold text-foreground">Display</p>
+            <p className="text-muted-foreground">{engineStatus?.display?.droppedDisplayUpdates ?? 0} dropped frames</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {engineStorageOk ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : <AlertTriangle className="h-4 w-4 text-amber-500" />}
+            <div>
+              <p className="font-semibold text-foreground">Storage</p>
+              <p className="text-muted-foreground">{engineStorageOk ? "OK" : engineStatus?.storage?.lastError || engineStatus?.queue?.lastWarning || "Review"}</p>
+            </div>
+          </div>
+        </div>
+
         <div className={`grid gap-3 sm:grid-cols-2 ${telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`}>
           <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large beatPulse={heartbeatPulseId} />
-          <MetricCard icon={<Zap className="w-4 h-4" />} label="Build Confidence" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "No HR phase"} active={Number(hrTelemetry?.buildConfidence) > 40} level={buildLevel} large />
-          <MetricCard
-            icon={<Brain className="w-4 h-4" />}
-            label="AI Magic"
-            value={`${prediction.nearClimax}%`}
-            helper={prediction.confidenceBand}
-            active={prediction.nearClimax >= 42}
-            level={prediction.nearClimax}
-            large
-          />
+          {!captureIsBodyExploration && (
+            <>
+              <MetricCard icon={<Zap className="w-4 h-4" />} label="Build Confidence" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "No HR phase"} active={Number(hrTelemetry?.buildConfidence) > 40} level={buildLevel} large />
+              <MetricCard
+                icon={<Brain className="w-4 h-4" />}
+                label="AI Magic"
+                value={`${prediction.nearClimax}%`}
+                helper={prediction.confidenceBand}
+                active={prediction.nearClimax >= 42}
+                level={prediction.nearClimax}
+                large
+              />
+            </>
+          )}
           {hrTelemetry?.source === "direct_h10" && (
             <>
               <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="RR Samples" value={fmtNumber(rrCount, 0)} helper="rolling H10 interval window" active={Number(rrCount) > 0} level={Math.min(100, (Number(rrCount) || 0) * 1.25)} large />
@@ -4889,7 +5032,8 @@ export default function LiveCapture() {
           )}
         </div>
 
-        <div className="rounded-xl border border-border bg-muted/20 p-4">
+        {!captureIsBodyExploration && (
+          <div className="rounded-xl border border-border bg-muted/20 p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
@@ -4944,7 +5088,8 @@ export default function LiveCapture() {
               ))}
             </div>
           )}
-        </div>
+          </div>
+        )}
 
         <div className={distanceTelemetryView && telemetryEmgLive ? "grid gap-4 xl:grid-cols-2" : "space-y-4"}>
         <TrendPanel title="Heart Rate Trend" subtitle="Current, smoothed, and baseline HR" empty={!hasHrTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-72 md:h-80"} distanceView={distanceTelemetryView}>
@@ -4970,7 +5115,7 @@ export default function LiveCapture() {
               <Line yAxisId="hr" type="monotone" dataKey="baseline" name="Baseline" stroke="hsl(var(--muted-foreground))" strokeDasharray="5 5" strokeWidth={1.5} dot={false} connectNulls />
               <Line yAxisId="hr" type="monotone" dataKey="hrSmoothed" name="Smoothed" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} connectNulls />
               <Line yAxisId="hr" type="monotone" dataKey="hr" name="HR" stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} connectNulls />
-              <Line yAxisId="watch" type="monotone" dataKey="nearClimax" name="Approach" stroke="hsl(var(--destructive))" strokeWidth={2} dot={false} connectNulls />
+              {!captureIsBodyExploration && <Line yAxisId="watch" type="monotone" dataKey="nearClimax" name="Approach" stroke="hsl(var(--destructive))" strokeWidth={2} dot={false} connectNulls />}
             </LineChart>
           </ResponsiveContainer>
         </TrendPanel>

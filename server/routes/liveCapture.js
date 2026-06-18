@@ -6,6 +6,7 @@ import WebSocket from 'ws';
 import { parse } from 'csv-parse/sync';
 import { bulkCreate, getEntity, upsertEntity } from '../db.js';
 import { liveCaptureConfig, uploadDir } from '../config.js';
+import { telemetryEngine } from '../localEngine/index.js';
 import {
   HR_SOURCE_IDS,
   HR_SOURCE_LABELS,
@@ -50,6 +51,7 @@ let pulsoidRecording = null;
 let directH10Recording = null;
 const HR_SOURCE_STALE_MS = 8000;
 const derivedHrState = new Map();
+const CAPTURE_KINDS = new Set(['session', 'body_exploration']);
 
 const state = {
   startedAt: new Date().toISOString(),
@@ -105,6 +107,8 @@ const state = {
   },
   session: {
     activeSessionId: null,
+    entity: 'Session',
+    captureKind: 'session',
     active: false,
     startedAt: null,
     finalizedAt: null,
@@ -113,7 +117,15 @@ const state = {
     importing: false,
     finalizedRecordingKey: null,
   },
+  engine: null,
 };
+
+telemetryEngine.on('snapshot', (snapshot) => {
+  state.engine = snapshot.engine;
+  if (snapshot.hr) state.hr.latestTelemetry = snapshot.hr;
+  if (snapshot.emg) state.emg.latestTelemetry = snapshot.emg;
+  broadcast('telemetry_snapshot', snapshot);
+});
 
 function cleanNumber(value) {
   const n = Number(value);
@@ -160,6 +172,14 @@ function formatFilenameDate(date = new Date()) {
 
 function shouldUseTelemetrySource(source) {
   return state.hr.selectedSource === source;
+}
+
+function normalizeCaptureKind(value) {
+  return CAPTURE_KINDS.has(value) ? value : 'session';
+}
+
+function entityForCaptureKind(captureKind) {
+  return normalizeCaptureKind(captureKind) === 'body_exploration' ? 'BodyExploration' : 'Session';
 }
 
 function median(values = []) {
@@ -675,13 +695,44 @@ function buildSessionSeed(recording) {
   };
 }
 
-function ensureLiveSession(recording) {
+function buildBodyExplorationSeed(recording) {
+  const started = recording?.startedAtMs ? new Date(recording.startedAtMs) : new Date();
+  return {
+    date: fmtDateForSession(started),
+    start_time: fmtTimeForSession(started),
+    title: `Live body exploration ${started.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+    exploration_type: 'Body exploration',
+    methods: ['Live Capture'],
+    tags: ['live-capture', 'body-exploration', 'obs-recorded'],
+    media_images: [],
+    hr_timeline: [],
+    substances: [],
+    standalone_body_exploration: true,
+    telemetry_only: true,
+    live_capture: true,
+    capture_kind: 'body_exploration',
+    capture_status: 'recording',
+    capture_started_at: started.toISOString(),
+    capture_source: `OBS + ${state.hr.selectedSourceLabel || 'HR relay'} + EMG bridge`,
+    hr_source: state.hr.selectedSource,
+    hr_source_label: state.hr.selectedSourceLabel,
+    purpose: 'Live Capture body exploration record created automatically when recording started.',
+    notes: 'Body exploration capture created from Live Capture. Add findings, comfort notes, and setup details after recording.',
+  };
+}
+
+function ensureLiveSession(recording, options = {}) {
   if (state.session.activeSessionId && state.session.active) return state.session.activeSessionId;
+  const captureKind = normalizeCaptureKind(options.captureKind || state.session.captureKind);
+  const entity = entityForCaptureKind(captureKind);
   const id = crypto.randomUUID();
-  upsertEntity('Session', id, buildSessionSeed(recording));
+  upsertEntity(entity, id, captureKind === 'body_exploration' ? buildBodyExplorationSeed(recording) : buildSessionSeed(recording));
+  telemetryEngine.setActiveSession(id);
   state.session = {
     ...state.session,
     activeSessionId: id,
+    entity,
+    captureKind,
     active: true,
     startedAt: new Date(recording?.startedAtMs || Date.now()).toISOString(),
     finalizedAt: null,
@@ -736,7 +787,7 @@ async function finalizeLiveSession(recording) {
       capture_digest: buildCaptureDigest({ hrRows: hrImport.rawRows, hrImport, emgUpload, recording }),
     };
     Object.keys(update).forEach((key) => update[key] === undefined && delete update[key]);
-    const targetEntity = getEntity('BodyExploration', sessionId) ? 'BodyExploration' : 'Session';
+    const targetEntity = state.session.entity || (getEntity('BodyExploration', sessionId) ? 'BodyExploration' : 'Session');
     upsertEntity(targetEntity, sessionId, update);
     state.session = {
       ...state.session,
@@ -747,6 +798,7 @@ async function finalizeLiveSession(recording) {
       importing: false,
       finalizedRecordingKey: recordingKey,
     };
+    telemetryEngine.setActiveSession(null);
     broadcast('live_session', state.session);
     return { sessionId, ...update.live_capture_import };
   } catch (error) {
@@ -836,10 +888,21 @@ function applySelectedHrTelemetry(telemetry) {
   const enriched = telemetry?.buildConfidence != null && telemetry?.baselineHr != null
     ? telemetry
     : enrichHrTelemetry(telemetry);
-  state.hr.latestTelemetry = enriched;
+  const protectedSample = telemetryEngine.ingestHrSample(enriched, { source: enriched?.source || state.hr.selectedSource });
+  const storedTelemetry = protectedSample.event?.payload || enriched;
+  state.hr.latestTelemetry = storedTelemetry;
   state.hr.lastMessageAt = new Date().toISOString();
-  broadcast('hr_telemetry', enriched);
-  return enriched;
+  broadcast('hr_telemetry', storedTelemetry);
+  return storedTelemetry;
+}
+
+function publishHrTelemetryToOverlay(telemetry) {
+  if (!telemetry || !hrSocket || hrSocket.readyState !== WebSocket.OPEN) return;
+  try {
+    hrSocket.send(JSON.stringify({ type: 'overlay_telemetry', data: telemetry }));
+  } catch {
+    // Overlay mirroring is best-effort; protected ingestion/storage already happened.
+  }
 }
 
 function handlePulsoidTelemetry(telemetry) {
@@ -860,7 +923,8 @@ function handlePulsoidTelemetry(telemetry) {
   };
   if (shouldUseTelemetrySource(HR_SOURCE_IDS.PULSOID)) {
     refreshHrSourceStatus('Pulsoid HR live');
-    applySelectedHrTelemetry(telemetry);
+    const selectedTelemetry = applySelectedHrTelemetry(telemetry);
+    publishHrTelemetryToOverlay(selectedTelemetry);
     appendPulsoidTelemetryRow(telemetry).catch((error) => {
       state.hr.pulsoid.error = `Pulsoid CSV write failed: ${error.message || error}`;
       refreshHrSourceStatus();
@@ -1007,9 +1071,9 @@ function connectHrBridge() {
       if (msg.type === 'telemetry') {
         const normalized = normalizeHeartRateOnStreamTelemetry(msg.data || null);
         if (shouldUseTelemetrySource(HR_SOURCE_IDS.HEART_RATE_ON_STREAM)) {
-          state.hr.latestTelemetry = normalized || msg.data || null;
+          const nextTelemetry = applySelectedHrTelemetry(normalized || msg.data || null);
+          state.hr.latestTelemetry = nextTelemetry;
           refreshHrSourceStatus('HeartRateOnStream HR live');
-          broadcast('hr_telemetry', state.hr.latestTelemetry);
         }
       }
 
@@ -1164,7 +1228,10 @@ async function readEmgTextTelemetry() {
   state.emg.latestTelemetry = telemetry;
   state.emg.lastMessageAt = new Date().toISOString();
   state.emg.error = null;
-  broadcast('emg_telemetry', telemetry);
+  const protectedSample = telemetryEngine.ingestEmgSample(telemetry, { source: 'emg_text_bridge' });
+  const storedTelemetry = protectedSample.event?.payload || telemetry;
+  state.emg.latestTelemetry = storedTelemetry;
+  broadcast('emg_telemetry', storedTelemetry);
 }
 
 function startEmgPolling() {
@@ -1239,6 +1306,21 @@ liveCaptureRouter.post('/hr-source', (req, res) => {
   });
 });
 
+liveCaptureRouter.post('/capture-kind', (req, res) => {
+  if (state.session.active) {
+    res.status(409).json({ error: 'Stop the active capture before switching between Session and Body Exploration.' });
+    return;
+  }
+  const captureKind = normalizeCaptureKind(req.body?.captureKind);
+  state.session = {
+    ...state.session,
+    captureKind,
+    entity: entityForCaptureKind(captureKind),
+  };
+  broadcast('live_session', state.session);
+  res.json({ ok: true, session: state.session });
+});
+
 liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
   let telemetry = normalizeDirectH10Telemetry(req.body || {});
   if (!telemetry) {
@@ -1258,6 +1340,7 @@ liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
   if (shouldUseTelemetrySource(HR_SOURCE_IDS.DIRECT_H10)) {
     refreshHrSourceStatus('Direct H10 HR + RR live');
     telemetry = applySelectedHrTelemetry(telemetry);
+    publishHrTelemetryToOverlay(telemetry);
     appendDirectH10TelemetryRow(telemetry).catch((error) => {
       state.hr.directH10.error = `Direct H10 CSV write failed: ${error.message || error}`;
       refreshHrSourceStatus();
@@ -1282,7 +1365,7 @@ liveCaptureRouter.post('/emg/calibration-command', async (req, res) => {
     action,
     save: req.body?.save !== false,
     requested_at: new Date().toISOString(),
-    source: 'pulsepoint_live_capture',
+    source: 'sarah_live_capture',
   };
 
   try {
@@ -1305,7 +1388,37 @@ liveCaptureRouter.post('/emg/calibration-command', async (req, res) => {
 
 liveCaptureRouter.get('/status', (_req, res) => {
   markSelectedHrStaleIfNeeded();
+  state.engine = telemetryEngine.snapshot().engine;
   res.json(state);
+});
+
+liveCaptureRouter.get('/engine/status', (_req, res) => {
+  res.json(telemetryEngine.snapshot());
+});
+
+liveCaptureRouter.post('/engine/mock-sample', (req, res) => {
+  const body = req.body || {};
+  const now = Date.now();
+  const hr = body.hr ?? body.heartRate ?? body.currentHr ?? 82 + Math.round(Math.sin(now / 3000) * 8);
+  const hrResult = telemetryEngine.ingestHrSample({
+    heartRate: hr,
+    currentHr: hr,
+    hr,
+    source: 'mock_local_engine',
+    receivedAt: now,
+  }, { source: 'mock_local_engine' });
+  const emgResult = body.emg === false ? null : telemetryEngine.ingestEmgSample({
+    left_pct: body.left_pct ?? Math.max(0, Math.min(100, 20 + Math.round(Math.sin(now / 900) * 12))),
+    right_pct: body.right_pct ?? Math.max(0, Math.min(100, 18 + Math.round(Math.cos(now / 1100) * 10))),
+    diff_pct: body.diff_pct ?? null,
+    level_pct: body.level_pct ?? null,
+    source_at: new Date(now).toISOString(),
+  }, { source: 'mock_local_engine' });
+  telemetryEngine.emitSnapshotIfDirty(true);
+  res.json({
+    ok: Boolean(hrResult.ok && (emgResult == null || emgResult.ok)),
+    snapshot: telemetryEngine.snapshot(),
+  });
 });
 
 liveCaptureRouter.get('/stream', (req, res) => {
@@ -1315,6 +1428,7 @@ liveCaptureRouter.get('/stream', (req, res) => {
   res.flushHeaders?.();
 
   clients.add(res);
+  state.engine = telemetryEngine.snapshot().engine;
   sendSse(res, 'status', state);
   const keepAlive = setInterval(() => {
     if (markSelectedHrStaleIfNeeded()) {
@@ -1335,6 +1449,8 @@ liveCaptureRouter.post('/refresh-files', async (_req, res) => {
 });
 
 liveCaptureRouter.post('/ensure-session', (req, res) => {
-  const sessionId = ensureLiveSession(req.body?.recording || state.hr.recording || {});
+  const sessionId = ensureLiveSession(req.body?.recording || state.hr.recording || {}, {
+    captureKind: req.body?.captureKind,
+  });
   res.json({ ok: true, sessionId, session: state.session });
 });

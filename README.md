@@ -1,8 +1,8 @@
-# PulsePoint Standalone
+# Sarah
 
-PulsePoint is a private, local-first review workspace for personal physiology sessions. It brings together session notes, heart-rate and HRV telemetry, optional EMG, local video, audio, annotations, body-exploration records, Profile Q&A, and AI-assisted review.
+Sarah is a private, local-first review workspace for personal physiology sessions. It brings together session notes, heart-rate and HRV telemetry, optional EMG, local video, audio, annotations, body-exploration records, Profile Q&A, and AI-assisted review.
 
-It is not a generic wellness dashboard. PulsePoint is the "what actually happened here?" workspace: the place where signals, observations, media, and body context can be reviewed together instead of living in disconnected files.
+It is not a generic wellness dashboard. Sarah is the "what actually happened here?" workspace: the place where signals, observations, media, and body context can be reviewed together instead of living in disconnected files.
 
 The project began as a Base44 app and is being migrated into a standalone local web app with a local API server. The goal is high-context review, strong privacy boundaries, exportable data, and useful analysis without pretending the app is a medical device.
 

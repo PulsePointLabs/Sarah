@@ -106,6 +106,30 @@ const SESSION_LIST_FIELDS = [
   "motion_analysis",
   "motion_telemetry",
 ];
+const SESSION_HYDRATE_FIELDS = [
+  ...SESSION_LIST_FIELDS,
+  "event_timeline",
+  "media_videos",
+  "emg_placement_photos",
+  "foley_size",
+  "foley_type",
+].filter((field, index, fields) => fields.indexOf(field) === index);
+const USER_PROFILE_FIELDS = [
+  "id",
+  "created_date",
+  "updated_date",
+  "full_name",
+  "preferred_name",
+  "sarah_personality",
+  "sarah_tts_delivery",
+  "profile_summary",
+  "physiological_baseline",
+  "communication_preferences",
+  "recovery_context",
+  "medications",
+  "conditions",
+  "notes",
+];
 
 const num = (value) => {
   const parsed = Number(value);
@@ -238,16 +262,20 @@ export default function Sessions() {
     }
 
     setHydrating(true);
-    Promise.all([
-      base44.entities.Session.list("-date", 200),
-      base44.auth.me().catch(() => null),
+    Promise.allSettled([
+      base44.entities.Session.listFields(SESSION_HYDRATE_FIELDS, "-date", 200),
+      base44.auth.meFields(USER_PROFILE_FIELDS).catch(() => null),
     ]).then(([fullRows, profile]) => {
-      setSessions((current) => {
-        const localById = new Map(current.map((session) => [session.id, session]));
-        return fullRows.map((session) => ({ ...(localById.get(session.id) || {}), ...session }));
-      });
-      setUserProfile(profile);
-      setHydrateError("");
+      if (fullRows.status === "fulfilled") {
+        setSessions((current) => {
+          const localById = new Map(current.map((session) => [session.id, session]));
+          return fullRows.value.map((session) => ({ ...(localById.get(session.id) || {}), ...session }));
+        });
+        setHydrateError("");
+      } else {
+        setHydrateError(fullRows.reason?.message || "Background session details did not finish loading.");
+      }
+      if (profile.status === "fulfilled") setUserProfile(profile.value);
     }).catch((error) => {
       setHydrateError(error?.message || "Background session details did not finish loading.");
     }).finally(() => {

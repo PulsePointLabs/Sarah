@@ -18,6 +18,10 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+desktop-release/
+release/
+desktop/node-runtime/
+uploads/
 *.local
 local-vision/.venv/
 local-vision/.venv-qwen/

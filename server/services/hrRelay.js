@@ -475,6 +475,10 @@ class HeartRateRelay {
         this.broadcast({ type: 'telemetry', data: message.data }, socket);
         return;
       }
+      if (message.type === 'overlay_telemetry' && message.data) {
+        this.broadcast({ type: 'telemetry', data: message.data }, socket);
+        return;
+      }
       if (message.type === 'reset') {
         this.createNewRecording('manual_reset');
         this.broadcast({ type: 'reset' }, socket);

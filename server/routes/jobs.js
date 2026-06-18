@@ -1,9 +1,12 @@
 import express from 'express';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
 import { cancelJob, clearJobs, createJob, getJob, listJobs, registerJobHandler } from '../services/jobQueue.js';
 import { renderTTSExport } from '../services/ttsRenderer.js';
 import { renderSessionReviewVideo } from '../services/sessionReviewVideoRenderer.js';
 import { renderProfileAnatomyVideo } from '../services/profileAnatomyVideoRenderer.js';
 import { aiInvokeInternal } from './internalAi.js';
+import { uploadDir } from '../config.js';
 import { startAIForensicCapture } from '../services/aiForensics.js';
 import { analyzeLocalVisionWindow } from '../services/localVision/analyzeWindow.js';
 import { analyzeLocalVisionContinuous } from '../services/localVision/continuousAnalyzer.js';
@@ -31,6 +34,134 @@ async function cleanupPayloadRef(payload = {}) {
   if (payload?.__payloadRef) {
     await deleteJobPayload(payload.__payloadRef);
   }
+}
+
+function stripDataUrl(value = '') {
+  return String(value || '').replace(/^data:[^;]+;base64,/, '');
+}
+
+function imageMediaTypeFromName(value = '') {
+  const ext = path.extname(String(value || '').toLowerCase());
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  return 'image/jpeg';
+}
+
+function normalizeImageMediaType(value = '', fallbackName = '') {
+  const mediaType = String(value || '').trim().toLowerCase();
+  if (mediaType.startsWith('image/')) return mediaType;
+  return imageMediaTypeFromName(fallbackName);
+}
+
+function candidateImageRefUrl(ref = {}) {
+  return String(ref.url || ref.file_url || ref.preview_url || ref.previewUrl || ref.storagePath || ref.path || '').trim();
+}
+
+function localUploadPathFromRefUrl(rawUrl = '') {
+  if (!rawUrl) return '';
+  let pathname = rawUrl;
+  try {
+    if (/^https?:\/\//i.test(rawUrl)) {
+      pathname = new URL(rawUrl).pathname;
+    }
+  } catch {
+    pathname = rawUrl;
+  }
+  if (!pathname.startsWith('/uploads/')) return '';
+  const filename = path.basename(decodeURIComponent(pathname.replace(/^\/uploads\//, '')));
+  return filename ? path.join(uploadDir, filename) : '';
+}
+
+async function readImageRefViaHttp(rawUrl, ref = {}, signal) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Number(process.env.PROFILE_IMAGE_REF_FETCH_TIMEOUT_MS || 30000));
+  const abortHandler = () => controller.abort();
+  try {
+    signal?.addEventListener?.('abort', abortHandler, { once: true });
+    const response = await fetch(rawUrl, { signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return {
+      filename: ref.filename || path.basename(new URL(rawUrl).pathname) || 'profile-reference.jpg',
+      media_type: normalizeImageMediaType(response.headers.get('content-type') || ref.media_type, rawUrl),
+      data: bytes.toString('base64'),
+    };
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener?.('abort', abortHandler);
+  }
+}
+
+async function resolveImageRefForAI(ref = {}, context) {
+  if (ref.data) {
+    return {
+      filename: ref.filename || `${ref.image_id || 'profile-reference'}.jpg`,
+      media_type: normalizeImageMediaType(ref.media_type, ref.filename),
+      data: stripDataUrl(ref.data),
+    };
+  }
+
+  const rawUrl = candidateImageRefUrl(ref);
+  if (!rawUrl) throw new Error(`Saved image reference ${ref.image_id || ref.filename || ''} has no URL.`);
+
+  const uploadPath = localUploadPathFromRefUrl(rawUrl);
+  if (uploadPath) {
+    const bytes = await fsp.readFile(uploadPath);
+    return {
+      filename: ref.filename || path.basename(uploadPath),
+      media_type: normalizeImageMediaType(ref.media_type, uploadPath),
+      data: bytes.toString('base64'),
+    };
+  }
+
+  if (path.isAbsolute(rawUrl)) {
+    const bytes = await fsp.readFile(rawUrl);
+    return {
+      filename: ref.filename || path.basename(rawUrl),
+      media_type: normalizeImageMediaType(ref.media_type, rawUrl),
+      data: bytes.toString('base64'),
+    };
+  }
+
+  if (/^https?:\/\//i.test(rawUrl)) {
+    return readImageRefViaHttp(rawUrl, ref, context.signal);
+  }
+
+  throw new Error(`Saved image reference ${ref.image_id || ref.filename || rawUrl} is not a local upload or readable URL.`);
+}
+
+async function hydrateRequestImageRefs(request = {}, context, label = 'Profile image review') {
+  const imageRefs = Array.isArray(request?.imageRefs) ? request.imageRefs : [];
+  if (!imageRefs.length) return request || {};
+
+  context.updateProgress({
+    phase: 'loading_saved_images',
+    current: 0,
+    total: imageRefs.length,
+    message: `${label}: loading ${imageRefs.length} saved image reference${imageRefs.length === 1 ? '' : 's'} in the backend…`,
+  });
+
+  const resolvedImages = [];
+  for (let index = 0; index < imageRefs.length; index += 1) {
+    if (context.signal?.aborted) throw new Error('Cancelled');
+    resolvedImages.push(await resolveImageRefForAI(imageRefs[index], context));
+    context.updateProgress({
+      phase: 'loading_saved_images',
+      current: index + 1,
+      total: imageRefs.length,
+      message: `${label}: loaded saved image ${index + 1}/${imageRefs.length}.`,
+    });
+  }
+
+  const { imageRefs: _imageRefs, ...rest } = request || {};
+  return {
+    ...rest,
+    images: [
+      ...(Array.isArray(request.images) ? request.images : []),
+      ...resolvedImages,
+    ],
+  };
 }
 
 registerJobHandler('tts_export', async (payload, context) => {
@@ -327,7 +458,8 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
     });
 
     if (!batchRequests.length) {
-      const result = await runInternalAIRequest(payload?.singleRequest, context, label, {
+      const singleRequest = await hydrateRequestImageRefs(payload?.singleRequest, context, label);
+      const result = await runInternalAIRequest(singleRequest, context, label, {
         phase: 'single_review',
         current: 1,
         total,
@@ -339,7 +471,9 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
     const batchResults = [];
     for (let index = 0; index < batchRequests.length; index += 1) {
       const batchNumber = index + 1;
-      const result = await runInternalAIRequest(batchRequests[index], context, `${label} batch ${batchNumber}/${batchRequests.length}`, {
+      const batchLabel = `${label} batch ${batchNumber}/${batchRequests.length}`;
+      const batchRequest = await hydrateRequestImageRefs(batchRequests[index], context, batchLabel);
+      const result = await runInternalAIRequest(batchRequest, context, batchLabel, {
         phase: 'batch_review',
         current: index,
         total,

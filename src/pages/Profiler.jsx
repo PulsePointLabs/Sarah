@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE, PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
 import { loadLatestProfilerAnalysis, loadUserProfileWithProfilerResults, mergeProfilerResultsIntoProfile } from "@/lib/profileContext";
-import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionContextFactorLabels } from "@/lib/sessionContext";
 import { getManualStimulationPauseResumeEvents, getMotionEvidenceSummary, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
 import { buildProfileAIContentMeta, formatGeneratedAt, isProfileAIContentStale } from "@/utils/aiContentMetadata";
@@ -680,6 +680,20 @@ const PELVIC_GENITAL_SCOPE_SECTION_KEYS = new Set([
 const PELVIC_GENITAL_STRONGLY_POSITIVE_RE = /\b(pubic|inguinal|groin|genital|genitals|penis|penile|shaft|foreskin|glans|meatus|meatal|urethra|urethral|scrotum|scrotal|testes|testicle|perineum|perineal|anal|anus|perianal|buttock|gluteal|foley|catheter|statlock|rectal|prostate|pelvic)\b/i;
 const PELVIC_GENITAL_FORBIDDEN_EVIDENCE_RE = /\b(foot|feet|toe|toes|ankle|ankles|heel|heels|dorsal foot|plantar|lower leg|lower legs|lower limb|lower limbs|lower extremity|lower extremities|calf|calves|shin|shins|knee|knees|malleolar|ankle edema|foot edema|lower-leg edema|lower limb edema|lower-limb edema|lower extremity edema|lower-extremity edema|venous engorgement|dog bite|bite wound|dog nip|bite zone|abdominal bite|abdominal wound|standing abdominal view|right lateral abdominal|right lateral lower abdominal|abdomen bite|abdominal bruise|ecchymosis|ecchymotic|yellow-green bruise|puncture point)\b/i;
 const PELVIC_GENITAL_NEGATED_SCOPE_RE = /\b(no|not|without|absent|lacks|lack)\s+(?:visible\s+|direct\s+|clear\s+|obvious\s+|discernible\s+|meaningful\s+){0,4}(?:pubic|inguinal|groin|genital|pelvic|penis|penile|glans|meatus|scrotum|perineum|anal|perianal|foley|catheter)\b/i;
+const HEAD_TO_TOE_BODY_REGION_BUCKETS = [
+  { key: "head_face", label: "head and face", quota: 4, re: /\b(head|face|facial|forehead|scalp|hair|temple|eye|eyes|eyebrow|eyebrows|glasses|nose|nasal|cheek|cheeks|ear|ears|mouth|lips|chin|jaw|beard|moustache|mustache)\b/i },
+  { key: "neck", label: "neck", quota: 3, re: /\b(neck|cervical|throat|nape)\b/i },
+  { key: "shoulders_upper_back", label: "shoulders and upper back", quota: 4, re: /\b(shoulder|shoulders|upper back|thoracic|scapula|scapular|trapezius|posterior trunk|back view)\b/i },
+  { key: "chest", label: "chest", quota: 4, re: /\b(chest|pectoral|pectorals|nipple|nipples|sternum|rib|ribs|thorax|anterior trunk)\b/i },
+  { key: "abdomen", label: "abdomen", quota: 4, re: /\b(abdomen|abdominal|belly|umbilicus|navel|pannus|flank|waist|hernia|bruise|ecchymosis)\b/i },
+  { key: "pelvis_pubic_region", label: "pelvis and pubic region", quota: 3, re: /\b(pelvis|pelvic|pubic|suprapubic|inguinal|groin|hip|hips)\b/i },
+  { key: "upper_limbs_hands", label: "upper limbs and hands", quota: 4, re: /\b(arm|arms|upper limb|upper limbs|elbow|elbows|forearm|forearms|wrist|wrists|hand|hands|finger|fingers|thumb|thumbs)\b/i },
+  { key: "lower_limbs", label: "lower limbs", quota: 4, re: /\b(leg|legs|lower limb|lower limbs|thigh|thighs|knee|knees|calf|calves|shin|shins|ankle|ankles|edema|varicos|standing)\b/i },
+  { key: "feet_toes", label: "feet and toes", quota: 4, re: /\b(foot|feet|toe|toes|heel|heels|plantar|dorsal foot|arches|arch|malleolar)\b/i },
+  { key: "posture_alignment", label: "posture and alignment", quota: 5, re: /\b(full[-\s]?body|whole[-\s]?body|head[-\s]?to[-\s]?toe|standing|anterior|posterior|lateral|front view|back view|side view|posture|alignment|symmetry|habit(?:us)?|body reference|body-reference|baseline set)\b/i },
+  { key: "skin_summary", label: "skin surface", quota: 4, re: /\b(skin|lesion|lesions|rash|papule|papules|follicular|folliculitis|redness|erythema|scar|scars|mark|marks|bruise|bruising|ecchymosis|wound|bite|pigmentation|color)\b/i },
+];
+const HEAD_TO_TOE_PELVIC_CLOSEUP_RE = /\b(close-up|closeup|pelvic close|genital close|perineal close|perianal close|glans close|meatus close|foley|catheter|lithotomy|sounding|dilator)\b/i;
 
 function compactEvidenceText(...parts) {
   return parts.flatMap((part) => {
@@ -688,6 +702,37 @@ function compactEvidenceText(...parts) {
     if (typeof part === "object") return Object.values(part);
     return [part];
   }).map((part) => String(part || "").trim()).filter(Boolean).join(" ");
+}
+
+function inferHeadToToeCoverageTags(...parts) {
+  const text = compactEvidenceText(...parts);
+  if (!text.trim()) return [];
+  return HEAD_TO_TOE_BODY_REGION_BUCKETS
+    .filter((bucket) => bucket.re.test(text))
+    .map((bucket) => bucket.key);
+}
+
+function headToToeCoverageLabels(tags = []) {
+  const set = new Set(Array.isArray(tags) ? tags : []);
+  return HEAD_TO_TOE_BODY_REGION_BUCKETS
+    .filter((bucket) => set.has(bucket.key))
+    .map((bucket) => bucket.label);
+}
+
+function headToToeAttachmentCoverageTags(attachment = {}) {
+  return inferHeadToToeCoverageTags(
+    attachment.display_label,
+    attachment.filename,
+    attachment.body_position,
+    attachment.coverage,
+    attachment.visibility_notes,
+    attachment.major_regions_visible,
+    attachment.selection_tags,
+    attachment.selection_prompt,
+    attachment.selection_review_context,
+    attachment.source_video?.note,
+    attachment.source_video?.purpose,
+  );
 }
 
 function isPelvicGenitalReviewResult(result = null, config = null) {
@@ -1233,6 +1278,17 @@ async function waitProfilerAIJob(job, onProgress) {
     intervalMs: 1200,
     onProgress,
   });
+}
+
+async function loadFullBackgroundJob(job) {
+  if (!job?.id) return job;
+  if (job.result !== undefined) return job;
+  if (!job.hasResult && !["complete", "error", "cancelled"].includes(job.status)) return job;
+  try {
+    return await getBackgroundJob(job.id);
+  } catch {
+    return job;
+  }
 }
 
 function completedAt(job) {
@@ -1875,6 +1931,8 @@ function scoreSavedProfileImageGroup({ message, replyText = "", purpose = "gener
     "standing", "anterior", "posterior", "lateral", "front view", "back view", "side view",
     "baseline set", "body baseline", "body-reference", "body reference", "posture", "alignment",
     "habitus", "torso", "abdomen", "chest", "shoulder", "build", "table position",
+    "head", "face", "facial", "glasses", "nose", "neck", "upper back", "arms", "hands",
+    "legs", "feet", "toes", "skin", "bruise", "scar",
   ];
   const headToToeNegative = [
     "close-up", "pelvic", "perineal", "perianal", "genital", "glans", "meatus", "foreskin",
@@ -1888,7 +1946,10 @@ function scoreSavedProfileImageGroup({ message, replyText = "", purpose = "gener
   const pelvicNegative = ["full-body", "full body", "whole-body", "whole body", "standing views"];
 
   if (purpose === "head_to_toe_body_reference") {
-    return countMatches(headToToePositive) * 4 - countMatches(headToToeNegative) * 3;
+    const coverageBonus = inferHeadToToeCoverageTags(text).length * 3;
+    const broadBodyBonus = /\b(full[-\s]?body|whole[-\s]?body|head[-\s]?to[-\s]?toe|standing|anterior|posterior|lateral)\b/i.test(text) ? 8 : 0;
+    const closeupPenalty = HEAD_TO_TOE_PELVIC_CLOSEUP_RE.test(text) ? 6 : 0;
+    return countMatches(headToToePositive) * 4 + coverageBonus + broadBodyBonus - countMatches(headToToeNegative) * 2 - closeupPenalty;
   }
   if (purpose === "pelvic_genital") {
     return countMatches(pelvicPositive) * 4 - countMatches(pelvicNegative) * 2;
@@ -1924,6 +1985,9 @@ function collectSavedProfileImageAttachments(userProfile, { limit = 5, purpose =
         selectionPrompt,
         selectionReviewContext,
       );
+      const selectionTags = purpose === "head_to_toe_body_reference"
+        ? inferHeadToToeCoverageTags(scopeText)
+        : [];
       if (purpose === "pelvic_genital") {
         if (isPelvicGenitalTextOutOfScope(scopeText)) continue;
         if (!PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(scopeText)) continue;
@@ -1940,6 +2004,7 @@ function collectSavedProfileImageAttachments(userProfile, { limit = 5, purpose =
         selection_prompt: selectionPrompt,
         selection_review_context: selectionReviewContext,
         selection_group_created_at: createdAt,
+        selection_tags: selectionTags,
       });
     }
   }
@@ -1951,6 +2016,10 @@ function collectSavedProfileImageAttachments(userProfile, { limit = 5, purpose =
     });
   const byRecency = [...items]
     .sort((a, b) => (Date.parse(b.saved_at || b.selection_group_created_at || 0) || 0) - (Date.parse(a.saved_at || a.selection_group_created_at || 0) || 0));
+
+  if (purpose === "head_to_toe_body_reference") {
+    return selectBalancedHeadToToeAttachments(items, limit);
+  }
 
   // Build a coverage-aware pool instead of letting one older high-scoring
   // image set monopolize the review. New saved uploads and strongly relevant
@@ -2076,6 +2145,18 @@ function reviewedProfileImageAttachmentsFromResult(result, {
         image.source_video?.note,
         image.source_video?.purpose,
       ].filter(Boolean).join(". "));
+      const selectionTags = purpose === "head_to_toe_body_reference"
+        ? inferHeadToToeCoverageTags(
+          annotation.view_label,
+          annotation.body_position,
+          coverage,
+          majorRegions,
+          image.display_label,
+          image.upload_note,
+          image.source_video?.note,
+          image.source_video?.purpose,
+        )
+        : [];
       return {
         id: `${prefix}_${String(originalId).replace(/[^a-z0-9_-]+/gi, "_")}_${index + 1}`,
         filename: image.filename || `${prefix}-${String(index + 1).padStart(3, "0")}.jpg`,
@@ -2094,6 +2175,7 @@ function reviewedProfileImageAttachmentsFromResult(result, {
         selection_context: purpose,
         selection_prompt: annotation.view_label || image.display_label || "",
         selection_review_context: coverage,
+        selection_tags: selectionTags,
         source_video: image.source_video || null,
       };
     })
@@ -2195,6 +2277,9 @@ function collectBodyExplorationFrameAttachments(bodyExplorations = [], { limit =
         selection_context: purpose,
         selection_prompt: card?.label || "",
         selection_review_context: cleanImageReviewProse(cardText),
+        selection_tags: purpose === "head_to_toe_body_reference"
+          ? inferHeadToToeCoverageTags(cardText)
+          : [],
         source_video: {
           video_id: card?.source_video?.id || "",
           note: card?.summary || "",
@@ -2226,9 +2311,15 @@ function collectBodyExplorationFrameAttachments(bodyExplorations = [], { limit =
 function mergeSavedReviewImageCandidates(candidateGroups = [], limit = 20) {
   const merged = [];
   const seen = new Set();
-  for (const group of candidateGroups) {
-    for (const attachment of Array.isArray(group) ? group : []) {
-      const key = evidenceUrlKey(attachment?.url || attachment?.previewUrl || attachment?.storagePath);
+  const groups = candidateGroups
+    .map((group) => (Array.isArray(group) ? group : []))
+    .filter((group) => group.length);
+  const maxLength = Math.max(0, ...groups.map((group) => group.length));
+  for (let index = 0; index < maxLength; index += 1) {
+    for (const group of groups) {
+      const attachment = group[index];
+      if (!attachment) continue;
+      const key = savedAttachmentDedupeKey(attachment);
       if (!key || seen.has(key)) continue;
       seen.add(key);
       merged.push(attachment);
@@ -2236,6 +2327,73 @@ function mergeSavedReviewImageCandidates(candidateGroups = [], limit = 20) {
     }
   }
   return merged;
+}
+
+function savedAttachmentDedupeKey(attachment = {}) {
+  return evidenceUrlKey(attachment.url || attachment.previewUrl || attachment.storagePath)
+    || String(attachment.id || attachment.filename || "").trim();
+}
+
+function headToToeAttachmentRank(attachment = {}) {
+  const tags = headToToeAttachmentCoverageTags(attachment);
+  const tagScore = tags.length * 10;
+  const savedAt = Date.parse(attachment.saved_at || attachment.selection_group_created_at || 0) || 0;
+  const recencyScore = savedAt ? Math.min(12, savedAt / 100000000000) : 0;
+  const sourceScore = attachment.source === "profile_review_image" || attachment.source === "profile_review_video_frame"
+    ? 10
+    : attachment.source === "body_exploration_video_frame"
+      ? 8
+      : 5;
+  const text = savedEvidenceAttachmentScopeText(attachment);
+  const closeupPenalty = HEAD_TO_TOE_PELVIC_CLOSEUP_RE.test(text) ? 10 : 0;
+  return (Number(attachment.selection_score) || 0) + tagScore + sourceScore + recencyScore - closeupPenalty;
+}
+
+function selectBalancedHeadToToeAttachments(attachments = [], limit = 20) {
+  const candidates = [];
+  const seen = new Set();
+  for (const attachment of Array.isArray(attachments) ? attachments : []) {
+    const key = savedAttachmentDedupeKey(attachment);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const tags = headToToeAttachmentCoverageTags(attachment);
+    candidates.push({
+      ...attachment,
+      selection_tags: tags,
+      selection_score: Number(attachment.selection_score) || 0,
+      _headToToeRank: headToToeAttachmentRank({ ...attachment, selection_tags: tags }),
+    });
+  }
+  if (!candidates.length || limit <= 0) return [];
+
+  const selected = [];
+  const selectedKeys = new Set();
+  const add = (attachment) => {
+    const key = savedAttachmentDedupeKey(attachment);
+    if (!key || selectedKeys.has(key) || selected.length >= limit) return false;
+    selectedKeys.add(key);
+    selected.push(attachment);
+    return true;
+  };
+  const ranked = [...candidates].sort((a, b) => {
+    if (b._headToToeRank !== a._headToToeRank) return b._headToToeRank - a._headToToeRank;
+    return (Date.parse(b.saved_at || b.selection_group_created_at || 0) || 0) - (Date.parse(a.saved_at || a.selection_group_created_at || 0) || 0);
+  });
+
+  for (const bucket of HEAD_TO_TOE_BODY_REGION_BUCKETS) {
+    const bucketCandidates = ranked.filter((attachment) => attachment.selection_tags?.includes(bucket.key));
+    for (const attachment of bucketCandidates.slice(0, bucket.quota)) add(attachment);
+  }
+
+  ranked.forEach(add);
+  return selected.slice(0, limit).map(({ _headToToeRank, ...attachment }) => attachment);
+}
+
+function selectSavedAttachmentsForReview(attachments = [], limit = 20, purpose = "general") {
+  if (purpose === "head_to_toe_body_reference") {
+    return selectBalancedHeadToToeAttachments(attachments, limit);
+  }
+  return (Array.isArray(attachments) ? attachments : []).slice(0, limit);
 }
 
 async function savedAttachmentToPayload(attachment) {
@@ -2281,6 +2439,37 @@ async function savedAttachmentToPayload(attachment) {
     ].filter(Boolean).join(". ")),
     source: attachment.source || "saved_profile_qa_attachment",
     saved_at: attachment.saved_at || null,
+    selection_tags: headToToeAttachmentCoverageTags(attachment),
+  };
+}
+
+function savedAttachmentToImageRef(attachment, index = 0) {
+  const sourceUrl = attachment.url || attachment.file_url || attachment.preview_url || attachment.storagePath || "";
+  if (!sourceUrl) throw new Error(`Saved image ${attachment.filename || ""} has no reusable URL.`);
+  const label = attachment.display_label || attachment.filename || `saved profile evidence image ${index + 1}`;
+  const contextText = cleanImageReviewProse([
+    label,
+    attachment.coverage,
+    attachment.visibility_notes,
+    Array.isArray(attachment.major_regions_visible) ? attachment.major_regions_visible.join(", ") : "",
+    attachment.selection_prompt,
+    attachment.selection_review_context,
+  ].filter(Boolean).join(". "));
+  return {
+    id: attachment.id || `${attachment.filename || "saved-image"}-${attachment.saved_at || index}`,
+    filename: attachment.filename || `saved-profile-image-${index + 1}.jpg`,
+    media_type: normalizeMediaType(attachment.media_type || attachment.mimeType),
+    url: sourceUrl,
+    file_url: attachment.file_url || sourceUrl,
+    preview_url: attachment.preview_url || sourceUrl,
+    storagePath: sourceUrl,
+    display_label: label,
+    upload_note: contextText,
+    coverage: contextText,
+    source: attachment.source || "saved_profile_qa_attachment",
+    saved_at: attachment.saved_at || null,
+    selection_tags: headToToeAttachmentCoverageTags(attachment),
+    server_image_ref: true,
   };
 }
 
@@ -2481,6 +2670,8 @@ function buildImageReviewReferences(images = []) {
     preview_url: image.storagePath || image.file_url || image.url || "",
     media_type: image.media_type || "image/jpeg",
     upload_note: String(image.upload_note || "").trim(),
+    coverage: String(image.coverage || "").trim(),
+    selection_tags: Array.isArray(image.selection_tags) ? image.selection_tags : inferHeadToToeCoverageTags(image.coverage, image.upload_note, image.display_label),
     source_video: image.sourceVideo ? {
       video_id: image.sourceVideo.videoId || image.sourceVideo.id || "",
       frame_index: image.sourceVideo.frameIndex || null,
@@ -2787,7 +2978,11 @@ function imageReviewReferencePromptLines(images = []) {
     const videoContext = video
       ? ` Sampled video frame ${video.frame_index || "?"}/${video.frame_count || "?"}${video.frame_time_seconds != null ? ` at ${formatVideoTimestamp(video.frame_time_seconds)}` : ""}${video.duration_seconds ? ` of a ${formatVideoTimestamp(video.duration_seconds)} uploaded video` : " from an uploaded video"}. Use same-video frame sequences cautiously for visible motion, gait, measurement, or device-position changes; do not claim full continuous video review beyond sampled frames.`
       : "";
-    return `- ${ref.image_id}: ${ref.display_label}${videoContext}${ref.upload_note ? `. User note: ${briefText(ref.upload_note, 240)}` : ""}. Infer the anatomical view from the image content; do not use uploaded filenames, camera-roll numbers, or storage IDs in the user-facing review.`;
+    const coverageHint = headToToeCoverageLabels(ref.selection_tags).join(", ");
+    const coverageContext = coverageHint || ref.coverage
+      ? `. Coverage hints from saved evidence: ${briefText([coverageHint, ref.coverage].filter(Boolean).join(". "), 260)}`
+      : "";
+    return `- ${ref.image_id}: ${ref.display_label}${videoContext}${ref.upload_note ? `. User note: ${briefText(ref.upload_note, 240)}` : ""}${coverageContext}. Infer the anatomical view from the image content; do not use uploaded filenames, camera-roll numbers, or storage IDs in the user-facing review.`;
   }).join("\n");
 }
 
@@ -3849,7 +4044,8 @@ HEAD-TO-TOE REVIEW SCOPE:
 - Profile Q&A is supporting context only. Direct saved images, prior media reviews, session visuals, body-exploration frames, and entered clinical/profile data outrank Q&A when forming the body map.
 - Preserve the full established head-to-toe picture every run. The newest images are the update layer, not the whole report.
 - If a section has saved evidence but no direct fresh view, summarize the current anatomical finding in one useful sentence only if it adds value. Do not write only "not visible", "not represented in this pass", "stable from prior established baseline", or "baseline carried forward."
-- If a section has no established evidence anywhere, write "No established baseline yet for this region" once. Do not describe that as a failure of the current pass.
+- If a section is not present in the directly reloaded image subset but saved profile/context evidence indicates that region exists elsewhere, do not say the current evidence library has no direct images. Say only that it was not directly rechecked in this subset, then use established evidence cautiously.
+- If a section has no established evidence anywhere after checking the saved context and established evidence records, write "No established baseline yet for this region" once. Do not describe that as a failure of the current pass.
 - When a current image shows a meaningful update, describe the update in relation to the existing body map. Example: "The right lateral abdominal bite zone is now in yellow-green bruise resolution, while the rest of the established abdominal baseline remains unchanged."
 - Do not mention prior corrections, invalidated findings, evidence conflicts, confidence accumulation, or historical mistakes unless Ben explicitly asks for an audit trail.
 - Comparison should appear only when it adds value: healing, bruising, swelling, wound/lesion evolution, a new finding, or an explicit comparison request.
@@ -4068,17 +4264,16 @@ function ProfileImageReviewPanel({
   const storeCompletedReviewJob = async (completedJob, sourceImages = []) => {
     const parsed = normalizeImageReviewResult(completedJob?.result, config);
     if (!parsed?.overview) throw new Error("Sarah returned an empty image review.");
-    if (isFinalSynthesisFallbackResult(parsed)) {
-      const fallbackStatus = parsed._background_attempt_status || {
+    const fallbackStatus = isFinalSynthesisFallbackResult(parsed)
+      ? parsed._background_attempt_status || {
         state: "final_synthesis_failed_batch_findings_preserved",
         timestamp: completedAt(completedJob) || new Date().toISOString(),
         batch_reviews_completed: true,
         final_synthesis_attempted: true,
-      };
+      }
+      : null;
+    if (fallbackStatus) {
       setLatestAttemptStatus(fallbackStatus);
-      setJobStatus(completedJob);
-      setError(`Latest ${config.title.toLowerCase()} batch review finished, but final cumulative synthesis failed. Keeping the existing cumulative review visible; use Recover Final Synthesis when credits are available.`);
-      return result || parsed;
     }
     const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
     const storedResult = {
@@ -4098,6 +4293,12 @@ function ProfileImageReviewPanel({
         },
       }),
     };
+    if (fallbackStatus) {
+      storedResult._meta.latest_attempt_status = fallbackStatus;
+      storedResult._meta.recovered_from_batches = true;
+      storedResult._meta.local_batch_assembled = true;
+      storedResult._meta.final_synthesis_failed = true;
+    }
     if (parsed?._background_attempt_status) {
       storedResult._meta.latest_attempt_status = parsed._background_attempt_status;
       setLatestAttemptStatus(parsed._background_attempt_status);
@@ -4119,6 +4320,10 @@ function ProfileImageReviewPanel({
       sessionCount: sessions.length,
     });
     setArchive(nextArchive);
+    if (fallbackStatus) {
+      setJobStatus(completedJob);
+      setError(`Latest ${config.title.toLowerCase()} completed and is now displayed as recovered batch findings. Final cumulative synthesis timed out, so rerun later when you want the polished synthesis pass.`);
+    }
     return storedResult;
   };
 
@@ -4271,7 +4476,11 @@ function ProfileImageReviewPanel({
           ...(completedFullData.jobs || []),
           ...(completedAiData.jobs || []),
         ];
-        const recoverable = findRecoverableBatchSet(completedJobs);
+        const completedJobsWithResults = await Promise.all(completedJobs.map((job) => (
+          isMatchingReviewJob(job) ? loadFullBackgroundJob(job) : job
+        )));
+        if (cancelled) return;
+        const recoverable = findRecoverableBatchSet(completedJobsWithResults);
         setRecoverableBatchSet(recoverable);
         if (
           recoverable?.batches?.length &&
@@ -4290,7 +4499,7 @@ function ProfileImageReviewPanel({
             final_synthesis_attempted: false,
           });
         }
-        const job = completedJobs
+        const job = completedJobsWithResults
           .filter(isFinalOrSingleReviewJob)
           .sort(newestFirst)[0];
         if (!job || (result && !isNewerCompletedJob(job, result))) {
@@ -4324,22 +4533,23 @@ function ProfileImageReviewPanel({
               : `Latest ${config.title.toLowerCase()} final synthesis failed: ${failedFinal.error || failedFinal.progress?.message || failedFinal.status}.`);
             return;
           }
-          describeIncompleteBatchedReview(completedJobs);
+          describeIncompleteBatchedReview(completedJobsWithResults);
           return;
         }
 
         if (job && (!result || isNewerCompletedJob(job, result))) {
           if (viewingArchiveRunId) {
-            setAvailableCompletedReviewJob(job);
+            setAvailableCompletedReviewJob(await loadFullBackgroundJob(job));
             setError("Viewing an archived profiler run. A newer completed review is available, but Sarah will not switch away until you ask.");
             return;
           }
           if (job.type === "profile_image_review_full" || job?.meta?.full_background_review) {
             setJobStatus(job);
-            await storeCompletedReviewJob(job, []);
+            const fullJob = await loadFullBackgroundJob(job);
+            await storeCompletedReviewJob(fullJob, []);
             setAvailableCompletedReviewJob(null);
             setRecoverableBatchSet(null);
-            setLatestAttemptStatus(job.result?._background_attempt_status || null);
+            setLatestAttemptStatus(fullJob.result?._background_attempt_status || null);
             setError("");
             setLoading(false);
             return;
@@ -4350,7 +4560,7 @@ function ProfileImageReviewPanel({
             return;
           }
           setJobStatus(job);
-          setAvailableCompletedReviewJob(job);
+          setAvailableCompletedReviewJob(await loadFullBackgroundJob(job));
           setRecoverableBatchSet(null);
           setLatestAttemptStatus(null);
           setError("A newer completed Profiler review is available. Press the main review button if you want to refresh the displayed output.");
@@ -4930,7 +5140,8 @@ function ProfileImageReviewPanel({
     result?._meta?.image_id_repair_version !== PROFILE_IMAGE_ID_REPAIR_VERSION;
   const hasRecoverableUnshownBatchSet = recoverableBatchSet?.batches?.length > 0 && !result?._meta?.local_batch_assembled;
   const hasCachedOrRecoverableReview = Boolean(result || availableCompletedReviewJob || hasRecoverableUnshownBatchSet || hasRecoverableDisplayRepair);
-  const primaryReviewNeedsFreshContext = !availableCompletedReviewJob && !hasRecoverableUnshownBatchSet && !hasRecoverableDisplayRepair;
+  const primaryReviewNeedsFreshContext = !result && !availableCompletedReviewJob && !hasRecoverableUnshownBatchSet && !hasRecoverableDisplayRepair;
+  const activeReviewJob = ["queued", "running", "starting"].includes(jobStatus?.status);
   const handlePrimaryReviewAction = async () => {
     if (availableCompletedReviewJob) {
       setLoading(true);
@@ -5195,16 +5406,22 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
       let savedImageLoadWarning = "";
       const savedImageSlots = Math.max(0, maxReviewImages - freshImagePayload.length);
       if (savedImageSlots > 0) {
-        const savedAttachments = allSavedAttachments.slice(0, savedImageSlots);
-        const loaded = [];
-        for (const attachment of savedAttachments) {
-          try {
-            loaded.push(await savedAttachmentToPayload(attachment));
-          } catch (savedImageError) {
-            savedImageLoadWarning = savedImageError?.message || "Some saved Profile Q&A images could not be reloaded.";
-          }
-        }
-        reusedSavedImages = loaded.slice(0, savedImageSlots);
+        const savedAttachments = selectSavedAttachmentsForReview(
+          allSavedAttachments,
+          savedImageSlots,
+          isHeadToToeBodyReference ? "head_to_toe_body_reference" : "pelvic_genital",
+        );
+        reusedSavedImages = savedAttachments
+          .map((attachment, savedIndex) => {
+            try {
+              return savedAttachmentToImageRef(attachment, savedIndex);
+            } catch (savedImageError) {
+              savedImageLoadWarning = savedImageError?.message || "Some saved Profile Q&A images could not be queued for backend reload.";
+              return null;
+            }
+          })
+          .filter(Boolean)
+          .slice(0, savedImageSlots);
       }
       if (!freshImagePayload.length && !reusedSavedImages.length && skippedImageMessages.length) {
         throw new Error(`No images could be prepared for review. ${skippedImageMessages[0]}`);
@@ -5273,10 +5490,19 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
           model: "claude_sonnet_4_6",
           max_tokens: PROFILE_IMAGE_REVIEW_MAX_TOKENS,
           attempts: 3,
-          images: batchImages.map((image) => ({
+          images: batchImages.filter((image) => image.data).map((image) => ({
             filename: `${image.image_id || "profile_reference"}.jpg`,
             media_type: image.media_type,
             data: image.data,
+          })),
+          imageRefs: batchImages.filter((image) => !image.data).map((image) => ({
+            image_id: image.image_id,
+            filename: `${image.image_id || "profile_reference"}.jpg`,
+            media_type: image.media_type,
+            url: image.url || image.storagePath || image.file_url || image.preview_url || "",
+            file_url: image.file_url || image.url || image.storagePath || image.preview_url || "",
+            preview_url: image.preview_url || image.url || image.storagePath || image.file_url || "",
+            storagePath: image.storagePath || image.url || image.file_url || image.preview_url || "",
           })),
           prompt: `You are Sarah, performing one batch of a larger Sarah profile image review.
 
@@ -5728,10 +5954,19 @@ ANNOTATED IMAGE OUTPUT RULES:
             max_tokens: PROFILE_IMAGE_REVIEW_MAX_TOKENS,
             attempts: 3,
             ...(imagePayload.length ? {
-              images: imagePayload.map((image) => ({
+              images: imagePayload.filter((image) => image.data).map((image) => ({
                 filename: `${image.image_id || "profile_reference"}.jpg`,
                 media_type: image.media_type,
                 data: image.data,
+              })),
+              imageRefs: imagePayload.filter((image) => !image.data).map((image) => ({
+                image_id: image.image_id,
+                filename: `${image.image_id || "profile_reference"}.jpg`,
+                media_type: image.media_type,
+                url: image.url || image.storagePath || image.file_url || image.preview_url || "",
+                file_url: image.file_url || image.url || image.storagePath || image.preview_url || "",
+                preview_url: image.preview_url || image.url || image.storagePath || image.file_url || "",
+                storagePath: image.storagePath || image.url || image.file_url || image.preview_url || "",
               })),
             } : {}),
             prompt: singlePrompt,
@@ -6340,7 +6575,7 @@ ANNOTATED IMAGE OUTPUT RULES:
               <Film className="h-3.5 w-3.5" /> Add Videos
               <input type="file" accept="video/*" multiple className="hidden" onChange={handleVideoFiles} />
             </label>
-            <Button size="sm" onClick={handlePrimaryReviewAction} disabled={loading || imageSaveInProgress || videoSaveInProgress || (primaryReviewNeedsFreshContext && (profileLoading || evidenceLoading || !userProfile))} className="h-8 gap-1.5 text-xs">
+            <Button size="sm" onClick={handlePrimaryReviewAction} disabled={loading || activeReviewJob || imageSaveInProgress || videoSaveInProgress || (primaryReviewNeedsFreshContext && (profileLoading || evidenceLoading))} className="h-8 gap-1.5 text-xs">
               {loading
                 ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Reviewing...</>
                 : imageSaveInProgress
@@ -6400,7 +6635,7 @@ ANNOTATED IMAGE OUTPUT RULES:
         </div>
 
         {recoverableBatchSet?.batches?.length > 0 && !result?._meta?.local_batch_assembled && (
-          <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-50">
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-950">
             {result?._meta?.local_batch_assembled
               ? "Batch reviews completed and are saved as the current review. The main review button will run a fresh review only when you ask for it."
               : latestAttemptStatus?.state === "batch_reviews_saved_without_final_synthesis"
@@ -6410,17 +6645,17 @@ ANNOTATED IMAGE OUTPUT RULES:
         )}
 
         {result?._meta?.local_batch_assembled && (
-          <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-50">
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-950">
             This displayed review is an interim local batch assembly, not a full Sarah cumulative synthesis. Use the archive below to view an older final review, or recover final synthesis when credits are available.
           </div>
         )}
 
         {(latestAttemptStatus || recoverableBatchSet?.batches?.length > 0) && !result?._meta?.local_batch_assembled && (
-          <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-50">
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs leading-relaxed text-amber-950">
             <p className="font-semibold uppercase tracking-wider">Latest Attempt Status</p>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              <div className="rounded-md border border-amber-300/20 bg-background/40 px-2 py-1.5">
-                <p className="text-[10px] uppercase tracking-wider text-amber-100/80">Final Synthesis</p>
+              <div className="rounded-md border border-amber-200 bg-white/70 px-2 py-1.5">
+                <p className="text-[10px] uppercase tracking-wider text-amber-800">Final Synthesis</p>
                 <p>{result?._meta?.local_batch_assembled
                   ? "Current batch-assembled review is saved."
                   : latestAttemptStatus?.state === "batch_reviews_saved_without_final_synthesis"
@@ -6429,20 +6664,20 @@ ANNOTATED IMAGE OUTPUT RULES:
                     ? `Failed: ${latestAttemptStatus.error_message}`
                     : "Completed batch findings are ready to show."}</p>
               </div>
-              <div className="rounded-md border border-amber-300/20 bg-background/40 px-2 py-1.5">
-                <p className="text-[10px] uppercase tracking-wider text-amber-100/80">Current Display</p>
+              <div className="rounded-md border border-amber-200 bg-white/70 px-2 py-1.5">
+                <p className="text-[10px] uppercase tracking-wider text-amber-800">Current Display</p>
                 <p>{result?._meta?.local_batch_assembled
                   ? "Showing recovered latest batch findings assembled locally."
                   : result
                     ? "Showing previous final synthesis until retry or local assembly succeeds."
                     : "No previous final synthesis is available yet."}</p>
               </div>
-              <div className="rounded-md border border-amber-300/20 bg-background/40 px-2 py-1.5">
-                <p className="text-[10px] uppercase tracking-wider text-amber-100/80">Latest Batch Findings</p>
+              <div className="rounded-md border border-amber-200 bg-white/70 px-2 py-1.5">
+                <p className="text-[10px] uppercase tracking-wider text-amber-800">Latest Batch Findings</p>
                 <p>{recoverableBatchSet?.batches?.length ? `${recoverableBatchSet.total}/${recoverableBatchSet.total} completed batches available.` : "No completed batch set loaded."}</p>
               </div>
-              <div className="rounded-md border border-amber-300/20 bg-background/40 px-2 py-1.5">
-                <p className="text-[10px] uppercase tracking-wider text-amber-100/80">Next Action</p>
+              <div className="rounded-md border border-amber-200 bg-white/70 px-2 py-1.5">
+                <p className="text-[10px] uppercase tracking-wider text-amber-800">Next Action</p>
                 <p>{result?._meta?.local_batch_assembled
                   ? "Use the main review button only when you want to run a fresh review."
                   : latestAttemptStatus?.state === "batch_reviews_saved_without_final_synthesis"
@@ -6687,7 +6922,7 @@ ANNOTATED IMAGE OUTPUT RULES:
 
         <CompactError message={error} />
 
-        {loading && (
+        {(loading || activeReviewJob) && (
           <ProfilerJobStatus
             job={jobStatus}
             fallback={`${config.shortTitle} review is running in the background queue...`}
@@ -6851,7 +7086,7 @@ function AIProfilePanel({ sessions, userProfile, journals, evidenceLoading = fal
         setJobStatus(job);
         setLoading(job.status !== "complete");
         const completedJob = job.status === "complete"
-          ? job
+          ? await loadFullBackgroundJob(job)
           : await waitForBackgroundJob(job.id, {
             intervalMs: 1200,
             onProgress: (nextJob) => {
@@ -7277,7 +7512,7 @@ function AnatomicalPhysiologicalProfilePanel({
         setJobStatus(job);
         setLoading(job.status !== "complete");
         const completedJob = job.status === "complete"
-          ? job
+          ? await loadFullBackgroundJob(job)
           : await waitForBackgroundJob(job.id, {
             intervalMs: 1200,
             onProgress: (nextJob) => {

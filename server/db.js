@@ -57,6 +57,20 @@ export function initDb() {
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_local_vision_results_session ON local_vision_results(session_id, record_type, created_at);
+
+    CREATE TABLE IF NOT EXISTS local_telemetry_events (
+      id TEXT PRIMARY KEY,
+      session_id TEXT,
+      kind TEXT NOT NULL,
+      source TEXT NOT NULL,
+      wall_time_ms INTEGER NOT NULL,
+      monotonic_ms REAL NOT NULL,
+      received_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_local_telemetry_events_session ON local_telemetry_events(session_id, kind, wall_time_ms);
+    CREATE INDEX IF NOT EXISTS idx_local_telemetry_events_kind_time ON local_telemetry_events(kind, wall_time_ms);
   `);
 
   const localVisionColumns = db.prepare("PRAGMA table_info(local_vision_results)").all().map((row) => row.name);

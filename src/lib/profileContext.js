@@ -33,7 +33,7 @@ export function mergeProfilerResultsIntoProfile(profile, latestProfilerAnalysis)
 
 export async function loadLatestProfilerAnalysis() {
   try {
-    const rows = await timeoutToNull(base44.entities.SessionClusterAnalysis.list("-updated_date", 1));
+    const rows = await timeoutToNull(base44.entities.SessionClusterAnalysis.listFields(PROFILER_RESULT_KEYS, "-updated_date", 1));
     return Array.isArray(rows) && rows.length ? rows[0] : null;
   } catch {
     return null;
@@ -41,7 +41,10 @@ export async function loadLatestProfilerAnalysis() {
 }
 
 export async function loadUserProfileWithProfilerResults() {
-  const profile = await base44.auth.me();
-  const latestProfilerAnalysis = await loadLatestProfilerAnalysis();
+  const [profile, latestProfilerAnalysis] = await Promise.all([
+    timeoutToNull(base44.auth.me()),
+    loadLatestProfilerAnalysis(),
+  ]);
+  if (!profile && latestProfilerAnalysis) return { id: "local-user", ...latestProfilerAnalysis };
   return mergeProfilerResultsIntoProfile(profile, latestProfilerAnalysis);
 }
