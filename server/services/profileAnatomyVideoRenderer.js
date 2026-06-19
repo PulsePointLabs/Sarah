@@ -4,6 +4,7 @@ import { uploadDir, ttsRenderDir } from '../config.js';
 import { listEntities, upsertEntity } from '../db.js';
 import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart } from './ttsCore.js';
+import { resolveCachedFramePath } from './localVision/frameSampler.js';
 
 const PROFILE_ANATOMY_VIDEO_RENDER_VERSION = 'profile_anatomy_video_v1_hd';
 const VIDEO_WIDTH = Number(process.env.PROFILE_ANATOMY_VIDEO_WIDTH || 1920);
@@ -230,11 +231,38 @@ const STRICT_FORBIDDEN_IMAGE_REGIONS = new Map([
   ['feet_toes', new Set(['head_face', 'neck', 'chest', 'pelvis_pubic_region', 'genitals_perineum', 'buttocks_perianal'])],
 ]);
 
-function uploadPathFromUrl(fileUrl = '') {
+function pathnameFromUrl(fileUrl = '') {
   const raw = String(fileUrl || '').trim();
+  try {
+    if (/^https?:\/\//i.test(raw)) return new URL(raw).pathname;
+  } catch {
+    return raw;
+  }
+  return raw;
+}
+
+function uploadPathFromUrl(fileUrl = '') {
+  const raw = pathnameFromUrl(fileUrl);
   if (!raw.startsWith('/uploads/')) return null;
   const filename = path.basename(decodeURIComponent(raw.replace(/^\/uploads\//, '')));
   return path.join(uploadDir, filename);
+}
+
+function localVisionFramePathFromUrl(fileUrl = '') {
+  const raw = pathnameFromUrl(fileUrl);
+  if (!raw.startsWith('/api/local-vision/frame/')) return null;
+  const parts = raw
+    .replace(/^\/api\/local-vision\/frame\//, '')
+    .split('/')
+    .map((part) => {
+      try {
+        return decodeURIComponent(part);
+      } catch {
+        return part;
+      }
+    });
+  if (parts.length !== 3 || parts.some((part) => !part)) return null;
+  return resolveCachedFramePath(parts[0], parts[1], parts[2]);
 }
 
 function normalizeText(value = '') {
@@ -908,6 +936,9 @@ async function resolveImageToFile(image, workDir, index) {
   const rawUrl = String(image.url || '').trim();
   const uploadPath = uploadPathFromUrl(rawUrl);
   if (uploadPath && await fileExists(uploadPath)) return uploadPath;
+
+  const localVisionFramePath = localVisionFramePathFromUrl(rawUrl);
+  if (localVisionFramePath && await fileExists(localVisionFramePath)) return localVisionFramePath;
 
   const dataMatch = rawUrl.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
   const output = path.join(workDir, `source-${String(index + 1).padStart(3, '0')}.jpg`);
