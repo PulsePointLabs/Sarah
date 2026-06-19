@@ -1426,16 +1426,16 @@ function ProfilerPanelLoadingStatus({ items = [] }) {
   const activeItems = items.filter((item) => item && item.active);
   if (!activeItems.length) return null;
   return (
-    <div className="rounded-lg border border-blue-400/25 bg-blue-500/10 px-3 py-3 text-xs">
-      <div className="flex items-center gap-2 font-semibold text-blue-100">
-        <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-blue-300 border-t-transparent" />
+    <div className="rounded-lg border border-sky-300 bg-sky-50 px-3 py-3 text-xs text-sky-950 shadow-sm">
+      <div className="flex items-center gap-2 font-semibold text-sky-900">
+        <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-sky-600 border-t-transparent" />
         Preparing this analysis panel
       </div>
       <div className="mt-2 grid gap-1.5">
         {activeItems.map((item) => (
-          <div key={item.label} className="flex items-start justify-between gap-3 rounded-md bg-background/35 px-2 py-1.5">
-            <span className="text-blue-50">{item.label}</span>
-            <span className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-blue-200">{item.status || "loading"}</span>
+          <div key={item.label} className="flex items-start justify-between gap-3 rounded-md border border-sky-200 bg-white px-2 py-1.5">
+            <span className="font-medium text-sky-950">{item.label}</span>
+            <span className="shrink-0 font-mono text-[10px] font-semibold uppercase tracking-wide text-sky-800">{item.status || "loading"}</span>
           </div>
         ))}
       </div>
