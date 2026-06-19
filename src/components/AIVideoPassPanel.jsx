@@ -5047,7 +5047,7 @@ Return only the structured JSON matching the requested schema.`,
             const deviceStatus = cardDeviceEvidenceStatus(card);
             return (
               <article key={card.id} className={`overflow-hidden rounded-xl border bg-card transition-opacity ${accepted ? "border-primary/25 opacity-80" : "border-border"}`}>
-                <div className={`${compactAccepted ? "p-3" : "grid gap-3 p-3 lg:grid-cols-[minmax(15rem,22rem)_1fr]"}`}>
+                <div className={`${compactAccepted ? "p-3" : "space-y-3 p-3"}`}>
                   {compactAccepted ? (
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -5080,7 +5080,7 @@ Return only the structured JSON matching the requested schema.`,
                   <button
                     type="button"
                     onClick={() => setExpanded((prev) => ({ ...prev, [card.id]: !prev[card.id] }))}
-                    className="group relative overflow-hidden rounded-lg border border-border bg-black text-left"
+                    className="group relative mx-auto block w-full max-w-4xl overflow-hidden rounded-lg border border-border bg-black text-left"
                   >
                     {showCardVideoPreview ? (
                       <video
@@ -5088,7 +5088,7 @@ Return only the structured JSON matching the requested schema.`,
                         muted
                         playsInline
                         preload="metadata"
-                        className={`w-full bg-black object-contain ${isExpanded ? "max-h-[28rem]" : "aspect-video"}`}
+                        className={`aspect-video w-full bg-black object-contain ${isExpanded ? "max-h-[36rem]" : "max-h-[30rem]"}`}
                         controls={isExpanded}
                       />
                     ) : cardFramePreview ? (
@@ -5096,7 +5096,7 @@ Return only the structured JSON matching the requested schema.`,
                         src={cardFramePreview}
                         alt={`${card.localVision ? "Local evidence" : "Sampled"} frame preview`}
                         loading="lazy"
-                        className={`w-full bg-black object-contain ${isExpanded ? "max-h-[28rem]" : "aspect-video"}`}
+                        className={`aspect-video w-full bg-black object-contain ${isExpanded ? "max-h-[36rem]" : "max-h-[30rem]"}`}
                       />
                     ) : (
                       <div className="flex aspect-video w-full items-center justify-center bg-black px-3 text-center text-xs text-muted-foreground">
