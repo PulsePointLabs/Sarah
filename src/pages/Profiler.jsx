@@ -3479,6 +3479,7 @@ function AnnotatedImageStage({
           src={imageUrl}
           alt={image.display_label || "Reviewed anatomy reference"}
           className={`absolute ${imageClassName}`}
+          decoding="async"
           style={rect ? {
             left: `${rect.left}px`,
             top: `${rect.top}px`,
@@ -3680,7 +3681,7 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
         <Badge variant="outline" className="text-[10px]">{findings.length} region finding{findings.length === 1 ? "" : "s"}</Badge>
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-2">
+      <div className="grid gap-3 xl:grid-cols-2">
         {imageIds.map((imageId) => {
           const image = pelvicScoped
             ? rawProfileImageById(result, imageId, transientImages)
@@ -3695,8 +3696,8 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
                 pinnedFindings={pinnedFindings}
                 boxedFindings={boxedFindings}
                 unavailableText="Image preview is not available for this saved run. Re-run with saved or fresh images to attach view previews."
-                className="relative h-72 min-h-72 overflow-hidden bg-black sm:h-80 lg:aspect-[4/3] lg:h-auto lg:min-h-0"
-                fitMode="cover"
+                className="relative aspect-[4/3] min-h-48 overflow-hidden bg-neutral-950 sm:min-h-64"
+                fitMode="contain"
               />
               <div className="space-y-2 p-3">
                 <div>
@@ -4120,8 +4121,8 @@ function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transie
       if (b.score !== a.score) return b.score - a.score;
       return Number(b.hasFinding) - Number(a.hasFinding);
     });
-  const best = scored.filter((item) => item.score > 0).slice(0, 3);
-  const fallback = scored.filter((item) => item.hasFinding).slice(0, 3);
+  const best = scored.filter((item) => item.score > 0).slice(0, 2);
+  const fallback = scored.filter((item) => item.hasFinding).slice(0, 2);
   return (best.length ? best : fallback).map((item) => item.imageId);
 }
 
@@ -4137,7 +4138,7 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
   const sectionLabel = sectionLabelForKey(sections, sectionKey);
 
   return (
-    <div className="my-3 rounded-xl border border-border bg-card/60 p-2.5 sm:p-3">
+    <div className="my-4 rounded-xl border border-border bg-card/80 p-2.5 shadow-sm sm:p-3">
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg px-1 py-1">
         <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color }}>
           <ImageIcon className="h-3.5 w-3.5" /> Evidence for {sectionLabel}
@@ -4147,7 +4148,7 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
           <Badge variant="secondary" className="h-5 text-[10px]">{imageIds.length} visible view{imageIds.length === 1 ? "" : "s"}</Badge>
         </span>
       </div>
-      <div className="mt-3 grid gap-2 md:grid-cols-2">
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
         {imageIds.map((imageId) => {
           const image = pelvicScoped
             ? rawProfileImageById(result, imageId, transientImages)
@@ -4155,42 +4156,42 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
           const imageFindings = findings.filter((finding) => finding.image_id === imageId).slice(0, 4);
           const pinnedFindings = imageFindings.filter((finding) => finding.pin?.x != null && finding.pin?.y != null);
           return (
-            <div key={`${sectionKey}-${imageId}`} className="overflow-hidden rounded-lg border border-border bg-background/70">
-              <div className="grid gap-2 xl:grid-cols-[minmax(260px,0.95fr)_1fr]">
+            <div key={`${sectionKey}-${imageId}`} className="overflow-hidden rounded-lg border border-border bg-background shadow-sm">
+              <div className="grid gap-0">
                 <AnnotatedImageStage
                   image={image}
                   pinnedFindings={pinnedFindings}
                   unavailableText="Image preview unavailable for this saved run."
-                  className="relative h-64 min-h-64 overflow-hidden bg-black sm:h-72 xl:h-full xl:min-h-full"
-                  fitMode="cover"
+                  className="relative aspect-[4/3] min-h-44 overflow-hidden bg-neutral-950 sm:min-h-56"
+                  fitMode="contain"
                   onClick={onOpenImage ? () => onOpenImage(imageId) : null}
                 />
-                <div className="space-y-2 p-2.5">
+                <div className="space-y-2 p-3">
                   <div>
-                    <p className="text-base font-semibold leading-snug text-foreground dark:text-white">{image.display_label || "Reviewed view"}</p>
+                    <p className="text-sm font-semibold leading-snug text-foreground dark:text-white">{image.display_label || "Reviewed view"}</p>
                     {(image.body_position || image.coverage || image.visibility_notes) && (
-                      <p className="mt-2 text-sm leading-relaxed text-foreground/90 dark:text-white/90">
+                      <p className="mt-1.5 line-clamp-4 text-xs leading-relaxed text-muted-foreground">
                         {[image.body_position, image.coverage, image.visibility_notes].filter(Boolean).join(" · ")}
                       </p>
                     )}
                   </div>
                   <div className="space-y-1.5">
                     {imageFindings.length > 0 ? imageFindings.map((finding, index) => (
-                      <div key={`${finding.finding_id}-inline`} className="rounded-md border border-border bg-muted/20 p-3">
+                      <div key={`${finding.finding_id}-inline`} className="rounded-md border border-border bg-muted/20 p-2.5">
                         <div className="flex flex-wrap items-center gap-1.5">
                           {finding.pin && (
                             <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
                               {index + 1}
                             </span>
                           )}
-                      <span className="text-base font-semibold leading-snug text-foreground dark:text-white">{finding.label || finding.region || "Visible finding"}</span>
+                      <span className="text-sm font-semibold leading-snug text-foreground dark:text-white">{finding.label || finding.region || "Visible finding"}</span>
                       <Badge variant="outline" className="h-5 text-[10px]">{confidenceLabel(finding.confidence)}</Badge>
                       {finding.evidence_level && (
                         <Badge variant="secondary" className="h-5 text-[10px]">{confidenceLabel(finding.evidence_level)}</Badge>
                       )}
                     </div>
                         {finding.finding && (
-                          <p className="mt-2 text-[0.95rem] leading-relaxed text-foreground/90 dark:text-white/90">{finding.finding}</p>
+                          <p className="mt-1.5 text-xs leading-relaxed text-foreground/90 dark:text-white/90">{finding.finding}</p>
                         )}
                         <FindingCorrectionControl finding={finding} onCorrectFinding={onCorrectFinding} onRemoveFinding={onRemoveFinding} />
                       </div>
@@ -7305,12 +7306,13 @@ ANNOTATED IMAGE OUTPUT RULES:
         )}
 
         {result && !freshReviewPending && (
-          <TTSReader
-            sessionId={config.ttsSessionId}
-            title={config.title}
-            sourceGeneratedAt={result?._meta?.last_generated_at}
-            paragraphs={paragraphs}
-            renderParagraph={(text, idx, isActive, _isBuffering, activeSentenceIdx, startFromSentence) => {
+          <div className="mx-auto w-full max-w-6xl">
+            <TTSReader
+              sessionId={config.ttsSessionId}
+              title={config.title}
+              sourceGeneratedAt={result?._meta?.last_generated_at}
+              paragraphs={paragraphs}
+              renderParagraph={(text, idx, isActive, _isBuffering, activeSentenceIdx, startFromSentence) => {
               const meta = paragraphMeta[idx];
               if (!meta) return null;
               if (meta.type === "title" || meta.type === "section-title") {
@@ -7382,8 +7384,9 @@ ANNOTATED IMAGE OUTPUT RULES:
                   {renderSentenceHighlightedText(text, activeSentenceIdx, startFromSentence)}
                 </p>
               );
-            }}
-          />
+              }}
+            />
+          </div>
         )}
 
         <ProfileImageLightbox
