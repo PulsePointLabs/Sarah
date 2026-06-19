@@ -34,10 +34,29 @@ const MAX_VOICE_NOTE_MS = 12000;
 const VOICE_NOTE_MIN_MS = 900;
 const VOICE_NOTE_SILENCE_MS = 1300;
 const VOICE_NOTE_SILENCE_RMS = 0.018;
+const TERMINAL_WAKE_LISTENER_ERRORS = new Set([
+  "network",
+  "not-allowed",
+  "service-not-allowed",
+  "audio-capture",
+]);
 const WHISPER_PROMPT =
   "Sarah live session annotation. Timestamped observation during physiological recording. " +
   "Heart rate, arousal, stimulation, physical finding, legs tense, feet planted, toe curl, tremor, breathing, " +
   "stroke speed, grip pressure, repositioning, comfort adjustment, nearing climax, ejaculation, climax, recovery.";
+
+function wakeListenerErrorMessage(errorCode) {
+  if (errorCode === "network") {
+    return "Wake phrase is unavailable in this app/browser right now. Use Record Now; Sarah will still timestamp and save the note.";
+  }
+  if (errorCode === "not-allowed" || errorCode === "service-not-allowed") {
+    return "Wake phrase needs microphone/speech permission. Use Record Now or allow microphone access, then try Wake again.";
+  }
+  if (errorCode === "audio-capture") {
+    return "Wake phrase cannot access the microphone. Check the selected mic, or use Record Now after mic access is restored.";
+  }
+  return errorCode ? `Wake listener: ${errorCode}` : "Wake listener stopped.";
+}
 const HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb";
 const HEART_RATE_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb";
 const BATTERY_SERVICE_UUID = "0000180f-0000-1000-8000-00805f9b34fb";
@@ -3131,12 +3150,23 @@ export default function LiveCapture() {
       setVoiceError("");
     };
     recognition.onerror = (event) => {
+      const errorCode = event?.error || "";
       const transient = event?.error === "no-speech" || event?.error === "aborted";
-      if (!voiceWakeEnabledRef.current || annotationRecordingRef.current) {
+      const terminal = TERMINAL_WAKE_LISTENER_ERRORS.has(errorCode);
+      if (terminal) {
+        voiceWakeEnabledRef.current = false;
+        setVoiceWakeEnabled(false);
+        clearTimeout(wakeRestartTimerRef.current);
+        wakeRestartTimerRef.current = null;
+      }
+      if (terminal || !voiceWakeEnabledRef.current || annotationRecordingRef.current) {
         setWakeListening(false);
       }
       if (!transient) {
-        setVoiceError(event?.error ? `Wake listener: ${event.error}` : "Wake listener stopped.");
+        setVoiceError(wakeListenerErrorMessage(errorCode));
+        if (terminal) {
+          setVoiceStatus("Wake phrase paused. Record Now still works for timestamped voice notes.");
+        }
       }
     };
     recognition.onresult = (event) => {
@@ -3191,8 +3221,11 @@ export default function LiveCapture() {
     try {
       recognition.start();
     } catch {
+      setVoiceWakeEnabled(false);
+      voiceWakeEnabledRef.current = false;
       setWakeListening(false);
-      wakeRestartTimerRef.current = window.setTimeout(startWakeListening, 1500);
+      setVoiceError("Wake phrase could not start here. Use Record Now for timestamped voice notes.");
+      setVoiceStatus("Wake phrase paused. Record Now still works for timestamped voice notes.");
     }
   }, [howlControlCeiling, playVoiceFeedback, runHowlVoiceCommand, speechRecognitionSupported, stopWakeListening]);
 
@@ -3300,6 +3333,7 @@ export default function LiveCapture() {
   const toggleVoiceWake = useCallback(async () => {
     await getAudioContext();
     if (voiceWakeEnabled) playVoiceFeedback("stop");
+    setVoiceError("");
     setVoiceWakeEnabled((value) => !value);
   }, [getAudioContext, playVoiceFeedback, voiceWakeEnabled]);
 
@@ -3347,6 +3381,7 @@ export default function LiveCapture() {
             onClick={async () => {
               await getAudioContext();
               if (voiceWakeEnabled) playVoiceFeedback("stop");
+              setVoiceError("");
               setVoiceWakeEnabled((value) => !value);
             }}
             disabled={!speechRecognitionSupported || !voiceRecordingSupported}
