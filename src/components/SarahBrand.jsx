@@ -27,9 +27,9 @@ export function useSarahBrand() {
 export function SarahLogoMark({ className = "h-8 w-8" }) {
   return (
     <img
-      src="/icons/sarah-icon.svg"
+      src="/icons/sarah-192.png"
       alt="Sarah"
-      className={className}
+      className={`rounded-[22%] ${className}`}
       draggable="false"
     />
   );

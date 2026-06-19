@@ -168,45 +168,11 @@ export default function BodyExplorationDetail() {
           </div>
         </div>
 
-        {timelineRows.length > 0 && <div className="rounded-xl border border-border bg-card p-4"><h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-primary">Heart Rate Timeline</h3><HRTimelineChart rows={timelineRows} events={exploration.event_timeline || []} noClimax /></div>}
-        {emgRows.length > 0 && <div className="rounded-xl border border-border bg-card p-4"><h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-primary">EMG Timeline</h3><EMGTimelineChart rows={emgRows} channelMode={exploration.emg_channels || "single"} events={exploration.event_timeline || []} timelineRows={timelineRows} /></div>}
-        {(exploration.event_timeline || []).length > 0 && <TimestampedNotes events={exploration.event_timeline} />}
-        <LinkedLocalVideoManager
-          videos={linkedLocalVideos}
-          title="Linked Original Videos"
-          helper="Save local references to original body exploration recordings for review and Video Sync. The app stores the path and fingerprint metadata only; raw video is not copied into the database."
-          onChange={async (nextVideos) => {
-            await base44.entities.BodyExploration.update(id, { linked_local_videos: nextVideos });
-            setExploration((prev) => ({ ...prev, linked_local_videos: nextVideos }));
-          }}
-        />
-        {linkedLocalVideos.length > 0 && (
-          <details className="rounded-xl border border-border bg-card p-4" open>
-            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
-              Rich Linked Video Playback
-            </summary>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Play the linked original video with synchronized event notes and telemetry context.
-            </p>
-            <div className="mt-3">
-              <VideoSyncPlayer
-                key={`body-media-sync:${exploration.id}:${linkedLocalVideos.map((video) => video.fingerprint || video.path).join("|")}`}
-                session={exploration}
-                timelineRows={timelineRows}
-                recordType="body_exploration"
-              />
-            </div>
-          </details>
-        )}
-        <div className="rounded-xl border border-border bg-card p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
-                <Clapperboard className="h-4 w-4" /> AI Procedure Video + Audio Passes
-              </h3>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Run and manage Sarah video/audio analysis from the central AI Annotation workbench. That page handles body explorations and sessions with the same event clearing and filtering controls.
-              </p>
+              <h2 className="text-sm font-semibold text-foreground">Sarah review</h2>
+              <p className="text-xs text-muted-foreground">Analysis and annotation tools are up here so the record is useful immediately.</p>
             </div>
             <Button asChild size="sm" variant="outline" className="gap-1.5">
               <Link to={`/ai-annotation?type=body_exploration&id=${exploration.id}`}>
@@ -214,9 +180,10 @@ export default function BodyExplorationDetail() {
               </Link>
             </Button>
           </div>
-        </div>
+          <BodyExplorationAIPanel exploration={exploration} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} />
+        </section>
 
-        <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+        <div className="space-y-3 rounded-xl border border-border bg-card p-4">
           <div>
             <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
               <MessageCircle className="h-4 w-4" /> Sarah Review Chat
@@ -291,7 +258,57 @@ export default function BodyExplorationDetail() {
           )}
         </div>
 
-        <BodyExplorationAIPanel exploration={exploration} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} />
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-sm font-semibold text-foreground">Media, telemetry, and notes</h2>
+            <p className="text-xs text-muted-foreground">Original evidence and long timelines stay available without pushing Sarah's analysis to the bottom.</p>
+          </div>
+          <LinkedLocalVideoManager
+            videos={linkedLocalVideos}
+            title="Linked Original Videos"
+            helper="Save local references to original body exploration recordings for review and Video Sync. The app stores the path and fingerprint metadata only; raw video is not copied into the database."
+            onChange={async (nextVideos) => {
+              await base44.entities.BodyExploration.update(id, { linked_local_videos: nextVideos });
+              setExploration((prev) => ({ ...prev, linked_local_videos: nextVideos }));
+            }}
+          />
+          {linkedLocalVideos.length > 0 && (
+            <details className="rounded-xl border border-border bg-card p-4">
+              <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+                Rich Linked Video Playback
+              </summary>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Play the linked original video with synchronized event notes and telemetry context.
+              </p>
+              <div className="mt-3">
+                <VideoSyncPlayer
+                  key={`body-media-sync:${exploration.id}:${linkedLocalVideos.map((video) => video.fingerprint || video.path).join("|")}`}
+                  session={exploration}
+                  timelineRows={timelineRows}
+                  recordType="body_exploration"
+                />
+              </div>
+            </details>
+          )}
+          {timelineRows.length > 0 && (
+            <details className="rounded-xl border border-border bg-card p-4">
+              <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Heart Rate Timeline</summary>
+              <div className="mt-3">
+                <HRTimelineChart rows={timelineRows} events={exploration.event_timeline || []} noClimax />
+              </div>
+            </details>
+          )}
+          {emgRows.length > 0 && (
+            <details className="rounded-xl border border-border bg-card p-4">
+              <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">EMG Timeline</summary>
+              <div className="mt-3">
+                <EMGTimelineChart rows={emgRows} channelMode={exploration.emg_channels || "single"} events={exploration.event_timeline || []} timelineRows={timelineRows} />
+              </div>
+            </details>
+          )}
+          {(exploration.event_timeline || []).length > 0 && <TimestampedNotes events={exploration.event_timeline} />}
+        </section>
+
         <div className="rounded-xl border border-border bg-muted/20 p-4 text-xs text-muted-foreground">
           <p className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-primary"><Brain className="h-3.5 w-3.5" /> Standalone exploration mode</p>
           <p className="mt-2">This record does not use climax phase markers or arousal-session completion logic.</p>

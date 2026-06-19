@@ -362,7 +362,7 @@ app.whenReady().then(async () => {
   win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`
     <body style="margin:0;background:#f8f2fb;color:#291b34;font:16px system-ui;display:grid;place-items:center;height:100vh">
       <main style="display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center">
-        <img src="file://${path.join(app.getAppPath(), 'public', 'icons', 'sarah-icon.svg').replace(/\\/g, '/')}" alt="Sarah" style="width:86px;height:86px;border-radius:24px;box-shadow:0 18px 42px rgba(124,58,237,.22)" />
+        <img src="file://${path.join(app.getAppPath(), 'dist', 'icons', 'sarah-192.png').replace(/\\/g, '/')}" alt="Sarah" style="width:86px;height:86px;border-radius:24px;box-shadow:0 18px 42px rgba(124,58,237,.22)" />
         <div style="font-size:30px;font-weight:800;letter-spacing:-.03em">Sarah</div>
         <div style="color:#6d5b78;font-size:14px;font-weight:600">Starting local engine...</div>
       </main>
