@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  ANATOMY_REVIEW_ASSIGNMENT_CONTRACT,
+  classifyAnatomyReviewEvidence,
   cleanupProfileImageReviewResult,
   reduceProfileFindingRepetition,
 } from '../../src/lib/profileImageReviewCleanup.js';
@@ -231,4 +233,141 @@ test('pelvic/genital cleanup preserves focused exam structures without catheter 
   assert.match(text, /glans and meatus/);
   assert.match(text, /scrotum appears symmetric/);
   assert.match(text, /perianal skin/);
+});
+
+test('Foley does not dominate pelvic/genital anatomy review without tissue injury', () => {
+  const result = cleanupProfileImageReviewResult({
+    executive_summary: [
+      'External pelvic and genital anatomy is represented with stable tissue appearance. Foley catheter exits the meatus, routes to StatLock, Y-junction visible, red-capped balloon port visible, drainage lumen visible, leg bag visible.',
+    ],
+    penis: [
+      'Penile shaft contour is visible without focal shaft lesion.',
+      'Foley catheter exits the meatus, curves anteriorly, routes toward the StatLock, Y-junction visible, red-capped balloon port visible, drainage lumen visible.',
+    ],
+    foreskin: [
+      'Foreskin coverage pattern appears stable.',
+      'The catheter tubing crosses the foreskin field and routes to the leg bag.',
+    ],
+    glans_meatus: [
+      'Glans and meatus are visible without obvious erythema, erosion, bleeding, or pressure injury.',
+      'Foley catheter exits the meatus with balloon port and drainage lumen visible.',
+    ],
+    scrotum_testes: ['Scrotum appears symmetric with stable midline raphe.'],
+    perineum: ['Perineal skin appears intact where represented.'],
+    anal_opening_perianal_region: ['Perianal skin is represented without visible fissure.'],
+    device_contact_findings: [
+      'Foley catheter exits the meatus, curves anteriorly, routes toward the StatLock, Y-junction visible, red-capped balloon port visible, drainage lumen visible, leg bag visible.',
+      'Foley catheter exits the meatus, curves anteriorly, routes toward the StatLock, Y-junction visible, red-capped balloon port visible, drainage lumen visible, leg bag visible.',
+    ],
+  }, { sections: PELVIC_SECTIONS });
+
+  const text = allText(result).toLowerCase();
+  assert.match(text, /penile shaft contour/);
+  assert.match(text, /glans and meatus/);
+  assert.match(text, /scrotum appears symmetric/);
+  assert.equal((text.match(/\bfoley\b/g) || []).length, 1);
+  assert.doesNotMatch(text, /y-junction|balloon port|drainage lumen|leg bag|routes toward the statlock/);
+});
+
+test('device findings appear when tissue or visibility relevance exists', () => {
+  const result = cleanupProfileImageReviewResult({
+    glans_meatus: [
+      'Foley catheter limits direct visualization of the inferior meatal rim, so small contact irritation cannot be fully assessed.',
+      'Y-junction and drainage lumen are visible near the field.',
+    ],
+    device_contact_findings: [
+      'Foley catheter limits visibility of the inferior meatal rim but no definite erosion or bleeding is visible.',
+      'Y-junction and drainage lumen are visible near the field.',
+    ],
+  }, { sections: PELVIC_SECTIONS });
+
+  const text = allText(result).toLowerCase();
+  assert.match(text, /limits direct visualization|limits visibility/);
+  assert.match(text, /meatal rim/);
+  assert.doesNotMatch(text, /y-junction|drainage lumen/);
+});
+
+test('dog nip remains subordinate in head-to-toe review', () => {
+  const result = cleanupProfileImageReviewResult({
+    executive_summary: [
+      'Overall body habitus, posture, extremities, skin distribution, and stable scars are represented as a cumulative head-to-toe assessment.',
+      'Dog nip dog nip dog nip dominates the review with repeated procedural story and bite context.',
+    ],
+    abdomen: [
+      'Abdominal contour and right inguinal hernia repair scar remain represented.',
+      'Dog nip injury on the abdomen is visible as a small resolving soft-tissue mark without open skin break.',
+      'Dog nip injury on the abdomen is visible as a small resolving soft-tissue mark without open skin break.',
+    ],
+    lower_limbs: ['Lower limbs appear symmetric where represented without visible lower-extremity edema.'],
+    feet_toes: ['Feet and toes show neutral resting alignment where represented.'],
+    skin_summary: ['Stable follicular papules and striae remain the broader skin baseline.'],
+  }, { sections: HEAD_TO_TOE_SECTIONS });
+
+  const text = allText(result).toLowerCase();
+  assert.match(text, /overall body habitus/);
+  assert.match(text, /lower limbs/);
+  assert.match(text, /feet and toes/);
+  assert.equal((text.match(/dog nip|dog bite|bite injury|bite wound/g) || []).length, 1);
+});
+
+test('deduplicates raw evidence metadata and repeated frame descriptions', () => {
+  const result = cleanupProfileImageReviewResult({
+    abdomen: [
+      'Sarah local read 0:00-0:24 Local visual evidence confirms frame f001 and frame source metadata.',
+      'Sarah local read 0:00-0:24 Local visual evidence confirms frame f001 and frame source metadata.',
+      'Anterior abdomen shows stable lower abdominal contour.',
+      'Anterior abdomen shows stable lower abdominal contour.',
+    ],
+    image_region_findings: [
+      { section_key: 'abdomen', image_id: 'img_001', label: 'Sarah local read 0:00-0:24', finding: 'Sarah local read 0:00-0:24 Local visual evidence confirms frame f001 and frame source metadata.' },
+      { section_key: 'abdomen', image_id: 'img_001', label: 'Sarah local read 0:00-0:24', finding: 'Sarah local read 0:00-0:24 Local visual evidence confirms frame f001 and frame source metadata.' },
+    ],
+  }, { sections: HEAD_TO_TOE_SECTIONS });
+
+  const text = allText(result).toLowerCase();
+  assert.equal((text.match(/anterior abdomen shows stable lower abdominal contour/g) || []).length, 1);
+  assert.doesNotMatch(text, /sarah local read|frame f001|source metadata/);
+});
+
+test('measurement cleanup removes malformed fragments', () => {
+  const result = cleanupProfileImageReviewResult({
+    measurement_reconciliation: [
+      '8 mm appear transposed.',
+      'The 14.',
+      'Diameter.',
+      'Meatal diameter is not cleanly measurable from the available views; prior values may need confirmation with a labeled reference.',
+    ],
+  }, { sections: PELVIC_SECTIONS });
+
+  const text = allText(result);
+  assert.doesNotMatch(text, /\b8 mm appear transposed\b/i);
+  assert.doesNotMatch(text, /\bThe 14\b/i);
+  assert.doesNotMatch(text, /^diameter\.?$/i);
+  assert.match(text, /Meatal diameter is not cleanly measurable/);
+});
+
+test('assignment contract and evidence classification prioritize anatomy over incidental context', () => {
+  assert.match(ANATOMY_REVIEW_ASSIGNMENT_CONTRACT, /cumulative anatomical assessment/i);
+  const anatomy = classifyAnatomyReviewEvidence('Glans and meatus are visible without focal irritation.', { sectionKey: 'glans_meatus' });
+  const device = classifyAnatomyReviewEvidence('Foley tubing route, StatLock, Y-junction, and adhesive remove with alcohol text are visible.', { sectionKey: 'penis' });
+  const relevantDevice = classifyAnatomyReviewEvidence('Foley catheter limits visibility of the inferior meatal rim.', { sectionKey: 'glans_meatus' });
+  assert.ok(anatomy.categories.includes('core_anatomy'));
+  assert.ok(device.categories.includes('incidental_device'));
+  assert.equal(device.allowedInMainSection, false);
+  assert.equal(relevantDevice.allowedInMainSection, true);
+});
+
+test('word repetition guard reduces repeated clinical filler without banning terms', () => {
+  const result = cleanupProfileImageReviewResult({
+    glans_meatus: [
+      'The glans finding is consistent with the baseline and consistently confirmed by the baseline views, with baseline glans appearance confirmed and focused focused review showing no change.',
+      'The scrotal raphe and perineal raphe are visible; raphe alignment remains clinically appropriate.',
+    ],
+  }, { sections: PELVIC_SECTIONS });
+
+  const text = allText(result).toLowerCase();
+  assert.ok((text.match(/consistent|consistently/g) || []).length <= 1);
+  assert.ok((text.match(/\bbaseline\b/g) || []).length <= 2);
+  assert.ok((text.match(/\bfocused\b/g) || []).length <= 1);
+  assert.match(text, /raphe/);
 });

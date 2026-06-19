@@ -6,9 +6,46 @@ const CAMERA_SETUP_RE = /\b(?:foot-of-table|camera angle|camera location|clinici
 const DEVICE_KEEP_RE = /\b(?:catheter|foley|urethral|sound|dilator|rectal|anal device|sleeve|device contact|contact zone|fit|tissue interaction|marker)\b/i;
 const BOOKKEEPING_SENTENCE_RE = /\b(?:evidence records?|prior documentation|strongly established|confidence accumulation|baseline establishment|prior corrections?|invalidated findings?|correction history|historical mistakes?|profile reconciliation|saved\/direct views?|rechecked saved\/direct views?)\b/i;
 const UI_CALLOUT_RE = /\b(?:clarify\s*\/\s*correct|remove callout|visual reference for|callouts?|direct visual|directly rechecked|reviewed image|image reference ids?|structured callouts?)\b/i;
+const INCIDENTAL_DEVICE_RE = /\b(?:foley|catheter|statlock|drainage tubing|tubing|leg bag|y[-\s]?junction|balloon port|drainage lumen|adhesive(?:\s+text)?|remove with alcohol|electrodes?|pads?|straps?|probes?|tools?|hands?|gloves?|drapes?|props?|clothing|furniture|app overlay)\b/i;
+const INCIDENTAL_INJURY_RE = /\b(?:dog nip|dog bite|bite wound|bite injury|puncture point|minor injury|incidental injury)\b/i;
+const PROCEDURE_CONTEXT_RE = /\b(?:procedure|procedural|placement|insertion|advancement|securement|urine return|balloon inflation|field handling|dwell state|routing|routes?|curves?|exits?|collection bag|drainage bag)\b/i;
+const DEVICE_MECHANICS_RE = /\b(?:route|routing|routes?|curves?|y[-\s]?junction|balloon port|drainage lumen|leg bag|drainage bag|collection bag|red[-\s]?capped|adhesive text|remove with alcohol|statlock placement|tubing)\b/i;
+const DEVICE_RELEVANCE_RE = /\b(?:irritation|erythema|redness|erosion|ulcer|bleeding|fissure|pressure|pressure injury|skin breakdown|tissue stress|tissue injury|contact injury|contact mark|adhesive reaction|limits? (?:direct )?(?:visibility|visualization|assessment)|obscures?|partially obscures?|cannot be fully assessed|interpretation|safety|tissue health)\b/i;
+const CORE_ANATOMY_RE = /\b(?:head|face|neck|shoulder|chest|abdomen|abdominal|pelvis|pelvic|pubic|inguinal|groin|penis|penile|shaft|foreskin|glans|meatus|meatal|scrotum|testes|testicle|perineum|perineal|anus|anal|perianal|buttock|gluteal|limb|hand|foot|toe|posture|alignment|skin|scar|contour|symmetry|hair|raphe)\b/i;
+const SKIN_TISSUE_RE = /\b(?:skin|tissue|irritation|erythema|redness|rash|papules?|follicular|scar|striae|lesion|wound|bruise|edema|swelling|fissure|ulcer|breakdown|healthy|intact)\b/i;
+const BASELINE_CHANGE_RE = /\b(?:baseline|stable|unchanged|new|changed|change|current|prior|previous|compared|comparison|improved|worse|resolved|healing|persistent|cumulative)\b/i;
+const LIMITATION_RE = /\b(?:limited|limitation|not assessable|cannot be fully assessed|visibility|obscured|not visible|future coverage|useful coverage)\b/i;
+const METADATA_RE = /\b(?:sarah local read|local visual evidence|frame f\d+|frame source|source metadata|image id|image_id|reviewed image|coverage map|generated at|saved\/direct|rechecked|batch \d+|source filename|timestamp)\b/i;
+const MAIN_ANATOMY_DEVICE_SECTIONS = new Set([
+  "executive_summary",
+  "pubic_mound_lower_abdomen",
+  "inguinal_folds_groin_skin",
+  "penis",
+  "foreskin",
+  "glans_meatus",
+  "scrotum_testes",
+  "perineum",
+  "anal_opening_perianal_region",
+  "buttocks_gluteal_skin",
+  "pelvis_pubic_region",
+  "genitals_perineum",
+  "abdomen",
+  "skin_summary",
+]);
+const DEVICE_CONTEXT_SECTIONS = new Set(["device_contact_findings", "tissue_health_safety_observations"]);
+const MEASUREMENT_SECTIONS = new Set(["measurement_reconciliation"]);
 const PROFILE_FINDING_NOVELTY_RE = /\b(?:new|newly|changed?|change|progress(?:ion|ed|ing)?|worsen(?:ed|ing)?|improv(?:ed|ing|ement)?|increase(?:d|s|ing)?|decrease(?:d|s|ing)?|reduc(?:ed|ing|tion)|resolved?|healing|evolving|current(?:ly)?|prior|previous|earlier|later|compared|comparison|from\s+\w+\s+to|now|no longer|more|less|greater|smaller|larger|mild|moderate|marked|severe|subtle|diffuse|focal|asymmetr(?:y|ic)|bilateral|unilateral|right|left|anterior|posterior|lateral|supine|standing|erect|flaccid|catheter|foley|meatus|glans|foreskin|shaft|scrot|perineal|perianal|fissure|ulcer|infection|open skin break)\b/i;
 const PROFILE_FINDING_NEGATIVE_RE = /\b(?:no|without|absent|not visible|not evident|not seen|no visible|no obvious|no open|no signs? of)\b/i;
 const PROFILE_FINDING_CONSOLIDATION = "Confirmed across multiple views.";
+
+export const ANATOMY_REVIEW_ASSIGNMENT_CONTRACT = `
+Sarah Anatomy Review Assignment Contract:
+- Primary task: produce a cumulative anatomical assessment of the body region being reviewed.
+- Secondary task: compare current visual evidence with the established baseline and identify stable, new, changed, and not-assessable findings.
+- Tertiary task: mention devices, procedures, props, and incidental injuries only when they affect tissue, visibility, interpretation, assessment quality, or user-requested context.
+- Forbidden behavior: raw evidence dumping, frame-by-frame transcript prose, repetitive metadata, incidental fixation, and device/procedure fixation.
+The body is the assignment. Devices are context. Incidental findings are context. Evidence metadata belongs behind the scenes.
+`.trim();
 
 const PROFILE_FINDING_REGISTRY = [
   { key: "head.face.hair.salt_pepper", region: "head_face", re: /\b(?:short\s+)?salt[-\s]?and[-\s]?pepper\s+hair\b/i },
@@ -74,6 +111,163 @@ function sentenceChunks(value = "") {
     .split(/(?<=[.!?])\s+/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function normalizedEvidenceHash(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, " time ")
+    .replace(/\bimg[_-]?\d+\b/g, " image ")
+    .replace(/\bf\d{3,}[-_]\d+\b/g, " frame ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(?:the|a|an|this|that|these|those|image|frame|view|visible|shows?|appears?|confirmed|baseline|current|review|evidence|source)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function classifyAnatomyReviewEvidence(value = "", { sectionKey = "", userRequestedDevice = false } = {}) {
+  const text = String(value || "");
+  const categories = [];
+  if (CORE_ANATOMY_RE.test(text)) categories.push("core_anatomy");
+  if (SKIN_TISSUE_RE.test(text)) categories.push("skin_tissue");
+  if (BASELINE_CHANGE_RE.test(text)) categories.push("cumulative_baseline");
+  if (/\b(?:new|changed|improved|worse|resolved|healing|current|compared|comparison)\b/i.test(text)) categories.push("new_or_changed");
+  if (LIMITATION_RE.test(text)) categories.push("limitation");
+  if (INCIDENTAL_DEVICE_RE.test(text)) categories.push("incidental_device");
+  if (INCIDENTAL_INJURY_RE.test(text)) categories.push("incidental_injury");
+  if (METADATA_RE.test(text)) categories.push("evidence_metadata");
+  if (PROCEDURE_CONTEXT_RE.test(text)) categories.push("procedure_context");
+  if (!categories.length) categories.push("core_anatomy");
+
+  const hasDevice = categories.includes("incidental_device") || categories.includes("procedure_context");
+  const hasIncidentalInjury = categories.includes("incidental_injury");
+  const hasMetadata = categories.includes("evidence_metadata");
+  const relevantDevice = hasDevice && (DEVICE_RELEVANCE_RE.test(text) || userRequestedDevice);
+  const deviceContextSection = DEVICE_CONTEXT_SECTIONS.has(sectionKey);
+  const measurementSection = MEASUREMENT_SECTIONS.has(sectionKey);
+  const mainAnatomySection = MAIN_ANATOMY_DEVICE_SECTIONS.has(sectionKey);
+  const allowedInMainSection = !hasDevice || relevantDevice || deviceContextSection || measurementSection || !mainAnatomySection;
+  const incidentalOnly = (hasDevice || hasIncidentalInjury || hasMetadata) &&
+    !relevantDevice &&
+    !/\b(?:visible\s+)?(?:anatomy|contour|skin|tissue|healthy|intact|lesion|scar|wound|injury|bruise|bruising|soft[-\s]?tissue|symmetry|posture|alignment|glans|meatus|shaft|foreskin|scrot|perineal|perianal|abdomen|limb|feet|toe)\b/i.test(text);
+
+  return {
+    categories,
+    hasDevice,
+    relevantDevice,
+    hasIncidentalInjury,
+    hasMetadata,
+    allowedInMainSection,
+    incidentalOnly,
+    priority: (
+      categories.includes("core_anatomy") ? 30 : 0
+    ) + (
+      categories.includes("skin_tissue") ? 25 : 0
+    ) + (
+      categories.includes("new_or_changed") ? 20 : 0
+    ) + (
+      categories.includes("limitation") ? 10 : 0
+    ) - (
+      hasDevice && !relevantDevice ? 30 : 0
+    ) - (
+      hasMetadata ? 25 : 0
+    ) - (
+      hasIncidentalInjury ? 12 : 0
+    ),
+  };
+}
+
+function hasClearSubject(sentence = "") {
+  const text = String(sentence || "").trim();
+  if (!text) return false;
+  if (/^(?:the|a|an|this|that|these|those|overall|current|prior|previous|stable|mild|moderate|marked|short|wire[-\s]?frame|rounded|follicular|pale|right|left|bilateral|unilateral|focused|external|no|without|dog\s+(?:nip|bite)|bite|glans|meatus|penis|penile|shaft|foreskin|scrotum|testes|perineal|perianal|anal|pubic|inguinal|abdomen|abdominal|skin|tissue|lower|upper|feet|toes|head|neck|chest|shoulders|posture|foley|catheter|device|measurement|meatal|urethral)\b/i.test(text)) return true;
+  return /^[A-Z][a-z]+(?:\s+[a-z]+){0,4}\s+(?:appears|is|are|shows?|remains|has|limits?|cannot|may|was|were)\b/.test(text);
+}
+
+function isMalformedMeasurementSentence(sentence = "") {
+  const text = String(sentence || "").trim();
+  if (!text) return true;
+  if (/^\s*(?:the\s+)?\d+(?:\.\d+)?\s*(?:mm|cm|in|inch|inches)?\.?\s*$/i.test(text)) return true;
+  if (/^\s*(?:diameter|length|width|circumference|measurement)\.?\s*$/i.test(text)) return true;
+  if (/^\s*\d+(?:\.\d+)?\s*(?:mm|cm|in|inch|inches)\s+(?:appear|appears|are|is|were|was)\s+transposed\.?\s*$/i.test(text)) return true;
+  if (/^\s*(?:the|a|an)\s+\d+(?:\.\d+)?\.?\s*$/i.test(text)) return true;
+  if (/\b(?:appear|appears)\s+transposed\b/i.test(text) && !/\b(?:meatal|urethral|diameter|length|width|measurement|value|values|figure|figures|recorded|reported)\b/i.test(text)) return true;
+  if (/\b(?:mm|cm|inch|inches)\b/i.test(text) && !hasClearSubject(text)) return true;
+  if (/\b(?:diameter|length|width|circumference)\b/i.test(text) && !/\b(?:meatal|urethral|glans|shaft|penile|catheter|external|internal|recorded|reported|visible|measured|measurement)\b/i.test(text)) return true;
+  return false;
+}
+
+function reduceRepeatedClinicalWords(text = "") {
+  let next = String(text || "");
+  next = next.replace(/\b(focused)(?:\s+\1\b)+/gi, "$1");
+  next = next.replace(/\b(confirmed)(?:\s+\1\b)+/gi, "$1");
+  const sentence = next;
+  const consistencyMatches = sentence.match(/\bconsistent(?:ly)?\b/gi) || [];
+  if (consistencyMatches.length > 1) {
+    let seen = 0;
+    next = next.replace(/\bconsistent(?:ly)?\b/gi, (match) => {
+      seen += 1;
+      return seen === 1 ? match : "unchanged";
+    });
+  }
+  const baselineMatches = next.match(/\bbaseline\b/gi) || [];
+  if (baselineMatches.length > 2) {
+    let seen = 0;
+    next = next.replace(/\bbaseline\b/gi, (match) => {
+      seen += 1;
+      if (seen <= 2) return match;
+      return seen % 2 === 0 ? "prior pattern" : "established pattern";
+    });
+  }
+  return next.replace(/\s{2,}/g, " ").trim();
+}
+
+function stripDeviceMechanics(text = "") {
+  return String(text || "")
+    .replace(/\b(?:routes?|routing|curves?|travels?|runs?)\s+(?:anteriorly|posteriorly|distally|proximally|toward|to|across|through|along)[^.]*\.?\s*/gi, "")
+    .replace(/\b(?:Y[-\s]?junction|red[-\s]?capped\s+)?balloon port|drainage lumen|leg bag|drainage bag|collection bag|adhesive text|remove with alcohol|StatLock placement\b[^.]*\.?/gi, "")
+    .replace(/\b(?:Y[-\s]?junction|balloon port|drainage lumen|leg bag|drainage bag|collection bag)\s+(?:is|are|remains?|visible|seen)[^.]*\.?\s*/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([.,;:])/g, "$1")
+    .trim();
+}
+
+function summarizeIncidentalDeviceContext(items = []) {
+  const text = items.join(" ");
+  if (!INCIDENTAL_DEVICE_RE.test(text)) return [];
+  if (DEVICE_RELEVANCE_RE.test(text)) {
+    return ["Device/contact context affects visibility or tissue interpretation; no irrelevant routing details are repeated."];
+  }
+  return ["Foley/device context is present in some reviewed images, but no visible tissue injury or meaningful anatomy change is apparent from that device context."];
+}
+
+function cleanAnatomyReviewItemForSection(item = "", { sectionKey = "", coverage = {} } = {}) {
+  let text = cleanProfileImageReviewText(item);
+  if (!text) return "";
+  if (MEASUREMENT_SECTIONS.has(sectionKey)) {
+    const sentences = sentenceChunks(text)
+      .filter((sentence) => !isMalformedMeasurementSentence(sentence))
+      .filter((sentence) => hasClearSubject(sentence));
+    return sentences.map(reduceRepeatedClinicalWords).join(" ").trim();
+  }
+  const classification = classifyAnatomyReviewEvidence(text, { sectionKey });
+  if (classification.hasMetadata && !classification.categories.includes("core_anatomy")) return "";
+  if (classification.incidentalOnly && !DEVICE_CONTEXT_SECTIONS.has(sectionKey)) return "";
+  if (!classification.allowedInMainSection) return "";
+  if (classification.hasDevice) {
+    text = stripDeviceMechanics(text);
+    if (!text) return "";
+    const afterStrip = classifyAnatomyReviewEvidence(text, { sectionKey });
+    if (!afterStrip.relevantDevice && MAIN_ANATOMY_DEVICE_SECTIONS.has(sectionKey) && !/\b(?:tissue|skin|irritation|healthy|intact|visibility|visualization|assessment|meatus|glans|shaft|foreskin|scrot|perineal|perianal)\b/i.test(text)) {
+      return "";
+    }
+  }
+  if (classification.hasIncidentalInjury && !/\b(?:visible|healing|resolved|resolving|scar|bruise|skin|wound|open skin|infection|soft-tissue)\b/i.test(text)) return "";
+  const sentences = sentenceChunks(text)
+    .filter((sentence) => !shouldDropSentence(sentence))
+    .filter((sentence) => !MEASUREMENT_SECTIONS.has(sectionKey) || !isMalformedMeasurementSentence(sentence))
+    .filter((sentence) => hasClearSubject(sentence));
+  return sentences.map(reduceRepeatedClinicalWords).join(" ").trim();
 }
 
 function normalizeFindingSupportText(value = "") {
@@ -482,14 +676,22 @@ export function dedupeProfileImageReviewItems(items = [], {
   limit = 14,
   coverage = {},
   suppressMissingCovered = true,
+  sectionKey = "",
 } = {}) {
   const byTopic = new Map();
   const order = [];
   for (const item of items) {
-    const text = cleanProfileImageReviewText(item);
+    const text = cleanAnatomyReviewItemForSection(item, { sectionKey, coverage });
     if (!text) continue;
     if (suppressMissingCovered && isLowValueMissingCoverage(text, coverage)) continue;
-    const key = profileImageReviewTopicKey(text);
+    const classification = classifyAnatomyReviewEvidence(text, { sectionKey });
+    const key = (
+      classification.hasMetadata ||
+      (classification.hasDevice && !classification.relevantDevice) ||
+      normalizedEvidenceHash(text).length < 36
+    )
+      ? (normalizedEvidenceHash(text) || profileImageReviewTopicKey(text))
+      : profileImageReviewTopicKey(text);
     if (!key) continue;
     const existing = byTopic.get(key);
     if (!existing) {
@@ -507,7 +709,14 @@ export function dedupeProfileImageReviewItems(items = [], {
       byTopic.set(key, text);
     }
   }
-  return order.map((key) => byTopic.get(key)).filter(Boolean).slice(0, limit);
+  return order
+    .map((key) => byTopic.get(key))
+    .filter(Boolean)
+    .sort((a, b) => (
+      classifyAnatomyReviewEvidence(b, { sectionKey }).priority -
+      classifyAnatomyReviewEvidence(a, { sectionKey }).priority
+    ))
+    .slice(0, limit);
 }
 
 export function cleanupProfileImageReviewResult(result = {}, { sections = [] } = {}) {
@@ -521,21 +730,35 @@ export function cleanupProfileImageReviewResult(result = {}, { sections = [] } =
       ...cleaned.summary_card,
       baseline_quality: cleanProfileImageReviewText(cleaned.summary_card.baseline_quality || ""),
       coverage: cleanProfileImageReviewText(cleaned.summary_card.coverage || ""),
-      primary_reference_value: dedupeProfileImageReviewItems(cleaned.summary_card.primary_reference_value || [], { limit: 8, coverage }),
-      key_direct_findings: dedupeProfileImageReviewItems(cleaned.summary_card.key_direct_findings || [], { limit: 12, coverage }),
-      key_limitations: dedupeProfileImageReviewItems(cleaned.summary_card.key_limitations || [], { limit: 6, coverage }),
+      primary_reference_value: dedupeProfileImageReviewItems(cleaned.summary_card.primary_reference_value || [], { limit: 8, coverage, sectionKey: "executive_summary" }),
+      key_direct_findings: dedupeProfileImageReviewItems(cleaned.summary_card.key_direct_findings || [], { limit: 12, coverage, sectionKey: "executive_summary" }),
+      key_limitations: dedupeProfileImageReviewItems(cleaned.summary_card.key_limitations || [], { limit: 6, coverage, sectionKey: "limitations_future_coverage" }),
       evidence_note: cleanProfileImageReviewText(cleaned.summary_card.evidence_note || ""),
     };
   }
 
+  const incidentalDeviceItems = [];
   for (const section of sections) {
     if (!Array.isArray(cleaned[section.key])) continue;
     const sectionLimit = /coverage_map|significant_findings/i.test(section.key) ? 10 : /missing|optional|gap|limit/i.test(section.key) ? 6 : 16;
+    if (section.key === "device_contact_findings") {
+      incidentalDeviceItems.push(...cleaned[section.key]);
+    }
     cleaned[section.key] = dedupeProfileImageReviewItems(cleaned[section.key], {
       limit: sectionLimit,
       coverage,
       suppressMissingCovered: true,
+      sectionKey: section.key,
     });
+  }
+
+  if (Array.isArray(cleaned.device_contact_findings)) {
+    const relevantDeviceItems = cleaned.device_contact_findings.filter((item) => (
+      classifyAnatomyReviewEvidence(item, { sectionKey: "device_contact_findings" }).relevantDevice
+    ));
+    cleaned.device_contact_findings = relevantDeviceItems.length
+      ? dedupeProfileImageReviewItems(relevantDeviceItems, { limit: 3, coverage, sectionKey: "device_contact_findings" })
+      : summarizeIncidentalDeviceContext(incidentalDeviceItems);
   }
 
   cleaned.annotated_images = Array.isArray(cleaned.annotated_images)
@@ -551,13 +774,19 @@ export function dedupeImageRegionFindings(findings = []) {
   const byTopic = new Map();
   const order = [];
   for (const finding of findings) {
-    const text = cleanProfileImageReviewText(finding?.finding || "");
-    const label = cleanProfileImageReviewText(finding?.label || finding?.region || "");
+    const sectionKey = finding?.section_key || "";
+    const text = cleanAnatomyReviewItemForSection(finding?.finding || "", { sectionKey });
+    const label = cleanAnatomyReviewItemForSection(finding?.label || finding?.region || "", { sectionKey });
     if (!text && !label) continue;
-    const key = `${finding?.section_key || ""}:${profileImageReviewTopicKey(`${label}. ${text}`)}`;
+    const combined = `${label}. ${text}`;
+    const classification = classifyAnatomyReviewEvidence(combined, { sectionKey });
+    const key = `${sectionKey}:${(
+      classification.hasMetadata ||
+      (classification.hasDevice && !classification.relevantDevice)
+    ) ? normalizedEvidenceHash(combined) : profileImageReviewTopicKey(combined)}`;
     if (!byTopic.has(key)) order.push(key);
     const existing = byTopic.get(key);
-    const next = { ...finding, label, finding: text, region: cleanProfileImageReviewText(finding?.region || "") };
+    const next = { ...finding, label, finding: text, region: cleanAnatomyReviewItemForSection(finding?.region || "", { sectionKey }) };
     if (!existing || evidenceRank(text) > evidenceRank(existing.finding || "") || text.length < String(existing.finding || "").length) {
       byTopic.set(key, next);
     }
