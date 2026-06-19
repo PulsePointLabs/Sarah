@@ -6,6 +6,36 @@ const CAMERA_SETUP_RE = /\b(?:foot-of-table|camera angle|camera location|clinici
 const DEVICE_KEEP_RE = /\b(?:catheter|foley|urethral|sound|dilator|rectal|anal device|sleeve|device contact|contact zone|fit|tissue interaction|marker)\b/i;
 const BOOKKEEPING_SENTENCE_RE = /\b(?:evidence records?|prior documentation|strongly established|confidence accumulation|baseline establishment|prior corrections?|invalidated findings?|correction history|historical mistakes?|profile reconciliation|saved\/direct views?|rechecked saved\/direct views?)\b/i;
 const UI_CALLOUT_RE = /\b(?:clarify\s*\/\s*correct|remove callout|visual reference for|callouts?|direct visual|directly rechecked|reviewed image|image reference ids?|structured callouts?)\b/i;
+const PROFILE_FINDING_NOVELTY_RE = /\b(?:new|newly|changed?|change|progress(?:ion|ed|ing)?|worsen(?:ed|ing)?|improv(?:ed|ing|ement)?|increase(?:d|s|ing)?|decrease(?:d|s|ing)?|reduc(?:ed|ing|tion)|resolved?|healing|evolving|current(?:ly)?|prior|previous|earlier|later|compared|comparison|from\s+\w+\s+to|now|no longer|more|less|greater|smaller|larger|mild|moderate|marked|severe|subtle|diffuse|focal|asymmetr(?:y|ic)|bilateral|unilateral|right|left|anterior|posterior|lateral|supine|standing|erect|flaccid|catheter|foley|meatus|glans|foreskin|shaft|scrot|perineal|perianal|fissure|ulcer|infection|open skin break)\b/i;
+const PROFILE_FINDING_NEGATIVE_RE = /\b(?:no|without|absent|not visible|not evident|not seen|no visible|no obvious|no open|no signs? of)\b/i;
+const PROFILE_FINDING_CONSOLIDATION = "Confirmed across multiple views.";
+
+const PROFILE_FINDING_REGISTRY = [
+  { key: "head.face.hair.salt_pepper", region: "head_face", re: /\b(?:short\s+)?salt[-\s]?and[-\s]?pepper\s+hair\b/i },
+  { key: "head.face.hair.vertex_thinning", region: "head_face", re: /\b(?:mild\s+)?vertex\s+thinning\b|\bthinning\s+(?:at|over)\s+the\s+vertex\b/i },
+  { key: "head.face.glasses.wire_frame", region: "head_face", re: /\bwire[-\s]?frame\s+glasses\b|\bglasses\b/i },
+  { key: "head.face.goatee.grey_predominance", region: "head_face", re: /\bgoatee\b|\bgr[ae]y\s+predominance\b/i },
+  { key: "head.face.rounded_facial_contour", region: "head_face", re: /\brounded\s+facial\s+contour\b/i },
+  { key: "head.face.submental_fullness", region: "head_face", re: /\bsubmental\s+fullness\b/i },
+  { key: "posture.forward_head_carriage", region: "posture_alignment", re: /\bforward\s+head\s+(?:carriage|posture)\b/i },
+  { key: "posture.thoracic_kyphosis", region: "posture_alignment", re: /\bthoracic\s+kyphosis\b|\bkyphotic\b/i },
+  { key: "posture.lumbar_lordosis", region: "posture_alignment", re: /\blumbar\s+lordosis\b|\blordotic\b/i },
+  { key: "posture.right_shoulder_elevation", region: "posture_alignment", re: /\bright\s+shoulder\b[^.]{0,60}\belevat/i },
+  { key: "abdomen.right_inguinal_hernia_scar", region: "abdomen_pelvis", re: /\bright\s+inguinal\s+hernia\s+repair\s+scar\b|\binguinal\b[^.]{0,50}\bscar\b/i },
+  { key: "abdomen.dog_bite_healing", region: "abdomen_pelvis", re: /\bdog\s+bite\b|\bbite\s+wound\b|\byellow[-\s]?green\s+bruise\b|\bbruise\s+resolution\b|\bhealing\s+progression\b/i },
+  { key: "skin.follicular_papules", region: "skin_surface", re: /\bfollicular\b[^.]{0,80}\bpapules?\b|\berythematous\s+papules?\b|\bpapular\b[^.]{0,80}\bfollicular\b/i },
+  { key: "skin.striae", region: "skin_surface", re: /\bpale\s+linear\s+striae\b|\bstriae\b/i },
+  { key: "skin.no_open_breaks_infection", region: "skin_surface", negative: true, re: /\bno\s+(?:visible\s+)?(?:open\s+)?skin\s+breaks?\b|\bno\s+(?:visible\s+)?signs?\s+of\s+(?:secondary\s+)?infection\b|\bno\s+visible\s+infection\b|\bwithout\s+(?:open\s+)?skin\s+breaks?\b/i },
+  { key: "feet.no_edema", region: "lower_limbs_feet", negative: true, re: /\bno\s+(?:visible\s+)?(?:ankle|foot|pedal|lower[-\s]?extremity)?\s*edema\b|\bwithout\s+(?:visible\s+)?edema\b/i },
+  { key: "genital.meatus", region: "pelvic_genital", pelvic: true, re: /\bmeat(?:al|us)\b/i },
+  { key: "genital.glans", region: "pelvic_genital", pelvic: true, re: /\bglans\b/i },
+  { key: "genital.foreskin", region: "pelvic_genital", pelvic: true, re: /\bforeskin\b|\bprepuce\b/i },
+  { key: "genital.shaft", region: "pelvic_genital", pelvic: true, re: /\bpenile\s+shaft\b|\bshaft\b/i },
+  { key: "genital.scrotum", region: "pelvic_genital", pelvic: true, re: /\bscrot(?:um|al)\b|\btest(?:es|icular)\b/i },
+  { key: "genital.perineal_raphe", region: "pelvic_genital", pelvic: true, re: /\bperineal\s+raphe\b|\bscrotal\s+raphe\b|\bperineal\s+body\b/i },
+  { key: "genital.perianal", region: "pelvic_genital", pelvic: true, re: /\bperianal\b|\banal\s+verge\b|\banal\s+opening\b/i },
+  { key: "catheter.foley_present", region: "pelvic_genital", pelvic: true, re: /\bfoley\b|\bcatheter\b|\bstatlock\b|\bmeatal\s+exit\b/i },
+];
 
 function normalizeForbiddenPhrasing(value = "") {
   return String(value || "")
@@ -44,6 +74,218 @@ function sentenceChunks(value = "") {
     .split(/(?<=[.!?])\s+/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function normalizeFindingSupportText(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^\w\s-]+/g, " ")
+    .replace(/\b(?:the|a|an|this|that|these|those|visible|shows?|appears?|noted|seen|view|views|image|images|photo|photos|current|cumulative|review|reviewed|baseline|finding|findings|is|are|was|were|with|and|or|of|in|on|at|from|to|across)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function findingEvidenceTokens(value = "") {
+  return new Set(
+    normalizeFindingSupportText(value)
+      .split(/\s+/)
+      .filter((token) => token.length > 3)
+  );
+}
+
+function profileFindingMatches(value = "") {
+  const text = String(value || "");
+  if (!text.trim()) return [];
+  return PROFILE_FINDING_REGISTRY.filter((entry) => entry.re.test(text)).map((entry) => ({
+    ...entry,
+    negative: entry.negative || PROFILE_FINDING_NEGATIVE_RE.test(text),
+  }));
+}
+
+function isMeaningfullyNewFindingMention(sentence = "", record = {}, matches = []) {
+  const text = String(sentence || "");
+  if (!record?.firstText) return true;
+  if (matches.some((match) => match.pelvic) && /\b(?:meatus|glans|foreskin|prepuce|shaft|scrot|testes|perineal|perianal|anal|catheter|foley|statlock|erect|flaccid)\b/i.test(text)) {
+    const priorTokens = record.tokens || new Set();
+    const currentTokens = findingEvidenceTokens(text);
+    let newStructureTokens = 0;
+    for (const token of currentTokens) {
+      if (!priorTokens.has(token) && /^(?:meat|glans|foreskin|prepuce|shaft|scrot|test|perine|perian|anal|foley|catheter|statlock|erect|flaccid|dorsal|ventral)$/i.test(token)) {
+        newStructureTokens += 1;
+      }
+    }
+    if (newStructureTokens > 0) return true;
+  }
+  if (!PROFILE_FINDING_NOVELTY_RE.test(text)) return false;
+  const previous = record.tokens || new Set();
+  const current = findingEvidenceTokens(text);
+  let novelTokens = 0;
+  for (const token of current) {
+    if (!previous.has(token)) novelTokens += 1;
+  }
+  if (record.negative && PROFILE_FINDING_NEGATIVE_RE.test(text) && novelTokens < 4) return false;
+  return novelTokens >= 3;
+}
+
+function appendFindingSupport(sentence = "", record = {}) {
+  const text = String(sentence || "").trim();
+  if (!text) return text;
+  if (record.supportCount < 2) return text;
+  if (/\bconfirmed across multiple views\b/i.test(text)) return text;
+  if (record.hasNovelMentions) return text;
+  return `${text.replace(/\s+$/g, "")} ${PROFILE_FINDING_CONSOLIDATION}`;
+}
+
+function replaceFirstFindingMention(value = "", from = "", to = "") {
+  const text = String(value || "");
+  if (!text || !from || !to || from === to) return text;
+  const index = text.indexOf(from);
+  if (index < 0) return text;
+  return `${text.slice(0, index)}${to}${text.slice(index + from.length)}`;
+}
+
+function applyProfileFindingSupportSummaries(result = {}, registry = new Map(), sections = []) {
+  if (!result || typeof result !== "object") return result;
+  const replacements = [...registry.values()]
+    .map((record) => ({
+      from: record.firstText,
+      to: appendFindingSupport(record.firstText, record),
+    }))
+    .filter((item) => item.from && item.to && item.from !== item.to);
+  if (!replacements.length) return result;
+
+  const applyToText = (value = "") => {
+    let next = String(value || "");
+    for (const replacement of replacements) {
+      next = replaceFirstFindingMention(next, replacement.from, replacement.to);
+    }
+    return next;
+  };
+
+  const next = { ...result, overview: applyToText(result.overview || "") };
+  if (next.summary_card && typeof next.summary_card === "object") {
+    next.summary_card = { ...next.summary_card };
+    for (const key of ["baseline_quality", "coverage", "evidence_note"]) {
+      next.summary_card[key] = applyToText(next.summary_card[key] || "");
+    }
+    for (const key of ["primary_reference_value", "key_direct_findings", "key_limitations"]) {
+      next.summary_card[key] = Array.isArray(next.summary_card[key])
+        ? next.summary_card[key].map((item) => applyToText(item)).filter(Boolean)
+        : [];
+    }
+  }
+  for (const section of sections) {
+    if (Array.isArray(next[section.key])) {
+      next[section.key] = next[section.key].map((item) => applyToText(item)).filter(Boolean);
+    }
+  }
+  if (Array.isArray(next.image_region_findings)) {
+    next.image_region_findings = next.image_region_findings.map((finding) => ({
+      ...finding,
+      finding: applyToText(finding?.finding || ""),
+    }));
+  }
+  return next;
+}
+
+function reduceProfileFindingSentenceList(sentences = [], registry, sectionKey = "") {
+  const output = [];
+  for (const rawSentence of sentences) {
+    const sentence = String(rawSentence || "").trim();
+    if (!sentence) continue;
+    const matches = profileFindingMatches(sentence);
+    if (!matches.length) {
+      output.push(sentence);
+      continue;
+    }
+
+    const repeatedMatches = [];
+    const novelMatches = [];
+    for (const match of matches) {
+      const existing = registry.get(match.key);
+      if (!existing) {
+        novelMatches.push(match);
+        continue;
+      }
+      existing.supportCount += 1;
+      existing.sections.add(sectionKey || "general");
+      if (isMeaningfullyNewFindingMention(sentence, existing, matches)) {
+        existing.hasNovelMentions = true;
+        const nextTokens = findingEvidenceTokens(sentence);
+        for (const token of nextTokens) existing.tokens.add(token);
+        novelMatches.push(match);
+      } else {
+        repeatedMatches.push(match);
+      }
+    }
+
+    if (novelMatches.length || !repeatedMatches.length) {
+      output.push(sentence);
+      for (const match of matches) {
+        if (!registry.has(match.key)) {
+          registry.set(match.key, {
+            key: match.key,
+            region: match.region,
+            negative: match.negative,
+            firstText: sentence,
+            supportCount: 1,
+            hasNovelMentions: false,
+            sections: new Set([sectionKey || "general"]),
+            tokens: findingEvidenceTokens(sentence),
+          });
+        }
+      }
+    }
+  }
+  return output;
+}
+
+function reduceProfileFindingRepetitionInItems(items = [], registry, sectionKey = "") {
+  return items
+    .map((item) => {
+      const chunks = sentenceChunks(item);
+      const reduced = reduceProfileFindingSentenceList(chunks, registry, sectionKey).join(" ").trim();
+      return reduced;
+    })
+    .filter(Boolean);
+}
+
+export function reduceProfileFindingRepetition(result = {}, { sections = [] } = {}) {
+  if (!result || typeof result !== "object") return result;
+  const cleaned = { ...result };
+  const registry = new Map();
+
+  cleaned.overview = reduceProfileFindingRepetitionInItems([cleaned.overview || ""], registry, "overview")[0] || "";
+
+  if (cleaned.summary_card && typeof cleaned.summary_card === "object") {
+    cleaned.summary_card = { ...cleaned.summary_card };
+    for (const key of ["baseline_quality", "coverage", "evidence_note"]) {
+      cleaned.summary_card[key] = reduceProfileFindingRepetitionInItems([cleaned.summary_card[key] || ""], registry, `summary_card.${key}`)[0] || "";
+    }
+    for (const key of ["primary_reference_value", "key_direct_findings", "key_limitations"]) {
+      cleaned.summary_card[key] = Array.isArray(cleaned.summary_card[key])
+        ? reduceProfileFindingRepetitionInItems(cleaned.summary_card[key], registry, `summary_card.${key}`)
+        : [];
+    }
+  }
+
+  for (const section of sections) {
+    if (Array.isArray(cleaned[section.key])) {
+      cleaned[section.key] = reduceProfileFindingRepetitionInItems(cleaned[section.key], registry, section.key);
+    }
+  }
+
+  if (Array.isArray(cleaned.image_region_findings)) {
+    const localImageFindingRegistry = new Map();
+    cleaned.image_region_findings = cleaned.image_region_findings
+      .map((finding) => {
+        const text = reduceProfileFindingRepetitionInItems([finding?.finding || ""], localImageFindingRegistry, `image_region_findings.${finding?.section_key || ""}`)[0] || "";
+        return text ? { ...finding, finding: text } : null;
+      })
+      .filter(Boolean);
+  }
+
+  return applyProfileFindingSupportSummaries(cleaned, registry, sections);
 }
 
 function shouldDropSentence(sentence = "") {
@@ -279,16 +521,16 @@ export function cleanupProfileImageReviewResult(result = {}, { sections = [] } =
       ...cleaned.summary_card,
       baseline_quality: cleanProfileImageReviewText(cleaned.summary_card.baseline_quality || ""),
       coverage: cleanProfileImageReviewText(cleaned.summary_card.coverage || ""),
-      primary_reference_value: dedupeProfileImageReviewItems(cleaned.summary_card.primary_reference_value || [], { limit: 6, coverage }),
-      key_direct_findings: dedupeProfileImageReviewItems(cleaned.summary_card.key_direct_findings || [], { limit: 8, coverage }),
-      key_limitations: dedupeProfileImageReviewItems(cleaned.summary_card.key_limitations || [], { limit: 4, coverage }),
+      primary_reference_value: dedupeProfileImageReviewItems(cleaned.summary_card.primary_reference_value || [], { limit: 8, coverage }),
+      key_direct_findings: dedupeProfileImageReviewItems(cleaned.summary_card.key_direct_findings || [], { limit: 12, coverage }),
+      key_limitations: dedupeProfileImageReviewItems(cleaned.summary_card.key_limitations || [], { limit: 6, coverage }),
       evidence_note: cleanProfileImageReviewText(cleaned.summary_card.evidence_note || ""),
     };
   }
 
   for (const section of sections) {
     if (!Array.isArray(cleaned[section.key])) continue;
-    const sectionLimit = /coverage_map|significant_findings/i.test(section.key) ? 8 : /missing|optional|gap|limit/i.test(section.key) ? 5 : 10;
+    const sectionLimit = /coverage_map|significant_findings/i.test(section.key) ? 10 : /missing|optional|gap|limit/i.test(section.key) ? 6 : 16;
     cleaned[section.key] = dedupeProfileImageReviewItems(cleaned[section.key], {
       limit: sectionLimit,
       coverage,
@@ -302,7 +544,7 @@ export function cleanupProfileImageReviewResult(result = {}, { sections = [] } =
   cleaned.image_region_findings = Array.isArray(cleaned.image_region_findings)
     ? dedupeImageRegionFindings(cleaned.image_region_findings)
     : [];
-  return cleaned;
+  return reduceProfileFindingRepetition(cleaned, { sections });
 }
 
 export function dedupeImageRegionFindings(findings = []) {

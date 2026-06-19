@@ -1204,7 +1204,7 @@ function chooseProcedureBrollEvent({ segment, session, usedEventIds, usage }) {
 }
 
 function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, sourceDuration, fallbackCursor }) {
-  const duration = Math.max(1.25, Number(audioDuration || 1) + 1.25);
+  const duration = Math.max(1.25, Number(audioDuration || 1));
   if (event) {
     const sessionTime = Number(event.session_time_s);
     const directSpokenTime = event.source === 'spoken_segment_time' || event.force_direct_cut || event.direct_spoken_time;
@@ -1213,7 +1213,7 @@ function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, s
     const offset = sourceCenter - sessionTime;
     const wantsClimax = isClimaxReviewSegment(segment, event);
     const playbackRate = wantsClimax ? 0.5 : 1;
-    const sourceSliceDuration = playbackRate < 1 ? Math.max(2.5, duration * playbackRate) : duration;
+    const sourceSliceDuration = playbackRate < 1 ? Math.max(0.75, duration * playbackRate) : duration;
     const spokenAnchorOffset = directSpokenTime
       ? estimateSpokenAnchorOffsetSeconds({ segment, event, audioDuration })
       : 0;
@@ -1330,6 +1330,7 @@ async function renderSegmentedSourceReviewVideo({
   const avSegments = [];
   const videoSegments = [];
   const audioSegments = [];
+  const segmentDurations = [];
   const generatedClips = [];
   const bodyExplorationMode = isBodyExplorationReview(payload, session);
   let previousText = '';
@@ -1355,7 +1356,9 @@ async function renderSegmentedSourceReviewVideo({
     });
     ttsMeta = ttsMeta || audio;
     audioSegments.push(audio.audioPath);
-    totalAudioDuration += Number(audio.durationSeconds || 0);
+    const audioDurationSeconds = Number(audio.durationSeconds || 0);
+    segmentDurations.push(audioDurationSeconds);
+    totalAudioDuration += audioDurationSeconds;
 
     const timestampRequirement = timestampRequirementForSegment(segment);
     const matchedEvent = chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds });
@@ -1402,6 +1405,9 @@ async function renderSegmentedSourceReviewVideo({
         durationSeconds: audio.durationSeconds,
       });
       videoSegments.push(card.path);
+      const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
+      await muxAudioVideo(card.path, audio.audioPath, avPath);
+      avSegments.push(avPath);
       const trace = buildTimelineTrace({
         segment,
         event: event || null,
@@ -1520,23 +1526,32 @@ async function renderSegmentedSourceReviewVideo({
   const outputPath = path.join(uploadDir, outputFilename);
   const audioFilename = `${outputBase}.mp3`;
   const audioOutputPath = path.join(uploadDir, audioFilename);
-  const silentVideoPath = path.join(workDir, 'review-video-continuous-video.mp4');
   const continuousWavPath = path.join(workDir, 'review-video-continuous-audio.wav');
 
-  onProgress({ phase: 'muxing', current: 4, total: 5, message: 'Concatenating aligned video and smoothing narration audio...' });
-  await concatSegments(videoSegments.length ? videoSegments : avSegments, silentVideoPath, workDir);
+  if (!avSegments.length || avSegments.length !== narrationSegments.length) {
+    throw new Error(`Review video segment assembly failed: ${avSegments.length} A/V segments for ${narrationSegments.length} spoken segments.`);
+  }
+
+  onProgress({ phase: 'muxing', current: 4, total: 5, message: 'Concatenating narration-locked audio/video segments...' });
   await concatWavSegments(audioSegments, continuousWavPath, workDir);
-  await muxAudioVideo(silentVideoPath, continuousWavPath, outputPath);
+  await concatAvSegments(avSegments, outputPath, workDir);
   await concatAudioSegments(audioSegments, audioOutputPath, workDir);
 
   const stat = await fs.stat(outputPath);
   const finalDuration = await mediaDurationSeconds(outputPath).catch(() => totalAudioDuration);
+  const continuousAudioDuration = await mediaDurationSeconds(continuousWavPath).catch(() => totalAudioDuration);
+  if (continuousAudioDuration < totalAudioDuration - 0.75) {
+    throw new Error(`Narration concat is short: expected about ${Math.round(totalAudioDuration)}s, got ${Math.round(continuousAudioDuration)}s.`);
+  }
+  if (finalDuration < totalAudioDuration - 0.75) {
+    throw new Error(`Review video audio was truncated: expected about ${Math.round(totalAudioDuration)}s, got ${Math.round(finalDuration)}s.`);
+  }
   const audioStat = await fs.stat(audioOutputPath).catch(() => null);
   const chapters = normalizeAudioChapters(
     narrationSegments.map((segment, index) => ({
       id: `review-segment-${index + 1}`,
       title: index === 0 ? 'Summary' : `Spoken segment ${index + 1}`,
-      startMs: Math.round(generatedClips.slice(0, index).reduce((sum, clip) => sum + Number(clip.audio_duration_seconds || 0), 0) * 1000),
+      startMs: Math.round(segmentDurations.slice(0, index).reduce((sum, duration) => sum + Number(duration || 0), 0) * 1000),
       source: 'session_review_video_segment',
       confidence: 'exact_segment_order',
     })),

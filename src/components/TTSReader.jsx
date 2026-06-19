@@ -42,7 +42,28 @@ const ttsExportStorageKey = (sessionId, title = "") =>
 const ttsDownloadRecordKey = (sessionId, title = "") =>
   `pulsepoint.ttsDownload.${String(`${sessionId || "global"}-${title || "analysis"}`).replace(/[^a-z0-9]+/gi, "_").slice(0, 120)}`;
 const TTS_AUTO_SCROLL_STORAGE_KEY = "pulsepoint.tts.autoScroll";
+const TTS_SIDE_TAB_BOTTOM_KEY = "pulsepoint.tts.sideTabBottom";
 const TTS_EXPORT_RENDER_VERSION = "tts_export_leading_trim_v2";
+const TTS_SIDE_TAB_DEFAULT_BOTTOM = 300;
+const SIDE_TAB_DRAG_THRESHOLD_PX = 6;
+
+function clampSideTabBottom(value, tabHeight = 64) {
+  if (typeof window === "undefined") return TTS_SIDE_TAB_DEFAULT_BOTTOM;
+  const viewportHeight = window.innerHeight || 720;
+  const min = 72;
+  const max = Math.max(min, viewportHeight - tabHeight - 72);
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return Math.min(TTS_SIDE_TAB_DEFAULT_BOTTOM, max);
+  return Math.max(min, Math.min(max, numeric));
+}
+
+function loadTtsSideTabBottom() {
+  try {
+    return clampSideTabBottom(window.localStorage.getItem(TTS_SIDE_TAB_BOTTOM_KEY));
+  } catch {
+    return TTS_SIDE_TAB_DEFAULT_BOTTOM;
+  }
+}
 
 function isCurrentTtsExportRecord(entry) {
   return entry?.render_version === TTS_EXPORT_RENDER_VERSION;
@@ -356,6 +377,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const [savedServerExport, setSavedServerExport] = useState(null);
   const [audioCacheStatus, setAudioCacheStatus] = useState({ ready: 0, total: 0, fetching: 0 });
   const [cacheStatusMinimized, setCacheStatusMinimized] = useState(false);
+  const [sideTabBottom, setSideTabBottom] = useState(loadTtsSideTabBottom);
   const [currentWordIdx, setCurrentWordIdx] = useState(-1); // index of highlighted word in current para
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(loadTtsAutoScrollPreference);
   const [copied, setCopied] = useState(false);
@@ -386,6 +408,8 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const updateIntervalRef = useRef(null); // track update interval to clear it
   const renderProgressTimerRef = useRef(null);
   const copyContentRef = useRef(null);
+  const sideTabDragRef = useRef(null);
+  const suppressSideTabClickRef = useRef(false);
   const readableParagraphs = useMemo(
     () => (Array.isArray(paragraphs) ? paragraphs : [])
       .map(repairCharacterSplitParagraph)
@@ -400,6 +424,22 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       // Preference persistence is optional.
     }
   }, [autoScrollEnabled]);
+
+  useEffect(() => {
+    const clampCurrentPosition = () => {
+      setSideTabBottom((value) => {
+        const next = clampSideTabBottom(value);
+        try {
+          window.localStorage.setItem(TTS_SIDE_TAB_BOTTOM_KEY, String(next));
+        } catch {
+          // Position persistence is optional.
+        }
+        return next;
+      });
+    };
+    window.addEventListener("resize", clampCurrentPosition);
+    return () => window.removeEventListener("resize", clampCurrentPosition);
+  }, []);
 
   useEffect(() => {
     try {
@@ -444,6 +484,46 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   }, []);
 
   const setS = (s) => { stateRef.current = s; setState(s); };
+  const beginSideTabDrag = (event) => {
+    if (event.button != null && event.button !== 0) return;
+    sideTabDragRef.current = {
+      startY: event.clientY,
+      startBottom: sideTabBottom,
+      moved: false,
+    };
+    suppressSideTabClickRef.current = false;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const moveSideTab = (event) => {
+    const drag = sideTabDragRef.current;
+    if (!drag) return;
+    const delta = drag.startY - event.clientY;
+    if (Math.abs(delta) > SIDE_TAB_DRAG_THRESHOLD_PX) drag.moved = true;
+    if (!drag.moved) return;
+    event.preventDefault();
+    setSideTabBottom(clampSideTabBottom(drag.startBottom + delta));
+  };
+
+  const endSideTabDrag = () => {
+    const drag = sideTabDragRef.current;
+    sideTabDragRef.current = null;
+    if (!drag?.moved) return;
+    suppressSideTabClickRef.current = true;
+    setSideTabBottom((value) => {
+      const next = clampSideTabBottom(value);
+      try {
+        window.localStorage.setItem(TTS_SIDE_TAB_BOTTOM_KEY, String(next));
+      } catch {
+        // Position persistence is optional.
+      }
+      return next;
+    });
+    window.setTimeout(() => {
+      suppressSideTabClickRef.current = false;
+    }, 0);
+  };
+
   const publishAudioCacheStatus = () => {
     setAudioCacheStatus({
       ready: Math.min(cacheReadyRef.current.size, cacheTotalRef.current),
@@ -1263,9 +1343,20 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       setSavedServerExport(null);
       const displayTitle = getDownloadDisplayTitle();
       try {
-        const matchingTitle = await base44.entities.AudioExport.filter({ title: displayTitle }, "-created_date", 30);
+        const [matchingTitle, matchingSession] = await Promise.all([
+          base44.entities.AudioExport.filter({ title: displayTitle }, "-created_date", 30),
+          sessionId
+            ? base44.entities.AudioExport.filter({ tts_session_key: sessionId }, "-created_date", 30)
+            : Promise.resolve([]),
+        ]);
         if (cancelled) return;
-        const usableExports = matchingTitle.filter((entry) => entry.file_url && isCurrentTtsExportRecord(entry));
+        const seen = new Set();
+        const usableExports = [...matchingTitle, ...matchingSession].filter((entry) => {
+          const key = entry?.id || entry?.file_url;
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return entry.file_url && isCurrentTtsExportRecord(entry);
+        });
         const exact = sourceGeneratedAt
           ? usableExports.find((entry) => entry.source_generated_at === sourceGeneratedAt)
           : usableExports.find((entry) => entry.file_url);
@@ -1433,8 +1524,19 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     {showAudioCacheMonitor && cacheStatusMinimized && (
       <button
         type="button"
-        onClick={() => setCacheStatusMinimized(false)}
-        className="fixed right-0 top-1/2 z-50 flex -translate-y-1/2 items-center gap-1 rounded-l-xl border border-primary/25 bg-card/95 px-2 py-3 text-[10px] font-semibold uppercase tracking-wider text-primary shadow-2xl backdrop-blur"
+        onClick={(event) => {
+          if (suppressSideTabClickRef.current) {
+            event.preventDefault();
+            return;
+          }
+          setCacheStatusMinimized(false);
+        }}
+        onPointerDown={beginSideTabDrag}
+        onPointerMove={moveSideTab}
+        onPointerUp={endSideTabDrag}
+        onPointerCancel={endSideTabDrag}
+        className="fixed right-0 z-50 flex touch-none items-center gap-1 rounded-l-xl border border-primary/25 bg-card/95 px-2 py-3 text-[10px] font-semibold uppercase tracking-wider text-primary shadow-2xl backdrop-blur"
+        style={{ bottom: `${sideTabBottom}px` }}
         title="Show audio cache status"
       >
         <Maximize2 className="h-3.5 w-3.5" />
@@ -1688,7 +1790,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     {isActive && (
       <button
         onClick={handlePlayPause}
-        className="fixed bottom-6 right-6 flex items-center justify-center w-14 h-14 rounded-full bg-primary text-primary-foreground shadow-lg hover:bg-primary/90 active:opacity-70 transition-all z-40"
+        className="fixed bottom-24 right-6 flex items-center justify-center w-14 h-14 rounded-full bg-primary text-primary-foreground shadow-lg hover:bg-primary/90 active:opacity-70 transition-all z-40 sm:bottom-6"
         style={{ WebkitTapHighlightColor: "transparent", touchAction: "manipulation" }}
         title={state === "playing" ? "Pause" : "Resume"}
       >

@@ -43,7 +43,7 @@ const LOCAL_VIDEO_SEARCH_SKIP_DIRS = new Set([
 ]);
 
 const AUDIO_PASS_WHISPER_PROMPT = [
-  'PulsePoint session audio note.',
+  'Sarah session audio note.',
   'Common phrases include: near climax event passed, Foley near the internal sphincter, stimulation paused, stimulation resumed, perineum pressure, internal sphincter, glans, foreskin, sleeve, vibrator, TENS, e-stim, catheter, ejaculation, recovery.',
   'Transcribe short spoken session notes accurately. Preserve anatomical terms.',
 ].join(' ');
@@ -69,7 +69,7 @@ function likelyLocalVideoSearchRoots() {
     if (!roots.some((item) => item.toLowerCase() === resolved.toLowerCase())) roots.push(resolved);
   };
 
-  splitPathList(process.env.PULSEPOINT_VIDEO_DIRS || process.env.OBS_RECORDINGS_DIR).forEach(add);
+  splitPathList(process.env.SARAH_VIDEO_DIRS || process.env.PULSEPOINT_VIDEO_DIRS || process.env.OBS_RECORDINGS_DIR).forEach(add);
 
   const home = process.env.USERPROFILE || process.env.HOME || '';
   [
@@ -454,12 +454,12 @@ filesRouter.post('/local-video/resolve-drop', async (req, res) => {
     }
     if (matches.length > 1) {
       return res.status(409).json({
-        error: `Found ${matches.length} possible local videos named ${filename}. Paste the full path or set PULSEPOINT_VIDEO_DIRS to the folder that contains the recording.`,
+        error: `Found ${matches.length} possible local videos named ${filename}. Paste the full path or set SARAH_VIDEO_DIRS to the folder that contains the recording.`,
         candidates: matches,
       });
     }
     return res.status(404).json({
-      error: `Chrome hid the full Windows path, and PulsePoint could not find ${filename} in the usual video folders. Use Browse, paste the full path, or set PULSEPOINT_VIDEO_DIRS to your recording folder.`,
+      error: `Chrome hid the full Windows path, and Sarah could not find ${filename} in the usual video folders. Use Browse, paste the full path, or set SARAH_VIDEO_DIRS to your recording folder.`,
       exists: false,
       checkedAt: new Date().toISOString(),
     });

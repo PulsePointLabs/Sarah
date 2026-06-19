@@ -67,7 +67,7 @@ export default function SessionSectionNavigator({ sections, onSelect }) {
         <SectionButtons sections={sections} onSelect={onSelect} />
       </aside>
 
-      <div className="fixed bottom-5 left-4 z-40 xl:hidden">
+      <div className="fixed bottom-24 left-4 z-40 sm:bottom-5 xl:hidden">
         <Sheet>
           <SheetTrigger asChild>
             <Button className="h-11 rounded-full px-4 shadow-lg">

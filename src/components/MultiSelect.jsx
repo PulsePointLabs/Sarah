@@ -1,8 +1,7 @@
 import { useState, useEffect } from "react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { X, Plus, Check, Trash2 } from "lucide-react";
+import { X, Plus, Check } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 
 const DEFAULT_METHODS = [

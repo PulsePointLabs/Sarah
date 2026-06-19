@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
-import { Upload, CheckCircle, AlertCircle, Camera, Trash2, X } from "lucide-react";
+import { Upload, CheckCircle, AlertCircle, Camera, X } from "lucide-react";
 import { parseEmgCsv } from "@/utils/parseEmgCsv";
 import EMGTimelineChart from "@/components/EMGTimelineChart";
 

@@ -995,7 +995,7 @@ export default function LiveFootLandmarkTracker({ sessionId, recordingActive, ge
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `pulsepoint-live-foot-landmarks-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `sarah-live-foot-landmarks-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };

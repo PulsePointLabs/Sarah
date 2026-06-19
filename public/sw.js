@@ -28,7 +28,7 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("message", (event) => {
-  if (event.data?.type === "PULSEPOINT_SKIP_WAITING") {
+  if (["SARAH_SKIP_WAITING", "PULSEPOINT_SKIP_WAITING"].includes(event.data?.type)) {
     self.skipWaiting();
     return;
   }

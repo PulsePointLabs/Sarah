@@ -130,8 +130,9 @@ export async function callOpenAITTS(body, meta) {
       const latencyMs = Date.now() - startedAt;
 
       if (response.ok) {
+        const buffer = Buffer.from(await response.arrayBuffer());
         console.info('[openaiTTS] success', { ...meta, latencyMs, retries: attempt });
-        return { response, latencyMs, retries: attempt };
+        return { response, buffer, latencyMs, retries: attempt };
       }
 
       lastStatus = response.status;
@@ -212,7 +213,6 @@ export async function synthesizeTTSChunk({
     format: responseFormat,
     ...meta,
   };
-  const { response, latencyMs, retries } = await callOpenAITTS(body, requestMeta);
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const { buffer, latencyMs, retries } = await callOpenAITTS(body, requestMeta);
   return { buffer, model, voice, speed: finalSpeed, format: responseFormat, latencyMs, retries };
 }

@@ -15,7 +15,7 @@ const PWA_DISABLE_SW_IN_DEV_V1 = true;
 const PWA_REGISTER_FIXED_WORKER_IN_STANDALONE_DEV_V1 = true;
 const PWA_ENABLE_DEV_NOTIFICATION_WORKER_V1 = true;
 
-const PULSEPOINT_CACHE_PREFIXES = ['pulsepoint-shell-', 'workbox-', 'vite-'];
+const SARAH_CACHE_PREFIXES = ['pulsepoint-shell-', 'workbox-', 'vite-'];
 
 function registerStableServiceWorker() {
   if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
@@ -31,7 +31,7 @@ function registerStableServiceWorker() {
   }
 }
 
-async function cleanupPulsePointShell() {
+async function cleanupSarahShell() {
   const tasks = [];
   if ('serviceWorker' in navigator && !PWA_ENABLE_DEV_NOTIFICATION_WORKER_V1) {
     tasks.push(
@@ -47,7 +47,7 @@ async function cleanupPulsePointShell() {
     tasks.push(
       window.caches.keys()
         .then((keys = []) => Promise.all(keys
-          .filter((key) => PULSEPOINT_CACHE_PREFIXES.some((prefix) => key.startsWith(prefix)))
+          .filter((key) => SARAH_CACHE_PREFIXES.some((prefix) => key.startsWith(prefix)))
           .map((key) => window.caches.delete(key))))
         .catch((error) => {
           console.warn('Sarah shell cache cleanup failed:', error);
@@ -59,12 +59,13 @@ async function cleanupPulsePointShell() {
 }
 
 if (typeof window !== 'undefined') {
-  window.pulsepointCleanupPwaShell = cleanupPulsePointShell;
+  window.sarahCleanupPwaShell = cleanupSarahShell;
+  window.pulsepointCleanupPwaShell = cleanupSarahShell;
 }
 
 if (import.meta.env.DEV) {
   window.addEventListener('load', () => {
-    cleanupPulsePointShell().finally(registerStableServiceWorker);
+    cleanupSarahShell().finally(registerStableServiceWorker);
   });
 } else {
   registerStableServiceWorker();

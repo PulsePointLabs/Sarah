@@ -13,6 +13,7 @@ import { analyzeLocalVisionContinuous } from '../services/localVision/continuous
 import { analyzeLocalVisionAdaptive } from '../services/localVision/adaptiveAnalyzer.js';
 import { analyzeLocalVisionForward } from '../services/localVision/forwardAnalyzer.js';
 import { askLocalVisionVideo } from '../services/localVision/videoQa.js';
+import { resolveCachedFramePath } from '../services/localVision/frameSampler.js';
 import { deleteJobPayload, loadJobPayload, saveJobPayload } from '../services/jobPayloadStore.js';
 import {
   cleanProfileImageReviewText,
@@ -73,6 +74,35 @@ function localUploadPathFromRefUrl(rawUrl = '') {
   return filename ? path.join(uploadDir, filename) : '';
 }
 
+function pathnameFromRefUrl(rawUrl = '') {
+  let pathname = String(rawUrl || '').trim();
+  try {
+    if (/^https?:\/\//i.test(pathname)) {
+      pathname = new URL(pathname).pathname;
+    }
+  } catch {
+    pathname = String(rawUrl || '').trim();
+  }
+  return pathname;
+}
+
+function localVisionFramePathFromRefUrl(rawUrl = '') {
+  const pathname = pathnameFromRefUrl(rawUrl);
+  if (!pathname.startsWith('/api/local-vision/frame/')) return '';
+  const parts = pathname
+    .replace(/^\/api\/local-vision\/frame\//, '')
+    .split('/')
+    .map((part) => {
+      try {
+        return decodeURIComponent(part);
+      } catch {
+        return part;
+      }
+    });
+  if (parts.length !== 3 || parts.some((part) => !part)) return '';
+  return resolveCachedFramePath(parts[0], parts[1], parts[2]);
+}
+
 async function readImageRefViaHttp(rawUrl, ref = {}, signal) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Number(process.env.PROFILE_IMAGE_REF_FETCH_TIMEOUT_MS || 30000));
@@ -115,6 +145,16 @@ async function resolveImageRefForAI(ref = {}, context) {
     };
   }
 
+  const localVisionFramePath = localVisionFramePathFromRefUrl(rawUrl);
+  if (localVisionFramePath) {
+    const bytes = await fsp.readFile(localVisionFramePath);
+    return {
+      filename: ref.filename || path.basename(localVisionFramePath),
+      media_type: normalizeImageMediaType(ref.media_type, localVisionFramePath),
+      data: bytes.toString('base64'),
+    };
+  }
+
   if (path.isAbsolute(rawUrl)) {
     const bytes = await fsp.readFile(rawUrl);
     return {
@@ -143,9 +183,33 @@ async function hydrateRequestImageRefs(request = {}, context, label = 'Profile i
   });
 
   const resolvedImages = [];
+  const skippedImageRefs = [];
   for (let index = 0; index < imageRefs.length; index += 1) {
     if (context.signal?.aborted) throw new Error('Cancelled');
-    resolvedImages.push(await resolveImageRefForAI(imageRefs[index], context));
+    try {
+      resolvedImages.push(await resolveImageRefForAI(imageRefs[index], context));
+    } catch (error) {
+      const imageRef = imageRefs[index] || {};
+      const labelName = imageRef.filename || imageRef.image_id || candidateImageRefUrl(imageRef) || `image ${index + 1}`;
+      const message = `${label}: skipped saved image ${index + 1}/${imageRefs.length} (${labelName}): ${error?.message || error}`;
+      skippedImageRefs.push({
+        index,
+        image_id: imageRef.image_id || null,
+        filename: imageRef.filename || null,
+        url: candidateImageRefUrl(imageRef) || null,
+        error: error?.message || String(error),
+      });
+      console.warn(message);
+      context.updateProgress({
+        phase: 'loading_saved_images',
+        current: index + 1,
+        total: imageRefs.length,
+        warning: true,
+        skipped_image_refs: skippedImageRefs.length,
+        message,
+      });
+      continue;
+    }
     context.updateProgress({
       phase: 'loading_saved_images',
       current: index + 1,
@@ -157,6 +221,7 @@ async function hydrateRequestImageRefs(request = {}, context, label = 'Profile i
   const { imageRefs: _imageRefs, ...rest } = request || {};
   return {
     ...rest,
+    ...(skippedImageRefs.length ? { skippedImageRefs } : {}),
     images: [
       ...(Array.isArray(request.images) ? request.images : []),
       ...resolvedImages,
@@ -433,11 +498,11 @@ function fallbackAssembleProfileImageReview(payload = {}, batchResults = []) {
     }
   }
 
-  result.summary_card.primary_reference_value = uniqueFallbackReviewItems(result.summary_card.primary_reference_value, 10);
-  result.summary_card.key_direct_findings = uniqueFallbackReviewItems(result.summary_card.key_direct_findings, 12);
-  result.summary_card.key_limitations = uniqueFallbackReviewItems(result.summary_card.key_limitations, 4);
+  result.summary_card.primary_reference_value = uniqueFallbackReviewItems(result.summary_card.primary_reference_value, 12);
+  result.summary_card.key_direct_findings = uniqueFallbackReviewItems(result.summary_card.key_direct_findings, 16);
+  result.summary_card.key_limitations = uniqueFallbackReviewItems(result.summary_card.key_limitations, 6);
   for (const section of sections) {
-    result[section.key] = uniqueFallbackReviewItems(result[section.key], /missing|optional|request|limit/i.test(section.key) ? 5 : 14);
+    result[section.key] = uniqueFallbackReviewItems(result[section.key], /missing|optional|request|limit/i.test(section.key) ? 6 : 18);
   }
   return cleanupProfileImageReviewResult(result, { sections });
 }

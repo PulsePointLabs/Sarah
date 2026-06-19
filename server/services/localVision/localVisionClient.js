@@ -3,7 +3,7 @@ import { normalizeVlmAnswers } from './schema.js';
 
 const DEFAULT_SERVICE_URL = 'http://127.0.0.1:8765';
 const LATERALITY_DISCIPLINE = "Laterality discipline: anatomical left/right means the person's own left/right, not viewer screen-left/screen-right. When the person faces the camera, anatomical right appears on viewer-left. Do not guess anatomical left/right from image position alone. Preserve anatomical identity across poses and camera angles: a bruise, mole, scar, catheter/tubing position, pelvic finding, genital finding, or skin mark on anatomical right remains right-sided when the person moves from supine to standing, turns toward the camera, rotates, or appears in another crop/camera lane. Track stable landmarks such as umbilicus, sternum, pubic mound, inguinal creases, thighs, known scars, moles, bruises, catheter exit angle, and manual side notes before assigning side. If orientation is unclear, say screen-left/screen-right, near/far, upper/lower, one hand/the other hand, or one leg/the other leg.";
-const PULSEPOINT_OVERLAY_DISCIPLINE = "PulsePoint overlay discipline: if sampled frames include readable PulsePoint app overlays or panels, treat labels such as Current HR, AVG, MAX, RR samples, RMSSD, HRV quality, build confidence, AI Magic, near-climax, recovery, phase labels, EMG levels, Howl/Coyote/e-stim state, timers, or heart-rate trend as app-generated telemetry evidence for that frame/window. Use readable overlay values as supporting context for the visual answer. If overlay text is blurred, cropped, stale, or unreadable, say it is unreadable rather than inventing values. Prefer stored/session telemetry for exact numeric conflict resolution; overlay OCR is visual support.";
+const SARAH_OVERLAY_DISCIPLINE = "Sarah overlay discipline: if sampled frames include readable Sarah app overlays or panels, treat labels such as Current HR, AVG, MAX, RR samples, RMSSD, HRV quality, build confidence, AI Magic, near-climax, recovery, phase labels, EMG levels, Howl/Coyote/e-stim state, timers, or heart-rate trend as app-generated telemetry evidence for that frame/window. Use readable overlay values as supporting context for the visual answer. If overlay text is blurred, cropped, stale, or unreadable, say it is unreadable rather than inventing values. Prefer stored/session telemetry for exact numeric conflict resolution; overlay OCR is visual support.";
 
 function assertLocalServiceUrl(value) {
   const url = new URL(value || process.env.LOCAL_VISION_URL || DEFAULT_SERVICE_URL);
@@ -138,7 +138,7 @@ export async function callLocalQwenBatch({ questions, frames, recordType, signal
     questions: questions.map((question) => ({
       id: question.id,
       label: question.label,
-      prompt: `${LATERALITY_DISCIPLINE}\n\n${PULSEPOINT_OVERLAY_DISCIPLINE}\n\n${question.prompt}`,
+      prompt: `${LATERALITY_DISCIPLINE}\n\n${SARAH_OVERLAY_DISCIPLINE}\n\n${question.prompt}`,
       allowed_answers: question.allowedAnswers,
       hallucination_warning: question.hallucinationWarning,
       category: question.category,
@@ -158,7 +158,7 @@ export async function askLocalQwenVideo({ question, frames, recordType, knownTim
   const data = await postToLocalVision('/ask', {
     engine: 'local_qwen25vl',
     record_type: recordType,
-    question: `${LATERALITY_DISCIPLINE}\n\n${PULSEPOINT_OVERLAY_DISCIPLINE}\n\n${question}`,
+    question: `${LATERALITY_DISCIPLINE}\n\n${SARAH_OVERLAY_DISCIPLINE}\n\n${question}`,
     frames: await readFramePayload(frames),
     known_timeline: knownTimeline || null,
     scale_calibration: scaleCalibration || { available: false, pixelsPerCm: null, source: null },

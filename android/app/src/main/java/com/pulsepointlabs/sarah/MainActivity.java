@@ -1,4 +1,4 @@
-package com.ben.pulsepoint;
+package com.pulsepointlabs.sarah;
 
 import com.getcapacitor.BridgeActivity;
 

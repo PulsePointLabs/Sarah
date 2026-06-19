@@ -422,7 +422,7 @@ howlRouter.get('/control-capabilities', (_req, res) => {
     ok: true,
     mode: settings.controlEnabled ? 'manual_control' : 'manual_control_disabled',
     message: settings.controlEnabled
-      ? 'PulsePoint can send bounded manual Howl commands. Closed-loop automatic control is not enabled.'
+      ? 'Sarah can send bounded manual Howl commands. Closed-loop automatic control is not enabled.'
       : 'Howl manual control is available but disabled until explicitly enabled.',
     safeguards: {
       ...HOWL_CONTROL_DEFAULT_LIMITS,

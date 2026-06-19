@@ -15,6 +15,27 @@ import {
 } from "@/utils/backgroundJobNotifications";
 
 const DISMISSED_RESULTS_KEY = "pulsepoint.backgroundJobs.dismissedTerminalIds";
+const COLLAPSED_DOCK_BOTTOM_KEY = "pulsepoint.backgroundJobs.collapsedDockBottom";
+const DEFAULT_COLLAPSED_DOCK_BOTTOM = 112;
+const SIDE_DOCK_DRAG_THRESHOLD_PX = 6;
+
+function clampDockBottom(value, dockHeight = 74) {
+  if (typeof window === "undefined") return DEFAULT_COLLAPSED_DOCK_BOTTOM;
+  const viewportHeight = window.innerHeight || 720;
+  const min = 14;
+  const max = Math.max(min, viewportHeight - dockHeight - 72);
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return Math.min(DEFAULT_COLLAPSED_DOCK_BOTTOM, max);
+  return Math.max(min, Math.min(max, numeric));
+}
+
+function loadCollapsedDockBottom() {
+  try {
+    return clampDockBottom(window.localStorage.getItem(COLLAPSED_DOCK_BOTTOM_KEY));
+  } catch {
+    return DEFAULT_COLLAPSED_DOCK_BOTTOM;
+  }
+}
 
 function loadDismissedResults() {
   try {
@@ -49,9 +70,9 @@ function jobLabel(job) {
 }
 
 function statusTone(status) {
-  if (status === "complete") return "text-emerald-400 bg-emerald-500/10 border-emerald-500/25";
+  if (status === "complete") return "text-emerald-800 bg-emerald-50 border-emerald-300";
   if (status === "error" || status === "cancelled") return "text-destructive bg-destructive/10 border-destructive/25";
-  return "text-primary bg-primary/10 border-primary/25";
+  return "text-foreground bg-primary/10 border-primary/30";
 }
 
 function progressMessage(job) {
@@ -124,10 +145,20 @@ function jobTarget(job) {
   return backgroundJobRoute(job) || null;
 }
 
+function isQuietTrayJob(job) {
+  return Boolean(
+    job?.meta?.quietInTray ||
+    job?.meta?.foreground ||
+    (job?.type === "ai_invoke" && /^ai_chat_/i.test(String(job?.meta?.source || "")))
+  );
+}
+
 export default function BackgroundJobStatusTray() {
   const navigate = useNavigate();
   const [jobs, setJobs] = useState([]);
   const [expanded, setExpanded] = useState(false);
+  const [cycleIndex, setCycleIndex] = useState(0);
+  const [collapsedDockBottom, setCollapsedDockBottom] = useState(loadCollapsedDockBottom);
   const [dismissedTerminalIds, setDismissedTerminalIds] = useState(loadDismissedResults);
   const [cancellingIds, setCancellingIds] = useState(() => new Set());
   const [offline, setOffline] = useState(false);
@@ -139,6 +170,8 @@ export default function BackgroundJobStatusTray() {
   const previousJobIdsRef = useRef(new Set());
   const previousJobStatusesRef = useRef(new Map());
   const etaCacheRef = useRef(new Map());
+  const collapsedDockDragRef = useRef(null);
+  const suppressCollapsedDockClickRef = useRef(false);
   const jobsInitializedRef = useRef(false);
   const dismissedTerminalIdsRef = useRef(dismissedTerminalIds);
   const wasHiddenSinceLastPollRef = useRef(
@@ -249,7 +282,9 @@ export default function BackgroundJobStatusTray() {
         [...(active.jobs || []), ...(recent.jobs || [])].forEach((job) => {
           if (job?.id) merged.set(job.id, job);
         });
-        const loadedJobs = [...merged.values()].sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
+        const loadedJobs = [...merged.values()]
+          .filter((job) => !isQuietTrayJob(job))
+          .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
         const shouldForceResumeNotification = wasHiddenSinceLastPollRef.current;
         if (jobsInitializedRef.current) {
           loadedJobs.forEach((job) => {
@@ -305,9 +340,90 @@ export default function BackgroundJobStatusTray() {
 
   const activeCount = visibleJobs.filter((job) => ["queued", "running"].includes(job.status)).length;
   const completedJobs = visibleJobs.filter((job) => job.status === "complete");
+  const jobsToRender = activeCount > 0
+    ? visibleJobs.filter((job) => ["queued", "running", "error", "cancelled"].includes(job.status)).slice(0, 4)
+    : visibleJobs.slice(0, 4);
   const primaryActiveJob = visibleJobs.find((job) => ["queued", "running"].includes(job.status));
   const primaryEta = stabilizeBackgroundJobEta(primaryActiveJob, etaCacheRef.current);
   const primaryPhaseFallback = activePhaseFallback(primaryActiveJob);
+  const cycleJobs = visibleJobs.filter((job) => ["queued", "running"].includes(job.status)).length
+    ? visibleJobs.filter((job) => ["queued", "running"].includes(job.status))
+    : visibleJobs;
+  const cycleJob = cycleJobs.length ? cycleJobs[cycleIndex % cycleJobs.length] : null;
+  const cycleEta = stabilizeBackgroundJobEta(cycleJob, etaCacheRef.current);
+  const cycleText = cycleJob
+    ? [
+      jobLabel(cycleJob),
+      cycleEta?.label || activePhaseFallback(cycleJob),
+    ].filter(Boolean).join(" · ")
+    : offline
+      ? "Local API may need a restart."
+      : "Recent work is visible here.";
+
+  useEffect(() => {
+    if (cycleJobs.length <= 1 || expanded) return undefined;
+    const timer = window.setInterval(() => {
+      setCycleIndex((value) => value + 1);
+    }, 3600);
+    return () => window.clearInterval(timer);
+  }, [cycleJobs.length, expanded]);
+
+  useEffect(() => {
+    if (expanded) return undefined;
+    const clampCurrentPosition = () => {
+      setCollapsedDockBottom((value) => {
+        const next = clampDockBottom(value);
+        try {
+          window.localStorage.setItem(COLLAPSED_DOCK_BOTTOM_KEY, String(next));
+        } catch {
+          // Position persistence is optional.
+        }
+        return next;
+      });
+    };
+    window.addEventListener("resize", clampCurrentPosition);
+    return () => window.removeEventListener("resize", clampCurrentPosition);
+  }, [expanded]);
+
+  const beginCollapsedDockDrag = (event) => {
+    if (event.button != null && event.button !== 0) return;
+    collapsedDockDragRef.current = {
+      startY: event.clientY,
+      startBottom: collapsedDockBottom,
+      moved: false,
+    };
+    suppressCollapsedDockClickRef.current = false;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const moveCollapsedDock = (event) => {
+    const drag = collapsedDockDragRef.current;
+    if (!drag) return;
+    const delta = drag.startY - event.clientY;
+    if (Math.abs(delta) > SIDE_DOCK_DRAG_THRESHOLD_PX) drag.moved = true;
+    if (!drag.moved) return;
+    event.preventDefault();
+    setCollapsedDockBottom(clampDockBottom(drag.startBottom + delta));
+  };
+
+  const endCollapsedDockDrag = () => {
+    const drag = collapsedDockDragRef.current;
+    collapsedDockDragRef.current = null;
+    if (!drag?.moved) return;
+    suppressCollapsedDockClickRef.current = true;
+    setCollapsedDockBottom((value) => {
+      const next = clampDockBottom(value);
+      try {
+        window.localStorage.setItem(COLLAPSED_DOCK_BOTTOM_KEY, String(next));
+      } catch {
+        // Position persistence is optional.
+      }
+      return next;
+    });
+    window.setTimeout(() => {
+      suppressCollapsedDockClickRef.current = false;
+    }, 0);
+  };
 
   const dismissFinished = (jobIds) => {
     setDismissedTerminalIds((previous) => new Set([...previous, ...jobIds]));
@@ -315,8 +431,50 @@ export default function BackgroundJobStatusTray() {
 
   if (closed || (!visibleJobs.length && !offline)) return null;
 
+  if (!expanded) {
+    return (
+      <div
+        className="fixed right-0 z-30 max-w-[11rem] sm:right-4 sm:max-w-[16rem]"
+        style={{ bottom: `${collapsedDockBottom}px` }}
+      >
+        <button
+          type="button"
+          onClick={(event) => {
+            if (suppressCollapsedDockClickRef.current) {
+              event.preventDefault();
+              return;
+            }
+            setExpanded(true);
+          }}
+          onPointerDown={beginCollapsedDockDrag}
+          onPointerMove={moveCollapsedDock}
+          onPointerUp={endCollapsedDockDrag}
+          onPointerCancel={endCollapsedDockDrag}
+          className="group flex min-h-16 w-full touch-none items-center gap-2 rounded-l-2xl border border-r-0 border-border bg-card/95 px-3 py-2 text-left shadow-2xl backdrop-blur transition-colors hover:bg-card sm:rounded-2xl sm:border"
+          title="Show background tasks"
+        >
+          <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+            {activeCount > 0 ? <Loader2 className="h-4 w-4 animate-spin" /> : offline ? <XCircle className="h-4 w-4 text-muted-foreground" /> : <CheckCircle2 className="h-4 w-4 text-emerald-400" />}
+            <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-card px-1 text-center text-[10px] font-bold text-foreground shadow">
+              {activeCount || visibleJobs.length}
+            </span>
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {activeCount > 0 ? "Running" : offline ? "Offline" : "Updated"}
+            </span>
+            <span key={`${cycleJob?.id || "offline"}-${cycleIndex}`} className="block truncate text-xs font-semibold text-foreground animate-pulse">
+              {cycleText}
+            </span>
+          </span>
+          <ChevronUp className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:-translate-y-0.5" />
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className={`fixed bottom-3 left-3 right-3 sm:left-auto sm:w-[24rem] ${expanded ? "z-50" : "z-20"}`}>
+    <div className="fixed bottom-2 left-2 right-2 z-50 sm:bottom-3 sm:left-auto sm:right-3 sm:w-[24rem]">
       <div className="rounded-xl border border-border bg-card/95 shadow-2xl backdrop-blur">
         <div className="flex items-center gap-1 px-1 py-1">
           <button
@@ -326,7 +484,7 @@ export default function BackgroundJobStatusTray() {
           >
             {activeCount > 0 ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : offline ? <XCircle className="h-4 w-4 text-muted-foreground" /> : <CheckCircle2 className="h-4 w-4 text-emerald-400" />}
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-foreground">
+              <p className="text-sm font-semibold leading-tight text-foreground">
                 {activeCount > 0 ? `${activeCount} background task${activeCount === 1 ? "" : "s"} running` : offline ? "Background status unavailable" : "Background tasks updated"}
               </p>
               <p className="truncate text-xs text-muted-foreground">
@@ -353,7 +511,7 @@ export default function BackgroundJobStatusTray() {
         </div>
 
         {expanded && (
-          <div className="max-h-72 space-y-2 overflow-y-auto border-t border-border p-2">
+          <div className="max-h-[45vh] space-y-2 overflow-y-auto border-t border-border p-2 sm:max-h-72">
             {completedJobs.length > 0 && (
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <button
@@ -397,7 +555,12 @@ export default function BackgroundJobStatusTray() {
                 Notifications work while Sarah is open or backgrounded. The APK uses Android local notifications; Chrome uses browser notifications.
               </p>
             )}
-            {visibleJobs.map((job) => {
+            {activeCount > 0 && completedJobs.length > 0 && (
+              <p className="rounded-lg border border-border bg-muted/20 px-2.5 py-2 text-[10px] leading-relaxed text-muted-foreground">
+                {completedJobs.length} completed result{completedJobs.length === 1 ? "" : "s"} hidden while active work is running.
+              </p>
+            )}
+            {jobsToRender.map((job) => {
               const progress = job.progress || {};
               const total = Number(progress.total || 0);
               const current = Number(progress.current || 0);

@@ -7,7 +7,9 @@ const PROFILER_SESSION_TARGETS = new Set([
 
 function normalizeRoute(route) {
   if (!route || typeof route !== "string") return "";
-  return route.startsWith("/") ? route : `/${route}`;
+  const normalized = route.startsWith("/") ? route : `/${route}`;
+  if (normalized === "/ai-profiler") return "/profiler";
+  return normalized;
 }
 
 export function backgroundJobRoute(job) {

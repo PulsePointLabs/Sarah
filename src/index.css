@@ -309,6 +309,31 @@
     color: hsl(35 82% 38%);
   }
 
+  html:not(.dark) .text-amber-100,
+  html:not(.dark) .text-amber-200,
+  html:not(.dark) .text-amber-300,
+  html:not(.dark) .text-yellow-100,
+  html:not(.dark) .text-yellow-200,
+  html:not(.dark) .text-yellow-300,
+  html:not(.dark) .text-yellow-400 {
+    color: hsl(34 86% 32%);
+  }
+
+  html:not(.dark) .text-emerald-100,
+  html:not(.dark) .text-emerald-200,
+  html:not(.dark) .text-emerald-300,
+  html:not(.dark) .text-emerald-400 {
+    color: hsl(158 64% 27%);
+  }
+
+  html:not(.dark) .text-blue-100,
+  html:not(.dark) .text-blue-200,
+  html:not(.dark) .text-sky-100,
+  html:not(.dark) .text-sky-200,
+  html:not(.dark) .text-sky-300 {
+    color: hsl(203 78% 32%);
+  }
+
   .theme-sarah-lavender .text-sky-300 {
     color: hsl(198 70% 36%);
   }

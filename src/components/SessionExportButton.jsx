@@ -26,7 +26,7 @@ function buildCSV(session, timelineRows) {
   const s = session;
   const motion = getMotionEvidenceSummary(s);
   const lines = [
-    "=== PULSEPOINT EXPORT METADATA ===",
+    "=== SARAH EXPORT METADATA ===",
     `Export Type,Session Data CSV`,
     `Generated,${moment().format("YYYY-MM-DD HH:mm")}`,
     `Motion Evidence,${motion.hasAnyMotionEvidence ? (motion.hasSavedTelemetry && motion.hasPromotedEvents ? "Saved telemetry and promoted events" : motion.hasSavedTelemetry ? "Saved telemetry only" : "Promoted events only") : "None"}`,

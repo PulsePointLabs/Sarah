@@ -1,8 +1,7 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
-  PieChart, Pie, Legend,
+import { Tooltip, ResponsiveContainer, Cell,
+  PieChart, Pie,
 } from "recharts";
 
 const ZONES = [

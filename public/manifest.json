@@ -21,25 +21,25 @@
   ],
   "icons": [
     {
-      "src": "/icons/pulsepoint-icon.svg",
+      "src": "/icons/sarah-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
     },
     {
-      "src": "/icons/pulsepoint-192.png",
+      "src": "/icons/sarah-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/pulsepoint-512.png",
+      "src": "/icons/sarah-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/pulsepoint-maskable-512.png",
+      "src": "/icons/sarah-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
@@ -64,7 +64,7 @@
       "url": "/new?source=pwa-shortcut",
       "icons": [
         {
-          "src": "/icons/pulsepoint-192.png",
+          "src": "/icons/sarah-192.png",
           "sizes": "192x192",
           "type": "image/png"
         }
@@ -77,7 +77,7 @@
       "url": "/capture?source=pwa-shortcut",
       "icons": [
         {
-          "src": "/icons/pulsepoint-192.png",
+          "src": "/icons/sarah-192.png",
           "sizes": "192x192",
           "type": "image/png"
         }
@@ -90,7 +90,7 @@
       "url": "/motion-lab?source=pwa-shortcut",
       "icons": [
         {
-          "src": "/icons/pulsepoint-192.png",
+          "src": "/icons/sarah-192.png",
           "sizes": "192x192",
           "type": "image/png"
         }
@@ -103,7 +103,7 @@
       "url": "/exploration?source=pwa-shortcut",
       "icons": [
         {
-          "src": "/icons/pulsepoint-192.png",
+          "src": "/icons/sarah-192.png",
           "sizes": "192x192",
           "type": "image/png"
         }
@@ -116,7 +116,7 @@
       "url": "/library?source=pwa-shortcut",
       "icons": [
         {
-          "src": "/icons/pulsepoint-192.png",
+          "src": "/icons/sarah-192.png",
           "sizes": "192x192",
           "type": "image/png"
         }

@@ -1,5 +1,5 @@
 import moment from "moment";
-import { Calendar, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus } from "lucide-react";
 
 export default function CadenceWidget({ sessions }) {
   if (!sessions.length) return null;

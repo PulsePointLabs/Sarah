@@ -53,7 +53,7 @@ export async function renderTTSExport(payload = {}, options = {}) {
   try {
     const {
       chunks = [],
-      title = 'PulsePoint TTS Export',
+      title = 'Sarah TTS Export',
       voice = 'nova',
       model: requestedModel,
       speed = 1.0,
@@ -131,8 +131,7 @@ export async function renderTTSExport(payload = {}, options = {}) {
         render: 'server',
         jobId,
       };
-      const { response } = await callOpenAITTS(body, meta);
-      const buffer = Buffer.from(await response.arrayBuffer());
+      const { buffer } = await callOpenAITTS(body, meta);
       const chunkPath = path.join(workDir, `chunk-${String(i).padStart(4, '0')}.wav`);
       await fs.writeFile(chunkPath, buffer);
       let sourcePath = chunkPath;

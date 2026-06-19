@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { base44 } from "@/api/base44Client";
-import { Brain, Sparkles, TrendingUp, BarChart2, Zap } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { BarChart2 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from "recharts";

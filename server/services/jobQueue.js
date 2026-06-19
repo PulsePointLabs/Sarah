@@ -5,6 +5,7 @@ const jobs = new Map();
 const queue = [];
 const running = new Set();
 const concurrency = Math.max(1, Number(process.env.BACKGROUND_JOB_CONCURRENCY || 3));
+const foregroundConcurrency = Math.max(1, Number(process.env.BACKGROUND_JOB_FOREGROUND_CONCURRENCY || 1));
 
 function normalizeJobPriority(value) {
   const numeric = Number(value);
@@ -12,8 +13,13 @@ function normalizeJobPriority(value) {
   return Math.max(-100, Math.min(100, Math.round(numeric)));
 }
 
-function jobLane(type) {
+function isForegroundJob(job = {}) {
+  return Boolean(job?.meta?.foreground || job?.payload?.foreground || job?.payload?.interactive);
+}
+
+function jobLane(type, meta = {}, payload = {}) {
   const name = String(type || '');
+  if (name === 'ai_invoke' && (meta.foreground || payload.foreground || payload.interactive)) return 'foreground_ai';
   if (name.startsWith('local_vision_')) return 'local_vision';
   if (name === 'ai_invoke' || name === 'profile_image_review_full') return 'ai';
   if (name === 'tts_export' || name === 'session_review_video') return 'tts';
@@ -21,6 +27,7 @@ function jobLane(type) {
 }
 
 function laneConcurrency(lane) {
+  if (lane === 'foreground_ai') return foregroundConcurrency;
   if (lane === 'local_vision') return Math.max(1, Number(process.env.BACKGROUND_JOB_LOCAL_VISION_CONCURRENCY || 1));
   if (lane === 'ai') return Math.max(1, Number(process.env.BACKGROUND_JOB_AI_CONCURRENCY || 2));
   if (lane === 'tts') return Math.max(1, Number(process.env.BACKGROUND_JOB_TTS_CONCURRENCY || 1));
@@ -38,8 +45,10 @@ function runningLaneCount(lane) {
 
 function canStartJob(job) {
   if (!job || job.status !== 'queued') return false;
-  const lane = job.lane || jobLane(job.type);
-  return runningLaneCount(lane) < laneConcurrency(lane);
+  const lane = job.lane || jobLane(job.type, job.meta, job.payload);
+  const foreground = lane === 'foreground_ai' || isForegroundJob(job);
+  const globalLimit = foreground ? concurrency + foregroundConcurrency : concurrency;
+  return running.size < globalLimit && runningLaneCount(lane) < laneConcurrency(lane);
 }
 
 function nowIso() {
@@ -91,6 +100,69 @@ function patchProgress(job, progress = {}) {
   });
 }
 
+function existingAudioExportForUrl(fileUrl = '') {
+  const target = String(fileUrl || '').trim();
+  if (!target) return null;
+  return listEntities('AudioExport').find((record) => String(record?.file_url || '').trim() === target) || null;
+}
+
+function persistTtsAudioExport(job, result = {}) {
+  if (job?.type !== 'tts_export' || !result?.file_url) return result;
+  const existing = existingAudioExportForUrl(result.file_url);
+  if (existing?.id) {
+    return {
+      ...result,
+      audio_export_id: existing.id,
+      audio_export_recovered: false,
+    };
+  }
+
+  const payload = job.payload || {};
+  const meta = job.meta || {};
+  const created = job.finishedAt || nowIso();
+  const id = `tts-job-${job.id}`;
+  const title = meta.title || payload.title || result.title || 'Completed audio render';
+  const saved = upsertEntity('AudioExport', id, {
+    id,
+    title,
+    analysis_title: title,
+    file_url: result.file_url,
+    duration_seconds: Math.round(Number(result.duration_seconds || 0)),
+    voice: result.voice || payload.voice || null,
+    speed: Number(result.speed || payload.speed || 1),
+    model: result.model || payload.model || null,
+    format: result.format || payload.outputFormat || 'mp3',
+    render_version: result.render_version || null,
+    silence_trim: result.silence_trim || null,
+    size: result.size || null,
+    filename: result.filename || String(result.file_url).split('/').pop(),
+    tts_session_key: meta.sessionId || null,
+    session_date: meta.sessionDate || payload.sessionDate || null,
+    source_generated_at: meta.sourceGeneratedAt || payload.sourceGeneratedAt || null,
+    exported_at: created,
+    has_chapters: Boolean(result.has_chapters),
+    chapter_format: result.chapter_format || 'sidecar',
+    chapter_count: Number(result.chapter_count || 0),
+    chapter_source: result.chapter_source || 'tts_export',
+    chapter_generated_at: result.chapter_generated_at || null,
+    chapters_embedded: Boolean(result.chapters_embedded),
+    sidecar_chapters_available: Boolean(result.sidecar_chapters_available),
+    chapter_json_url: result.chapter_json_url || null,
+    chapter_cue_url: result.chapter_cue_url || null,
+    chapter_txt_url: result.chapter_txt_url || null,
+    audio_content_version: meta.sourceGeneratedAt || payload.sourceGeneratedAt || null,
+    recovered_from_job_id: job.id,
+    notes: 'Saved automatically from completed background audio render.',
+    created_date: created,
+  });
+
+  return {
+    ...result,
+    audio_export_id: saved.id,
+    audio_export_recovered: true,
+  };
+}
+
 function compareQueuedJobs(a, b) {
   const priorityDelta = normalizeJobPriority(b?.priority) - normalizeJobPriority(a?.priority);
   if (priorityDelta) return priorityDelta;
@@ -103,7 +175,7 @@ function enqueueJob(job) {
 }
 
 function runNext() {
-  while (running.size < concurrency && queue.length > 0) {
+  while (queue.length > 0) {
     queue.sort(compareQueuedJobs);
     const queueIndex = queue.findIndex((candidate) => canStartJob(candidate));
     if (queueIndex < 0) return;
@@ -123,7 +195,7 @@ function runNext() {
     running.add(job.id);
     patchJob(job, {
       status: 'running',
-      lane: job.lane || jobLane(job.type),
+      lane: job.lane || jobLane(job.type, job.meta, job.payload),
       startedAt: nowIso(),
     });
     patchProgress(job, {
@@ -143,9 +215,10 @@ function runNext() {
         const keepCompletionMessage =
           existingProgress.phase === 'complete' &&
           existingProgress.message;
+        const finalResult = persistTtsAudioExport(job, result);
         patchJob(job, {
           status: 'complete',
-          result,
+          result: finalResult,
           error: null,
           payload: null,
           finishedAt: nowIso(),
@@ -204,7 +277,7 @@ export function createJob(type, payload = {}, meta = {}) {
       priority,
     },
     priority,
-    lane: jobLane(type),
+    lane: jobLane(type, meta, payload),
     payload,
     createdAt: now,
     updatedAt: now,
@@ -224,7 +297,7 @@ function hydratePersistedJob(record) {
   return {
     ...record,
     priority: normalizeJobPriority(record.priority ?? record.meta?.priority),
-    lane: record.lane || jobLane(record.type),
+    lane: record.lane || jobLane(record.type, record.meta, record.payload),
     payload: record.payload || null,
     abortController: new AbortController(),
   };

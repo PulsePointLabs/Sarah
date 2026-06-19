@@ -31,7 +31,7 @@ import {
   normalizeBodyExplorationVideoPassFindings,
   normalizeSessionVideoPassFindings,
 } from "@/lib/visualEvidence";
-import { PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
+import { SARAH_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
 import {
   deviceEvidenceStageForText,
   hasUnsupportedMeatusContactClaim as hasUnsupportedMeatusContactClaimGuard,
@@ -2247,7 +2247,7 @@ Draft event examples for this mode: "Fresh gloves/glove change visible during pr
 
 You are Sarah, reviewing sampled frames from a linked local ${recordLabel} video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
 
-${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
+${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 
 ${isExploration ? "Exploration/procedure context grounding" : "Session context grounding"} has priority when it identifies known setup, devices, materials, or technique. Use the ${recordLabel} notes, methods, devices, and timestamped/manual notes below to interpret ambiguous visible objects and contact locations. ${isExploration ? "For example, if the exploration context says an 18 French Foley catheter or urethral sound is in use and the frames show a matching device at the meatus, identify it as that supported instrumentation rather than vague stimulation or generic object handling." : "For example, if the session context says a vibrator is held at the perineum during stimulation and the frames show a matching device/contact at that location, call it a perineal vibrator/contact rather than a vague \"blue device near the scrotum and genitals.\""} If context and visuals do not line up, state the uncertainty instead of forcing the label.
 

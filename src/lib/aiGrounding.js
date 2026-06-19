@@ -27,8 +27,8 @@ REVIEWED VISUAL EVIDENCE PRIORITY RULE - HIGH PRIORITY:
 - Keep the rule domain-specific: current-session telemetry/events still control timing and numeric claims; reviewed visual evidence controls visible anatomy, stimulation mechanics, movement, contact, device fit, marker placement, and visible arousal/body-state claims.
 `;
 
-export const PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE = `
-PULSEPOINT APP OVERLAY TELEMETRY RULE - HIGH PRIORITY:
+export const SARAH_APP_OVERLAY_TELEMETRY_RULE = `
+SARAH APP OVERLAY TELEMETRY RULE - HIGH PRIORITY:
 - Sarah videos may include app-generated overlays or captured app panels showing Current HR, AVG, MAX, RR samples, RMSSD/HRV quality, build confidence, AI Magic/near-climax percentage, recovery percentage, phase labels, heart-rate trend charts, timers, OBS/session status, EMG levels, Howl/Coyote/e-stim device state, and other Sarah telemetry.
 - Treat readable Sarah overlay values as first-class app telemetry evidence, not random scene text. When a visible overlay says build, recovery, near-climax, HR, HRV, RR, EMG, or device state, use it to improve the physiological interpretation of the same moment.
 - Use on-screen Sarah overlay data as timing and context support for visible body/session evidence: it can strengthen reads about rising load, plateau, near-climax, recovery, HRV opening/tightening, EMG activation, device changes, or stimulation-state correlation.
@@ -358,7 +358,7 @@ GLOBAL EVIDENCE AND INTERPRETATION RULES:
 
 ${REVIEWED_VISUAL_EVIDENCE_PRIORITY_RULE}
 
-${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
+${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}`;
 }

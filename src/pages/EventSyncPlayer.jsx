@@ -472,7 +472,7 @@ export default function EventSyncPlayer() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [newEventNote, selectedSession, savingEvent, isPlaying, videoMode, playbackTime]);
 
   const handleSaveEvent = async () => {

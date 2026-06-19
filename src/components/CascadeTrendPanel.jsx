@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import {
   ResponsiveContainer, ComposedChart, Line, XAxis, YAxis,
-  Tooltip, CartesianGrid, ReferenceLine, Area,
+  Tooltip, CartesianGrid, Area,
 } from "recharts";
 import { TrendingUp, TrendingDown, Minus } from "lucide-react";
 

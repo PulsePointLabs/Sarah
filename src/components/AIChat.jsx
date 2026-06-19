@@ -1,6 +1,6 @@
 import { useCallback, useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
-import { MessageCircle, Send, ChevronDown, ChevronUp, Sparkles, Save, RefreshCw, Mic, MicOff, Volume2, VolumeX, Copy, Check, Maximize2, Minimize2, Paperclip, X, Image as ImageIcon, Film } from "lucide-react";
+import { Send, ChevronDown, ChevronUp, Save, RefreshCw, Mic, MicOff, Volume2, VolumeX, Copy, Check, Maximize2, Minimize2, Paperclip, X, Image as ImageIcon, Film } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
@@ -8,6 +8,7 @@ import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext } from "@/lib/
 import { extractVisualMediaContextFromConversation } from "@/lib/visualEvidence";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { cleanWhisperTranscript } from "@/utils/whisperTranscript";
+import { SarahAvatar } from "@/components/SarahBrand";
 
 const PROFILE_CATEGORIES = [
   { key: "physical", label: "Physical Baseline", emoji: "🫀", hint: "Body metrics, fitness, resting HR, medications" },
@@ -58,6 +59,20 @@ function extractProviderErrorMessage(error) {
     if (raw) return raw;
   }
   return "";
+}
+
+function friendlyWhisperError(error) {
+  const message = extractProviderErrorMessage(error) || "Whisper transcription failed.";
+  if (/Invalid URL\s+\(POST\s+\/v1\/audio\/transcriptions\)/i.test(message)) {
+    return "Whisper is using a stale transcription route. Restart the local Sarah API or rebuild/reopen the Android app, then try the mic again.";
+  }
+  if (/Missing OPENAI_API_KEY/i.test(message)) {
+    return "Whisper needs OPENAI_API_KEY in the local API environment.";
+  }
+  if (/invalid file format/i.test(message)) {
+    return "Whisper received the recording but could not read the audio format. Try recording again; Sarah now normalizes Android recorder formats before sending them.";
+  }
+  return message;
 }
 
 function friendlySarahError(error) {
@@ -1199,8 +1214,8 @@ export default function AIChat({
         if (text) setInput((prev) => (prev ? `${prev} ${text}` : text));
         setTimeout(() => inputRef.current?.focus(), 100);
       } catch (error) {
-        const message = extractProviderErrorMessage(error) || "Whisper transcription failed.";
-        setImageError(message);
+        const message = friendlyWhisperError(error);
+        setImageError("");
         setChatProcessingStatus({ phase: "error", message: "Whisper transcription failed", detail: message });
       } finally {
         audioChunksRef.current = [];
@@ -1236,6 +1251,8 @@ export default function AIChat({
     const profileMechanicalContext = mode === "profile" ? `\n\n${PROFILE_MECHANICAL_RULE}` : "";
     const res = await base44.integrations.Core.InvokeLLM({
       prompt: `${groundingContext}${profileMechanicalContext}\n\nBased on this Q&A conversation about a person's ${conversationSubject}, write 2-4 concise bullet points summarizing only the NEW factual findings from the user's answers that would be useful to persist for future AI analysis. Do not repeat generic information already obvious from the base data. Be specific and factual. Do not preserve assumptions about intent unless the person explicitly stated them. Write every saved bullet in direct second person using "you" and "your"; do not use the person's name, "the user", "he", "she", "his", or "her".\n\nConversation:\n${history}\n\nOutput as plain bullet points starting with "•":`,
+      source: "ai_chat_findings_summary",
+      priority: 25,
     });
     return typeof res === "string" ? res.trim() : res?.response?.trim() ?? "";
   };
@@ -1477,6 +1494,10 @@ Return a conversational answer plus structured findings for review/persistence.`
     const res = await base44.integrations.Core.InvokeLLM({
       prompt: `${imageReviewPrompt || systemPrompt}\n\n${TIME_FORMAT_RULE}${profileMechanicalContext}\n\n${groundingContext}\n\nSession/profile data:\n${context}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
       ...(imagePayload.aiImages.length ? { images: imagePayload.aiImages, response_json_schema: imageSchema, max_tokens: 5000 } : {}),
+      source: "ai_chat_interactive",
+      foreground: true,
+      interactive: true,
+      priority: 100,
     });
 
     const normalized = imagePayload.aiImages.length ? normalizeAIImageResult(res) : null;
@@ -1972,9 +1993,9 @@ Return a conversational answer plus structured findings for review/persistence.`
             open ? setOpen(false) : handleOpen();
           }}
         >
-          <MessageCircle className="w-4 h-4 text-accent shrink-0" />
+          <SarahAvatar className="h-8 w-8" />
           <span className="truncate text-xs font-semibold text-foreground">
-            {mode === "profile" ? "Interview Me — Deepen My Profile" : "Ask the AI — Session Deep Dive"}
+            {mode === "profile" ? "Sarah Profile Chat" : "Sarah Session Chat"}
           </span>
           {hasMessages && (
             <span className="shrink-0 text-[10px] text-muted-foreground">{messages.length} msg{messages.length !== 1 ? "s" : ""}</span>
@@ -2056,7 +2077,7 @@ Return a conversational answer plus structured findings for review/persistence.`
                   className={`scroll-mt-4 flex gap-2 items-start ${msg.role === "user" ? "flex-row-reverse" : ""}`}
                 >
                   {msg.role === "assistant" && (
-                    <Sparkles className="w-3.5 h-3.5 text-accent shrink-0 mt-1" />
+                    <SarahAvatar className="mt-0.5 h-8 w-8" />
                   )}
                   <div
                     className={messageClass(msg.role)}
@@ -2120,7 +2141,7 @@ Return a conversational answer plus structured findings for review/persistence.`
 
               {loading && (
                 <div className="flex gap-2 items-start">
-                  <Sparkles className="w-3.5 h-3.5 text-accent shrink-0 mt-0.5" />
+                  <SarahAvatar className="h-8 w-8" />
                   <div className="max-w-[min(85%,38rem)] rounded-xl rounded-tl-sm border border-accent/20 bg-muted/70 px-3 py-2">
                     <div className="flex items-center gap-2">
                       {uploadingImages || processingVideoClip ? <ImageIcon className="h-3.5 w-3.5 text-accent" /> : null}

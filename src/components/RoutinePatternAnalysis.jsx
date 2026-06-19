@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { base44 } from "@/api/base44Client";
-import { Brain, TrendingUp, Award, Lightbulb, Activity, Zap, ChevronDown, ChevronUp } from "lucide-react";
+import { Brain, TrendingUp, Award, Lightbulb, Activity, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";

@@ -3,6 +3,7 @@ import { Outlet, Link, useLocation } from "react-router-dom";
 import { LayoutDashboard, List, PlusCircle, GitCompare, TrendingUp, Waves, ScanSearch, GitMerge, LineChart, Menu, X, UserCircle, Grid3x3, Clapperboard, Music, BarChart2, FlaskConical, BookOpen, Radio, Settings2, Activity, MessageCircle, Sparkles } from "lucide-react";
 import InstallAppButton from "./InstallAppButton";
 import BackgroundJobStatusTray from "./BackgroundJobStatusTray";
+import { SarahAvatar, SarahLogoMark } from "./SarahBrand";
 
 // UI_OLD_MAN_ACCESSIBILITY_V1
 const UI_PREFS_STORAGE_KEY = "pulsepoint-ui-preferences-v1";
@@ -51,11 +52,11 @@ const navGroups = [
   {
     label: "Review & AI",
     items: [
+      { path: "/profiler", icon: ScanSearch, label: "AI Profiler" },
+      { path: "/profile-qa", icon: MessageCircle, label: "Profiler QA" },
       { path: "/ai-annotation", icon: Sparkles, label: "AI Annotation" },
       { path: "/review-player", icon: Clapperboard, label: "Review Player" },
       { path: "/video", icon: Clapperboard, label: "Video Sync" },
-      { path: "/profiler", icon: ScanSearch, label: "AI Profiler" },
-      { path: "/profile-qa", icon: MessageCircle, label: "Profile Q&A" },
     ],
   },
   {
@@ -219,7 +220,10 @@ export default function Layout() {
           {open ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
         </button>
         <span className="min-w-0 text-sm font-semibold text-foreground tracking-tight">
-          <span className="text-primary">Sarah</span>
+          <span className="inline-flex items-center gap-2 text-primary">
+            <SarahAvatar className="h-7 w-7" ring={false} />
+            <span>Sarah</span>
+          </span>
           <span className="text-muted-foreground"> / </span>
           <span>{navItems.find((n) => isPathActive(n.path, location.pathname))?.label ?? "App"}</span>
         </span>
@@ -239,8 +243,11 @@ export default function Layout() {
         open ? "translate-x-0" : "-translate-x-full"}`
         }>
         
-        <div className="flex items-center justify-between px-4 h-12 border-b border-border shrink-0">
-          <span className="text-sm font-bold text-primary tracking-tight">Sarah</span>
+        <div className="flex items-center justify-between px-4 h-14 border-b border-border shrink-0">
+          <span className="flex items-center gap-2 text-sm font-bold text-primary tracking-tight">
+            <SarahLogoMark className="h-8 w-8" />
+            Sarah
+          </span>
           <button onClick={() => setOpen(false)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground">
             <X className="w-4 h-4" />
           </button>

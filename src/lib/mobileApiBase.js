@@ -36,7 +36,7 @@ function readQueryApiBase() {
   return "";
 }
 
-export function getPulsePointApiBase() {
+export function getSarahApiBase() {
   const configured = cleanBase(import.meta.env.VITE_API_BASE || "");
   if (configured) return configured;
 
@@ -53,7 +53,7 @@ export function getPulsePointApiBase() {
   return "/api";
 }
 
-export const API_BASE = getPulsePointApiBase();
+export const API_BASE = getSarahApiBase();
 
 export function apiUrl(path = "") {
   if (!path) return API_BASE;

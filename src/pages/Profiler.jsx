@@ -7,7 +7,7 @@ import AIOutputReader from "../components/AIOutputReader";
 import { normalizeJournalEntry } from "@/lib/journalEntry";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE, PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
+import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE, SARAH_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
 import { loadLatestProfilerAnalysis, loadUserProfileWithProfilerResults, mergeProfilerResultsIntoProfile } from "@/lib/profileContext";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionContextFactorLabels } from "@/lib/sessionContext";
@@ -54,19 +54,40 @@ function trailingTtsContext(text, maxChars = 320) {
 
 function buildProfilerVideoChunks(paragraphs = []) {
   const chunks = [];
-  let previousText = "";
+  const combinedParagraphs = [];
+  let current = "";
+
+  const pushCurrent = () => {
+    const cleaned = current.trim();
+    if (cleaned) combinedParagraphs.push(cleaned);
+    current = "";
+  };
+
   paragraphs.forEach((paragraph) => {
     const cleaned = cleanTextForSpeech(paragraph);
     if (!cleaned) return;
-    splitIntoChunks(cleaned, TTS_CHUNK_TARGET_CHARS).forEach((part) => {
-      const text = prepareTTSInput(part);
-      if (!text) return;
-      chunks.push({
-        text,
-        previousContext: trailingTtsContext(previousText),
+    const next = current ? `${current}\n\n${cleaned}` : cleaned;
+    if (current && next.length > TTS_CHUNK_TARGET_CHARS) pushCurrent();
+    if (cleaned.length > TTS_CHUNK_TARGET_CHARS) {
+      splitIntoChunks(cleaned, TTS_CHUNK_TARGET_CHARS).forEach((part) => {
+        const partText = part.trim();
+        if (partText) combinedParagraphs.push(partText);
       });
-      previousText = previousText ? `${previousText} ${part}` : part;
+      return;
+    }
+    current = current ? `${current}\n\n${cleaned}` : cleaned;
+  });
+  pushCurrent();
+
+  let previousText = "";
+  combinedParagraphs.forEach((part) => {
+    const text = prepareTTSInput(part);
+    if (!text) return;
+    chunks.push({
+      text,
+      previousContext: trailingTtsContext(previousText),
     });
+    previousText = previousText ? `${previousText} ${part}` : part;
   });
   return chunks;
 }
@@ -139,7 +160,7 @@ PROFILE VIDEO FRAME EVIDENCE RULE:
 
 const PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE = `
 PROFILE IMAGE INSIGHT-EFFICIENCY RULE:
-Core goal: maximize insight per token, not words per report. Sarah should stay warm, clinical, evidence-based, and anatomically useful, but shorter, less repetitive, and more confidence-calibrated.
+Core goal: maximize organized anatomical value per paragraph, not produce a shorter report. Sarah should stay warm, clinical, evidence-based, anatomically useful, less repetitive, and confidence-calibrated while preserving comprehensive coverage.
 
 BASELINE VS NEW FINDINGS:
 - Treat stable anatomy as part of the current body map. Before documenting any finding, ask whether the reader needs detail now. If it appears unchanged, summarize the current appearance briefly without narrating how it was established.
@@ -190,7 +211,7 @@ PELVIC/GENITAL REVIEW SCOPING:
 - Do not use the pelvic review to repeat whole-body habitus or posture unless it directly affects pelvic visibility or tissue interpretation.
 
 COST AND OUTPUT DISCIPLINE:
-- Generate: new findings, changed findings, stable baseline summary, significant findings, and coverage gaps.
+- Generate: comprehensive current anatomical assessment, stable baseline findings, new findings, changed findings, active findings, significant findings, and coverage gaps.
 - Avoid: entire historical narrative, repeated anatomy descriptions, repeated confidence statements, repeated callout text, source/provenance/process narration, correction chatter, and internal anatomy boilerplate.
 - Do not add source/provenance/process sections to satisfy these rules. Apply them inside the existing anatomy-centered sections.
 `;
@@ -221,6 +242,23 @@ COMPLETE BODY MAP + CHANGE LAYER RULE - HIGHEST PRIORITY:
 - Avoid long absence inventories. If a body region has no useful evidence at all, use one concise sentence. If it has prior evidence, summarize that prior baseline instead of saying only that it is not visible now.
 `;
 
+const PROFILE_IMAGE_COMPREHENSIVE_EXAM_RULE = `
+COMPREHENSIVE MULTIDISCIPLINARY PHYSICAL EXAM RULE - HIGHEST PRIORITY:
+- The Head-to-Toe Review and Pelvic/Genital Review are longitudinal visual anatomy documentation products. Their job is to answer: "What does this person look like today in the requested anatomical scope?"
+- Do not convert the report into a novelty detector, wound tracker, change log, or "most interesting finding" summary.
+- Anatomical completeness outranks novelty. Every configured anatomical section should receive meaningful attention when evidence exists, even when the finding is normal, stable, or unchanged.
+- Head-to-Toe should read like one combined physical examination written by primary care, dermatology, orthopedics, physical therapy, vascular medicine, general surgery, urology, and wound care.
+- Pelvic/Genital should read like a focused external pelvic/genital/perineal examination written by urology plus primary care, with gynecology-style structure and tissue-health discipline when anatomy makes that lens relevant. Use the person's documented/visible anatomy rather than forcing a sex-specific template.
+- Executive Summary must describe the whole requested anatomical scope first: overall appearance, body habitus or regional contour, posture where relevant, skin overview, major scars, major active findings, extremity or regional overview, notable anatomical characteristics, and important interval changes.
+- Executive Summary must not become a pathology spotlight. A healing wound, catheter, mole, scar, edema episode, or isolated lesion may be mentioned once if clinically important, but it must not dominate the summary.
+- Separate baseline findings from active findings. Baseline findings include body habitus, posture, stable skin distribution, scars, anatomical characteristics, and long-term observations. Active findings include healing wound, edema, bruising, catheterization state, new lesions, irritation, and interval changes.
+- Put findings in their anatomical home. Document a dog bite in Abdomen/Skin, a hernia repair scar in Abdomen/Pelvis, edema in Lower Limbs/Feet, genital visibility in Genitals/Perineum, and posture in Posture & Alignment. Do not reintroduce the same finding repeatedly in unrelated sections.
+- For Pelvic/Genital, put findings in their structure-specific home: pubic mound/lower abdomen, inguinal folds/groin skin, penis/shaft, foreskin, glans/meatus, scrotum/testes, perineum, anal/perianal region, buttocks/gluteal skin, device/contact findings, tissue health, and measurement reconciliation. Do not let catheter/device status dominate sections where it is not the main anatomical subject.
+- Preserve richness by organizing detail, not deleting detail. Use concise synthesis for stable findings and deeper description for regions with active findings, improved coverage, or meaningful clinical relevance.
+- Evidence notes and callouts may support the report, but the main clinical assessment should not read like pasted raw evidence notes.
+- If a region has no established evidence anywhere, state that once in that region. Do not let missing coverage replace meaningful assessment of represented regions.
+`;
+
 const PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE = `
 LONGITUDINAL EVIDENCE / CREDIT DISCIPLINE RULE - HIGHEST PRIORITY:
 - Sarah is building a longitudinal anatomical record. Do not rediscover stable anatomy during every review.
@@ -235,7 +273,7 @@ LONGITUDINAL EVIDENCE / CREDIT DISCIPLINE RULE - HIGHEST PRIORITY:
 - Low-priority repeats: normal raphe visibility, unchanged foreskin coverage, unchanged glans/scrotal appearance, unchanged anal verge, unchanged buttock/perineal baseline.
 - Visual callouts should represent the best evidence ever obtained or the newest image showing meaningful change. Do not create a new callout only because another identical view exists.
 - Prefer evidence quality over recency. New images should be promoted to callouts when they improve coverage, clarify uncertainty, contradict baseline, or show change.
-- If no meaningful change is visible, the final report should be shorter, more comparative, and less descriptive than the original baseline-building report.
+- If no meaningful change is visible, keep the final report comprehensive but organized: describe the current whole-body baseline, then say plainly where no meaningful interval change is evident. Do not become vague or omit major represented regions just because they are stable.
 - Each new or updated evidence finding should preserve confidence, first observed date, last confirmed date, source images, and evidence strength when possible.
 `;
 
@@ -332,6 +370,7 @@ function naturalizeSpokenDates(value) {
 
 function cleanImageReviewProse(value) {
   const cleaned = naturalizeSpokenDates(value)
+    .replace(/\[object Object\]/gi, "")
     .replace(/\bimg[_-]?0*(\d+)\b/gi, (_match, number) => `image ${Number(number) || number}`)
     .replace(/\bImage\s+\d+\s*(?:\([^)]+\))?\s*:\s*/gi, "")
     .replace(/\b(?:IMG|VID|PXL|DSC|Photo|Screenshot)[-_ ]?\d{4,}\b/gi, "the referenced view")
@@ -696,12 +735,48 @@ const HEAD_TO_TOE_BODY_REGION_BUCKETS = [
 const HEAD_TO_TOE_PELVIC_CLOSEUP_RE = /\b(close-up|closeup|pelvic close|genital close|perineal close|perianal close|glans close|meatus close|foley|catheter|lithotomy|sounding|dilator)\b/i;
 
 function compactEvidenceText(...parts) {
-  return parts.flatMap((part) => {
-    if (!part) return [];
-    if (Array.isArray(part)) return part;
-    if (typeof part === "object") return Object.values(part);
-    return [part];
-  }).map((part) => String(part || "").trim()).filter(Boolean).join(" ");
+  const seen = new WeakSet();
+  const meaningfulObjectKeys = [
+    "display_label",
+    "view_label",
+    "body_position",
+    "coverage",
+    "visibility_notes",
+    "upload_note",
+    "selection_prompt",
+    "selection_review_context",
+    "source",
+    "filename",
+    "title",
+    "label",
+    "region",
+    "finding",
+    "description",
+    "summary",
+    "note",
+    "purpose",
+    "limitations",
+    "major_regions_visible",
+  ];
+  const collect = (part) => {
+    if (part == null || part === false) return [];
+    if (typeof part === "string" || typeof part === "number" || typeof part === "boolean") {
+      const text = String(part).replace(/\[object Object\]/gi, "").trim();
+      return text ? [text] : [];
+    }
+    if (Array.isArray(part)) return part.flatMap(collect);
+    if (typeof part === "object") {
+      if (seen.has(part)) return [];
+      seen.add(part);
+      const selected = meaningfulObjectKeys.flatMap((key) => collect(part[key]));
+      if (selected.length) return selected;
+      return Object.values(part)
+        .filter((value) => value == null || typeof value !== "object" || Array.isArray(value))
+        .flatMap(collect);
+    }
+    return [];
+  };
+  return parts.flatMap(collect).map((part) => String(part || "").trim()).filter(Boolean).join(" ");
 }
 
 function inferHeadToToeCoverageTags(...parts) {
@@ -1256,7 +1331,7 @@ async function runProfilerAIJob(payload, label, onProgress, options = {}) {
 async function startProfilerAIJob(payload, label, options = {}) {
   return startBackgroundJob("ai_invoke", { ...payload, label }, {
     source: "Profiler",
-    route: "/ai-profiler",
+    route: "/profiler",
     label,
     priority: options.priority ?? 0,
     ...options.meta,
@@ -1266,7 +1341,7 @@ async function startProfilerAIJob(payload, label, options = {}) {
 async function startProfileImageReviewFullJob(payload, label, options = {}) {
   return startBackgroundJob("profile_image_review_full", { ...payload, label }, {
     source: "Profiler",
-    route: "/ai-profiler",
+    route: "/profiler",
     label,
     priority: options.priority ?? 45,
     ...options.meta,
@@ -1354,6 +1429,35 @@ function ProfilerPanelLoadingStatus({ items = [] }) {
           <div key={item.label} className="flex items-start justify-between gap-3 rounded-md bg-background/35 px-2 py-1.5">
             <span className="text-blue-50">{item.label}</span>
             <span className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-blue-200">{item.status || "loading"}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProfileImageReviewInlineStatus({ items = [], color = "hsl(var(--primary))" }) {
+  const visibleItems = items.filter((item) => item && item.active);
+  if (!visibleItems.length) return null;
+  return (
+    <div className="rounded-xl border border-border bg-card/70 px-3 py-3 text-xs shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-2 font-semibold text-foreground">
+          <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: color }} />
+          {visibleItems[0]?.headline || "Profiler status"}
+        </p>
+        {visibleItems.some((item) => item.loading) && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2 py-1 font-mono text-[10px] uppercase text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            working
+          </span>
+        )}
+      </div>
+      <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+        {visibleItems.map((item) => (
+          <div key={item.label} className="rounded-lg border border-border bg-background/70 px-2.5 py-2">
+            <p className="font-semibold text-foreground">{item.label}</p>
+            {item.detail && <p className="mt-0.5 leading-relaxed text-muted-foreground">{item.detail}</p>}
           </div>
         ))}
       </div>
@@ -3903,6 +4007,117 @@ function ProfileImageLightbox({
   );
 }
 
+const PROCEDURAL_IMAGE_CONTEXT_RE = /\b(foley|catheter|dwell|meatus|meatal|urethral|gloved|sterile|drape|insertion|post-placement|procedure|field|tube|tubing|drainage|collection bag|statlock|device)\b/i;
+const CLINICAL_REFERENCE_IMAGE_CONTEXT_RE = /\b(standing|anterior|posterior|lateral|front view|side view|back view|supine|prone|seated|whole[-\s]?body|full[-\s]?body|head[-\s]?to[-\s]?toe|torso|abdomen|abdominal|pelvis|pelvic|pubic|inguinal|groin|reference|baseline|anatomical|clinical)\b/i;
+const SECTION_REFERENCE_HINTS = {
+  head_face: /\b(head|face|facial|scalp|hair|forehead|eye|eyes|nose|cheek|mouth|chin|jaw)\b/i,
+  neck: /\b(neck|cervical|throat|nape)\b/i,
+  shoulders_upper_back: /\b(shoulder|upper back|thoracic|scapula|back view|posterior trunk)\b/i,
+  chest: /\b(chest|pectoral|sternum|rib|thorax|anterior trunk)\b/i,
+  abdomen: /\b(abdomen|abdominal|belly|umbilicus|navel|pannus|flank|waist|scar|hernia|bruise|ecchymosis)\b/i,
+  pelvis_pubic_region: /\b(pelvis|pelvic|pubic|suprapubic|inguinal|groin|hip|hips|lower abdomen|abdominal)\b/i,
+  genitals_perineum: /\b(genital|genitals|penis|penile|pubic|perineum|perineal|scrotum|glans|meatus)\b/i,
+  buttocks_perianal_region: /\b(buttock|buttocks|gluteal|perianal|anal|anus)\b/i,
+  upper_limbs_hands: /\b(arm|arms|upper limb|elbow|forearm|wrist|hand|hands|finger|thumb)\b/i,
+  lower_limbs: /\b(leg|legs|lower limb|thigh|knee|calf|shin|ankle|standing)\b/i,
+  feet_toes: /\b(foot|feet|toe|toes|heel|plantar|dorsal foot|arch|malleolar)\b/i,
+  posture_alignment: /\b(standing|whole[-\s]?body|full[-\s]?body|head[-\s]?to[-\s]?toe|anterior|posterior|lateral|posture|alignment|symmetry|baseline)\b/i,
+  skin_summary: /\b(skin|lesion|rash|redness|erythema|scar|bruise|wound|bite|pigmentation|mark)\b/i,
+  pubic_mound_lower_abdomen: /\b(pubic|pubic mound|suprapubic|lower abdomen|abdominal|inguinal|groin|pelvis|pelvic|scar)\b/i,
+  inguinal_folds_groin_skin: /\b(inguinal|groin|crease|fold|pelvic|pubic)\b/i,
+  penis: /\b(penis|penile|shaft|foreskin|glans|meatus)\b/i,
+  foreskin: /\b(foreskin|prepuce|glans|penile)\b/i,
+  glans_meatus: /\b(glans|meatus|meatal|urethral|catheter|foley)\b/i,
+  scrotum_testes: /\b(scrotum|scrotal|testes|testicle|testicular)\b/i,
+  perineum: /\b(perineum|perineal|anal|scrotal base)\b/i,
+  anal_opening_perianal_region: /\b(anal|anus|perianal|rectal)\b/i,
+  buttocks_gluteal_skin: /\b(buttocks|gluteal|glute)\b/i,
+  device_contact_findings: /\b(device|foley|catheter|tube|tubing|statlock|contact|meatus|urethral)\b/i,
+  tissue_health_safety_observations: /\b(tissue|skin|irritation|redness|erythema|lesion|wound|swelling|edema|moisture|drainage)\b/i,
+  measurement_reconciliation: /\b(measurement|measure|ruler|diameter|length|circumference)\b/i,
+};
+
+function inlineEvidenceImageText(result, imageId, transientImages = [], pelvicScoped = false) {
+  const image = pelvicScoped
+    ? rawProfileImageById(result, imageId, transientImages)
+    : profileImageById(result, imageId, transientImages);
+  const rawImage = rawProfileImageById(result, imageId, transientImages);
+  const annotation = Array.isArray(result?.annotated_images)
+    ? result.annotated_images.find((item) => item?.image_id === imageId) || {}
+    : {};
+  return compactEvidenceText(
+    image?.display_label,
+    image?.body_position,
+    image?.coverage,
+    image?.visibility_notes,
+    image?.major_regions_visible,
+    image?.upload_note,
+    rawImage?.display_label,
+    rawImage?.body_position,
+    rawImage?.coverage,
+    rawImage?.visibility_notes,
+    rawImage?.major_regions_visible,
+    rawImage?.upload_note,
+    rawImage?.source,
+    rawImage?.source_video?.note,
+    rawImage?.source_video?.purpose,
+    annotation?.view_label,
+    annotation?.coverage,
+    annotation?.visibility_notes,
+    annotation?.major_regions_visible,
+  );
+}
+
+function inlineEvidenceImageScore(result, imageId, sectionKey, findingsForImage = [], transientImages = [], pelvicScoped = false) {
+  const image = pelvicScoped
+    ? rawProfileImageById(result, imageId, transientImages)
+    : profileImageById(result, imageId, transientImages);
+  if (!image?.preview_url) return -10000;
+  const text = inlineEvidenceImageText(result, imageId, transientImages, pelvicScoped);
+  const sectionHint = SECTION_REFERENCE_HINTS[sectionKey];
+  let score = findingsForImage.length * 70;
+  if (sectionHint?.test(text)) score += 90;
+  if (CLINICAL_REFERENCE_IMAGE_CONTEXT_RE.test(text)) score += 35;
+  if (/\b(reference|baseline|anatomical|clinical|profile)\b/i.test(text)) score += 30;
+  if (/\b(saved_profile_qa|body[-_\s]?exploration|profile_review_archive)\b/i.test(text)) score += 12;
+  if (PROCEDURAL_IMAGE_CONTEXT_RE.test(text)) {
+    if (sectionKey === "device_contact_findings" || sectionKey === "glans_meatus") score += 20;
+    else if (sectionKey === "pubic_mound_lower_abdomen" || sectionKey === "pelvis_pubic_region") score -= 95;
+    else score -= pelvicScoped ? 45 : 80;
+  }
+  if (pelvicScoped && isPelvicGenitalTextOutOfScope(text)) score -= 200;
+  return score;
+}
+
+function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transientImages = [], pelvicScoped = false) {
+  const reviewed = Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images : [];
+  const annotated = Array.isArray(result?.annotated_images) ? result.annotated_images : [];
+  const candidates = [
+    ...findings.map((finding) => finding.image_id),
+    ...reviewed.map((image) => image.image_id),
+    ...annotated.map((image) => image.image_id),
+    ...transientImages.map((image, index) => image.image_id || `img_${String(index + 1).padStart(3, "0")}`),
+  ].filter(Boolean);
+  const uniqueIds = [...new Set(candidates)];
+  const scored = uniqueIds
+    .map((imageId) => {
+      const imageFindings = findings.filter((finding) => finding.image_id === imageId);
+      return {
+        imageId,
+        score: inlineEvidenceImageScore(result, imageId, sectionKey, imageFindings, transientImages, pelvicScoped),
+        hasFinding: imageFindings.length > 0,
+      };
+    })
+    .filter((item) => item.score > -10000)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return Number(b.hasFinding) - Number(a.hasFinding);
+    });
+  const best = scored.filter((item) => item.score > 0).slice(0, 3);
+  const fallback = scored.filter((item) => item.hasFinding).slice(0, 3);
+  return (best.length ? best : fallback).map((item) => item.imageId);
+}
+
 function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(var(--primary))", transientImages = [], onOpenImage = null, onCorrectFinding = null, onRemoveFinding = null }) {
   const pelvicScoped = isPelvicGenitalReviewResult(result);
   const findings = Array.isArray(result?.image_region_findings)
@@ -3910,20 +4125,21 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
     : [];
   if (!findings.length) return null;
 
-  const imageIds = [...new Set(findings.map((finding) => finding.image_id).filter(Boolean))].slice(0, 3);
+  const imageIds = selectInlineEvidenceImageIds(result, sectionKey, findings, transientImages, pelvicScoped);
+  if (!imageIds.length) return null;
   const sectionLabel = sectionLabelForKey(sections, sectionKey);
 
   return (
-    <details className="my-2 rounded-xl border border-border bg-card/60 p-2.5 sm:p-3">
-      <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 rounded-lg px-1 py-1">
+    <div className="my-3 rounded-xl border border-border bg-card/60 p-2.5 sm:p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg px-1 py-1">
         <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider" style={{ color }}>
           <ImageIcon className="h-3.5 w-3.5" /> Evidence for {sectionLabel}
         </span>
-        <span className="flex items-center gap-2">
+        <span className="flex flex-wrap items-center gap-2">
           <Badge variant="outline" className="h-5 text-[10px]">{findings.length} linked note{findings.length === 1 ? "" : "s"}</Badge>
-          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+          <Badge variant="secondary" className="h-5 text-[10px]">{imageIds.length} visible view{imageIds.length === 1 ? "" : "s"}</Badge>
         </span>
-      </summary>
+      </div>
       <div className="mt-3 grid gap-2 md:grid-cols-2">
         {imageIds.map((imageId) => {
           const image = pelvicScoped
@@ -3952,7 +4168,7 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
                     )}
                   </div>
                   <div className="space-y-1.5">
-                    {imageFindings.map((finding, index) => (
+                    {imageFindings.length > 0 ? imageFindings.map((finding, index) => (
                       <div key={`${finding.finding_id}-inline`} className="rounded-md border border-border bg-muted/20 p-3">
                         <div className="flex flex-wrap items-center gap-1.5">
                           {finding.pin && (
@@ -3971,7 +4187,11 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
                         )}
                         <FindingCorrectionControl finding={finding} onCorrectFinding={onCorrectFinding} onRemoveFinding={onRemoveFinding} />
                       </div>
-                    ))}
+                    )) : (
+                      <p className="rounded-md border border-border bg-muted/20 p-3 text-sm leading-relaxed text-muted-foreground">
+                        Reference view selected for this section. Sarah did not attach a separate pinned note to this exact image.
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -3979,7 +4199,7 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
           );
         })}
       </div>
-    </details>
+    </div>
   );
 }
 
@@ -4037,6 +4257,10 @@ HEAD-TO-TOE REVIEW SCOPE:
 - Start with anatomy. Do not open with source details, image counts, batch status, timeout/recovery language, payment/cloud language, or "assembled from" language.
 - Make the review easy to listen to as downloaded audio: top-to-bottom flow, minimal repetition, short clear paragraphs, and no duplicate callout/prose narration.
 - Prioritize observations: visible anatomy, posture, symmetry, skin findings, and meaningful changes. Default mode is observe, not defend or prove.
+- This is a comprehensive current physical-appearance exam, not a novelty report. Answer "what does this person look like today from head to toe?" before answering "what changed?"
+- Preserve anatomical coverage. Head, face, neck, shoulders, upper back, chest, abdomen, pelvis, genitals/perineum, buttocks/perianal region, upper extremities, lower extremities, feet, posture, and skin all matter.
+- Distinguish stable baseline findings from active findings. Baseline includes body habitus, posture, skin distribution, scars, stable anatomy, and long-term observations. Active includes wounds, bruising, edema, catheter/device state, new lesions, irritation, or interval change.
+- Novel findings should be documented thoroughly in their anatomical section, then stop. Do not let a wound, scar, catheter, mole, edema episode, or isolated lesion become the organizing theme of unrelated sections.
 - Write short present-tense findings. Good: "Mild bilateral ankle swelling. Small follicular papules on the lower legs. Skin otherwise appears healthy." Avoid paragraphs that explain why the database believes the finding.
 - Use all available reviewed evidence as cumulative evidence. Do not frame findings around "this batch", "prior batch", "subsequent batch", "image set", "rechecked saved/direct views", or image numbers.
 - Treat this like a clinician performing a full head-to-toe exam from the saved library. Move region by region and say the current findings as you go.
@@ -4057,7 +4281,7 @@ HEAD-TO-TOE REVIEW SCOPE:
 - Do not summarize catheter, urethral, sound/dilator, Foley, sleeve, stimulation, ejaculation, arousal progression, foot-camera arousal recruitment, or genital measurement history in Head-to-Toe.
 - Compare visible whole-body findings against saved Q&A findings, prior sessions, and entered metrics only where they help reconcile body reference evidence. Do not let profile context override fresh image evidence.
 - Organize the output exactly as a top-to-bottom anatomical profile:
-  1. Executive Summary: 5 to 10 bullets maximum. Most meaningful cumulative findings and current changes only.
+  1. Executive Summary: 6 to 12 bullets maximum. Describe the whole physical picture first: overall appearance, body habitus, posture, skin overview, major scars, extremity overview, notable anatomical characteristics, major active findings, and important interval changes.
   2. Head & Face: hair, face, glasses only if relevant to body profile, visible skin findings, symmetry if visible.
   3. Neck: contour, posture, visible masses or asymmetry if any.
   4. Shoulders & Upper Back: shoulder level/symmetry, thoracic posture, visible skin findings.
@@ -4113,6 +4337,11 @@ PELVIC / GENITAL REVIEW SCOPE:
 - Start with actual pelvic/genital/perineal findings. Do not open with source details, image counts, evidence-scope logistics, batch/source/rechecked-image explanations, or provenance.
 - Make the review easy to listen to as downloaded audio: natural anatomical flow, minimal repetition, short paragraphs, and no duplicate callout/prose wording.
 - Default mode is observe, not defend or prove. Describe visible anatomy, visible findings, meaningful changes, and tissue/device relationships. Stop there.
+- This is a comprehensive focused external pelvic/genital/perineal exam, not a device report, catheter report, novelty detector, or change log.
+- Use the appropriate clinical lens for the visible/documented anatomy: urology plus primary care by default, and gynecology-style structure/tissue-health discipline when the person's anatomy makes that relevant. Do not force a sex-specific template that does not match the anatomy.
+- Preserve structure-by-structure coverage. Pubic mound/lower abdomen, inguinal folds/groin skin, penis/shaft, foreskin, glans/meatus, scrotum/testes, perineum, anal/perianal region, buttocks/gluteal skin, visible tissue health, device/contact findings, and measurement reconciliation all matter when evidence exists.
+- Distinguish stable baseline anatomy from active findings. Baseline includes stable structure, contour, symmetry, hair distribution, pigmentation, scars, and long-term tissue appearance. Active findings include irritation, wound/lesion change, swelling, edema, bruising, catheter/device state, moisture/fluid uncertainty, and interval changes.
+- Novel or active findings should be documented thoroughly in their structure-specific section, then not repeatedly reintroduced elsewhere unless a later section adds new clinically meaningful detail.
 - Good: "The catheter exits centrally from the meatus." "The glans appears healthy." "The scrotum appears symmetric." Bad: "This remains consistent with the strongly established glans baseline."
 - Use all available reviewed evidence cumulatively. Do not write "this batch", "prior batch", "subsequent batch", "rechecked saved/direct views", or image-number narration.
 - Treat this like a clinician performing a complete pelvic/genital/perineal exam from the saved visual library. Move structure by structure and state the current findings as you go.
@@ -4141,7 +4370,7 @@ PELVIC / GENITAL REVIEW SCOPE:
 - Bright meatal points remain uncertain unless clearly visible: "small bright meatal highlight or possible fluid point; static image cannot confirm secretion."
 - Measurements should be reconciled only when meaningful. Use: "Visually compatible with entered measurement, but not independently measurable from this image."
 - Organize the review exactly by anatomy:
-  1. Executive Summary: 5 to 10 bullets maximum.
+  1. Executive Summary: 6 to 12 bullets maximum. Describe the whole focused pelvic/genital picture first: regional contour, visible tissue health, structure coverage, major stable anatomy, device/contact state if present, and important active or interval findings.
   2. Pubic Mound & Lower Abdomen: adipose fullness, pubic hair distribution, lower abdominal overhang, inguinal visibility, visible scars or hernia bulges.
   3. Inguinal Folds & Groin Skin: scars, follicular papules/friction irritation, redness, lesions, swelling, fissures if visible.
   4. Penis: resting/flaccid appearance, shaft contour/symmetry, curvature if visible, erect or partial erect state if available, meatus only if visible.
@@ -5142,6 +5371,7 @@ function ProfileImageReviewPanel({
   const hasCachedOrRecoverableReview = Boolean(result || availableCompletedReviewJob || hasRecoverableUnshownBatchSet || hasRecoverableDisplayRepair);
   const primaryReviewNeedsFreshContext = !result && !availableCompletedReviewJob && !hasRecoverableUnshownBatchSet && !hasRecoverableDisplayRepair;
   const activeReviewJob = ["queued", "running", "starting"].includes(jobStatus?.status);
+  const freshReviewPending = Boolean(result && (loading || activeReviewJob || availableCompletedReviewJob) && !viewingArchiveRunId);
   const handlePrimaryReviewAction = async () => {
     if (availableCompletedReviewJob) {
       setLoading(true);
@@ -5232,7 +5462,7 @@ ${imageReviewContext}
 ${canonicalAnatomyPacket}
 ${cumulativeBaselineContext}
 ${anatomicalFocusRule}
-${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
+${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
@@ -5243,6 +5473,7 @@ ${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 ${PROFILE_IMAGE_COMPLETE_MAP_RULE}
+${PROFILE_IMAGE_COMPREHENSIVE_EXAM_RULE}
 ${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${establishedEvidenceContext}
@@ -5521,7 +5752,7 @@ ${canonicalAnatomyPacket}
 ${imagePresenceRules}
 ${cumulativeBaselineContext}
 ${anatomicalFocusRule}
-${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
+${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
@@ -5532,6 +5763,7 @@ ${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 ${PROFILE_IMAGE_COMPLETE_MAP_RULE}
+${PROFILE_IMAGE_COMPREHENSIVE_EXAM_RULE}
 ${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${establishedEvidenceContext}
@@ -5575,7 +5807,7 @@ ${imageReviewContext}
 ${canonicalAnatomyPacket}
 ${cumulativeBaselineContext}
 ${anatomicalFocusRule}
-${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
+${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
@@ -5586,6 +5818,7 @@ ${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 ${PROFILE_IMAGE_COMPLETE_MAP_RULE}
+${PROFILE_IMAGE_COMPREHENSIVE_EXAM_RULE}
 ${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${establishedEvidenceContext}
@@ -5676,7 +5909,7 @@ ${imageReviewContext}
 ${canonicalAnatomyPacket}
 ${imagePresenceRules}
 ${anatomicalFocusRule}
-${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
+${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
@@ -5687,6 +5920,7 @@ ${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 ${PROFILE_IMAGE_COMPLETE_MAP_RULE}
+${PROFILE_IMAGE_COMPREHENSIVE_EXAM_RULE}
 ${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${establishedEvidenceContext}
@@ -5823,7 +6057,7 @@ ${imageReviewContext}
 ${canonicalAnatomyPacket}
 ${cumulativeBaselineContext}
 ${anatomicalFocusRule}
-${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
+${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
@@ -5834,6 +6068,7 @@ ${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 ${PROFILE_IMAGE_COMPLETE_MAP_RULE}
+${PROFILE_IMAGE_COMPREHENSIVE_EXAM_RULE}
 ${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${establishedEvidenceContext}
@@ -5880,7 +6115,7 @@ ${canonicalAnatomyPacket}
 ${imagePresenceRules}
 ${cumulativeBaselineContext}
 ${anatomicalFocusRule}
-${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
+${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
@@ -5891,6 +6126,7 @@ ${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 ${PROFILE_IMAGE_COMPLETE_MAP_RULE}
+${PROFILE_IMAGE_COMPREHENSIVE_EXAM_RULE}
 ${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${establishedEvidenceContext}
@@ -6020,7 +6256,7 @@ ${imageReviewContext}
 ${canonicalAnatomyPacket}
 ${imagePresenceRules}
 ${anatomicalFocusRule}
-${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
+${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${firstNameToneCue}
 ${sessionGroundingRule}
@@ -6031,6 +6267,7 @@ ${PROFILE_VIDEO_FRAME_EVIDENCE_RULE}
 ${PROFILE_IMAGE_INSIGHT_EFFICIENCY_RULE}
 ${PROFILE_IMAGE_CUMULATIVE_SCOPE_RULE}
 ${PROFILE_IMAGE_COMPLETE_MAP_RULE}
+${PROFILE_IMAGE_COMPREHENSIVE_EXAM_RULE}
 ${PROFILE_IMAGE_INCREMENTAL_EVIDENCE_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${establishedEvidenceContext}
@@ -6332,6 +6569,61 @@ ANNOTATED IMAGE OUTPUT RULES:
   const videoSaveInProgress = videos.some((video) => video.upload_status === "saving");
   const imageSaveErrorCount = images.filter((image) => image.upload_status === "error").length;
   const videoSaveErrorCount = videos.filter((video) => video.upload_status === "error").length;
+  const savingImageCount = images.filter((image) => image.upload_status === "saving").length;
+  const savingVideoCount = videos.filter((video) => video.upload_status === "saving").length;
+  const reviewCardStatusItems = [
+    {
+      active: profileLoading,
+      loading: true,
+      headline: `${config.shortTitle} is preparing context`,
+      label: "Saved profile context",
+      detail: "Loading saved profile facts, Q&A, and prior Sarah outputs.",
+    },
+    {
+      active: evidenceLoading,
+      loading: true,
+      headline: `${config.shortTitle} is preparing evidence`,
+      label: "Saved visual/session evidence",
+      detail: "Loading reusable images, sessions, body-exploration frames, and prior review context.",
+    },
+    {
+      active: imageSaveInProgress,
+      loading: true,
+      headline: `${config.shortTitle} is saving uploads`,
+      label: "Fresh images",
+      detail: `${savingImageCount} image upload${savingImageCount === 1 ? "" : "s"} still saving.`,
+    },
+    {
+      active: videoSaveInProgress,
+      loading: true,
+      headline: `${config.shortTitle} is sampling video`,
+      label: "Fresh videos",
+      detail: `${savingVideoCount} video${savingVideoCount === 1 ? "" : "s"} still being sampled for review frames.`,
+    },
+    {
+      active: loading || activeReviewJob,
+      loading: true,
+      headline: `${config.shortTitle} review is running`,
+      label: jobStatus?.progress?.phase ? `Review phase: ${jobStatus.progress.phase}` : "Background review",
+      detail: jobStatus?.progress?.message || "Sarah is working through the background queue. You can leave this page while it finishes.",
+    },
+    {
+      active: Boolean(availableCompletedReviewJob),
+      loading: false,
+      headline: `${config.shortTitle} result is ready`,
+      label: "Completed background result",
+      detail: "A finished review is available. Tap Show Completed Review to attach it to the card.",
+    },
+    {
+      active: Boolean(hasRecoverableUnshownBatchSet || hasRecoverableDisplayRepair),
+      loading: false,
+      headline: `${config.shortTitle} completed batches are recoverable`,
+      label: "Completed batch findings",
+      detail: hasRecoverableDisplayRepair
+        ? "A saved batch review can be repaired to reconnect its inline image callouts."
+        : `${recoverableBatchSet?.total || recoverableBatchSet?.batches?.length || 0} completed batches can be assembled without rerunning image review.`,
+    },
+  ];
   const pelvicResultScoped = isPelvicGenitalReviewResult(result, config);
   const lightboxImageIds = result ? [...new Set([
     ...(Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images.map((image) => image.image_id).filter(Boolean) : []),
@@ -6564,18 +6856,18 @@ ANNOTATED IMAGE OUTPUT RULES:
   return (
     <SectionCard icon={config.icon} title={config.title} color={config.color} defaultCollapsed={true}>
       <div className="space-y-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
           <p className="max-w-3xl text-xs leading-relaxed text-muted-foreground">{config.helper}</p>
-          <div className="flex shrink-0 flex-wrap gap-2">
-            <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground hover:bg-muted/60">
+          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:shrink-0 sm:flex-wrap">
+            <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground hover:bg-muted/60 sm:h-8">
               <Upload className="h-3.5 w-3.5" /> Add Images
               <input type="file" accept="image/*" multiple className="hidden" onChange={handleImageFiles} />
             </label>
-            <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground hover:bg-muted/60">
+            <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground hover:bg-muted/60 sm:h-8">
               <Film className="h-3.5 w-3.5" /> Add Videos
               <input type="file" accept="video/*" multiple className="hidden" onChange={handleVideoFiles} />
             </label>
-            <Button size="sm" onClick={handlePrimaryReviewAction} disabled={loading || activeReviewJob || imageSaveInProgress || videoSaveInProgress || (primaryReviewNeedsFreshContext && (profileLoading || evidenceLoading))} className="h-8 gap-1.5 text-xs">
+            <Button size="sm" onClick={handlePrimaryReviewAction} disabled={loading || activeReviewJob || imageSaveInProgress || videoSaveInProgress || (primaryReviewNeedsFreshContext && (profileLoading || evidenceLoading))} className="col-span-2 h-10 min-w-0 gap-1.5 text-xs sm:h-8 sm:w-auto">
               {loading
                 ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Reviewing...</>
                 : imageSaveInProgress
@@ -6603,36 +6895,41 @@ ANNOTATED IMAGE OUTPUT RULES:
         )}
 
         <div className="flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
-          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{existingEvidenceCount} saved visual/video evidence items</Badge>
-          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+          <Badge variant="outline" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">{existingEvidenceCount} saved visual/video evidence items</Badge>
+          <Badge variant="outline" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">
             {reusableProfileAttachments.length} relevant reusable Profile Q&A images
           </Badge>
-          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+          <Badge variant="outline" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">
             {reusableProfileReviewAttachments.length + reusableBodyExplorationFrameAttachments.length} reusable saved review/frame images
           </Badge>
-          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{sessions.length} sessions loaded</Badge>
+          <Badge variant="outline" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">{sessions.length} sessions loaded</Badge>
           {bodyExplorations.length > 0 && (
-            <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{bodyExplorations.length} body exploration sessions loaded</Badge>
+            <Badge variant="outline" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">{bodyExplorations.length} body exploration sessions loaded</Badge>
           )}
           {images.length > 0 && (
-            <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{images.length} fresh image{images.length === 1 ? "" : "s"} selected</Badge>
+            <Badge variant="outline" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">{images.length} fresh image{images.length === 1 ? "" : "s"} selected</Badge>
           )}
           {videos.length > 0 && (
-            <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{videos.length} video{videos.length === 1 ? "" : "s"} uploaded/sampled</Badge>
+            <Badge variant="outline" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">{videos.length} video{videos.length === 1 ? "" : "s"} uploaded/sampled</Badge>
           )}
           {imageSaveErrorCount > 0 && (
-            <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">{imageSaveErrorCount} image save error{imageSaveErrorCount === 1 ? "" : "s"}</Badge>
+            <Badge variant="destructive" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">{imageSaveErrorCount} image save error{imageSaveErrorCount === 1 ? "" : "s"}</Badge>
           )}
           {videoSaveErrorCount > 0 && (
-            <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">{videoSaveErrorCount} video save error{videoSaveErrorCount === 1 ? "" : "s"}</Badge>
+            <Badge variant="destructive" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">{videoSaveErrorCount} video save error{videoSaveErrorCount === 1 ? "" : "s"}</Badge>
           )}
           {recoverableBatchSet?.batches?.length > 0 && !result?._meta?.local_batch_assembled && (
-            <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+            <Badge variant="secondary" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">
               {recoverableBatchSet.total}/{recoverableBatchSet.total} batches recoverable
             </Badge>
           )}
-          <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">Priority background queue</Badge>
+          <Badge variant="secondary" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">Priority background queue</Badge>
         </div>
+
+        <ProfileImageReviewInlineStatus
+          items={reviewCardStatusItems}
+          color={config.color}
+        />
 
         {recoverableBatchSet?.batches?.length > 0 && !result?._meta?.local_batch_assembled && (
           <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-950">
@@ -6645,8 +6942,14 @@ ANNOTATED IMAGE OUTPUT RULES:
         )}
 
         {result?._meta?.local_batch_assembled && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-950">
-            This displayed review is an interim local batch assembly, not a full Sarah cumulative synthesis. Use the archive below to view an older final review, or recover final synthesis when credits are available.
+          <div className="rounded-lg border border-primary/25 bg-primary/5 px-3 py-3 text-sm leading-relaxed text-foreground shadow-sm">
+            <p className="font-semibold">Batch-assembled review shown while final text catches up.</p>
+            <p className="mt-1">
+              Sarah finished the image batches and saved the completed findings. This view is assembled locally from those batches so the content is usable right away; the polished final text can take extra time to attach or refresh into the current view.
+            </p>
+            <p className="mt-1">
+              If a newer final version appears in the archive or after refresh, use that. This message does not mean credits ran out.
+            </p>
           </div>
         )}
 
@@ -6689,7 +6992,7 @@ ANNOTATED IMAGE OUTPUT RULES:
         )}
 
         {result && (
-          <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+          <div className="grid gap-1 text-xs leading-relaxed text-muted-foreground sm:flex sm:flex-wrap sm:items-center sm:gap-2 sm:text-[10px]">
             <span>{result?._meta?.last_generated_at ? `Generated ${formatGeneratedAt(result._meta.last_generated_at)}` : "Generated time unavailable"}</span>
             <span>Fresh images added this run: {result?._meta?.fresh_image_count ?? 0}</span>
             <span>Saved image views rechecked: {result?._meta?.reused_saved_image_count ?? 0}</span>
@@ -6929,7 +7232,26 @@ ANNOTATED IMAGE OUTPUT RULES:
           />
         )}
 
-        {result && (
+        {freshReviewPending && (
+          <div className="rounded-xl border border-primary/25 bg-card px-4 py-5 text-sm shadow-sm">
+            <div className="flex items-start gap-3">
+              <span className="mt-1 h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-foreground">Fresh {config.shortTitle} review is still loading.</p>
+                <p className="mt-1 leading-relaxed text-muted-foreground">
+                  Sarah is building the updated view now. The previous cached review is hidden so it does not look like the new result.
+                </p>
+                {jobStatus?.progress?.message && (
+                  <p className="mt-3 rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-xs leading-relaxed text-foreground">
+                    {jobStatus.progress.message}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {result && !freshReviewPending && (
           <TTSReader
             sessionId={config.ttsSessionId}
             title={config.title}
@@ -7198,7 +7520,7 @@ AI PROFILER PRIORITY RULE:
 - Hydration, THC/cannabis, fatigue, preparation, and environment are important modifiers, but they are seasoning, not the steak. The profile should still primarily be about the person's observable arousal physiology, stimulation response, anatomy/device interaction, motion evidence, climax mechanics, and recovery behavior.
 ${SESSION_DATE_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}
-${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
+${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${firstNameToneCue}
@@ -7582,7 +7904,7 @@ ${SESSION_CONTEXT_GROUNDING_RULE}
 ${SESSION_DATE_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}
 ${ANATOMICAL_REFERENCE_FOCUS_RULE}
-${PULSEPOINT_APP_OVERLAY_TELEMETRY_RULE}
+${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${PROFILE_IMAGE_LEFT_RIGHT_ORIENTATION_RULE}
 ${firstNameToneCue}

@@ -85,7 +85,7 @@ export function useChartZoom(dataMin, dataMax) {
     el.addEventListener("touchstart", stableTouchStart, { passive: true });
     el.addEventListener("touchmove", stableTouchMove, { passive: false });
     el.addEventListener("touchend", stableTouchEnd, { passive: true });
-  }, []); // eslint-disable-line
+  }, []);
 
   // Stable wrappers — these never change identity, so add/removeEventListener works
   function stableTouchStart(e) { touchStartHandler.current(e); }

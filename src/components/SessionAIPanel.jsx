@@ -614,7 +614,7 @@ export function SessionReviewVideoExportButton({
           ? "Review video ready. Reused matching narration."
           : "Review video ready. Narration was rendered for this export.",
       });
-    } catch {
+    } catch (error) {
       setStatus({ type: "error", message: error?.message || "Review video render failed." });
     }
   };
@@ -1058,7 +1058,7 @@ SESSION TYPE / INTENT GROUNDING - HIGH PRIORITY:
 `;
 
 const BODY_STATE_INTERPRETIVE_STYLE_V1 = `
-BODY-STATE INTERPRETIVE STYLE - RESTORE PULSEPOINT FEEL:
+BODY-STATE INTERPRETIVE STYLE - SARAH PHYSIOLOGY VOICE:
 - Do not let the analysis become only "this happened, then this happened." Use the timeline as evidence for what the body was doing in each phase.
 - When HR, event notes, subjective sensations, movement evidence, or stimulation changes line up, translate them into body-state language: autonomic loading, sensory focus, pelvic/urethral/prostatic awareness when supported, muscular tension or settling when supported, preparation, plateauing, thresholding, recovery, or exploratory mapping.
 - Prefer phrasing like "at this point your body appears to be..." or "this looks like..." when evidence supports a visible/physiological state.

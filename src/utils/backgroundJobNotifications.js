@@ -223,8 +223,8 @@ export async function notifyBackgroundJobFinished(job, { route, onOpen, force = 
   const message = buildSafeJobNotification(job);
   const options = {
     body: message.body,
-    icon: "/icons/pulsepoint-192.png",
-    badge: "/icons/pulsepoint-192.png",
+    icon: "/icons/sarah-192.png",
+    badge: "/icons/sarah-192.png",
     tag: `pulsepoint-job-${job.id}-${job.status}`,
     requireInteraction: false,
     data: { route: route || "/" },
@@ -275,8 +275,8 @@ export async function sendBackgroundTestNotification({ route = "/settings", onOp
   if (!isNotificationSupported() || getNotificationPermission() !== "granted") return false;
   const options = {
     body: message.body,
-    icon: "/icons/pulsepoint-192.png",
-    badge: "/icons/pulsepoint-192.png",
+    icon: "/icons/sarah-192.png",
+    badge: "/icons/sarah-192.png",
     tag: "pulsepoint-test-notification",
     renotify: true,
     data: { route },

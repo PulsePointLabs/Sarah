@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import {
   ComposedChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  CartesianGrid, ReferenceLine, ReferenceArea, Scatter, ScatterChart,
+  CartesianGrid, ReferenceLine, ReferenceArea,
 } from "recharts";
 import { Button } from "@/components/ui/button";
 

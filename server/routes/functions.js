@@ -15,6 +15,26 @@ function b64ToBuffer(b64) {
   return Buffer.from(clean, 'base64');
 }
 
+function normalizeAudioMimeType(value = 'audio/webm') {
+  const raw = String(value || 'audio/webm').toLowerCase();
+  if (raw.includes('ogg') || raw.includes('oga')) return { mimeType: 'audio/ogg', extension: 'ogg' };
+  if (raw.includes('mp4') || raw.includes('m4a')) return { mimeType: 'audio/mp4', extension: 'm4a' };
+  if (raw.includes('mpeg') || raw.includes('mp3')) return { mimeType: 'audio/mpeg', extension: 'mp3' };
+  if (raw.includes('wav')) return { mimeType: 'audio/wav', extension: 'wav' };
+  if (raw.includes('webm')) return { mimeType: 'audio/webm', extension: 'webm' };
+  return { mimeType: 'audio/webm', extension: 'webm' };
+}
+
+async function readOpenAIError(response) {
+  const raw = await response.text();
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed?.error?.message || parsed?.message || raw;
+  } catch {
+    return raw;
+  }
+}
+
 function setTtsRenderProgress(jobId, patch) {
   if (!jobId) return;
   const previous = ttsRenderJobs.get(jobId) || {};
@@ -171,9 +191,10 @@ functionsRouter.post('/whisperSTT', async (req, res) => {
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY' });
     const { audio_base64, mime_type = 'audio/webm', prompt } = req.body || {};
     if (!audio_base64) return res.status(400).json({ error: 'No audio provided' });
+    const { mimeType, extension } = normalizeAudioMimeType(mime_type);
     const form = new FormData();
-    const blob = new Blob([b64ToBuffer(audio_base64)], { type: mime_type });
-    form.append('file', blob, 'audio.webm');
+    const blob = new Blob([b64ToBuffer(audio_base64)], { type: mimeType });
+    form.append('file', blob, `audio.${extension}`);
     form.append('model', 'whisper-1');
     form.append('language', 'en');
     if (prompt) form.append('prompt', prompt);
@@ -182,11 +203,23 @@ functionsRouter.post('/whisperSTT', async (req, res) => {
       headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
       body: form,
     });
-    if (!response.ok) return res.status(response.status).json({ error: await response.text() });
+    if (!response.ok) {
+      const message = await readOpenAIError(response);
+      return res.status(response.status).json({
+        error: message,
+        provider: 'openai',
+        endpoint: 'audio/transcriptions',
+      });
+    }
     const data = await response.json();
     res.json({ text: data.text });
   } catch (error) {
-    res.status(500).json({ error: error.message || String(error) });
+    const message = error.message || String(error);
+    res.status(500).json({
+      error: /Invalid URL\s+\(POST\s+\/v1\/audio\/transcriptions\)/i.test(message)
+        ? 'Whisper reached the transcription layer, but the OpenAI client received a relative transcription URL. Restart the local API so Sarah uses the direct OpenAI Whisper route.'
+        : message,
+    });
   }
 });
 

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ResponsiveContainer, BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend, ComposedChart } from "recharts";
+import { ResponsiveContainer, Bar, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend, ComposedChart } from "recharts";
 import { Zap, TrendingUp, TrendingDown } from "lucide-react";
 import { EVENT_CATEGORIES } from "@/components/session-form/EventTimelineSection";
 

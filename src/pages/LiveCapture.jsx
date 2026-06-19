@@ -302,6 +302,64 @@ function readHowlChannelIntensity(telemetry, channel) {
   return readNumber(telemetry?.intensity, telemetry?.power_level);
 }
 
+function readHowlChannelText(telemetry, channel, field) {
+  const normalized = String(channel || "").toLowerCase();
+  const channelState = telemetry?.channel_state || telemetry?.channelState || telemetry?.channels || null;
+  if (channelState && typeof channelState === "object") {
+    const direct = channelState[normalized] || channelState[normalized.toUpperCase()];
+    const text = direct?.[field] == null ? "" : String(direct[field]).trim();
+    if (text) return text;
+  }
+  const directText = telemetry?.[field] == null ? "" : String(telemetry[field]).trim();
+  return directText || "";
+}
+
+function latestHowlCommandState(commands = []) {
+  return (Array.isArray(commands) ? commands : []).find((command) => command?.dispatch?.howl) || null;
+}
+
+function buildHowlWavePoints(type = "", amplitude = 50) {
+  const normalized = String(type || "").toLowerCase();
+  const amp = Math.max(8, Math.min(44, Number(amplitude) || 20));
+  const mid = 50;
+  const points = [];
+  for (let i = 0; i <= 48; i += 1) {
+    const x = (i / 48) * 100;
+    let y;
+    if (/square|pulse|step/.test(normalized)) {
+      y = i % 8 < 4 ? mid - amp : mid + amp;
+    } else if (/triangle|saw|ramp/.test(normalized)) {
+      const phase = (i % 12) / 12;
+      y = mid + (phase < 0.5 ? (phase * 4 - 1) : (3 - phase * 4)) * amp;
+    } else {
+      y = mid + Math.sin((i / 48) * Math.PI * 6) * amp;
+    }
+    points.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+  }
+  return points.join(" ");
+}
+
+function HowlWaveformPreview({ label = "", intensity = 0, live = false }) {
+  const amplitude = Math.max(0, Math.min(100, Number(intensity) || 0)) / 100 * 44;
+  const points = buildHowlWavePoints(label, amplitude);
+  return (
+    <div className="rounded-lg border border-border bg-background/70 p-2">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="truncate text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {label || "Waveform preview"}
+        </span>
+        <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${live ? "bg-emerald-500/10 text-emerald-400" : "bg-muted text-muted-foreground"}`}>
+          {live ? "live" : "preview"}
+        </span>
+      </div>
+      <svg viewBox="0 0 100 100" className="h-16 w-full overflow-visible" role="img" aria-label="Howl waveform preview">
+        <line x1="0" y1="50" x2="100" y2="50" stroke="hsl(var(--border))" strokeWidth="1" strokeDasharray="4 4" />
+        <polyline points={points} fill="none" stroke="hsl(var(--primary))" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </div>
+  );
+}
+
 function previewHowlControlUrl(value) {
   const text = String(value || "").trim();
   if (!text) return "";
@@ -1136,6 +1194,7 @@ export default function LiveCapture() {
   const [howlSettingsDirty, setHowlSettingsDirty] = useState(false);
   const [howlConnectionTest, setHowlConnectionTest] = useState({ status: "idle", message: "" });
   const [howlAdvancedOpen, setHowlAdvancedOpen] = useState(false);
+  const [howlQuickModalOpen, setHowlQuickModalOpen] = useState(false);
   const latestHrRef = useRef(null);
   const latestEmgRef = useRef(null);
   const perinealDetectorRef = useRef(createPerinealEmgDetector());
@@ -1947,7 +2006,7 @@ export default function LiveCapture() {
     if (settings.source === "heartrateonstream" || settings.source === "direct_h10" || (settings.source === "pulsoid" && settings.pulsoidToken)) {
       applyHrSourceSettings(settings);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   useEffect(() => () => {
@@ -2190,6 +2249,42 @@ export default function LiveCapture() {
   const howlConnectionSucceeded = howlConnectionTest.status === "ok";
   const howlManualControlsUnlocked = howlControlEnabled && howlConnectionSucceeded;
   const selectedHowlActivity = HOWL_ACTIVITY_MODES.find((mode) => mode.name === howlCommandForm.mode) || HOWL_ACTIVITY_MODES.find((mode) => mode.name === "MILKMASTER");
+  const latestHowlStateCommand = latestHowlCommandState(howlCommandHistory);
+  const howlChannelAIntensity = readNumber(
+    readHowlChannelIntensity(howlTelemetry, "a"),
+    howlTelemetry?.raw?.options?.power_a,
+    latestHowlStateCommand?.dispatch?.howl?.power_a,
+    howlCommandForm.channel === "a" ? howlCommandForm.intensity : null,
+  );
+  const howlChannelBIntensity = readNumber(
+    readHowlChannelIntensity(howlTelemetry, "b"),
+    howlTelemetry?.raw?.options?.power_b,
+    latestHowlStateCommand?.dispatch?.howl?.power_b,
+    howlCommandForm.channel === "b" ? howlCommandForm.intensity : null,
+  );
+  const howlSelectedChannelIntensity = readNumber(
+    howlCommandForm.channel === "b" ? howlChannelBIntensity : howlChannelAIntensity,
+    howlCommandForm.intensity,
+    0,
+  ) ?? 0;
+  const howlWaveformLabel = readHowlChannelText(howlTelemetry, howlCommandForm.channel, "waveform")
+    || readHowlChannelText(howlTelemetry, howlCommandForm.channel, "mode")
+    || selectedHowlActivity?.displayName
+    || howlCommandForm.mode
+    || "";
+  const howlTelemetryHasWaveform = Boolean(
+    readHowlChannelText(howlTelemetry, howlCommandForm.channel, "waveform")
+    || readHowlChannelText(howlTelemetry, howlCommandForm.channel, "mode")
+    || howlTelemetry?.waveform
+    || howlTelemetry?.mode,
+  );
+  const howlDisplayStatus = howlSarahAutoEnabled
+    ? howlAutoStatus
+    : howlManualControlsUnlocked
+      ? "Manual Howl control ready."
+      : howlConnectionSucceeded
+        ? "Connection tested; enable manual control to send commands."
+        : "Set up and test Howl before sending commands.";
   const howlControlModeLabel = howlControlEnabled
     ? howlControlForm.dispatchMode === "direct_http"
       ? "Direct HTTP"
@@ -3321,6 +3416,134 @@ export default function LiveCapture() {
     </div>
   );
 
+  const howlQuickControlPanel = (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
+        <div className="rounded-xl border border-border bg-muted/20 p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
+                <Zap className="h-4 w-4" /> Howl Live Control
+              </p>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {howlLive ? howlModeSummary || "Howl telemetry live" : "No recent Howl telemetry"}
+              </p>
+            </div>
+            <span className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wider ${
+              howlSarahAutoEnabled ? "bg-primary/15 text-primary" : howlManualControlsUnlocked ? "bg-emerald-500/10 text-emerald-400" : "bg-muted text-muted-foreground"
+            }`}>
+              {howlSarahAutoEnabled ? "Sarah auto" : howlManualControlsUnlocked ? "manual" : "locked"}
+            </span>
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{howlDisplayStatus}</p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <CompactStat label="Channel A" value={fmtNumber(howlChannelAIntensity, 0)} helper="power" level={howlChannelAIntensity} />
+            <CompactStat label="Channel B" value={fmtNumber(howlChannelBIntensity, 0)} helper="power" level={howlChannelBIntensity} />
+          </div>
+        </div>
+        <div className="rounded-xl border border-border bg-muted/20 p-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Ceiling</p>
+          <p className="mt-1 font-mono text-4xl font-bold text-foreground">{fmtNumber(howlControlCeiling, 0)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">floor {fmtNumber(howlControlFloor, 0)} · selected {String(howlCommandForm.channel || "a").toUpperCase()}</p>
+        </div>
+      </div>
+
+      <HowlWaveformPreview
+        label={howlWaveformLabel}
+        intensity={howlSelectedChannelIntensity}
+        live={howlLive && howlTelemetryHasWaveform}
+      />
+
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <label className="space-y-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Howl activity</span>
+          <select
+            className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+            value={selectedHowlActivity?.name || ""}
+            onChange={(event) => setHowlCommandForm((prev) => ({ ...prev, mode: event.target.value }))}
+          >
+            {HOWL_ACTIVITY_MODES.map((mode) => (
+              <option key={mode.name} value={mode.name}>{mode.displayName}</option>
+            ))}
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Channel</span>
+          <select
+            className="h-10 rounded-lg border border-border bg-background px-3 text-sm"
+            value={howlCommandForm.channel || "a"}
+            onChange={(event) => setHowlCommandForm((prev) => ({ ...prev, channel: event.target.value }))}
+          >
+            <option value="a">A</option>
+            <option value="b">B</option>
+            <option value="all">All</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <button
+          type="button"
+          onClick={() => sendHowlControlCommand("load_activity", { activityName: selectedHowlActivity?.name, activityDisplayName: selectedHowlActivity?.displayName, play: false })}
+          disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy) || !selectedHowlActivity}
+          className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          Load activity
+        </button>
+        <button
+          type="button"
+          onClick={() => sendHowlControlCommand("increment_power", { channel: howlCommandForm.channel || "a", step: 1 })}
+          disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy)}
+          className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          Power up
+        </button>
+        <button
+          type="button"
+          onClick={() => sendHowlControlCommand("decrement_power", { channel: howlCommandForm.channel || "a", step: 1 })}
+          disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy)}
+          className="rounded-lg bg-primary/10 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          Power down
+        </button>
+        <button
+          type="button"
+          onClick={sendHowlEmergencyStop}
+          disabled={!howlControlEnabled || Boolean(howlControlBusy)}
+          className="rounded-lg bg-destructive px-3 py-2 text-xs font-semibold text-destructive-foreground hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          Mute / stop
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-2 rounded-xl border border-primary/20 bg-primary/[0.05] p-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-primary">Sarah HR/HRV Auto</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            When armed, Sarah uses live phase watch plus HR/HRV quality to step intensity within the saved floor/ceiling and cooldown.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => saveHowlControlSettings({ sarahAutoEnabled: !howlSarahAutoEnabled })}
+          disabled={!howlManualControlsUnlocked || howlControlBusy === "settings"}
+          className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+            howlSarahAutoEnabled ? "bg-primary/15 text-primary hover:bg-primary/25" : "bg-primary text-primary-foreground hover:bg-primary/90"
+          }`}
+        >
+          {howlSarahAutoEnabled ? "Disarm auto" : "Arm auto"}
+        </button>
+      </div>
+
+      {howlControlStatus && (
+        <div className="rounded-lg border border-primary/25 bg-primary/10 px-3 py-2 text-xs text-primary">{howlControlStatus}</div>
+      )}
+      {howlError && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">{howlError}</div>
+      )}
+    </div>
+  );
+
   const mediaPanel = (captureMode === "media" || focusView) ? (
     <div className={focusView ? "flex h-full flex-col bg-background p-3" : "rounded-xl border border-border bg-card p-3 md:p-4"}>
       <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -3358,6 +3581,14 @@ export default function LiveCapture() {
             />
             Beat beep
           </label>
+          <button
+            type="button"
+            onClick={() => setHowlQuickModalOpen(true)}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary/35 bg-primary/10 px-3 py-2 text-sm font-semibold text-foreground hover:bg-primary/15"
+          >
+            <Zap className="h-4 w-4 text-primary" />
+            Howl {fmtNumber(howlSelectedChannelIntensity, 0)}
+          </button>
           <button
             type="button"
             onClick={() => setFocusView(!focusView)}
@@ -3464,6 +3695,27 @@ export default function LiveCapture() {
               <p className="truncate font-semibold">{mediaVideo.name}</p>
               {mediaVideo.converted && <p className="mt-0.5 text-[10px] text-white/75">WMV converted to MP4 preview</p>}
             </div>
+          )}
+          {!mediaFullscreen && (
+            <button
+              type="button"
+              onClick={() => setHowlQuickModalOpen(true)}
+              className="absolute right-3 top-3 max-w-[min(22rem,calc(100%-1.5rem))] rounded-lg border border-white/15 bg-black/70 px-3 py-2 text-left text-white shadow-xl backdrop-blur-sm transition-colors hover:bg-black/80"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/75">
+                  <Zap className="h-3.5 w-3.5 text-primary" /> Howl
+                </span>
+                <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${howlSarahAutoEnabled ? "bg-primary/25 text-primary" : "bg-white/10 text-white/75"}`}>
+                  {howlSarahAutoEnabled ? "auto" : "manual"}
+                </span>
+              </div>
+              <div className="mt-1 flex items-end gap-3">
+                <span className="font-mono text-3xl font-bold leading-none">{fmtNumber(howlSelectedChannelIntensity, 0)}</span>
+                <span className="pb-1 text-xs text-white/75">A {fmtNumber(howlChannelAIntensity, 0)} · B {fmtNumber(howlChannelBIntensity, 0)}</span>
+              </div>
+              <p className="mt-1 line-clamp-1 text-[10px] text-white/70">{howlWaveformLabel || howlDisplayStatus}</p>
+            </button>
           )}
         </div>
 
@@ -3603,6 +3855,38 @@ export default function LiveCapture() {
                 Reconnect H10
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {howlQuickModalOpen && (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/45 p-4" onMouseDown={() => setHowlQuickModalOpen(false)}>
+          <div
+            className="max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-border bg-card p-4 shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="howl-quick-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <p id="howl-quick-title" className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-primary">
+                  <Zap className="h-4 w-4" /> Howl Quick Access
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Live e-stim state, bounded manual controls, and Sarah auto status.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHowlQuickModalOpen(false)}
+                className="rounded-lg bg-muted p-2 text-muted-foreground hover:text-foreground"
+                aria-label="Close Howl quick access"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            {howlQuickControlPanel}
           </div>
         </div>
       )}

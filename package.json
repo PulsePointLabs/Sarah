@@ -1,5 +1,5 @@
 {
-  "name": "pulsepoint-standalone",
+  "name": "sarah-standalone",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -30,7 +30,7 @@
     "capture:emg:single": "py tools/capture/emg/emg_single.py"
   },
   "build": {
-    "appId": "com.benmcmahan.sarah",
+    "appId": "com.pulsepointlabs.sarah",
     "productName": "Sarah",
     "asar": false,
     "npmRebuild": false,
@@ -62,7 +62,7 @@
         "nsis",
         "portable"
       ],
-      "icon": "public/icons/pulsepoint-512.png",
+      "icon": "public/icons/sarah-512.png",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "nsis": {

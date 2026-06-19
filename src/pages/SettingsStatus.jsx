@@ -5,6 +5,7 @@ import {
   BellRing,
   Brain,
   CircleDollarSign,
+  Image,
   Palette,
   Sparkles,
   Type,
@@ -19,9 +20,16 @@ import {
 } from "lucide-react";
 import TTSSettingsPanel from "@/components/TTSSettingsPanel";
 import { Textarea } from "@/components/ui/textarea";
+import { SarahLogoMark } from "@/components/SarahBrand";
 import { cancelBackgroundJob, clearBackgroundJobs, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
 import { getProviderStatus } from "@/lib/providerStatus";
+import {
+  getSarahImageOption,
+  readSarahBrandSettings,
+  SARAH_IMAGE_OPTIONS,
+  saveSarahBrandSettings,
+} from "@/lib/sarahBrand";
 import {
   DEFAULT_SARAH_PERSONALITY,
   readSarahPersonalitySettings,
@@ -311,6 +319,7 @@ export default function SettingsStatus() {
   const [pwaCleanupBusy, setPwaCleanupBusy] = useState(false);
   const [pwaCleanupMessage, setPwaCleanupMessage] = useState("");
   const [uiPrefs, setUiPrefs] = useState(readUiPreferences);
+  const [sarahBrand, setSarahBrand] = useState(readSarahBrandSettings);
   const [sarahPersonality, setSarahPersonality] = useState(readSarahPersonalitySettings);
   const [sarahPersonalityDirty, setSarahPersonalityDirty] = useState(false);
   const [sarahPersonalityMessage, setSarahPersonalityMessage] = useState("");
@@ -405,6 +414,10 @@ export default function SettingsStatus() {
     }
   };
 
+  const updateSarahBrand = (imageId) => {
+    setSarahBrand(saveSarahBrandSettings({ imageId }));
+  };
+
   const updateSarahPersonality = (patch) => {
     setSarahPersonality((previous) => ({ ...previous, ...patch }));
     setSarahPersonalityDirty(true);
@@ -428,8 +441,8 @@ export default function SettingsStatus() {
     setPwaCleanupBusy(true);
     setPwaCleanupMessage("");
     try {
-      if (window.pulsepointCleanupPwaShell) {
-        await window.pulsepointCleanupPwaShell();
+      if (window.sarahCleanupPwaShell || window.pulsepointCleanupPwaShell) {
+        await (window.sarahCleanupPwaShell || window.pulsepointCleanupPwaShell)();
       } else {
         const tasks = [];
         if ("serviceWorker" in navigator) {
@@ -639,6 +652,57 @@ export default function SettingsStatus() {
       </section>
 
       <TTSSettingsPanel />
+
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-primary">
+              <Image className="h-4 w-4" />
+              <h2 className="text-sm font-bold uppercase tracking-wider">Sarah Identity</h2>
+            </div>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+              Choose the portrait Sarah uses on the splash screen, app shell, and AI chat surfaces.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 rounded-full border border-border bg-muted/20 px-3 py-1.5 text-xs font-semibold text-muted-foreground">
+            <SarahLogoMark className="h-6 w-6" />
+            New Sarah mark
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {SARAH_IMAGE_OPTIONS.map((option) => {
+            const active = getSarahImageOption(sarahBrand.imageId).id === option.id;
+            return (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => updateSarahBrand(option.id)}
+                className={`overflow-hidden rounded-xl border text-left transition-all ${active ? "border-primary bg-primary/10 shadow-sm shadow-primary/10" : "border-border bg-muted/15 hover:border-primary/50"}`}
+              >
+                <div className="aspect-[16/9] overflow-hidden bg-muted">
+                  <img
+                    src={option.src}
+                    alt={option.label}
+                    className="h-full w-full object-cover"
+                    style={{ objectPosition: option.position }}
+                    draggable="false"
+                  />
+                </div>
+                <div className="flex items-start justify-between gap-3 p-3">
+                  <div>
+                    <p className="text-sm font-bold text-foreground">{option.label}</p>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{option.helper}</p>
+                  </div>
+                  <span className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase ${active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
+                    {active ? "Selected" : "Choose"}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
 
       <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">

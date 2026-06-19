@@ -129,10 +129,14 @@ export const base44 = {
       InvokeLLM: async (payload) => {
         const { startBackgroundJob, waitForBackgroundJob } = await import('@/lib/backgroundJobs');
         const label = payload?.label || 'AI analysis';
+        const source = payload?.source || 'base44_invoke_llm';
         const job = await startBackgroundJob('ai_invoke', payload || {}, {
           title: label,
           label,
-          source: payload?.source || 'base44_invoke_llm',
+          source,
+          foreground: Boolean(payload?.foreground || payload?.interactive),
+          quietInTray: Boolean(payload?.quietInTray || /^ai_chat_/i.test(source) || payload?.foreground || payload?.interactive),
+          priority: payload?.priority,
         });
         const completed = await waitForBackgroundJob(job.id, { intervalMs: 1200 });
         return completed.result;

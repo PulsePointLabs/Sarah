@@ -4,7 +4,6 @@ import {
   ResponsiveContainer, ReferenceLine, Cell,
 } from "recharts";
 import { Activity } from "lucide-react";
-import { Link } from "react-router-dom";
 import moment from "moment";
 
 const VIEWS = [

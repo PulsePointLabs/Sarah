@@ -134,14 +134,14 @@ class HeartRateRelay {
     this.appWss = new this.WebSocketServer({ port: liveCaptureConfig.hrRelayPort });
     this.appWss.on('connection', (socket) => this.handleAppConnection(socket));
     this.appWss.on('listening', () => {
-      console.log(`PulsePoint HR relay running on ws://127.0.0.1:${liveCaptureConfig.hrRelayPort}`);
+      console.log(`Sarah HR relay running on ws://127.0.0.1:${liveCaptureConfig.hrRelayPort}`);
       this.connectObs();
     });
     this.appWss.on('error', (error) => {
       const detail = error?.code === 'EADDRINUSE'
-        ? `Port ${liveCaptureConfig.hrRelayPort} is already in use; PulsePoint will keep using the available HR relay.`
+        ? `Port ${liveCaptureConfig.hrRelayPort} is already in use; Sarah will keep using the available HR relay.`
         : error.message || String(error);
-      console.warn(`PulsePoint HR relay not started: ${detail}`);
+      console.warn(`Sarah HR relay not started: ${detail}`);
     });
     return this;
   }
@@ -226,7 +226,7 @@ class HeartRateRelay {
       reason,
     };
     this.obsOutputPath = null;
-    console.log(`PulsePoint HR relay started recording CSV: ${filename} (${reason})`);
+    console.log(`Sarah HR relay started recording CSV: ${filename} (${reason})`);
     this.broadcast({
       type: 'recording_info',
       recording: {
@@ -248,7 +248,7 @@ class HeartRateRelay {
       endedAt: new Date().toISOString(),
       obsOutputPath: this.obsOutputPath,
     }, null, 2), 'utf8');
-    console.log(`PulsePoint HR relay finalized recording: ${this.currentRecording.filename}`);
+    console.log(`Sarah HR relay finalized recording: ${this.currentRecording.filename}`);
     this.broadcast({
       type: 'recording_finalized',
       recording: {
@@ -300,7 +300,7 @@ class HeartRateRelay {
     if (!shouldLog) return;
     this.obsLastRetryLogAt = now;
     const suffix = this.obsRetryCount > 1 ? `attempt ${this.obsRetryCount}` : 'standing by';
-    console.warn(`PulsePoint HR relay OBS unavailable (${reason}); ${suffix}. Retrying quietly...`);
+    console.warn(`Sarah HR relay OBS unavailable (${reason}); ${suffix}. Retrying quietly...`);
   }
 
   scheduleObsReconnect(reason = 'disconnected') {
@@ -319,7 +319,7 @@ class HeartRateRelay {
       this.obsConnected = true;
       this.obsError = null;
       const retryText = this.obsRetryCount ? ` after ${this.obsRetryCount} retry attempt${this.obsRetryCount === 1 ? '' : 's'}` : '';
-      console.log(`PulsePoint HR relay connected to OBS at ${liveCaptureConfig.hrObsWsUrl}${retryText}`);
+      console.log(`Sarah HR relay connected to OBS at ${liveCaptureConfig.hrObsWsUrl}${retryText}`);
       this.obsRetryCount = 0;
       this.obsLastRetryLogAt = 0;
       this.obsLastErrorMessage = null;
@@ -366,7 +366,7 @@ class HeartRateRelay {
     if (message.op === 2) {
       this.obsIdentified = true;
       this.obsError = null;
-      console.log('PulsePoint HR relay identified with OBS');
+      console.log('Sarah HR relay identified with OBS');
       this.broadcastRelayStatus();
       try {
         const status = await this.obsRequest('GetRecordStatus');
@@ -375,7 +375,7 @@ class HeartRateRelay {
           this.createNewRecording('obs_already_recording');
         }
       } catch (error) {
-        console.warn(`PulsePoint HR relay could not read initial OBS recording state: ${error.message || error}`);
+        console.warn(`Sarah HR relay could not read initial OBS recording state: ${error.message || error}`);
       }
       return;
     }
@@ -443,7 +443,7 @@ class HeartRateRelay {
   }
 
   async handleAppConnection(socket) {
-    console.log('PulsePoint HR relay app client connected');
+    console.log('Sarah HR relay app client connected');
     socket.send(JSON.stringify({ type: 'config', config: this.latestConfig }));
     socket.send(JSON.stringify({ type: 'relay_status', relay: this.relayStatus() }));
     socket.send(JSON.stringify({
@@ -462,7 +462,7 @@ class HeartRateRelay {
       try {
         message = JSON.parse(raw.toString());
       } catch (error) {
-        console.warn(`PulsePoint HR relay ignored bad client JSON: ${error.message}`);
+        console.warn(`Sarah HR relay ignored bad client JSON: ${error.message}`);
         return;
       }
       if (message.type === 'config' && message.config) {
@@ -501,13 +501,13 @@ class HeartRateRelay {
         }
       }
     });
-    socket.on('close', () => console.log('PulsePoint HR relay app client disconnected'));
+    socket.on('close', () => console.log('Sarah HR relay app client disconnected'));
   }
 }
 
 export async function startHeartRateRelay() {
   if (!liveCaptureConfig.hrRelayEnabled) {
-    console.log('PulsePoint embedded HR relay disabled by HR_CAPTURE_RELAY_ENABLED=false');
+    console.log('Sarah embedded HR relay disabled by HR_CAPTURE_RELAY_ENABLED=false');
     return null;
   }
   try {
@@ -516,7 +516,7 @@ export async function startHeartRateRelay() {
     const WebSocketServer = ws.WebSocketServer || WebSocket.Server;
     return new HeartRateRelay({ WebSocket, WebSocketServer }).start();
   } catch (error) {
-    console.warn(`PulsePoint embedded HR relay unavailable: ${error.message || error}`);
+    console.warn(`Sarah embedded HR relay unavailable: ${error.message || error}`);
     console.warn('Install root dependencies or keep the standalone heart-rate relay running.');
     return null;
   }
