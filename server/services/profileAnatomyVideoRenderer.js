@@ -85,9 +85,34 @@ const FINE_STRUCTURE_ALIASES = [
   { key: 'feet_toes', aliases: ['foot', 'feet', 'toe', 'toes', 'ankle', 'heel'] },
   { key: 'chest', aliases: ['chest', 'thorax', 'pectoral', 'nipple', 'sternum'] },
   { key: 'face_head', aliases: ['head', 'face', 'scalp', 'beard', 'glasses'] },
+  { key: 'ear', aliases: ['ear', 'ears', 'auricle', 'pinna'] },
+  { key: 'eye', aliases: ['eye', 'eyes', 'eyelid', 'eyelids'] },
+  { key: 'mouth', aliases: ['mouth', 'lip', 'lips', 'oral'] },
 ];
 
 const DEVICE_STRUCTURE_KEYS = new Set(['catheter_device']);
+const STRICT_FINE_STRUCTURE_MATCH_KEYS = new Set([
+  'meatus',
+  'glans',
+  'foreskin',
+  'shaft',
+  'scrotum',
+  'perineum',
+  'anal_perianal',
+  'pubic_groin',
+  'catheter_device',
+  'ear',
+  'eye',
+  'mouth',
+]);
+const DEVICE_AUTHORIZED_SECTION_KEYS = new Set([
+  'device_contact_findings',
+  'tissue_health_safety_observations',
+]);
+const DEVICE_AUTHORIZED_REGION_KEYS = new Set([
+  'genitals_perineum',
+  'pelvis_pubic_region',
+]);
 
 const SECTION_KEY_REGION_MAP = new Map([
   ['executive_summary', 'overview'],
@@ -340,6 +365,47 @@ function fineStructureKeysForImage(image = {}) {
     image.regionLabels,
     image.source,
   ].filter(Boolean).flat().join(' '));
+}
+
+function isDeviceHeavyImage(image = {}) {
+  const fineKeys = fineStructureKeysForImage(image);
+  if ([...fineKeys].some((key) => DEVICE_STRUCTURE_KEYS.has(key))) return true;
+  const haystack = normalizeText([
+    image.label,
+    image.section,
+    image.coverage,
+    image.regions,
+    image.regionLabels,
+    image.source,
+  ].filter(Boolean).flat().join(' '));
+  return /\b(foley|catheter|drainage\s*bag|leg\s*bag|urine|tubing|statlock|device|procedure)\b/i.test(haystack);
+}
+
+function sectionRequestsDevice(meta = {}, paragraphText = '') {
+  const sectionKey = normalizeText(meta.section_key || meta.sectionKey || meta.section?.key || '').replace(/\s+/g, '_');
+  if (DEVICE_AUTHORIZED_SECTION_KEYS.has(sectionKey)) return true;
+  const requested = collectFineStructureKeys([
+    meta.section_label,
+    meta.sectionLabel,
+    meta.displayLabel,
+    meta.label,
+    paragraphText,
+  ].filter(Boolean).join(' '));
+  return [...requested].some((key) => DEVICE_STRUCTURE_KEYS.has(key));
+}
+
+function requestedStrictFineStructureKeys(meta = {}, paragraphText = '') {
+  const requested = collectFineStructureKeys([
+    meta.section_key,
+    meta.sectionKey,
+    meta.section?.key,
+    meta.section_label,
+    meta.sectionLabel,
+    meta.displayLabel,
+    meta.label,
+    paragraphText,
+  ].filter(Boolean).join(' '));
+  return new Set([...requested].filter((key) => STRICT_FINE_STRUCTURE_MATCH_KEYS.has(key)));
 }
 
 function fineStructureMatchScore(image = {}, paragraphText = '', meta = {}) {
@@ -651,6 +717,198 @@ function isImageAllowedForRegion(image, targetKey, reviewScope = '') {
   return true;
 }
 
+function isImageAllowedForManifestSection(image, targetKey, reviewScope = '', meta = {}, paragraphText = '') {
+  if (!isImageAllowedForRegion(image, targetKey, reviewScope)) return false;
+  const requestedFineKeys = requestedStrictFineStructureKeys(meta, paragraphText);
+  if (requestedFineKeys.size) {
+    const imageFineKeys = fineStructureKeysForImage(image);
+    if (![...requestedFineKeys].some((key) => imageFineKeys.has(key))) return false;
+  }
+  if (!isDeviceHeavyImage(image)) return true;
+  if (sectionRequestsDevice(meta, paragraphText) && DEVICE_AUTHORIZED_REGION_KEYS.has(targetKey)) return true;
+  return false;
+}
+
+function stableSectionId(value = '', index = 0) {
+  const cleaned = normalizeText(value || `section-${index + 1}`).replace(/\s+/g, '_').replace(/[^a-z0-9_]+/g, '');
+  return cleaned || `section_${index + 1}`;
+}
+
+function normalizeParagraphItems(paragraphs = [], paragraphMeta = []) {
+  return (Array.isArray(paragraphs) ? paragraphs : [])
+    .map((text, index) => ({
+      index,
+      text: String(text || '').trim(),
+      meta: paragraphMeta[index] || {},
+    }))
+    .filter((item) => item.text);
+}
+
+function groupParagraphsIntoManifestSections(paragraphs = [], paragraphMeta = [], reviewScope = '') {
+  const items = normalizeParagraphItems(paragraphs, paragraphMeta);
+  if (!items.length) {
+    return [{
+      section_id: 'profile_anatomy_overview',
+      order: 0,
+      section_key: 'overview',
+      section_title: 'Profile Anatomy',
+      target_region: 'overview',
+      resolved_from: 'missing_paragraph_metadata',
+      paragraph_indices: [],
+      narration_text: 'Profile Anatomy',
+      hold_last_frame_allowed: false,
+      placeholder_behavior: 'section_card',
+    }];
+  }
+
+  const sections = [];
+  let current = null;
+  const pushCurrent = () => {
+    if (!current) return;
+    current.narration_text = current.paragraphs.map((item) => item.text).join('\n\n').trim();
+    current.paragraph_indices = current.paragraphs.map((item) => item.index);
+    delete current.paragraphs;
+    sections.push(current);
+    current = null;
+  };
+
+  for (const item of items) {
+    const explicitKey = normalizeText(item.meta.section_key || item.meta.sectionKey || item.meta.section?.key || '').replace(/\s+/g, '_');
+    const isBoundary = item.meta.type === 'title' || item.meta.type === 'section-title' || !current || (explicitKey && explicitKey !== current.section_key && item.meta.type !== 'visual-callout');
+    if (isBoundary) {
+      pushCurrent();
+      const resolution = sectionRegionResolutionFromMeta(item.meta, item.text, reviewScope);
+      const sectionKey = explicitKey || resolution.key || `section_${sections.length + 1}`;
+      const title = displayLabelForMeta(item.meta, item.text);
+      current = {
+        section_id: `${String(sections.length + 1).padStart(3, '0')}_${stableSectionId(sectionKey || title, sections.length)}`,
+        order: sections.length,
+        section_key: sectionKey,
+        section_title: title,
+        target_region: resolution.key || 'overview',
+        resolved_from: resolution.source,
+        paragraphs: [],
+        allowed_anatomy_labels: [...(STRICT_ALLOWED_IMAGE_REGIONS.get(resolution.key) || new Set())],
+        prohibited_anatomy_labels: [...(STRICT_FORBIDDEN_IMAGE_REGIONS.get(resolution.key) || new Set())],
+        hold_last_frame_allowed: false,
+        placeholder_behavior: 'section_card',
+      };
+    }
+    current.paragraphs.push(item);
+  }
+  pushCurrent();
+  return sections;
+}
+
+function assignmentMetadataForImage(image = {}, score = 0, reason = '') {
+  const anatomyLabels = [...regionKeysForImage(image)];
+  const fineLabels = [...fineStructureKeysForImage(image)];
+  return {
+    evidence_id: image.id || null,
+    source_collection: image.source || 'profile_review',
+    source_ref: image.url || null,
+    source_path_or_frame: image.url || null,
+    anatomy_labels: anatomyLabels,
+    fine_structure_labels: fineLabels,
+    assignment_score: Number(score || 0),
+    assignment_confidence: score >= 90 ? 'high' : score >= 45 ? 'moderate' : 'low',
+    assignment_reason: reason,
+    evidence_recency: image.source?.includes('archive') ? 'historical' : 'current_or_saved',
+    evidence_role: isDeviceHeavyImage(image) ? 'device_related' : 'anatomy',
+    device_related: isDeviceHeavyImage(image),
+    procedure_related: /\b(procedure|catheter|foley|statlock|tubing|drainage)\b/i.test(normalizeText([image.label, image.coverage, image.source].join(' '))),
+    display_label: image.label || null,
+  };
+}
+
+export function createReviewEvidenceManifest({
+  reviewId = '',
+  title = 'Profile Anatomy Video',
+  paragraphs = [],
+  paragraphMeta = [],
+  images = [],
+  reviewScope = 'head_to_toe',
+} = {}) {
+  const sections = groupParagraphsIntoManifestSections(paragraphs, paragraphMeta, reviewScope);
+  const manifestSections = sections.map((section) => {
+    const meta = {
+      section_key: section.section_key,
+      section_label: section.section_title,
+      type: 'manifest-section',
+    };
+    const candidates = section.target_region === 'overview'
+      ? overviewCandidateTrace(images, reviewScope)
+      : candidateTrace(images, section.target_region, meta, section.narration_text, reviewScope);
+    const ranked = candidates
+      .map((candidate) => ({
+        candidate,
+        image: images.find((image) => image.id === candidate.id),
+      }))
+      .filter((entry) => entry.image && entry.candidate.score > 0)
+      .filter((entry) => isImageAllowedForManifestSection(entry.image, section.target_region, reviewScope, meta, section.narration_text))
+      .sort((a, b) => b.candidate.score - a.candidate.score);
+    const selected = ranked[0] || null;
+    const directReason = selected
+      ? `Selected explicit compatible evidence for ${REGION_LABELS.get(section.target_region) || section.target_region}.`
+      : `No compatible focused evidence for ${REGION_LABELS.get(section.target_region) || section.target_region}; renderer must use section card.`;
+    const assignment = selected
+      ? assignmentMetadataForImage(selected.image, selected.candidate.score, directReason)
+      : null;
+    return {
+      ...section,
+      explicitly_assigned_evidence_ids: assignment?.evidence_id ? [assignment.evidence_id] : [],
+      assigned_evidence: assignment ? [assignment] : [],
+      assignment_candidates: candidates,
+      fallback_reason: assignment ? '' : directReason,
+      media_mode: assignment ? 'assigned_evidence' : 'placeholder',
+    };
+  });
+
+  const manifest = {
+    manifest_version: 1,
+    review_id: reviewId || crypto.randomUUID(),
+    title,
+    review_scope: reviewScope,
+    created_at: new Date().toISOString(),
+    sections: manifestSections,
+  };
+  return Object.freeze(JSON.parse(JSON.stringify(manifest)));
+}
+
+export function validateReviewEvidenceManifest(manifest = {}) {
+  const errors = [];
+  const seen = new Set();
+  const sections = Array.isArray(manifest.sections) ? manifest.sections : [];
+  sections.forEach((section, index) => {
+    if (!section.section_id) errors.push(`Section ${index + 1} is missing section_id.`);
+    if (seen.has(section.section_id)) errors.push(`Duplicate section_id ${section.section_id}.`);
+    seen.add(section.section_id);
+    if (Number(section.order) !== index) errors.push(`Section ${section.section_id} has non-stable order ${section.order}; expected ${index}.`);
+    const assigned = Array.isArray(section.assigned_evidence) ? section.assigned_evidence : [];
+    if (!assigned.length && section.media_mode !== 'placeholder') errors.push(`Section ${section.section_id} has no assigned evidence but is not placeholder.`);
+    assigned.forEach((evidence) => {
+      if (!section.explicitly_assigned_evidence_ids?.includes(evidence.evidence_id)) {
+        errors.push(`Renderer evidence ${evidence.evidence_id} is not explicitly assigned to ${section.section_id}.`);
+      }
+      const labels = new Set(evidence.anatomy_labels || []);
+      for (const blocked of section.prohibited_anatomy_labels || []) {
+        if (labels.has(blocked)) errors.push(`Section ${section.section_id} contains prohibited anatomy label ${blocked} from evidence ${evidence.evidence_id}.`);
+      }
+      if (evidence.device_related && !sectionRequestsDevice({ section_key: section.section_key, section_label: section.section_title }, section.narration_text)) {
+        errors.push(`Device evidence ${evidence.evidence_id} is not authorized for section ${section.section_id}.`);
+      }
+    });
+  });
+  if (!sections.length) errors.push('Manifest has no sections.');
+  if (errors.length) {
+    const error = new Error(`ANATOMY MANIFEST VALIDATION FAILED: ${errors[0]}`);
+    error.status = 422;
+    error.validationErrors = errors;
+    throw error;
+  }
+  return true;
+}
+
 function traceLine(trace = {}) {
   const candidates = (trace.candidates || []).map((candidate) => (
     `${candidate.id || 'unknown'} tags=[${(candidate.tags || []).join(', ') || 'none'}] score=${candidate.score} label="${candidate.label || ''}"`
@@ -796,6 +1054,287 @@ async function resolveNarration(payload, { jobId, signal, onProgress }) {
     audio_content_version: request.sourceGeneratedAt,
   });
   return { reused: false, audioPath, rendered: savedAudio };
+}
+
+function ttsChunksForSectionText(text = '') {
+  const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return [];
+  const maxChars = 3200;
+  const chunks = [];
+  let remaining = cleaned;
+  let previousContext = '';
+  while (remaining.length > maxChars) {
+    let splitAt = remaining.lastIndexOf('. ', maxChars);
+    if (splitAt < 800) splitAt = remaining.lastIndexOf(' ', maxChars);
+    if (splitAt < 800) splitAt = maxChars;
+    const part = remaining.slice(0, splitAt + 1).trim();
+    if (part) {
+      chunks.push({ text: part, previousContext });
+      previousContext = part.slice(-320);
+    }
+    remaining = remaining.slice(splitAt + 1).trim();
+  }
+  if (remaining) chunks.push({ text: remaining, previousContext });
+  return chunks;
+}
+
+async function concatAudioFiles({ files = [], outputPath, outputFormat = 'mp3', normalize = false }) {
+  const concatPath = `${outputPath}.concat.txt`;
+  await fs.writeFile(concatPath, files.map((file) => `file ${q(file.replace(/\\/g, '/'))}`).join('\n'), 'utf8');
+  const filterArgs = normalize ? ['-af', 'loudnorm=I=-18:TP=-1.5:LRA=11'] : [];
+  const encodeArgs = outputFormat === 'wav'
+    ? ['-c:a', 'pcm_s16le']
+    : outputFormat === 'm4a'
+      ? ['-c:a', 'aac', '-b:a', '320k', '-movflags', '+faststart']
+      : ['-c:a', 'libmp3lame', '-b:a', '320k', '-compression_level', '0'];
+  await runProcess('ffmpeg', [
+    '-hide_banner',
+    '-y',
+    '-f', 'concat',
+    '-safe', '0',
+    '-i', concatPath,
+    ...filterArgs,
+    ...encodeArgs,
+    outputPath,
+  ]);
+}
+
+async function resolveManifestNarration(payload, manifest, { jobId, signal, onProgress }) {
+  const outputFormat = payload.outputFormat || 'mp3';
+  const sectionOutputFormat = 'wav';
+  const measuredFromPayload = Array.isArray(payload.measuredAudioSegments) ? payload.measuredAudioSegments : [];
+  if (measuredFromPayload.length) {
+    const byId = new Map(measuredFromPayload.map((segment) => [String(segment.section_id || ''), segment]));
+    const segments = manifest.sections.map((section) => {
+      const supplied = byId.get(section.section_id);
+      const duration = Number(supplied?.duration_seconds || supplied?.durationSeconds || 0);
+      if (!duration || duration <= 0) {
+        const error = new Error(`Measured audio duration missing for manifest section ${section.section_id}.`);
+        error.status = 422;
+        throw error;
+      }
+      return {
+        section_id: section.section_id,
+        audioPath: supplied.audio_path || supplied.audioPath || null,
+        file_url: supplied.file_url || supplied.fileUrl || null,
+        durationSeconds: duration,
+        reused: true,
+      };
+    });
+    return { reused: true, audioPath: null, rendered: null, segments, durationSeconds: segments.reduce((sum, item) => sum + item.durationSeconds, 0) };
+  }
+
+  const files = [];
+  const segments = [];
+  let cursorSeconds = 0;
+  for (const [index, section] of manifest.sections.entries()) {
+    if (signal?.aborted) throw new Error('Cancelled');
+    const chunks = ttsChunksForSectionText(section.narration_text || section.section_title);
+    if (!chunks.length) {
+      const error = new Error(`No narration text for manifest section ${section.section_id}.`);
+      error.status = 422;
+      throw error;
+    }
+    onProgress?.({
+      phase: 'narration',
+      current: index,
+      total: manifest.sections.length,
+      message: `Rendering measured narration section ${index + 1}/${manifest.sections.length}: ${section.section_title}`,
+      section_id: section.section_id,
+    });
+    const rendered = await renderTTSExport({
+      title: `${payload.title || 'Profile Anatomy Video'} - ${section.section_title}`,
+      chunks,
+      chapters: [{
+        title: section.section_title,
+        startMs: 0,
+        source: 'profile_anatomy_manifest_section',
+        confidence: 'explicit',
+      }],
+      voice: payload.voice || 'nova',
+      model: payload.model,
+      speed: payload.speed,
+      instructions: payload.instructions || '',
+      outputFormat: sectionOutputFormat,
+      normalize: Boolean(payload.normalize),
+    }, {
+      jobId: `${jobId}-audio-${String(index + 1).padStart(3, '0')}`,
+      signal,
+      onProgress: (progress) => onProgress?.({
+        ...progress,
+        phase: `narration_${progress?.phase || 'rendering'}`,
+        message: `Narration ${index + 1}/${manifest.sections.length}: ${progress?.message || 'rendering...'}`,
+        section_id: section.section_id,
+      }),
+    });
+    const audioPath = uploadPathFromUrl(rendered.file_url);
+    if (!audioPath || !await fileExists(audioPath)) {
+      const error = new Error(`Narration audio file missing for section ${section.section_id}.`);
+      error.status = 500;
+      throw error;
+    }
+    const durationSeconds = await mediaDurationSeconds(audioPath);
+    if (!durationSeconds || durationSeconds <= 0) {
+      const error = new Error(`Measured audio duration failed for section ${section.section_id}.`);
+      error.status = 422;
+      throw error;
+    }
+    files.push(audioPath);
+    segments.push({
+      section_id: section.section_id,
+      audioPath,
+      file_url: rendered.file_url,
+      durationSeconds,
+      startSeconds: cursorSeconds,
+      endSeconds: cursorSeconds + durationSeconds,
+      rendered,
+    });
+    cursorSeconds += durationSeconds;
+  }
+
+  const outputBase = `${slugifyFilePart(payload.title || 'Profile Anatomy Video')}-measured-narration-${Date.now()}`;
+  const finalFilename = `${outputBase}.${outputFormat}`;
+  const finalAudioPath = path.join(uploadDir, finalFilename);
+  await concatAudioFiles({ files, outputPath: finalAudioPath, outputFormat, normalize: Boolean(payload.normalize) });
+  const stat = await fs.stat(finalAudioPath);
+  const durationSeconds = await mediaDurationSeconds(finalAudioPath);
+  const savedAudio = upsertEntity('AudioExport', crypto.randomUUID(), {
+    title: payload.title || 'Profile Anatomy Video',
+    analysis_title: payload.title || 'Profile Anatomy Video',
+    file_url: `/uploads/${finalFilename}`,
+    duration_seconds: Math.round(durationSeconds || cursorSeconds),
+    voice: payload.voice || 'nova',
+    speed: payload.speed || null,
+    model: payload.model || null,
+    format: outputFormat,
+    render_version: 'profile_anatomy_measured_sections_v1',
+    size: stat.size,
+    filename: finalFilename,
+    tts_session_key: payload.sessionId || null,
+    source_generated_at: payload.sourceGeneratedAt || null,
+    exported_at: new Date().toISOString(),
+    audio_content_version: payload.sourceGeneratedAt || null,
+    notes: 'Measured section-level anatomy narration used for synchronized profile video rendering.',
+  });
+  return {
+    reused: false,
+    audioPath: finalAudioPath,
+    rendered: savedAudio,
+    segments,
+    durationSeconds,
+  };
+}
+
+export function buildManifestVisualTimeline({ manifest = {}, narrationSegments = [] } = {}) {
+  const audioBySection = new Map((Array.isArray(narrationSegments) ? narrationSegments : []).map((segment) => [segment.section_id, segment]));
+  let cursor = 0;
+  return (manifest.sections || []).map((section, index) => {
+    const audio = audioBySection.get(section.section_id);
+    const durationSeconds = Number(audio?.durationSeconds || audio?.duration_seconds || 0);
+    if (!durationSeconds || durationSeconds <= 0) {
+      const error = new Error(`Missing measured audio duration for section ${section.section_id}.`);
+      error.status = 422;
+      throw error;
+    }
+    const assignment = section.assigned_evidence?.[0] || null;
+    const item = {
+      type: assignment ? 'image' : 'card',
+      image: assignment ? {
+        id: assignment.evidence_id,
+        label: assignment.display_label,
+        url: assignment.source_ref,
+        source: assignment.source_collection,
+        regions: assignment.anatomy_labels,
+        coverage: assignment.assignment_reason,
+      } : null,
+      durationSeconds,
+      startSeconds: cursor,
+      endSeconds: cursor + durationSeconds,
+      sectionId: section.section_id,
+      label: section.section_title,
+      targetKey: section.target_region,
+      resolvedFrom: section.resolved_from,
+      paragraphPreview: textPreview(section.narration_text),
+      score: assignment?.assignment_score || 0,
+      selectionReason: assignment?.assignment_reason || section.fallback_reason || 'Section card selected.',
+      audio,
+      trace: {
+        sectionId: section.section_id,
+        sectionLabel: section.section_title,
+        paragraphPreview: textPreview(section.narration_text),
+        resolvedFrom: section.resolved_from,
+        reviewScope: manifest.review_scope,
+        targetRegion: section.target_region,
+        allowedRegions: section.allowed_anatomy_labels,
+        candidates: section.assignment_candidates || [],
+        selectedImage: assignment ? {
+          id: assignment.evidence_id,
+          label: assignment.display_label,
+          tags: assignment.anatomy_labels,
+          source: assignment.source_collection,
+        } : null,
+        selectionReason: assignment?.assignment_reason || section.fallback_reason || 'Section card selected.',
+      },
+    };
+    cursor = item.endSeconds;
+    item.timeline_index = index;
+    return item;
+  });
+}
+
+export function validateManifestTimelineIntegrity({ manifest = {}, narrationSegments = [], visualTimeline = [] } = {}) {
+  validateReviewEvidenceManifest(manifest);
+  const errors = [];
+  const manifestIds = (manifest.sections || []).map((section) => section.section_id);
+  const audioIds = (narrationSegments || []).map((segment) => segment.section_id);
+  const visualIds = (visualTimeline || []).map((segment) => segment.sectionId);
+  if (manifestIds.length !== audioIds.length || manifestIds.some((id, index) => id !== audioIds[index])) {
+    errors.push('Narration segment ordering does not match manifest section ordering.');
+  }
+  if (manifestIds.length !== visualIds.length || manifestIds.some((id, index) => id !== visualIds[index])) {
+    errors.push('Visual segment ordering does not match manifest section ordering.');
+  }
+  let cursor = 0;
+  for (const [index, item] of visualTimeline.entries()) {
+    if (item.durationSeconds <= 0) errors.push(`Visual segment ${item.sectionId} has invalid duration.`);
+    if (Math.abs(Number(item.startSeconds || 0) - cursor) > 0.03) errors.push(`Visual segment ${item.sectionId} has timeline gap or overlap.`);
+    cursor = Number(item.endSeconds || 0);
+    const section = manifest.sections[index];
+    if (item.image?.id && !section?.explicitly_assigned_evidence_ids?.includes(item.image.id)) {
+      errors.push(`Visual segment ${item.sectionId} uses unassigned evidence ${item.image.id}.`);
+    }
+  }
+  if (errors.length) {
+    const error = new Error(`ANATOMY TIMELINE VALIDATION FAILED: ${errors[0]}`);
+    error.status = 422;
+    error.validationErrors = errors;
+    throw error;
+  }
+  return true;
+}
+
+export function buildManifestQaReport(manifest = {}, visualSelections = []) {
+  const selectionBySection = new Map((visualSelections || []).map((item) => [item.section_id, item]));
+  const lines = [
+    `Profile anatomy video QA manifest: ${manifest.title || 'Profile Anatomy Video'}`,
+    `Review scope: ${manifest.review_scope || 'unknown'}`,
+    `Sections: ${(manifest.sections || []).length}`,
+    '',
+  ];
+  for (const section of manifest.sections || []) {
+    const assignment = section.assigned_evidence?.[0] || null;
+    const selection = selectionBySection.get(section.section_id);
+    lines.push([
+      `${String(section.order + 1).padStart(2, '0')}. ${section.section_title}`,
+      `id=${section.section_id}`,
+      `target=${section.target_region}`,
+      assignment
+        ? `evidence=${assignment.evidence_id} labels=[${(assignment.anatomy_labels || []).join(', ')}] confidence=${assignment.assignment_confidence} role=${assignment.evidence_role}`
+        : `placeholder=${section.placeholder_behavior} reason=${section.fallback_reason || 'no compatible evidence'}`,
+      selection?.duration_seconds ? `duration=${selection.duration_seconds}s` : null,
+    ].filter(Boolean).join(' | '));
+  }
+  return lines.join('\n');
 }
 
 function safeImageItems(images = []) {
@@ -1216,26 +1755,66 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
       throw error;
     }
 
-    const narration = await resolveNarration(payload, { jobId, signal: options.signal, onProgress });
-    if (options.signal?.aborted) throw new Error('Cancelled');
-    const audioDuration = await mediaDurationSeconds(narration.audioPath);
-    const visualTimeline = buildNarrationVisualTimeline({
+    const manifest = createReviewEvidenceManifest({
+      reviewId: payload.reviewId || jobId,
+      title,
       paragraphs: payload.paragraphs || [],
       paragraphMeta: payload.paragraphMeta || payload.paragraph_meta || [],
       images: imageItems,
-      audioDuration,
       reviewScope,
+    });
+    validateReviewEvidenceManifest(manifest);
+    onProgress({
+      phase: 'manifest',
+      current: 1,
+      total: 5,
+      message: `Validated immutable ${manifest.sections.length}-section evidence manifest.`,
+      review_scope: reviewScope,
+      manifest_section_count: manifest.sections.length,
+      assigned_evidence_count: manifest.sections.filter((section) => section.assigned_evidence?.length).length,
+      placeholder_count: manifest.sections.filter((section) => !section.assigned_evidence?.length).length,
+    });
+    if (payload.qaOnly || payload.qa_only) {
+      return {
+        ok: true,
+        jobId,
+        render_version: PROFILE_ANATOMY_VIDEO_RENDER_VERSION,
+        qa_only: true,
+        review_scope: reviewScope,
+        manifest,
+        qa_report: buildManifestQaReport(manifest),
+        created_at: new Date().toISOString(),
+      };
+    }
+
+    const narration = await resolveManifestNarration(payload, manifest, { jobId, signal: options.signal, onProgress });
+    if (options.signal?.aborted) throw new Error('Cancelled');
+    const audioDuration = narration.durationSeconds || await mediaDurationSeconds(narration.audioPath);
+    const visualTimeline = buildManifestVisualTimeline({
+      manifest,
+      narrationSegments: narration.segments || [],
+    });
+    validateManifestTimelineIntegrity({
+      manifest,
+      narrationSegments: narration.segments || [],
+      visualTimeline,
     });
     validateVisualTimeline(visualTimeline, reviewScope);
     const totalSegments = visualTimeline.length;
     const regionTrace = visualTimeline.map((item, index) => ({
       segment: index + 1,
+      section_id: item.sectionId || null,
       type: item.type,
       target_region: item.targetKey || null,
       narration_section: item.label || null,
       narration_preview: item.paragraphPreview || null,
       resolved_from: item.resolvedFrom || null,
       review_scope: reviewScope,
+      audio_start_seconds: Number(item.startSeconds?.toFixed?.(3) || item.startSeconds || 0),
+      audio_end_seconds: Number(item.endSeconds?.toFixed?.(3) || item.endSeconds || 0),
+      actual_audio_duration_seconds: Number(item.durationSeconds?.toFixed?.(3) || item.durationSeconds || 0),
+      video_start_seconds: Number(item.startSeconds?.toFixed?.(3) || item.startSeconds || 0),
+      video_end_seconds: Number(item.endSeconds?.toFixed?.(3) || item.endSeconds || 0),
       selected_image_id: item.image?.id || null,
       selected_image_label: item.image?.label || null,
       selected_image_tags: item.image ? [...regionKeysForImage(item.image)] : [],
@@ -1284,12 +1863,16 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
       }
       segmentPaths.push(segmentPath);
       visualSelections.push({
+        section_id: item.sectionId || null,
         type: item.type,
         target_region: item.targetKey || null,
         label: item.label || null,
         narration_preview: item.paragraphPreview || null,
         resolved_from: item.resolvedFrom || null,
         review_scope: reviewScope,
+        audio_file_url: item.audio?.file_url || null,
+        audio_start_seconds: Number(item.startSeconds.toFixed(3)),
+        audio_end_seconds: Number(item.endSeconds.toFixed(3)),
         duration_seconds: Number(item.durationSeconds.toFixed(3)),
         image_id: item.image?.id || null,
         image_label: item.image?.label || null,
@@ -1359,11 +1942,21 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
       duration_seconds: durationSeconds,
       audio_reused: narration.reused,
       audio_file_url: narration.rendered?.file_url || null,
+      audio_timing: 'measured_section_audio',
+      section_audio_segments: (narration.segments || []).map((segment) => ({
+        section_id: segment.section_id,
+        file_url: segment.file_url || null,
+        duration_seconds: Number(segment.durationSeconds?.toFixed?.(3) || segment.durationSeconds || 0),
+        start_seconds: Number(segment.startSeconds?.toFixed?.(3) || segment.startSeconds || 0),
+        end_seconds: Number(segment.endSeconds?.toFixed?.(3) || segment.endSeconds || 0),
+      })),
       image_count: imageItems.length,
       payload_image_count: payloadImages.length,
       database_augmented_image_count: Math.max(0, imageItems.length - payloadImages.length),
       visual_segment_count: totalSegments,
       review_scope: reviewScope,
+      evidence_manifest: manifest,
+      qa_report: buildManifestQaReport(manifest, visualSelections),
       source_images: imageItems.map((image) => ({
         id: image.id,
         label: image.label,

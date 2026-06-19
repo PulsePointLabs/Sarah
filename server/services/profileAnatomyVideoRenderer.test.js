@@ -1,0 +1,152 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  buildManifestVisualTimeline,
+  createReviewEvidenceManifest,
+  validateManifestTimelineIntegrity,
+  validateReviewEvidenceManifest,
+} from './profileAnatomyVideoRenderer.js';
+
+const images = [
+  {
+    id: 'head-face-current',
+    label: 'Current head and face view with hair, glasses, beard, scalp, and face visible',
+    coverage: 'head face scalp beard glasses',
+    sectionKey: 'head_face',
+    url: '/uploads/head.jpg',
+    source: 'fixture',
+  },
+  {
+    id: 'body-current',
+    label: 'Current broad full body standing posture view',
+    coverage: 'full body whole body standing posture alignment chest abdomen lower limbs feet',
+    sectionKey: 'posture_alignment',
+    url: '/uploads/body.jpg',
+    source: 'fixture',
+  },
+  {
+    id: 'feet-only',
+    label: 'Foot-only image showing toes ankles and dorsal feet',
+    coverage: 'feet toes ankle heel plantar dorsal foot',
+    sectionKey: 'feet_toes',
+    url: '/uploads/feet.jpg',
+    source: 'fixture',
+  },
+  {
+    id: 'pelvic-genital-current',
+    label: 'Current pelvic genital view with pubic groin penile shaft glans meatus scrotum perineum visible',
+    coverage: 'pelvic pubic groin penis penile shaft glans meatus scrotum testes perineum',
+    sectionKey: 'genitals_perineum',
+    url: '/uploads/pelvic.jpg',
+    source: 'fixture',
+  },
+  {
+    id: 'foley-bag',
+    label: 'Foley drainage bag with concentrated urine and tubing',
+    coverage: 'foley catheter drainage bag urine tubing device procedure',
+    sectionKey: 'device_contact_findings',
+    url: '/uploads/foley.jpg',
+    source: 'fixture',
+  },
+];
+
+function buildManifest(reviewScope = 'head_to_toe') {
+  const paragraphs = [
+    'Head-to-Toe Image Review',
+    'Head and Face',
+    'Short hair, glasses, goatee, and facial contour are assessed here.',
+    'Feet and Toes',
+    'Feet, toes, and ankles are assessed here.',
+    'Pelvic and Genital',
+    'Glans, meatus, shaft, scrotum, and perineum are assessed here.',
+    'Device and Procedure Context',
+    'Foley catheter, drainage bag, tubing, and device contact are assessed here.',
+    'No Focused Image Section',
+    'Ears are mentioned but no focused ear image exists.',
+  ];
+  const paragraphMeta = [
+    { type: 'title', displayLabel: 'Head-to-Toe Image Review' },
+    { type: 'section-title', section_key: 'head_face', section_label: 'Head and Face' },
+    { type: 'section', section_key: 'head_face', section_label: 'Head and Face' },
+    { type: 'section-title', section_key: 'feet_toes', section_label: 'Feet and Toes' },
+    { type: 'section', section_key: 'feet_toes', section_label: 'Feet and Toes' },
+    { type: 'section-title', section_key: 'glans_meatus', section_label: 'Pelvic and Genital' },
+    { type: 'section', section_key: 'glans_meatus', section_label: 'Pelvic and Genital' },
+    { type: 'section-title', section_key: 'device_contact_findings', section_label: 'Device and Procedure Context' },
+    { type: 'section', section_key: 'device_contact_findings', section_label: 'Device and Procedure Context' },
+    { type: 'section-title', section_key: 'ears', section_label: 'No Focused Image Section' },
+    { type: 'section', section_key: 'ears', section_label: 'No Focused Image Section' },
+  ];
+  return createReviewEvidenceManifest({
+    reviewId: 'fixture-review',
+    title: 'Fixture Anatomy Video',
+    paragraphs,
+    paragraphMeta,
+    images,
+    reviewScope,
+  });
+}
+
+test('head and face section never receives Foley, foot, or genital evidence', () => {
+  const manifest = buildManifest();
+  const head = manifest.sections.find((section) => section.section_key === 'head_face');
+  assert.equal(head.assigned_evidence[0].evidence_id, 'head-face-current');
+  assert.deepEqual(head.assigned_evidence[0].anatomy_labels.includes('feet_toes'), false);
+  assert.deepEqual(head.assigned_evidence[0].anatomy_labels.includes('genitals_perineum'), false);
+  assert.equal(head.assigned_evidence[0].device_related, false);
+});
+
+test('pelvic or genital section rejects foot-only media and uses compatible genital evidence', () => {
+  const manifest = buildManifest('pelvic_genital');
+  const genital = manifest.sections.find((section) => section.section_key === 'glans_meatus');
+  assert.equal(genital.assigned_evidence[0].evidence_id, 'pelvic-genital-current');
+  assert.equal(genital.assigned_evidence[0].anatomy_labels.includes('feet_toes'), false);
+});
+
+test('Foley and drainage bag evidence stays in the device/procedure lane', () => {
+  const manifest = buildManifest('pelvic_genital');
+  const device = manifest.sections.find((section) => section.section_key === 'device_contact_findings');
+  assert.equal(device.assigned_evidence[0].evidence_id, 'foley-bag');
+  assert.equal(device.assigned_evidence[0].device_related, true);
+  const nonDeviceSections = manifest.sections.filter((section) => section.section_key !== 'device_contact_findings');
+  assert.equal(nonDeviceSections.some((section) => section.assigned_evidence?.[0]?.evidence_id === 'foley-bag'), false);
+});
+
+test('missing focused evidence produces a placeholder rather than unrelated fallback', () => {
+  const manifest = buildManifest();
+  const missing = manifest.sections.find((section) => section.section_key === 'ears');
+  assert.equal(missing.media_mode, 'placeholder');
+  assert.deepEqual(missing.explicitly_assigned_evidence_ids, []);
+});
+
+test('renderer timeline uses identical section IDs and measured audio durations', () => {
+  const manifest = buildManifest();
+  validateReviewEvidenceManifest(manifest);
+  const narrationSegments = manifest.sections.map((section, index) => ({
+    section_id: section.section_id,
+    durationSeconds: 2.5 + index,
+    file_url: `/uploads/audio-${index}.mp3`,
+  }));
+  const visualTimeline = buildManifestVisualTimeline({ manifest, narrationSegments });
+  validateManifestTimelineIntegrity({ manifest, narrationSegments, visualTimeline });
+  assert.deepEqual(
+    visualTimeline.map((segment) => segment.sectionId),
+    manifest.sections.map((section) => section.section_id)
+  );
+  assert.equal(visualTimeline[0].durationSeconds, 2.5);
+  assert.equal(visualTimeline[1].startSeconds, 2.5);
+});
+
+test('timeline validation rejects renderer access to unassigned evidence', () => {
+  const manifest = buildManifest();
+  const narrationSegments = manifest.sections.map((section) => ({
+    section_id: section.section_id,
+    durationSeconds: 3,
+  }));
+  const visualTimeline = buildManifestVisualTimeline({ manifest, narrationSegments });
+  visualTimeline[0].image = { id: 'foley-bag' };
+  assert.throws(
+    () => validateManifestTimelineIntegrity({ manifest, narrationSegments, visualTimeline }),
+    /unassigned evidence/
+  );
+});
