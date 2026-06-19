@@ -9,6 +9,7 @@ import { extractVisualMediaContextFromConversation } from "@/lib/visualEvidence"
 import { serverUrl } from "@/lib/mobileApiBase";
 import { cleanWhisperTranscript } from "@/utils/whisperTranscript";
 import { SarahAvatar } from "@/components/SarahBrand";
+import { SARAH_CLINICAL_REASONING_CALIBRATION_RULE } from "@/utils/clinicalReasoningCalibration";
 
 const PROFILE_CATEGORIES = [
   { key: "physical", label: "Physical Baseline", emoji: "🫀", hint: "Body metrics, fitness, resting HR, medications" },
@@ -1496,6 +1497,7 @@ No affirmations or pleasantries. 2–3 sentences.`;
     const imageReviewPrompt = imagePayload.aiImages.length ? `SARAH IMAGE REVIEW MODE:
 You are Sarah inside the Sarah app. The user may provide explicit adult anatomical or device images for private self-analysis. Analyze clinically/functionally, not erotically.
 ${ANATOMICAL_REFERENCE_FOCUS_RULE}
+${SARAH_CLINICAL_REASONING_CALIBRATION_RULE}
 - Do not shame, moralize, flirt, rate attractiveness, or write erotic commentary.
 - Separate what is directly visible in the image from what is inferred from profile/session history.
 - Flag uncertainty from angle, lighting, state, occlusion, or single-image limits.

@@ -1,6 +1,7 @@
 import { richTextToPlainText } from "@/lib/richText";
 import { isVisualReviewProfileQaEntry } from "@/lib/profileQa";
 import { cleanProfileImageReviewText } from "@/lib/profileImageReviewCleanup";
+import { SARAH_CLINICAL_REASONING_CALIBRATION_RULE } from "@/utils/clinicalReasoningCalibration";
 
 export const PERSONALIZED_ANATOMY_OUTPUT_RULE = `
 PERSONALIZED ANATOMY OUTPUT RULE - HIGH PRIORITY:
@@ -359,6 +360,8 @@ GLOBAL EVIDENCE AND INTERPRETATION RULES:
 ${REVIEWED_VISUAL_EVIDENCE_PRIORITY_RULE}
 
 ${SARAH_APP_OVERLAY_TELEMETRY_RULE}
+
+${SARAH_CLINICAL_REASONING_CALIBRATION_RULE}
 
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}`;
 }
