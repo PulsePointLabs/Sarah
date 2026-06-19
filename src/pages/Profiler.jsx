@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE, SARAH_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
 import { loadLatestProfilerAnalysis, loadUserProfileWithProfilerResults, mergeProfilerResultsIntoProfile } from "@/lib/profileContext";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import { friendlyJobErrorMessage } from "@/lib/jobErrorMessages";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionContextFactorLabels } from "@/lib/sessionContext";
 import { getManualStimulationPauseResumeEvents, getMotionEvidenceSummary, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
 import { buildProfileAIContentMeta, formatGeneratedAt, isProfileAIContentStale } from "@/utils/aiContentMetadata";
@@ -1115,15 +1116,7 @@ function remapBatchLocalImageIds(result, reviewedImages = []) {
 }
 
 function aiErrorMessage(error) {
-  const raw = error?.data?.error || error?.message || String(error || "Analysis failed");
-  try {
-    const parsed = JSON.parse(raw);
-    const nested = parsed?.error?.message || parsed?.message || parsed?.error;
-    if (nested) return nested;
-  } catch {
-    // use raw text below
-  }
-  return raw;
+  return friendlyJobErrorMessage(error);
 }
 
 async function saveClusterAnalysisPatch(patch, sessionCount) {
@@ -4682,6 +4675,45 @@ function ProfileImageReviewPanel({
         latestFailedFinal,
       };
     };
+    const findCheckpointBatchSet = (jobs = []) => {
+      const candidates = (jobs || [])
+        .filter(isMatchingReviewJob)
+        .filter((job) => Array.isArray(job?.progress?.completed_batch_results))
+        .filter((job) => job.progress.completed_batch_results.length > 0)
+        .sort(newestFirst);
+      const job = candidates[0];
+      if (!job) return null;
+      const completedResults = job.progress.completed_batch_results.filter(Boolean);
+      const completed = completedResults.length;
+      const expectedTotal = Number(job.progress?.batch_total || job.meta?.batch_count || completed || 0);
+      const reviewedImages = Array.isArray(job?.meta?.reviewed_images) ? job.meta.reviewed_images : [];
+      return {
+        total: completed,
+        expectedTotal: expectedTotal || completed,
+        partial: expectedTotal > completed,
+        batches: completedResults.map((result, index) => ({
+          id: `${job.id || "checkpoint"}:batch-${index + 1}`,
+          status: "complete",
+          result,
+          meta: {
+            ...(job.meta || {}),
+            batch: index + 1,
+            batch_count: expectedTotal || completed,
+            reviewed_images: reviewedImages,
+          },
+          createdAt: job.startedAt || job.createdAt,
+          updatedAt: job.updatedAt,
+          finishedAt: job.updatedAt,
+        })),
+        reviewed_images: reviewedImages,
+        fresh_image_count: Number(job.meta?.fresh_image_count || 0),
+        reused_saved_image_count: Number(job.meta?.reused_saved_image_count || 0),
+        image_count: Number(job.meta?.full_review_image_count || job.meta?.image_count || reviewedImages.length || 0),
+        startedAt: job.startedAt || job.createdAt,
+        finishedAt: job.updatedAt || job.finishedAt,
+        latestFailedFinal: job,
+      };
+    };
 
     const refreshRecoverableState = async () => {
       try {
@@ -4766,14 +4798,22 @@ function ProfileImageReviewPanel({
           ]
             .filter(isFailedFinalReviewJob)
             .sort(newestFirst)[0];
+          const checkpointRecoverable = findCheckpointBatchSet([
+            ...(failedFullData.jobs || []),
+            ...(failedAiData.jobs || []),
+          ]);
+          const activeRecoverable = recoverable || checkpointRecoverable;
           if (failedFinal && isNewerCompletedJob({ ...failedFinal, status: "complete" }, result)) {
-            const failedStatus = finalSynthesisFailureStatus(failedFinal, recoverable);
+            const failedStatus = finalSynthesisFailureStatus(failedFinal, activeRecoverable);
             setJobStatus(failedFinal);
-            setRecoverableBatchSet(recoverable);
+            setRecoverableBatchSet(activeRecoverable);
             setLatestAttemptStatus(failedStatus);
-            setError(recoverable?.batches?.length
-              ? `Latest ${config.title.toLowerCase()} final synthesis failed, but completed batch findings are available. Press Show Latest Findings to display them.`
-              : `Latest ${config.title.toLowerCase()} final synthesis failed: ${failedFinal.error || failedFinal.progress?.message || failedFinal.status}.`);
+            setError(activeRecoverable?.batches?.length
+              ? `Latest ${config.title.toLowerCase()} review stopped, but ${activeRecoverable.batches.length}/${activeRecoverable.expectedTotal || activeRecoverable.total} completed batch findings are preserved. Press Show Latest Findings to display them.`
+              : `Latest ${config.title.toLowerCase()} review stopped: ${aiErrorMessage({
+                message: failedFinal.error || failedFinal.progress?.message || failedFinal.status,
+                data: { error: failedFinal.error || failedFinal.progress?.message },
+              })}`);
             return;
           }
           describeIncompleteBatchedReview(completedJobsWithResults);
@@ -5409,6 +5449,40 @@ function ProfileImageReviewPanel({
   const recoverFinalSynthesis = async () => {
     if (!recoverableBatchSet?.batches?.length) {
       setError("No complete batch set is available to recover yet.");
+      return;
+    }
+    if (recoverableBatchSet.partial) {
+      setLoading(true);
+      setError("");
+      try {
+        const batchParsedResults = recoverableBatchSet.batches
+          .map((job) => remapBatchLocalImageIds(
+            normalizeImageReviewResult(job?.result, config),
+            job?.meta?.reviewed_images || [],
+          ))
+          .filter((item) => item?.overview);
+        await saveBatchAssembledReview(
+          batchParsedResults,
+          `Saved a partial recovered review from ${batchParsedResults.length}/${recoverableBatchSet.expectedTotal || recoverableBatchSet.total} completed Sarah batches. Add credits and rerun when you want the full review.`,
+          recoverableBatchSet,
+          {
+            state: "partial_batch_findings_saved",
+            timestamp: new Date().toISOString(),
+            synthesis_stage: "local_partial_batch_assembly",
+            batch_reviews_completed: false,
+            older_saved_review_showing: false,
+            latest_batch_findings_available: true,
+            batch_count: batchParsedResults.length,
+            expected_batch_count: recoverableBatchSet.expectedTotal || recoverableBatchSet.total,
+            final_synthesis_required: true,
+          },
+        );
+      } catch (err) {
+        console.error(`${config.title} partial recovery failed:`, err);
+        setError(aiErrorMessage(err));
+      } finally {
+        setLoading(false);
+      }
       return;
     }
     setLoading(true);
@@ -6579,7 +6653,9 @@ ANNOTATED IMAGE OUTPUT RULES:
       label: "Completed batch findings",
       detail: hasRecoverableDisplayRepair
         ? "A saved batch review can be repaired to reconnect its inline image callouts."
-        : `${recoverableBatchSet?.total || recoverableBatchSet?.batches?.length || 0} completed batches can be assembled without rerunning image review.`,
+        : recoverableBatchSet?.partial
+          ? `${recoverableBatchSet.batches.length}/${recoverableBatchSet.expectedTotal || recoverableBatchSet.total} completed batches were preserved and can be assembled as a partial draft.`
+          : `${recoverableBatchSet?.total || recoverableBatchSet?.batches?.length || 0} completed batches can be assembled without rerunning image review.`,
     },
   ];
   const pelvicResultScoped = isPelvicGenitalReviewResult(result, config);
@@ -6832,7 +6908,7 @@ ANNOTATED IMAGE OUTPUT RULES:
                   ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Saving Images...</>
                 : videoSaveInProgress
                   ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Sampling Video...</>
-                : <><ImageIcon className="h-3.5 w-3.5" />{(hasRecoverableUnshownBatchSet || hasRecoverableDisplayRepair) ? "Recover Final Synthesis" : availableCompletedReviewJob ? "Show Completed Review" : images.length ? (result ? "Re-review Images" : "Review Images") : (result ? "Re-review Evidence" : "Review Existing Evidence")}</>}
+                : <><ImageIcon className="h-3.5 w-3.5" />{(hasRecoverableUnshownBatchSet || hasRecoverableDisplayRepair) ? (recoverableBatchSet?.partial ? "Show Partial Findings" : "Recover Final Synthesis") : availableCompletedReviewJob ? "Show Completed Review" : images.length ? (result ? "Re-review Images" : "Review Images") : (result ? "Re-review Evidence" : "Review Existing Evidence")}</>}
             </Button>
           </div>
         </div>
@@ -6878,7 +6954,9 @@ ANNOTATED IMAGE OUTPUT RULES:
           )}
           {recoverableBatchSet?.batches?.length > 0 && !result?._meta?.local_batch_assembled && (
             <Badge variant="secondary" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">
-              {recoverableBatchSet.total}/{recoverableBatchSet.total} batches recoverable
+              {recoverableBatchSet.partial
+                ? `${recoverableBatchSet.batches.length}/${recoverableBatchSet.expectedTotal || recoverableBatchSet.total} batches preserved`
+                : `${recoverableBatchSet.total}/${recoverableBatchSet.total} batches recoverable`}
             </Badge>
           )}
           <Badge variant="secondary" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">Priority background queue</Badge>
@@ -6895,7 +6973,9 @@ ANNOTATED IMAGE OUTPUT RULES:
               ? "Batch reviews completed and are saved as the current review. The main review button will run a fresh review only when you ask for it."
               : latestAttemptStatus?.state === "batch_reviews_saved_without_final_synthesis"
                 ? "Batch reviews completed and were saved as the current review. The main review button will run a fresh review only when you ask for it."
-              : "Batch reviews completed, but the final rewrite did not finish. Tap Show Latest Findings to display the completed findings without rerunning image review."}
+              : recoverableBatchSet?.partial
+                ? `Sarah preserved ${recoverableBatchSet.batches.length}/${recoverableBatchSet.expectedTotal || recoverableBatchSet.total} completed batches before the job stopped. Tap Show Partial Findings to display a local draft without spending more credits.`
+                : "Batch reviews completed, but the final rewrite did not finish. Tap Show Latest Findings to display the completed findings without rerunning image review."}
           </div>
         )}
 
@@ -6922,7 +7002,7 @@ ANNOTATED IMAGE OUTPUT RULES:
                   : latestAttemptStatus?.state === "batch_reviews_saved_without_final_synthesis"
                     ? "Not needed for current output; completed batch findings are saved."
                   : latestAttemptStatus?.error_message
-                    ? `Failed: ${latestAttemptStatus.error_message}`
+                    ? `Failed: ${aiErrorMessage({ message: latestAttemptStatus.error_message, data: { error: latestAttemptStatus.error_message } })}`
                     : "Completed batch findings are ready to show."}</p>
               </div>
               <div className="rounded-md border border-amber-200 bg-white/70 px-2 py-1.5">
@@ -6935,7 +7015,11 @@ ANNOTATED IMAGE OUTPUT RULES:
               </div>
               <div className="rounded-md border border-amber-200 bg-white/70 px-2 py-1.5">
                 <p className="text-[10px] uppercase tracking-wider text-amber-800">Latest Batch Findings</p>
-                <p>{recoverableBatchSet?.batches?.length ? `${recoverableBatchSet.total}/${recoverableBatchSet.total} completed batches available.` : "No completed batch set loaded."}</p>
+                <p>{recoverableBatchSet?.batches?.length
+                  ? recoverableBatchSet.partial
+                    ? `${recoverableBatchSet.batches.length}/${recoverableBatchSet.expectedTotal || recoverableBatchSet.total} completed batches preserved.`
+                    : `${recoverableBatchSet.total}/${recoverableBatchSet.total} completed batches available.`
+                  : "No completed batch set loaded."}</p>
               </div>
               <div className="rounded-md border border-amber-200 bg-white/70 px-2 py-1.5">
                 <p className="text-[10px] uppercase tracking-wider text-amber-800">Next Action</p>
@@ -6943,7 +7027,9 @@ ANNOTATED IMAGE OUTPUT RULES:
                   ? "Use the main review button only when you want to run a fresh review."
                   : latestAttemptStatus?.state === "batch_reviews_saved_without_final_synthesis"
                   ? "The current batch-assembled review is already saved."
-                  : "Tap Show Latest Findings. This will not rerun image review."}</p>
+                  : recoverableBatchSet?.partial
+                    ? "Tap Show Partial Findings to save the recovered draft locally. Rerun the full review after adding credits."
+                    : "Tap Show Latest Findings. This will not rerun image review."}</p>
               </div>
             </div>
           </div>

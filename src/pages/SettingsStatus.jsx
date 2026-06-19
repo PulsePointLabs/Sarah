@@ -23,6 +23,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { SarahLogoMark } from "@/components/SarahBrand";
 import { cancelBackgroundJob, clearBackgroundJobs, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
+import { friendlyJobStatusMessage } from "@/lib/jobErrorMessages";
 import { getProviderStatus } from "@/lib/providerStatus";
 import {
   getSarahImageOption,
@@ -536,7 +537,7 @@ export default function SettingsStatus() {
               <p className="truncate text-sm font-bold text-foreground">{jobLabel(job)}</p>
               {stale && <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-200">May be hung</span>}
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">{job?.progress?.message || job?.error || job.status}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{friendlyJobStatusMessage(job)}</p>
           </div>
           <span className={`rounded-full px-2 py-1 text-xs font-semibold uppercase ${active ? "bg-primary/10 text-primary" : job.status === "complete" ? "bg-emerald-500/10 text-emerald-300" : "bg-destructive/10 text-destructive"}`}>
             {job.status}

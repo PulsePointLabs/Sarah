@@ -4,6 +4,7 @@ import { Bell, BellOff, CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Load
 import { cancelBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { stabilizeBackgroundJobEta } from "@/lib/backgroundJobEta";
 import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
+import { friendlyJobStatusMessage } from "@/lib/jobErrorMessages";
 import {
   areBackgroundNotificationsEnabled,
   getNotificationPermission,
@@ -76,15 +77,7 @@ function statusTone(status) {
 }
 
 function progressMessage(job) {
-  const message = job?.progress?.message || job?.error || job?.status;
-  if (
-    job?.status === "complete" &&
-    job?.progress?.phase === "complete" &&
-    !/(complete|completed|ready|finished)/i.test(String(message || ""))
-  ) {
-    return "Complete";
-  }
-  return message;
+  return friendlyJobStatusMessage(job);
 }
 
 function progressCounts(job) {

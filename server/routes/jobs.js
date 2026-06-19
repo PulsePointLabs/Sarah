@@ -20,6 +20,7 @@ import {
   cleanupProfileImageReviewResult,
   dedupeProfileImageReviewItems,
 } from '../../src/lib/profileImageReviewCleanup.js';
+import { friendlyJobErrorMessage } from '../../src/lib/jobErrorMessages.js';
 
 export const jobsRouter = express.Router();
 export const largeJobsRouter = express.Router();
@@ -524,13 +525,27 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
 
     if (!batchRequests.length) {
       const singleRequest = await hydrateRequestImageRefs(payload?.singleRequest, context, label);
-      const result = await runInternalAIRequest(singleRequest, context, label, {
-        phase: 'single_review',
-        current: 1,
-        total,
-        message: `${label}: running Sarah review…`,
-      });
-      return parseAIResult(result);
+      try {
+        const result = await runInternalAIRequest(singleRequest, context, label, {
+          phase: 'single_review',
+          current: 1,
+          total,
+          message: `${label}: running Sarah review…`,
+        });
+        return parseAIResult(result);
+      } catch (error) {
+        const cleanErrorMessage = friendlyJobErrorMessage(error);
+        context.updateProgress({
+          phase: 'error',
+          current: 1,
+          total,
+          message: cleanErrorMessage,
+          error_raw: error?.message || String(error),
+        });
+        const cleanError = new Error(cleanErrorMessage);
+        cleanError.cause = error;
+        throw cleanError;
+      }
     }
 
     const batchResults = [];
@@ -538,12 +553,34 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
       const batchNumber = index + 1;
       const batchLabel = `${label} batch ${batchNumber}/${batchRequests.length}`;
       const batchRequest = await hydrateRequestImageRefs(batchRequests[index], context, batchLabel);
-      const result = await runInternalAIRequest(batchRequest, context, batchLabel, {
-        phase: 'batch_review',
-        current: index,
-        total,
-        message: `${label}: Sarah batch ${batchNumber}/${batchRequests.length} running…`,
-      });
+      let result;
+      try {
+        result = await runInternalAIRequest(batchRequest, context, batchLabel, {
+          phase: 'batch_review',
+          current: index,
+          total,
+          message: `${label}: Sarah batch ${batchNumber}/${batchRequests.length} running…`,
+        });
+      } catch (error) {
+        const cleanErrorMessage = friendlyJobErrorMessage(error);
+        if (batchResults.length) {
+          context.updateProgress({
+            phase: 'batch_failed_partial_preserved',
+            current: batchNumber,
+            total,
+            message: `${label}: stopped at batch ${batchNumber}/${batchRequests.length}; ${batchResults.length} completed batch${batchResults.length === 1 ? '' : 'es'} preserved for local recovery.`,
+            batch_current: batchNumber,
+            batch_total: batchRequests.length,
+            completed_batch_count: batchResults.length,
+            completed_batch_results: batchResults,
+            batch_error_message: cleanErrorMessage,
+            batch_error_raw: error?.message || String(error),
+          });
+        }
+        const cleanError = new Error(cleanErrorMessage);
+        cleanError.cause = error;
+        throw cleanError;
+      }
       batchResults.push(parseAIResult(result));
       context.updateProgress({
         phase: 'batch_complete',
@@ -552,6 +589,8 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
         message: `${label}: completed batch ${batchNumber}/${batchRequests.length}.`,
         batch_current: batchNumber,
         batch_total: batchRequests.length,
+        completed_batch_count: batchResults.length,
+        completed_batch_results: batchResults,
       });
     }
 
