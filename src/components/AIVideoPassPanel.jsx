@@ -631,6 +631,18 @@ function videoRoleHelper(role, isExploration = false) {
   return VIDEO_ROLE_OPTIONS.find((option) => option.value === role)?.helper || "";
 }
 
+function isBrowserPlayableLinkedVideo(video = {}) {
+  const ext = String(video.extension || video.filename || video.path || "")
+    .toLowerCase()
+    .match(/\.[a-z0-9]+(?:$|\?)/)?.[0] || "";
+  const mimeType = String(video.mimeType || "").toLowerCase();
+  return ext === ".mp4"
+    || ext === ".m4v"
+    || ext === ".webm"
+    || mimeType === "video/mp4"
+    || mimeType === "video/webm";
+}
+
 const LOWER_BODY_TERMS = [
   "foot",
   "feet",
@@ -1894,7 +1906,11 @@ export default function AIVideoPassPanel({
 
   const selectedVideo = availableVideos.find((video) => video.path === selectedPath) || availableVideos[0];
   const selectedVideoOffset = timelineOffsetSeconds(selectedVideo);
-  const selectedVideoStreamUrl = selectedVideo?.path ? base44.integrations.Core.localVideoStreamUrl(selectedVideo.path) : "";
+  const rawSelectedVideoStreamUrl = selectedVideo?.path ? base44.integrations.Core.localVideoStreamUrl(selectedVideo.path) : "";
+  const [playbackPreviewUrl, setPlaybackPreviewUrl] = useState("");
+  const [playbackPreviewStatus, setPlaybackPreviewStatus] = useState("");
+  const [playbackPreviewError, setPlaybackPreviewError] = useState("");
+  const selectedVideoStreamUrl = playbackPreviewUrl || rawSelectedVideoStreamUrl;
   const [selectedVideoRole, setSelectedVideoRole] = useState(inferVideoRole(selectedVideo));
   const selectedVideoRoleHelper = videoRoleHelper(selectedVideoRole, isExploration);
   const estimatedSessionEnd = useMemo(() => estimateSessionEnd(session, timelineRows), [session, timelineRows]);
@@ -2109,6 +2125,36 @@ export default function AIVideoPassPanel({
   useEffect(() => {
     setSelectedVideoRole(inferVideoRole(selectedVideo));
   }, [selectedVideo?.path]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPlaybackPreviewUrl("");
+    setPlaybackPreviewError("");
+    setPlaybackPreviewStatus("");
+    if (!selectedVideo?.path || isBrowserPlayableLinkedVideo(selectedVideo)) return undefined;
+
+    setPlaybackPreviewStatus("Preparing MP4 preview for Windows playback...");
+    base44.integrations.Core.ConvertLocalVideoForPlayback({
+      path: selectedVideo.path,
+      label: selectedVideo.label || selectedVideo.filename || "local-video-preview",
+    })
+      .then((result) => {
+        if (cancelled) return;
+        const url = result?.file_url || result?.url;
+        if (!url) throw new Error("The local video converter did not return a playable preview URL.");
+        setPlaybackPreviewUrl(base44.integrations.Core.localVisionAssetUrl(url));
+        setPlaybackPreviewStatus(result.cached ? "Using cached MP4 preview." : "MP4 preview ready.");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setPlaybackPreviewError(err?.data?.error || err?.message || "Could not prepare an MP4 preview for this video.");
+        setPlaybackPreviewStatus("");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedVideo?.path, selectedVideo?.fingerprint]);
 
   useEffect(() => {
     const maxCursor = Math.max(0, sessionEnd - 0.25);
@@ -3740,6 +3786,11 @@ Return only the structured JSON matching the requested schema.`,
                 Saved alignment: video 0:00 = {recordLabel} <span className="font-mono text-primary">{fmtSignedMmSs(selectedVideoOffset)}</span>.
               </p>
             )}
+            {(playbackPreviewStatus || playbackPreviewError) && (
+              <p className={`mt-1 text-[10px] ${playbackPreviewError ? "text-destructive" : "text-primary"}`}>
+                {playbackPreviewError || playbackPreviewStatus}
+              </p>
+            )}
           </div>
           <Button
             type="button"
@@ -3760,6 +3811,25 @@ Return only the structured JSON matching the requested schema.`,
               controls
               preload="metadata"
               className="max-h-[34rem] w-full bg-black object-contain"
+              onError={() => {
+                if (!selectedVideo?.path || playbackPreviewUrl || playbackPreviewStatus) return;
+                setPlaybackPreviewError("");
+                setPlaybackPreviewStatus("Raw video playback failed; preparing MP4 preview...");
+                base44.integrations.Core.ConvertLocalVideoForPlayback({
+                  path: selectedVideo.path,
+                  label: selectedVideo.label || selectedVideo.filename || "local-video-preview",
+                })
+                  .then((result) => {
+                    const url = result?.file_url || result?.url;
+                    if (!url) throw new Error("The local video converter did not return a playable preview URL.");
+                    setPlaybackPreviewUrl(base44.integrations.Core.localVisionAssetUrl(url));
+                    setPlaybackPreviewStatus(result.cached ? "Using cached MP4 preview." : "MP4 preview ready.");
+                  })
+                  .catch((err) => {
+                    setPlaybackPreviewError(err?.data?.error || err?.message || "Could not prepare an MP4 preview for this video.");
+                    setPlaybackPreviewStatus("");
+                  });
+              }}
               onLoadedMetadata={(event) => {
                 const duration = Number(event.currentTarget.duration);
                 setMetadataDurationSeconds(Number.isFinite(duration) && duration > 0 ? duration : 0);

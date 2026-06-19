@@ -209,6 +209,11 @@ export const base44 = {
         form.append('label', label);
         return request('/files/video-playback-preview', { method: 'POST', body: form });
       },
+      ConvertLocalVideoForPlayback: async ({ path, label = '' }) => request('/files/local-video/playback-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, label }),
+      }),
       GetLocalVideoMetadata: async ({ path }) => request('/files/local-video/metadata', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

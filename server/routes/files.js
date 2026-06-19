@@ -511,6 +511,69 @@ filesRouter.post('/video-playback-preview', upload.single('file'), async (req, r
   }
 });
 
+filesRouter.post('/local-video/playback-preview', async (req, res) => {
+  try {
+    const requestedPath = normalizeLocalVideoPath(req.body?.path);
+    if (!requestedPath) return res.status(400).json({ error: 'Missing local video path.' });
+    const meta = await localVideoMetadata(requestedPath);
+    const label = slugifyFilePart(req.body?.label || meta.filename || 'local-video-preview');
+    const cacheKey = slugifyFilePart(`${meta.fingerprint}-${label}`);
+    const filename = `local-playback-${cacheKey}.mp4`;
+    const outputPath = path.join(uploadDir, filename);
+
+    try {
+      const existing = await fsp.stat(outputPath);
+      if (existing.isFile() && existing.size > 0) {
+        return res.json({
+          ok: true,
+          cached: true,
+          url: `/uploads/${filename}`,
+          file_url: `/uploads/${filename}`,
+          filename,
+          mimeType: 'video/mp4',
+          size: existing.size,
+          source_filename: meta.filename,
+          source_fingerprint: meta.fingerprint,
+        });
+      }
+    } catch {
+      // Cache miss, convert below.
+    }
+
+    await runProcess('ffmpeg', [
+      '-hide_banner',
+      '-y',
+      '-i', meta.path,
+      '-map', '0:v:0',
+      '-map', '0:a?',
+      '-vf', 'scale=min(1280\\,iw):-2',
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-crf', '24',
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-pix_fmt', 'yuv420p',
+      '-movflags', '+faststart',
+      outputPath,
+    ]);
+
+    const stat = await fsp.stat(outputPath);
+    res.json({
+      ok: true,
+      cached: false,
+      url: `/uploads/${filename}`,
+      file_url: `/uploads/${filename}`,
+      filename,
+      mimeType: 'video/mp4',
+      size: stat.size,
+      source_filename: meta.filename,
+      source_fingerprint: meta.fingerprint,
+    });
+  } catch (error) {
+    res.status(error?.status || 500).json({ error: error?.message || 'Could not convert local video for browser playback' });
+  }
+});
+
 filesRouter.post('/local-video/browse', async (_req, res) => {
   if (process.platform !== 'win32') {
     return res.status(400).json({ error: 'The local video picker is currently available on Windows only.' });
