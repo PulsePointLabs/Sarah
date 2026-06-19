@@ -4,11 +4,11 @@ Sarah is a private, local-first review workspace for personal physiology session
 
 It is not a generic wellness dashboard. Sarah is the "what actually happened here?" workspace: the place where signals, observations, media, and body context can be reviewed together instead of living in disconnected files.
 
-The project began as a Base44 app and is being migrated into a standalone local web app with a local API server. The goal is high-context review, strong privacy boundaries, exportable data, and useful analysis without pretending the app is a medical device.
+The project began as a Base44 app and has been migrated into a standalone local app with a React frontend, local Express API, SQLite storage, local telemetry engine, and Windows desktop packaging. The goal is high-context review, strong privacy boundaries, exportable data, and useful analysis without pretending the app is a medical device.
 
 ## Current Shape
 
-PulsePoint now covers five main workflows:
+Sarah now covers five main workflows:
 
 - **Session review:** create, edit, annotate, analyze, compare, export, and listen back to recorded sessions.
 - **Body exploration:** track non-session anatomical/procedure-style exploration separately from active stimulation sessions.
@@ -16,7 +16,7 @@ PulsePoint now covers five main workflows:
 - **AI evidence building:** use Profile Q&A, session Q&A, image/video review, AI video passes, annotations, and profile metrics as persistent context.
 - **Longitudinal analysis:** build profile, cascade, insight, correlation, trend, predictive, and profiler views from accumulated evidence.
 
-The app is still evolving quickly, but the core standalone stack is usable locally.
+The app is still evolving quickly, but the core standalone stack is usable locally and can be launched as a Windows desktop app.
 
 ## Major Features
 
@@ -69,7 +69,8 @@ The app is still evolving quickly, but the core standalone stack is usable local
 - Motion Lab for local-only video-derived movement evidence.
 - Region motion, hand activity, cadence proxy experiments, lower-body/foot activity, position segments, manual landmarks, and marker-assisted foot geometry.
 - Reviewed motion findings can be promoted into session timelines.
-- Local video is used in-browser; PulsePoint is designed to persist reviewed findings and derived evidence, not raw private video.
+- Local video is used in-browser; Sarah is designed to persist reviewed findings and derived evidence, not raw private video.
+- Linked MKV/AVI/WMV recordings are converted to cached MP4 previews for Windows/Electron playback while AI annotation still uses the original source recording.
 
 ### TTS and Audio Library
 
@@ -95,7 +96,8 @@ The app is still evolving quickly, but the core standalone stack is usable local
 - **TTS/STT:** OpenAI TTS and Whisper-backed voice input where configured
 - **Computer vision:** MediaPipe Tasks Vision for local video-derived evidence
 - **Telemetry helpers:** WebSocket HR relay, OBS-aware capture helpers, optional Python EMG scripts
-- **Mobile shell:** browser PWA/service worker
+- **Desktop shell:** Electron-based Windows app that starts the local backend automatically
+- **Mobile shell:** browser PWA/service worker and Capacitor Android scaffold
 
 ## Quick Start
 
@@ -136,6 +138,26 @@ npm run server
 npm run dev -- --host
 ```
 
+Run the Windows desktop app in development mode:
+
+```bash
+npm run desktop:dev
+```
+
+Build the runnable Windows desktop package:
+
+```bash
+npm run desktop:pack
+```
+
+The current reliable Windows output is:
+
+```text
+desktop-release/win-unpacked/Sarah.exe
+```
+
+See [`docs/WINDOWS_DESKTOP_APP.md`](docs/WINDOWS_DESKTOP_APP.md) for the desktop runtime notes.
+
 Build:
 
 ```bash
@@ -163,6 +185,7 @@ Common values:
 - `OBS_WS_URL` and `OBS_PASSWORD` let capture helpers follow OBS recording state.
 - `HR_RECORDINGS_DIR`, `EMG_TEXT_DIR`, and `EMG_SESSIONS_DIR` point at generated telemetry folders.
 - `OPENAI_ADMIN_API_KEY` and `ANTHROPIC_ADMIN_API_KEY` optionally enable provider cost visibility in Settings & Status.
+- `SARAH_VIDEO_DIRS`, `PULSEPOINT_VIDEO_DIRS`, or `OBS_RECORDINGS_DIR` can help Sarah resolve dropped local video files when Chrome/Electron hides the full path.
 
 Repo-local helper output alternatives:
 
@@ -174,7 +197,9 @@ EMG_SESSIONS_DIR=./tools/capture/emg/emg_sessions
 
 ## Capture Stack
 
-PulsePoint works with manually entered sessions and imported files. The richer live workflow can use HR, HRV/RR, OBS, and EMG.
+Sarah works with manually entered sessions and imported files. The richer live workflow can use HR, HRV/RR, OBS, and EMG.
+
+Sarah's local telemetry engine owns monotonic timestamping, recent ring buffers, append-only event queueing, SQLite writes, and throttled live snapshots. React renders the cockpit; it is not the source of timing truth. See [`docs/WINDOWS_LOCAL_ENGINE.md`](docs/WINDOWS_LOCAL_ENGINE.md).
 
 ### Heart Rate and HRV
 
@@ -185,7 +210,7 @@ Supported or evolving sources include:
 - HeartRateOnStream-compatible local relay
 - imported heart-rate CSV timelines
 
-PulsePoint can ingest HR timelines and RR/HRV evidence for session analysis, profiler synthesis, Live Capture, and longitudinal review.
+Sarah can ingest HR timelines and RR/HRV evidence for session analysis, profiler synthesis, Live Capture, and longitudinal review.
 
 The embedded relay starts with:
 
@@ -252,7 +277,7 @@ The Settings & Status page centralizes:
 - background task visibility, cancellation, stale/hung review, and completion notifications
 - provider API status and optional cost-report visibility
 
-Local completion notifications work while PulsePoint is open or available to the PWA/service worker. Fully closed-app remote delivery is intentionally not claimed yet.
+Local completion notifications work while Sarah is open or available to the PWA/service worker. Fully closed-app remote delivery is intentionally not claimed yet.
 
 ## Remote / Mobile Testing
 
@@ -276,7 +301,7 @@ On Android:
 
 ## Data and Privacy
 
-PulsePoint is intentionally local-first. Treat the workspace, `.env`, and `data/` as sensitive.
+Sarah is intentionally local-first. Treat the workspace, `.env`, and `data/` as sensitive.
 
 Important local data areas:
 
@@ -309,14 +334,16 @@ AI APIs receive whatever text/media frames are sent for a requested analysis. Ke
 
 ## Current AI Direction and Collaborator Notes
 
-PulsePoint is being developed as a serious, private physiology and evidence-review tool. Adult anatomy, pelvic/genital reference review, masturbation physiology, Foley/procedure review, and body exploration are valid in-scope data domains when handled clinically and non-erotically.
+Sarah is being developed as a serious, private physiology and evidence-review tool. Adult anatomy, pelvic/genital reference review, masturbation physiology, Foley/procedure review, and body exploration are valid in-scope data domains when handled clinically and non-erotically.
 
 Near-term AI priorities:
 
-- **Local AI Annotation is the main active gap.** The target is Sarah-style chronological video/window cards with timestamp range, visible evidence, change from prior window, confidence/limitations, event tags, frame references, and provenance. Raw CV/Qwen rows should remain debug evidence, not the primary user-facing result.
-- **Cloud Sarah / Claude remains the reference path.** Claude video-pass and session-analysis outputs are currently the quality bar for chronological, evidence-based interpretation.
+- **AI Annotation is the main active video review surface.** Sarah builds chronological video/window cards with timestamp range, visible evidence, change from prior window, confidence/limitations, event tags, frame references, and provenance.
+- **Manual notes are foundational for annotation.** Human-written session notes, freeform notes, and timestamped manual events anchor Foley/procedure timelines; Sarah then adds visible genital/body state, positioning, technique, comfort/tolerance, and telemetry-supported observations.
+- **Cloud Sarah / Claude remains the reference quality path.** Claude video-pass and session-analysis outputs are currently the quality bar for chronological, evidence-based interpretation.
 - **Session Analysis is Claude-only right now.** The attempted local Sarah text synthesis path is disabled because local packet summaries were too robotic and unreliable for the Sarah-quality narrative target.
 - **AI Profiler image review now preserves batch work when final synthesis times out.** If the final Pelvic & Genital or Head-to-Toe synthesis fails after batch reviews complete, the UI may show “Latest final synthesis failed” while also showing “recovered latest batch findings assembled locally.” That state means the batch-level visual review completed and the app is displaying an interim assembled review instead of losing paid-for or time-consuming batch evidence. Repeatedly retrying the same large final synthesis may time out again; use the recovered batch findings as the current working review unless a smaller or compressed synthesis pass is implemented.
+- **Anatomy review video rendering now uses immutable evidence manifests.** Head-to-Toe and Pelvic/Genital narrated videos bind section IDs, evidence IDs, measured TTS durations, visual segments, and QA output to the same manifest so unrelated media cannot drift into later narration.
 
 Evidence discipline rules:
 
@@ -354,7 +381,7 @@ Only source code, helper overlays, and dependency metadata belong there. Recordi
 
 ## Status
 
-PulsePoint is active, private, and moving fast. The standalone app is usable locally, with the highest-change areas currently being:
+Sarah is active, private, and moving fast. The standalone app is usable locally and as a Windows desktop app, with the highest-change areas currently being:
 
 - AI prompt grounding and reviewed-evidence persistence
 - Live Capture hardware/source polish
