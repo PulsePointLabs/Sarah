@@ -259,6 +259,58 @@ function formatSeconds(value) {
   return minutes ? `${minutes}:${remainder.toFixed(1).padStart(4, "0")}` : `${remainder.toFixed(1)}s`;
 }
 
+function localDateTimeParts(dateLike = new Date()) {
+  if (!dateLike) return null;
+  const date = dateLike instanceof Date ? dateLike : new Date(dateLike);
+  if (Number.isNaN(date.getTime())) return null;
+  const locale = typeof navigator !== "undefined" ? navigator.language : undefined;
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "local timezone";
+  return {
+    date,
+    locale,
+    timezone,
+    iso: date.toISOString(),
+    shortTime: new Intl.DateTimeFormat(locale, {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(date),
+    full: new Intl.DateTimeFormat(locale, {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    }).format(date),
+  };
+}
+
+function messageCreatedAt(message) {
+  return message?.createdAt || message?.created_at || message?.timestamp || message?.sentAt || null;
+}
+
+function formatMessageDisplayTime(message) {
+  const parts = localDateTimeParts(messageCreatedAt(message));
+  return parts?.shortTime || "earlier";
+}
+
+function formatMessagePromptTime(message) {
+  const parts = localDateTimeParts(messageCreatedAt(message));
+  return parts?.full || "older saved message; exact local time not stored";
+}
+
+function buildLocalTimeContext() {
+  const parts = localDateTimeParts(new Date());
+  if (!parts) return "";
+  return `LOCAL TIME CONTEXT:
+- The user's current local time is ${parts.full}.
+- Browser timezone: ${parts.timezone}.
+- Current UTC timestamp: ${parts.iso}.
+- Use this for natural clinical/conversational timeline acknowledgement when relevant, such as "earlier today", "tonight", "this morning", or "a few minutes ago".
+- Do not overdo time references; include them only when they help orient the conversation or timeline.`;
+}
+
 function formatTimePhrase(value) {
   const total = Math.max(0, Number(value) || 0);
   const minutes = Math.floor(total / 60);
@@ -1246,11 +1298,12 @@ export default function AIChat({
   };
 
   const summarizeFindings = async (messageList) => {
-    const history = messageList.map((m) => `${m.role === "user" ? "User" : "AI"}: ${m.text}`).join("\n");
+    const localTimeContext = buildLocalTimeContext();
+    const history = messageList.map((m) => `${m.role === "user" ? "User" : "AI"} (${formatMessagePromptTime(m)}): ${m.text}`).join("\n");
     const groundingContext = buildAIGroundingContext(userProfile);
     const profileMechanicalContext = mode === "profile" ? `\n\n${PROFILE_MECHANICAL_RULE}` : "";
     const res = await base44.integrations.Core.InvokeLLM({
-      prompt: `${groundingContext}${profileMechanicalContext}\n\nBased on this Q&A conversation about a person's ${conversationSubject}, write 2-4 concise bullet points summarizing only the NEW factual findings from the user's answers that would be useful to persist for future AI analysis. Do not repeat generic information already obvious from the base data. Be specific and factual. Do not preserve assumptions about intent unless the person explicitly stated them. Write every saved bullet in direct second person using "you" and "your"; do not use the person's name, "the user", "he", "she", "his", or "her".\n\nConversation:\n${history}\n\nOutput as plain bullet points starting with "•":`,
+      prompt: `${localTimeContext}\n\n${groundingContext}${profileMechanicalContext}\n\nBased on this Q&A conversation about a person's ${conversationSubject}, write 2-4 concise bullet points summarizing only the NEW factual findings from the user's answers that would be useful to persist for future AI analysis. Do not repeat generic information already obvious from the base data. Be specific and factual. Do not preserve assumptions about intent unless the person explicitly stated them. Write every saved bullet in direct second person using "you" and "your"; do not use the person's name, "the user", "he", "she", "his", or "her".\n\nConversation:\n${history}\n\nOutput as plain bullet points starting with "•":`,
       source: "ai_chat_findings_summary",
       priority: 25,
     });
@@ -1337,16 +1390,17 @@ export default function AIChat({
       setImageError(error.message || "Image upload failed.");
       return;
     }
-    const userMsg = { role: "user", text: text || "Please review the attached media.", imageAttachments: imagePayload.metadata };
+    const userMsg = { role: "user", text: text || "Please review the attached media.", imageAttachments: imagePayload.metadata, createdAt: new Date().toISOString() };
     const updated = [...messages, userMsg];
     setMessages(updated);
     await persistChatMessages(updated);
     setInput("");
     setSelectedImages([]);
 
+    const localTimeContext = buildLocalTimeContext();
     const history = updated.map((m) => {
       const attachmentLine = m.imageAttachments?.length ? ` [${m.imageAttachments.length} attached image${m.imageAttachments.length === 1 ? "" : "s"}]` : "";
-      return `${m.role === "user" ? "User" : "AI"}: ${m.text}${attachmentLine}`;
+      return `${m.role === "user" ? "User" : "AI"} (${formatMessagePromptTime(m)}): ${m.text}${attachmentLine}`;
     }).join("\n");
     const videoContext = imagePayload.metadata
       .filter((item) => item.sourceVideo)
@@ -1492,7 +1546,7 @@ Return a conversational answer plus structured findings for review/persistence.`
 
     try {
     const res = await base44.integrations.Core.InvokeLLM({
-      prompt: `${imageReviewPrompt || systemPrompt}\n\n${TIME_FORMAT_RULE}${profileMechanicalContext}\n\n${groundingContext}\n\nSession/profile data:\n${context}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
+      prompt: `${imageReviewPrompt || systemPrompt}\n\n${TIME_FORMAT_RULE}\n\n${localTimeContext}${profileMechanicalContext}\n\n${groundingContext}\n\nSession/profile data:\n${context}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
       ...(imagePayload.aiImages.length ? { images: imagePayload.aiImages, response_json_schema: imageSchema, max_tokens: 5000 } : {}),
       source: "ai_chat_interactive",
       foreground: true,
@@ -1504,7 +1558,7 @@ Return a conversational answer plus structured findings for review/persistence.`
     const reply = imagePayload.aiImages.length
       ? normalized.chatResponse
       : typeof res === "string" ? res.trim() : res?.response?.trim() ?? "";
-    const aiMsg = { role: "assistant", text: reply };
+    const aiMsg = { role: "assistant", text: reply, createdAt: new Date().toISOString() };
     const finalMessages = [...updated, aiMsg];
     setMessages(finalMessages);
     await persistChatMessages(finalMessages);
@@ -2086,6 +2140,9 @@ Return a conversational answer plus structured findings for review/persistence.`
                   >
                     {renderMessageImages(msg.imageAttachments)}
                     <MessageMarkdown text={msg.text} />
+                    <div className={`mt-1 text-[10px] font-medium ${msg.role === "user" ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
+                      {formatMessageDisplayTime(msg)}
+                    </div>
                     {msg.role === "assistant" && (
                       <button
                         type="button"

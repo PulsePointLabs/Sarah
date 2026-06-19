@@ -17,9 +17,87 @@ export function formatSecondsAsWords(value) {
   return `${minutes} minute${minutes === 1 ? "" : "s"} and ${seconds} second${seconds === 1 ? "" : "s"}`;
 }
 
+const TIME_WORD_VALUES = new Map([
+  ["zero", 0],
+  ["oh", 0],
+  ["o", 0],
+  ["one", 1],
+  ["two", 2],
+  ["three", 3],
+  ["four", 4],
+  ["five", 5],
+  ["six", 6],
+  ["seven", 7],
+  ["eight", 8],
+  ["nine", 9],
+  ["ten", 10],
+  ["eleven", 11],
+  ["twelve", 12],
+  ["thirteen", 13],
+  ["fourteen", 14],
+  ["fifteen", 15],
+  ["sixteen", 16],
+  ["seventeen", 17],
+  ["eighteen", 18],
+  ["nineteen", 19],
+  ["twenty", 20],
+  ["thirty", 30],
+  ["forty", 40],
+  ["fifty", 50],
+]);
+
+const TIME_PREFIX_RE = "(at|around|near|by|before|after|from|until|through|to|between)";
+const TIME_ONES_RE = "(?:one|two|three|four|five|six|seven|eight|nine)";
+const TIME_TEENS_RE = "(?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)";
+const TIME_TENS_RE = "(?:twenty|thirty|forty|fifty)";
+const TIME_NUMBER_WORD_RE = `(?:${TIME_TEENS_RE}|${TIME_TENS_RE}(?:[-\\s]+${TIME_ONES_RE})?|${TIME_ONES_RE}|zero)`;
+const SPOKEN_CLOCK_TIME_RE = new RegExp(
+  `\\b${TIME_PREFIX_RE}\\s+(${TIME_NUMBER_WORD_RE})[-\\s]+((?:oh|o|zero)[-\\s]+${TIME_ONES_RE}|${TIME_TEENS_RE}|${TIME_TENS_RE}(?:[-\\s]+${TIME_ONES_RE})?)\\b`,
+  "gi"
+);
+
+function parseTimeWords(value) {
+  const normalized = String(value || "").toLowerCase().replace(/-/g, " ").trim();
+  if (!normalized) return null;
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length === 1) return TIME_WORD_VALUES.get(words[0]) ?? null;
+  if (words.length === 2 && ["oh", "o", "zero"].includes(words[0])) {
+    const ones = TIME_WORD_VALUES.get(words[1]);
+    return ones != null && ones > 0 && ones < 10 ? ones : null;
+  }
+  if (words.length === 2) {
+    const tens = TIME_WORD_VALUES.get(words[0]);
+    const ones = TIME_WORD_VALUES.get(words[1]);
+    if (tens != null && ones != null && tens >= 20 && tens <= 50 && ones > 0 && ones < 10) {
+      return tens + ones;
+    }
+  }
+  return null;
+}
+
+function hyphenateNumberWords(value) {
+  return String(value || "").toLowerCase().replace(/\s+/g, "-");
+}
+
+function displaySecondWords(value) {
+  return String(value || "").toLowerCase().replace(/^(?:oh|o|zero)[-\s]+/i, "");
+}
+
+export function repairSpokenClockTimeReferences(text) {
+  if (typeof text !== "string") return text;
+  return text.replace(SPOKEN_CLOCK_TIME_RE, (match, prefix, minuteWords, secondWords) => {
+    const minutes = parseTimeWords(minuteWords);
+    const seconds = parseTimeWords(secondWords);
+    if (minutes == null || seconds == null || minutes < 0 || seconds < 0 || minutes > 59 || seconds > 59) return match;
+    const minuteLabel = `${minuteWords.toLowerCase().replace(/\s+/g, "-")} minute${minutes === 1 ? "" : "s"}`;
+    const secondLabel = `${hyphenateNumberWords(displaySecondWords(secondWords))} second${seconds === 1 ? "" : "s"}`;
+    return `${prefix} ${minuteLabel} and ${secondLabel}`;
+  });
+}
+
 export function repairRawSecondTimeReferences(text) {
   if (typeof text !== "string") return text;
-  return text
+  return repairSpokenClockTimeReferences(text)
     .replace(/\b(at|around|near|by|before|after|from|until|through|to)\s+(\d{2,5})\s*seconds?\b/gi, (match, prefix, seconds) => {
       const value = Number(seconds);
       if (!Number.isFinite(value) || value < 60) return match;

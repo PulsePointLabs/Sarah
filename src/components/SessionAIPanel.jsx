@@ -2217,6 +2217,7 @@ ${hrvIntegrationRules}
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
 - Write all times as words: "ten minutes and thirty seconds" not "10:30"
+- Do not write clock-style spoken timestamps like "nine twenty two", "four thirty", or "one oh five". Those must be written as "nine minutes and twenty-two seconds", "four minutes and thirty seconds", or "one minute and five seconds".
 - Never write raw second offsets such as "at 943 seconds" or "943s". Convert them to minutes and seconds, such as "at fifteen minutes and forty-three seconds".
 - Spell out all numbers as words (e.g., "ten beats per minute" not "10 bpm")
 - Write in conversational, sentence-based prose with natural pauses

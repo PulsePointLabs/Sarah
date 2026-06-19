@@ -5,6 +5,7 @@ import {
   repairCharacterSplitParagraph,
   reduceConsistencyPhraseRepetition,
   repairRawSecondTimeReferences,
+  repairSpokenClockTimeReferences,
 } from '../../src/utils/aiTextRepair.js';
 
 test('raw large second offsets are repaired in AI-facing/user-facing prose', () => {
@@ -13,6 +14,19 @@ test('raw large second offsets are repaired in AI-facing/user-facing prose', () 
   assert.doesNotMatch(repaired, /\b943s\b/);
   assert.doesNotMatch(repaired, /\b943 seconds\b/);
   assert.doesNotMatch(repaired, /\[943s\]/);
+});
+
+test('spoken clock-style timestamps are repaired to explicit minutes and seconds', () => {
+  const repaired = repairSpokenClockTimeReferences(
+    'The shift is visible at nine twenty two, then around one oh five, and from four thirty to five ten.'
+  );
+
+  assert.match(repaired, /at nine minutes and twenty-two seconds/i);
+  assert.match(repaired, /around one minute and five seconds/i);
+  assert.match(repaired, /from four minutes and thirty seconds/i);
+  assert.match(repaired, /to five minutes and ten seconds/i);
+  assert.doesNotMatch(repaired, /\bat nine twenty two\b/i);
+  assert.doesNotMatch(repaired, /\baround one oh five\b/i);
 });
 
 test('repeated consistency wording is varied after the first allowed use', () => {
