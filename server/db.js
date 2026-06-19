@@ -107,6 +107,53 @@ export function listEntities(entity) {
   return db.prepare('SELECT data FROM entities WHERE entity = ?').all(entity).map((r) => safeJsonParse(r.data)).filter(Boolean);
 }
 
+export function listProcessingJobSummaries({ type = '', statuses = [], meta = {}, limit = 100, includeCleared = false } = {}) {
+  try {
+    const clauses = ["entity = 'ProcessingJob'"];
+    const params = [];
+    if (type) {
+      clauses.push("json_extract(data, '$.type') = ?");
+      params.push(type);
+    }
+    if (Array.isArray(statuses) && statuses.length) {
+      clauses.push(`json_extract(data, '$.status') IN (${statuses.map(() => '?').join(', ')})`);
+      params.push(...statuses);
+    }
+    if (!includeCleared) {
+      clauses.push("json_extract(data, '$.meta.clearedAt') IS NULL");
+    }
+    for (const [key, value] of Object.entries(meta || {})) {
+      if (value === undefined || value === null || value === '') continue;
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+      clauses.push(`json_extract(data, '$.meta.${key}') = ?`);
+      params.push(String(value));
+    }
+    params.push(Math.max(1, Math.min(500, Number(limit) || 100)));
+    return db.prepare(`
+      SELECT json_remove(data, '$.result', '$.payload') AS data
+      FROM entities
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY COALESCE(updated_date, created_date) DESC
+      LIMIT ?
+    `).all(...params).map((r) => safeJsonParse(r.data)).filter(Boolean);
+  } catch {
+    return listEntities('ProcessingJob').map(({ result: _result, payload: _payload, ...job }) => job);
+  }
+}
+
+export function listRecoverableProcessingJobs() {
+  try {
+    return db.prepare(`
+      SELECT data
+      FROM entities
+      WHERE entity = 'ProcessingJob'
+        AND json_extract(data, '$.status') IN ('queued', 'running')
+    `).all().map((r) => safeJsonParse(r.data)).filter(Boolean);
+  } catch {
+    return listEntities('ProcessingJob').filter((record) => ['queued', 'running'].includes(record?.status));
+  }
+}
+
 export function getEntity(entity, id) {
   const row = db.prepare('SELECT data FROM entities WHERE entity = ? AND id = ?').get(entity, id);
   return row ? safeJsonParse(row.data) : null;

@@ -1,4 +1,4 @@
-import { getEntity, listEntities, upsertEntity } from '../db.js';
+import { getEntity, listEntities, listProcessingJobSummaries, listRecoverableProcessingJobs, upsertEntity } from '../db.js';
 
 const handlers = new Map();
 const jobs = new Map();
@@ -304,8 +304,7 @@ function hydratePersistedJob(record) {
 }
 
 export function restorePersistedJobs() {
-  const recoverable = listEntities('ProcessingJob')
-    .filter((record) => ['queued', 'running'].includes(record?.status));
+  const recoverable = listRecoverableProcessingJobs();
 
   for (const record of recoverable) {
     const handler = handlers.get(record.type);
@@ -374,7 +373,14 @@ export function getJob(id) {
 
 export function listJobs({ type, status, limit = 20, meta = {}, includeCleared = false } = {}) {
   const merged = new Map();
-  for (const job of listEntities('ProcessingJob')) {
+  const statuses = String(status || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const metaEntries = Object.entries(meta || {}).filter(([, value]) => value !== undefined && value !== null && value !== '');
+  const queryLimit = Math.max(50, Math.min(500, Number(limit || 20) * 4));
+
+  for (const job of listProcessingJobSummaries({ type, statuses, meta, includeCleared, limit: queryLimit })) {
     const pub = publicJob(job, { includeResult: false });
     if (pub?.id) merged.set(pub.id, pub);
   }
@@ -382,12 +388,6 @@ export function listJobs({ type, status, limit = 20, meta = {}, includeCleared =
     const pub = publicJob(job, { includeResult: false });
     if (pub?.id) merged.set(pub.id, pub);
   }
-
-  const statuses = String(status || '')
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const metaEntries = Object.entries(meta || {}).filter(([, value]) => value !== undefined && value !== null && value !== '');
 
   return [...merged.values()]
     .filter((job) => includeCleared || !isCleared(job))
