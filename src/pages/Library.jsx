@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
-import { listBackgroundJobs } from "@/lib/backgroundJobs";
+import { getBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Play, Pause, Download, Trash2, Music, Video, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -113,7 +113,8 @@ const getVideoUrl = (video) => serverUrl(getRawVideoUrl(video));
 
 const virtualVideoFromJob = (job) => {
   if (!job?.result?.file_url) return null;
-  const title = job?.meta?.title || job?.result?.record?.title || job?.payload?.title || "Completed review video";
+  const isProfileAnatomyVideo = job?.type === "profile_anatomy_video";
+  const title = job?.meta?.title || job?.result?.record?.title || job?.payload?.title || (isProfileAnatomyVideo ? "Profile anatomy video" : "Completed review video");
   return {
     id: `job:${job.id}`,
     title,
@@ -131,10 +132,23 @@ const virtualVideoFromJob = (job) => {
     clip_count: Number(job.result.clip_count || 0),
     cited_time_count: Number(job.result.cited_time_count || 0),
     manifest_url: job.result.manifest_url || null,
-    visual_mode: job.result.record?.visual_mode || null,
-    _source: "completed_review_video_job",
+    visual_mode: job.result.record?.visual_mode || (isProfileAnatomyVideo ? "profile_anatomy_video" : null),
+    review_type: job?.meta?.reviewType || job?.payload?.reviewType || job?.result?.review_scope || null,
+    _source: isProfileAnatomyVideo ? "completed_profile_anatomy_video_job" : "completed_review_video_job",
   };
 };
+
+const hydrateJobsWithResults = async (jobs = []) => (
+  Promise.all((jobs || []).map(async (job) => {
+    if (!job?.id || job.result || !job.hasResult) return job;
+    try {
+      return await getBackgroundJob(job.id);
+    } catch (error) {
+      console.warn("Could not hydrate completed background job:", error);
+      return job;
+    }
+  }))
+);
 
 const getCreatedTimestamp = (export_) => (
   export_?.exported_at ||
@@ -274,7 +288,20 @@ export default function Library() {
         includeCleared: true,
         limit: 75,
       });
-      return result.jobs || [];
+      return hydrateJobsWithResults(result.jobs || []);
+    },
+  });
+
+  const { data: completedProfileVideoJobs = [], isLoading: profileVideoJobsLoading } = useQuery({
+    queryKey: ["completedProfileAnatomyVideoJobs"],
+    queryFn: async () => {
+      const result = await listBackgroundJobs({
+        type: "profile_anatomy_video",
+        status: "complete",
+        includeCleared: true,
+        limit: 75,
+      });
+      return hydrateJobsWithResults(result.jobs || []);
     },
   });
 
@@ -324,7 +351,7 @@ export default function Library() {
   const downloadableVideos = useMemo(() => (
     [
       ...reviewVideos,
-      ...completedVideoJobs
+      ...[...completedVideoJobs, ...completedProfileVideoJobs]
         .map(virtualVideoFromJob)
         .filter(Boolean)
         .filter((jobVideo) => !reviewVideos.some((video) => getRawVideoUrl(video) === jobVideo.file_url)),
@@ -332,7 +359,7 @@ export default function Library() {
       .filter((video) => Boolean(getRawVideoUrl(video)))
       .sort((a, b) => timestampMs(b) - timestampMs(a))
       .slice(0, RECENT_VIDEO_LIMIT)
-  ), [completedVideoJobs, reviewVideos]);
+  ), [completedProfileVideoJobs, completedVideoJobs, reviewVideos]);
 
   const deleteExport = useMutation({
     mutationFn: (id) => base44.entities.AudioExport.delete(id),
@@ -421,7 +448,7 @@ export default function Library() {
     }
   };
 
-  if (isLoading || jobsLoading || videosLoading || videoJobsLoading) {
+  if (isLoading || jobsLoading || videosLoading || videoJobsLoading || profileVideoJobsLoading) {
     return (
       <div className="flex items-center justify-center h-96">
         <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>

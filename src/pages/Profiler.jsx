@@ -4872,20 +4872,29 @@ function ProfileImageReviewPanel({
           type: "profile_anatomy_video",
           status: "queued,running,complete",
           metaSource: "Profiler",
-          limit: 20,
+          limit: 50,
         });
         if (cancelled) return;
-        const matching = (jobs.jobs || [])
-          .filter((job) => job?.meta?.reviewType === config.kind && String(job?.meta?.sourceGeneratedAt || "") === String(sourceGeneratedAt))
-          .sort((a, b) => String(b.finishedAt || b.updatedAt || b.createdAt || "").localeCompare(String(a.finishedAt || a.updatedAt || a.createdAt || "")))[0];
+        const sortedReviewJobs = (jobs.jobs || [])
+          .filter((job) => (job?.meta?.reviewType || job?.payload?.reviewType) === config.kind)
+          .sort((a, b) => String(b.finishedAt || b.updatedAt || b.createdAt || "").localeCompare(String(a.finishedAt || a.updatedAt || a.createdAt || "")));
+        const matching = sortedReviewJobs.find((job) => (
+          String(job?.meta?.sourceGeneratedAt || job?.payload?.sourceGeneratedAt || "") === String(sourceGeneratedAt)
+        )) || sortedReviewJobs.find((job) => job.status === "complete" && job.result?.file_url) || sortedReviewJobs[0];
         if (!matching) return;
-        if (matching.status === "complete" && matching.result?.file_url) {
-          setAnatomyVideo(matching.result);
-          setAnatomyVideoStatus({ type: "ok", message: "Anatomy video ready." });
-        } else if (matching.status === "queued" || matching.status === "running") {
+        const fullMatching = matching.hasResult && !matching.result ? await getBackgroundJob(matching.id) : matching;
+        if (cancelled) return;
+        if (fullMatching.status === "complete" && fullMatching.result?.file_url) {
+          const exactSourceMatch = String(fullMatching?.meta?.sourceGeneratedAt || fullMatching?.payload?.sourceGeneratedAt || "") === String(sourceGeneratedAt);
+          setAnatomyVideo(fullMatching.result);
+          setAnatomyVideoStatus({
+            type: "ok",
+            message: exactSourceMatch ? "Anatomy video ready." : "Latest saved anatomy video ready.",
+          });
+        } else if (fullMatching.status === "queued" || fullMatching.status === "running") {
           setAnatomyVideoStatus({
             type: "working",
-            message: matching.progress?.message || "Anatomy video is rendering in the background...",
+            message: fullMatching.progress?.message || "Anatomy video is rendering in the background...",
           });
         }
       } catch (err) {
