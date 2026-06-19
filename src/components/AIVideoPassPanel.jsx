@@ -125,6 +125,8 @@ const ANATOMICAL_LATERALITY_RULE = `Anatomical laterality rule: "your left" and 
 
 const PRODUCTION_PROCEDURE_ANNOTATION_RULE = `Production procedure narration rule: output should be useful for later viewer-facing review, not an internal correction log. Do not write "possible visual/timeline mismatch", "correction", "video-pass conflict", "timeline of record", "not directly documented", "not visible", or "could not confirm" unless the uncertainty changes safety or the event should be rejected. If manual notes resolve the sequence, silently use the manual notes and write the clean visible/procedural action. Visible hands are your hands; write "your hand" or "your hands". Use "your gloved hand" only when glove/sterile technique matters. Never write "a gloved hand", "the gloved hand", "operator", "operator's hand", "clinician", or "assistant". Do not infer povidone-iodine from natural tissue color, warm lighting, shadow, or camera tone; only call iodine/staining when the swab/applicator or nearby manual note supports iodine at that stage. If manual notes place swabbing after draping, do not describe swabbing or iodine staining before draping. If two swabbing passes are logged, describe two passes total, not an extra prep pass.`;
 
+const MANUAL_NOTE_FOUNDATION_RULE = `Manual-note foundation rule: human-written session notes, freeform notes, and timestamped manual event notes are the foundation for Sarah's AI annotation. Use them to understand what the window is supposed to represent before interpreting the frames. Then add Sarah's observational layer: visible genital/resting or erection state, glans/meatus/foreskin/scrotal/perineal state when visible, body position, hand/body positioning, Foley or tool technique, field setup, comfort/tolerance cues, breathing/leg/foot response, and any telemetry-supported body response. Do not merely restate the note. Do not contradict or move a manual note unless the current frames directly and unmistakably show a mismatch; when there is ambiguity, keep the manual note as the procedural anchor and describe the visual uncertainty separately. Prior AI-generated cards are reference material only; they are not manual notes.`;
+
 function formatLocalVisionRollingState(state) {
   if (!state) return "";
   if (typeof state === "string") return state.replace(/\s+/g, " ").trim();
@@ -242,7 +244,7 @@ function buildSessionVideoContext(session, selectedVideo, timelineRows = []) {
   ].filter(Boolean);
   const contextText = sessionContextEvidenceText(session);
   const timelineEvents = (session?.event_timeline || [])
-    .filter((event) => String(event?.note || "").trim())
+    .filter((event) => String(event?.note || "").trim() && !isAIGeneratedPassEvent(event))
     .slice()
     .sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0))
     .slice(0, 80)
@@ -2249,6 +2251,8 @@ You are Sarah, reviewing sampled frames from a linked local ${recordLabel} video
 
 ${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 
+${MANUAL_NOTE_FOUNDATION_RULE}
+
 ${isExploration ? "Exploration/procedure context grounding" : "Session context grounding"} has priority when it identifies known setup, devices, materials, or technique. Use the ${recordLabel} notes, methods, devices, and timestamped/manual notes below to interpret ambiguous visible objects and contact locations. ${isExploration ? "For example, if the exploration context says an 18 French Foley catheter or urethral sound is in use and the frames show a matching device at the meatus, identify it as that supported instrumentation rather than vague stimulation or generic object handling." : "For example, if the session context says a vibrator is held at the perineum during stimulation and the frames show a matching device/contact at that location, call it a perineal vibrator/contact rather than a vague \"blue device near the scrotum and genitals.\""} If context and visuals do not line up, state the uncertainty instead of forcing the label.
 
 ${isExploration ? "Procedure chronology rule: manual/user timeline notes are stronger than prior AI video-pass cards for stage order and timing. Use the current sampled frames to describe what is visible now, but do not back-date iodine, lubricant, Foley-at-meatus contact, insertion, urine return, balloon fill, securement, or cleanup into a window unless either the current frames show it or a nearby manual note says it has happened. If the video appears to show something before the manual timeline allows it, label the visual as ambiguous or possible conflict instead of merging both claims." : ""}
@@ -2329,7 +2333,7 @@ ${isExploration ? "Exploration procedure/devices/context" : "Session methods/dev
 ].filter(Boolean).join(" | ") || "No specific device context listed."}
 Nearby ${recordLabel} events: ${(workingSession?.event_timeline || [])
   .filter((event) => {
-    if (isExploration && isAIGeneratedPassEvent(event)) return false;
+    if (isAIGeneratedPassEvent(event)) return false;
     const t = Number(event.time_s || 0);
     if (!Number.isFinite(t)) return false;
     if (isExploration) return t >= window.start - 8 && t <= window.end + 8;
