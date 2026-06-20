@@ -1034,6 +1034,10 @@ function chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds }) {
   return best.event;
 }
 
+export function selectReviewVideoEventForSegment({ segment, plan, clipByParagraph = new Map(), usedEventIds = new Set() } = {}) {
+  return chooseSegmentEvent({ segment, plan: plan || {}, clipByParagraph, usedEventIds });
+}
+
 function clampClipStart(startSeconds, durationSeconds, sourceDuration) {
   const duration = Math.max(0.5, Number(durationSeconds || 0.5));
   const maxStart = Math.max(0, Number(sourceDuration || 0) - duration);
@@ -1070,142 +1074,6 @@ function estimateSpokenAnchorOffsetSeconds({ segment, event, audioDuration }) {
 
 function isClimaxReviewSegment(segment = {}, event = {}) {
   return /\b(climax|ejaculat|orgasm|semen|fluid release|release of semen|emission|expulsion)\b/i.test(`${segment.text || ''} ${eventText(event)}`);
-}
-
-function isBodyExplorationReview(payload = {}, session = {}) {
-  const text = [
-    payload.recordType,
-    payload.record_type,
-    payload.source,
-    payload.title,
-    session.recordType,
-    session.record_type,
-    session.exploration_type,
-    session.devices,
-  ].filter(Boolean).join(' ').toLowerCase();
-  return /\b(body[_\s-]?exploration|foley|catheter|instrumentation|urethral|sounding|dilation)\b/.test(text);
-}
-
-function procedureBrollScore(event = {}, segmentText = '') {
-  const text = eventText(event);
-  const segment = String(segmentText || '').toLowerCase();
-  let score = 0;
-  const positive = [
-    [/\b(table|supine|positioning|setup|tray|field|drape|underpad)\b/, 34],
-    [/\b(glove|gloved|sterile|prep|swab|swabbing|iodine|povidone|antiseptic|gauze|wipe|applicator)\b/, 58],
-    [/\b(lubric|lube|gel|syringe|instill|dilat|dilation)\b/, 62],
-    [/\b(foley|catheter|urethral|meatus|meatal|glans|penis|foreskin|shaft|scrotum)\b/, 72],
-    [/\b(advance|advancement|insert|insertion|sphincter|prostatic|bladder|urine|balloon|traction|seat|seated|drainage|bag|tubing)\b/, 82],
-    [/\b(comfort|discomfort|resistance|relax|relaxed|tension|bracing|leg|foot|toe)\b/, 24],
-  ];
-  const negative = [
-    [/\b(walk|walking|wander|wandering|around the room|room walk|butt|ass|rear|standing up|stood up|exit|exited|leaving|left the table)\b/, 160],
-    [/\boff[-\s]?camera\b/, 120],
-    [/\bstatlock\b.*\boff[-\s]?camera\b/, 180],
-    [/\bcamera (?:moved|shifted|repositioned)\b|\bcleanup only\b/, 65],
-  ];
-  for (const [pattern, value] of positive) {
-    if (pattern.test(text)) score += value;
-    if (pattern.test(text) && pattern.test(segment)) score += Math.round(value * 0.8);
-  }
-  for (const [pattern, value] of negative) {
-    if (pattern.test(text)) score -= value;
-  }
-  const eventTime = Number(event.session_time_s ?? event.time_s);
-  if (Number.isFinite(eventTime) && eventTime < 20) score += 10;
-  return score;
-}
-
-function procedureBrollTopic(event = {}) {
-  const text = eventText(event);
-  if (/\b(balloon|inflation|inflate|syringe|port|bypass|leak|escaped|escaping|troubleshoot|issue|problem|fumble)\b/.test(text)) return 'balloon_troubleshooting';
-  if (/\b(swab|swabbing|iodine|povidone|antiseptic|prep|gauze|wipe|applicator)\b/.test(text)) return 'prep_swab';
-  if (/\b(lubric|lube|gel)\b/.test(text)) return 'lubrication';
-  if (/\b(meatus|meatal|insert|insertion|advance|advancement|urethral|sphincter|prostatic|bladder entry)\b/.test(text)) return 'insertion_passage';
-  if (/\b(drape|field|table|supine|position|setup|tray|underpad)\b/.test(text)) return 'setup_positioning';
-  if (/\b(traction|seat|seated|drainage|bag|urine|tubing)\b/.test(text)) return 'drainage_seating';
-  if (/\b(remove|cleanup|clean up|glove removal|exit|statlock)\b/.test(text)) return 'cleanup';
-  return 'general';
-}
-
-function segmentWantsBrollTopic(segmentText = '', topic = '') {
-  const segment = String(segmentText || '').toLowerCase();
-  if (topic === 'balloon_troubleshooting') return /\b(balloon|inflation|inflate|syringe|port|bypass|leak|escaped|escaping|troubleshoot|issue|problem)\b/.test(segment);
-  if (topic === 'prep_swab') return /\b(swab|swabbing|iodine|povidone|antiseptic|prep|gauze|wipe|applicator)\b/.test(segment);
-  if (topic === 'lubrication') return /\b(lubric|lube|gel)\b/.test(segment);
-  if (topic === 'insertion_passage') return /\b(meatus|meatal|insert|insertion|advance|advancement|urethral|sphincter|prostatic|bladder)\b/.test(segment);
-  if (topic === 'setup_positioning') return /\b(drape|field|table|supine|position|setup|tray|underpad)\b/.test(segment);
-  if (topic === 'drainage_seating') return /\b(traction|seat|seated|drainage|bag|urine|tubing)\b/.test(segment);
-  if (topic === 'cleanup') return /\b(remove|cleanup|clean up|exit|statlock|securement)\b/.test(segment);
-  return false;
-}
-
-function procedureBrollRepetitionPenalty(event = {}, segmentText = '', usage = {}) {
-  const time = Number(event.session_time_s ?? event.time_s);
-  const topic = procedureBrollTopic(event);
-  let penalty = 0;
-  const usedTimes = Array.isArray(usage.usedTimes) ? usage.usedTimes : [];
-  const closeUses = usedTimes.filter((usedTime) => Number.isFinite(time) && Math.abs(Number(usedTime) - time) <= 22).length;
-  if (closeUses) penalty += 95 * closeUses;
-  const veryCloseUses = usedTimes.filter((usedTime) => Number.isFinite(time) && Math.abs(Number(usedTime) - time) <= 8).length;
-  if (veryCloseUses) penalty += 180 * veryCloseUses;
-  const topicCount = Number(usage.topicCounts?.[topic] || 0);
-  if (topicCount) penalty += topicCount * (topic === 'balloon_troubleshooting' ? 150 : 58);
-  if (topic === 'balloon_troubleshooting' && !segmentWantsBrollTopic(segmentText, topic)) penalty += 170;
-  if (topic === 'cleanup' && !segmentWantsBrollTopic(segmentText, topic)) penalty += 95;
-  return penalty;
-}
-
-function markProcedureBrollUsed(event = {}, usage = {}) {
-  const time = Number(event.session_time_s ?? event.time_s);
-  if (!Array.isArray(usage.usedTimes)) usage.usedTimes = [];
-  if (!usage.topicCounts || typeof usage.topicCounts !== 'object') usage.topicCounts = {};
-  if (Number.isFinite(time)) usage.usedTimes.push(time);
-  const topic = procedureBrollTopic(event);
-  usage.topicCounts[topic] = Number(usage.topicCounts[topic] || 0) + 1;
-  return usage;
-}
-
-function bodyExplorationBrollEvents(session = {}) {
-  const events = Array.isArray(session.event_timeline) ? session.event_timeline : [];
-  return events
-    .map((event, index) => ({
-      id: event?.id || `procedure-broll-${index + 1}`,
-      label: event?.note || `Procedure context ${index + 1}`,
-      reason: 'Procedure-safe B-roll from timestamped body exploration notes',
-      note: event?.note || '',
-      category: Array.isArray(event?.category) ? event.category.join(' ') : event?.category || '',
-      tags: Array.isArray(event?.annotation_tags) ? event.annotation_tags.join(' ') : event?.annotation_tags || '',
-      source: 'procedure_broll_event',
-      session_time_s: Number(event?.time_s),
-    }))
-    .filter((event) => Number.isFinite(Number(event.session_time_s)));
-}
-
-function chooseProcedureBrollEvent({ segment, session, usedEventIds, usage }) {
-  const candidates = bodyExplorationBrollEvents(session)
-    .map((event) => {
-      const id = String(event.id || `${event.label}:${event.session_time_s}`);
-      const reusePenalty = usedEventIds.has(id) ? 220 : 0;
-      const repetitionPenalty = procedureBrollRepetitionPenalty(event, segment?.text, usage);
-      return {
-        event,
-        id,
-        score: procedureBrollScore(event, segment?.text) - reusePenalty - repetitionPenalty,
-      };
-    })
-    .filter(({ score }) => score >= 35)
-    .sort((a, b) => b.score - a.score || Number(a.event.session_time_s) - Number(b.event.session_time_s));
-  if (!candidates.length) return null;
-  const chosen = candidates[0];
-  usedEventIds.add(chosen.id);
-  markProcedureBrollUsed(chosen.event, usage);
-  return {
-    ...chosen.event,
-    label: chosen.event.label || 'Procedure context',
-    reason: chosen.event.reason,
-    _broll_score: chosen.score,
-  };
 }
 
 function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, sourceDuration, fallbackCursor }) {
@@ -1331,13 +1199,11 @@ async function renderSegmentedSourceReviewVideo({
 
   const narrationSegments = buildReviewNarrationSegments(paragraphs);
   const usedEventIds = new Set();
-  const procedureBrollUsage = { usedTimes: [], topicCounts: {} };
   const avSegments = [];
   const videoSegments = [];
   const audioSegments = [];
   const segmentDurations = [];
   const generatedClips = [];
-  const bodyExplorationMode = isBodyExplorationReview(payload, session);
   let previousText = '';
   let fallbackCursor = 0;
   let totalAudioDuration = 0;
@@ -1367,9 +1233,7 @@ async function renderSegmentedSourceReviewVideo({
 
     const timestampRequirement = timestampRequirementForSegment(segment);
     const matchedEvent = chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds });
-    const event = matchedEvent || (!timestampRequirement.required && bodyExplorationMode
-      ? chooseProcedureBrollEvent({ segment, session, usedEventIds, usage: procedureBrollUsage })
-      : null);
+    const event = matchedEvent || null;
     const eventRenderable = event
       ? canRenderSessionTimeFromPrimary({
         sessionSeconds: event.session_time_s,
@@ -1475,9 +1339,7 @@ async function renderSegmentedSourceReviewVideo({
     await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
     avSegments.push(avPath);
     fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
-    const selectionReason = event?.reason || (bodyExplorationMode && !matchedEvent && event
-      ? 'No exact event matched this untimed spoken segment; using procedure-safe timestamped B-roll.'
-      : !matchedEvent && !event
+    const selectionReason = event?.reason || (!matchedEvent && !event
       ? 'No exact event matched this untimed spoken segment; using continuous source video context.'
       : 'Matched narration segment to timestamped source video.');
     const timelineTrace = buildTimelineTrace({
@@ -1488,16 +1350,12 @@ async function renderSegmentedSourceReviewVideo({
       selectionReason,
       fallbackUsed: !matchedEvent,
       fallbackType: !matchedEvent
-        ? event
-          ? 'procedure_broll'
-          : 'continuous_source_context'
+        ? 'continuous_source_context'
         : null,
       visualSource: matchedEvent
         ? event?.source === 'spoken_segment_time'
           ? 'explicit_spoken_timestamp'
           : 'matched_event'
-        : event
-        ? 'procedure_broll'
         : 'continuous_source_context',
     });
     generatedClips.push({
@@ -1519,8 +1377,8 @@ async function renderSegmentedSourceReviewVideo({
       spoken_time_lead_seconds: Math.round(Number(window.spokenTimeLeadSeconds || 0) * 10) / 10,
       source_time_strategy: window.directSpokenTime ? 'spoken_time_phrase_aligned_to_source' : 'session_offset_or_event',
       matched_event: Boolean(matchedEvent),
-      procedural_broll: Boolean(!matchedEvent && event),
-      procedural_broll_score: event?._broll_score ?? null,
+      procedural_broll: false,
+      procedural_broll_score: null,
       timeline_trace: { ...timelineTrace, spoken_segment_index: index + 1 },
     });
     previousText = previousText ? `${previousText} ${segment.text}` : segment.text;
