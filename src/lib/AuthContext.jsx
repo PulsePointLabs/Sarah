@@ -1,5 +1,6 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
+import { incrementLifecycleMountCount, recordPwaLifecycleEvent } from '@/lib/pwaLifecycleDiagnostics';
 
 const AuthContext = createContext();
 
@@ -12,16 +13,19 @@ export const AuthProvider = ({ children }) => {
   const [appPublicSettings, setAppPublicSettings] = useState(null); // Contains only { id, public_settings }
 
   useEffect(() => {
+    incrementLifecycleMountCount('auth_provider');
     checkAppState();
   }, []);
 
   const checkAppState = async () => {
     try {
+      recordPwaLifecycleEvent('auth_initialization_start');
       setIsLoadingPublicSettings(true);
       setAuthError(null);
       setAppPublicSettings({ id: 'local', public_settings: {} });
       setIsLoadingPublicSettings(false);
       await checkUserAuth();
+      recordPwaLifecycleEvent('auth_initialization_complete');
     } catch (error) {
       console.error('Unexpected error:', error);
       setAuthError({
@@ -36,15 +40,21 @@ export const AuthProvider = ({ children }) => {
   const checkUserAuth = async () => {
     try {
       // Now check if the user is authenticated
+      recordPwaLifecycleEvent('auth_refresh_start');
       setIsLoadingAuth(true);
       const currentUser = await base44.auth.me();
       setUser(currentUser);
       setIsAuthenticated(true);
       setIsLoadingAuth(false);
+      recordPwaLifecycleEvent('auth_refresh_success');
     } catch (error) {
       console.error('User auth check failed:', error);
       setIsLoadingAuth(false);
       setIsAuthenticated(false);
+      recordPwaLifecycleEvent('auth_refresh_failed', {
+        status: error?.status || null,
+        message: error?.message || String(error),
+      });
       
       // If user auth fails, it might be an expired token
       if (error.status === 401 || error.status === 403) {

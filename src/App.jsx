@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
@@ -35,12 +36,29 @@ import SettingsStatus from './pages/SettingsStatus';
 import BodyExploration from './pages/BodyExploration';
 import BodyExplorationDetail from './pages/BodyExplorationDetail';
 import NewBodyExploration from './pages/NewBodyExploration';
+import { incrementLifecycleMountCount, recordPwaLifecycleEvent } from '@/lib/pwaLifecycleDiagnostics';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
+  const bootScreenVisibleRef = useRef(null);
+
+  useEffect(() => {
+    incrementLifecycleMountCount('router_tree');
+  }, []);
+
+  const bootScreenVisible = Boolean(isLoadingPublicSettings || isLoadingAuth);
+
+  useEffect(() => {
+    if (bootScreenVisibleRef.current === bootScreenVisible) return;
+    bootScreenVisibleRef.current = bootScreenVisible;
+    recordPwaLifecycleEvent(bootScreenVisible ? 'boot_screen_entry' : 'boot_screen_exit', {
+      isLoadingPublicSettings,
+      isLoadingAuth,
+    });
+  }, [bootScreenVisible, isLoadingAuth, isLoadingPublicSettings]);
 
   // Show loading spinner while checking app public settings or auth
-  if (isLoadingPublicSettings || isLoadingAuth) {
+  if (bootScreenVisible) {
     return <SarahSplash />;
   }
 

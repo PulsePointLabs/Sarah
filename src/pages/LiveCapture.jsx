@@ -15,10 +15,20 @@ import {
 } from "recharts";
 import PageHeader from "@/components/PageHeader";
 import LiveFootLandmarkTracker from "@/components/LiveFootLandmarkTracker";
+import LiveCaptureLaunchpad from "@/components/LiveCaptureLaunchpad";
 import { base44 } from "@/api/base44Client";
 import { useToast } from "@/components/ui/use-toast";
 import { HR_SOURCE_OPTIONS, PULSOID_MODE_OPTIONS, computeHrvFromRr, maskPulsoidToken, readHrSourceSettings, writeHrSourceSettings } from "@/lib/hrSources";
 import { apiUrl } from "@/lib/mobileApiBase";
+import {
+  buildLaunchProfileFromRuntime,
+  readLiveCaptureLaunchProfile,
+  saveLiveCaptureLaunchProfile,
+  summarizeLaunchProfile,
+} from "@/lib/liveCaptureLaunchProfile";
+import { DEFAULT_LIVE_CUE_SETTINGS, LIVE_CUE_PRESETS, resolveLiveCuePhraseBank } from "@/lib/liveCuePhrases";
+import { useLiveCueAudio } from "@/hooks/useLiveCueAudio";
+import { useLiveCueEngine } from "@/hooks/useLiveCueEngine";
 import { computeLiveClimaxPrediction } from "@/utils/liveClimaxPrediction";
 import {
   buildPerinealEmgCalibration,
@@ -361,6 +371,7 @@ function buildHowlWavePoints(type = "", amplitude = 50) {
 function HowlWaveformPreview({ label = "", intensity = 0, live = false }) {
   const amplitude = Math.max(0, Math.min(100, Number(intensity) || 0)) / 100 * 44;
   const points = buildHowlWavePoints(label, amplitude);
+
   return (
     <div className="rounded-lg border border-border bg-background/70 p-2">
       <div className="mb-1 flex items-center justify-between gap-2">
@@ -1214,6 +1225,17 @@ export default function LiveCapture() {
   const [howlConnectionTest, setHowlConnectionTest] = useState({ status: "idle", message: "" });
   const [howlAdvancedOpen, setHowlAdvancedOpen] = useState(false);
   const [howlQuickModalOpen, setHowlQuickModalOpen] = useState(false);
+  const [launchProfile, setLaunchProfile] = useState(() => readLiveCaptureLaunchProfile());
+  const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
+  const [launchState, setLaunchState] = useState({ phase: "idle", message: "", steps: [], busy: false, error: "" });
+  const [liveCueSettings, setLiveCueSettings] = useState(() => ({
+    ...DEFAULT_LIVE_CUE_SETTINGS,
+    enabled: readLiveCaptureLaunchProfile().livePhysiologyCuesEnabled,
+    style: readLiveCaptureLaunchProfile().cueStyle,
+    volume: readLiveCaptureLaunchProfile().cueVolume,
+    pan: readLiveCaptureLaunchProfile().cuePan,
+    mediaDucking: readLiveCaptureLaunchProfile().mediaDucking,
+  }));
   const latestHrRef = useRef(null);
   const latestEmgRef = useRef(null);
   const perinealDetectorRef = useRef(createPerinealEmgDetector());
@@ -1254,9 +1276,36 @@ export default function LiveCapture() {
   const howlAutoLastActionRef = useRef({ at: 0, intensity: null, reason: "" });
   const howlSettingsDirtyRef = useRef(false);
   const howlFocusedFieldRef = useRef("");
+  const launchInFlightRef = useRef(null);
+  const restoredLaunchProfileRef = useRef(false);
   const liveRecordEntity = liveSession?.entity || (captureKind === "body_exploration" ? "BodyExploration" : "Session");
   const liveRecordApi = base44.entities[liveRecordEntity] || base44.entities.Session;
   const captureIsBodyExploration = liveRecordEntity === "BodyExploration" || captureKind === "body_exploration";
+
+  useEffect(() => {
+    if (restoredLaunchProfileRef.current) return;
+    restoredLaunchProfileRef.current = true;
+    const profile = readLiveCaptureLaunchProfile();
+    setLaunchProfile(profile);
+    setCaptureKind(profile.captureKind || "session");
+    setCaptureMode(profile.captureMode || "full");
+    setEmgSensorConfig(profile.emgSensorConfig || "generic");
+    setTelemetryNoticesEnabled(profile.telemetryNoticesEnabled !== false);
+    setHeartbeatAudioEnabled(Boolean(profile.heartbeatAudioEnabled));
+    setHrSourceSettings((prev) => ({
+      ...prev,
+      source: profile.hrSource || prev.source,
+      pulsoidMode: profile.pulsoidMode || prev.pulsoidMode,
+    }));
+    setLiveCueSettings((prev) => ({
+      ...prev,
+      enabled: profile.livePhysiologyCuesEnabled !== false,
+      style: profile.cueStyle || prev.style,
+      volume: profile.cueVolume ?? prev.volume,
+      pan: profile.cuePan || prev.pan,
+      mediaDucking: profile.mediaDucking !== false,
+    }));
+  }, []);
 
   const getHeartbeatAudioContext = useCallback(async () => {
     if (!heartbeatAudioContextRef.current || heartbeatAudioContextRef.current.state === "closed") {
@@ -2613,6 +2662,175 @@ export default function LiveCapture() {
     setActiveSessionDoc((prev) => ({ ...(prev || session), ...patch }));
   }, [activeSessionDoc, ensureSession, liveRecordApi, liveSession]);
 
+  const liveCuePhraseBank = useMemo(
+    () => resolveLiveCuePhraseBank(liveCueSettings, { captureKind }),
+    [captureKind, liveCueSettings],
+  );
+  const liveCueAudio = useLiveCueAudio({
+    phrases: liveCuePhraseBank.phrases,
+    settings: liveCuePhraseBank.settings,
+    enabled: liveCueSettings.enabled,
+  });
+  const liveCueEngine = useLiveCueEngine({
+    captureKind,
+    cueSettings: liveCueSettings,
+    audio: liveCueAudio,
+    sessionId: liveSession?.activeSessionId,
+    getSessionTime: getCurrentSessionTime,
+    microphoneActive: annotationRecording,
+    onTimelineEvent: (event) => {
+      const finalEvent = {
+        id: `live-cue-${event.type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        source: "sarah_live_cue",
+        label: event.label,
+        note: event.label,
+        time_s: event.time_s,
+        category: event.type,
+        metadata: event.metadata,
+      };
+      appendLiveSessionEvents(finalEvent).catch(() => {});
+    },
+  });
+
+  const hasRecentHrPacket = useCallback(() => {
+    const sample = latestHrRef.current || hrTelemetry;
+    const hr = readNumber(sample?.currentHr, sample?.hr, sample?.heartRate);
+    if (hr == null) return false;
+    const stamp = sample?.measuredAt || sample?.receivedAt || sample?.source_at || sample?.lastMessageAt;
+    const ageMs = stamp ? Date.now() - Date.parse(stamp) : 0;
+    return !stamp || (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 10000);
+  }, [hrTelemetry]);
+
+  const waitForRecentHrPacket = useCallback((timeoutMs = 25000) => new Promise((resolve) => {
+    const started = Date.now();
+    const timer = window.setInterval(() => {
+      if (hasRecentHrPacket()) {
+        window.clearInterval(timer);
+        resolve(true);
+      } else if (Date.now() - started >= timeoutMs) {
+        window.clearInterval(timer);
+        resolve(false);
+      }
+    }, 350);
+  }), [hasRecentHrPacket]);
+
+  const setLaunchStep = useCallback((label, state = "active") => {
+    setLaunchState((prev) => {
+      const labels = ["Restoring setup", "Preparing voice", "Connecting H10", "Waiting for heart rate", "Checking OBS", "Starting session", "Live"];
+      const currentIndex = labels.indexOf(label);
+      return {
+        ...prev,
+        phase: state === "done" && label === "Live" ? "live" : label,
+        message: label,
+        steps: labels.map((item, index) => ({
+          label: item,
+          active: item === label && state !== "done",
+          done: currentIndex >= 0 && index < currentIndex || (item === label && state === "done"),
+        })),
+      };
+    });
+  }, []);
+
+  const saveSuccessfulLaunchProfile = useCallback((sessionState) => {
+    const next = saveLiveCaptureLaunchProfile(buildLaunchProfileFromRuntime({
+      captureKind,
+      captureMode,
+      hrSourceSettings,
+      emgSensorConfig,
+      telemetryNoticesEnabled,
+      heartbeatAudioEnabled,
+      howlControlForm,
+      mediaVideo,
+      cueSettings: liveCueSettings,
+      liveSession: sessionState || liveSession,
+    }));
+    setLaunchProfile(next);
+  }, [captureKind, captureMode, emgSensorConfig, heartbeatAudioEnabled, howlControlForm, hrSourceSettings, liveCueSettings, liveSession, mediaVideo, telemetryNoticesEnabled]);
+
+  const startFromLaunchpad = useCallback(async ({ allowWithoutVoice = false } = {}) => {
+    if (launchInFlightRef.current) return launchInFlightRef.current;
+    const transaction = (async () => {
+      setLaunchState({ phase: "starting", message: "Starting session...", steps: [], busy: true, error: "" });
+      try {
+        setLaunchStep("Restoring setup");
+        writeHrSourceSettings(hrSourceSettings);
+        await applyHrSourceSettings(hrSourceSettings);
+
+        setLaunchStep("Preparing voice");
+        let voiceReadyForLaunch = false;
+        if (liveCueSettings.enabled) {
+          try {
+            await liveCueAudio.unlock();
+            const prepared = await liveCueAudio.prepare();
+            voiceReadyForLaunch = Boolean(prepared?.ok);
+          } catch (error) {
+            if (!allowWithoutVoice) {
+              throw new Error(`${error?.message || "Sarah voice cues could not be prepared."} You can start without voice cues from advanced setup.`);
+            }
+          }
+        }
+
+        if (hrSourceSettings.source === "direct_h10" && !hasRecentHrPacket()) {
+          setLaunchStep("Connecting H10");
+          await connectDirectH10();
+        }
+
+        setLaunchStep("Waiting for heart rate");
+        const receivedHr = await waitForRecentHrPacket();
+        if (!receivedHr) {
+          throw new Error("H10/source is connected or configured, but no recent heart-rate packet has arrived.");
+        }
+
+        setLaunchStep("Checking OBS");
+        if (launchProfile.obsEnabled && !obsReady && !launchProfile.telemetryOnlyFallback) {
+          throw new Error("OBS is unavailable. Reconnect OBS or enable telemetry-only fallback.");
+        }
+
+        setLaunchStep("Starting session");
+        const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();
+        if (!sessionState?.activeSessionId) throw new Error("Sarah could not create or reuse the live session shell.");
+
+        saveSuccessfulLaunchProfile(sessionState);
+        setLaunchStep("Live", "done");
+        setLaunchState((prev) => ({
+          ...prev,
+          phase: "live",
+          busy: false,
+          error: "",
+          message: voiceReadyForLaunch || !liveCueSettings.enabled ? "Session live." : "Session live without voice cues.",
+        }));
+        return sessionState;
+      } catch (error) {
+        setLaunchState((prev) => ({
+          ...prev,
+          busy: false,
+          error: error?.message || String(error),
+          message: error?.message || "Launch failed.",
+        }));
+        throw error;
+      } finally {
+        launchInFlightRef.current = null;
+      }
+    })();
+    launchInFlightRef.current = transaction;
+    return transaction;
+  }, [
+    applyHrSourceSettings,
+    connectDirectH10,
+    ensureSession,
+    hasRecentHrPacket,
+    hrSourceSettings,
+    launchProfile.obsEnabled,
+    launchProfile.telemetryOnlyFallback,
+    liveCueAudio,
+    liveCueSettings.enabled,
+    liveSession,
+    obsReady,
+    saveSuccessfulLaunchProfile,
+    setLaunchStep,
+    waitForRecentHrPacket,
+  ]);
+
   const queuePerinealSessionEvents = useCallback((eventsToAdd, extraPatch = {}) => {
     perinealSaveQueueRef.current = perinealSaveQueueRef.current
       .catch(() => {})
@@ -2890,6 +3108,18 @@ export default function LiveCapture() {
       });
     }
   }, [buildLevel, captureIsBodyExploration, getCurrentSessionTime, prediction, recordingActive, telemetryHistory, telemetryNoticesEnabled, toast]);
+
+  useEffect(() => {
+    if (!recordingActive || !telemetryHistory.length || !hrTelemetry) return;
+    liveCueEngine.step(prediction, {
+      hr: readNumber(hrTelemetry?.currentHr, hrTelemetry?.hr, hrTelemetry?.heartRate),
+      baselineHr: readNumber(hrTelemetry?.baselineHr, hrTelemetry?.baseline_hr),
+      recentSlope: prediction.recentSlope,
+      emgContribution: readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct) != null ? 1 : 0,
+      hasMultipleSignalFamilies: Boolean(prediction.hrvUsable || emgTelemetry),
+      sessionTimeSec: getCurrentSessionTime(),
+    });
+  }, [emgTelemetry, getCurrentSessionTime, hrTelemetry, liveCueEngine, prediction, recordingActive, telemetryHistory.length]);
 
   const getAudioContext = useCallback(async () => {
     if (!audioContextRef.current || audioContextRef.current.state === "closed") {
@@ -3847,6 +4077,83 @@ export default function LiveCapture() {
     </div>
   ) : null;
 
+  const launchSetupSummary = summarizeLaunchProfile({
+    ...launchProfile,
+    captureKind,
+    captureMode,
+    hrSource: hrSourceSettings.source,
+    pulsoidMode: hrSourceSettings.pulsoidMode,
+    emgEnabled: emgSensorConfig !== "generic",
+    emgSensorConfig,
+    livePhysiologyCuesEnabled: liveCueSettings.enabled,
+    cueStyle: liveCueSettings.style,
+    cueVolume: liveCueSettings.volume,
+    mediaLayout: mediaVideo ? "loaded" : "none",
+    howlEnabled: howlControlEnabled,
+    howlAutoControlEnabled: howlSarahAutoEnabled,
+    telemetryNoticesEnabled,
+    heartbeatAudioEnabled,
+  });
+  const h10Recent = hasRecentHrPacket();
+  const launchActive = recordingActive || Boolean(liveSession?.activeSessionId);
+  const launchReadiness = {
+    h10: {
+      value: hrSourceSettings.source === "direct_h10"
+        ? h10Recent
+          ? "Connected"
+          : directH10Status.connecting
+            ? "Connecting"
+            : directH10Status.connected
+              ? "Waiting packet"
+              : "Needs connection"
+        : selectedHrSource.label,
+      helper: hrSourceSettings.source === "direct_h10" ? directH10Status.message || "Direct H10 HR + RR source" : selectedHrSource.helper,
+      tone: h10Recent || hrSourceSettings.source !== "direct_h10" ? "good" : directH10Status.connected || directH10Status.connecting ? "warn" : "bad",
+    },
+    hr: {
+      value: h10Recent ? `${fmtNumber(hrTelemetry?.currentHr, 0)} BPM` : "Waiting",
+      helper: h10Recent ? "Recent live packet received." : "Sarah will wait for an actual HR packet.",
+      tone: h10Recent ? "good" : "warn",
+    },
+    obs: {
+      value: recordingActive ? "Recording" : obsReady ? "Ready" : "Optional",
+      helper: recordingActive ? recording?.filename || "OBS recording is live." : obsReady ? "OBS relay identified." : "Start telemetry-only or reconnect OBS.",
+      tone: recordingActive || obsReady ? "good" : "neutral",
+    },
+    emg: {
+      value: emgRecent ? "Live" : emgSensorConfig !== "generic" ? "Configured" : "Optional",
+      helper: emgRecent ? "Recent EMG telemetry received." : "Does not block a normal HR session.",
+      tone: emgRecent ? "good" : "neutral",
+    },
+    voice: {
+      value: liveCueAudio.ready ? "Preloaded" : liveCueSettings.enabled ? (liveCueAudio.status.phase === "preparing" ? "Preparing" : "Enabled") : "Disabled",
+      helper: liveCueAudio.status.message || `${LIVE_CUE_PRESETS[liveCueSettings.style]?.label || "Sarah"} · ${Math.round((liveCueSettings.volume ?? 0.28) * 100)}%`,
+      tone: liveCueAudio.ready ? "good" : liveCueSettings.enabled ? "warn" : "neutral",
+      required: false,
+    },
+    media: {
+      value: mediaVideo ? "Loaded" : "None",
+      helper: mediaVideo?.name || "Media is optional.",
+      tone: mediaVideo ? "good" : "neutral",
+    },
+    howl: {
+      value: howlSarahAutoEnabled ? "Sarah armed" : howlManualControlsUnlocked ? "Ready" : howlControlEnabled ? "Needs test" : "Disabled",
+      helper: howlSarahAutoEnabled ? howlAutoStatus : "Howl does not block launch.",
+      tone: howlSarahAutoEnabled || howlManualControlsUnlocked ? "good" : howlControlEnabled ? "warn" : "neutral",
+    },
+  };
+  const launchPrimaryLabel = launchActive
+    ? "Session Live"
+    : !h10Recent && hrSourceSettings.source === "direct_h10"
+      ? "Connect H10 and Start Session"
+      : liveCueSettings.enabled && !liveCueAudio.ready
+        ? "Prepare Sarah and Start Session"
+        : "Start Session";
+  const launchCueSummary = liveCueEngine.latestCue
+    ? `Latest Sarah cue · ${liveCueEngine.latestCue.phrase}`
+    : `Sarah voice · ${LIVE_CUE_PRESETS[liveCueSettings.style]?.label || "Soft"} · ${Math.round((liveCueSettings.volume ?? 0.28) * 100)}% · ${liveCueAudio.ready ? "Preloaded" : liveCueSettings.enabled ? "Not preloaded yet" : "Disabled"}`;
+  const showAdvancedSetupConsole = advancedSetupOpen || launchActive;
+
   return (
     <div className={`${focusView ? "h-screen overflow-y-auto p-4" : "p-4 md:p-6"} space-y-4`}>
       {hrLossDialog && (
@@ -3922,6 +4229,60 @@ export default function LiveCapture() {
               </button>
             </div>
             {howlQuickControlPanel}
+          </div>
+        </div>
+      )}
+
+      {!focusView && !mainTelemetryView && (
+        <LiveCaptureLaunchpad
+          captureKind={captureKind}
+          onCaptureKindChange={setCaptureKind}
+          setupSummary={launchSetupSummary}
+          readiness={launchReadiness}
+          primaryLabel={launchPrimaryLabel}
+          primaryBusy={launchState.busy}
+          primaryDisabled={launchActive}
+          progress={launchState.steps}
+          active={launchActive}
+          cueSummary={launchCueSummary}
+          advancedOpen={advancedSetupOpen}
+          onChangeSetup={() => setAdvancedSetupOpen((open) => !open)}
+          onStart={() => startFromLaunchpad().catch((error) => {
+            toast({
+              title: "Live Capture launch paused",
+              description: error?.message || "Sarah could not complete the launch sequence.",
+              variant: "destructive",
+            });
+          })}
+        />
+      )}
+
+      {!focusView && !mainTelemetryView && launchState.error && (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          <p className="font-semibold">Launch stopped at: {launchState.message}</p>
+          <p className="mt-1">{launchState.error}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => startFromLaunchpad().catch(() => {})}
+              className="rounded-lg bg-destructive px-3 py-2 text-xs font-semibold text-destructive-foreground"
+            >
+              Retry failed step
+            </button>
+            <button
+              type="button"
+              onClick={() => startFromLaunchpad({ allowWithoutVoice: true }).catch(() => {})}
+              className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground"
+            >
+              Start without optional voice
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdvancedSetupOpen(true)}
+              className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground"
+            >
+              Open advanced setup
+            </button>
           </div>
         </div>
       )}
@@ -4070,7 +4431,7 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {!focusView && !mainTelemetryView && (
+      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
         <div className="rounded-xl border border-primary/20 bg-primary/[0.05] p-3">
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             {[
@@ -4088,7 +4449,7 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {!focusView && !mainTelemetryView && (
+      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
         <div className="rounded-2xl border border-primary/25 bg-card p-4 shadow-sm">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
@@ -4310,7 +4671,7 @@ export default function LiveCapture() {
 
       {mediaPanel}
 
-      {!focusView && !mainTelemetryView && (
+      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
         <CollapsibleControlSection
           icon={HeartPulse}
           title="Heart-Rate Source Settings"
@@ -4333,7 +4694,7 @@ export default function LiveCapture() {
         </CollapsibleControlSection>
       )}
 
-      {!focusView && !mainTelemetryView && <CollapsibleControlSection
+      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && <CollapsibleControlSection
         icon={CheckCircle2}
         title="Capture Readiness"
         helper="OBS is the session boundary; HR can run alone and EMG stays optional."
@@ -4385,7 +4746,7 @@ export default function LiveCapture() {
         </div>
       </CollapsibleControlSection>}
 
-      {!focusView && !mainTelemetryView && (
+      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
         <div className="rounded-xl border border-border bg-card">
           <button
             type="button"
@@ -4838,7 +5199,7 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {!focusView && !mainTelemetryView && voiceAnnotationPanel}
+      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && voiceAnnotationPanel}
 
       {!focusView && captureMode !== "media" && (
         <div className="rounded-xl border border-border bg-card">
@@ -5115,7 +5476,7 @@ export default function LiveCapture() {
 
       {captureMode !== "media" && (
         <>
-      {!focusView && !mainTelemetryView && <CollapsibleControlSection
+      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && <CollapsibleControlSection
         icon={Radio}
         title="Connection Details"
         helper="Relay, provider, EMG, and OBS status for troubleshooting."
@@ -5129,7 +5490,7 @@ export default function LiveCapture() {
         </div>
       </CollapsibleControlSection>}
 
-      {!focusView && !mainTelemetryView && <div className="rounded-xl border border-border bg-card p-4">
+      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && <div className="rounded-xl border border-border bg-card p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
@@ -5219,7 +5580,7 @@ export default function LiveCapture() {
         )}
       </div>}
 
-      {!focusView && !mainTelemetryView && (
+      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
         <div className="rounded-xl border border-border bg-card p-4">
           <div className="mb-3 flex flex-col gap-1">
             <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">

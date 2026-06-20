@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runProcess } from './ttsCore.js';
 
+const PUBLIC_DIR = path.resolve(process.cwd(), 'public');
+
 export const WATERMARK_PRESETS = {
   public_export: 'Public Export',
   private_archive: 'Private Archive',
@@ -17,8 +19,12 @@ export const DEFAULT_WATERMARK_SETTINGS = {
   opacity: 0.62,
   textSize: 34,
   logoSize: 76,
+  portraitEnabled: true,
+  logoEnabled: true,
+  portraitPath: 'brand/sarah-lab.jpg',
+  logoPath: 'icons/sarah-192.png',
   paddingPercent: 4,
-  positionMode: 'rotating_corners',
+  positionMode: 'bottom_right',
   movementIntervalSeconds: 24,
   movementTransitionSeconds: 0.7,
   shadowEnabled: true,
@@ -76,6 +82,10 @@ export function normalizeWatermarkSettings(input = {}) {
     opacity: clamp(input?.opacity, 0.05, 1, presetDefaults.opacity || DEFAULT_WATERMARK_SETTINGS.opacity),
     textSize: Math.round(clamp(input?.textSize, 18, 96, DEFAULT_WATERMARK_SETTINGS.textSize)),
     logoSize: Math.round(clamp(input?.logoSize, 32, 220, DEFAULT_WATERMARK_SETTINGS.logoSize)),
+    portraitEnabled: Boolean(input?.portraitEnabled ?? DEFAULT_WATERMARK_SETTINGS.portraitEnabled),
+    logoEnabled: Boolean(input?.logoEnabled ?? DEFAULT_WATERMARK_SETTINGS.logoEnabled),
+    portraitPath: cleanAssetPath(input?.portraitPath, DEFAULT_WATERMARK_SETTINGS.portraitPath),
+    logoPath: cleanAssetPath(input?.logoPath, DEFAULT_WATERMARK_SETTINGS.logoPath),
     paddingPercent: clamp(input?.paddingPercent, 1, 12, DEFAULT_WATERMARK_SETTINGS.paddingPercent),
     positionMode,
     movementIntervalSeconds: clamp(input?.movementIntervalSeconds, 8, 120, DEFAULT_WATERMARK_SETTINGS.movementIntervalSeconds),
@@ -85,6 +95,16 @@ export function normalizeWatermarkSettings(input = {}) {
     subtleCenterEnabled: Boolean(input?.subtleCenterEnabled ?? DEFAULT_WATERMARK_SETTINGS.subtleCenterEnabled),
     metadataScrubEnabled,
   };
+}
+
+function cleanAssetPath(value, fallback = '') {
+  const cleaned = String(value || fallback || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/\.\.+/g, '')
+    .replace(/[<>:"|?*]/g, '')
+    .trim();
+  return cleaned || fallback;
 }
 
 export function safeExportFilename({ contentType = 'video', extension = 'mp4', date = new Date(), shortId = '' } = {}) {
@@ -135,6 +155,23 @@ function fixedPositionExpression(position, padExpression) {
   return { x: padExpression, y: padExpression };
 }
 
+function assetPath(relativePath) {
+  const cleaned = cleanAssetPath(relativePath);
+  if (!cleaned) return null;
+  return path.join(PUBLIC_DIR, cleaned);
+}
+
+async function existingWatermarkAsset(relativePath) {
+  const resolved = assetPath(relativePath);
+  if (!resolved) return null;
+  try {
+    await fs.access(resolved);
+    return resolved;
+  } catch {
+    return null;
+  }
+}
+
 export function watermarkPositionPlan(settings = {}, durationSeconds = 0) {
   const normalized = normalizeWatermarkSettings(settings);
   if (!normalized.enabled) return [];
@@ -176,12 +213,81 @@ export function buildWatermarkFilter(settings = {}) {
   return [main, center].filter(Boolean).join(',');
 }
 
+function ffmpegPath(value = '') {
+  return String(value || '').replace(/\\/g, '/');
+}
+
+export function buildSarahBrandFilterComplex(settings = {}, { hasPortrait = false, hasLogo = false } = {}) {
+  const normalized = normalizeWatermarkSettings(settings);
+  if (!normalized.enabled) return null;
+
+  const text = ffmpegText(normalized.primaryText);
+  const subtext = ffmpegText([normalized.secondaryText, normalized.handleText].filter(Boolean).join('  |  '));
+  const font = fontFile();
+  const alpha = normalized.opacity.toFixed(3);
+  const pad = `(min(w\\,h)*${(normalized.paddingPercent / 100).toFixed(4)})`;
+  const overlayPad = `(min(main_w\\,main_h)*${(normalized.paddingPercent / 100).toFixed(4)})`;
+  const portraitSize = normalized.logoSize;
+  const iconSize = Math.max(22, Math.round(normalized.logoSize * 0.42));
+  const textSize = normalized.textSize;
+  const subTextSize = Math.max(14, Math.round(normalized.textSize * 0.58));
+  const gap = Math.max(10, Math.round(normalized.logoSize * 0.16));
+  const estimatedTextWidth = Math.max(
+    140,
+    Math.round(Math.max(normalized.primaryText.length, normalized.secondaryText.length) * textSize * 0.48),
+  );
+  const panelWidth = Math.max(
+    300,
+    Math.round(portraitSize + iconSize + gap * 3 + estimatedTextWidth),
+  );
+  const panelHeight = Math.max(portraitSize, Math.round(textSize + subTextSize + gap * 1.6));
+  const panelX = `max(${pad}\\,w-${panelWidth}-${pad})`;
+  const panelY = `max(${pad}\\,h-${panelHeight}-${pad})`;
+  const iconX = `max(${overlayPad}\\,main_w-${estimatedTextWidth + iconSize + gap * 2}-${overlayPad})`;
+  const portraitX = `max(${overlayPad}\\,main_w-${estimatedTextWidth + iconSize + portraitSize + gap * 3}-${overlayPad})`;
+  const portraitY = `max(${overlayPad}\\,main_h-${portraitSize}-${overlayPad})`;
+  const textX = `w-text_w-${pad}`;
+  const primaryY = `h-${panelHeight}-${pad}+${Math.round(gap * 0.25)}`;
+  const secondaryY = `h-${panelHeight}-${pad}+${Math.round(textSize + gap * 0.85)}`;
+  const iconY = `main_h-${panelHeight}-${overlayPad}+${Math.round(gap * 0.35)}`;
+  const labelX = textX;
+  const shadow = normalized.shadowEnabled
+    ? `:shadowcolor=0x000000@${Math.min(0.9, normalized.opacity + 0.15).toFixed(3)}:shadowx=2:shadowy=2`
+    : '';
+  const plate = normalized.backgroundPlateEnabled
+    ? `drawbox=x=${panelX}:y=${panelY}:w=${panelWidth}:h=${panelHeight}:color=black@${Math.min(0.45, normalized.opacity).toFixed(3)}:t=fill,`
+    : '';
+
+  const steps = ['[0:v]format=rgba[base0]'];
+  let current = 'base0';
+  let inputIndex = 1;
+  if (hasPortrait) {
+    steps.push(`[${inputIndex}:v]scale=${portraitSize}:${portraitSize}:force_original_aspect_ratio=increase,crop=${portraitSize}:${portraitSize},format=rgba,colorchannelmixer=aa=${alpha}[sarahPortrait]`);
+    steps.push(`[${current}][sarahPortrait]overlay=x=${portraitX}:y=${portraitY}:format=auto[withPortrait]`);
+    current = 'withPortrait';
+    inputIndex += 1;
+  }
+  if (hasLogo) {
+    steps.push(`[${inputIndex}:v]scale=${iconSize}:${iconSize}:force_original_aspect_ratio=decrease,format=rgba,colorchannelmixer=aa=${alpha}[sarahLogo]`);
+    steps.push(`[${current}][sarahLogo]overlay=x=${iconX}:y=${iconY}:format=auto[withLogo]`);
+    current = 'withLogo';
+  }
+
+  steps.push(`[${current}]${plate}drawtext=fontfile='${font}':text='${text}':fontsize=${textSize}:fontcolor=white@${alpha}:x=${labelX}:y=${primaryY}${shadow},drawtext=fontfile='${font}':text='${subtext}':fontsize=${subTextSize}:fontcolor=white@${Math.min(0.86, normalized.opacity).toFixed(3)}:x=${textX}:y=${secondaryY}${shadow}[vout]`);
+  return steps.join(';');
+}
+
 export async function applyWatermarkToVideo(inputPath, outputPath, settings = {}, {
   durationSeconds = 0,
   contentType = 'video',
   onProgress = null,
 } = {}) {
   const normalized = normalizeWatermarkSettings(settings);
+  const portraitAsset = normalized.portraitEnabled ? await existingWatermarkAsset(normalized.portraitPath) : null;
+  const logoAsset = normalized.logoEnabled ? await existingWatermarkAsset(normalized.logoPath) : null;
+  const brandFilter = (portraitAsset || logoAsset)
+    ? buildSarahBrandFilterComplex(normalized, { hasPortrait: Boolean(portraitAsset), hasLogo: Boolean(logoAsset) })
+    : null;
   const debug = {
     export_id: crypto.randomUUID(),
     preset: normalized.preset,
@@ -191,6 +297,10 @@ export async function applyWatermarkToVideo(inputPath, outputPath, settings = {}
     secondary_text: normalized.secondaryText,
     opacity: normalized.opacity,
     movement_mode: normalized.positionMode,
+    portrait_enabled: Boolean(portraitAsset),
+    logo_enabled: Boolean(logoAsset),
+    portrait_asset: portraitAsset ? normalized.portraitPath : null,
+    logo_asset: logoAsset ? normalized.logoPath : null,
     movement_interval_seconds: normalized.movementIntervalSeconds,
     positions_used: watermarkPositionPlan(normalized, durationSeconds),
     metadata_scrub_enabled: normalized.metadataScrubEnabled,
@@ -208,14 +318,17 @@ export async function applyWatermarkToVideo(inputPath, outputPath, settings = {}
     '-hide_banner',
     '-y',
     '-i', inputPath,
-    '-map', '0:v:0',
+    ...(portraitAsset ? ['-loop', '1', '-i', ffmpegPath(portraitAsset)] : []),
+    ...(logoAsset ? ['-loop', '1', '-i', ffmpegPath(logoAsset)] : []),
+    ...(brandFilter ? ['-filter_complex', brandFilter, '-map', '[vout]'] : ['-map', '0:v:0']),
     '-map', '0:a?',
-    ...(filter ? ['-vf', filter] : []),
+    ...(!brandFilter && filter ? ['-vf', filter] : []),
     '-c:v', 'libx264',
     '-preset', process.env.WATERMARK_VIDEO_PRESET || 'medium',
     '-crf', String(process.env.WATERMARK_VIDEO_CRF || 18),
     '-pix_fmt', 'yuv420p',
     '-c:a', 'copy',
+    ...(brandFilter ? ['-shortest'] : []),
     ...(normalized.metadataScrubEnabled ? [
       '-map_metadata', '-1',
       '-metadata', 'creator=PulsePointLabs',

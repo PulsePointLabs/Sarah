@@ -74,3 +74,63 @@ test('buildReviewVideoPlan prefers pause/lubricant anchors over active stroking 
   assert.equal(plan.generatedClipRequests[0].session_time_s, 491);
   assert.equal(plan.generatedClipRequests[0].startSeconds, 490);
 });
+
+test('buildReviewVideoPlan maps Foley meatus narration to meatal event notes instead of post-procedure b-roll', () => {
+  const plan = buildReviewVideoPlan({
+    paragraphs: [
+      'Sarah discusses the meatus, meatal engagement, and the catheter tip entering before urethral advancement begins.',
+    ],
+    session: {
+      record_type: 'body_exploration',
+      exploration_type: 'Foley catheter insertion',
+      event_timeline: [
+        {
+          id: 'post-procedure-bag',
+          time_s: 768,
+          note: 'Ambulatory transition underway; Foley secured off camera and drainage bag held while getting off the exam table.',
+          category: ['instrumentation', 'physical'],
+          annotation_tags: ['ambulatory', 'foley_dwell', 'drainage_bag'],
+        },
+        {
+          id: 'meatus-contact',
+          time_s: 529,
+          note: 'Foley tip makes initial contact with meatus; meatal engagement begins.',
+          category: ['instrumentation', 'sensation'],
+          annotation_tags: ['catheter_tip_at_meatus', 'meatal_contact', 'insertion_beginning'],
+        },
+      ],
+    },
+  });
+
+  assert.equal(plan.generatedClipRequests.length, 1);
+  assert.equal(plan.generatedClipRequests[0].session_time_s, 529);
+  assert.match(plan.generatedClipRequests[0].label, /meatus/i);
+});
+
+test('buildReviewVideoPlan maps Foley balloon narration to balloon seating event notes', () => {
+  const plan = buildReviewVideoPlan({
+    paragraphs: [
+      'The balloon inflation and seating phase is clinically important because urgency passed after traction.',
+    ],
+    session: {
+      event_timeline: [
+        {
+          time_s: 529,
+          note: 'Foley tip makes initial contact with meatus; meatal engagement begins.',
+          category: ['instrumentation'],
+          annotation_tags: ['catheter_tip_at_meatus'],
+        },
+        {
+          time_s: 698,
+          note: 'Balloon confirmed seated at bladder neck; urgency sensation passes, no discomfort, traction hold maintained.',
+          category: ['instrumentation_change', 'comfort', 'sensation'],
+          annotation_tags: ['balloon_seated', 'bladder_neck', 'urgency_resolved', 'no_discomfort'],
+        },
+      ],
+    },
+  });
+
+  assert.equal(plan.generatedClipRequests.length, 1);
+  assert.equal(plan.generatedClipRequests[0].session_time_s, 698);
+  assert.match(plan.generatedClipRequests[0].label, /Balloon/i);
+});

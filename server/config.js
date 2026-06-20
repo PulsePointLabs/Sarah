@@ -6,6 +6,7 @@ export const rootDir = path.resolve(__dirname, '..');
 export const dataDir = path.resolve(rootDir, process.env.DATA_DIR || './data');
 export const uploadDir = path.resolve(rootDir, process.env.UPLOAD_DIR || './data/uploads');
 export const ttsRenderDir = path.resolve(rootDir, process.env.TTS_RENDER_DIR || './data/tts-render-work');
+export const liveCueAudioDir = path.resolve(rootDir, process.env.LIVE_CUE_AUDIO_DIR || './data/live-cue-audio');
 export const databasePath = path.resolve(rootDir, process.env.DATABASE_PATH || './data/pulsepoint.sqlite');
 
 const desktopRoot = path.resolve(rootDir, '..');

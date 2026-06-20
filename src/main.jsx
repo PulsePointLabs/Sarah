@@ -2,8 +2,15 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from '@/App.jsx'
 import '@/index.css'
-import { installPwaLifecycleDiagnostics, recordPwaLifecycleEvent } from '@/lib/pwaLifecycleDiagnostics'
+import {
+  installPwaLifecycleDiagnostics,
+  recordPwaLifecycleEvent,
+  incrementLifecycleMountCount,
+  restorePwaRouteOnColdStart,
+} from '@/lib/pwaLifecycleDiagnostics'
 
+restorePwaRouteOnColdStart();
+incrementLifecycleMountCount('react_root');
 ReactDOM.createRoot(document.getElementById('root')).render(
   <App />
 )
@@ -48,9 +55,9 @@ function registerStableServiceWorker() {
   }
 }
 
-async function cleanupSarahShell() {
+async function cleanupSarahShell({ unregisterWorkers = false } = {}) {
   const tasks = [];
-  if ('serviceWorker' in navigator && !PWA_ENABLE_DEV_NOTIFICATION_WORKER_V1) {
+  if ('serviceWorker' in navigator && (unregisterWorkers || !PWA_ENABLE_DEV_NOTIFICATION_WORKER_V1)) {
     tasks.push(
       navigator.serviceWorker.getRegistrations?.()
         .then((registrations = []) => Promise.all(registrations.map((registration) => registration.unregister())))
@@ -82,7 +89,10 @@ if (typeof window !== 'undefined') {
 
 if (import.meta.env.DEV) {
   window.addEventListener('load', () => {
-    cleanupSarahShell().finally(registerStableServiceWorker);
+    // Dev/Tailscale sessions are served by Vite. Keeping a service worker active
+    // here can strand Android's installed shell on stale module URLs and produce
+    // a blank page even while the API is healthy.
+    cleanupSarahShell({ unregisterWorkers: true });
   });
 } else {
   registerStableServiceWorker();

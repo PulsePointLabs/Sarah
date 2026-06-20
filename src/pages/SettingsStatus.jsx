@@ -28,8 +28,10 @@ import { friendlyJobStatusMessage } from "@/lib/jobErrorMessages";
 import { getProviderStatus } from "@/lib/providerStatus";
 import {
   getSarahImageOption,
+  getSarahImageOptions,
+  addSarahImageOption,
+  removeSarahImageOption,
   readSarahBrandSettings,
-  SARAH_IMAGE_OPTIONS,
   saveSarahBrandSettings,
 } from "@/lib/sarahBrand";
 import {
@@ -336,6 +338,11 @@ export default function SettingsStatus() {
   const [overlayMessage, setOverlayMessage] = useState("");
   const [uiPrefs, setUiPrefs] = useState(readUiPreferences);
   const [sarahBrand, setSarahBrand] = useState(readSarahBrandSettings);
+  const [sarahImageOptions, setSarahImageOptions] = useState(getSarahImageOptions);
+  const [sarahUploadStatus, setSarahUploadStatus] = useState("");
+  const [sarahGeneratePrompt, setSarahGeneratePrompt] = useState("");
+  const [sarahGenerateStatus, setSarahGenerateStatus] = useState({ type: "", message: "" });
+  const [sarahGenerating, setSarahGenerating] = useState(false);
   const [watermark, setWatermark] = useState(readWatermarkSettings);
   const [sarahPersonality, setSarahPersonality] = useState(readSarahPersonalitySettings);
   const [sarahPersonalityDirty, setSarahPersonalityDirty] = useState(false);
@@ -499,8 +506,77 @@ export default function SettingsStatus() {
     }
   };
 
+  const refreshSarahBrandOptions = () => {
+    setSarahImageOptions(getSarahImageOptions());
+    setSarahBrand(readSarahBrandSettings());
+  };
+
   const updateSarahBrand = (imageId) => {
     setSarahBrand(saveSarahBrandSettings({ imageId }));
+  };
+
+  const uploadSarahPortrait = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!/^image\//i.test(file.type || "")) {
+      setSarahUploadStatus("Choose an image file for Sarah.");
+      return;
+    }
+    setSarahUploadStatus("Uploading Sarah portrait...");
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      const response = await fetch(apiUrl("/files/upload"), { method: "POST", body });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Portrait upload failed.");
+      const option = addSarahImageOption({
+        id: `uploaded-${Date.now()}`,
+        label: file.name ? `Uploaded: ${file.name.replace(/\.[^.]+$/, "")}` : "Uploaded Sarah",
+        helper: "Uploaded local portrait.",
+        src: payload.file_url || payload.url,
+        source: "upload",
+      });
+      if (option) updateSarahBrand(option.id);
+      refreshSarahBrandOptions();
+      setSarahUploadStatus("Uploaded and selected.");
+    } catch (error) {
+      setSarahUploadStatus(error?.message || "Portrait upload failed.");
+    }
+  };
+
+  const generateSarahPortrait = async () => {
+    setSarahGenerating(true);
+    setSarahGenerateStatus({ type: "working", message: "Generating Sarah portrait with OpenAI..." });
+    try {
+      const response = await fetch(apiUrl("/sarah-brand/generate-portrait"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: sarahGeneratePrompt }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Sarah portrait generation failed.");
+      const option = addSarahImageOption({
+        id: payload.id || `generated-${Date.now()}`,
+        label: payload.label || "Generated Sarah",
+        helper: payload.helper || "Generated with OpenAI.",
+        src: payload.url,
+        source: "openai",
+      });
+      if (option) updateSarahBrand(option.id);
+      refreshSarahBrandOptions();
+      setSarahGenerateStatus({ type: "ok", message: "Generated and selected." });
+    } catch (error) {
+      setSarahGenerateStatus({ type: "error", message: error?.message || "Sarah portrait generation failed." });
+    } finally {
+      setSarahGenerating(false);
+    }
+  };
+
+  const removeSarahPortrait = (imageId) => {
+    const next = removeSarahImageOption(imageId);
+    setSarahBrand(next);
+    refreshSarahBrandOptions();
   };
 
   const applyPwaUpdateNow = async () => {
@@ -527,8 +603,8 @@ export default function SettingsStatus() {
     const presetPatch = preset === "private_archive"
       ? { preset, enabled: false, metadataScrubEnabled: false }
       : preset === "preview"
-        ? { preset, enabled: true, metadataScrubEnabled: true, opacity: 0.7 }
-        : { preset, enabled: true, metadataScrubEnabled: true, primaryText: "Clinical Climax", secondaryText: "Powered by Sarah" };
+        ? { preset, enabled: true, metadataScrubEnabled: true, opacity: 0.7, positionMode: "bottom_right", portraitEnabled: true, logoEnabled: true }
+        : { preset, enabled: true, metadataScrubEnabled: true, primaryText: "Clinical Climax", secondaryText: "Powered by Sarah", positionMode: "bottom_right", portraitEnabled: true, logoEnabled: true };
     updateWatermark(presetPatch);
   };
 
@@ -864,15 +940,22 @@ export default function SettingsStatus() {
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          {SARAH_IMAGE_OPTIONS.map((option) => {
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {sarahImageOptions.map((option) => {
             const active = getSarahImageOption(sarahBrand.imageId).id === option.id;
             return (
-              <button
+              <div
                 key={option.id}
-                type="button"
                 onClick={() => updateSarahBrand(option.id)}
-                className={`overflow-hidden rounded-xl border text-left transition-all ${active ? "border-primary bg-primary/10 shadow-sm shadow-primary/10" : "border-border bg-muted/15 hover:border-primary/50"}`}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    updateSarahBrand(option.id);
+                  }
+                }}
+                role="button"
+                tabIndex={0}
+                className={`overflow-hidden rounded-xl border text-left transition-all focus:outline-none focus:ring-2 focus:ring-primary/40 ${active ? "border-primary bg-primary/10 shadow-sm shadow-primary/10" : "border-border bg-muted/15 hover:border-primary/50"}`}
               >
                 <div className="aspect-[16/9] overflow-hidden bg-muted">
                   <img
@@ -887,14 +970,84 @@ export default function SettingsStatus() {
                   <div>
                     <p className="text-sm font-bold text-foreground">{option.label}</p>
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{option.helper}</p>
+                    {option.custom && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeSarahPortrait(option.id);
+                        }}
+                        className="mt-2 text-xs font-semibold text-destructive hover:underline"
+                      >
+                        Remove custom image
+                      </button>
+                    )}
                   </div>
                   <span className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase ${active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
                     {active ? "Selected" : "Choose"}
                   </span>
                 </div>
-              </button>
+              </div>
             );
           })}
+        </div>
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          <div className="rounded-xl border border-border bg-muted/15 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-foreground">Upload Sarah portrait</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Use any local image. Sarah stores the uploaded copy locally under uploads and uses it across splash, chat, and app chrome.
+                </p>
+              </div>
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
+                <Image className="h-4 w-4" />
+                Upload
+                <input type="file" accept="image/*" className="hidden" onChange={uploadSarahPortrait} />
+              </label>
+            </div>
+            {sarahUploadStatus && <p className="mt-3 text-xs font-semibold text-muted-foreground">{sarahUploadStatus}</p>}
+          </div>
+
+          <div className="rounded-xl border border-border bg-muted/15 p-4">
+            <div className="flex items-center gap-2 text-primary">
+              <Sparkles className="h-4 w-4" />
+              <p className="text-sm font-bold text-foreground">Generate Sarah with OpenAI</p>
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              Describe the look you want. The prompt is sent to OpenAI image generation; the finished portrait is saved locally and selected.
+            </p>
+            <Textarea
+              value={sarahGeneratePrompt}
+              onChange={(event) => setSarahGeneratePrompt(event.target.value)}
+              placeholder="Example: warm clinician, lavender lab lighting, kind expression, realistic portrait, shoulder-length dark hair..."
+              className="mt-3 min-h-24"
+            />
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={generateSarahPortrait}
+                disabled={sarahGenerating}
+                className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {sarahGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                Generate portrait
+              </button>
+              <button
+                type="button"
+                onClick={() => setSarahGeneratePrompt("")}
+                className="rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
+              >
+                Clear prompt
+              </button>
+            </div>
+            {sarahGenerateStatus.message && (
+              <p className={`mt-3 text-xs font-semibold ${sarahGenerateStatus.type === "error" ? "text-destructive" : "text-muted-foreground"}`}>
+                {sarahGenerateStatus.message}
+              </p>
+            )}
+          </div>
         </div>
       </section>
 
@@ -967,8 +1120,8 @@ export default function SettingsStatus() {
               {[
                 ["opacity", "Opacity", 0.05, 1, 0.01],
                 ["textSize", "Text size", 18, 96, 1],
+                ["logoSize", "Sarah image size", 32, 220, 1],
                 ["paddingPercent", "Edge padding %", 1, 12, 0.5],
-                ["movementIntervalSeconds", "Move every sec", 8, 120, 1],
               ].map(([key, label, min, max, step]) => (
                 <label key={key} className="space-y-1">
                   <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{label}</span>
@@ -989,6 +1142,8 @@ export default function SettingsStatus() {
               {[
                 ["shadowEnabled", "Shadow / outline"],
                 ["backgroundPlateEnabled", "Background plate"],
+                ["portraitEnabled", "Sarah portrait"],
+                ["logoEnabled", "Sarah icon"],
                 ["subtleCenterEnabled", "Subtle center duplicate"],
                 ["metadataScrubEnabled", "Metadata scrub"],
               ].map(([key, label]) => (
@@ -1029,21 +1184,41 @@ export default function SettingsStatus() {
               )}
               {watermark.enabled && (
                 <div
-                  className={`absolute left-[4%] top-[4%] max-w-[68%] rounded px-2 py-1 text-white ${watermark.backgroundPlateEnabled ? "bg-black/40" : ""}`}
+                  className={`absolute bottom-[4%] right-[4%] flex max-w-[76%] items-end gap-2 rounded px-2 py-1 text-white ${watermark.backgroundPlateEnabled ? "bg-black/40" : ""}`}
                   style={{
                     opacity: watermark.opacity,
                     fontSize: Math.max(10, watermark.textSize * 0.34),
                     textShadow: watermark.shadowEnabled ? "0 2px 4px rgba(0,0,0,.9)" : "none",
                   }}
                 >
-                  <p className="font-bold leading-tight">{watermark.primaryText}</p>
-                  <p className="leading-tight">{watermark.secondaryText}</p>
-                  {watermark.handleText && <p className="leading-tight">{watermark.handleText}</p>}
+                  {watermark.portraitEnabled && (
+                    <img
+                      src={`/${watermark.portraitPath || "brand/sarah-lab.jpg"}`}
+                      alt=""
+                      className="aspect-square rounded-full border border-white/35 object-cover shadow"
+                      style={{ width: Math.max(24, watermark.logoSize * 0.34) }}
+                    />
+                  )}
+                  <div className="flex items-start gap-1.5">
+                    {watermark.logoEnabled && (
+                      <img
+                        src={`/${watermark.logoPath || "icons/sarah-192.png"}`}
+                        alt=""
+                        className="mt-0.5 aspect-square rounded object-contain"
+                        style={{ width: Math.max(14, watermark.logoSize * 0.16) }}
+                      />
+                    )}
+                    <div>
+                      <p className="font-bold leading-tight">{watermark.primaryText}</p>
+                      <p className="leading-tight">{watermark.secondaryText}</p>
+                      {watermark.handleText && <p className="leading-tight">{watermark.handleText}</p>}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              The final video renderer rotates this between safe corners on the configured interval. Source recordings are not modified.
+              The final video renderer bakes this Sarah portrait, icon, and text into the bottom-right corner. Source recordings are not modified.
             </p>
           </div>
         </div>
@@ -1289,7 +1464,12 @@ export default function SettingsStatus() {
                 <span className="text-foreground">{event.type}</span>
                 <span> · {fmtDateTime(event.at)}</span>
                 <span> · boot {String(event.bootId || "").slice(0, 10)}</span>
+                {event.documentId ? <span> · doc {String(event.documentId).replace(/^sarah-doc-/, "").slice(0, 10)}</span> : null}
                 <span> · {event.visibilityState}</span>
+                {event.mountCount != null ? <span> · mount {event.mountCount}</span> : null}
+                {event.mountCounts?.react_root ? <span> · root {event.mountCounts.react_root}</span> : null}
+                {event.mountCounts?.router_tree ? <span> · router {event.mountCounts.router_tree}</span> : null}
+                {event.mountCounts?.auth_provider ? <span> · auth {event.mountCounts.auth_provider}</span> : null}
                 {event.wasDiscarded ? <span className="text-destructive"> · discarded</span> : null}
                 {event.persisted != null ? <span> · persisted {String(event.persisted)}</span> : null}
                 {event.route ? <span> · {event.route}</span> : null}

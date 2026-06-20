@@ -62,6 +62,20 @@ function parseFields(value) {
 function publicEntity(entity, doc) {
   if (entity !== 'ProcessingJob' || !doc) return doc;
   const { payload: _payload, ...rest } = doc;
+  if (rest.progress?.completed_batch_results) {
+    rest.progress = {
+      ...rest.progress,
+      completed_batch_results: undefined,
+      completed_batch_results_omitted: true,
+    };
+  }
+  if (Array.isArray(rest.meta?.reviewed_images)) {
+    rest.meta = {
+      ...rest.meta,
+      reviewed_image_count: rest.meta.reviewed_images.length,
+      reviewed_images: undefined,
+    };
+  }
   return rest;
 }
 

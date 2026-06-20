@@ -1,5 +1,6 @@
 export const SARAH_BRAND_EVENT = "sarah:brand-changed";
 export const SARAH_IMAGE_STORAGE_KEY = "sarah.brand.image.v1";
+export const SARAH_CUSTOM_IMAGES_STORAGE_KEY = "sarah.brand.customImages.v1";
 
 export const SARAH_IMAGE_OPTIONS = [
   {
@@ -20,8 +21,38 @@ export const SARAH_IMAGE_OPTIONS = [
 
 export const DEFAULT_SARAH_IMAGE_ID = "lab";
 
+function normalizeCustomOption(option = {}) {
+  const id = String(option.id || "").trim();
+  const src = String(option.src || "").trim();
+  if (!id || !src) return null;
+  return {
+    id,
+    label: String(option.label || "Custom Sarah").trim() || "Custom Sarah",
+    helper: String(option.helper || "Custom local portrait.").trim() || "Custom local portrait.",
+    src,
+    position: String(option.position || "50% 42%").trim() || "50% 42%",
+    custom: true,
+    createdAt: option.createdAt || new Date().toISOString(),
+    source: option.source || "custom",
+  };
+}
+
+export function readCustomSarahImageOptions() {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SARAH_CUSTOM_IMAGES_STORAGE_KEY) || "[]");
+    return (Array.isArray(parsed) ? parsed : []).map(normalizeCustomOption).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export function getSarahImageOptions() {
+  return [...SARAH_IMAGE_OPTIONS, ...readCustomSarahImageOptions()];
+}
+
 export function getSarahImageOption(id = DEFAULT_SARAH_IMAGE_ID) {
-  return SARAH_IMAGE_OPTIONS.find((option) => option.id === id) || SARAH_IMAGE_OPTIONS[0];
+  return getSarahImageOptions().find((option) => option.id === id) || SARAH_IMAGE_OPTIONS[0];
 }
 
 export function readSarahBrandSettings() {
@@ -40,4 +71,26 @@ export function saveSarahBrandSettings(next = {}) {
     window.dispatchEvent(new CustomEvent(SARAH_BRAND_EVENT, { detail: saved }));
   }
   return saved;
+}
+
+export function addSarahImageOption(option = {}) {
+  if (typeof window === "undefined") return null;
+  const normalized = normalizeCustomOption(option);
+  if (!normalized) return null;
+  const existing = readCustomSarahImageOptions().filter((item) => item.id !== normalized.id);
+  const next = [normalized, ...existing].slice(0, 24);
+  window.localStorage.setItem(SARAH_CUSTOM_IMAGES_STORAGE_KEY, JSON.stringify(next));
+  window.dispatchEvent(new CustomEvent(SARAH_BRAND_EVENT, { detail: readSarahBrandSettings() }));
+  return normalized;
+}
+
+export function removeSarahImageOption(id) {
+  if (typeof window === "undefined") return readSarahBrandSettings();
+  const imageId = String(id || "");
+  const next = readCustomSarahImageOptions().filter((item) => item.id !== imageId);
+  window.localStorage.setItem(SARAH_CUSTOM_IMAGES_STORAGE_KEY, JSON.stringify(next));
+  const current = readSarahBrandSettings();
+  if (current.imageId === imageId) return saveSarahBrandSettings({ imageId: DEFAULT_SARAH_IMAGE_ID });
+  window.dispatchEvent(new CustomEvent(SARAH_BRAND_EVENT, { detail: current }));
+  return current;
 }

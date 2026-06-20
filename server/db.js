@@ -130,7 +130,7 @@ export function listProcessingJobSummaries({ type = '', statuses = [], meta = {}
     }
     params.push(Math.max(1, Math.min(500, Number(limit) || 100)));
     return db.prepare(`
-      SELECT json_remove(data, '$.result', '$.payload') AS data
+      SELECT json_remove(data, '$.result', '$.payload', '$.progress.completed_batch_results', '$.meta.reviewed_images') AS data
       FROM entities
       WHERE ${clauses.join(' AND ')}
       ORDER BY COALESCE(updated_date, created_date) DESC

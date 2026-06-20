@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { getBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Play, Pause, Download, Trash2, Music, Video, ChevronDown, ChevronRight } from "lucide-react";
+import { Play, Pause, Download, Trash2, Music, Video, ChevronDown, ChevronRight, ExternalLink, RefreshCw, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import PageHeader from "@/components/PageHeader";
 import { buildAudioExportFilename } from "@/utils/exportFilenames";
@@ -176,6 +177,30 @@ const formatCreatedTimestamp = (value) => {
   });
 };
 
+const formatQueryError = (error) => {
+  if (!error) return "";
+  const status = error?.status ? `${error.status} ` : "";
+  return `${status}${error?.message || "Request failed"}`.trim();
+};
+
+const parseLocalDateOnly = (value) => {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+};
+
+const formatSessionDate = (session) => {
+  const source = session?.date || session?.start_time || session?.created_date;
+  if (!source) return "";
+  const date = session?.date ? parseLocalDateOnly(source) : new Date(source);
+  if (!date || Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+};
+
 const titleFromFilename = (filename = "") => {
   const base = String(filename)
     .split(/[\\/]/)
@@ -255,12 +280,12 @@ export default function Library() {
   const [audioOpen, setAudioOpen] = useState(false);
   const recoveringJobIdsRef = useRef(new Set());
 
-  const { data: exports = [], isLoading } = useQuery({
+  const { data: exports = [], isLoading, error: audioExportsError } = useQuery({
     queryKey: ["audioExports"],
     queryFn: () => base44.entities.AudioExport.list("-created_date", 250),
   });
 
-  const { data: completedJobs = [], isLoading: jobsLoading } = useQuery({
+  const { data: completedJobs = [], isLoading: jobsLoading, error: completedJobsError } = useQuery({
     queryKey: ["completedTtsExportJobs"],
     queryFn: async () => {
       const result = await listBackgroundJobs({
@@ -274,12 +299,17 @@ export default function Library() {
     },
   });
 
-  const { data: reviewVideos = [], isLoading: videosLoading } = useQuery({
+  const { data: reviewVideos = [], isLoading: videosLoading, error: reviewVideosError } = useQuery({
     queryKey: ["sessionReviewVideos"],
     queryFn: () => base44.entities.SessionReviewVideo.list("-created_date", 250),
   });
 
-  const { data: completedVideoJobs = [], isLoading: videoJobsLoading } = useQuery({
+  const { data: sessionLookupRows = [], error: sessionLookupError } = useQuery({
+    queryKey: ["librarySessionLookup"],
+    queryFn: () => base44.entities.Session.listFields(["id", "date", "start_time", "created_date"], "-date", 500),
+  });
+
+  const { data: completedVideoJobs = [], isLoading: videoJobsLoading, error: completedVideoJobsError } = useQuery({
     queryKey: ["completedSessionReviewVideoJobs"],
     queryFn: async () => {
       const result = await listBackgroundJobs({
@@ -292,7 +322,7 @@ export default function Library() {
     },
   });
 
-  const { data: completedProfileVideoJobs = [], isLoading: profileVideoJobsLoading } = useQuery({
+  const { data: completedProfileVideoJobs = [], isLoading: profileVideoJobsLoading, error: completedProfileVideoJobsError } = useQuery({
     queryKey: ["completedProfileAnatomyVideoJobs"],
     queryFn: async () => {
       const result = await listBackgroundJobs({
@@ -360,6 +390,36 @@ export default function Library() {
       .sort((a, b) => timestampMs(b) - timestampMs(a))
       .slice(0, RECENT_VIDEO_LIMIT)
   ), [completedProfileVideoJobs, completedVideoJobs, reviewVideos]);
+
+  const sessionsById = useMemo(() => {
+    const map = new Map();
+    for (const session of sessionLookupRows || []) {
+      if (session?.id) map.set(String(session.id), session);
+    }
+    return map;
+  }, [sessionLookupRows]);
+
+  useEffect(() => {
+    if (downloadableVideos.length > 0) setVideosOpen(true);
+  }, [downloadableVideos.length]);
+
+  const libraryErrors = [
+    ["Audio exports", audioExportsError],
+    ["Audio jobs", completedJobsError],
+    ["Review videos", reviewVideosError],
+    ["Review video jobs", completedVideoJobsError],
+    ["Profile video jobs", completedProfileVideoJobsError],
+    ["Session dates", sessionLookupError],
+  ].filter(([, error]) => Boolean(error));
+
+  const refreshLibrary = () => {
+    queryClient.invalidateQueries({ queryKey: ["audioExports"] });
+    queryClient.invalidateQueries({ queryKey: ["completedTtsExportJobs"] });
+    queryClient.invalidateQueries({ queryKey: ["sessionReviewVideos"] });
+    queryClient.invalidateQueries({ queryKey: ["librarySessionLookup"] });
+    queryClient.invalidateQueries({ queryKey: ["completedSessionReviewVideoJobs"] });
+    queryClient.invalidateQueries({ queryKey: ["completedProfileAnatomyVideoJobs"] });
+  };
 
   const deleteExport = useMutation({
     mutationFn: (id) => base44.entities.AudioExport.delete(id),
@@ -461,7 +521,34 @@ export default function Library() {
       <PageHeader
         title="Multimedia Library"
         subtitle="Manage review videos, narrated audio exports, manifests, chapters, and past downloads"
+        action={(
+          <Button variant="outline" size="sm" onClick={refreshLibrary} className="gap-2">
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </Button>
+        )}
       />
+
+      {libraryErrors.length > 0 && (
+        <div className="mx-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+            <div className="min-w-0">
+              <p className="font-semibold">Library refresh had trouble reaching part of Sarah.</p>
+              <p className="mt-1 text-sm opacity-90">
+                Saved files are not deleted. Some sections may be incomplete until the API or app shell refreshes.
+              </p>
+              <div className="mt-2 space-y-1 text-xs">
+                {libraryErrors.map(([label, error]) => (
+                  <p key={label}>
+                    <span className="font-semibold">{label}:</span> {formatQueryError(error)}
+                  </p>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {downloadableVideos.length > 0 && (
         <LibrarySection
@@ -477,16 +564,23 @@ export default function Library() {
               const title = cleanVideoTitle(video);
               const created = getCreatedTimestamp(video);
               const duration = formatDuration(video.duration_seconds);
+              const sourceSession = video.session_id ? sessionsById.get(String(video.session_id)) : null;
+              const sessionDate = formatSessionDate(sourceSession);
               return (
                 <div
                   key={video.id}
                   className="bg-card rounded-lg border border-border p-4 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between hover:shadow-md transition-shadow"
                 >
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-foreground truncate">{title}</h3>
+                    <h3 className="font-semibold text-foreground truncate">
+                      {sessionDate ? `${title} · ${sessionDate}` : title}
+                    </h3>
                     <p className="text-xs text-primary mt-1">
                       Created {formatCreatedTimestamp(created)}
                     </p>
+                    {sessionDate && (
+                      <p className="text-xs text-muted-foreground mt-1">Source session: {sessionDate}</p>
+                    )}
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs text-muted-foreground">
                       {duration && <span>{duration}</span>}
                       {video.audio_reused != null && <span>{video.audio_reused ? "Reused narration" : "Rendered narration"}</span>}
@@ -504,6 +598,20 @@ export default function Library() {
                     )}
                   </div>
                   <div className="flex items-center gap-2 sm:ml-4 shrink-0">
+                    {video.session_id && (
+                      <Button
+                        asChild
+                        size="sm"
+                        variant="outline"
+                        className="gap-1.5"
+                        title="Open source session"
+                      >
+                        <Link to={`/sessions/${video.session_id}`}>
+                          <ExternalLink className="w-4 h-4" />
+                          <span>Open session</span>
+                        </Link>
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="ghost"
@@ -545,9 +653,13 @@ export default function Library() {
       {downloadableExports.length === 0 && downloadableVideos.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12 text-center">
           <Music className="w-12 h-12 text-muted-foreground mb-3 opacity-50" />
-          <h3 className="text-lg font-semibold text-foreground mb-1">No downloadable exports yet</h3>
+          <h3 className="text-lg font-semibold text-foreground mb-1">
+            {libraryErrors.length ? "Saved recordings could not load" : "No downloadable exports yet"}
+          </h3>
           <p className="text-sm text-muted-foreground">
-            Export TTS audio or build a review video from a session to add files to your library
+            {libraryErrors.length
+              ? "Sarah still has saved media on disk and in the database, but this page could not fetch it. Try Refresh or reopen the app shell."
+              : "Export TTS audio or build a review video from a session to add files to your library"}
           </p>
         </div>
       ) : downloadableExports.length > 0 ? (

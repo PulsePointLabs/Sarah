@@ -61,8 +61,20 @@ function publicJob(job, { includeResult = true } = {}) {
   const { payload: _payload, abortController: _abortController, ...rest } = job;
   if (!includeResult) {
     const { result: _result, ...summary } = rest;
+    const progress = summary.progress ? { ...summary.progress } : summary.progress;
+    if (progress && Array.isArray(progress.completed_batch_results)) {
+      progress.completed_batch_results = undefined;
+      progress.completed_batch_results_omitted = true;
+    }
+    const meta = summary.meta ? { ...summary.meta } : summary.meta;
+    if (meta && Array.isArray(meta.reviewed_images)) {
+      meta.reviewed_image_count = meta.reviewed_images.length;
+      meta.reviewed_images = undefined;
+    }
     return {
       ...summary,
+      meta,
+      progress,
       hasResult: rest.result != null,
     };
   }

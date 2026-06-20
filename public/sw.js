@@ -10,7 +10,7 @@
 // PWA_SAFE_WAITING_UPDATE_V1
 const CACHE_PREFIX = "pulsepoint-shell-";
 const CACHE_PREFIXES = ["pulsepoint-shell-", "workbox-", "vite-"];
-const SW_BUILD_ID = "sarah-sw-safe-waiting-update-v1";
+const SW_BUILD_ID = "sarah-sw-safe-waiting-update-v2";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(Promise.resolve());
@@ -18,10 +18,14 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys()
-      .then((keys) => Promise.all(keys
-        .filter((key) => CACHE_PREFIXES.some((prefix) => key.startsWith(prefix)))
-        .map((key) => caches.delete(key))))
+    self.clients.matchAll({ type: "window", includeUncontrolled: true })
+      .then((clients) => {
+        if (clients.length > 0) return null;
+        return caches.keys()
+          .then((keys) => Promise.all(keys
+            .filter((key) => CACHE_PREFIXES.some((prefix) => key.startsWith(prefix)))
+            .map((key) => caches.delete(key))));
+      })
   );
 });
 

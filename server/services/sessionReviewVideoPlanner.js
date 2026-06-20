@@ -53,6 +53,44 @@ function hasAny(value = '', terms = []) {
   return terms.some((term) => term.test(text));
 }
 
+const FOLEY_PROCEDURE_CONCEPTS = [
+  {
+    score: 190,
+    terms: [/\bmeatus\b/, /\bmeatal\b/, /\burethral opening\b/, /\bglans\b/, /\bforeskin\b/, /\bcatheter tip\b/],
+    exclusions: [/\bdrainage bag\b/, /\bleg[-\s]?bag\b/, /\bambulatory\b/, /\btable vacant\b/, /\bgetting off\b/, /\bexiting the table\b/],
+  },
+  {
+    score: 170,
+    terms: [/\burethra\b/, /\burethral\b/, /\badvancement\b/, /\badvance\b/, /\binsertion\b/, /\bspongy urethra\b/, /\bprostatic urethra\b/, /\bfoley\b/, /\bcatheter\b/],
+    exclusions: [/\btable vacant\b/, /\bambulatory\b/, /\bwalking\b/, /\bsecured off[-\s]?camera\b/],
+  },
+  {
+    score: 175,
+    terms: [/\bexternal sphincter\b/, /\binternal sphincter\b/, /\bsphincter\b/, /\bresistance\b/, /\bpinch\b/, /\bbladder neck\b/, /\brelaxation\b/, /\bbreathing\b/],
+    exclusions: [/\bdrainage bag\b/, /\btable vacant\b/, /\bambulatory\b/],
+  },
+  {
+    score: 165,
+    terms: [/\burine return\b/, /\burine output\b/, /\bdrainage\b/, /\bdrainage bag\b/, /\bbladder entry\b/, /\bcollected\b/],
+    exclusions: [/\bmeatus\b/, /\bmeatal\b/, /\bglans\b/],
+  },
+  {
+    score: 175,
+    terms: [/\bballoon\b/, /\binflat/, /\b5\s*cc\b/, /\bsterile water\b/, /\bsyringe\b/, /\bseating\b/, /\btraction\b/],
+    exclusions: [/\bmeatus\b/, /\bmeatal\b/, /\bglans\b/],
+  },
+];
+
+function procedureConceptScore(anchorText = '', paragraphText = '') {
+  return FOLEY_PROCEDURE_CONCEPTS.reduce((sum, concept) => {
+    const anchorHasConcept = hasAny(anchorText, concept.terms);
+    const paragraphHasConcept = hasAny(paragraphText, concept.terms);
+    if (!paragraphHasConcept) return sum;
+    if (anchorHasConcept) return sum + concept.score;
+    return hasAny(anchorText, concept.exclusions || []) ? sum - Math.max(120, concept.score * 0.75) : sum;
+  }, 0);
+}
+
 function conceptScore(anchorText = '', paragraphText = '') {
   const concepts = [
     { score: 110, terms: [/\bejaculat/, /\bclimax/, /\borgasm/, /\bsemen/, /\bfluid release/, /\brelease\b/] },
@@ -71,7 +109,7 @@ function conceptScore(anchorText = '', paragraphText = '') {
   const anchorLooksActive = hasAny(anchorText, [/\bactive/, /\bstroking/, /\bcontinues/, /\bongoing/, /\btwo-handed.*continues/, /\bcontact continues/]);
   const anchorLooksOnlyVisibleObject = hasAny(anchorText, [/\bbottle visible/, /\bvisible in background/]) && !hasAny(anchorText, [/\bapply/, /\bapplication/, /\bprep/, /\bpreparation/, /\bhandling/]);
   const penalty = (paragraphWantsPause && anchorLooksActive ? 90 : 0) + (paragraphWantsPause && anchorLooksOnlyVisibleObject ? 35 : 0);
-  return positive - penalty;
+  return positive + procedureConceptScore(anchorText, paragraphText) - penalty;
 }
 
 function anchorScore(anchor, paragraphText = '') {

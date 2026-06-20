@@ -985,10 +985,19 @@ function segmentKeywordScore(event = {}, segmentText = '') {
     [/\blubric|lube|pause|paused|prep|preparation\b/, 110],
     [/\bheart rate|hrv|bpm|peak\b/, 35],
     [/\bperineal|pelvic|contraction|foley|catheter\b/, 35],
+    [/\bmeatus|meatal|urethral opening|glans|foreskin|catheter tip\b/, 210],
+    [/\burethra|urethral|advancement|advance|insertion|spongy urethra|prostatic urethra\b/, 185],
+    [/\bexternal sphincter|internal sphincter|sphincter|resistance|pinch|bladder neck|relaxation|breathing\b/, 175],
+    [/\burine return|urine output|drainage bag|bladder entry|collected\b/, 165],
+    [/\bballoon|inflate|inflation|5\s*cc|sterile water|syringe|seating|traction\b/, 175],
   ];
-  return pairs.reduce((sum, [pattern, score]) => (
+  const positive = pairs.reduce((sum, [pattern, score]) => (
     pattern.test(source) && pattern.test(target) ? sum + score : sum
   ), 0);
+  const wantsMeatusOrUrethra = /\b(meatus|meatal|urethral opening|glans|foreskin|catheter tip|urethra|urethral|advancement|advance|insertion|spongy urethra|prostatic urethra)\b/i.test(target);
+  const sourceLooksPostProcedureBroll = /\b(drainage bag|leg[-\s]?bag|ambulatory|table vacant|getting off|exiting the table|secured off[-\s]?camera|walking)\b/i.test(source);
+  const sourceHasMatchingProcedure = /\b(meatus|meatal|urethral opening|glans|foreskin|catheter tip|urethra|urethral|advancement|advance|insertion|spongy urethra|prostatic urethra)\b/i.test(source);
+  return positive - (wantsMeatusOrUrethra && sourceLooksPostProcedureBroll && !sourceHasMatchingProcedure ? 180 : 0);
 }
 
 function collectSegmentEvents({ segment, plan, clipByParagraph }) {
@@ -1049,7 +1058,7 @@ function chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds }) {
   let best = null;
   for (const event of candidates) {
     const id = String(event.id || `${event.label}:${event.session_time_s}`);
-    const reusePenalty = usedEventIds.has(id) ? 45 : 0;
+    const reusePenalty = usedEventIds.has(id) ? 140 : 0;
     const directTimeScore = explicitTimes.some((time) => Math.abs(Number(time.seconds) - Number(event.session_time_s)) <= 14)
       ? 220
       : 0;
