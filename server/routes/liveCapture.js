@@ -925,11 +925,12 @@ function refreshDirectH10TelemetryState(telemetry, fallbackDeviceName = '') {
 
 function handleRelayTelemetry(telemetry) {
   if (!telemetry) return;
+  if (telemetry?.origin === 'obs_overlay' || telemetry?.raw?.origin === 'obs_overlay') return;
 
   const shouldTreatAsDirectH10 =
-    state.hr.selectedSource === HR_SOURCE_IDS.DIRECT_H10 ||
     telemetry?.source === HR_SOURCE_IDS.DIRECT_H10 ||
-    telemetry?.sourceLabel === HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10];
+    telemetry?.sourceLabel === HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10] ||
+    telemetry?.raw?.source === HR_SOURCE_IDS.DIRECT_H10;
 
   if (shouldTreatAsDirectH10) {
     const normalized = normalizeDirectH10Telemetry(telemetry);

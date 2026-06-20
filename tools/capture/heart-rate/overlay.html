@@ -590,7 +590,10 @@ function sendTelemetry(data) {
   if (controlWs && controlWs.readyState === WebSocket.OPEN) {
     controlWs.send(JSON.stringify({
       type: "telemetry",
-      data
+      data: {
+        ...data,
+        origin: "obs_overlay"
+      }
     }));
   }
 }
@@ -601,9 +604,18 @@ function readTelemetryBpm(data) {
   return Number.isFinite(bpm) && bpm >= 25 && bpm <= 250 ? Math.round(bpm) : null;
 }
 
+function liveTelemetryAgeMs(data) {
+  const timestamp = Number(data?.receivedAt ?? data?.measuredAt ?? data?.engineWallTimeMs ?? data?.timestampMs);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return 0;
+  return Math.max(0, Date.now() - timestamp);
+}
+
 function ingestLiveTelemetry(data) {
+  if (data?.origin === "obs_overlay" || data?.raw?.origin === "obs_overlay") return;
   const bpm = readTelemetryBpm(data);
   if (bpm == null) return;
+  const ageMs = Number(data?.quality?.ageMs ?? liveTelemetryAgeMs(data));
+  if (Number.isFinite(ageMs) && ageMs > 7000) return;
   lastLiveCaptureHrAtMs = Date.now();
   ingestHRText(String(bpm));
 }
