@@ -9,6 +9,14 @@ import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES } from "./session-form/E
 import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
 import { SessionReviewVideoExportButton } from "./SessionAIPanel";
 import { recoverCompletedAIJob, startRecoverableAIJob, waitForRecoverableAIJob } from "@/lib/recoverableAIJobs";
+import {
+  FOCUSED_FOLEY_SECTION_DEFS,
+  buildFocusedFoleyProfileContext,
+  focusedFoleyPromptBlock,
+  focusedFoleyResponseSchema,
+  isFocusedFoleyExploration,
+  normalizeFocusedFoleyAnalysis,
+} from "@/lib/bodyExplorationFocus";
 
 const SECTION_DEFS = [
   { key: "telemetry_findings", label: "Telemetry Findings", icon: <Activity className="h-3.5 w-3.5" />, color: "hsl(var(--chart-2))" },
@@ -16,6 +24,26 @@ const SECTION_DEFS = [
   { key: "comfort_safety_findings", label: "Comfort & Safety", icon: <ShieldCheck className="h-3.5 w-3.5" />, color: "hsl(var(--chart-3))" },
   { key: "recommendations", label: "Review Notes", icon: <Lightbulb className="h-3.5 w-3.5" />, color: "hsl(var(--chart-4))" },
 ];
+
+const FOCUSED_SECTION_ICONS = {
+  procedural_course: <ScanSearch className="h-3.5 w-3.5" />,
+  clinical_interpretation: <Brain className="h-3.5 w-3.5" />,
+  body_response_felt_experience: <Activity className="h-3.5 w-3.5" />,
+  placement_confidence: <ShieldCheck className="h-3.5 w-3.5" />,
+  prior_comparison: <ScanSearch className="h-3.5 w-3.5" />,
+  focused_follow_up: <Lightbulb className="h-3.5 w-3.5" />,
+};
+
+function sectionDefsForResult(result) {
+  if (result?._focus?.mode === "foley_insertion") {
+    return FOCUSED_FOLEY_SECTION_DEFS.map((section) => ({
+      ...section,
+      icon: FOCUSED_SECTION_ICONS[section.key] || <ScanSearch className="h-3.5 w-3.5" />,
+      color: "hsl(var(--primary))",
+    }));
+  }
+  return SECTION_DEFS;
+}
 
 const ANATOMICAL_LATERALITY_RULE = `
 ANATOMICAL LEFT/RIGHT DISCIPLINE:
@@ -61,7 +89,8 @@ function aiErrorMessage(error) {
   }
 }
 
-function normalizeAnalysis(raw) {
+function normalizeAnalysis(raw, { focusedFoley = false } = {}) {
+  if (focusedFoley) return normalizeFocusedFoleyAnalysis(raw);
   const parsed = raw?.response ?? raw;
   if (!parsed?.summary || !parsed?.telemetry_findings?.length || !parsed?.mechanical_findings?.length) {
     throw new Error("AI returned an incomplete body exploration analysis. Please try again.");
@@ -120,6 +149,7 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
   const [error, setError] = useState("");
   const generatedAt = getAIContentGeneratedAt(result);
   const jobKey = `body-exploration-analysis:${exploration.id}`;
+  const focusedFoley = isFocusedFoleyExploration(exploration);
 
   const attachAnalysisMeta = (analysis, previousAnalysis) => {
     return {
@@ -136,7 +166,7 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
 
   const persistAnalysisResult = async (raw) => {
     const previousAnalysis = exploration.ai_body_exploration || result;
-    const parsed = attachAnalysisMeta(normalizeAnalysis(raw), previousAnalysis);
+    const parsed = attachAnalysisMeta(normalizeAnalysis(raw, { focusedFoley }), previousAnalysis);
     setResult(parsed);
     await base44.entities.BodyExploration.update(exploration.id, { ai_body_exploration: parsed });
     return parsed;
@@ -191,9 +221,21 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
         const hr = nearestHr(event.time_s);
         return `[${Math.floor(Number(event.time_s || 0) / 60)}:${String(Math.round(Number(event.time_s || 0) % 60)).padStart(2, "0")}] ${labels || "Observation"} - ${event.note}${hr != null ? ` [heart rate ${Math.round(Number(hr))} beats per minute]` : ""}`;
       });
-      const groundingContext = buildAIGroundingContext(userProfile);
+      const groundingContext = buildAIGroundingContext(userProfile, { includeProfile: !focusedFoley });
+      const focusedProfileContext = focusedFoley ? buildFocusedFoleyProfileContext(userProfile) : "";
       const visualEvidenceContext = buildBodyExplorationVisualEvidenceDigest(exploration);
       const videoPassEvidenceContext = buildBodyExplorationVideoPassDigest(exploration);
+      const responseSchema = focusedFoley ? focusedFoleyResponseSchema() : {
+        type: "object",
+        properties: {
+          summary: { type: "string" },
+          telemetry_findings: { type: "array", items: { type: "string" }, description: "Landmark/window-specific HR or EMG interpretation where possible; do not merely list min/avg/max." },
+          mechanical_findings: { type: "array", items: { type: "string" }, description: "Procedure mechanics by visible/logged landmark: prep, lubrication, meatal engagement, urethral passage, sphincters, bladder entry/urine return, balloon, securement, dwell/removal when supported." },
+          comfort_safety_findings: { type: "array", items: { type: "string" }, description: "Comfort, sterile/safety controls, tissue state, irritation/lack of irritation, tension, dwell tolerance, uncertainty, and risk-control observations." },
+          recommendations: { type: "array", items: { type: "string" }, description: "Focused review notes or future documentation gaps grounded in the procedure evidence, phrased without pressure." },
+        },
+        required: ["summary", "telemetry_findings", "mechanical_findings", "comfort_safety_findings", "recommendations"],
+      };
       const aiPayload = {
         model: "claude_sonnet_4_6",
         max_tokens: 10000,
@@ -229,12 +271,14 @@ Focus on:
 - useful next-review notes grounded in the actual record
 
 ${groundingContext}
+${focusedProfileContext}
 ${visualEvidenceContext}
 ${videoPassEvidenceContext}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${ANATOMICAL_LATERALITY_RULE}
 ${PRODUCTION_BODY_EXPLORATION_STYLE}
 ${SARAH_LANGUAGE_VARIETY_RULE}
+${focusedFoley ? focusedFoleyPromptBlock() : ""}
 
 STYLE:
 - Write directly to the person using "you" and "your".
@@ -270,17 +314,7 @@ ${JSON.stringify({
 }, null, 2)}
 
 ${events.length ? `TIMESTAMPED NOTES:\n${events.join("\n")}` : "No timestamped notes were recorded."}`,
-        response_json_schema: {
-          type: "object",
-          properties: {
-            summary: { type: "string" },
-            telemetry_findings: { type: "array", items: { type: "string" }, description: "Landmark/window-specific HR or EMG interpretation where possible; do not merely list min/avg/max." },
-            mechanical_findings: { type: "array", items: { type: "string" }, description: "Procedure mechanics by visible/logged landmark: prep, lubrication, meatal engagement, urethral passage, sphincters, bladder entry/urine return, balloon, securement, dwell/removal when supported." },
-            comfort_safety_findings: { type: "array", items: { type: "string" }, description: "Comfort, sterile/safety controls, tissue state, irritation/lack of irritation, tension, dwell tolerance, uncertainty, and risk-control observations." },
-            recommendations: { type: "array", items: { type: "string" }, description: "Focused review notes or future documentation gaps grounded in the procedure evidence, phrased without pressure." },
-          },
-          required: ["summary", "telemetry_findings", "mechanical_findings", "comfort_safety_findings", "recommendations"],
-        },
+        response_json_schema: responseSchema,
       };
       const job = await startRecoverableAIJob(jobKey, aiPayload, {
         title: "Body Exploration AI analysis",
@@ -300,11 +334,12 @@ ${events.length ? `TIMESTAMPED NOTES:\n${events.join("\n")}` : "No timestamped n
     }
   };
 
+  const activeSectionDefs = sectionDefsForResult(result);
   const paragraphs = result
-    ? [result.summary, ...SECTION_DEFS.flatMap((section) => result[section.key] || [])].filter(Boolean)
+    ? [result.summary, ...activeSectionDefs.flatMap((section) => result[section.key] || [])].filter(Boolean)
     : [];
   const paragraphMeta = result
-    ? [{ type: "summary" }, ...SECTION_DEFS.flatMap((section) => (result[section.key] || []).map(() => ({ type: "section", section })))]
+    ? [{ type: "summary" }, ...activeSectionDefs.flatMap((section) => (result[section.key] || []).map(() => ({ type: "section", section })))]
     : [];
 
   return (
