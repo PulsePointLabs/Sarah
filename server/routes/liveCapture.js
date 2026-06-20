@@ -905,6 +905,56 @@ function publishHrTelemetryToOverlay(telemetry) {
   }
 }
 
+function refreshDirectH10TelemetryState(telemetry, fallbackDeviceName = '') {
+  const receivedIso = new Date(telemetry?.receivedAt || Date.now()).toISOString();
+  state.hr.directH10 = {
+    ...state.hr.directH10,
+    connected: true,
+    deviceName: String(
+      telemetry?.deviceName
+      || telemetry?.raw?.deviceName
+      || fallbackDeviceName
+      || state.hr.directH10.deviceName
+      || ''
+    ),
+    error: null,
+    lastMessageAt: receivedIso,
+    lastMeasuredAt: telemetry?.measuredAt ? new Date(telemetry.measuredAt).toISOString() : null,
+  };
+}
+
+function handleRelayTelemetry(telemetry) {
+  if (!telemetry) return;
+
+  const shouldTreatAsDirectH10 =
+    state.hr.selectedSource === HR_SOURCE_IDS.DIRECT_H10 ||
+    telemetry?.source === HR_SOURCE_IDS.DIRECT_H10 ||
+    telemetry?.sourceLabel === HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10];
+
+  if (shouldTreatAsDirectH10) {
+    const normalized = normalizeDirectH10Telemetry(telemetry);
+    if (!normalized) return;
+    refreshDirectH10TelemetryState(normalized, 'OBS overlay relay');
+    refreshHrSourceStatus(normalized.rrIntervalsMs?.length ? 'Direct H10 HR + RR live' : 'Direct H10 HR live');
+    const selectedTelemetry = applySelectedHrTelemetry(normalized);
+    appendDirectH10TelemetryRow(selectedTelemetry).catch((error) => {
+      state.hr.directH10.error = `Direct H10 CSV write failed: ${error.message || error}`;
+      refreshHrSourceStatus();
+      broadcast('status', state);
+    });
+    broadcast('status', state);
+    return;
+  }
+
+  const normalized = normalizeHeartRateOnStreamTelemetry(telemetry);
+  if (normalized && shouldUseTelemetrySource(HR_SOURCE_IDS.HEART_RATE_ON_STREAM)) {
+    const nextTelemetry = applySelectedHrTelemetry(normalized);
+    state.hr.latestTelemetry = nextTelemetry;
+    refreshHrSourceStatus('HeartRateOnStream HR live');
+    broadcast('status', state);
+  }
+}
+
 function handlePulsoidTelemetry(telemetry) {
   if (!telemetry) return;
   pulsoidBackoffMs = 1500;
@@ -1069,12 +1119,7 @@ function connectHrBridge() {
       state.hr.lastMessageAt = new Date().toISOString();
 
       if (msg.type === 'telemetry') {
-        const normalized = normalizeHeartRateOnStreamTelemetry(msg.data || null);
-        if (shouldUseTelemetrySource(HR_SOURCE_IDS.HEART_RATE_ON_STREAM)) {
-          const nextTelemetry = applySelectedHrTelemetry(normalized || msg.data || null);
-          state.hr.latestTelemetry = nextTelemetry;
-          refreshHrSourceStatus('HeartRateOnStream HR live');
-        }
+        handleRelayTelemetry(msg.data || null);
       }
 
       if (msg.type === 'relay_status') {
@@ -1328,20 +1373,15 @@ liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
     return;
   }
   telemetry = enrichHrTelemetry(telemetry);
-  const receivedIso = new Date(telemetry.receivedAt || Date.now()).toISOString();
   if (state.hr.selectedSource !== HR_SOURCE_IDS.DIRECT_H10) {
     closePulsoidConnection({ quiet: true });
     state.hr.selectedSource = HR_SOURCE_IDS.DIRECT_H10;
     state.hr.selectedSourceLabel = HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10];
   }
-  state.hr.directH10 = {
-    ...state.hr.directH10,
-    connected: true,
-    deviceName: String(req.body?.deviceName || req.body?.device_name || state.hr.directH10.deviceName || ''),
-    error: null,
-    lastMessageAt: receivedIso,
-    lastMeasuredAt: telemetry.measuredAt ? new Date(telemetry.measuredAt).toISOString() : null,
-  };
+  refreshDirectH10TelemetryState(
+    telemetry,
+    req.body?.deviceName || req.body?.device_name || state.hr.directH10.deviceName || ''
+  );
   if (shouldUseTelemetrySource(HR_SOURCE_IDS.DIRECT_H10)) {
     refreshHrSourceStatus('Direct H10 HR + RR live');
     telemetry = applySelectedHrTelemetry(telemetry);
