@@ -411,13 +411,17 @@ function drawTextSafe(value = '') {
 
 function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playbackRate = 1, outputDurationSeconds = 0 } = {}) {
   const fontPath = process.env.REVIEW_VIDEO_FONT || 'C\\:/Windows/Fonts/arial.ttf';
-  const sourceLabel = `source ${formatTimestamp(startSeconds)}`;
-  const sessionLabel = Number.isFinite(Number(sessionSeconds))
-    ? `session ${formatTimestamp(sessionSeconds)}`
-    : '';
   const rate = Number(playbackRate);
   const slowMoLabel = Number.isFinite(rate) && rate > 0 && rate < 0.99 ? `${Math.round(rate * 100)}% speed` : '';
-  const text = drawTextSafe([sessionLabel, sourceLabel, slowMoLabel].filter(Boolean).join('  |  '));
+  const timelineStart = Number.isFinite(Number(sessionSeconds)) ? Number(sessionSeconds) : Number(startSeconds || 0);
+  const timelineRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
+  const timelineCounter = [
+    'timeline ',
+    `%{eif\\:floor((${timelineStart.toFixed(3)}+t*${timelineRate.toFixed(4)})/60)\\:d}`,
+    '\\:',
+    `%{eif\\:mod(floor(${timelineStart.toFixed(3)}+t*${timelineRate.toFixed(4)})\\,60)\\:d\\:2}`,
+  ].join('');
+  const text = [timelineCounter, slowMoLabel ? drawTextSafe(slowMoLabel) : ''].filter(Boolean).join('  |  ');
   return [
     reviewVideoFitFilter(),
     'format=yuv420p',
