@@ -1,4 +1,5 @@
 import { getEntity, listEntities, listProcessingJobSummaries, listRecoverableProcessingJobs, upsertEntity } from '../db.js';
+import { friendlyJobErrorMessage } from '../../src/lib/jobErrorMessages.js';
 
 const handlers = new Map();
 const jobs = new Map();
@@ -231,15 +232,17 @@ function runNext() {
       })
       .catch((error) => {
         const cancelled = job.abortController.signal.aborted;
+        const cleanErrorMessage = cancelled ? 'Cancelled' : friendlyJobErrorMessage(error);
         patchJob(job, {
           status: cancelled ? 'cancelled' : 'error',
-          error: cancelled ? 'Cancelled' : (error?.message || String(error)),
+          error: cleanErrorMessage,
           payload: null,
           finishedAt: nowIso(),
         });
         patchProgress(job, {
           phase: cancelled ? 'cancelled' : 'error',
-          message: cancelled ? 'Cancelled' : (error?.message || String(error)),
+          message: cleanErrorMessage,
+          ...(cancelled ? {} : { error_raw: error?.message || String(error) }),
         });
       })
       .finally(() => {

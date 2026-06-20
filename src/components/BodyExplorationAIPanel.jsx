@@ -9,6 +9,7 @@ import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES } from "./session-form/E
 import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
 import { SessionReviewVideoExportButton } from "./SessionAIPanel";
 import { recoverCompletedAIJob, startRecoverableAIJob, waitForRecoverableAIJob } from "@/lib/recoverableAIJobs";
+import { friendlyJobErrorMessage } from "@/lib/jobErrorMessages";
 import {
   FOCUSED_FOLEY_SECTION_DEFS,
   buildFocusedFoleyProfileContext,
@@ -80,13 +81,7 @@ function categoryLabel(value) {
 }
 
 function aiErrorMessage(error) {
-  const raw = error?.data?.error || error?.message || String(error || "Analysis failed");
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed?.error?.message || parsed?.message || parsed?.error || raw;
-  } catch {
-    return raw;
-  }
+  return friendlyJobErrorMessage(error, { preserveContext: false }) || "Analysis failed";
 }
 
 function normalizeAnalysis(raw, { focusedFoley = false } = {}) {

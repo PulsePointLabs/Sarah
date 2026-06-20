@@ -51,6 +51,11 @@ export function friendlyJobErrorMessage(error, { preserveContext = true } = {}) 
       ? "Anthropic credits are exhausted. Any completed checkpoints were kept; add credits, then retry or recover the saved findings."
       : "Anthropic credits are exhausted. Add credits in Anthropic Plans & Billing, then try again.";
   }
+  if (/overloaded|overloaded_error|529/i.test(raw)) {
+    return preserveContext
+      ? "The AI provider is overloaded right now. Sarah kept any completed checkpoints; wait a minute, then retry or let the remaining queued job continue."
+      : "The AI provider is overloaded right now. Wait a minute, then try again.";
+  }
   if (/server restarted before this job could be resumed/i.test(raw)) {
     return "The desktop backend restarted before this job could resume. Start the task again.";
   }

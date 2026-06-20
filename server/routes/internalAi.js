@@ -50,7 +50,7 @@ async function createMessageWithRetries(anthropic, payload, attempts = 3, signal
       lastError = error;
       if (signal?.aborted) throw new Error('Cancelled');
       const status = error.status || error.response?.status;
-      const retryable = [408, 429, 500, 502, 503, 504].includes(status);
+      const retryable = [408, 429, 500, 502, 503, 504, 529].includes(status);
       if (!retryable || attempt === attempts - 1) throw error;
       const retryAfter = error.headers?.['retry-after'] || error.response?.headers?.get?.('retry-after');
       const delay = retryAfter

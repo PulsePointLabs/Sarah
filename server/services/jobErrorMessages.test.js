@@ -31,3 +31,21 @@ test('friendlyJobStatusMessage cleans failed job progress messages', () => {
   assert.match(friendlyJobStatusMessage(job), /Anthropic credits are exhausted/);
   assert.doesNotMatch(friendlyJobStatusMessage(job), /\{"type":"error"/);
 });
+
+test('friendlyJobErrorMessage maps provider overload to a retryable user-facing status', () => {
+  const raw = '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CcDdXMNt1y1"}';
+  assert.equal(
+    friendlyJobErrorMessage(new Error(raw), { preserveContext: false }),
+    'The AI provider is overloaded right now. Wait a minute, then try again.',
+  );
+});
+
+test('friendlyJobStatusMessage hides provider overload JSON in background task tray', () => {
+  const job = {
+    status: 'error',
+    error: '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+    progress: { phase: 'error' },
+  };
+  assert.match(friendlyJobStatusMessage(job), /AI provider is overloaded/);
+  assert.doesNotMatch(friendlyJobStatusMessage(job), /\{"type":"error"/);
+});
