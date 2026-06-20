@@ -21,6 +21,7 @@ import {
   dedupeProfileImageReviewItems,
 } from '../../src/lib/profileImageReviewCleanup.js';
 import { friendlyJobErrorMessage } from '../../src/lib/jobErrorMessages.js';
+import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
 
 export const jobsRouter = express.Router();
 export const largeJobsRouter = express.Router();
@@ -415,6 +416,13 @@ function parseAIResult(value) {
   }
 }
 
+function safeProviderError(error, options = {}) {
+  return classifyProviderError(error, {
+    defaultProvider: 'anthropic',
+    ...options,
+  });
+}
+
 function cleanFallbackReviewText(value = '') {
   return cleanProfileImageReviewText(String(value || '')
     .replace(/\bThis batch does not include[^.]*\.?\s*/gi, '')
@@ -535,11 +543,13 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
         return parseAIResult(result);
       } catch (error) {
         const cleanErrorMessage = friendlyJobErrorMessage(error);
+        const providerError = safeProviderError(error, { requestStage: 'single_review', jobId: context.jobId });
         context.updateProgress({
           phase: 'error',
           current: 1,
           total,
           message: cleanErrorMessage,
+          provider_error: providerError,
           error_raw: error?.message || String(error),
         });
         const cleanError = new Error(cleanErrorMessage);
@@ -563,6 +573,7 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
         });
       } catch (error) {
         const cleanErrorMessage = friendlyJobErrorMessage(error);
+        const providerError = safeProviderError(error, { requestStage: 'batch_review', jobId: context.jobId });
         if (batchResults.length) {
           context.updateProgress({
             phase: 'batch_failed_partial_preserved',
@@ -574,6 +585,7 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
             completed_batch_count: batchResults.length,
             completed_batch_results: batchResults,
             batch_error_message: cleanErrorMessage,
+            provider_error: providerError,
             batch_error_raw: error?.message || String(error),
           });
         }
@@ -609,11 +621,19 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
         });
         return parseAIResult(result);
       } catch (error) {
+        const providerError = safeProviderError(error, {
+          requestStage: 'final_synthesis',
+          jobId: context.jobId,
+          preservedArtifacts: ['completed_image_review_batches'],
+        });
         context.updateProgress({
           phase: 'fallback_assembly',
           current: total,
           total,
-          message: `${label}: final synthesis failed, preserving completed batch findings…`,
+          message: providerError.category === 'insufficient_credits'
+            ? `${label}: Anthropic credits are unavailable; completed image-review batches were preserved.`
+            : `${label}: final synthesis failed, preserving completed batch findings…`,
+          provider_error: providerError,
           synthesis_error: error?.message || String(error),
         });
         const assembled = fallbackAssembleProfileImageReview(payload, batchResults);
@@ -621,6 +641,7 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
           state: 'final_synthesis_failed_batch_findings_preserved',
           timestamp: new Date().toISOString(),
           error_message: error?.message || String(error),
+          provider_error: providerError,
           batch_reviews_completed: true,
           batch_count: batchResults.length,
           final_synthesis_attempted: true,

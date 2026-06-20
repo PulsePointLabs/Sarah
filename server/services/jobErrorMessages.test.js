@@ -18,7 +18,7 @@ test('friendlyJobErrorMessage maps Anthropic credit exhaustion to a concise user
   const raw = '400 {"type":"error","error":{"message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}';
   assert.equal(
     friendlyJobErrorMessage(new Error(raw)),
-    'Anthropic credits are exhausted. Any completed checkpoints were kept; add credits, then retry or recover the saved findings.',
+    'Anthropic credits are unavailable. Completed checkpoints were preserved; add credits, then retry the final synthesis only.',
   );
 });
 
@@ -28,7 +28,7 @@ test('friendlyJobStatusMessage cleans failed job progress messages', () => {
     error: '400 {"type":"error","error":{"message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}',
     progress: { phase: 'error' },
   };
-  assert.match(friendlyJobStatusMessage(job), /Anthropic credits are exhausted/);
+  assert.match(friendlyJobStatusMessage(job), /Anthropic credits are unavailable/);
   assert.doesNotMatch(friendlyJobStatusMessage(job), /\{"type":"error"/);
 });
 
@@ -36,7 +36,7 @@ test('friendlyJobErrorMessage maps provider overload to a retryable user-facing 
   const raw = '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CcDdXMNt1y1"}';
   assert.equal(
     friendlyJobErrorMessage(new Error(raw), { preserveContext: false }),
-    'The AI provider is overloaded right now. Wait a minute, then try again.',
+    'The AI provider is temporarily unavailable. Wait a minute, then try again.',
   );
 });
 
@@ -46,6 +46,6 @@ test('friendlyJobStatusMessage hides provider overload JSON in background task t
     error: '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
     progress: { phase: 'error' },
   };
-  assert.match(friendlyJobStatusMessage(job), /AI provider is overloaded/);
+  assert.match(friendlyJobStatusMessage(job), /AI provider is temporarily unavailable/);
   assert.doesNotMatch(friendlyJobStatusMessage(job), /\{"type":"error"/);
 });

@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { writeAIForensicArtifact } from '../services/aiForensics.js';
+import { classifyProviderError, shouldRetryProviderError } from '../../src/lib/providerErrorClassifier.js';
 
 const MODEL_MAP = {
   claude_sonnet_4_6: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
@@ -49,14 +50,14 @@ async function createMessageWithRetries(anthropic, payload, attempts = 3, signal
     } catch (error) {
       lastError = error;
       if (signal?.aborted) throw new Error('Cancelled');
-      const status = error.status || error.response?.status;
-      const retryable = [408, 429, 500, 502, 503, 504, 529].includes(status);
+      const classified = classifyProviderError(error, { provider: 'anthropic', requestStage: 'internal_invoke' });
+      const retryable = shouldRetryProviderError(error, { provider: 'anthropic', requestStage: 'internal_invoke' });
       if (!retryable || attempt === attempts - 1) throw error;
       const retryAfter = error.headers?.['retry-after'] || error.response?.headers?.get?.('retry-after');
       const delay = retryAfter
         ? Math.min(Math.max(Number(retryAfter) * 1000, 2000), 65000)
         : Math.min(10000 * 2 ** attempt, 65000) + Math.floor(Math.random() * 1500);
-      console.warn('Internal AI invoke retrying after transient error', { status, attempt: attempt + 1, delay });
+      console.warn('Internal AI invoke retrying after transient error', { category: classified.category, code: classified.code, attempt: attempt + 1, delay });
       await sleep(delay);
     }
   }

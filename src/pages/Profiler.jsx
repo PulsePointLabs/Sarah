@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE, SARAH_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
 import { loadLatestProfilerAnalysis, loadUserProfileWithProfilerResults, mergeProfilerResultsIntoProfile } from "@/lib/profileContext";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
-import { friendlyJobErrorMessage } from "@/lib/jobErrorMessages";
+import { friendlyJobErrorMessage, providerErrorCategory } from "@/lib/jobErrorMessages";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionContextFactorLabels } from "@/lib/sessionContext";
 import { getManualStimulationPauseResumeEvents, getMotionEvidenceSummary, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
 import { buildProfileAIContentMeta, formatGeneratedAt, isProfileAIContentStale } from "@/utils/aiContentMetadata";
@@ -4535,6 +4535,7 @@ function ProfileImageReviewPanel({
       storedResult._meta.latest_attempt_status = fallbackStatus;
       storedResult._meta.recovered_from_batches = true;
       storedResult._meta.local_batch_assembled = true;
+      storedResult._meta.result_kind = "recovered_batch_draft";
       storedResult._meta.final_synthesis_failed = true;
     }
     if (parsed?._background_attempt_status) {
@@ -4543,10 +4544,14 @@ function ProfileImageReviewPanel({
       if (parsed._background_attempt_status?.batch_reviews_completed && parsed._background_attempt_status?.final_synthesis_attempted !== false) {
         storedResult._meta.recovered_from_batches = true;
         storedResult._meta.local_batch_assembled = true;
+        storedResult._meta.result_kind = "recovered_batch_draft";
       }
     }
     if (parsed?._meta?.recovered_from_batches) storedResult._meta.recovered_from_batches = true;
-    if (parsed?._meta?.local_batch_assembled) storedResult._meta.local_batch_assembled = true;
+    if (parsed?._meta?.local_batch_assembled) {
+      storedResult._meta.local_batch_assembled = true;
+      storedResult._meta.result_kind = parsed?._meta?.result_kind || "recovered_batch_draft";
+    }
     setResult(storedResult);
     setViewingArchiveRunId("");
     const nextArchive = await saveProfileResultWithArchive({
@@ -5363,6 +5368,7 @@ function ProfileImageReviewPanel({
     };
     storedResult._meta.recovered_from_batches = true;
     storedResult._meta.local_batch_assembled = true;
+    storedResult._meta.result_kind = "recovered_batch_draft";
     storedResult._meta.image_id_repair_version = PROFILE_IMAGE_ID_REPAIR_VERSION;
     storedResult._meta.latest_attempt_status = attemptStatusOverride || {
       state: "batch_reviews_saved_as_current_review",
@@ -6992,13 +6998,15 @@ ANNOTATED IMAGE OUTPUT RULES:
         )}
 
         {result?._meta?.local_batch_assembled && (
-          <div className="rounded-lg border border-primary/25 bg-primary/5 px-3 py-3 text-sm leading-relaxed text-foreground shadow-sm">
-            <p className="font-semibold">Batch-assembled review shown while final text catches up.</p>
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-sm leading-relaxed text-amber-950 shadow-sm">
+            <p className="font-semibold">Recovered batch findings · Not final synthesis</p>
             <p className="mt-1">
-              Sarah finished the image batches and saved the completed findings. This view is assembled locally from those batches so the content is usable right away; the polished final text can take extra time to attach or refresh into the current view.
+              Sarah finished the image-review batches and preserved those findings. This view is a local recovered draft assembled from completed batches; the polished final Sarah synthesis has not run successfully yet.
             </p>
             <p className="mt-1">
-              If a newer final version appears in the archive or after refresh, use that. This message does not mean credits ran out.
+              {providerErrorCategory(latestAttemptStatus?.provider_error || latestAttemptStatus?.error_message) === "insufficient_credits"
+                ? "Anthropic credits are unavailable. Add credits, then use Retry final synthesis only so Sarah reuses the completed batches without rerunning image review."
+                : "Use Retry final synthesis only when you want the polished final pass. Sarah should reuse the completed batches and avoid rerunning image review."}
             </p>
           </div>
         )}
@@ -7010,7 +7018,7 @@ ANNOTATED IMAGE OUTPUT RULES:
               <div className="rounded-md border border-amber-200 bg-white/70 px-2 py-1.5">
                 <p className="text-[10px] uppercase tracking-wider text-amber-800">Final Synthesis</p>
                 <p>{result?._meta?.local_batch_assembled
-                  ? "Current batch-assembled review is saved."
+                  ? "Recovered batch draft is saved; final synthesis is still incomplete."
                   : latestAttemptStatus?.state === "batch_reviews_saved_without_final_synthesis"
                     ? "Not needed for current output; completed batch findings are saved."
                   : latestAttemptStatus?.error_message
@@ -7020,7 +7028,7 @@ ANNOTATED IMAGE OUTPUT RULES:
               <div className="rounded-md border border-amber-200 bg-white/70 px-2 py-1.5">
                 <p className="text-[10px] uppercase tracking-wider text-amber-800">Current Display</p>
                 <p>{result?._meta?.local_batch_assembled
-                  ? "Showing recovered latest batch findings assembled locally."
+                  ? "Showing recovered batch findings, not final synthesis."
                   : result
                     ? "Showing previous final synthesis until retry or local assembly succeeds."
                     : "No previous final synthesis is available yet."}</p>
@@ -7036,7 +7044,7 @@ ANNOTATED IMAGE OUTPUT RULES:
               <div className="rounded-md border border-amber-200 bg-white/70 px-2 py-1.5">
                 <p className="text-[10px] uppercase tracking-wider text-amber-800">Next Action</p>
                 <p>{result?._meta?.local_batch_assembled
-                  ? "Use the main review button only when you want to run a fresh review."
+                  ? "Use Retry final synthesis only to polish this without rerunning image review."
                   : latestAttemptStatus?.state === "batch_reviews_saved_without_final_synthesis"
                   ? "The current batch-assembled review is already saved."
                   : recoverableBatchSet?.partial

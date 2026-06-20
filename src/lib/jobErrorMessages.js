@@ -1,61 +1,33 @@
-function asText(value) {
-  if (value == null) return "";
-  if (typeof value === "string") return value;
-  if (value instanceof Error) return value.message || String(value);
-  if (typeof value === "object") {
-    return value.error || value.message || value.data?.error || value.data?.message || "";
-  }
-  return String(value);
-}
+import { classifyProviderError, extractProviderErrorMessage } from "./providerErrorClassifier.js";
 
-function tryParseJsonText(value) {
-  const text = String(value || "").trim();
-  if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    const match = text.match(/\{[\s\S]*\}$/);
-    if (!match) return null;
-    try {
-      return JSON.parse(match[0]);
-    } catch {
-      return null;
-    }
-  }
-}
-
-export function extractProviderErrorMessage(error) {
-  const candidates = [
-    error?.data?.error,
-    error?.data?.message,
-    error?.error?.message,
-    error?.error,
-    error?.message,
-    asText(error),
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    const parsed = tryParseJsonText(candidate);
-    const nested = parsed?.error?.message || parsed?.message || parsed?.error;
-    if (typeof nested === "string" && nested.trim()) return nested.trim();
-    if (typeof candidate === "string" && candidate.trim() && !candidate.trim().startsWith("{")) return candidate.trim();
-  }
-
-  return "Background task failed.";
-}
+export { extractProviderErrorMessage };
 
 export function friendlyJobErrorMessage(error, { preserveContext = true } = {}) {
+  const classified = classifyProviderError(error, { defaultProvider: "anthropic" });
+  if (classified.category === "insufficient_credits") {
+    return preserveContext
+      ? "Anthropic credits are unavailable. Completed checkpoints were preserved; add credits, then retry the final synthesis only."
+      : "Anthropic credits are unavailable. Add credits in Anthropic Plans & Billing, then try again.";
+  }
+  if (classified.category === "provider_unavailable") {
+    return preserveContext
+      ? "The AI provider is temporarily unavailable. Sarah kept any completed checkpoints; wait a minute, then retry only the failed stage."
+      : "The AI provider is temporarily unavailable. Wait a minute, then try again.";
+  }
+  if (classified.category === "rate_limit") {
+    return preserveContext
+      ? "The AI provider rate-limited the request. Sarah kept any completed checkpoints; retry after the limit cools down."
+      : "The AI provider rate-limited the request. Wait, then try again.";
+  }
+  if (classified.category === "invalid_api_key" || classified.category === "authentication_failure") {
+    return "Provider authentication failed. Check the configured API key before retrying.";
+  }
+  if (classified.category === "timeout") return "The AI provider timed out. Sarah preserved completed checkpoints.";
+  if (classified.category === "context_too_large") return "The AI request was too large. Reuse completed evidence and retry final synthesis with a smaller packet.";
+  if (classified.category === "output_truncation") return "The AI response was cut off before it finished. Sarah preserved completed checkpoints.";
+  if (classified.category === "malformed_structured_response") return "The AI response was not valid structured output. Sarah preserved completed checkpoints.";
+  if (classified.category === "safety_refusal") return "The AI provider refused this request. Sarah preserved completed checkpoints.";
   const raw = extractProviderErrorMessage(error);
-  if (/credit balance is too low|plans\s*&\s*billing|purchase credits|anthropic api/i.test(raw)) {
-    return preserveContext
-      ? "Anthropic credits are exhausted. Any completed checkpoints were kept; add credits, then retry or recover the saved findings."
-      : "Anthropic credits are exhausted. Add credits in Anthropic Plans & Billing, then try again.";
-  }
-  if (/overloaded|overloaded_error|529/i.test(raw)) {
-    return preserveContext
-      ? "The AI provider is overloaded right now. Sarah kept any completed checkpoints; wait a minute, then retry or let the remaining queued job continue."
-      : "The AI provider is overloaded right now. Wait a minute, then try again.";
-  }
   if (/server restarted before this job could be resumed/i.test(raw)) {
     return "The desktop backend restarted before this job could resume. Start the task again.";
   }
@@ -81,4 +53,8 @@ export function friendlyJobStatusMessage(job) {
     });
   }
   return message;
+}
+
+export function providerErrorCategory(error) {
+  return classifyProviderError(error, { defaultProvider: "anthropic" }).category;
 }

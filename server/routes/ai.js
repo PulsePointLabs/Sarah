@@ -1,6 +1,7 @@
 import express from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 import { isAIForensicsEnabled, saveAIForensicFinal } from '../services/aiForensics.js';
+import { classifyProviderError, shouldRetryProviderError } from '../../src/lib/providerErrorClassifier.js';
 
 export const aiRouter = express.Router();
 
@@ -60,14 +61,14 @@ async function createMessageWithRetries(anthropic, payload, attempts = 3) {
       return await anthropic.messages.create(payload);
     } catch (error) {
       lastError = error;
-      const status = error.status || error.response?.status;
-      const retryable = [408, 429, 500, 502, 503, 504, 529].includes(status);
+      const classified = classifyProviderError(error, { provider: 'anthropic', requestStage: 'invoke' });
+      const retryable = shouldRetryProviderError(error, { provider: 'anthropic', requestStage: 'invoke' });
       if (!retryable || attempt === attempts - 1) throw error;
       const retryAfter = error.headers?.['retry-after'] || error.response?.headers?.get?.('retry-after');
       const delay = retryAfter
         ? Math.min(Math.max(Number(retryAfter) * 1000, 2000), 65000)
         : Math.min(10000 * 2 ** attempt, 65000) + Math.floor(Math.random() * 1500);
-      console.warn('AI invoke retrying after transient error', { status, attempt: attempt + 1, delay });
+      console.warn('AI invoke retrying after transient error', { category: classified.category, code: classified.code, attempt: attempt + 1, delay });
       await sleep(delay);
     }
   }
@@ -133,6 +134,7 @@ aiRouter.post('/invoke', async (req, res) => {
     console.error('AI invoke failed:', error);
     res.status(error.status || 502).json({
       error: error.message || String(error),
+      provider_error: classifyProviderError(error, { provider: 'anthropic', requestStage: 'invoke' }),
       preview: error.preview,
     });
   }
