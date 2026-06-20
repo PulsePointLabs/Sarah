@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildReviewVideoPlan } from './sessionReviewVideoPlanner.js';
-import { selectReviewVideoEventForSegment } from './sessionReviewVideoRenderer.js';
+import { resolveTimestampViolationVisualFallback, selectReviewVideoEventForSegment } from './sessionReviewVideoRenderer.js';
 
 test('untimed Foley placement narration does not jump to drainage-bag b-roll', () => {
   const segment = {
@@ -49,4 +49,63 @@ test('explicit Foley timestamps still select the exact spoken timestamp', () => 
   assert.ok(selected);
   assert.equal(Math.round(selected.session_time_s), 272);
   assert.equal(selected.source, 'spoken_segment_time');
+});
+
+test('out-of-range narrated timestamps clamp to source video instead of title cards', () => {
+  const segment = {
+    paragraphIndex: 0,
+    text: 'At 34:00, Sarah describes the final placement state.',
+  };
+  const fallback = resolveTimestampViolationVisualFallback({
+    segment,
+    timestampRequirement: {
+      required: true,
+      primary: {
+        seconds: 2040,
+        text: '34:00',
+        charIndex: 3,
+        source: 'colon_time',
+      },
+    },
+    audioDuration: 7,
+    primaryVideo: { path: 'E:/recordings/source.mp4' },
+    sourceDuration: 780,
+    fallbackCursor: 120,
+  });
+
+  assert.ok(fallback);
+  assert.equal(fallback.fallbackType, 'nearest_available_source_video');
+  assert.equal(fallback.visualSource, 'clamped_source_video');
+  assert.equal(fallback.sourceTimeStrategy, 'clamped_to_nearest_available_source_video');
+  assert.equal(Math.round(fallback.event.session_time_s), 2040);
+  assert.ok(fallback.window.start >= 0);
+  assert.ok(fallback.window.end <= 780.1);
+  assert.ok(fallback.window.sessionStartSeconds <= fallback.event.session_time_s);
+  assert.notEqual(fallback.window.label, 'No Time-Matched Visual');
+});
+
+test('direct narrated timestamps keep clip lead-in on the timeline counter', () => {
+  const segment = {
+    paragraphIndex: 0,
+    text: 'At 4:32, the catheter advances through the main resistance point with deliberate relaxation.',
+  };
+  const fallback = resolveTimestampViolationVisualFallback({
+    segment,
+    event: {
+      id: 'direct-4-32',
+      session_time_s: 272,
+      spoken_char_index: 3,
+      source: 'spoken_segment_time',
+      direct_spoken_time: true,
+      force_direct_cut: true,
+      label: 'Referenced 4:32',
+    },
+    audioDuration: 8,
+    primaryVideo: { path: 'E:/recordings/source.mp4' },
+    sourceDuration: 780,
+  });
+
+  assert.ok(fallback.window.start < 272);
+  assert.ok(fallback.window.sessionStartSeconds < 272);
+  assert.equal(Math.round(fallback.window.sessionSeconds), 272);
 });

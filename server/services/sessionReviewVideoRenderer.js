@@ -314,6 +314,11 @@ function sourceTimeForSession(sessionTime, video = {}) {
   return Math.max(0, Number(sessionTime || 0) - (Number.isFinite(offset) ? offset : 0));
 }
 
+function sessionTimeForSource(sourceTime, video = {}) {
+  const offset = Number(video.timelineOffsetSeconds ?? video.timeline_offset_s ?? video.offset_seconds ?? video.session_time_offset_s ?? 0);
+  return Math.max(0, Number(sourceTime || 0) + (Number.isFinite(offset) ? offset : 0));
+}
+
 function formatTimestamp(seconds = 0) {
   const totalSeconds = Math.max(0, Math.floor(Number(seconds || 0)));
   const hours = Math.floor(totalSeconds / 3600);
@@ -358,6 +363,28 @@ function canRenderSessionTimeFromPrimary({ sessionSeconds, primaryVideo, sourceD
   const sourceTime = sourceTimeForSession(sessionTime, primaryVideo);
   const duration = Number(sourceDuration || 0);
   return duration <= 0 || sourceTime <= duration + REVIEW_VIDEO_TIME_TOLERANCE_SECONDS;
+}
+
+function fallbackEventFromTimestampRequirement(segment = {}, timestampRequirement = {}) {
+  const primary = timestampRequirement?.primary;
+  const seconds = Number(primary?.seconds);
+  if (!Number.isFinite(seconds)) return null;
+  return {
+    id: `clamped-spoken-time-${Number(segment?.paragraphIndex ?? 0)}-${Math.round(seconds)}`,
+    paragraphIndex: segment?.paragraphIndex,
+    session_time_s: seconds,
+    cited_text: primary?.text || formatTimestamp(seconds),
+    spoken_char_index: primary?.charIndex,
+    spoken_time_source: primary?.source,
+    label: primary?.text ? `Referenced ${primary.text}` : `Referenced ${formatTimestamp(seconds)}`,
+    reason: 'Explicit narration timestamp; clamped to the nearest available source video when needed.',
+    startSeconds: Math.max(0, seconds - 3),
+    endSeconds: seconds + 14,
+    source: 'spoken_segment_time',
+    direct_spoken_time: true,
+    force_direct_cut: true,
+    clamped_to_available_source: true,
+  };
 }
 
 function buildTimelineTrace({
@@ -581,7 +608,7 @@ async function buildNarrationAlignedSegments({
             label: event.label,
             workDir,
             index: segmentIndex++,
-            sessionSeconds: event.session_time_s,
+            sessionSeconds: sessionTimeForSource(start, primaryVideo),
           });
           segments.push(clip.path);
           const actualDuration = Number(clip.durationSeconds || sliceDuration);
@@ -617,7 +644,7 @@ async function buildNarrationAlignedSegments({
           label: slotTitle(paragraphIndex, payloadTitle),
           workDir,
           index: segmentIndex++,
-          sessionSeconds: fallbackStart,
+          sessionSeconds: sessionTimeForSource(fallbackStart, primaryVideo),
         });
         segments.push(clip.path);
         visualDuration += Number(clip.durationSeconds || slot.durationSeconds);
@@ -643,7 +670,7 @@ async function buildNarrationAlignedSegments({
         label: slotTitle(paragraphIndex, payloadTitle),
         workDir,
         index: segmentIndex++,
-        sessionSeconds: fallbackStart,
+        sessionSeconds: sessionTimeForSource(fallbackStart, primaryVideo),
       });
       segments.push(clip.path);
       visualDuration += Number(clip.durationSeconds || slot.durationSeconds);
@@ -1107,6 +1134,7 @@ function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, s
       start,
       end: start + sourceSliceDuration,
       sessionSeconds: sessionTime,
+      sessionStartSeconds: sessionTimeForSource(start, primaryVideo),
       label: event.label || event.cited_text || 'Referenced moment',
       playbackRate,
       slowMotion: wantsClimax,
@@ -1120,9 +1148,38 @@ function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, s
     start,
     end: start + duration,
     sessionSeconds: start,
+    sessionStartSeconds: sessionTimeForSource(start, primaryVideo),
     label: 'Source video context',
     playbackRate: 1,
     slowMotion: false,
+  };
+}
+
+export function resolveTimestampViolationVisualFallback({
+  segment,
+  event = null,
+  timestampRequirement = null,
+  audioDuration = 1,
+  primaryVideo = {},
+  sourceDuration = 0,
+  fallbackCursor = 0,
+} = {}) {
+  if (!primaryVideo?.path) return null;
+  const fallbackEvent = event || fallbackEventFromTimestampRequirement(segment, timestampRequirement);
+  const window = sourceWindowForSegment({
+    event: fallbackEvent,
+    segment,
+    audioDuration,
+    primaryVideo,
+    sourceDuration,
+    fallbackCursor,
+  });
+  return {
+    event: fallbackEvent,
+    window,
+    fallbackType: 'nearest_available_source_video',
+    visualSource: 'clamped_source_video',
+    sourceTimeStrategy: 'clamped_to_nearest_available_source_video',
   };
 }
 
@@ -1264,44 +1321,71 @@ async function renderSegmentedSourceReviewVideo({
         phase: 'segments',
         current: 3,
         total: 5,
-        message: `No aligned visual for ${narratedLabel}; using a neutral card...`,
+        message: `No exact visual for ${narratedLabel}; using nearest source video instead of a title card...`,
       });
-      const card = await createTitleCard({
+      const fallback = resolveTimestampViolationVisualFallback({
+        segment,
+        event,
+        timestampRequirement,
+        audioDuration: audio.durationSeconds,
+        primaryVideo,
+        sourceDuration,
+        fallbackCursor,
+      });
+      const fallbackEvent = fallback?.event || null;
+      const window = fallback?.window || sourceWindowForSegment({
+        event: null,
+        segment,
+        audioDuration: audio.durationSeconds,
+        primaryVideo,
+        sourceDuration,
+        fallbackCursor,
+      });
+      const videoClip = await cutReviewClip({
+        sourcePath: primaryVideo.path,
+        startSeconds: window.start,
+        endSeconds: window.end,
+        label: window.label,
         workDir,
         index: index + 1,
-        title: 'No Time-Matched Visual',
-        subtitle: reason,
-        durationSeconds: audio.durationSeconds,
+        sessionSeconds: window.sessionStartSeconds,
+        playbackRate: window.playbackRate || 1,
       });
-      videoSegments.push(card.path);
+      videoSegments.push(videoClip.path);
       const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
-      await muxAudioVideo(card.path, audio.audioPath, avPath);
+      await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
       avSegments.push(avPath);
+      fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
       const trace = buildTimelineTrace({
         segment,
-        event: event || null,
-        window: null,
+        event: fallbackEvent || null,
+        window,
         audio,
         selectionReason: reason,
         fallbackUsed: true,
-        fallbackType: 'neutral_card_no_time_match',
-        visualSource: 'neutral_card',
-        violation: 'TIMESTAMP_VISUAL_MISMATCH_PREVENTED',
+        fallbackType: fallback?.fallbackType || 'nearest_available_source_video',
+        visualSource: fallback?.visualSource || 'clamped_source_video',
+        violation: 'TIMESTAMP_VISUAL_CLAMPED_TO_SOURCE',
       });
       generatedClips.push({
-        id: event?.id || `neutral-card-${index + 1}`,
+        id: fallbackEvent?.id || `clamped-source-${index + 1}`,
         paragraphIndex: segment.paragraphIndex,
-        session_time_s: event ? roundedSeconds(event.session_time_s) : null,
+        session_time_s: fallbackEvent ? roundedSeconds(fallbackEvent.session_time_s) : roundedSeconds(window.sessionSeconds),
+        visual_session_start_s: roundedSeconds(window.sessionStartSeconds),
+        source_start_s: roundedSeconds(window.start),
+        source_end_s: roundedSeconds(window.end),
         spoken_segment_index: index + 1,
         spoken_text: segment.text.slice(0, 240),
-        label: 'No time-matched visual',
+        label: window.label || 'Nearest available source video',
         reason,
         source_video_path: primaryVideo.path,
         audio_duration_seconds: roundedSeconds(audio.durationSeconds),
-        playback_rate: 1,
-        slow_motion: false,
-        direct_spoken_time: false,
-        source_time_strategy: 'neutral_card_required_by_timeline_validation',
+        playback_rate: Number(window.playbackRate || 1),
+        slow_motion: Boolean(window.slowMotion),
+        direct_spoken_time: Boolean(window.directSpokenTime),
+        spoken_anchor_offset_seconds: roundedSeconds(window.spokenAnchorOffset || 0),
+        spoken_time_lead_seconds: roundedSeconds(window.spokenTimeLeadSeconds || 0),
+        source_time_strategy: fallback?.sourceTimeStrategy || 'clamped_to_nearest_available_source_video',
         matched_event: Boolean(matchedEvent),
         procedural_broll: false,
         timeline_trace: { ...trace, spoken_segment_index: index + 1 },
@@ -1331,7 +1415,7 @@ async function renderSegmentedSourceReviewVideo({
       label: window.label,
       workDir,
       index: index + 1,
-      sessionSeconds: window.sessionSeconds,
+      sessionSeconds: window.sessionStartSeconds,
       playbackRate: window.playbackRate || 1,
     });
     videoSegments.push(videoClip.path);
@@ -1362,6 +1446,7 @@ async function renderSegmentedSourceReviewVideo({
       id: event?.id || `context-${index + 1}`,
       paragraphIndex: segment.paragraphIndex,
       session_time_s: event ? Number(event.session_time_s) : Math.round(window.sessionSeconds * 10) / 10,
+      visual_session_start_s: roundedSeconds(window.sessionStartSeconds),
       source_start_s: Math.round(window.start * 10) / 10,
       source_end_s: Math.round(window.end * 10) / 10,
       spoken_segment_index: index + 1,
@@ -1616,7 +1701,7 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
           label: payload.title || 'Session Review',
           workDir,
           index: 0,
-          sessionSeconds: 0,
+          sessionSeconds: sessionTimeForSource(0, primaryVideo),
         });
         segments.push(clip.path);
         visualDuration += Number(clip.durationSeconds || 0);
@@ -1644,7 +1729,7 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
           label: payload.title || 'Session Review',
           workDir,
           index: segments.length + 1,
-          sessionSeconds: sourceStart,
+          sessionSeconds: sessionTimeForSource(sourceStart, primaryVideo),
         });
         segments.push(pad.path);
         visualDuration += Number(pad.durationSeconds || 0);
