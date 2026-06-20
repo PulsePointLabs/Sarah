@@ -23,6 +23,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { SarahLogoMark } from "@/components/SarahBrand";
 import { cancelBackgroundJob, clearBackgroundJobs, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
+import { apiUrl, serverUrl } from "@/lib/mobileApiBase";
 import { friendlyJobStatusMessage } from "@/lib/jobErrorMessages";
 import { getProviderStatus } from "@/lib/providerStatus";
 import {
@@ -331,6 +332,8 @@ export default function SettingsStatus() {
   const [pwaCleanupBusy, setPwaCleanupBusy] = useState(false);
   const [pwaCleanupMessage, setPwaCleanupMessage] = useState("");
   const [pwaLifecycleEvents, setPwaLifecycleEvents] = useState(() => readPwaLifecycleDiagnostics().slice(-20).reverse());
+  const [overlayDiagnostics, setOverlayDiagnostics] = useState(null);
+  const [overlayMessage, setOverlayMessage] = useState("");
   const [uiPrefs, setUiPrefs] = useState(readUiPreferences);
   const [sarahBrand, setSarahBrand] = useState(readSarahBrandSettings);
   const [watermark, setWatermark] = useState(readWatermarkSettings);
@@ -378,6 +381,63 @@ export default function SettingsStatus() {
     setNotificationPermission(getNotificationPermission());
     setCompletionNotificationsEnabled(areBackgroundNotificationsEnabled());
   }, [notificationSupport.supported]);
+
+  const refreshOverlayDiagnostics = async () => {
+    try {
+      const response = await fetch(apiUrl("/live-capture/overlay-heart-rate"), { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      setOverlayDiagnostics(data.overlay || null);
+    } catch (error) {
+      setOverlayDiagnostics({ error: error?.message || "Overlay diagnostics unavailable" });
+    }
+  };
+
+  useEffect(() => {
+    refreshOverlayDiagnostics();
+    const timer = window.setInterval(refreshOverlayDiagnostics, 4000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const obsOverlayUrl = serverUrl("/tools/capture/heart-rate/overlay.html");
+
+  const sendOverlayTestPulse = async () => {
+    setOverlayMessage("Sending test pulse...");
+    try {
+      const response = await fetch(apiUrl("/live-capture/overlay-heart-rate/test-pulse"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ heartRate: 101 }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      setOverlayDiagnostics(data.overlay || null);
+      setOverlayMessage("Sent 101 BPM test pulse to the OBS overlay stream.");
+    } catch (error) {
+      setOverlayMessage(error?.message || "Could not send test pulse.");
+    }
+  };
+
+  const clearOverlayTestPulse = async () => {
+    try {
+      const response = await fetch(apiUrl("/live-capture/overlay-heart-rate/clear-test-pulse"), { method: "POST" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      setOverlayDiagnostics(data.overlay || null);
+      setOverlayMessage("Cleared test pulse.");
+    } catch (error) {
+      setOverlayMessage(error?.message || "Could not clear test pulse.");
+    }
+  };
+
+  const copyOverlayUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(obsOverlayUrl);
+      setOverlayMessage("OBS overlay URL copied.");
+    } catch {
+      setOverlayMessage(obsOverlayUrl);
+    }
+  };
 
   const requestNotifications = async () => {
     if (!notificationSupport.supported) {
@@ -707,6 +767,82 @@ export default function SettingsStatus() {
           <KeyRound className="mt-0.5 h-4 w-4 shrink-0" />
           <span>Standard Claude and OpenAI API keys still power analysis and TTS. Optional admin reporting keys only add cost visibility here.</span>
         </div>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-primary">
+              <Activity className="h-4 w-4" />
+              <h2 className="text-sm font-bold uppercase tracking-wider">OBS HR Overlay</h2>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Server-owned heart-rate stream for OBS. The Browser Source does not need your Pulsoid token or Sarah browser storage.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={refreshOverlayDiagnostics}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
+            >
+              <RefreshCw className="h-4 w-4" /> Refresh
+            </button>
+            <button
+              type="button"
+              onClick={copyOverlayUrl}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 text-sm font-semibold text-primary hover:bg-primary/15"
+            >
+              Copy OBS URL
+            </button>
+            <a
+              href={obsOverlayUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
+            >
+              <ExternalLink className="h-4 w-4" /> Open overlay
+            </a>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            ["Selected source", overlayDiagnostics?.sourceLabel || overlayDiagnostics?.source || "Unavailable"],
+            ["Latest BPM", overlayDiagnostics?.heartRate ?? "--"],
+            ["Data age", overlayDiagnostics?.ageMs != null ? `${Math.round(overlayDiagnostics.ageMs)} ms` : "--"],
+            ["Subscribers", overlayDiagnostics?.subscribers ?? 0],
+            ["Connected", overlayDiagnostics?.connected ? "Yes" : "No"],
+            ["Stale", overlayDiagnostics?.stale ? "Yes" : "No"],
+            ["Sequence", overlayDiagnostics?.sequence ?? 0],
+            ["Last delivery", fmtDateTime(overlayDiagnostics?.lastDeliveryAt) || "--"],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-lg border border-border bg-muted/15 p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</p>
+              <p className="mt-1 break-words text-sm font-semibold text-foreground">{String(value)}</p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={sendOverlayTestPulse}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+          >
+            Send 101 BPM test pulse
+          </button>
+          <button
+            type="button"
+            onClick={clearOverlayTestPulse}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
+          >
+            Clear test pulse
+          </button>
+        </div>
+        <p className="mt-3 rounded-lg bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
+          OBS URL: <span className="font-mono text-foreground">{obsOverlayUrl}</span>
+        </p>
+        {overlayMessage && <p className="mt-2 text-xs font-semibold text-foreground">{overlayMessage}</p>}
+        {overlayDiagnostics?.error && <p className="mt-2 text-xs font-semibold text-destructive">{overlayDiagnostics.error}</p>}
       </section>
 
       <TTSSettingsPanel />

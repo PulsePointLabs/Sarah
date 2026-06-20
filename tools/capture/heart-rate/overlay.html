@@ -358,6 +358,9 @@ const HR_TEXT_SOURCE_NAME = "HR";
 const CONTROL_WS_URL = "ws://127.0.0.1:8765";
 const LIVE_CAPTURE_STREAM_URL = "http://127.0.0.1:8787/api/live-capture/stream";
 const LIVE_CAPTURE_STATUS_URL = "http://127.0.0.1:8787/api/live-capture/status";
+const OVERLAY_HR_STREAM_URL = "http://127.0.0.1:8787/api/live-capture/overlay-heart-rate/stream";
+const OVERLAY_HR_STATUS_URL = "http://127.0.0.1:8787/api/live-capture/overlay-heart-rate";
+const OVERLAY_BUILD_ID = "sarah-overlay-authoritative-hr-v1";
 
 /*** POLLING / DISPLAY ***/
 const POLL_MS = 1000;
@@ -388,6 +391,9 @@ let lastSampleBpm = null;
 let liveCaptureEvents = null;
 let liveCaptureConnected = false;
 let lastLiveCaptureHrAtMs = 0;
+let overlayHrEvents = null;
+let overlayHrConnected = false;
+let overlayHrSequence = 0;
 
 /*** BASELINE ANCHOR ***/
 const BASELINE_SMOOTHING = 0.03;
@@ -612,10 +618,22 @@ function liveTelemetryAgeMs(data) {
 
 function ingestLiveTelemetry(data) {
   if (data?.origin === "obs_overlay" || data?.raw?.origin === "obs_overlay") return;
+  if (data?.sequence != null && Number(data.sequence) <= overlayHrSequence) return;
+  if (data?.sequence != null) overlayHrSequence = Number(data.sequence);
+  if (data?.stale || data?.connected === false) {
+    markTelemetryStale();
+    return;
+  }
   const bpm = readTelemetryBpm(data);
-  if (bpm == null) return;
+  if (bpm == null) {
+    markTelemetryStale();
+    return;
+  }
   const ageMs = Number(data?.quality?.ageMs ?? liveTelemetryAgeMs(data));
-  if (Number.isFinite(ageMs) && ageMs > 7000) return;
+  if (Number.isFinite(ageMs) && ageMs > 7000) {
+    markTelemetryStale();
+    return;
+  }
   lastLiveCaptureHrAtMs = Date.now();
   ingestHRText(String(bpm));
 }
@@ -626,11 +644,44 @@ function liveCaptureTelemetryFresh() {
 
 async function loadInitialLiveCaptureStatus() {
   try {
+    const overlayResponse = await fetch(OVERLAY_HR_STATUS_URL, { cache: "no-store" });
+    if (overlayResponse.ok) {
+      const status = await overlayResponse.json();
+      ingestLiveTelemetry(status?.overlay);
+      return;
+    }
+  } catch {}
+  try {
     const response = await fetch(LIVE_CAPTURE_STATUS_URL, { cache: "no-store" });
     if (!response.ok) return;
     const status = await response.json();
     ingestLiveTelemetry(status?.hr?.latestTelemetry);
   } catch {}
+}
+
+function connectOverlayHeartRateStream() {
+  if (!window.EventSource) return;
+  try {
+    overlayHrEvents = new EventSource(OVERLAY_HR_STREAM_URL);
+    overlayHrEvents.onopen = () => {
+      overlayHrConnected = true;
+      liveCaptureConnected = true;
+    };
+    overlayHrEvents.onerror = () => {
+      overlayHrConnected = false;
+      liveCaptureConnected = false;
+    };
+    const handleOverlayEvent = (event) => {
+      try {
+        ingestLiveTelemetry(JSON.parse(event.data));
+      } catch {}
+    };
+    overlayHrEvents.addEventListener("snapshot", handleOverlayEvent);
+    overlayHrEvents.addEventListener("hr", handleOverlayEvent);
+    overlayHrEvents.addEventListener("heartbeat", handleOverlayEvent);
+  } catch {
+    overlayHrConnected = false;
+  }
 }
 
 function connectLiveCaptureStream() {
@@ -826,6 +877,13 @@ function updateStats(){
     heartEl.style.setProperty("--beat-duration", `${60 / currentBpm}s`);
     heartEl.classList.add("beating");
   }
+}
+
+function markTelemetryStale(){
+  if (points.length && Date.now() - lastLiveCaptureHrAtMs < 7000) return;
+  currentEl.textContent = "--";
+  heartEl.classList.remove("beating");
+  heartEl.style.removeProperty("--beat-duration");
 }
 
 function updateBaseline(currentSmoothedHr){
@@ -1171,7 +1229,7 @@ function ingestHRText(text) {
 }
 
 async function pollHR(){
-  if (liveCaptureTelemetryFresh()) {
+  if (overlayHrConnected || liveCaptureTelemetryFresh()) {
     setTimeout(pollHR, POLL_MS);
     return;
   }
@@ -1187,6 +1245,7 @@ async function pollHR(){
 
 (async()=>{
   connectControlWS();
+  connectOverlayHeartRateStream();
   connectLiveCaptureStream();
   loadInitialLiveCaptureStatus();
   await connectOBS();

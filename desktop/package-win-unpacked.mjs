@@ -68,6 +68,7 @@ function copySarahResources({ overlay = false } = {}) {
   refreshDir(path.join(root, 'dist'), path.join(appResourcesOut, 'dist'));
   refreshDir(path.join(root, 'server'), path.join(appResourcesOut, 'server'));
   refreshDir(path.join(root, 'src'), path.join(appResourcesOut, 'src'));
+  refreshDir(path.join(root, 'tools', 'capture', 'heart-rate'), path.join(appResourcesOut, 'tools', 'capture', 'heart-rate'));
   refreshDir(path.join(root, 'local-vision'), path.join(appResourcesOut, 'local-vision'));
   const packagedNodeModules = path.join(appResourcesOut, 'node_modules');
   if (overlay && fs.existsSync(packagedNodeModules)) {

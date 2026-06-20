@@ -17,6 +17,7 @@ import {
   normalizePulsoidTelemetry,
   parsePulsoidMessage,
 } from '../services/hrSources.js';
+import { normalizeOverlayHeartRateSnapshot } from '../services/overlayHeartRate.js';
 
 export const liveCaptureRouter = express.Router();
 
@@ -38,6 +39,7 @@ const EMG_CALIBRATION_ACTIONS = new Set([
 ]);
 
 const clients = new Set();
+const overlayHrClients = new Set();
 let hrSocket = null;
 let hrReconnectTimer = null;
 let pulsoidSocket = null;
@@ -52,6 +54,9 @@ let directH10Recording = null;
 const HR_SOURCE_STALE_MS = 8000;
 const derivedHrState = new Map();
 const CAPTURE_KINDS = new Set(['session', 'body_exploration']);
+let overlayHrSequence = 0;
+let overlayLastDeliveryAt = null;
+let overlayTestTelemetry = null;
 
 const state = {
   startedAt: new Date().toISOString(),
@@ -125,6 +130,7 @@ telemetryEngine.on('snapshot', (snapshot) => {
   if (snapshot.hr) state.hr.latestTelemetry = snapshot.hr;
   if (snapshot.emg) state.emg.latestTelemetry = snapshot.emg;
   broadcast('telemetry_snapshot', snapshot);
+  if (snapshot.hr) broadcastOverlayHeartRate(snapshot.hr);
 });
 
 function cleanNumber(value) {
@@ -826,6 +832,40 @@ function broadcast(event, data) {
   }
 }
 
+function currentOverlayHeartRateSnapshot({ now = Date.now(), forceTelemetry = null } = {}) {
+  const activeTest = overlayTestTelemetry && (now - Number(overlayTestTelemetry.receivedAt || 0)) < 10000;
+  return normalizeOverlayHeartRateSnapshot({
+    telemetry: forceTelemetry || (activeTest ? overlayTestTelemetry : state.hr.latestTelemetry),
+    sourceStatus: activeTest
+      ? { source: 'overlay_test', label: 'OBS overlay test pulse', connected: true }
+      : state.hr.sourceStatus,
+    sequence: overlayHrSequence,
+    subscribers: overlayHrClients.size,
+    lastDeliveryAt: overlayLastDeliveryAt,
+    now,
+  });
+}
+
+function sendOverlayHeartRate(res, event = 'snapshot', telemetry = null) {
+  const snapshot = currentOverlayHeartRateSnapshot({ forceTelemetry: telemetry });
+  overlayLastDeliveryAt = new Date().toISOString();
+  sendSse(res, event, { ...snapshot, lastDeliveryAt: overlayLastDeliveryAt });
+}
+
+function broadcastOverlayHeartRate(telemetry = null) {
+  overlayHrSequence += 1;
+  overlayLastDeliveryAt = new Date().toISOString();
+  const snapshot = {
+    ...currentOverlayHeartRateSnapshot({ forceTelemetry: telemetry }),
+    sequence: overlayHrSequence,
+    lastDeliveryAt: overlayLastDeliveryAt,
+  };
+  for (const res of overlayHrClients) {
+    sendSse(res, 'hr', snapshot);
+  }
+  return snapshot;
+}
+
 async function latestCsv(dir) {
   try {
     const files = await fs.readdir(dir, { withFileTypes: true });
@@ -893,6 +933,7 @@ function applySelectedHrTelemetry(telemetry) {
   state.hr.latestTelemetry = storedTelemetry;
   state.hr.lastMessageAt = new Date().toISOString();
   broadcast('hr_telemetry', storedTelemetry);
+  broadcastOverlayHeartRate(storedTelemetry);
   return storedTelemetry;
 }
 
@@ -1440,6 +1481,38 @@ liveCaptureRouter.get('/status', (_req, res) => {
   res.json(state);
 });
 
+liveCaptureRouter.get('/overlay-heart-rate', (_req, res) => {
+  markSelectedHrStaleIfNeeded();
+  res.json({
+    ok: true,
+    overlay: currentOverlayHeartRateSnapshot(),
+  });
+});
+
+liveCaptureRouter.post('/overlay-heart-rate/test-pulse', (req, res) => {
+  const now = Date.now();
+  const requested = cleanHr(req.body?.heartRate ?? req.body?.bpm ?? req.body?.hr ?? 72);
+  overlayTestTelemetry = requested == null ? null : {
+    source: 'overlay_test',
+    sourceLabel: 'OBS overlay test pulse',
+    heartRate: requested,
+    currentHr: requested,
+    measuredAt: now,
+    receivedAt: now,
+    quality: { stale: false, ageMs: 0 },
+  };
+  const overlay = overlayTestTelemetry
+    ? broadcastOverlayHeartRate(overlayTestTelemetry)
+    : currentOverlayHeartRateSnapshot();
+  res.json({ ok: Boolean(overlayTestTelemetry), overlay });
+});
+
+liveCaptureRouter.post('/overlay-heart-rate/clear-test-pulse', (_req, res) => {
+  overlayTestTelemetry = null;
+  const overlay = broadcastOverlayHeartRate(state.hr.latestTelemetry);
+  res.json({ ok: true, overlay });
+});
+
 liveCaptureRouter.get('/engine/status', (_req, res) => {
   res.json(telemetryEngine.snapshot());
 });
@@ -1488,6 +1561,27 @@ liveCaptureRouter.get('/stream', (req, res) => {
   req.on('close', () => {
     clearInterval(keepAlive);
     clients.delete(res);
+  });
+});
+
+liveCaptureRouter.get('/overlay-heart-rate/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  overlayHrClients.add(res);
+  sendOverlayHeartRate(res, 'snapshot');
+  const keepAlive = setInterval(() => {
+    const staleChanged = markSelectedHrStaleIfNeeded();
+    if (staleChanged) broadcastOverlayHeartRate(state.hr.latestTelemetry);
+    sendOverlayHeartRate(res, 'heartbeat');
+    res.write(': keepalive\n\n');
+  }, 5000);
+
+  req.on('close', () => {
+    clearInterval(keepAlive);
+    overlayHrClients.delete(res);
   });
 });
 
