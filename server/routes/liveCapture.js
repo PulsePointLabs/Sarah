@@ -1329,6 +1329,11 @@ liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
   }
   telemetry = enrichHrTelemetry(telemetry);
   const receivedIso = new Date(telemetry.receivedAt || Date.now()).toISOString();
+  if (state.hr.selectedSource !== HR_SOURCE_IDS.DIRECT_H10) {
+    closePulsoidConnection({ quiet: true });
+    state.hr.selectedSource = HR_SOURCE_IDS.DIRECT_H10;
+    state.hr.selectedSourceLabel = HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10];
+  }
   state.hr.directH10 = {
     ...state.hr.directH10,
     connected: true,
@@ -1347,6 +1352,8 @@ liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
       broadcast('status', state);
     });
   } else {
+    telemetry = applySelectedHrTelemetry(telemetry);
+    publishHrTelemetryToOverlay(telemetry);
     refreshHrSourceStatus();
   }
   broadcast('status', state);

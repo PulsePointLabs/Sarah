@@ -355,9 +355,9 @@ canvas{
 /*** CONNECTIONS ***/
 const OBS_HOST = "ws://192.168.0.33:4455";
 const HR_TEXT_SOURCE_NAME = "HR";
-const CONTROL_WS_URL = "ws://localhost:8765";
-const LIVE_CAPTURE_STREAM_URL = "http://localhost:8787/api/live-capture/stream";
-const LIVE_CAPTURE_STATUS_URL = "http://localhost:8787/api/live-capture/status";
+const CONTROL_WS_URL = "ws://127.0.0.1:8765";
+const LIVE_CAPTURE_STREAM_URL = "http://127.0.0.1:8787/api/live-capture/stream";
+const LIVE_CAPTURE_STATUS_URL = "http://127.0.0.1:8787/api/live-capture/status";
 
 /*** POLLING / DISPLAY ***/
 const POLL_MS = 1000;
@@ -640,6 +640,12 @@ function connectLiveCaptureStream() {
     liveCaptureEvents.addEventListener("hr_telemetry", (event) => {
       try {
         ingestLiveTelemetry(JSON.parse(event.data));
+      } catch {}
+    });
+    liveCaptureEvents.addEventListener("telemetry_snapshot", (event) => {
+      try {
+        const snapshot = JSON.parse(event.data);
+        ingestLiveTelemetry(snapshot?.hr);
       } catch {}
     });
   } catch {
