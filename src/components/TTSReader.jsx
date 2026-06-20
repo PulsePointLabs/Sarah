@@ -18,6 +18,14 @@ import { buildAudioExportFilename } from "@/utils/exportFilenames";
 import { base44 } from "@/api/base44Client";
 import { buildAudioChapterBundle, downloadChapterSidecars } from "@/lib/audioChapters";
 import { idbGet, idbSet } from "@/lib/ttsCache";
+import {
+  buildTtsCheckpoint,
+  hashTtsContent,
+  isCheckpointCompatible,
+  loadTtsCheckpoint,
+  saveTtsCheckpoint,
+  ttsCheckpointKey,
+} from "@/lib/ttsReadingCheckpoint";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { repairCharacterSplitParagraph, repairDecimalSpacing, reduceConsistencyPhraseRepetition, splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
@@ -402,6 +410,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const cacheFetchingRef = useRef(new Set());
   const cacheTotalRef = useRef(0);
   const playbackTimeRef = useRef(0); // track playback time in seconds
+  const currentSentenceIdxRef = useRef(-1);
+  const currentWordIdxRef = useRef(-1);
+  const lastCheckpointAtRef = useRef(0);
+  const checkpointRestoredRef = useRef(false);
   const wordRefs = useRef(new Map()); // map of word element refs for auto-scroll
   const paragraphRefs = useRef(new Map());
   const lastAutoScrollKeyRef = useRef("");
@@ -416,6 +428,17 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       .map((text) => reduceConsistencyPhraseRepetition(text, 2)),
     [paragraphs]
   );
+  const contentHash = useMemo(() => hashTtsContent(readableParagraphs), [readableParagraphs]);
+  const checkpointKey = useMemo(() => ttsCheckpointKey(sessionId, title), [sessionId, title]);
+  const voiceSettingsHash = useMemo(() => hashTtsContent([JSON.stringify(normalizeTTSSettings(ttsSettings))]), [ttsSettings]);
+
+  useEffect(() => {
+    currentSentenceIdxRef.current = currentSentenceIdx;
+  }, [currentSentenceIdx]);
+
+  useEffect(() => {
+    currentWordIdxRef.current = currentWordIdx;
+  }, [currentWordIdx]);
 
   useEffect(() => {
     try {
@@ -484,6 +507,67 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   }, []);
 
   const setS = (s) => { stateRef.current = s; setState(s); };
+  const saveReadingCheckpoint = (reason = "checkpoint", { force = false } = {}) => {
+    const now = Date.now();
+    if (!force && now - lastCheckpointAtRef.current < 1200) return;
+    lastCheckpointAtRef.current = now;
+    try {
+      saveTtsCheckpoint(checkpointKey, buildTtsCheckpoint({
+        route: window.location.pathname + window.location.search + window.location.hash,
+        sessionId,
+        title,
+        contentHash,
+        currentPara: currentParaRef.current,
+        currentSentenceIdx: currentSentenceIdxRef.current,
+        currentWordIdx: currentWordIdxRef.current,
+        playbackTime: playbackTimeRef.current,
+        state: stateRef.current,
+        scrollY: window.scrollY || 0,
+        voiceSettingsHash,
+        reason,
+      }));
+    } catch {
+      // Checkpointing is best-effort and must never interrupt playback.
+    }
+  };
+
+  useEffect(() => {
+    if (checkpointRestoredRef.current || !readableParagraphs.length) return;
+    const checkpoint = loadTtsCheckpoint(checkpointKey);
+    if (!isCheckpointCompatible(checkpoint, { contentHash })) return;
+    checkpointRestoredRef.current = true;
+    currentParaRef.current = checkpoint.currentPara;
+    setCurrentPara(checkpoint.currentPara);
+    setCurrentSentenceIdx(checkpoint.currentSentenceIdx ?? -1);
+    setCurrentWordIdx(checkpoint.currentWordIdx ?? -1);
+    playbackTimeRef.current = Number(checkpoint.playbackTime || 0);
+    window.requestAnimationFrame(() => {
+      try {
+        window.scrollTo({ top: checkpoint.scrollY || 0, behavior: "auto" });
+      } catch {
+        window.scrollTo(0, checkpoint.scrollY || 0);
+      }
+    });
+    if (checkpoint.state === "playing" || checkpoint.state === "buffering") {
+      setRequestStatus({ type: "ok", msg: "Reading position restored. Tap Read to resume." });
+    }
+  }, [checkpointKey, contentHash, readableParagraphs.length]);
+
+  useEffect(() => {
+    const persist = () => saveReadingCheckpoint("page_lifecycle", { force: true });
+    const onVisibility = () => {
+      if (document.hidden) persist();
+    };
+    window.addEventListener("pagehide", persist);
+    window.addEventListener("beforeunload", persist);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", persist);
+      window.removeEventListener("beforeunload", persist);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [checkpointKey, contentHash, sessionId, title, voiceSettingsHash]);
+
   const beginSideTabDrag = (event) => {
     if (event.button != null && event.button !== 0) return;
     sideTabDragRef.current = {
@@ -549,9 +633,12 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     if (resetPlayback) {
       setCurrentWordIdx(-1);
       setCurrentSentenceIdx(-1);
+      currentWordIdxRef.current = -1;
+      currentSentenceIdxRef.current = -1;
       playbackTimeRef.current = 0;
     }
     if (sessionId && i >= 0) localStorage.setItem(`tts_progress_${sessionId}`, String(i));
+    if (i >= 0) saveReadingCheckpoint("paragraph_change");
   };
 
   const stopSource = () => {
@@ -671,6 +758,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       setBufferingPara(-1);
       setS("idle");
       setCP(-1);
+      saveReadingCheckpoint("finished", { force: true });
       return;
     }
 
@@ -903,7 +991,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     if (paraIdx !== currentParaRef.current) setCP(paraIdx, { resetPlayback: false });
     setCurrentWordIdx(paraWordIdx);
     setCurrentSentenceIdx(sentenceIdx);
+    currentWordIdxRef.current = paraWordIdx;
+    currentSentenceIdxRef.current = sentenceIdx;
     scrollActiveReadingArea(paraIdx, paraWordIdx, sentenceIdx);
+    saveReadingCheckpoint("playback_progress");
   };
 
   const startFrom = async (paraIdx, sentenceIdx = 0) => {
@@ -928,7 +1019,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     setCacheStatusMinimized(false);
     setCP(paraIdx);
     setCurrentSentenceIdx(sentenceIdx > 0 ? sentenceIdx : -1);
+    currentSentenceIdxRef.current = sentenceIdx > 0 ? sentenceIdx : -1;
+    currentWordIdxRef.current = -1;
     setS("playing");
+    saveReadingCheckpoint("playback_start", { force: true });
     setBufferingPara(paraIdx);
     playNextChunk(gen);
   };
@@ -938,6 +1032,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       userPausedRef.current = true;
       try { sourceRef.current?.audio?.pause(); } catch {}
       setS("paused");
+      saveReadingCheckpoint("user_paused", { force: true });
       return;
     }
     if (state === "buffering") {
@@ -946,17 +1041,20 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       genRef.current++;
       setBufferingPara(-1);
       setS("paused");
+      saveReadingCheckpoint("user_paused_buffering", { force: true });
       return;
     }
     if (state === "paused") {
       userPausedRef.current = false;
       if (sourceRef.current?.audio) {
         setS("playing"); // update state immediately
+        saveReadingCheckpoint("resume_existing_audio", { force: true });
         await sourceRef.current.audio.play().catch(() => {});
       } else {
         // Was paused during buffering — re-fetch the current chunk
         const gen = genRef.current;
         setS("playing");
+        saveReadingCheckpoint("resume_refetch", { force: true });
         if (currentChunkRef.current) {
           await fetchAndPlay(currentChunkRef.current, gen);
         } else {
@@ -965,8 +1063,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       }
       return;
     }
-    // idle → start
-    await startFrom(0);
+    // idle -> start, honoring a restored Android/PWA reading checkpoint.
+    const resumePara = currentParaRef.current >= 0 ? currentParaRef.current : 0;
+    const resumeSentence = currentSentenceIdxRef.current >= 0 ? currentSentenceIdxRef.current : 0;
+    await startFrom(resumePara, resumeSentence);
   };
 
   const isActive = state === "playing" || state === "paused" || state === "buffering";

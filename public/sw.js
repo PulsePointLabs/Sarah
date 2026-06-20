@@ -7,14 +7,13 @@
 // PWA_NO_SKIP_WAITING_ON_INSTALL_V1
 // PWA_NOTIFICATION_FOCUS_NO_NAVIGATE_V1
 // PWA_MINIMAL_NOTIFICATION_WORKER_V1
-// PWA_FORCE_RECOVER_FROM_OLD_OFFLINE_SHELL_V1
+// PWA_SAFE_WAITING_UPDATE_V1
 const CACHE_PREFIX = "pulsepoint-shell-";
 const CACHE_PREFIXES = ["pulsepoint-shell-", "workbox-", "vite-"];
+const SW_BUILD_ID = "sarah-sw-safe-waiting-update-v1";
 
 self.addEventListener("install", (event) => {
-  // Force activation so phones controlled by an older offline-shell worker stop
-  // serving stale cached HTML before the live app can clean itself up.
-  self.skipWaiting();
+  event.waitUntil(Promise.resolve());
 });
 
 self.addEventListener("activate", (event) => {
@@ -23,11 +22,14 @@ self.addEventListener("activate", (event) => {
       .then((keys) => Promise.all(keys
         .filter((key) => CACHE_PREFIXES.some((prefix) => key.startsWith(prefix)))
         .map((key) => caches.delete(key))))
-      .then(() => self.clients.claim())
   );
 });
 
 self.addEventListener("message", (event) => {
+  if (event.data?.type === "SARAH_SW_VERSION") {
+    event.source?.postMessage?.({ type: "SARAH_SW_VERSION", buildId: SW_BUILD_ID });
+    return;
+  }
   if (["SARAH_SKIP_WAITING", "PULSEPOINT_SKIP_WAITING"].includes(event.data?.type)) {
     self.skipWaiting();
     return;

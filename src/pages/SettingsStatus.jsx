@@ -52,6 +52,11 @@ import {
   sendBackgroundTestNotification,
   setBackgroundNotificationsEnabled,
 } from "@/utils/backgroundJobNotifications";
+import {
+  clearPwaLifecycleDiagnostics,
+  readPwaLifecycleDiagnostics,
+  recordPwaLifecycleEvent,
+} from "@/lib/pwaLifecycleDiagnostics";
 
 function fmtMoney(value) {
   const n = Number(value);
@@ -325,6 +330,7 @@ export default function SettingsStatus() {
   const [notificationBusy, setNotificationBusy] = useState(false);
   const [pwaCleanupBusy, setPwaCleanupBusy] = useState(false);
   const [pwaCleanupMessage, setPwaCleanupMessage] = useState("");
+  const [pwaLifecycleEvents, setPwaLifecycleEvents] = useState(() => readPwaLifecycleDiagnostics().slice(-20).reverse());
   const [uiPrefs, setUiPrefs] = useState(readUiPreferences);
   const [sarahBrand, setSarahBrand] = useState(readSarahBrandSettings);
   const [watermark, setWatermark] = useState(readWatermarkSettings);
@@ -354,6 +360,17 @@ export default function SettingsStatus() {
 
   useEffect(() => {
     loadProviders();
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => setPwaLifecycleEvents(readPwaLifecycleDiagnostics().slice(-20).reverse());
+    refresh();
+    window.addEventListener("sarah:pwa-lifecycle", refresh);
+    const timer = window.setInterval(refresh, 5000);
+    return () => {
+      window.removeEventListener("sarah:pwa-lifecycle", refresh);
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -424,6 +441,22 @@ export default function SettingsStatus() {
 
   const updateSarahBrand = (imageId) => {
     setSarahBrand(saveSarahBrandSettings({ imageId }));
+  };
+
+  const applyPwaUpdateNow = async () => {
+    recordPwaLifecycleEvent("manual_update_apply_requested");
+    const registration = await navigator.serviceWorker?.getRegistration?.();
+    if (!registration?.waiting) {
+      setPwaCleanupMessage("No waiting Sarah update is available right now.");
+      return;
+    }
+    registration.waiting.postMessage({ type: "SARAH_SKIP_WAITING" });
+    setPwaCleanupMessage("Sarah update applied. If the app reloads, reading state was checkpointed first.");
+  };
+
+  const clearLifecycleLog = () => {
+    clearPwaLifecycleDiagnostics();
+    setPwaLifecycleEvents([]);
   };
 
   const updateWatermark = (patch) => {
@@ -1086,12 +1119,47 @@ export default function SettingsStatus() {
             {pwaCleanupBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             Reset Shell
           </button>
+          <button
+            type="button"
+            onClick={applyPwaUpdateNow}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 text-sm font-semibold text-primary hover:bg-primary/15"
+          >
+            Apply update now
+          </button>
         </div>
         <div className="mt-4 rounded-lg bg-muted/25 px-3 py-3 text-sm text-muted-foreground">
           <p>
-            Dev/mobile builds now unregister service workers automatically so Chrome cannot swap an old shell back in while Sarah is running.
+            Sarah now lets service-worker updates wait instead of taking over while you are reading or listening. Use Apply update now only when you are ready to checkpoint and reload.
           </p>
           {pwaCleanupMessage && <p className="mt-2 text-xs font-semibold text-foreground">{pwaCleanupMessage}</p>}
+        </div>
+        <div className="mt-4 rounded-lg border border-border bg-muted/10 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-primary">Android/PWA lifecycle diagnostics</p>
+              <p className="mt-1 text-xs text-muted-foreground">Local-only resume/reload events. No report text or media is stored here.</p>
+            </div>
+            <button
+              type="button"
+              onClick={clearLifecycleLog}
+              className="rounded-lg bg-muted px-2 py-1 text-xs font-semibold text-foreground hover:bg-muted/80"
+            >
+              Clear log
+            </button>
+          </div>
+          <div className="mt-3 max-h-52 overflow-auto rounded-md bg-background/70 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+            {pwaLifecycleEvents.length ? pwaLifecycleEvents.map((event, index) => (
+              <div key={`${event.at}-${index}`} className="border-b border-border/60 py-1 last:border-0">
+                <span className="text-foreground">{event.type}</span>
+                <span> · {fmtDateTime(event.at)}</span>
+                <span> · boot {String(event.bootId || "").slice(0, 10)}</span>
+                <span> · {event.visibilityState}</span>
+                {event.wasDiscarded ? <span className="text-destructive"> · discarded</span> : null}
+                {event.persisted != null ? <span> · persisted {String(event.persisted)}</span> : null}
+                {event.route ? <span> · {event.route}</span> : null}
+              </div>
+            )) : <p>No lifecycle events recorded yet.</p>}
+          </div>
         </div>
       </section>
 
