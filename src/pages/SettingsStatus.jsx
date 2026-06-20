@@ -32,6 +32,12 @@ import {
   saveSarahBrandSettings,
 } from "@/lib/sarahBrand";
 import {
+  DEFAULT_WATERMARK_SETTINGS,
+  readWatermarkSettings,
+  saveWatermarkSettings,
+  WATERMARK_PRESETS,
+} from "@/lib/watermarkSettings";
+import {
   DEFAULT_SARAH_PERSONALITY,
   readSarahPersonalitySettings,
   SARAH_DETAIL_OPTIONS,
@@ -321,6 +327,7 @@ export default function SettingsStatus() {
   const [pwaCleanupMessage, setPwaCleanupMessage] = useState("");
   const [uiPrefs, setUiPrefs] = useState(readUiPreferences);
   const [sarahBrand, setSarahBrand] = useState(readSarahBrandSettings);
+  const [watermark, setWatermark] = useState(readWatermarkSettings);
   const [sarahPersonality, setSarahPersonality] = useState(readSarahPersonalitySettings);
   const [sarahPersonalityDirty, setSarahPersonalityDirty] = useState(false);
   const [sarahPersonalityMessage, setSarahPersonalityMessage] = useState("");
@@ -417,6 +424,23 @@ export default function SettingsStatus() {
 
   const updateSarahBrand = (imageId) => {
     setSarahBrand(saveSarahBrandSettings({ imageId }));
+  };
+
+  const updateWatermark = (patch) => {
+    setWatermark((previous) => saveWatermarkSettings({ ...previous, ...patch }));
+  };
+
+  const applyWatermarkPreset = (preset) => {
+    const presetPatch = preset === "private_archive"
+      ? { preset, enabled: false, metadataScrubEnabled: false }
+      : preset === "preview"
+        ? { preset, enabled: true, metadataScrubEnabled: true, opacity: 0.7 }
+        : { preset, enabled: true, metadataScrubEnabled: true, primaryText: "Clinical Climax", secondaryText: "Powered by Sarah" };
+    updateWatermark(presetPatch);
+  };
+
+  const resetWatermark = () => {
+    setWatermark(saveWatermarkSettings(DEFAULT_WATERMARK_SETTINGS));
   };
 
   const updateSarahPersonality = (patch) => {
@@ -702,6 +726,157 @@ export default function SettingsStatus() {
               </button>
             );
           })}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-primary">
+              <Image className="h-4 w-4" />
+              <h2 className="text-sm font-bold uppercase tracking-wider">Watermark & Public Export</h2>
+            </div>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+              Sarah-produced MP4 exports use these settings. Public Export bakes the watermark into the final pixels and scrubs metadata.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 rounded-full border border-border bg-muted/20 px-3 py-1.5">
+            <span className="text-xs font-semibold text-muted-foreground">Enable watermark</span>
+            <ToggleControl
+              checked={watermark.enabled}
+              onChange={(enabled) => updateWatermark({ enabled })}
+              label="Enable watermark"
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+          <div className="space-y-4">
+            <div className="grid gap-2 sm:grid-cols-3">
+              {WATERMARK_PRESETS.map((preset) => (
+                <button
+                  key={preset.value}
+                  type="button"
+                  onClick={() => applyWatermarkPreset(preset.value)}
+                  className={`rounded-lg border px-3 py-2 text-left transition-colors ${watermark.preset === preset.value ? "border-primary bg-primary/10 text-foreground" : "border-border bg-muted/15 text-muted-foreground hover:border-primary/40 hover:text-foreground"}`}
+                >
+                  <span className="block text-sm font-semibold">{preset.label}</span>
+                  <span className="mt-0.5 block text-xs leading-relaxed opacity-85">{preset.helper}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <label className="space-y-1">
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Primary text</span>
+                <input
+                  value={watermark.primaryText}
+                  onChange={(event) => updateWatermark({ primaryText: event.target.value })}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Secondary text</span>
+                <input
+                  value={watermark.secondaryText}
+                  onChange={(event) => updateWatermark({ secondaryText: event.target.value })}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Handle or URL</span>
+                <input
+                  value={watermark.handleText}
+                  onChange={(event) => updateWatermark({ handleText: event.target.value })}
+                  placeholder="@handle or short URL"
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                />
+              </label>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-4">
+              {[
+                ["opacity", "Opacity", 0.05, 1, 0.01],
+                ["textSize", "Text size", 18, 96, 1],
+                ["paddingPercent", "Edge padding %", 1, 12, 0.5],
+                ["movementIntervalSeconds", "Move every sec", 8, 120, 1],
+              ].map(([key, label, min, max, step]) => (
+                <label key={key} className="space-y-1">
+                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{label}</span>
+                  <input
+                    type="number"
+                    min={min}
+                    max={max}
+                    step={step}
+                    value={watermark[key]}
+                    onChange={(event) => updateWatermark({ [key]: Number(event.target.value) })}
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                  />
+                </label>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              {[
+                ["shadowEnabled", "Shadow / outline"],
+                ["backgroundPlateEnabled", "Background plate"],
+                ["subtleCenterEnabled", "Subtle center duplicate"],
+                ["metadataScrubEnabled", "Metadata scrub"],
+              ].map(([key, label]) => (
+                <label key={key} className="inline-flex items-center gap-2 rounded-full border border-border bg-muted/20 px-3 py-1.5 text-xs font-semibold text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(watermark[key])}
+                    onChange={(event) => updateWatermark({ [key]: event.target.checked })}
+                    className="h-4 w-4 accent-primary"
+                  />
+                  {label}
+                </label>
+              ))}
+              <button type="button" onClick={resetWatermark} className="rounded-full border border-border bg-muted/20 px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-muted">
+                Reset defaults
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border bg-muted/20 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-bold text-foreground">Preview watermark</h3>
+              <span className="rounded-full bg-primary/10 px-2 py-1 text-[11px] font-semibold uppercase text-primary">
+                {watermark.positionMode.replace(/_/g, " ")}
+              </span>
+            </div>
+            <div className="relative mt-3 aspect-video overflow-hidden rounded-lg border border-border bg-gradient-to-br from-slate-900 via-slate-700 to-slate-950">
+              <div className="absolute right-[4%] top-[4%] h-[16%] w-[34%] rounded-lg border border-white/15 bg-black/35" />
+              <div className="absolute bottom-[4%] right-[4%] h-[18%] w-[24%] rounded-lg border border-white/15 bg-black/35" />
+              <div className="absolute bottom-[4%] left-[4%] rounded bg-black/60 px-2 py-1 text-[10px] text-white/85">timeline 0:42</div>
+              {watermark.subtleCenterEnabled && watermark.enabled && (
+                <div className="absolute inset-0 grid place-items-center text-center text-white/15" style={{ fontSize: Math.max(14, watermark.textSize * 0.58) }}>
+                  <div>
+                    <p className="font-bold">{watermark.primaryText}</p>
+                    <p>{watermark.secondaryText}</p>
+                  </div>
+                </div>
+              )}
+              {watermark.enabled && (
+                <div
+                  className={`absolute left-[4%] top-[4%] max-w-[68%] rounded px-2 py-1 text-white ${watermark.backgroundPlateEnabled ? "bg-black/40" : ""}`}
+                  style={{
+                    opacity: watermark.opacity,
+                    fontSize: Math.max(10, watermark.textSize * 0.34),
+                    textShadow: watermark.shadowEnabled ? "0 2px 4px rgba(0,0,0,.9)" : "none",
+                  }}
+                >
+                  <p className="font-bold leading-tight">{watermark.primaryText}</p>
+                  <p className="leading-tight">{watermark.secondaryText}</p>
+                  {watermark.handleText && <p className="leading-tight">{watermark.handleText}</p>}
+                </div>
+              )}
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              The final video renderer rotates this between safe corners on the configured interval. Source recordings are not modified.
+            </p>
+          </div>
         </div>
       </section>
 

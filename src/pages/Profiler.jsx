@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { readWatermarkSettings } from "@/lib/watermarkSettings";
 import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, RefreshCw, History, Film, Image as ImageIcon, Upload, X, Download, Loader2, Video } from "lucide-react";
 import TTSReader from "../components/TTSReader";
 import AIOutputReader from "../components/AIOutputReader";
@@ -6852,6 +6853,7 @@ ANNOTATED IMAGE OUTPUT RULES:
         instructions: runtime.instructions,
         outputFormat: runtime.format,
         normalize: runtime.settings.normalizeExport,
+        watermark: readWatermarkSettings(),
       }, {
         title,
         source: "Profiler",

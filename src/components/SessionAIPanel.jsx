@@ -8,6 +8,7 @@ import { buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_AN
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { buildAudioChapterBundle } from "@/lib/audioChapters";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { readWatermarkSettings } from "@/lib/watermarkSettings";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from "@/lib/sessionContext";
 import { buildSessionKeyVideoClipDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, normalizeSessionKeyVideoClips, normalizeSessionVideoPassFindings } from "@/lib/visualEvidence";
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
@@ -585,6 +586,7 @@ export function SessionReviewVideoExportButton({
         instructions: runtime.instructions,
         outputFormat: runtime.format,
         normalize: runtime.settings.normalizeExport,
+        watermark: readWatermarkSettings(),
       };
 
       setStatus({ type: "working", message: "Starting review video render..." });

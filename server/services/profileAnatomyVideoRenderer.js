@@ -5,6 +5,7 @@ import { listEntities, upsertEntity } from '../db.js';
 import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart } from './ttsCore.js';
 import { resolveCachedFramePath } from './localVision/frameSampler.js';
+import { normalizeWatermarkSettings, replaceVideoWithWatermarkedExport } from './watermark.js';
 
 const PROFILE_ANATOMY_VIDEO_RENDER_VERSION = 'profile_anatomy_video_v1_hd';
 const VIDEO_WIDTH = Number(process.env.PROFILE_ANATOMY_VIDEO_WIDTH || 1920);
@@ -1930,8 +1931,15 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
       finalPath,
     ]);
 
+    const watermark = normalizeWatermarkSettings(payload.watermark || {});
+    let durationSeconds = Math.round(await mediaDurationSeconds(finalPath));
+    const watermarkDebug = await replaceVideoWithWatermarkedExport(finalPath, watermark, {
+      durationSeconds,
+      contentType: 'profile_anatomy_video',
+      onProgress,
+    });
     const stat = await fs.stat(finalPath);
-    const durationSeconds = Math.round(await mediaDurationSeconds(finalPath));
+    durationSeconds = Math.round(await mediaDurationSeconds(finalPath));
     return {
       ok: true,
       jobId,
@@ -1940,6 +1948,9 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
       filename,
       size: stat.size,
       duration_seconds: durationSeconds,
+      watermark: watermarkDebug,
+      watermark_enabled: Boolean(watermarkDebug?.watermark_enabled),
+      watermark_preset: watermarkDebug?.preset || watermark.preset,
       audio_reused: narration.reused,
       audio_file_url: narration.rendered?.file_url || null,
       audio_timing: 'measured_section_audio',

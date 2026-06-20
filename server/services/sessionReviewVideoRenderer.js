@@ -6,6 +6,7 @@ import { normalizeAudioChapters } from './audioChapters.js';
 import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart, synthesizeTTSChunk } from './ttsCore.js';
 import { buildReviewVideoPlan, extractCitedTimesFromText } from './sessionReviewVideoPlanner.js';
+import { normalizeWatermarkSettings, replaceVideoWithWatermarkedExport } from './watermark.js';
 
 const REVIEW_RENDER_VERSION = 'session_review_video_v11_hd';
 const TTS_REQUEST_TAIL = '\u200B';
@@ -1541,8 +1542,7 @@ async function renderSegmentedSourceReviewVideo({
   await concatAvSegments(avSegments, outputPath, workDir);
   await concatAudioSegments(audioSegments, audioOutputPath, workDir);
 
-  const stat = await fs.stat(outputPath);
-  const finalDuration = await mediaDurationSeconds(outputPath).catch(() => totalAudioDuration);
+  let finalDuration = await mediaDurationSeconds(outputPath).catch(() => totalAudioDuration);
   const continuousAudioDuration = await mediaDurationSeconds(continuousWavPath).catch(() => totalAudioDuration);
   if (continuousAudioDuration < totalAudioDuration - 0.75) {
     throw new Error(`Narration concat is short: expected about ${Math.round(totalAudioDuration)}s, got ${Math.round(continuousAudioDuration)}s.`);
@@ -1550,6 +1550,14 @@ async function renderSegmentedSourceReviewVideo({
   if (finalDuration < totalAudioDuration - 0.75) {
     throw new Error(`Review video audio was truncated: expected about ${Math.round(totalAudioDuration)}s, got ${Math.round(finalDuration)}s.`);
   }
+  const watermark = normalizeWatermarkSettings(payload.watermark || {});
+  const watermarkDebug = await replaceVideoWithWatermarkedExport(outputPath, watermark, {
+    durationSeconds: finalDuration,
+    contentType: 'session_review_video',
+    onProgress,
+  });
+  finalDuration = await mediaDurationSeconds(outputPath).catch(() => totalAudioDuration);
+  const stat = await fs.stat(outputPath);
   const audioStat = await fs.stat(audioOutputPath).catch(() => null);
   const chapters = normalizeAudioChapters(
     narrationSegments.map((segment, index) => ({
@@ -1580,6 +1588,7 @@ async function renderSegmentedSourceReviewVideo({
     timeline_trace: generatedClips.map((clip) => clip.timeline_trace || null).filter(Boolean),
     existing_clip_count: existingSegmentSources.length,
     chapters,
+    watermark: watermarkDebug,
   };
   const manifest_url = await writeManifest(outputBase, manifest);
   const record = upsertEntity('SessionReviewVideo', crypto.randomUUID(), {
@@ -1603,6 +1612,8 @@ async function renderSegmentedSourceReviewVideo({
     manifest_url,
     render_version: REVIEW_RENDER_VERSION,
     exported_at: new Date().toISOString(),
+    watermark_enabled: Boolean(watermarkDebug?.watermark_enabled),
+    watermark_preset: watermarkDebug?.preset || watermark.preset,
   });
   const result = {
     ok: true,
@@ -1616,6 +1627,7 @@ async function renderSegmentedSourceReviewVideo({
     clip_count: record.clip_count,
     cited_time_count: record.cited_time_count,
     manifest_url,
+    watermark: watermarkDebug,
     timeline_trace: generatedClips.map((clip) => clip.timeline_trace || null).filter(Boolean),
     record,
     render_version: REVIEW_RENDER_VERSION,
@@ -1799,8 +1811,15 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
 
     onProgress({ phase: 'muxing', current: 4, total: 5, message: 'Muxing review video with narration audio...' });
     await muxAudioVideo(silentVideoPath, narration.audioPath, outputPath);
+    let finalDuration = await mediaDurationSeconds(outputPath).catch(() => audioDuration);
+    const watermark = normalizeWatermarkSettings(payload.watermark || {});
+    const watermarkDebug = await replaceVideoWithWatermarkedExport(outputPath, watermark, {
+      durationSeconds: finalDuration,
+      contentType: 'session_review_video',
+      onProgress,
+    });
+    finalDuration = await mediaDurationSeconds(outputPath).catch(() => audioDuration);
     const stat = await fs.stat(outputPath);
-    const finalDuration = await mediaDurationSeconds(outputPath).catch(() => audioDuration);
     const manifest = {
       version: 1,
       render_version: REVIEW_RENDER_VERSION,
@@ -1821,6 +1840,7 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
         .filter(Boolean),
       existing_clip_count: existingSegmentSources.length,
       chapters,
+      watermark: watermarkDebug,
     };
     const manifest_url = await writeManifest(outputBase, manifest);
     const record = upsertEntity('SessionReviewVideo', crypto.randomUUID(), {
@@ -1843,6 +1863,8 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       manifest_url,
       render_version: REVIEW_RENDER_VERSION,
       exported_at: new Date().toISOString(),
+      watermark_enabled: Boolean(watermarkDebug?.watermark_enabled),
+      watermark_preset: watermarkDebug?.preset || watermark.preset,
     });
 
     const result = {
@@ -1857,6 +1879,7 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       clip_count: record.clip_count,
       cited_time_count: record.cited_time_count,
       manifest_url,
+      watermark: watermarkDebug,
       timeline_trace: clipOutputs
         .map((clip) => clip.timeline_trace || null)
         .filter(Boolean),

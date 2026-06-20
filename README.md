@@ -449,6 +449,38 @@ Linked recordings remain local.
 
 Some formats may be converted into cached preview files for browser or Electron playback while preserving the original source.
 
+## Watermarked Public Exports 🪪
+
+Sarah-produced narrated MP4 exports can bake a watermark directly into the final video pixels.
+
+Open:
+
+- `/settings`
+- Watermark & Public Export
+
+Default public branding:
+
+- Primary: `Clinical Climax`
+- Secondary: `Powered by Sarah`
+
+The default preset is Public Export. New Sarah-rendered session review videos and Profiler anatomy videos use the saved watermark settings when the render starts.
+
+Available presets:
+
+- Public Export: watermark enabled, rotating corners, metadata scrub enabled.
+- Private Archive: watermark disabled by default, original source media still untouched.
+- Preview: watermark visible for checking placement before a public render.
+
+The watermark is applied only to exported derivative videos. Sarah does not alter original recordings, raw uploads, or internal evidence images.
+
+Public exports also scrub MP4 metadata where practical and replace it with neutral values such as:
+
+- Creator: `PulsePointLabs`
+- Application: `Sarah`
+- Brand: `Clinical Climax`
+
+If you need an unwatermarked local/private render, switch the preset to Private Archive or disable the watermark before starting the video render.
+
 ---
 
 ## Configuration ⚙️
