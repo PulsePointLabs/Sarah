@@ -1303,6 +1303,7 @@ export default function LiveCapture() {
   const directH10ReconnectAttemptRef = useRef(0);
   const howlAutoLastActionRef = useRef({ at: 0, intensity: null, reason: "" });
   const bpSyncInFlightRef = useRef(false);
+  const bpOmronSeenRef = useRef(new Set());
   const howlSettingsDirtyRef = useRef(false);
   const howlFocusedFieldRef = useRef("");
   const launchInFlightRef = useRef(null);
@@ -2858,24 +2859,52 @@ export default function LiveCapture() {
   const saveOmronBloodPressureForLiveSession = useCallback(async (reading) => {
     if (!reading) throw new Error("OMRON did not return a blood pressure reading.");
 
+    const readingKey = reading.external_id || reading.id || `${reading.measured_at}-${reading.systolic_mm_hg}-${reading.diastolic_mm_hg}-${reading.pulse_bpm || ""}`;
+    if (bpOmronSeenRef.current.has(readingKey)) return;
+    bpOmronSeenRef.current.add(readingKey);
+
+    setBpCapture((prev) => ({
+      ...prev,
+      native: true,
+      syncing: false,
+      status: "syncing",
+      error: "",
+      message: `Received OMRON reading ${formatBloodPressure(reading)}. Saving...`,
+    }));
+
     const saved = await ingestBloodPressureReadings([reading]);
     const savedReadings = Array.isArray(saved?.readings) && saved.readings.length ? saved.readings : [reading];
-    const stamped = await stampBloodPressureReadings(savedReadings, { source: "omron_direct_ble_listener" });
-    const latestReading = stamped.latest || savedReadings[0] || reading;
+    const latestReading = savedReadings[0] || reading;
 
     setBpCapture((prev) => ({
       ...prev,
       native: true,
       permissionGranted: prev.permissionGranted,
       syncing: false,
-      status: stamped.stamped ? "captured" : "ready",
+      status: "ready",
       lastReading: latestReading,
-      lastCapturedAt: stamped.latest ? new Date().toISOString() : prev.lastCapturedAt,
-      capturedCount: prev.capturedCount + stamped.stamped,
-      message: stamped.stamped
-        ? `OMRON captured ${formatBloodPressure(latestReading)} and stamped it into this session.`
-        : `OMRON captured ${formatBloodPressure(latestReading)} and saved it to PulsePoint.`,
+      message: `OMRON captured ${formatBloodPressure(latestReading)} and saved it to PulsePoint.`,
     }));
+
+    stampBloodPressureReadings(savedReadings, { source: "omron_direct_ble_listener" })
+      .then((stamped) => {
+        if (!stamped?.stamped) return;
+        setBpCapture((prev) => ({
+          ...prev,
+          status: "captured",
+          lastReading: stamped.latest || latestReading,
+          lastCapturedAt: new Date().toISOString(),
+          capturedCount: prev.capturedCount + stamped.stamped,
+          message: `OMRON captured ${formatBloodPressure(stamped.latest || latestReading)} and stamped it into this session.`,
+        }));
+      })
+      .catch((error) => {
+        setBpCapture((prev) => ({
+          ...prev,
+          error: error?.message || "Saved BP, but could not stamp it into the live session.",
+          message: `OMRON captured ${formatBloodPressure(latestReading)} and saved it to PulsePoint. Session stamp failed.`,
+        }));
+      });
   }, [stampBloodPressureReadings]);
 
   const toggleOmronBloodPressureListener = useCallback(async () => {
@@ -2932,6 +2961,13 @@ export default function LiveCapture() {
           }));
         },
         onReading: (reading) => {
+          setBpCapture((prev) => ({
+            ...prev,
+            syncing: false,
+            status: "syncing",
+            error: "",
+            message: `Received OMRON reading ${formatBloodPressure(reading)}. Saving...`,
+          }));
           saveOmronBloodPressureForLiveSession(reading).catch((error) => {
             setBpCapture((prev) => ({
               ...prev,
