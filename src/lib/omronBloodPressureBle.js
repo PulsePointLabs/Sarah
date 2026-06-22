@@ -5,6 +5,7 @@ const BLOOD_PRESSURE_MEASUREMENT_UUID = "00002a35-0000-1000-8000-00805f9b34fb";
 const CURRENT_TIME_SERVICE_UUID = "00001805-0000-1000-8000-00805f9b34fb";
 const BATTERY_SERVICE_UUID = "0000180f-0000-1000-8000-00805f9b34fb";
 const DEVICE_INFORMATION_SERVICE_UUID = "0000180a-0000-1000-8000-00805f9b34fb";
+const OMRON_RECONNECT_DELAY_MS = 2500;
 
 let activeOmronListener = null;
 
@@ -196,6 +197,99 @@ export function parseBloodPressureMeasurement(value, device = {}) {
   };
 }
 
+function clearReconnectTimer(listener) {
+  if (listener?.reconnectTimer) {
+    window.clearTimeout(listener.reconnectTimer);
+    listener.reconnectTimer = null;
+  }
+}
+
+function handleOmronDisconnected(listener) {
+  if (!listener || activeOmronListener !== listener) return;
+  if (listener.suppressNextDisconnect) {
+    listener.suppressNextDisconnect = false;
+    return;
+  }
+  listener.connected = false;
+  if (listener.stopping) {
+    activeOmronListener = null;
+    listener.onStatus?.("OMRON listener stopped.");
+    listener.onDisconnect?.({ device: listener.device, stopped: true });
+    return;
+  }
+
+  listener.onStatus?.("OMRON cuff went idle/disconnected. Sarah is still armed and will reconnect when the cuff wakes.");
+  scheduleOmronReconnect(listener);
+}
+
+async function connectAndSubscribeOmron(listener, { initial = false } = {}) {
+  if (!listener || listener.stopping || activeOmronListener !== listener) return null;
+  clearReconnectTimer(listener);
+  listener.reconnecting = !initial;
+
+  try {
+    listener.onStatus?.(initial ? "Connecting to OMRON BP7000..." : "Trying to reconnect to OMRON BP7000...");
+    listener.suppressNextDisconnect = true;
+    await BleClient.disconnect(listener.deviceId).catch(() => {});
+    listener.suppressNextDisconnect = false;
+    await BleClient.connect(listener.deviceId, () => handleOmronDisconnected(listener), { timeout: initial ? 20000 : 8000 });
+
+    const services = await BleClient.getServices(listener.deviceId).catch(() => []);
+    const serviceSummary = summarizeServices(services);
+    const bpService = serviceSummary.find((service) => service.uuid?.toLowerCase() === BLOOD_PRESSURE_SERVICE_UUID);
+    const measurement = bpService?.characteristics?.find((characteristic) => characteristic.uuid?.toLowerCase() === BLOOD_PRESSURE_MEASUREMENT_UUID);
+    if (bpService && measurement && !measurement.properties?.notify && !measurement.properties?.indicate) {
+      throw new Error("The OMRON BP measurement characteristic is present, but it is not advertising notify/indicate support.");
+    }
+
+    await BleClient.startNotifications(
+      listener.deviceId,
+      BLOOD_PRESSURE_SERVICE_UUID,
+      BLOOD_PRESSURE_MEASUREMENT_UUID,
+      (value) => {
+        try {
+          const parsed = parseBloodPressureMeasurement(value, listener.device);
+          listener.onStatus?.(`Received OMRON reading ${parsed.systolic_mm_hg}/${parsed.diastolic_mm_hg} mmHg.`);
+          listener.onReading?.(parsed, { device: listener.device, services: listener.services || serviceSummary });
+        } catch (error) {
+          listener.onError?.(error);
+        }
+      },
+      { timeout: 15000 },
+    );
+
+    listener.connected = true;
+    listener.reconnecting = false;
+    clearReconnectTimer(listener);
+    listener.services = serviceSummary;
+    listener.lastConnectedAt = new Date().toISOString();
+    listener.onStatus?.("OMRON listener is armed. Take a BP reading; if the cuff sleeps, Sarah will reconnect when it wakes/transmits.");
+    return serviceSummary;
+  } catch (error) {
+    listener.connected = false;
+    listener.reconnecting = false;
+    if (!initial && !listener.stopping && activeOmronListener === listener) {
+      listener.onStatus?.("Waiting for OMRON cuff to wake/transmit. Sarah is still armed.");
+      scheduleOmronReconnect(listener);
+      return null;
+    }
+    throw error;
+  }
+}
+
+function scheduleOmronReconnect(listener) {
+  if (!listener || listener.stopping || activeOmronListener !== listener) return;
+  clearReconnectTimer(listener);
+  listener.reconnectTimer = window.setTimeout(() => {
+    if (!listener || listener.stopping || activeOmronListener !== listener) return;
+    connectAndSubscribeOmron(listener, { initial: false }).catch((error) => {
+      if (listener.stopping || activeOmronListener !== listener) return;
+      listener.onStatus?.(`Still armed; OMRON reconnect is waiting for the cuff to wake. ${error?.message || ""}`.trim());
+      scheduleOmronReconnect(listener);
+    });
+  }, OMRON_RECONNECT_DELAY_MS);
+}
+
 export async function startOmronBloodPressureListener({
   onStatus,
   onReading,
@@ -211,50 +305,27 @@ export async function startOmronBloodPressureListener({
   if (!deviceId) throw new Error("Android Bluetooth picker did not return a usable OMRON device id.");
 
   try {
-    onStatus?.("Connecting to OMRON BP7000...");
-    await BleClient.disconnect(deviceId).catch(() => {});
-    await BleClient.connect(deviceId, () => {
-      const listener = activeOmronListener;
-      if (listener?.deviceId === deviceId) activeOmronListener = null;
-      onStatus?.("OMRON BP7000 disconnected.");
-      onDisconnect?.({ device });
-    }, { timeout: 20000 });
-
-    const services = await BleClient.getServices(deviceId).catch(() => []);
-    const serviceSummary = summarizeServices(services);
-    const bpService = serviceSummary.find((service) => service.uuid?.toLowerCase() === BLOOD_PRESSURE_SERVICE_UUID);
-    const measurement = bpService?.characteristics?.find((characteristic) => characteristic.uuid?.toLowerCase() === BLOOD_PRESSURE_MEASUREMENT_UUID);
-    if (bpService && measurement && !measurement.properties?.notify && !measurement.properties?.indicate) {
-      throw new Error("The OMRON BP measurement characteristic is present, but it is not advertising notify/indicate support.");
-    }
-
-    onStatus?.("Connected and listening. Take a BP reading or press the BP7000 Bluetooth/Transfer button once until the O flashes.");
-
-    await BleClient.startNotifications(
-      deviceId,
-      BLOOD_PRESSURE_SERVICE_UUID,
-      BLOOD_PRESSURE_MEASUREMENT_UUID,
-      (value) => {
-        try {
-          const parsed = parseBloodPressureMeasurement(value, device);
-          onStatus?.(`Received OMRON reading ${parsed.systolic_mm_hg}/${parsed.diastolic_mm_hg} mmHg.`);
-          onReading?.(parsed, { device, services: serviceSummary });
-        } catch (error) {
-          onError?.(error);
-        }
-      },
-      { timeout: 15000 },
-    );
-
-    activeOmronListener = {
+    const listener = {
       deviceId,
       device,
       startedAt: new Date().toISOString(),
-      services: serviceSummary,
+      services: [],
+      connected: false,
+      reconnecting: false,
+      reconnectTimer: null,
+      stopping: false,
+      suppressNextDisconnect: false,
+      onStatus,
+      onReading,
+      onDisconnect,
+      onError,
     };
+    activeOmronListener = listener;
 
-    return { ok: true, device, services: serviceSummary };
+    const services = await connectAndSubscribeOmron(listener, { initial: true });
+    return { ok: true, device, services: services || [] };
   } catch (error) {
+    activeOmronListener = null;
     await BleClient.disconnect(deviceId).catch(() => {});
     throw error;
   }
@@ -264,6 +335,8 @@ export async function stopOmronBloodPressureListener() {
   const listener = activeOmronListener;
   activeOmronListener = null;
   if (!listener?.deviceId) return { ok: true, stopped: false };
+  listener.stopping = true;
+  clearReconnectTimer(listener);
   await BleClient.stopNotifications(listener.deviceId, BLOOD_PRESSURE_SERVICE_UUID, BLOOD_PRESSURE_MEASUREMENT_UUID).catch(() => {});
   await BleClient.disconnect(listener.deviceId).catch(() => {});
   return { ok: true, stopped: true, device: listener.device };
@@ -273,6 +346,8 @@ export function getOmronBloodPressureListenerState() {
   return activeOmronListener
     ? {
       listening: true,
+      connected: Boolean(activeOmronListener.connected),
+      reconnecting: Boolean(activeOmronListener.reconnecting),
       deviceName: activeOmronListener.device?.name || "OMRON BP7000",
       startedAt: activeOmronListener.startedAt,
       services: activeOmronListener.services,
