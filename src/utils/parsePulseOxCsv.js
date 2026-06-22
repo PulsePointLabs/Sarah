@@ -135,8 +135,41 @@ export function parsePulseOxCsv(text, options = {}) {
   }
 
   rawRows.sort((a, b) => new Date(a.measured_at).getTime() - new Date(b.measured_at).getTime());
-  const firstMs = new Date(rawRows[0].measured_at).getTime();
-  const rows = rawRows.map((row, index) => ({
+  const sessionStartMs = options.sessionStartAt ? new Date(options.sessionStartAt).getTime() : NaN;
+  const sessionEndMs = options.sessionEndAt ? new Date(options.sessionEndAt).getTime() : NaN;
+  const hasSessionStart = Number.isFinite(sessionStartMs);
+  const hasSessionEnd = Number.isFinite(sessionEndMs);
+  let filteredBefore = 0;
+  let filteredAfter = 0;
+  const firstMs = hasSessionStart ? sessionStartMs : new Date(rawRows[0].measured_at).getTime();
+  const alignedRows = rawRows.filter((row) => {
+    const measuredMs = new Date(row.measured_at).getTime();
+    if (hasSessionStart && measuredMs < sessionStartMs) {
+      filteredBefore += 1;
+      return false;
+    }
+    if (hasSessionEnd && measuredMs > sessionEndMs) {
+      filteredAfter += 1;
+      return false;
+    }
+    return true;
+  });
+
+  if (!alignedRows.length) {
+    return {
+      error: hasSessionStart
+        ? "No pulse-ox rows fall inside this session start/end window."
+        : "No valid pulse-ox rows found.",
+      rows: [],
+      skipped: dataLines.length,
+      total: dataLines.length,
+      skipReasons,
+      filteredBefore,
+      filteredAfter,
+    };
+  }
+
+  const rows = alignedRows.map((row, index) => ({
     ...row,
     id: row.id || `pulseox-${row.measured_at}-${index}`,
     time_offset_s: Math.max(0, Math.round((new Date(row.measured_at).getTime() - firstMs) / 1000)),
@@ -148,6 +181,11 @@ export function parsePulseOxCsv(text, options = {}) {
     imported: rows.length,
     skipped: dataLines.length - rows.length,
     skipReasons,
+    filteredBefore,
+    filteredAfter,
+    alignedToSession: hasSessionStart,
+    sessionStartAt: hasSessionStart ? new Date(sessionStartMs).toISOString() : null,
+    sessionEndAt: hasSessionEnd ? new Date(sessionEndMs).toISOString() : null,
     firstTimestamp: rows[0]?.measured_at || null,
     lastTimestamp: rows[rows.length - 1]?.measured_at || null,
   };

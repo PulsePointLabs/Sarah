@@ -33,3 +33,27 @@ test('parsePulseOxCsv falls back to second and third columns when EMAY headers a
   assert.equal(result.rows[1].spo2_percent, 93);
   assert.equal(result.rows[1].pulse_bpm, 89);
 });
+
+test('parsePulseOxCsv aligns rows to session start and filters outside session end', () => {
+  const csv = [
+    'Time,SpO2,PR',
+    '6/5/2026 12:55:34 AM,94,88',
+    '6/5/2026 12:55:35 AM,94,88',
+    '6/5/2026 12:55:36 AM,95,89',
+    '6/5/2026 12:55:37 AM,95,90',
+  ].join('\n');
+
+  const result = parsePulseOxCsv(csv, {
+    sessionStartAt: new Date(2026, 5, 5, 0, 55, 35).toISOString(),
+    sessionEndAt: new Date(2026, 5, 5, 0, 55, 36).toISOString(),
+  });
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.imported, 2);
+  assert.equal(result.filteredBefore, 1);
+  assert.equal(result.filteredAfter, 1);
+  assert.equal(result.rows[0].time_offset_s, 0);
+  assert.equal(result.rows[1].time_offset_s, 1);
+  assert.equal(result.rows[0].spo2_percent, 94);
+  assert.equal(result.rows[1].spo2_percent, 95);
+});
