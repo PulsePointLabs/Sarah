@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.3",
-  "commit": "9b50293d",
-  "commitMessage": "Surface BP in live and session analysis",
-  "builtAt": "2026-06-22T22:48:44.909Z"
+  "version": "0.1.4",
+  "commit": "4f8fda5a",
+  "commitMessage": "Rebuild v0.1.3 APK with current stamp",
+  "builtAt": "2026-06-22T23:07:08.621Z"
 };

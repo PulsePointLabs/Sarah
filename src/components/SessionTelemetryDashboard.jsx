@@ -7,6 +7,7 @@ import PerinealEmgPanel from "./PerinealEmgPanel";
 import SavedMotionSummaryCard from "./SavedMotionSummaryCard";
 import ClimaxMotionSnapshotCard from "./ClimaxMotionSnapshotCard";
 import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
+import { pulseOxReadingsFromSession } from "@/lib/sessionContext";
 
 function formatTime(seconds) {
   const total = Math.max(0, Math.round(Number(seconds) || 0));
@@ -49,6 +50,7 @@ export default function SessionTelemetryDashboard({
   const inspectionTimeRef = useRef(Number(inspectionTime) || 0);
   const events = Array.isArray(session.event_timeline) ? session.event_timeline : [];
   const perinealEmgSummary = useMemo(() => summarizePerinealEmg(session), [session]);
+  const pulseOxRows = useMemo(() => pulseOxReadingsFromSession(session), [session]);
   const orderedEvents = useMemo(
     () => events
       .map((event, index) => ({ event, index, timeS: Number(event.time_s) }))
@@ -57,6 +59,7 @@ export default function SessionTelemetryDashboard({
     [events],
   );
   const hrPoint = useMemo(() => nearest(timelineRows, inspectionTime, "time_offset_s"), [inspectionTime, timelineRows]);
+  const pulseOxPoint = useMemo(() => nearest(pulseOxRows, inspectionTime, "time_offset_s"), [inspectionTime, pulseOxRows]);
   const motionPoint = useMemo(
     () => nearest(session.motion_analysis_summary?.derived_timeline || [], inspectionTime, "time_s"),
     [inspectionTime, session.motion_analysis_summary],
@@ -174,8 +177,10 @@ export default function SessionTelemetryDashboard({
             aria-label="Inspect session timestamp"
           />
         )}
-        <div className="grid gap-2 grid-cols-2 md:grid-cols-4 xl:grid-cols-8">
+        <div className="grid gap-2 grid-cols-2 md:grid-cols-4 xl:grid-cols-10">
           <Metric label="HR" value={Number.isFinite(currentHR) ? `${Math.round(currentHR)} bpm` : "--"} tone="text-rose-400" />
+          <Metric label="SpO2" value={pulseOxPoint?.spo2_percent != null ? `${pulseOxPoint.spo2_percent}%` : "--"} tone="text-primary" />
+          <Metric label="O2 Pulse" value={pulseOxPoint?.pulse_bpm != null ? `${pulseOxPoint.pulse_bpm} bpm` : "--"} />
           <Metric label="Smoothed" value={Number.isFinite(Number(hrPoint?.hr_smoothed)) ? `${Math.round(Number(hrPoint.hr_smoothed))} bpm` : "--"} />
           <Metric label="Baseline Delta" value={Number.isFinite(currentHR) && Number.isFinite(baseline) ? `${currentHR - baseline >= 0 ? "+" : ""}${Math.round(currentHR - baseline)}` : "--"} />
           <Metric label="Left Lower Body" value={motionPoint?.left_lower_body_activity ?? "--"} tone="text-primary" />

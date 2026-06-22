@@ -242,6 +242,9 @@ functionsRouter.post('/generateJournal', async (req, res) => {
       s.session_context?.blood_pressure?.systolic_mm_hg && s.session_context?.blood_pressure?.diastolic_mm_hg
         ? `Blood pressure context: ${s.session_context.blood_pressure.systolic_mm_hg}/${s.session_context.blood_pressure.diastolic_mm_hg} mmHg${s.session_context.blood_pressure.pulse_bpm ? `, pulse ${s.session_context.blood_pressure.pulse_bpm} bpm` : ''}${s.session_context.blood_pressure.measured_at ? `, measured ${s.session_context.blood_pressure.measured_at}` : ''}`
         : null,
+      Array.isArray(s.pulse_ox_readings) && s.pulse_ox_readings.length
+        ? `Pulse oximetry: ${s.pulse_ox_readings.length} samples, average SpO2 ${s.avg_spo2_percent || ''}%, minimum SpO2 ${s.min_spo2_percent || ''}%${s.avg_pulse_ox_pulse_bpm ? `, average pulse ${s.avg_pulse_ox_pulse_bpm} bpm` : ''}`
+        : null,
       s.avg_hr ? `Avg HR: ${s.avg_hr} bpm` : null,
       s.max_hr ? `Max HR: ${s.max_hr} bpm` : null,
       s.hr_at_climax ? `HR at climax: ${s.hr_at_climax} bpm` : null,

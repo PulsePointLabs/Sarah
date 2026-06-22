@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from '../../src/lib/sessionContext.js';
+import { pulseOxReadingsFromSession, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from '../../src/lib/sessionContext.js';
 
 const session = {
   session_context: {
@@ -64,4 +64,23 @@ test('structured session context accepts camelCase and legacy session fields', (
   assert.deepEqual(context.mental_state, ['calm', 'meditative']);
   assert.equal(context.privacy_interruptibility, 'fully_private');
   assert.deepEqual(context.environmental_preparation, ['tools_prepared', 'telemetry_active']);
+});
+
+test('session context includes pulse oximetry as AI evidence', () => {
+  const pulseOxSession = {
+    pulse_ox_source: 'EMAY app CSV',
+    pulse_ox_readings: [
+      { measured_at: '2026-06-05T04:55:34.000Z', time_offset_s: 0, spo2_percent: 94, pulse_bpm: 88, source_app: 'EMAY app CSV' },
+      { measured_at: '2026-06-05T04:55:35.000Z', time_offset_s: 1, spo2_percent: 95, pulse_bpm: 89, source_app: 'EMAY app CSV' },
+      { measured_at: '2026-06-05T04:55:36.000Z', time_offset_s: 2, spo2_percent: 93, pulse_bpm: 90, source_app: 'EMAY app CSV' },
+    ],
+  };
+  const readings = pulseOxReadingsFromSession(pulseOxSession);
+  const context = structuredSessionContextForAI(pulseOxSession);
+  const text = sessionContextEvidenceText(pulseOxSession);
+
+  assert.equal(readings.length, 3);
+  assert.equal(context.pulse_ox_summary.samples, 3);
+  assert.equal(context.pulse_ox_summary.min_spo2_percent, 93);
+  assert.match(text, /Pulse oximetry: 3 samples, average SpO2 94%, minimum SpO2 93%, average pulse 89 bpm/i);
 });

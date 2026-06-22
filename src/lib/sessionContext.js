@@ -126,6 +126,23 @@ function cleanBloodPressureReading(value = {}) {
   };
 }
 
+function cleanPulseOxReading(value = {}) {
+  const spo2 = Number(value.spo2_percent ?? value.spo2 ?? value.oxygen_saturation ?? value.oxygen_saturation_percent);
+  if (!Number.isFinite(spo2)) return null;
+  const pulse = Number(value.pulse_bpm ?? value.pulse ?? value.pr_bpm ?? value.heart_rate_bpm ?? value.hr);
+  const timeOffset = Number(value.time_offset_s);
+  return {
+    id: value.id || value.reading_id || value.external_id || "",
+    measured_at: value.measured_at || value.timestamp || value.time || "",
+    time_offset_s: Number.isFinite(timeOffset) ? timeOffset : null,
+    spo2_percent: Math.round(spo2),
+    pulse_bpm: Number.isFinite(pulse) ? Math.round(pulse) : null,
+    perfusion_index: value.perfusion_index ?? value.pi ?? null,
+    source_app: value.source_app || value.sourceApp || "",
+    source_device: value.source_device || value.sourceDevice || "",
+  };
+}
+
 export function bloodPressureReadingsFromSession(session) {
   const readings = [];
   const add = (value) => {
@@ -145,6 +162,32 @@ export function bloodPressureReadingsFromSession(session) {
   });
 
   return readings.sort((a, b) => new Date(a.measured_at || 0).getTime() - new Date(b.measured_at || 0).getTime());
+}
+
+export function pulseOxReadingsFromSession(session) {
+  const readings = [];
+  const add = (value) => {
+    const reading = cleanPulseOxReading(value);
+    if (!reading) return;
+    const key = reading.id || `${reading.measured_at}-${reading.time_offset_s}-${reading.spo2_percent}-${reading.pulse_bpm || ""}`;
+    if (readings.some((item) => (item.id || `${item.measured_at}-${item.time_offset_s}-${item.spo2_percent}-${item.pulse_bpm || ""}`) === key)) return;
+    readings.push(reading);
+  };
+
+  add(session?.session_context?.pulse_ox);
+  add(session?.latest_pulse_ox_reading);
+  (session?.session_context?.pulse_ox_readings || []).forEach(add);
+  (session?.pulse_ox_readings || []).forEach(add);
+  (session?.event_timeline || []).forEach((event) => {
+    add(event?.pulse_ox);
+  });
+
+  return readings.sort((a, b) => {
+    const at = new Date(a.measured_at || 0).getTime();
+    const bt = new Date(b.measured_at || 0).getTime();
+    if (Number.isFinite(at) && Number.isFinite(bt) && at !== bt) return at - bt;
+    return Number(a.time_offset_s || 0) - Number(b.time_offset_s || 0);
+  });
 }
 
 export function structuredSessionContextForAI(session) {
@@ -168,6 +211,20 @@ export function structuredSessionContextForAI(session) {
   if (context.blood_pressure && typeof context.blood_pressure === "object") cleaned.blood_pressure = context.blood_pressure;
   const bpReadings = bloodPressureReadingsFromSession(session);
   if (bpReadings.length) cleaned.blood_pressure_readings = bpReadings;
+  const pulseOxReadings = pulseOxReadingsFromSession(session);
+  if (pulseOxReadings.length) {
+    cleaned.pulse_ox_readings = pulseOxReadings;
+    const spo2Values = pulseOxReadings.map((reading) => Number(reading.spo2_percent)).filter(Number.isFinite);
+    const pulseValues = pulseOxReadings.map((reading) => Number(reading.pulse_bpm)).filter(Number.isFinite);
+    cleaned.pulse_ox_summary = {
+      samples: pulseOxReadings.length,
+      min_spo2_percent: Math.min(...spo2Values),
+      avg_spo2_percent: Math.round(spo2Values.reduce((sum, value) => sum + value, 0) / spo2Values.length),
+      avg_pulse_bpm: pulseValues.length ? Math.round(pulseValues.reduce((sum, value) => sum + value, 0) / pulseValues.length) : null,
+      max_pulse_bpm: pulseValues.length ? Math.max(...pulseValues) : null,
+      source_app: pulseOxReadings.find((reading) => reading.source_app)?.source_app || session?.pulse_ox_source || "",
+    };
+  }
   return Object.keys(cleaned).length ? cleaned : undefined;
 }
 
@@ -176,6 +233,7 @@ export function sessionContextEvidenceItems(session) {
   if (!context) return [];
   const bp = context.blood_pressure;
   const bpReadings = context.blood_pressure_readings || [];
+  const pulseOxSummary = context.pulse_ox_summary;
   const bpText = bp?.systolic_mm_hg && bp?.diastolic_mm_hg
     ? `Blood pressure: ${bp.systolic_mm_hg}/${bp.diastolic_mm_hg} mmHg${bp.pulse_bpm ? `, pulse ${bp.pulse_bpm} bpm` : ""}${bp.measured_at ? ` at ${new Date(bp.measured_at).toLocaleString()}` : ""}${bp.source_app ? ` (${bp.source_app})` : ""}`
     : null;
@@ -187,6 +245,9 @@ export function sessionContextEvidenceItems(session) {
     substanceText("Cannabis", context.cannabis),
     bpText,
     bpSeriesText,
+    pulseOxSummary?.samples
+      ? `Pulse oximetry: ${pulseOxSummary.samples} samples, average SpO2 ${pulseOxSummary.avg_spo2_percent}%, minimum SpO2 ${pulseOxSummary.min_spo2_percent}%${pulseOxSummary.avg_pulse_bpm ? `, average pulse ${pulseOxSummary.avg_pulse_bpm} bpm` : ""}${pulseOxSummary.source_app ? ` (${pulseOxSummary.source_app})` : ""}`
+      : null,
     recordedValue(context.fatigue) ? `Fatigue: ${labelFor(FATIGUE_OPTIONS, context.fatigue)}` : null,
     recordedValue(context.hydration_state) ? `Hydration: ${labelFor(HYDRATION_OPTIONS, context.hydration_state)}` : null,
     recordedValue(context.food_state) ? `Food state: ${labelFor(FOOD_OPTIONS, context.food_state)}` : null,
@@ -209,6 +270,7 @@ export function sessionContextFactorLabels(session) {
 export function sessionContextDisplayRows(session) {
   const context = structuredSessionContextForAI(session);
   const bpReadings = bloodPressureReadingsFromSession(session);
+  const pulseOxReadings = pulseOxReadingsFromSession(session);
   const rows = [];
   if (context?.fatigue) rows.push({ label: "Fatigue", value: labelFor(FATIGUE_OPTIONS, context.fatigue) });
   if (context?.hydration_state) rows.push({ label: "Hydration", value: labelFor(HYDRATION_OPTIONS, context.hydration_state) });
@@ -226,6 +288,15 @@ export function sessionContextDisplayRows(session) {
     rows.push({
       label: "BP Readings",
       value: `${bpReadings.length} readings · latest ${bpReadings[bpReadings.length - 1].systolic_mm_hg}/${bpReadings[bpReadings.length - 1].diastolic_mm_hg} mmHg`,
+    });
+  }
+  if (pulseOxReadings.length) {
+    const summary = context?.pulse_ox_summary;
+    rows.push({
+      label: "Pulse Oximetry",
+      value: summary
+        ? `${summary.samples} samples · avg ${summary.avg_spo2_percent}% · min ${summary.min_spo2_percent}%${summary.avg_pulse_bpm ? ` · pulse ${summary.avg_pulse_bpm} bpm` : ""}`
+        : `${pulseOxReadings.length} samples`,
     });
   }
   const alcohol = substanceText("Alcohol", context?.alcohol);
