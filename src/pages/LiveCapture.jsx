@@ -42,11 +42,13 @@ import {
   formatBloodPressure,
   formatBloodPressureTime,
   getBloodPressureStatus,
+  ingestBloodPressureReadings,
   listRecentBloodPressure,
   openHealthConnectSettings,
   requestBloodPressurePermission,
   syncBloodPressureFromHealthConnect,
 } from "@/lib/bloodPressure";
+import { readOmronBloodPressureOnce } from "@/lib/omronBloodPressureBle";
 
 const MAX_TELEMETRY_POINTS = 240;
 const MAX_VOICE_NOTE_MS = 12000;
@@ -2848,6 +2850,63 @@ export default function LiveCapture() {
     }
   }, [stampBloodPressureReadings]);
 
+  const syncOmronBloodPressureForLiveSession = useCallback(async () => {
+    if (bpSyncInFlightRef.current) return;
+    bpSyncInFlightRef.current = true;
+    setBpCapture((prev) => ({
+      ...prev,
+      syncing: true,
+      status: "syncing",
+      error: "",
+      message: "Opening OMRON Bluetooth sync...",
+    }));
+    try {
+      const result = await readOmronBloodPressureOnce({
+        timeoutMs: 70000,
+        onStatus: (message) => {
+          setBpCapture((prev) => ({
+            ...prev,
+            syncing: true,
+            status: "syncing",
+            error: "",
+            message,
+          }));
+        },
+      });
+      const reading = result?.reading;
+      if (!reading) throw new Error("OMRON did not return a blood pressure reading.");
+
+      const saved = await ingestBloodPressureReadings([reading]);
+      const savedReadings = Array.isArray(saved?.readings) && saved.readings.length ? saved.readings : [reading];
+      const stamped = await stampBloodPressureReadings(savedReadings, { source: "omron_direct_ble_manual_sync" });
+      const latestReading = stamped.latest || savedReadings[0] || reading;
+
+      setBpCapture((prev) => ({
+        ...prev,
+        native: true,
+        permissionGranted: prev.permissionGranted,
+        syncing: false,
+        status: stamped.stamped ? "captured" : "ready",
+        lastReading: latestReading,
+        lastCapturedAt: stamped.latest ? new Date().toISOString() : prev.lastCapturedAt,
+        capturedCount: prev.capturedCount + stamped.stamped,
+        message: stamped.stamped
+          ? `OMRON captured ${formatBloodPressure(latestReading)} and stamped it into this session.`
+          : `OMRON captured ${formatBloodPressure(latestReading)} and saved it to PulsePoint.`,
+      }));
+    } catch (error) {
+      setBpCapture((prev) => ({
+        ...prev,
+        syncing: false,
+        status: "error",
+        error: error?.message || "Could not sync OMRON blood pressure.",
+        message: error?.message || "Could not sync OMRON blood pressure.",
+      }));
+    } finally {
+      bpSyncInFlightRef.current = false;
+    }
+  }, [stampBloodPressureReadings]);
+
   const requestBloodPressureForLiveCapture = useCallback(async () => {
     setBpCapture((prev) => ({
       ...prev,
@@ -4529,7 +4588,7 @@ export default function LiveCapture() {
               )}
               {bpCapture.error && <p className="mt-1 text-xs text-destructive">{bpCapture.error}</p>}
               <p className="mt-2 text-[11px] text-muted-foreground">
-                Phone APK pulls from Health Connect. Desktop reads the same local PulsePoint BP database and refreshes the active session.
+                Phone APK can sync the OMRON BP7000 directly over Bluetooth. Desktop reads the same local PulsePoint BP database and refreshes the active session.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -4565,6 +4624,19 @@ export default function LiveCapture() {
                   Health Connect
                 </button>
               )}
+              <button
+                type="button"
+                onClick={syncOmronBloodPressureForLiveSession}
+                disabled={bpCapture.syncing}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {bpCapture.syncing ? (
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
+                ) : (
+                  <Radio className="h-3.5 w-3.5" />
+                )}
+                Sync OMRON
+              </button>
               <button
                 type="button"
                 onClick={() => syncBloodPressureForLiveSession({ manual: true })}

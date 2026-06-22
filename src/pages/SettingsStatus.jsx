@@ -65,11 +65,13 @@ import {
   formatBloodPressure,
   formatBloodPressureTime,
   getBloodPressureStatus,
+  ingestBloodPressureReadings,
   listRecentBloodPressure,
   openHealthConnectSettings,
   requestBloodPressurePermission,
   syncBloodPressureFromHealthConnect,
 } from "@/lib/bloodPressure";
+import { readOmronBloodPressureOnce } from "@/lib/omronBloodPressureBle";
 
 function fmtMoney(value) {
   const n = Number(value);
@@ -464,6 +466,27 @@ export default function SettingsStatus() {
       await loadBloodPressure();
     } catch (error) {
       setBpMessage(error?.message || "Could not sync blood pressure.");
+    } finally {
+      setBpBusy(false);
+    }
+  };
+
+  const syncOmronBloodPressure = async () => {
+    setBpBusy(true);
+    setBpMessage("Opening OMRON Bluetooth sync...");
+    try {
+      const result = await readOmronBloodPressureOnce({
+        timeoutMs: 70000,
+        onStatus: (message) => setBpMessage(message),
+      });
+      const reading = result?.reading;
+      if (!reading) throw new Error("OMRON did not return a blood pressure reading.");
+      const saved = await ingestBloodPressureReadings([reading]);
+      const latest = Array.isArray(saved?.readings) && saved.readings.length ? saved.readings[0] : reading;
+      setBpMessage(`Synced OMRON reading: ${formatBloodPressure(latest)}.`);
+      await loadBloodPressure();
+    } catch (error) {
+      setBpMessage(error?.message || "Could not sync OMRON blood pressure.");
     } finally {
       setBpBusy(false);
     }
@@ -977,7 +1000,7 @@ export default function SettingsStatus() {
               <h2 className="text-sm font-bold uppercase tracking-wider">Blood Pressure Sync</h2>
             </div>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-              Pull Samsung Health / OMRON BP readings through Android Health Connect into the local PulsePoint database.
+              Sync the OMRON BP7000 directly over Bluetooth in the Android APK. Health Connect is still available as a fallback when Samsung/OMRON exposes BP there.
             </p>
           </div>
           <span className={`rounded-full px-2 py-1 text-xs font-semibold uppercase ${bpStatus?.permissionGranted ? "bg-emerald-500/10 text-emerald-400" : "bg-muted text-muted-foreground"}`}>
@@ -1020,6 +1043,15 @@ export default function SettingsStatus() {
             >
               {bpBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               Sync
+            </button>
+            <button
+              type="button"
+              onClick={syncOmronBloodPressure}
+              disabled={bpBusy}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            >
+              {bpBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
+              Sync OMRON
             </button>
             <button
               type="button"
