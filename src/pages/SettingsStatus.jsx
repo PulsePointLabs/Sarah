@@ -454,7 +454,13 @@ export default function SettingsStatus() {
     setBpMessage("Reading Health Connect blood pressure records...");
     try {
       const result = await syncBloodPressureFromHealthConnect({ days: 60, limit: 200 });
-      setBpMessage(`Synced ${result.inserted || 0} BP reading${result.inserted === 1 ? "" : "s"} from Health Connect.`);
+      const nativeCount = Number(result?.native?.count ?? result?.native?.readings?.length ?? result?.readings?.length ?? 0);
+      const inserted = Number(result.inserted || 0);
+      setBpMessage(inserted > 0
+        ? `Synced ${inserted} BP reading${inserted === 1 ? "" : "s"} from Health Connect.`
+        : nativeCount > 0
+          ? `Health Connect returned ${nativeCount} BP reading${nativeCount === 1 ? "" : "s"}, but none were new to save.`
+          : "Health Connect permission is on, but it returned 0 blood pressure records. Check that Samsung Health/OMRON is writing BP data into Health Connect.");
       await loadBloodPressure();
     } catch (error) {
       setBpMessage(error?.message || "Could not sync blood pressure.");

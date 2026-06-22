@@ -1,6 +1,8 @@
 package com.pulsepointlabs.sarah
 
 import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.result.ActivityResultLauncher
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
@@ -76,17 +78,36 @@ class BloodPressureHealthPlugin : Plugin() {
 
     @PluginMethod
     fun openHealthConnectSettings(call: PluginCall) {
-        try {
-            activity.startActivity(Intent("android.health.connect.action.HEALTH_CONNECT_SETTINGS"))
-            call.resolve(JSObject().put("ok", true))
-        } catch (error: Exception) {
+        val attempts = mutableListOf<String>()
+        val intents = listOf(
+            Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS),
+            Intent("android.health.connect.action.HEALTH_CONNECT_SETTINGS"),
+            Intent("androidx.health.ACTION_HEALTH_CONNECT_SETTINGS"),
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(Uri.parse("package:com.google.android.apps.healthdata")),
+            context.packageManager.getLaunchIntentForPackage("com.google.android.apps.healthdata"),
+            Intent(Settings.ACTION_SETTINGS),
+        ).filterNotNull()
+
+        for (intent in intents) {
             try {
-                activity.startActivity(Intent("androidx.health.ACTION_HEALTH_CONNECT_SETTINGS"))
-                call.resolve(JSObject().put("ok", true))
-            } catch (fallbackError: Exception) {
-                call.reject(fallbackError.message ?: error.message ?: "Could not open Health Connect settings.")
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                attempts.add(intent.action ?: intent.dataString ?: "package_launch")
+                activity.startActivity(intent)
+                call.resolve(JSObject()
+                    .put("ok", true)
+                    .put("opened", intent.action ?: intent.dataString ?: "package_launch")
+                    .put("attempts", stringArray(attempts))
+                )
+                return
+            } catch (error: Exception) {
+                attempts.add("${intent.action ?: intent.dataString ?: "package_launch"} failed: ${error.message ?: error.javaClass.simpleName}")
             }
         }
+        call.reject(
+            "Could not open Health Connect settings. Open Android Settings and search for Health Connect.",
+            "HEALTH_CONNECT_SETTINGS_UNAVAILABLE",
+            JSObject().put("attempts", stringArray(attempts))
+        )
     }
 
     @PluginMethod
@@ -159,6 +180,12 @@ class BloodPressureHealthPlugin : Plugin() {
             .put("sdkStatus", sdkStatus)
             .put("permissionGranted", permissionGranted)
             .put("message", statusMessage(sdkStatus, permissionGranted))
+    }
+
+    private fun stringArray(values: List<String>): JSArray {
+        val array = JSArray()
+        values.forEach { array.put(it) }
+        return array
     }
 
     private fun statusMessage(sdkStatus: Int, permissionGranted: Boolean): String {
