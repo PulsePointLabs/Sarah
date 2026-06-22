@@ -6,6 +6,8 @@ const CURRENT_TIME_SERVICE_UUID = "00001805-0000-1000-8000-00805f9b34fb";
 const BATTERY_SERVICE_UUID = "0000180f-0000-1000-8000-00805f9b34fb";
 const DEVICE_INFORMATION_SERVICE_UUID = "0000180a-0000-1000-8000-00805f9b34fb";
 
+let activeOmronListener = null;
+
 function dataViewFromValue(value) {
   if (value instanceof DataView) return value;
   if (value instanceof ArrayBuffer) return new DataView(value);
@@ -59,6 +61,65 @@ function stableOmronId({ deviceId, measuredAt, systolic, diastolic, pulse }) {
     diastolic ?? "dia",
     pulse ?? "pulse",
   ].join("-");
+}
+
+function summarizeServices(services = []) {
+  return services.map((service) => ({
+    uuid: service.uuid,
+    characteristics: (service.characteristics || []).map((characteristic) => ({
+      uuid: characteristic.uuid,
+      properties: characteristic.properties || {},
+    })),
+  }));
+}
+
+async function initializeAndroidBle(onStatus) {
+  if (!window.Capacitor?.isNativePlatform?.()) {
+    throw new Error("Direct OMRON BP sync currently needs the installed Android APK. Use the phone to sync; desktop will read the saved PulsePoint BP record.");
+  }
+
+  onStatus?.("Press the BP7000 Bluetooth/Transfer button once until the O flashes, then select the OMRON device in the picker.");
+  await BleClient.initialize({ androidNeverForLocation: true });
+
+  if (typeof BleClient.isLocationEnabled === "function") {
+    const enabled = await BleClient.isLocationEnabled().catch(() => true);
+    if (!enabled) {
+      throw new Error("Android Location services are off. Turn Location on, then try OMRON sync again so Android can scan for BLE devices.");
+    }
+  }
+}
+
+async function requestOmronDevice(onStatus) {
+  const pickerOptions = {
+    services: [BLOOD_PRESSURE_SERVICE_UUID],
+    optionalServices: [
+      BLOOD_PRESSURE_SERVICE_UUID,
+      CURRENT_TIME_SERVICE_UUID,
+      BATTERY_SERVICE_UUID,
+      DEVICE_INFORMATION_SERVICE_UUID,
+    ],
+  };
+
+  try {
+    return await BleClient.requestDevice(pickerOptions);
+  } catch (error) {
+    if (/cancel|dismiss|denied/i.test(error?.message || "")) throw error;
+    onStatus?.("Android did not advertise the BP service. Trying common OMRON/BLEsmart device names...");
+    const namePrefixes = ["BLEsmart", "OMRON", "BP7000", "Evolv", "HEM"];
+    let lastError = error;
+    for (const namePrefix of namePrefixes) {
+      try {
+        return await BleClient.requestDevice({
+          namePrefix,
+          optionalServices: pickerOptions.optionalServices,
+        });
+      } catch (fallbackError) {
+        lastError = fallbackError;
+        if (/cancel|dismiss|denied/i.test(fallbackError?.message || "")) throw fallbackError;
+      }
+    }
+    throw lastError;
+  }
 }
 
 export function parseBloodPressureMeasurement(value, device = {}) {
@@ -135,107 +196,127 @@ export function parseBloodPressureMeasurement(value, device = {}) {
   };
 }
 
-export async function readOmronBloodPressureOnce({ timeoutMs = 60000, onStatus } = {}) {
-  if (!window.Capacitor?.isNativePlatform?.()) {
-    throw new Error("Direct OMRON BP sync currently needs the installed Android APK. Use the phone to sync; desktop will read the saved PulsePoint BP record.");
-  }
+export async function startOmronBloodPressureListener({
+  onStatus,
+  onReading,
+  onDisconnect,
+  onError,
+} = {}) {
+  await stopOmronBloodPressureListener().catch(() => {});
+  await initializeAndroidBle(onStatus);
 
-  onStatus?.("Press the BP7000 Bluetooth/Transfer button once until the O flashes, then select the OMRON device in the picker.");
-  await BleClient.initialize({ androidNeverForLocation: true });
-
-  if (typeof BleClient.isLocationEnabled === "function") {
-    const enabled = await BleClient.isLocationEnabled().catch(() => true);
-    if (!enabled) {
-      throw new Error("Android Location services are off. Turn Location on, then try Sync OMRON again so Android can scan for BLE devices.");
-    }
-  }
-
-  const pickerOptions = {
-    services: [BLOOD_PRESSURE_SERVICE_UUID],
-    optionalServices: [
-      BLOOD_PRESSURE_SERVICE_UUID,
-      CURRENT_TIME_SERVICE_UUID,
-      BATTERY_SERVICE_UUID,
-      DEVICE_INFORMATION_SERVICE_UUID,
-    ],
-  };
-
-  let device;
-  try {
-    device = await BleClient.requestDevice(pickerOptions);
-  } catch (error) {
-    if (/cancel|dismiss|denied/i.test(error?.message || "")) throw error;
-    onStatus?.("Android did not advertise the BP service. Trying common OMRON/BLEsmart device names...");
-    const namePrefixes = ["BLEsmart", "OMRON", "BP7000", "Evolv", "HEM"];
-    let lastError = error;
-    for (const namePrefix of namePrefixes) {
-      try {
-        device = await BleClient.requestDevice({
-          namePrefix,
-          optionalServices: pickerOptions.optionalServices,
-        });
-        break;
-      } catch (fallbackError) {
-        lastError = fallbackError;
-        if (/cancel|dismiss|denied/i.test(fallbackError?.message || "")) throw fallbackError;
-      }
-    }
-    if (!device) throw lastError;
-  }
+  const device = await requestOmronDevice(onStatus);
 
   const deviceId = device?.deviceId;
   if (!deviceId) throw new Error("Android Bluetooth picker did not return a usable OMRON device id.");
 
-  let notificationsStarted = false;
-  let settled = false;
-
   try {
     onStatus?.("Connecting to OMRON BP7000...");
     await BleClient.disconnect(deviceId).catch(() => {});
-    await BleClient.connect(deviceId, undefined, { timeout: 20000 });
+    await BleClient.connect(deviceId, () => {
+      const listener = activeOmronListener;
+      if (listener?.deviceId === deviceId) activeOmronListener = null;
+      onStatus?.("OMRON BP7000 disconnected.");
+      onDisconnect?.({ device });
+    }, { timeout: 20000 });
 
-    onStatus?.("Connected. Waiting for the BP7000 measurement packet...");
+    const services = await BleClient.getServices(deviceId).catch(() => []);
+    const serviceSummary = summarizeServices(services);
+    const bpService = serviceSummary.find((service) => service.uuid?.toLowerCase() === BLOOD_PRESSURE_SERVICE_UUID);
+    const measurement = bpService?.characteristics?.find((characteristic) => characteristic.uuid?.toLowerCase() === BLOOD_PRESSURE_MEASUREMENT_UUID);
+    if (bpService && measurement && !measurement.properties?.notify && !measurement.properties?.indicate) {
+      throw new Error("The OMRON BP measurement characteristic is present, but it is not advertising notify/indicate support.");
+    }
 
-    const reading = await new Promise((resolve, reject) => {
-      const timer = window.setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        reject(new Error("Timed out waiting for the OMRON BP measurement. Press the cuff Bluetooth/Transfer button once until the O flashes, then try Sync OMRON again."));
-      }, timeoutMs);
+    onStatus?.("Connected and listening. Take a BP reading or press the BP7000 Bluetooth/Transfer button once until the O flashes.");
 
-      BleClient.startNotifications(
-        deviceId,
-        BLOOD_PRESSURE_SERVICE_UUID,
-        BLOOD_PRESSURE_MEASUREMENT_UUID,
-        (value) => {
-          if (settled) return;
-          try {
-            const parsed = parseBloodPressureMeasurement(value, device);
-            settled = true;
-            window.clearTimeout(timer);
-            resolve(parsed);
-          } catch (error) {
-            settled = true;
-            window.clearTimeout(timer);
-            reject(error);
-          }
-        },
-        { timeout: 15000 },
-      ).then(() => {
-        notificationsStarted = true;
-      }).catch((error) => {
+    await BleClient.startNotifications(
+      deviceId,
+      BLOOD_PRESSURE_SERVICE_UUID,
+      BLOOD_PRESSURE_MEASUREMENT_UUID,
+      (value) => {
+        try {
+          const parsed = parseBloodPressureMeasurement(value, device);
+          onStatus?.(`Received OMRON reading ${parsed.systolic_mm_hg}/${parsed.diastolic_mm_hg} mmHg.`);
+          onReading?.(parsed, { device, services: serviceSummary });
+        } catch (error) {
+          onError?.(error);
+        }
+      },
+      { timeout: 15000 },
+    );
+
+    activeOmronListener = {
+      deviceId,
+      device,
+      startedAt: new Date().toISOString(),
+      services: serviceSummary,
+    };
+
+    return { ok: true, device, services: serviceSummary };
+  } catch (error) {
+    await BleClient.disconnect(deviceId).catch(() => {});
+    throw error;
+  }
+}
+
+export async function stopOmronBloodPressureListener() {
+  const listener = activeOmronListener;
+  activeOmronListener = null;
+  if (!listener?.deviceId) return { ok: true, stopped: false };
+  await BleClient.stopNotifications(listener.deviceId, BLOOD_PRESSURE_SERVICE_UUID, BLOOD_PRESSURE_MEASUREMENT_UUID).catch(() => {});
+  await BleClient.disconnect(listener.deviceId).catch(() => {});
+  return { ok: true, stopped: true, device: listener.device };
+}
+
+export function getOmronBloodPressureListenerState() {
+  return activeOmronListener
+    ? {
+      listening: true,
+      deviceName: activeOmronListener.device?.name || "OMRON BP7000",
+      startedAt: activeOmronListener.startedAt,
+      services: activeOmronListener.services,
+    }
+    : { listening: false };
+}
+
+export async function readOmronBloodPressureOnce({ timeoutMs = 60000, onStatus } = {}) {
+  let settled = false;
+  let timer = null;
+  return new Promise((resolve, reject) => {
+    timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      stopOmronBloodPressureListener().finally(() => {
+        reject(new Error("Timed out waiting for the OMRON BP measurement. Leave Sarah listening, take a fresh reading, or press the cuff Bluetooth/Transfer button once until the O flashes."));
+      });
+    }, timeoutMs);
+
+    startOmronBloodPressureListener({
+      onStatus,
+      onReading: (reading, context) => {
         if (settled) return;
         settled = true;
         window.clearTimeout(timer);
-        reject(error);
-      });
+        stopOmronBloodPressureListener().finally(() => resolve({ ok: true, reading, ...context }));
+      },
+      onDisconnect: () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        reject(new Error("OMRON BP7000 disconnected before it sent a measurement."));
+      },
+      onError: (error) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        stopOmronBloodPressureListener().finally(() => reject(error));
+      },
+    }).catch((error) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      reject(error);
     });
-
-    return { ok: true, device, reading };
-  } finally {
-    if (notificationsStarted) {
-      await BleClient.stopNotifications(deviceId, BLOOD_PRESSURE_SERVICE_UUID, BLOOD_PRESSURE_MEASUREMENT_UUID).catch(() => {});
-    }
-    await BleClient.disconnect(deviceId).catch(() => {});
-  }
+  });
 }

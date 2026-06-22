@@ -48,7 +48,10 @@ import {
   requestBloodPressurePermission,
   syncBloodPressureFromHealthConnect,
 } from "@/lib/bloodPressure";
-import { readOmronBloodPressureOnce } from "@/lib/omronBloodPressureBle";
+import {
+  startOmronBloodPressureListener,
+  stopOmronBloodPressureListener,
+} from "@/lib/omronBloodPressureBle";
 
 const MAX_TELEMETRY_POINTS = 240;
 const MAX_VOICE_NOTE_MS = 12000;
@@ -1248,6 +1251,7 @@ export default function LiveCapture() {
     syncing: false,
     error: "",
   });
+  const [bpOmronListening, setBpOmronListening] = useState(false);
   const [launchProfile, setLaunchProfile] = useState(() => readLiveCaptureLaunchProfile());
   const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
   const [launchState, setLaunchState] = useState({ phase: "idle", message: "", steps: [], busy: false, error: "" });
@@ -2850,62 +2854,136 @@ export default function LiveCapture() {
     }
   }, [stampBloodPressureReadings]);
 
-  const syncOmronBloodPressureForLiveSession = useCallback(async () => {
+  const saveOmronBloodPressureForLiveSession = useCallback(async (reading) => {
+    if (!reading) throw new Error("OMRON did not return a blood pressure reading.");
+
+    const saved = await ingestBloodPressureReadings([reading]);
+    const savedReadings = Array.isArray(saved?.readings) && saved.readings.length ? saved.readings : [reading];
+    const stamped = await stampBloodPressureReadings(savedReadings, { source: "omron_direct_ble_listener" });
+    const latestReading = stamped.latest || savedReadings[0] || reading;
+
+    setBpCapture((prev) => ({
+      ...prev,
+      native: true,
+      permissionGranted: prev.permissionGranted,
+      syncing: false,
+      status: stamped.stamped ? "captured" : "ready",
+      lastReading: latestReading,
+      lastCapturedAt: stamped.latest ? new Date().toISOString() : prev.lastCapturedAt,
+      capturedCount: prev.capturedCount + stamped.stamped,
+      message: stamped.stamped
+        ? `OMRON captured ${formatBloodPressure(latestReading)} and stamped it into this session.`
+        : `OMRON captured ${formatBloodPressure(latestReading)} and saved it to PulsePoint.`,
+    }));
+  }, [stampBloodPressureReadings]);
+
+  const toggleOmronBloodPressureListener = useCallback(async () => {
     if (bpSyncInFlightRef.current) return;
+
+    if (bpOmronListening) {
+      bpSyncInFlightRef.current = true;
+      setBpCapture((prev) => ({
+        ...prev,
+        syncing: true,
+        error: "",
+        message: "Stopping OMRON listener...",
+      }));
+      try {
+        await stopOmronBloodPressureListener();
+        setBpOmronListening(false);
+        setBpCapture((prev) => ({
+          ...prev,
+          syncing: false,
+          status: prev.lastReading ? "ready" : "idle",
+          message: prev.lastReading ? "OMRON listener stopped. Latest BP is saved." : "OMRON listener stopped.",
+        }));
+      } catch (error) {
+        setBpCapture((prev) => ({
+          ...prev,
+          syncing: false,
+          status: "error",
+          error: error?.message || "Could not stop OMRON listener.",
+          message: error?.message || "Could not stop OMRON listener.",
+        }));
+      } finally {
+        bpSyncInFlightRef.current = false;
+      }
+      return;
+    }
+
     bpSyncInFlightRef.current = true;
     setBpCapture((prev) => ({
       ...prev,
       syncing: true,
       status: "syncing",
       error: "",
-      message: "Opening OMRON Bluetooth sync...",
+      message: "Starting OMRON listener...",
     }));
     try {
-      const result = await readOmronBloodPressureOnce({
-        timeoutMs: 70000,
+      await startOmronBloodPressureListener({
         onStatus: (message) => {
           setBpCapture((prev) => ({
             ...prev,
-            syncing: true,
+            syncing: false,
             status: "syncing",
             error: "",
             message,
           }));
         },
+        onReading: (reading) => {
+          saveOmronBloodPressureForLiveSession(reading).catch((error) => {
+            setBpCapture((prev) => ({
+              ...prev,
+              syncing: false,
+              status: "error",
+              error: error?.message || "Could not save OMRON blood pressure.",
+              message: error?.message || "Could not save OMRON blood pressure.",
+            }));
+          });
+        },
+        onDisconnect: () => {
+          setBpOmronListening(false);
+          setBpCapture((prev) => ({
+            ...prev,
+            syncing: false,
+            status: prev.lastReading ? "ready" : "idle",
+            message: prev.lastReading ? "OMRON disconnected. Latest BP is saved." : "OMRON disconnected before a BP reading arrived.",
+          }));
+        },
+        onError: (error) => {
+          setBpCapture((prev) => ({
+            ...prev,
+            syncing: false,
+            status: "error",
+            error: error?.message || "Could not parse OMRON blood pressure.",
+            message: error?.message || "Could not parse OMRON blood pressure.",
+          }));
+        },
       });
-      const reading = result?.reading;
-      if (!reading) throw new Error("OMRON did not return a blood pressure reading.");
-
-      const saved = await ingestBloodPressureReadings([reading]);
-      const savedReadings = Array.isArray(saved?.readings) && saved.readings.length ? saved.readings : [reading];
-      const stamped = await stampBloodPressureReadings(savedReadings, { source: "omron_direct_ble_manual_sync" });
-      const latestReading = stamped.latest || savedReadings[0] || reading;
-
+      setBpOmronListening(true);
       setBpCapture((prev) => ({
         ...prev,
-        native: true,
-        permissionGranted: prev.permissionGranted,
         syncing: false,
-        status: stamped.stamped ? "captured" : "ready",
-        lastReading: latestReading,
-        lastCapturedAt: stamped.latest ? new Date().toISOString() : prev.lastCapturedAt,
-        capturedCount: prev.capturedCount + stamped.stamped,
-        message: stamped.stamped
-          ? `OMRON captured ${formatBloodPressure(latestReading)} and stamped it into this session.`
-          : `OMRON captured ${formatBloodPressure(latestReading)} and saved it to PulsePoint.`,
+        status: prev.lastReading ? "ready" : "syncing",
+        message: "OMRON listener is active. Take a BP reading or press the cuff Bluetooth/Transfer button once until the O flashes.",
       }));
     } catch (error) {
+      setBpOmronListening(false);
       setBpCapture((prev) => ({
         ...prev,
         syncing: false,
         status: "error",
-        error: error?.message || "Could not sync OMRON blood pressure.",
-        message: error?.message || "Could not sync OMRON blood pressure.",
+        error: error?.message || "Could not start OMRON listener.",
+        message: error?.message || "Could not start OMRON listener.",
       }));
     } finally {
       bpSyncInFlightRef.current = false;
     }
-  }, [stampBloodPressureReadings]);
+  }, [bpOmronListening, saveOmronBloodPressureForLiveSession]);
+
+  useEffect(() => () => {
+    stopOmronBloodPressureListener().catch(() => {});
+  }, []);
 
   const requestBloodPressureForLiveCapture = useCallback(async () => {
     setBpCapture((prev) => ({
@@ -4603,6 +4681,11 @@ export default function LiveCapture() {
               }`}>
                 {bpCapture.syncing ? "Syncing" : bpCapture.status === "captured" ? "Captured" : bpCapture.status === "permission_needed" ? "Permission needed" : bpCapture.lastReading ? "Latest ready" : "Watching"}
               </span>
+              {bpOmronListening && (
+                <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
+                  OMRON listening
+                </span>
+              )}
               {bpCapture.status === "permission_needed" && (
                 <button
                   type="button"
@@ -4626,16 +4709,20 @@ export default function LiveCapture() {
               )}
               <button
                 type="button"
-                onClick={syncOmronBloodPressureForLiveSession}
+                onClick={toggleOmronBloodPressureListener}
                 disabled={bpCapture.syncing}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
+                  bpOmronListening
+                    ? "bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
+                    : "bg-primary text-primary-foreground hover:bg-primary/90"
+                }`}
               >
                 {bpCapture.syncing ? (
-                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
                 ) : (
                   <Radio className="h-3.5 w-3.5" />
                 )}
-                Sync OMRON
+                {bpOmronListening ? "Stop OMRON" : "Listen OMRON"}
               </button>
               <button
                 type="button"

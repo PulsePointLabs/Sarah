@@ -71,7 +71,10 @@ import {
   requestBloodPressurePermission,
   syncBloodPressureFromHealthConnect,
 } from "@/lib/bloodPressure";
-import { readOmronBloodPressureOnce } from "@/lib/omronBloodPressureBle";
+import {
+  startOmronBloodPressureListener,
+  stopOmronBloodPressureListener,
+} from "@/lib/omronBloodPressureBle";
 
 function fmtMoney(value) {
   const n = Number(value);
@@ -381,6 +384,7 @@ export default function SettingsStatus() {
   const [bpReadings, setBpReadings] = useState([]);
   const [bpMessage, setBpMessage] = useState("");
   const [bpBusy, setBpBusy] = useState(false);
+  const [bpOmronListening, setBpOmronListening] = useState(false);
 
   const updateUiPrefs = (patch) => {
     setUiPrefs((previous) => {
@@ -471,26 +475,59 @@ export default function SettingsStatus() {
     }
   };
 
-  const syncOmronBloodPressure = async () => {
+  const toggleOmronBloodPressureListener = async () => {
+    if (bpOmronListening) {
+      setBpBusy(true);
+      setBpMessage("Stopping OMRON listener...");
+      try {
+        await stopOmronBloodPressureListener();
+        setBpOmronListening(false);
+        setBpMessage("OMRON listener stopped.");
+      } catch (error) {
+        setBpMessage(error?.message || "Could not stop OMRON listener.");
+      } finally {
+        setBpBusy(false);
+      }
+      return;
+    }
+
     setBpBusy(true);
-    setBpMessage("Opening OMRON Bluetooth sync...");
+    setBpMessage("Starting OMRON listener...");
     try {
-      const result = await readOmronBloodPressureOnce({
-        timeoutMs: 70000,
+      await startOmronBloodPressureListener({
         onStatus: (message) => setBpMessage(message),
+        onReading: async (reading) => {
+          try {
+            if (!reading) throw new Error("OMRON did not return a blood pressure reading.");
+            const saved = await ingestBloodPressureReadings([reading]);
+            const latest = Array.isArray(saved?.readings) && saved.readings.length ? saved.readings[0] : reading;
+            await loadBloodPressure();
+            setBpMessage(`Received OMRON reading: ${formatBloodPressure(latest)}.`);
+          } catch (error) {
+            setBpMessage(error?.message || "Could not save OMRON blood pressure.");
+          }
+        },
+        onDisconnect: () => {
+          setBpOmronListening(false);
+          setBpMessage("OMRON disconnected.");
+        },
+        onError: (error) => {
+          setBpMessage(error?.message || "Could not parse OMRON blood pressure.");
+        },
       });
-      const reading = result?.reading;
-      if (!reading) throw new Error("OMRON did not return a blood pressure reading.");
-      const saved = await ingestBloodPressureReadings([reading]);
-      const latest = Array.isArray(saved?.readings) && saved.readings.length ? saved.readings[0] : reading;
-      setBpMessage(`Synced OMRON reading: ${formatBloodPressure(latest)}.`);
-      await loadBloodPressure();
+      setBpOmronListening(true);
+      setBpMessage("OMRON listener is active. Take a BP reading or press the cuff Bluetooth/Transfer button once until the O flashes.");
     } catch (error) {
-      setBpMessage(error?.message || "Could not sync OMRON blood pressure.");
+      setBpOmronListening(false);
+      setBpMessage(error?.message || "Could not start OMRON listener.");
     } finally {
       setBpBusy(false);
     }
   };
+
+  useEffect(() => () => {
+    stopOmronBloodPressureListener().catch(() => {});
+  }, []);
 
   useEffect(() => {
     const refresh = () => setPwaLifecycleEvents(readPwaLifecycleDiagnostics().slice(-20).reverse());
@@ -1046,12 +1083,16 @@ export default function SettingsStatus() {
             </button>
             <button
               type="button"
-              onClick={syncOmronBloodPressure}
+              onClick={toggleOmronBloodPressureListener}
               disabled={bpBusy}
-              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50 ${
+                bpOmronListening
+                  ? "bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
+                  : "bg-primary text-primary-foreground hover:bg-primary/90"
+              }`}
             >
               {bpBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
-              Sync OMRON
+              {bpOmronListening ? "Stop OMRON" : "Listen OMRON"}
             </button>
             <button
               type="button"
