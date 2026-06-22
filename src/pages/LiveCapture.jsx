@@ -2300,6 +2300,13 @@ export default function LiveCapture() {
   const rrCount = readNumber(hrTelemetry?.quality?.rrCount, hrv.sampleCount);
   const hrvRmssd = readNumber(hrv.rmssdMs, hrTelemetry?.hrv_rmssd_ms);
   const hrvQuality = hrv.quality || hrTelemetry?.hrv_quality || null;
+  const latestBpReading = bpCapture.lastReading || activeSessionDoc?.latest_blood_pressure_reading || activeSessionDoc?.session_context?.blood_pressure || null;
+  const latestBpValue = latestBpReading?.systolic_mm_hg && latestBpReading?.diastolic_mm_hg
+    ? `${latestBpReading.systolic_mm_hg}/${latestBpReading.diastolic_mm_hg}`
+    : "--";
+  const latestBpHelper = latestBpReading
+    ? `${latestBpReading.pulse_bpm ? `${Math.round(Number(latestBpReading.pulse_bpm))} bpm pulse · ` : ""}${formatBloodPressureTime(latestBpReading.measured_at)}`
+    : "waiting for OMRON";
   const leftEmgLevel = readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct);
   const rightEmgLevel = readNumber(emgTelemetry?.right_pct);
   const engineStatus = status?.engine || null;
@@ -4415,6 +4422,7 @@ export default function LiveCapture() {
           <div className={`grid content-start gap-3 ${focusView ? "min-h-0 overflow-y-auto pr-1" : "xl:sticky xl:top-4 xl:max-h-[calc(100vh-9rem)] xl:overflow-hidden"}`}>
             <div className="grid grid-cols-2 gap-2">
               <CompactStat label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="bpm" level={currentHrLevel} emphasis beatPulse={heartbeatPulseId} />
+              <CompactStat label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} emphasis />
               <CompactStat label="Max HR" value={fmtNumber(maxHr, 0)} helper="session peak" level={hrLevelPercent(maxHr, hrTelemetry?.baselineHr)} emphasis />
               {!captureIsBodyExploration && (
                 <>
@@ -6207,6 +6215,7 @@ export default function LiveCapture() {
 
         <div className={`grid gap-3 sm:grid-cols-2 ${telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`}>
           <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large beatPulse={heartbeatPulseId} />
+          <MetricCard icon={<Activity className="w-4 h-4" />} label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} active={Boolean(latestBpReading)} large />
           {!captureIsBodyExploration && (
             <>
               <MetricCard icon={<Zap className="w-4 h-4" />} label="Build Confidence" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "No HR phase"} active={Number(hrTelemetry?.buildConfidence) > 40} level={buildLevel} large />

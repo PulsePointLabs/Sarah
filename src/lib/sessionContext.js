@@ -109,6 +109,44 @@ function substanceText(label, value) {
   return `${label}: logged use${detail.length ? ` (${detail.join(", ")})` : ""}`;
 }
 
+function cleanBloodPressureReading(value = {}) {
+  const systolic = Number(value.systolic_mm_hg ?? value.systolic);
+  const diastolic = Number(value.diastolic_mm_hg ?? value.diastolic);
+  if (!Number.isFinite(systolic) || !Number.isFinite(diastolic)) return null;
+  const pulse = Number(value.pulse_bpm ?? value.pulse);
+  return {
+    id: value.id || value.reading_id || value.external_id || "",
+    measured_at: value.measured_at || value.timestamp || value.time || "",
+    systolic_mm_hg: Math.round(systolic),
+    diastolic_mm_hg: Math.round(diastolic),
+    pulse_bpm: Number.isFinite(pulse) ? Math.round(pulse) : null,
+    source_app: value.source_app || value.sourceApp || "",
+    source_device: value.source_device || value.sourceDevice || "",
+    relationship: value.relationship || "",
+  };
+}
+
+export function bloodPressureReadingsFromSession(session) {
+  const readings = [];
+  const add = (value) => {
+    const reading = cleanBloodPressureReading(value);
+    if (!reading) return;
+    const key = reading.id || `${reading.measured_at}-${reading.systolic_mm_hg}-${reading.diastolic_mm_hg}-${reading.pulse_bpm || ""}`;
+    if (readings.some((item) => (item.id || `${item.measured_at}-${item.systolic_mm_hg}-${item.diastolic_mm_hg}-${item.pulse_bpm || ""}`) === key)) return;
+    readings.push(reading);
+  };
+
+  add(session?.session_context?.blood_pressure);
+  add(session?.latest_blood_pressure_reading);
+  (session?.session_context?.blood_pressure_readings || []).forEach(add);
+  (session?.blood_pressure_readings || []).forEach(add);
+  (session?.event_timeline || []).forEach((event) => {
+    add(event?.blood_pressure);
+  });
+
+  return readings.sort((a, b) => new Date(a.measured_at || 0).getTime() - new Date(b.measured_at || 0).getTime());
+}
+
 export function structuredSessionContextForAI(session) {
   const context = session?.session_context || {};
   if (!context || typeof context !== "object") return undefined;
@@ -128,6 +166,8 @@ export function structuredSessionContextForAI(session) {
   const preparation = arrayValue(context.environmental_preparation, context.preparation, session?.environmental_preparation, session?.preparation);
   if (preparation.length) cleaned.environmental_preparation = preparation;
   if (context.blood_pressure && typeof context.blood_pressure === "object") cleaned.blood_pressure = context.blood_pressure;
+  const bpReadings = bloodPressureReadingsFromSession(session);
+  if (bpReadings.length) cleaned.blood_pressure_readings = bpReadings;
   return Object.keys(cleaned).length ? cleaned : undefined;
 }
 
@@ -135,13 +175,18 @@ export function sessionContextEvidenceItems(session) {
   const context = structuredSessionContextForAI(session);
   if (!context) return [];
   const bp = context.blood_pressure;
+  const bpReadings = context.blood_pressure_readings || [];
   const bpText = bp?.systolic_mm_hg && bp?.diastolic_mm_hg
     ? `Blood pressure: ${bp.systolic_mm_hg}/${bp.diastolic_mm_hg} mmHg${bp.pulse_bpm ? `, pulse ${bp.pulse_bpm} bpm` : ""}${bp.measured_at ? ` at ${new Date(bp.measured_at).toLocaleString()}` : ""}${bp.source_app ? ` (${bp.source_app})` : ""}`
+    : null;
+  const bpSeriesText = bpReadings.length > 1
+    ? `Blood pressure series: ${bpReadings.map((reading) => `${reading.systolic_mm_hg}/${reading.diastolic_mm_hg}${reading.pulse_bpm ? ` pulse ${reading.pulse_bpm}` : ""}${reading.measured_at ? ` at ${new Date(reading.measured_at).toLocaleString()}` : ""}`).join("; ")}`
     : null;
   return [
     substanceText("Alcohol", context.alcohol),
     substanceText("Cannabis", context.cannabis),
     bpText,
+    bpSeriesText,
     recordedValue(context.fatigue) ? `Fatigue: ${labelFor(FATIGUE_OPTIONS, context.fatigue)}` : null,
     recordedValue(context.hydration_state) ? `Hydration: ${labelFor(HYDRATION_OPTIONS, context.hydration_state)}` : null,
     recordedValue(context.food_state) ? `Food state: ${labelFor(FOOD_OPTIONS, context.food_state)}` : null,
@@ -163,6 +208,7 @@ export function sessionContextFactorLabels(session) {
 
 export function sessionContextDisplayRows(session) {
   const context = structuredSessionContextForAI(session);
+  const bpReadings = bloodPressureReadingsFromSession(session);
   const rows = [];
   if (context?.fatigue) rows.push({ label: "Fatigue", value: labelFor(FATIGUE_OPTIONS, context.fatigue) });
   if (context?.hydration_state) rows.push({ label: "Hydration", value: labelFor(HYDRATION_OPTIONS, context.hydration_state) });
@@ -174,6 +220,12 @@ export function sessionContextDisplayRows(session) {
     rows.push({
       label: "Blood Pressure",
       value: `${bp.systolic_mm_hg}/${bp.diastolic_mm_hg} mmHg${bp.pulse_bpm ? ` · ${bp.pulse_bpm} bpm` : ""}${measured ? ` · ${measured}` : ""}`,
+    });
+  }
+  if (bpReadings.length > 1) {
+    rows.push({
+      label: "BP Readings",
+      value: `${bpReadings.length} readings · latest ${bpReadings[bpReadings.length - 1].systolic_mm_hg}/${bpReadings[bpReadings.length - 1].diastolic_mm_hg} mmHg`,
     });
   }
   const alcohol = substanceText("Alcohol", context?.alcohol);

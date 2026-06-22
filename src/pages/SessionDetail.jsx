@@ -36,7 +36,7 @@ import SessionTimelineNarrative from "../components/SessionTimelineNarrative";
 import SavedMotionSummaryCard from "../components/SavedMotionSummaryCard";
 import JournalRecorder from "../components/JournalRecorder";
 import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
-import { sessionContextDisplayRows } from "@/lib/sessionContext";
+import { bloodPressureReadingsFromSession, sessionContextDisplayRows } from "@/lib/sessionContext";
 import { buildSessionKeyVideoClipDigest, buildSessionPhaseMarkerDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, getReviewedVisualClips, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionKeyVideoClips, normalizeSessionVisualEvidence, sessionEventsForCurrentPhaseMarkers } from "@/lib/visualEvidence";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "../components/session-form/EventTimelineSection";
 import { hasMixedPauseResumeEvidence, isVerifiedMotionEvent } from "@/utils/sessionMotionEvidence";
@@ -89,6 +89,88 @@ function EmptyPanelNote({ children }) {
     <p className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
       {children}
     </p>
+  );
+}
+
+function formatBpTime(value) {
+  if (!value) return "";
+  return new Date(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function BloodPressureSessionChart({ session }) {
+  const readings = bloodPressureReadingsFromSession(session);
+  if (!readings.length) return null;
+  const chartRows = readings.map((reading) => ({
+    ...reading,
+    label: formatBpTime(reading.measured_at),
+    systolic: reading.systolic_mm_hg,
+    diastolic: reading.diastolic_mm_hg,
+    pulse: reading.pulse_bpm,
+  }));
+  const latest = readings[readings.length - 1];
+  const avgSys = Math.round(readings.reduce((sum, reading) => sum + Number(reading.systolic_mm_hg || 0), 0) / readings.length);
+  const avgDia = Math.round(readings.reduce((sum, reading) => sum + Number(reading.diastolic_mm_hg || 0), 0) / readings.length);
+  const pulseValues = readings.map((reading) => Number(reading.pulse_bpm)).filter(Number.isFinite);
+  const avgPulse = pulseValues.length ? Math.round(pulseValues.reduce((sum, value) => sum + value, 0) / pulseValues.length) : null;
+
+  return (
+    <section id="session-blood-pressure" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
+            <Activity className="h-3.5 w-3.5" /> Blood Pressure
+          </h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Session-linked BP readings plotted with pulse so Sarah can compare vascular load against HR/HRV context.
+          </p>
+        </div>
+        <div className="grid grid-cols-3 gap-2 text-right">
+          <div className="rounded-lg bg-muted/25 px-3 py-2">
+            <p className="font-mono text-xl font-bold text-foreground">{latest.systolic_mm_hg}/{latest.diastolic_mm_hg}</p>
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">latest</p>
+          </div>
+          <div className="rounded-lg bg-muted/25 px-3 py-2">
+            <p className="font-mono text-xl font-bold text-foreground">{avgSys}/{avgDia}</p>
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">average</p>
+          </div>
+          <div className="rounded-lg bg-muted/25 px-3 py-2">
+            <p className="font-mono text-xl font-bold text-foreground">{avgPulse ?? "--"}</p>
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">pulse</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 h-56">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartRows} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
+            <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+            <YAxis yAxisId="bp" tick={{ fontSize: 10 }} domain={["dataMin - 8", "dataMax + 8"]} />
+            <YAxis yAxisId="pulse" orientation="right" tick={{ fontSize: 10 }} domain={["dataMin - 8", "dataMax + 8"]} />
+            <Tooltip
+              formatter={(value, name) => [`${Math.round(Number(value))}${name === "pulse" ? " bpm" : " mmHg"}`, name === "systolic" ? "Systolic" : name === "diastolic" ? "Diastolic" : "Pulse"]}
+              labelFormatter={(_, rows = []) => rows?.[0]?.payload?.measured_at ? new Date(rows[0].payload.measured_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}
+            />
+            <Line yAxisId="bp" type="monotone" dataKey="systolic" name="systolic" stroke="hsl(var(--primary))" strokeWidth={2.5} dot={{ r: 3 }} />
+            <Line yAxisId="bp" type="monotone" dataKey="diastolic" name="diastolic" stroke="hsl(var(--chart-3))" strokeWidth={2.5} dot={{ r: 3 }} />
+            <Line yAxisId="pulse" type="monotone" dataKey="pulse" name="pulse" stroke="hsl(var(--chart-2))" strokeWidth={2} strokeDasharray="4 3" dot={{ r: 3 }} connectNulls />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {readings.slice(-6).reverse().map((reading) => (
+          <div key={reading.id || `${reading.measured_at}-${reading.systolic_mm_hg}-${reading.diastolic_mm_hg}`} className="rounded-lg border border-border bg-muted/15 px-3 py-2">
+            <p className="font-mono text-lg font-bold text-foreground">
+              {reading.systolic_mm_hg}/{reading.diastolic_mm_hg} mmHg{reading.pulse_bpm ? ` · ${reading.pulse_bpm} bpm` : ""}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {reading.measured_at ? new Date(reading.measured_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "No timestamp"}
+              {reading.source_app ? ` · ${reading.source_app}` : ""}
+            </p>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -446,7 +528,6 @@ export default function SessionDetail() {
   const [lightboxPhoto, setLightboxPhoto] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [sessionNotes, setSessionNotes] = useState("");
-  const [sessionInterviewOpen, setSessionInterviewOpen] = useState(false);
   const [sessionJournal, setSessionJournal] = useState(null);
   const [pendingSectionId, setPendingSectionId] = useState("");
   const [inspectionTime, setInspectionTime] = useState(0);
@@ -794,6 +875,20 @@ export default function SessionDetail() {
     return () => window.cancelAnimationFrame(frame);
   }, [pendingSectionId]);
 
+  useEffect(() => {
+    if (loading || typeof window === "undefined" || window.location.hash) return undefined;
+    const scrollTop = () => {
+      document.querySelector("main")?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    };
+    const frame = window.requestAnimationFrame(() => {
+      scrollTop();
+      window.setTimeout(scrollTop, 180);
+      window.setTimeout(scrollTop, 720);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [id, loading]);
+
   const handleDelete = async () => {
     await base44.entities.Session.delete(id);
     navigate("/sessions");
@@ -819,6 +914,7 @@ export default function SessionDetail() {
   const s = session;
   const cap = (str) => str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
   const contextRows = sessionContextDisplayRows(s);
+  const bloodPressureReadings = bloodPressureReadingsFromSession(s);
   const recorded = (value) => value !== undefined && value !== null && value !== "";
   const metricBadges = [
     { label: s.no_climax ? "Peak Arousal" : "Peak Intensity", value: s.intensity },
@@ -1039,6 +1135,7 @@ export default function SessionDetail() {
           onMarkersChange={savePhaseMarkers}
           onOpenReview={() => navigate(`/review-player?session=${encodeURIComponent(s.id)}`)}
         />
+        {bloodPressureReadings.length > 0 && <BloodPressureSessionChart session={s} />}
         {timelineRows.length > 0 && (
           <details className="rounded-xl border border-border bg-card p-4">
             <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
@@ -1590,7 +1687,7 @@ export default function SessionDetail() {
         )}
 
         {(s.event_timeline || []).length > 0 && (
-          <details open id="session-event-notes" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+          <details id="session-event-notes" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
             <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
               Event Notes ({(s.event_timeline || []).length})
             </summary>
@@ -1638,15 +1735,13 @@ export default function SessionDetail() {
         </details>
 
         {/* Ask the AI — Session Deep Dive */}
-        <details
+        <section
           id="session-interview"
-          open={sessionInterviewOpen}
-          onToggle={(event) => setSessionInterviewOpen(event.currentTarget.open)}
-          className="scroll-mt-24 rounded-xl border border-border bg-card p-4"
+          className="scroll-mt-24 rounded-xl border border-primary/20 bg-card p-4"
         >
-          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">
             Ask the AI{chatMessages.length > 0 ? ` (${chatMessages.length} saved messages)` : ""}
-          </summary>
+          </h3>
           <div className="mt-3">
         <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
           Attach images or a short local video clip for Sarah to review visible technique, device fit, anatomy, marker placement, telemetry overlays, or body movement for this session.
@@ -1680,12 +1775,13 @@ export default function SessionDetail() {
           savedVideoClips={normalizeSessionKeyVideoClips(s)}
           savedMessages={chatMessages}
           savedNotes={sessionNotes}
-          defaultOpen={chatMessages.length > 0}
+          defaultOpen
+          autoScrollOnMount={false}
           onSaveMessages={handleChatMessagesSave}
           onSaveNotes={handleSessionNotesSave}
         />
           </div>
-        </details>
+        </section>
 
         {/* Tags */}
         <details id="session-tags" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
