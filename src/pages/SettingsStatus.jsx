@@ -19,6 +19,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import TTSSettingsPanel from "@/components/TTSSettingsPanel";
+import AppVersionBadge from "@/components/AppVersionBadge";
 import { Textarea } from "@/components/ui/textarea";
 import { SarahLogoMark } from "@/components/SarahBrand";
 import { cancelBackgroundJob, clearBackgroundJobs, listBackgroundJobs, retryBackgroundJob } from "@/lib/backgroundJobs";
@@ -987,6 +988,7 @@ export default function SettingsStatus() {
             Tune narration once, check API cost visibility, and manage background AI or audio work without hunting through individual cards.
           </p>
         </div>
+        <AppVersionBadge />
       </header>
 
       <section className="rounded-xl border border-border bg-card p-3 sm:p-5">

@@ -74,6 +74,11 @@ function summarizeServices(services = []) {
   }));
 }
 
+function isRecoverableOmronConnectionError(error) {
+  const message = String(error?.message || error || "");
+  return /connection\s+timeout|connect\s+timeout|timed?\s*out|gatt\s+133|disconnected|not\s+connected/i.test(message);
+}
+
 async function initializeAndroidBle(onStatus) {
   if (!window.Capacitor?.isNativePlatform?.()) {
     throw new Error("Direct OMRON BP sync currently needs the installed Android APK. Use the phone to sync; desktop will read the saved PulsePoint BP record.");
@@ -268,8 +273,10 @@ async function connectAndSubscribeOmron(listener, { initial = false } = {}) {
   } catch (error) {
     listener.connected = false;
     listener.reconnecting = false;
-    if (!initial && !listener.stopping && activeOmronListener === listener) {
-      listener.onStatus?.("Waiting for OMRON cuff to wake/transmit. Sarah is still armed.");
+    if (!listener.stopping && activeOmronListener === listener && (!initial || isRecoverableOmronConnectionError(error))) {
+      listener.onStatus?.(initial
+        ? "Connection timed out, but Sarah is still armed. Wake the OMRON cuff or take a reading; Sarah will keep trying to reconnect."
+        : "Waiting for OMRON cuff to wake/transmit. Sarah is still armed.");
       scheduleOmronReconnect(listener);
       return null;
     }

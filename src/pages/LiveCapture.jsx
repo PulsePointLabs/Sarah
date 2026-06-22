@@ -52,6 +52,7 @@ import {
   startOmronBloodPressureListener,
   stopOmronBloodPressureListener,
 } from "@/lib/omronBloodPressureBle";
+import AppVersionBadge from "@/components/AppVersionBadge";
 
 const MAX_TELEMETRY_POINTS = 240;
 const MAX_VOICE_NOTE_MS = 12000;
@@ -4781,6 +4782,7 @@ export default function LiveCapture() {
           icon={Radio}
         />
         <div className="flex flex-wrap items-center gap-2 md:mt-1">
+          <AppVersionBadge />
           <div className="inline-flex shrink-0 rounded-lg border border-border bg-card p-1 shadow-sm">
             {CAPTURE_KINDS.map((kind) => {
               const active = captureKind === kind.value;
