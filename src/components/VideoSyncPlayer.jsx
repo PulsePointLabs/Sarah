@@ -30,6 +30,7 @@ import ClimaxMotionSnapshotCard from "./ClimaxMotionSnapshotCard";
 import MotionPlaybackReadout from "./MotionPlaybackReadout";
 import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { cleanWhisperTranscript } from "@/utils/whisperTranscript";
+import { isSarahNativeShell } from "@/lib/mobileApiBase";
 
 function getCategoryMeta(value) {
   return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -462,6 +463,7 @@ export default function VideoSyncPlayer({
   const [mobileEventSheetOpen, setMobileEventSheetOpen] = useState(false);
   const fullscreenControlsTimerRef = useRef(null);
   const suppressNextFullscreenVideoToggleRef = useRef(false);
+  const nativeShell = isSarahNativeShell();
   const widthDragStartRef = useRef({ x: 0, width: 66, layoutWidth: 1 });
   const [zoomWindow, setZoomWindow] = useState(60);
   const [activeEventIdx, setActiveEventIdx] = useState(null);
@@ -972,7 +974,11 @@ export default function VideoSyncPlayer({
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setFullscreenActive(document.fullscreenElement === fullscreenSurfaceRef.current);
+      const fullscreenElement = document.fullscreenElement;
+      setFullscreenActive(
+        fullscreenElement === fullscreenSurfaceRef.current
+        || fullscreenElement === videoRef.current
+      );
       setFullscreenControlsVisible(true);
     };
     document.addEventListener("fullscreenchange", handleFullscreenChange);
@@ -1013,19 +1019,24 @@ export default function VideoSyncPlayer({
 
   const toggleFullscreenOverlay = useCallback(async () => {
     const surface = fullscreenSurfaceRef.current;
-    if (!surface) return;
+    const video = videoRef.current;
+    if (!surface && !video) return;
     try {
-      if (document.fullscreenElement === surface) {
+      if (document.fullscreenElement === surface || document.fullscreenElement === video) {
         await document.exitFullscreen?.();
         return;
       }
       if (document.fullscreenElement) await document.exitFullscreen?.();
+      if (nativeShell && video?.requestFullscreen) {
+        await video.requestFullscreen();
+        return;
+      }
       setTelemetryDisplayMode("overlay");
-      await surface.requestFullscreen?.();
+      await surface?.requestFullscreen?.();
     } catch (err) {
       console.warn("Fullscreen playback could not be opened:", err);
     }
-  }, []);
+  }, [nativeShell]);
 
   // Scroll-to-top
   const [showScrollTop, setShowScrollTop] = useState(false);
@@ -1580,7 +1591,8 @@ export default function VideoSyncPlayer({
                       src={feed.src}
                       muted={!isMaster}
                       className="h-full w-full object-contain cursor-pointer"
-                      playsInline
+                      controls={nativeShell && fullscreenActive && isMaster}
+                      playsInline={!nativeShell}
                       onClick={() => {
                         if (isMaster) {
                           if (suppressNextFullscreenVideoToggleRef.current) {

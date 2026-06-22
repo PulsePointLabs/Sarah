@@ -17,8 +17,8 @@ const formatDuration = (seconds) => {
 };
 
 const RAW_SECTION_TITLE_RE = /^tts-section-\d+$/i;
-const RECENT_AUDIO_LIMIT = 75;
-const RECENT_VIDEO_LIMIT = 75;
+const RECENT_AUDIO_LIMIT = 50;
+const RECENT_VIDEO_LIMIT = 50;
 
 const getRawAudioUrl = (export_) => (
   export_?.file_url ||
@@ -316,7 +316,8 @@ export default function Library() {
 
   const { data: exports = [], isLoading, error: audioExportsError } = useQuery({
     queryKey: ["audioExports"],
-    queryFn: () => base44.entities.AudioExport.list("-created_date", 250),
+    queryFn: () => base44.entities.AudioExport.list("-created_date", 125),
+    placeholderData: [],
   });
 
   const { data: completedJobs = [], isLoading: jobsLoading, error: completedJobsError } = useQuery({
@@ -327,25 +328,29 @@ export default function Library() {
         status: "complete",
         metaSource: "TTSReader",
         includeCleared: true,
-        limit: 75,
+        limit: 40,
       });
       return result.jobs || [];
     },
+    placeholderData: [],
   });
 
   const { data: reviewVideos = [], isLoading: videosLoading, error: reviewVideosError } = useQuery({
     queryKey: ["sessionReviewVideos"],
-    queryFn: () => base44.entities.SessionReviewVideo.list("-created_date", 250),
+    queryFn: () => base44.entities.SessionReviewVideo.list("-created_date", 125),
+    placeholderData: [],
   });
 
   const { data: sessionLookupRows = [], error: sessionLookupError } = useQuery({
     queryKey: ["librarySessionLookup"],
-    queryFn: () => base44.entities.Session.listFields(["id", "date", "start_time", "created_date"], "-date", 500),
+    queryFn: () => base44.entities.Session.listFields(["id", "date", "start_time", "created_date"], "-date", 150),
+    placeholderData: [],
   });
 
   const { data: explorationLookupRows = [], error: explorationLookupError } = useQuery({
     queryKey: ["libraryBodyExplorationLookup"],
-    queryFn: () => base44.entities.BodyExploration.listFields(["id", "date", "start_time", "created_date", "title", "exploration_type"], "-date", 500),
+    queryFn: () => base44.entities.BodyExploration.listFields(["id", "date", "start_time", "created_date", "title", "exploration_type"], "-date", 150),
+    placeholderData: [],
   });
 
   const { data: completedVideoJobs = [], isLoading: videoJobsLoading, error: completedVideoJobsError } = useQuery({
@@ -355,10 +360,11 @@ export default function Library() {
         type: "session_review_video",
         status: "complete",
         includeCleared: true,
-        limit: 75,
+        limit: 40,
       });
       return hydrateJobsWithResults(result.jobs || []);
     },
+    placeholderData: [],
   });
 
   const { data: completedProfileVideoJobs = [], isLoading: profileVideoJobsLoading, error: completedProfileVideoJobsError } = useQuery({
@@ -368,10 +374,11 @@ export default function Library() {
         type: "profile_anatomy_video",
         status: "complete",
         includeCleared: true,
-        limit: 75,
+        limit: 40,
       });
       return hydrateJobsWithResults(result.jobs || []);
     },
+    placeholderData: [],
   });
 
   useEffect(() => {
@@ -557,13 +564,7 @@ export default function Library() {
     }
   };
 
-  if (isLoading || jobsLoading || videosLoading || videoJobsLoading || profileVideoJobsLoading) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
-      </div>
-    );
-  }
+  const libraryLoading = isLoading || jobsLoading || videosLoading || videoJobsLoading || profileVideoJobsLoading;
 
   return (
     <div className="space-y-6">
@@ -577,6 +578,13 @@ export default function Library() {
           </Button>
         )}
       />
+
+      {libraryLoading && (
+        <div className="mx-4 flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm text-muted-foreground">
+          <RefreshCw className="h-4 w-4 animate-spin text-primary" />
+          Loading latest media. Available results are shown as they arrive.
+        </div>
+      )}
 
       {libraryErrors.length > 0 && (
         <div className="mx-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
@@ -707,7 +715,7 @@ export default function Library() {
         </LibrarySection>
       )}
 
-      {downloadableExports.length === 0 && downloadableVideos.length === 0 ? (
+      {downloadableExports.length === 0 && downloadableVideos.length === 0 && !libraryLoading ? (
         <div className="flex flex-col items-center justify-center py-12 text-center">
           <Music className="w-12 h-12 text-muted-foreground mb-3 opacity-50" />
           <h3 className="text-lg font-semibold text-foreground mb-1">

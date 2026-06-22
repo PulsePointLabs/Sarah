@@ -153,6 +153,22 @@
 }
 
 @layer components {
+  video:fullscreen {
+    width: 100vw;
+    height: 100vh;
+    object-fit: contain;
+    background: #000;
+    border-radius: 0;
+  }
+
+  video:-webkit-full-screen {
+    width: 100vw;
+    height: 100vh;
+    object-fit: contain;
+    background: #000;
+    border-radius: 0;
+  }
+
   @media (max-width: 950px) {
     .video-sync-surface:not(.video-sync-fullscreen) {
       height: auto !important;

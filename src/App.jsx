@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
-import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
+import { BrowserRouter as Router, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
@@ -39,6 +39,8 @@ import NewBodyExploration from './pages/NewBodyExploration';
 import { incrementLifecycleMountCount, recordPwaLifecycleEvent } from '@/lib/pwaLifecycleDiagnostics';
 
 const AuthenticatedApp = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
   const {
     isLoadingAuth,
     isLoadingPublicSettings,
@@ -51,6 +53,50 @@ const AuthenticatedApp = () => {
   useEffect(() => {
     incrementLifecycleMountCount('router_tree');
   }, []);
+
+  useEffect(() => {
+    let listener = null;
+    let active = true;
+
+    import('@capacitor/app')
+      .then(({ App: CapacitorApp }) => {
+        if (!active || !CapacitorApp?.addListener) return;
+        return CapacitorApp.addListener('backButton', async ({ canGoBack } = {}) => {
+          if (document.fullscreenElement) {
+            await document.exitFullscreen?.();
+            return;
+          }
+
+          const activeElement = document.activeElement;
+          if (activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeElement.tagName)) {
+            activeElement.blur();
+            return;
+          }
+
+          if (location.pathname === '/video' || location.pathname === '/review-player') {
+            if (canGoBack || window.history.length > 1) navigate(-1);
+            else navigate('/sessions');
+            return;
+          }
+
+          if (canGoBack || window.history.length > 1) {
+            navigate(-1);
+            return;
+          }
+
+          CapacitorApp.exitApp?.();
+        });
+      })
+      .then((handle) => {
+        listener = handle;
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+      listener?.remove?.();
+    };
+  }, [location.pathname, navigate]);
 
   const bootScreenVisible = Boolean(isLoadingPublicSettings || isLoadingAuth);
 
