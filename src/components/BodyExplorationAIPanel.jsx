@@ -7,7 +7,7 @@ import { buildBodyExplorationVideoPassDigest, buildBodyExplorationVisualEvidence
 import AIOutputReader from "./AIOutputReader";
 import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt } from "@/utils/aiContentMetadata";
-import { SessionReviewVideoExportButton } from "./SessionAIPanel";
+import { SessionReviewVideoExportButton, reviewVideoTitleWithDate } from "./SessionAIPanel";
 import { recoverCompletedAIJob, startRecoverableAIJob, waitForRecoverableAIJob } from "@/lib/recoverableAIJobs";
 import { friendlyJobErrorMessage } from "@/lib/jobErrorMessages";
 import {
@@ -317,6 +317,7 @@ ${events.length ? `TIMESTAMPED NOTES:\n${events.join("\n")}` : "No timestamped n
         source: "body_exploration_analysis",
         recordType: "body_exploration",
         sessionId: exploration.id,
+        route: `/exploration/${encodeURIComponent(exploration.id)}#exploration-ai-analysis`,
       });
       const completed = await waitForRecoverableAIJob(jobKey, job.id, {
         intervalMs: 1800,
@@ -336,9 +337,10 @@ ${events.length ? `TIMESTAMPED NOTES:\n${events.join("\n")}` : "No timestamped n
   const paragraphMeta = result
     ? [{ type: "summary" }, ...activeSectionDefs.flatMap((section) => (result[section.key] || []).map(() => ({ type: "section", section })))]
     : [];
+  const reviewVideoTitle = reviewVideoTitleWithDate("AI Body Exploration Analysis", exploration);
 
   return (
-    <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+    <div id="exploration-ai-analysis" className="scroll-mt-24 rounded-xl border border-border bg-card p-4 space-y-3">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
@@ -363,14 +365,16 @@ ${events.length ? `TIMESTAMPED NOTES:\n${events.join("\n")}` : "No timestamped n
       )}
       {result && (
         <>
-          <SessionReviewVideoExportButton
-            session={exploration}
-            analysisTitle="AI Body Exploration Analysis"
-            sourceGeneratedAt={generatedAt}
-            paragraphs={paragraphs}
-            paragraphMeta={paragraphMeta}
-            recordType="body_exploration"
-          />
+          <div id="exploration-ai-video" className="scroll-mt-24">
+            <SessionReviewVideoExportButton
+              session={exploration}
+              analysisTitle={reviewVideoTitle}
+              sourceGeneratedAt={generatedAt}
+              paragraphs={paragraphs}
+              paragraphMeta={paragraphMeta}
+              recordType="body_exploration"
+            />
+          </div>
           <AIOutputReader
             sessionId={`body-exploration-${exploration.id}`}
             title="AI Body Exploration Analysis"

@@ -33,8 +33,13 @@ export function mergeProfilerResultsIntoProfile(profile, latestProfilerAnalysis)
 
 export async function loadLatestProfilerAnalysis() {
   try {
-    const rows = await timeoutToNull(base44.entities.SessionClusterAnalysis.listFields(PROFILER_RESULT_KEYS, "-updated_date", 1));
-    return Array.isArray(rows) && rows.length ? rows[0] : null;
+    const rows = await timeoutToNull(base44.entities.SessionClusterAnalysis.listFields(PROFILER_RESULT_KEYS, "-updated_date", 5));
+    if (!Array.isArray(rows) || !rows.length) return null;
+    return rows.find((row) => PROFILER_RESULT_KEYS.some((key) => {
+      const value = row?.[key];
+      if (Array.isArray(value)) return value.length > 0;
+      return value !== undefined && value !== null;
+    })) || rows[0] || null;
   } catch {
     return null;
   }

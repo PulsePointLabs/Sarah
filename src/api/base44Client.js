@@ -1,7 +1,41 @@
-import { apiUrl, serverUrl } from "@/lib/mobileApiBase";
+import {
+  apiUrl,
+  discoverSarahApiBase,
+  isSarahNativeShell,
+  serverUrl,
+} from "@/lib/mobileApiBase";
 
 async function request(path, options = {}) {
-  const response = await fetch(apiUrl(path), options);
+  const timeoutMs = Number(options.timeoutMs || 0);
+  const controller = timeoutMs > 0 && !options.signal ? new AbortController() : null;
+  const timeoutId = controller
+    ? window.setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+  const fetchOptions = { ...options };
+  delete fetchOptions.timeoutMs;
+  delete fetchOptions.skipApiDiscovery;
+  if (controller) fetchOptions.signal = controller.signal;
+
+  const targetUrl = apiUrl(path);
+  let response;
+  try {
+    response = await fetch(targetUrl, fetchOptions);
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s: ${targetUrl}`);
+    }
+    if (
+      isSarahNativeShell()
+      && !options.skipApiDiscovery
+      && !/^https?:\/\//i.test(path)
+    ) {
+      await discoverSarahApiBase({ timeoutMs: 2200 });
+      return request(path, { ...options, skipApiDiscovery: true });
+    }
+    throw error;
+  } finally {
+    if (timeoutId) window.clearTimeout(timeoutId);
+  }
   const contentType = response.headers.get('content-type') || '';
   if (!response.ok) {
     const data = contentType.includes('application/json')
@@ -105,14 +139,14 @@ function entityApi(entity) {
 }
 
 const entityNames = [
-  'Session', 'BodyExploration', 'HeartRateTimeline', 'EMGTimeline', 'HowlTelemetry', 'HowlControlCommand', 'HowlControlSettings', 'AudioExport', 'SessionReviewVideo', 'CompareAnalysisResult',
+  'Session', 'BodyExploration', 'HeartRateTimeline', 'EMGTimeline', 'BloodPressureReading', 'HowlTelemetry', 'HowlControlCommand', 'HowlControlSettings', 'AudioExport', 'SessionReviewVideo', 'CompareAnalysisResult',
   'CascadeAnalysisResult', 'SessionClusterAnalysis', 'Journal', 'CustomMethod', 'User',
 ];
 
 export const base44 = {
   entities: Object.fromEntries(entityNames.map((name) => [name, entityApi(name)])),
   auth: {
-    me: () => request('/auth/me'),
+    me: () => request('/auth/me', { timeoutMs: 7000 }),
     meFields: (fields = []) => {
       const params = new URLSearchParams();
       if (Array.isArray(fields) && fields.length) params.set('fields', fields.join(','));

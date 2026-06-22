@@ -24,7 +24,7 @@ export const DEFAULT_WATERMARK_SETTINGS = {
   portraitPath: 'brand/sarah-lab.jpg',
   logoPath: 'icons/sarah-192.png',
   paddingPercent: 4,
-  positionMode: 'bottom_right',
+  positionMode: 'top_right',
   movementIntervalSeconds: 24,
   movementTransitionSeconds: 0.7,
   shadowEnabled: true,
@@ -241,15 +241,33 @@ export function buildSarahBrandFilterComplex(settings = {}, { hasPortrait = fals
     Math.round(portraitSize + iconSize + gap * 3 + estimatedTextWidth),
   );
   const panelHeight = Math.max(portraitSize, Math.round(textSize + subTextSize + gap * 1.6));
-  const panelX = `max(${pad}\\,w-${panelWidth}-${pad})`;
-  const panelY = `max(${pad}\\,h-${panelHeight}-${pad})`;
-  const iconX = `max(${overlayPad}\\,main_w-${estimatedTextWidth + iconSize + gap * 2}-${overlayPad})`;
-  const portraitX = `max(${overlayPad}\\,main_w-${estimatedTextWidth + iconSize + portraitSize + gap * 3}-${overlayPad})`;
-  const portraitY = `max(${overlayPad}\\,main_h-${portraitSize}-${overlayPad})`;
-  const textX = `w-text_w-${pad}`;
-  const primaryY = `h-${panelHeight}-${pad}+${Math.round(gap * 0.25)}`;
-  const secondaryY = `h-${panelHeight}-${pad}+${Math.round(textSize + gap * 0.85)}`;
-  const iconY = `main_h-${panelHeight}-${overlayPad}+${Math.round(gap * 0.35)}`;
+  const fixedPosition = normalized.positionMode === 'fixed_custom'
+    || normalized.positionMode === 'rotating_corners'
+    || normalized.positionMode === 'intelligent_safe_area'
+    ? 'top_right'
+    : normalized.positionMode;
+  const leftAligned = fixedPosition.includes('left');
+  const topAligned = fixedPosition.includes('top');
+  const mediaWidth = (hasPortrait ? portraitSize + gap : 0) + (hasLogo ? iconSize + gap : 0);
+  const panelX = leftAligned ? pad : `max(${pad}\\,w-${panelWidth}-${pad})`;
+  const panelY = topAligned ? pad : `max(${pad}\\,h-${panelHeight}-${pad})`;
+  const portraitX = leftAligned
+    ? overlayPad
+    : `max(${overlayPad}\\,main_w-${estimatedTextWidth + iconSize + portraitSize + gap * 3}-${overlayPad})`;
+  const portraitY = topAligned ? overlayPad : `max(${overlayPad}\\,main_h-${portraitSize}-${overlayPad})`;
+  const iconX = leftAligned
+    ? `${overlayPad}+${hasPortrait ? portraitSize + gap : 0}`
+    : `max(${overlayPad}\\,main_w-${estimatedTextWidth + iconSize + gap * 2}-${overlayPad})`;
+  const iconY = topAligned
+    ? `${overlayPad}+${Math.round(gap * 0.35)}`
+    : `main_h-${panelHeight}-${overlayPad}+${Math.round(gap * 0.35)}`;
+  const textX = leftAligned ? `${pad}+${mediaWidth}` : `w-text_w-${pad}`;
+  const primaryY = topAligned
+    ? `${pad}+${Math.round(gap * 0.25)}`
+    : `h-${panelHeight}-${pad}+${Math.round(gap * 0.25)}`;
+  const secondaryY = topAligned
+    ? `${pad}+${Math.round(textSize + gap * 0.85)}`
+    : `h-${panelHeight}-${pad}+${Math.round(textSize + gap * 0.85)}`;
   const labelX = textX;
   const shadow = normalized.shadowEnabled
     ? `:shadowcolor=0x000000@${Math.min(0.9, normalized.opacity + 0.15).toFixed(3)}:shadowx=2:shadowy=2`

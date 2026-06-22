@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   getSarahImageOption,
   readSarahBrandSettings,
+  resolveSarahImageSrc,
   SARAH_BRAND_EVENT,
 } from "@/lib/sarahBrand";
 
@@ -44,10 +45,14 @@ export function SarahPortrait({
   return (
     <div className={`overflow-hidden bg-muted ${className}`}>
       <img
-        src={image.src}
+        src={resolveSarahImageSrc(image.src)}
         alt={label}
         className={`h-full w-full object-cover ${imageClassName}`}
         style={{ objectPosition: image.position }}
+        onError={(event) => {
+          event.currentTarget.onerror = null;
+          event.currentTarget.src = "/brand/sarah-lab.jpg";
+        }}
         draggable="false"
       />
     </div>
@@ -64,7 +69,11 @@ export function SarahAvatar({ className = "h-8 w-8", ring = true }) {
   );
 }
 
-export function SarahSplash() {
+export function SarahSplash({
+  message = "Starting local cockpit...",
+  detail = "",
+  error = false,
+}) {
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-background px-5 text-foreground">
       <div className="flex w-full max-w-sm flex-col items-center text-center">
@@ -73,10 +82,27 @@ export function SarahSplash() {
           <SarahLogoMark className="h-9 w-9" />
           <h1 className="text-3xl font-black tracking-tight">Sarah</h1>
         </div>
-        <p className="mt-2 text-sm font-medium text-muted-foreground">Starting local cockpit...</p>
-        <div className="mt-5 h-1.5 w-36 overflow-hidden rounded-full bg-muted">
-          <div className="h-full w-1/2 animate-pulse rounded-full bg-primary" />
-        </div>
+        <p className={`mt-2 text-sm font-medium ${error ? "text-destructive" : "text-muted-foreground"}`}>
+          {message}
+        </p>
+        {detail ? (
+          <p className="mt-2 max-w-xs break-words text-xs leading-relaxed text-muted-foreground">
+            {detail}
+          </p>
+        ) : null}
+        {!error ? (
+          <div className="mt-5 h-1.5 w-36 overflow-hidden rounded-full bg-muted">
+            <div className="h-full w-1/2 animate-pulse rounded-full bg-primary" />
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-5 rounded-full border border-border px-4 py-2 text-sm font-semibold text-foreground shadow-sm"
+          >
+            Retry
+          </button>
+        )}
       </div>
     </div>
   );

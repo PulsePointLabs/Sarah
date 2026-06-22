@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildReviewVideoPlan } from './sessionReviewVideoPlanner.js';
-import { resolveTimestampViolationVisualFallback, selectReviewVideoEventForSegment } from './sessionReviewVideoRenderer.js';
+import {
+  resolveTimestampViolationVisualFallback,
+  selectDistinctReviewSourceStart,
+  selectReviewVideoEventForSegment,
+} from './sessionReviewVideoRenderer.js';
 
 test('untimed Foley placement narration does not jump to drainage-bag b-roll', () => {
   const segment = {
@@ -186,4 +190,39 @@ test('direct narrated timestamps keep clip lead-in on the timeline counter', () 
   assert.ok(fallback.window.start < 272);
   assert.ok(fallback.window.sessionStartSeconds < 272);
   assert.equal(Math.round(fallback.window.sessionSeconds), 272);
+});
+
+test('generic review b-roll avoids reusing a nearby source-video window', () => {
+  const start = selectDistinctReviewSourceStart({
+    preferredStart: 124,
+    durationSeconds: 8,
+    sourceDuration: 300,
+    usedWindows: [{ start: 120, end: 130, label: 'Prior context' }],
+  });
+
+  assert.notEqual(start, null);
+  assert.ok(Math.abs(start - 120) >= 18);
+});
+
+test('generic review b-roll falls back when no distinct source window exists', () => {
+  const start = selectDistinctReviewSourceStart({
+    preferredStart: 6,
+    durationSeconds: 8,
+    sourceDuration: 18,
+    usedWindows: [{ start: 0, end: 10, label: 'Prior context' }],
+  });
+
+  assert.equal(start, null);
+});
+
+test('explicit review timestamps can reuse a nearby source-video window', () => {
+  const start = selectDistinctReviewSourceStart({
+    preferredStart: 124,
+    durationSeconds: 8,
+    sourceDuration: 300,
+    usedWindows: [{ start: 120, end: 130, label: 'Prior context' }],
+    allowNearRepeat: true,
+  });
+
+  assert.equal(start, 124);
 });

@@ -13,10 +13,22 @@ function flattenCueClips(phrases = {}) {
 }
 
 async function decodeClip(ctx, clip) {
-  const response = await fetch(serverUrl(clip.url), { cache: "force-cache" });
+  const clipUrl = String(clip?.url || "").startsWith("/live-cues/")
+    ? apiUrl(String(clip.url).replace(/^\/live-cues/, "/live-cues"))
+    : serverUrl(clip.url);
+  const response = await fetch(clipUrl, { cache: "force-cache" });
   if (!response.ok) throw new Error(`Cue audio fetch failed (${response.status})`);
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType && !contentType.toLowerCase().startsWith("audio/") && !contentType.toLowerCase().includes("octet-stream")) {
+    throw new Error(`Cue audio returned ${contentType || "non-audio data"} instead of audio.`);
+  }
   const arrayBuffer = await response.arrayBuffer();
-  const decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
+  let decoded;
+  try {
+    decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
+  } catch {
+    throw new Error(`Unable to decode cue audio${contentType ? ` (${contentType})` : ""}.`);
+  }
   return { ...clip, audioBuffer: decoded };
 }
 

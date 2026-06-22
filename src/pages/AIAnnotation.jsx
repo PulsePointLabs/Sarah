@@ -72,7 +72,7 @@ export default function AIAnnotation() {
   const [loadingRecord, setLoadingRecord] = useState(false);
   const [error, setError] = useState("");
   const [cursorSeconds, setCursorSeconds] = useState(0);
-  const [ignoreCompletedJobsBefore, setIgnoreCompletedJobsBefore] = useState(0);
+  const [ignoreCompletedJobsBefore] = useState(0);
   const records = selectedType === "body_exploration" ? explorations : sessions;
   const entity = selectedType === "body_exploration" ? base44.entities.BodyExploration : base44.entities.Session;
   const detailPath = record?.id
@@ -195,7 +195,6 @@ export default function AIAnnotation() {
       [analysisField]: retainedAnalysis,
     };
     await entity.update(record.id, updated);
-    setIgnoreCompletedJobsBefore(Date.now());
     setRecord((current) => (current ? { ...current, ...updated } : current));
     const updateList = (current) => current.map((item) => (
       item.id === record.id ? { ...item, ...updated } : item

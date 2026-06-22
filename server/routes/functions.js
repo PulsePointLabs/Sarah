@@ -239,6 +239,9 @@ functionsRouter.post('/generateJournal', async (req, res) => {
       s.climax_duration ? `Climax duration: ${s.climax_duration}` : null,
       s.no_climax ? 'No climax this session' : null,
       s.mood ? `Mood: ${s.mood}` : null,
+      s.session_context?.blood_pressure?.systolic_mm_hg && s.session_context?.blood_pressure?.diastolic_mm_hg
+        ? `Blood pressure context: ${s.session_context.blood_pressure.systolic_mm_hg}/${s.session_context.blood_pressure.diastolic_mm_hg} mmHg${s.session_context.blood_pressure.pulse_bpm ? `, pulse ${s.session_context.blood_pressure.pulse_bpm} bpm` : ''}${s.session_context.blood_pressure.measured_at ? `, measured ${s.session_context.blood_pressure.measured_at}` : ''}`
+        : null,
       s.avg_hr ? `Avg HR: ${s.avg_hr} bpm` : null,
       s.max_hr ? `Max HR: ${s.max_hr} bpm` : null,
       s.hr_at_climax ? `HR at climax: ${s.hr_at_climax} bpm` : null,

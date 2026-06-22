@@ -31,6 +31,98 @@ function formatTimePhrase(value) {
   return `${minutes} minute${minutes === 1 ? "" : "s"} and ${secondsText} second${seconds === 1 ? "" : "s"}`;
 }
 
+function formatClockTime(value) {
+  const total = Math.max(0, Number(value) || 0);
+  const minutes = Math.floor(total / 60);
+  const seconds = Math.round((total - minutes * 60) * 10) / 10;
+  const secondsText = seconds % 1 === 0
+    ? String(Math.round(seconds)).padStart(2, "0")
+    : seconds.toFixed(1).padStart(4, "0");
+  return `${minutes}:${secondsText}`;
+}
+
+function markerNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function currentSessionPhaseMarkers(session = {}) {
+  return {
+    pre_climax: markerNumber(session.pre_climax_offset_s),
+    climax: markerNumber(session.climax_offset_s),
+    recovery: markerNumber(session.recovery_offset_s),
+  };
+}
+
+function phaseTargetFromText(text = "") {
+  const value = String(text || "").toLowerCase();
+  if (/\bpre[-\s]?climax\b/.test(value)) return "pre_climax";
+  if (/\brecovery\b/.test(value)) return "recovery";
+  if (/\bafter[-\s]?marker\b/.test(value)) return "after_climax";
+  if (/\b(climax|orgasm|ejaculat|emission|expulsion|release)\b/.test(value)) return "climax";
+  return null;
+}
+
+function phaseMarkerClaimFromText(text = "") {
+  const value = String(text || "");
+  return /\b(?:pre[-\s]?climax|climax|recovery)\s+marker\b/i.test(value)
+    || /\bmarker\s+(?:logged|reached|set|saved)\b/i.test(value)
+    || /^(?:pre[-\s]?climax build|climax\s*\/\s*ejaculation evidence window|after[-\s]?marker continuation|recovery shift)$/i.test(value.trim());
+}
+
+function referencedClockSeconds(text = "") {
+  const times = [];
+  String(text || "").replace(/\b(\d{1,2}):(\d{2}(?:\.\d+)?)\b/g, (match, minutes, seconds) => {
+    times.push((Number(minutes) * 60) + Number(seconds));
+    return match;
+  });
+  return times.filter(Number.isFinite);
+}
+
+export function buildSessionPhaseMarkerDigest(session = {}) {
+  const markers = currentSessionPhaseMarkers(session);
+  const parts = [
+    markers.pre_climax != null ? `pre-climax ${formatClockTime(markers.pre_climax)} (${formatTimePhrase(markers.pre_climax)})` : null,
+    markers.climax != null ? `climax ${formatClockTime(markers.climax)} (${formatTimePhrase(markers.climax)})` : null,
+    markers.recovery != null ? `recovery ${formatClockTime(markers.recovery)} (${formatTimePhrase(markers.recovery)})` : null,
+  ].filter(Boolean);
+  if (!parts.length) return "";
+  return `Current manually saved phase markers are the source of truth: ${parts.join(", ")}. Older imported video-pass notes or saved clips that cite different marker times should be treated as stale.`;
+}
+
+export function isStalePhaseMarkerReference(item = {}, session = {}, toleranceSeconds = 35) {
+  const text = [
+    item.label,
+    item.reason,
+    item.note,
+    item.text,
+    item.description,
+    Array.isArray(item.category) ? item.category.join(" ") : item.category,
+    Array.isArray(item.annotation_tags) ? item.annotation_tags.join(" ") : item.annotation_tags,
+  ].filter(Boolean).join(" ");
+  if (!phaseMarkerClaimFromText(text)) return false;
+
+  const target = phaseTargetFromText(text);
+  const markers = currentSessionPhaseMarkers(session);
+  const expected = target === "pre_climax"
+    ? markers.pre_climax
+    : target === "recovery"
+      ? markers.recovery
+      : markers.climax;
+  if (expected == null) return false;
+
+  const itemTime = markerNumber(item.session_time_s ?? item.time_s ?? item.time_s_offset ?? item.offset_s);
+  const expectedForItem = target === "after_climax" ? expected + 22 : expected;
+  if (itemTime != null && Math.abs(itemTime - expectedForItem) > toleranceSeconds) return true;
+
+  return referencedClockSeconds(text).some((time) => Math.abs(time - expected) > toleranceSeconds);
+}
+
+export function sessionEventsForCurrentPhaseMarkers(session = {}) {
+  const events = Array.isArray(session.event_timeline) ? session.event_timeline : [];
+  return events.filter((event) => !isStalePhaseMarkerReference(event, session));
+}
+
 function compactFindingText(finding) {
   if (!finding) return "";
   if (typeof finding === "string") return cleanText(finding);
@@ -255,6 +347,7 @@ function normalizeVideoPassFindingCard(card, index = 0) {
 }
 
 export function normalizeSessionVideoPassFindings(sessionOrEntries) {
+  const hasSessionContext = !Array.isArray(sessionOrEntries) && sessionOrEntries && typeof sessionOrEntries === "object";
   const entries = Array.isArray(sessionOrEntries)
     ? sessionOrEntries
     : sessionOrEntries?.ai_analysis?._video_pass_findings;
@@ -262,6 +355,19 @@ export function normalizeSessionVideoPassFindings(sessionOrEntries) {
   const seen = new Set();
   return entries
     .map(normalizeVideoPassFindingCard)
+    .map((entry) => {
+      if (!entry || !hasSessionContext) return entry;
+      return {
+        ...entry,
+        findings: entry.findings.filter((finding) => !isStalePhaseMarkerReference({ text: finding, time_s: entry.clip.start_s }, sessionOrEntries)),
+        draft_events: entry.draft_events.filter((event) => !isStalePhaseMarkerReference(event, sessionOrEntries)),
+      };
+    })
+    .filter((entry) => !hasSessionContext || !isStalePhaseMarkerReference({
+      label: entry?.label,
+      text: entry?.summary,
+      time_s: entry?.clip?.start_s,
+    }, sessionOrEntries))
     .filter((entry) => entry && (entry.summary || entry.findings.length || entry.draft_events.length))
     .filter((entry) => {
       const key = [
@@ -300,7 +406,10 @@ function formatVideoPassRange(entry) {
 
 export function buildSessionVideoPassDigest(session, { limit = 14, findingsPerCard = 4, eventsPerCard = 3 } = {}) {
   const entries = normalizeSessionVideoPassFindings(session).slice(0, limit);
-  if (!entries.length) return cleanText(session?.ai_analysis?._video_pass_digest || "", 6000);
+  if (!entries.length) {
+    const fallback = cleanText(session?.ai_analysis?._video_pass_digest || "", 6000);
+    return isStalePhaseMarkerReference({ text: fallback }, session) ? "" : fallback;
+  }
   const lines = entries.map((entry) => {
     const videoLabel = entry.source_video.label || entry.source_video.filename || "linked local video";
     const findings = entry.findings.slice(0, findingsPerCard);
@@ -372,6 +481,7 @@ function normalizeKeyVideoClip(clip, sourceLabel = "", index = 0) {
 }
 
 export function normalizeSessionKeyVideoClips(sessionOrClips) {
+  const hasSessionContext = !Array.isArray(sessionOrClips) && sessionOrClips && typeof sessionOrClips === "object";
   const rawClips = Array.isArray(sessionOrClips)
     ? sessionOrClips
     : [
@@ -383,6 +493,7 @@ export function normalizeSessionKeyVideoClips(sessionOrClips) {
   return rawClips
     .map((clip, index) => normalizeKeyVideoClip(clip, clip?.source_panel || "", index))
     .filter((clip) => clip && (clip.url || clip.frames.length || clip.label))
+    .filter((clip) => !hasSessionContext || !isStalePhaseMarkerReference(clip, sessionOrClips))
     .filter((clip) => {
       const key = [
         clip.url || clip.filename || clip.id,

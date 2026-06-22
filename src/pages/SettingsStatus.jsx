@@ -21,7 +21,7 @@ import {
 import TTSSettingsPanel from "@/components/TTSSettingsPanel";
 import { Textarea } from "@/components/ui/textarea";
 import { SarahLogoMark } from "@/components/SarahBrand";
-import { cancelBackgroundJob, clearBackgroundJobs, listBackgroundJobs } from "@/lib/backgroundJobs";
+import { cancelBackgroundJob, clearBackgroundJobs, listBackgroundJobs, retryBackgroundJob } from "@/lib/backgroundJobs";
 import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
 import { apiUrl, serverUrl } from "@/lib/mobileApiBase";
 import { friendlyJobStatusMessage } from "@/lib/jobErrorMessages";
@@ -30,6 +30,7 @@ import {
   getSarahImageOption,
   getSarahImageOptions,
   addSarahImageOption,
+  resolveSarahImageSrc,
   removeSarahImageOption,
   readSarahBrandSettings,
   saveSarahBrandSettings,
@@ -60,6 +61,15 @@ import {
   readPwaLifecycleDiagnostics,
   recordPwaLifecycleEvent,
 } from "@/lib/pwaLifecycleDiagnostics";
+import {
+  formatBloodPressure,
+  formatBloodPressureTime,
+  getBloodPressureStatus,
+  listRecentBloodPressure,
+  openHealthConnectSettings,
+  requestBloodPressurePermission,
+  syncBloodPressureFromHealthConnect,
+} from "@/lib/bloodPressure";
 
 function fmtMoney(value) {
   const n = Number(value);
@@ -75,6 +85,23 @@ function fmtDateTime(value) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+const WATERMARK_POSITION_OPTIONS = [
+  { value: "top_right", label: "Top right" },
+  { value: "top_left", label: "Top left" },
+  { value: "bottom_right", label: "Bottom right" },
+  { value: "bottom_left", label: "Bottom left" },
+];
+
+function watermarkPreviewPositionStyle(positionMode = "top_right") {
+  const position = String(positionMode || "top_right");
+  const style = {};
+  if (position.includes("top")) style.top = "4%";
+  else style.bottom = "4%";
+  if (position.includes("left")) style.left = "4%";
+  else style.right = "4%";
+  return style;
 }
 
 function elapsedLabel(value) {
@@ -326,6 +353,7 @@ export default function SettingsStatus() {
   const [jobsError, setJobsError] = useState("");
   const [clearing, setClearing] = useState(false);
   const [stoppingIds, setStoppingIds] = useState(() => new Set());
+  const [retryingIds, setRetryingIds] = useState(() => new Set());
   const notificationSupport = useMemo(() => getNotificationSupport(), []);
   const [notificationPermission, setNotificationPermission] = useState(getNotificationPermission);
   const [completionNotificationsEnabled, setCompletionNotificationsEnabled] = useState(areBackgroundNotificationsEnabled);
@@ -347,6 +375,10 @@ export default function SettingsStatus() {
   const [sarahPersonality, setSarahPersonality] = useState(readSarahPersonalitySettings);
   const [sarahPersonalityDirty, setSarahPersonalityDirty] = useState(false);
   const [sarahPersonalityMessage, setSarahPersonalityMessage] = useState("");
+  const [bpStatus, setBpStatus] = useState(null);
+  const [bpReadings, setBpReadings] = useState([]);
+  const [bpMessage, setBpMessage] = useState("");
+  const [bpBusy, setBpBusy] = useState(false);
 
   const updateUiPrefs = (patch) => {
     setUiPrefs((previous) => {
@@ -371,6 +403,65 @@ export default function SettingsStatus() {
   useEffect(() => {
     loadProviders();
   }, []);
+
+  const loadBloodPressure = async () => {
+    setBpMessage("");
+    try {
+      const [nativeStatus, recent] = await Promise.all([
+        getBloodPressureStatus().catch((error) => ({ available: false, error: error?.message || String(error) })),
+        listRecentBloodPressure(5).catch(() => ({ readings: [] })),
+      ]);
+      setBpStatus(nativeStatus);
+      setBpReadings(recent.readings || []);
+    } catch (error) {
+      setBpMessage(error?.message || "Could not load blood pressure status.");
+    }
+  };
+
+  useEffect(() => {
+    loadBloodPressure();
+  }, []);
+
+  const requestBpAccess = async () => {
+    setBpBusy(true);
+    setBpMessage("Requesting Health Connect blood pressure access...");
+    try {
+      const status = await requestBloodPressurePermission();
+      setBpStatus(status);
+      setBpMessage(status.permissionGranted ? "Blood pressure permission granted." : "Permission was not granted yet. Open Health Connect and grant Sarah blood pressure access manually.");
+    } catch (error) {
+      setBpMessage(error?.message || "Could not request Health Connect BP access.");
+    } finally {
+      setBpBusy(false);
+    }
+  };
+
+  const openBpSettings = async () => {
+    setBpBusy(true);
+    setBpMessage("Opening Health Connect settings...");
+    try {
+      await openHealthConnectSettings();
+      setBpMessage("Health Connect opened. Grant Sarah blood pressure access, then return here and tap Refresh.");
+    } catch (error) {
+      setBpMessage(error?.message || "Could not open Health Connect settings.");
+    } finally {
+      setBpBusy(false);
+    }
+  };
+
+  const syncBloodPressure = async () => {
+    setBpBusy(true);
+    setBpMessage("Reading Health Connect blood pressure records...");
+    try {
+      const result = await syncBloodPressureFromHealthConnect({ days: 60, limit: 200 });
+      setBpMessage(`Synced ${result.inserted || 0} BP reading${result.inserted === 1 ? "" : "s"} from Health Connect.`);
+      await loadBloodPressure();
+    } catch (error) {
+      setBpMessage(error?.message || "Could not sync blood pressure.");
+    } finally {
+      setBpBusy(false);
+    }
+  };
 
   useEffect(() => {
     const refresh = () => setPwaLifecycleEvents(readPwaLifecycleDiagnostics().slice(-20).reverse());
@@ -497,6 +588,10 @@ export default function SettingsStatus() {
       await sendBackgroundTestNotification({
         route: "/settings",
         onOpen: (target) => navigate(target),
+      }).then((sent) => {
+        if (!sent) {
+          throw new Error("Chrome/PWA requires a ready service worker for notifications here. Try reopening the installed app after the service worker finishes registering.");
+        }
       });
       setNotificationMessage("Test notification sent.");
     } catch (error) {
@@ -603,8 +698,8 @@ export default function SettingsStatus() {
     const presetPatch = preset === "private_archive"
       ? { preset, enabled: false, metadataScrubEnabled: false }
       : preset === "preview"
-        ? { preset, enabled: true, metadataScrubEnabled: true, opacity: 0.7, positionMode: "bottom_right", portraitEnabled: true, logoEnabled: true }
-        : { preset, enabled: true, metadataScrubEnabled: true, primaryText: "Clinical Climax", secondaryText: "Powered by Sarah", positionMode: "bottom_right", portraitEnabled: true, logoEnabled: true };
+        ? { preset, enabled: true, metadataScrubEnabled: true, opacity: 0.7, positionMode: "top_right", portraitEnabled: true, logoEnabled: true }
+        : { preset, enabled: true, metadataScrubEnabled: true, primaryText: "Clinical Climax", secondaryText: "Powered by Sarah", positionMode: "top_right", portraitEnabled: true, logoEnabled: true };
     updateWatermark(presetPatch);
   };
 
@@ -703,6 +798,23 @@ export default function SettingsStatus() {
     }
   };
 
+  const retryJob = async (job) => {
+    if (!job?.id || retryingIds.has(job.id)) return;
+    setRetryingIds((previous) => new Set([...previous, job.id]));
+    try {
+      const next = await retryBackgroundJob(job.id);
+      setJobs((previous) => previous.map((item) => (item.id === job.id ? next : item)));
+    } catch (error) {
+      setJobsError(error?.message || "Could not retry background task.");
+    } finally {
+      setRetryingIds((previous) => {
+        const next = new Set(previous);
+        next.delete(job.id);
+        return next;
+      });
+    }
+  };
+
   const clearTasks = async () => {
     setClearing(true);
     try {
@@ -723,16 +835,16 @@ export default function SettingsStatus() {
     const phaseFallback = activePhaseFallback(job);
     const counts = progressCounts(job);
     return (
-      <article key={job.id} className="rounded-xl border border-border bg-card p-3">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="min-w-0">
+      <article key={job.id} className="overflow-hidden rounded-xl border border-border bg-card p-3 shadow-sm shadow-primary/5 sm:p-3.5">
+        <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+          <div className="min-w-0 max-w-full">
             <div className="flex flex-wrap items-center gap-2">
-              <p className="truncate text-sm font-bold text-foreground">{jobLabel(job)}</p>
+              <p className="min-w-0 overflow-hidden text-ellipsis text-sm font-bold leading-snug text-foreground sm:truncate">{jobLabel(job)}</p>
               {stale && <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-200">May be hung</span>}
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">{friendlyJobStatusMessage(job)}</p>
+            <p className="mt-1 break-words text-sm leading-snug text-muted-foreground">{friendlyJobStatusMessage(job)}</p>
           </div>
-          <span className={`rounded-full px-2 py-1 text-xs font-semibold uppercase ${active ? "bg-primary/10 text-primary" : job.status === "complete" ? "bg-emerald-500/10 text-emerald-300" : "bg-destructive/10 text-destructive"}`}>
+          <span className={`w-fit rounded-full px-2 py-1 text-xs font-semibold uppercase ${active ? "bg-primary/10 text-primary" : job.status === "complete" ? "bg-emerald-500/10 text-emerald-300" : "bg-destructive/10 text-destructive"}`}>
             {job.status}
           </span>
         </div>
@@ -758,13 +870,13 @@ export default function SettingsStatus() {
             ))}
           </div>
         )}
-        <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
-          <span>
+        <div className="mt-2 grid min-w-0 gap-1 text-xs text-muted-foreground sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-2">
+          <span className="min-w-0 break-words">
             {job?.progress?.phase || job.type}
             {counts ? ` · ${counts}` : ""}
             {job?.progress?.model ? ` / ${job.progress.model}` : ""}
           </span>
-          <span>Updated {elapsedLabel(job?.progress?.updatedAt || job.updatedAt)}{job.updatedAt ? ` / ${fmtDateTime(job.updatedAt)}` : ""}</span>
+          <span className="min-w-0 break-words sm:text-right">Updated {elapsedLabel(job?.progress?.updatedAt || job.updatedAt)}{job.updatedAt ? ` / ${fmtDateTime(job.updatedAt)}` : ""}</span>
         </div>
         {active && (eta || phaseFallback) && (
           <div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold text-primary">
@@ -772,17 +884,23 @@ export default function SettingsStatus() {
             {eta?.elapsedLabel && <span className="rounded-full border border-border bg-muted/20 px-2 py-1 text-muted-foreground">{eta.elapsedLabel}</span>}
           </div>
         )}
-        <div className="mt-3 flex flex-wrap gap-2">
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
           {route && (
-            <button type="button" onClick={() => navigate(route)} className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted/80">
+            <button type="button" onClick={() => navigate(route)} className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-muted px-2.5 py-2 text-xs font-semibold text-foreground hover:bg-muted/80 sm:py-1.5">
               <ExternalLink className="h-3.5 w-3.5" />
               Open
             </button>
           )}
           {active && (
-            <button type="button" disabled={stoppingIds.has(job.id)} onClick={() => stopJob(job)} className="inline-flex items-center gap-1.5 rounded-lg bg-destructive/10 px-2.5 py-1.5 text-xs font-semibold text-destructive hover:bg-destructive/20 disabled:opacity-60">
+            <button type="button" disabled={stoppingIds.has(job.id)} onClick={() => stopJob(job)} className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-destructive/10 px-2.5 py-2 text-xs font-semibold text-destructive hover:bg-destructive/20 disabled:opacity-60 sm:py-1.5">
               {stoppingIds.has(job.id) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
               {stoppingIds.has(job.id) ? "Stopping" : "Stop"}
+            </button>
+          )}
+          {!active && job.retryable && (
+            <button type="button" disabled={retryingIds.has(job.id)} onClick={() => retryJob(job)} className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary/10 px-2.5 py-2 text-xs font-semibold text-primary hover:bg-primary/15 disabled:opacity-60 sm:py-1.5">
+              {retryingIds.has(job.id) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              {retryingIds.has(job.id) ? "Retrying" : "Retry"}
             </button>
           )}
         </div>
@@ -791,7 +909,7 @@ export default function SettingsStatus() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6">
+    <div className="mx-auto w-full max-w-7xl space-y-4 overflow-x-hidden px-3 py-4 sm:space-y-5 sm:px-6 sm:py-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-primary">
@@ -805,7 +923,7 @@ export default function SettingsStatus() {
         </div>
       </header>
 
-      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+      <section className="rounded-xl border border-border bg-card p-3 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-primary">
@@ -842,6 +960,86 @@ export default function SettingsStatus() {
         <div className="mt-3 flex items-start gap-2 rounded-lg bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
           <KeyRound className="mt-0.5 h-4 w-4 shrink-0" />
           <span>Standard Claude and OpenAI API keys still power analysis and TTS. Optional admin reporting keys only add cost visibility here.</span>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-primary">
+              <Activity className="h-4 w-4" />
+              <h2 className="text-sm font-bold uppercase tracking-wider">Blood Pressure Sync</h2>
+            </div>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+              Pull Samsung Health / OMRON BP readings through Android Health Connect into the local PulsePoint database.
+            </p>
+          </div>
+          <span className={`rounded-full px-2 py-1 text-xs font-semibold uppercase ${bpStatus?.permissionGranted ? "bg-emerald-500/10 text-emerald-400" : "bg-muted text-muted-foreground"}`}>
+            {bpStatus?.native === false ? "web only" : bpStatus?.permissionGranted ? "permission on" : "permission needed"}
+          </span>
+        </div>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-start">
+          <div className="rounded-lg bg-muted/25 px-3 py-3 text-sm text-muted-foreground">
+            <p>
+              {bpStatus?.message || (bpStatus?.available ? "Health Connect is available." : "Health Connect status has not been checked yet.")}
+            </p>
+            {bpStatus?.error && <p className="mt-1 text-destructive">{bpStatus.error}</p>}
+            {bpMessage && <p className="mt-2 font-semibold text-foreground">{bpMessage}</p>}
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
+            <button
+              type="button"
+              onClick={requestBpAccess}
+              disabled={bpBusy || bpStatus?.native === false}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            >
+              {bpBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+              Allow BP
+            </button>
+            <button
+              type="button"
+              onClick={openBpSettings}
+              disabled={bpBusy || bpStatus?.native === false}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80 disabled:opacity-50"
+            >
+              <ExternalLink className="h-4 w-4" />
+              Health Connect
+            </button>
+            <button
+              type="button"
+              onClick={syncBloodPressure}
+              disabled={bpBusy || bpStatus?.native === false || !bpStatus?.permissionGranted}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80 disabled:opacity-50"
+            >
+              {bpBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Sync
+            </button>
+            <button
+              type="button"
+              onClick={loadBloodPressure}
+              disabled={bpBusy}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80 disabled:opacity-50"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {bpReadings.length ? bpReadings.map((reading) => (
+            <div key={reading.id} className="rounded-lg border border-border bg-muted/15 px-3 py-2">
+              <p className="font-mono text-lg font-bold text-foreground">{formatBloodPressure(reading)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {formatBloodPressureTime(reading.measured_at)} · {reading.source_app || "Health Connect"}
+              </p>
+            </div>
+          )) : (
+            <p className="rounded-lg bg-muted/25 px-3 py-4 text-sm text-muted-foreground md:col-span-2 xl:col-span-3">
+              No local BP readings saved yet.
+            </p>
+          )}
         </div>
       </section>
 
@@ -959,10 +1157,14 @@ export default function SettingsStatus() {
               >
                 <div className="aspect-[16/9] overflow-hidden bg-muted">
                   <img
-                    src={option.src}
+                    src={resolveSarahImageSrc(option.src)}
                     alt={option.label}
                     className="h-full w-full object-cover"
                     style={{ objectPosition: option.position }}
+                    onError={(event) => {
+                      event.currentTarget.onerror = null;
+                      event.currentTarget.src = "/brand/sarah-lab.jpg";
+                    }}
                     draggable="false"
                   />
                 </div>
@@ -1088,6 +1290,22 @@ export default function SettingsStatus() {
               ))}
             </div>
 
+            <div className="space-y-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Corner placement</span>
+              <div className="grid gap-2 sm:grid-cols-4">
+                {WATERMARK_POSITION_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => updateWatermark({ positionMode: option.value })}
+                    className={`rounded-lg border px-3 py-2 text-left text-xs font-semibold transition-colors ${watermark.positionMode === option.value ? "border-primary bg-primary/10 text-foreground" : "border-border bg-muted/15 text-muted-foreground hover:border-primary/40 hover:text-foreground"}`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="grid gap-3 md:grid-cols-3">
               <label className="space-y-1">
                 <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Primary text</span>
@@ -1184,8 +1402,9 @@ export default function SettingsStatus() {
               )}
               {watermark.enabled && (
                 <div
-                  className={`absolute bottom-[4%] right-[4%] flex max-w-[76%] items-end gap-2 rounded px-2 py-1 text-white ${watermark.backgroundPlateEnabled ? "bg-black/40" : ""}`}
+                  className={`absolute flex max-w-[76%] items-end gap-2 rounded px-2 py-1 text-white ${watermark.backgroundPlateEnabled ? "bg-black/40" : ""}`}
                   style={{
+                    ...watermarkPreviewPositionStyle(watermark.positionMode),
                     opacity: watermark.opacity,
                     fontSize: Math.max(10, watermark.textSize * 0.34),
                     textShadow: watermark.shadowEnabled ? "0 2px 4px rgba(0,0,0,.9)" : "none",
@@ -1495,20 +1714,20 @@ export default function SettingsStatus() {
           </span>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
-          <div className="rounded-lg bg-muted/25 px-3 py-3 text-sm text-muted-foreground">
+        <div className="mt-4 grid min-w-0 gap-3 md:grid-cols-[1fr_auto] md:items-center">
+          <div className="min-w-0 rounded-lg bg-muted/25 px-3 py-3 text-sm leading-relaxed text-muted-foreground">
             <p>{notificationSupport.reason}</p>
-            <p className="mt-1 text-xs">
+            <p className="mt-1 break-words text-xs">
               These are local completion/test alerts for work the app is already tracking. Fully closed remote push can come later if we add subscription storage and backend push routes.
             </p>
-            {notificationMessage && <p className="mt-2 text-xs font-semibold text-foreground">{notificationMessage}</p>}
+            {notificationMessage && <p className="mt-2 break-words text-xs font-semibold text-foreground">{notificationMessage}</p>}
           </div>
-          <div className="flex flex-wrap gap-2 md:justify-end">
+          <div className="grid grid-cols-2 gap-2 md:flex md:flex-wrap md:justify-end">
             <button
               type="button"
               onClick={requestNotifications}
               disabled={notificationBusy || !notificationSupport.supported || (notificationPermission === "granted" && completionNotificationsEnabled)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
               {notificationBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <BellRing className="h-4 w-4" />}
               {notificationPermission === "granted" && !completionNotificationsEnabled ? "Enable Alerts" : "Enable"}
@@ -1517,7 +1736,7 @@ export default function SettingsStatus() {
               type="button"
               onClick={sendTestNotification}
               disabled={notificationBusy || !notificationSupport.supported || notificationPermission !== "granted"}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80 disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80 disabled:opacity-50"
             >
               {notificationBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
               Send Test
@@ -1526,7 +1745,7 @@ export default function SettingsStatus() {
         </div>
       </section>
 
-      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+      <section className="rounded-xl border border-border bg-card p-3 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-primary">
@@ -1537,7 +1756,7 @@ export default function SettingsStatus() {
               Active jobs stay visible here across the app. Tasks without progress updates for ten minutes are flagged so they are easier to spot.
             </p>
           </div>
-          <button type="button" onClick={clearTasks} disabled={clearing || !jobs.length} className="inline-flex items-center gap-1.5 rounded-lg bg-destructive/10 px-3 py-2 text-sm font-semibold text-destructive hover:bg-destructive/20 disabled:opacity-50">
+          <button type="button" onClick={clearTasks} disabled={clearing || !jobs.length} className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-destructive/10 px-3 py-2 text-sm font-semibold text-destructive hover:bg-destructive/20 disabled:opacity-50 sm:w-auto">
             {clearing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
             Clear All Tasks
           </button>

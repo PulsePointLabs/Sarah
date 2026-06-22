@@ -1,7 +1,7 @@
 const ENABLED_KEY = "pulsepoint.backgroundJobs.notificationsEnabled";
 const NOTIFIED_KEY = "pulsepoint.backgroundJobs.notifiedTerminalJobs.v1";
 const NATIVE_CHANNEL_ID = "pulsepoint-background-jobs";
-const DEV_SERVICE_WORKER_DISABLED = false;
+const DEV_SERVICE_WORKER_DISABLED = import.meta.env.DEV;
 
 let nativeBridgePromise = null;
 let nativeChannelReady = false;
@@ -86,6 +86,14 @@ export function areBackgroundNotificationsEnabled() {
 
 export function isNotificationServiceWorkerDisabled() {
   return DEV_SERVICE_WORKER_DISABLED;
+}
+
+function canUseWindowNotificationConstructor() {
+  if (typeof window === "undefined") return false;
+  if (isNativeAppShell()) return false;
+  if (window.matchMedia?.("(display-mode: standalone)")?.matches) return false;
+  if (navigator.standalone) return false;
+  return typeof window.Notification === "function";
 }
 
 export function setBackgroundNotificationsEnabled(enabled) {
@@ -244,7 +252,7 @@ export async function notifyBackgroundJobFinished(job, { route, onOpen, force = 
       return true;
     }
 
-    if ("serviceWorker" in navigator && !DEV_SERVICE_WORKER_DISABLED) return false;
+    if ("serviceWorker" in navigator || !canUseWindowNotificationConstructor()) return false;
 
     const notification = new window.Notification(message.title, options);
     notification.onclick = () => {
@@ -286,6 +294,7 @@ export async function sendBackgroundTestNotification({ route = "/settings", onOp
     await registration.showNotification(message.title, options);
     return true;
   }
+  if ("serviceWorker" in navigator || !canUseWindowNotificationConstructor()) return false;
   const notification = new window.Notification(message.title, options);
   notification.onclick = () => {
     notification.close();

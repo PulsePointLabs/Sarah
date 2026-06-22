@@ -17,7 +17,7 @@ test('public export preset enables Clinical Climax watermark by default', () => 
   assert.equal(settings.metadataScrubEnabled, true);
   assert.equal(settings.primaryText, 'Clinical Climax');
   assert.equal(settings.secondaryText, 'Powered by Sarah');
-  assert.equal(settings.positionMode, 'bottom_right');
+  assert.equal(settings.positionMode, 'top_right');
   assert.equal(settings.portraitEnabled, true);
   assert.equal(settings.logoEnabled, true);
   assert.equal(settings.portraitPath, 'brand/sarah-lab.jpg');
@@ -58,7 +58,7 @@ test('drawtext filter stays inside frame expressions with safe padding', () => {
   assert.doesNotMatch(filter, /y=-/);
 });
 
-test('Sarah brand watermark graph places portrait, icon, and text in the bottom right', () => {
+test('Sarah brand watermark graph places portrait, icon, and text in the top right by default', () => {
   const filter = buildSarahBrandFilterComplex(DEFAULT_WATERMARK_SETTINGS, {
     hasPortrait: true,
     hasLogo: true,
@@ -66,10 +66,20 @@ test('Sarah brand watermark graph places portrait, icon, and text in the bottom 
   assert.match(filter, /sarahPortrait/);
   assert.match(filter, /sarahLogo/);
   assert.match(filter, /overlay=x=max\(.*w-/);
-  assert.match(filter, /y=max\(.*h-/);
+  assert.match(filter, /y=\(min\(main_w\\,main_h\)\*0\.0400\)/);
   assert.match(filter, /Clinical Climax/);
   assert.match(filter, /Powered by Sarah/);
   assert.match(filter, /\[vout\]$/);
+});
+
+test('Sarah brand watermark graph honors explicit bottom-left placement', () => {
+  const filter = buildSarahBrandFilterComplex({ ...DEFAULT_WATERMARK_SETTINGS, positionMode: 'bottom_left' }, {
+    hasPortrait: true,
+    hasLogo: true,
+  });
+  assert.match(filter, /overlay=x=\(min\(main_w\\,main_h\)\*0\.0400\)/);
+  assert.match(filter, /y=max\(.*h-/);
+  assert.match(filter, /x=\(min\(w\\,h\)\*0\.0400\)\+132/);
 });
 
 test('safe export filenames avoid source names and local paths', () => {

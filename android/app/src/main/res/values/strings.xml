@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">PulsePoint</string>
-    <string name="title_activity_main">PulsePoint</string>
+    <string name="app_name">Sarah</string>
+    <string name="title_activity_main">Sarah</string>
     <string name="package_name">com.pulsepointlabs.sarah</string>
     <string name="custom_url_scheme">com.pulsepointlabs.sarah</string>
 </resources>

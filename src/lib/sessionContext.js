@@ -127,15 +127,21 @@ export function structuredSessionContextForAI(session) {
   if (mentalState.length) cleaned.mental_state = mentalState;
   const preparation = arrayValue(context.environmental_preparation, context.preparation, session?.environmental_preparation, session?.preparation);
   if (preparation.length) cleaned.environmental_preparation = preparation;
+  if (context.blood_pressure && typeof context.blood_pressure === "object") cleaned.blood_pressure = context.blood_pressure;
   return Object.keys(cleaned).length ? cleaned : undefined;
 }
 
 export function sessionContextEvidenceItems(session) {
   const context = structuredSessionContextForAI(session);
   if (!context) return [];
+  const bp = context.blood_pressure;
+  const bpText = bp?.systolic_mm_hg && bp?.diastolic_mm_hg
+    ? `Blood pressure: ${bp.systolic_mm_hg}/${bp.diastolic_mm_hg} mmHg${bp.pulse_bpm ? `, pulse ${bp.pulse_bpm} bpm` : ""}${bp.measured_at ? ` at ${new Date(bp.measured_at).toLocaleString()}` : ""}${bp.source_app ? ` (${bp.source_app})` : ""}`
+    : null;
   return [
     substanceText("Alcohol", context.alcohol),
     substanceText("Cannabis", context.cannabis),
+    bpText,
     recordedValue(context.fatigue) ? `Fatigue: ${labelFor(FATIGUE_OPTIONS, context.fatigue)}` : null,
     recordedValue(context.hydration_state) ? `Hydration: ${labelFor(HYDRATION_OPTIONS, context.hydration_state)}` : null,
     recordedValue(context.food_state) ? `Food state: ${labelFor(FOOD_OPTIONS, context.food_state)}` : null,
@@ -162,6 +168,14 @@ export function sessionContextDisplayRows(session) {
   if (context?.hydration_state) rows.push({ label: "Hydration", value: labelFor(HYDRATION_OPTIONS, context.hydration_state) });
   else if (session?.hydration) rows.push({ label: "Hydration", value: labelFor([], session.hydration) });
   if (context?.food_state) rows.push({ label: "Food State", value: labelFor(FOOD_OPTIONS, context.food_state) });
+  if (context?.blood_pressure?.systolic_mm_hg && context?.blood_pressure?.diastolic_mm_hg) {
+    const bp = context.blood_pressure;
+    const measured = bp.measured_at ? new Date(bp.measured_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+    rows.push({
+      label: "Blood Pressure",
+      value: `${bp.systolic_mm_hg}/${bp.diastolic_mm_hg} mmHg${bp.pulse_bpm ? ` · ${bp.pulse_bpm} bpm` : ""}${measured ? ` · ${measured}` : ""}`,
+    });
+  }
   const alcohol = substanceText("Alcohol", context?.alcohol);
   const cannabis = substanceText("Cannabis", context?.cannabis);
   if (alcohol) rows.push({ label: "Alcohol", value: alcohol.replace(/^Alcohol: /, "") });

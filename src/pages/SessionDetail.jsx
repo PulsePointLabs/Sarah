@@ -37,7 +37,7 @@ import SavedMotionSummaryCard from "../components/SavedMotionSummaryCard";
 import JournalRecorder from "../components/JournalRecorder";
 import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
 import { sessionContextDisplayRows } from "@/lib/sessionContext";
-import { buildSessionKeyVideoClipDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, getReviewedVisualClips, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionKeyVideoClips, normalizeSessionVisualEvidence } from "@/lib/visualEvidence";
+import { buildSessionKeyVideoClipDigest, buildSessionPhaseMarkerDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, getReviewedVisualClips, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionKeyVideoClips, normalizeSessionVisualEvidence, sessionEventsForCurrentPhaseMarkers } from "@/lib/visualEvidence";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "../components/session-form/EventTimelineSection";
 import { hasMixedPauseResumeEvidence, isVerifiedMotionEvent } from "@/utils/sessionMotionEvidence";
 import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
@@ -523,6 +523,48 @@ export default function SessionDetail() {
       return { ...current, [field]: value };
     });
   }, []);
+
+  const savePhaseMarkers = useCallback(async (markers) => {
+    if (!id) return;
+    const nextMarkers = {
+      pre_climax_offset_s: markers.pre_climax_offset_s ?? null,
+      climax_offset_s: markers.climax_offset_s ?? null,
+      recovery_offset_s: markers.recovery_offset_s ?? null,
+    };
+    const patch = {
+      ...markers,
+      phase_markers_updated_at: new Date().toISOString(),
+    };
+    const preClimax = Number(nextMarkers.pre_climax_offset_s);
+    const climax = Number(nextMarkers.climax_offset_s);
+    if (Number.isFinite(preClimax) && Number.isFinite(climax) && timelineRows.length) {
+      const lo = Math.min(preClimax, climax);
+      const hi = Math.max(preClimax, climax);
+      const seg = timelineRows.filter((row) => {
+        const t = Number(row.time_offset_s);
+        return Number.isFinite(t) && t >= lo && t <= hi;
+      });
+      patch.hr_avg_pre_to_climax = seg.length
+        ? Math.round(seg.reduce((sum, row) => sum + Number(row.hr_smoothed || row.hr || 0), 0) / seg.length)
+        : null;
+    } else if ("pre_climax_offset_s" in markers || "climax_offset_s" in markers) {
+      patch.hr_avg_pre_to_climax = null;
+    }
+    if (Number.isFinite(climax) && timelineRows.length) {
+      const win = timelineRows.filter((row) => {
+        const t = Number(row.time_offset_s);
+        return Number.isFinite(t) && Math.abs(t - climax) <= 30;
+      });
+      patch.hr_avg_at_climax_window = win.length
+        ? Math.round(win.reduce((sum, row) => sum + Number(row.hr_smoothed || row.hr || 0), 0) / win.length)
+        : null;
+    } else if ("climax_offset_s" in markers) {
+      patch.hr_avg_at_climax_window = null;
+    }
+    await base44.entities.Session.update(id, patch);
+    setSession((prev) => (prev ? { ...prev, ...patch } : prev));
+  }, [id, timelineRows]);
+
   const handleMotionVerificationUpdate = useCallback(async (eventIndex, verificationStatus) => {
     if (!session?.id) return;
     const currentEvents = Array.isArray(session.event_timeline) ? session.event_timeline : [];
@@ -700,6 +742,7 @@ export default function SessionDetail() {
           pre_climax_offset_s: preClimaxOffset,
           climax_offset_s: climaxOffset,
           recovery_offset_s: recoveryOffset,
+          phase_markers_updated_at: new Date().toISOString(),
         };
 
         // Compute HR metrics
@@ -860,15 +903,32 @@ export default function SessionDetail() {
   };
   const sessionStorySection = !s.no_climax ? (
     <section className="space-y-4">
-      {companionAnalysisData.paragraphs.length > 0 && (
-        <section id="session-ai-video-chat" className="scroll-mt-24">
-          <SessionReviewVideoExportButton
-            session={s}
-            analysisTitle="AI Session Analysis"
-            sourceGeneratedAt={s.ai_analysis?._meta?.last_generated_at}
-            paragraphs={companionAnalysisData.paragraphs}
-            paragraphMeta={companionAnalysisData.paragraphMeta}
-          />
+      {(companionAnalysisData.paragraphs.length > 0 || technicalAnalysisData.paragraphs.length > 0) && (
+        <section id="session-ai-video-chat" className="scroll-mt-24 space-y-3">
+          {companionAnalysisData.paragraphs.length > 0 && (
+            <div id="session-ai-video-companion" className="scroll-mt-24">
+              <SessionReviewVideoExportButton
+                session={s}
+                analysisTitle="AI Session Analysis"
+                sourceGeneratedAt={s.ai_analysis?._meta?.last_generated_at}
+                paragraphs={companionAnalysisData.paragraphs}
+                paragraphMeta={companionAnalysisData.paragraphMeta}
+                routeHash="session-ai-video-companion"
+              />
+            </div>
+          )}
+          {technicalAnalysisData.paragraphs.length > 0 && (
+            <div id="session-ai-video-technical" className="scroll-mt-24">
+              <SessionReviewVideoExportButton
+                session={s}
+                analysisTitle="Technical Deep Dive"
+                sourceGeneratedAt={technicalVideoSourceGeneratedAt}
+                paragraphs={technicalAnalysisData.paragraphs}
+                paragraphMeta={technicalAnalysisData.paragraphMeta}
+                routeHash="session-ai-video-technical"
+              />
+            </div>
+          )}
         </section>
       )}
       <section id="session-ai-companion" className="scroll-mt-24">
@@ -886,22 +946,6 @@ export default function SessionDetail() {
         </div>
         <CascadeOverviewPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} />
         <SessionTimelineNarrative session={s} timelineRows={timelineRows} userProfile={userProfile} sessionJournal={sessionJournal} />
-        {technicalAnalysisData.paragraphs.length > 0 && (
-          <details className="rounded-xl border border-border bg-muted/10 p-3">
-            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
-              Technical Deep Dive Video
-            </summary>
-            <div className="mt-3">
-              <SessionReviewVideoExportButton
-                session={s}
-                analysisTitle="Technical Deep Dive"
-                sourceGeneratedAt={technicalVideoSourceGeneratedAt}
-                paragraphs={technicalAnalysisData.paragraphs}
-                paragraphMeta={technicalAnalysisData.paragraphMeta}
-              />
-            </div>
-          </details>
-        )}
         <details className="rounded-xl border border-border bg-muted/10 p-3">
           <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
             Supporting Evidence Pattern View
@@ -919,14 +963,14 @@ export default function SessionDetail() {
   );
 
   return (
-    <div>
-      <div className="px-2 md:px-4 pt-4 flex items-center gap-2">
-        <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
+    <div className="max-w-full overflow-x-hidden">
+      <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2 px-3 pt-4 md:px-4">
+        <Button variant="ghost" size="icon" onClick={() => navigate(-1)} className="shrink-0">
           <ArrowLeft className="w-5 h-5" />
         </Button>
-        <div className="flex-1">
-          <h1 className="text-lg font-bold">{moment(s.date).format("MMM D, YYYY")}</h1>
-          <p className="text-sm text-muted-foreground flex items-center gap-1 flex-wrap">
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-lg font-bold">{moment(s.date).format("MMM D, YYYY")}</h1>
+          <p className="flex min-w-0 flex-wrap items-center gap-1 text-sm text-muted-foreground">
             {s.start_time && <><Clock className="w-3 h-3" />{s.start_time}</>}
             {s.end_time && ` – ${s.end_time}`}
             {s.duration_minutes && <> · <strong>{s.duration_minutes}m</strong></>}
@@ -938,7 +982,7 @@ export default function SessionDetail() {
             )}
           </p>
         </div>
-        <Button variant="ghost" size="icon" onClick={() => navigate(`/sessions/${id}/edit`)}>
+        <Button variant="ghost" size="icon" onClick={() => navigate(`/sessions/${id}/edit`)} className="shrink-0">
           <Pencil className="w-5 h-5 text-muted-foreground" />
         </Button>
         <Button
@@ -951,12 +995,12 @@ export default function SessionDetail() {
           Motion Lab
         </Button>
         <SessionExportButton session={s} timelineRows={timelineRows} />
-        <Button variant="ghost" size="icon" onClick={toggleFav}>
+        <Button variant="ghost" size="icon" onClick={toggleFav} className="shrink-0">
           <Star className={`w-5 h-5 ${s.is_favorite ? "text-yellow-500 fill-yellow-500" : "text-muted-foreground"}`} />
         </Button>
         <AlertDialog>
           <AlertDialogTrigger asChild>
-            <Button variant="ghost" size="icon"><Trash2 className="w-5 h-5 text-destructive" /></Button>
+            <Button variant="ghost" size="icon" className="shrink-0"><Trash2 className="w-5 h-5 text-destructive" /></Button>
           </AlertDialogTrigger>
           <AlertDialogContent>
             <AlertDialogHeader>
@@ -973,7 +1017,7 @@ export default function SessionDetail() {
 
       <SessionSectionNavigator sections={sectionLinks} onSelect={selectSection} />
 
-      <div className="px-2 md:px-4 py-4 space-y-4 pb-24 xl:pr-60">
+      <div className="min-w-0 max-w-full space-y-4 overflow-x-hidden px-3 py-4 pb-24 md:px-4 xl:pr-60">
         <section id="session-snapshot" className="scroll-mt-24">
           <SessionSnapshotHero session={s} timelineRows={timelineRows} motionSummary={s.motion_analysis_summary} />
         </section>
@@ -988,10 +1032,7 @@ export default function SessionDetail() {
           onSelectEventIndex={setSelectedEventIdx}
           inspectionTime={inspectionTime}
           onInspectionTimeChange={setInspectionTime}
-          onMarkersChange={async (markers) => {
-            await base44.entities.Session.update(id, markers);
-            setSession((prev) => ({ ...prev, ...markers }));
-          }}
+          onMarkersChange={savePhaseMarkers}
           onOpenReview={() => navigate(`/review-player?session=${encodeURIComponent(s.id)}`)}
         />
         {timelineRows.length > 0 && (
@@ -1005,10 +1046,7 @@ export default function SessionDetail() {
                   session={s}
                   timelineRows={timelineRows}
                   userProfile={userProfile}
-                  onApply={async (updates) => {
-                    await base44.entities.Session.update(id, updates);
-                    setSession((prev) => ({ ...prev, ...updates }));
-                  }}
+                  onApply={savePhaseMarkers}
                 />
               )}
               {!s.no_climax && (
@@ -1146,10 +1184,7 @@ export default function SessionDetail() {
                       climax_offset_s: s.climax_offset_s,
                       recovery_offset_s: s.recovery_offset_s,
                     }}
-                    onMarkersChange={async (markers) => {
-                      await base44.entities.Session.update(id, markers);
-                      setSession((prev) => ({ ...prev, ...markers }));
-                    }}
+                    onMarkersChange={savePhaseMarkers}
                     highlightRange={highlightRange}
                     noClimax={!!s.no_climax}
                     nearClimaxEvents={nearClimaxEvents}
@@ -1187,10 +1222,7 @@ export default function SessionDetail() {
                         session={s}
                         timelineRows={timelineRows}
                         userProfile={userProfile}
-                        onApply={async (updates) => {
-                          await base44.entities.Session.update(id, updates);
-                          setSession((prev) => ({ ...prev, ...updates }));
-                        }}
+                        onApply={savePhaseMarkers}
                       />
                     )}
                     {!s.no_climax && (
@@ -1630,11 +1662,12 @@ export default function SessionDetail() {
             `Climax duration: ${s.climax_duration ?? "?"}`,
             `Mood: ${s.mood}, Hydration: ${s.hydration}`,
             s.avg_hr ? `HR: avg ${s.avg_hr}, max ${s.max_hr}, at climax ${s.hr_at_climax ?? "?"}` : null,
+            buildSessionPhaseMarkerDigest(s),
             s.pre_climax_offset_s != null ? (() => { const fmt = (v) => { if (v == null) return "?"; const m = Math.floor(v/60); const sec = Math.round(v%60); return `${m}:${sec.toString().padStart(2,"0")}`; }; return `Phase markers: pre-climax ${fmt(s.pre_climax_offset_s)}, climax ${fmt(s.climax_offset_s)}, recovery ${fmt(s.recovery_offset_s)}`; })() : null,
             s.ejaculate_volume ? `Ejaculate: ${s.ejaculate_volume}` : null,
             s.unusual_sensations ? `Unusual sensations: ${s.unusual_sensations}` : null,
             (s.discomfort_entries || []).length ? `Discomfort: ${s.discomfort_entries.map(e => `sev ${e.severity}/10 — ${e.note}`).join("; ")}` : null,
-            (s.event_timeline || []).length ? `Events: ${s.event_timeline.map(e => { const m = Math.floor(e.time_s / 60); const sec = Math.round(e.time_s % 60); return `[${m}:${sec.toString().padStart(2,"0")}] ${e.note}`; }).join(" | ")}` : null,
+            sessionEventsForCurrentPhaseMarkers(s).length ? `Events: ${sessionEventsForCurrentPhaseMarkers(s).map(e => { const m = Math.floor(e.time_s / 60); const sec = Math.round(e.time_s % 60); return `[${m}:${sec.toString().padStart(2,"0")}] ${e.note}`; }).join(" | ")}` : null,
             buildSessionVisualEvidenceDigest(s),
             buildSessionVideoPassDigest(s),
             buildSessionKeyVideoClipDigest(s),

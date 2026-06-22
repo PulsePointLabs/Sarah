@@ -39,7 +39,10 @@ const VIDEO_FRAME_SAMPLE_COUNT = 12;
 const TTS_CACHE_DB_NAME = "pulsepoint-ai-chat-tts";
 const TTS_CACHE_DB_VERSION = 1;
 const TTS_CACHE_STORE_NAME = "audioChunks";
-const VOICE_AUTO_STOP_ENABLED = false;
+const VOICE_AUTO_STOP_ENABLED = true;
+const VOICE_AUTO_STOP_SILENCE_MS = 3600;
+const VOICE_AUTO_STOP_RMS = 0.024;
+const VOICE_AUTO_STOP_MIN_RECORDING_MS = 1200;
 
 function extractProviderErrorMessage(error) {
   const candidates = [
@@ -82,6 +85,25 @@ function friendlySarahError(error) {
     return "Sarah could not answer because Anthropic says the API credit balance is too low. Add credits in Anthropic Plans & Billing, then try again.";
   }
   return message;
+}
+
+function friendlyMicError(error) {
+  const name = String(error?.name || "");
+  const message = String(error?.message || "");
+  const combined = `${name} ${message}`;
+  if (/notallowed|permission|denied/i.test(combined)) {
+    return "Microphone permission is blocked for Sarah. Open Android app settings for Sarah, allow Microphone, then reopen the APK.";
+  }
+  if (/notfound|devicesnotfound/i.test(combined)) {
+    return "No microphone was reported by Android for this app.";
+  }
+  if (/notreadable|trackstarterror|in use/i.test(combined)) {
+    return "Android could not open the microphone. Another app may be using it; close recorder/camera apps and try again.";
+  }
+  if (/mediarecorder|mime|unsupported/i.test(combined)) {
+    return "This Android WebView could access the mic but could not start the recorder format.";
+  }
+  return message || "Microphone recording could not start.";
 }
 
 function makeId(prefix) {
@@ -251,6 +273,24 @@ async function sampleVideoFrames({ file, startSeconds, endSeconds, label, maxFra
 
 function stripDataUrl(dataUrl) {
   return String(dataUrl || "").replace(/^data:[^;]+;base64,/, "");
+}
+
+function supportedAudioMimeType() {
+  if (typeof MediaRecorder === "undefined") return "";
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/ogg;codecs=opus",
+    "audio/ogg",
+  ];
+  return candidates.find((type) => {
+    try {
+      return MediaRecorder.isTypeSupported(type);
+    } catch {
+      return false;
+    }
+  }) || "";
 }
 
 function formatSeconds(value) {
@@ -1196,10 +1236,12 @@ export default function AIChat({
     stopVad();
     speechDetectedRef.current = false;
     silenceStartRef.current = null;
+    const startedAt = Date.now();
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) return;
     const audioContext = new AudioContextClass();
     audioContextRef.current = audioContext;
+    audioContext.resume?.().catch(() => {});
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 1024;
     const source = audioContext.createMediaStreamSource(stream);
@@ -1214,12 +1256,22 @@ export default function AIChat({
       }
       const rms = Math.sqrt(total / data.length);
       const now = Date.now();
-      if (rms > 0.035) {
+      if (rms > VOICE_AUTO_STOP_RMS) {
         speechDetectedRef.current = true;
         silenceStartRef.current = null;
       } else if (speechDetectedRef.current) {
         if (!silenceStartRef.current) silenceStartRef.current = now;
-        if (VOICE_AUTO_STOP_ENABLED && now - silenceStartRef.current > 2400 && mediaRecorderRef.current?.state === "recording") {
+        if (
+          VOICE_AUTO_STOP_ENABLED
+          && now - startedAt >= VOICE_AUTO_STOP_MIN_RECORDING_MS
+          && now - silenceStartRef.current > VOICE_AUTO_STOP_SILENCE_MS
+          && mediaRecorderRef.current?.state === "recording"
+        ) {
+          setChatProcessingStatus({
+            phase: "processing",
+            message: "Pause detected",
+            detail: "Sarah stopped listening and is transcribing the voice note.",
+          });
           mediaRecorderRef.current.stop();
           return;
         }
@@ -1231,53 +1283,113 @@ export default function AIChat({
 
   const startRecording = async () => {
     if (recording || transcribing || loading) return;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    micStreamRef.current = stream;
-    audioChunksRef.current = [];
-    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-      ? "audio/webm;codecs=opus"
-      : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/ogg";
-    const mr = new MediaRecorder(stream, { mimeType });
-    mediaRecorderRef.current = mr;
-    mr.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
-    mr.onstop = async () => {
+    setImageError("");
+    setChatProcessingStatus({
+      phase: "processing",
+      message: "Opening microphone",
+      detail: "Android may ask for microphone permission.",
+    });
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setChatProcessingStatus({
+        phase: "error",
+        message: "Microphone unavailable",
+        detail: "This app view does not expose browser microphone recording.",
+      });
+      return;
+    }
+
+    let stream = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      micStreamRef.current = stream;
+      audioChunksRef.current = [];
+      const mimeType = supportedAudioMimeType();
+      const mr = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+      const recorderMimeType = mr.mimeType || mimeType || "audio/webm";
+      mediaRecorderRef.current = mr;
+      mr.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+      mr.onerror = (event) => {
+        const message = friendlyMicError(event?.error || event);
+        setChatProcessingStatus({ phase: "error", message: "Microphone recorder failed", detail: message });
+      };
+      mr.onstop = async () => {
+        stopVad();
+        stream.getTracks().forEach((t) => t.stop());
+        if (micStreamRef.current === stream) micStreamRef.current = null;
+        setRecording(false);
+        if (suppressNextTranscriptionRef.current) {
+          suppressNextTranscriptionRef.current = false;
+          audioChunksRef.current = [];
+          setTranscribing(false);
+          setChatProcessingStatus(null);
+          return;
+        }
+        setTranscribing(true);
+        setChatProcessingStatus({
+          phase: "processing",
+          message: "Transcribing voice note",
+          detail: "Sarah is sending the captured audio to local Whisper routing.",
+        });
+        try {
+          const chunks = audioChunksRef.current.slice();
+          if (!chunks.length) throw new Error("No audio was captured.");
+          const blob = new Blob(chunks, { type: recorderMimeType });
+          const ab = await blob.arrayBuffer();
+          const bytes = new Uint8Array(ab);
+          let bin = "";
+          for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+          const base64 = btoa(bin);
+          const res = await base44.functions.invoke("whisperSTT", { audio_base64: base64, mime_type: recorderMimeType, prompt: WHISPER_PROMPT });
+          const rawText = res.data?.text?.trim() || "";
+          const text = cleanWhisperTranscript(rawText);
+          if (text) {
+            setInput((prev) => (prev ? `${prev} ${text}` : text));
+            setChatProcessingStatus(null);
+          } else {
+            setChatProcessingStatus({
+              phase: "ready",
+              message: "No speech detected",
+              detail: "The recording completed, but Whisper did not return usable text.",
+            });
+          }
+          setTimeout(() => inputRef.current?.focus(), 100);
+        } catch (error) {
+          const message = friendlyWhisperError(error);
+          setImageError("");
+          setChatProcessingStatus({ phase: "error", message: "Whisper transcription failed", detail: message });
+        } finally {
+          audioChunksRef.current = [];
+          setTranscribing(false);
+        }
+      };
+      mr.start(500);
+      setRecording(true);
+      setChatProcessingStatus({
+        phase: "recording",
+        message: "Listening",
+        detail: "Tap the mic to stop, or pause for a few seconds after speaking and Sarah will stop automatically.",
+      });
+      startVad(stream);
+    } catch (error) {
       stopVad();
-      stream.getTracks().forEach((t) => t.stop());
+      stream?.getTracks?.().forEach((track) => track.stop());
       if (micStreamRef.current === stream) micStreamRef.current = null;
       setRecording(false);
-      if (suppressNextTranscriptionRef.current) {
-        suppressNextTranscriptionRef.current = false;
-        audioChunksRef.current = [];
-        setTranscribing(false);
-        return;
-      }
-      setTranscribing(true);
-      try {
-        const chunks = audioChunksRef.current.slice();
-        if (!chunks.length) throw new Error("No audio was captured.");
-        const blob = new Blob(chunks, { type: mimeType });
-        const ab = await blob.arrayBuffer();
-        const bytes = new Uint8Array(ab);
-        let bin = "";
-        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-        const base64 = btoa(bin);
-        const res = await base44.functions.invoke("whisperSTT", { audio_base64: base64, mime_type: mimeType, prompt: WHISPER_PROMPT });
-        const rawText = res.data?.text?.trim() || "";
-        const text = cleanWhisperTranscript(rawText);
-        if (text) setInput((prev) => (prev ? `${prev} ${text}` : text));
-        setTimeout(() => inputRef.current?.focus(), 100);
-      } catch (error) {
-        const message = friendlyWhisperError(error);
-        setImageError("");
-        setChatProcessingStatus({ phase: "error", message: "Whisper transcription failed", detail: message });
-      } finally {
-        audioChunksRef.current = [];
-        setTranscribing(false);
-      }
-    };
-    mr.start();
-    setRecording(true);
-    startVad(stream);
+      setTranscribing(false);
+      setChatProcessingStatus({
+        phase: "error",
+        message: "Microphone could not start",
+        detail: friendlyMicError(error),
+      });
+    }
   };
 
   const stopRecording = () => {
@@ -1647,6 +1759,28 @@ Return a conversational answer plus structured findings for review/persistence.`
     </div>
   ) : null;
 
+  const renderChatProcessingStatus = () => {
+    if (!chatProcessingStatus || loading) return null;
+    const tone = chatProcessingStatus.phase === "error"
+      ? "border-destructive/30 bg-destructive/10 text-destructive"
+      : chatProcessingStatus.phase === "recording"
+        ? "border-primary/30 bg-primary/10 text-primary"
+        : "border-border bg-muted/30 text-muted-foreground";
+    return (
+      <div className={`rounded-lg border px-3 py-2 text-xs ${tone}`}>
+        <div className="flex items-center gap-2 font-semibold">
+          {["processing", "recording"].includes(chatProcessingStatus.phase) && (
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-current border-t-transparent animate-spin" />
+          )}
+          <span>{chatProcessingStatus.message}</span>
+        </div>
+        {chatProcessingStatus.detail && (
+          <p className="mt-1 leading-relaxed opacity-90">{chatProcessingStatus.detail}</p>
+        )}
+      </div>
+    );
+  };
+
   const renderSavedVideoClips = () => {
     const clips = Array.isArray(savedVideoClips) ? savedVideoClips.filter((clip) => clip?.url || clip?.clip_url || clip?.frames?.length) : [];
     if (!clips.length || mode !== "session") return null;
@@ -2008,6 +2142,7 @@ Return a conversational answer plus structured findings for review/persistence.`
     <div className="flex items-center justify-end gap-2">
       {renderAttachButton()}
       <button
+        type="button"
         onClick={recording ? stopRecording : startRecording}
         disabled={loading || transcribing || uploadingImages}
         title={recording ? "Stop recording" : "Tap to dictate"}
@@ -2018,6 +2153,7 @@ Return a conversational answer plus structured findings for review/persistence.`
           : recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
       </button>
       <button
+        type="button"
         onClick={sendMessage}
         disabled={effectiveSendDisabled}
         className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
@@ -2109,6 +2245,7 @@ Return a conversational answer plus structured findings for review/persistence.`
               {renderSavedVideoClips()}
               {renderSelectedImages()}
               {imageError && <p className="text-xs text-destructive">{imageError}</p>}
+              {renderChatProcessingStatus()}
               <textarea
                 ref={inputRef}
                 value={input}
@@ -2224,6 +2361,7 @@ Return a conversational answer plus structured findings for review/persistence.`
               {renderSavedVideoClips()}
               {renderSelectedImages()}
               {imageError && <p className="text-xs text-destructive">{imageError}</p>}
+              {renderChatProcessingStatus()}
               <div className={composerClass}>
                 <textarea
                     ref={inputRef}

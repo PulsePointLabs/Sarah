@@ -10,9 +10,9 @@ import { buildAudioChapterBundle } from "@/lib/audioChapters";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { readWatermarkSettings } from "@/lib/watermarkSettings";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from "@/lib/sessionContext";
-import { buildSessionKeyVideoClipDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, normalizeSessionKeyVideoClips, normalizeSessionVideoPassFindings } from "@/lib/visualEvidence";
+import { buildSessionKeyVideoClipDigest, buildSessionPhaseMarkerDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, normalizeSessionKeyVideoClips, normalizeSessionVideoPassFindings, sessionEventsForCurrentPhaseMarkers } from "@/lib/visualEvidence";
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
-import { buildSessionAIContentMeta, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
+import { buildSessionAIContentMeta, buildSessionPhaseMarkerFreshnessKey, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
 import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
 import { buildSarahPersonalityPrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
@@ -54,6 +54,24 @@ function reviewFilename(title = "Session Review Video") {
     .slice(0, 60) || "Session-Review-Video"}.mp4`;
 }
 
+function reviewIdentityForTitle(title = "", recordType = "session") {
+  const normalized = String(title || "").toLowerCase();
+  if (recordType === "body_exploration") return "body_exploration_ai_analysis";
+  if (normalized.includes("technical") || normalized.includes("deep dive")) return "session_technical_deep_dive";
+  if (normalized.includes("cascade")) return "session_climax_cascade";
+  if (normalized.includes("timeline")) return "session_arousal_timeline";
+  return "session_ai_analysis";
+}
+
+function reviewRecordMatchesIdentity(record = {}, reviewType = "", displayTitle = "", analysisTitle = "") {
+  const recordReviewType = String(record.review_type || record.reviewType || "").trim();
+  if (recordReviewType) return recordReviewType === reviewType;
+  const title = String(record.analysis_title || record.title || "").trim().toLowerCase();
+  const display = String(displayTitle || "").trim().toLowerCase();
+  const legacy = String(analysisTitle || "").trim().toLowerCase();
+  return Boolean(title && (title === display || title === legacy || title.startsWith(`${legacy} ·`)));
+}
+
 function formatVideoClock(seconds = 0) {
   const totalSeconds = Math.max(0, Math.floor(Number(seconds || 0)));
   const hours = Math.floor(totalSeconds / 3600);
@@ -61,6 +79,35 @@ function formatVideoClock(seconds = 0) {
   const secs = totalSeconds % 60;
   if (hours) return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
   return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+function parseLocalDateOnly(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
+function formatReviewSessionDate(value) {
+  const parsed = parseLocalDateOnly(value) || new Date(value);
+  if (!parsed || Number.isNaN(parsed.getTime())) return "";
+  return parsed.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+export function reviewVideoTitleWithDate(title = "Session Review Video", session = {}) {
+  const cleanTitle = String(title || "Session Review Video").trim() || "Session Review Video";
+  const sessionDate = formatReviewSessionDate(session?.date || session?.start_time || session?.created_date);
+  return sessionDate && !cleanTitle.includes(sessionDate) ? `${cleanTitle} · ${sessionDate}` : cleanTitle;
+}
+
+function cacheBustedMediaUrl(fileUrl = "", cacheKey = "") {
+  const url = serverUrl(fileUrl);
+  if (!url) return "";
+  const version = String(cacheKey || Date.now()).replace(/[^a-zA-Z0-9_.-]/g, "");
+  return `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}`;
 }
 
 function cleanReviewAnswerForDisplay(text = "") {
@@ -161,7 +208,7 @@ function rangeOverlapsRanges(start, end, ranges = [], pad = 0) {
 function buildReviewWindowEvidencePacket({ session, manifest, windowStart, windowEnd, question }) {
   const manifestSegments = reviewManifestSegmentsForPlayback(manifest, windowStart, windowEnd);
   const sessionRanges = buildSessionRangesFromManifestSegments(manifestSegments, windowStart, windowEnd);
-  const eventTimeline = Array.isArray(session?.event_timeline) ? session.event_timeline : [];
+  const eventTimeline = sessionEventsForCurrentPhaseMarkers(session);
   const events = eventTimeline
     .filter((event) => timeInRanges(event?.time_s ?? event?.offset_s ?? event?.timestamp_s, sessionRanges, 10))
     .sort((a, b) => Number(a.time_s ?? a.offset_s ?? a.timestamp_s) - Number(b.time_s ?? b.offset_s ?? b.timestamp_s))
@@ -381,7 +428,12 @@ export function buildSessionAnalysisReaderData({ result, session, timelineRows =
   if (notableItems.length) { sections.push({ label: isTechnical ? "Notable Findings" : "Patterns & Hypotheses", color: "chart-4", icon: <Zap className="w-3.5 h-3.5" />, items: notableItems, start: idx }); idx += notableItems.length; }
   if (recommendationItems.length) { sections.push({ label: isTechnical ? "Recommendations" : "Recommendations & Experiments", color: "accent", icon: <Lightbulb className="w-3.5 h-3.5" />, items: recommendationItems, start: idx }); }
 
-  const keyVideoClips = Array.isArray(result?._meta?.key_video_clips) ? result._meta.key_video_clips : [];
+  const keyVideoClips = normalizeSessionKeyVideoClips({
+    ...session,
+    ai_analysis: result,
+    ai_session_deep_dive: null,
+    ai_cascade: null,
+  });
   const keyVideoClipError = result?._meta?.key_video_clip_error || "";
   const clipsByParagraph = keyVideoClips.reduce((map, clip) => {
     const paraIndex = paragraphIndexForClip(clip, sections, paragraphs.length, sessionDurationSeconds(session, timelineRows), paragraphs);
@@ -440,6 +492,7 @@ export function SessionReviewVideoExportButton({
   paragraphs = [],
   paragraphMeta = [],
   recordType = "session",
+  routeHash,
 }) {
   const [status, setStatus] = useState({ type: "idle", message: "" });
   const [rendered, setRendered] = useState(null);
@@ -450,7 +503,24 @@ export function SessionReviewVideoExportButton({
   const [reviewStatus, setReviewStatus] = useState({ type: "idle", message: "" });
   const chatStorageLoadedRef = useRef("");
   const activeVideo = rendered?.file_url ? rendered : existingVideo;
-  const activeVideoUrl = activeVideo?.file_url ? serverUrl(activeVideo.file_url) : "";
+  const displayTitle = reviewVideoTitleWithDate(analysisTitle || "Session Review Video", session);
+  const reviewType = reviewIdentityForTitle(analysisTitle || displayTitle, recordType);
+  const reviewRouteHash = routeHash || (
+    recordType === "body_exploration"
+      ? "exploration-ai-video"
+      : reviewType === "session_technical_deep_dive"
+        ? "session-ai-video-technical"
+        : "session-ai-video-companion"
+  );
+  const activeVideoUrl = activeVideo?.file_url
+    ? cacheBustedMediaUrl(activeVideo.file_url, [
+      activeVideo.filename,
+      activeVideo.exported_at,
+      activeVideo.source_generated_at,
+      activeVideo.duration_seconds,
+      activeVideo.watermark_enabled ? "wm" : "nowm",
+    ].filter(Boolean).join("-"))
+    : "";
   const chatStorageKey = session?.id
     ? [
       "pulsepoint",
@@ -480,11 +550,22 @@ export function SessionReviewVideoExportButton({
         const matchingRecord = (records || []).find((record) => (
           record?.file_url &&
           record?.render_version === REVIEW_VIDEO_RENDER_VERSION &&
+          reviewRecordMatchesIdentity(record, reviewType, displayTitle, analysisTitle) &&
           (!sourceGeneratedAt || !record.source_generated_at || record.source_generated_at === sourceGeneratedAt)
         ));
         const matchingJob = (jobsResult?.jobs || []).find((job) => (
           job?.result?.file_url &&
           job?.result?.render_version === REVIEW_VIDEO_RENDER_VERSION &&
+          reviewRecordMatchesIdentity(
+            {
+              review_type: job?.meta?.reviewType || job?.payload?.reviewType || job?.result?.record?.review_type,
+              analysis_title: job?.meta?.analysisTitle || job?.payload?.title || job?.result?.record?.analysis_title,
+              title: job?.meta?.title || job?.payload?.title || job?.result?.record?.title,
+            },
+            reviewType,
+            displayTitle,
+            analysisTitle
+          ) &&
           (!sourceGeneratedAt || !job?.meta?.sourceGeneratedAt || job.meta.sourceGeneratedAt === sourceGeneratedAt)
         ));
         const recovered = matchingRecord || (matchingJob ? {
@@ -493,7 +574,11 @@ export function SessionReviewVideoExportButton({
           filename: matchingJob.result.filename || String(matchingJob.result.file_url).split("/").pop(),
           duration_seconds: matchingJob.result.duration_seconds,
           audio_reused: matchingJob.result.audio_reused,
+          review_type: reviewType,
           source_generated_at: matchingJob.meta?.sourceGeneratedAt || null,
+          exported_at: matchingJob.finishedAt || matchingJob.updatedAt || matchingJob.createdAt || null,
+          watermark_enabled: Boolean(matchingJob.result.watermark?.watermark_enabled ?? matchingJob.result.watermark_enabled),
+          watermark_preset: matchingJob.result.watermark?.preset || matchingJob.result.watermark_preset || null,
           _source: "completed_review_video_job",
         } : null);
         setExistingVideo(recovered);
@@ -505,7 +590,7 @@ export function SessionReviewVideoExportButton({
     return () => {
       cancelled = true;
     };
-  }, [session?.id, sourceGeneratedAt]);
+  }, [analysisTitle, displayTitle, reviewType, session?.id, sourceGeneratedAt]);
 
   useEffect(() => {
     if (!chatStorageKey) return;
@@ -543,8 +628,8 @@ export function SessionReviewVideoExportButton({
       const runtime = getTTSRuntime(loadTTSSettings());
       const chunks = buildReviewVideoChunks(readableParagraphs);
       const chapters = buildAudioChapterBundle({
-        title: analysisTitle || "Session Review Video",
-        audioFilename: reviewFilename(analysisTitle),
+        title: displayTitle,
+        audioFilename: reviewFilename(displayTitle),
         paragraphs: readableParagraphs,
         source: "session_review_video",
       }).chapters;
@@ -555,8 +640,9 @@ export function SessionReviewVideoExportButton({
       }));
       const payload = {
         sessionId: session?.id || null,
-        sessionDate: session?.date || null,
-        title: analysisTitle || "Session Review Video",
+        sessionDate: session?.date || session?.start_time || session?.created_date || null,
+        title: displayTitle,
+        reviewType,
         sourceGeneratedAt: sourceGeneratedAt || null,
         recordType,
         session: {
@@ -591,10 +677,16 @@ export function SessionReviewVideoExportButton({
 
       setStatus({ type: "working", message: "Starting review video render..." });
       const job = await startBackgroundJob("session_review_video", payload, {
-        title: `${analysisTitle || "Session Analysis"} review video`,
+        title: `${displayTitle} review video`,
         source: "SessionAIPanel",
         sessionId: session?.id || null,
         recordType,
+        reviewType,
+        analysisTitle: displayTitle,
+        route: recordType === "body_exploration"
+          ? `/exploration/${encodeURIComponent(session?.id || "")}#exploration-ai-video`
+          : `/sessions/${encodeURIComponent(session?.id || "")}#${reviewRouteHash}`,
+        sessionDate: session?.date || session?.start_time || session?.created_date || null,
         sourceGeneratedAt: sourceGeneratedAt || null,
       });
       const completed = await waitForBackgroundJob(job.id, {
@@ -633,7 +725,9 @@ export function SessionReviewVideoExportButton({
   const loadActiveManifest = async () => {
     if (!activeVideo?.manifest_url) return null;
     try {
-      const res = await fetch(serverUrl(activeVideo.manifest_url));
+      const res = await fetch(cacheBustedMediaUrl(activeVideo.manifest_url, activeVideo.exported_at || activeVideo.filename || activeVideo.file_url), {
+        cache: "no-store",
+      });
       if (!res.ok) throw new Error(`Manifest request failed: ${res.status}`);
       return await res.json();
     } catch (error) {
@@ -745,7 +839,7 @@ Answer directly and practically. If the evidence specifically supports the user'
         file_url: fileUrl,
         startSeconds: windowStart,
         endSeconds: windowEnd,
-        label: `${analysisTitle || "Review video"} current window`,
+        label: `${displayTitle} current window`,
         frameCount: 12,
         maxDurationSeconds: 18,
       });
@@ -776,7 +870,7 @@ Recent conversation for follow-up continuity:
 ${conversationContext || "- This is the first question in this review thread."}
 
 Video context:
-- Review video title: ${analysisTitle || "Review video"}
+- Review video title: ${displayTitle}
 - Processed video playback window: ${formatVideoClock(windowStart)} to ${formatVideoClock(windowEnd)}
 - Source record type: ${recordType}
 - Sampled frame count: ${frames.length}
@@ -825,10 +919,10 @@ Answer directly and practically in conversational prose, not markdown. Describe 
   };
 
   return (
-    <div className="space-y-3 rounded-xl border border-primary/20 bg-card p-4 shadow-sm">
+    <div className="max-w-full min-w-0 space-y-3 overflow-hidden rounded-xl border border-primary/20 bg-card p-3 shadow-sm sm:p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary">
+        <div className="min-w-0 flex-1">
+          <h3 className="flex min-w-0 items-center gap-2 break-words text-xs font-semibold uppercase tracking-wider text-primary">
             <MessageCircle className="h-3.5 w-3.5" /> Ask Sarah About The Review Video
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -841,14 +935,14 @@ Answer directly and practically in conversational prose, not markdown. Describe 
             size="sm"
             variant="ghost"
             onClick={() => setChatMessages([])}
-            className="h-8 text-xs"
+            className="h-8 shrink-0 text-xs"
           >
             Clear chat
           </Button>
         )}
       </div>
       {activeVideoUrl && (
-        <div className="relative overflow-hidden rounded-lg border border-border bg-black">
+        <div className="relative max-w-full overflow-hidden rounded-lg border border-border bg-black">
           <video
             key={activeVideoUrl}
             src={activeVideoUrl}
@@ -860,13 +954,13 @@ Answer directly and practically in conversational prose, not markdown. Describe 
             onTimeUpdate={(event) => setPreviewTime(event.currentTarget.currentTime || 0)}
             onSeeked={(event) => setPreviewTime(event.currentTarget.currentTime || 0)}
           />
-          <div className="pointer-events-none absolute bottom-3 left-3 rounded-md bg-black/75 px-2 py-1 font-mono text-xs font-semibold text-white shadow">
+          <div className="pointer-events-none absolute bottom-3 left-3 max-w-[calc(100%-1.5rem)] truncate rounded-md bg-black/75 px-2 py-1 font-mono text-xs font-semibold text-white shadow">
             player {formatVideoClock(previewTime)}
           </div>
         </div>
       )}
       {activeVideoUrl && (
-        <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-3">
+        <div className="max-w-full min-w-0 space-y-3 overflow-hidden rounded-lg border border-border bg-muted/20 p-3">
           <div className="flex flex-col gap-2 sm:flex-row">
             <input
               value={reviewQuestion}
@@ -886,7 +980,7 @@ Answer directly and practically in conversational prose, not markdown. Describe 
               variant="outline"
               onClick={askSarahAboutCurrentWindow}
               disabled={reviewStatus.type === "working"}
-              className="h-9 gap-1.5 text-xs"
+              className="h-9 shrink-0 gap-1.5 text-xs"
             >
               {reviewStatus.type === "working" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageCircle className="h-3.5 w-3.5" />}
               Review Window
@@ -897,7 +991,7 @@ Answer directly and practically in conversational prose, not markdown. Describe 
               {chatMessages.map((message) => (
                 <div
                   key={message.id}
-                  className={`max-w-[92%] rounded-xl border px-3 py-2 ${
+                  className={`max-w-[92%] break-words rounded-xl border px-3 py-2 ${
                     message.role === "user"
                       ? "ml-auto border-primary/25 bg-primary/10 text-foreground"
                       : message.error
@@ -934,14 +1028,28 @@ Answer directly and practically in conversational prose, not markdown. Describe 
           )}
         </div>
       )}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex max-w-full flex-wrap items-center gap-2">
+        {displayTitle && (
+          <span className="max-w-full truncate rounded-full border border-border bg-muted/30 px-2 py-1 text-[11px] font-medium text-muted-foreground">
+            {displayTitle}
+          </span>
+        )}
+        {activeVideo?.watermark_enabled != null && (
+          <span className={`rounded-full border px-2 py-1 text-[11px] font-medium ${
+            activeVideo.watermark_enabled
+              ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-700 dark:text-emerald-300"
+              : "border-amber-400/30 bg-amber-400/10 text-amber-700 dark:text-amber-300"
+          }`}>
+            {activeVideo.watermark_enabled ? "Watermarked" : "No watermark"}
+          </span>
+        )}
         <Button
           type="button"
           size="sm"
           variant="outline"
           onClick={startRender}
           disabled={status.type === "working" || !paragraphs.length}
-          className="h-8 gap-1.5 text-xs"
+          className="h-8 max-w-full shrink-0 gap-1.5 text-xs"
         >
           {status.type === "working" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Video className="h-3.5 w-3.5" />}
           Build review video
@@ -952,7 +1060,7 @@ Answer directly and practically in conversational prose, not markdown. Describe 
             size="sm"
             variant="secondary"
             onClick={download}
-            className="h-8 gap-1.5 text-xs"
+            className="h-8 max-w-full shrink-0 gap-1.5 text-xs"
           >
             <Download className="h-3.5 w-3.5" />
             {rendered?.file_url ? "Download MP4" : "Download Existing"}
@@ -976,6 +1084,13 @@ Answer directly and practically in conversational prose, not markdown. Describe 
 function buildSessionContext(session, timelineRows) {
   const hrMin = timelineRows.length ? Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))) : null;
   const hrMax = timelineRows.length ? Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))) : null;
+  const aiAnalysisFresh = session.ai_analysis && !isSessionAIContentStale(session.ai_analysis, session);
+  const technicalAnalysisFresh = session.ai_session_deep_dive && !isSessionAIContentStale(session.ai_session_deep_dive, session);
+  const keyVideoDigest = aiAnalysisFresh || technicalAnalysisFresh
+    ? buildSessionKeyVideoClipDigest(session)
+    : "";
+  const currentPhaseMarkerDigest = buildSessionPhaseMarkerDigest(session);
+  const currentPhaseEvents = sessionEventsForCurrentPhaseMarkers(session);
   return [
     `Session date: ${session.date?.slice(0, 10)}`,
     `Duration: ${session.duration_minutes ?? "?"}min`,
@@ -1011,16 +1126,17 @@ function buildSessionContext(session, timelineRows) {
     `Mood: ${session.mood}, Hydration: ${session.hydration}`,
     sessionContextEvidenceText(session) ? `Logged session context/influences: ${sessionContextEvidenceText(session)}` : null,
     hrMin != null ? `HR: min ${hrMin}, avg ${session.avg_hr ?? "?"}, max ${hrMax}, at climax ${session.hr_at_climax ?? "?"}` : null,
+    currentPhaseMarkerDigest,
     session.pre_climax_offset_s != null ? `Phase markers: pre-climax at ${formatSecondsAsWords(session.pre_climax_offset_s)}, climax at ${formatSecondsAsWords(session.climax_offset_s)}, recovery ${session.recovery_offset_s != null ? `at ${formatSecondsAsWords(session.recovery_offset_s)}` : "unknown"}` : null,
     session.ejaculate_volume ? `Ejaculate: ${session.ejaculate_volume}` : null,
     session.unusual_sensations ? `Unusual sensations: ${session.unusual_sensations}` : null,
     (session.discomfort_entries || []).length ? `Discomfort: ${session.discomfort_entries.map(e => `sev ${e.severity}/10 — ${e.note}`).join("; ")}` : null,
-    (session.event_timeline || []).length ? `Events: ${session.event_timeline.map(e => `[${Math.floor(Number(e.time_s || 0) / 60)}:${String(Math.round(Number(e.time_s || 0) % 60)).padStart(2, "0")}] ${e.note}`).join(" | ")}` : null,
+    currentPhaseEvents.length ? `Events: ${currentPhaseEvents.map(e => `[${Math.floor(Number(e.time_s || 0) / 60)}:${String(Math.round(Number(e.time_s || 0) % 60)).padStart(2, "0")}] ${e.note}`).join(" | ")}` : null,
     session.notes ? `Session notes: ${session.notes}` : null,
     buildSessionVisualEvidenceDigest(session),
     buildSessionVideoPassDigest(session),
-    buildSessionKeyVideoClipDigest(session),
-    session.ai_analysis?.summary ? `AI analysis summary: ${session.ai_analysis.summary}` : null,
+    keyVideoDigest,
+    aiAnalysisFresh && session.ai_analysis?.summary ? `AI analysis summary: ${session.ai_analysis.summary}` : null,
   ].filter(Boolean).join("\n");
 }
 
@@ -1099,6 +1215,8 @@ GENITAL STATUS AND STIMULATION MECHANICS - HIGH PRIORITY:
 - If visual evidence supports grip, stroke, hand/genital contact, erection state, detumescence, genital visibility, sleeve/device fit, catheter/foley position, lubricant/preparation, or contact-location changes, mention the strongest supported findings in the Chronological Deep Dive or Motion & Evidence Interpretation. Use personal anatomy wording such as "your penis", "your shaft", "your glans", "your meatus", "your erection", and "your grip/contact pattern" when applicable.
 - If the data only gives subjective scores such as erection stability or stimulation fit, use them as subjective evidence and say what they suggest practically. For example, a high stimulation-fit score can support that the technique was effective; a lower erection-stability score can explain why grip, contact zone, or stimulation method may have shifted.
 - If these details are not visible or not logged, say that specific genital status, erection quality, grip, or stroke mechanics were not directly assessable rather than silently omitting the category. Do not invent a stroke pattern or erection state from HR alone.
+- Profile/Q&A context is background only. Do not import unrelated profile-chat topics, older Q&A speculation, foot odor/smell, vascular status, edema/perfusion, wound follow-up, or lower-extremity health commentary into this session unless the current session notes, event timeline, telemetry, or reviewed visual evidence directly supports that topic.
+- For masturbation or stimulation sessions, lower-body/foot findings are limited to visible/logged movement, bracing, position, timing, or contact relevance. Do not turn foot/leg visibility into odor, vascular, podiatry, or general health commentary.
 - Keep the tone clinical and observational, not erotic. The point is session analysis: visible mechanics, sensory input, effectiveness, and physiological consequence.
 `;
 
@@ -1176,6 +1294,15 @@ function completedAt(job) {
   return job?.finishedAt || job?.updatedAt || job?.createdAt || null;
 }
 
+function jobMatchesCurrentSessionMarkers(job, session, phaseMarkerFreshnessKey) {
+  if (job?.meta?.phaseMarkerFreshnessKey) return job.meta.phaseMarkerFreshnessKey === phaseMarkerFreshnessKey;
+  if (!session?.phase_markers_updated_at) return true;
+  const markerUpdatedAt = new Date(session.phase_markers_updated_at).getTime();
+  const jobTime = new Date(completedAt(job) || 0).getTime();
+  if (!Number.isFinite(markerUpdatedAt) || !Number.isFinite(jobTime)) return true;
+  return jobTime >= markerUpdatedAt;
+}
+
 function isNewerCompletedJob(job, savedResult) {
   if (job?.status !== "complete") return false;
   const jobTime = new Date(completedAt(job) || 0).getTime();
@@ -1233,18 +1360,33 @@ function hasOutdatedKeyVideoClipSchema(savedResult) {
     && Number(savedResult?._meta?.key_video_clip_schema_version || 0) < KEY_VIDEO_CLIP_SCHEMA_VERSION;
 }
 
-function needsKeyVideoClipRepair(savedResult) {
+function hasCurrentPhaseMarkerKeyClips(savedResult, session) {
+  const clips = Array.isArray(savedResult?._meta?.key_video_clips) ? savedResult._meta.key_video_clips : [];
+  if (!clips.length) return false;
+  const hasNear = (labelPattern, target, tolerance = 2) => {
+    const time = numberOrNull(target);
+    if (time == null) return true;
+    return clips.some((clip) => labelPattern.test(String(clip?.label || ""))
+      && Math.abs(Number(clip?.session_time_s) - time) <= tolerance);
+  };
+  return hasNear(/^Pre-climax build$/i, session?.pre_climax_offset_s)
+    && hasNear(/^Climax \/ ejaculation evidence window$/i, session?.climax_offset_s)
+    && hasNear(/^Recovery shift$/i, session?.recovery_offset_s);
+}
+
+function needsKeyVideoClipRepair(savedResult, session = null) {
   return hasKeyVideoClipMeta(savedResult)
     && (
       !hasPrimaryKeyVideoClipMeta(savedResult)
       || hasLegacyTruncatedKeyVideoClipLabel(savedResult)
       || hasOutdatedKeyVideoClipSchema(savedResult)
+      || (session && !hasCurrentPhaseMarkerKeyClips(savedResult, session))
     );
 }
 
-function shouldProcessCompletedJob(job, savedResult) {
+function shouldProcessCompletedJob(job, savedResult, session = null) {
   if (isNewerCompletedJob(job, savedResult)) return true;
-  if (job?.status === "complete" && savedResult && needsKeyVideoClipRepair(savedResult)) return true;
+  if (job?.status === "complete" && savedResult && needsKeyVideoClipRepair(savedResult, session)) return true;
   return job?.status === "complete" && savedResult && !hasKeyVideoClipMeta(savedResult);
 }
 
@@ -1280,6 +1422,56 @@ function repairSessionAnalysisResult(value) {
   return normalizeAnalysisShape(repairAITextBlocks(value));
 }
 
+function sessionEvidenceCorpus(session = {}) {
+  return [
+    session.notes,
+    session.subjective_notes,
+    session.unusual_sensations,
+    session.discomfort_notes,
+    ...(Array.isArray(session.event_timeline) ? session.event_timeline.map((event) => event?.note) : []),
+    buildSessionVideoPassDigest(session),
+    buildSessionVisualEvidenceDigest(session),
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function removeUnsupportedSessionTangents(text = "", evidenceCorpus = "") {
+  const value = String(text || "");
+  if (!value) return value;
+  const hasOdorEvidence = /\b(smell|odor|odour|malodor|scent)\b/i.test(evidenceCorpus);
+  const hasVascularEvidence = /\b(vascular|circulation|circulatory|perfusion|cyanosis|pallor|edema|oedema|swelling|venous|arterial|capillary refill|color change)\b/i.test(evidenceCorpus);
+  const shouldRemoveSentence = (sentence) => {
+    const lower = String(sentence || "").toLowerCase();
+    if (!hasOdorEvidence && /\b(feet|foot|toe|toes|sole|soles)\b/.test(lower) && /\b(smell|smelled|smelling|odor|odour|malodor|scent)\b/.test(lower)) return true;
+    if (!hasVascularEvidence && /\b(vascular|circulation|circulatory|perfusion|cyanosis|pallor|edema|oedema|venous|arterial|capillary refill)\b/.test(lower)) return true;
+    return false;
+  };
+  return value
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !shouldRemoveSentence(sentence))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sanitizeSessionAnalysisResultForEvidence(result, session = {}) {
+  if (!result || typeof result !== "object") return result;
+  const corpus = sessionEvidenceCorpus(session);
+  const cleanArray = (rows) => (Array.isArray(rows)
+    ? rows.map((row) => removeUnsupportedSessionTangents(row, corpus)).filter(Boolean)
+    : rows);
+  return {
+    ...result,
+    summary: removeUnsupportedSessionTangents(result.summary, corpus),
+    arousal_arc: cleanArray(result.arousal_arc),
+    phase_analysis: cleanArray(result.phase_analysis),
+    event_analysis: cleanArray(result.event_analysis),
+    hr_analysis: cleanArray(result.hr_analysis),
+    emg_analysis: cleanArray(result.emg_analysis),
+    notable_findings: cleanArray(result.notable_findings),
+    recommendations: cleanArray(result.recommendations),
+  };
+}
+
 function sessionAIPreflight(session, timelineRows = []) {
   const events = Array.isArray(session?.event_timeline)
     ? session.event_timeline.filter((event) => String(event?.note || "").trim())
@@ -1308,7 +1500,7 @@ function sessionAIPreflight(session, timelineRows = []) {
   };
 }
 
-function normalizeSessionAnalysis(res) {
+function normalizeSessionAnalysis(res, session = {}) {
   const raw = typeof res === "string" ? JSON.parse(res) : res;
   const parsed = raw?.response ?? raw;
   const hasContent =
@@ -1322,7 +1514,7 @@ function normalizeSessionAnalysis(res) {
     throw new Error("AI returned text, but not the structured session analysis the app needs. Please try again.");
   }
 
-  return repairSessionAnalysisResult(parsed);
+  return sanitizeSessionAnalysisResultForEvidence(repairSessionAnalysisResult(parsed), session);
 }
 
 function Section({ icon, title, color, children }) {
@@ -1462,7 +1654,8 @@ function dedupeClipRequests(requests, minSpacingS = 22) {
     .sort((a, b) => b.priority - a.priority);
   const accepted = [];
   for (const request of sorted) {
-    if (accepted.some((item) => Math.abs(item.session_time_s - request.session_time_s) < minSpacingS)) continue;
+    const isCanonicalPhaseRequest = /^(?:Pre-climax build|Climax \/ ejaculation evidence window|After-marker continuation|Recovery shift):/i.test(request.id || "");
+    if (!isCanonicalPhaseRequest && accepted.some((item) => Math.abs(item.session_time_s - request.session_time_s) < minSpacingS)) continue;
     accepted.push(request);
   }
   return accepted.sort((a, b) => a.session_time_s - b.session_time_s);
@@ -1519,7 +1712,7 @@ function buildKeyVideoClipRequests(session, timelineRows = []) {
     );
   }
 
-  const eventRequests = (session?.event_timeline || [])
+  const eventRequests = sessionEventsForCurrentPhaseMarkers(session)
     .map((event, index) => ({
       event,
       index,
@@ -1714,6 +1907,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
   const analysisField = isTechnical ? "ai_session_deep_dive" : "ai_analysis";
   const analysisLabel = isTechnical ? "AI Session Technical Deep Dive" : "AI Session Analysis";
   const analysisTitle = isTechnical ? "Technical Session Deep Dive" : "AI Session Analysis";
+  const phaseMarkerFreshnessKey = buildSessionPhaseMarkerFreshnessKey(session);
   const [collapsed, setCollapsed] = useState(true);
   const [loading, setLoading] = useState(false);
   const [jobStatus, setJobStatus] = useState(null);
@@ -1741,7 +1935,8 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
         if (cancelled) return;
         const job = (data.jobs || []).find((item) => item.meta?.label === analysisLabel);
         if (!job) return;
-        if (job.status === "complete" && !shouldProcessCompletedJob(job, result || session[analysisField])) return;
+        if (!jobMatchesCurrentSessionMarkers(job, session, phaseMarkerFreshnessKey)) return;
+        if (job.status === "complete" && !shouldProcessCompletedJob(job, result || session[analysisField], session)) return;
 
         setCollapsed(false);
         setJobStatus(job);
@@ -1756,9 +1951,10 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
             },
           });
         if (cancelled) return;
-        if (!shouldProcessCompletedJob(completedJob, result || session[analysisField])) return;
+        if (!jobMatchesCurrentSessionMarkers(completedJob, session, phaseMarkerFreshnessKey)) return;
+        if (!shouldProcessCompletedJob(completedJob, result || session[analysisField], session)) return;
 
-        const parsed = normalizeSessionAnalysis(completedJob.result);
+        const parsed = normalizeSessionAnalysis(completedJob.result, session);
         const storedResult = await buildStoredSessionAnalysisResult({
           parsed,
           completedJob,
@@ -1806,13 +2002,13 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
     return () => {
       cancelled = true;
     };
-  }, [analysisField, analysisLabel, onAnalysisSaved, result, session, session.id]);
+  }, [analysisField, analysisLabel, onAnalysisSaved, phaseMarkerFreshnessKey, result, session, session.id]);
 
   useEffect(() => {
     let cancelled = false;
     const repairKeyClips = async () => {
       const currentResult = result || session[analysisField];
-      if (!currentResult || !needsKeyVideoClipRepair(currentResult)) return;
+      if (!currentResult || !needsKeyVideoClipRepair(currentResult, session)) return;
       const primaryVideo = chooseLinkedVideo(session, "primary");
       if (!primaryVideo?.path) return;
       const repairReason = !hasPrimaryKeyVideoClipMeta(currentResult)
@@ -2061,7 +2257,9 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
       return formatSecondsAsWords(seconds);
     };
 
-    const eventTimeline = (session.event_timeline || []).map(e => {
+    const currentPhaseMarkerDigest = buildSessionPhaseMarkerDigest(session);
+    const currentPhaseEvents = sessionEventsForCurrentPhaseMarkers(session);
+    const eventTimeline = currentPhaseEvents.map(e => {
       const timeWords = formatTimeWords(e.time_s);
       const hr = nearestHR(e.time_s);
       const categories = Array.isArray(e.category) ? e.category : [e.category].filter(Boolean);
@@ -2158,6 +2356,10 @@ LOGGED SESSION CONTEXT / INFLUENCES (user-entered context, not telemetry or visu
 ${structuredSessionContextText}
 
 Use these fields as logged contextual influences. Keep alcohol and cannabis wording neutral and clinical. If logged alcohol or cannabis occurred near the session, say it may have influenced heart rate, arousal timing, sensory state, or autonomic tone; do not overclaim causality.` : ""}
+${currentPhaseMarkerDigest ? `
+MANUAL PHASE MARKER OVERRIDE:
+${currentPhaseMarkerDigest}
+When older saved notes, video-pass findings, key clips, or generated text disagree with these marker times, use these marker fields and the current event timeline instead.` : ""}
 ${AI_SESSION_TYPE_GROUNDING_V1}
 ${BODY_STATE_INTERPRETIVE_STYLE_V1}
 ${reviewedVisualEvidence}
@@ -2362,6 +2564,14 @@ Provide ${isTechnical
     const startedJob = await startBackgroundJob("ai_invoke", aiPayload, {
       sessionId: session.id,
       label: analysisLabel,
+      analysisField,
+      phaseMarkerFreshnessKey,
+      phaseMarkers: {
+        pre_climax_offset_s: session.pre_climax_offset_s ?? null,
+        climax_offset_s: session.climax_offset_s ?? null,
+        recovery_offset_s: session.recovery_offset_s ?? null,
+      },
+      route: `/sessions/${encodeURIComponent(session.id)}#${isTechnical ? "session-ai-technical" : "session-ai-companion"}`,
     });
     setJobStatus(startedJob);
     const completedJob = await waitForBackgroundJob(startedJob.id, {
@@ -2369,7 +2579,7 @@ Provide ${isTechnical
       onProgress: setJobStatus,
     });
 
-    const parsed = normalizeSessionAnalysis(completedJob.result);
+    const parsed = normalizeSessionAnalysis(completedJob.result, session);
     const storedResult = await buildStoredSessionAnalysisResult({
       parsed,
       completedJob,

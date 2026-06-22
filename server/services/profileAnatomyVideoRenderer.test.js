@@ -103,6 +103,107 @@ test('pelvic or genital section rejects foot-only media and uses compatible geni
   assert.equal(genital.assigned_evidence[0].anatomy_labels.includes('feet_toes'), false);
 });
 
+test('pubic mound section refuses genital close-up evidence', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'pubic-fixture-review',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: [
+      'Pubic Mound and Lower Abdomen',
+      'The pubic mound, lower abdomen, inguinal folds, and groin skin are assessed here.',
+    ],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'pubic_mound_lower_abdomen', section_label: 'Pubic Mound and Lower Abdomen' },
+      { type: 'section', section_key: 'pubic_mound_lower_abdomen', section_label: 'Pubic Mound and Lower Abdomen' },
+    ],
+    images: [
+      {
+        id: 'genital-closeup-only',
+        label: 'Close-up genital image showing penis shaft, glans, and meatus',
+        coverage: 'penis penile shaft glans meatus foreskin',
+        sectionKey: 'genitals_perineum',
+        url: '/uploads/genital-closeup.jpg',
+        source: 'fixture',
+      },
+      {
+        id: 'pubic-mound-view',
+        label: 'Focused pubic mound and groin skin view',
+        coverage: 'pubic mound lower abdomen inguinal folds groin skin penile base',
+        sectionKey: 'pubic_mound_lower_abdomen',
+        url: '/uploads/pubic-mound.jpg',
+        source: 'fixture',
+      },
+    ],
+  });
+
+  const pubic = manifest.sections.find((section) => section.section_key === 'pubic_mound_lower_abdomen');
+  assert.equal(pubic.assigned_evidence[0].evidence_id, 'pubic-mound-view');
+  assert.equal(
+    pubic.assignment_candidates.find((candidate) => candidate.id === 'genital-closeup-only')?.score,
+    -1000
+  );
+});
+
+test('pubic mound section uses a card instead of unrelated genital close-up when no pubic evidence exists', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'pubic-missing-fixture-review',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: [
+      'Pubic Mound and Lower Abdomen',
+      'The pubic mound and lower abdomen are assessed here.',
+    ],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'pubic_mound_lower_abdomen', section_label: 'Pubic Mound and Lower Abdomen' },
+      { type: 'section', section_key: 'pubic_mound_lower_abdomen', section_label: 'Pubic Mound and Lower Abdomen' },
+    ],
+    images: [
+      {
+        id: 'genital-closeup-only',
+        label: 'Close-up genital image showing penis shaft, glans, and meatus',
+        coverage: 'penis penile shaft glans meatus foreskin',
+        sectionKey: 'genitals_perineum',
+        url: '/uploads/genital-closeup.jpg',
+        source: 'fixture',
+      },
+    ],
+  });
+
+  const pubic = manifest.sections.find((section) => section.section_key === 'pubic_mound_lower_abdomen');
+  assert.equal(pubic.media_mode, 'placeholder');
+  assert.deepEqual(pubic.explicitly_assigned_evidence_ids, []);
+});
+
+test('head-to-toe chest section uses a card instead of wrong-region feet evidence', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'head-to-toe-wrong-region-fixture',
+    title: 'Head-to-Toe Image Review',
+    reviewScope: 'head_to_toe',
+    paragraphs: [
+      'Chest',
+      'The chest, sternum, pectoral contour, and anterior thorax are assessed here.',
+    ],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'chest', section_label: 'Chest' },
+      { type: 'section', section_key: 'chest', section_label: 'Chest' },
+    ],
+    images: [
+      {
+        id: 'feet-only',
+        label: 'Foot-only image showing toes ankles and dorsal feet',
+        coverage: 'feet toes ankle heel plantar dorsal foot',
+        sectionKey: 'feet_toes',
+        url: '/uploads/feet.jpg',
+        source: 'fixture',
+      },
+    ],
+  });
+
+  const chest = manifest.sections.find((section) => section.section_key === 'chest');
+  assert.equal(chest.media_mode, 'placeholder');
+  assert.deepEqual(chest.explicitly_assigned_evidence_ids, []);
+});
+
 test('Foley and drainage bag evidence stays in the device/procedure lane', () => {
   const manifest = buildManifest('pelvic_genital');
   const device = manifest.sections.find((section) => section.section_key === 'device_contact_findings');

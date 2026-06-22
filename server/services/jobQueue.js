@@ -1,5 +1,6 @@
 import { getEntity, listEntities, listProcessingJobSummaries, listRecoverableProcessingJobs, upsertEntity } from '../db.js';
 import { friendlyJobErrorMessage } from '../../src/lib/jobErrorMessages.js';
+import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
 
 const handlers = new Map();
 const jobs = new Map();
@@ -14,6 +15,24 @@ function normalizeJobPriority(value) {
   return Math.max(-100, Math.min(100, Math.round(numeric)));
 }
 
+function hasExplicitPriority(meta = {}, payload = {}) {
+  return meta?.priority !== undefined && meta?.priority !== null
+    ? true
+    : payload?.priority !== undefined && payload?.priority !== null;
+}
+
+function defaultJobPriority(type, meta = {}, payload = {}) {
+  if (hasExplicitPriority(meta, payload)) return normalizeJobPriority(meta?.priority ?? payload?.priority);
+  const name = String(type || '');
+  if (name === 'tts_export') return 75;
+  if (name === 'ai_invoke' && (meta.foreground || payload.foreground || payload.interactive)) return 70;
+  if (name === 'ai_invoke') return 55;
+  if (name === 'profile_image_review_full') return 50;
+  if (name.startsWith('local_vision_')) return 35;
+  if (name === 'session_review_video' || name === 'profile_anatomy_video') return 10;
+  return 0;
+}
+
 function isForegroundJob(job = {}) {
   return Boolean(job?.meta?.foreground || job?.payload?.foreground || job?.payload?.interactive);
 }
@@ -23,7 +42,8 @@ function jobLane(type, meta = {}, payload = {}) {
   if (name === 'ai_invoke' && (meta.foreground || payload.foreground || payload.interactive)) return 'foreground_ai';
   if (name.startsWith('local_vision_')) return 'local_vision';
   if (name === 'ai_invoke' || name === 'profile_image_review_full') return 'ai';
-  if (name === 'tts_export' || name === 'session_review_video') return 'tts';
+  if (name === 'tts_export') return 'tts';
+  if (name === 'session_review_video' || name === 'profile_anatomy_video') return 'video';
   return 'general';
 }
 
@@ -32,6 +52,7 @@ function laneConcurrency(lane) {
   if (lane === 'local_vision') return Math.max(1, Number(process.env.BACKGROUND_JOB_LOCAL_VISION_CONCURRENCY || 1));
   if (lane === 'ai') return Math.max(1, Number(process.env.BACKGROUND_JOB_AI_CONCURRENCY || 2));
   if (lane === 'tts') return Math.max(1, Number(process.env.BACKGROUND_JOB_TTS_CONCURRENCY || 1));
+  if (lane === 'video') return Math.max(1, Number(process.env.BACKGROUND_JOB_VIDEO_CONCURRENCY || 1));
   return Math.max(1, Number(process.env.BACKGROUND_JOB_GENERAL_CONCURRENCY || concurrency));
 }
 
@@ -39,7 +60,7 @@ function runningLaneCount(lane) {
   let count = 0;
   for (const id of running) {
     const job = jobs.get(id);
-    if (jobLane(job?.type) === lane) count += 1;
+    if ((job?.lane || jobLane(job?.type, job?.meta, job?.payload)) === lane) count += 1;
   }
   return count;
 }
@@ -58,6 +79,7 @@ function nowIso() {
 
 function publicJob(job, { includeResult = true } = {}) {
   if (!job) return null;
+  const hasPayload = job.payload != null;
   const { payload: _payload, abortController: _abortController, ...rest } = job;
   if (!includeResult) {
     const { result: _result, ...summary } = rest;
@@ -75,10 +97,27 @@ function publicJob(job, { includeResult = true } = {}) {
       ...summary,
       meta,
       progress,
-      hasResult: rest.result != null,
+      hasResult: rest.result != null || Boolean(summary.hasResult),
+      hasPayload,
+      retryable: Boolean(meta?.retryable || progress?.retryable) && hasPayload,
     };
   }
-  return rest;
+  return {
+    ...rest,
+    hasPayload,
+    retryable: Boolean(rest.meta?.retryable || rest.progress?.retryable) && hasPayload,
+  };
+}
+
+function shouldRetainPayloadForRetry(error) {
+  const category = classifyProviderError(error, { defaultProvider: 'anthropic' })?.category;
+  return [
+    'insufficient_credits',
+    'rate_limit',
+    'provider_unavailable',
+    'timeout',
+    'output_truncation',
+  ].includes(category);
 }
 
 function isCleared(job) {
@@ -221,6 +260,7 @@ function runNext() {
         jobId: job.id,
         signal: job.abortController.signal,
         updateProgress: (progress) => patchProgress(job, progress),
+        getProgress: () => ({ ...(job.progress || {}) }),
       }))
       .then((result) => {
         const existingProgress = job.progress || {};
@@ -245,10 +285,19 @@ function runNext() {
       .catch((error) => {
         const cancelled = job.abortController.signal.aborted;
         const cleanErrorMessage = cancelled ? 'Cancelled' : friendlyJobErrorMessage(error);
+        const providerRetryable = !cancelled && shouldRetainPayloadForRetry(error);
+        const retainPayloadForRetry = !cancelled && Boolean(providerRetryable || job.progress?.retryable || job.progress?.payload_ref_retained);
         patchJob(job, {
           status: cancelled ? 'cancelled' : 'error',
           error: cleanErrorMessage,
-          payload: null,
+          payload: retainPayloadForRetry ? job.payload : null,
+          meta: {
+            ...(job.meta || {}),
+            retryable: retainPayloadForRetry || Boolean(job.meta?.retryable),
+            retry_category: retainPayloadForRetry
+              ? (job.progress?.provider_error?.category || classifyProviderError(error, { defaultProvider: 'anthropic' })?.category || null)
+              : job.meta?.retry_category,
+          },
           finishedAt: nowIso(),
         });
         patchProgress(job, {
@@ -273,7 +322,7 @@ export function createJob(type, payload = {}, meta = {}) {
   if (!handlers.has(type)) throw new Error(`Unknown background job type: ${type}`);
   const id = crypto.randomUUID();
   const now = nowIso();
-  const priority = normalizeJobPriority(meta?.priority ?? payload?.priority);
+  const priority = defaultJobPriority(type, meta, payload);
   const job = {
     id,
     type,
@@ -307,12 +356,69 @@ export function createJob(type, payload = {}, meta = {}) {
   return publicJob(job);
 }
 
+export function retryJob(id, { priority } = {}) {
+  const existing = jobs.get(id) || getEntity('ProcessingJob', id);
+  if (!existing?.id) return null;
+  if (!['error', 'cancelled'].includes(existing.status)) {
+    const error = new Error('Only failed or cancelled jobs can be retried.');
+    error.status = 400;
+    throw error;
+  }
+  if (!existing.payload) {
+    const error = new Error('This job no longer has a saved payload, so it must be started again.');
+    error.status = 409;
+    throw error;
+  }
+  const now = nowIso();
+  const nextPriority = priority !== undefined && priority !== null
+    ? normalizeJobPriority(priority)
+    : normalizeJobPriority(existing.priority ?? existing.meta?.priority ?? defaultJobPriority(existing.type, existing.meta, existing.payload));
+  const job = hydratePersistedJob({
+    ...existing,
+    status: 'queued',
+    error: null,
+    result: null,
+    priority: nextPriority,
+    lane: existing.lane || jobLane(existing.type, existing.meta, existing.payload),
+    meta: {
+      ...(existing.meta || {}),
+      priority: nextPriority,
+      retriedAt: now,
+      retryOfJobId: existing.meta?.retryOfJobId || existing.id,
+    },
+    progress: {
+      ...(existing.progress || {}),
+      phase: 'queued',
+      message: 'Queued to resume from saved job payload...',
+      retrying: true,
+      updatedAt: now,
+    },
+    startedAt: null,
+    finishedAt: null,
+    updatedAt: now,
+  });
+  jobs.set(job.id, job);
+  enqueueJob(job);
+  saveJob(job);
+  queueMicrotask(runNext);
+  return publicJob(job);
+}
+
 function hydratePersistedJob(record) {
   if (!record?.id) return null;
+  const lane = jobLane(record.type, record.meta, record.payload);
+  const storedPriority = normalizeJobPriority(record.priority ?? record.meta?.priority);
+  const priority = storedPriority === 0 && ['tts_export', 'ai_invoke', 'profile_image_review_full', 'session_review_video', 'profile_anatomy_video'].includes(String(record.type || ''))
+    ? defaultJobPriority(record.type, {}, record.payload)
+    : storedPriority;
   return {
     ...record,
-    priority: normalizeJobPriority(record.priority ?? record.meta?.priority),
-    lane: record.lane || jobLane(record.type, record.meta, record.payload),
+    priority,
+    lane,
+    meta: {
+      ...(record.meta || {}),
+      priority,
+    },
     payload: record.payload || null,
     abortController: new AbortController(),
   };

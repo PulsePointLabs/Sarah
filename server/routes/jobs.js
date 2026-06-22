@@ -1,7 +1,7 @@
 import express from 'express';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { cancelJob, clearJobs, createJob, getJob, listJobs, registerJobHandler } from '../services/jobQueue.js';
+import { cancelJob, clearJobs, createJob, getJob, listJobs, registerJobHandler, retryJob } from '../services/jobQueue.js';
 import { renderTTSExport } from '../services/ttsRenderer.js';
 import { renderSessionReviewVideo } from '../services/sessionReviewVideoRenderer.js';
 import { renderProfileAnatomyVideo } from '../services/profileAnatomyVideoRenderer.js';
@@ -416,11 +416,72 @@ function parseAIResult(value) {
   }
 }
 
+function parseProfileImageReviewAIResult(value, { label = 'Profile image review', stage = 'review' } = {}) {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    const reviewError = new Error(`${label}: ${stage} returned malformed JSON and was not saved as complete.`);
+    reviewError.status = 502;
+    reviewError.cause = error;
+    reviewError.rawPreview = value.slice(0, 500);
+    throw reviewError;
+  }
+}
+
+function validateProfileImageReviewResult(result, payload = {}, { label = 'Profile image review', stage = 'review' } = {}) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    const error = new Error(`${label}: ${stage} returned no structured review object.`);
+    error.status = 502;
+    throw error;
+  }
+  const overview = String(result.overview || '').trim();
+  const sections = Array.isArray(payload.sections) ? payload.sections : [];
+  const sectionItemCount = sections.reduce((count, section) => (
+    count + (Array.isArray(result?.[section.key]) ? result[section.key].filter(Boolean).length : 0)
+  ), 0);
+  const summaryCount = [
+    result?.summary_card?.primary_reference_value,
+    result?.summary_card?.key_direct_findings,
+    result?.summary_card?.key_limitations,
+  ].reduce((count, items) => count + (Array.isArray(items) ? items.filter(Boolean).length : 0), 0);
+  const annotatedCount = Array.isArray(result.annotated_images) ? result.annotated_images.length : 0;
+  const findingCount = Array.isArray(result.image_region_findings) ? result.image_region_findings.length : 0;
+  const usefulCount = sectionItemCount + summaryCount + annotatedCount + findingCount;
+  const refusalOrErrorText = /\b(?:i cannot|i can'?t|unable to|as an ai|policy|malformed json|error|failed|insufficient credits)\b/i.test(overview);
+  if (!overview || overview.length < 24 || usefulCount < 1 || refusalOrErrorText) {
+    const error = new Error(`${label}: ${stage} did not return enough usable structured review content, so it was not marked complete.`);
+    error.status = 502;
+    error.validation = {
+      overviewLength: overview.length,
+      usefulCount,
+      sectionItemCount,
+      summaryCount,
+      annotatedCount,
+      findingCount,
+      refusalOrErrorText,
+    };
+    throw error;
+  }
+  return result;
+}
+
 function safeProviderError(error, options = {}) {
   return classifyProviderError(error, {
     defaultProvider: 'anthropic',
     ...options,
   });
+}
+
+function shouldRetainJobPayloadForRetry(error) {
+  const category = safeProviderError(error)?.category;
+  return [
+    'insufficient_credits',
+    'rate_limit',
+    'provider_unavailable',
+    'timeout',
+    'output_truncation',
+  ].includes(category);
 }
 
 function cleanFallbackReviewText(value = '') {
@@ -522,6 +583,7 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
   const label = payload?.label || 'Profile image review';
   const batchRequests = Array.isArray(payload?.batchRequests) ? payload.batchRequests : [];
   const total = Math.max(1, batchRequests.length + (payload?.synthesisRequest ? 1 : 0));
+  let cleanupPayload = true;
 
   try {
     context.updateProgress({
@@ -540,7 +602,11 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
           total,
           message: `${label}: running Sarah review…`,
         });
-        return parseAIResult(result);
+        return validateProfileImageReviewResult(
+          parseProfileImageReviewAIResult(result, { label, stage: 'single review' }),
+          payload,
+          { label, stage: 'single review' },
+        );
       } catch (error) {
         const cleanErrorMessage = friendlyJobErrorMessage(error);
         const providerError = safeProviderError(error, { requestStage: 'single_review', jobId: context.jobId });
@@ -558,8 +624,29 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
       }
     }
 
-    const batchResults = [];
-    for (let index = 0; index < batchRequests.length; index += 1) {
+    const preservedBatchResults = Array.isArray(context.getProgress?.().completed_batch_results)
+      ? context.getProgress().completed_batch_results
+      : [];
+    const batchResults = preservedBatchResults
+      .map((result) => validateProfileImageReviewResult(
+        parseProfileImageReviewAIResult(result, { label, stage: 'preserved batch review' }),
+        payload,
+        { label, stage: 'preserved batch review' },
+      ))
+      .slice(0, batchRequests.length);
+    if (batchResults.length) {
+      context.updateProgress({
+        phase: 'resume_preserved_batches',
+        current: batchResults.length,
+        total,
+        message: `${label}: resuming with ${batchResults.length} preserved batch${batchResults.length === 1 ? '' : 'es'} already complete.`,
+        batch_current: batchResults.length,
+        batch_total: batchRequests.length,
+        completed_batch_count: batchResults.length,
+        completed_batch_results: batchResults,
+      });
+    }
+    for (let index = batchResults.length; index < batchRequests.length; index += 1) {
       const batchNumber = index + 1;
       const batchLabel = `${label} batch ${batchNumber}/${batchRequests.length}`;
       const batchRequest = await hydrateRequestImageRefs(batchRequests[index], context, batchLabel);
@@ -593,7 +680,11 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
         cleanError.cause = error;
         throw cleanError;
       }
-      batchResults.push(parseAIResult(result));
+      batchResults.push(validateProfileImageReviewResult(
+        parseProfileImageReviewAIResult(result, { label: batchLabel, stage: 'batch review' }),
+        payload,
+        { label: batchLabel, stage: 'batch review' },
+      ));
       context.updateProgress({
         phase: 'batch_complete',
         current: batchNumber,
@@ -619,7 +710,11 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
           total,
           message: `${label}: synthesizing final review from completed batches…`,
         });
-        return parseAIResult(result);
+        return validateProfileImageReviewResult(
+          parseProfileImageReviewAIResult(result, { label, stage: 'final synthesis' }),
+          payload,
+          { label, stage: 'final synthesis' },
+        );
       } catch (error) {
         const providerError = safeProviderError(error, {
           requestStage: 'final_synthesis',
@@ -651,8 +746,20 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
     }
 
     return fallbackAssembleProfileImageReview(payload, batchResults);
+  } catch (error) {
+    cleanupPayload = !shouldRetainJobPayloadForRetry(error);
+    if (!cleanupPayload) {
+      const providerError = safeProviderError(error, { requestStage: 'profile_image_review_full', jobId: context.jobId });
+      context.updateProgress({
+        retryable: true,
+        payload_ref_retained: Boolean(originalPayload?.__payloadRef),
+        provider_error: providerError,
+        message: `${providerError.userMessage || friendlyJobErrorMessage(error)} Saved payload retained for retry.`,
+      });
+    }
+    throw error;
   } finally {
-    await cleanupPayloadRef(originalPayload);
+    if (cleanupPayload) await cleanupPayloadRef(originalPayload);
   }
 });
 
@@ -790,6 +897,16 @@ jobsRouter.get('/', (req, res) => {
 
 jobsRouter.post('/clear', (_req, res) => {
   res.json(clearJobs());
+});
+
+jobsRouter.post('/:jobId/retry', (req, res) => {
+  try {
+    const job = retryJob(req.params.jobId, req.body || {});
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    res.status(202).json(job);
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || String(error) });
+  }
 });
 
 jobsRouter.get('/:jobId', (req, res) => {

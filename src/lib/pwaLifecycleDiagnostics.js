@@ -194,7 +194,7 @@ export function installPwaLifecycleDiagnostics() {
   window.addEventListener("blur", () => record("blur"));
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") savePwaStateCheckpoint("visibility_hidden");
-    if (document.visibilityState === "visible") restorePwaScrollCheckpoint();
+    if (document.visibilityState === "visible") record("foreground_no_restore");
     record("visibilitychange");
   });
   window.addEventListener("pageshow", (event) => record("pageshow", { persisted: Boolean(event.persisted) }));
@@ -210,7 +210,7 @@ export function installPwaLifecycleDiagnostics() {
     record("freeze");
   });
   document.addEventListener("resume", () => {
-    restorePwaScrollCheckpoint();
+    record("resume_no_restore");
     record("resume");
   });
   navigator.serviceWorker?.addEventListener?.("controllerchange", () => record("controllerchange"));

@@ -1,3 +1,5 @@
+import { serverUrl } from "@/lib/mobileApiBase";
+
 export const SARAH_BRAND_EVENT = "sarah:brand-changed";
 export const SARAH_IMAGE_STORAGE_KEY = "sarah.brand.image.v1";
 export const SARAH_CUSTOM_IMAGES_STORAGE_KEY = "sarah.brand.customImages.v1";
@@ -53,6 +55,13 @@ export function getSarahImageOptions() {
 
 export function getSarahImageOption(id = DEFAULT_SARAH_IMAGE_ID) {
   return getSarahImageOptions().find((option) => option.id === id) || SARAH_IMAGE_OPTIONS[0];
+}
+
+export function resolveSarahImageSrc(src = "") {
+  const value = String(src || "").trim();
+  if (!value) return SARAH_IMAGE_OPTIONS[0].src;
+  if (value.startsWith("/uploads/") || value.startsWith("uploads/")) return serverUrl(value);
+  return value;
 }
 
 export function readSarahBrandSettings() {

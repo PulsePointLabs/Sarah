@@ -1,14 +1,16 @@
 {
   "appId": "com.pulsepointlabs.sarah",
-  "appName": "PulsePoint",
+  "appName": "Sarah",
   "webDir": "dist",
   "server": {
-    "androidScheme": "https",
+    "androidScheme": "http",
     "cleartext": true,
     "allowNavigation": [
       "localhost",
       "127.0.0.1",
       "10.0.2.2",
+      "192.168.0.33",
+      "100.65.16.104",
       "*.ts.net"
     ]
   }

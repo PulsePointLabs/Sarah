@@ -6,6 +6,7 @@ const hmrEnabled = process.env.PULSEPOINT_HMR === '1';
 
 export default defineConfig({
   logLevel: 'error',
+  base: './',
   plugins: [react()],
   resolve: {
     alias: {

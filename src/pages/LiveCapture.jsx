@@ -38,6 +38,14 @@ import {
   processPerinealEmgSample,
   signalQualityFromCalibration,
 } from "@/utils/perinealEmgDetector";
+import {
+  formatBloodPressure,
+  formatBloodPressureTime,
+  getBloodPressureStatus,
+  openHealthConnectSettings,
+  requestBloodPressurePermission,
+  syncBloodPressureFromHealthConnect,
+} from "@/lib/bloodPressure";
 
 const MAX_TELEMETRY_POINTS = 240;
 const MAX_VOICE_NOTE_MS = 12000;
@@ -213,6 +221,7 @@ const PERINEAL_EMG_PROTOCOL_PHASES = [
   },
 ];
 const HOWL_TELEMETRY_POLL_MS = 2500;
+const BLOOD_PRESSURE_SYNC_POLL_MS = 30000;
 const HOWL_DEFAULT_CONTROL_FORM = {
   controlEnabled: false,
   sarahAutoEnabled: false,
@@ -1225,6 +1234,17 @@ export default function LiveCapture() {
   const [howlConnectionTest, setHowlConnectionTest] = useState({ status: "idle", message: "" });
   const [howlAdvancedOpen, setHowlAdvancedOpen] = useState(false);
   const [howlQuickModalOpen, setHowlQuickModalOpen] = useState(false);
+  const [bpCapture, setBpCapture] = useState({
+    status: "idle",
+    message: "Blood pressure sync is ready in the Android APK.",
+    lastReading: null,
+    lastCapturedAt: null,
+    capturedCount: 0,
+    permissionGranted: false,
+    native: null,
+    syncing: false,
+    error: "",
+  });
   const [launchProfile, setLaunchProfile] = useState(() => readLiveCaptureLaunchProfile());
   const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
   const [launchState, setLaunchState] = useState({ phase: "idle", message: "", steps: [], busy: false, error: "" });
@@ -1274,6 +1294,7 @@ export default function LiveCapture() {
   const directH10IntentionalDisconnectRef = useRef(false);
   const directH10ReconnectAttemptRef = useRef(0);
   const howlAutoLastActionRef = useRef({ at: 0, intensity: null, reason: "" });
+  const bpSyncInFlightRef = useRef(false);
   const howlSettingsDirtyRef = useRef(false);
   const howlFocusedFieldRef = useRef("");
   const launchInFlightRef = useRef(null);
@@ -2661,6 +2682,231 @@ export default function LiveCapture() {
     setLiveEvents(patch.event_timeline);
     setActiveSessionDoc((prev) => ({ ...(prev || session), ...patch }));
   }, [activeSessionDoc, ensureSession, liveRecordApi, liveSession]);
+
+  const resolveLiveSessionStartMs = useCallback((session = activeSessionDoc) => {
+    const direct = Number(recording?.startedAtMs) || (liveSession?.startedAt ? new Date(liveSession.startedAt).getTime() : 0);
+    if (direct && Number.isFinite(direct)) return direct;
+    const sessionDateMs = new Date(session?.date || session?.capture_started_at || 0).getTime();
+    if (!Number.isFinite(sessionDateMs) || sessionDateMs <= 0) return 0;
+    if (session?.start_time && /^\d{1,2}:\d{2}/.test(String(session.start_time))) {
+      const date = new Date(sessionDateMs);
+      const [hour, minute] = String(session.start_time).split(":").map(Number);
+      date.setHours(hour, minute, 0, 0);
+      return date.getTime();
+    }
+    return sessionDateMs;
+  }, [activeSessionDoc, liveSession?.startedAt, recording?.startedAtMs]);
+
+  const readingIsInActiveSession = useCallback((reading, session = activeSessionDoc) => {
+    const measuredMs = new Date(reading?.measured_at || 0).getTime();
+    const startMs = resolveLiveSessionStartMs(session);
+    if (!Number.isFinite(measuredMs) || measuredMs <= 0 || !startMs) return false;
+    const durationMs = Math.max(0, Number(session?.duration_minutes || 0)) * 60000;
+    const endMs = recordingActive ? Date.now() + 15000 : startMs + durationMs + 10 * 60000;
+    return measuredMs >= startMs - 60000 && measuredMs <= endMs;
+  }, [activeSessionDoc, recordingActive, resolveLiveSessionStartMs]);
+
+  const stampBloodPressureReadings = useCallback(async (readings = [], { source = "health_connect_auto" } = {}) => {
+    const sessionState = liveSession?.activeSessionId ? liveSession : null;
+    const sessionId = sessionState?.activeSessionId;
+    if (!sessionId) return { stamped: 0, latest: null };
+    const rows = await liveRecordApi.filter({ id: sessionId });
+    const session = rows[0] || activeSessionDoc || {};
+    const startMs = resolveLiveSessionStartMs(session);
+    if (!startMs) return { stamped: 0, latest: null };
+
+    const existingIds = new Set((session.event_timeline || []).map((event) => event.id).filter(Boolean));
+    const usable = readings
+      .filter((reading) => readingIsInActiveSession(reading, session))
+      .filter((reading) => !existingIds.has(`blood-pressure-${reading.id || new Date(reading.measured_at).getTime()}`))
+      .sort((a, b) => new Date(a.measured_at).getTime() - new Date(b.measured_at).getTime());
+    if (!usable.length) return { stamped: 0, latest: null };
+
+    const events = usable.map((reading) => {
+      const measuredMs = new Date(reading.measured_at).getTime();
+      const timeS = Math.max(0, Math.round((measuredMs - startMs) / 1000));
+      return {
+        id: `blood-pressure-${reading.id || measuredMs}`,
+        time_s: timeS,
+        note: `Blood pressure captured: ${formatBloodPressure(reading)}`,
+        label: "Blood pressure captured",
+        category: ["physiology", "blood_pressure"],
+        source,
+        created_at: new Date().toISOString(),
+        blood_pressure: {
+          reading_id: reading.id,
+          measured_at: reading.measured_at,
+          systolic_mm_hg: reading.systolic_mm_hg,
+          diastolic_mm_hg: reading.diastolic_mm_hg,
+          pulse_bpm: reading.pulse_bpm ?? null,
+          source_app: reading.source_app || "Health Connect",
+          source_device: reading.source_device || "",
+        },
+      };
+    });
+    const latest = usable[usable.length - 1];
+    await appendLiveSessionEvents(events, {
+      session_context: {
+        ...(session.session_context || {}),
+        blood_pressure: {
+          reading_id: latest.id,
+          measured_at: latest.measured_at,
+          systolic_mm_hg: latest.systolic_mm_hg,
+          diastolic_mm_hg: latest.diastolic_mm_hg,
+          pulse_bpm: latest.pulse_bpm ?? null,
+          source_app: latest.source_app || "Health Connect",
+          source_device: latest.source_device || "",
+          relationship: "captured_during_live_session",
+        },
+      },
+      latest_blood_pressure_reading: {
+        id: latest.id,
+        measured_at: latest.measured_at,
+        systolic_mm_hg: latest.systolic_mm_hg,
+        diastolic_mm_hg: latest.diastolic_mm_hg,
+        pulse_bpm: latest.pulse_bpm ?? null,
+        source_app: latest.source_app || "Health Connect",
+      },
+    });
+    return { stamped: events.length, latest };
+  }, [
+    activeSessionDoc,
+    appendLiveSessionEvents,
+    liveRecordApi,
+    liveSession,
+    readingIsInActiveSession,
+    resolveLiveSessionStartMs,
+  ]);
+
+  const syncBloodPressureForLiveSession = useCallback(async ({ manual = false } = {}) => {
+    if (bpSyncInFlightRef.current) return;
+    bpSyncInFlightRef.current = true;
+    setBpCapture((prev) => ({
+      ...prev,
+      syncing: true,
+      status: "syncing",
+      error: "",
+      message: manual ? "Checking Health Connect for BP readings..." : prev.message,
+    }));
+    try {
+      const nativeStatus = await getBloodPressureStatus();
+      if (!nativeStatus?.native || nativeStatus.native === false) {
+        setBpCapture((prev) => ({
+          ...prev,
+          native: false,
+          permissionGranted: false,
+          syncing: false,
+          status: "web_only",
+          message: "BP auto-capture runs inside the Android APK.",
+        }));
+        return;
+      }
+      if (!nativeStatus.permissionGranted) {
+        setBpCapture((prev) => ({
+          ...prev,
+          native: true,
+          permissionGranted: false,
+          syncing: false,
+          status: "permission_needed",
+          message: "Health Connect BP permission is not granted yet. Enable it in Settings.",
+        }));
+        return;
+      }
+      const result = await syncBloodPressureFromHealthConnect({ days: 2, limit: 25 });
+      const readings = Array.isArray(result?.readings) ? result.readings : [];
+      const stamped = await stampBloodPressureReadings(readings, { source: manual ? "health_connect_manual_sync" : "health_connect_auto_sync" });
+      setBpCapture((prev) => ({
+        ...prev,
+        native: true,
+        permissionGranted: true,
+        syncing: false,
+        status: stamped.stamped ? "captured" : "ready",
+        lastReading: stamped.latest || readings[0] || prev.lastReading,
+        lastCapturedAt: stamped.latest ? new Date().toISOString() : prev.lastCapturedAt,
+        capturedCount: prev.capturedCount + stamped.stamped,
+        message: stamped.stamped
+          ? `Captured ${stamped.stamped} BP reading${stamped.stamped === 1 ? "" : "s"} into this session.`
+          : (manual ? "No new in-session BP reading found." : prev.message || "BP sync is watching for session readings."),
+      }));
+    } catch (error) {
+      setBpCapture((prev) => ({
+        ...prev,
+        syncing: false,
+        status: "error",
+        error: error?.message || "Could not sync BP.",
+        message: error?.message || "Could not sync BP.",
+      }));
+    } finally {
+      bpSyncInFlightRef.current = false;
+    }
+  }, [stampBloodPressureReadings]);
+
+  const requestBloodPressureForLiveCapture = useCallback(async () => {
+    setBpCapture((prev) => ({
+      ...prev,
+      syncing: true,
+      status: "syncing",
+      error: "",
+      message: "Requesting Health Connect BP permission...",
+    }));
+    try {
+      const status = await requestBloodPressurePermission();
+      setBpCapture((prev) => ({
+        ...prev,
+        native: status?.native !== false,
+        permissionGranted: Boolean(status?.permissionGranted),
+        syncing: false,
+        status: status?.permissionGranted ? "ready" : "permission_needed",
+        message: status?.permissionGranted ? "BP permission granted. Watching for readings." : "BP permission was not granted yet. Open Health Connect and grant Sarah blood pressure access manually.",
+      }));
+      if (status?.permissionGranted) {
+        syncBloodPressureForLiveSession({ manual: true });
+      }
+    } catch (error) {
+      setBpCapture((prev) => ({
+        ...prev,
+        syncing: false,
+        status: "error",
+        error: error?.message || "Could not request BP permission.",
+        message: error?.message || "Could not request BP permission.",
+      }));
+    }
+  }, [syncBloodPressureForLiveSession]);
+
+  const openBloodPressureSettingsForLiveCapture = useCallback(async () => {
+    setBpCapture((prev) => ({
+      ...prev,
+      syncing: true,
+      error: "",
+      message: "Opening Health Connect settings...",
+    }));
+    try {
+      await openHealthConnectSettings();
+      setBpCapture((prev) => ({
+        ...prev,
+        syncing: false,
+        status: "permission_needed",
+        message: "Health Connect opened. Grant Sarah blood pressure access, then return here and tap Sync BP now.",
+      }));
+    } catch (error) {
+      setBpCapture((prev) => ({
+        ...prev,
+        syncing: false,
+        status: "error",
+        error: error?.message || "Could not open Health Connect settings.",
+        message: error?.message || "Could not open Health Connect settings.",
+      }));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!liveSession?.activeSessionId) return undefined;
+    syncBloodPressureForLiveSession({ manual: false });
+    const timer = window.setInterval(() => {
+      syncBloodPressureForLiveSession({ manual: false });
+    }, BLOOD_PRESSURE_SYNC_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [liveSession?.activeSessionId, syncBloodPressureForLiveSession]);
 
   const liveCuePhraseBank = useMemo(
     () => resolveLiveCuePhraseBank(liveCueSettings, { captureKind }),
@@ -5534,6 +5780,76 @@ export default function LiveCapture() {
               </Link>
             )}
           </div>
+        </div>
+        <div className="mt-4 rounded-lg border border-border bg-muted/20 p-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
+                <Activity className="h-4 w-4" /> Blood Pressure Capture
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {bpCapture.lastReading
+                  ? `Last reading: ${formatBloodPressure(bpCapture.lastReading)} · ${formatBloodPressureTime(bpCapture.lastReading.measured_at)}`
+                  : bpCapture.message || "Waiting for a Health Connect BP reading."}
+              </p>
+              {bpCapture.lastCapturedAt && (
+                <p className="mt-1 text-xs text-primary">
+                  Successfully stamped into this session {formatBloodPressureTime(bpCapture.lastCapturedAt)}.
+                </p>
+              )}
+              {bpCapture.error && <p className="mt-1 text-xs text-destructive">{bpCapture.error}</p>}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider ${
+                bpCapture.status === "captured"
+                  ? "border-primary/30 bg-primary/10 text-primary"
+                  : bpCapture.status === "error"
+                    ? "border-destructive/30 bg-destructive/10 text-destructive"
+                    : bpCapture.status === "permission_needed"
+                      ? "border-amber-400/30 bg-amber-400/10 text-amber-300"
+                      : "border-border bg-card text-muted-foreground"
+              }`}>
+                {bpCapture.syncing ? "Syncing" : bpCapture.status === "captured" ? "Captured" : bpCapture.status === "permission_needed" ? "Permission needed" : bpCapture.status === "web_only" ? "APK only" : "Watching"}
+              </span>
+              {bpCapture.status === "permission_needed" && (
+                <button
+                  type="button"
+                  onClick={requestBloodPressureForLiveCapture}
+                  disabled={bpCapture.syncing}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Allow BP
+                </button>
+              )}
+              {(bpCapture.status === "permission_needed" || bpCapture.status === "error") && (
+                <button
+                  type="button"
+                  onClick={openBloodPressureSettingsForLiveCapture}
+                  disabled={bpCapture.syncing}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-xs font-semibold text-foreground hover:bg-muted/80 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Health Connect
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => syncBloodPressureForLiveSession({ manual: true })}
+                disabled={bpCapture.syncing || !liveSession?.activeSessionId}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {bpCapture.syncing ? (
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                Sync BP now
+              </button>
+            </div>
+          </div>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Auto-sync checks every {Math.round(BLOOD_PRESSURE_SYNC_POLL_MS / 1000)} seconds while the session shell is active. New in-session readings are timestamped from the cuff measurement time.
+          </p>
         </div>
         {captureDigest && (
           <div className="mt-4 grid gap-3 border-t border-border pt-4 lg:grid-cols-[1.1fr_0.9fr]">

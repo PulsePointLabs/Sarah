@@ -42,8 +42,7 @@
       })();
 
       (function clearSarahDevShell() {
-        if (window.location.port !== "5174") return;
-        if (sarahIsStandalone()) return;
+        if (!/^517[3-9]$/.test(window.location.port || "")) return;
         if ("serviceWorker" in navigator) {
           navigator.serviceWorker.getRegistrations()
             .then(function (registrations) {

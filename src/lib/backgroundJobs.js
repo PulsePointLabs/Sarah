@@ -38,6 +38,14 @@ export function cancelBackgroundJob(jobId) {
   });
 }
 
+export function retryBackgroundJob(jobId, options = {}) {
+  return jobRequest(`/jobs/${encodeURIComponent(jobId)}/retry`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options || {}),
+  });
+}
+
 export function clearBackgroundJobs() {
   return jobRequest("/jobs/clear", {
     method: "POST",

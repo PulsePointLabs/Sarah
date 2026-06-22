@@ -1305,6 +1305,62 @@ function mergeProfileArchive(existingArchive = [], entry) {
   ].slice(0, PROFILE_ARCHIVE_LIMIT);
 }
 
+function stableProfilerHash(value = "") {
+  const text = String(value || "");
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function compactProfileReviewMetaForStorage(meta = {}) {
+  if (!meta || typeof meta !== "object") return meta;
+  const next = { ...meta };
+  const freshnessKey = typeof next.evidence_freshness_key === "string" ? next.evidence_freshness_key : "";
+  if (freshnessKey.length > 2000) {
+    next.evidence_freshness_hash = next.evidence_freshness_hash || stableProfilerHash(freshnessKey);
+    next.evidence_freshness_key_length = freshnessKey.length;
+    next.evidence_freshness_key_omitted = true;
+    delete next.evidence_freshness_key;
+  }
+  return next;
+}
+
+function compactProfileReviewResultForStorage(result) {
+  if (!result || typeof result !== "object") return result;
+  if (!result._meta || typeof result._meta !== "object") return result;
+  return {
+    ...result,
+    _meta: compactProfileReviewMetaForStorage(result._meta),
+  };
+}
+
+function compactProfileArchiveForStorage(archive = []) {
+  return (Array.isArray(archive) ? archive : []).map((entry) => {
+    if (!entry || typeof entry !== "object") return entry;
+    if (!entry.result) return entry;
+    return {
+      ...entry,
+      result: compactProfileReviewResultForStorage(entry.result),
+    };
+  });
+}
+
+function firstProfilerRowWithField(rows = [], field) {
+  return (Array.isArray(rows) ? rows : []).find((row) => {
+    const value = row?.[field];
+    if (Array.isArray(value)) return value.length > 0;
+    return value !== undefined && value !== null;
+  }) || null;
+}
+
+async function loadLatestProfileReviewResultField(field) {
+  const rows = await base44.entities.SessionClusterAnalysis.listFields([field], "-updated_date", 5);
+  return firstProfilerRowWithField(rows, field);
+}
+
 async function saveProfileResultWithArchive({
   resultKey,
   archiveKey,
@@ -1314,10 +1370,11 @@ async function saveProfileResultWithArchive({
   sessionCount,
 }) {
   const existing = await base44.entities.SessionClusterAnalysis.list("-updated_date", 1);
-  const entry = buildProfileArchiveEntry(kind, label, result);
-  const archive = mergeProfileArchive(existing[0]?.[archiveKey], entry);
+  const storedResult = compactProfileReviewResultForStorage(result);
+  const entry = buildProfileArchiveEntry(kind, label, storedResult);
+  const archive = compactProfileArchiveForStorage(mergeProfileArchive(existing[0]?.[archiveKey], entry));
   const patch = {
-    [resultKey]: result,
+    [resultKey]: storedResult,
     [archiveKey]: archive,
     ...(sessionCount != null ? { session_count: sessionCount } : {}),
   };
@@ -1337,9 +1394,21 @@ async function runProfilerAIJob(payload, label, onProgress, options = {}) {
 }
 
 async function startProfilerAIJob(payload, label, options = {}) {
+  const reviewType = options.meta?.reviewType || payload?.reviewType || "";
+  const route = reviewType === "profile_head_to_toe_image_review"
+    ? "/profiler#profiler-head-to-toe"
+    : reviewType === "profile_pelvic_genital_image_review"
+      ? "/profiler#profiler-pelvic-genital"
+      : options.meta?.sessionId === "profiler_anatomical_physiological_profile"
+        ? "/profiler#profiler-anatomical-profile"
+        : options.meta?.sessionId === "profiler_stim_methods"
+          ? "/profiler#profiler-stimulation-methods"
+          : options.meta?.sessionId === "profiler_near_climax"
+            ? "/profiler#profiler-near-climax"
+            : "/profiler#profiler-ai-profile";
   return startBackgroundJob("ai_invoke", { ...payload, label }, {
     source: "Profiler",
-    route: "/profiler",
+    route,
     label,
     priority: options.priority ?? 0,
     ...options.meta,
@@ -1347,9 +1416,13 @@ async function startProfilerAIJob(payload, label, options = {}) {
 }
 
 async function startProfileImageReviewFullJob(payload, label, options = {}) {
+  const reviewType = options.meta?.reviewType || payload?.reviewType || "";
+  const route = reviewType === "profile_pelvic_genital_image_review"
+    ? "/profiler#profiler-pelvic-genital"
+    : "/profiler#profiler-head-to-toe";
   return startBackgroundJob("profile_image_review_full", { ...payload, label }, {
     source: "Profiler",
-    route: "/profiler",
+    route,
     label,
     priority: options.priority ?? 45,
     ...options.meta,
@@ -1366,7 +1439,7 @@ async function waitProfilerAIJob(job, onProgress) {
 async function loadFullBackgroundJob(job) {
   if (!job?.id) return job;
   if (job.result !== undefined) return job;
-  if (!job.hasResult && !["complete", "error", "cancelled"].includes(job.status)) return job;
+  if (!["complete", "error", "cancelled"].includes(job.status) && !job.hasResult) return job;
   try {
     return await getBackgroundJob(job.id);
   } catch {
@@ -1383,6 +1456,22 @@ function isNewerCompletedJob(job, savedResult) {
   const jobTime = new Date(completedAt(job) || 0).getTime();
   const savedTime = new Date(savedResult?._meta?.last_generated_at || savedResult?._meta?.updated_at || 0).getTime();
   return Number.isFinite(jobTime) && jobTime > (Number.isFinite(savedTime) ? savedTime : 0);
+}
+
+function profilerJobMetaValue(job, key) {
+  return job?.meta?.[key]
+    ?? job?.payload?.[key]
+    ?? job?.result?._meta?.[key]
+    ?? job?.result?.meta?.[key]
+    ?? null;
+}
+
+function profilerJobReviewType(job) {
+  return String(
+    profilerJobMetaValue(job, "reviewType")
+      || profilerJobMetaValue(job, "kind")
+      || ""
+  );
 }
 
 function ProfilerJobStatus({ job, fallback }) {
@@ -2651,6 +2740,27 @@ BODY EXPLORATION VISUAL / VIDEO EVIDENCE DIGEST:
 ${explorationBlocks.length ? explorationBlocks.join("\n\n") : "- No saved body exploration visual/video evidence digest available."}
 `,
   };
+}
+
+function latestProfileReviewSourceUpdatedAt({ sessions = [], bodyExplorations = [], userProfile = null } = {}) {
+  return [
+    ...(Array.isArray(sessions) ? sessions : []),
+    ...(Array.isArray(bodyExplorations) ? bodyExplorations : []),
+    userProfile,
+  ]
+    .filter(Boolean)
+    .map((source) => source.updated_date || source.updated_at || source.created_date || source.createdAt || null)
+    .filter(Boolean)
+    .map((value) => new Date(value).getTime())
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => b - a)[0] || 0;
+}
+
+function isProfileImageReviewSourceStale(result, { sessions = [], bodyExplorations = [], userProfile = null } = {}) {
+  const generatedAt = new Date(result?._meta?.last_generated_at || result?._meta?.updated_at || 0).getTime();
+  if (!Number.isFinite(generatedAt) || generatedAt <= 0) return false;
+  const latestSourceUpdatedAt = latestProfileReviewSourceUpdatedAt({ sessions, bodyExplorations, userProfile });
+  return latestSourceUpdatedAt > generatedAt + 1000;
 }
 
 function buildProfileImageReviewContext({ userProfile, sessions = [], bodyExplorations = [] }) {
@@ -4467,15 +4577,20 @@ function ProfileImageReviewPanel({
 
   useEffect(() => {
     let cancelled = false;
-    base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
+    loadLatestProfileReviewResultField(config.resultKey).then((resultRow) => {
       if (cancelled) return;
-      if (rows[0]?.[config.resultKey]) {
-        const loadedResult = normalizeImageReviewResult(rows[0][config.resultKey], config) || rows[0][config.resultKey];
+      if (resultRow?.[config.resultKey]) {
+        const loadedResult = normalizeImageReviewResult(resultRow[config.resultKey], config) || resultRow[config.resultKey];
         setResult(loadedResult);
         if (loadedResult?._meta?.latest_attempt_status) setLatestAttemptStatus(loadedResult._meta.latest_attempt_status);
       }
-      if (Array.isArray(rows[0]?.[config.archiveKey])) {
-        setArchive(rows[0][config.archiveKey].map((entry) => ({
+    }).catch((err) => {
+      console.warn(`${config.title} saved result load skipped:`, err);
+    });
+    loadLatestProfileReviewResultField(config.archiveKey).then((archiveRow) => {
+      if (cancelled) return;
+      if (Array.isArray(archiveRow?.[config.archiveKey])) {
+        setArchive(archiveRow[config.archiveKey].map((entry) => ({
           ...entry,
           result: normalizeImageReviewResult(entry.result, config) || entry.result,
         })));
@@ -4502,6 +4617,14 @@ function ProfileImageReviewPanel({
   const storeCompletedReviewJob = async (completedJob, sourceImages = []) => {
     const parsed = normalizeImageReviewResult(completedJob?.result, config);
     if (!parsed?.overview) throw new Error("Sarah returned an empty image review.");
+    const reviewedImages = completedJob?.meta?.reviewed_images
+      || completedJob?.payload?.reviewed_images
+      || completedJob?.result?._meta?.reviewed_images
+      || [];
+    const jobFreshImageCount = profilerJobMetaValue(completedJob, "fresh_image_count");
+    const jobReusedSavedImageCount = profilerJobMetaValue(completedJob, "reused_saved_image_count");
+    const jobImageCount = profilerJobMetaValue(completedJob, "image_count")
+      ?? profilerJobMetaValue(completedJob, "full_review_image_count");
     const fallbackStatus = isFinalSynthesisFallbackResult(parsed)
       ? parsed._background_attempt_status || {
         state: "final_synthesis_failed_batch_findings_preserved",
@@ -4523,14 +4646,17 @@ function ProfileImageReviewPanel({
         currentResult: parsed,
         evidenceCounts: visualEvidence.counts,
         generatedAtOverride: completedAt(completedJob),
-        reviewedImageOverride: completedJob?.meta?.reviewed_images,
+        reviewedImageOverride: reviewedImages,
         countOverrides: {
-          fresh_image_count: completedJob?.meta?.fresh_image_count,
-          reused_saved_image_count: completedJob?.meta?.reused_saved_image_count,
-          image_count: completedJob?.meta?.image_count,
+          fresh_image_count: jobFreshImageCount,
+          reused_saved_image_count: jobReusedSavedImageCount,
+          image_count: jobImageCount,
         },
       }),
     };
+    storedResult._meta.reviewType = config.kind;
+    storedResult._meta.source_job_id = completedJob?.id || completedJob?.jobId || null;
+    storedResult._meta.source_job_completed_at = completedAt(completedJob);
     if (fallbackStatus) {
       storedResult._meta.latest_attempt_status = fallbackStatus;
       storedResult._meta.recovered_from_batches = true;
@@ -4576,8 +4702,11 @@ function ProfileImageReviewPanel({
 
     const jobTime = (job) => new Date(completedAt(job) || job?.updatedAt || job?.createdAt || 0).getTime() || 0;
     const isMatchingReviewJob = (job) => {
-      const label = String(job?.meta?.label || "");
-      return job?.meta?.reviewType === config.kind ||
+      const label = String(job?.meta?.label || job?.payload?.label || job?.result?._meta?.label || "");
+      const reviewType = profilerJobReviewType(job);
+      const reviewTitle = String(job?.meta?.reviewTitle || job?.payload?.reviewTitle || "").toLowerCase();
+      return reviewType === config.kind ||
+        reviewTitle === config.title.toLowerCase() ||
         label === jobLabel ||
         label.startsWith(`${jobLabel} `);
     };
@@ -4593,7 +4722,7 @@ function ProfileImageReviewPanel({
       if (looksLikePartialBatchResult(job)) return false;
       if (job?.meta?.synthesis) return true;
       if (job?.meta?.batch) return false;
-      return job?.meta?.reviewType === config.kind || job?.meta?.label === jobLabel;
+      return profilerJobReviewType(job) === config.kind || job?.meta?.label === jobLabel || job?.payload?.label === jobLabel;
     };
     const isFailedFinalReviewJob = (job) => (
       isMatchingReviewJob(job) &&
@@ -4751,7 +4880,7 @@ function ProfileImageReviewPanel({
           type: "profile_image_review_full",
           status: "complete",
           metaSource: "Profiler",
-          limit: 20,
+          limit: 100,
         });
         if (cancelled) return;
         const completedJobs = [
@@ -4796,7 +4925,7 @@ function ProfileImageReviewPanel({
             type: "profile_image_review_full",
             status: "error,cancelled",
             metaSource: "Profiler",
-            limit: 20,
+            limit: 100,
           });
           if (cancelled) return;
           const failedFinal = [
@@ -4850,10 +4979,12 @@ function ProfileImageReviewPanel({
             return;
           }
           setJobStatus(job);
-          setAvailableCompletedReviewJob(await loadFullBackgroundJob(job));
+          const fullJob = await loadFullBackgroundJob(job);
+          await storeCompletedReviewJob(fullJob, []);
           setRecoverableBatchSet(null);
           setLatestAttemptStatus(null);
-          setError("A newer completed Profiler review is available. Press the main review button if you want to refresh the displayed output.");
+          setAvailableCompletedReviewJob(null);
+          setError("");
         }
       } catch (err) {
         if (!cancelled) console.warn(`${config.title} background state refresh skipped:`, err);
@@ -4883,7 +5014,7 @@ function ProfileImageReviewPanel({
         });
         if (cancelled) return;
         const sortedReviewJobs = (jobs.jobs || [])
-          .filter((job) => (job?.meta?.reviewType || job?.payload?.reviewType) === config.kind)
+          .filter((job) => profilerJobReviewType(job) === config.kind)
           .sort((a, b) => String(b.finishedAt || b.updatedAt || b.createdAt || "").localeCompare(String(a.finishedAt || a.updatedAt || a.createdAt || "")));
         const matching = sortedReviewJobs.find((job) => (
           String(job?.meta?.sourceGeneratedAt || job?.payload?.sourceGeneratedAt || "") === String(sourceGeneratedAt)
@@ -6512,6 +6643,10 @@ ANNOTATED IMAGE OUTPUT RULES:
 
   const sections = profileReviewResultSections(config);
   const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
+  const profileStale = Boolean(result) && (
+    isProfileAIContentStale(result, sessions) ||
+    isProfileImageReviewSourceStale(result, { sessions, bodyExplorations })
+  );
   const existingEvidenceCount = Object.values(visualEvidence.counts).reduce((sum, value) => sum + (Number(value) || 0), 0);
   const reusableProfileAttachments = collectSavedProfileImageAttachments(userProfile, {
     limit: 99,
@@ -6863,7 +6998,7 @@ ANNOTATED IMAGE OUTPUT RULES:
       }, {
         title,
         source: "Profiler",
-        route: "/profiler",
+        route: config.kind === PELVIC_GENITAL_REVIEW_KIND ? "/profiler#profiler-pelvic-genital-video" : "/profiler#profiler-head-to-toe-video",
         reviewType: config.kind,
         sourceGeneratedAt,
       });
@@ -6905,7 +7040,11 @@ ANNOTATED IMAGE OUTPUT RULES:
     a.click();
   };
 
+  const panelId = config.kind === PELVIC_GENITAL_REVIEW_KIND ? "profiler-pelvic-genital" : "profiler-head-to-toe";
+  const videoPanelId = config.kind === PELVIC_GENITAL_REVIEW_KIND ? "profiler-pelvic-genital-video" : "profiler-head-to-toe-video";
+
   return (
+    <div id={panelId} className="scroll-mt-24">
     <SectionCard icon={config.icon} title={config.title} color={config.color} defaultCollapsed={true}>
       <div className="space-y-3">
         <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -7063,11 +7202,16 @@ ANNOTATED IMAGE OUTPUT RULES:
             {Array.isArray(result?._meta?.reviewed_images) && result._meta.reviewed_images.length > 0 && (
               <span>{result._meta.reviewed_images.length} direct view{result._meta.reviewed_images.length === 1 ? "" : "s"} linked into cumulative review</span>
             )}
+            {profileStale && (
+              <span className="rounded-full border border-amber-400/40 bg-amber-400/15 px-2 py-0.5 font-semibold text-amber-700">
+                Newer saved evidence exists - re-review to update this synthesis
+              </span>
+            )}
           </div>
         )}
 
         {result && (
-          <div className="rounded-xl border border-primary/20 bg-primary/5 p-3">
+          <div id={videoPanelId} className="scroll-mt-24 rounded-xl border border-primary/20 bg-primary/5 p-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h4 className="flex items-center gap-1.5 text-sm font-bold text-foreground">
@@ -7426,6 +7570,7 @@ ANNOTATED IMAGE OUTPUT RULES:
         />
       </div>
     </SectionCard>
+    </div>
   );
 }
 
@@ -8794,15 +8939,19 @@ export default function Profiler() {
         </div>
       )}
 
-      <AIProfilePanel sessions={sessions} userProfile={userProfile} journals={journals} evidenceLoading={sessionEvidenceLoading} />
-      <AnatomicalPhysiologicalProfilePanel
-        sessions={sessions}
-        allTimelines={allTimelines}
-        userProfile={userProfile}
-        profileLoading={profileContextLoading}
-        evidenceLoading={sessionEvidenceLoading}
-        timelineLoading={timelineLoading}
-      />
+      <div id="profiler-ai-profile" className="scroll-mt-24">
+        <AIProfilePanel sessions={sessions} userProfile={userProfile} journals={journals} evidenceLoading={sessionEvidenceLoading} />
+      </div>
+      <div id="profiler-anatomical-profile" className="scroll-mt-24">
+        <AnatomicalPhysiologicalProfilePanel
+          sessions={sessions}
+          allTimelines={allTimelines}
+          userProfile={userProfile}
+          profileLoading={profileContextLoading}
+          evidenceLoading={sessionEvidenceLoading}
+          timelineLoading={timelineLoading}
+        />
+      </div>
       <ProfileImageReviewPanel
         config={HEAD_TO_TOE_IMAGE_REVIEW_CONFIG}
         sessions={sessions}
@@ -8821,8 +8970,12 @@ export default function Profiler() {
         profileLoading={profileContextLoading}
         evidenceLoading={sessionEvidenceLoading}
       />
-      <StimulationMethodsPanel sessions={sessions} userProfile={userProfile} evidenceLoading={sessionEvidenceLoading} />
-      <NearClimaxPanel sessions={sessions} allTimelines={allTimelines} userProfile={userProfile} timelineLoading={timelineLoading} />
+      <div id="profiler-stimulation-methods" className="scroll-mt-24">
+        <StimulationMethodsPanel sessions={sessions} userProfile={userProfile} evidenceLoading={sessionEvidenceLoading} />
+      </div>
+      <div id="profiler-near-climax" className="scroll-mt-24">
+        <NearClimaxPanel sessions={sessions} allTimelines={allTimelines} userProfile={userProfile} timelineLoading={timelineLoading} />
+      </div>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
+import { discoverSarahApiBase, isSarahNativeShell } from '@/lib/mobileApiBase';
 import { incrementLifecycleMountCount, recordPwaLifecycleEvent } from '@/lib/pwaLifecycleDiagnostics';
 
 const AuthContext = createContext();
@@ -11,6 +12,10 @@ export const AuthProvider = ({ children }) => {
   const [isLoadingPublicSettings, setIsLoadingPublicSettings] = useState(true);
   const [authError, setAuthError] = useState(null);
   const [appPublicSettings, setAppPublicSettings] = useState(null); // Contains only { id, public_settings }
+  const [bootStatus, setBootStatus] = useState({
+    message: 'Starting local cockpit...',
+    detail: '',
+  });
 
   useEffect(() => {
     incrementLifecycleMountCount('auth_provider');
@@ -24,6 +29,20 @@ export const AuthProvider = ({ children }) => {
       setAuthError(null);
       setAppPublicSettings({ id: 'local', public_settings: {} });
       setIsLoadingPublicSettings(false);
+      if (isSarahNativeShell()) {
+        setBootStatus({ message: 'Finding Sarah server...', detail: '' });
+        const discovery = await discoverSarahApiBase({
+          timeoutMs: 2600,
+          onAttempt: (base) => setBootStatus({
+            message: 'Finding Sarah server...',
+            detail: base,
+          }),
+        });
+        setBootStatus({
+          message: 'Connected to Sarah server',
+          detail: discovery.base,
+        });
+      }
       await checkUserAuth();
       recordPwaLifecycleEvent('auth_initialization_complete');
     } catch (error) {
@@ -31,6 +50,10 @@ export const AuthProvider = ({ children }) => {
       setAuthError({
         type: 'unknown',
         message: error.message || 'An unexpected error occurred'
+      });
+      setBootStatus({
+        message: 'Could not reach Sarah server',
+        detail: error.message || 'Check Wi-Fi, VPN, and whether the desktop server is running.',
       });
       setIsLoadingPublicSettings(false);
       setIsLoadingAuth(false);
@@ -94,7 +117,8 @@ export const AuthProvider = ({ children }) => {
       appPublicSettings,
       logout,
       navigateToLogin,
-      checkAppState
+      checkAppState,
+      bootStatus,
     }}>
       {children}
     </AuthContext.Provider>

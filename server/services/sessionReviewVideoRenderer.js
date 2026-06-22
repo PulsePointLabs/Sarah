@@ -19,6 +19,8 @@ const REVIEW_VIDEO_CARD_CRF = String(process.env.REVIEW_VIDEO_CARD_CRF || 17);
 const REVIEW_VIDEO_TRANSITION_SECONDS = Math.max(0, Math.min(0.6, Number(process.env.REVIEW_VIDEO_TRANSITION_SECONDS || 0.22)));
 const REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS = Math.max(0, Math.min(1.5, Number(process.env.REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS || 0.25)));
 const REVIEW_VIDEO_TIME_TOLERANCE_SECONDS = Math.max(0, Math.min(30, Number(process.env.REVIEW_VIDEO_TIME_TOLERANCE_SECONDS || 8)));
+const REVIEW_VIDEO_MIN_GENERIC_BROLL_GAP_SECONDS = Math.max(6, Number(process.env.REVIEW_VIDEO_MIN_GENERIC_BROLL_GAP_SECONDS || 18));
+const REVIEW_VIDEO_GENERIC_BROLL_SEARCH_STEPS = Math.max(3, Number(process.env.REVIEW_VIDEO_GENERIC_BROLL_SEARCH_STEPS || 8));
 
 function reviewVideoFitFilter() {
   return [
@@ -74,6 +76,8 @@ function matchAudioExport(record, request) {
   if (record.render_version !== 'tts_export_leading_trim_v2') return false;
   if (String(record.tts_session_key || '') !== String(request.sessionId || '')) return false;
   if (String(record.source_generated_at || '') !== String(request.sourceGeneratedAt || '')) return false;
+  if (String(record.review_type || '') && String(record.review_type || '') !== String(request.reviewType || '')) return false;
+  if (!String(record.review_type || '') && String(record.analysis_title || record.title || '') !== String(request.title || '')) return false;
   if (String(record.voice || 'nova') !== String(request.voice || 'nova')) return false;
   if (String(record.model || '') !== String(request.model || '')) return false;
   if (String(record.format || 'mp3') !== String(request.outputFormat || 'mp3')) return false;
@@ -86,6 +90,8 @@ function matchCompletedTtsJob(job, request) {
   if (result.render_version !== 'tts_export_leading_trim_v2') return false;
   if (String(job?.meta?.sessionId || '') !== String(request.sessionId || '')) return false;
   if (String(job?.meta?.sourceGeneratedAt || '') !== String(request.sourceGeneratedAt || '')) return false;
+  if (String(job?.meta?.reviewType || '') && String(job?.meta?.reviewType || '') !== String(request.reviewType || '')) return false;
+  if (!String(job?.meta?.reviewType || '') && String(job?.meta?.title || result.analysis_title || result.title || '') !== String(request.title || '')) return false;
   if (String(result.voice || 'nova') !== String(request.voice || 'nova')) return false;
   if (String(result.model || '') !== String(request.model || '')) return false;
   if (String(result.format || 'mp3') !== String(request.outputFormat || 'mp3')) return false;
@@ -96,6 +102,7 @@ async function resolveNarration(payload, { jobId, signal, onProgress }) {
   const request = {
     sessionId: payload.sessionId,
     title: payload.title || 'Session Review Video',
+    reviewType: payload.reviewType || null,
     sourceGeneratedAt: payload.sourceGeneratedAt || null,
     voice: payload.voice || 'nova',
     model: payload.model,
@@ -200,6 +207,7 @@ async function resolveNarration(payload, { jobId, signal, onProgress }) {
     size: rendered.size,
     filename: rendered.filename,
     tts_session_key: request.sessionId || null,
+    review_type: request.reviewType || null,
     analysis_title: request.title,
     session_date: payload.sessionDate || null,
     source_generated_at: request.sourceGeneratedAt,
@@ -432,6 +440,7 @@ function drawTextSafe(value = '') {
     .replace(/\\/g, '/')
     .replace(/:/g, '\\:')
     .replace(/'/g, "\\'")
+    .replace(/%/g, '\\%')
     .replace(/\[/g, '\\[')
     .replace(/\]/g, '\\]')
     .trim();
@@ -444,17 +453,27 @@ function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playb
   const timelineStart = Number.isFinite(Number(sessionSeconds)) ? Number(sessionSeconds) : Number(startSeconds || 0);
   const timelineRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
   const timelineCounter = [
-    'timeline ',
     `%{eif\\:floor((${timelineStart.toFixed(3)}+t*${timelineRate.toFixed(4)})/60)\\:d}`,
     '\\:',
     `%{eif\\:mod(floor(${timelineStart.toFixed(3)}+t*${timelineRate.toFixed(4)})\\,60)\\:d\\:2}`,
   ].join('');
-  const text = [timelineCounter, slowMoLabel ? drawTextSafe(slowMoLabel) : ''].filter(Boolean).join('  |  ');
+  const slowMoText = slowMoLabel ? drawTextSafe(slowMoLabel.toUpperCase()) : '';
+  const badgeX = 34;
+  const badgeY = 'h-118';
+  const badgeWidth = slowMoText ? 430 : 305;
+  const badgeHeight = 78;
   return [
     reviewVideoFitFilter(),
     'format=yuv420p',
     Number.isFinite(rate) && rate > 0 && rate < 0.99 ? `setpts=${(1 / rate).toFixed(4)}*PTS` : null,
-    `drawtext=fontfile='${fontPath}':text='${text}':x=36:y=h-78:fontsize=34:fontcolor=white:box=1:boxcolor=black@0.68:boxborderw=12`,
+    `drawbox=x=${badgeX}:y=${badgeY}:w=${badgeWidth}:h=${badgeHeight}:color=0x050711@0.66:t=fill`,
+    `drawbox=x=${badgeX}:y=${badgeY}:w=7:h=${badgeHeight}:color=0xa855f7@0.96:t=fill`,
+    `drawbox=x=${badgeX + 9}:y=h-116:w=${badgeWidth - 13}:h=1:color=0xffffff@0.18:t=fill`,
+    `drawtext=fontfile='${fontPath}':text='SESSION TIME':x=${badgeX + 22}:y=h-104:fontsize=17:fontcolor=0xd8b4fe@0.95:shadowcolor=0x000000@0.85:shadowx=1:shadowy=1`,
+    `drawtext=fontfile='${fontPath}':text='${timelineCounter}':x=${badgeX + 21}:y=h-82:fontsize=38:fontcolor=0xffffff@0.98:shadowcolor=0x000000@0.9:shadowx=2:shadowy=2`,
+    slowMoText
+      ? `drawtext=fontfile='${fontPath}':text='${slowMoText}':x=${badgeX + 167}:y=h-73:fontsize=18:fontcolor=0xf5d0fe@0.94:box=1:boxcolor=0x7e22ce@0.32:boxborderw=7:shadowcolor=0x000000@0.75:shadowx=1:shadowy=1`
+      : null,
     ...segmentFadeFilters(outputDurationSeconds),
   ].filter(Boolean).join(',');
 }
@@ -539,6 +558,7 @@ async function buildNarrationAlignedSegments({
   let visualDuration = 0;
   let segmentIndex = 1;
   let continuitySourceCursor = 0;
+  const usedSourceWindows = [];
 
   for (const slot of paragraphSlots) {
     if (signal?.aborted) throw new Error('Cancelled');
@@ -614,6 +634,7 @@ async function buildNarrationAlignedSegments({
           const actualDuration = Number(clip.durationSeconds || sliceDuration);
           visualDuration += actualDuration;
           slotVisualDuration += actualDuration;
+          rememberSourceWindow(usedSourceWindows, { start, end: start + actualDuration, label: event.label });
           generatedClips.push({
             ...event.source,
             paragraphIndex,
@@ -635,28 +656,45 @@ async function buildNarrationAlignedSegments({
         }
       }
       if (slotVisualDuration <= 0) {
-        const fallbackStart = Math.max(0, Math.min(sourceDuration || continuitySourceCursor, continuitySourceCursor));
-        const fallbackEnd = fallbackStart + slot.durationSeconds;
+        const fallbackStart = selectDistinctReviewSourceStart({
+          preferredStart: continuitySourceCursor,
+          durationSeconds: slot.durationSeconds,
+          sourceDuration,
+          usedWindows: usedSourceWindows,
+        });
+        const sourceStart = fallbackStart == null
+          ? clampClipStart(continuitySourceCursor, slot.durationSeconds, sourceDuration)
+          : fallbackStart;
+        const fallbackEnd = sourceStart + slot.durationSeconds;
         const clip = await cutReviewClip({
           sourcePath: primaryVideo.path,
-          startSeconds: fallbackStart,
+          startSeconds: sourceStart,
           endSeconds: fallbackEnd,
           label: slotTitle(paragraphIndex, payloadTitle),
           workDir,
           index: segmentIndex++,
-          sessionSeconds: sessionTimeForSource(fallbackStart, primaryVideo),
+          sessionSeconds: sessionTimeForSource(sourceStart, primaryVideo),
         });
         segments.push(clip.path);
-        visualDuration += Number(clip.durationSeconds || slot.durationSeconds);
-        continuitySourceCursor = fallbackStart + Number(clip.durationSeconds || slot.durationSeconds);
+        const actualDuration = Number(clip.durationSeconds || slot.durationSeconds);
+        visualDuration += actualDuration;
+        rememberSourceWindow(usedSourceWindows, { start: sourceStart, end: sourceStart + actualDuration, label: slotTitle(paragraphIndex, payloadTitle) });
+        continuitySourceCursor = sourceStart + actualDuration;
       }
       continue;
     }
 
     if (primaryVideo?.path) {
-      const maxStart = Math.max(0, Number(sourceDuration || 0) - Math.max(1, slot.durationSeconds));
-      const fallbackStart = Math.max(0, Math.min(maxStart || continuitySourceCursor, continuitySourceCursor));
-      const fallbackEnd = fallbackStart + slot.durationSeconds;
+      const fallbackStart = selectDistinctReviewSourceStart({
+        preferredStart: continuitySourceCursor,
+        durationSeconds: slot.durationSeconds,
+        sourceDuration,
+        usedWindows: usedSourceWindows,
+      });
+      const sourceStart = fallbackStart == null
+        ? clampClipStart(continuitySourceCursor, slot.durationSeconds, sourceDuration)
+        : fallbackStart;
+      const fallbackEnd = sourceStart + slot.durationSeconds;
       onProgress?.({
         phase: 'segments',
         current: 3,
@@ -665,28 +703,30 @@ async function buildNarrationAlignedSegments({
       });
       const clip = await cutReviewClip({
         sourcePath: primaryVideo.path,
-        startSeconds: fallbackStart,
+        startSeconds: sourceStart,
         endSeconds: fallbackEnd,
         label: slotTitle(paragraphIndex, payloadTitle),
         workDir,
         index: segmentIndex++,
-        sessionSeconds: sessionTimeForSource(fallbackStart, primaryVideo),
+        sessionSeconds: sessionTimeForSource(sourceStart, primaryVideo),
       });
       segments.push(clip.path);
-      visualDuration += Number(clip.durationSeconds || slot.durationSeconds);
+      const actualDuration = Number(clip.durationSeconds || slot.durationSeconds);
+      visualDuration += actualDuration;
+      rememberSourceWindow(usedSourceWindows, { start: sourceStart, end: sourceStart + actualDuration, label: slotTitle(paragraphIndex, payloadTitle) });
       generatedClips.push({
         id: `context-${paragraphIndex}`,
         paragraphIndex,
-        session_time_s: Math.round(fallbackStart * 10) / 10,
+        session_time_s: Math.round(sourceStart * 10) / 10,
         cited_text: 'Continuous source video context',
         label: slotTitle(paragraphIndex, payloadTitle),
         reason: 'No exact logged event or explicit timestamp matched this narration slot; using source video instead of title-card filler.',
         source_video_path: primaryVideo.path,
         aligned_narration_start_s: Math.round(slot.startSeconds * 10) / 10,
         aligned_narration_end_s: Math.round(slot.endSeconds * 10) / 10,
-        durationSeconds: Number(clip.durationSeconds || slot.durationSeconds),
+        durationSeconds: actualDuration,
       });
-      continuitySourceCursor = fallbackStart + Number(clip.durationSeconds || slot.durationSeconds);
+      continuitySourceCursor = sourceStart + actualDuration;
       continue;
     }
 
@@ -734,11 +774,18 @@ async function createTitleCard({ workDir, index, title, subtitle, durationSecond
   const output = path.join(workDir, `title-card-${String(index).padStart(3, '0')}.mp4`);
   const fontPath = process.env.REVIEW_VIDEO_FONT || 'C\\:/Windows/Fonts/arial.ttf';
   const heading = safeDrawText(title || 'Session Review', 48);
-  const body = safeDrawText(subtitle || '', 92);
+  const body = safeDrawText(subtitle || 'No source media was available for this section.', 96);
   const duration = Math.max(2, Number(durationSeconds || 3));
   const draw = [
-    `drawtext=fontfile='${fontPath}':text='${heading}':fontcolor=white:fontsize=42:x=(w-text_w)/2:y=(h/2)-70`,
-    body ? `drawtext=fontfile='${fontPath}':text='${body}':fontcolor=white@0.78:fontsize=24:x=(w-text_w)/2:y=(h/2)+8` : null,
+    `drawbox=x=0:y=0:w=iw:h=ih:color=0x090b10@1:t=fill`,
+    `drawbox=x=110:y=100:w=1700:h=880:color=0x0f1117@0.94:t=fill`,
+    `drawbox=x=110:y=100:w=1700:h=880:color=0xff2d55@0.82:t=4`,
+    `drawbox=x=154:y=146:w=84:h=84:color=0xff2d55@0.95:t=8`,
+    `drawtext=fontfile='${fontPath}':text='SARAH':fontcolor=white@0.96:fontsize=30:x=270:y=148`,
+    `drawtext=fontfile='${fontPath}':text='PulsePoint Production Review':fontcolor=white@0.62:fontsize=24:x=270:y=192`,
+    `drawtext=fontfile='${fontPath}':text='${heading}':fontcolor=white:fontsize=54:x=154:y=430`,
+    body ? `drawtext=fontfile='${fontPath}':text='${body}':fontcolor=white@0.76:fontsize=26:x=154:y=520` : null,
+    `drawtext=fontfile='${fontPath}':text='No verified source visual available for this segment':fontcolor=white@0.48:fontsize=22:x=154:y=870`,
     ...segmentFadeFilters(duration),
   ].filter(Boolean).join(',');
   await runProcess('ffmpeg', [
@@ -1080,6 +1127,69 @@ function clampClipStart(startSeconds, durationSeconds, sourceDuration) {
   return Math.max(0, Math.min(maxStart, Number(startSeconds || 0)));
 }
 
+function sourceWindowConflicts(startSeconds, durationSeconds, usedWindows = [], minGapSeconds = REVIEW_VIDEO_MIN_GENERIC_BROLL_GAP_SECONDS) {
+  const start = Number(startSeconds);
+  const duration = Math.max(0.5, Number(durationSeconds || 0.5));
+  const minGap = Math.max(0, Number(minGapSeconds || 0));
+  if (!Number.isFinite(start)) return true;
+  const end = start + duration;
+  return usedWindows.some((used) => {
+    const usedStart = Number(used?.start);
+    const usedEnd = Number(used?.end);
+    if (!Number.isFinite(usedStart) || !Number.isFinite(usedEnd)) return false;
+    if (Math.abs(start - usedStart) < minGap) return true;
+    return end > usedStart - minGap && start < usedEnd + minGap;
+  });
+}
+
+function rememberSourceWindow(usedWindows = [], window = {}) {
+  const start = Number(window.start);
+  const end = Number(window.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+  usedWindows.push({
+    start,
+    end,
+    label: window.label || null,
+  });
+}
+
+export function selectDistinctReviewSourceStart({
+  preferredStart = 0,
+  durationSeconds = 1,
+  sourceDuration = 0,
+  usedWindows = [],
+  minGapSeconds = REVIEW_VIDEO_MIN_GENERIC_BROLL_GAP_SECONDS,
+  allowNearRepeat = false,
+} = {}) {
+  const duration = Math.max(0.5, Number(durationSeconds || 0.5));
+  const availableDuration = Number(sourceDuration || 0);
+  const maxStart = Math.max(0, availableDuration - duration);
+  const preferred = clampClipStart(preferredStart, duration, availableDuration);
+  if (allowNearRepeat || !usedWindows.length) return preferred;
+
+  const addCandidate = (list, value) => {
+    const candidate = clampClipStart(value, duration, availableDuration);
+    if (!list.some((existing) => Math.abs(existing - candidate) < 0.25)) list.push(candidate);
+  };
+
+  const candidates = [];
+  addCandidate(candidates, preferred);
+  const stride = Math.max(duration + minGapSeconds, minGapSeconds);
+  for (let step = 1; step <= REVIEW_VIDEO_GENERIC_BROLL_SEARCH_STEPS; step += 1) {
+    addCandidate(candidates, preferred + stride * step);
+    addCandidate(candidates, preferred - stride * step);
+  }
+  for (const ratio of [0, 0.18, 0.36, 0.54, 0.72, 0.9, 1]) {
+    addCandidate(candidates, maxStart * ratio);
+  }
+
+  const sorted = candidates.sort((a, b) => Math.abs(a - preferred) - Math.abs(b - preferred));
+  for (const candidate of sorted) {
+    if (!sourceWindowConflicts(candidate, duration, usedWindows, minGapSeconds)) return candidate;
+  }
+  return null;
+}
+
 function closestSpokenTimeInSegment(segment = {}, event = {}) {
   const eventTime = Number(event?.session_time_s);
   if (!Number.isFinite(eventTime)) return null;
@@ -1156,11 +1266,93 @@ function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, s
   return {
     start,
     end: start + duration,
-    sessionSeconds: start,
+    sessionSeconds: sessionTimeForSource(start, primaryVideo),
     sessionStartSeconds: sessionTimeForSource(start, primaryVideo),
     label: 'Source video context',
     playbackRate: 1,
     slowMotion: false,
+  };
+}
+
+async function renderSourceContextSegment({
+  primaryVideo,
+  sourceDuration,
+  workDir,
+  index,
+  segment,
+  audio,
+  fallbackCursor = 0,
+  usedSourceWindows = [],
+  label = 'Source video context',
+  selectionReason = 'No exact event matched this spoken segment; using source video context instead of a title card.',
+  fallbackType = 'continuous_source_context',
+  visualSource = 'continuous_source_context',
+}) {
+  const duration = Number(audio?.durationSeconds || 1);
+  const distinctStart = selectDistinctReviewSourceStart({
+    preferredStart: fallbackCursor,
+    durationSeconds: duration,
+    sourceDuration,
+    usedWindows: usedSourceWindows,
+  });
+  const start = Number.isFinite(Number(distinctStart))
+    ? Number(distinctStart)
+    : clampClipStart(fallbackCursor, duration, sourceDuration);
+  const window = sourceWindowForSegment({
+    event: null,
+    segment,
+    audioDuration: duration,
+    primaryVideo,
+    sourceDuration,
+    fallbackCursor: start,
+  });
+  window.label = label || window.label;
+  const videoClip = await cutReviewClip({
+    sourcePath: primaryVideo.path,
+    startSeconds: window.start,
+    endSeconds: window.end,
+    label: window.label,
+    workDir,
+    index,
+    sessionSeconds: window.sessionStartSeconds,
+  });
+  return {
+    videoClip,
+    window,
+    generatedClip: {
+      id: `source-context-${index}`,
+      paragraphIndex: segment.paragraphIndex,
+      session_time_s: roundedSeconds(window.sessionSeconds),
+      visual_session_start_s: roundedSeconds(window.sessionStartSeconds),
+      source_start_s: roundedSeconds(window.start),
+      source_end_s: roundedSeconds(window.end),
+      spoken_segment_index: index,
+      spoken_text: segment.text.slice(0, 240),
+      label: window.label,
+      reason: selectionReason,
+      source_video_path: primaryVideo.path,
+      audio_duration_seconds: roundedSeconds(duration),
+      playback_rate: 1,
+      slow_motion: false,
+      direct_spoken_time: false,
+      source_time_strategy: 'continuous_source_video_context',
+      matched_event: false,
+      procedural_broll: false,
+      procedural_broll_score: null,
+      timeline_trace: {
+        ...buildTimelineTrace({
+          segment,
+          event: null,
+          window,
+          audio,
+          selectionReason,
+          fallbackUsed: true,
+          fallbackType,
+          visualSource,
+        }),
+        spoken_segment_index: index,
+      },
+    },
   };
 }
 
@@ -1272,6 +1464,7 @@ async function renderSegmentedSourceReviewVideo({
   const generatedClips = [];
   let previousText = '';
   let fallbackCursor = 0;
+  const usedSourceWindows = [];
   let totalAudioDuration = 0;
   let ttsMeta = null;
 
@@ -1326,6 +1519,38 @@ async function renderSegmentedSourceReviewVideo({
         : !eventRenderable
         ? `Referenced ${narratedLabel}, but that moment is outside the available source video range.`
         : `Referenced ${narratedLabel}, but the nearest selected visual was ${formatTimestamp(event.session_time_s)}.`;
+      if (!event) {
+        onProgress?.({
+          phase: 'segments',
+          current: 3,
+          total: 5,
+          message: `No exact visual for ${narratedLabel}; using source video context instead of a title card...`,
+        });
+        const sourceContext = await renderSourceContextSegment({
+          primaryVideo,
+          sourceDuration,
+          workDir,
+          index: index + 1,
+          segment,
+          audio,
+          fallbackCursor,
+          usedSourceWindows,
+          label: `Source context for ${narratedLabel}`,
+          selectionReason: `${reason} No exact timestamp anchor was available, so the renderer used continuous source video context instead of a title card.`,
+          fallbackType: 'source_context_for_unmatched_timestamp',
+          visualSource: 'continuous_source_context',
+        });
+        const { videoClip, window } = sourceContext;
+        const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
+        await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
+        avSegments.push(avPath);
+        videoSegments.push(videoClip.path);
+        rememberSourceWindow(usedSourceWindows, window);
+        fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
+        generatedClips.push(sourceContext.generatedClip);
+        previousText = previousText ? `${previousText} ${segment.text}` : segment.text;
+        continue;
+      }
       onProgress?.({
         phase: 'segments',
         current: 3,
@@ -1350,6 +1575,58 @@ async function renderSegmentedSourceReviewVideo({
         sourceDuration,
         fallbackCursor,
       });
+      if (sourceWindowConflicts(window.start, Number(audio.durationSeconds || 1), usedSourceWindows)) {
+        const videoClip = await cutReviewClip({
+          sourcePath: primaryVideo.path,
+          startSeconds: window.start,
+          endSeconds: window.end,
+          label: window.label,
+          workDir,
+          index: index + 1,
+          sessionSeconds: window.sessionStartSeconds,
+          playbackRate: window.playbackRate || 1,
+        });
+        videoSegments.push(videoClip.path);
+        const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
+        await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
+        avSegments.push(avPath);
+        rememberSourceWindow(usedSourceWindows, window);
+        fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
+        const trace = buildTimelineTrace({
+          segment,
+          event: fallbackEvent || null,
+          window,
+          audio,
+          selectionReason: `${reason} The nearest source-video window was already used nearby, but source video was still used to avoid title-card filler.`,
+          fallbackUsed: true,
+          fallbackType: 'repeated_nearest_available_source_video',
+          visualSource: 'clamped_source_video',
+          violation: 'TIMESTAMP_VISUAL_CLAMPED_REPEAT_SOURCE_VIDEO',
+        });
+        generatedClips.push({
+          id: fallbackEvent?.id || `repeated-clamped-source-${index + 1}`,
+          paragraphIndex: segment.paragraphIndex,
+          session_time_s: fallbackEvent ? roundedSeconds(fallbackEvent.session_time_s) : null,
+          visual_session_start_s: roundedSeconds(window.sessionStartSeconds),
+          source_start_s: roundedSeconds(window.start),
+          source_end_s: roundedSeconds(window.end),
+          spoken_segment_index: index + 1,
+          spoken_text: segment.text.slice(0, 240),
+          label: window.label || 'Nearest available source video',
+          reason: 'Narration referenced a time whose nearest source-video window was already used nearby; repeated source video was used instead of a title card.',
+          source_video_path: primaryVideo.path,
+          audio_duration_seconds: roundedSeconds(audio.durationSeconds),
+          playback_rate: Number(window.playbackRate || 1),
+          slow_motion: Boolean(window.slowMotion),
+          direct_spoken_time: Boolean(window.directSpokenTime),
+          source_time_strategy: 'repeated_clamped_source_video',
+          matched_event: Boolean(matchedEvent),
+          procedural_broll: false,
+          timeline_trace: { ...trace, spoken_segment_index: index + 1 },
+        });
+        previousText = previousText ? `${previousText} ${segment.text}` : segment.text;
+        continue;
+      }
       const videoClip = await cutReviewClip({
         sourcePath: primaryVideo.path,
         startSeconds: window.start,
@@ -1364,6 +1641,7 @@ async function renderSegmentedSourceReviewVideo({
       const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
       await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
       avSegments.push(avPath);
+      rememberSourceWindow(usedSourceWindows, window);
       fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
       const trace = buildTimelineTrace({
         segment,
@@ -1403,6 +1681,39 @@ async function renderSegmentedSourceReviewVideo({
       continue;
     }
 
+    if (!event) {
+      onProgress?.({
+        phase: 'segments',
+        current: 3,
+        total: 5,
+        message: `No exact visual for spoken segment ${index + 1}; using source video context instead of a title card...`,
+      });
+      const sourceContext = await renderSourceContextSegment({
+        primaryVideo,
+        sourceDuration,
+        workDir,
+        index: index + 1,
+        segment,
+        audio,
+        fallbackCursor,
+        usedSourceWindows,
+        label: payload.title || 'Session Review',
+        selectionReason: 'No exact event matched this untimed spoken segment; using continuous source video context instead of title-card filler.',
+        fallbackType: 'continuous_source_context_for_untimed_narration',
+        visualSource: 'continuous_source_context',
+      });
+      const { videoClip, window } = sourceContext;
+      videoSegments.push(videoClip.path);
+      const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
+      await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
+      avSegments.push(avPath);
+      rememberSourceWindow(usedSourceWindows, window);
+      fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
+      generatedClips.push(sourceContext.generatedClip);
+      previousText = previousText ? `${previousText} ${segment.text}` : segment.text;
+      continue;
+    }
+
     const window = sourceWindowForSegment({
       event,
       segment,
@@ -1431,6 +1742,7 @@ async function renderSegmentedSourceReviewVideo({
     const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
     await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
     avSegments.push(avPath);
+    rememberSourceWindow(usedSourceWindows, window);
     fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
     const selectionReason = event?.reason || (!matchedEvent && !event
       ? 'No exact event matched this untimed spoken segment; using continuous source video context.'
@@ -1546,6 +1858,9 @@ async function renderSegmentedSourceReviewVideo({
   const record = upsertEntity('SessionReviewVideo', crypto.randomUUID(), {
     title: payload.title || 'Session Review Video',
     session_id: payload.sessionId || session.id || null,
+    record_type: payload.recordType || session.record_type || null,
+    session_date: payload.sessionDate || session.date || null,
+    review_type: payload.reviewType || null,
     analysis_title: payload.title || null,
     source_generated_at: payload.sourceGeneratedAt || null,
     file_url: `/uploads/${outputFilename}`,
@@ -1576,6 +1891,7 @@ async function renderSegmentedSourceReviewVideo({
     duration_seconds: record.duration_seconds,
     audio_file_url: record.audio_file_url,
     audio_reused: false,
+    review_type: payload.reviewType || null,
     clip_count: record.clip_count,
     cited_time_count: record.cited_time_count,
     manifest_url,
@@ -1798,6 +2114,9 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
     const record = upsertEntity('SessionReviewVideo', crypto.randomUUID(), {
       title: payload.title || 'Session Review Video',
       session_id: payload.sessionId || session.id || null,
+      record_type: payload.recordType || session.record_type || null,
+      session_date: payload.sessionDate || session.date || null,
+      review_type: payload.reviewType || null,
       analysis_title: payload.title || null,
       source_generated_at: payload.sourceGeneratedAt || null,
       file_url: `/uploads/${outputFilename}`,
@@ -1828,6 +2147,7 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       duration_seconds: record.duration_seconds,
       audio_file_url: record.audio_file_url,
       audio_reused: narration.reused,
+      review_type: payload.reviewType || null,
       clip_count: record.clip_count,
       cited_time_count: record.cited_time_count,
       manifest_url,

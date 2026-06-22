@@ -39,7 +39,13 @@ import NewBodyExploration from './pages/NewBodyExploration';
 import { incrementLifecycleMountCount, recordPwaLifecycleEvent } from '@/lib/pwaLifecycleDiagnostics';
 
 const AuthenticatedApp = () => {
-  const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
+  const {
+    isLoadingAuth,
+    isLoadingPublicSettings,
+    authError,
+    bootStatus,
+    navigateToLogin,
+  } = useAuth();
   const bootScreenVisibleRef = useRef(null);
 
   useEffect(() => {
@@ -59,7 +65,12 @@ const AuthenticatedApp = () => {
 
   // Show loading spinner while checking app public settings or auth
   if (bootScreenVisible) {
-    return <SarahSplash />;
+    return (
+      <SarahSplash
+        message={bootStatus?.message}
+        detail={bootStatus?.detail}
+      />
+    );
   }
 
   // Handle authentication errors
@@ -70,6 +81,14 @@ const AuthenticatedApp = () => {
       // Redirect to login automatically
       navigateToLogin();
       return null;
+    } else {
+      return (
+        <SarahSplash
+          message={bootStatus?.message || 'Could not start Sarah'}
+          detail={bootStatus?.detail || authError.message}
+          error
+        />
+      );
     }
   }
 

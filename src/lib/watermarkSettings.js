@@ -1,4 +1,5 @@
 export const WATERMARK_SETTINGS_KEY = "sarah-watermark-settings-v1";
+export const WATERMARK_SETTINGS_VERSION = 2;
 
 export const WATERMARK_PRESETS = [
   {
@@ -19,6 +20,7 @@ export const WATERMARK_PRESETS = [
 ];
 
 export const DEFAULT_WATERMARK_SETTINGS = {
+  settingsVersion: WATERMARK_SETTINGS_VERSION,
   preset: "public_export",
   enabled: true,
   primaryText: "Clinical Climax",
@@ -32,7 +34,7 @@ export const DEFAULT_WATERMARK_SETTINGS = {
   portraitPath: "brand/sarah-lab.jpg",
   logoPath: "icons/sarah-192.png",
   paddingPercent: 4,
-  positionMode: "bottom_right",
+  positionMode: "top_right",
   movementIntervalSeconds: 24,
   movementTransitionSeconds: 0.7,
   shadowEnabled: true,
@@ -45,6 +47,18 @@ export function normalizeWatermarkSettings(input = {}) {
   const preset = ["public_export", "private_archive", "preview"].includes(input?.preset)
     ? input.preset
     : DEFAULT_WATERMARK_SETTINGS.preset;
+  const isLegacyPublicExport = input
+    && input.settingsVersion == null
+    && preset === "public_export";
+  const migratedPositionMode = isLegacyPublicExport && input?.positionMode === "rotating_corners"
+    ? DEFAULT_WATERMARK_SETTINGS.positionMode
+    : input?.positionMode;
+  const migratedPrimaryText = isLegacyPublicExport && String(input?.primaryText || "").trim() === "ClinicalClimax"
+    ? DEFAULT_WATERMARK_SETTINGS.primaryText
+    : input?.primaryText;
+  const migratedSecondaryText = isLegacyPublicExport && /Powered by Sarah/i.test(String(input?.secondaryText || "")) && /[♥🩺]/u.test(String(input?.secondaryText || ""))
+    ? DEFAULT_WATERMARK_SETTINGS.secondaryText
+    : input?.secondaryText;
   const presetDefaults = preset === "private_archive"
     ? { enabled: false, metadataScrubEnabled: false }
     : preset === "preview"
@@ -58,10 +72,11 @@ export function normalizeWatermarkSettings(input = {}) {
     ...DEFAULT_WATERMARK_SETTINGS,
     ...presetDefaults,
     ...input,
+    settingsVersion: WATERMARK_SETTINGS_VERSION,
     preset,
     enabled: Boolean(input?.enabled ?? presetDefaults.enabled),
-    primaryText: String(input?.primaryText || DEFAULT_WATERMARK_SETTINGS.primaryText).slice(0, 80),
-    secondaryText: String(input?.secondaryText ?? DEFAULT_WATERMARK_SETTINGS.secondaryText).slice(0, 80),
+    primaryText: String(migratedPrimaryText || DEFAULT_WATERMARK_SETTINGS.primaryText).slice(0, 80),
+    secondaryText: String(migratedSecondaryText ?? DEFAULT_WATERMARK_SETTINGS.secondaryText).slice(0, 80),
     handleText: String(input?.handleText || "").slice(0, 80),
     opacity: number(input?.opacity, 0.05, 1, presetDefaults.opacity || DEFAULT_WATERMARK_SETTINGS.opacity),
     textSize: Math.round(number(input?.textSize, 18, 96, DEFAULT_WATERMARK_SETTINGS.textSize)),
@@ -71,6 +86,7 @@ export function normalizeWatermarkSettings(input = {}) {
     portraitPath: String(input?.portraitPath || DEFAULT_WATERMARK_SETTINGS.portraitPath).replace(/^\/+/, "").slice(0, 140),
     logoPath: String(input?.logoPath || DEFAULT_WATERMARK_SETTINGS.logoPath).replace(/^\/+/, "").slice(0, 140),
     paddingPercent: number(input?.paddingPercent, 1, 12, DEFAULT_WATERMARK_SETTINGS.paddingPercent),
+    positionMode: migratedPositionMode || DEFAULT_WATERMARK_SETTINGS.positionMode,
     movementIntervalSeconds: number(input?.movementIntervalSeconds, 8, 120, DEFAULT_WATERMARK_SETTINGS.movementIntervalSeconds),
     movementTransitionSeconds: number(input?.movementTransitionSeconds, 0, 3, DEFAULT_WATERMARK_SETTINGS.movementTransitionSeconds),
     shadowEnabled: Boolean(input?.shadowEnabled ?? DEFAULT_WATERMARK_SETTINGS.shadowEnabled),

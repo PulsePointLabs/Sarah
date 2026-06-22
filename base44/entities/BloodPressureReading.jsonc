@@ -1,0 +1,48 @@
+{
+  "name": "BloodPressureReading",
+  "type": "object",
+  "properties": {
+    "measured_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "systolic_mm_hg": {
+      "type": "number"
+    },
+    "diastolic_mm_hg": {
+      "type": "number"
+    },
+    "pulse_bpm": {
+      "type": "number"
+    },
+    "source_app": {
+      "type": "string"
+    },
+    "source_device": {
+      "type": "string"
+    },
+    "source_package": {
+      "type": "string"
+    },
+    "body_position": {
+      "type": "string"
+    },
+    "measurement_location": {
+      "type": "string"
+    },
+    "health_connect_id": {
+      "type": "string"
+    },
+    "external_id": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "measured_at",
+    "systolic_mm_hg",
+    "diastolic_mm_hg"
+  ]
+}

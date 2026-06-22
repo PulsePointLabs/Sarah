@@ -13,7 +13,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { base44 } from "@/api/base44Client";
-import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import {
   compactFrameRefs,
   buildSarahLocalAnnotationCards,
@@ -1951,7 +1951,6 @@ export default function AIVideoPassPanel({
   }, [ignoreCompletedJobsBefore]);
 
   const resetStoredAIPassState = async ({ message = "" } = {}) => {
-    freshRunStartedAtRef.current = Date.now();
     const existingAnalysis = session?.[analysisField] || {};
     const retainedAnalysis = { ...existingAnalysis };
     delete retainedAnalysis._video_pass_findings;
@@ -1986,18 +1985,31 @@ export default function AIVideoPassPanel({
       const response = await listBackgroundJobs({
         type: "ai_invoke",
         status: "complete",
-        limit: 30,
+        limit: 80,
         metaSessionId: session.id,
         metaSource: "ai_video_pass",
       });
       const freshRunStartedAt = freshRunStartedAtRef.current;
-      const completedCards = (response.jobs || [])
-        .filter((job) => job?.meta?.recordType === recordType)
+      const matchingJobSummaries = (response.jobs || [])
+        .filter((job) => job?.meta?.recordType === recordType);
+      const completedJobSummaries = matchingJobSummaries
         .filter((job) => {
           if (!freshRunStartedAt) return true;
           const jobCreatedAt = Date.parse(job?.createdAt || job?.startedAt || job?.updatedAt || "");
           return Number.isFinite(jobCreatedAt) && jobCreatedAt >= freshRunStartedAt - 1000;
-        })
+        });
+      const jobsToRecover = completedJobSummaries.length || running || reassessing
+        ? completedJobSummaries
+        : matchingJobSummaries.slice(0, 20);
+      const completedJobs = await Promise.all(jobsToRecover.map(async (job) => {
+        if (job?.result || !job?.hasResult || !job?.id) return job;
+        try {
+          return await getBackgroundJob(job.id);
+        } catch {
+          return job;
+        }
+      }));
+      const completedCards = completedJobs
         .map((job) => cardFromAIVideoJob(job, isExploration))
         .filter(Boolean)
         .sort((a, b) => Number(a.window?.start || 0) - Number(b.window?.start || 0));
@@ -2012,12 +2024,13 @@ export default function AIVideoPassPanel({
         });
         if (!additions.length) return current;
         if (!quiet) setStatus(`Caught up ${additions.length} completed background video review${additions.length === 1 ? "" : "s"}.`);
+        else if (!completedJobSummaries.length && matchingJobSummaries.length) setStatus(`Recovered ${additions.length} completed draft video review${additions.length === 1 ? "" : "s"}.`);
         return [...current, ...additions].sort((a, b) => Number(a.window?.start || 0) - Number(b.window?.start || 0));
       });
     } catch (err) {
       if (!quiet) setError(err?.message || "Could not refresh background video pass results.");
     }
-  }, [isExploration, recordType, session?.id]);
+  }, [isExploration, reassessing, recordType, running, session?.id]);
 
   useEffect(() => {
     refreshCompletedVideoPassJobs({ quiet: true });
@@ -3021,7 +3034,7 @@ Return only the structured JSON matching the requested schema.`,
         label: "Local Vision Forward Review",
         sessionId: session.id,
         source: "AIVideoPassPanel",
-        route: window.location.pathname,
+        route: `${window.location.pathname}${window.location.search}#ai-video-pass`,
         analysisType: localVisionRecordType(),
         mode,
       });
@@ -3111,7 +3124,7 @@ Return only the structured JSON matching the requested schema.`,
       const startedJob = await startBackgroundJob("local_vision_analyze_continuous", payload, {
         sessionId: session.id,
         source: "AIVideoPassPanel",
-        route: window.location.pathname,
+        route: `${window.location.pathname}${window.location.search}#ai-video-pass`,
       });
       setLocalVisionStatus(`Queued continuous local vision job ${startedJob.id.slice(0, 8)}...`);
       const completedJob = await waitForBackgroundJob(startedJob.id, {
@@ -3221,7 +3234,7 @@ Return only the structured JSON matching the requested schema.`,
       const startedJob = await startBackgroundJob("local_vision_analyze_window", payload, {
         sessionId: session.id,
         source: "AIVideoPassPanel",
-        route: window.location.pathname,
+        route: `${window.location.pathname}${window.location.search}#ai-video-pass`,
       });
       setLocalVisionStatus(`Queued diagnostic local vision job ${startedJob.id.slice(0, 8)}...`);
       const completedJob = await waitForBackgroundJob(startedJob.id, {
@@ -3283,7 +3296,7 @@ Return only the structured JSON matching the requested schema.`,
       const startedJob = await startBackgroundJob("local_vision_ask_video", payload, {
         sessionId: session.id,
         source: "AIVideoPassPanel",
-        route: window.location.pathname,
+        route: `${window.location.pathname}${window.location.search}#ai-video-pass`,
       });
       setLocalVisionStatus(`Queued local video Q&A job ${startedJob.id.slice(0, 8)}...`);
       const completedJob = await waitForBackgroundJob(startedJob.id, {
@@ -3483,14 +3496,14 @@ Return only the structured JSON matching the requested schema.`,
 
   if (!availableVideos.length) {
     return (
-      <div className="rounded-xl border border-border bg-muted/10 p-3 text-sm text-muted-foreground">
+      <div id="ai-video-pass" className="scroll-mt-24 rounded-xl border border-border bg-muted/10 p-3 text-sm text-muted-foreground">
         Link a local original video first, then Sarah can scan candidate windows and build review cards.
       </div>
     );
   }
 
   return (
-    <div className="rounded-xl border border-border bg-muted/10 p-3">
+    <div id="ai-video-pass" className="scroll-mt-24 rounded-xl border border-border bg-muted/10 p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary">

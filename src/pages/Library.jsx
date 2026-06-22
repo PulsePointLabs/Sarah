@@ -110,7 +110,19 @@ const getRawVideoUrl = (video) => (
   ""
 );
 
-const getVideoUrl = (video) => serverUrl(getRawVideoUrl(video));
+const getVideoUrl = (video) => {
+  const url = serverUrl(getRawVideoUrl(video));
+  if (!url) return "";
+  const version = [
+    video?.filename,
+    video?.exported_at,
+    video?.created_date,
+    video?.source_generated_at,
+    video?.watermark_enabled ? "wm" : "nowm",
+  ].filter(Boolean).join("-");
+  const cleaned = String(version || Date.now()).replace(/[^a-zA-Z0-9_.-]/g, "");
+  return `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(cleaned)}`;
+};
 
 const virtualVideoFromJob = (job) => {
   if (!job?.result?.file_url) return null;
@@ -135,6 +147,10 @@ const virtualVideoFromJob = (job) => {
     manifest_url: job.result.manifest_url || null,
     visual_mode: job.result.record?.visual_mode || (isProfileAnatomyVideo ? "profile_anatomy_video" : null),
     review_type: job?.meta?.reviewType || job?.payload?.reviewType || job?.result?.review_scope || null,
+    record_type: job?.meta?.recordType || job?.payload?.recordType || job?.result?.record?.record_type || null,
+    session_date: job?.meta?.sessionDate || job?.payload?.sessionDate || job?.result?.record?.session_date || null,
+    watermark_enabled: Boolean(job?.result?.watermark?.watermark_enabled ?? job?.result?.record?.watermark_enabled),
+    watermark_preset: job?.result?.watermark?.preset || job?.result?.record?.watermark_preset || null,
     _source: isProfileAnatomyVideo ? "completed_profile_anatomy_video_job" : "completed_review_video_job",
   };
 };
@@ -199,6 +215,24 @@ const formatSessionDate = (session) => {
     day: "numeric",
     year: "numeric",
   });
+};
+
+const formatReviewVideoSessionDate = (value) => {
+  if (!value) return "";
+  const date = parseLocalDateOnly(value) || new Date(value);
+  if (!date || Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+};
+
+const reviewVideoRecordType = (video) => {
+  const type = String(video?.record_type || video?.recordType || video?.review_type || "").toLowerCase();
+  if (type === "body_exploration" || type === "body exploration") return "body_exploration";
+  if (/body[-_\s]?exploration/i.test(`${video?.analysis_title || ""} ${video?.title || ""} ${video?.filename || ""}`)) return "body_exploration";
+  return "session";
 };
 
 const titleFromFilename = (filename = "") => {
@@ -309,6 +343,11 @@ export default function Library() {
     queryFn: () => base44.entities.Session.listFields(["id", "date", "start_time", "created_date"], "-date", 500),
   });
 
+  const { data: explorationLookupRows = [], error: explorationLookupError } = useQuery({
+    queryKey: ["libraryBodyExplorationLookup"],
+    queryFn: () => base44.entities.BodyExploration.listFields(["id", "date", "start_time", "created_date", "title", "exploration_type"], "-date", 500),
+  });
+
   const { data: completedVideoJobs = [], isLoading: videoJobsLoading, error: completedVideoJobsError } = useQuery({
     queryKey: ["completedSessionReviewVideoJobs"],
     queryFn: async () => {
@@ -399,6 +438,14 @@ export default function Library() {
     return map;
   }, [sessionLookupRows]);
 
+  const explorationsById = useMemo(() => {
+    const map = new Map();
+    for (const exploration of explorationLookupRows || []) {
+      if (exploration?.id) map.set(String(exploration.id), exploration);
+    }
+    return map;
+  }, [explorationLookupRows]);
+
   useEffect(() => {
     if (downloadableVideos.length > 0) setVideosOpen(true);
   }, [downloadableVideos.length]);
@@ -410,6 +457,7 @@ export default function Library() {
     ["Review video jobs", completedVideoJobsError],
     ["Profile video jobs", completedProfileVideoJobsError],
     ["Session dates", sessionLookupError],
+    ["Body exploration dates", explorationLookupError],
   ].filter(([, error]) => Boolean(error));
 
   const refreshLibrary = () => {
@@ -417,6 +465,7 @@ export default function Library() {
     queryClient.invalidateQueries({ queryKey: ["completedTtsExportJobs"] });
     queryClient.invalidateQueries({ queryKey: ["sessionReviewVideos"] });
     queryClient.invalidateQueries({ queryKey: ["librarySessionLookup"] });
+    queryClient.invalidateQueries({ queryKey: ["libraryBodyExplorationLookup"] });
     queryClient.invalidateQueries({ queryKey: ["completedSessionReviewVideoJobs"] });
     queryClient.invalidateQueries({ queryKey: ["completedProfileAnatomyVideoJobs"] });
   };
@@ -564,8 +613,12 @@ export default function Library() {
               const title = cleanVideoTitle(video);
               const created = getCreatedTimestamp(video);
               const duration = formatDuration(video.duration_seconds);
-              const sourceSession = video.session_id ? sessionsById.get(String(video.session_id)) : null;
-              const sessionDate = formatSessionDate(sourceSession);
+              const recordType = reviewVideoRecordType(video);
+              const sourceRecord = video.session_id
+                ? (recordType === "body_exploration" ? explorationsById : sessionsById).get(String(video.session_id))
+                : null;
+              const sessionDate = formatSessionDate(sourceRecord) || formatReviewVideoSessionDate(video.session_date || video.source_generated_at);
+              const sourceRoute = recordType === "body_exploration" ? `/exploration/${video.session_id}` : `/sessions/${video.session_id}`;
               return (
                 <div
                   key={video.id}
@@ -579,7 +632,9 @@ export default function Library() {
                       Created {formatCreatedTimestamp(created)}
                     </p>
                     {sessionDate && (
-                      <p className="text-xs text-muted-foreground mt-1">Source session: {sessionDate}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {recordType === "body_exploration" ? "Body exploration" : "Source session"}: {sessionDate}
+                      </p>
                     )}
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs text-muted-foreground">
                       {duration && <span>{duration}</span>}
@@ -587,12 +642,14 @@ export default function Library() {
                       {video.clip_count != null && <span>{video.clip_count} clips indexed</span>}
                       {video.cited_time_count != null && <span>{video.cited_time_count} cited moments</span>}
                       {video.visual_mode && <span>{String(video.visual_mode).replace(/_/g, " ")}</span>}
+                      {video.watermark_enabled != null && <span>{video.watermark_enabled ? "Watermarked" : "No watermark"}</span>}
+                      {video.watermark_preset && <span>{String(video.watermark_preset).replace(/_/g, " ")}</span>}
                     </div>
                     {video.filename && (
                       <p className="text-xs text-muted-foreground mt-2 truncate">{video.filename}</p>
                     )}
                     {video._source === "completed_review_video_job" && (
-                      <p className="mt-2 rounded-md border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-xs text-amber-100">
+                      <p className="mt-2 rounded-md border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-xs text-amber-800 dark:text-amber-100">
                         Recovered from a completed background video render. Download works; saving to SessionReviewVideo may have been interrupted.
                       </p>
                     )}
@@ -604,11 +661,11 @@ export default function Library() {
                         size="sm"
                         variant="outline"
                         className="gap-1.5"
-                        title="Open source session"
+                        title={recordType === "body_exploration" ? "Open body exploration" : "Open source session"}
                       >
-                        <Link to={`/sessions/${video.session_id}`}>
+                        <Link to={sourceRoute}>
                           <ExternalLink className="w-4 h-4" />
-                          <span>Open session</span>
+                          <span>{recordType === "body_exploration" ? "Open exploration" : "Open session"}</span>
                         </Link>
                       </Button>
                     )}

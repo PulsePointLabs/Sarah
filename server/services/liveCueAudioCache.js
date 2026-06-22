@@ -33,7 +33,7 @@ export function liveCueAudioFilePath(settings = {}) {
   return {
     key,
     format,
-    relativeUrl: `/live-cues/audio/${key}.${format}`,
+    relativeUrl: `/api/live-cues/audio/${key}.${format}`,
     filePath: path.join(liveCueAudioDir, `${key}.${format}`),
     metaPath: path.join(liveCueAudioDir, `${key}.json`),
   };

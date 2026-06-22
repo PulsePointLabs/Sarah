@@ -1,5 +1,13 @@
+import { useState } from "react";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Activity, Loader2 } from "lucide-react";
+import {
+  findBloodPressureNearSession,
+  formatBloodPressure,
+  formatBloodPressureTime,
+} from "@/lib/bloodPressure";
 import {
   CANNABIS_ROUTE_OPTIONS,
   FATIGUE_OPTIONS,
@@ -50,6 +58,8 @@ function ChoiceChips({ options, selected, onToggle }) {
 
 export default function ContextSection({ data, onChange }) {
   const context = data.session_context || {};
+  const [bpStatus, setBpStatus] = useState("");
+  const [bpLoading, setBpLoading] = useState(false);
   const updateLegacy = (field, value) => onChange({ ...data, [field]: value });
   const updateContext = (patch) => onChange({ ...data, session_context: { ...context, ...patch } });
   const updateNested = (field, patch) => updateContext({ [field]: { ...(context[field] || {}), ...patch } });
@@ -73,6 +83,39 @@ export default function ContextSection({ data, onChange }) {
     updateContext({ [field]: current.includes(value) ? current.filter((item) => item !== value) : [...current, value] });
   };
 
+  const attachNearestBloodPressure = async () => {
+    if (!data?.id) {
+      setBpStatus("Save the session once before attaching nearby BP from the local vitals history.");
+      return;
+    }
+    setBpLoading(true);
+    setBpStatus("");
+    try {
+      const result = await findBloodPressureNearSession(data.id);
+      if (!result.nearest) {
+        setBpStatus("No BP readings found within the session window.");
+        return;
+      }
+      updateContext({
+        blood_pressure: {
+          reading_id: result.nearest.id,
+          measured_at: result.nearest.measured_at,
+          systolic_mm_hg: result.nearest.systolic_mm_hg,
+          diastolic_mm_hg: result.nearest.diastolic_mm_hg,
+          pulse_bpm: result.nearest.pulse_bpm ?? null,
+          source_app: result.nearest.source_app || "Health Connect",
+          source_device: result.nearest.source_device || "",
+          relationship: "nearest_session_reading",
+        },
+      });
+      setBpStatus(`Attached ${formatBloodPressure(result.nearest)} from ${formatBloodPressureTime(result.nearest.measured_at)}.`);
+    } catch (error) {
+      setBpStatus(error?.message || "Could not attach nearby BP.");
+    } finally {
+      setBpLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -92,6 +135,30 @@ export default function ContextSection({ data, onChange }) {
         {!context.hydration_state && data.hydration && (
           <p className="text-[11px] text-muted-foreground">Existing saved hydration entry: {data.hydration}. It remains available as legacy context until a structured hydration value is selected.</p>
         )}
+        <div className="rounded-lg border border-border bg-muted/10 p-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Blood Pressure</Label>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {context.blood_pressure
+                  ? `${formatBloodPressure(context.blood_pressure)} · ${formatBloodPressureTime(context.blood_pressure.measured_at)}`
+                  : "Optional nearby BP context from the local Health Connect/Samsung Health vitals history."}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={attachNearestBloodPressure}
+              disabled={bpLoading}
+              className="gap-1.5"
+            >
+              {bpLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}
+              Attach nearest
+            </Button>
+          </div>
+          {bpStatus && <p className="mt-2 text-xs text-muted-foreground">{bpStatus}</p>}
+        </div>
       </div>
 
       <div className="space-y-4 rounded-lg border border-border bg-muted/10 p-3">
