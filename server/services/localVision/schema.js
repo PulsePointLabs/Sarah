@@ -316,6 +316,7 @@ export function normalizeVideoQaRequest(body = {}) {
     ...request,
     question,
     knownTimeline: body.knownTimeline || body.known_timeline || null,
+    telemetryContext: body.telemetryContext || body.telemetry_context || null,
     evidencePolicy: {
       baselineFps: Math.max(0.1, Math.min(10, Number(evidencePolicy.baselineFps || evidencePolicy.baseline_fps || 1))),
       maxScanFrames: Math.max(1, Math.min(300, Math.round(Number(evidencePolicy.maxScanFrames || 300)))),

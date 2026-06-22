@@ -322,6 +322,7 @@ ${JSON.stringify({
                 sourceGeneratedAt={generatedAt ? `${generatedAt}:arousal-timeline` : `${session.id || session.date || "session"}:arousal-timeline`}
                 paragraphs={paras}
                 paragraphMeta={paraMeta}
+                timelineRows={timelineRows}
               />
             </div>
           )}

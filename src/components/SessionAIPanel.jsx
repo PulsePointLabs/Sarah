@@ -17,6 +17,7 @@ import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph
 import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
 import { buildSarahPersonalityPrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
+import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
 import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "./TTSButton";
 
 export const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v11_hd";
@@ -205,9 +206,18 @@ function rangeOverlapsRanges(start, end, ranges = [], pad = 0) {
   return ranges.some((range) => overlapSeconds(safeStart, safeEnd, range.start - pad, range.end + pad) > 0);
 }
 
-function buildReviewWindowEvidencePacket({ session, manifest, windowStart, windowEnd, question }) {
+function buildReviewWindowEvidencePacket({ session, manifest, windowStart, windowEnd, question, timelineRows = [], emgRows = [] }) {
   const manifestSegments = reviewManifestSegmentsForPlayback(manifest, windowStart, windowEnd);
   const sessionRanges = buildSessionRangesFromManifestSegments(manifestSegments, windowStart, windowEnd);
+  const telemetryStart = Math.min(...sessionRanges.map((range) => range.start));
+  const telemetryEnd = Math.max(...sessionRanges.map((range) => range.end));
+  const momentTelemetry = buildSessionMomentTelemetry({
+    session,
+    timelineRows,
+    emgRows,
+    startSeconds: telemetryStart,
+    endSeconds: telemetryEnd,
+  });
   const eventTimeline = sessionEventsForCurrentPhaseMarkers(session);
   const events = eventTimeline
     .filter((event) => timeInRanges(event?.time_s ?? event?.offset_s ?? event?.timestamp_s, sessionRanges, 10))
@@ -271,8 +281,9 @@ function buildReviewWindowEvidencePacket({ session, manifest, windowStart, windo
     video_passes: videoPasses,
     key_clips: keyClips,
     visual_findings: visualFindings,
+    telemetry: momentTelemetry,
     keyword_hits: keywordHits,
-    evidence_count: events.length + videoPasses.length + keyClips.length + visualFindings.length,
+    evidence_count: events.length + videoPasses.length + keyClips.length + visualFindings.length + (momentTelemetry?.row_counts?.timeline_context || 0) + (momentTelemetry?.row_counts?.emg_context || 0),
   };
 }
 
@@ -290,6 +301,17 @@ function deterministicEvidenceAnswer(packet, question = "") {
   if (packet.events?.length) {
     lines.push("", "Nearest saved timeline notes:");
     packet.events.slice(0, 5).forEach((event) => lines.push(`• ${formatVideoClock(event.time_s)}: ${event.text}`));
+  }
+  if (packet.telemetry?.heart_rate?.exact_window || packet.telemetry?.heart_rate?.context_window) {
+    const exact = packet.telemetry.heart_rate.exact_window;
+    const context = packet.telemetry.heart_rate.context_window;
+    const hr = exact || context;
+    lines.push(
+      "",
+      `${exact ? "Exact-window" : "Nearby-context"} telemetry: HR averaged ${hr.bpm_avg} BPM, range ${hr.bpm_min}-${hr.bpm_max} BPM across ${hr.samples} sample${hr.samples === 1 ? "" : "s"}.`
+    );
+    const rmssd = packet.telemetry.rr_hrv?.exact_window?.rmssd_ms || packet.telemetry.rr_hrv?.context_window?.rmssd_ms;
+    if (rmssd) lines.push(`RR/HRV support: RMSSD averaged ${rmssd.avg} ms across ${rmssd.count} sample${rmssd.count === 1 ? "" : "s"} in the available ${exact ? "exact" : "context"} window.`);
   }
   if (packet.video_passes?.length) {
     lines.push("", "Accepted video-pass evidence near that moment:");
@@ -491,6 +513,8 @@ export function SessionReviewVideoExportButton({
   sourceGeneratedAt,
   paragraphs = [],
   paragraphMeta = [],
+  timelineRows = [],
+  emgRows = [],
   recordType = "session",
   routeHash,
 }) {
@@ -501,7 +525,9 @@ export function SessionReviewVideoExportButton({
   const [reviewQuestion, setReviewQuestion] = useState("");
   const [chatMessages, setChatMessages] = useState([]);
   const [reviewStatus, setReviewStatus] = useState({ type: "idle", message: "" });
+  const [qaSaveStatus, setQaSaveStatus] = useState("");
   const chatStorageLoadedRef = useRef("");
+  const qaAutosaveTimerRef = useRef(null);
   const activeVideo = rendered?.file_url ? rendered : existingVideo;
   const displayTitle = reviewVideoTitleWithDate(analysisTitle || "Session Review Video", session);
   const reviewType = reviewIdentityForTitle(analysisTitle || displayTitle, recordType);
@@ -530,6 +556,19 @@ export function SessionReviewVideoExportButton({
       activeVideo?.file_url || "pending",
     ].join(":")
     : "";
+  const activeVideoFingerprint = String(activeVideo?.file_url || "pending").split(/[/?#]/).filter(Boolean).pop() || "pending";
+  const chatThreadKey = session?.id
+    ? [
+      reviewType || "review",
+      sourceGeneratedAt || "latest",
+      activeVideoFingerprint,
+    ].join("|")
+    : "";
+  const savedReviewThreads = (
+    session?.review_video_qa_threads &&
+    typeof session.review_video_qa_threads === "object" &&
+    !Array.isArray(session.review_video_qa_threads)
+  ) ? session.review_video_qa_threads : {};
 
   useEffect(() => {
     let cancelled = false;
@@ -595,27 +634,84 @@ export function SessionReviewVideoExportButton({
   useEffect(() => {
     if (!chatStorageKey) return;
     chatStorageLoadedRef.current = "";
+    setQaSaveStatus("");
+    const durableMessages = Array.isArray(savedReviewThreads?.[chatThreadKey]?.messages)
+      ? savedReviewThreads[chatThreadKey].messages
+      : [];
     try {
       const stored = window.localStorage?.getItem(chatStorageKey);
       const parsed = stored ? JSON.parse(stored) : [];
-      setChatMessages(Array.isArray(parsed) ? parsed : []);
+      const localMessages = Array.isArray(parsed) ? parsed : [];
+      setChatMessages(localMessages.length ? localMessages : durableMessages);
     } catch {
-      setChatMessages([]);
+      setChatMessages(durableMessages);
     }
     const timer = window.setTimeout(() => {
       chatStorageLoadedRef.current = chatStorageKey;
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [chatStorageKey]);
+  }, [chatStorageKey, chatThreadKey, session?.review_video_qa_threads]);
 
   useEffect(() => {
     if (!chatStorageKey || chatStorageLoadedRef.current !== chatStorageKey) return;
     try {
-      window.localStorage?.setItem(chatStorageKey, JSON.stringify(chatMessages.slice(-40)));
+      window.localStorage?.setItem(chatStorageKey, JSON.stringify(chatMessages.slice(-80)));
     } catch {
       // Local persistence is best-effort only.
     }
-  }, [chatMessages, chatStorageKey]);
+    if (!session?.id || !chatThreadKey) return;
+    if (qaAutosaveTimerRef.current) {
+      window.clearTimeout(qaAutosaveTimerRef.current);
+    }
+    setQaSaveStatus(chatMessages.length ? "Saving Q&A..." : "Clearing saved Q&A...");
+    qaAutosaveTimerRef.current = window.setTimeout(async () => {
+      try {
+        const entity = recordType === "body_exploration"
+          ? base44.entities.BodyExploration
+          : base44.entities.Session;
+        const latestRecords = await entity.filter({ id: session.id });
+        const latest = Array.isArray(latestRecords) ? latestRecords[0] : null;
+        const latestThreads = (
+          latest?.review_video_qa_threads &&
+          typeof latest.review_video_qa_threads === "object" &&
+          !Array.isArray(latest.review_video_qa_threads)
+        ) ? latest.review_video_qa_threads : {};
+        const nextThreads = {
+          ...latestThreads,
+          [chatThreadKey]: {
+            messages: chatMessages.slice(-80),
+            updated_at: new Date().toISOString(),
+            review_type: reviewType,
+            analysis_title: displayTitle,
+            source_generated_at: sourceGeneratedAt || null,
+            video_file_url: activeVideo?.file_url || null,
+            route_hash: reviewRouteHash,
+          },
+        };
+        await entity.update(session.id, { review_video_qa_threads: nextThreads });
+        setQaSaveStatus(chatMessages.length ? "Q&A saved to this session." : "Saved Q&A cleared.");
+      } catch (error) {
+        console.warn("Could not autosave review video Q&A:", error);
+        setQaSaveStatus("Q&A autosave failed. Local backup is still active.");
+      }
+    }, 900);
+    return () => {
+      if (qaAutosaveTimerRef.current) {
+        window.clearTimeout(qaAutosaveTimerRef.current);
+      }
+    };
+  }, [
+    activeVideo?.file_url,
+    chatMessages,
+    chatStorageKey,
+    chatThreadKey,
+    displayTitle,
+    recordType,
+    reviewRouteHash,
+    reviewType,
+    session?.id,
+    sourceGeneratedAt,
+  ]);
 
   const startRender = async () => {
     const readableParagraphs = paragraphs.map((paragraph) => String(paragraph || "").trim()).filter(Boolean);
@@ -744,7 +840,7 @@ export function SessionReviewVideoExportButton({
         : "Reviewing saved local/timeline evidence for this window...",
     });
     const manifest = await loadActiveManifest();
-    const packet = buildReviewWindowEvidencePacket({ session, manifest, windowStart, windowEnd, question });
+    const packet = buildReviewWindowEvidencePacket({ session, manifest, windowStart, windowEnd, question, timelineRows, emgRows });
     const deterministic = deterministicEvidenceAnswer(packet, question);
     if (!packet.evidence_count) {
       setChatMessages((messages) => [
@@ -846,6 +942,9 @@ Answer directly and practically. If the evidence specifically supports the user'
       const frames = Array.isArray(clip.frames) ? clip.frames.slice(0, 12) : [];
       if (!frames.length) throw new Error("No frames were sampled from this video window.");
       setReviewStatus({ type: "working", message: "Sarah is reviewing the sampled frames..." });
+      const manifest = await loadActiveManifest();
+      const evidencePacket = buildReviewWindowEvidencePacket({ session, manifest, windowStart, windowEnd, question, timelineRows, emgRows });
+      const telemetryPrompt = formatMomentTelemetryForPrompt(evidencePacket.telemetry);
       const conversationContext = chatMessages.slice(-8).map((message) => (
         `${message.role === "assistant" ? "Sarah" : "Ben"} (${formatVideoClock(message.windowStart)}-${formatVideoClock(message.windowEnd)}): ${message.text}`
       )).join("\n");
@@ -872,9 +971,17 @@ ${conversationContext || "- This is the first question in this review thread."}
 Video context:
 - Review video title: ${displayTitle}
 - Processed video playback window: ${formatVideoClock(windowStart)} to ${formatVideoClock(windowEnd)}
+- Mapped source/session ranges: ${evidencePacket.mapped_session_ranges.join("; ") || "no manifest mapping available"}
 - Source record type: ${recordType}
 - Sampled frame count: ${frames.length}
 - Manifest URL if available: ${activeVideo?.manifest_url || "not available"}
+
+Saved source-session telemetry for this moment:
+${telemetryPrompt}
+${MOMENT_TELEMETRY_INTERPRETATION_RULES}
+
+Nearby saved event/video evidence packet:
+${formatEvidencePacketForPrompt(evidencePacket)}
 
 Content handling:
 - Treat this as consensual private physiology/session review for Sarah, not erotic writing.
@@ -1024,6 +1131,11 @@ Answer directly and practically in conversational prose, not markdown. Describe 
           {reviewStatus.message && (
             <p className={`text-[11px] ${reviewStatus.type === "error" ? "text-amber-300" : reviewStatus.type === "ok" ? "text-emerald-400" : "text-muted-foreground"}`}>
               {reviewStatus.message}
+            </p>
+          )}
+          {qaSaveStatus && (
+            <p className={`text-[11px] ${qaSaveStatus.includes("failed") ? "text-amber-300" : "text-muted-foreground"}`}>
+              {qaSaveStatus}
             </p>
           )}
         </div>

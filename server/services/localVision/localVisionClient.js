@@ -154,13 +154,17 @@ export async function callLocalQwenBatch({ questions, frames, recordType, signal
   };
 }
 
-export async function askLocalQwenVideo({ question, frames, recordType, knownTimeline, scaleCalibration, signal }) {
+export async function askLocalQwenVideo({ question, frames, recordType, knownTimeline, telemetryContext, scaleCalibration, signal }) {
+  const telemetryPrompt = telemetryContext
+    ? `\n\nSaved source-session telemetry for this video window. Use this for HR, RR/HRV, EMG, event-note, and phase-marker timing. Do not infer exact physiology from whole-session averages if this packet has moment rows:\n${JSON.stringify(telemetryContext, null, 2).slice(0, 8000)}`
+    : '';
   const data = await postToLocalVision('/ask', {
     engine: 'local_qwen25vl',
     record_type: recordType,
-    question: `${LATERALITY_DISCIPLINE}\n\n${SARAH_OVERLAY_DISCIPLINE}\n\n${question}`,
+    question: `${LATERALITY_DISCIPLINE}\n\n${SARAH_OVERLAY_DISCIPLINE}${telemetryPrompt}\n\n${question}`,
     frames: await readFramePayload(frames),
     known_timeline: knownTimeline || null,
+    telemetry_context: telemetryContext || null,
     scale_calibration: scaleCalibration || { available: false, pixelsPerCm: null, source: null },
   }, signal);
   return {

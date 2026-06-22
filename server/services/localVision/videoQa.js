@@ -73,6 +73,7 @@ export async function askLocalVisionVideo(body, { signal, onProgress } = {}) {
     frames: sampled.frames,
     recordType: request.recordType,
     knownTimeline: request.knownTimeline,
+    telemetryContext: request.telemetryContext,
     scaleCalibration: request.scaleCalibration,
     signal,
   });
@@ -90,6 +91,7 @@ export async function askLocalVisionVideo(body, { signal, onProgress } = {}) {
     privacy: { localOnly: true, cloudUpload: false },
     range: { startMs: request.startMs, endMs: request.endMs },
     question: request.question,
+    telemetry_context: request.telemetryContext || null,
     answer,
     supporting_evidence: normalizeSupportingEvidence(local.supporting_evidence, sampled.frames),
     forbidden_or_not_visible: local.forbidden_or_not_visible,

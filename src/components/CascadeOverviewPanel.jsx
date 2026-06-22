@@ -661,6 +661,8 @@ ${annotatedEvents.length > 0 ? `\nAnnotated event timeline (with HR at each mome
                   sourceGeneratedAt={result?._meta?.last_generated_at ? `${result._meta.last_generated_at}:climax-cascade` : `${session.id || session.date || "session"}:climax-cascade`}
                   paragraphs={cascadeReaderData.paras}
                   paragraphMeta={cascadeReaderData.paraMeta}
+                  timelineRows={timelineRows}
+                  emgRows={emgRows}
                 />
               </div>
             )}

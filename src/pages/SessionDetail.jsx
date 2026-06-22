@@ -913,6 +913,8 @@ export default function SessionDetail() {
                 sourceGeneratedAt={s.ai_analysis?._meta?.last_generated_at}
                 paragraphs={companionAnalysisData.paragraphs}
                 paragraphMeta={companionAnalysisData.paragraphMeta}
+                timelineRows={timelineRows}
+                emgRows={emgRows}
                 routeHash="session-ai-video-companion"
               />
             </div>
@@ -925,6 +927,8 @@ export default function SessionDetail() {
                 sourceGeneratedAt={technicalVideoSourceGeneratedAt}
                 paragraphs={technicalAnalysisData.paragraphs}
                 paragraphMeta={technicalAnalysisData.paragraphMeta}
+                timelineRows={timelineRows}
+                emgRows={emgRows}
                 routeHash="session-ai-video-technical"
               />
             </div>

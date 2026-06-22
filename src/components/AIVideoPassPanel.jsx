@@ -41,6 +41,7 @@ import {
   sanitizeSleeveSessionText,
 } from "@/lib/videoPassTextGuards";
 import { reduceConsistencyPhraseRepetition } from "@/utils/aiTextRepair";
+import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
 
 function fmtMmSs(totalSeconds) {
   const v = Math.max(0, Math.round(Number(totalSeconds) || 0));
@@ -119,6 +120,21 @@ function progressText(value = "") {
   if (typeof value === "string") return value.replace(/\s+/g, " ").trim();
   if (typeof value === "object") return humanStatus(value);
   return String(value).replace(/\s+/g, " ").trim();
+}
+
+function compactTelemetryLabel(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  const exact = value?.heart_rate?.exact_window;
+  const context = value?.heart_rate?.context_window;
+  const hrv = value?.rr_hrv?.exact_window || value?.rr_hrv?.context_window;
+  const parts = [
+    value?.requested_session_window?.label ? `Telemetry ${value.requested_session_window.label}` : "Telemetry window",
+    exact ? `HR ${exact.bpm_avg} avg (${exact.bpm_min}-${exact.bpm_max})` : context ? `context HR ${context.bpm_avg} avg (${context.bpm_min}-${context.bpm_max})` : "no HR samples",
+    hrv?.rmssd_ms ? `RMSSD ${hrv.rmssd_ms.avg} ms` : null,
+    value?.nearby_events?.length ? `${value.nearby_events.length} nearby event notes` : null,
+  ].filter(Boolean);
+  return parts.join(" · ");
 }
 
 const ANATOMICAL_LATERALITY_RULE = `Anatomical laterality rule: "your left" and "your right" must always mean Ben's anatomical left/right, not the viewer's screen-left/screen-right. When you are facing the camera, your anatomical right appears on the viewer's left; when the view is from your feet, overhead, mirrored, supine, rotated, close-cropped, or composite, laterality can flip or become ambiguous. Do not guess left/right from image position alone. Preserve anatomical identity across views: a bruise, mole, scar, catheter/tubing position, pelvic finding, genital finding, or skin mark on your anatomical right remains right-sided when you move from supine to standing, turn toward the camera, rotate, or appear in another camera lane. Track stable landmarks such as your umbilicus, sternum, pubic mound, inguinal creases, thighs, known scars, moles, bruises, catheter exit angle, and manual side notes before assigning side. If anatomical laterality is not unmistakable from body landmarks, camera orientation, tracking labels, or manual notes, use "screen-left/screen-right", "near/far", "upper/lower", "one hand/the other hand", or "one leg/the other leg" instead of anatomical left/right. For head-to-toe, masturbation, Foley/body exploration, and lower-body assessments, explicitly preserve this distinction.`;
@@ -397,20 +413,6 @@ function selectedVideoSessionEnd(video, fallbackEnd, metadataDuration = 0) {
   if (!durations.length) return fallbackEnd;
   const videoEnd = sessionTimeForSource(Math.max(...durations), video);
   return Math.max(0, Math.min(fallbackEnd, videoEnd));
-}
-
-function nearestTelemetrySummary(timelineRows, start, end) {
-  const rows = timelineRows.filter((row) => {
-    const t = Number(row.time_offset_s);
-    return Number.isFinite(t) && t >= start && t <= end;
-  });
-  if (!rows.length) return "No heart-rate samples in this window.";
-  const hrs = rows.map((row) => Number(row.hr ?? row.heart_rate)).filter((value) => Number.isFinite(value));
-  if (!hrs.length) return `${rows.length} telemetry samples, but no parsed BPM values.`;
-  const min = Math.round(Math.min(...hrs));
-  const max = Math.round(Math.max(...hrs));
-  const avg = Math.round(hrs.reduce((sum, value) => sum + value, 0) / hrs.length);
-  return `${rows.length} telemetry samples; HR avg ${avg} BPM, range ${min}-${max} BPM.`;
 }
 
 function isStaticTrackingMarkerFinding(finding) {
@@ -1608,7 +1610,7 @@ function compactCardContinuity(card, isExploration = false) {
       findings.length ? `Prior findings: ${findings.join(" | ")}` : "",
       events.length ? `Prior draft events: ${events.join(" | ")}` : "",
       "Use this as procedural continuity, but correct the stage if current frames show the sequence is earlier/later than the prior interpretation.",
-      card.telemetry ? `Prior telemetry: ${card.telemetry}` : "",
+      card.telemetry ? `Prior telemetry: ${compactTelemetryLabel(card.telemetry)}` : "",
     ].filter(Boolean).join("\n");
   }
   const findings = (card.findings || [])
@@ -1625,7 +1627,7 @@ function compactCardContinuity(card, isExploration = false) {
     findings.length ? `Prior findings: ${findings.join(" | ")}` : "",
     events.length ? `Prior draft events: ${events.join(" | ")}` : "",
     "Use this only as continuity. Current sampled frames override the prior interpretation, especially if the prior window said no stimulation/no visible cause but this window shows hand/device contact, motion, or technique change.",
-    card.telemetry ? `Prior telemetry: ${card.telemetry}` : "",
+    card.telemetry ? `Prior telemetry: ${compactTelemetryLabel(card.telemetry)}` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -1641,7 +1643,7 @@ function compactSavedContinuity(entry) {
     findings.length ? `Prior findings: ${findings.join(" | ")}` : "",
     events.length ? `Prior draft events: ${events.join(" | ")}` : "",
     "Use this only as continuity. Current sampled frames override the accepted prior interpretation, especially if this window now shows visible contact, motion, or stimulation/procedure change.",
-    entry.telemetry ? `Prior telemetry: ${entry.telemetry}` : "",
+    entry.telemetry ? `Prior telemetry: ${compactTelemetryLabel(entry.telemetry)}` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -2214,7 +2216,13 @@ export default function AIVideoPassPanel({
             start: sessionTimeForSource(preview.startSeconds ?? sourceStart, selectedVideo),
             end: sessionTimeForSource(preview.endSeconds ?? sourceEnd, selectedVideo),
           };
-          const telemetry = nearestTelemetrySummary(timelineRows, reviewWindow.start, reviewWindow.end);
+          const telemetry = buildSessionMomentTelemetry({
+            session: workingSession,
+            timelineRows,
+            startSeconds: reviewWindow.start,
+            endSeconds: reviewWindow.end,
+          });
+          const telemetryPrompt = formatMomentTelemetryForPrompt(telemetry);
           const frameTiming = (preview.frames || [])
             .map((frame, index) => `frame ${index + 1} = ${recordLabel} ${fmtMmSs(sessionTimeForSource(frame.frameTimeSeconds, selectedVideo))} (source ${fmtMmSs(frame.frameTimeSeconds)})`)
             .join(", ");
@@ -2374,7 +2382,9 @@ ${videoContext || `No additional ${recordLabel} context is available.`}
 ${isExploration ? "Exploration" : "Session"} window: ${fmtMmSs(reviewWindow.start)} to ${fmtMmSs(reviewWindow.end)} (${reviewWindow.start.toFixed(1)}s-${reviewWindow.end.toFixed(1)}s).
 Source video window: ${fmtMmSs(sourceStart)} to ${fmtMmSs(sourceEnd)}. Video 0:00 aligns to ${recordLabel} ${fmtSignedMmSs(selectedVideoOffset)}.
 Sampled frame timing in image order: ${frameTiming || "No decoded frame timing was returned."}
-Telemetry in this window: ${telemetry}
+Saved telemetry in this window:
+${telemetryPrompt}
+${MOMENT_TELEMETRY_INTERPRETATION_RULES}
 ${isExploration ? "Exploration procedure/devices/context" : "Session methods/devices/context"}: ${isExploration ? [
   ...(workingSession?.methods || []),
   workingSession?.exploration_type ? `Type: ${workingSession.exploration_type}` : null,
@@ -2547,7 +2557,7 @@ Window: ${fmtMmSs(card.window.start)}-${fmtMmSs(card.window.end)}
 Original summary, possibly overclaimed: ${sanitizeExplorationFoleyText(card.summary)}
 Original findings, possibly overclaimed: ${(card.findings || []).map((finding) => `${sanitizeExplorationFoleyText(finding.title)}: ${sanitizeExplorationFoleyText(finding.text)}`).join(" | ") || "None"}
 Original events, possibly overclaimed: ${(card.events || []).map((event) => `[${fmtMmSs(event.time_s)}] ${sanitizeExplorationFoleyText(event.note)}`).join(" | ") || "None"}
-Telemetry: ${card.telemetry || "None"}
+Telemetry: ${compactTelemetryLabel(card.telemetry) || "None"}
 
 Foley correction rules:
 - Foley/tubing visible means present/state, not newly inserted, placed, advanced, secured, or finalized.
@@ -2809,7 +2819,13 @@ Return a corrected compact card for this same window. Keep timeline events only 
         };
         const sourceStart = preview.startSeconds ?? window.sourceStart;
         const sourceEnd = preview.endSeconds ?? window.sourceEnd;
-        const telemetry = nearestTelemetrySummary(timelineRows, reviewWindow.start, reviewWindow.end);
+        const telemetry = buildSessionMomentTelemetry({
+          session,
+          timelineRows,
+          startSeconds: reviewWindow.start,
+          endSeconds: reviewWindow.end,
+        });
+        const telemetryPrompt = formatMomentTelemetryForPrompt(telemetry);
         const frameTiming = (preview.frames || [])
           .map((frame, index) => `frame ${index + 1} = ${recordLabel} ${fmtMmSs(sessionTimeForSource(frame.frameTimeSeconds, selectedVideo))} (source ${fmtMmSs(frame.frameTimeSeconds)})`)
           .join(", ");
@@ -2913,7 +2929,9 @@ ${videoContext || `No additional ${recordLabel} context is available.`}
 Reviewed ${recordLabel} window: ${fmtMmSs(reviewWindow.start)} to ${fmtMmSs(reviewWindow.end)}.
 Source video window: ${fmtMmSs(sourceStart)} to ${fmtMmSs(sourceEnd)}.
 Sampled frame timing in image order: ${frameTiming || "No decoded frame timing was returned."}
-Telemetry in this window: ${telemetry}
+Saved telemetry in this window:
+${telemetryPrompt}
+${MOMENT_TELEMETRY_INTERPRETATION_RULES}
 
 Return only the structured JSON matching the requested schema.`,
         };
@@ -3272,6 +3290,12 @@ Return only the structured JSON matching the requested schema.`,
     updateLocalVisionProgress({ phase: "starting", message: "Starting local video Q&A job..." });
     setLocalVisionStatus("Sampling local evidence and asking Qwen2.5-VL...");
     try {
+      const telemetryContext = buildSessionMomentTelemetry({
+        session,
+        timelineRows,
+        startSeconds: range.start,
+        endSeconds: range.end,
+      });
       const payload = {
         sessionId: session.id,
         recordType: localVisionRecordType(),
@@ -3291,6 +3315,7 @@ Return only the structured JSON matching the requested schema.`,
           refineAroundLikelyEvidence: true,
         },
         knownTimeline: localVisionResult || null,
+        telemetryContext,
         scaleCalibration: { available: false, pixelsPerCm: null, source: null },
       };
       const startedJob = await startBackgroundJob("local_vision_ask_video", payload, {
@@ -5249,7 +5274,7 @@ Return only the structured JSON matching the requested schema.`,
                         </div>
                       </div>
                     )}
-                    <p className="text-[10px] text-muted-foreground">{card.telemetry}</p>
+                    <p className="text-[10px] text-muted-foreground">{compactTelemetryLabel(card.telemetry)}</p>
                   </div>
                   </>
                   )}
