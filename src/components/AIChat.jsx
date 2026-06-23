@@ -439,6 +439,7 @@ export default function AIChat({
   savedVideoClips = [],
   onSaveMessages,
   onSaveNotes,
+  autoScrollOnMount = true,
 }) {
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [open, setOpen] = useState(defaultOpen);
@@ -480,6 +481,7 @@ export default function AIChat({
   const audioUrlCacheRef = useRef(new Map());
   const ttsRequestIdRef = useRef(0);
   const lastAssistantScrollKeyRef = useRef("");
+  const initialAutoScrollSuppressedRef = useRef(false);
 
   const categories = mode === "profile" ? PROFILE_CATEGORIES : SESSION_CATEGORIES;
   const evidenceScope = ["profile", "session", "body_exploration"].includes(visualEvidenceScope) ? visualEvidenceScope : mode;
@@ -499,6 +501,10 @@ export default function AIChat({
   }, []);
 
   useEffect(() => {
+    if (!autoScrollOnMount && !initialAutoScrollSuppressedRef.current) {
+      initialAutoScrollSuppressedRef.current = true;
+      return;
+    }
     const lastIndex = messages.length - 1;
     const lastMessage = messages[lastIndex];
     const assistantScrollKey = lastMessage?.role === "assistant"
@@ -520,11 +526,12 @@ export default function AIChat({
 
     if (assistantScrollKey) lastAssistantScrollKeyRef.current = assistantScrollKey;
     scrollToBottom("smooth");
-  }, [messages, loading, isMobileViewport, scrollToBottom]);
+  }, [autoScrollOnMount, messages, loading, isMobileViewport, open, fullScreen, scrollToBottom]);
 
   useEffect(() => {
-    if (open || fullScreen) scrollToBottom("auto");
-  }, [open, fullScreen, scrollToBottom]);
+    if (!autoScrollOnMount && !initialAutoScrollSuppressedRef.current) return;
+    if ((open || fullScreen) && autoScrollOnMount) scrollToBottom("auto");
+  }, [autoScrollOnMount, open, fullScreen, scrollToBottom]);
 
   useEffect(() => () => {
     audioUrlCacheRef.current.forEach((url) => URL.revokeObjectURL(url));

@@ -301,9 +301,15 @@ export default function Profile() {
   const [computing, setComputing] = useState(false);
   const [computedRecovery, setComputedRecovery] = useState(null);
   const [mechanicalOpen, setMechanicalOpen] = useState(false);
+  const [profileLoadError, setProfileLoadError] = useState("");
+  const [profileReloadToken, setProfileReloadToken] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
+    setProfileLoadError("");
+    setUser(null);
     base44.auth.me().then((u) => {
+      if (cancelled) return;
       const savedQaFindings = normalizeProfileQaFindings(u.profile_qa_findings);
       const importedQaFindings = savedQaFindings.length ? savedQaFindings : parseProfileQaFindingsFromText(u.arousal_notes);
       const savedChatMessages = u.profile_chat_messages || [];
@@ -336,8 +342,14 @@ export default function Profile() {
       if (imageReviewBackfills.length) {
         base44.auth.updateMe({ profile_qa_findings: qaFindingsWithBackfills }).catch(() => {});
       }
+    }).catch((error) => {
+      if (cancelled) return;
+      setProfileLoadError(error?.message || "Sarah could not load the profile record.");
     });
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [profileReloadToken]);
 
   // Auto-compute recovery HR from session HR timelines
   const computeRecovery = async () => {
@@ -397,8 +409,27 @@ export default function Profile() {
   const profileQaFindingCards = buildProfileQaFindingCards(profileQaFindings, form.first_name);
 
   if (!user) return (
-    <div className="flex items-center justify-center h-64">
-      <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+    <div className="flex min-h-64 items-center justify-center px-4 py-10">
+      {profileLoadError ? (
+        <div className="w-full max-w-md rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm">
+          <p className="font-semibold text-foreground">Profile could not load.</p>
+          <p className="mt-2 text-muted-foreground">{profileLoadError}</p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            On the APK this usually means Sarah cannot reach the local desktop server/API from the phone.
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="mt-4"
+            onClick={() => setProfileReloadToken((value) => value + 1)}
+          >
+            <RefreshCw className="mr-2 h-3.5 w-3.5" /> Retry
+          </Button>
+        </div>
+      ) : (
+        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+      )}
     </div>
   );
 
