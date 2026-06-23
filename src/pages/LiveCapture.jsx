@@ -1302,6 +1302,7 @@ export default function LiveCapture() {
   const directH10NotificationHandlerRef = useRef(null);
   const directH10RrRef = useRef([]);
   const directH10StatusRef = useRef(directH10Status);
+  const directH10RelaySocketRef = useRef(null);
   const directH10IntentionalDisconnectRef = useRef(false);
   const directH10ReconnectAttemptRef = useRef(0);
   const howlAutoLastActionRef = useRef({ at: 0, intensity: null, reason: "" });
@@ -1480,8 +1481,37 @@ export default function LiveCapture() {
       },
     };
 
+    const sendTelemetryToRelay = () => {
+      if (typeof WebSocket === "undefined") return;
+      let relayUrl = "";
+      try {
+        const base = new URL(apiUrl("/live-capture/status"), window.location.href);
+        base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
+        base.port = "8765";
+        base.pathname = "/";
+        base.search = "";
+        base.hash = "";
+        relayUrl = base.toString();
+      } catch {
+        return;
+      }
+
+      const payload = JSON.stringify({ type: "telemetry", data: telemetry });
+      let socket = directH10RelaySocketRef.current;
+      if (!socket || [WebSocket.CLOSING, WebSocket.CLOSED].includes(socket.readyState)) {
+        socket = new WebSocket(relayUrl);
+        directH10RelaySocketRef.current = socket;
+      }
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(payload);
+      } else if (socket.readyState === WebSocket.CONNECTING) {
+        socket.addEventListener("open", () => socket.send(payload), { once: true });
+      }
+    };
+
     latestHrRef.current = telemetry;
     setHrTelemetry(telemetry);
+    sendTelemetryToRelay();
     setDirectH10Status((prev) => ({
       ...prev,
       connected: true,
@@ -2114,6 +2144,8 @@ export default function LiveCapture() {
   }, []);
 
   useEffect(() => () => {
+    directH10RelaySocketRef.current?.close?.();
+    directH10RelaySocketRef.current = null;
     disconnectDirectH10();
   }, [disconnectDirectH10]);
 
