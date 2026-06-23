@@ -817,135 +817,141 @@ export default function SessionDetail() {
 
   useEffect(() => {
     (async () => {
-      const [all, me] = await Promise.all([
-        base44.entities.Session.filter({ id }),
-        loadUserProfileWithProfilerResults(),
-      ]);
-      const s = all[0];
-      sessionRef.current = s;
-      setSession(s);
-      setUserProfile(me);
-      const savedChatMessages = s?.ai_analysis?._chat_messages || [];
-      setChatMessages(savedChatMessages);
-      setSessionInterviewOpen(savedChatMessages.length > 0);
-      setSessionNotes(s?.notes || "");
-      const rows = await base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000);
+      try {
+        setLoading(true);
+        const [all, me] = await Promise.all([
+          base44.entities.Session.filter({ id }),
+          loadUserProfileWithProfilerResults(),
+        ]);
+        const s = all[0];
+        sessionRef.current = s;
+        setSession(s);
+        setUserProfile(me);
+        const savedChatMessages = s?.ai_analysis?._chat_messages || [];
+        setChatMessages(savedChatMessages);
+        setSessionNotes(s?.notes || "");
+        const rows = await base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000);
 
-      // Load journal for this session so it can be factored into AI analyses
-      base44.entities.Journal.filter({ session_id: id }, "-created_date", 10).then((rows) => {
-        const rowWithStoryline = rows.find((row) => journalHasStoryline(row.ai_journal));
-        if (rowWithStoryline?.ai_journal) setSessionJournal(normalizeJournalEntry(rowWithStoryline.ai_journal));
-      });
-      setTimelineRows(rows);
+        // Load journal for this session so it can be factored into AI analyses
+        base44.entities.Journal.filter({ session_id: id }, "-created_date", 10).then((rows) => {
+          const rowWithStoryline = rows.find((row) => journalHasStoryline(row.ai_journal));
+          if (rowWithStoryline?.ai_journal) setSessionJournal(normalizeJournalEntry(rowWithStoryline.ai_journal));
+        }).catch((error) => {
+          console.warn("[SessionDetail] Journal load failed", error);
+        });
+        setTimelineRows(rows);
 
-      // Load EMG data from the stored CSV file (client-side parse — no DB rows needed)
-      if (s?.emg_data_file) {
-        try {
-          const csvResp = await fetch(serverUrl(s.emg_data_file));
-          const text = await csvResp.text();
-          const { parseEmgCsv } = await import("../utils/parseEmgCsv");
-          const result = parseEmgCsv(text);
-          if (!result.error) {
-            const startRow = result.rows.find((r) => r.marker === "RECORD_START");
-            const timeZero = startRow ? startRow.time_s : result.rows[0]?.time_s ?? 0;
-            setEmgRows(result.rows.map((r) => ({ ...r, time_s: parseFloat((r.time_s - timeZero).toFixed(6)) })));
-          }
-        } catch {
-          setEmgRows([]);
-        }
-      }
-
-      const hasEventNotes = (s?.event_timeline || []).some((event) => String(event?.note || "").trim());
-
-      // Auto-detect phase markers if not already set. Use the old HR-only fallback only
-      // when no event notes exist; noted sessions need full timeline context.
-      if (rows.length > 10 && s && !s.climax_offset_s && !hasEventNotes) {
-        // Climax: peak HR in last 60% of session
-        const startIdx = Math.floor(rows.length * 0.25);
-        let peakIdx = startIdx;
-        for (let i = startIdx; i < rows.length; i++) {
-          if (Number(rows[i].hr) > Number(rows[peakIdx].hr)) peakIdx = i;
-        }
-        const climaxOffset = Number(rows[peakIdx].time_offset_s);
-
-        // Pre-climax: lowest HR point within 5 min before climax
-        const windowStart = climaxOffset - 300;
-        const windowEnd = climaxOffset - 15;
-        let valleyIdx = peakIdx;
-        let foundInWindow = false;
-        for (let i = 0; i < rows.length; i++) {
-          const t = Number(rows[i].time_offset_s);
-          if (t < windowStart) continue;
-          if (t > windowEnd) break;
-          if (!foundInWindow || Number(rows[i].hr) < Number(rows[valleyIdx].hr)) {
-            valleyIdx = i;
-            foundInWindow = true;
+        // Load EMG data from the stored CSV file (client-side parse — no DB rows needed)
+        if (s?.emg_data_file) {
+          try {
+            const csvResp = await fetch(serverUrl(s.emg_data_file));
+            const text = await csvResp.text();
+            const { parseEmgCsv } = await import("../utils/parseEmgCsv");
+            const result = parseEmgCsv(text);
+            if (!result.error) {
+              const startRow = result.rows.find((r) => r.marker === "RECORD_START");
+              const timeZero = startRow ? startRow.time_s : result.rows[0]?.time_s ?? 0;
+              setEmgRows(result.rows.map((r) => ({ ...r, time_s: parseFloat((r.time_s - timeZero).toFixed(6)) })));
+            }
+          } catch {
+            setEmgRows([]);
           }
         }
-        const preClimaxOffset = Number(rows[valleyIdx].time_offset_s);
 
-        // Recovery: first point after 15s where HR is falling for 4 consecutive samples and dropped 2%
-        const peakHr = Number(rows[peakIdx].hr);
-        let searchStart = peakIdx + 1;
-        for (let i = peakIdx + 1; i < rows.length; i++) {
-          if (Number(rows[i].time_offset_s) >= Number(rows[peakIdx].time_offset_s) + 15) { searchStart = i; break; }
-        }
-        let recoveryIdx = Math.min(searchStart, rows.length - 1);
-        for (let i = searchStart; i <= rows.length - 4; i++) {
-          const hr = Number(rows[i].hr);
-          if (
-            hr < Number(rows[i - 1].hr) &&
-            Number(rows[i + 1].hr) < hr &&
-            Number(rows[i + 2].hr) < Number(rows[i + 1].hr) &&
-            Number(rows[i + 3].hr) < Number(rows[i + 2].hr) &&
-            hr <= peakHr * 0.98
-          ) {
-            recoveryIdx = i;
-            break;
+        const hasEventNotes = (s?.event_timeline || []).some((event) => String(event?.note || "").trim());
+
+        // Auto-detect phase markers if not already set. Use the old HR-only fallback only
+        // when no event notes exist; noted sessions need full timeline context.
+        if (rows.length > 10 && s && !s.climax_offset_s && !hasEventNotes) {
+          // Climax: peak HR in last 60% of session
+          const startIdx = Math.floor(rows.length * 0.25);
+          let peakIdx = startIdx;
+          for (let i = startIdx; i < rows.length; i++) {
+            if (Number(rows[i].hr) > Number(rows[peakIdx].hr)) peakIdx = i;
           }
-        }
-        const recoveryOffset = Number(rows[recoveryIdx].time_offset_s);
+          const climaxOffset = Number(rows[peakIdx].time_offset_s);
 
-        const updates = {
-          pre_climax_offset_s: preClimaxOffset,
-          climax_offset_s: climaxOffset,
-          recovery_offset_s: recoveryOffset,
-          phase_markers_updated_at: new Date().toISOString(),
-        };
+          // Pre-climax: lowest HR point within 5 min before climax
+          const windowStart = climaxOffset - 300;
+          const windowEnd = climaxOffset - 15;
+          let valleyIdx = peakIdx;
+          let foundInWindow = false;
+          for (let i = 0; i < rows.length; i++) {
+            const t = Number(rows[i].time_offset_s);
+            if (t < windowStart) continue;
+            if (t > windowEnd) break;
+            if (!foundInWindow || Number(rows[i].hr) < Number(rows[valleyIdx].hr)) {
+              valleyIdx = i;
+              foundInWindow = true;
+            }
+          }
+          const preClimaxOffset = Number(rows[valleyIdx].time_offset_s);
 
-        // Compute HR metrics
-        const lo = Math.min(preClimaxOffset, climaxOffset);
-        const hi = Math.max(preClimaxOffset, climaxOffset);
-        const seg = rows.filter((r) => Number(r.time_offset_s) >= lo && Number(r.time_offset_s) <= hi);
-        if (seg.length > 0) updates.hr_avg_pre_to_climax = Math.round(seg.reduce((a, r) => a + Number(r.hr), 0) / seg.length);
+          // Recovery: first point after 15s where HR is falling for 4 consecutive samples and dropped 2%
+          const peakHr = Number(rows[peakIdx].hr);
+          let searchStart = peakIdx + 1;
+          for (let i = peakIdx + 1; i < rows.length; i++) {
+            if (Number(rows[i].time_offset_s) >= Number(rows[peakIdx].time_offset_s) + 15) { searchStart = i; break; }
+          }
+          let recoveryIdx = Math.min(searchStart, rows.length - 1);
+          for (let i = searchStart; i <= rows.length - 4; i++) {
+            const hr = Number(rows[i].hr);
+            if (
+              hr < Number(rows[i - 1].hr) &&
+              Number(rows[i + 1].hr) < hr &&
+              Number(rows[i + 2].hr) < Number(rows[i + 1].hr) &&
+              Number(rows[i + 3].hr) < Number(rows[i + 2].hr) &&
+              hr <= peakHr * 0.98
+            ) {
+              recoveryIdx = i;
+              break;
+            }
+          }
+          const recoveryOffset = Number(rows[recoveryIdx].time_offset_s);
 
-        const win = rows.filter((r) => Math.abs(Number(r.time_offset_s) - climaxOffset) <= 30);
-        if (win.length > 0) updates.hr_avg_at_climax_window = Math.round(win.reduce((a, r) => a + Number(r.hr), 0) / win.length);
+          const updates = {
+            pre_climax_offset_s: preClimaxOffset,
+            climax_offset_s: climaxOffset,
+            recovery_offset_s: recoveryOffset,
+            phase_markers_updated_at: new Date().toISOString(),
+          };
 
-        await base44.entities.Session.update(id, updates);
-        setSession((prev) => ({ ...prev, ...updates }));
-      } else if (rows.length > 0 && s && (!s.hr_avg_pre_to_climax || !s.hr_avg_at_climax_window)) {
-        // Auto-compute phase HR metrics for existing sessions with markers but no computed values
-        const updates = {};
-        if (s.pre_climax_offset_s != null && s.climax_offset_s != null && !s.hr_avg_pre_to_climax) {
-          const lo = Math.min(s.pre_climax_offset_s, s.climax_offset_s);
-          const hi = Math.max(s.pre_climax_offset_s, s.climax_offset_s);
+          // Compute HR metrics
+          const lo = Math.min(preClimaxOffset, climaxOffset);
+          const hi = Math.max(preClimaxOffset, climaxOffset);
           const seg = rows.filter((r) => Number(r.time_offset_s) >= lo && Number(r.time_offset_s) <= hi);
-          if (seg.length > 0)
-            updates.hr_avg_pre_to_climax = Math.round(seg.reduce((a, r) => a + Number(r.hr), 0) / seg.length);
-        }
-        if (s.climax_offset_s != null && !s.hr_avg_at_climax_window) {
-          const win = rows.filter((r) => Math.abs(Number(r.time_offset_s) - s.climax_offset_s) <= 30);
-          if (win.length > 0)
-            updates.hr_avg_at_climax_window = Math.round(win.reduce((a, r) => a + Number(r.hr), 0) / win.length);
-        }
-        if (Object.keys(updates).length > 0) {
+          if (seg.length > 0) updates.hr_avg_pre_to_climax = Math.round(seg.reduce((a, r) => a + Number(r.hr), 0) / seg.length);
+
+          const win = rows.filter((r) => Math.abs(Number(r.time_offset_s) - climaxOffset) <= 30);
+          if (win.length > 0) updates.hr_avg_at_climax_window = Math.round(win.reduce((a, r) => a + Number(r.hr), 0) / win.length);
+
           await base44.entities.Session.update(id, updates);
           setSession((prev) => ({ ...prev, ...updates }));
+        } else if (rows.length > 0 && s && (!s.hr_avg_pre_to_climax || !s.hr_avg_at_climax_window)) {
+          // Auto-compute phase HR metrics for existing sessions with markers but no computed values
+          const updates = {};
+          if (s.pre_climax_offset_s != null && s.climax_offset_s != null && !s.hr_avg_pre_to_climax) {
+            const lo = Math.min(s.pre_climax_offset_s, s.climax_offset_s);
+            const hi = Math.max(s.pre_climax_offset_s, s.climax_offset_s);
+            const seg = rows.filter((r) => Number(r.time_offset_s) >= lo && Number(r.time_offset_s) <= hi);
+            if (seg.length > 0)
+              updates.hr_avg_pre_to_climax = Math.round(seg.reduce((a, r) => a + Number(r.hr), 0) / seg.length);
+          }
+          if (s.climax_offset_s != null && !s.hr_avg_at_climax_window) {
+            const win = rows.filter((r) => Math.abs(Number(r.time_offset_s) - s.climax_offset_s) <= 30);
+            if (win.length > 0)
+              updates.hr_avg_at_climax_window = Math.round(win.reduce((a, r) => a + Number(r.hr), 0) / win.length);
+          }
+          if (Object.keys(updates).length > 0) {
+            await base44.entities.Session.update(id, updates);
+            setSession((prev) => ({ ...prev, ...updates }));
+          }
         }
+      } catch (error) {
+        console.error("[SessionDetail] Failed to load session detail", error);
+      } finally {
+        setLoading(false);
       }
-
-      setLoading(false);
     })();
   }, [id]);
 
