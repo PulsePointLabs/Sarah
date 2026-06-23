@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
-import { isSarahNativeShell, serverUrl } from "@/lib/mobileApiBase";
+import { serverUrl } from "@/lib/mobileApiBase";
+import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { getBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Play, Pause, Download, Trash2, Music, Video, ChevronDown, ChevronRight, ExternalLink, RefreshCw, AlertTriangle } from "lucide-react";
@@ -77,24 +78,9 @@ const REVIEW_VIDEO_FIELDS = [
   "updated_date",
 ];
 
-function triggerDownloadOrOpen(url, filename = "") {
+async function triggerDownloadOrOpen(url, filename = "", options = {}) {
   if (!url) return;
-  const a = document.createElement("a");
-  a.href = url;
-  if (filename) a.download = filename;
-  a.rel = "noopener";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  if (isSarahNativeShell()) {
-    window.setTimeout(() => {
-      try {
-        window.location.href = url;
-      } catch {
-        window.open(url, "_blank", "noopener");
-      }
-    }, 700);
-  }
+  return downloadOrSaveUrl(url, filename, options);
 }
 
 const getRawAudioUrl = (export_) => (
@@ -578,30 +564,32 @@ export default function Library() {
     }
   };
 
-  const handleDownload = (export_) => {
+  const handleDownload = async (export_) => {
     const url = getAudioUrl(export_);
     if (!url) return;
-    triggerDownloadOrOpen(url, buildAudioExportFilename({
+    await triggerDownloadOrOpen(url, buildAudioExportFilename({
       title: cleanDisplayTitle(export_),
       sessionDate: export_.session_date || getCreatedTimestamp(export_),
       extension: getDownloadExtension(export_),
-    }));
+    }), { mimeType: export_?.format ? `audio/${String(export_.format).replace("mp3", "mpeg")}` : undefined });
   };
 
-  const handleDownloadVideo = (video) => {
+  const handleDownloadVideo = async (video) => {
     const url = getVideoUrl(video);
     if (!url) return;
-    triggerDownloadOrOpen(
+    await triggerDownloadOrOpen(
       url,
-      video.filename || `${cleanVideoTitle(video).replace(/[^a-zA-Z0-9_-]+/g, "-") || "Session-Review-Video"}.mp4`
+      video.filename || `${cleanVideoTitle(video).replace(/[^a-zA-Z0-9_-]+/g, "-") || "Session-Review-Video"}.mp4`,
+      { mimeType: "video/mp4" }
     );
   };
 
-  const handleDownloadManifest = (video) => {
+  const handleDownloadManifest = async (video) => {
     if (!video?.manifest_url) return;
-    triggerDownloadOrOpen(
+    await triggerDownloadOrOpen(
       serverUrl(video.manifest_url),
-      `${(video.filename || cleanVideoTitle(video)).replace(/\.[^.]+$/, "")}.review-manifest.json`
+      `${(video.filename || cleanVideoTitle(video)).replace(/\.[^.]+$/, "")}.review-manifest.json`,
+      { mimeType: "application/json" }
     );
   };
 
@@ -617,7 +605,7 @@ export default function Library() {
       { url: serverUrl(export_.chapter_txt_url), suffix: ".chapters.txt" },
     ].filter((entry) => entry.url).forEach((entry, index) => {
       window.setTimeout(() => {
-        triggerDownloadOrOpen(entry.url, `${baseFilename}${entry.suffix}`);
+        triggerDownloadOrOpen(entry.url, `${baseFilename}${entry.suffix}`).catch(() => {});
       }, index * 120);
     });
   };

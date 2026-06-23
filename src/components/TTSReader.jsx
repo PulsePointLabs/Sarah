@@ -27,7 +27,8 @@ import {
   ttsCheckpointKey,
 } from "@/lib/ttsReadingCheckpoint";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
-import { isSarahNativeShell, serverUrl } from "@/lib/mobileApiBase";
+import { serverUrl } from "@/lib/mobileApiBase";
+import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { repairCharacterSplitParagraph, repairDecimalSpacing, reduceConsistencyPhraseRepetition, splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
@@ -56,25 +57,9 @@ const TTS_SIDE_TAB_DEFAULT_BOTTOM = 300;
 const SIDE_TAB_DRAG_THRESHOLD_PX = 6;
 const TTS_CHUNK_REQUEST_TIMEOUT_MS = 90000;
 
-function triggerDownloadOrOpen(url, filename = "") {
+async function triggerDownloadOrOpen(url, filename = "", options = {}) {
   if (!url) return;
-  const a = document.createElement("a");
-  a.href = url;
-  if (filename) a.download = filename;
-  a.rel = "noopener";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-
-  if (isSarahNativeShell()) {
-    window.setTimeout(() => {
-      try {
-        window.location.href = url;
-      } catch {
-        window.open(url, "_blank", "noopener");
-      }
-    }, 700);
-  }
+  return downloadOrSaveUrl(url, filename, options);
 }
 
 function clampSideTabBottom(value, tabHeight = 64) {
@@ -1197,7 +1182,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         triggerDownloadOrOpen(
           entry.url,
           `${String(exportRecord?.filename || getAudioDownloadFilename()).replace(/\.[^.]+$/, "")}${entry.suffix}`
-        );
+        ).catch(() => {});
       }, index * 120);
     });
   };
@@ -1252,9 +1237,11 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     setLastDownloadRecord(record);
   };
 
-  const triggerSavedExportDownload = (exportRecord) => {
+  const triggerSavedExportDownload = async (exportRecord) => {
     const filename = getAudioDownloadFilename(exportRecord.format || runtimeRef.current.format);
-    triggerDownloadOrOpen(serverUrl(exportRecord.file_url), filename);
+    await triggerDownloadOrOpen(serverUrl(exportRecord.file_url), filename, {
+      mimeType: getTTSMime(exportRecord.format || runtimeRef.current.format),
+    });
     saveDownloadRecord({
       downloaded_at: new Date().toISOString(),
       source_generated_at: exportRecord.source_generated_at || sourceGeneratedAt || null,
@@ -1275,7 +1262,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const triggerRenderedDownload = async (rendered, displayTitle = getDownloadDisplayTitle(), exportFormat = runtimeRef.current.format, runtime = runtimeRef.current) => {
     if (!rendered?.file_url) throw new Error("Server render did not return an audio file");
     const filename = getAudioDownloadFilename(rendered.format || exportFormat);
-    triggerDownloadOrOpen(serverUrl(rendered.file_url), filename);
+    await triggerDownloadOrOpen(serverUrl(rendered.file_url), filename, {
+      mimeType: getTTSMime(rendered.format || exportFormat),
+    });
 
     const createdExport = await base44.entities.AudioExport.create({
       title: displayTitle,
@@ -1527,7 +1516,14 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         setCompletedRender(null);
         clearSavedExportJob();
       }
-      triggerSavedExportDownload(savedServerExport);
+      try {
+        setDownloading(true);
+        await triggerSavedExportDownload(savedServerExport);
+      } catch (err) {
+        setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) || "Download failed" });
+      } finally {
+        setDownloading(false);
+      }
       return;
     }
 
