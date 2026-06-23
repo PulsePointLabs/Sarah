@@ -2797,14 +2797,22 @@ export default function LiveCapture() {
 
   const syncBloodPressureForLiveSession = useCallback(async ({ manual = false } = {}) => {
     if (bpSyncInFlightRef.current) return;
+    if (!manual && bpOmronListening) return;
     bpSyncInFlightRef.current = true;
-    setBpCapture((prev) => ({
-      ...prev,
-      syncing: true,
-      status: "syncing",
-      error: "",
-      message: manual ? "Refreshing BP readings..." : prev.message,
-    }));
+    if (manual) {
+      setBpCapture((prev) => ({
+        ...prev,
+        syncing: true,
+        status: "syncing",
+        error: "",
+        message: "Refreshing BP readings...",
+      }));
+    } else {
+      setBpCapture((prev) => ({
+        ...prev,
+        error: "",
+      }));
+    }
     try {
       const nativeStatus = await getBloodPressureStatus().catch(() => ({ native: false, permissionGranted: false }));
       let readings = [];
@@ -2837,7 +2845,13 @@ export default function LiveCapture() {
         native: nativeStatus?.native !== false,
         permissionGranted: nativePermissionGranted,
         syncing: false,
-        status: stamped.stamped ? "captured" : needsPermission ? "permission_needed" : latestReading ? "ready" : "idle",
+        status: stamped.stamped
+          ? "captured"
+          : !manual && prev.status === "captured"
+            ? "captured"
+            : needsPermission
+              ? "permission_needed"
+              : latestReading ? "ready" : "idle",
         lastReading: latestReading || prev.lastReading,
         lastCapturedAt: stamped.latest ? new Date().toISOString() : prev.lastCapturedAt,
         capturedCount: prev.capturedCount + stamped.stamped,
@@ -2862,7 +2876,7 @@ export default function LiveCapture() {
     } finally {
       bpSyncInFlightRef.current = false;
     }
-  }, [stampBloodPressureReadings]);
+  }, [bpOmronListening, stampBloodPressureReadings]);
 
   const saveOmronBloodPressureForLiveSession = useCallback(async (reading) => {
     if (!reading) throw new Error("OMRON did not return a blood pressure reading.");

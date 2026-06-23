@@ -114,6 +114,8 @@ export default function LiveSessionMobileRecorder({
   latestSpo2Reading,
 }) {
   const [supported, setSupported] = useState(false);
+  const [capabilities, setCapabilities] = useState(null);
+  const [capabilityChecked, setCapabilityChecked] = useState(false);
   const [recording, setRecording] = useState(false);
   const [previewUrl, setPreviewUrl] = useState("");
   const [status, setStatus] = useState("Ready to record a clean source video on this phone.");
@@ -135,6 +137,35 @@ export default function LiveSessionMobileRecorder({
 
   useEffect(() => {
     setSupported(Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCapabilityChecked(false);
+    base44.integrations.Core.GetSessionVideoCapabilities()
+      .then((data) => {
+        if (cancelled) return;
+        setCapabilities(data || {});
+        setCapabilityChecked(true);
+        if (data?.ffmpeg_available) {
+          setStatus("Ready to record. Desktop video renderer is reachable.");
+        } else {
+          setStatus("Desktop video renderer is reachable, but FFmpeg is not available.");
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setCapabilities(null);
+        setCapabilityChecked(true);
+        setStatus(
+          error?.status === 404
+            ? "Phone recording is disabled because the desktop Sarah server is older than v0.1.7. Start the rebuilt desktop EXE first."
+            : error?.message || "Phone recording is disabled until the desktop render server is reachable."
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -266,7 +297,7 @@ export default function LiveSessionMobileRecorder({
   };
 
   const startRecording = async () => {
-    if (!supported || recording || busy) return;
+    if (!supported || recording || busy || !capabilities?.ffmpeg_available) return;
     setStatus("Creating/reusing Sarah session...");
     const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession?.();
     if (!sessionState?.activeSessionId) throw new Error("Sarah could not create an active session shell.");
@@ -333,6 +364,8 @@ export default function LiveSessionMobileRecorder({
     }
   };
 
+  const readyToRecord = supported && Boolean(capabilities?.ffmpeg_available);
+
   return (
     <div className="rounded-xl border border-border bg-card p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -344,7 +377,10 @@ export default function LiveSessionMobileRecorder({
             Record clean camera/mic video in the APK, upload it to the desktop server, and watch the render finish here.
           </p>
           <div className="mt-2 flex flex-wrap gap-2">
-            <Badge variant={supported ? "default" : "secondary"}>{supported ? "Camera recorder ready" : "Recorder unavailable"}</Badge>
+            <Badge variant={supported ? "default" : "secondary"}>{supported ? "Camera available" : "Camera unavailable"}</Badge>
+            <Badge variant={capabilities?.ffmpeg_available ? "default" : "secondary"}>
+              {!capabilityChecked ? "Checking desktop" : capabilities?.ffmpeg_available ? "Desktop renderer ready" : "Desktop renderer unavailable"}
+            </Badge>
             {sessionId && <Badge variant="outline">Session {String(sessionId).slice(0, 8)}</Badge>}
             {recording && <Badge variant="destructive">Recording {elapsedText}</Badge>}
             {job?.status && <Badge variant="outline">Render {job.status}</Badge>}
@@ -352,7 +388,7 @@ export default function LiveSessionMobileRecorder({
         </div>
         <div className="flex flex-wrap gap-2">
           {!recording ? (
-            <Button type="button" onClick={() => startRecording().catch((error) => setStatus(error?.message || "Could not start recording."))} disabled={!supported || busy}>
+            <Button type="button" onClick={() => startRecording().catch((error) => setStatus(error?.message || "Could not start recording."))} disabled={!readyToRecord || busy}>
               <Radio className="mr-2 h-4 w-4" />
               Start Phone Recording
             </Button>
@@ -366,8 +402,13 @@ export default function LiveSessionMobileRecorder({
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.9fr)]">
-        <div className="overflow-hidden rounded-lg border border-border bg-black">
-          <video ref={videoRef} className="aspect-video w-full object-contain" muted playsInline autoPlay />
+        <div className={`overflow-hidden rounded-lg border ${recording ? "border-border bg-black" : "border-dashed border-border bg-muted/20"}`}>
+          <video ref={videoRef} className={`${recording ? "aspect-video" : "h-0"} w-full object-contain`} muted playsInline autoPlay />
+          {!recording && (
+            <div className="p-4 text-sm text-muted-foreground">
+            Camera preview appears here only while recording, so Live Capture stays compact before the session starts.
+            </div>
+          )}
         </div>
         <div className="space-y-3">
           <div className="rounded-lg border border-border bg-muted/20 p-3">
