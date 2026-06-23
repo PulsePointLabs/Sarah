@@ -2298,6 +2298,15 @@ export default function LiveCapture() {
     });
   }, [calibrationCommandStatus, liveRecordApi, liveSession?.activeSessionId]);
 
+  const hasRecentHrPacket = useCallback(() => {
+    const sample = latestHrRef.current || hrTelemetry;
+    const hr = readNumber(sample?.currentHr, sample?.hr, sample?.heartRate);
+    if (hr == null) return false;
+    const stamp = sample?.measuredAt || sample?.receivedAt || sample?.source_at || sample?.lastMessageAt;
+    const ageMs = stamp ? Date.now() - Date.parse(stamp) : 0;
+    return !stamp || (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 10000);
+  }, [hrTelemetry]);
+
   const prediction = useMemo(() => computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory), [hrTelemetry, emgTelemetry, telemetryHistory]);
   const recordingActive = Boolean(recording?.active);
   const recentHrPacket = hasRecentHrPacket();
@@ -3168,15 +3177,6 @@ export default function LiveCapture() {
       appendLiveSessionEvents(finalEvent).catch(() => {});
     },
   });
-
-  const hasRecentHrPacket = useCallback(() => {
-    const sample = latestHrRef.current || hrTelemetry;
-    const hr = readNumber(sample?.currentHr, sample?.hr, sample?.heartRate);
-    if (hr == null) return false;
-    const stamp = sample?.measuredAt || sample?.receivedAt || sample?.source_at || sample?.lastMessageAt;
-    const ageMs = stamp ? Date.now() - Date.parse(stamp) : 0;
-    return !stamp || (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 10000);
-  }, [hrTelemetry]);
 
   const waitForRecentHrPacket = useCallback((timeoutMs = 25000) => new Promise((resolve) => {
     const started = Date.now();
