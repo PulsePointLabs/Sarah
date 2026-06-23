@@ -354,6 +354,90 @@ function latestVitalsText(recording = {}, settings = {}) {
   return parts.join('   ');
 }
 
+function secondsFromTelemetryRow(row = {}, recording = {}) {
+  const direct = Number(row.t ?? row.time_s ?? row.seconds ?? row.offset_seconds);
+  if (Number.isFinite(direct) && direct >= 0) return direct;
+  const measuredAt = row.measured_at || row.source_at || row.captured_at || row.timestamp;
+  const startAt = recording.video_start_timestamp || recording.telemetry_package?.video_start_timestamp;
+  const measuredMs = measuredAt ? new Date(measuredAt).getTime() : 0;
+  const startMs = startAt ? new Date(startAt).getTime() : 0;
+  if (Number.isFinite(measuredMs) && Number.isFinite(startMs) && measuredMs > 0 && startMs > 0) {
+    return Math.max(0, (measuredMs - startMs) / 1000);
+  }
+  return 0;
+}
+
+function latestAt(rows = [], t = 0, recording = {}) {
+  let latest = null;
+  for (const row of rows || []) {
+    const rowT = secondsFromTelemetryRow(row, recording);
+    if (rowT <= t + 0.5) latest = row;
+    else break;
+  }
+  return latest;
+}
+
+function mmss(seconds = 0) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const min = Math.floor(total / 60);
+  const sec = String(total % 60).padStart(2, '0');
+  return `${min}:${sec}`;
+}
+
+function timedTelemetryRows(recording = {}, durationSeconds = 0) {
+  const telemetry = recording.telemetry_package || {};
+  const sampleRows = Array.isArray(telemetry.samples) ? telemetry.samples : [];
+  const hrRows = [
+    ...sampleRows.map((sample) => ({ ...(sample.hr || {}), t: sample.time_s ?? sample.t })),
+    ...(Array.isArray(telemetry.hr_timeline) ? telemetry.hr_timeline : []),
+  ].filter((row) => row && (row.hr != null || row.currentHr != null || row.heart_rate_bpm != null || row.value != null))
+    .sort((a, b) => secondsFromTelemetryRow(a, recording) - secondsFromTelemetryRow(b, recording));
+  const emgRows = [
+    ...sampleRows.map((sample) => ({ ...(sample.emg || {}), t: sample.time_s ?? sample.t })),
+    ...(Array.isArray(telemetry.emg_timeline) ? telemetry.emg_timeline : []),
+  ].filter((row) => row && (row.left_pct != null || row.right_pct != null || row.level_pct != null))
+    .sort((a, b) => secondsFromTelemetryRow(a, recording) - secondsFromTelemetryRow(b, recording));
+  const bpRows = [
+    ...sampleRows.map((sample) => ({ ...(sample.blood_pressure || {}), t: sample.time_s ?? sample.t })),
+    ...(Array.isArray(telemetry.blood_pressure_snapshots) ? telemetry.blood_pressure_snapshots : []),
+  ].filter((row) => row && row.systolic_mm_hg && row.diastolic_mm_hg)
+    .sort((a, b) => secondsFromTelemetryRow(a, recording) - secondsFromTelemetryRow(b, recording));
+  const spo2Rows = [
+    ...sampleRows.map((sample) => ({ ...(sample.spo2 || {}), t: sample.time_s ?? sample.t })),
+    ...(Array.isArray(telemetry.spo2_timeline) ? telemetry.spo2_timeline : []),
+  ].filter((row) => row && (row.spo2_percent != null || row.spo2 != null || row.value != null))
+    .sort((a, b) => secondsFromTelemetryRow(a, recording) - secondsFromTelemetryRow(b, recording));
+
+  const interval = durationSeconds > 1800 ? 5 : durationSeconds > 900 ? 3 : 2;
+  const rows = [];
+  for (let t = 0; t < Math.max(1, durationSeconds); t += interval) {
+    const hr = latestAt(hrRows, t, recording);
+    const emg = latestAt(emgRows, t, recording);
+    const bp = latestAt(bpRows, t, recording);
+    const spo2 = latestAt(spo2Rows, t, recording);
+    const parts = [mmss(t)];
+    const hrValue = hr ? Number(hr.hr ?? hr.currentHr ?? hr.heart_rate_bpm ?? hr.value) : null;
+    if (Number.isFinite(hrValue)) parts.push(`HR ${Math.round(hrValue)}`);
+    if (bp?.systolic_mm_hg && bp?.diastolic_mm_hg) parts.push(`BP ${bp.systolic_mm_hg}/${bp.diastolic_mm_hg}`);
+    const spo2Value = spo2 ? Number(spo2.spo2_percent ?? spo2.spo2 ?? spo2.value) : null;
+    if (Number.isFinite(spo2Value)) parts.push(`SpO2 ${Math.round(spo2Value)}%`);
+    const emgValue = emg ? Number(emg.left_pct ?? emg.level_pct) : null;
+    if (Number.isFinite(emgValue)) {
+      const right = Number(emg.right_pct);
+      parts.push(Number.isFinite(right) ? `EMG ${Math.round(emgValue)}/${Math.round(right)}%` : `EMG ${Math.round(emgValue)}%`);
+    }
+    if (parts.length > 1) rows.push({ start: t, end: Math.min(durationSeconds, t + interval), text: parts.join('   ') });
+  }
+  return rows.slice(0, 1200);
+}
+
+function timedTelemetryDrawtextFilters(recording = {}, settings = {}, durationSeconds = 0, fontOption = '') {
+  if (settings.includeTimedTelemetry === false) return [];
+  return timedTelemetryRows(recording, durationSeconds).map((row) => (
+    `drawtext=text='${drawTextEscape(row.text)}':x=48:y=132:fontsize=22:fontcolor=white${fontOption}:box=1:boxcolor=black@0.42:boxborderw=10:enable='between(t,${row.start.toFixed(2)},${row.end.toFixed(2)})'`
+  ));
+}
+
 async function mediaDurationSeconds(filePath) {
   const { stdout } = await runProcess('ffprobe', [
     '-v', 'error',
@@ -452,6 +536,7 @@ export async function renderMobileSessionVideo(payload = {}, context = {}) {
     `drawbox=x=24:y=24:w=620:h=104:color=black@0.48:t=fill`,
     `drawtext=text='${title}':x=48:y=42:fontsize=30:fontcolor=white${fontOption}`,
     `drawtext=text='${subtitle}':x=48:y=82:fontsize=22:fontcolor=white${fontOption}`,
+    ...timedTelemetryDrawtextFilters(recording, settings, durationSeconds, fontOption),
   ].join(',');
   const encoder = String(settings.encoder || process.env.SESSION_VIDEO_ENCODER || 'libx264');
   const args = [

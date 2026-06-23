@@ -16,6 +16,7 @@ import {
 import PageHeader from "@/components/PageHeader";
 import LiveFootLandmarkTracker from "@/components/LiveFootLandmarkTracker";
 import LiveCaptureLaunchpad from "@/components/LiveCaptureLaunchpad";
+import LiveSessionMobileRecorder from "@/components/LiveSessionMobileRecorder";
 import { base44 } from "@/api/base44Client";
 import { useToast } from "@/components/ui/use-toast";
 import { HR_SOURCE_OPTIONS, PULSOID_MODE_OPTIONS, computeHrvFromRr, maskPulsoidToken, readHrSourceSettings, writeHrSourceSettings } from "@/lib/hrSources";
@@ -4785,6 +4786,19 @@ export default function LiveCapture() {
             </div>
           </div>
         </div>
+      )}
+
+      {!focusView && !mainTelemetryView && (
+        <LiveSessionMobileRecorder
+          activeSessionDoc={activeSessionDoc}
+          liveSession={liveSession}
+          ensureSession={ensureSession}
+          telemetryHistory={telemetryHistory}
+          hrTelemetry={hrTelemetry}
+          emgTelemetry={emgTelemetry}
+          latestBpReading={latestBpReading}
+          latestSpo2Reading={activeSessionDoc?.latest_pulse_ox_reading || activeSessionDoc?.session_context?.pulse_ox || null}
+        />
       )}
 
       {!focusView && !mainTelemetryView && launchState.error && (
