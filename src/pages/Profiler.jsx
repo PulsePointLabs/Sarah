@@ -7878,6 +7878,14 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
       }
     }
   }
+  const profileButtonDisabledReason = loading
+    ? ""
+    : evidenceLoading
+      ? "Waiting for saved session evidence to finish loading."
+      : sessions.length < 2
+        ? "Need at least two sessions before generating this profile."
+        : "";
+  const profileButtonDisabled = Boolean(loading || profileButtonDisabledReason);
 
   return (
     <SectionCard icon={<Brain className="w-4 h-4" />} title="Comprehensive Physiological Profile" color="hsl(var(--primary))" defaultCollapsed={true}>
@@ -7885,7 +7893,7 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
         <p className="text-xs text-muted-foreground">
           AI-generated personal physiological & arousal profile based on all sessions, event timelines, and profile notes.
         </p>
-        <Button size="sm" onClick={analyze} disabled={loading || evidenceLoading || sessions.length < 2} className="h-7 text-xs gap-1.5 shrink-0 ml-2">
+        <Button size="sm" onClick={analyze} disabled={profileButtonDisabled} title={profileButtonDisabledReason || undefined} className="h-7 text-xs gap-1.5 shrink-0 ml-2">
           {loading
             ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Profiling…</>
             : <><Brain className="w-3 h-3" />{result ? "Re-generate" : "Generate Profile"}</>}
@@ -7911,6 +7919,11 @@ Be warm, direct, insightful, and willing to state conclusions when the evidence 
             { active: evidenceLoading, label: "Session evidence and saved findings", status: "loading" },
           ]}
         />
+      )}
+      {result && profileButtonDisabledReason && (
+        <p className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          Re-generate is waiting: {profileButtonDisabledReason}
+        </p>
       )}
 
       {!evidenceLoading && sessions.length < 2 && (
@@ -8227,6 +8240,16 @@ Write directly to the person in clear, clinically grounded language. Favor meani
       }
     }
   }
+  const apButtonDisabledReason = loading
+    ? ""
+    : profileLoading
+      ? "Waiting for saved profile context to finish loading."
+      : evidenceLoading
+        ? "Waiting for saved session evidence to finish loading."
+        : !userProfile
+          ? "Profile context is not loaded yet."
+          : "";
+  const apButtonDisabled = Boolean(loading || apButtonDisabledReason);
 
   return (
     <SectionCard icon={<Activity className="w-4 h-4" />} title="Anatomical & Physiological Profile" color="hsl(var(--chart-2))" defaultCollapsed={true}>
@@ -8234,7 +8257,7 @@ Write directly to the person in clear, clinically grounded language. Favor meani
         <p className="text-xs text-muted-foreground">
           Evidence-grounded anatomy, dynamic function, fit, and instrumentation synthesis from your optional profile data and supported session findings.
         </p>
-        <Button size="sm" onClick={analyze} disabled={loading || profileLoading || evidenceLoading || timelineLoading || !userProfile} className="h-7 text-xs gap-1.5 shrink-0">
+        <Button size="sm" onClick={analyze} disabled={apButtonDisabled} title={apButtonDisabledReason || undefined} className="h-7 text-xs gap-1.5 shrink-0">
           {loading
             ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Synthesizing...</>
             : <><Activity className="w-3 h-3" />{result ? "Re-generate" : "Generate A&P"}</>}
@@ -8256,6 +8279,16 @@ Write directly to the person in clear, clinically grounded language. Favor meani
 
       <CompactError message={error} />
       {loading && <ProfilerJobStatus job={jobStatus} fallback="The anatomical and physiological profile is running in the background..." />}
+      {result && apButtonDisabledReason && (
+        <p className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          Re-generate is waiting: {apButtonDisabledReason}
+        </p>
+      )}
+      {result && timelineLoading && !apButtonDisabledReason && (
+        <p className="rounded-lg border border-primary/15 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+          HR timelines are still loading in the background. You can re-generate now; Sarah will use the timeline data already available.
+        </p>
+      )}
       {!result && !loading && (
         <ProfilerPanelLoadingStatus
           items={[
@@ -8470,12 +8503,18 @@ Be interpretive, insightful, and speak directly to the person. Reference specifi
   const savedSessionEvents = result?._session_events;
   const displayStats = eventStats || savedStats;
   const displaySessionEvents = savedSessionEvents;
+  const nearClimaxButtonDisabledReason = loading
+    ? ""
+    : timelineLoading
+      ? "Waiting for heart-rate timelines to finish loading."
+      : "";
+  const nearClimaxButtonDisabled = Boolean(loading || nearClimaxButtonDisabledReason);
 
   return (
     <SectionCard icon={<Zap className="w-4 h-4" />} title="Near-Climax Event Analysis" color="hsl(var(--chart-3))" defaultCollapsed={true}>
       <div className="flex items-center justify-between">
         <p className="text-xs text-muted-foreground">Detects erratic HR spikes & reversals that resemble — but don't complete — a climax cascade.</p>
-        <Button size="sm" onClick={analyze} disabled={loading || timelineLoading} className="h-7 text-xs gap-1.5 shrink-0">
+        <Button size="sm" onClick={analyze} disabled={nearClimaxButtonDisabled} title={nearClimaxButtonDisabledReason || undefined} className="h-7 text-xs gap-1.5 shrink-0">
           {loading ?
             <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Analyzing…</> :
             <><Brain className="w-3 h-3" />{result ? "Re-run" : "Analyze"}</>}
@@ -8488,6 +8527,11 @@ Be interpretive, insightful, and speak directly to the person. Reference specifi
             { active: timelineLoading, label: "Heart-rate timelines", status: "loading" },
           ]}
         />
+      )}
+      {result && nearClimaxButtonDisabledReason && (
+        <p className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          Re-run is waiting: {nearClimaxButtonDisabledReason}
+        </p>
       )}
 
       <CompactError message={error} />
@@ -8719,6 +8763,14 @@ Each section should be 2-4 sentences of flowing, TTS-ready prose.`,
       });
     }
   }
+  const methodsButtonDisabledReason = loading
+    ? ""
+    : evidenceLoading
+      ? "Waiting for saved session evidence to finish loading."
+      : sessions.length < 2
+        ? "Need at least two sessions before analyzing methods."
+        : "";
+  const methodsButtonDisabled = Boolean(loading || methodsButtonDisabledReason);
 
   return (
     <SectionCard icon={<Zap className="w-4 h-4" />} title="Stimulation Methods Analysis" color="hsl(var(--primary))" defaultCollapsed={true}>
@@ -8726,7 +8778,7 @@ Each section should be 2-4 sentences of flowing, TTS-ready prose.`,
         <p className="text-xs text-muted-foreground">
           How each stimulation method affects your physiology, arousal, and climax outcomes across sessions.
         </p>
-        <Button size="sm" onClick={analyze} disabled={loading || evidenceLoading || sessions.length < 2} className="h-7 text-xs gap-1.5 shrink-0 ml-2">
+        <Button size="sm" onClick={analyze} disabled={methodsButtonDisabled} title={methodsButtonDisabledReason || undefined} className="h-7 text-xs gap-1.5 shrink-0 ml-2">
           {loading
             ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Analyzing…</>
             : <><Brain className="w-3 h-3" />{result ? "Re-generate" : "Analyze Methods"}</>}
@@ -8739,6 +8791,11 @@ Each section should be 2-4 sentences of flowing, TTS-ready prose.`,
             { active: evidenceLoading, label: "Session evidence for method comparison", status: "loading" },
           ]}
         />
+      )}
+      {result && methodsButtonDisabledReason && (
+        <p className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          Re-generate is waiting: {methodsButtonDisabledReason}
+        </p>
       )}
 
       {!evidenceLoading && sessions.length < 2 && (
