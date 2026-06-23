@@ -27,6 +27,10 @@ export const ENTITY_NAMES = [
   'Journal',
   'CustomMethod',
   'ProcessingJob',
+  'SessionRecording',
+  'RecordingUpload',
+  'RenderedVideo',
+  'RenderPreset',
   'User',
 ];
 

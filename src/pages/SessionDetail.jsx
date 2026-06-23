@@ -35,6 +35,7 @@ import NoClimaxAIPanel from "../components/NoClimaxAIPanel";
 import SessionTimelineNarrative from "../components/SessionTimelineNarrative";
 import SavedMotionSummaryCard from "../components/SavedMotionSummaryCard";
 import JournalRecorder from "../components/JournalRecorder";
+import MobileSessionVideoRenderPanel from "../components/MobileSessionVideoRenderPanel";
 import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
 import { bloodPressureReadingsFromSession, pulseOxReadingsFromSession, sessionContextDisplayRows } from "@/lib/sessionContext";
 import { buildSessionKeyVideoClipDigest, buildSessionPhaseMarkerDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, getReviewedVisualClips, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionKeyVideoClips, normalizeSessionVisualEvidence, sessionEventsForCurrentPhaseMarkers } from "@/lib/visualEvidence";
@@ -1060,6 +1061,7 @@ export default function SessionDetail() {
     { id: "session-summary", label: "Executive Summary", group: "Overview" },
     { id: "session-review", label: "Review Checklist", group: "Overview" },
     { id: "session-metrics-context", label: "Metrics & Context", group: "Overview" },
+    { id: "session-mobile-video-render", label: "Mobile Video Render", group: "Session Story" },
     ...(!s.no_climax ? [
       ...((companionAnalysisData.paragraphs.length || technicalAnalysisData.paragraphs.length) ? [{ id: "session-ai-video-chat", label: "Review Videos", group: "Session Story" }] : []),
       { id: "session-ai-companion", label: "Companion Analysis", group: "Session Story" },
@@ -1282,6 +1284,7 @@ export default function SessionDetail() {
         )}
 
         {sessionStorySection}
+        <MobileSessionVideoRenderPanel session={s} />
 
         {/* Executive Summary */}
         <section id="session-summary" className="scroll-mt-24 space-y-4">

@@ -18,6 +18,7 @@ import { sarahBrandRouter } from './routes/sarahBrand.js';
 import { localVisionRouter } from './routes/localVision.js';
 import { howlRouter } from './routes/howl.js';
 import { bloodPressureRouter } from './routes/bloodPressure.js';
+import { sessionVideoRouter } from './routes/sessionVideo.js';
 import { startTelemetryEngine, telemetryEngine } from './localEngine/index.js';
 import { startHeartRateRelay } from './services/hrRelay.js';
 import { restorePersistedJobs } from './services/jobQueue.js';
@@ -63,6 +64,7 @@ app.use('/api/sarah-brand', sarahBrandRouter);
 app.use('/api/local-vision', localVisionRouter);
 app.use('/api/howl', howlRouter);
 app.use('/api/blood-pressure', bloodPressureRouter);
+app.use('/api/session-video', sessionVideoRouter);
 app.use('/api/auth', authRouter);
 
 if (process.env.SARAH_SERVE_STATIC === '1') {

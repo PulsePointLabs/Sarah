@@ -5,6 +5,7 @@ import { cancelJob, clearJobs, createJob, getJob, listJobs, registerJobHandler, 
 import { renderTTSExport } from '../services/ttsRenderer.js';
 import { renderSessionReviewVideo } from '../services/sessionReviewVideoRenderer.js';
 import { renderProfileAnatomyVideo } from '../services/profileAnatomyVideoRenderer.js';
+import { renderMobileSessionVideo } from '../services/sessionVideoPipeline.js';
 import { aiInvokeInternal } from './internalAi.js';
 import { uploadDir } from '../config.js';
 import { startAIForensicCapture } from '../services/aiForensics.js';
@@ -252,6 +253,14 @@ registerJobHandler('profile_anatomy_video', async (payload, context) => {
     jobId: context.jobId,
     signal: context.signal,
     onProgress: context.updateProgress,
+  });
+});
+
+registerJobHandler('mobile_session_video_render', async (payload, context) => {
+  return renderMobileSessionVideo(payload, {
+    jobId: context.jobId,
+    signal: context.signal,
+    updateProgress: context.updateProgress,
   });
 });
 

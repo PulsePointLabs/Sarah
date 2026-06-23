@@ -140,7 +140,7 @@ function entityApi(entity) {
 
 const entityNames = [
   'Session', 'BodyExploration', 'HeartRateTimeline', 'EMGTimeline', 'BloodPressureReading', 'HowlTelemetry', 'HowlControlCommand', 'HowlControlSettings', 'AudioExport', 'SessionReviewVideo', 'CompareAnalysisResult',
-  'CascadeAnalysisResult', 'SessionClusterAnalysis', 'Journal', 'CustomMethod', 'User',
+  'CascadeAnalysisResult', 'SessionClusterAnalysis', 'Journal', 'CustomMethod', 'SessionRecording', 'RecordingUpload', 'RenderedVideo', 'RenderPreset', 'User',
 ];
 
 export const base44 = {
@@ -261,6 +261,48 @@ export const base44 = {
       BrowseLocalVideo: async () => request('/files/local-video/browse', { method: 'POST' }),
       localVideoStreamUrl: (path) => serverUrl(`/api/files/local-video/stream?path=${encodeURIComponent(path)}`),
       localVisionAssetUrl: (path) => serverUrl(path),
+      GetSessionVideoCapabilities: async () => request('/session-video/capabilities'),
+      ListSessionVideoPresets: async () => request('/session-video/presets'),
+      CreateSessionRecording: async (payload) => request('/session-video/recordings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+        timeoutMs: 15000,
+      }),
+      ListSessionRecordings: async ({ sessionId } = {}) => {
+        const query = new URLSearchParams();
+        if (sessionId) query.set('sessionId', sessionId);
+        return request(`/session-video/recordings${query.toString() ? `?${query}` : ''}`);
+      },
+      InitSessionVideoUpload: async (payload) => request('/session-video/uploads/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+        timeoutMs: 15000,
+      }),
+      GetSessionVideoUpload: async (uploadId) => request(`/session-video/uploads/${encodeURIComponent(uploadId)}`),
+      UploadSessionVideoChunk: async ({ uploadId, chunkIndex, bytes, signal }) => request(`/session-video/uploads/${encodeURIComponent(uploadId)}/chunks/${encodeURIComponent(chunkIndex)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: bytes,
+        signal,
+        timeoutMs: 120000,
+      }),
+      FinalizeSessionVideoUpload: async (uploadId) => request(`/session-video/uploads/${encodeURIComponent(uploadId)}/finalize`, {
+        method: 'POST',
+        timeoutMs: 120000,
+      }),
+      StartSessionVideoRender: async (payload) => request('/session-video/render-jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+        timeoutMs: 15000,
+      }),
+      GetSessionVideoRenderJob: async (jobId) => request(`/session-video/render-jobs/${encodeURIComponent(jobId)}`),
+      CancelSessionVideoRenderJob: async (jobId) => request(`/session-video/render-jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }),
+      GetRenderedSessionVideo: async (renderedId) => request(`/session-video/rendered/${encodeURIComponent(renderedId)}`),
+      renderedSessionVideoStreamUrl: (renderedId) => serverUrl(`/api/session-video/rendered/${encodeURIComponent(renderedId)}/stream`),
+      renderedSessionVideoDownloadUrl: (renderedId) => serverUrl(`/api/session-video/rendered/${encodeURIComponent(renderedId)}/download`),
     },
   },
   functions: {
