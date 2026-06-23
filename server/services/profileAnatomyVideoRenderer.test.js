@@ -204,6 +204,43 @@ test('head-to-toe chest section uses a card instead of wrong-region feet evidenc
   assert.deepEqual(chest.explicitly_assigned_evidence_ids, []);
 });
 
+test('head-to-toe head section uses a card instead of pelvic or genital evidence', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'head-to-toe-head-pelvic-mismatch-fixture',
+    title: 'Head-to-Toe Image Review',
+    reviewScope: 'head_to_toe',
+    paragraphs: [
+      'Head and Face',
+      'Hair, scalp, facial contour, and face-specific findings are assessed here.',
+      'Pelvic and Genital',
+      'Pubic, genital, scrotal, and perineal findings are assessed here.',
+    ],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'head_face', section_label: 'Head and Face' },
+      { type: 'section', section_key: 'head_face', section_label: 'Head and Face' },
+      { type: 'section-title', section_key: 'genitals_perineum', section_label: 'Pelvic and Genital' },
+      { type: 'section', section_key: 'genitals_perineum', section_label: 'Pelvic and Genital' },
+    ],
+    images: [
+      {
+        id: 'pelvic-only',
+        label: 'Current pelvic genital view with pubic groin penile shaft glans meatus scrotum perineum visible',
+        coverage: 'pelvic pubic groin penis penile shaft glans meatus scrotum testes perineum',
+        sectionKey: 'genitals_perineum',
+        url: '/uploads/pelvic.jpg',
+        source: 'fixture',
+      },
+    ],
+  });
+
+  const head = manifest.sections.find((section) => section.section_key === 'head_face');
+  const genital = manifest.sections.find((section) => section.section_key === 'genitals_perineum');
+  assert.equal(head.media_mode, 'placeholder');
+  assert.deepEqual(head.explicitly_assigned_evidence_ids, []);
+  assert.equal(genital.assigned_evidence[0].evidence_id, 'pelvic-only');
+  validateReviewEvidenceManifest(manifest);
+});
+
 test('Foley and drainage bag evidence stays in the device/procedure lane', () => {
   const manifest = buildManifest('pelvic_genital');
   const device = manifest.sections.find((section) => section.section_key === 'device_contact_findings');

@@ -5,6 +5,8 @@ import {
   BellRing,
   Brain,
   CircleDollarSign,
+  FolderOpen,
+  HardDrive,
   Image,
   Palette,
   Sparkles,
@@ -91,6 +93,12 @@ function fmtDateTime(value) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+async function getStorageStatus() {
+  const response = await fetch(apiUrl("/status/storage"));
+  if (!response.ok) throw new Error(`Storage status failed: ${response.status}`);
+  return response.json();
 }
 
 const WATERMARK_POSITION_OPTIONS = [
@@ -386,6 +394,10 @@ export default function SettingsStatus() {
   const [bpMessage, setBpMessage] = useState("");
   const [bpBusy, setBpBusy] = useState(false);
   const [bpOmronListening, setBpOmronListening] = useState(false);
+  const [storageStatus, setStorageStatus] = useState(null);
+  const [desktopStorageSettings, setDesktopStorageSettings] = useState(null);
+  const [storageMessage, setStorageMessage] = useState("");
+  const [storageBusy, setStorageBusy] = useState(false);
 
   const updateUiPrefs = (patch) => {
     setUiPrefs((previous) => {
@@ -428,6 +440,69 @@ export default function SettingsStatus() {
   useEffect(() => {
     loadBloodPressure();
   }, []);
+
+  const loadStorage = async () => {
+    setStorageMessage("");
+    try {
+      const desktopSettingsPromise = window.sarahDesktop?.getStorageSettings
+        ? window.sarahDesktop.getStorageSettings().catch(() => null)
+        : Promise.resolve(null);
+      const [status, desktopSettings] = await Promise.all([
+        getStorageStatus(),
+        desktopSettingsPromise,
+      ]);
+      setStorageStatus(status?.storage || null);
+      setDesktopStorageSettings(desktopSettings || null);
+    } catch (error) {
+      setStorageMessage(error?.message || "Could not load storage status.");
+    }
+  };
+
+  useEffect(() => {
+    loadStorage();
+  }, []);
+
+  const chooseMediaRoot = async () => {
+    if (!window.sarahDesktop?.chooseMediaRoot) {
+      setStorageMessage("Folder picking is available in the Windows EXE. In the APK/browser, set SARAH_MEDIA_ROOT before launching the backend.");
+      return;
+    }
+    setStorageBusy(true);
+    setStorageMessage("Choosing media output folder...");
+    try {
+      const result = await window.sarahDesktop.chooseMediaRoot();
+      if (result?.canceled) {
+        setStorageMessage("Media folder selection cancelled.");
+      } else {
+        setDesktopStorageSettings(result?.settings || null);
+        setStorageMessage("Media folder saved. Restart Sarah so the backend writes new media there.");
+      }
+      await loadStorage();
+    } catch (error) {
+      setStorageMessage(error?.message || "Could not choose media output folder.");
+    } finally {
+      setStorageBusy(false);
+    }
+  };
+
+  const clearMediaRoot = async () => {
+    if (!window.sarahDesktop?.clearMediaRoot) {
+      setStorageMessage("Resetting the desktop media folder is available in the Windows EXE.");
+      return;
+    }
+    setStorageBusy(true);
+    setStorageMessage("Resetting media output folder...");
+    try {
+      const result = await window.sarahDesktop.clearMediaRoot();
+      setDesktopStorageSettings(result?.settings || null);
+      setStorageMessage("Media folder reset to the built-in data folder. Restart Sarah to apply.");
+      await loadStorage();
+    } catch (error) {
+      setStorageMessage(error?.message || "Could not reset media output folder.");
+    } finally {
+      setStorageBusy(false);
+    }
+  };
 
   const requestBpAccess = async () => {
     setBpBusy(true);
@@ -1029,6 +1104,71 @@ export default function SettingsStatus() {
           <KeyRound className="mt-0.5 h-4 w-4 shrink-0" />
           <span>Standard Claude and OpenAI API keys still power analysis and TTS. Optional admin reporting keys only add cost visibility here.</span>
         </div>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-primary">
+              <HardDrive className="h-4 w-4" />
+              <h2 className="text-sm font-bold uppercase tracking-wider">Media Storage</h2>
+            </div>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+              Choose where Sarah saves new uploads, generated videos, exported narration, and mobile session render files. Existing C: drive media remains readable.
+            </p>
+          </div>
+          <span className={`rounded-full px-2 py-1 text-xs font-semibold uppercase ${storageStatus?.uploadDirExternal ? "bg-emerald-500/10 text-emerald-400" : "bg-muted text-muted-foreground"}`}>
+            {storageStatus?.uploadDirExternal ? "external media" : "C: media"}
+          </span>
+        </div>
+
+        <div className="mt-4 grid gap-3">
+          {[
+            ["New saved/generated media", storageStatus?.uploadDir || "--"],
+            ["Render scratch", storageStatus?.ttsRenderDir || "--"],
+            ["Legacy fallback media", storageStatus?.defaultUploadDir || "--"],
+            ["Desktop selected root", desktopStorageSettings?.mediaRoot || "Built-in C: data folder"],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-lg border border-border bg-muted/15 p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</p>
+              <p className="mt-1 break-all font-mono text-xs font-semibold text-foreground">{value}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={chooseMediaRoot}
+            disabled={storageBusy}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {storageBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+            Choose Folder
+          </button>
+          <button
+            type="button"
+            onClick={clearMediaRoot}
+            disabled={storageBusy}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80 disabled:opacity-50"
+          >
+            Reset to C:
+          </button>
+          <button
+            type="button"
+            onClick={loadStorage}
+            disabled={storageBusy}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80 disabled:opacity-50"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </button>
+        </div>
+
+        <p className="mt-3 rounded-lg bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
+          Changes apply after restarting Sarah. The database stays on C: for now; this setting moves heavy media output.
+        </p>
+        {storageMessage && <p className="mt-2 text-xs font-semibold text-foreground">{storageMessage}</p>}
       </section>
 
       <section className="rounded-xl border border-border bg-card p-4 sm:p-5">

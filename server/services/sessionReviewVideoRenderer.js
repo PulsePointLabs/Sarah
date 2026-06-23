@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { uploadDir, ttsRenderDir } from '../config.js';
+import { resolveUploadPath, uploadDir, ttsRenderDir } from '../config.js';
 import { listEntities, upsertEntity } from '../db.js';
 import { normalizeAudioChapters } from './audioChapters.js';
 import { renderTTSExport } from './ttsRenderer.js';
@@ -46,8 +46,8 @@ function cleanParagraph(value) {
 function uploadPathFromUrl(fileUrl = '') {
   const raw = String(fileUrl || '').trim();
   if (!raw.startsWith('/uploads/')) return null;
-  const filename = path.basename(decodeURIComponent(raw.replace(/^\/uploads\//, '')));
-  return path.join(uploadDir, filename);
+  const filename = decodeURIComponent(raw.replace(/^\/uploads\//, ''));
+  return resolveUploadPath(filename);
 }
 
 async function fileExists(filePath) {

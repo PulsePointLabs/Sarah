@@ -3,11 +3,11 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { dataDir } from '../config.js';
+import { dataDir, mediaOutputRoot } from '../config.js';
 import { getEntity, listEntities, upsertEntity } from '../db.js';
 import { runProcess } from './ttsCore.js';
 
-export const sessionVideoDir = path.join(dataDir, 'session-video');
+export const sessionVideoDir = path.resolve(process.env.SESSION_VIDEO_DIR || (mediaOutputRoot ? path.join(mediaOutputRoot, 'session-video') : path.join(dataDir, 'session-video')));
 const recordingsDir = path.join(sessionVideoDir, 'recordings');
 const uploadDir = path.join(sessionVideoDir, 'uploads');
 const renderDir = path.join(sessionVideoDir, 'renders');

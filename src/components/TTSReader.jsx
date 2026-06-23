@@ -54,6 +54,7 @@ const TTS_SIDE_TAB_BOTTOM_KEY = "pulsepoint.tts.sideTabBottom";
 const TTS_EXPORT_RENDER_VERSION = "tts_export_leading_trim_v2";
 const TTS_SIDE_TAB_DEFAULT_BOTTOM = 300;
 const SIDE_TAB_DRAG_THRESHOLD_PX = 6;
+const TTS_CHUNK_REQUEST_TIMEOUT_MS = 90000;
 
 function clampSideTabBottom(value, tabHeight = 64) {
   if (typeof window === "undefined") return TTS_SIDE_TAB_DEFAULT_BOTTOM;
@@ -237,13 +238,16 @@ const getTtsStatus = (err) => {
 
 const isAbortError = (err) => err?.name === "AbortError" || /cancelled|aborted/i.test(String(err?.message || ""));
 
-async function callTTSWithRetries(payload, attempts = 7, signal) {
+async function callTTSWithRetries(payload, attempts = 3, signal) {
   let lastError;
 
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (signal?.aborted) throw new DOMException("TTS request cancelled", "AbortError");
     try {
-      const response = await base44.functions.invoke("openaiTTS", payload, { signal });
+      const response = await base44.functions.invoke("openaiTTS", payload, {
+        signal,
+        timeoutMs: TTS_CHUNK_REQUEST_TIMEOUT_MS,
+      });
 
       if (response?.data?.error) {
         const error = new Error(getTtsErrorMessage(response));
@@ -290,6 +294,7 @@ async function callTTSWithRetries(payload, attempts = 7, signal) {
 const getChunkText = (chunk) => (typeof chunk === "string" ? chunk : chunk?.text || "");
 const getChunkContext = (chunk) => (typeof chunk === "string" ? "" : chunk?.previousContext || "");
 const getChunkStatusKey = (chunk) => `${getChunkContext(chunk)}|${getChunkText(chunk)}`;
+const getPrefetchCacheKey = (chunk, gen) => `${gen}:${getChunkStatusKey(chunk)}`;
 
 function readAscii(bytes, offset, length) {
   let out = "";
@@ -776,7 +781,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     const chunkText = getChunkText(chunk);
     const previousContext = getChunkContext(chunk);
     const statusKey = getChunkStatusKey(chunk);
-    const cacheKey = `${gen}:${previousContext}:${chunkText}`;
+    const cacheKey = getPrefetchCacheKey(chunk, gen);
     if (prefetchCacheRef.current.has(cacheKey)) {
       return prefetchCacheRef.current.get(cacheKey);
     }
@@ -800,7 +805,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             speed: runtime.speed,
             instructions: runtime.supportsInstructions ? instructions : "",
             format: runtime.format,
-          }, 7, speculative ? prefetchAbortRef.current?.signal : playbackAbortRef.current?.signal);
+          }, 3, speculative ? prefetchAbortRef.current?.signal : playbackAbortRef.current?.signal);
           if (response.data?.error) throw new Error(response.data.error);
           const base64 = response.data.audio;
           const binary = atob(base64);
@@ -855,7 +860,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     }
 
     for (const chunk of upcoming) {
-      const cacheKey = `${gen}:${chunk}`;
+      const cacheKey = getPrefetchCacheKey(chunk, gen);
       if (!prefetchCacheRef.current.has(cacheKey)) {
         fetchDecoded(chunk, gen, { speculative: true }).catch(() => {}); // errors cleared inside fetchDecoded
       }

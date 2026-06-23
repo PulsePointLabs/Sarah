@@ -7,7 +7,7 @@ import { renderSessionReviewVideo } from '../services/sessionReviewVideoRenderer
 import { renderProfileAnatomyVideo } from '../services/profileAnatomyVideoRenderer.js';
 import { renderMobileSessionVideo } from '../services/sessionVideoPipeline.js';
 import { aiInvokeInternal } from './internalAi.js';
-import { uploadDir } from '../config.js';
+import { resolveUploadPath } from '../config.js';
 import { startAIForensicCapture } from '../services/aiForensics.js';
 import { analyzeLocalVisionWindow } from '../services/localVision/analyzeWindow.js';
 import { analyzeLocalVisionContinuous } from '../services/localVision/continuousAnalyzer.js';
@@ -73,8 +73,8 @@ function localUploadPathFromRefUrl(rawUrl = '') {
     pathname = rawUrl;
   }
   if (!pathname.startsWith('/uploads/')) return '';
-  const filename = path.basename(decodeURIComponent(pathname.replace(/^\/uploads\//, '')));
-  return filename ? path.join(uploadDir, filename) : '';
+  const filename = decodeURIComponent(pathname.replace(/^\/uploads\//, ''));
+  return filename ? resolveUploadPath(filename) : '';
 }
 
 function pathnameFromRefUrl(rawUrl = '') {

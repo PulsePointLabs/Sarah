@@ -5,7 +5,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { liveCaptureConfig, uploadDir } from '../config.js';
+import { liveCaptureConfig, resolveUploadPath, uploadDir } from '../config.js';
 import { runProcess, runProcessBinary, slugifyFilePart } from '../services/ttsCore.js';
 
 export const filesRouter = express.Router();
@@ -775,8 +775,8 @@ filesRouter.post('/uploaded-video/clip-preview', async (req, res) => {
     const rawUrl = String(req.body?.file_url || req.body?.url || '').trim();
     if (!rawUrl) return res.status(400).json({ error: 'Missing uploaded video URL.' });
     if (!rawUrl.startsWith('/uploads/')) return res.status(400).json({ error: 'Only /uploads video URLs can be clipped.' });
-    const filename = path.basename(decodeURIComponent(rawUrl.replace(/^\/uploads\//, '')));
-    const sourcePath = path.join(uploadDir, filename);
+    const filename = decodeURIComponent(rawUrl.replace(/^\/uploads\//, ''));
+    const sourcePath = resolveUploadPath(filename);
     const ext = path.extname(filename).toLowerCase();
     if (!LOCAL_VIDEO_EXTENSIONS.has(ext)) return res.status(400).json({ error: 'Uploaded file is not a supported video type.' });
     await fsp.access(sourcePath, fs.constants.R_OK);

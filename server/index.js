@@ -4,7 +4,7 @@ import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initDb } from './db.js';
-import { rootDir, uploadDir } from './config.js';
+import { rootDir, uploadDirs } from './config.js';
 import { entitiesRouter } from './routes/entities.js';
 import { aiRouter } from './routes/ai.js';
 import { filesRouter } from './routes/files.js';
@@ -37,13 +37,15 @@ await startHeartRateRelay();
 app.use(cors());
 app.use('/api/jobs/start-large', largeJobsRouter);
 app.use(express.json({ limit: '50mb' }));
-app.use('/uploads', express.static(uploadDir, {
-  setHeaders(res) {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-  },
-}));
+for (const dir of uploadDirs) {
+  app.use('/uploads', express.static(dir, {
+    setHeaders(res) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    },
+  }));
+}
 app.use('/tools/capture/heart-rate', express.static(hrOverlayDir, {
   fallthrough: false,
   setHeaders(res) {

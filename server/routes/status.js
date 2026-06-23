@@ -1,9 +1,28 @@
 import express from 'express';
+import fs from 'node:fs/promises';
+import { dataDir, databasePath, defaultUploadDir, mediaOutputRoot, ttsRenderDir, uploadDir, uploadDirs } from '../config.js';
 
 export const statusRouter = express.Router();
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STATUS_TIMEOUT_MS = Math.max(3000, Number(process.env.PROVIDER_STATUS_TIMEOUT_MS || 12000));
+
+async function pathStatus(dir = '') {
+  try {
+    const stat = await fs.stat(dir);
+    return {
+      path: dir,
+      exists: true,
+      directory: stat.isDirectory(),
+    };
+  } catch {
+    return {
+      path: dir,
+      exists: false,
+      directory: false,
+    };
+  }
+}
 
 function unixDaysAgo(days) {
   return Math.floor((Date.now() - days * DAY_MS) / 1000);
@@ -156,5 +175,25 @@ statusRouter.get('/providers', async (_req, res) => {
     checkedAt: new Date().toISOString(),
     providers: { openai, anthropic },
     note: 'Provider APIs report configured usage and cost visibility here when admin reporting keys are available; a prepaid remaining-balance endpoint is not assumed.',
+  });
+});
+
+statusRouter.get('/storage', async (_req, res) => {
+  res.json({
+    ok: true,
+    restartRequiredForChanges: true,
+    storage: {
+      dataDir,
+      databasePath,
+      mediaOutputRoot,
+      uploadDir,
+      defaultUploadDir,
+      ttsRenderDir,
+      uploadDirs,
+      uploadDirExternal: uploadDir !== defaultUploadDir,
+      uploadDirStatus: await pathStatus(uploadDir),
+      defaultUploadDirStatus: await pathStatus(defaultUploadDir),
+      ttsRenderDirStatus: await pathStatus(ttsRenderDir),
+    },
   });
 });

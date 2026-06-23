@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell, session } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, session } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -18,6 +18,32 @@ let backendProcess = null;
 let backendUrl = '';
 let shutdownStarted = false;
 let bluetoothSelection = null;
+
+function desktopSettingsPath() {
+  return path.join(app.getPath('userData'), 'desktop-settings.json');
+}
+
+function readDesktopSettings() {
+  try {
+    const raw = fs.readFileSync(desktopSettingsPath(), 'utf8');
+    const parsed = JSON.parse(raw);
+    return {
+      mediaRoot: typeof parsed.mediaRoot === 'string' ? parsed.mediaRoot.trim() : '',
+    };
+  } catch {
+    return { mediaRoot: '' };
+  }
+}
+
+function saveDesktopSettings(settings = {}) {
+  const next = {
+    ...readDesktopSettings(),
+    ...settings,
+  };
+  ensureDir(path.dirname(desktopSettingsPath()));
+  fs.writeFileSync(desktopSettingsPath(), JSON.stringify(next, null, 2));
+  return next;
+}
 
 function appRoot() {
   return app.getAppPath();
@@ -197,6 +223,23 @@ function configureDesktopPermissions() {
   });
 }
 
+ipcMain.handle('storage:get-settings', () => readDesktopSettings());
+
+ipcMain.handle('storage:choose-media-root', async () => {
+  const result = await dialog.showOpenDialog(mainWindow || undefined, {
+    title: 'Choose Sarah media output folder',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || !result.filePaths?.[0]) return { canceled: true, settings: readDesktopSettings() };
+  const selected = path.resolve(result.filePaths[0]);
+  const settings = saveDesktopSettings({ mediaRoot: selected });
+  return { canceled: false, settings };
+});
+
+ipcMain.handle('storage:clear-media-root', () => ({
+  settings: saveDesktopSettings({ mediaRoot: '' }),
+}));
+
 function configureBluetoothSelection(win) {
   win.webContents.on('select-bluetooth-device', (event, devices, callback) => {
     event.preventDefault();
@@ -236,10 +279,15 @@ function backendEnv(port, hrRelayPort) {
   const userData = app.getPath('userData');
   const projectRoot = findProjectDataRoot();
   const dotenvEnv = loadDesktopEnv(projectRoot);
+  const desktopSettings = readDesktopSettings();
   const baseDataDir = projectRoot ? path.join(projectRoot, 'data') : path.join(userData, 'data');
   const dataDir = ensureDir(baseDataDir);
-  const uploadDir = ensureDir(existingDir(path.join(dataDir, 'uploads')) || path.join(dataDir, 'uploads'));
-  const ttsDir = ensureDir(path.join(dataDir, 'tts-render-work'));
+  const configuredMediaRoot = process.env.SARAH_MEDIA_ROOT || dotenvEnv.SARAH_MEDIA_ROOT || desktopSettings.mediaRoot || '';
+  const mediaRoot = configuredMediaRoot ? ensureDir(path.resolve(configuredMediaRoot)) : '';
+  const uploadDir = ensureDir(mediaRoot ? path.join(mediaRoot, 'uploads') : (existingDir(path.join(dataDir, 'uploads')) || path.join(dataDir, 'uploads')));
+  const ttsDir = ensureDir(mediaRoot ? path.join(mediaRoot, 'tts-render-work') : path.join(dataDir, 'tts-render-work'));
+  const sessionVideoDir = ensureDir(mediaRoot ? path.join(mediaRoot, 'session-video') : path.join(dataDir, 'session-video'));
+  const liveCueAudioDir = ensureDir(mediaRoot ? path.join(mediaRoot, 'live-cue-audio') : path.join(dataDir, 'live-cue-audio'));
   const hrDir = ensureDir(existingDir(path.join(dataDir, 'heart-rate-recordings')) || path.join(userData, 'HeartRate', 'recordings'));
   const emgBase = projectRoot ? projectRoot : userData;
   const emgDir = ensureDir(existingDir(path.join(emgBase, 'EMG')) || path.join(userData, 'EMG'));
@@ -257,8 +305,11 @@ function backendEnv(port, hrRelayPort) {
     HR_CAPTURE_RELAY_PORT: String(hrRelayPort),
     HR_CAPTURE_WS_URL: `ws://127.0.0.1:${hrRelayPort}`,
     DATA_DIR: dataDir,
+    SARAH_MEDIA_ROOT: mediaRoot,
     UPLOAD_DIR: uploadDir,
     TTS_RENDER_DIR: ttsDir,
+    SESSION_VIDEO_DIR: sessionVideoDir,
+    LIVE_CUE_AUDIO_DIR: liveCueAudioDir,
     DATABASE_PATH: databasePath,
     SARAH_PROJECT_ROOT: projectRoot || '',
     HR_RECORDINGS_DIR: hrDir,

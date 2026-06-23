@@ -57,12 +57,34 @@ async function request(path, options = {}) {
 }
 
 async function invokeFunction(name, payload, options = {}) {
-  const response = await fetch(apiUrl(`/functions/${name}`), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload || {}),
-    signal: options.signal,
-  });
+  const timeoutMs = Number(options.timeoutMs || 0);
+  const controller = timeoutMs > 0 && !options.signal ? new AbortController() : null;
+  const timeoutId = controller
+    ? window.setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+  let response;
+  try {
+    response = await fetch(apiUrl(`/functions/${name}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+      signal: options.signal || controller?.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError" && controller) {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s: ${apiUrl(`/functions/${name}`)}`);
+    }
+    if (
+      isSarahNativeShell()
+      && !options.skipApiDiscovery
+    ) {
+      await discoverSarahApiBase({ timeoutMs: 2200 });
+      return invokeFunction(name, payload, { ...options, skipApiDiscovery: true });
+    }
+    throw error;
+  } finally {
+    if (timeoutId) window.clearTimeout(timeoutId);
+  }
   const contentType = response.headers.get('content-type') || '';
 
   if (!response.ok) {
