@@ -93,8 +93,8 @@ export default function LiveCaptureLaunchpad({
       </div>
 
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
-        <Pill icon={<HeartPulse className="h-4 w-4" />} label="H10" {...readiness.h10} />
-        <Pill icon={<Activity className="h-4 w-4" />} label="Live HR" {...readiness.hr} />
+        <Pill icon={<HeartPulse className="h-4 w-4" />} label={readiness.h10?.label || "H10"} {...readiness.h10} />
+        <Pill icon={<Activity className="h-4 w-4" />} label={readiness.hr?.label || "Live HR"} {...readiness.hr} />
         <Pill icon={<Video className="h-4 w-4" />} label="OBS" optional {...readiness.obs} />
         <Pill icon={<Activity className="h-4 w-4" />} label="EMG" optional {...readiness.emg} />
         <Pill icon={<Mic2 className="h-4 w-4" />} label="Sarah voice" optional={!readiness.voice?.required} {...readiness.voice} />

@@ -229,7 +229,8 @@ const PERINEAL_EMG_PROTOCOL_PHASES = [
   },
 ];
 const HOWL_TELEMETRY_POLL_MS = 2500;
-const BLOOD_PRESSURE_SYNC_POLL_MS = 30000;
+const BLOOD_PRESSURE_SYNC_POLL_MS = 10000;
+const ACTIVE_SESSION_REFRESH_MS = 5000;
 const HOWL_DEFAULT_CONTROL_FORM = {
   controlEnabled: false,
   sarahAutoEnabled: false,
@@ -2110,10 +2111,6 @@ export default function LiveCapture() {
   useEffect(() => {
     const settings = readHrSourceSettings();
     setHrSourceSettings(settings);
-    if (settings.source === "heartrateonstream" || settings.source === "direct_h10" || (settings.source === "pulsoid" && settings.pulsoidToken)) {
-      applyHrSourceSettings(settings);
-    }
-
   }, []);
 
   useEffect(() => () => {
@@ -2254,12 +2251,20 @@ export default function LiveCapture() {
       setActiveSessionDoc(null);
       return;
     }
-    liveRecordApi.filter({ id: sessionId }).then((rows) => {
+    let cancelled = false;
+    const refreshActiveSessionDoc = () => liveRecordApi.filter({ id: sessionId }).then((rows) => {
+      if (cancelled) return;
       const session = rows[0] || null;
       setActiveSessionDoc(session);
       const events = session?.event_timeline || [];
       setLiveEvents([...events].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0)));
     }).catch(() => {});
+    refreshActiveSessionDoc();
+    const timer = window.setInterval(refreshActiveSessionDoc, ACTIVE_SESSION_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [liveRecordApi, liveSession?.activeSessionId, liveSession?.lastImportedAt]);
 
   useEffect(() => {
@@ -2295,7 +2300,8 @@ export default function LiveCapture() {
 
   const prediction = useMemo(() => computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory), [hrTelemetry, emgTelemetry, telemetryHistory]);
   const recordingActive = Boolean(recording?.active);
-  const hrConnected = Boolean(status?.hr?.sourceStatus?.connected ?? status?.hr?.connected);
+  const recentHrPacket = hasRecentHrPacket();
+  const hrConnected = Boolean(recentHrPacket || status?.hr?.sourceStatus?.connected || status?.hr?.connected);
   const emgSourceAt = emgTelemetry?.source_at || status?.emg?.lastSourceAt || status?.emg?.lastMessageAt;
   const emgLive = captureMode !== "hr" && recordingActive && isRecent(emgSourceAt);
   const mainTelemetryView = captureMode === "hr";
@@ -4581,11 +4587,17 @@ export default function LiveCapture() {
     telemetryNoticesEnabled,
     heartbeatAudioEnabled,
   });
-  const h10Recent = hasRecentHrPacket();
+  const h10Recent = recentHrPacket;
+  const serverHrSource = status?.hr?.sourceStatus?.source || status?.hr?.latestTelemetry?.source || hrTelemetry?.source || "";
+  const serverHrLabel = status?.hr?.sourceStatus?.label || hrTelemetry?.sourceLabel || selectedHrSource.label;
+  const sharedServerHr = Boolean(h10Recent && serverHrSource && serverHrSource !== hrSourceSettings.source);
   const launchActive = recordingActive || Boolean(liveSession?.activeSessionId);
   const launchReadiness = {
     h10: {
-      value: hrSourceSettings.source === "direct_h10"
+      label: sharedServerHr ? "Shared HR" : hrSourceSettings.source === "direct_h10" ? "H10" : "HR Source",
+      value: sharedServerHr
+        ? "Receiving"
+        : hrSourceSettings.source === "direct_h10"
         ? h10Recent
           ? "Connected"
           : directH10Status.connecting
@@ -4594,12 +4606,14 @@ export default function LiveCapture() {
               ? "Waiting packet"
               : "Needs connection"
         : selectedHrSource.label,
-      helper: hrSourceSettings.source === "direct_h10" ? directH10Status.message || "Direct H10 HR + RR source" : selectedHrSource.helper,
+      helper: sharedServerHr
+        ? `${serverHrLabel} from the shared Sarah backend.`
+        : hrSourceSettings.source === "direct_h10" ? directH10Status.message || "Direct H10 HR + RR source" : selectedHrSource.helper,
       tone: h10Recent || hrSourceSettings.source !== "direct_h10" ? "good" : directH10Status.connected || directH10Status.connecting ? "warn" : "bad",
     },
     hr: {
       value: h10Recent ? `${fmtNumber(hrTelemetry?.currentHr, 0)} BPM` : "Waiting",
-      helper: h10Recent ? "Recent live packet received." : "Sarah will wait for an actual HR packet.",
+      helper: h10Recent ? `${serverHrLabel} packet received.` : "Sarah will wait for an actual HR packet.",
       tone: h10Recent ? "good" : "warn",
     },
     obs: {

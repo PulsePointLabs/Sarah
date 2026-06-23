@@ -180,6 +180,11 @@ function shouldUseTelemetrySource(source) {
   return state.hr.selectedSource === source;
 }
 
+function hasRecentDirectH10Packet(maxAgeMs = HR_SOURCE_STALE_MS) {
+  const last = Date.parse(state.hr.directH10.lastMessageAt || '');
+  return Boolean(state.hr.directH10.connected && Number.isFinite(last) && Date.now() - last <= maxAgeMs);
+}
+
 function normalizeCaptureKind(value) {
   return CAPTURE_KINDS.has(value) ? value : 'session';
 }
@@ -989,7 +994,14 @@ function handleRelayTelemetry(telemetry) {
   }
 
   const normalized = normalizeHeartRateOnStreamTelemetry(telemetry);
-  if (normalized && shouldUseTelemetrySource(HR_SOURCE_IDS.HEART_RATE_ON_STREAM)) {
+  const canUseRelayTelemetry = shouldUseTelemetrySource(HR_SOURCE_IDS.HEART_RATE_ON_STREAM)
+    || (state.hr.selectedSource === HR_SOURCE_IDS.DIRECT_H10 && !hasRecentDirectH10Packet())
+    || (state.hr.selectedSource === HR_SOURCE_IDS.PULSOID && !state.hr.pulsoid.connected);
+  if (normalized && canUseRelayTelemetry) {
+    if (state.hr.selectedSource !== HR_SOURCE_IDS.HEART_RATE_ON_STREAM) {
+      state.hr.selectedSource = HR_SOURCE_IDS.HEART_RATE_ON_STREAM;
+      state.hr.selectedSourceLabel = HR_SOURCE_LABELS[HR_SOURCE_IDS.HEART_RATE_ON_STREAM];
+    }
     const nextTelemetry = applySelectedHrTelemetry(normalized);
     state.hr.latestTelemetry = nextTelemetry;
     refreshHrSourceStatus('HeartRateOnStream HR live');
