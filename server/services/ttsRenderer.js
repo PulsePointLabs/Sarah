@@ -39,6 +39,12 @@ async function trimTtsChunkSilence(inputPath, outputPath) {
   ]);
 }
 
+function ttsExportConcurrency() {
+  const configured = Number(process.env.TTS_EXPORT_CHUNK_CONCURRENCY || process.env.OPENAI_TTS_EXPORT_CONCURRENCY || 2);
+  if (!Number.isFinite(configured)) return 2;
+  return Math.max(1, Math.min(4, Math.round(configured)));
+}
+
 export async function renderTTSExport(payload = {}, options = {}) {
   let workDir = null;
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
@@ -100,14 +106,16 @@ export async function renderTTSExport(payload = {}, options = {}) {
     workDir = path.join(ttsRenderDir, `${Date.now()}-${crypto.randomUUID()}`);
     await fs.mkdir(workDir, { recursive: true });
 
-    const sourceFiles = [];
+    const sourceFiles = new Array(normalizedChunks.length);
     const chunkSilenceTrim = [];
-    for (let i = 0; i < normalizedChunks.length; i++) {
+    let completedChunks = 0;
+    let nextChunkIndex = 0;
+    const renderChunk = async (i) => {
       if (options.signal?.aborted) throw new Error('Cancelled');
       const chunk = normalizedChunks[i];
       onProgress({
         phase: 'generating',
-        current: i,
+        current: completedChunks,
         total: normalizedChunks.length,
         message: `Generating chunk ${i + 1} of ${normalizedChunks.length}...`,
       });
@@ -162,17 +170,28 @@ export async function renderTTSExport(payload = {}, options = {}) {
         trimMeta = { chunk: i, trimmed: false, warning: error?.message || 'chunk silence trim failed' };
         console.warn('[renderTTSExport] chunk silence trim skipped', trimMeta);
       }
-      chunkSilenceTrim.push(trimMeta);
-      sourceFiles.push(sourcePath);
+      chunkSilenceTrim[i] = trimMeta;
+      sourceFiles[i] = sourcePath;
+      completedChunks += 1;
       onProgress({
         phase: 'generating',
-        current: i + 1,
+        current: completedChunks,
         total: normalizedChunks.length,
         message: trimMeta.trimmed
           ? `Generated chunk ${i + 1} of ${normalizedChunks.length}; trimmed ${trimMeta.removed_seconds}s boundary silence`
           : `Generated chunk ${i + 1} of ${normalizedChunks.length}`,
       });
-    }
+    };
+
+    const workerCount = Math.min(ttsExportConcurrency(), normalizedChunks.length);
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+      while (nextChunkIndex < normalizedChunks.length) {
+        if (options.signal?.aborted) throw new Error('Cancelled');
+        const i = nextChunkIndex;
+        nextChunkIndex += 1;
+        await renderChunk(i);
+      }
+    }));
 
     if (options.signal?.aborted) throw new Error('Cancelled');
     onProgress({

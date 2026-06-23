@@ -27,7 +27,7 @@ import {
   ttsCheckpointKey,
 } from "@/lib/ttsReadingCheckpoint";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
-import { serverUrl } from "@/lib/mobileApiBase";
+import { isSarahNativeShell, serverUrl } from "@/lib/mobileApiBase";
 import { repairCharacterSplitParagraph, repairDecimalSpacing, reduceConsistencyPhraseRepetition, splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
@@ -55,6 +55,27 @@ const TTS_EXPORT_RENDER_VERSION = "tts_export_leading_trim_v2";
 const TTS_SIDE_TAB_DEFAULT_BOTTOM = 300;
 const SIDE_TAB_DRAG_THRESHOLD_PX = 6;
 const TTS_CHUNK_REQUEST_TIMEOUT_MS = 90000;
+
+function triggerDownloadOrOpen(url, filename = "") {
+  if (!url) return;
+  const a = document.createElement("a");
+  a.href = url;
+  if (filename) a.download = filename;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  if (isSarahNativeShell()) {
+    window.setTimeout(() => {
+      try {
+        window.location.href = url;
+      } catch {
+        window.open(url, "_blank", "noopener");
+      }
+    }, 700);
+  }
+}
 
 function clampSideTabBottom(value, tabHeight = 64) {
   if (typeof window === "undefined") return TTS_SIDE_TAB_DEFAULT_BOTTOM;
@@ -1173,10 +1194,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     ].filter((entry) => entry.url);
     links.forEach((entry, index) => {
       window.setTimeout(() => {
-        const a = document.createElement("a");
-        a.href = entry.url;
-        a.download = `${String(exportRecord?.filename || getAudioDownloadFilename()).replace(/\.[^.]+$/, "")}${entry.suffix}`;
-        a.click();
+        triggerDownloadOrOpen(
+          entry.url,
+          `${String(exportRecord?.filename || getAudioDownloadFilename()).replace(/\.[^.]+$/, "")}${entry.suffix}`
+        );
       }, index * 120);
     });
   };
@@ -1232,15 +1253,13 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   };
 
   const triggerSavedExportDownload = (exportRecord) => {
-    const a = document.createElement("a");
-    a.href = serverUrl(exportRecord.file_url);
-    a.download = getAudioDownloadFilename(exportRecord.format || runtimeRef.current.format);
-    a.click();
+    const filename = getAudioDownloadFilename(exportRecord.format || runtimeRef.current.format);
+    triggerDownloadOrOpen(serverUrl(exportRecord.file_url), filename);
     saveDownloadRecord({
       downloaded_at: new Date().toISOString(),
       source_generated_at: exportRecord.source_generated_at || sourceGeneratedAt || null,
       title: exportRecord.title || getDownloadDisplayTitle(),
-      filename: a.download,
+      filename,
       format: exportRecord.format || runtimeRef.current.format,
       has_chapters: Boolean(exportRecord.has_chapters || exportRecord.sidecar_chapters_available),
       chapter_count: Number(exportRecord.chapter_count || 0),
@@ -1256,10 +1275,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const triggerRenderedDownload = async (rendered, displayTitle = getDownloadDisplayTitle(), exportFormat = runtimeRef.current.format, runtime = runtimeRef.current) => {
     if (!rendered?.file_url) throw new Error("Server render did not return an audio file");
     const filename = getAudioDownloadFilename(rendered.format || exportFormat);
-    const a = document.createElement("a");
-    a.href = serverUrl(rendered.file_url);
-    a.download = filename;
-    a.click();
+    triggerDownloadOrOpen(serverUrl(rendered.file_url), filename);
 
     const createdExport = await base44.entities.AudioExport.create({
       title: displayTitle,

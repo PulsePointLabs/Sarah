@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.14",
-  "commit": "62a556a",
-  "commitMessage": "Fix Live Capture shared HR and BP refresh",
-  "builtAt": "2026-06-23T20:29:11.344Z"
+  "version": "0.1.15",
+  "commit": "c8dd3f3",
+  "commitMessage": "Fix APK TTS playback and media storage",
+  "builtAt": "2026-06-23T20:59:19.567Z"
 };

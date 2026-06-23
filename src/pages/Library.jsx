@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
-import { serverUrl } from "@/lib/mobileApiBase";
+import { isSarahNativeShell, serverUrl } from "@/lib/mobileApiBase";
 import { getBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Play, Pause, Download, Trash2, Music, Video, ChevronDown, ChevronRight, ExternalLink, RefreshCw, AlertTriangle } from "lucide-react";
@@ -19,6 +19,83 @@ const formatDuration = (seconds) => {
 const RAW_SECTION_TITLE_RE = /^tts-section-\d+$/i;
 const RECENT_AUDIO_LIMIT = 50;
 const RECENT_VIDEO_LIMIT = 50;
+const AUDIO_EXPORT_FIELDS = [
+  "id",
+  "title",
+  "analysis_title",
+  "file_url",
+  "audio_url",
+  "download_url",
+  "url",
+  "duration_seconds",
+  "voice",
+  "speed",
+  "model",
+  "format",
+  "render_version",
+  "size",
+  "filename",
+  "tts_session_key",
+  "analysis_title",
+  "session_date",
+  "source_generated_at",
+  "exported_at",
+  "has_chapters",
+  "chapter_count",
+  "sidecar_chapters_available",
+  "chapter_json_url",
+  "chapter_cue_url",
+  "chapter_txt_url",
+  "notes",
+  "section_name",
+  "created_date",
+  "updated_date",
+];
+const REVIEW_VIDEO_FIELDS = [
+  "id",
+  "title",
+  "analysis_title",
+  "file_url",
+  "video_url",
+  "download_url",
+  "url",
+  "manifest_url",
+  "filename",
+  "duration_seconds",
+  "session_id",
+  "record_type",
+  "session_date",
+  "source_generated_at",
+  "exported_at",
+  "audio_reused",
+  "clip_count",
+  "cited_time_count",
+  "visual_mode",
+  "watermark_enabled",
+  "watermark_preset",
+  "created_date",
+  "updated_date",
+];
+
+function triggerDownloadOrOpen(url, filename = "") {
+  if (!url) return;
+  const a = document.createElement("a");
+  a.href = url;
+  if (filename) a.download = filename;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  if (isSarahNativeShell()) {
+    window.setTimeout(() => {
+      try {
+        window.location.href = url;
+      } catch {
+        window.open(url, "_blank", "noopener");
+      }
+    }, 700);
+  }
+}
 
 const getRawAudioUrl = (export_) => (
   export_?.file_url ||
@@ -316,7 +393,7 @@ export default function Library() {
 
   const { data: exports = [], isLoading, error: audioExportsError } = useQuery({
     queryKey: ["audioExports"],
-    queryFn: () => base44.entities.AudioExport.list("-created_date", 125),
+    queryFn: () => base44.entities.AudioExport.listFields(AUDIO_EXPORT_FIELDS, "-created_date", 125),
     placeholderData: [],
   });
 
@@ -337,7 +414,7 @@ export default function Library() {
 
   const { data: reviewVideos = [], isLoading: videosLoading, error: reviewVideosError } = useQuery({
     queryKey: ["sessionReviewVideos"],
-    queryFn: () => base44.entities.SessionReviewVideo.list("-created_date", 125),
+    queryFn: () => base44.entities.SessionReviewVideo.listFields(REVIEW_VIDEO_FIELDS, "-created_date", 125),
     placeholderData: [],
   });
 
@@ -504,31 +581,28 @@ export default function Library() {
   const handleDownload = (export_) => {
     const url = getAudioUrl(export_);
     if (!url) return;
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = buildAudioExportFilename({
+    triggerDownloadOrOpen(url, buildAudioExportFilename({
       title: cleanDisplayTitle(export_),
       sessionDate: export_.session_date || getCreatedTimestamp(export_),
       extension: getDownloadExtension(export_),
-    });
-    a.click();
+    }));
   };
 
   const handleDownloadVideo = (video) => {
     const url = getVideoUrl(video);
     if (!url) return;
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = video.filename || `${cleanVideoTitle(video).replace(/[^a-zA-Z0-9_-]+/g, "-") || "Session-Review-Video"}.mp4`;
-    a.click();
+    triggerDownloadOrOpen(
+      url,
+      video.filename || `${cleanVideoTitle(video).replace(/[^a-zA-Z0-9_-]+/g, "-") || "Session-Review-Video"}.mp4`
+    );
   };
 
   const handleDownloadManifest = (video) => {
     if (!video?.manifest_url) return;
-    const a = document.createElement("a");
-    a.href = serverUrl(video.manifest_url);
-    a.download = `${(video.filename || cleanVideoTitle(video)).replace(/\.[^.]+$/, "")}.review-manifest.json`;
-    a.click();
+    triggerDownloadOrOpen(
+      serverUrl(video.manifest_url),
+      `${(video.filename || cleanVideoTitle(video)).replace(/\.[^.]+$/, "")}.review-manifest.json`
+    );
   };
 
   const handleDownloadChapters = (export_) => {
@@ -543,10 +617,7 @@ export default function Library() {
       { url: serverUrl(export_.chapter_txt_url), suffix: ".chapters.txt" },
     ].filter((entry) => entry.url).forEach((entry, index) => {
       window.setTimeout(() => {
-        const a = document.createElement("a");
-        a.href = entry.url;
-        a.download = `${baseFilename}${entry.suffix}`;
-        a.click();
+        triggerDownloadOrOpen(entry.url, `${baseFilename}${entry.suffix}`);
       }, index * 120);
     });
   };

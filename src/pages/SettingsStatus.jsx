@@ -26,7 +26,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { SarahLogoMark } from "@/components/SarahBrand";
 import { cancelBackgroundJob, clearBackgroundJobs, listBackgroundJobs, retryBackgroundJob } from "@/lib/backgroundJobs";
 import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
-import { apiUrl, serverUrl } from "@/lib/mobileApiBase";
+import { apiUrl, discoverSarahApiBase, isSarahNativeShell, serverUrl } from "@/lib/mobileApiBase";
 import { friendlyJobStatusMessage } from "@/lib/jobErrorMessages";
 import { getProviderStatus } from "@/lib/providerStatus";
 import {
@@ -96,7 +96,17 @@ function fmtDateTime(value) {
 }
 
 async function getStorageStatus() {
-  const response = await fetch(apiUrl("/status/storage"));
+  let response;
+  try {
+    response = await fetch(apiUrl("/status/storage"), { cache: "no-store" });
+  } catch (error) {
+    if (isSarahNativeShell()) {
+      await discoverSarahApiBase({ timeoutMs: 2200 });
+      response = await fetch(apiUrl("/status/storage"), { cache: "no-store" });
+    } else {
+      throw error;
+    }
+  }
   if (!response.ok) throw new Error(`Storage status failed: ${response.status}`);
   return response.json();
 }

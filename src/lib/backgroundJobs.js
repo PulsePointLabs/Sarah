@@ -1,7 +1,31 @@
-import { apiUrl } from "@/lib/mobileApiBase";
+import { apiUrl, discoverSarahApiBase, isSarahNativeShell } from "@/lib/mobileApiBase";
 
 async function jobRequest(path, options = {}) {
-  const response = await fetch(apiUrl(path), options);
+  const timeoutMs = Number(options.timeoutMs || 15000);
+  const controller = timeoutMs > 0 && !options.signal ? new AbortController() : null;
+  const timeoutId = controller
+    ? window.setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+  const fetchOptions = { ...options };
+  delete fetchOptions.timeoutMs;
+  delete fetchOptions.skipApiDiscovery;
+  if (controller) fetchOptions.signal = controller.signal;
+
+  let response;
+  try {
+    response = await fetch(apiUrl(path), fetchOptions);
+  } catch (error) {
+    if (error?.name === "AbortError" && controller) {
+      throw new Error(`Job request timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    if (isSarahNativeShell() && !options.skipApiDiscovery) {
+      await discoverSarahApiBase({ timeoutMs: 2200 });
+      return jobRequest(path, { ...options, skipApiDiscovery: true });
+    }
+    throw error;
+  } finally {
+    if (timeoutId) window.clearTimeout(timeoutId);
+  }
   const contentType = response.headers.get("content-type") || "";
   const data = contentType.includes("application/json")
     ? await response.json()
@@ -25,6 +49,7 @@ export function startBackgroundJob(type, payload = {}, meta = {}) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body,
+    timeoutMs: 30000,
   });
 }
 
