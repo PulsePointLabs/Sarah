@@ -324,9 +324,17 @@ function fmtAgeMs(value) {
   return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)} s`;
 }
 
+function timestampMs(value) {
+  if (!value) return NaN;
+  if (typeof value === "number") return value;
+  const direct = Number(value);
+  if (Number.isFinite(direct) && direct > 100000000000) return direct;
+  return new Date(value).getTime();
+}
+
 function isRecent(value, maxAgeMs = 5000) {
   if (!value) return false;
-  const t = new Date(value).getTime();
+  const t = timestampMs(value);
   return Number.isFinite(t) && Date.now() - t <= maxAgeMs;
 }
 
@@ -2026,9 +2034,20 @@ export default function LiveCapture() {
       const serverDirect = status?.hr?.directH10 || {};
       const sourceStatus = status?.hr?.sourceStatus || {};
       const lastMessageAt = directH10Status.lastMessageAt || serverDirect.lastMessageAt || sourceStatus.lastMessageAt;
-      const lastMs = Date.parse(lastMessageAt || "");
+      const lastMs = timestampMs(lastMessageAt);
       const connectedFlag = Boolean(directH10Status.connected || serverDirect.connected || sourceStatus.connected);
       const signalLost = serverDirect.error && /signal lost|no hr packets/i.test(serverDirect.error);
+      const sharedSample = latestHrRef.current || hrTelemetry || status?.hr?.latestTelemetry;
+      const sharedHr = readNumber(sharedSample?.currentHr, sharedSample?.hr, sharedSample?.heartRate);
+      const sharedStamp = sharedSample?.measuredAt || sharedSample?.receivedAt || sharedSample?.source_at || sharedSample?.lastMessageAt || sharedSample?.engineReceivedAt;
+      const sharedAgeMs = sharedStamp ? Date.now() - timestampMs(sharedStamp) : NaN;
+      const sharedHrRecent = sharedHr != null && Number.isFinite(sharedAgeMs) && sharedAgeMs >= 0 && sharedAgeMs <= 15000;
+
+      if (sharedHrRecent) {
+        directH10ReconnectAttemptRef.current = 0;
+        setHrLossDialog((prev) => (prev?.title === "H10 signal lost" ? null : prev));
+        return;
+      }
 
       if (signalLost) {
         setHrLossDialog((prev) => prev || {
@@ -2071,10 +2090,12 @@ export default function LiveCapture() {
     connectDirectH10,
     directH10Status.connected,
     directH10Status.lastMessageAt,
+    hrTelemetry,
     hrSourceSettings.source,
     status?.hr?.directH10?.connected,
     status?.hr?.directH10?.error,
     status?.hr?.directH10?.lastMessageAt,
+    status?.hr?.latestTelemetry,
     status?.hr?.sourceStatus?.connected,
     status?.hr?.sourceStatus?.lastMessageAt,
   ]);
@@ -2335,7 +2356,7 @@ export default function LiveCapture() {
     const hr = readNumber(sample?.currentHr, sample?.hr, sample?.heartRate);
     if (hr == null) return false;
     const stamp = sample?.measuredAt || sample?.receivedAt || sample?.source_at || sample?.lastMessageAt;
-    const ageMs = stamp ? Date.now() - Date.parse(stamp) : 0;
+    const ageMs = stamp ? Date.now() - timestampMs(stamp) : 0;
     return !stamp || (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 10000);
   }, [hrTelemetry]);
 
@@ -3172,7 +3193,6 @@ export default function LiveCapture() {
   }, []);
 
   useEffect(() => {
-    if (!liveSession?.activeSessionId) return undefined;
     syncBloodPressureForLiveSession({ manual: false });
     const timer = window.setInterval(() => {
       syncBloodPressureForLiveSession({ manual: false });
