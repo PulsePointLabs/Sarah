@@ -1300,10 +1300,12 @@ export default function LiveCapture() {
   const directH10CharacteristicRef = useRef(null);
   const directH10NotificationHandlerRef = useRef(null);
   const directH10RrRef = useRef([]);
+  const directH10StatusRef = useRef(directH10Status);
   const directH10IntentionalDisconnectRef = useRef(false);
   const directH10ReconnectAttemptRef = useRef(0);
   const howlAutoLastActionRef = useRef({ at: 0, intensity: null, reason: "" });
   const bpSyncInFlightRef = useRef(false);
+  const bpOmronActionInFlightRef = useRef(false);
   const bpOmronSeenRef = useRef(new Set());
   const howlSettingsDirtyRef = useRef(false);
   const howlFocusedFieldRef = useRef("");
@@ -1312,6 +1314,10 @@ export default function LiveCapture() {
   const liveRecordEntity = liveSession?.entity || (captureKind === "body_exploration" ? "BodyExploration" : "Session");
   const liveRecordApi = base44.entities[liveRecordEntity] || base44.entities.Session;
   const captureIsBodyExploration = liveRecordEntity === "BodyExploration" || captureKind === "body_exploration";
+
+  useEffect(() => {
+    directH10StatusRef.current = directH10Status;
+  }, [directH10Status]);
 
   useEffect(() => {
     if (restoredLaunchProfileRef.current) return;
@@ -1473,6 +1479,8 @@ export default function LiveCapture() {
       },
     };
 
+    latestHrRef.current = telemetry;
+    setHrTelemetry(telemetry);
     setDirectH10Status((prev) => ({
       ...prev,
       connected: true,
@@ -2796,7 +2804,15 @@ export default function LiveCapture() {
   ]);
 
   const syncBloodPressureForLiveSession = useCallback(async ({ manual = false } = {}) => {
-    if (bpSyncInFlightRef.current) return;
+    if (bpSyncInFlightRef.current) {
+      if (manual) {
+        setBpCapture((prev) => ({
+          ...prev,
+          message: "BP refresh is already running. Give it a second, then the latest reading will update here.",
+        }));
+      }
+      return;
+    }
     if (!manual && bpOmronListening) return;
     bpSyncInFlightRef.current = true;
     if (manual) {
@@ -2930,10 +2946,16 @@ export default function LiveCapture() {
   }, [stampBloodPressureReadings]);
 
   const toggleOmronBloodPressureListener = useCallback(async () => {
-    if (bpSyncInFlightRef.current) return;
+    if (bpOmronActionInFlightRef.current) {
+      setBpCapture((prev) => ({
+        ...prev,
+        message: "OMRON listener is already handling the previous tap.",
+      }));
+      return;
+    }
 
     if (bpOmronListening) {
-      bpSyncInFlightRef.current = true;
+      bpOmronActionInFlightRef.current = true;
       setBpCapture((prev) => ({
         ...prev,
         syncing: true,
@@ -2958,12 +2980,12 @@ export default function LiveCapture() {
           message: error?.message || "Could not stop OMRON listener.",
         }));
       } finally {
-        bpSyncInFlightRef.current = false;
+        bpOmronActionInFlightRef.current = false;
       }
       return;
     }
 
-    bpSyncInFlightRef.current = true;
+    bpOmronActionInFlightRef.current = true;
     setBpCapture((prev) => ({
       ...prev,
       syncing: true,
@@ -3036,7 +3058,7 @@ export default function LiveCapture() {
         message: error?.message || "Could not start OMRON listener.",
       }));
     } finally {
-      bpSyncInFlightRef.current = false;
+      bpOmronActionInFlightRef.current = false;
     }
   }, [bpOmronListening, saveOmronBloodPressureForLiveSession]);
 
@@ -3219,15 +3241,30 @@ export default function LiveCapture() {
           }
         }
 
-        if (hrSourceSettings.source === "direct_h10" && !hasRecentHrPacket()) {
+        const directH10Launch = hrSourceSettings.source === "direct_h10";
+        if (directH10Launch && !hasRecentHrPacket()) {
+          const currentH10 = directH10StatusRef.current || {};
           setLaunchStep("Connecting H10");
-          await connectDirectH10();
+          if (!currentH10.connected && !currentH10.connecting) {
+            await connectDirectH10({ launch: true });
+          }
         }
 
         setLaunchStep("Waiting for heart rate");
-        const receivedHr = await waitForRecentHrPacket();
+        let receivedHr = await waitForRecentHrPacket(directH10Launch ? 60000 : 25000);
+        if (!receivedHr && directH10Launch) {
+          const currentH10 = directH10StatusRef.current || {};
+          if (!currentH10.connected && !currentH10.connecting) {
+            setLaunchStep("Connecting H10");
+            await connectDirectH10({ autoReconnect: true, launch: true });
+            setLaunchStep("Waiting for heart rate");
+            receivedHr = await waitForRecentHrPacket(45000);
+          }
+        }
         if (!receivedHr) {
-          throw new Error("H10/source is connected or configured, but no recent heart-rate packet has arrived.");
+          throw new Error(directH10Launch
+            ? "H10 is selected, but Sarah has not received the first heart-rate packet yet. Wake the strap, then tap Retry failed step."
+            : "H10/source is connected or configured, but no recent heart-rate packet has arrived.");
         }
 
         setLaunchStep("Checking OBS");

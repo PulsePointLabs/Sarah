@@ -526,7 +526,10 @@ export async function renderMobileSessionVideo(payload = {}, context = {}) {
     percent: 2,
     message: 'Validating source recording and render settings...',
   });
-  const durationSeconds = await mediaDurationSeconds(recording.source_path).catch(() => Number(recording.duration_seconds || 0));
+  const probedDurationSeconds = await mediaDurationSeconds(recording.source_path).catch(() => 0);
+  const storedDurationSeconds = Number(recording.duration_seconds || 0) || 0;
+  const packageDurationSeconds = Number(recording.telemetry_package?.duration_seconds || 0) || 0;
+  const durationSeconds = probedDurationSeconds || storedDurationSeconds || packageDurationSeconds;
   if (!durationSeconds) throw new Error('Could not determine source video duration.');
 
   const title = drawTextEscape(settings.title || 'ClinicalClimax');

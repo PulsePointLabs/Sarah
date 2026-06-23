@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.8",
-  "commit": "a62cc21a",
-  "commitMessage": "Bump Sarah to v0.1.7 mobile video build",
-  "builtAt": "2026-06-23T01:33:38.825Z"
+  "version": "0.1.9",
+  "commit": "51cd8f67",
+  "commitMessage": "Stabilize Live Capture mobile video and BP sync",
+  "builtAt": "2026-06-23T01:50:06.540Z"
 };
