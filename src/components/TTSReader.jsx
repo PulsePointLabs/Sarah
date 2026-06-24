@@ -575,7 +575,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       }
     });
     if (checkpoint.state === "playing" || checkpoint.state === "buffering") {
-      setRequestStatus({ type: "ok", msg: "Reading position restored. Tap Read to resume." });
+      setRequestStatus({
+        type: "ok",
+        msg: "Reading position restored. Android will not auto-play after reload/background restore; tap Read to resume audio from here.",
+      });
     }
   }, [checkpointKey, contentHash, readableParagraphs.length]);
 

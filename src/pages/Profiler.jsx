@@ -1951,6 +1951,40 @@ function formatFileSize(bytes = 0) {
   return `${value} B`;
 }
 
+function anatomyVideoFromJob(job = {}) {
+  const result = job?.result && typeof job.result === "object" ? job.result : null;
+  if (result?.file_url) return result;
+  const summary = job?.result_summary && typeof job.result_summary === "object" ? job.result_summary : null;
+  if (summary?.file_url) {
+    return {
+      ok: true,
+      jobId: job.id,
+      file_url: summary.file_url,
+      filename: summary.filename,
+      size: summary.size,
+      duration_seconds: summary.duration_seconds,
+      created_at: summary.created_at || job.finishedAt || job.updatedAt || job.createdAt,
+      render_version: summary.render_version,
+      watermark_enabled: summary.watermark_enabled,
+      audio_reused: summary.audio_reused,
+      mime_type: summary.mime_type,
+    };
+  }
+  const progress = job?.progress && typeof job.progress === "object" ? job.progress : null;
+  if (progress?.result_file_url) {
+    return {
+      ok: true,
+      jobId: job.id,
+      file_url: progress.result_file_url,
+      filename: progress.result_filename,
+      size: progress.result_size,
+      duration_seconds: progress.result_duration_seconds,
+      created_at: progress.result_created_at || job.finishedAt || job.updatedAt || job.createdAt,
+    };
+  }
+  return null;
+}
+
 function formatVideoCreatedAt(value) {
   if (!value) return "";
   try {
@@ -5070,6 +5104,12 @@ function ProfileImageReviewPanel({
 
     const reconnectProfileVideo = async () => {
       try {
+        if (!anatomyVideo?.file_url && !activeAnatomyVideoJobId) {
+          setAnatomyVideoStatus({
+            type: "checking",
+            message: "Checking saved background renders for this Profiler review...",
+          });
+        }
         let storedJobId = "";
         try {
           storedJobId = window.localStorage.getItem(anatomyVideoJobStorageKey) || "";
@@ -5089,11 +5129,18 @@ function ProfileImageReviewPanel({
         const matching = sortedReviewJobs.find((job) => storedJobId && job.id === storedJobId)
           || sortedReviewJobs.find((job) => (
           String(job?.meta?.sourceGeneratedAt || job?.payload?.sourceGeneratedAt || "") === String(sourceGeneratedAt)
-        )) || sortedReviewJobs.find((job) => job.status === "complete" && job.result?.file_url) || sortedReviewJobs[0];
-        if (!matching) return;
+        )) || sortedReviewJobs.find((job) => job.status === "complete" && anatomyVideoFromJob(job)?.file_url) || sortedReviewJobs[0];
+        if (!matching) {
+          setAnatomyVideoStatus({
+            type: "idle",
+            message: "No saved anatomy video is linked to this review yet. Use Build anatomy video to start one; once the desktop backend accepts it, you can leave this page.",
+          });
+          return;
+        }
         const fullMatching = matching.hasResult && !matching.result ? await getBackgroundJob(matching.id) : matching;
         if (cancelled) return;
-        if (fullMatching.status === "complete" && fullMatching.result?.file_url) {
+        const videoResult = anatomyVideoFromJob(fullMatching);
+        if (fullMatching.status === "complete" && videoResult?.file_url) {
           setActiveAnatomyVideoJobId("");
           try {
             if (storedJobId === fullMatching.id) window.localStorage.removeItem(anatomyVideoJobStorageKey);
@@ -5101,16 +5148,23 @@ function ProfileImageReviewPanel({
             // Ignore storage cleanup failures.
           }
           const exactSourceMatch = String(fullMatching?.meta?.sourceGeneratedAt || fullMatching?.payload?.sourceGeneratedAt || "") === String(sourceGeneratedAt);
-          setAnatomyVideo(fullMatching.result);
+          setAnatomyVideo(videoResult);
           setAnatomyVideoStatus({
             type: "ok",
-            message: exactSourceMatch ? "Anatomy video ready." : "Latest saved anatomy video ready.",
+            message: exactSourceMatch
+              ? "Anatomy video ready. The player below is the completed MP4."
+              : "Latest saved anatomy video ready. This may have been rendered from a previous version of the review text.",
           });
         } else if (fullMatching.status === "queued" || fullMatching.status === "running") {
           setActiveAnatomyVideoJobId(fullMatching.id);
           setAnatomyVideoStatus({
             type: "working",
             message: fullMatching.progress?.message || "Queued on the desktop backend. You can background the app; Sarah will keep rendering.",
+          });
+        } else if (fullMatching.status === "complete") {
+          setAnatomyVideoStatus({
+            type: "idle",
+            message: "The latest anatomy video job is marked complete, but no MP4 output is attached to it. Open Settings & Status to inspect the completed job.",
           });
         }
       } catch (err) {
@@ -5124,7 +5178,7 @@ function ProfileImageReviewPanel({
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [anatomyVideoJobStorageKey, config.kind, result?._meta?.last_generated_at, result?._meta?.updated_at]);
+  }, [activeAnatomyVideoJobId, anatomyVideo?.file_url, anatomyVideoJobStorageKey, config.kind, result?._meta?.last_generated_at, result?._meta?.updated_at]);
 
   const handleImageFiles = async (event) => {
     const files = Array.from(event.target.files || []).filter((file) => file.type?.startsWith("image/"));
@@ -7412,6 +7466,11 @@ ANNOTATED IMAGE OUTPUT RULES:
                   Builds a narrated HD review from the current Sarah text plus linked profile images and video-sampled frames.
                   Keep the app foregrounded only until the status says it is queued on the desktop backend.
                 </p>
+                {profileStale && (
+                  <p className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] font-medium leading-relaxed text-amber-900">
+                    This Profiler text is stale. A saved video may still be shown below, but use Re-review first if you want the narrated video to match the newest evidence.
+                  </p>
+                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -7443,6 +7502,31 @@ ANNOTATED IMAGE OUTPUT RULES:
                 )}
               </div>
             </div>
+            {!anatomyVideo?.file_url && anatomyVideoStatus.message && (
+              <div className={`mt-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs leading-relaxed ${
+                anatomyVideoStatus.type === "error"
+                  ? "border-destructive/30 bg-destructive/10 text-destructive"
+                  : anatomyVideoStatus.type === "working" || anatomyVideoStatus.type === "starting" || anatomyVideoStatus.type === "checking"
+                    ? "border-primary/25 bg-background text-muted-foreground"
+                    : "border-border bg-background text-muted-foreground"
+              }`}>
+                {anatomyVideoStatus.type === "working" || anatomyVideoStatus.type === "starting" || anatomyVideoStatus.type === "checking"
+                  ? <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+                  : <Video className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />}
+                <div>
+                  <p className="font-semibold text-foreground">
+                    {anatomyVideoStatus.type === "working" || anatomyVideoStatus.type === "starting"
+                      ? "Video job is active"
+                      : anatomyVideoStatus.type === "checking"
+                        ? "Looking for a saved video"
+                        : anatomyVideoStatus.type === "error"
+                          ? "Video job needs attention"
+                          : "No video is currently attached"}
+                  </p>
+                  <p className="mt-0.5">{anatomyVideoStatus.message}</p>
+                </div>
+              </div>
+            )}
             {anatomyVideo?.file_url && (
               <div className="mt-3 overflow-hidden rounded-lg border border-border bg-black">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 text-xs">
@@ -7461,7 +7545,7 @@ ANNOTATED IMAGE OUTPUT RULES:
                 />
               </div>
             )}
-            {anatomyVideoStatus.message && (
+            {anatomyVideo?.file_url && anatomyVideoStatus.message && (
               <p className={`mt-2 text-xs ${
                 anatomyVideoStatus.type === "error"
                   ? "text-destructive"
