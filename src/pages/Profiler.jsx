@@ -3557,7 +3557,7 @@ function AnnotatedImageStage({
   pinnedFindings = [],
   boxedFindings = [],
   unavailableText = "Image preview is not available for this saved run.",
-  className = "relative aspect-[4/3] bg-black",
+  className = "relative aspect-[4/3] overflow-hidden bg-muted/20",
   imageClassName = "",
   fitMode = "contain",
   onClick = null,
@@ -3565,6 +3565,14 @@ function AnnotatedImageStage({
   const { containerRef, getRect, setNaturalSize } = useContainedImageRect();
   const rect = getRect(fitMode);
   const imageUrl = image?.preview_url ? serverUrl(image.preview_url) : "";
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
+  const priorityImage = pinnedFindings.length > 0 || boxedFindings.length > 0;
+
+  useEffect(() => {
+    setImageLoaded(false);
+    setImageFailed(false);
+  }, [imageUrl]);
 
   return (
     <div
@@ -3585,11 +3593,16 @@ function AnnotatedImageStage({
       } : undefined}
       title={onClick ? "Open annotated image viewer" : undefined}
     >
-      {imageUrl ? (
+      {imageUrl && !imageLoaded && !imageFailed && (
+        <div className="absolute inset-0 z-0 flex items-center justify-center bg-muted/20 px-4 text-center text-xs font-medium text-muted-foreground">
+          Loading image...
+        </div>
+      )}
+      {imageUrl && !imageFailed ? (
         <img
           src={imageUrl}
           alt={image.display_label || "Reviewed anatomy reference"}
-          className={`absolute ${imageClassName}`}
+          className={`absolute z-[1] object-contain transition-opacity duration-200 ${imageLoaded ? "opacity-100" : "opacity-0"} ${imageClassName}`}
           decoding="async"
           style={rect ? {
             left: `${rect.left}px`,
@@ -3597,15 +3610,21 @@ function AnnotatedImageStage({
             width: `${rect.width}px`,
             height: `${rect.height}px`,
           } : { inset: 0, width: "100%", height: "100%" }}
-          loading="lazy"
+          loading={priorityImage ? "eager" : "lazy"}
+          fetchPriority={priorityImage ? "high" : "auto"}
           onLoad={(event) => {
             const img = event.currentTarget;
             setNaturalSize({ width: img.naturalWidth || 1, height: img.naturalHeight || 1 });
+            setImageLoaded(true);
+          }}
+          onError={() => {
+            setImageFailed(true);
+            setImageLoaded(true);
           }}
         />
       ) : (
-        <div className="flex h-full min-h-36 items-center justify-center px-4 text-center text-sm leading-relaxed text-foreground/85 dark:text-white/85">
-          {unavailableText}
+        <div className="flex h-full min-h-36 items-center justify-center bg-muted/20 px-4 text-center text-sm leading-relaxed text-foreground/85 dark:text-white/85">
+          {imageFailed ? "Image preview could not load from the local server." : unavailableText}
         </div>
       )}
       {pinnedFindings.map((finding, index) => (
@@ -3807,7 +3826,7 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
                 pinnedFindings={pinnedFindings}
                 boxedFindings={boxedFindings}
                 unavailableText="Image preview is not available for this saved run. Re-run with saved or fresh images to attach view previews."
-                className="relative aspect-[4/3] min-h-48 overflow-hidden bg-neutral-950 sm:min-h-64"
+                className="relative aspect-[4/3] overflow-hidden bg-muted/20"
                 fitMode="contain"
               />
               <div className="space-y-2 p-3">
@@ -4232,9 +4251,11 @@ function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transie
       if (b.score !== a.score) return b.score - a.score;
       return Number(b.hasFinding) - Number(a.hasFinding);
     });
+  const withFindings = scored.filter((item) => item.hasFinding);
+  const bestWithFindings = withFindings.filter((item) => item.score > 0).slice(0, 2);
+  const fallbackWithFindings = withFindings.slice(0, 2);
   const best = scored.filter((item) => item.score > 0).slice(0, 2);
-  const fallback = scored.filter((item) => item.hasFinding).slice(0, 2);
-  return (best.length ? best : fallback).map((item) => item.imageId);
+  return (bestWithFindings.length ? bestWithFindings : fallbackWithFindings.length ? fallbackWithFindings : best).map((item) => item.imageId);
 }
 
 function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(var(--primary))", transientImages = [], onOpenImage = null, onCorrectFinding = null, onRemoveFinding = null }) {
@@ -4259,7 +4280,7 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
           <Badge variant="secondary" className="h-5 text-[10px]">{imageIds.length} visible view{imageIds.length === 1 ? "" : "s"}</Badge>
         </span>
       </div>
-      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {imageIds.map((imageId) => {
           const image = pelvicScoped
             ? rawProfileImageById(result, imageId, transientImages)
@@ -4273,7 +4294,7 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
                   image={image}
                   pinnedFindings={pinnedFindings}
                   unavailableText="Image preview unavailable for this saved run."
-                  className="relative aspect-[4/3] min-h-44 overflow-hidden bg-neutral-950 sm:min-h-56"
+                  className="relative aspect-[4/3] overflow-hidden bg-muted/20"
                   fitMode="contain"
                   onClick={onOpenImage ? () => onOpenImage(imageId) : null}
                 />
