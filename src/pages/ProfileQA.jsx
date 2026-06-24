@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, ClipboardList, MessageCircle } from "lucide-react";
+import { AlertCircle, ArrowLeft, ClipboardList, Loader2, MessageCircle, RefreshCw } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import AIChat from "@/components/AIChat";
-import { loadUserProfileWithProfilerResults } from "@/lib/profileContext";
+import { loadLatestProfilerAnalysis, mergeProfilerResultsIntoProfile } from "@/lib/profileContext";
 import { richTextToPlainText } from "@/lib/richText";
 import {
   backfillImageReviewFindingsFromChat,
@@ -44,40 +44,127 @@ function buildProfileContext(profile, findingCards) {
   ].join("\n");
 }
 
+const PROFILE_QA_LOAD_STEPS = [
+  "Connecting to Sarah desktop API",
+  "Loading profile and saved Q&A",
+  "Checking latest Profiler results",
+  "Preparing Sarah chat context",
+];
+
 export default function ProfileQA() {
   const [profile, setProfile] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [qaFindingsOpen, setQaFindingsOpen] = useState(true);
+  const [loadState, setLoadState] = useState({
+    step: 0,
+    message: PROFILE_QA_LOAD_STEPS[0],
+    error: "",
+  });
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
-    loadUserProfileWithProfilerResults().then((u) => {
-      const savedQaFindings = normalizeProfileQaFindings(u.profile_qa_findings);
-      const importedQaFindings = savedQaFindings.length ? savedQaFindings : parseProfileQaFindingsFromText(u.arousal_notes);
-      const savedChatMessages = u.profile_chat_messages || [];
-      const imageReviewBackfills = backfillImageReviewFindingsFromChat(savedChatMessages, importedQaFindings, u.first_name);
-      const qaFindingsWithBackfills = imageReviewBackfills.length
-        ? normalizeProfileQaFindings([...imageReviewBackfills, ...importedQaFindings])
-        : importedQaFindings;
-      const hydratedProfile = {
-        ...u,
-        profile_qa_findings: qaFindingsWithBackfills,
-      };
+    let cancelled = false;
 
-      setProfile(hydratedProfile);
-      setChatMessages(savedChatMessages);
-      if (!savedQaFindings.length && importedQaFindings.length && !imageReviewBackfills.length) {
-        base44.auth.updateMe({ profile_qa_findings: importedQaFindings }).catch(() => {});
+    async function loadProfileQaWorkspace() {
+      setLoadState({ step: 0, message: PROFILE_QA_LOAD_STEPS[0], error: "" });
+      setProfile(null);
+      try {
+        setLoadState({ step: 1, message: PROFILE_QA_LOAD_STEPS[1], error: "" });
+        const profileResponse = await base44.auth.me();
+        if (cancelled) return;
+        if (!profileResponse) throw new Error("Sarah returned an empty profile response.");
+
+        setLoadState({ step: 2, message: PROFILE_QA_LOAD_STEPS[2], error: "" });
+        const latestProfilerAnalysis = await loadLatestProfilerAnalysis();
+        if (cancelled) return;
+
+        setLoadState({ step: 3, message: PROFILE_QA_LOAD_STEPS[3], error: "" });
+        const u = mergeProfilerResultsIntoProfile(profileResponse, latestProfilerAnalysis) || profileResponse;
+        const savedQaFindings = normalizeProfileQaFindings(u.profile_qa_findings);
+        const importedQaFindings = savedQaFindings.length ? savedQaFindings : parseProfileQaFindingsFromText(u.arousal_notes);
+        const savedChatMessages = Array.isArray(u.profile_chat_messages) ? u.profile_chat_messages : [];
+        const imageReviewBackfills = backfillImageReviewFindingsFromChat(savedChatMessages, importedQaFindings, u.first_name);
+        const qaFindingsWithBackfills = imageReviewBackfills.length
+          ? normalizeProfileQaFindings([...imageReviewBackfills, ...importedQaFindings])
+          : importedQaFindings;
+        const hydratedProfile = {
+          ...u,
+          profile_qa_findings: qaFindingsWithBackfills,
+        };
+
+        setProfile(hydratedProfile);
+        setChatMessages(savedChatMessages);
+        setLoadState({ step: PROFILE_QA_LOAD_STEPS.length, message: "Profile Q&A ready", error: "" });
+        if (!savedQaFindings.length && importedQaFindings.length && !imageReviewBackfills.length) {
+          base44.auth.updateMe({ profile_qa_findings: importedQaFindings }).catch(() => {});
+        }
+        if (imageReviewBackfills.length) {
+          base44.auth.updateMe({ profile_qa_findings: qaFindingsWithBackfills }).catch(() => {});
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setLoadState({
+          step: 0,
+          message: "Profile Q&A could not finish loading.",
+          error: error?.message || "Unknown loading error.",
+        });
       }
-      if (imageReviewBackfills.length) {
-        base44.auth.updateMe({ profile_qa_findings: qaFindingsWithBackfills }).catch(() => {});
-      }
-    });
-  }, []);
+    }
+
+    loadProfileQaWorkspace();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadAttempt]);
 
   if (!profile) {
+    const pct = loadState.error
+      ? 100
+      : Math.max(12, Math.min(92, Math.round(((loadState.step + 1) / PROFILE_QA_LOAD_STEPS.length) * 100)));
     return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      <div className="mx-auto flex min-h-[50vh] max-w-xl items-center justify-center px-4 py-10">
+        <div className="w-full rounded-xl border border-border bg-card p-5 shadow-sm">
+          <div className="flex items-start gap-3">
+            <div className={`mt-0.5 rounded-full border p-2 ${loadState.error ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-primary/30 bg-primary/10 text-primary"}`}>
+              {loadState.error ? <AlertCircle className="h-5 w-5" /> : <Loader2 className="h-5 w-5 animate-spin" />}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold uppercase tracking-wider text-primary">Profile Q&A</p>
+              <h1 className="mt-1 text-lg font-semibold">{loadState.error ? "Could not load Sarah chat" : loadState.message}</h1>
+              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                {loadState.error
+                  ? loadState.error
+                  : "Sarah is loading your saved profile, Q&A findings, chat thread, and latest profiler context."}
+              </p>
+            </div>
+          </div>
+          {!loadState.error && (
+            <>
+              <div className="mt-4 h-2 overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+              </div>
+              <div className="mt-3 space-y-1.5">
+                {PROFILE_QA_LOAD_STEPS.map((step, index) => (
+                  <div key={step} className={`flex items-center gap-2 text-xs ${index <= loadState.step ? "text-foreground" : "text-muted-foreground"}`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${index < loadState.step ? "bg-primary" : index === loadState.step ? "bg-primary/70" : "bg-muted-foreground/30"}`} />
+                    <span>{step}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {loadState.error && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button type="button" onClick={() => setLoadAttempt((value) => value + 1)} className="gap-2">
+                <RefreshCw className="h-4 w-4" />
+                Retry
+              </Button>
+              <Button asChild type="button" variant="outline">
+                <Link to="/profile">Back to Profile</Link>
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
