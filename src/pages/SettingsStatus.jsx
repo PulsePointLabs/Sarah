@@ -97,6 +97,37 @@ function fmtDateTime(value) {
   });
 }
 
+function formatResultBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / 1024 / 1024)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+function formatResultDuration(value) {
+  const seconds = Math.round(Number(value || 0));
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return minutes ? `${minutes}:${String(rest).padStart(2, "0")}` : `0:${String(rest).padStart(2, "0")}`;
+}
+
+function jobResultSummary(job) {
+  const summary = job?.result_summary || {};
+  const progress = job?.progress || {};
+  const result = job?.result || {};
+  const fileUrl = summary.file_url || summary.download_url || summary.stream_url || progress.result_file_url || result.file_url || "";
+  if (!fileUrl) return null;
+  return {
+    fileUrl,
+    filename: summary.filename || progress.result_filename || result.filename || "",
+    size: summary.size || progress.result_size || result.size || "",
+    duration: summary.duration_seconds || progress.result_duration_seconds || result.duration_seconds || "",
+    createdAt: summary.created_at || progress.result_created_at || result.created_at || job?.finishedAt || job?.updatedAt || job?.createdAt || "",
+  };
+}
+
 async function getStorageStatus() {
   let response;
   try {
@@ -1046,6 +1077,12 @@ export default function SettingsStatus() {
     const eta = estimateJobEta(job);
     const phaseFallback = activePhaseFallback(job);
     const counts = progressCounts(job);
+    const result = jobResultSummary(job);
+    const resultDetails = [
+      result?.duration ? formatResultDuration(result.duration) : "",
+      result?.size ? formatResultBytes(result.size) : "",
+      result?.createdAt ? `Created ${fmtDateTime(result.createdAt)}` : "",
+    ].filter(Boolean).join(" · ");
     return (
       <article key={job.id} className="overflow-hidden rounded-xl border border-border bg-card p-3 shadow-sm shadow-primary/5 sm:p-3.5">
         <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
@@ -1094,6 +1131,23 @@ export default function SettingsStatus() {
           <div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold text-primary">
             <span className="rounded-full border border-primary/25 bg-primary/10 px-2 py-1">{eta?.label || phaseFallback}</span>
             {eta?.elapsedLabel && <span className="rounded-full border border-border bg-muted/20 px-2 py-1 text-muted-foreground">{eta.elapsedLabel}</span>}
+          </div>
+        )}
+        {result && (
+          <div className="mt-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-semibold text-foreground">Output ready</span>
+              <button
+                type="button"
+                onClick={() => window.open(serverUrl(result.fileUrl), "_blank", "noopener,noreferrer")}
+                className="inline-flex items-center justify-center gap-1.5 rounded-full border border-primary/25 bg-background px-2.5 py-1 text-[11px] font-semibold text-primary hover:bg-primary/10"
+              >
+                <ExternalLink className="h-3 w-3" />
+                Open output
+              </button>
+            </div>
+            {result.filename && <p className="mt-1 truncate font-mono text-[11px]">{result.filename}</p>}
+            {resultDetails && <p className="mt-0.5">{resultDetails}</p>}
           </div>
         )}
         <div className="mt-3 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">

@@ -3,6 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { readWatermarkSettings } from "@/lib/watermarkSettings";
+import { videoPosterDataUrl } from "@/lib/videoPoster";
 import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, RefreshCw, History, Film, Image as ImageIcon, Upload, X, Download, Loader2, Video } from "lucide-react";
 import TTSReader from "../components/TTSReader";
 import AIOutputReader from "../components/AIOutputReader";
@@ -1948,6 +1949,16 @@ function formatFileSize(bytes = 0) {
   if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
   if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${value} B`;
+}
+
+function formatVideoCreatedAt(value) {
+  if (!value) return "";
+  try {
+    return formatGeneratedAt(value);
+  } catch {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "" : date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  }
 }
 
 function seekProfilerVideo(video, time) {
@@ -7215,6 +7226,12 @@ ANNOTATED IMAGE OUTPUT RULES:
   const panelId = config.kind === PELVIC_GENITAL_REVIEW_KIND ? "profiler-pelvic-genital" : "profiler-head-to-toe";
   const videoPanelId = config.kind === PELVIC_GENITAL_REVIEW_KIND ? "profiler-pelvic-genital-video" : "profiler-head-to-toe-video";
   const anatomyVideoBusy = anatomyVideoStatus.type === "starting" || anatomyVideoStatus.type === "working";
+  const anatomyVideoCreatedLabel = formatVideoCreatedAt(anatomyVideo?.created_at || anatomyVideo?.exported_at || anatomyVideo?.finished_at);
+  const anatomyVideoPoster = videoPosterDataUrl({
+    title: `${config.shortTitle} Anatomy Video`,
+    subtitle: anatomyVideoCreatedLabel ? "Generated Sarah review video" : "Tap to play generated Sarah review",
+    timestamp: anatomyVideoCreatedLabel ? `Created ${anatomyVideoCreatedLabel}` : "",
+  });
 
   return (
     <div id={panelId} className="scroll-mt-24">
@@ -7428,8 +7445,15 @@ ANNOTATED IMAGE OUTPUT RULES:
             </div>
             {anatomyVideo?.file_url && (
               <div className="mt-3 overflow-hidden rounded-lg border border-border bg-black">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 text-xs">
+                  <span className="font-semibold text-foreground">Generated video output</span>
+                  <span className="text-muted-foreground">
+                    {anatomyVideoCreatedLabel ? `Created ${anatomyVideoCreatedLabel}` : "Created time unavailable"}
+                  </span>
+                </div>
                 <video
                   src={serverUrl(anatomyVideo.file_url)}
+                  poster={anatomyVideoPoster}
                   controls
                   playsInline
                   preload="metadata"

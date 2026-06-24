@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Clapperboard, Download, Play, UploadCloud, Video } from "lucide-react";
 import { bloodPressureReadingsFromSession, pulseOxReadingsFromSession } from "@/lib/sessionContext";
+import { videoPosterDataUrl } from "@/lib/videoPoster";
 
 const CHUNK_SIZE = 4 * 1024 * 1024;
 
@@ -19,6 +20,13 @@ function fileSha256(file) {
 
 function latestOrNull(rows = []) {
   return Array.isArray(rows) && rows.length ? rows[rows.length - 1] : null;
+}
+
+function formatCreatedAt(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function buildTelemetryPackage(session = {}) {
@@ -51,6 +59,7 @@ export default function MobileSessionVideoRenderPanel({ session }) {
 
   const latestBp = useMemo(() => latestOrNull(bloodPressureReadingsFromSession(session)), [session]);
   const latestSpo2 = useMemo(() => latestOrNull(pulseOxReadingsFromSession(session)), [session]);
+  const renderedCreatedLabel = formatCreatedAt(rendered?.created_at || rendered?.created_date || rendered?.updated_at || rendered?.updated_date);
 
   useEffect(() => {
     let cancelled = false;
@@ -201,6 +210,9 @@ export default function MobileSessionVideoRenderPanel({ session }) {
               <div>
                 <p className="text-sm font-semibold">Rendered MP4 ready</p>
                 <p className="text-xs text-muted-foreground">{rendered.filename}</p>
+                <p className="text-xs text-muted-foreground">
+                  {renderedCreatedLabel ? `Created ${renderedCreatedLabel}` : "Created time unavailable"}
+                </p>
               </div>
               <div className="flex gap-2">
                 <Button asChild size="sm" variant="secondary">
@@ -217,7 +229,16 @@ export default function MobileSessionVideoRenderPanel({ session }) {
                 </Button>
               </div>
             </div>
-            <video className="max-h-80 w-full rounded-md bg-black" controls src={base44.integrations.Core.renderedSessionVideoStreamUrl(rendered.id)} />
+            <video
+              className="max-h-80 w-full rounded-md bg-black"
+              controls
+              poster={videoPosterDataUrl({
+                title: "Rendered session video",
+                subtitle: rendered.filename || "Sarah MP4 output",
+                timestamp: renderedCreatedLabel ? `Created ${renderedCreatedLabel}` : "",
+              })}
+              src={base44.integrations.Core.renderedSessionVideoStreamUrl(rendered.id)}
+            />
           </div>
         )}
 

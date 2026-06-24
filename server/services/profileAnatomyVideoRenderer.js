@@ -2050,6 +2050,7 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
       filename,
       size: stat.size,
       duration_seconds: durationSeconds,
+      created_at: new Date().toISOString(),
       watermark: watermarkDebug,
       watermark_enabled: Boolean(watermarkDebug?.watermark_enabled),
       watermark_preset: watermarkDebug?.preset || watermark.preset,

@@ -112,6 +112,7 @@ function publicJob(job, { includeResult = true } = {}) {
   const { payload: _payload, abortController: _abortController, ...rest } = safeJob;
   if (!includeResult) {
     const { result: _result, ...summary } = rest;
+    const resultSummary = summarizeJobResult(rest.result);
     const progress = summary.progress ? { ...summary.progress } : summary.progress;
     if (progress && Array.isArray(progress.completed_batch_results)) {
       progress.completed_batch_results = undefined;
@@ -126,6 +127,7 @@ function publicJob(job, { includeResult = true } = {}) {
       ...summary,
       meta,
       progress,
+      result_summary: resultSummary,
       hasResult: rest.result != null || Boolean(summary.hasResult),
       hasPayload,
       retryable: Boolean(meta?.retryable || progress?.retryable) && hasPayload,
@@ -136,6 +138,33 @@ function publicJob(job, { includeResult = true } = {}) {
     hasPayload,
     retryable: Boolean(rest.meta?.retryable || rest.progress?.retryable) && hasPayload,
   };
+}
+
+function summarizeJobResult(result) {
+  if (!result || typeof result !== 'object') return null;
+  const record = result.record && typeof result.record === 'object' ? result.record : {};
+  const candidate = {
+    file_url: result.file_url || result.url || result.audio_file_url || record.file_url || record.url || null,
+    stream_url: result.stream_url || record.stream_url || null,
+    download_url: result.download_url || record.download_url || null,
+    manifest_url: result.manifest_url || record.manifest_url || null,
+    filename: result.filename || record.filename || null,
+    size: result.size || result.size_bytes || record.size || record.size_bytes || null,
+    duration_seconds: result.duration_seconds || record.duration_seconds || null,
+    created_at: result.created_at || result.exported_at || result.finished_at || record.created_at || record.exported_at || record.finished_at || null,
+    mime_type: result.mime_type || result.content_type || record.mime_type || record.content_type || null,
+    render_version: result.render_version || record.render_version || null,
+    watermark_enabled: result.watermark_enabled ?? record.watermark_enabled ?? null,
+    audio_reused: result.audio_reused ?? record.audio_reused ?? null,
+  };
+  const summary = Object.fromEntries(
+    Object.entries(candidate).filter(([, value]) => value !== undefined && value !== null && value !== '')
+  );
+  if (!Object.keys(summary).length) return null;
+  const url = String(summary.file_url || summary.download_url || summary.stream_url || '');
+  if (!summary.mime_type && /\.mp4(?:$|[?#])/i.test(url)) summary.mime_type = 'video/mp4';
+  if (!summary.mime_type && /\.(?:mp3|wav|m4a|aac)(?:$|[?#])/i.test(url)) summary.mime_type = 'audio/*';
+  return summary;
 }
 
 function shouldRetainPayloadForRetry(error) {
@@ -304,6 +333,7 @@ function runNext() {
           existingProgress.phase === 'complete' &&
           existingProgress.message;
         const finalResult = persistTtsAudioExport(job, result);
+        const resultSummary = summarizeJobResult(finalResult);
         patchJob(job, {
           status: 'complete',
           result: finalResult,
@@ -315,6 +345,11 @@ function runNext() {
           phase: 'complete',
           ...(total > 0 ? { current: total, total } : {}),
           message: keepCompletionMessage || 'Complete',
+          ...(resultSummary?.file_url ? { file_url: resultSummary.file_url, result_file_url: resultSummary.file_url } : {}),
+          ...(resultSummary?.filename ? { filename: resultSummary.filename, result_filename: resultSummary.filename } : {}),
+          ...(resultSummary?.duration_seconds ? { result_duration_seconds: resultSummary.duration_seconds } : {}),
+          ...(resultSummary?.size ? { result_size: resultSummary.size } : {}),
+          ...(resultSummary?.created_at ? { result_created_at: resultSummary.created_at } : {}),
         });
       })
       .catch((error) => {

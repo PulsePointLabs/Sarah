@@ -1,6 +1,7 @@
 import { splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 import TTSReader from "./TTSReader";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { videoPosterDataUrl } from "@/lib/videoPoster";
 
 export function renderSentenceHighlightedText(text, activeSentenceIdx = -1, onSentenceClick) {
   const sentences = splitSentencesPreservingDecimals(text);
@@ -64,6 +65,10 @@ function fmtMmSs(totalSeconds) {
 function InlineClipCard({ clip }) {
   if (!clip?.url && !clip?.clip_url && !clip?.file_url) return null;
   const src = serverUrl(clip.url || clip.clip_url || clip.file_url);
+  const timestamp = [
+    clip.session_time_s != null ? fmtMmSs(clip.session_time_s) : "",
+    clip.startSeconds != null && clip.endSeconds != null ? `clip ${fmtMmSs(clip.startSeconds)}-${fmtMmSs(clip.endSeconds)}` : "",
+  ].filter(Boolean).join(" · ");
   return (
     <div
       className="mt-2 overflow-hidden rounded-lg border border-primary/20 bg-background/80"
@@ -80,6 +85,11 @@ function InlineClipCard({ clip }) {
       </div>
       <video
         src={src}
+        poster={videoPosterDataUrl({
+          title: clip.label || "Key video moment",
+          subtitle: "Sarah session evidence clip",
+          timestamp,
+        })}
         controls
         preload="metadata"
         className="block w-full bg-black"

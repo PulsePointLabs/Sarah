@@ -5,6 +5,7 @@ import { cancelBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { stabilizeBackgroundJobEta } from "@/lib/backgroundJobEta";
 import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
 import { friendlyJobStatusMessage } from "@/lib/jobErrorMessages";
+import { serverUrl } from "@/lib/mobileApiBase";
 import {
   areBackgroundNotificationsEnabled,
   getNotificationPermission,
@@ -54,6 +55,52 @@ function fmtTime(value) {
   } catch {
     return "";
   }
+}
+
+function fmtDateTime(value) {
+  if (!value) return "";
+  try {
+    return new Date(value).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  } catch {
+    return "";
+  }
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / 1024 / 1024)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+function formatDuration(value) {
+  const seconds = Math.round(Number(value || 0));
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return minutes ? `${minutes}:${String(rest).padStart(2, "0")}` : `0:${String(rest).padStart(2, "0")}`;
+}
+
+function jobResultSummary(job) {
+  const summary = job?.result_summary || {};
+  const progress = job?.progress || {};
+  const result = job?.result || {};
+  const fileUrl = summary.file_url || summary.download_url || summary.stream_url || progress.result_file_url || result.file_url || "";
+  if (!fileUrl) return null;
+  return {
+    fileUrl,
+    filename: summary.filename || progress.result_filename || result.filename || "",
+    size: summary.size || progress.result_size || result.size || "",
+    duration: summary.duration_seconds || progress.result_duration_seconds || result.duration_seconds || "",
+    createdAt: summary.created_at || progress.result_created_at || result.created_at || job?.finishedAt || job?.updatedAt || job?.createdAt || "",
+    mimeType: summary.mime_type || result.mime_type || "",
+  };
+}
+
+function openResultFile(result) {
+  if (!result?.fileUrl) return;
+  window.open(serverUrl(result.fileUrl), "_blank", "noopener,noreferrer");
 }
 
 function formatJobSourceDate(value) {
@@ -285,7 +332,7 @@ export default function BackgroundJobStatusTray() {
       try {
         const [active, recent] = await Promise.all([
           listBackgroundJobs({ status: "queued,running", limit: 8 }),
-          listBackgroundJobs({ status: "complete,error,cancelled", limit: 4 }),
+          listBackgroundJobs({ status: "complete,error,cancelled", limit: 12 }),
         ]);
         if (cancelled) return;
         const merged = new Map();
@@ -351,8 +398,11 @@ export default function BackgroundJobStatusTray() {
   const activeCount = visibleJobs.filter((job) => ["queued", "running"].includes(job.status)).length;
   const completedJobs = visibleJobs.filter((job) => job.status === "complete");
   const jobsToRender = activeCount > 0
-    ? visibleJobs.filter((job) => ["queued", "running", "error", "cancelled"].includes(job.status)).slice(0, 4)
-    : visibleJobs.slice(0, 4);
+    ? [
+      ...visibleJobs.filter((job) => ["queued", "running", "error", "cancelled"].includes(job.status)).slice(0, 4),
+      ...completedJobs.filter((job) => jobResultSummary(job)).slice(0, 3),
+    ].filter((job, index, list) => list.findIndex((item) => item.id === job.id) === index)
+    : visibleJobs.slice(0, 6);
   const primaryActiveJob = visibleJobs.find((job) => ["queued", "running"].includes(job.status));
   const primaryEta = stabilizeBackgroundJobEta(primaryActiveJob, etaCacheRef.current);
   const primaryPhaseFallback = activePhaseFallback(primaryActiveJob);
@@ -567,7 +617,7 @@ export default function BackgroundJobStatusTray() {
             )}
             {activeCount > 0 && completedJobs.length > 0 && (
               <p className="rounded-lg border border-border bg-muted/20 px-2.5 py-2 text-[10px] leading-relaxed text-muted-foreground">
-                {completedJobs.length} completed result{completedJobs.length === 1 ? "" : "s"} hidden while active work is running.
+                {completedJobs.length} completed result{completedJobs.length === 1 ? "" : "s"} available. Outputs stay visible below active work.
               </p>
             )}
             {jobsToRender.map((job) => {
@@ -581,6 +631,12 @@ export default function BackgroundJobStatusTray() {
               const eta = stabilizeBackgroundJobEta(job, etaCacheRef.current);
               const phaseFallback = activePhaseFallback(job);
               const counts = progressCounts(job);
+              const result = jobResultSummary(job);
+              const resultDetails = [
+                result?.duration ? formatDuration(result.duration) : "",
+                result?.size ? formatBytes(result.size) : "",
+                result?.createdAt ? `Created ${fmtDateTime(result.createdAt)}` : "",
+              ].filter(Boolean).join(" · ");
               return (
                 <div
                   key={job.id}
@@ -631,6 +687,26 @@ export default function BackgroundJobStatusTray() {
                     {counts && <span className="shrink-0 font-mono">{counts}</span>}
                     <span>{fmtTime(job.updatedAt || job.finishedAt || job.createdAt)}</span>
                   </div>
+                  {result && (
+                    <div className="mt-2 rounded-md border border-current/20 bg-black/10 px-2 py-1.5 text-[10px] leading-relaxed opacity-95">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold">Output ready</span>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openResultFile(result);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-full border border-current/25 px-2 py-0.5 font-semibold hover:opacity-100"
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                          Open output
+                        </button>
+                      </div>
+                      {result.filename && <p className="mt-1 truncate font-mono opacity-80">{result.filename}</p>}
+                      {resultDetails && <p className="mt-0.5 opacity-80">{resultDetails}</p>}
+                    </div>
+                  )}
                   {active && (eta || phaseFallback) && (
                     <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] font-semibold opacity-85">
                       <span className="rounded-full border border-current/20 px-2 py-0.5">{eta?.label || phaseFallback}</span>

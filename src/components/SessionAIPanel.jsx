@@ -10,6 +10,7 @@ import { buildAudioChapterBundle } from "@/lib/audioChapters";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { readWatermarkSettings } from "@/lib/watermarkSettings";
+import { videoPosterDataUrl } from "@/lib/videoPoster";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from "@/lib/sessionContext";
 import { buildSessionKeyVideoClipDigest, buildSessionPhaseMarkerDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, normalizeSessionKeyVideoClips, normalizeSessionVideoPassFindings, sessionEventsForCurrentPhaseMarkers } from "@/lib/visualEvidence";
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
@@ -97,6 +98,16 @@ function formatReviewSessionDate(value) {
     day: "numeric",
     year: "numeric",
   });
+}
+
+function formatVideoCreatedAt(value) {
+  if (!value) return "";
+  try {
+    return formatGeneratedAt(value);
+  } catch {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "" : date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  }
 }
 
 export function reviewVideoTitleWithDate(title = "Session Review Video", session = {}) {
@@ -548,6 +559,12 @@ export function SessionReviewVideoExportButton({
       activeVideo.watermark_enabled ? "wm" : "nowm",
     ].filter(Boolean).join("-"))
     : "";
+  const activeVideoCreatedLabel = formatVideoCreatedAt(activeVideo?.created_at || activeVideo?.exported_at || activeVideo?.source_generated_at);
+  const activeVideoPoster = videoPosterDataUrl({
+    title: displayTitle,
+    subtitle: "Sarah review video",
+    timestamp: activeVideoCreatedLabel ? `Created ${activeVideoCreatedLabel}` : "",
+  });
   const chatStorageKey = session?.id
     ? [
       "pulsepoint",
@@ -1060,9 +1077,16 @@ Answer directly and practically in conversational prose, not markdown. Describe 
       </div>
       {activeVideoUrl && (
         <div className="relative max-w-full overflow-hidden rounded-lg border border-border bg-black">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 text-xs">
+            <span className="font-semibold text-foreground">Review video</span>
+            <span className="text-muted-foreground">
+              {activeVideoCreatedLabel ? `Created ${activeVideoCreatedLabel}` : "Created time unavailable"}
+            </span>
+          </div>
           <video
             key={activeVideoUrl}
             src={activeVideoUrl}
+            poster={activeVideoPoster}
             controls
             preload="metadata"
             playsInline
