@@ -1536,12 +1536,14 @@ function ProfilerPanelLoadingStatus({ items = [] }) {
 function ProfileImageReviewInlineStatus({ items = [], color = "hsl(var(--primary))" }) {
   const visibleItems = items.filter((item) => item && item.active);
   if (!visibleItems.length) return null;
+  const primary = visibleItems[0];
+  const secondaryCount = Math.max(0, visibleItems.length - 1);
   return (
     <div className="rounded-xl border border-border bg-card/70 px-3 py-3 text-xs shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="flex items-center gap-2 font-semibold text-foreground">
           <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: color }} />
-          {visibleItems[0]?.headline || "Profiler status"}
+          {primary?.headline || "Profiler status"}
         </p>
         {visibleItems.some((item) => item.loading) && (
           <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2 py-1 font-mono text-[10px] uppercase text-muted-foreground">
@@ -1550,13 +1552,14 @@ function ProfileImageReviewInlineStatus({ items = [], color = "hsl(var(--primary
           </span>
         )}
       </div>
-      <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
-        {visibleItems.map((item) => (
-          <div key={item.label} className="rounded-lg border border-border bg-background/70 px-2.5 py-2">
-            <p className="font-semibold text-foreground">{item.label}</p>
-            {item.detail && <p className="mt-0.5 leading-relaxed text-muted-foreground">{item.detail}</p>}
-          </div>
-        ))}
+      <div className="mt-2 rounded-lg border border-border bg-background/70 px-2.5 py-2">
+        <p className="font-semibold text-foreground">{primary.label}</p>
+        {primary.detail && <p className="mt-0.5 leading-relaxed text-muted-foreground">{primary.detail}</p>}
+        {secondaryCount > 0 && (
+          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+            {secondaryCount} other background check{secondaryCount === 1 ? "" : "s"} also active.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -5858,17 +5861,18 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
   const analyze = async () => {
     setLoading(true);
     setViewingArchiveRunId("");
+    setError("");
+    setAvailableCompletedReviewJob(null);
     setLatestAttemptStatus(null);
     setJobStatus({
       status: "starting",
       progress: {
-        phase: "building",
+        phase: "preparing",
         current: 0,
         total: 3,
-        message: `Preparing ${config.shortTitle} review for the background queue...`,
+        message: `Preparing ${config.shortTitle} review locally. Keep this screen open until Sarah says it is queued on the desktop backend.`,
       },
     });
-    setError("");
     let batchParsedResults = [];
     let activeBatchSet = null;
     try {
@@ -6139,7 +6143,7 @@ Batch review JSON:`,
             phase: "queued",
             current: 0,
             total: imageBatches.length + 1,
-            message: `Queued full ${config.shortTitle} review as one priority backend job. You can leave this page; reopen later to recover the completed output.`,
+            message: `${config.shortTitle} review is queued on the desktop backend. You can leave this page; Sarah will keep running it.`,
           },
         });
         setLoading(false);
@@ -6151,7 +6155,7 @@ Batch review JSON:`,
             phase: "batching",
             current: 0,
             total: imageBatches.length + 1,
-            message: `Queueing ${imagePayload.length} images in ${imageBatches.length} server-side batches. Keep the app open until all batches are queued; after that the desktop backend can continue the work.`,
+            message: `Queueing ${imagePayload.length} images in ${imageBatches.length} server-side batches. Keep this screen open until Sarah says the backend has the job.`,
           },
         });
 
@@ -6232,7 +6236,7 @@ ANNOTATED IMAGE OUTPUT RULES:
               phase: "batch_queued",
               current: batchIndex + 1,
               total: imageBatches.length,
-              message: `Queued ${batchIndex + 1}/${imageBatches.length} ${config.shortTitle} image batches. Server jobs can continue if Android backgrounds the app.`,
+              message: `Queued ${batchIndex + 1}/${imageBatches.length} ${config.shortTitle} image batches on the desktop backend.`,
             },
           });
         }
@@ -6477,7 +6481,7 @@ ANNOTATED IMAGE OUTPUT RULES:
             phase: "queued",
             current: 0,
             total: 1,
-            message: `Queued full ${config.shortTitle} review as one priority backend job. You can leave this page; reopen later to recover the completed output.`,
+            message: `${config.shortTitle} review is queued on the desktop backend. You can leave this page; Sarah will keep running it.`,
           },
         });
         setLoading(false);
@@ -6818,6 +6822,9 @@ ANNOTATED IMAGE OUTPUT RULES:
   const videoSaveErrorCount = videos.filter((video) => video.upload_status === "error").length;
   const savingImageCount = images.filter((image) => image.upload_status === "saving").length;
   const savingVideoCount = videos.filter((video) => video.upload_status === "saving").length;
+  const reviewPhase = String(jobStatus?.progress?.phase || "");
+  const reviewIsPreparingLocally = loading && (jobStatus?.status === "starting" || reviewPhase === "preparing" || reviewPhase === "building");
+  const reviewIsBackendQueued = activeReviewJob && !reviewIsPreparingLocally;
   const reviewCardStatusItems = [
     {
       active: profileLoading,
@@ -6850,9 +6857,17 @@ ANNOTATED IMAGE OUTPUT RULES:
     {
       active: loading || activeReviewJob,
       loading: true,
-      headline: `${config.shortTitle} review is running`,
-      label: jobStatus?.progress?.phase ? `Review phase: ${jobStatus.progress.phase}` : "Background review",
-      detail: jobStatus?.progress?.message || "Sarah is working through the background queue. You can leave this page while it finishes.",
+      headline: reviewIsPreparingLocally
+        ? `Preparing ${config.shortTitle} review`
+        : reviewIsBackendQueued
+          ? `${config.shortTitle} review is queued`
+          : `${config.shortTitle} review is running`,
+      label: reviewIsPreparingLocally
+        ? "Keep this screen open"
+        : "Safe to leave this page",
+      detail: jobStatus?.progress?.message || (reviewIsPreparingLocally
+        ? "Sarah is packaging the request locally. Backgrounding too early can prevent the job from being created."
+        : "The desktop backend has the job. Sarah will keep working even if the phone app backgrounds."),
     },
     {
       active: Boolean(availableCompletedReviewJob),
@@ -7529,33 +7544,7 @@ ANNOTATED IMAGE OUTPUT RULES:
           </div>
         )}
 
-        <CompactError message={error} />
-
-        {(loading || activeReviewJob) && (
-          <ProfilerJobStatus
-            job={jobStatus}
-            fallback={`${config.shortTitle} review is running in the background queue...`}
-          />
-        )}
-
-        {freshReviewPending && (
-          <div className="rounded-xl border border-primary/25 bg-card px-4 py-5 text-sm shadow-sm">
-            <div className="flex items-start gap-3">
-              <span className="mt-1 h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-foreground">Fresh {config.shortTitle} review is still loading.</p>
-                <p className="mt-1 leading-relaxed text-muted-foreground">
-                  Sarah is building the updated view now. The previous cached review is hidden so it does not look like the new result.
-                </p>
-                {jobStatus?.progress?.message && (
-                  <p className="mt-3 rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-xs leading-relaxed text-foreground">
-                    {jobStatus.progress.message}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
+        <CompactError message={(loading || activeReviewJob || freshReviewPending) ? "" : error} />
 
         {result && !freshReviewPending && (
           <div className="mx-auto w-full max-w-6xl">
