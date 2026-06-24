@@ -4227,9 +4227,24 @@ function inlineEvidenceImageScore(result, imageId, sectionKey, findingsForImage 
   return score;
 }
 
-function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transientImages = [], pelvicScoped = false) {
+function priorInlineEvidenceImageUseCounts(result, sectionKey, sections = []) {
+  const counts = new Map();
+  const sectionKeys = Array.isArray(sections) ? sections.map((section) => section?.key).filter(Boolean) : [];
+  const currentIndex = sectionKeys.indexOf(sectionKey);
+  if (currentIndex <= 0) return counts;
+  const priorKeys = new Set(sectionKeys.slice(0, currentIndex));
+  const allFindings = Array.isArray(result?.image_region_findings) ? result.image_region_findings : [];
+  for (const finding of allFindings) {
+    if (!finding?.image_id || !priorKeys.has(finding.section_key)) continue;
+    counts.set(finding.image_id, (counts.get(finding.image_id) || 0) + 1);
+  }
+  return counts;
+}
+
+function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transientImages = [], pelvicScoped = false, sections = []) {
   const reviewed = Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images : [];
   const annotated = Array.isArray(result?.annotated_images) ? result.annotated_images : [];
+  const priorUseCounts = priorInlineEvidenceImageUseCounts(result, sectionKey, sections);
   const candidates = [
     ...findings.map((finding) => finding.image_id),
     ...reviewed.map((image) => image.image_id),
@@ -4240,14 +4255,19 @@ function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transie
   const scored = uniqueIds
     .map((imageId) => {
       const imageFindings = findings.filter((finding) => finding.image_id === imageId);
+      const score = inlineEvidenceImageScore(result, imageId, sectionKey, imageFindings, transientImages, pelvicScoped);
+      const priorUseCount = priorUseCounts.get(imageId) || 0;
       return {
         imageId,
-        score: inlineEvidenceImageScore(result, imageId, sectionKey, imageFindings, transientImages, pelvicScoped),
+        score,
+        adjustedScore: score - priorUseCount * 120,
         hasFinding: imageFindings.length > 0,
+        priorUseCount,
       };
     })
     .filter((item) => item.score > -10000)
     .sort((a, b) => {
+      if (b.adjustedScore !== a.adjustedScore) return b.adjustedScore - a.adjustedScore;
       if (b.score !== a.score) return b.score - a.score;
       return Number(b.hasFinding) - Number(a.hasFinding);
     });
@@ -4255,7 +4275,13 @@ function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transie
   const bestWithFindings = withFindings.filter((item) => item.score > 0).slice(0, 2);
   const fallbackWithFindings = withFindings.slice(0, 2);
   const best = scored.filter((item) => item.score > 0).slice(0, 2);
-  return (bestWithFindings.length ? bestWithFindings : fallbackWithFindings.length ? fallbackWithFindings : best).map((item) => item.imageId);
+  const selected = bestWithFindings.length ? bestWithFindings : fallbackWithFindings.length ? fallbackWithFindings : best;
+  const selectedIds = new Set(selected.map((item) => item.imageId));
+  if (selected.length === 1 && selected[0].priorUseCount > 0) {
+    const alternate = best.find((item) => !selectedIds.has(item.imageId));
+    if (alternate) selected.push(alternate);
+  }
+  return selected.map((item) => item.imageId);
 }
 
 function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(var(--primary))", transientImages = [], onOpenImage = null, onCorrectFinding = null, onRemoveFinding = null }) {
@@ -4265,7 +4291,7 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
     : [];
   if (!findings.length) return null;
 
-  const imageIds = selectInlineEvidenceImageIds(result, sectionKey, findings, transientImages, pelvicScoped);
+  const imageIds = selectInlineEvidenceImageIds(result, sectionKey, findings, transientImages, pelvicScoped, sections);
   if (!imageIds.length) return null;
   const sectionLabel = sectionLabelForKey(sections, sectionKey);
 

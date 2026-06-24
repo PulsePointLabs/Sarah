@@ -890,6 +890,7 @@ export function createReviewEvidenceManifest({
   reviewScope = 'head_to_toe',
 } = {}) {
   const sections = groupParagraphsIntoManifestSections(paragraphs, paragraphMeta, reviewScope);
+  const evidenceUseCounts = new Map();
   const manifestSections = sections.map((section) => {
     const meta = {
       section_key: section.section_key,
@@ -915,7 +916,17 @@ export function createReviewEvidenceManifest({
       }))
       .filter((entry) => entry.image && entry.candidate.score > 0)
       .filter((entry) => isImageAllowedForManifestSection(entry.image, section.target_region, reviewScope, meta, section.narration_text))
-      .sort((a, b) => b.candidate.score - a.candidate.score);
+      .map((entry) => {
+        const imageId = entry.image?.id || entry.candidate?.id || '';
+        const useCount = imageId ? (evidenceUseCounts.get(imageId) || 0) : 0;
+        const repeatPenalty = useCount * (reviewScope === 'pelvic_genital' ? 135 : 105);
+        return {
+          ...entry,
+          adjustedScore: entry.candidate.score - repeatPenalty,
+          repeatPenalty,
+        };
+      })
+      .sort((a, b) => b.adjustedScore - a.adjustedScore || b.candidate.score - a.candidate.score);
     const selected = ranked[0] || null;
     const directReason = selected
       ? `Selected explicit compatible evidence for ${REGION_LABELS.get(section.target_region) || section.target_region}.`
@@ -923,6 +934,9 @@ export function createReviewEvidenceManifest({
     const assignment = selected
       ? assignmentMetadataForImage(selected.image, selected.candidate.score, directReason)
       : null;
+    if (assignment?.evidence_id) {
+      evidenceUseCounts.set(assignment.evidence_id, (evidenceUseCounts.get(assignment.evidence_id) || 0) + 1);
+    }
     return {
       ...section,
       explicitly_assigned_evidence_ids: assignment?.evidence_id ? [assignment.evidence_id] : [],
@@ -1718,8 +1732,8 @@ function buildNarrationVisualTimeline({ paragraphs = [], paragraphMeta = [], ima
       .map((entry) => {
         const imageId = entry.image?.id || entry.candidate?.id || '';
         const recentIndex = imageId ? recentImageIds.indexOf(imageId) : -1;
-        const recentPenalty = recentIndex >= 0 ? Math.max(36, 92 - recentIndex * 18) : 0;
-        const usagePenalty = imageId ? (imageUseCounts.get(imageId) || 0) * 42 : 0;
+        const recentPenalty = recentIndex >= 0 ? Math.max(70, 180 - recentIndex * 24) : 0;
+        const usagePenalty = imageId ? (imageUseCounts.get(imageId) || 0) * (reviewScope === 'pelvic_genital' ? 135 : 105) : 0;
         const repeatPenalty = recentPenalty + usagePenalty;
         return {
           ...entry,
