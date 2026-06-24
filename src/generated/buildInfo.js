@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
   "version": "0.1.17",
-  "commit": "28c5e59",
-  "commitMessage": "Persist and rearm OMRON blood pressure listener",
-  "builtAt": "2026-06-24T08:03:18.390Z"
+  "commit": "9d287d9",
+  "commitMessage": "Improve mobile job feedback and media downloads",
+  "builtAt": "2026-06-24T18:51:24.428Z"
 };
