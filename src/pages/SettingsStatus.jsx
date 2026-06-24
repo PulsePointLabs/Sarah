@@ -33,6 +33,7 @@ import {
   getSarahImageOption,
   getSarahImageOptions,
   addSarahImageOption,
+  cacheSarahImageDataUrl,
   resolveSarahImageSrc,
   removeSarahImageOption,
   readSarahBrandSettings,
@@ -109,6 +110,56 @@ async function getStorageStatus() {
   }
   if (!response.ok) throw new Error(`Storage status failed: ${response.status}`);
   return response.json();
+}
+
+async function imageBlobToSarahCacheDataUrl(blob) {
+  if (typeof window === "undefined" || !blob) return "";
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const image = new window.Image();
+    image.decoding = "async";
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = reject;
+      image.src = objectUrl;
+    });
+    const sourceWidth = image.naturalWidth || image.width || 1;
+    const sourceHeight = image.naturalHeight || image.height || 1;
+    const maxSide = 720;
+    const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return "";
+    ctx.drawImage(image, 0, 0, width, height);
+    return canvas.toDataURL("image/jpeg", 0.86);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function cacheSarahImageBlob(imageId, blob) {
+  try {
+    const dataUrl = await imageBlobToSarahCacheDataUrl(blob);
+    return cacheSarahImageDataUrl(imageId, dataUrl);
+  } catch {
+    return false;
+  }
+}
+
+async function cacheSarahImageFromUrl(imageId, src) {
+  try {
+    const resolved = resolveSarahImageSrc(src, imageId);
+    if (!resolved || resolved.startsWith("data:image/")) return false;
+    const response = await fetch(resolved, { cache: "no-store" });
+    if (!response.ok) return false;
+    return cacheSarahImageBlob(imageId, await response.blob());
+  } catch {
+    return false;
+  }
 }
 
 const WATERMARK_POSITION_OPTIONS = [
@@ -772,13 +823,15 @@ export default function SettingsStatus() {
     }
     setSarahUploadStatus("Uploading Sarah portrait...");
     try {
+      const imageId = `uploaded-${Date.now()}`;
+      await cacheSarahImageBlob(imageId, file);
       const body = new FormData();
       body.append("file", file);
       const response = await fetch(apiUrl("/files/upload"), { method: "POST", body });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "Portrait upload failed.");
       const option = addSarahImageOption({
-        id: `uploaded-${Date.now()}`,
+        id: imageId,
         label: file.name ? `Uploaded: ${file.name.replace(/\.[^.]+$/, "")}` : "Uploaded Sarah",
         helper: "Uploaded local portrait.",
         src: payload.file_url || payload.url,
@@ -803,13 +856,15 @@ export default function SettingsStatus() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "Sarah portrait generation failed.");
+      const imageId = payload.id || `generated-${Date.now()}`;
       const option = addSarahImageOption({
-        id: payload.id || `generated-${Date.now()}`,
+        id: imageId,
         label: payload.label || "Generated Sarah",
         helper: payload.helper || "Generated with OpenAI.",
         src: payload.url,
         source: "openai",
       });
+      if (option) await cacheSarahImageFromUrl(option.id, option.src);
       if (option) updateSarahBrand(option.id);
       refreshSarahBrandOptions();
       setSarahGenerateStatus({ type: "ok", message: "Generated and selected." });
@@ -1388,7 +1443,7 @@ export default function SettingsStatus() {
               >
                 <div className="aspect-[16/9] overflow-hidden bg-muted">
                   <img
-                    src={resolveSarahImageSrc(option.src)}
+                    src={resolveSarahImageSrc(option.src, option.id)}
                     alt={option.label}
                     className="h-full w-full object-cover"
                     style={{ objectPosition: option.position }}

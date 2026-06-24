@@ -52,8 +52,8 @@ export const AuthProvider = ({ children }) => {
         message: error.message || 'An unexpected error occurred'
       });
       setBootStatus({
-        message: 'Could not reach Sarah server',
-        detail: error.message || 'Check Wi-Fi, VPN, and whether the desktop server is running.',
+        message: 'Phone cannot reach desktop Sarah',
+        detail: error.message || 'Internet can still work while this local desktop API path is unavailable. Check Wi-Fi/Tailscale and whether the desktop Sarah app is running.',
       });
       setIsLoadingPublicSettings(false);
       setIsLoadingAuth(false);

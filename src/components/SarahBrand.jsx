@@ -42,16 +42,28 @@ export function SarahPortrait({
   label = "Sarah",
 }) {
   const { image } = useSarahBrand();
+  const resolvedSrc = resolveSarahImageSrc(image.src, image.id);
+  const fallbackSrc = "/brand/sarah-lab.jpg";
   return (
-    <div className={`overflow-hidden bg-muted ${className}`}>
+    <div
+      className={`overflow-hidden bg-muted ${className}`}
+      style={{
+        backgroundImage: `url(${fallbackSrc})`,
+        backgroundSize: "cover",
+        backgroundPosition: image.position || "50% 42%",
+      }}
+    >
       <img
-        src={resolveSarahImageSrc(image.src)}
+        src={resolvedSrc || fallbackSrc}
         alt={label}
         className={`h-full w-full object-cover ${imageClassName}`}
         style={{ objectPosition: image.position }}
+        loading="eager"
+        decoding="sync"
+        fetchPriority="high"
         onError={(event) => {
           event.currentTarget.onerror = null;
-          event.currentTarget.src = "/brand/sarah-lab.jpg";
+          event.currentTarget.src = fallbackSrc;
         }}
         draggable="false"
       />
