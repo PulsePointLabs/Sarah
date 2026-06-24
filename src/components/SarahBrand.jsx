@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   getSarahImageOption,
+  getCachedSarahImageSrc,
   readSarahBrandSettings,
   resolveSarahImageSrc,
   SARAH_BRAND_EVENT,
@@ -40,15 +41,17 @@ export function SarahPortrait({
   className = "",
   imageClassName = "",
   label = "Sarah",
+  preferCached = false,
 }) {
   const { image } = useSarahBrand();
-  const resolvedSrc = resolveSarahImageSrc(image.src, image.id);
+  const cachedSrc = getCachedSarahImageSrc(image.id);
+  const resolvedSrc = preferCached && cachedSrc ? cachedSrc : resolveSarahImageSrc(image.src, image.id);
   const fallbackSrc = "/brand/sarah-lab.jpg";
   return (
     <div
       className={`overflow-hidden bg-muted ${className}`}
       style={{
-        backgroundImage: `url(${fallbackSrc})`,
+        backgroundImage: `url(${resolvedSrc || fallbackSrc})`,
         backgroundSize: "cover",
         backgroundPosition: image.position || "50% 42%",
       }}
@@ -89,7 +92,11 @@ export function SarahSplash({
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-background px-5 text-foreground">
       <div className="flex w-full max-w-sm flex-col items-center text-center">
-        <SarahPortrait className="h-36 w-36 rounded-[2rem] shadow-2xl shadow-primary/20 ring-1 ring-border" />
+        <SarahPortrait
+          className="h-36 w-36 rounded-[2rem] shadow-2xl shadow-primary/20 ring-1 ring-border"
+          preferCached
+          label="Sarah splash portrait"
+        />
         <div className="mt-5 flex items-center gap-2">
           <SarahLogoMark className="h-9 w-9" />
           <h1 className="text-3xl font-black tracking-tight">Sarah</h1>

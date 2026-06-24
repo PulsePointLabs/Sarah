@@ -34,6 +34,7 @@ import {
   getSarahImageOptions,
   addSarahImageOption,
   cacheSarahImageDataUrl,
+  getCachedSarahImageSrc,
   resolveSarahImageSrc,
   removeSarahImageOption,
   readSarahBrandSettings,
@@ -811,6 +812,10 @@ export default function SettingsStatus() {
 
   const updateSarahBrand = (imageId) => {
     setSarahBrand(saveSarahBrandSettings({ imageId }));
+    const option = getSarahImageOption(imageId);
+    if (option?.custom && !getCachedSarahImageSrc(option.id)) {
+      cacheSarahImageFromUrl(option.id, option.src).finally(refreshSarahBrandOptions);
+    }
   };
 
   const uploadSarahPortrait = async (event) => {
