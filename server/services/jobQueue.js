@@ -577,7 +577,24 @@ export function listJobs({ type, status, limit = 20, meta = {}, includeCleared =
   const queryLimit = Math.max(50, Math.min(500, Number(limit || 20) * 4));
 
   for (const job of listProcessingJobSummaries({ type, statuses, meta, includeCleared, limit: queryLimit })) {
-    const pub = publicJob(job, { includeResult: false });
+    let pub = publicJob(job, { includeResult: false });
+    if (pub?.hasResult && !pub.result_summary && pub.id) {
+      const hydrated = publicJob(getEntity('ProcessingJob', pub.id), { includeResult: false });
+      if (hydrated?.result_summary) {
+        pub = {
+          ...pub,
+          result_summary: hydrated.result_summary,
+          progress: {
+            ...(pub.progress || {}),
+            ...(hydrated.progress?.result_file_url ? { result_file_url: hydrated.progress.result_file_url } : {}),
+            ...(hydrated.progress?.result_filename ? { result_filename: hydrated.progress.result_filename } : {}),
+            ...(hydrated.progress?.result_duration_seconds ? { result_duration_seconds: hydrated.progress.result_duration_seconds } : {}),
+            ...(hydrated.progress?.result_size ? { result_size: hydrated.progress.result_size } : {}),
+            ...(hydrated.progress?.result_created_at ? { result_created_at: hydrated.progress.result_created_at } : {}),
+          },
+        };
+      }
+    }
     if (pub?.id) merged.set(pub.id, pub);
   }
   for (const job of jobs.values()) {
