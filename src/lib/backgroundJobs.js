@@ -56,21 +56,28 @@ export function startBackgroundJob(type, payload = {}, meta = {}) {
   const body = JSON.stringify({ type, payload, meta });
   const largeBodyThreshold = 42 * 1024 * 1024;
   const path = body.length > largeBodyThreshold ? "/jobs/start-large" : "/jobs/start";
-  const startRequest = () => jobRequest(path, {
+  const startRequest = (options = {}) => jobRequest(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body,
     timeoutMs: 30000,
+    ...options,
   });
   if (!isSarahNativeShell()) return startRequest();
-  return discoverSarahApiBase({ timeoutMs: 1200 })
-    .then(startRequest)
-    .catch((error) => {
+
+  return startRequest({ skipApiDiscovery: true }).catch(async (firstError) => {
+    try {
+      await discoverSarahApiBase({ timeoutMs: 5000 });
+      return await startRequest({ skipApiDiscovery: true });
+    } catch (error) {
       if (Array.isArray(error?.failures)) {
-        throw new Error(nativeApiUnavailableMessage(error));
+        const unavailable = new Error(nativeApiUnavailableMessage(error));
+        unavailable.cause = firstError;
+        throw unavailable;
       }
       throw error;
-    });
+    }
+  });
 }
 
 export function getBackgroundJob(jobId) {
