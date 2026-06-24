@@ -85,6 +85,7 @@ function summarizeHowlResponse(data) {
     player: data?.player ? {
       playing: data.player.playing ?? null,
       filename: data.player.filename ?? data.player.file ?? null,
+      title: data.player.title ?? null,
       position: data.player.position ?? null,
       duration: data.player.duration ?? null,
     } : null,
@@ -422,7 +423,7 @@ howlRouter.get('/control-capabilities', (_req, res) => {
     ok: true,
     mode: settings.controlEnabled ? 'manual_control' : 'manual_control_disabled',
     message: settings.controlEnabled
-      ? 'Sarah can send bounded manual Howl commands. Closed-loop automatic control is not enabled.'
+      ? 'Sarah can send bounded manual Howl commands. HR/HRV automatic control is available when armed in Live Capture.'
       : 'Howl manual control is available but disabled until explicitly enabled.',
     safeguards: {
       ...HOWL_CONTROL_DEFAULT_LIMITS,
@@ -434,7 +435,7 @@ howlRouter.get('/control-capabilities', (_req, res) => {
       queue: true,
       direct_http: true,
       emergency_stop: true,
-      automatic_closed_loop: false,
+      automatic_closed_loop: true,
     },
     settings: {
       controlEnabled: settings.controlEnabled,
@@ -460,6 +461,32 @@ howlRouter.get('/control-capabilities', (_req, res) => {
 
 howlRouter.get('/control/settings', (_req, res) => {
   res.json({ ok: true, settings: getSettings() });
+});
+
+howlRouter.get('/control/status', async (_req, res) => {
+  const settings = getSettings();
+  if (!settings.controlUrl) {
+    return res.status(400).json({ ok: false, message: 'Howl phone URL is not configured.' });
+  }
+  if (!settings.remoteAccessKey) {
+    return res.status(400).json({ ok: false, message: 'Howl remote access key is not configured.' });
+  }
+  try {
+    const result = await requestHowl(settings, '/status', {}, { timeoutMs: 3000 });
+    res.json({
+      ok: true,
+      status: result.status,
+      measured_at: new Date().toISOString(),
+      howl: summarizeHowlResponse(result.data),
+      raw: result.data,
+    });
+  } catch (error) {
+    res.status(error?.status || 502).json({
+      ok: false,
+      message: error?.message || 'Could not read Howl status.',
+      status: error?.status || null,
+    });
+  }
 });
 
 howlRouter.post('/control/settings', (req, res) => {

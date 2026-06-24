@@ -354,6 +354,12 @@ function readHowlChannelIntensity(telemetry, channel) {
     const value = readNumber(direct?.intensity, direct?.level, direct?.power);
     if (value != null) return value;
   }
+  if (normalized === "b" || normalized === "1") {
+    const value = readNumber(telemetry?.power_b, telemetry?.raw?.options?.power_b);
+    if (value != null) return value;
+  }
+  const channelAValue = readNumber(telemetry?.power_a, telemetry?.raw?.options?.power_a);
+  if (channelAValue != null) return channelAValue;
   return readNumber(telemetry?.intensity, telemetry?.power_level);
 }
 
@@ -1387,6 +1393,7 @@ export default function LiveCapture() {
   }, [getHeartbeatAudioContext]);
 
   const triggerHeartbeatPulse = useCallback((telemetry = latestHrRef.current) => {
+    if (!heartbeatAudioEnabledRef.current) return;
     const hr = readNumber(telemetry?.currentHr, telemetry?.hr, telemetry?.heartRate);
     if (hr == null) return;
     const now = Date.now();
@@ -1427,19 +1434,32 @@ export default function LiveCapture() {
   const refreshHowlTelemetry = useCallback(async ({ quiet = false, forceSettings = false } = {}) => {
     if (!quiet) setHowlRefreshing(true);
     try {
-      const [recentResponse, capabilitiesResponse, settingsResponse, commandsResponse] = await Promise.all([
+      const [recentResponse, statusResponse, capabilitiesResponse, settingsResponse, commandsResponse] = await Promise.all([
         fetch(apiUrl("/howl/telemetry/recent?limit=1")),
+        fetch(apiUrl("/howl/control/status")),
         fetch(apiUrl("/howl/control-capabilities")),
         fetch(apiUrl("/howl/control/settings")),
         fetch(apiUrl("/howl/control/commands?limit=5")),
       ]);
       if (!recentResponse.ok) throw new Error("Howl telemetry route is not responding.");
       const recent = await recentResponse.json();
+      const liveStatus = statusResponse.ok ? await statusResponse.json() : null;
       const capabilities = capabilitiesResponse.ok ? await capabilitiesResponse.json() : null;
       const settingsPayload = settingsResponse.ok ? await settingsResponse.json() : null;
       const commandsPayload = commandsResponse.ok ? await commandsResponse.json() : null;
-      setHowlTelemetry(recent?.samples?.[0] || null);
+      const liveHowlTelemetry = liveStatus?.ok && liveStatus?.howl ? {
+        ...liveStatus.howl,
+        source: "howl_status",
+        measured_at: liveStatus.measured_at || new Date().toISOString(),
+        received_at: new Date().toISOString(),
+        mode: liveStatus.howl?.player?.filename || liveStatus.howl?.player?.title || null,
+        raw: liveStatus.raw || null,
+      } : null;
+      setHowlTelemetry(liveHowlTelemetry || recent?.samples?.[0] || null);
       setHowlCapabilities(capabilities);
+      if (liveStatus?.ok) {
+        setHowlConnectionTest({ status: "ok", message: "Howl /status is live. Sarah is synced to the current Howl state." });
+      }
       if (settingsPayload?.settings) {
         const canApplySettings = forceSettings || (!howlSettingsDirtyRef.current && !howlFocusedFieldRef.current);
         if (canApplySettings) {
@@ -2474,6 +2494,7 @@ export default function LiveCapture() {
         ? "Queue + direct"
         : "Helper queue"
     : "Disabled";
+  const visibleHeartbeatPulseId = heartbeatAudioEnabled ? heartbeatPulseId : 0;
 
   useEffect(() => {
     if (!howlManualControlsUnlocked || !howlSarahAutoEnabled) {
@@ -4531,7 +4552,7 @@ export default function LiveCapture() {
         {!mediaFullscreen && (
           <div className={`grid content-start gap-3 ${focusView ? "min-h-0 overflow-y-auto pr-1" : "xl:sticky xl:top-4 xl:max-h-[calc(100vh-9rem)] xl:overflow-hidden"}`}>
             <div className="grid grid-cols-2 gap-2">
-              <CompactStat label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="bpm" level={currentHrLevel} emphasis beatPulse={heartbeatPulseId} />
+              <CompactStat label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="bpm" level={currentHrLevel} emphasis beatPulse={visibleHeartbeatPulseId} />
               <CompactStat label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} emphasis />
               <CompactStat label="Max HR" value={fmtNumber(maxHr, 0)} helper="session peak" level={hrLevelPercent(maxHr, hrTelemetry?.baselineHr)} emphasis />
               {!captureIsBodyExploration && (
@@ -6345,7 +6366,7 @@ export default function LiveCapture() {
         </div>
 
         <div className={`grid gap-3 sm:grid-cols-2 ${telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`}>
-          <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large beatPulse={heartbeatPulseId} />
+          <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large beatPulse={visibleHeartbeatPulseId} />
           <MetricCard icon={<Activity className="w-4 h-4" />} label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} active={Boolean(latestBpReading)} large />
           {!captureIsBodyExploration && (
             <>

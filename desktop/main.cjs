@@ -13,6 +13,11 @@ const PREFERRED_HR_RELAY_PORT = 8765;
 app.setName(APP_NAME);
 app.commandLine.appendSwitch('enable-web-bluetooth');
 
+const singleInstanceLock = app.requestSingleInstanceLock();
+if (!singleInstanceLock) {
+  app.quit();
+}
+
 let mainWindow = null;
 let backendProcess = null;
 let backendUrl = '';
@@ -408,6 +413,7 @@ async function stopBackend() {
 }
 
 app.whenReady().then(async () => {
+  if (!singleInstanceLock) return;
   configureDesktopPermissions();
   const win = createWindow();
   win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`
@@ -428,6 +434,13 @@ app.whenReady().then(async () => {
     dialog.showErrorBox('Sarah backend failed to start', message);
     await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`<body style="margin:0;background:#10161f;color:#f8f4ff;font:16px system-ui;padding:32px"><h1>Sarah could not start the local backend</h1><p>${message.replace(/[<>&]/g, '')}</p><p>Check the backend logs in ${app.getPath('userData')}\\logs.</p></body>`)}`);
   }
+});
+
+app.on('second-instance', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 });
 
 app.on('before-quit', () => {
