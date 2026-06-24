@@ -1096,14 +1096,16 @@ function CompactStat({ label, value, helper, level, emphasis = false, beatPulse 
   const color = hasLevel ? levelColor(level) : null;
   return (
     <div
-      className={`relative overflow-hidden rounded-xl border px-4 py-3 transition-shadow ${emphasis ? "min-h-[7.5rem]" : "min-h-[6.75rem]"} ${hasLevel ? "" : "border-border bg-muted/25"} ${beatPulse ? "shadow-[0_0_26px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
+      className={`relative flex overflow-hidden rounded-xl border px-4 py-3 transition-shadow ${emphasis ? "h-[7.5rem]" : "h-[6.75rem]"} ${hasLevel ? "" : "border-border bg-muted/25"} ${beatPulse ? "shadow-[0_0_26px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
       style={hasLevel ? { borderColor: `${color}9a`, background: `linear-gradient(135deg, ${color}42, ${color}12 54%, hsl(var(--card)) 100%)` } : undefined}
     >
       {beatPulse ? <span key={`compact-beat-${label}-${beatPulse}`} className="pointer-events-none absolute right-4 top-4 h-4 w-4 rounded-full bg-rose-400/45 animate-ping" /> : null}
       {hasLevel && <div className="absolute inset-x-0 bottom-0 h-1.5" style={{ backgroundColor: color }} />}
-      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
-      <p className={`mt-2 font-bold tracking-tight text-foreground ${emphasis ? "text-5xl" : "text-4xl"}`}>{value}</p>
-      {helper && <p className="mt-1 text-sm font-medium text-foreground/75">{helper}</p>}
+      <div className="flex min-w-0 flex-1 flex-col justify-between">
+        <p className="truncate text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
+        <p className={`mt-2 truncate font-bold tabular-nums leading-none tracking-tight text-foreground ${emphasis ? "text-5xl" : "text-4xl"}`}>{value}</p>
+        <p className="mt-1 h-5 truncate text-sm font-medium leading-5 text-foreground/75">{helper || "\u00a0"}</p>
+      </div>
     </div>
   );
 }
@@ -4551,7 +4553,7 @@ export default function LiveCapture() {
 
         {!mediaFullscreen && (
           <div className={`grid content-start gap-3 ${focusView ? "min-h-0 overflow-y-auto pr-1" : "xl:sticky xl:top-4 xl:max-h-[calc(100vh-9rem)] xl:overflow-hidden"}`}>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid auto-rows-fr grid-cols-2 items-stretch gap-2">
               <CompactStat label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="bpm" level={currentHrLevel} emphasis beatPulse={visibleHeartbeatPulseId} />
               <CompactStat label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} emphasis />
               <CompactStat label="Max HR" value={fmtNumber(maxHr, 0)} helper="session peak" level={hrLevelPercent(maxHr, hrTelemetry?.baselineHr)} emphasis />
@@ -4570,21 +4572,21 @@ export default function LiveCapture() {
 
             {!captureIsBodyExploration && (
               <div
-                className="rounded-xl border p-4"
+                className="min-h-[12.25rem] rounded-xl border p-4"
                 style={{ borderColor: `${levelColor(prediction.nearClimax)}80`, background: `linear-gradient(135deg, ${levelColor(prediction.nearClimax)}28, hsl(var(--card)) 65%)` }}
               >
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <p className="text-sm font-semibold uppercase tracking-wider text-primary">Real-Time Phase Watch</p>
-                    <p className="mt-1 text-base font-medium text-foreground">{prediction.label}</p>
+                    <p className="mt-1 h-6 truncate text-base font-medium leading-6 text-foreground">{prediction.label}</p>
                   </div>
                   <Brain className="h-5 w-5 text-primary" />
                 </div>
                 <div className="mt-3 h-3 overflow-hidden rounded-full bg-muted">
                   <div className="h-full rounded-full transition-all" style={{ width: `${prediction.nearClimax}%`, backgroundColor: levelColor(prediction.nearClimax) }} />
                 </div>
-                {prediction.reason && <p className="mt-3 line-clamp-3 text-sm leading-relaxed text-muted-foreground">{prediction.reason}</p>}
-                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                <p className="mt-3 line-clamp-3 min-h-[3.75rem] text-sm leading-5 text-muted-foreground">{prediction.reason || "\u00a0"}</p>
+                <p className="mt-2 line-clamp-2 min-h-8 text-xs leading-4 text-muted-foreground">
                   {prediction.hrvExplanation}
                 </p>
               </div>
