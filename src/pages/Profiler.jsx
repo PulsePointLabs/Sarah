@@ -4593,6 +4593,7 @@ function ProfileImageReviewPanel({
   const [viewingArchiveRunId, setViewingArchiveRunId] = useState("");
   const [anatomyVideo, setAnatomyVideo] = useState(null);
   const [anatomyVideoStatus, setAnatomyVideoStatus] = useState({ type: "", message: "" });
+  const [activeAnatomyVideoJobId, setActiveAnatomyVideoJobId] = useState("");
   const [imageUploadStatus, setImageUploadStatus] = useState(null);
   const [videoUploadStatus, setVideoUploadStatus] = useState(null);
   const [includeImageCalloutsInTts, setIncludeImageCalloutsInTts] = useState(() => {
@@ -4603,6 +4604,7 @@ function ProfileImageReviewPanel({
     }
   });
   const autoRecoveredBatchSetRef = useRef("");
+  const anatomyVideoJobStorageKey = `sarah_profiler_anatomy_video_job_${config.kind}`;
 
   useEffect(() => {
     try {
@@ -5053,6 +5055,12 @@ function ProfileImageReviewPanel({
 
     const reconnectProfileVideo = async () => {
       try {
+        let storedJobId = "";
+        try {
+          storedJobId = window.localStorage.getItem(anatomyVideoJobStorageKey) || "";
+        } catch {
+          storedJobId = "";
+        }
         const jobs = await listBackgroundJobs({
           type: "profile_anatomy_video",
           status: "queued,running,complete",
@@ -5063,13 +5071,20 @@ function ProfileImageReviewPanel({
         const sortedReviewJobs = (jobs.jobs || [])
           .filter((job) => profilerJobReviewType(job) === config.kind)
           .sort((a, b) => String(b.finishedAt || b.updatedAt || b.createdAt || "").localeCompare(String(a.finishedAt || a.updatedAt || a.createdAt || "")));
-        const matching = sortedReviewJobs.find((job) => (
+        const matching = sortedReviewJobs.find((job) => storedJobId && job.id === storedJobId)
+          || sortedReviewJobs.find((job) => (
           String(job?.meta?.sourceGeneratedAt || job?.payload?.sourceGeneratedAt || "") === String(sourceGeneratedAt)
         )) || sortedReviewJobs.find((job) => job.status === "complete" && job.result?.file_url) || sortedReviewJobs[0];
         if (!matching) return;
         const fullMatching = matching.hasResult && !matching.result ? await getBackgroundJob(matching.id) : matching;
         if (cancelled) return;
         if (fullMatching.status === "complete" && fullMatching.result?.file_url) {
+          setActiveAnatomyVideoJobId("");
+          try {
+            if (storedJobId === fullMatching.id) window.localStorage.removeItem(anatomyVideoJobStorageKey);
+          } catch {
+            // Ignore storage cleanup failures.
+          }
           const exactSourceMatch = String(fullMatching?.meta?.sourceGeneratedAt || fullMatching?.payload?.sourceGeneratedAt || "") === String(sourceGeneratedAt);
           setAnatomyVideo(fullMatching.result);
           setAnatomyVideoStatus({
@@ -5077,9 +5092,10 @@ function ProfileImageReviewPanel({
             message: exactSourceMatch ? "Anatomy video ready." : "Latest saved anatomy video ready.",
           });
         } else if (fullMatching.status === "queued" || fullMatching.status === "running") {
+          setActiveAnatomyVideoJobId(fullMatching.id);
           setAnatomyVideoStatus({
             type: "working",
-            message: fullMatching.progress?.message || "Anatomy video is rendering in the background...",
+            message: fullMatching.progress?.message || "Queued on the desktop backend. You can background the app; Sarah will keep rendering.",
           });
         }
       } catch (err) {
@@ -5093,7 +5109,7 @@ function ProfileImageReviewPanel({
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [config.kind, result?._meta?.last_generated_at, result?._meta?.updated_at]);
+  }, [anatomyVideoJobStorageKey, config.kind, result?._meta?.last_generated_at, result?._meta?.updated_at]);
 
   const handleImageFiles = async (event) => {
     const files = Array.from(event.target.files || []).filter((file) => file.type?.startsWith("image/"));
@@ -6999,9 +7015,14 @@ ANNOTATED IMAGE OUTPUT RULES:
       setAnatomyVideoStatus({ type: "error", message: "No linked review images are available for this anatomy video yet." });
       return;
     }
+    let confirmedJobId = "";
     try {
       setAnatomyVideo(null);
-      setAnatomyVideoStatus({ type: "working", message: "Starting anatomy video render..." });
+      setActiveAnatomyVideoJobId("");
+      setAnatomyVideoStatus({
+        type: "starting",
+        message: "Preparing the anatomy video job. Keep Sarah in the foreground until it says the desktop backend has the job.",
+      });
       const runtime = getTTSRuntime(loadTTSSettings());
       const readableItems = paragraphs
         .map((paragraph, index) => ({
@@ -7025,6 +7046,10 @@ ANNOTATED IMAGE OUTPUT RULES:
         source: "profile_anatomy_video",
       }).chapters;
       const sourceGeneratedAt = result?._meta?.last_generated_at || result?._meta?.updated_at || new Date().toISOString();
+      setAnatomyVideoStatus({
+        type: "starting",
+        message: "Sending the anatomy video job to the desktop backend...",
+      });
       const job = await startBackgroundJob("profile_anatomy_video", {
         sessionId: `${config.ttsSessionId}-video`,
         title,
@@ -7049,18 +7074,36 @@ ANNOTATED IMAGE OUTPUT RULES:
         reviewType: config.kind,
         sourceGeneratedAt,
       });
+      confirmedJobId = job.id;
+      setActiveAnatomyVideoJobId(job.id);
+      try {
+        window.localStorage.setItem(anatomyVideoJobStorageKey, job.id);
+      } catch {
+        // The job is still queued server-side; storage is only for reconnect convenience.
+      }
+      setAnatomyVideoStatus({
+        type: "working",
+        message: "Queued on the desktop backend. You can background the app now; Sarah will keep rendering.",
+      });
       const completed = await waitForBackgroundJob(job.id, {
         intervalMs: 1500,
         onProgress: (nextJob) => {
           const progress = nextJob.progress || {};
+          if (nextJob.id) setActiveAnatomyVideoJobId(nextJob.id);
           setAnatomyVideoStatus({
             type: nextJob.status === "error" ? "error" : "working",
-            message: progress.message || "Rendering anatomy video...",
+            message: progress.message || "Queued on the desktop backend. You can background the app; Sarah will keep rendering.",
           });
         },
       });
       if (!completed.result?.file_url) throw new Error("Anatomy video render did not return an MP4.");
       setAnatomyVideo(completed.result);
+      setActiveAnatomyVideoJobId("");
+      try {
+        window.localStorage.removeItem(anatomyVideoJobStorageKey);
+      } catch {
+        // Ignore storage cleanup failures.
+      }
       setAnatomyVideoStatus({
         type: "ok",
         message: completed.result.audio_reused
@@ -7074,6 +7117,8 @@ ANNOTATED IMAGE OUTPUT RULES:
         type: "error",
         message: staleApiJobType
           ? "Anatomy video support is installed in the app code, but the local API has not reloaded it yet. Let the current render/analysis finish, then restart the local API to enable this button."
+          : !confirmedJobId
+            ? `The anatomy video job was not confirmed on the desktop backend. Keep Sarah foregrounded until the queued message appears, then retry. ${message || ""}`.trim()
           : message || "Anatomy video render failed.",
       });
     }
@@ -7089,6 +7134,7 @@ ANNOTATED IMAGE OUTPUT RULES:
 
   const panelId = config.kind === PELVIC_GENITAL_REVIEW_KIND ? "profiler-pelvic-genital" : "profiler-head-to-toe";
   const videoPanelId = config.kind === PELVIC_GENITAL_REVIEW_KIND ? "profiler-pelvic-genital-video" : "profiler-head-to-toe-video";
+  const anatomyVideoBusy = anatomyVideoStatus.type === "starting" || anatomyVideoStatus.type === "working";
 
   return (
     <div id={panelId} className="scroll-mt-24">
@@ -7267,6 +7313,7 @@ ANNOTATED IMAGE OUTPUT RULES:
                 </h4>
                 <p className="mt-1 max-w-2xl text-[11px] leading-relaxed text-muted-foreground">
                   Builds a narrated HD review from the current Sarah text plus linked profile images and video-sampled frames.
+                  Keep the app foregrounded only until the status says it is queued on the desktop backend.
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -7275,11 +7322,15 @@ ANNOTATED IMAGE OUTPUT RULES:
                   size="sm"
                   variant="outline"
                   onClick={startAnatomyVideoRender}
-                  disabled={anatomyVideoStatus.type === "working" || !paragraphs.length}
+                  disabled={anatomyVideoBusy || !paragraphs.length}
                   className="h-8 gap-1.5 text-xs"
                 >
-                  {anatomyVideoStatus.type === "working" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Video className="h-3.5 w-3.5" />}
-                  {anatomyVideo?.file_url ? "Rebuild video" : "Build anatomy video"}
+                  {anatomyVideoBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Video className="h-3.5 w-3.5" />}
+                  {anatomyVideoStatus.type === "starting"
+                    ? "Starting..."
+                    : anatomyVideoStatus.type === "working"
+                      ? "Queued"
+                      : anatomyVideo?.file_url ? "Rebuild video" : "Build anatomy video"}
                 </Button>
                 {anatomyVideo?.file_url && (
                   <Button
