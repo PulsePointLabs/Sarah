@@ -7031,6 +7031,74 @@ ANNOTATED IMAGE OUTPUT RULES:
       return;
     }
     let confirmedJobId = "";
+    let sourceGeneratedAt = "";
+
+    const finishAnatomyVideoJob = async (job, initialMessage) => {
+      if (!job?.id) throw new Error("Anatomy video job did not return an id.");
+      confirmedJobId = job.id;
+      setActiveAnatomyVideoJobId(job.id);
+      try {
+        window.localStorage.setItem(anatomyVideoJobStorageKey, job.id);
+      } catch {
+        // The job is still queued server-side; storage is only for reconnect convenience.
+      }
+      setAnatomyVideoStatus({
+        type: "working",
+        message: initialMessage || "Queued on the desktop backend. You can background the app now; Sarah will keep rendering.",
+      });
+
+      const completed = job.status === "complete"
+        ? (job.result ? job : await getBackgroundJob(job.id))
+        : await waitForBackgroundJob(job.id, {
+          intervalMs: 1500,
+          onProgress: (nextJob) => {
+            const progress = nextJob.progress || {};
+            if (nextJob.id) setActiveAnatomyVideoJobId(nextJob.id);
+            setAnatomyVideoStatus({
+              type: nextJob.status === "error" ? "error" : "working",
+              message: progress.message || "Queued on the desktop backend. You can background the app; Sarah will keep rendering.",
+            });
+          },
+        });
+      if (!completed.result?.file_url) throw new Error("Anatomy video render did not return an MP4.");
+      setAnatomyVideo(completed.result);
+      setActiveAnatomyVideoJobId("");
+      try {
+        window.localStorage.removeItem(anatomyVideoJobStorageKey);
+      } catch {
+        // Ignore storage cleanup failures.
+      }
+      setAnatomyVideoStatus({
+        type: "ok",
+        message: completed.result.audio_reused
+          ? "Anatomy video ready. Reused matching narration."
+          : "Anatomy video ready. Narration was rendered for this export.",
+      });
+    };
+
+    const recoverTimedOutAnatomyVideoJob = async () => {
+      if (!sourceGeneratedAt) return null;
+      const jobs = await listBackgroundJobs({
+        type: "profile_anatomy_video",
+        status: "queued,running,complete",
+        metaSource: "Profiler",
+        limit: 50,
+      });
+      const sortedReviewJobs = (jobs.jobs || [])
+        .filter((job) => profilerJobReviewType(job) === config.kind)
+        .sort((a, b) => String(b.finishedAt || b.updatedAt || b.createdAt || "").localeCompare(String(a.finishedAt || a.updatedAt || a.createdAt || "")));
+      const sourceMatch = sortedReviewJobs.find((job) => (
+        String(job?.meta?.sourceGeneratedAt || job?.payload?.sourceGeneratedAt || "") === String(sourceGeneratedAt)
+      ));
+      if (sourceMatch) return sourceMatch;
+
+      const startedAfterClick = Date.now() - 3 * 60 * 1000;
+      return sortedReviewJobs.find((job) => {
+        const createdMs = Date.parse(job.createdAt || job.startedAt || job.updatedAt || "");
+        return Number.isFinite(createdMs) && createdMs >= startedAfterClick;
+      }) || null;
+    };
+
     try {
       setAnatomyVideo(null);
       setActiveAnatomyVideoJobId("");
@@ -7060,7 +7128,7 @@ ANNOTATED IMAGE OUTPUT RULES:
         paragraphs: readableParagraphs,
         source: "profile_anatomy_video",
       }).chapters;
-      const sourceGeneratedAt = result?._meta?.last_generated_at || result?._meta?.updated_at || new Date().toISOString();
+      sourceGeneratedAt = result?._meta?.last_generated_at || result?._meta?.updated_at || new Date().toISOString();
       setAnatomyVideoStatus({
         type: "starting",
         message: "Sending the anatomy video job to the desktop backend...",
@@ -7089,45 +7157,26 @@ ANNOTATED IMAGE OUTPUT RULES:
         reviewType: config.kind,
         sourceGeneratedAt,
       });
-      confirmedJobId = job.id;
-      setActiveAnatomyVideoJobId(job.id);
-      try {
-        window.localStorage.setItem(anatomyVideoJobStorageKey, job.id);
-      } catch {
-        // The job is still queued server-side; storage is only for reconnect convenience.
-      }
-      setAnatomyVideoStatus({
-        type: "working",
-        message: "Queued on the desktop backend. You can background the app now; Sarah will keep rendering.",
-      });
-      const completed = await waitForBackgroundJob(job.id, {
-        intervalMs: 1500,
-        onProgress: (nextJob) => {
-          const progress = nextJob.progress || {};
-          if (nextJob.id) setActiveAnatomyVideoJobId(nextJob.id);
-          setAnatomyVideoStatus({
-            type: nextJob.status === "error" ? "error" : "working",
-            message: progress.message || "Queued on the desktop backend. You can background the app; Sarah will keep rendering.",
-          });
-        },
-      });
-      if (!completed.result?.file_url) throw new Error("Anatomy video render did not return an MP4.");
-      setAnatomyVideo(completed.result);
-      setActiveAnatomyVideoJobId("");
-      try {
-        window.localStorage.removeItem(anatomyVideoJobStorageKey);
-      } catch {
-        // Ignore storage cleanup failures.
-      }
-      setAnatomyVideoStatus({
-        type: "ok",
-        message: completed.result.audio_reused
-          ? "Anatomy video ready. Reused matching narration."
-          : "Anatomy video ready. Narration was rendered for this export.",
-      });
+      await finishAnatomyVideoJob(job, "Queued on the desktop backend. You can background the app now; Sarah will keep rendering.");
     } catch (err) {
       const message = String(err?.message || "");
       const staleApiJobType = /Unknown background job type:\s*profile_anatomy_video/i.test(message);
+      const requestTimedOut = /timed out|timeout/i.test(message);
+      if (!confirmedJobId && requestTimedOut && !staleApiJobType) {
+        try {
+          const recoveredJob = await recoverTimedOutAnatomyVideoJob();
+          if (recoveredJob?.id) {
+            setAnatomyVideoStatus({
+              type: "working",
+              message: "The phone request timed out, but the desktop backend has the video job. Reconnected to the render.",
+            });
+            await finishAnatomyVideoJob(recoveredJob, recoveredJob.progress?.message || "The desktop backend has the video job. You can background the app now; Sarah will keep rendering.");
+            return;
+          }
+        } catch (recoverErr) {
+          console.warn("Anatomy video timeout recovery skipped:", recoverErr);
+        }
+      }
       setAnatomyVideoStatus({
         type: "error",
         message: staleApiJobType
