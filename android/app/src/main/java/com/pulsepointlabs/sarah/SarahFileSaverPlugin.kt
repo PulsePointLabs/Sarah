@@ -77,6 +77,11 @@ class SarahFileSaverPlugin : Plugin() {
                     .put("uri", outputUri.toString())
                 withContext(Dispatchers.Main) { call.resolve(response) }
             } catch (error: Exception) {
+                try {
+                    context.contentResolver.delete(outputUri, null, null)
+                } catch (_: Exception) {
+                    // Best effort cleanup; the error message below is more important.
+                }
                 withContext(Dispatchers.Main) {
                     call.reject(error.message ?: "Could not save media file.", error)
                 }
@@ -100,7 +105,7 @@ class SarahFileSaverPlugin : Plugin() {
     private fun streamUrlToUri(url: String, outputUri: Uri): Long {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15000
-            readTimeout = 120000
+            readTimeout = 300000
             instanceFollowRedirects = true
             requestMethod = "GET"
         }
@@ -109,6 +114,7 @@ class SarahFileSaverPlugin : Plugin() {
             if (status !in 200..299) {
                 throw IllegalStateException("Download failed: HTTP $status")
             }
+            val expectedLength = connection.contentLengthLong
             context.contentResolver.openOutputStream(outputUri, "w")?.use { output ->
                 connection.inputStream.use { input ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -120,6 +126,9 @@ class SarahFileSaverPlugin : Plugin() {
                         total += read.toLong()
                     }
                     output.flush()
+                    if (expectedLength > 0L && total < expectedLength) {
+                        throw IllegalStateException("Download incomplete: saved $total of $expectedLength bytes.")
+                    }
                     total
                 }
             } ?: throw IllegalStateException("Could not open selected save location.")

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { readWatermarkSettings } from "@/lib/watermarkSettings";
 import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, RefreshCw, History, Film, Image as ImageIcon, Upload, X, Download, Loader2, Video } from "lucide-react";
 import TTSReader from "../components/TTSReader";
@@ -7188,12 +7189,27 @@ ANNOTATED IMAGE OUTPUT RULES:
     }
   };
 
-  const downloadAnatomyVideo = () => {
+  const downloadAnatomyVideo = async () => {
     if (!anatomyVideo?.file_url) return;
-    const a = document.createElement("a");
-    a.href = serverUrl(anatomyVideo.file_url);
-    a.download = anatomyVideo.filename || profileVideoFilename(`${config.shortTitle} Anatomy Video`);
-    a.click();
+    const filename = anatomyVideo.filename || profileVideoFilename(`${config.shortTitle} Anatomy Video`);
+    try {
+      setAnatomyVideoStatus({
+        type: "working",
+        message: "Opening the Android save dialog for the anatomy video...",
+      });
+      const result = await downloadOrSaveUrl(serverUrl(anatomyVideo.file_url), filename, { mimeType: "video/mp4" });
+      setAnatomyVideoStatus({
+        type: "ok",
+        message: result?.bytes
+          ? `Anatomy video saved (${Math.round(result.bytes / 1024 / 1024)} MB).`
+          : "Anatomy video download started.",
+      });
+    } catch (error) {
+      setAnatomyVideoStatus({
+        type: "error",
+        message: error?.message || "Could not download the anatomy video.",
+      });
+    }
   };
 
   const panelId = config.kind === PELVIC_GENITAL_REVIEW_KIND ? "profiler-pelvic-genital" : "profiler-head-to-toe";

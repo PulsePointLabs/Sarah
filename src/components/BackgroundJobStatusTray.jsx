@@ -367,7 +367,7 @@ export default function BackgroundJobStatusTray() {
       cycleEta?.label || activePhaseFallback(cycleJob),
     ].filter(Boolean).join(" · ")
     : offline
-      ? "Local API may need a restart."
+      ? "Desktop API unreachable. Check Wi-Fi/Tailscale."
       : "Recent work is visible here.";
 
   useEffect(() => {
@@ -501,7 +501,7 @@ export default function BackgroundJobStatusTray() {
                 {primaryActiveJob
                   ? [progressMessage(primaryActiveJob), primaryEta?.label].filter(Boolean).join(" · ")
                   || [progressMessage(primaryActiveJob), primaryPhaseFallback].filter(Boolean).join(" · ")
-                  : progressMessage(visibleJobs[0]) || (offline ? "Local API may need a restart." : "Recent AI/TTS work is visible here.")}
+                  : progressMessage(visibleJobs[0]) || (offline ? "Desktop API unreachable. Check Wi-Fi/Tailscale." : "Recent AI/TTS work is visible here.")}
               </p>
             </div>
             {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}

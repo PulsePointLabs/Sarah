@@ -1,5 +1,16 @@
 import { apiUrl, discoverSarahApiBase, isSarahNativeShell } from "@/lib/mobileApiBase";
 
+function nativeApiUnavailableMessage(error) {
+  const tried = Array.isArray(error?.failures)
+    ? error.failures.map((failure) => failure.base).filter(Boolean).join(", ")
+    : "";
+  return [
+    "Sarah cannot reach the desktop Local API.",
+    "Connect this phone to the same Wi-Fi/Tailscale path as the desktop, then try again.",
+    tried ? `Tried: ${tried}` : "",
+  ].filter(Boolean).join(" ");
+}
+
 async function jobRequest(path, options = {}) {
   const timeoutMs = Number(options.timeoutMs || 15000);
   const controller = timeoutMs > 0 && !options.signal ? new AbortController() : null;
@@ -45,12 +56,21 @@ export function startBackgroundJob(type, payload = {}, meta = {}) {
   const body = JSON.stringify({ type, payload, meta });
   const largeBodyThreshold = 42 * 1024 * 1024;
   const path = body.length > largeBodyThreshold ? "/jobs/start-large" : "/jobs/start";
-  return jobRequest(path, {
+  const startRequest = () => jobRequest(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body,
     timeoutMs: 30000,
   });
+  if (!isSarahNativeShell()) return startRequest();
+  return discoverSarahApiBase({ timeoutMs: 1200 })
+    .then(startRequest)
+    .catch((error) => {
+      if (Array.isArray(error?.failures)) {
+        throw new Error(nativeApiUnavailableMessage(error));
+      }
+      throw error;
+    });
 }
 
 export function getBackgroundJob(jobId) {

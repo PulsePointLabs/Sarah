@@ -8,6 +8,7 @@ import { buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_AN
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { buildAudioChapterBundle } from "@/lib/audioChapters";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { readWatermarkSettings } from "@/lib/watermarkSettings";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from "@/lib/sessionContext";
 import { buildSessionKeyVideoClipDigest, buildSessionPhaseMarkerDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, normalizeSessionKeyVideoClips, normalizeSessionVideoPassFindings, sessionEventsForCurrentPhaseMarkers } from "@/lib/visualEvidence";
@@ -809,13 +810,22 @@ export function SessionReviewVideoExportButton({
     }
   };
 
-  const download = () => {
+  const download = async () => {
     const target = activeVideo;
     if (!target?.file_url) return;
-    const a = document.createElement("a");
-    a.href = serverUrl(target.file_url);
-    a.download = target.filename || reviewFilename(analysisTitle);
-    a.click();
+    const filename = target.filename || reviewFilename(analysisTitle);
+    try {
+      setStatus({ type: "working", message: "Opening the Android save dialog for the review video..." });
+      const result = await downloadOrSaveUrl(serverUrl(target.file_url), filename, { mimeType: "video/mp4" });
+      setStatus({
+        type: "ok",
+        message: result?.bytes
+          ? `Review video saved (${Math.round(result.bytes / 1024 / 1024)} MB).`
+          : "Review video download started.",
+      });
+    } catch (error) {
+      setStatus({ type: "error", message: error?.message || "Could not download the review video." });
+    }
   };
 
   const loadActiveManifest = async () => {
