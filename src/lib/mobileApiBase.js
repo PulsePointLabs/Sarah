@@ -1,6 +1,7 @@
 const API_BASE_STORAGE_KEY = "pulsepoint.apiBase";
 const API_BASE_QUERY_KEYS = ["pulsepoint_api_base", "api_base"];
 const CAPACITOR_API_BASES = [
+  "https://benm-desktop.tail980777.ts.net/api",
   "http://192.168.0.33:8787/api",
   "http://100.65.16.104:8787/api",
   "http://10.0.2.2:8787/api",
@@ -95,8 +96,8 @@ export function getSarahApiBaseCandidates() {
   return uniqueBases([
     queryBase,
     ...configured,
-    storedBase,
     ...CAPACITOR_API_BASES,
+    storedBase,
   ]);
 }
 
