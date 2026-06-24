@@ -57,6 +57,14 @@ const TTS_SIDE_TAB_DEFAULT_BOTTOM = 300;
 const SIDE_TAB_DRAG_THRESHOLD_PX = 6;
 const TTS_CHUNK_REQUEST_TIMEOUT_MS = 90000;
 
+function playbackFormatForRuntime(format = "mp3") {
+  const value = String(format || "mp3").toLowerCase();
+  // The local OpenAI chunk endpoint normalizes unsupported m4a requests to MP3.
+  // Android WebView is not forgiving when MP3 bytes are labeled audio/mp4.
+  if (value === "m4a") return "mp3";
+  return value;
+}
+
 async function triggerDownloadOrOpen(url, filename = "", options = {}) {
   if (!url) return;
   return downloadOrSaveUrl(url, filename, options);
@@ -805,9 +813,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         const runtime = runtimeRef.current;
         const instructions = buildTTSInstructions(runtime.instructions, previousContext);
         const cacheText = ttsCacheKey(chunkText, runtime.format, runtime, previousContext);
-        let mp3Buffer = await idbGet(cacheText, voiceRef.current, runtime.speed);
+        let audioBuffer = await idbGet(cacheText, voiceRef.current, runtime.speed);
+        let audioFormat = playbackFormatForRuntime(runtime.format);
 
-        if (!mp3Buffer) {
+        if (!audioBuffer) {
           if (!speculative) {
             setRequestStatus({ type: "fetching", msg: "Fetching audio..." });
           }
@@ -820,14 +829,15 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             format: runtime.format,
           }, 3, speculative ? prefetchAbortRef.current?.signal : playbackAbortRef.current?.signal);
           if (response.data?.error) throw new Error(response.data.error);
+          audioFormat = response.data?.format || audioFormat;
           const base64 = response.data.audio;
           const binary = atob(base64);
           const bytes = new Uint8Array(binary.length);
           for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          mp3Buffer = bytes.buffer;
-          idbSet(cacheText, voiceRef.current, runtime.speed, mp3Buffer); // fire-and-forget
+          audioBuffer = bytes.buffer;
+          idbSet(cacheText, voiceRef.current, runtime.speed, audioBuffer); // fire-and-forget
           if (!speculative) {
-            setRequestStatus({ type: "ok", msg: "Audio ready" });
+            setRequestStatus({ type: "ok", msg: `Audio ready${audioFormat && audioFormat !== runtime.format ? ` (${String(audioFormat).toUpperCase()})` : ""}` });
           }
         } else {
           if (!speculative) {
@@ -836,7 +846,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         }
 
         markCacheReady(statusKey);
-        return mp3Buffer.slice(0);
+        return {
+          buffer: audioBuffer.slice(0),
+          format: audioFormat,
+        };
       } catch (err) {
         markCacheFetching(statusKey, false);
         prefetchCacheRef.current.delete(cacheKey); // allow retry on failure
@@ -886,9 +899,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     setBufferingPara(currentParaRef.current);
 
-    let mp3Buffer;
+    let audioChunk;
     try {
-      mp3Buffer = await fetchDecoded(chunk, gen);
+      audioChunk = await fetchDecoded(chunk, gen);
     } catch (err) {
       if (isAbortError(err) || gen !== genRef.current) return;
       console.error("TTS fetch failed:", err);
@@ -908,7 +921,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     if (gen !== genRef.current) return;
 
-    const url = URL.createObjectURL(new Blob([mp3Buffer], { type: getTTSMime(runtimeRef.current.format) }));
+    const audioBuffer = audioChunk?.buffer || audioChunk;
+    const audioFormat = audioChunk?.format || playbackFormatForRuntime(runtimeRef.current.format);
+    const url = URL.createObjectURL(new Blob([audioBuffer], { type: getTTSMime(audioFormat) }));
     const audio = new Audio(url);
     audio.preload = "auto";
     const playbackStartWord = Number(chunk?.playbackStartWord || 0);
@@ -1033,6 +1048,17 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     chunkQueueRef.current = [];
     currentChunkRef.current = null;
     const speechChunks = buildSpeechChunks(readableParagraphs, paraIdx, sentenceIdx);
+    if (!speechChunks.length) {
+      setRequestStatus({ type: "error", msg: "No readable text was available for TTS on this section." });
+      setBufferingPara(-1);
+      setS("idle");
+      setCP(-1);
+      cacheReadyRef.current = new Set();
+      cacheFetchingRef.current = new Set();
+      cacheTotalRef.current = 0;
+      publishAudioCacheStatus();
+      return;
+    }
     remainingParasRef.current = speechChunks;
     cacheReadyRef.current = new Set();
     cacheFetchingRef.current = new Set();
