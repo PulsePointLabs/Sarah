@@ -27,7 +27,7 @@ async function jobRequest(path, options = {}) {
     response = await fetch(apiUrl(path), fetchOptions);
   } catch (error) {
     if (error?.name === "AbortError" && controller) {
-      throw new Error(`Job request timed out after ${Math.round(timeoutMs / 1000)}s`);
+      throw new Error(`Local background job API did not respond within ${Math.round(timeoutMs / 1000)}s`);
     }
     if (isSarahNativeShell() && !options.skipApiDiscovery) {
       await discoverSarahApiBase({ timeoutMs: 2200 });

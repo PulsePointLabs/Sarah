@@ -645,6 +645,14 @@ function isBrowserPlayableLinkedVideo(video = {}) {
     || mimeType === "video/webm";
 }
 
+function friendlyVideoWorkflowError(error, fallback = "AI video pass failed.") {
+  const message = error?.data?.error || error?.message || fallback;
+  if (/job request timed out|background job api did not respond|request timed out/i.test(message)) {
+    return "Sarah did not get a timely response from the local desktop job API. The video file may still be fine; check the background tray or restart the local API if no job appears.";
+  }
+  return message;
+}
+
 const LOWER_BODY_TERMS = [
   "foot",
   "feet",
@@ -1912,6 +1920,7 @@ export default function AIVideoPassPanel({
   const [playbackPreviewUrl, setPlaybackPreviewUrl] = useState("");
   const [playbackPreviewStatus, setPlaybackPreviewStatus] = useState("");
   const [playbackPreviewError, setPlaybackPreviewError] = useState("");
+  const [playbackPreviewConverting, setPlaybackPreviewConverting] = useState(false);
   const selectedVideoStreamUrl = playbackPreviewUrl || rawSelectedVideoStreamUrl;
   const [selectedVideoRole, setSelectedVideoRole] = useState(inferVideoRole(selectedVideo));
   const selectedVideoRoleHelper = videoRoleHelper(selectedVideoRole, isExploration);
@@ -2142,33 +2151,15 @@ export default function AIVideoPassPanel({
   }, [selectedVideo?.path]);
 
   useEffect(() => {
-    let cancelled = false;
     setPlaybackPreviewUrl("");
     setPlaybackPreviewError("");
-    setPlaybackPreviewStatus("");
-    if (!selectedVideo?.path || isBrowserPlayableLinkedVideo(selectedVideo)) return undefined;
-
-    setPlaybackPreviewStatus("Preparing MP4 preview for Windows playback...");
-    base44.integrations.Core.ConvertLocalVideoForPlayback({
-      path: selectedVideo.path,
-      label: selectedVideo.label || selectedVideo.filename || "local-video-preview",
-    })
-      .then((result) => {
-        if (cancelled) return;
-        const url = result?.file_url || result?.url;
-        if (!url) throw new Error("The local video converter did not return a playable preview URL.");
-        setPlaybackPreviewUrl(base44.integrations.Core.localVisionAssetUrl(url));
-        setPlaybackPreviewStatus(result.cached ? "Using cached MP4 preview." : "MP4 preview ready.");
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setPlaybackPreviewError(err?.data?.error || err?.message || "Could not prepare an MP4 preview for this video.");
-        setPlaybackPreviewStatus("");
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    setPlaybackPreviewConverting(false);
+    setPlaybackPreviewStatus(
+      selectedVideo?.path && !isBrowserPlayableLinkedVideo(selectedVideo)
+        ? "Trying the original local video first. If the player cannot decode this MKV/container, Sarah will prepare an MP4 preview; annotation can still run from the original file."
+        : "",
+    );
+    return undefined;
   }, [selectedVideo?.path, selectedVideo?.fingerprint]);
 
   useEffect(() => {
@@ -2484,7 +2475,7 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
       }
       setStatus(`Review complete: ${nextCards.length} windows ready${autoContinue && scanMode === "continue" ? " through the current forward run" : ""}.`);
     } catch (err) {
-      setError(err?.data?.error || err?.message || "AI video pass failed.");
+      setError(friendlyVideoWorkflowError(err, "AI video pass failed."));
       setStatus("");
     } finally {
       setRunning(false);
@@ -3094,9 +3085,7 @@ Return only the structured JSON matching the requested schema.`,
       const message = err?.data?.error || err?.message || "Adaptive local vision analysis failed.";
       if (/Unknown background job type:\s*local_vision_analyze_forward/i.test(message)) {
         setLocalVisionError("Backend needs a restart: the UI has the Forward Review button, but the running Node server has not loaded the forward job handler yet.");
-      } else {
-        setLocalVisionError(message);
-      }
+      } else setLocalVisionError(friendlyVideoWorkflowError(err, message));
       setLocalVisionStatus("");
     } finally {
       setLocalVisionRunning(false);
@@ -3163,7 +3152,7 @@ Return only the structured JSON matching the requested schema.`,
       }
       setLocalVisionStatus(`Continuous local vision complete: ${result.frame_evidence?.length || 0} frame refs, ${result.timeline_events?.length || 0} timeline events, ${result.forbidden_or_not_visible?.length || 0} unsafe/not-visible claims blocked.`);
     } catch (err) {
-      setLocalVisionError(err?.data?.error || err?.message || "Continuous local vision analysis failed.");
+      setLocalVisionError(friendlyVideoWorkflowError(err, "Continuous local vision analysis failed."));
       setLocalVisionStatus("");
     } finally {
       setLocalVisionRunning(false);
@@ -3274,7 +3263,7 @@ Return only the structured JSON matching the requested schema.`,
       setLocalVisionProgress(null);
       setLocalVisionStatus(`Local vision complete: ${result.frame_evidence?.length || 0} frame${result.frame_evidence?.length === 1 ? "" : "s"} checked, ${result.forbidden_or_not_visible?.length || 0} unsafe claim${result.forbidden_or_not_visible?.length === 1 ? "" : "s"} blocked.`);
     } catch (err) {
-      setLocalVisionError(err?.data?.error || err?.message || "Local vision analysis failed.");
+      setLocalVisionError(friendlyVideoWorkflowError(err, "Local vision analysis failed."));
       setLocalVisionStatus("");
     } finally {
       setLocalVisionRunning(false);
@@ -3338,7 +3327,7 @@ Return only the structured JSON matching the requested schema.`,
       setLocalVisionProgress(null);
       setLocalVisionStatus(`Local Q&A complete: confidence ${Math.round((result.answer?.confidence || 0) * 100)}%, frames ${result.answer?.frame_refs?.join(", ") || "not cited"}.`);
     } catch (err) {
-      setLocalVisionError(err?.data?.error || err?.message || "Local video Q&A failed.");
+      setLocalVisionError(friendlyVideoWorkflowError(err, "Local video Q&A failed."));
       setLocalVisionStatus("");
     } finally {
       setLocalVisionRunning(false);
@@ -3850,9 +3839,10 @@ Return only the structured JSON matching the requested schema.`,
               preload="metadata"
               className="max-h-[34rem] w-full bg-black object-contain"
               onError={() => {
-                if (!selectedVideo?.path || playbackPreviewUrl || playbackPreviewStatus) return;
+                if (!selectedVideo?.path || playbackPreviewUrl || playbackPreviewConverting) return;
                 setPlaybackPreviewError("");
                 setPlaybackPreviewStatus("Raw video playback failed; preparing MP4 preview...");
+                setPlaybackPreviewConverting(true);
                 base44.integrations.Core.ConvertLocalVideoForPlayback({
                   path: selectedVideo.path,
                   label: selectedVideo.label || selectedVideo.filename || "local-video-preview",
@@ -3866,11 +3856,15 @@ Return only the structured JSON matching the requested schema.`,
                   .catch((err) => {
                     setPlaybackPreviewError(err?.data?.error || err?.message || "Could not prepare an MP4 preview for this video.");
                     setPlaybackPreviewStatus("");
-                  });
+                  })
+                  .finally(() => setPlaybackPreviewConverting(false));
               }}
               onLoadedMetadata={(event) => {
                 const duration = Number(event.currentTarget.duration);
                 setMetadataDurationSeconds(Number.isFinite(duration) && duration > 0 ? duration : 0);
+                if (!playbackPreviewUrl && !isBrowserPlayableLinkedVideo(selectedVideo)) {
+                  setPlaybackPreviewStatus("Original local video preview is ready. Annotation will use the original file.");
+                }
                 seekPreviewVideo(scanCursor);
               }}
               onSeeked={(event) => {
