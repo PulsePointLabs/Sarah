@@ -11,7 +11,7 @@ test('classifies Anthropic low-credit failures as non-retryable', () => {
   assert.equal(classified.category, 'insufficient_credits');
   assert.equal(classified.retryable, false);
   assert.equal(shouldRetryProviderError(error, { provider: 'anthropic' }), false);
-  assert.match(classified.user_message, /credits are unavailable/i);
+  assert.match(classified.user_message, /credits or quota are unavailable/i);
 });
 
 test('classifies billing and spending limits as insufficient credits', () => {
@@ -26,6 +26,24 @@ test('classifies billing and spending limits as insufficient credits', () => {
     assert.equal(classified.category, 'insufficient_credits', message);
     assert.equal(classified.retryable, false);
   }
+});
+
+test('classifies OpenAI insufficient quota as non-retryable credits/quota failure', () => {
+  const error = {
+    status: 429,
+    message: JSON.stringify({
+      error: {
+        message: 'You exceeded your current quota, please check your plan and billing details.',
+        type: 'insufficient_quota',
+        code: 'insufficient_quota',
+      },
+    }),
+  };
+  const classified = classifyProviderError(error, { provider: 'openai', requestStage: 'openai_tts' });
+  assert.equal(classified.provider, 'openai');
+  assert.equal(classified.category, 'insufficient_credits');
+  assert.equal(classified.retryable, false);
+  assert.match(classified.user_message, /OpenAI credits or quota/i);
 });
 
 test('classifies invalid keys as non-retryable provider configuration failures', () => {

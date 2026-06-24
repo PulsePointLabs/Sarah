@@ -77,10 +77,39 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function sanitizePublicJob(job = {}) {
+  if (!job || job.status !== 'error') return job;
+  const defaultProvider = defaultProviderForJobType(job.type);
+  const rawError = [
+    job.error,
+    job.progress?.message,
+    job.progress?.error_raw,
+    job.progress?.provider_error?.technical_message,
+  ].filter(Boolean).join(' ');
+  const classified = classifyProviderError({ message: rawError }, { defaultProvider });
+  if (classified.category === 'unknown_provider_error') return job;
+  const cleanMessage = friendlyJobErrorMessage({ message: rawError }, { defaultProvider });
+  return {
+    ...job,
+    error: cleanMessage,
+    meta: {
+      ...(job.meta || {}),
+      retry_category: job.meta?.retry_category || classified.category,
+    },
+    progress: {
+      ...(job.progress || {}),
+      message: cleanMessage,
+      provider_error: job.progress?.provider_error || classified,
+      error_raw: classified.technical_message || cleanMessage,
+    },
+  };
+}
+
 function publicJob(job, { includeResult = true } = {}) {
   if (!job) return null;
-  const hasPayload = job.payload != null;
-  const { payload: _payload, abortController: _abortController, ...rest } = job;
+  const safeJob = sanitizePublicJob(job);
+  const hasPayload = safeJob.payload != null;
+  const { payload: _payload, abortController: _abortController, ...rest } = safeJob;
   if (!includeResult) {
     const { result: _result, ...summary } = rest;
     const progress = summary.progress ? { ...summary.progress } : summary.progress;
@@ -118,6 +147,12 @@ function shouldRetainPayloadForRetry(error) {
     'timeout',
     'output_truncation',
   ].includes(category);
+}
+
+function defaultProviderForJobType(type = '') {
+  const name = String(type || '');
+  if (name === 'tts_export' || name === 'profile_anatomy_video' || name === 'session_review_video') return 'openai';
+  return 'anthropic';
 }
 
 function isCleared(job) {
@@ -284,7 +319,9 @@ function runNext() {
       })
       .catch((error) => {
         const cancelled = job.abortController.signal.aborted;
-        const cleanErrorMessage = cancelled ? 'Cancelled' : friendlyJobErrorMessage(error);
+        const defaultProvider = defaultProviderForJobType(job?.type);
+        const cleanErrorMessage = cancelled ? 'Cancelled' : friendlyJobErrorMessage(error, { defaultProvider });
+        const providerError = cancelled ? null : classifyProviderError(error, { defaultProvider });
         const providerRetryable = !cancelled && shouldRetainPayloadForRetry(error);
         const retainPayloadForRetry = !cancelled && Boolean(providerRetryable || job.progress?.retryable || job.progress?.payload_ref_retained);
         patchJob(job, {
@@ -294,8 +331,8 @@ function runNext() {
           meta: {
             ...(job.meta || {}),
             retryable: retainPayloadForRetry || Boolean(job.meta?.retryable),
-            retry_category: retainPayloadForRetry
-              ? (job.progress?.provider_error?.category || classifyProviderError(error, { defaultProvider: 'anthropic' })?.category || null)
+          retry_category: retainPayloadForRetry
+              ? (job.progress?.provider_error?.category || providerError?.category || null)
               : job.meta?.retry_category,
           },
           finishedAt: nowIso(),
@@ -303,7 +340,10 @@ function runNext() {
         patchProgress(job, {
           phase: cancelled ? 'cancelled' : 'error',
           message: cleanErrorMessage,
-          ...(cancelled ? {} : { error_raw: error?.message || String(error) }),
+          ...(cancelled ? {} : {
+            provider_error: providerError,
+            error_raw: providerError?.technical_message || cleanErrorMessage,
+          }),
         });
       })
       .finally(() => {

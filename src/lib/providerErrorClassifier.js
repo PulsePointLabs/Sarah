@@ -76,8 +76,14 @@ function httpStatus(error) {
 function providerName(error, fallback = "unknown") {
   const text = nestedStrings(error).join(" ").toLowerCase();
   if (/anthropic|claude/.test(text)) return "anthropic";
-  if (/openai|whisper|nova|gpt/.test(text)) return "openai";
+  if (/openai|whisper|nova|gpt|tts-1|insufficient_quota/.test(text)) return "openai";
   return fallback;
+}
+
+function providerLabel(provider = "unknown") {
+  if (provider === "anthropic") return "Anthropic";
+  if (provider === "openai") return "OpenAI";
+  return "The AI provider";
 }
 
 function providerCode(error) {
@@ -107,10 +113,10 @@ export function classifyProviderError(error, options = {}) {
   let nextAction = "review_error";
   let userMessage = "The AI provider failed. Sarah preserved any completed checkpoints.";
 
-  if (/credit balance is too low|insufficient credits?|no available credits?|billing balance|billing limit|spending limit|usage limit|purchase credits|plans\s*&\s*billing|account has no available credits/.test(haystack)) {
+  if (/insufficient_quota|credit balance is too low|insufficient credits?|no available credits?|billing balance|billing limit|spending limit|usage limit|quota exceeded|exceeded your current quota|purchase credits|plans\s*&\s*billing|account has no available credits/.test(haystack)) {
     category = "insufficient_credits";
     nextAction = "add_provider_credits_then_retry_final_only";
-    userMessage = "Anthropic credits are unavailable. Completed checkpoints were preserved; add credits, then retry the final synthesis only.";
+    userMessage = `${providerLabel(provider)} credits or quota are unavailable. Completed checkpoints were preserved; add credits or update billing, then retry only the failed stage.`;
   } else if (/invalid api key|incorrect api key|unauthorized|authentication|auth failed|permission denied/.test(haystack) || status === 401 || status === 403) {
     category = /invalid api key|incorrect api key/.test(haystack) ? "invalid_api_key" : "authentication_failure";
     nextAction = "fix_provider_configuration";

@@ -18,7 +18,15 @@ test('friendlyJobErrorMessage maps Anthropic credit exhaustion to a concise user
   const raw = '400 {"type":"error","error":{"message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}';
   assert.equal(
     friendlyJobErrorMessage(new Error(raw)),
-    'Anthropic credits are unavailable. Completed checkpoints were preserved; add credits, then retry the final synthesis only.',
+    'Anthropic credits or quota are unavailable. Completed checkpoints were preserved; add credits or update billing, then retry only the failed stage.',
+  );
+});
+
+test('friendlyJobErrorMessage maps OpenAI TTS quota exhaustion to OpenAI wording', () => {
+  const raw = '{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","code":"insufficient_quota"}}';
+  assert.equal(
+    friendlyJobErrorMessage(new Error(raw), { defaultProvider: 'openai' }),
+    'OpenAI credits or quota are unavailable. Completed checkpoints were preserved; add credits or update billing, then retry only the failed stage.',
   );
 });
 
@@ -28,7 +36,7 @@ test('friendlyJobStatusMessage cleans failed job progress messages', () => {
     error: '400 {"type":"error","error":{"message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}',
     progress: { phase: 'error' },
   };
-  assert.match(friendlyJobStatusMessage(job), /Anthropic credits are unavailable/);
+  assert.match(friendlyJobStatusMessage(job), /Anthropic credits or quota are unavailable/);
   assert.doesNotMatch(friendlyJobStatusMessage(job), /\{"type":"error"/);
 });
 

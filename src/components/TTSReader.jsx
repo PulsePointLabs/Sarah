@@ -232,8 +232,15 @@ const getTtsErrorMessage = (err) => {
   // Base44/OpenAI sometimes returns a JSON string inside the error field.
   try {
     const parsed = JSON.parse(raw);
-    return parsed?.error?.message || parsed?.message || raw;
+    const parsedMessage = parsed?.error?.message || parsed?.message || parsed?.error || raw;
+    if (/insufficient_quota|exceeded your current quota|billing/i.test(String(parsedMessage))) {
+      return "OpenAI TTS credits or quota are unavailable. Add credits or update billing, then retry audio playback.";
+    }
+    return parsedMessage;
   } catch {
+    if (/insufficient_quota|exceeded your current quota|billing/i.test(raw)) {
+      return "OpenAI TTS credits or quota are unavailable. Add credits or update billing, then retry audio playback.";
+    }
     return raw;
   }
 };
@@ -886,7 +893,11 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       if (isAbortError(err) || gen !== genRef.current) return;
       console.error("TTS fetch failed:", err);
       setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) });
-      stop();
+      stop({ clearStatus: false });
+      cacheReadyRef.current = new Set();
+      cacheFetchingRef.current = new Set();
+      cacheTotalRef.current = 0;
+      publishAudioCacheStatus();
       return;
     }
 
@@ -912,7 +923,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       URL.revokeObjectURL(url);
       sourceRef.current = null;
       setRequestStatus({ type: "error", msg: "Audio playback failed" });
-      stop();
+      stop({ clearStatus: false });
     };
     sourceRef.current = { audio, url };
     

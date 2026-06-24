@@ -2,12 +2,13 @@ import { classifyProviderError, extractProviderErrorMessage } from "./providerEr
 
 export { extractProviderErrorMessage };
 
-export function friendlyJobErrorMessage(error, { preserveContext = true } = {}) {
-  const classified = classifyProviderError(error, { defaultProvider: "anthropic" });
+export function friendlyJobErrorMessage(error, { preserveContext = true, defaultProvider = "anthropic", provider } = {}) {
+  const classified = classifyProviderError(error, { defaultProvider, provider });
   if (classified.category === "insufficient_credits") {
+    const provider = classified.provider === "openai" ? "OpenAI" : classified.provider === "anthropic" ? "Anthropic" : "AI provider";
     return preserveContext
-      ? "Anthropic credits are unavailable. Completed checkpoints were preserved; add credits, then retry the final synthesis only."
-      : "Anthropic credits are unavailable. Add credits in Anthropic Plans & Billing, then try again.";
+      ? `${provider} credits or quota are unavailable. Completed checkpoints were preserved; add credits or update billing, then retry only the failed stage.`
+      : `${provider} credits or quota are unavailable. Add credits or update billing, then try again.`;
   }
   if (classified.category === "provider_unavailable") {
     return preserveContext

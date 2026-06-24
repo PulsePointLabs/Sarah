@@ -6,6 +6,7 @@ import {
   TTS_CONTENT_TYPES,
   synthesizeTTSChunk,
 } from '../services/ttsCore.js';
+import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
 
 export const functionsRouter = express.Router();
 const ttsRenderJobs = new Map();
@@ -145,11 +146,16 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
     res.setHeader('X-TTS-Retries', String(result.retries));
     res.send(result.buffer);
   } catch (error) {
+    const providerError = classifyProviderError(error, {
+      provider: 'openai',
+      requestStage: 'openai_tts',
+    });
     res.status(error.status || 502).json({
-      error: error.message || String(error),
+      error: providerError.user_message || error.message || String(error),
+      provider_error: providerError,
       length: error.length,
       maxLength: error.maxLength,
-      retryable: true,
+      retryable: providerError.retryable,
     });
   }
 });
