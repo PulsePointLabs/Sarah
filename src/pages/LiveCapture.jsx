@@ -20,7 +20,7 @@ import LiveSessionMobileRecorder from "@/components/LiveSessionMobileRecorder";
 import { base44 } from "@/api/base44Client";
 import { useToast } from "@/components/ui/use-toast";
 import { HR_SOURCE_OPTIONS, PULSOID_MODE_OPTIONS, computeHrvFromRr, maskPulsoidToken, readHrSourceSettings, writeHrSourceSettings } from "@/lib/hrSources";
-import { apiUrl } from "@/lib/mobileApiBase";
+import { apiUrl, isSarahNativeShell } from "@/lib/mobileApiBase";
 import {
   buildLaunchProfileFromRuntime,
   readLiveCaptureLaunchProfile,
@@ -50,6 +50,10 @@ import {
   syncBloodPressureFromHealthConnect,
 } from "@/lib/bloodPressure";
 import {
+  getOmronBloodPressureListenerState,
+  getRememberedOmronDevice,
+  isOmronAutoListenEnabled,
+  setOmronAutoListenEnabled,
   startOmronBloodPressureListener,
   stopOmronBloodPressureListener,
 } from "@/lib/omronBloodPressureBle";
@@ -3036,44 +3040,21 @@ export default function LiveCapture() {
       });
   }, [stampBloodPressureReadings]);
 
-  const toggleOmronBloodPressureListener = useCallback(async () => {
+  const startOmronBloodPressureListenerForLiveSession = useCallback(async ({ auto = false, forceDevicePicker = false } = {}) => {
     if (bpOmronActionInFlightRef.current) {
-      setBpCapture((prev) => ({
-        ...prev,
-        message: "OMRON listener is already handling the previous tap.",
-      }));
-      return;
-    }
-
-    if (bpOmronListening) {
-      bpOmronActionInFlightRef.current = true;
-      setBpCapture((prev) => ({
-        ...prev,
-        syncing: true,
-        error: "",
-        message: "Stopping OMRON listener...",
-      }));
-      try {
-        await stopOmronBloodPressureListener();
-        setBpOmronListening(false);
+      if (!auto) {
         setBpCapture((prev) => ({
           ...prev,
-          syncing: false,
-          status: prev.lastReading ? "ready" : "idle",
-          message: prev.lastReading ? "OMRON listener stopped. Latest BP is saved." : "OMRON listener stopped.",
+          message: "OMRON listener is already handling the previous tap.",
         }));
-      } catch (error) {
-        setBpCapture((prev) => ({
-          ...prev,
-          syncing: false,
-          status: "error",
-          error: error?.message || "Could not stop OMRON listener.",
-          message: error?.message || "Could not stop OMRON listener.",
-        }));
-      } finally {
-        bpOmronActionInFlightRef.current = false;
       }
-      return;
+      return false;
+    }
+    if (auto && !isOmronAutoListenEnabled()) return false;
+    if (auto && !getRememberedOmronDevice()) return false;
+    if (auto && getOmronBloodPressureListenerState()?.listening) {
+      setBpOmronListening(true);
+      return true;
     }
 
     bpOmronActionInFlightRef.current = true;
@@ -3082,10 +3063,11 @@ export default function LiveCapture() {
       syncing: true,
       status: "syncing",
       error: "",
-      message: "Starting OMRON listener...",
+      message: auto ? "Re-arming saved OMRON listener..." : "Starting OMRON listener...",
     }));
     try {
       await startOmronBloodPressureListener({
+        forceDevicePicker,
         onStatus: (message) => {
           setBpCapture((prev) => ({
             ...prev,
@@ -3132,26 +3114,77 @@ export default function LiveCapture() {
           }));
         },
       });
+      setOmronAutoListenEnabled(true);
       setBpOmronListening(true);
       setBpCapture((prev) => ({
         ...prev,
         syncing: false,
         status: prev.lastReading ? "ready" : "syncing",
-        message: "OMRON listener is active. Take a BP reading or press the cuff Bluetooth/Transfer button once until the O flashes.",
+        message: auto
+          ? "Saved OMRON listener is re-armed. Take a BP reading or wake/transmit the cuff."
+          : "OMRON listener is active. Take a BP reading or press the cuff Bluetooth/Transfer button once until the O flashes.",
       }));
+      return true;
     } catch (error) {
       setBpOmronListening(false);
       setBpCapture((prev) => ({
         ...prev,
         syncing: false,
-        status: "error",
-        error: error?.message || "Could not start OMRON listener.",
-        message: error?.message || "Could not start OMRON listener.",
+        status: auto ? (prev.lastReading ? "ready" : "idle") : "error",
+        error: auto ? "" : error?.message || "Could not start OMRON listener.",
+        message: auto
+          ? (prev.lastReading ? "Latest BP is saved. OMRON will re-arm when the cuff/app is available." : "OMRON auto-listen is waiting for the saved cuff to be available.")
+          : error?.message || "Could not start OMRON listener.",
       }));
+      return false;
     } finally {
       bpOmronActionInFlightRef.current = false;
     }
-  }, [bpOmronListening, saveOmronBloodPressureForLiveSession]);
+  }, [saveOmronBloodPressureForLiveSession]);
+
+  const toggleOmronBloodPressureListener = useCallback(async () => {
+    if (bpOmronActionInFlightRef.current) {
+      setBpCapture((prev) => ({
+        ...prev,
+        message: "OMRON listener is already handling the previous tap.",
+      }));
+      return;
+    }
+
+    if (bpOmronListening) {
+      bpOmronActionInFlightRef.current = true;
+      setBpCapture((prev) => ({
+        ...prev,
+        syncing: true,
+        error: "",
+        message: "Stopping OMRON listener...",
+      }));
+      try {
+        setOmronAutoListenEnabled(false);
+        await stopOmronBloodPressureListener();
+        setBpOmronListening(false);
+        setBpCapture((prev) => ({
+          ...prev,
+          syncing: false,
+          status: prev.lastReading ? "ready" : "idle",
+          message: prev.lastReading ? "OMRON listener stopped. Latest BP is saved." : "OMRON listener stopped.",
+        }));
+      } catch (error) {
+        setBpCapture((prev) => ({
+          ...prev,
+          syncing: false,
+          status: "error",
+          error: error?.message || "Could not stop OMRON listener.",
+          message: error?.message || "Could not stop OMRON listener.",
+        }));
+      } finally {
+        bpOmronActionInFlightRef.current = false;
+      }
+      return;
+    }
+
+    await startOmronBloodPressureListenerForLiveSession();
+  }, [bpOmronListening, startOmronBloodPressureListenerForLiveSession]);
 
   useEffect(() => () => {
     stopOmronBloodPressureListener().catch(() => {});
@@ -3222,6 +3255,46 @@ export default function LiveCapture() {
     }, BLOOD_PRESSURE_SYNC_POLL_MS);
     return () => window.clearInterval(timer);
   }, [liveSession?.activeSessionId, syncBloodPressureForLiveSession]);
+
+  useEffect(() => {
+    if (!isSarahNativeShell()) return undefined;
+
+    let mounted = true;
+    let appStateHandle = null;
+    const refreshAndRearmBloodPressure = () => {
+      if (!mounted) return;
+      syncBloodPressureForLiveSession({ manual: false });
+      if (isOmronAutoListenEnabled() && !getOmronBloodPressureListenerState()?.listening) {
+        startOmronBloodPressureListenerForLiveSession({ auto: true }).catch(() => {});
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshAndRearmBloodPressure();
+    };
+
+    if (isOmronAutoListenEnabled()) {
+      window.setTimeout(refreshAndRearmBloodPressure, 500);
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    import("@capacitor/app")
+      .then(({ App: CapacitorApp }) => CapacitorApp?.addListener?.("appStateChange", ({ isActive } = {}) => {
+        if (isActive) refreshAndRearmBloodPressure();
+      }))
+      .then((handle) => {
+        appStateHandle = handle;
+      })
+      .catch(() => {});
+
+    return () => {
+      mounted = false;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      appStateHandle?.remove?.();
+    };
+  }, [
+    liveSession?.activeSessionId,
+    startOmronBloodPressureListenerForLiveSession,
+    syncBloodPressureForLiveSession,
+  ]);
 
   const liveCuePhraseBank = useMemo(
     () => resolveLiveCuePhraseBank(liveCueSettings, { captureKind }),

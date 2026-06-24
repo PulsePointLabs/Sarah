@@ -6,8 +6,66 @@ const CURRENT_TIME_SERVICE_UUID = "00001805-0000-1000-8000-00805f9b34fb";
 const BATTERY_SERVICE_UUID = "0000180f-0000-1000-8000-00805f9b34fb";
 const DEVICE_INFORMATION_SERVICE_UUID = "0000180a-0000-1000-8000-00805f9b34fb";
 const OMRON_RECONNECT_DELAY_MS = 2500;
+const OMRON_DEVICE_STORAGE_KEY = "pulsepoint.omronBp.device";
+const OMRON_AUTO_LISTEN_STORAGE_KEY = "pulsepoint.omronBp.autoListen";
 
 let activeOmronListener = null;
+
+function readStoredJson(key, fallback = null) {
+  try {
+    const raw = window.localStorage?.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredJson(key, value) {
+  try {
+    window.localStorage?.setItem(key, JSON.stringify(value));
+  } catch {
+    // Local storage is best-effort; BLE can still work for the current run.
+  }
+}
+
+export function getRememberedOmronDevice() {
+  const device = readStoredJson(OMRON_DEVICE_STORAGE_KEY, null);
+  return device?.deviceId ? device : null;
+}
+
+export function clearRememberedOmronDevice() {
+  try {
+    window.localStorage?.removeItem(OMRON_DEVICE_STORAGE_KEY);
+  } catch {
+    // Ignore storage cleanup failures.
+  }
+}
+
+export function setOmronAutoListenEnabled(enabled) {
+  try {
+    window.localStorage?.setItem(OMRON_AUTO_LISTEN_STORAGE_KEY, enabled ? "on" : "off");
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+export function isOmronAutoListenEnabled() {
+  try {
+    return window.localStorage?.getItem(OMRON_AUTO_LISTEN_STORAGE_KEY) === "on";
+  } catch {
+    return false;
+  }
+}
+
+function rememberOmronDevice(device) {
+  if (!device?.deviceId) return;
+  writeStoredJson(OMRON_DEVICE_STORAGE_KEY, {
+    deviceId: device.deviceId,
+    name: device.name || device.displayName || "OMRON BP7000",
+    displayName: device.displayName || device.name || "OMRON BP7000",
+    rememberedAt: new Date().toISOString(),
+  });
+}
 
 function dataViewFromValue(value) {
   if (value instanceof DataView) return value;
@@ -302,11 +360,19 @@ export async function startOmronBloodPressureListener({
   onReading,
   onDisconnect,
   onError,
+  forceDevicePicker = false,
+  rememberDevice = true,
 } = {}) {
   await stopOmronBloodPressureListener().catch(() => {});
   await initializeAndroidBle(onStatus);
 
-  const device = await requestOmronDevice(onStatus);
+  let device = !forceDevicePicker ? getRememberedOmronDevice() : null;
+  if (device?.deviceId) {
+    onStatus?.(`Using saved OMRON BP7000 Bluetooth permission (${device.name || "OMRON BP7000"}).`);
+  } else {
+    device = await requestOmronDevice(onStatus);
+    if (rememberDevice) rememberOmronDevice(device);
+  }
 
   const deviceId = device?.deviceId;
   if (!deviceId) throw new Error("Android Bluetooth picker did not return a usable OMRON device id.");
@@ -334,6 +400,10 @@ export async function startOmronBloodPressureListener({
   } catch (error) {
     activeOmronListener = null;
     await BleClient.disconnect(deviceId).catch(() => {});
+    if (device?.rememberedAt && !isRecoverableOmronConnectionError(error)) {
+      clearRememberedOmronDevice();
+      throw new Error(`Saved OMRON Bluetooth permission did not reconnect. Tap Listen OMRON once and reselect the cuff. ${error?.message || ""}`.trim());
+    }
     throw error;
   }
 }
