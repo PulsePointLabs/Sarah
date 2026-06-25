@@ -257,6 +257,26 @@ test('missing focused evidence produces a placeholder rather than unrelated fall
   assert.deepEqual(missing.explicitly_assigned_evidence_ids, []);
 });
 
+test('mixed limitations section uses safe overview evidence instead of a title card', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'limitations-fixture-review',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: [
+      'Limitations / Future Useful Coverage',
+      'A dedicated pubic mound close-up and a posterior perineal reference would improve future coverage.',
+    ],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'limitations_future_coverage', section_label: 'Limitations / Future Useful Coverage' },
+      { type: 'section', section_key: 'limitations_future_coverage', section_label: 'Limitations / Future Useful Coverage' },
+    ],
+    images,
+  });
+  const limitations = manifest.sections.find((section) => section.section_key === 'limitations_future_coverage');
+  assert.equal(limitations.media_mode, 'assigned_evidence');
+  assert.equal(limitations.assigned_evidence[0].evidence_id, 'pelvic-genital-current');
+});
+
 test('renderer timeline uses identical section IDs and measured audio durations', () => {
   const manifest = buildManifest();
   validateReviewEvidenceManifest(manifest);

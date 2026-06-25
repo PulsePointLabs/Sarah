@@ -816,6 +816,20 @@ function bestSpecificSectionFallback(images = [], targetKey, meta = {}, paragrap
     .sort((a, b) => b.score - a.score)[0] || null;
 }
 
+function bestOverviewSectionFallback(images = [], reviewScope = '', usedIds = new Map()) {
+  return images
+    .map((image) => {
+      const imageId = image?.id || '';
+      const useCount = imageId ? (usedIds.get(imageId) || 0) : 0;
+      return {
+        image,
+        score: scoreOverviewImage(image, reviewScope) - useCount * 90,
+      };
+    })
+    .filter((entry) => entry.image && entry.score > 0 && !isDeviceHeavyImage(entry.image))
+    .sort((a, b) => b.score - a.score)[0] || null;
+}
+
 function imageRegionTrace(image = {}) {
   const keys = [...regionKeysForImage(image)];
   return {
@@ -1032,11 +1046,17 @@ export function createReviewEvidenceManifest({
         };
       })
       .sort((a, b) => b.adjustedScore - a.adjustedScore || b.candidate.score - a.candidate.score);
-    const fallback = ranked[0] ? null : bestSpecificSectionFallback(images, section.target_region, meta, section.narration_text, reviewScope, evidenceUseCounts);
+    const fallback = ranked[0]
+      ? null
+      : MIXED_SECTION_KEYS.has(section.section_key)
+        ? bestOverviewSectionFallback(images, reviewScope, evidenceUseCounts)
+        : bestSpecificSectionFallback(images, section.target_region, meta, section.narration_text, reviewScope, evidenceUseCounts);
     const selected = ranked[0] || fallback;
     const directReason = selected
       ? fallback
-        ? `Selected closest safe anatomical fallback for ${REGION_LABELS.get(section.target_region) || section.target_region}; exact section evidence was not labelled strongly enough.`
+        ? MIXED_SECTION_KEYS.has(section.section_key)
+          ? `Selected safe overview evidence for ${section.section_title}; this mixed narrative section does not require a single exact anatomical close-up.`
+          : `Selected closest safe anatomical fallback for ${REGION_LABELS.get(section.target_region) || section.target_region}; exact section evidence was not labelled strongly enough.`
         : `Selected explicit compatible evidence for ${REGION_LABELS.get(section.target_region) || section.target_region}.`
       : `No compatible focused evidence for ${REGION_LABELS.get(section.target_region) || section.target_region}; renderer must use section card.`;
     const assignment = selected
