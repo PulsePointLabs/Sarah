@@ -91,6 +91,53 @@ class SarahFileSaverPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun getDownloadStatus(call: PluginCall) {
+        val downloadId = call.getDouble("downloadId")?.toLong()
+        if (downloadId == null || downloadId <= 0) {
+            call.reject("Missing Android download id.")
+            return
+        }
+
+        try {
+            val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val query = DownloadManager.Query().setFilterById(downloadId)
+            manager.query(query).use { cursor ->
+                if (!cursor.moveToFirst()) {
+                    call.resolve(
+                        JSObject()
+                            .put("ok", false)
+                            .put("downloadId", downloadId)
+                            .put("status", "missing")
+                            .put("message", "Android no longer has this download in its queue.")
+                    )
+                    return
+                }
+
+                val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                val downloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                val localUriIndex = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
+                val localUri = if (localUriIndex >= 0) cursor.getString(localUriIndex) else null
+
+                call.resolve(
+                    JSObject()
+                        .put("ok", true)
+                        .put("downloadId", downloadId)
+                        .put("status", downloadStatusLabel(status))
+                        .put("reason", reason)
+                        .put("reasonLabel", downloadReasonLabel(status, reason))
+                        .put("bytesDownloaded", downloaded)
+                        .put("totalBytes", total)
+                        .put("localUri", localUri)
+                )
+            }
+        } catch (error: Exception) {
+            call.reject(error.message ?: "Could not read Android download status.", error)
+        }
+    }
+
+    @PluginMethod
     fun openAppSettings(call: PluginCall) {
         try {
             val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
@@ -123,6 +170,44 @@ class SarahFileSaverPlugin : Plugin() {
             lower.endsWith(".txt") -> "text/plain"
             else -> "application/octet-stream"
         }
+    }
+
+    private fun downloadStatusLabel(status: Int): String {
+        return when (status) {
+            DownloadManager.STATUS_PENDING -> "pending"
+            DownloadManager.STATUS_RUNNING -> "running"
+            DownloadManager.STATUS_PAUSED -> "paused"
+            DownloadManager.STATUS_SUCCESSFUL -> "successful"
+            DownloadManager.STATUS_FAILED -> "failed"
+            else -> "unknown"
+        }
+    }
+
+    private fun downloadReasonLabel(status: Int, reason: Int): String {
+        if (status == DownloadManager.STATUS_PAUSED) {
+            return when (reason) {
+                DownloadManager.PAUSED_WAITING_TO_RETRY -> "waiting_to_retry"
+                DownloadManager.PAUSED_WAITING_FOR_NETWORK -> "waiting_for_network"
+                DownloadManager.PAUSED_QUEUED_FOR_WIFI -> "queued_for_wifi"
+                DownloadManager.PAUSED_UNKNOWN -> "paused_unknown"
+                else -> "paused_$reason"
+            }
+        }
+        if (status == DownloadManager.STATUS_FAILED) {
+            return when (reason) {
+                DownloadManager.ERROR_CANNOT_RESUME -> "cannot_resume"
+                DownloadManager.ERROR_DEVICE_NOT_FOUND -> "device_not_found"
+                DownloadManager.ERROR_FILE_ALREADY_EXISTS -> "file_already_exists"
+                DownloadManager.ERROR_FILE_ERROR -> "file_error"
+                DownloadManager.ERROR_HTTP_DATA_ERROR -> "http_data_error"
+                DownloadManager.ERROR_INSUFFICIENT_SPACE -> "insufficient_space"
+                DownloadManager.ERROR_TOO_MANY_REDIRECTS -> "too_many_redirects"
+                DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> "unhandled_http_code"
+                DownloadManager.ERROR_UNKNOWN -> "unknown_error"
+                else -> "error_$reason"
+            }
+        }
+        return ""
     }
 
     private fun openExternalUrl(url: String) {

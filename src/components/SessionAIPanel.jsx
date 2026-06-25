@@ -839,7 +839,7 @@ export function SessionReviewVideoExportButton({
         message: result?.openedExternally
           ? "Android opened the download link. Use the system browser/download prompt to save it."
           : result?.systemDownload
-          ? "Download handed to Android. Check the notification shade or Downloads."
+          ? `Download handed to Android${result?.downloadStatus?.status ? ` (${result.downloadStatus.status})` : ""}. Check the notification shade or Downloads.`
           : result?.bytes
           ? `Review video saved (${Math.round(result.bytes / 1024 / 1024)} MB).`
           : "Review video download started.",
