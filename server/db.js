@@ -46,6 +46,12 @@ export function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_entities_entity_created ON entities(entity, created_date);
     CREATE INDEX IF NOT EXISTS idx_entities_entity_updated ON entities(entity, updated_date);
+    CREATE INDEX IF NOT EXISTS idx_entities_processing_job_status_updated
+      ON entities(entity, json_extract(data, '$.status'), updated_date)
+      WHERE entity = 'ProcessingJob';
+    CREATE INDEX IF NOT EXISTS idx_entities_processing_job_type_updated
+      ON entities(entity, json_extract(data, '$.type'), updated_date)
+      WHERE entity = 'ProcessingJob';
 
     CREATE TABLE IF NOT EXISTS local_vision_results (
       id TEXT PRIMARY KEY,
