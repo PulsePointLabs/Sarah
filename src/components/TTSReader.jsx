@@ -42,8 +42,8 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => {
     reject(new DOMException("TTS request cancelled", "AbortError"));
   }, { once: true });
 });
-const TTS_UNIT_MAX_CHARS = Math.min(TTS_CHUNK_TARGET_CHARS, 1100);
-const TTS_PREFETCH_AHEAD = 3;
+const TTS_UNIT_MAX_CHARS = TTS_CHUNK_TARGET_CHARS;
+const TTS_PREFETCH_AHEAD = 2;
 const ttsCacheKey = (chunk, format, runtime, previousContext = "") =>
   `${runtime.cacheProfile}|${format}|${buildTTSInstructions(runtime.instructions, previousContext).trim()}|${chunk}`;
 const ttsExportStorageKey = (sessionId, title = "") =>
@@ -425,6 +425,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const currentChunkRef = useRef(null); // the chunk currently playing/buffering
   const voiceRef = useRef("nova");
   const runtimeRef = useRef(getTTSRuntime(ttsSettings));
+  const audioCtxRef = useRef(null);
   const playbackAbortRef = useRef(null);
   const prefetchAbortRef = useRef(null);
   const wakeLockRef = useRef(null);
@@ -457,6 +458,20 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const contentHash = useMemo(() => hashTtsContent(readableParagraphs), [readableParagraphs]);
   const checkpointKey = useMemo(() => ttsCheckpointKey(sessionId, title), [sessionId, title]);
   const voiceSettingsHash = useMemo(() => hashTtsContent([JSON.stringify(normalizeTTSSettings(ttsSettings))]), [ttsSettings]);
+
+  const getAudioCtx = () => {
+    if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AudioContextCtor();
+      ctx.addEventListener?.("statechange", () => {
+        if (ctx.state === "suspended" && stateRef.current === "playing" && !userPausedRef.current) {
+          ctx.resume().catch(() => {});
+        }
+      });
+      audioCtxRef.current = ctx;
+    }
+    return audioCtxRef.current;
+  };
 
   useEffect(() => {
     currentSentenceIdxRef.current = currentSentenceIdx;
@@ -820,15 +835,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         let audioFormat = playbackFormatForRuntime(runtime.format);
 
         if (!audioBuffer) {
-          if (!speculative) {
-            const paraLabel = currentParaRef.current >= 0 && readableParagraphs.length
-              ? `paragraph ${Math.min(currentParaRef.current + 1, readableParagraphs.length)} / ${readableParagraphs.length}`
-              : "current paragraph";
-            const cached = cacheTotalRef.current
-              ? ` Cached ${cacheReadyRef.current.size}/${cacheTotalRef.current}.`
-              : "";
-            setRequestStatus({ type: "fetching", msg: `Requesting first playable TTS audio for ${paraLabel}.${cached}` });
-          }
+          if (!speculative) setRequestStatus({ type: "fetching", msg: "Fetching audio..." });
           const response = await callTTSWithRetries({
             text: prepareTTSInput(chunkText),
             voice: voiceRef.current,
@@ -836,7 +843,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             speed: runtime.speed,
             instructions: runtime.supportsInstructions ? instructions : "",
             format: runtime.format,
-          }, 3, speculative ? prefetchAbortRef.current?.signal : playbackAbortRef.current?.signal);
+          }, speculative ? 3 : 7, speculative ? prefetchAbortRef.current?.signal : undefined);
           if (response.data?.error) throw new Error(response.data.error);
           audioFormat = response.data?.format || audioFormat;
           const base64 = response.data.audio;
@@ -854,11 +861,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           }
         }
 
+        const ctx = getAudioCtx();
+        const decoded = await ctx.decodeAudioData(audioBuffer.slice(0));
         markCacheReady(statusKey);
-        return {
-          buffer: audioBuffer.slice(0),
-          format: audioFormat,
-        };
+        return decoded;
       } catch (err) {
         markCacheFetching(statusKey, false);
         prefetchCacheRef.current.delete(cacheKey); // allow retry on failure
@@ -908,9 +914,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     setBufferingPara(currentParaRef.current);
 
-    let audioChunk;
+    let decoded;
     try {
-      audioChunk = await fetchDecoded(chunk, gen);
+      decoded = await fetchDecoded(chunk, gen);
     } catch (err) {
       if (isAbortError(err) || gen !== genRef.current) return;
       console.error("TTS fetch failed:", err);
@@ -930,26 +936,19 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     if (gen !== genRef.current) return;
 
-    const audioBuffer = audioChunk?.buffer || audioChunk;
-    const audioFormat = audioChunk?.format || playbackFormatForRuntime(runtimeRef.current.format);
-    const url = URL.createObjectURL(new Blob([audioBuffer], { type: getTTSMime(audioFormat) }));
-    const audio = new Audio(url);
-    audio.preload = "auto";
+    const ctx = getAudioCtx();
+    if (ctx.state === "suspended") await ctx.resume();
     const playbackStartWord = Number(chunk?.playbackStartWord || 0);
-
-    audio.onended = () => {
-      URL.revokeObjectURL(url);
+    const source = ctx.createBufferSource();
+    source.buffer = decoded;
+    source.connect(ctx.destination);
+    const chunkDuration = decoded.duration;
+    let audioStartTime = null;
+    source.onended = () => {
       sourceRef.current = null;
-      // Move to next chunk after this one finishes
       playNextChunk(gen);
     };
-    audio.onerror = () => {
-      URL.revokeObjectURL(url);
-      sourceRef.current = null;
-      setRequestStatus({ type: "error", msg: "Audio playback failed" });
-      stop({ clearStatus: false });
-    };
-    sourceRef.current = { audio, url };
+    sourceRef.current = source;
     
     // Clear previous interval if it exists
     if (updateIntervalRef.current) clearInterval(updateIntervalRef.current);
@@ -961,30 +960,23 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         updateIntervalRef.current = null;
         return;
       }
-      playbackTimeRef.current = Math.max(0, audio.currentTime || 0);
-      updateWordHighlight(audio.duration);
+      const elapsed = audioStartTime == null ? 0 : ctx.currentTime - audioStartTime;
+      playbackTimeRef.current = Math.max(0, Math.min(elapsed, chunkDuration));
+      updateWordHighlight(chunkDuration);
     }, 50);
-    
+
     try {
       if (playbackStartWord > 0) {
-        const applyResumeOffset = () => {
-          if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
-          const words = getChunkText(chunk).split(/\s+/).filter(Boolean);
-          if (!words.length) return;
-          audio.currentTime = Math.min(audio.duration - 0.05, Math.max(0, audio.duration * (playbackStartWord / words.length)));
-          playbackTimeRef.current = Math.max(0, audio.currentTime || 0);
-          updateWordHighlight(audio.duration);
-        };
-        if (Number.isFinite(audio.duration) && audio.duration > 0) {
-          applyResumeOffset();
-        } else {
-          audio.addEventListener("loadedmetadata", applyResumeOffset, { once: true });
-        }
+        const words = getChunkText(chunk).split(/\s+/).filter(Boolean);
+        const offset = words.length ? Math.min(chunkDuration - 0.05, Math.max(0, chunkDuration * (playbackStartWord / words.length))) : 0;
+        playbackTimeRef.current = offset;
+        source.start(0, offset);
+      } else {
+        source.start(0);
       }
-      await audio.play();
+      audioStartTime = ctx.currentTime - playbackTimeRef.current;
       setRequestStatus(null);
     } catch (err) {
-      URL.revokeObjectURL(url);
       sourceRef.current = null;
       stop({ clearStatus: false });
       setRequestStatus({ type: "error", msg: getTtsErrorMessage(err) || "Audio playback was blocked" });
@@ -1079,10 +1071,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     currentSentenceIdxRef.current = sentenceIdx > 0 ? sentenceIdx : -1;
     currentWordIdxRef.current = -1;
     setS("playing");
-    setRequestStatus({
-      type: "fetching",
-      msg: `Starting TTS: ${speechChunks.length} chunk${speechChunks.length === 1 ? "" : "s"} prepared; requesting chunk 1 now.`,
-    });
     saveReadingCheckpoint("playback_start", { force: true });
     setBufferingPara(paraIdx);
     playNextChunk(gen);
@@ -1091,7 +1079,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const handlePlayPause = async () => {
     if (state === "playing") {
       userPausedRef.current = true;
-      try { sourceRef.current?.audio?.pause(); } catch {}
+      try { await getAudioCtx().suspend(); } catch {}
       setS("paused");
       saveReadingCheckpoint("user_paused", { force: true });
       return;
@@ -1107,10 +1095,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     }
     if (state === "paused") {
       userPausedRef.current = false;
-      if (sourceRef.current?.audio) {
+      if (sourceRef.current) {
         setS("playing"); // update state immediately
         saveReadingCheckpoint("resume_existing_audio", { force: true });
-        await sourceRef.current.audio.play().catch(() => {});
+        await getAudioCtx().resume().catch(() => {});
       } else {
         // Was paused during buffering — re-fetch the current chunk
         const gen = genRef.current;
