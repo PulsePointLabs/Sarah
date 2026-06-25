@@ -23,6 +23,7 @@ export async function saveUrlWithSystemPicker(url, filename, options = {}) {
     alternateUrls: buildAlternateDownloadUrls(url),
     filename: filename || "sarah-media-download",
     mimeType: guessMimeType(filename, options.mimeType),
+    headers: options.headers || {},
   });
 }
 
@@ -45,7 +46,7 @@ export async function openAndroidDownloads() {
 export async function downloadOrSaveUrl(url, filename, options = {}) {
   if (!url) return null;
   if (isSarahNativeShell()) {
-    return saveUrlWithAndroidDownloadManager(url, filename, options);
+    return saveUrlWithSystemPicker(url, filename, options);
   }
   const a = document.createElement("a");
   a.href = url;

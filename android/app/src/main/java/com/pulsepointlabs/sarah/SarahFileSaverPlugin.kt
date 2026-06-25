@@ -1,13 +1,9 @@
 package com.pulsepointlabs.sarah
 
 import android.app.Activity
-import android.app.DownloadManager
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Environment
 import android.provider.Settings
-import android.widget.Toast
 import androidx.activity.result.ActivityResult
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -15,77 +11,26 @@ import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.net.HttpURLConnection
-import java.net.URL
+import org.json.JSONObject
 
 @CapacitorPlugin(name = "SarahFileSaver")
 class SarahFileSaverPlugin : Plugin() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    override fun handleOnDestroy() {
-        scope.cancel()
-        super.handleOnDestroy()
-    }
-
     @PluginMethod
     fun downloadWithManager(call: PluginCall) {
-        val urls = managerUrlsFromCall(call)
-        val url = urls.firstOrNull().orEmpty()
-        val filename = safeFilename(call.getString("filename") ?: "sarah-media-download")
-        val mimeType = call.getString("mimeType")?.trim().takeUnless { it.isNullOrBlank() }
-            ?: guessMimeType(filename)
-
-        if (url.isBlank()) {
-            call.reject("Missing download URL.")
-            return
-        }
-
-        try {
-            val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            val request = DownloadManager.Request(Uri.parse(url)).apply {
-                setTitle(filename)
-                setDescription("Downloading from Sarah")
-                setMimeType(mimeType)
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
-                setAllowedOverMetered(true)
-                setAllowedOverRoaming(true)
-                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, filename)
-            }
-            val downloadId = manager.enqueue(request)
-            Toast.makeText(context, "Download queued in Android Downloads", Toast.LENGTH_SHORT).show()
-            call.resolve(
-                JSObject()
-                    .put("ok", true)
-                    .put("filename", filename)
-                    .put("downloadId", downloadId)
-                    .put("sourceUrl", url)
-                    .put("systemDownload", true)
-            )
-        } catch (error: Exception) {
-            call.reject(error.message ?: "Could not queue Android download.", error)
-        }
+        // Backward-compatible bridge name. The APK download path must still use
+        // Android's Save As picker, then Sarah's native foreground downloader.
+        saveFromUrl(call)
     }
 
     @PluginMethod
     fun saveFromUrl(call: PluginCall) {
-        val url = call.getString("url")?.trim().orEmpty()
+        val urls = urlsFromCall(call)
         val filename = safeFilename(call.getString("filename") ?: "sarah-media-download")
         val mimeType = call.getString("mimeType")?.trim().takeUnless { it.isNullOrBlank() }
             ?: guessMimeType(filename)
 
-        if (url.isBlank()) {
+        if (urls.isEmpty()) {
             call.reject("Missing download URL.")
-            return
-        }
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            call.reject("Sarah can only save HTTP/HTTPS media URLs from the Android app.")
             return
         }
 
@@ -100,39 +45,74 @@ class SarahFileSaverPlugin : Plugin() {
     @ActivityCallback
     fun handleSaveDocumentResult(call: PluginCall, result: ActivityResult) {
         if (result.resultCode != Activity.RESULT_OK) {
-            call.reject("Save cancelled.")
+            call.resolve(
+                JSObject()
+                    .put("ok", false)
+                    .put("state", "cancelled")
+                    .put("cancelled", true)
+                    .put("message", "Save cancelled.")
+            )
             return
         }
+
         val outputUri = result.data?.data
         if (outputUri == null) {
             call.reject("Android did not return a save location.")
             return
         }
 
-        val filename = safeFilename(call.getString("filename") ?: "sarah-media-download")
-        val urls = urlsFromCall(call)
-        scope.launch {
-            try {
-                val bytes = streamUrlsToUri(urls, outputUri)
-                val response = JSObject()
-                    .put("ok", true)
-                    .put("filename", filename)
-                    .put("bytes", bytes)
-                    .put("uri", outputUri.toString())
-                    .put("systemPicker", true)
-                withContext(Dispatchers.Main) { call.resolve(response) }
-            } catch (error: Exception) {
-                withContext(Dispatchers.Main) {
-                    call.reject(error.message ?: "Could not save media file.", error)
-                }
+        try {
+            val flags = result.data?.flags ?: 0
+            val persistFlags = flags and (
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            if (persistFlags != 0) {
+                context.contentResolver.takePersistableUriPermission(outputUri, persistFlags)
             }
+        } catch (_: Exception) {
+            // Some document providers do not offer persistable grants for newly
+            // created files. The immediate write grant is still usable.
+        }
+
+        val urls = urlsFromCall(call)
+        val filename = safeFilename(call.getString("filename") ?: "sarah-media-download")
+        val mimeType = call.getString("mimeType")?.trim().takeUnless { it.isNullOrBlank() }
+            ?: guessMimeType(filename)
+        val headers = headersFromCall(call)
+        val downloadId = "sarah-${System.currentTimeMillis()}"
+
+        val serviceIntent = Intent(context, SarahDownloadService::class.java).apply {
+            action = SarahDownloadService.ACTION_START
+            putStringArrayListExtra(SarahDownloadService.EXTRA_URLS, ArrayList(urls))
+            putExtra(SarahDownloadService.EXTRA_DESTINATION_URI, outputUri.toString())
+            putExtra(SarahDownloadService.EXTRA_FILENAME, filename)
+            putExtra(SarahDownloadService.EXTRA_MIME_TYPE, mimeType)
+            putExtra(SarahDownloadService.EXTRA_HEADERS_JSON, JSONObject(headers).toString())
+            putExtra(SarahDownloadService.EXTRA_DOWNLOAD_ID, downloadId)
+        }
+
+        try {
+            context.startForegroundService(serviceIntent)
+            call.resolve(
+                JSObject()
+                    .put("ok", true)
+                    .put("downloadId", downloadId)
+                    .put("state", "queued")
+                    .put("filename", filename)
+                    .put("mimeType", mimeType)
+                    .put("uri", outputUri.toString())
+                    .put("nativeDownload", true)
+                    .put("systemPicker", true)
+            )
+        } catch (error: Exception) {
+            call.reject(error.message ?: "Could not start Sarah native download.", error)
         }
     }
 
     @PluginMethod
     fun openDownloads(call: PluginCall) {
         try {
-            val intent = Intent(DownloadManager.ACTION_VIEW_DOWNLOADS)
+            val intent = Intent("android.intent.action.VIEW_DOWNLOADS")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
             call.resolve(JSObject().put("ok", true))
@@ -154,49 +134,6 @@ class SarahFileSaverPlugin : Plugin() {
         }
     }
 
-    private fun streamUrlsToUri(urls: List<String>, outputUri: Uri): Long {
-        var lastError: Exception? = null
-        for (url in urls) {
-            try {
-                return streamUrlToUri(url, outputUri)
-            } catch (error: Exception) {
-                lastError = error
-            }
-        }
-        throw lastError ?: IllegalStateException("No usable download URL was available.")
-    }
-
-    private fun streamUrlToUri(url: String, outputUri: Uri): Long {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15000
-            readTimeout = 300000
-            instanceFollowRedirects = true
-            requestMethod = "GET"
-        }
-        return try {
-            val status = connection.responseCode
-            if (status !in 200..299) {
-                throw IllegalStateException("Download failed: HTTP $status")
-            }
-            context.contentResolver.openOutputStream(outputUri, "w")?.use { output ->
-                connection.inputStream.use { input ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    var total = 0L
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        output.write(buffer, 0, read)
-                        total += read.toLong()
-                    }
-                    output.flush()
-                    total
-                }
-            } ?: throw IllegalStateException("Could not open selected save location.")
-        } finally {
-            connection.disconnect()
-        }
-    }
-
     private fun urlsFromCall(call: PluginCall): List<String> {
         val urls = mutableListOf<String>()
         fun addUrl(value: String?) {
@@ -210,37 +147,28 @@ class SarahFileSaverPlugin : Plugin() {
             }
         }
 
-        addUrl(call.getString("url"))
         val alternates = call.data.optJSONArray("alternateUrls")
         if (alternates != null) {
             for (index in 0 until alternates.length()) {
                 addUrl(alternates.optString(index))
             }
         }
+        addUrl(call.getString("url"))
         return urls
     }
 
-    private fun managerUrlsFromCall(call: PluginCall): List<String> {
-        val urls = mutableListOf<String>()
-        fun addUrl(value: String?) {
-            val clean = value?.trim().orEmpty()
-            if (
-                clean.isNotBlank()
-                && (clean.startsWith("http://") || clean.startsWith("https://"))
-                && !urls.contains(clean)
-            ) {
-                urls.add(clean)
+    private fun headersFromCall(call: PluginCall): Map<String, String> {
+        val headers = mutableMapOf<String, String>()
+        val raw = call.data.optJSONObject("headers") ?: return headers
+        val keys = raw.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val value = raw.optString(key)
+            if (key.isNotBlank() && value.isNotBlank()) {
+                headers[key] = value
             }
         }
-
-        val alternates = call.data.optJSONArray("alternateUrls")
-        if (alternates != null) {
-            for (index in 0 until alternates.length()) {
-                addUrl(alternates.optString(index))
-            }
-        }
-        addUrl(call.getString("url"))
-        return urls
+        return headers
     }
 
     private fun safeFilename(value: String): String {

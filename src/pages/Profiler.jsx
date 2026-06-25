@@ -7248,13 +7248,15 @@ ANNOTATED IMAGE OUTPUT RULES:
     try {
       setAnatomyVideoStatus({
         type: "working",
-        message: "Sending the anatomy video to Android Downloads...",
+        message: "Choose where to save the anatomy video...",
       });
       const result = await downloadOrSaveUrl(serverUrl(anatomyVideo.file_url), filename, { mimeType: "video/mp4" });
       setAnatomyVideoStatus({
         type: "ok",
         message: result?.openedExternally
           ? "Android opened the download link. Use the system browser/download prompt to save it."
+          : result?.nativeDownload
+          ? "Native download started. Watch the Android notification for progress and completion."
           : result?.systemPicker
           ? `Saved through Android picker (${Math.round(Number(result.bytes || 0) / 1024 / 1024)} MB).`
           : result?.systemDownload

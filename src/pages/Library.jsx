@@ -569,7 +569,7 @@ export default function Library() {
     if (!url) return;
     setDownloadNotice({
       type: "working",
-      message: `Sending ${filename || "download"} to Android Downloads...`,
+      message: `Choose where to save ${filename || "download"}...`,
     });
     try {
       const result = await triggerDownloadOrOpen(url, filename, options);
@@ -577,7 +577,9 @@ export default function Library() {
       setDownloadNotice({
         type: result?.openedExternally ? "warning" : "ok",
         action: result?.systemDownload ? "openDownloads" : null,
-        message: result?.systemDownload
+        message: result?.nativeDownload
+          ? `Native download started: ${filename || "file"}. Watch the Android notification for progress.`
+          : result?.systemDownload
           ? `Queued in Android Downloads: ${filename || "file"}`
           : result?.systemPicker
           ? `Saved ${filename || "file"} (${Math.round(Number(result.bytes || 0) / 1024 / 1024)} MB).`

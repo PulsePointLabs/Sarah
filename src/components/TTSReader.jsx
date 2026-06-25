@@ -1404,7 +1404,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
   const triggerSavedExportDownload = async (exportRecord) => {
     const filename = getAudioDownloadFilename(exportRecord.format || runtimeRef.current.format);
-    await triggerDownloadOrOpen(serverUrl(exportRecord.file_url), filename, {
+    const result = await triggerDownloadOrOpen(serverUrl(exportRecord.file_url), filename, {
       mimeType: getTTSMime(exportRecord.format || runtimeRef.current.format),
     });
     saveDownloadRecord({
@@ -1418,7 +1418,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     });
     setRequestStatus({
       type: "ok",
-      msg: exportRecord.sidecar_chapters_available
+      msg: result?.nativeDownload
+        ? "Native audio download started. Watch the Android notification for progress."
+        : exportRecord.sidecar_chapters_available
         ? "Downloaded existing narration export; chapter files are available"
         : "Downloaded existing narration export without re-rendering audio",
     });
@@ -1427,7 +1429,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
   const triggerRenderedDownload = async (rendered, displayTitle = getDownloadDisplayTitle(), exportFormat = runtimeRef.current.format, runtime = runtimeRef.current) => {
     if (!rendered?.file_url) throw new Error("Server render did not return an audio file");
     const filename = getAudioDownloadFilename(rendered.format || exportFormat);
-    await triggerDownloadOrOpen(serverUrl(rendered.file_url), filename, {
+    const result = await triggerDownloadOrOpen(serverUrl(rendered.file_url), filename, {
       mimeType: getTTSMime(rendered.format || exportFormat),
     });
 
@@ -1475,7 +1477,9 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     setCompletedRender(null);
     setRequestStatus({
       type: "ok",
-      msg: rendered.sidecar_chapters_available
+      msg: result?.nativeDownload
+        ? "Native audio download started. Watch the Android notification for progress."
+        : rendered.sidecar_chapters_available
         ? `Premium ${String(rendered.format || exportFormat).toUpperCase()} render downloaded with chapter files ready`
         : `Premium ${String(rendered.format || exportFormat).toUpperCase()} render downloaded`,
     });
