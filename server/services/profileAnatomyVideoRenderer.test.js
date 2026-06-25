@@ -5,6 +5,7 @@ import {
   createReviewEvidenceManifest,
   validateManifestTimelineIntegrity,
   validateReviewEvidenceManifest,
+  validateVisualTimeline,
 } from './profileAnatomyVideoRenderer.js';
 
 const images = [
@@ -293,6 +294,53 @@ test('renderer timeline uses identical section IDs and measured audio durations'
   );
   assert.equal(visualTimeline[0].durationSeconds, 2.5);
   assert.equal(visualTimeline[1].startSeconds, 2.5);
+});
+
+test('timeline validation accepts manifest-assigned pelvic/genital evidence labels', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'timeline-pelvic-fixture',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: [
+      'Pelvic and Genital Image Review',
+      'Pubic Mound and Lower Abdomen',
+      'The pubic mound, lower abdomen, inguinal folds, and groin skin are assessed here.',
+      'Glans and Meatus',
+      'The glans and meatus are assessed here.',
+    ],
+    paragraphMeta: [
+      { type: 'title', displayLabel: 'Pelvic and Genital Image Review' },
+      { type: 'section-title', section_key: 'pubic_mound_lower_abdomen', section_label: 'Pubic Mound and Lower Abdomen' },
+      { type: 'section', section_key: 'pubic_mound_lower_abdomen', section_label: 'Pubic Mound and Lower Abdomen' },
+      { type: 'section-title', section_key: 'glans_meatus', section_label: 'Glans and Meatus' },
+      { type: 'section', section_key: 'glans_meatus', section_label: 'Glans and Meatus' },
+    ],
+    images: [
+      {
+        id: 'pubic-current',
+        label: 'Wide-field pubic mound lower abdomen inguinal groin reference',
+        coverage: 'pubic mound lower abdomen inguinal groin pelvis',
+        sectionKey: 'pubic_mound_lower_abdomen',
+        url: '/uploads/pubic.jpg',
+        source: 'fixture',
+      },
+      {
+        id: 'glans-current',
+        label: 'Close-up glans meatus penile shaft reference',
+        coverage: 'glans meatus penis penile shaft',
+        sectionKey: 'glans_meatus',
+        url: '/uploads/glans.jpg',
+        source: 'fixture',
+      },
+    ],
+  });
+  const narrationSegments = manifest.sections.map((section) => ({
+    section_id: section.section_id,
+    durationSeconds: 3,
+  }));
+  const visualTimeline = buildManifestVisualTimeline({ manifest, narrationSegments });
+  validateManifestTimelineIntegrity({ manifest, narrationSegments, visualTimeline });
+  assert.doesNotThrow(() => validateVisualTimeline(visualTimeline, 'pelvic_genital'));
 });
 
 test('timeline validation rejects renderer access to unassigned evidence', () => {

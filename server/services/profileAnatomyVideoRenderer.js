@@ -376,6 +376,8 @@ function fineStructureKeysForImage(image = {}) {
     image.coverage,
     image.regions,
     image.regionLabels,
+    image.anatomy_labels,
+    image.fine_structure_labels,
   ].filter(Boolean).flat().join(' '));
 }
 
@@ -441,6 +443,8 @@ function imageFineStructureText(image = {}) {
     image.coverage,
     image.regions,
     image.regionLabels,
+    image.anatomy_labels,
+    image.fine_structure_labels,
   ].filter(Boolean).flat().join(' '));
 }
 
@@ -636,6 +640,7 @@ function regionKeysForImage(image = {}) {
       image.section,
       image.regions,
       image.regionLabels,
+      image.anatomy_labels,
       image.source,
     ].filter(Boolean).flat().join(' '),
   };
@@ -1475,6 +1480,9 @@ export function buildManifestVisualTimeline({ manifest = {}, narrationSegments =
         url: assignment.source_ref,
         source: assignment.source_collection,
         regions: assignment.anatomy_labels,
+        regionLabels: assignment.anatomy_labels,
+        anatomy_labels: assignment.anatomy_labels,
+        fine_structure_labels: assignment.fine_structure_labels,
         coverage: assignment.assignment_reason,
       } : null,
       durationSeconds,
@@ -1954,7 +1962,7 @@ function buildNarrationVisualTimeline({ paragraphs = [], paragraphMeta = [], ima
   });
 }
 
-function validateVisualTimeline(visualTimeline = [], reviewScope = '') {
+export function validateVisualTimeline(visualTimeline = [], reviewScope = '') {
   const violations = [];
   for (const [index, item] of visualTimeline.entries()) {
     if (item.type !== 'image') continue;
