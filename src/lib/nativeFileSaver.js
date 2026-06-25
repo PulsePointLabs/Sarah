@@ -2,8 +2,6 @@ import { registerPlugin } from "@capacitor/core";
 import { isSarahNativeShell } from "@/lib/mobileApiBase";
 
 const SarahFileSaver = registerPlugin("SarahFileSaver");
-const DOWNLOAD_STATUS_POLL_MS = 500;
-const DOWNLOAD_STATUS_MAX_POLLS = 8;
 
 function guessMimeType(filename = "", fallback = "") {
   if (fallback) return fallback;
@@ -17,46 +15,20 @@ function guessMimeType(filename = "", fallback = "") {
   return "application/octet-stream";
 }
 
-export async function saveUrlWithSystemDownloader(url, filename, options = {}) {
+export async function saveUrlWithSystemPicker(url, filename, options = {}) {
   if (!isSarahNativeShell()) return null;
   if (!url || !/^https?:\/\//i.test(String(url))) return null;
-  const payload = {
+  return SarahFileSaver.saveFromUrl({
     url,
     filename: filename || "sarah-media-download",
     mimeType: guessMimeType(filename, options.mimeType),
-  };
-  try {
-    const result = await SarahFileSaver.saveFromUrl(payload);
-    if (!result?.downloadId) return result;
-    const downloadStatus = await waitForDownloadStatus(result.downloadId);
-    if (downloadStatus?.status === "failed") {
-      const fallback = await SarahFileSaver.openUrl(payload);
-      return {
-        ...fallback,
-        filename: payload.filename,
-        systemDownload: false,
-        openedExternally: true,
-        downloadStatus,
-        nativeDownloadError: `Android DownloadManager failed: ${downloadStatus.reasonLabel || downloadStatus.reason || "unknown"}`,
-      };
-    }
-    return { ...result, downloadStatus };
-  } catch (error) {
-    const fallback = await SarahFileSaver.openUrl(payload);
-    return {
-      ...fallback,
-      filename: payload.filename,
-      systemDownload: false,
-      openedExternally: true,
-      nativeDownloadError: error?.message || "Android DownloadManager did not accept this download.",
-    };
-  }
+  });
 }
 
 export async function downloadOrSaveUrl(url, filename, options = {}) {
   if (!url) return null;
   if (isSarahNativeShell()) {
-    return saveUrlWithSystemDownloader(url, filename, options);
+    return saveUrlWithSystemPicker(url, filename, options);
   }
   const a = document.createElement("a");
   a.href = url;
@@ -66,28 +38,4 @@ export async function downloadOrSaveUrl(url, filename, options = {}) {
   a.click();
   a.remove();
   return { ok: true, browserDownload: true };
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForDownloadStatus(downloadId) {
-  let latest = null;
-  for (let i = 0; i < DOWNLOAD_STATUS_MAX_POLLS; i += 1) {
-    await delay(DOWNLOAD_STATUS_POLL_MS);
-    try {
-      latest = await SarahFileSaver.getDownloadStatus({ downloadId });
-    } catch (error) {
-      return {
-        ok: false,
-        status: "unknown",
-        message: error?.message || "Could not read Android download status.",
-      };
-    }
-    if (!latest?.ok) return latest;
-    if (latest.status === "failed" || latest.status === "successful") return latest;
-    if (latest.status === "running" && Number(latest.bytesDownloaded || 0) > 0) return latest;
-  }
-  return latest;
 }

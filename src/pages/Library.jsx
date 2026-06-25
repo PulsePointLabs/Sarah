@@ -569,14 +569,16 @@ export default function Library() {
     if (!url) return;
     setDownloadNotice({
       type: "working",
-      message: `Starting ${filename || "download"}...`,
+      message: `Opening Android save picker for ${filename || "download"}...`,
     });
     try {
       const result = await triggerDownloadOrOpen(url, filename, options);
       const androidStatus = result?.downloadStatus?.status;
       setDownloadNotice({
         type: result?.openedExternally ? "warning" : "ok",
-        message: result?.openedExternally
+        message: result?.systemPicker
+          ? `Saved ${filename || "file"} (${Math.round(Number(result.bytes || 0) / 1024 / 1024)} MB).`
+          : result?.openedExternally
           ? `Android opened the download link externally for ${filename || "this file"}.`
           : result?.systemDownload
             ? `Android download ${androidStatus || "started"}: ${filename || "file"}`
