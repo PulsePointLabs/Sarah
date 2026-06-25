@@ -42,8 +42,8 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => {
     reject(new DOMException("TTS request cancelled", "AbortError"));
   }, { once: true });
 });
-const TTS_UNIT_MAX_CHARS = TTS_CHUNK_TARGET_CHARS;
-const TTS_PREFETCH_AHEAD = 2;
+const TTS_UNIT_MAX_CHARS = Math.min(TTS_CHUNK_TARGET_CHARS, 1100);
+const TTS_PREFETCH_AHEAD = 3;
 const ttsCacheKey = (chunk, format, runtime, previousContext = "") =>
   `${runtime.cacheProfile}|${format}|${buildTTSInstructions(runtime.instructions, previousContext).trim()}|${chunk}`;
 const ttsExportStorageKey = (sessionId, title = "") =>
@@ -827,7 +827,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
             const cached = cacheTotalRef.current
               ? ` Cached ${cacheReadyRef.current.size}/${cacheTotalRef.current}.`
               : "";
-            setRequestStatus({ type: "fetching", msg: `Fetching TTS audio for ${paraLabel}.${cached}` });
+            setRequestStatus({ type: "fetching", msg: `Requesting first playable TTS audio for ${paraLabel}.${cached}` });
           }
           const response = await callTTSWithRetries({
             text: prepareTTSInput(chunkText),
@@ -1079,6 +1079,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     currentSentenceIdxRef.current = sentenceIdx > 0 ? sentenceIdx : -1;
     currentWordIdxRef.current = -1;
     setS("playing");
+    setRequestStatus({
+      type: "fetching",
+      msg: `Starting TTS: ${speechChunks.length} chunk${speechChunks.length === 1 ? "" : "s"} prepared; requesting chunk 1 now.`,
+    });
     saveReadingCheckpoint("playback_start", { force: true });
     setBufferingPara(paraIdx);
     playNextChunk(gen);

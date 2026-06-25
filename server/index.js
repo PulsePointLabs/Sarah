@@ -39,7 +39,17 @@ app.use('/api/jobs/start-large', largeJobsRouter);
 app.use(express.json({ limit: '50mb' }));
 for (const dir of uploadDirs) {
   app.use('/uploads', express.static(dir, {
-    setHeaders(res) {
+    setHeaders(res, filePath) {
+      const ext = path.extname(filePath || '').toLowerCase();
+      const cacheableMedia = new Set([
+        '.jpg', '.jpeg', '.png', '.webp', '.gif',
+        '.mp4', '.webm', '.mov', '.m4v',
+        '.mp3', '.wav', '.m4a', '.aac',
+      ]);
+      if (cacheableMedia.has(ext)) {
+        res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+        return;
+      }
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');

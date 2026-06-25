@@ -1455,9 +1455,14 @@ function completedAt(job) {
 
 function isNewerCompletedJob(job, savedResult) {
   if (job?.status !== "complete") return false;
+  const jobId = job?.id || job?.jobId || "";
+  const savedJobId = savedResult?._meta?.source_job_id || "";
   const jobTime = new Date(completedAt(job) || 0).getTime();
   const savedTime = new Date(savedResult?._meta?.last_generated_at || savedResult?._meta?.updated_at || 0).getTime();
-  return Number.isFinite(jobTime) && jobTime > (Number.isFinite(savedTime) ? savedTime : 0);
+  const normalizedSavedTime = Number.isFinite(savedTime) ? savedTime : 0;
+  if (!Number.isFinite(jobTime)) return false;
+  if (jobTime > normalizedSavedTime) return true;
+  return jobTime === normalizedSavedTime && jobId && savedJobId && jobId !== savedJobId;
 }
 
 function profilerJobMetaValue(job, key) {
@@ -3617,6 +3622,7 @@ function AnnotatedImageStage({
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
   const priorityImage = pinnedFindings.length > 0 || boxedFindings.length > 0;
+  const placeholderLabel = image?.display_label || image?.coverage || "Reviewed anatomy reference";
 
   useEffect(() => {
     setImageLoaded(false);
@@ -3643,8 +3649,10 @@ function AnnotatedImageStage({
       title={onClick ? "Open annotated image viewer" : undefined}
     >
       {imageUrl && !imageLoaded && !imageFailed && (
-        <div className="absolute inset-0 z-0 flex items-center justify-center bg-muted/20 px-4 text-center text-xs font-medium text-muted-foreground">
-          Loading image...
+        <div className="absolute inset-0 z-0 flex flex-col items-center justify-center gap-2 bg-primary/5 px-4 text-center text-xs font-medium text-muted-foreground">
+          <span className="h-5 w-5 animate-spin rounded-full border-2 border-primary/50 border-t-transparent" />
+          <span className="line-clamp-2 max-w-xs">Loading local preview...</span>
+          <span className="line-clamp-2 max-w-xs text-[10px] font-normal opacity-80">{placeholderLabel}</span>
         </div>
       )}
       {imageUrl && !imageFailed ? (
@@ -3661,6 +3669,7 @@ function AnnotatedImageStage({
           } : { inset: 0, width: "100%", height: "100%" }}
           loading={priorityImage ? "eager" : "lazy"}
           fetchPriority={priorityImage ? "high" : "auto"}
+          referrerPolicy="no-referrer"
           onLoad={(event) => {
             const img = event.currentTarget;
             setNaturalSize({ width: img.naturalWidth || 1, height: img.naturalHeight || 1 });
