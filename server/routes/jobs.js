@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { cancelJob, clearJobs, createJob, getJob, listJobs, registerJobHandler, retryJob } from '../services/jobQueue.js';
@@ -16,6 +17,7 @@ import { analyzeLocalVisionForward } from '../services/localVision/forwardAnalyz
 import { askLocalVisionVideo } from '../services/localVision/videoQa.js';
 import { resolveCachedFramePath } from '../services/localVision/frameSampler.js';
 import { deleteJobPayload, loadJobPayload, saveJobPayload } from '../services/jobPayloadStore.js';
+import { listEntities, upsertEntity } from '../db.js';
 import {
   cleanProfileImageReviewText,
   cleanupProfileImageReviewResult,
@@ -42,6 +44,79 @@ async function cleanupPayloadRef(payload = {}) {
 
 function stripDataUrl(value = '') {
   return String(value || '').replace(/^data:[^;]+;base64,/, '');
+}
+
+const PROFILE_REVIEW_RESULT_FIELDS = {
+  profile_head_to_toe_image_review: {
+    resultKey: 'head_to_toe_image_review_result',
+    archiveKey: 'head_to_toe_image_review_archive',
+    label: 'Head-to-Toe Image Review',
+  },
+  profile_pelvic_genital_image_review: {
+    resultKey: 'pelvic_genital_image_review_result',
+    archiveKey: 'pelvic_genital_image_review_archive',
+    label: 'Pelvic & Genital Image Review',
+  },
+};
+
+function compactProfileArchive(archive = [], limit = 30) {
+  const seen = new Set();
+  return (Array.isArray(archive) ? archive : [])
+    .filter((entry) => entry?.id || entry?.generated_at || entry?.result)
+    .filter((entry) => {
+      const key = entry.id || entry.generated_at || JSON.stringify(entry.result?._meta || {});
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
+}
+
+function persistCompletedProfileImageReviewResult(result, payload = {}, context = {}) {
+  if (!result || typeof result !== 'object') return result;
+  const reviewType = String(payload?.reviewType || payload?.kind || result?._meta?.reviewType || '');
+  const fields = PROFILE_REVIEW_RESULT_FIELDS[reviewType];
+  if (!fields) return result;
+
+  const generatedAt = new Date().toISOString();
+  const sourceSessionCount = Number(payload?.source_session_count || payload?.session_count || 0) || undefined;
+  const sourceMotionCount = Number(payload?.motion_evidence_session_count || 0) || undefined;
+  const currentMeta = result._meta && typeof result._meta === 'object' ? result._meta : {};
+  const storedResult = {
+    ...result,
+    _meta: {
+      ...currentMeta,
+      reviewType,
+      last_generated_at: currentMeta.last_generated_at || generatedAt,
+      updated_at: generatedAt,
+      source_job_id: context.jobId || currentMeta.source_job_id || null,
+      source_job_completed_at: generatedAt,
+      ...(sourceSessionCount != null ? { source_session_count: sourceSessionCount } : {}),
+      ...(sourceMotionCount != null ? { motion_evidence_session_count: sourceMotionCount } : {}),
+      image_count: Number(payload?.image_count || payload?.full_review_image_count || currentMeta.image_count || 0) || currentMeta.image_count,
+      fresh_image_count: Number(payload?.fresh_image_count || currentMeta.fresh_image_count || 0) || 0,
+      reused_saved_image_count: Number(payload?.reused_saved_image_count || currentMeta.reused_saved_image_count || 0) || 0,
+    },
+  };
+
+  const existing = listEntities('SessionClusterAnalysis')
+    .sort((a, b) => new Date(b?.updated_date || b?.created_date || 0) - new Date(a?.updated_date || a?.created_date || 0))[0];
+  const archiveEntry = {
+    id: `${reviewType}-${storedResult._meta.last_generated_at}-${storedResult._meta.source_job_id || 'job'}`.replace(/[^a-zA-Z0-9_.:-]+/g, '-'),
+    kind: reviewType,
+    label: fields.label,
+    generated_at: storedResult._meta.last_generated_at,
+    source_session_count: storedResult._meta.source_session_count,
+    result: storedResult,
+  };
+  const nextArchive = compactProfileArchive([archiveEntry, ...(existing?.[fields.archiveKey] || [])]);
+  upsertEntity('SessionClusterAnalysis', existing?.id || crypto.randomUUID(), {
+    ...(existing || {}),
+    [fields.resultKey]: storedResult,
+    [fields.archiveKey]: nextArchive,
+    ...(sourceSessionCount != null ? { session_count: sourceSessionCount } : {}),
+  });
+  return storedResult;
 }
 
 function imageMediaTypeFromName(value = '') {
@@ -611,11 +686,12 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
           total,
           message: `${label}: running Sarah review…`,
         });
-        return validateProfileImageReviewResult(
+        const parsed = validateProfileImageReviewResult(
           parseProfileImageReviewAIResult(result, { label, stage: 'single review' }),
           payload,
           { label, stage: 'single review' },
         );
+        return persistCompletedProfileImageReviewResult(parsed, payload, context);
       } catch (error) {
         const cleanErrorMessage = friendlyJobErrorMessage(error);
         const providerError = safeProviderError(error, { requestStage: 'single_review', jobId: context.jobId });
@@ -719,11 +795,12 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
           total,
           message: `${label}: synthesizing final review from completed batches…`,
         });
-        return validateProfileImageReviewResult(
+        const parsed = validateProfileImageReviewResult(
           parseProfileImageReviewAIResult(result, { label, stage: 'final synthesis' }),
           payload,
           { label, stage: 'final synthesis' },
         );
+        return persistCompletedProfileImageReviewResult(parsed, payload, context);
       } catch (error) {
         const providerError = safeProviderError(error, {
           requestStage: 'final_synthesis',
@@ -750,11 +827,11 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
           batch_count: batchResults.length,
           final_synthesis_attempted: true,
         };
-        return assembled;
+        return persistCompletedProfileImageReviewResult(assembled, payload, context);
       }
     }
 
-    return fallbackAssembleProfileImageReview(payload, batchResults);
+    return persistCompletedProfileImageReviewResult(fallbackAssembleProfileImageReview(payload, batchResults), payload, context);
   } catch (error) {
     cleanupPayload = !shouldRetainJobPayloadForRetry(error);
     if (!cleanupPayload) {

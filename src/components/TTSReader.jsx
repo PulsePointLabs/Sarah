@@ -821,7 +821,13 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
         if (!audioBuffer) {
           if (!speculative) {
-            setRequestStatus({ type: "fetching", msg: "Fetching audio..." });
+            const paraLabel = currentParaRef.current >= 0 && readableParagraphs.length
+              ? `paragraph ${Math.min(currentParaRef.current + 1, readableParagraphs.length)} / ${readableParagraphs.length}`
+              : "current paragraph";
+            const cached = cacheTotalRef.current
+              ? ` Cached ${cacheReadyRef.current.size}/${cacheTotalRef.current}.`
+              : "";
+            setRequestStatus({ type: "fetching", msg: `Fetching TTS audio for ${paraLabel}.${cached}` });
           }
           const response = await callTTSWithRetries({
             text: prepareTTSInput(chunkText),
@@ -1549,6 +1555,14 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     ? Math.round((audioCacheStatus.ready / audioCacheStatus.total) * 100)
     : 0;
   const showAudioCacheMonitor = isActive && audioCacheStatus.total > 0;
+  const currentParagraphLabel = currentPara >= 0 && readableParagraphs.length
+    ? `paragraph ${Math.min(currentPara + 1, readableParagraphs.length)} / ${readableParagraphs.length}`
+    : "current paragraph";
+  const ttsPlaybackStatusMessage = state === "buffering"
+    ? `Preparing audio for ${currentParagraphLabel}. Cached ${audioCacheStatus.ready}/${audioCacheStatus.total || "?"} chunks${audioCacheStatus.fetching ? `; ${audioCacheStatus.fetching} fetching` : ""}.`
+    : bufferingPara >= 0
+      ? `Buffering ${currentParagraphLabel}...`
+      : "";
 
   const downloadAudio = async () => {
     if (savedServerExport?.file_url) {
@@ -1834,6 +1848,13 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           {downloading && downloadProgress.total > 0
             ? `Downloading: chunk ${downloadProgress.current} / ${downloadProgress.total} — ${requestStatus.msg}`
             : requestStatus.msg}
+        </div>
+      )}
+
+      {ttsPlaybackStatusMessage && !requestStatus && (
+        <div className="mb-1 flex items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-[10px] text-primary">
+          <span className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" />
+          {ttsPlaybackStatusMessage}
         </div>
       )}
 
