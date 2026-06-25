@@ -119,6 +119,59 @@ function persistCompletedProfileImageReviewResult(result, payload = {}, context 
   return storedResult;
 }
 
+function sessionDirectEvidenceCorpus(session = {}) {
+  return [
+    session.notes,
+    session.subjective_notes,
+    session.unusual_sensations,
+    session.discomfort_notes,
+    ...(Array.isArray(session.discomfort_entries) ? session.discomfort_entries.map((entry) => `${entry?.description || ''} ${entry?.notes || ''}`) : []),
+    ...(Array.isArray(session.event_timeline) ? session.event_timeline.map((event) => event?.note) : []),
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function removeUnsupportedSessionTangents(text = '', directCorpus = '', section = '') {
+  const value = String(text || '');
+  if (!value) return value;
+  const hasDirectLowerExtremityHealthEvidence = /\b(pitted\s+keratolysis|plantar\s+(?:skin|surface|maceration)|footwear|shoe|shoes|topical\s+antibacterial|vascular\s+specialist|edema|oedema|lower\s+extremity|lower-extremity|venous|arterial|perfusion|podiatry|podiatrist)\b/i.test(directCorpus);
+  const shouldRemoveSentence = (sentence) => {
+    const lower = String(sentence || '').toLowerCase();
+    if (/\b(feet|foot|toe|toes|sole|soles)\b/.test(lower) && /\b(smell|smelled|smelling|odor|odour|malodor|scent)\b/.test(lower)) return true;
+    if (/\b(vascular|circulation|circulatory|perfusion|cyanosis|pallor|edema|oedema|venous|arterial|capillary refill)\b/.test(lower) && !hasDirectLowerExtremityHealthEvidence) return true;
+    if (
+      !hasDirectLowerExtremityHealthEvidence
+      && (section === 'recommendations' || section === 'notable_findings' || section === 'summary')
+      && /\b(pitted\s+keratolysis|plantar\s+(?:skin|surface|maceration)|footwear|shoe|shoes|topical\s+antibacterial|vascular\s+specialist|lower\s+extremity|lower-extremity|podiatry|podiatrist|right-worse-than-left\s+edema)\b/.test(lower)
+    ) return true;
+    return false;
+  };
+  return value
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !shouldRemoveSentence(sentence))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sanitizeSessionAIResultForCurrentSession(result = {}, session = {}) {
+  if (!result || typeof result !== 'object') return result;
+  const directCorpus = sessionDirectEvidenceCorpus(session);
+  const cleanArray = (rows, section) => (Array.isArray(rows)
+    ? rows.map((row) => removeUnsupportedSessionTangents(row, directCorpus, section)).filter(Boolean)
+    : rows);
+  return {
+    ...result,
+    summary: removeUnsupportedSessionTangents(result.summary, directCorpus, 'summary'),
+    arousal_arc: cleanArray(result.arousal_arc, 'arousal_arc'),
+    phase_analysis: cleanArray(result.phase_analysis, 'phase_analysis'),
+    event_analysis: cleanArray(result.event_analysis, 'event_analysis'),
+    hr_analysis: cleanArray(result.hr_analysis, 'hr_analysis'),
+    emg_analysis: cleanArray(result.emg_analysis, 'emg_analysis'),
+    notable_findings: cleanArray(result.notable_findings, 'notable_findings'),
+    recommendations: cleanArray(result.recommendations, 'recommendations'),
+  };
+}
+
 function persistCompletedSessionAIInvokeResult(result, _payload = {}, context = {}) {
   if (!result || typeof result !== 'object') return result;
   const meta = context?.meta || {};
@@ -130,11 +183,12 @@ function persistCompletedSessionAIInvokeResult(result, _payload = {}, context = 
 
   const generatedAt = new Date().toISOString();
   const previousMeta = session?.[analysisField]?._meta || {};
+  const sanitizedResult = sanitizeSessionAIResultForCurrentSession(result, session);
   const storedResult = {
-    ...result,
+    ...sanitizedResult,
     _meta: {
       ...previousMeta,
-      ...(result._meta && typeof result._meta === 'object' ? result._meta : {}),
+      ...(sanitizedResult._meta && typeof sanitizedResult._meta === 'object' ? sanitizedResult._meta : {}),
       created_at: previousMeta.created_at || generatedAt,
       updated_at: generatedAt,
       last_generated_at: generatedAt,

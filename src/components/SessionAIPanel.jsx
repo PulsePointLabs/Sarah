@@ -1363,6 +1363,7 @@ GENITAL STATUS AND STIMULATION MECHANICS - HIGH PRIORITY:
 - If these details are not visible or not logged, say that specific genital status, erection quality, grip, or stroke mechanics were not directly assessable rather than silently omitting the category. Do not invent a stroke pattern or erection state from HR alone.
 - Profile/Q&A context is background only. Do not import unrelated profile-chat topics, older Q&A speculation, foot odor/smell, vascular status, edema/perfusion, wound follow-up, or lower-extremity health commentary into this session unless the current session notes, event timeline, telemetry, or reviewed visual evidence directly supports that topic.
 - For masturbation or stimulation sessions, lower-body/foot findings are limited to visible/logged movement, bracing, position, timing, or contact relevance. Do not turn foot/leg visibility into odor, vascular, podiatry, or general health commentary.
+- Recommendations must stay inside this session's sexual-response, physiology, stimulation, telemetry, recovery, device, discomfort, or evidence-quality findings. Do not add unrelated profile maintenance such as footwear rotation, topical foot treatment, vascular specialist follow-up, edema monitoring, plantar skin care, or podiatry-style advice unless that exact issue is logged as a current-session finding.
 - Keep the tone clinical and observational, not erotic. The point is session analysis: visible mechanics, sensory input, effectiveness, and physiological consequence.
 `;
 
@@ -1585,15 +1586,32 @@ function sessionEvidenceCorpus(session = {}) {
   ].filter(Boolean).join(" ").toLowerCase();
 }
 
-function removeUnsupportedSessionTangents(text = "", evidenceCorpus = "") {
+function sessionDirectEvidenceCorpus(session = {}) {
+  return [
+    session.notes,
+    session.subjective_notes,
+    session.unusual_sensations,
+    session.discomfort_notes,
+    ...(Array.isArray(session.discomfort_entries) ? session.discomfort_entries.map((entry) => `${entry?.description || ""} ${entry?.notes || ""}`) : []),
+    ...(Array.isArray(session.event_timeline) ? session.event_timeline.map((event) => event?.note) : []),
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function removeUnsupportedSessionTangents(text = "", evidenceCorpus = "", directCorpus = "", section = "") {
   const value = String(text || "");
   if (!value) return value;
   const hasOdorEvidence = /\b(smell|odor|odour|malodor|scent)\b/i.test(evidenceCorpus);
   const hasVascularEvidence = /\b(vascular|circulation|circulatory|perfusion|cyanosis|pallor|edema|oedema|swelling|venous|arterial|capillary refill|color change)\b/i.test(evidenceCorpus);
+  const hasDirectLowerExtremityHealthEvidence = /\b(pitted\s+keratolysis|plantar\s+(?:skin|surface|maceration)|footwear|shoe|shoes|topical\s+antibacterial|vascular\s+specialist|edema|oedema|lower\s+extremity|lower-extremity|venous|arterial|perfusion|podiatry|podiatrist)\b/i.test(directCorpus);
   const shouldRemoveSentence = (sentence) => {
     const lower = String(sentence || "").toLowerCase();
     if (!hasOdorEvidence && /\b(feet|foot|toe|toes|sole|soles)\b/.test(lower) && /\b(smell|smelled|smelling|odor|odour|malodor|scent)\b/.test(lower)) return true;
     if (!hasVascularEvidence && /\b(vascular|circulation|circulatory|perfusion|cyanosis|pallor|edema|oedema|venous|arterial|capillary refill)\b/.test(lower)) return true;
+    if (
+      !hasDirectLowerExtremityHealthEvidence
+      && (section === "recommendations" || section === "notable_findings" || section === "summary")
+      && /\b(pitted\s+keratolysis|plantar\s+(?:skin|surface|maceration)|footwear|shoe|shoes|topical\s+antibacterial|vascular\s+specialist|lower\s+extremity|lower-extremity|podiatry|podiatrist|right-worse-than-left\s+edema)\b/.test(lower)
+    ) return true;
     return false;
   };
   return value
@@ -1607,19 +1625,20 @@ function removeUnsupportedSessionTangents(text = "", evidenceCorpus = "") {
 function sanitizeSessionAnalysisResultForEvidence(result, session = {}) {
   if (!result || typeof result !== "object") return result;
   const corpus = sessionEvidenceCorpus(session);
-  const cleanArray = (rows) => (Array.isArray(rows)
-    ? rows.map((row) => removeUnsupportedSessionTangents(row, corpus)).filter(Boolean)
+  const directCorpus = sessionDirectEvidenceCorpus(session);
+  const cleanArray = (rows, section) => (Array.isArray(rows)
+    ? rows.map((row) => removeUnsupportedSessionTangents(row, corpus, directCorpus, section)).filter(Boolean)
     : rows);
   return {
     ...result,
-    summary: removeUnsupportedSessionTangents(result.summary, corpus),
-    arousal_arc: cleanArray(result.arousal_arc),
-    phase_analysis: cleanArray(result.phase_analysis),
-    event_analysis: cleanArray(result.event_analysis),
-    hr_analysis: cleanArray(result.hr_analysis),
-    emg_analysis: cleanArray(result.emg_analysis),
-    notable_findings: cleanArray(result.notable_findings),
-    recommendations: cleanArray(result.recommendations),
+    summary: removeUnsupportedSessionTangents(result.summary, corpus, directCorpus, "summary"),
+    arousal_arc: cleanArray(result.arousal_arc, "arousal_arc"),
+    phase_analysis: cleanArray(result.phase_analysis, "phase_analysis"),
+    event_analysis: cleanArray(result.event_analysis, "event_analysis"),
+    hr_analysis: cleanArray(result.hr_analysis, "hr_analysis"),
+    emg_analysis: cleanArray(result.emg_analysis, "emg_analysis"),
+    notable_findings: cleanArray(result.notable_findings, "notable_findings"),
+    recommendations: cleanArray(result.recommendations, "recommendations"),
   };
 }
 
