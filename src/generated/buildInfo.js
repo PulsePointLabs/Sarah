@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.28",
-  "commit": "f643265",
-  "commitMessage": "Add native Save As download service",
-  "builtAt": "2026-06-25T22:40:03.213Z"
+  "version": "0.1.29",
+  "commit": "4afc726",
+  "commitMessage": "Fix anatomy video evidence region selection",
+  "builtAt": "2026-06-25T23:24:13.452Z"
 };

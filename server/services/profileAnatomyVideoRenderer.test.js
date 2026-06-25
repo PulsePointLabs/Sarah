@@ -273,6 +273,38 @@ test('head-to-toe head section can crop from broad full-body evidence without re
   assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
 });
 
+test('head-to-toe validation allows multi-region evidence when the target region is present', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'head-to-toe-multi-region-head-fixture',
+    title: 'Head-to-Toe Image Review',
+    reviewScope: 'head_to_toe',
+    paragraphs: [
+      'Head and Face',
+      'Hair, scalp, facial contour, and face-specific findings are assessed here.',
+    ],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'head_face', section_label: 'Head and Face' },
+      { type: 'section', section_key: 'head_face', section_label: 'Head and Face' },
+    ],
+    images: [
+      {
+        id: 'head-and-pelvis-labelled',
+        label: 'Reference view with head face and pelvis visible',
+        coverage: 'head face scalp pelvis pubic region',
+        sectionKey: 'head_face',
+        url: '/uploads/head-pelvis.jpg',
+        source: 'fixture',
+      },
+    ],
+  });
+
+  const head = manifest.sections.find((section) => section.section_key === 'head_face');
+  assert.equal(head.assigned_evidence[0].evidence_id, 'head-and-pelvis-labelled');
+  assert.equal(head.assigned_evidence[0].anatomy_labels.includes('head_face'), true);
+  assert.equal(head.assigned_evidence[0].anatomy_labels.includes('pelvis_pubic_region'), true);
+  assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
+});
+
 test('Foley and drainage bag evidence stays in the device/procedure lane', () => {
   const manifest = buildManifest('pelvic_genital');
   const device = manifest.sections.find((section) => section.section_key === 'device_contact_findings');

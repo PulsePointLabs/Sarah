@@ -1114,7 +1114,9 @@ export function validateReviewEvidenceManifest(manifest = {}) {
       const labels = new Set(evidence.anatomy_labels || []);
       for (const blocked of section.prohibited_anatomy_labels || []) {
         const allowedCropFromBroadReference = Boolean(evidence.region_crop_fallback && labels.has(section.target_region));
-        if (labels.has(blocked) && !allowedCropFromBroadReference) {
+        const allowedHeadToToeMultiRegionReference = manifest.review_scope !== 'pelvic_genital'
+          && labels.has(section.target_region);
+        if (labels.has(blocked) && !allowedCropFromBroadReference && !allowedHeadToToeMultiRegionReference) {
           errors.push(`Section ${section.section_id} contains prohibited anatomy label ${blocked} from evidence ${evidence.evidence_id}.`);
         }
       }
