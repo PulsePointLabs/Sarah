@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
-import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
+import { downloadOrSaveUrl, openAndroidDownloads } from "@/lib/nativeFileSaver";
 import { getBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Play, Pause, Download, Trash2, Music, Video, ChevronDown, ChevronRight, ExternalLink, RefreshCw, AlertTriangle } from "lucide-react";
@@ -569,19 +569,22 @@ export default function Library() {
     if (!url) return;
     setDownloadNotice({
       type: "working",
-      message: `Opening Android save picker for ${filename || "download"}...`,
+      message: `Sending ${filename || "download"} to Android Downloads...`,
     });
     try {
       const result = await triggerDownloadOrOpen(url, filename, options);
       const androidStatus = result?.downloadStatus?.status;
       setDownloadNotice({
         type: result?.openedExternally ? "warning" : "ok",
-        message: result?.systemPicker
+        action: result?.systemDownload ? "openDownloads" : null,
+        message: result?.systemDownload
+          ? `Queued in Android Downloads: ${filename || "file"}`
+          : result?.systemPicker
           ? `Saved ${filename || "file"} (${Math.round(Number(result.bytes || 0) / 1024 / 1024)} MB).`
           : result?.openedExternally
           ? `Android opened the download link externally for ${filename || "this file"}.`
-          : result?.systemDownload
-            ? `Android download ${androidStatus || "started"}: ${filename || "file"}`
+          : androidStatus
+            ? `Android download ${androidStatus}: ${filename || "file"}`
             : `Download started: ${filename || "file"}`,
       });
     } catch (error) {
@@ -692,6 +695,15 @@ export default function Library() {
           >
             Dismiss
           </button>
+          {downloadNotice.action === "openDownloads" && (
+            <button
+              type="button"
+              onClick={() => openAndroidDownloads().catch(() => {})}
+              className="shrink-0 text-xs font-semibold opacity-80 hover:opacity-100"
+            >
+              Open Downloads
+            </button>
+          )}
         </div>
       )}
 

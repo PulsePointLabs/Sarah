@@ -26,10 +26,26 @@ export async function saveUrlWithSystemPicker(url, filename, options = {}) {
   });
 }
 
+export async function saveUrlWithAndroidDownloadManager(url, filename, options = {}) {
+  if (!isSarahNativeShell()) return null;
+  if (!url || !/^https?:\/\//i.test(String(url))) return null;
+  return SarahFileSaver.downloadWithManager({
+    url,
+    alternateUrls: buildAlternateDownloadUrls(url),
+    filename: filename || "sarah-media-download",
+    mimeType: guessMimeType(filename, options.mimeType),
+  });
+}
+
+export async function openAndroidDownloads() {
+  if (!isSarahNativeShell()) return null;
+  return SarahFileSaver.openDownloads();
+}
+
 export async function downloadOrSaveUrl(url, filename, options = {}) {
   if (!url) return null;
   if (isSarahNativeShell()) {
-    return saveUrlWithSystemPicker(url, filename, options);
+    return saveUrlWithAndroidDownloadManager(url, filename, options);
   }
   const a = document.createElement("a");
   a.href = url;
