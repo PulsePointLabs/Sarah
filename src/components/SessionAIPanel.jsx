@@ -832,11 +832,13 @@ export function SessionReviewVideoExportButton({
     if (!target?.file_url) return;
     const filename = target.filename || reviewFilename(analysisTitle);
     try {
-      setStatus({ type: "working", message: "Opening the Android save dialog for the review video..." });
+      setStatus({ type: "working", message: "Sending the review video to Android Downloads..." });
       const result = await downloadOrSaveUrl(serverUrl(target.file_url), filename, { mimeType: "video/mp4" });
       setStatus({
         type: "ok",
-        message: result?.bytes
+        message: result?.systemDownload
+          ? "Download handed to Android. Check the notification shade or Downloads."
+          : result?.bytes
           ? `Review video saved (${Math.round(result.bytes / 1024 / 1024)} MB).`
           : "Review video download started.",
       });

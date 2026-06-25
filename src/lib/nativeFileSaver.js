@@ -15,7 +15,7 @@ function guessMimeType(filename = "", fallback = "") {
   return "application/octet-stream";
 }
 
-export async function saveUrlWithSystemPicker(url, filename, options = {}) {
+export async function saveUrlWithSystemDownloader(url, filename, options = {}) {
   if (!isSarahNativeShell()) return null;
   if (!url || !/^https?:\/\//i.test(String(url))) return null;
   return SarahFileSaver.saveFromUrl({
@@ -28,7 +28,7 @@ export async function saveUrlWithSystemPicker(url, filename, options = {}) {
 export async function downloadOrSaveUrl(url, filename, options = {}) {
   if (!url) return null;
   if (isSarahNativeShell()) {
-    return saveUrlWithSystemPicker(url, filename, options);
+    return saveUrlWithSystemDownloader(url, filename, options);
   }
   const a = document.createElement("a");
   a.href = url;

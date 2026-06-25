@@ -1,34 +1,19 @@
 package com.pulsepointlabs.sarah
 
-import android.app.Activity
+import android.app.DownloadManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Environment
 import android.provider.Settings
-import androidx.activity.result.ActivityResult
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
-import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.net.HttpURLConnection
-import java.net.URL
 
 @CapacitorPlugin(name = "SarahFileSaver")
 class SarahFileSaverPlugin : Plugin() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    override fun handleOnDestroy() {
-        scope.cancel()
-        super.handleOnDestroy()
-    }
-
     @PluginMethod
     fun saveFromUrl(call: PluginCall) {
         val url = call.getString("url")?.trim().orEmpty()
@@ -45,47 +30,27 @@ class SarahFileSaverPlugin : Plugin() {
             return
         }
 
-        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = mimeType
-            putExtra(Intent.EXTRA_TITLE, filename)
-        }
-        startActivityForResult(call, intent, "handleSaveDocumentResult")
-    }
-
-    @ActivityCallback
-    fun handleSaveDocumentResult(call: PluginCall, result: ActivityResult) {
-        if (result.resultCode != Activity.RESULT_OK) {
-            call.reject("Save cancelled.")
-            return
-        }
-        val outputUri = result.data?.data
-        if (outputUri == null) {
-            call.reject("Android did not return a save location.")
-            return
-        }
-
-        val url = call.getString("url")?.trim().orEmpty()
-        val filename = safeFilename(call.getString("filename") ?: "sarah-media-download")
-        scope.launch {
-            try {
-                val bytes = streamUrlToUri(url, outputUri)
-                val response = JSObject()
+        try {
+            val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val request = DownloadManager.Request(Uri.parse(url)).apply {
+                setTitle(filename)
+                setDescription("Downloading from Sarah")
+                setMimeType(mimeType)
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setAllowedOverMetered(true)
+                setAllowedOverRoaming(true)
+                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, filename)
+            }
+            val downloadId = manager.enqueue(request)
+            call.resolve(
+                JSObject()
                     .put("ok", true)
                     .put("filename", filename)
-                    .put("bytes", bytes)
-                    .put("uri", outputUri.toString())
-                withContext(Dispatchers.Main) { call.resolve(response) }
-            } catch (error: Exception) {
-                try {
-                    context.contentResolver.delete(outputUri, null, null)
-                } catch (_: Exception) {
-                    // Best effort cleanup; the error message below is more important.
-                }
-                withContext(Dispatchers.Main) {
-                    call.reject(error.message ?: "Could not save media file.", error)
-                }
-            }
+                    .put("downloadId", downloadId)
+                    .put("systemDownload", true)
+            )
+        } catch (error: Exception) {
+            call.reject(error.message ?: "Could not hand download to Android.", error)
         }
     }
 
@@ -99,41 +64,6 @@ class SarahFileSaverPlugin : Plugin() {
             call.resolve(JSObject().put("ok", true))
         } catch (error: Exception) {
             call.reject("Could not open Android app settings.", error)
-        }
-    }
-
-    private fun streamUrlToUri(url: String, outputUri: Uri): Long {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15000
-            readTimeout = 300000
-            instanceFollowRedirects = true
-            requestMethod = "GET"
-        }
-        return try {
-            val status = connection.responseCode
-            if (status !in 200..299) {
-                throw IllegalStateException("Download failed: HTTP $status")
-            }
-            val expectedLength = connection.contentLengthLong
-            context.contentResolver.openOutputStream(outputUri, "w")?.use { output ->
-                connection.inputStream.use { input ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    var total = 0L
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        output.write(buffer, 0, read)
-                        total += read.toLong()
-                    }
-                    output.flush()
-                    if (expectedLength > 0L && total < expectedLength) {
-                        throw IllegalStateException("Download incomplete: saved $total of $expectedLength bytes.")
-                    }
-                    total
-                }
-            } ?: throw IllegalStateException("Could not open selected save location.")
-        } finally {
-            connection.disconnect()
         }
     }
 
