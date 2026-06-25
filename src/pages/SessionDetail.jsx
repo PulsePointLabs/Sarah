@@ -1063,7 +1063,6 @@ export default function SessionDetail() {
     { id: "session-metrics-context", label: "Metrics & Context", group: "Overview" },
     { id: "session-mobile-video-render", label: "Mobile Video Render", group: "Session Story" },
     ...(!s.no_climax ? [
-      ...((companionAnalysisData.paragraphs.length || technicalAnalysisData.paragraphs.length) ? [{ id: "session-ai-video-chat", label: "Review Videos", group: "Session Story" }] : []),
       { id: "session-ai-companion", label: "Companion Analysis", group: "Session Story" },
       { id: "session-ai-technical", label: "Technical Deep Dive", group: "Session Story" },
       { id: "session-ai-support", label: "Supporting AI Views", group: "Session Story" },
@@ -1095,45 +1094,60 @@ export default function SessionDetail() {
     };
     if (idByTarget[target]) setPendingSectionId(idByTarget[target]);
   };
+  const renderReviewVideoBuilder = ({
+    id,
+    title,
+    helper,
+    sourceGeneratedAt,
+    analysisData,
+    routeHash,
+  }) => {
+    if (!analysisData?.paragraphs?.length) return null;
+    return (
+      <div id={id} className="scroll-mt-24 rounded-xl border border-primary/20 bg-primary/[0.045] p-3 space-y-2">
+        <div className="flex items-start gap-2">
+          <Clapperboard className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-primary">{title}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{helper}</p>
+          </div>
+        </div>
+        <SessionReviewVideoExportButton
+          session={s}
+          analysisTitle={title}
+          sourceGeneratedAt={sourceGeneratedAt}
+          paragraphs={analysisData.paragraphs}
+          paragraphMeta={analysisData.paragraphMeta}
+          timelineRows={timelineRows}
+          emgRows={emgRows}
+          routeHash={routeHash}
+        />
+      </div>
+    );
+  };
   const sessionStorySection = !s.no_climax ? (
     <section className="space-y-4">
-      {(companionAnalysisData.paragraphs.length > 0 || technicalAnalysisData.paragraphs.length > 0) && (
-        <section id="session-ai-video-chat" className="scroll-mt-24 space-y-3">
-          {companionAnalysisData.paragraphs.length > 0 && (
-            <div id="session-ai-video-companion" className="scroll-mt-24">
-              <SessionReviewVideoExportButton
-                session={s}
-                analysisTitle="AI Session Analysis"
-                sourceGeneratedAt={s.ai_analysis?._meta?.last_generated_at}
-                paragraphs={companionAnalysisData.paragraphs}
-                paragraphMeta={companionAnalysisData.paragraphMeta}
-                timelineRows={timelineRows}
-                emgRows={emgRows}
-                routeHash="session-ai-video-companion"
-              />
-            </div>
-          )}
-          {technicalAnalysisData.paragraphs.length > 0 && (
-            <div id="session-ai-video-technical" className="scroll-mt-24">
-              <SessionReviewVideoExportButton
-                session={s}
-                analysisTitle="Technical Deep Dive"
-                sourceGeneratedAt={technicalVideoSourceGeneratedAt}
-                paragraphs={technicalAnalysisData.paragraphs}
-                paragraphMeta={technicalAnalysisData.paragraphMeta}
-                timelineRows={timelineRows}
-                emgRows={emgRows}
-                routeHash="session-ai-video-technical"
-              />
-            </div>
-          )}
-        </section>
-      )}
-      <section id="session-ai-companion" className="scroll-mt-24">
+      <section id="session-ai-companion" className="scroll-mt-24 space-y-3">
         <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} onAnalysisSaved={handleAnalysisSaved} />
+        {renderReviewVideoBuilder({
+          id: "session-ai-video-companion",
+          title: "AI Session Analysis",
+          helper: "Build a narrated MP4 from the AI Session Analysis above.",
+          sourceGeneratedAt: s.ai_analysis?._meta?.last_generated_at,
+          analysisData: companionAnalysisData,
+          routeHash: "session-ai-companion",
+        })}
       </section>
-      <section id="session-ai-technical" className="scroll-mt-24">
+      <section id="session-ai-technical" className="scroll-mt-24 space-y-3">
         <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" onAnalysisSaved={handleAnalysisSaved} />
+        {renderReviewVideoBuilder({
+          id: "session-ai-video-technical",
+          title: "Technical Deep Dive",
+          helper: "Build a narrated MP4 from the Technical Deep Dive above.",
+          sourceGeneratedAt: technicalVideoSourceGeneratedAt,
+          analysisData: technicalAnalysisData,
+          routeHash: "session-ai-technical",
+        })}
       </section>
       <section id="session-ai-support" className="scroll-mt-24 rounded-xl border border-primary/20 bg-card p-4 space-y-3">
         <div>
