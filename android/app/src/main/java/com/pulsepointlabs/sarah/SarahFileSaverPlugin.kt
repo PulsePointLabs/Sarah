@@ -1,11 +1,13 @@
 package com.pulsepointlabs.sarah
 
 import android.app.DownloadManager
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
 import android.provider.Settings
+import android.widget.Toast
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
@@ -37,11 +39,13 @@ class SarahFileSaverPlugin : Plugin() {
                 setDescription("Downloading from Sarah")
                 setMimeType(mimeType)
                 setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
                 setAllowedOverMetered(true)
                 setAllowedOverRoaming(true)
                 setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, filename)
             }
             val downloadId = manager.enqueue(request)
+            Toast.makeText(context, "Download started: $filename", Toast.LENGTH_SHORT).show()
             call.resolve(
                 JSObject()
                     .put("ok", true)
@@ -50,7 +54,39 @@ class SarahFileSaverPlugin : Plugin() {
                     .put("systemDownload", true)
             )
         } catch (error: Exception) {
-            call.reject(error.message ?: "Could not hand download to Android.", error)
+            try {
+                openExternalUrl(url)
+                Toast.makeText(context, "Opened download link", Toast.LENGTH_SHORT).show()
+                call.resolve(
+                    JSObject()
+                        .put("ok", true)
+                        .put("filename", filename)
+                        .put("openedExternally", true)
+                        .put("systemDownload", false)
+                        .put("downloadManagerError", error.message ?: "Android DownloadManager rejected this download.")
+                )
+            } catch (fallbackError: Exception) {
+                call.reject(error.message ?: "Could not hand download to Android.", error)
+            }
+        }
+    }
+
+    @PluginMethod
+    fun openUrl(call: PluginCall) {
+        val url = call.getString("url")?.trim().orEmpty()
+        if (url.isBlank()) {
+            call.reject("Missing URL.")
+            return
+        }
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            call.reject("Sarah can only open HTTP/HTTPS URLs from the Android app.")
+            return
+        }
+        try {
+            openExternalUrl(url)
+            call.resolve(JSObject().put("ok", true).put("openedExternally", true))
+        } catch (error: Exception) {
+            call.reject(error.message ?: "Could not open Android download link.", error)
         }
     }
 
@@ -86,6 +122,16 @@ class SarahFileSaverPlugin : Plugin() {
             lower.endsWith(".cue") -> "application/octet-stream"
             lower.endsWith(".txt") -> "text/plain"
             else -> "application/octet-stream"
+        }
+    }
+
+    private fun openExternalUrl(url: String) {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            context.startActivity(intent)
+        } catch (error: ActivityNotFoundException) {
+            throw Exception("No Android app can open this download URL.", error)
         }
     }
 }

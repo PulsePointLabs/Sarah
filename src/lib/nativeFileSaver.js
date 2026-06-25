@@ -18,11 +18,23 @@ function guessMimeType(filename = "", fallback = "") {
 export async function saveUrlWithSystemDownloader(url, filename, options = {}) {
   if (!isSarahNativeShell()) return null;
   if (!url || !/^https?:\/\//i.test(String(url))) return null;
-  return SarahFileSaver.saveFromUrl({
+  const payload = {
     url,
     filename: filename || "sarah-media-download",
     mimeType: guessMimeType(filename, options.mimeType),
-  });
+  };
+  try {
+    return await SarahFileSaver.saveFromUrl(payload);
+  } catch (error) {
+    const fallback = await SarahFileSaver.openUrl(payload);
+    return {
+      ...fallback,
+      filename: payload.filename,
+      systemDownload: false,
+      openedExternally: true,
+      nativeDownloadError: error?.message || "Android DownloadManager did not accept this download.",
+    };
+  }
 }
 
 export async function downloadOrSaveUrl(url, filename, options = {}) {
