@@ -242,6 +242,37 @@ test('head-to-toe head section uses a card instead of pelvic or genital evidence
   validateReviewEvidenceManifest(manifest);
 });
 
+test('head-to-toe head section can crop from broad full-body evidence without rejecting visible pelvis labels', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'head-to-toe-broad-body-head-fixture',
+    title: 'Head-to-Toe Image Review',
+    reviewScope: 'head_to_toe',
+    paragraphs: [
+      'Head and Face',
+      'Hair, scalp, facial contour, and face-specific findings are assessed here.',
+    ],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'head_face', section_label: 'Head and Face' },
+      { type: 'section', section_key: 'head_face', section_label: 'Head and Face' },
+    ],
+    images: [
+      {
+        id: 'full-body-with-head-and-pelvis',
+        label: 'Full body standing reference with head face chest abdomen pelvis and feet visible',
+        coverage: 'whole body full body posture head face chest abdomen pelvis pubic lower limbs feet',
+        sectionKey: 'posture_alignment',
+        url: '/uploads/full-body.jpg',
+        source: 'fixture',
+      },
+    ],
+  });
+
+  const head = manifest.sections.find((section) => section.section_key === 'head_face');
+  assert.equal(head.assigned_evidence[0].evidence_id, 'full-body-with-head-and-pelvis');
+  assert.equal(head.assigned_evidence[0].region_crop_fallback, true);
+  assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
+});
+
 test('Foley and drainage bag evidence stays in the device/procedure lane', () => {
   const manifest = buildManifest('pelvic_genital');
   const device = manifest.sections.find((section) => section.section_key === 'device_contact_findings');
@@ -274,6 +305,7 @@ test('mixed limitations section uses safe overview evidence instead of a title c
     images,
   });
   const limitations = manifest.sections.find((section) => section.section_key === 'limitations_future_coverage');
+  assert.equal(limitations.target_region, 'overview');
   assert.equal(limitations.media_mode, 'assigned_evidence');
   assert.equal(limitations.assigned_evidence[0].evidence_id, 'pelvic-genital-current');
   const narrationSegments = manifest.sections.map((section) => ({
@@ -283,6 +315,28 @@ test('mixed limitations section uses safe overview evidence instead of a title c
   const visualTimeline = buildManifestVisualTimeline({ manifest, narrationSegments });
   validateManifestTimelineIntegrity({ manifest, narrationSegments, visualTimeline });
   assert.doesNotThrow(() => validateVisualTimeline(visualTimeline, 'pelvic_genital'));
+});
+
+test('pelvic limitations section stays overview even when wording names missing regions', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'limitations-missing-regions-fixture',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: [
+      'Limitations / Future Useful Coverage',
+      'Dedicated pubic mound, perineum, and posterior perianal close-ups would improve future coverage.',
+    ],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'limitations_future_coverage', section_label: 'Limitations / Future Useful Coverage' },
+      { type: 'section', section_key: 'limitations_future_coverage', section_label: 'Limitations / Future Useful Coverage' },
+    ],
+    images,
+  });
+
+  const limitations = manifest.sections.find((section) => section.section_key === 'limitations_future_coverage');
+  assert.equal(limitations.target_region, 'overview');
+  assert.equal(limitations.media_mode, 'assigned_evidence');
+  assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
 });
 
 test('renderer timeline uses identical section IDs and measured audio durations', () => {

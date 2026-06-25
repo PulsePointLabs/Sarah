@@ -4457,6 +4457,7 @@ const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
   reviewInstructions: `
 HEAD-TO-TOE REVIEW SCOPE:
 - Produce one cumulative anatomical profile of Ben. This is not a batch report, image audit, provenance report, or process note.
+- Write directly to Ben in second person throughout. Use "you" and "your"; do not write "he", "his", "the person", "the subject", or "the patient" except inside a direct quote from saved source text.
 - Start with anatomy. Do not open with source details, image counts, batch status, timeout/recovery language, payment/cloud language, or "assembled from" language.
 - Make the review easy to listen to as downloaded audio: top-to-bottom flow, minimal repetition, short clear paragraphs, and no duplicate callout/prose narration.
 - Prioritize observations: visible anatomy, posture, symmetry, skin findings, and meaningful changes. Default mode is observe, not defend or prove.
@@ -4537,6 +4538,7 @@ const PELVIC_GENITAL_IMAGE_REVIEW_CONFIG = {
   reviewInstructions: `
 PELVIC / GENITAL REVIEW SCOPE:
 - Produce one cumulative pelvic/genital/perineal anatomical profile of Ben. This is not a batch report, image audit, source report, or process note.
+- Write directly to Ben in second person throughout. Use "you" and "your"; do not write "he", "his", "the person", "the subject", or "the patient" except inside a direct quote from saved source text.
 - Start with actual pelvic/genital/perineal findings. Do not open with source details, image counts, evidence-scope logistics, batch/source/rechecked-image explanations, or provenance.
 - Make the review easy to listen to as downloaded audio: natural anatomical flow, minimal repetition, short paragraphs, and no duplicate callout/prose wording.
 - Default mode is observe, not defend or prove. Describe visible anatomy, visible findings, meaningful changes, and tissue/device relationships. Stop there.

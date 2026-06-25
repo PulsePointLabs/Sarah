@@ -596,6 +596,9 @@ function constrainRegionForReview(regionKey = '', meta = {}, paragraphText = '',
 function sectionRegionResolutionFromMeta(meta = {}, paragraphText = '', reviewScope = '') {
   const explicitKey = normalizeText(meta.section_key || meta.sectionKey || '').replace(/\s+/g, '_');
   const paragraphRegion = sectionRegionKeyFromText(paragraphText);
+  if (explicitKey === 'limitations_future_coverage') {
+    return { key: 'overview', source: 'limitations_section_overview' };
+  }
   if (MIXED_SECTION_KEYS.has(explicitKey)) {
     const rawKey = paragraphRegion || 'overview';
     return {
@@ -984,9 +987,10 @@ function groupParagraphsIntoManifestSections(paragraphs = [], paragraphMeta = []
   return sections;
 }
 
-function assignmentMetadataForImage(image = {}, score = 0, reason = '') {
+function assignmentMetadataForImage(image = {}, score = 0, reason = '', targetKey = '') {
   const anatomyLabels = [...regionKeysForImage(image)];
   const fineLabels = [...fineStructureKeysForImage(image)];
+  const regionCropFallback = allowsRegionCropFallback(targetKey, new Set(anatomyLabels), image);
   return {
     evidence_id: image.id || null,
     source_collection: image.source || 'profile_review',
@@ -1000,6 +1004,7 @@ function assignmentMetadataForImage(image = {}, score = 0, reason = '') {
     evidence_recency: image.source?.includes('archive') ? 'historical' : 'current_or_saved',
     evidence_role: isDeviceHeavyImage(image) ? 'device_related' : 'anatomy',
     device_related: isDeviceHeavyImage(image),
+    region_crop_fallback: regionCropFallback,
     procedure_related: /\b(procedure|catheter|foley|statlock|tubing|drainage)\b/i.test(normalizeText([image.label, image.coverage, image.source].join(' '))),
     display_label: image.label || null,
   };
@@ -1065,7 +1070,7 @@ export function createReviewEvidenceManifest({
         : `Selected explicit compatible evidence for ${REGION_LABELS.get(section.target_region) || section.target_region}.`
       : `No compatible focused evidence for ${REGION_LABELS.get(section.target_region) || section.target_region}; renderer must use section card.`;
     const assignment = selected
-      ? assignmentMetadataForImage(selected.image, selected.candidate?.score ?? selected.score ?? 0, directReason)
+      ? assignmentMetadataForImage(selected.image, selected.candidate?.score ?? selected.score ?? 0, directReason, section.target_region)
       : null;
     if (assignment?.evidence_id) {
       evidenceUseCounts.set(assignment.evidence_id, (evidenceUseCounts.get(assignment.evidence_id) || 0) + 1);
@@ -1108,7 +1113,10 @@ export function validateReviewEvidenceManifest(manifest = {}) {
       }
       const labels = new Set(evidence.anatomy_labels || []);
       for (const blocked of section.prohibited_anatomy_labels || []) {
-        if (labels.has(blocked)) errors.push(`Section ${section.section_id} contains prohibited anatomy label ${blocked} from evidence ${evidence.evidence_id}.`);
+        const allowedCropFromBroadReference = Boolean(evidence.region_crop_fallback && labels.has(section.target_region));
+        if (labels.has(blocked) && !allowedCropFromBroadReference) {
+          errors.push(`Section ${section.section_id} contains prohibited anatomy label ${blocked} from evidence ${evidence.evidence_id}.`);
+        }
       }
       if (evidence.device_related && !sectionRequestsDevice({ section_key: section.section_key, section_label: section.section_title }, section.narration_text)) {
         errors.push(`Device evidence ${evidence.evidence_id} is not authorized for section ${section.section_id}.`);
