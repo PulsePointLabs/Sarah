@@ -1,5 +1,5 @@
 import { registerPlugin } from "@capacitor/core";
-import { isSarahNativeShell } from "@/lib/mobileApiBase";
+import { getSarahApiBaseCandidates, isSarahNativeShell } from "@/lib/mobileApiBase";
 
 const SarahFileSaver = registerPlugin("SarahFileSaver");
 
@@ -20,6 +20,7 @@ export async function saveUrlWithSystemPicker(url, filename, options = {}) {
   if (!url || !/^https?:\/\//i.test(String(url))) return null;
   return SarahFileSaver.saveFromUrl({
     url,
+    alternateUrls: buildAlternateDownloadUrls(url),
     filename: filename || "sarah-media-download",
     mimeType: guessMimeType(filename, options.mimeType),
   });
@@ -38,4 +39,26 @@ export async function downloadOrSaveUrl(url, filename, options = {}) {
   a.click();
   a.remove();
   return { ok: true, browserDownload: true };
+}
+
+function buildAlternateDownloadUrls(url) {
+  try {
+    const parsed = new URL(url);
+    const path = `${parsed.pathname || ""}${parsed.search || ""}`;
+    if (!path.startsWith("/uploads/")) return [];
+    const urls = [];
+    const seen = new Set([url]);
+    for (const base of getSarahApiBaseCandidates()) {
+      if (!/^https?:\/\//i.test(base)) continue;
+      const origin = base.replace(/\/api\/?$/i, "");
+      const alternate = `${origin}${path}`;
+      if (!seen.has(alternate)) {
+        seen.add(alternate);
+        urls.push(alternate);
+      }
+    }
+    return urls;
+  } catch {
+    return [];
+  }
 }

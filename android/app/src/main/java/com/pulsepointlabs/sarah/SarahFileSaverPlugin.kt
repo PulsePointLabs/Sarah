@@ -65,11 +65,11 @@ class SarahFileSaverPlugin : Plugin() {
             return
         }
 
-        val url = call.getString("url")?.trim().orEmpty()
         val filename = safeFilename(call.getString("filename") ?: "sarah-media-download")
+        val urls = urlsFromCall(call)
         scope.launch {
             try {
-                val bytes = streamUrlToUri(url, outputUri)
+                val bytes = streamUrlsToUri(urls, outputUri)
                 val response = JSObject()
                     .put("ok", true)
                     .put("filename", filename)
@@ -98,10 +98,22 @@ class SarahFileSaverPlugin : Plugin() {
         }
     }
 
+    private fun streamUrlsToUri(urls: List<String>, outputUri: Uri): Long {
+        var lastError: Exception? = null
+        for (url in urls) {
+            try {
+                return streamUrlToUri(url, outputUri)
+            } catch (error: Exception) {
+                lastError = error
+            }
+        }
+        throw lastError ?: IllegalStateException("No usable download URL was available.")
+    }
+
     private fun streamUrlToUri(url: String, outputUri: Uri): Long {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15000
-            readTimeout = 120000
+            readTimeout = 300000
             instanceFollowRedirects = true
             requestMethod = "GET"
         }
@@ -127,6 +139,29 @@ class SarahFileSaverPlugin : Plugin() {
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun urlsFromCall(call: PluginCall): List<String> {
+        val urls = mutableListOf<String>()
+        fun addUrl(value: String?) {
+            val clean = value?.trim().orEmpty()
+            if (
+                clean.isNotBlank()
+                && (clean.startsWith("http://") || clean.startsWith("https://"))
+                && !urls.contains(clean)
+            ) {
+                urls.add(clean)
+            }
+        }
+
+        addUrl(call.getString("url"))
+        val alternates = call.data.optJSONArray("alternateUrls")
+        if (alternates != null) {
+            for (index in 0 until alternates.length()) {
+                addUrl(alternates.optString(index))
+            }
+        }
+        return urls
     }
 
     private fun safeFilename(value: String): String {
