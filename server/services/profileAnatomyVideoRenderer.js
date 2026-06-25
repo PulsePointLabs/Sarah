@@ -1479,6 +1479,7 @@ export function buildManifestVisualTimeline({ manifest = {}, narrationSegments =
         label: assignment.display_label,
         url: assignment.source_ref,
         source: assignment.source_collection,
+        manifest_assigned: true,
         regions: assignment.anatomy_labels,
         regionLabels: assignment.anatomy_labels,
         anatomy_labels: assignment.anatomy_labels,
@@ -1491,6 +1492,7 @@ export function buildManifestVisualTimeline({ manifest = {}, narrationSegments =
       sectionId: section.section_id,
       label: section.section_title,
       targetKey: section.target_region,
+      manifestAssigned: Boolean(assignment),
       resolvedFrom: section.resolved_from,
       paragraphPreview: textPreview(section.narration_text),
       score: assignment?.assignment_score || 0,
@@ -1966,19 +1968,20 @@ export function validateVisualTimeline(visualTimeline = [], reviewScope = '') {
   const violations = [];
   for (const [index, item] of visualTimeline.entries()) {
     if (item.type !== 'image') continue;
-    if (
-      !isImageAllowedForRegion(item.image, item.targetKey, reviewScope)
-      || !imageMatchesFineStructureRequest(
+    const regionAllowed = isImageAllowedForRegion(item.image, item.targetKey, reviewScope);
+    const manifestAssigned = Boolean(item.manifestAssigned || item.image?.manifest_assigned);
+    const fineStructureAllowed = manifestAssigned || imageMatchesFineStructureRequest(
         item.image,
         item.targetKey,
         { section_key: item.targetKey, section_label: item.label },
         item.paragraphPreview,
         reviewScope
-      )
-    ) {
+      );
+    if (!regionAllowed || !fineStructureAllowed) {
       const imageTags = [...regionKeysForImage(item.image)];
       violations.push({
         index,
+        reason: !regionAllowed ? 'region_not_allowed' : 'fine_structure_mismatch',
         target_region: item.targetKey || null,
         narration_section: item.label || null,
         image_id: item.image?.id || null,

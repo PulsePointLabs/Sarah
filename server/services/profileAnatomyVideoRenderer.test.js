@@ -276,6 +276,13 @@ test('mixed limitations section uses safe overview evidence instead of a title c
   const limitations = manifest.sections.find((section) => section.section_key === 'limitations_future_coverage');
   assert.equal(limitations.media_mode, 'assigned_evidence');
   assert.equal(limitations.assigned_evidence[0].evidence_id, 'pelvic-genital-current');
+  const narrationSegments = manifest.sections.map((section) => ({
+    section_id: section.section_id,
+    durationSeconds: 3,
+  }));
+  const visualTimeline = buildManifestVisualTimeline({ manifest, narrationSegments });
+  validateManifestTimelineIntegrity({ manifest, narrationSegments, visualTimeline });
+  assert.doesNotThrow(() => validateVisualTimeline(visualTimeline, 'pelvic_genital'));
 });
 
 test('renderer timeline uses identical section IDs and measured audio durations', () => {
