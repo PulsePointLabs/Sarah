@@ -27,7 +27,7 @@ import {
   ttsCheckpointKey,
 } from "@/lib/ttsReadingCheckpoint";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
-import { serverUrl } from "@/lib/mobileApiBase";
+import { apiUrl, discoverSarahApiBase, isSarahNativeShell, serverUrl } from "@/lib/mobileApiBase";
 import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { repairCharacterSplitParagraph, repairDecimalSpacing, reduceConsistencyPhraseRepetition, splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 
@@ -260,16 +260,74 @@ const getTtsStatus = (err) => {
 
 const isAbortError = (err) => err?.name === "AbortError" || /cancelled|aborted/i.test(String(err?.message || ""));
 
+async function fetchTTSBytesDirect(payload, signal) {
+  const requestOnce = async () => {
+    const response = await fetch(apiUrl("/functions/openaiTTS"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+      signal,
+    });
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.ok) {
+      const data = contentType.includes("application/json")
+        ? await response.json().catch(() => ({}))
+        : { error: await response.text().catch(() => "") };
+      const error = new Error(data?.error || data?.message || `TTS request failed: ${response.status}`);
+      error.status = response.status;
+      error.data = data;
+      throw error;
+    }
+    if (!contentType.includes("audio/") && !contentType.includes("application/octet-stream")) {
+      const error = new Error(`TTS returned ${contentType || "unknown content"} instead of audio.`);
+      error.status = response.status || 502;
+      throw error;
+    }
+    return {
+      status: response.status,
+      data: {
+        audioBuffer: await response.arrayBuffer(),
+        model: response.headers.get("x-tts-model") || undefined,
+        voice: response.headers.get("x-tts-voice") || undefined,
+        speed: response.headers.get("x-tts-speed") || undefined,
+        format: response.headers.get("x-tts-format") || undefined,
+        latency_ms: response.headers.get("x-tts-latency-ms") || undefined,
+        retries: response.headers.get("x-tts-retries") || undefined,
+      },
+    };
+  };
+
+  try {
+    return await requestOnce();
+  } catch (error) {
+    if (!isSarahNativeShell() || isAbortError(error)) throw error;
+    await discoverSarahApiBase({ timeoutMs: 2200 });
+    return requestOnce();
+  }
+}
+
 async function callTTSWithRetries(payload, attempts = 3, signal) {
   let lastError;
 
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (signal?.aborted) throw new DOMException("TTS request cancelled", "AbortError");
     try {
-      const response = await base44.functions.invoke("openaiTTS", payload, {
-        signal,
-        timeoutMs: TTS_CHUNK_REQUEST_TIMEOUT_MS,
-      });
+      const timeoutController = !signal ? new AbortController() : null;
+      const timeoutId = timeoutController
+        ? window.setTimeout(() => timeoutController.abort(), TTS_CHUNK_REQUEST_TIMEOUT_MS)
+        : null;
+      const requestSignal = signal || timeoutController?.signal;
+      let response;
+      try {
+        response = await fetchTTSBytesDirect(payload, requestSignal);
+      } catch (error) {
+        if (error?.name === "AbortError" && timeoutController) {
+          throw new Error(`Request timed out after ${Math.round(TTS_CHUNK_REQUEST_TIMEOUT_MS / 1000)}s: ${apiUrl("/functions/openaiTTS")}`);
+        }
+        throw error;
+      } finally {
+        if (timeoutId) window.clearTimeout(timeoutId);
+      }
 
       if (response?.data?.error) {
         const error = new Error(getTtsErrorMessage(response));
@@ -278,7 +336,7 @@ async function callTTSWithRetries(payload, attempts = 3, signal) {
         throw error;
       }
 
-      if (!response?.data?.audio) {
+      if (!response?.data?.audioBuffer) {
         const error = new Error(`TTS returned no audio. Status: ${response?.status || "unknown"}`);
         error.status = response?.status || 502;
         error.data = response?.data;
@@ -857,11 +915,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           }, speculative ? 3 : 7, speculative ? prefetchAbortRef.current?.signal : undefined);
           if (response.data?.error) throw new Error(response.data.error);
           audioFormat = response.data?.format || audioFormat;
-          const base64 = response.data.audio;
-          const binary = atob(base64);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          audioBuffer = bytes.buffer;
+          audioBuffer = response.data.audioBuffer;
           idbSet(cacheText, voiceRef.current, runtime.speed, audioBuffer); // fire-and-forget
           if (!speculative) {
             setRequestStatus({ type: "ok", msg: `Audio ready${audioFormat && audioFormat !== runtime.format ? ` (${String(audioFormat).toUpperCase()})` : ""}` });
