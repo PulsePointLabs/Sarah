@@ -375,6 +375,7 @@ export default function Library() {
   const [audioRef, setAudioRef] = useState(null);
   const [videosOpen, setVideosOpen] = useState(false);
   const [audioOpen, setAudioOpen] = useState(false);
+  const [downloadNotice, setDownloadNotice] = useState(null);
   const recoveringJobIdsRef = useRef(new Set());
 
   const { data: exports = [], isLoading, error: audioExportsError } = useQuery({
@@ -564,10 +565,35 @@ export default function Library() {
     }
   };
 
+  const startLibraryDownload = async (url, filename, options = {}) => {
+    if (!url) return;
+    setDownloadNotice({
+      type: "working",
+      message: `Starting ${filename || "download"}...`,
+    });
+    try {
+      const result = await triggerDownloadOrOpen(url, filename, options);
+      const androidStatus = result?.downloadStatus?.status;
+      setDownloadNotice({
+        type: result?.openedExternally ? "warning" : "ok",
+        message: result?.openedExternally
+          ? `Android opened the download link externally for ${filename || "this file"}.`
+          : result?.systemDownload
+            ? `Android download ${androidStatus || "started"}: ${filename || "file"}`
+            : `Download started: ${filename || "file"}`,
+      });
+    } catch (error) {
+      setDownloadNotice({
+        type: "error",
+        message: error?.message || "Download failed before Android accepted it.",
+      });
+    }
+  };
+
   const handleDownload = async (export_) => {
     const url = getAudioUrl(export_);
     if (!url) return;
-    await triggerDownloadOrOpen(url, buildAudioExportFilename({
+    await startLibraryDownload(url, buildAudioExportFilename({
       title: cleanDisplayTitle(export_),
       sessionDate: export_.session_date || getCreatedTimestamp(export_),
       extension: getDownloadExtension(export_),
@@ -577,7 +603,7 @@ export default function Library() {
   const handleDownloadVideo = async (video) => {
     const url = getVideoUrl(video);
     if (!url) return;
-    await triggerDownloadOrOpen(
+    await startLibraryDownload(
       url,
       video.filename || `${cleanVideoTitle(video).replace(/[^a-zA-Z0-9_-]+/g, "-") || "Session-Review-Video"}.mp4`,
       { mimeType: "video/mp4" }
@@ -586,7 +612,7 @@ export default function Library() {
 
   const handleDownloadManifest = async (video) => {
     if (!video?.manifest_url) return;
-    await triggerDownloadOrOpen(
+    await startLibraryDownload(
       serverUrl(video.manifest_url),
       `${(video.filename || cleanVideoTitle(video)).replace(/\.[^.]+$/, "")}.review-manifest.json`,
       { mimeType: "application/json" }
@@ -605,7 +631,7 @@ export default function Library() {
       { url: serverUrl(export_.chapter_txt_url), suffix: ".chapters.txt" },
     ].filter((entry) => entry.url).forEach((entry, index) => {
       window.setTimeout(() => {
-        triggerDownloadOrOpen(entry.url, `${baseFilename}${entry.suffix}`).catch(() => {});
+        startLibraryDownload(entry.url, `${baseFilename}${entry.suffix}`).catch(() => {});
       }, index * 120);
     });
   };
@@ -642,6 +668,28 @@ export default function Library() {
         <div className="mx-4 flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm text-muted-foreground">
           <RefreshCw className="h-4 w-4 animate-spin text-primary" />
           Loading latest media. Available results are shown as they arrive.
+        </div>
+      )}
+
+      {downloadNotice && (
+        <div className={[
+          "mx-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm",
+          downloadNotice.type === "error"
+            ? "border-destructive/30 bg-destructive/10 text-destructive"
+            : downloadNotice.type === "warning"
+              ? "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100"
+              : downloadNotice.type === "working"
+                ? "border-primary/20 bg-primary/10 text-primary"
+                : "border-emerald-300 bg-emerald-50 text-emerald-950 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-100",
+        ].join(" ")}>
+          <span className="min-w-0">{downloadNotice.message}</span>
+          <button
+            type="button"
+            onClick={() => setDownloadNotice(null)}
+            className="shrink-0 text-xs font-semibold opacity-70 hover:opacity-100"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 
