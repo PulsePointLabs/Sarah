@@ -5,7 +5,7 @@ import AIOutputReader from "./AIOutputReader";
 import { Button } from "@/components/ui/button";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
-import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { buildAudioChapterBundle } from "@/lib/audioChapters";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
@@ -1536,6 +1536,11 @@ function shouldProcessCompletedJob(job, savedResult, session = null) {
   return job?.status === "complete" && savedResult && !hasKeyVideoClipMeta(savedResult);
 }
 
+async function hydrateCompletedJobResult(job) {
+  if (job?.status !== "complete" || job?.result) return job;
+  return getBackgroundJob(job.id);
+}
+
 function toAnalysisTextArray(value) {
   if (Array.isArray(value)) {
     return value
@@ -2089,7 +2094,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
         setLoading(job.status !== "complete");
 
         const completedJob = job.status === "complete"
-          ? job
+          ? await hydrateCompletedJobResult(job)
           : await waitForBackgroundJob(job.id, {
             intervalMs: 1200,
             onProgress: (nextJob) => {

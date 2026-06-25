@@ -322,6 +322,7 @@ function runNext() {
     Promise.resolve()
       .then(() => handler(job.payload, {
         jobId: job.id,
+        meta: { ...(job.meta || {}) },
         signal: job.abortController.signal,
         updateProgress: (progress) => patchProgress(job, progress),
         getProgress: () => ({ ...(job.progress || {}) }),

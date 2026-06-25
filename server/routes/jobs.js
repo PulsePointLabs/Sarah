@@ -17,7 +17,7 @@ import { analyzeLocalVisionForward } from '../services/localVision/forwardAnalyz
 import { askLocalVisionVideo } from '../services/localVision/videoQa.js';
 import { resolveCachedFramePath } from '../services/localVision/frameSampler.js';
 import { deleteJobPayload, loadJobPayload, saveJobPayload } from '../services/jobPayloadStore.js';
-import { listEntities, upsertEntity } from '../db.js';
+import { getEntity, listEntities, upsertEntity } from '../db.js';
 import {
   cleanProfileImageReviewText,
   cleanupProfileImageReviewResult,
@@ -115,6 +115,43 @@ function persistCompletedProfileImageReviewResult(result, payload = {}, context 
     [fields.resultKey]: storedResult,
     [fields.archiveKey]: nextArchive,
     ...(sourceSessionCount != null ? { session_count: sourceSessionCount } : {}),
+  });
+  return storedResult;
+}
+
+function persistCompletedSessionAIInvokeResult(result, _payload = {}, context = {}) {
+  if (!result || typeof result !== 'object') return result;
+  const meta = context?.meta || {};
+  const sessionId = String(meta.sessionId || '');
+  const analysisField = String(meta.analysisField || '');
+  if (!sessionId || !['ai_analysis', 'ai_session_deep_dive', 'ai_body_exploration'].includes(analysisField)) return result;
+  const session = getEntity('Session', sessionId) || getEntity('BodyExploration', sessionId);
+  if (!session) return result;
+
+  const generatedAt = new Date().toISOString();
+  const previousMeta = session?.[analysisField]?._meta || {};
+  const storedResult = {
+    ...result,
+    _meta: {
+      ...previousMeta,
+      ...(result._meta && typeof result._meta === 'object' ? result._meta : {}),
+      created_at: previousMeta.created_at || generatedAt,
+      updated_at: generatedAt,
+      last_generated_at: generatedAt,
+      source_job_id: context.jobId || null,
+      source_job_completed_at: generatedAt,
+      ...(meta.phaseMarkerFreshnessKey ? { phase_marker_freshness_key: meta.phaseMarkerFreshnessKey } : {}),
+      ...(meta.phaseMarkers ? { source_phase_markers_s: {
+        pre_climax: meta.phaseMarkers.pre_climax_offset_s ?? null,
+        climax: meta.phaseMarkers.climax_offset_s ?? null,
+        recovery: meta.phaseMarkers.recovery_offset_s ?? null,
+      } } : {}),
+    },
+  };
+  const entity = getEntity('Session', sessionId) ? 'Session' : 'BodyExploration';
+  upsertEntity(entity, sessionId, {
+    ...session,
+    [analysisField]: storedResult,
   });
   return storedResult;
 }
@@ -427,7 +464,7 @@ registerJobHandler('ai_invoke', async (payload, context) => {
     total: 3,
     message: `${label}: validating structured output…`,
   });
-  return result;
+  return persistCompletedSessionAIInvokeResult(result, payload, context);
 });
 
 async function runInternalAIRequest(request = {}, context, label = 'AI analysis', step = {}) {
