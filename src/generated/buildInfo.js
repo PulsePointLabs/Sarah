@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
   "version": "0.1.36",
-  "commit": "60884cc",
-  "commitMessage": "Fix Sarah vitals Q&A and add cached session analysis",
-  "builtAt": "2026-06-26T23:21:50.652Z"
+  "commit": "6b2d21a",
+  "commitMessage": "Stamp Sarah 0.1.36 build",
+  "builtAt": "2026-06-26T23:23:07.456Z"
 };
