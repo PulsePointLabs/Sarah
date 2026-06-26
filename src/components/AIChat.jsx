@@ -44,6 +44,20 @@ const VOICE_AUTO_STOP_SILENCE_MS = 3600;
 const VOICE_AUTO_STOP_RMS = 0.024;
 const VOICE_AUTO_STOP_MIN_RECORDING_MS = 1200;
 
+function getSpeechRecognitionConstructor() {
+  if (typeof window === "undefined") return null;
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function compactSpeechPreview(value = "") {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function lastSpokenWord(value = "") {
+  const words = compactSpeechPreview(value).match(/[\p{L}\p{N}'-]+/gu);
+  return words?.length ? words[words.length - 1] : "";
+}
+
 function extractProviderErrorMessage(error) {
   const candidates = [
     error?.data?.error,
@@ -451,6 +465,9 @@ export default function AIChat({
   const [savedFeedback, setSavedFeedback] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [liveSpeechPreview, setLiveSpeechPreview] = useState("");
+  const [liveSpeechLastWord, setLiveSpeechLastWord] = useState("");
+  const [liveSpeechSupported, setLiveSpeechSupported] = useState(() => Boolean(getSpeechRecognitionConstructor()));
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [speakingIdx, setSpeakingIdx] = useState(null);
   const [ttsStatus, setTtsStatus] = useState(null);
@@ -472,6 +489,8 @@ export default function AIChat({
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const micStreamRef = useRef(null);
+  const speechRecognitionRef = useRef(null);
+  const liveSpeechPreviewRef = useRef("");
   const speechDetectedRef = useRef(false);
   const silenceStartRef = useRef(null);
   const suppressNextTranscriptionRef = useRef(false);
@@ -537,6 +556,7 @@ export default function AIChat({
     audioUrlCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
     audioUrlCacheRef.current.clear();
     if (vadFrameRef.current) cancelAnimationFrame(vadFrameRef.current);
+    speechRecognitionRef.current?.abort?.();
     micStreamRef.current?.getTracks().forEach((track) => track.stop());
     audioContextRef.current?.close?.();
   }, []);
@@ -1220,9 +1240,76 @@ export default function AIChat({
     micStreamRef.current = null;
   };
 
+  const clearLiveSpeechPreview = () => {
+    liveSpeechPreviewRef.current = "";
+    setLiveSpeechPreview("");
+    setLiveSpeechLastWord("");
+  };
+
+  const stopLiveSpeechRecognition = ({ clear = false } = {}) => {
+    const recognition = speechRecognitionRef.current;
+    speechRecognitionRef.current = null;
+    if (recognition) {
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      try {
+        recognition.stop();
+      } catch {
+        try {
+          recognition.abort?.();
+        } catch {}
+      }
+    }
+    if (clear) clearLiveSpeechPreview();
+  };
+
+  const startLiveSpeechRecognition = () => {
+    const SpeechRecognition = getSpeechRecognitionConstructor();
+    setLiveSpeechSupported(Boolean(SpeechRecognition));
+    clearLiveSpeechPreview();
+    if (!SpeechRecognition) return false;
+
+    stopLiveSpeechRecognition();
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+      recognition.lang = navigator.language || "en-US";
+      recognition.onresult = (event) => {
+        let transcript = "";
+        for (let index = 0; index < event.results.length; index += 1) {
+          transcript += event.results[index]?.[0]?.transcript || "";
+        }
+        const preview = compactSpeechPreview(transcript);
+        liveSpeechPreviewRef.current = preview;
+        setLiveSpeechPreview(preview);
+        setLiveSpeechLastWord(lastSpokenWord(preview));
+      };
+      recognition.onerror = (event) => {
+        const code = String(event?.error || "");
+        if (!["no-speech", "aborted"].includes(code)) {
+          setLiveSpeechSupported(false);
+        }
+      };
+      recognition.onend = () => {
+        if (speechRecognitionRef.current === recognition) speechRecognitionRef.current = null;
+      };
+      speechRecognitionRef.current = recognition;
+      recognition.start();
+      return true;
+    } catch {
+      speechRecognitionRef.current = null;
+      setLiveSpeechSupported(false);
+      return false;
+    }
+  };
+
   const releaseVoiceCaptureForPlayback = () => {
     if (!recording && !micStreamRef.current && !audioContextRef.current) return;
     suppressNextTranscriptionRef.current = true;
+    stopLiveSpeechRecognition({ clear: true });
     if (mediaRecorderRef.current?.state === "recording") {
       mediaRecorderRef.current.stop();
     } else {
@@ -1234,6 +1321,7 @@ export default function AIChat({
 
   const disableVoiceMode = () => {
     if (mediaRecorderRef.current?.state === "recording") mediaRecorderRef.current.stop();
+    stopLiveSpeechRecognition({ clear: true });
     stopVad();
     stopMicStream();
     setRecording(false);
@@ -1328,6 +1416,7 @@ export default function AIChat({
         setChatProcessingStatus({ phase: "error", message: "Microphone recorder failed", detail: message });
       };
       mr.onstop = async () => {
+        stopLiveSpeechRecognition();
         stopVad();
         stream.getTracks().forEach((t) => t.stop());
         if (micStreamRef.current === stream) micStreamRef.current = null;
@@ -1337,6 +1426,7 @@ export default function AIChat({
           audioChunksRef.current = [];
           setTranscribing(false);
           setChatProcessingStatus(null);
+          clearLiveSpeechPreview();
           return;
         }
         setTranscribing(true);
@@ -1360,11 +1450,14 @@ export default function AIChat({
           if (text) {
             setInput((prev) => (prev ? `${prev} ${text}` : text));
             setChatProcessingStatus(null);
+            clearLiveSpeechPreview();
           } else {
             setChatProcessingStatus({
               phase: "ready",
               message: "No speech detected",
-              detail: "The recording completed, but Whisper did not return usable text.",
+              detail: liveSpeechPreviewRef.current
+                ? `Live preview heard: "${liveSpeechPreviewRef.current}". Whisper did not return usable final text.`
+                : "The recording completed, but Whisper did not return usable text.",
             });
           }
           setTimeout(() => inputRef.current?.focus(), 100);
@@ -1378,14 +1471,18 @@ export default function AIChat({
         }
       };
       mr.start(500);
+      const livePreviewStarted = startLiveSpeechRecognition();
       setRecording(true);
       setChatProcessingStatus({
         phase: "recording",
         message: "Listening",
-        detail: "Tap the mic to stop, or pause for a few seconds after speaking and Sarah will stop automatically.",
+        detail: livePreviewStarted
+          ? "Live word preview is on. Tap the mic to stop, or pause for a few seconds after speaking and Sarah will stop automatically."
+          : "Tap the mic to stop, or pause for a few seconds after speaking and Sarah will stop automatically. This Android WebView does not expose live word preview.",
       });
       startVad(stream);
     } catch (error) {
+      stopLiveSpeechRecognition({ clear: true });
       stopVad();
       stream?.getTracks?.().forEach((track) => track.stop());
       if (micStreamRef.current === stream) micStreamRef.current = null;
@@ -1783,6 +1880,23 @@ Return a conversational answer plus structured findings for review/persistence.`
         </div>
         {chatProcessingStatus.detail && (
           <p className="mt-1 leading-relaxed opacity-90">{chatProcessingStatus.detail}</p>
+        )}
+        {chatProcessingStatus.phase === "recording" && liveSpeechLastWord && (
+          <div className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-full border border-current/20 bg-background/70 px-2 py-1 text-[11px] font-semibold">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
+            <span className="shrink-0 opacity-80">Last heard</span>
+            <span className="min-w-0 truncate text-foreground">{liveSpeechLastWord}</span>
+          </div>
+        )}
+        {chatProcessingStatus.phase === "recording" && liveSpeechPreview && (
+          <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-foreground/80">
+            {liveSpeechPreview}
+          </p>
+        )}
+        {chatProcessingStatus.phase === "recording" && !liveSpeechSupported && (
+          <p className="mt-1 text-[11px] leading-relaxed opacity-75">
+            Live word preview is not available in this Android WebView; final transcription still uses Whisper.
+          </p>
         )}
       </div>
     );
