@@ -22,6 +22,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import TTSReader from "@/components/TTSReader";
 import { apiUrl } from "@/lib/mobileApiBase";
 
 function number(value) {
@@ -231,6 +232,22 @@ function AnalysisPanel({ analysis, loading, error, onRetry }) {
   );
 }
 
+function buildAnalysisNarration(analysis) {
+  if (!analysis) return "";
+  return [
+    analysis.headline,
+    analysis.personal_read,
+    analysis.clinical_summary,
+    analysis.cardiovascular_arc,
+    analysis.hrv_read,
+    analysis.blood_pressure_read,
+    analysis.recovery_read,
+    analysis.data_quality,
+    ...(analysis.notable_findings || []).flatMap((finding) => [finding.title, finding.detail, finding.evidence]),
+    ...(analysis.takeaways || []),
+  ].filter(Boolean).join(". ");
+}
+
 export default function VitalSignsDetail() {
   const { id } = useParams();
   const [transfer, setTransfer] = useState(null);
@@ -282,6 +299,51 @@ export default function VitalSignsDetail() {
   const events = useMemo(() => Array.isArray(payload.events) ? payload.events : Array.isArray(session.events) ? session.events : [], [payload.events, session.events]);
   const bloodPressure = useMemo(() => Array.isArray(payload.bloodPressureReadings) ? payload.bloodPressureReadings : Array.isArray(session.bloodPressureReadings) ? session.bloodPressureReadings : [], [payload.bloodPressureReadings, session.bloodPressureReadings]);
   const trend = useMemo(() => Array.isArray(payload.heartRateTrend) ? payload.heartRateTrend : [], [payload.heartRateTrend]);
+  const narrationItems = useMemo(() => {
+    const overview = [
+      `${session.title || transfer?.latest_session_title || "Vital-sign details"}.`,
+      `Session duration ${fmtDuration(session.durationSeconds)}.`,
+      hr.baselineBpm != null ? `Baseline heart rate ${hr.baselineBpm} beats per minute.` : "",
+      hr.averageBpm != null ? `Average heart rate ${Math.round(number(hr.averageBpm))} beats per minute.` : "",
+      hr.maxBpm != null ? `Maximum heart rate ${hr.maxBpm} beats per minute.` : "",
+      hr.finalBpm != null ? `Final heart rate ${hr.finalBpm} beats per minute.` : "",
+      number(hrv.rmssdMs) != null ? `R M S S D ${number(hrv.rmssdMs).toFixed(1)} milliseconds.` : "",
+      hrv.acceptedRrIntervals != null ? `${Number(hrv.acceptedRrIntervals).toLocaleString()} R R intervals accepted.` : "",
+    ].filter(Boolean).join(" ");
+    const eventNarration = events.length
+      ? events.map((event) => {
+        const eventHr = event.heartRateAtEvent || {};
+        return [
+          `At ${fmtElapsed(event.elapsedSeconds)}, ${event.label || event.type || "event"}.`,
+          event.note || "",
+          eventHr.currentBpm != null ? `Heart rate ${eventHr.currentBpm} beats per minute.` : "",
+        ].filter(Boolean).join(" ");
+      }).join(" ")
+      : "No event notes were included.";
+    const pressureNarration = bloodPressure.length
+      ? bloodPressure.map((reading) => [
+        `Blood pressure ${reading.systolic} over ${reading.diastolic}.`,
+        reading.meanArterialPressure != null ? `Mean arterial pressure ${reading.meanArterialPressure}.` : "",
+        reading.pulse != null ? `Pulse ${reading.pulse} beats per minute.` : "",
+        reading.bodyPosition ? `Position ${reading.bodyPosition}.` : "",
+        reading.notes || "",
+      ].filter(Boolean).join(" ")).join(" ")
+      : "No blood-pressure readings were linked.";
+    return [
+      { kind: "overview", text: overview },
+      ...(transfer?.analysis ? [{ kind: "analysis", text: buildAnalysisNarration(transfer.analysis) }] : []),
+      {
+        kind: "heart",
+        text: `Heart-rate timeline. ${trend.length} trend points span this session. Baseline ${hr.baselineBpm ?? "unavailable"}, average ${hr.averageBpm != null ? Math.round(number(hr.averageBpm)) : "unavailable"}, maximum ${hr.maxBpm ?? "unavailable"}, and final ${hr.finalBpm ?? "unavailable"} beats per minute.`,
+      },
+      { kind: "events", text: `Event timeline. ${eventNarration}` },
+      { kind: "pressure", text: `Blood pressure. ${pressureNarration}` },
+      {
+        kind: "quality",
+        text: `Capture quality. ${Number(hr.sampleCount || 0).toLocaleString()} heart-rate samples. ${rawStreams.ecg?.samplesCaptured != null ? `${Number(rawStreams.ecg.samplesCaptured).toLocaleString()} E C G samples.` : "E C G sample count unavailable."} ${hrv.contextualArtifacts ?? "Unknown number of"} contextual artifacts. ${Array.isArray(payload.connectionGaps) ? payload.connectionGaps.length : "Unknown number of"} connection gaps.`,
+      },
+    ];
+  }, [bloodPressure, events, hr, hrv, payload.connectionGaps, rawStreams.ecg?.samplesCaptured, session.durationSeconds, session.title, transfer, trend.length]);
 
   if (loading) return <div className="mx-auto max-w-7xl px-4 py-8 text-sm text-muted-foreground">Loading vital-sign details…</div>;
   if (error || !transfer) return (
@@ -310,77 +372,114 @@ export default function VitalSignsDetail() {
         </div>
       </header>
 
-      <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <Metric label="Baseline" value={hr.baselineBpm != null ? `${hr.baselineBpm} bpm` : "--"} />
-        <Metric label="Average" value={hr.averageBpm != null ? `${Math.round(number(hr.averageBpm))} bpm` : "--"} accent />
-        <Metric label="Maximum" value={hr.maxBpm != null ? `${hr.maxBpm} bpm` : "--"} />
-        <Metric label="Final" value={hr.finalBpm != null ? `${hr.finalBpm} bpm` : "--"} />
-        <Metric label="RMSSD" value={number(hrv.rmssdMs) != null ? `${number(hrv.rmssdMs).toFixed(1)} ms` : "--"} />
-        <Metric label="RR accepted" value={hrv.acceptedRrIntervals != null ? Number(hrv.acceptedRrIntervals).toLocaleString() : "--"} />
-      </div>
-
-      <div className="mt-5 space-y-4">
-        <AnalysisPanel analysis={transfer.analysis} loading={analysisLoading} error={analysisError} onRetry={analyze} />
-
-        <Section title="Heart-rate timeline" icon={Activity}>
-          <p className="mb-3 text-sm text-muted-foreground">Pink is measured HR, blue is the smoothed trend, and gold markers identify documented events.</p>
-          <HeartRateChart rows={trend} events={events} />
-        </Section>
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Section title="Event timeline" icon={Clock3}>
-            {events.length ? (
-              <div className="max-h-[34rem] space-y-3 overflow-y-auto pr-1">
-                {events.map((event, index) => {
-                  const eventHr = event.heartRateAtEvent || {};
-                  return (
-                    <article key={event.markerId || `${event.timestampUtc}-${index}`} className="rounded-lg border border-border bg-muted/15 p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <p className="font-semibold text-foreground">{event.label || event.type || "Event"}</p>
-                        <span className="shrink-0 font-mono text-xs text-primary">{fmtElapsed(event.elapsedSeconds)}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-muted-foreground">{fmtDateTime(event.timestampUtc)}</p>
-                      {event.note && <p className="mt-2 text-sm leading-relaxed text-foreground/90">{event.note}</p>}
-                      <p className="mt-2 text-xs text-muted-foreground">HR {eventHr.currentBpm ?? "--"} · average {eventHr.averageBpmSoFar != null ? Math.round(number(eventHr.averageBpmSoFar)) : "--"} · max {eventHr.maxBpmSoFar ?? "--"}</p>
-                    </article>
-                  );
-                })}
-              </div>
-            ) : <p className="text-sm text-muted-foreground">No event notes were included.</p>}
-          </Section>
-
-          <Section title="Blood pressure" icon={HeartPulse}>
-            {bloodPressure.length ? (
-              <>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {bloodPressure.map((reading, index) => {
-                    const sys = number(reading.systolic);
-                    const dia = number(reading.diastolic);
-                    const pulsePressure = sys != null && dia != null ? sys - dia : null;
-                    return (
-                      <article key={reading.id || index} className="rounded-lg border border-border bg-muted/15 p-3">
-                        <p className="font-mono text-xl font-bold text-foreground">{sys ?? "--"}/{dia ?? "--"}</p>
-                        <p className="mt-1 text-xs text-muted-foreground">MAP {reading.meanArterialPressure ?? "--"} · PP {pulsePressure ?? "--"}{reading.pulse != null ? ` · pulse ${reading.pulse}` : ""}</p>
-                        <p className="mt-2 text-xs text-muted-foreground">{fmtDateTime(reading.timestampUtc)}{reading.bodyPosition ? ` · ${reading.bodyPosition}` : ""}</p>
-                        {reading.notes && <p className="mt-2 text-sm text-foreground/85">{reading.notes}</p>}
-                      </article>
-                    );
-                  })}
-                </div>
-                <BloodPressureChart readings={bloodPressure} />
-              </>
-            ) : <p className="text-sm text-muted-foreground">No blood-pressure readings were linked.</p>}
-          </Section>
+      {(!transfer.analysis || analysisLoading || analysisError) && (
+        <div className="mt-5">
+          <AnalysisPanel analysis={transfer.analysis} loading={analysisLoading} error={analysisError} onRetry={analyze} />
         </div>
+      )}
 
-        <Section title="Capture quality" icon={ShieldCheck}>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Metric label="HR samples" value={hr.sampleCount != null ? Number(hr.sampleCount).toLocaleString() : "--"} />
-            <Metric label="ECG samples" value={rawStreams.ecg?.samplesCaptured != null ? Number(rawStreams.ecg.samplesCaptured).toLocaleString() : "--"} />
-            <Metric label="Artifacts" value={hrv.contextualArtifacts ?? "--"} />
-            <Metric label="Connection gaps" value={Array.isArray(payload.connectionGaps) ? payload.connectionGaps.length : "--"} />
-          </div>
-        </Section>
+      <div className="mt-5">
+        <TTSReader
+          sessionId={`sarahvs-vitals-${transfer.id}`}
+          title={`${session.title || transfer.latest_session_title || "SarahVS session"} Vital Signs`}
+          sourceGeneratedAt={transfer.analysis?.generated_at || transfer.imported_at || null}
+          paragraphs={narrationItems.map((item) => item.text)}
+          renderParagraph={(_text, index, isActive, isBuffering) => {
+            const item = narrationItems[index];
+            const stateClass = isActive
+              ? "rounded-lg ring-2 ring-primary/45 ring-offset-2 ring-offset-background"
+              : isBuffering
+                ? "rounded-lg ring-1 ring-primary/30"
+                : "";
+            if (item.kind === "overview") return (
+              <section className={stateClass}>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                  <Metric label="Baseline" value={hr.baselineBpm != null ? `${hr.baselineBpm} bpm` : "--"} />
+                  <Metric label="Average" value={hr.averageBpm != null ? `${Math.round(number(hr.averageBpm))} bpm` : "--"} accent />
+                  <Metric label="Maximum" value={hr.maxBpm != null ? `${hr.maxBpm} bpm` : "--"} />
+                  <Metric label="Final" value={hr.finalBpm != null ? `${hr.finalBpm} bpm` : "--"} />
+                  <Metric label="RMSSD" value={number(hrv.rmssdMs) != null ? `${number(hrv.rmssdMs).toFixed(1)} ms` : "--"} />
+                  <Metric label="RR accepted" value={hrv.acceptedRrIntervals != null ? Number(hrv.acceptedRrIntervals).toLocaleString() : "--"} />
+                </div>
+              </section>
+            );
+            if (item.kind === "analysis") return (
+              <div className={stateClass}>
+                <AnalysisPanel analysis={transfer.analysis} loading={false} error="" onRetry={analyze} />
+              </div>
+            );
+            if (item.kind === "heart") return (
+              <div className={stateClass}>
+                <Section title="Heart-rate timeline" icon={Activity}>
+                  <p className="mb-3 text-sm text-muted-foreground">Pink is measured HR, blue is the smoothed trend, and gold markers identify documented events.</p>
+                  <HeartRateChart rows={trend} events={events} />
+                </Section>
+              </div>
+            );
+            if (item.kind === "events") return (
+              <div className={stateClass}>
+                <Section title="Event timeline" icon={Clock3}>
+                  {events.length ? (
+                    <div className="max-h-[34rem] space-y-3 overflow-y-auto pr-1">
+                      {events.map((event, eventIndex) => {
+                        const eventHr = event.heartRateAtEvent || {};
+                        return (
+                          <article key={event.markerId || `${event.timestampUtc}-${eventIndex}`} className="rounded-lg border border-border bg-muted/15 p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <p className="font-semibold text-foreground">{event.label || event.type || "Event"}</p>
+                              <span className="shrink-0 font-mono text-xs text-primary">{fmtElapsed(event.elapsedSeconds)}</span>
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">{fmtDateTime(event.timestampUtc)}</p>
+                            {event.note && <p className="mt-2 text-sm leading-relaxed text-foreground/90">{event.note}</p>}
+                            <p className="mt-2 text-xs text-muted-foreground">HR {eventHr.currentBpm ?? "--"} · average {eventHr.averageBpmSoFar != null ? Math.round(number(eventHr.averageBpmSoFar)) : "--"} · max {eventHr.maxBpmSoFar ?? "--"}</p>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : <p className="text-sm text-muted-foreground">No event notes were included.</p>}
+                </Section>
+              </div>
+            );
+            if (item.kind === "pressure") return (
+              <div className={stateClass}>
+                <Section title="Blood pressure" icon={HeartPulse}>
+                  {bloodPressure.length ? (
+                    <>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {bloodPressure.map((reading, readingIndex) => {
+                          const sys = number(reading.systolic);
+                          const dia = number(reading.diastolic);
+                          const pulsePressure = sys != null && dia != null ? sys - dia : null;
+                          return (
+                            <article key={reading.id || readingIndex} className="rounded-lg border border-border bg-muted/15 p-3">
+                              <p className="font-mono text-xl font-bold text-foreground">{sys ?? "--"}/{dia ?? "--"}</p>
+                              <p className="mt-1 text-xs text-muted-foreground">MAP {reading.meanArterialPressure ?? "--"} · PP {pulsePressure ?? "--"}{reading.pulse != null ? ` · pulse ${reading.pulse}` : ""}</p>
+                              <p className="mt-2 text-xs text-muted-foreground">{fmtDateTime(reading.timestampUtc)}{reading.bodyPosition ? ` · ${reading.bodyPosition}` : ""}</p>
+                              {reading.notes && <p className="mt-2 text-sm text-foreground/85">{reading.notes}</p>}
+                            </article>
+                          );
+                        })}
+                      </div>
+                      <BloodPressureChart readings={bloodPressure} />
+                    </>
+                  ) : <p className="text-sm text-muted-foreground">No blood-pressure readings were linked.</p>}
+                </Section>
+              </div>
+            );
+            return (
+              <div className={stateClass}>
+                <Section title="Capture quality" icon={ShieldCheck}>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <Metric label="HR samples" value={hr.sampleCount != null ? Number(hr.sampleCount).toLocaleString() : "--"} />
+                    <Metric label="ECG samples" value={rawStreams.ecg?.samplesCaptured != null ? Number(rawStreams.ecg.samplesCaptured).toLocaleString() : "--"} />
+                    <Metric label="Artifacts" value={hrv.contextualArtifacts ?? "--"} />
+                    <Metric label="Connection gaps" value={Array.isArray(payload.connectionGaps) ? payload.connectionGaps.length : "--"} />
+                  </div>
+                </Section>
+              </div>
+            );
+          }}
+        />
       </div>
     </div>
   );

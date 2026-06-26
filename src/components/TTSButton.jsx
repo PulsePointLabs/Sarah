@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import { Play, Pause, Square } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 import { repairDecimalSpacing, splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
+import { normalizeNumericBandsForSpeech } from "@/utils/ttsTextNormalization";
 import { buildSarahTTSVoicePrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
 
 const TTS_SETTINGS_KEY = "pulsepoint_tts_settings_v1";
@@ -399,7 +400,7 @@ function applyTTSPronunciationHints(text) {
 
 // Clean text for natural speech
 export function cleanTextForSpeech(text) {
-  return applyTTSPronunciationHints(repairDecimalSpacing(text))
+  return applyTTSPronunciationHints(normalizeNumericBandsForSpeech(repairDecimalSpacing(text)))
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/\*([^*]+)\*/g, "$1")
     .replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g, (_, time) => formatTimeAsWords(time))
