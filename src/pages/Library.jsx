@@ -188,32 +188,35 @@ const getVideoUrl = (video) => {
 };
 
 const virtualVideoFromJob = (job) => {
-  if (!job?.result?.file_url) return null;
+  const result = job?.result || job?.result_summary || {};
+  const progress = job?.progress || {};
+  const fileUrl = result.file_url || progress.result_file_url || progress.file_url || "";
+  if (!fileUrl) return null;
   const isProfileAnatomyVideo = job?.type === "profile_anatomy_video";
-  const title = job?.meta?.title || job?.result?.record?.title || job?.payload?.title || (isProfileAnatomyVideo ? "Profile anatomy video" : "Completed review video");
+  const title = job?.meta?.title || result?.record?.title || job?.payload?.title || (isProfileAnatomyVideo ? "Profile anatomy video" : "Completed review video");
   return {
     id: `job:${job.id}`,
     title,
-    analysis_title: job?.result?.record?.analysis_title || title,
-    file_url: job.result.file_url,
-    filename: job.result.filename || String(job.result.file_url).split("/").pop(),
-    duration_seconds: Math.round(Number(job.result.duration_seconds || 0)),
-    size: job.result.size || null,
+    analysis_title: result?.record?.analysis_title || title,
+    file_url: fileUrl,
+    filename: result.filename || progress.result_filename || progress.filename || String(fileUrl).split("/").pop(),
+    duration_seconds: Math.round(Number(result.duration_seconds || progress.result_duration_seconds || progress.duration_seconds || 0)),
+    size: result.size || progress.result_size || progress.size || null,
     mimeType: "video/mp4",
-    session_id: job?.meta?.sessionId || job?.result?.record?.session_id || null,
-    source_generated_at: job?.meta?.sourceGeneratedAt || job?.result?.record?.source_generated_at || null,
+    session_id: job?.meta?.sessionId || result?.record?.session_id || null,
+    source_generated_at: job?.meta?.sourceGeneratedAt || result?.record?.source_generated_at || null,
     exported_at: job.finishedAt || job.updatedAt || job.createdAt,
     created_date: job.finishedAt || job.updatedAt || job.createdAt,
-    audio_reused: Boolean(job.result.audio_reused),
-    clip_count: Number(job.result.clip_count || 0),
-    cited_time_count: Number(job.result.cited_time_count || 0),
-    manifest_url: job.result.manifest_url || null,
-    visual_mode: job.result.record?.visual_mode || (isProfileAnatomyVideo ? "profile_anatomy_video" : null),
-    review_type: job?.meta?.reviewType || job?.payload?.reviewType || job?.result?.review_scope || null,
-    record_type: job?.meta?.recordType || job?.payload?.recordType || job?.result?.record?.record_type || null,
-    session_date: job?.meta?.sessionDate || job?.payload?.sessionDate || job?.result?.record?.session_date || null,
-    watermark_enabled: Boolean(job?.result?.watermark?.watermark_enabled ?? job?.result?.record?.watermark_enabled),
-    watermark_preset: job?.result?.watermark?.preset || job?.result?.record?.watermark_preset || null,
+    audio_reused: Boolean(result.audio_reused),
+    clip_count: Number(result.clip_count || 0),
+    cited_time_count: Number(result.cited_time_count || 0),
+    manifest_url: result.manifest_url || null,
+    visual_mode: result.record?.visual_mode || result.render_version || (isProfileAnatomyVideo ? "profile_anatomy_video" : null),
+    review_type: job?.meta?.reviewType || job?.payload?.reviewType || result.review_scope || progress.review_scope || null,
+    record_type: job?.meta?.recordType || job?.payload?.recordType || result?.record?.record_type || null,
+    session_date: job?.meta?.sessionDate || job?.payload?.sessionDate || result?.record?.session_date || null,
+    watermark_enabled: Boolean(result?.watermark?.watermark_enabled ?? result?.record?.watermark_enabled ?? result?.watermark_enabled),
+    watermark_preset: result?.watermark?.preset || result?.record?.watermark_preset || result?.watermark_preset || null,
     _source: isProfileAnatomyVideo ? "completed_profile_anatomy_video_job" : "completed_review_video_job",
   };
 };

@@ -389,6 +389,77 @@ test('renderer timeline uses identical section IDs and measured audio durations'
   assert.equal(visualTimeline[1].startSeconds, 2.5);
 });
 
+test('head-to-toe sections rotate through multiple compatible images when available', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'multi-image-head-fixture',
+    title: 'Head-to-Toe Review',
+    reviewScope: 'head_to_toe',
+    paragraphs: [
+      'Head and Face',
+      'Head, face, scalp, hairline, and facial contour are reviewed here with several direct reference views.',
+    ],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'head_face', section_label: 'Head and Face' },
+      { type: 'section', section_key: 'head_face', section_label: 'Head and Face' },
+    ],
+    images: [
+      {
+        id: 'head-front',
+        label: 'Anterior head and face reference view',
+        coverage: 'head face scalp hairline anterior facial contour',
+        sectionKey: 'head_face',
+        url: '/uploads/head-front.jpg',
+        source: 'fixture',
+      },
+      {
+        id: 'head-lateral',
+        label: 'Lateral head and face profile reference view',
+        coverage: 'head face scalp hairline lateral facial contour',
+        sectionKey: 'head_face',
+        url: '/uploads/head-lateral.jpg',
+        source: 'fixture',
+      },
+      {
+        id: 'head-close',
+        label: 'Close head face and scalp detail reference view',
+        coverage: 'head face scalp hairline close detail',
+        sectionKey: 'head_face',
+        url: '/uploads/head-close.jpg',
+        source: 'fixture',
+      },
+      {
+        id: 'feet-only-decoy',
+        label: 'Foot-only image',
+        coverage: 'feet toes plantar heel',
+        sectionKey: 'feet_toes',
+        url: '/uploads/feet-decoy.jpg',
+        source: 'fixture',
+      },
+    ],
+  });
+  const head = manifest.sections.find((section) => section.section_key === 'head_face');
+  assert.equal(head.assigned_evidence.length, 3);
+  assert.deepEqual(
+    head.assigned_evidence.map((item) => item.evidence_id).sort(),
+    ['head-close', 'head-front', 'head-lateral'].sort()
+  );
+
+  const narrationSegments = manifest.sections.map((section) => ({
+    section_id: section.section_id,
+    durationSeconds: 24,
+  }));
+  const visualTimeline = buildManifestVisualTimeline({ manifest, narrationSegments });
+  assert.equal(visualTimeline.length, 3);
+  assert.equal(visualTimeline.every((item) => item.sectionId === head.section_id), true);
+  assert.equal(visualTimeline.every((item) => item.targetKey === 'head_face'), true);
+  assert.equal(visualTimeline.some((item) => item.image?.id === 'feet-only-decoy'), false);
+  assert.equal(
+    Number(visualTimeline.reduce((sum, item) => sum + item.durationSeconds, 0).toFixed(3)),
+    24
+  );
+  validateManifestTimelineIntegrity({ manifest, narrationSegments, visualTimeline });
+});
+
 test('timeline validation accepts manifest-assigned pelvic/genital evidence labels', () => {
   const manifest = createReviewEvidenceManifest({
     reviewId: 'timeline-pelvic-fixture',

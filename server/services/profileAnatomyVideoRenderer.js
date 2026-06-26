@@ -1020,6 +1020,7 @@ export function createReviewEvidenceManifest({
 } = {}) {
   const sections = groupParagraphsIntoManifestSections(paragraphs, paragraphMeta, reviewScope);
   const evidenceUseCounts = new Map();
+  const maxEvidencePerSection = reviewScope === 'pelvic_genital' ? 2 : 3;
   const manifestSections = sections.map((section) => {
     const meta = {
       section_key: section.section_key,
@@ -1061,7 +1062,10 @@ export function createReviewEvidenceManifest({
       : MIXED_SECTION_KEYS.has(section.section_key)
         ? bestOverviewSectionFallback(images, reviewScope, evidenceUseCounts)
         : bestSpecificSectionFallback(images, section.target_region, meta, section.narration_text, reviewScope, evidenceUseCounts);
-    const selected = ranked[0] || fallback;
+    const selectedEntries = ranked
+      .filter((entry) => entry.adjustedScore > 0)
+      .slice(0, maxEvidencePerSection);
+    const selected = selectedEntries[0] || fallback;
     const directReason = selected
       ? fallback
         ? MIXED_SECTION_KEYS.has(section.section_key)
@@ -1069,19 +1073,27 @@ export function createReviewEvidenceManifest({
           : `Selected closest safe anatomical fallback for ${REGION_LABELS.get(section.target_region) || section.target_region}; exact section evidence was not labelled strongly enough.`
         : `Selected explicit compatible evidence for ${REGION_LABELS.get(section.target_region) || section.target_region}.`
       : `No compatible focused evidence for ${REGION_LABELS.get(section.target_region) || section.target_region}; renderer must use section card.`;
-    const assignment = selected
-      ? assignmentMetadataForImage(selected.image, selected.candidate?.score ?? selected.score ?? 0, directReason, section.target_region)
-      : null;
-    if (assignment?.evidence_id) {
-      evidenceUseCounts.set(assignment.evidence_id, (evidenceUseCounts.get(assignment.evidence_id) || 0) + 1);
+    const selectedForAssignments = selectedEntries.length ? selectedEntries : (fallback ? [fallback] : []);
+    const assignments = selectedForAssignments
+      .map((entry, index) => {
+        const reason = index === 0
+          ? directReason
+          : `Selected additional compatible visual ${index + 1} for ${REGION_LABELS.get(section.target_region) || section.target_region}.`;
+        return assignmentMetadataForImage(entry.image, entry.candidate?.score ?? entry.score ?? 0, reason, section.target_region);
+      })
+      .filter(Boolean);
+    for (const assignment of assignments) {
+      if (assignment?.evidence_id) {
+        evidenceUseCounts.set(assignment.evidence_id, (evidenceUseCounts.get(assignment.evidence_id) || 0) + 1);
+      }
     }
     return {
       ...section,
-      explicitly_assigned_evidence_ids: assignment?.evidence_id ? [assignment.evidence_id] : [],
-      assigned_evidence: assignment ? [assignment] : [],
+      explicitly_assigned_evidence_ids: assignments.map((assignment) => assignment.evidence_id).filter(Boolean),
+      assigned_evidence: assignments,
       assignment_candidates: candidates,
-      fallback_reason: assignment ? '' : directReason,
-      media_mode: assignment ? 'assigned_evidence' : 'placeholder',
+      fallback_reason: assignments.length ? '' : directReason,
+      media_mode: assignments.length ? 'assigned_evidence' : 'placeholder',
     };
   });
 
@@ -1473,7 +1485,8 @@ async function resolveManifestNarration(payload, manifest, { jobId, signal, onPr
 export function buildManifestVisualTimeline({ manifest = {}, narrationSegments = [] } = {}) {
   const audioBySection = new Map((Array.isArray(narrationSegments) ? narrationSegments : []).map((segment) => [segment.section_id, segment]));
   let cursor = 0;
-  return (manifest.sections || []).map((section, index) => {
+  const timeline = [];
+  for (const [sectionIndex, section] of (manifest.sections || []).entries()) {
     const audio = audioBySection.get(section.section_id);
     const durationSeconds = Number(audio?.durationSeconds || audio?.duration_seconds || 0);
     if (!durationSeconds || durationSeconds <= 0) {
@@ -1481,8 +1494,19 @@ export function buildManifestVisualTimeline({ manifest = {}, narrationSegments =
       error.status = 422;
       throw error;
     }
-    const assignment = section.assigned_evidence?.[0] || null;
-    const item = {
+    const assignments = Array.isArray(section.assigned_evidence) ? section.assigned_evidence : [];
+    const usableAssignments = assignments.filter((assignment) => assignment?.evidence_id);
+    const visualCount = usableAssignments.length
+      ? Math.max(1, Math.min(usableAssignments.length, Math.floor(durationSeconds / 6) || 1))
+      : 1;
+    const selectedAssignments = usableAssignments.slice(0, visualCount);
+    const segmentDuration = durationSeconds / visualCount;
+    const entries = selectedAssignments.length ? selectedAssignments : [null];
+    for (const [visualIndex, assignment] of entries.entries()) {
+      const startSeconds = cursor;
+      const isLastVisual = visualIndex === entries.length - 1;
+      const endSeconds = isLastVisual ? startSeconds + (durationSeconds - segmentDuration * visualIndex) : startSeconds + segmentDuration;
+      const item = {
       type: assignment ? 'image' : 'card',
       image: assignment ? {
         id: assignment.evidence_id,
@@ -1496,9 +1520,9 @@ export function buildManifestVisualTimeline({ manifest = {}, narrationSegments =
         fine_structure_labels: assignment.fine_structure_labels,
         coverage: assignment.assignment_reason,
       } : null,
-      durationSeconds,
-      startSeconds: cursor,
-      endSeconds: cursor + durationSeconds,
+      durationSeconds: endSeconds - startSeconds,
+      startSeconds,
+      endSeconds,
       sectionId: section.section_id,
       label: section.section_title,
       targetKey: section.target_region,
@@ -1525,11 +1549,16 @@ export function buildManifestVisualTimeline({ manifest = {}, narrationSegments =
         } : null,
         selectionReason: assignment?.assignment_reason || section.fallback_reason || 'Section card selected.',
       },
-    };
-    cursor = item.endSeconds;
-    item.timeline_index = index;
-    return item;
-  });
+      };
+      cursor = item.endSeconds;
+      item.timeline_index = timeline.length;
+      item.section_visual_index = visualIndex;
+      item.section_visual_count = entries.length;
+      item.section_manifest_index = sectionIndex;
+      timeline.push(item);
+    }
+  }
+  return timeline;
 }
 
 export function validateManifestTimelineIntegrity({ manifest = {}, narrationSegments = [], visualTimeline = [] } = {}) {
@@ -1537,19 +1566,28 @@ export function validateManifestTimelineIntegrity({ manifest = {}, narrationSegm
   const errors = [];
   const manifestIds = (manifest.sections || []).map((section) => section.section_id);
   const audioIds = (narrationSegments || []).map((segment) => segment.section_id);
-  const visualIds = (visualTimeline || []).map((segment) => segment.sectionId);
   if (manifestIds.length !== audioIds.length || manifestIds.some((id, index) => id !== audioIds[index])) {
     errors.push('Narration segment ordering does not match manifest section ordering.');
   }
-  if (manifestIds.length !== visualIds.length || manifestIds.some((id, index) => id !== visualIds[index])) {
-    errors.push('Visual segment ordering does not match manifest section ordering.');
+  const sectionsById = new Map((manifest.sections || []).map((section) => [section.section_id, section]));
+  let visualIndex = 0;
+  for (const sectionId of manifestIds) {
+    let count = 0;
+    while (visualIndex < visualTimeline.length && visualTimeline[visualIndex].sectionId === sectionId) {
+      visualIndex += 1;
+      count += 1;
+    }
+    if (!count) errors.push(`Visual segment ordering does not include section ${sectionId}.`);
+  }
+  if (visualIndex !== visualTimeline.length) {
+    errors.push('Visual segment ordering contains an unknown or out-of-order section.');
   }
   let cursor = 0;
   for (const [index, item] of visualTimeline.entries()) {
     if (item.durationSeconds <= 0) errors.push(`Visual segment ${item.sectionId} has invalid duration.`);
     if (Math.abs(Number(item.startSeconds || 0) - cursor) > 0.03) errors.push(`Visual segment ${item.sectionId} has timeline gap or overlap.`);
     cursor = Number(item.endSeconds || 0);
-    const section = manifest.sections[index];
+    const section = sectionsById.get(item.sectionId);
     if (item.image?.id && !section?.explicitly_assigned_evidence_ids?.includes(item.image.id)) {
       errors.push(`Visual segment ${item.sectionId} uses unassigned evidence ${item.image.id}.`);
     }
@@ -1564,7 +1602,12 @@ export function validateManifestTimelineIntegrity({ manifest = {}, narrationSegm
 }
 
 export function buildManifestQaReport(manifest = {}, visualSelections = []) {
-  const selectionBySection = new Map((visualSelections || []).map((item) => [item.section_id, item]));
+  const selectionsBySection = new Map();
+  for (const item of visualSelections || []) {
+    if (!item.section_id) continue;
+    if (!selectionsBySection.has(item.section_id)) selectionsBySection.set(item.section_id, []);
+    selectionsBySection.get(item.section_id).push(item);
+  }
   const lines = [
     `Profile anatomy video QA manifest: ${manifest.title || 'Profile Anatomy Video'}`,
     `Review scope: ${manifest.review_scope || 'unknown'}`,
@@ -1573,15 +1616,16 @@ export function buildManifestQaReport(manifest = {}, visualSelections = []) {
   ];
   for (const section of manifest.sections || []) {
     const assignment = section.assigned_evidence?.[0] || null;
-    const selection = selectionBySection.get(section.section_id);
+    const selections = selectionsBySection.get(section.section_id) || [];
+    const duration = selections.reduce((sum, item) => sum + Number(item.duration_seconds || 0), 0);
     lines.push([
       `${String(section.order + 1).padStart(2, '0')}. ${section.section_title}`,
       `id=${section.section_id}`,
       `target=${section.target_region}`,
       assignment
-        ? `evidence=${assignment.evidence_id} labels=[${(assignment.anatomy_labels || []).join(', ')}] confidence=${assignment.assignment_confidence} role=${assignment.evidence_role}`
+        ? `evidence=${section.assigned_evidence.map((item) => item.evidence_id).join(', ')} labels=[${(assignment.anatomy_labels || []).join(', ')}] confidence=${assignment.assignment_confidence} role=${assignment.evidence_role}`
         : `placeholder=${section.placeholder_behavior} reason=${section.fallback_reason || 'no compatible evidence'}`,
-      selection?.duration_seconds ? `duration=${selection.duration_seconds}s` : null,
+      duration ? `duration=${Number(duration.toFixed(3))}s` : null,
     ].filter(Boolean).join(' | '));
   }
   return lines.join('\n');
