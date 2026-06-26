@@ -1,5 +1,7 @@
 import { apiUrl, discoverSarahApiBase, isSarahNativeShell } from "@/lib/mobileApiBase";
 
+const START_RECOVERY_WINDOW_MS = 4 * 60 * 1000;
+
 function nativeApiUnavailableMessage(error) {
   const tried = Array.isArray(error?.failures)
     ? error.failures.map((failure) => failure.base).filter(Boolean).join(", ")
@@ -52,8 +54,70 @@ async function jobRequest(path, options = {}) {
   return data;
 }
 
+function makeClientRequestId(type) {
+  const prefix = String(type || "job").replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 36) || "job";
+  try {
+    return `${prefix}-${crypto.randomUUID()}`;
+  } catch {
+    return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+}
+
+function getJobTimeMs(job = {}) {
+  const value = job.createdAt || job.startedAt || job.updatedAt || "";
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function jobMatchesStartRequest(job, { type, meta = {}, payload = {}, requestStartedAt = 0, clientRequestId = "" } = {}) {
+  if (!job || String(job.type || "") !== String(type || "")) return false;
+  if (clientRequestId && job?.meta?.clientRequestId === clientRequestId) return true;
+  const createdMs = getJobTimeMs(job);
+  if (!Number.isFinite(createdMs) || createdMs < requestStartedAt - 5000) return false;
+  if (createdMs < Date.now() - START_RECOVERY_WINDOW_MS) return false;
+
+  const expectedReviewType = meta.reviewType || payload.reviewType || "";
+  if (expectedReviewType && String(job?.meta?.reviewType || job?.payload?.reviewType || "") !== String(expectedReviewType)) return false;
+
+  const expectedSource = meta.source || payload.source || "";
+  if (expectedSource && String(job?.meta?.source || job?.payload?.source || "") !== String(expectedSource)) return false;
+
+  const expectedSessionId = meta.sessionId || payload.sessionId || "";
+  if (expectedSessionId && String(job?.meta?.sessionId || job?.payload?.sessionId || "") !== String(expectedSessionId)) return false;
+
+  const expectedTitle = meta.title || payload.title || "";
+  if (expectedTitle && String(job?.meta?.title || job?.payload?.title || "") !== String(expectedTitle)) return false;
+
+  const expectedLabel = meta.label || payload.label || "";
+  if (expectedLabel && String(job?.meta?.label || job?.payload?.label || "") !== String(expectedLabel)) return false;
+
+  return true;
+}
+
+async function recoverStartedBackgroundJob({ type, payload, meta, requestStartedAt, clientRequestId }) {
+  const params = new URLSearchParams();
+  params.set("type", type);
+  params.set("status", "queued,running,complete,error");
+  params.set("limit", "80");
+  if (meta?.source) params.set("metaSource", meta.source);
+  const data = await jobRequest(`/jobs?${params.toString()}`, {
+    timeoutMs: 8000,
+    skipApiDiscovery: true,
+  });
+  const jobs = Array.isArray(data?.jobs) ? data.jobs : [];
+  return jobs
+    .filter((job) => jobMatchesStartRequest(job, { type, meta, payload, requestStartedAt, clientRequestId }))
+    .sort((a, b) => getJobTimeMs(b) - getJobTimeMs(a))[0] || null;
+}
+
 export function startBackgroundJob(type, payload = {}, meta = {}) {
-  const body = JSON.stringify({ type, payload, meta });
+  const clientRequestId = meta?.clientRequestId || makeClientRequestId(type);
+  const requestStartedAt = Date.now();
+  const enrichedMeta = {
+    ...meta,
+    clientRequestId,
+  };
+  const body = JSON.stringify({ type, payload, meta: enrichedMeta });
   const largeBodyThreshold = 42 * 1024 * 1024;
   const path = body.length > largeBodyThreshold ? "/jobs/start-large" : "/jobs/start";
   const startRequest = (options = {}) => jobRequest(path, {
@@ -63,12 +127,27 @@ export function startBackgroundJob(type, payload = {}, meta = {}) {
     timeoutMs: 30000,
     ...options,
   });
-  if (!isSarahNativeShell()) return startRequest();
+  const recoverAfterTimeout = async (error) => {
+    if (!/timed out|timeout|did not respond/i.test(String(error?.message || ""))) throw error;
+    const recovered = await recoverStartedBackgroundJob({
+      type,
+      payload,
+      meta: enrichedMeta,
+      requestStartedAt,
+      clientRequestId,
+    }).catch(() => null);
+    if (recovered?.id) return recovered;
+    throw error;
+  };
+
+  if (!isSarahNativeShell()) return startRequest().catch(recoverAfterTimeout);
 
   return startRequest({ skipApiDiscovery: true }).catch(async (firstError) => {
+    const recovered = await recoverAfterTimeout(firstError).catch(() => null);
+    if (recovered?.id) return recovered;
     try {
       await discoverSarahApiBase({ timeoutMs: 5000 });
-      return await startRequest({ skipApiDiscovery: true });
+      return await startRequest({ skipApiDiscovery: true }).catch(recoverAfterTimeout);
     } catch (error) {
       if (Array.isArray(error?.failures)) {
         const unavailable = new Error(nativeApiUnavailableMessage(error));

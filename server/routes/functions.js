@@ -144,6 +144,7 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
     res.setHeader('X-TTS-Format', result.format);
     res.setHeader('X-TTS-Latency-Ms', String(result.latencyMs));
     res.setHeader('X-TTS-Retries', String(result.retries));
+    res.setHeader('Content-Length', String(result.buffer.length));
     res.send(result.buffer);
   } catch (error) {
     const providerError = classifyProviderError(error, {

@@ -227,6 +227,13 @@ class SarahDownloadService : Service() {
                 }
             }
 
+            if (contentLength > 0L && bytesWritten != contentLength) {
+                throw IOException("Download was incomplete: saved ${formatBytes(bytesWritten)} of ${formatBytes(contentLength)}.")
+            }
+            if (bytesWritten <= 0L) {
+                throw IOException("Download completed with no saved bytes.")
+            }
+
             val elapsed = System.currentTimeMillis() - startedAt
             Log.i(
                 TAG,
@@ -247,9 +254,20 @@ class SarahDownloadService : Service() {
                 "download failed url=${redactUrl(url)} bytes=$bytesWritten elapsedMs=$elapsed dest=$destinationUri ${error.javaClass.simpleName}: ${error.message}",
                 error
             )
+            clearPartialDestination(destinationUri)
             throw error
         } finally {
             connection.disconnect()
+        }
+    }
+
+    private fun clearPartialDestination(destinationUri: Uri) {
+        try {
+            contentResolver.openOutputStream(destinationUri, "wt")?.use { target ->
+                target.flush()
+            }
+        } catch (clearError: Exception) {
+            Log.w(TAG, "Could not clear incomplete download dest=$destinationUri ${clearError.javaClass.simpleName}: ${clearError.message}")
         }
     }
 

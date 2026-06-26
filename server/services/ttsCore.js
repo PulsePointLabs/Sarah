@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 export const TTS_CONTENT_TYPES = {
   mp3: 'audio/mpeg',
@@ -97,6 +100,68 @@ export function runProcessBinary(command, args, options = {}) {
   });
 }
 
+export async function probeAudioDurationSeconds(filePath) {
+  const probe = await runProcess('ffprobe', [
+    '-v', 'error',
+    '-show_entries', 'format=duration',
+    '-of', 'default=noprint_wrappers=1:nokey=1',
+    filePath,
+  ]);
+  return Number(probe.stdout.trim()) || 0;
+}
+
+export function estimateTtsDurationSeconds(text = '') {
+  const words = String(text || '').split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.round(words / 2.25));
+}
+
+export async function validateAudioFile(filePath, {
+  label = 'audio',
+  expectedDurationSeconds = 0,
+  minDurationSeconds = 0.25,
+  minBytes = 512,
+} = {}) {
+  const stat = await fs.stat(filePath);
+  if (!stat.isFile() || stat.size < minBytes) {
+    throw new Error(`${label} failed audio integrity check: file is too small (${stat.size || 0} bytes).`);
+  }
+  const durationSeconds = await probeAudioDurationSeconds(filePath);
+  if (!Number.isFinite(durationSeconds) || durationSeconds < minDurationSeconds) {
+    throw new Error(`${label} failed audio integrity check: ffprobe could not decode usable audio.`);
+  }
+  if (expectedDurationSeconds > 0 && durationSeconds < Math.max(0.5, expectedDurationSeconds * 0.45)) {
+    throw new Error(`${label} failed audio integrity check: decoded duration ${durationSeconds.toFixed(1)}s is too short for the requested text (${expectedDurationSeconds.toFixed(1)}s expected).`);
+  }
+  return {
+    size: stat.size,
+    durationSeconds,
+  };
+}
+
+export async function validateAudioBuffer(buffer, {
+  format = 'mp3',
+  label = 'TTS response',
+  expectedDurationSeconds = 0,
+  minBytes = 512,
+} = {}) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < minBytes) {
+    throw new Error(`${label} failed audio integrity check: response was too small (${buffer?.length || 0} bytes).`);
+  }
+  const ext = normalizeTTSFormat(format);
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sarah-tts-'));
+  const tempPath = path.join(tempDir, `probe.${ext === 'pcm' ? 'bin' : ext}`);
+  try {
+    await fs.writeFile(tempPath, buffer);
+    return await validateAudioFile(tempPath, {
+      label,
+      expectedDurationSeconds,
+      minBytes,
+    });
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 export function buildChunkInstructions(baseInstructions, previousContext, supportsInstructionsForModel) {
   const base = String(baseInstructions || '').trim();
   if (!supportsInstructionsForModel) return '';
@@ -131,7 +196,16 @@ export async function callOpenAITTS(body, meta) {
 
       if (response.ok) {
         const buffer = Buffer.from(await response.arrayBuffer());
-        console.info('[openaiTTS] success', { ...meta, latencyMs, retries: attempt });
+        const advertisedLength = Number(response.headers.get('content-length') || 0);
+        if (advertisedLength > 0 && buffer.length !== advertisedLength) {
+          throw new Error(`OpenAI TTS returned an incomplete response: received ${buffer.length} of ${advertisedLength} bytes.`);
+        }
+        const integrity = await validateAudioBuffer(buffer, {
+          format: body?.response_format,
+          label: `OpenAI TTS chunk ${meta?.chunkIndex != null ? Number(meta.chunkIndex) + 1 : ''}`.trim(),
+          expectedDurationSeconds: meta?.estimatedDurationSec || 0,
+        });
+        console.info('[openaiTTS] success', { ...meta, latencyMs, retries: attempt, bytes: buffer.length, durationSeconds: Math.round(integrity.durationSeconds * 10) / 10 });
         return { response, buffer, latencyMs, retries: attempt };
       }
 
@@ -206,7 +280,7 @@ export async function synthesizeTTSChunk({
   const requestMeta = {
     chunkIndex: meta.chunkIndex,
     charCount: input.length,
-    estimatedDurationSec: Math.max(1, Math.round(input.split(/\s+/).filter(Boolean).length / 2.25)),
+    estimatedDurationSec: estimateTtsDurationSeconds(input),
     model,
     voice,
     speed: finalSpeed,

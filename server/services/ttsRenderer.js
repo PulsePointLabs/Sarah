@@ -5,25 +5,18 @@ import {
   buildChunkInstructions,
   callOpenAITTS,
   clampSpeed,
+  estimateTtsDurationSeconds,
   normalizeTTSExportFormat,
   normalizeTTSModel,
+  probeAudioDurationSeconds,
   q,
   runProcess,
   slugifyFilePart,
   supportsTTSInstructions,
   ttsExportMime,
+  validateAudioFile,
 } from './ttsCore.js';
 import { writeChapterSidecars } from './audioChapters.js';
-
-async function probeAudioDurationSeconds(filePath) {
-  const probe = await runProcess('ffprobe', [
-    '-v', 'error',
-    '-show_entries', 'format=duration',
-    '-of', 'default=noprint_wrappers=1:nokey=1',
-    filePath,
-  ]);
-  return Number(probe.stdout.trim()) || 0;
-}
 
 async function trimTtsChunkSilence(inputPath, outputPath) {
   await runProcess('ffmpeg', [
@@ -43,6 +36,72 @@ function ttsExportConcurrency() {
   const configured = Number(process.env.TTS_EXPORT_CHUNK_CONCURRENCY || process.env.OPENAI_TTS_EXPORT_CONCURRENCY || 2);
   if (!Number.isFinite(configured)) return 2;
   return Math.max(1, Math.min(4, Math.round(configured)));
+}
+
+function parseSilenceSpans(stderr = '') {
+  const spans = [];
+  let currentStart = null;
+  String(stderr || '').split(/\r?\n/).forEach((line) => {
+    const startMatch = line.match(/silence_start:\s*([0-9.]+)/);
+    if (startMatch) {
+      currentStart = Number(startMatch[1]);
+      return;
+    }
+    const endMatch = line.match(/silence_end:\s*([0-9.]+)\s*\|\s*silence_duration:\s*([0-9.]+)/);
+    if (endMatch && Number.isFinite(currentStart)) {
+      const end = Number(endMatch[1]);
+      const duration = Number(endMatch[2]);
+      if (Number.isFinite(end) && Number.isFinite(duration)) {
+        spans.push({ start: currentStart, end, duration });
+      }
+      currentStart = null;
+    }
+  });
+  return spans;
+}
+
+async function validateRenderedNarration(filePath, {
+  expectedDurationSeconds = 0,
+  label = 'TTS export',
+} = {}) {
+  const integrity = await validateAudioFile(filePath, {
+    label,
+    expectedDurationSeconds,
+    minDurationSeconds: Math.max(0.5, Math.min(8, expectedDurationSeconds * 0.25 || 0.5)),
+    minBytes: 2048,
+  });
+  const duration = integrity.durationSeconds;
+  const suspiciousSilenceSeconds = Math.max(8, Math.min(30, duration * 0.22));
+  let silenceSpans = [];
+  try {
+    const { stderr } = await runProcess('ffmpeg', [
+      '-hide_banner',
+      '-nostats',
+      '-i', filePath,
+      '-vn',
+      '-af', `silencedetect=noise=-55dB:d=${suspiciousSilenceSeconds}`,
+      '-f', 'null',
+      '-',
+    ]);
+    silenceSpans = parseSilenceSpans(stderr);
+  } catch (error) {
+    silenceSpans = parseSilenceSpans(error?.message || '');
+    if (!silenceSpans.length) throw error;
+  }
+
+  const interiorSilence = silenceSpans.find((span) => (
+    span.duration >= suspiciousSilenceSeconds
+    && span.start > Math.max(3, duration * 0.08)
+    && span.end < duration - Math.max(3, duration * 0.08)
+  ));
+  if (interiorSilence) {
+    throw new Error(`${label} failed audio integrity check: detected ${interiorSilence.duration.toFixed(1)}s of interior silence starting at ${interiorSilence.start.toFixed(1)}s.`);
+  }
+
+  return {
+    ...integrity,
+    silenceSpans,
+  };
 }
 
 export async function renderTTSExport(payload = {}, options = {}) {
@@ -131,7 +190,7 @@ export async function renderTTSExport(payload = {}, options = {}) {
       const meta = {
         chunkIndex: i,
         charCount: chunk.text.length,
-        estimatedDurationSec: Math.max(1, Math.round(chunk.text.split(/\s+/).filter(Boolean).length / 2.25)),
+        estimatedDurationSec: estimateTtsDurationSeconds(chunk.text),
         model,
         voice,
         speed: finalSpeed,
@@ -142,6 +201,12 @@ export async function renderTTSExport(payload = {}, options = {}) {
       const { buffer } = await callOpenAITTS(body, meta);
       const chunkPath = path.join(workDir, `chunk-${String(i).padStart(4, '0')}.wav`);
       await fs.writeFile(chunkPath, buffer);
+      const expectedDurationSeconds = estimateTtsDurationSeconds(chunk.text);
+      await validateAudioFile(chunkPath, {
+        label: `TTS export chunk ${i + 1}/${normalizedChunks.length}`,
+        expectedDurationSeconds,
+        minBytes: 2048,
+      });
       let sourcePath = chunkPath;
       let trimMeta = { chunk: i, trimmed: false };
       try {
@@ -194,6 +259,10 @@ export async function renderTTSExport(payload = {}, options = {}) {
     }));
 
     if (options.signal?.aborted) throw new Error('Cancelled');
+    const missingChunk = sourceFiles.findIndex((file) => !file);
+    if (missingChunk >= 0) {
+      throw new Error(`TTS export stopped before chunk ${missingChunk + 1}/${normalizedChunks.length} was ready.`);
+    }
     onProgress({
       phase: 'encoding',
       current: normalizedChunks.length,
@@ -228,10 +297,12 @@ export async function renderTTSExport(payload = {}, options = {}) {
     ]);
 
     const stat = await fs.stat(finalPath);
-    let durationSeconds = 0;
-    try {
-      durationSeconds = Math.round(await probeAudioDurationSeconds(finalPath));
-    } catch {}
+    const expectedDurationSeconds = normalizedChunks.reduce((sum, chunk) => sum + estimateTtsDurationSeconds(chunk.text), 0);
+    const renderIntegrity = await validateRenderedNarration(finalPath, {
+      expectedDurationSeconds,
+      label: `TTS export ${finalFilename}`,
+    });
+    let durationSeconds = Math.round(renderIntegrity.durationSeconds);
 
     const trimmedChunks = chunkSilenceTrim.filter((item) => item.trimmed);
     const removedSilenceSeconds = Math.round(trimmedChunks.reduce((sum, item) => sum + Number(item.removed_seconds || 0), 0) * 10) / 10;

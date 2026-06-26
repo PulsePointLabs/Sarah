@@ -283,10 +283,22 @@ async function fetchTTSBytesDirect(payload, signal) {
       error.status = response.status || 502;
       throw error;
     }
+    const audioBuffer = await response.arrayBuffer();
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (contentLength > 0 && audioBuffer.byteLength !== contentLength) {
+      const error = new Error(`TTS download was incomplete: received ${audioBuffer.byteLength} of ${contentLength} bytes.`);
+      error.status = 502;
+      throw error;
+    }
+    if (audioBuffer.byteLength < 512) {
+      const error = new Error(`TTS returned an audio payload that was too small (${audioBuffer.byteLength} bytes).`);
+      error.status = 502;
+      throw error;
+    }
     return {
       status: response.status,
       data: {
-        audioBuffer: await response.arrayBuffer(),
+        audioBuffer,
         model: response.headers.get("x-tts-model") || undefined,
         voice: response.headers.get("x-tts-voice") || undefined,
         speed: response.headers.get("x-tts-speed") || undefined,
