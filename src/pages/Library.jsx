@@ -429,7 +429,7 @@ export default function Library() {
         includeCleared: true,
         limit: 40,
       });
-      return hydrateJobsWithResults(result.jobs || []);
+      return result.jobs || [];
     },
     placeholderData: [],
   });
@@ -443,7 +443,7 @@ export default function Library() {
         includeCleared: true,
         limit: 40,
       });
-      return hydrateJobsWithResults(result.jobs || []);
+      return result.jobs || [];
     },
     placeholderData: [],
   });
