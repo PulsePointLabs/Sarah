@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Bell, BellOff, CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Loader2, Square, X, XCircle } from "lucide-react";
 import { cancelBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { stabilizeBackgroundJobEta } from "@/lib/backgroundJobEta";
+import { backgroundJobLabel as jobLabel } from "@/lib/backgroundJobLabels";
 import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
 import { friendlyJobStatusMessage } from "@/lib/jobErrorMessages";
 import { serverUrl } from "@/lib/mobileApiBase";
@@ -101,37 +102,6 @@ function jobResultSummary(job) {
 function openResultFile(result) {
   if (!result?.fileUrl) return;
   window.open(serverUrl(result.fileUrl), "_blank", "noopener,noreferrer");
-}
-
-function formatJobSourceDate(value) {
-  if (!value) return "";
-  const exactDate = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  const date = exactDate
-    ? new Date(Number(exactDate[1]), Number(exactDate[2]) - 1, Number(exactDate[3]))
-    : new Date(value);
-  if (!date || Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
-}
-
-function appendJobSourceDate(label, job) {
-  if (job?.type !== "session_review_video") return label;
-  const date = formatJobSourceDate(job?.meta?.sessionDate || job?.payload?.sessionDate || job?.result?.record?.session_date || job?.meta?.sourceGeneratedAt);
-  if (!date || String(label || "").includes(date)) return label;
-  return `${label} · ${date}`;
-}
-
-function jobLabel(job) {
-  if (job?.meta?.title) return appendJobSourceDate(job.meta.title, job);
-  if (job?.meta?.label) return appendJobSourceDate(job.meta.label, job);
-  if (job?.type === "local_vision_analyze_continuous") return "Local vision annotation";
-  if (job?.type === "local_vision_analyze_window") return "Diagnostic local vision";
-  if (job?.type === "local_vision_ask_video") return "Local video question";
-  if (job?.type === "ai_invoke" && job?.meta?.source === "ai_video_pass") return "Cloud Sarah annotation";
-  if (job?.type === "session_review_video") return appendJobSourceDate("Review video render", job);
-  if (job?.type === "profile_anatomy_video") return "Anatomy video render";
-  if (job?.type === "tts_export") return "Audio render";
-  if (job?.type === "ai_invoke") return "AI analysis";
-  return job?.type || "Background job";
 }
 
 function statusTone(status) {

@@ -25,6 +25,7 @@ import AppVersionBadge from "@/components/AppVersionBadge";
 import { Textarea } from "@/components/ui/textarea";
 import { SarahLogoMark } from "@/components/SarahBrand";
 import { cancelBackgroundJob, clearBackgroundJobs, listBackgroundJobs, retryBackgroundJob } from "@/lib/backgroundJobs";
+import { backgroundJobLabel as jobLabel } from "@/lib/backgroundJobLabels";
 import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
 import { apiUrl, discoverSarahApiBase, isSarahNativeShell, serverUrl } from "@/lib/mobileApiBase";
 import { friendlyJobStatusMessage } from "@/lib/jobErrorMessages";
@@ -230,18 +231,6 @@ function fmtDuration(ms) {
   const hours = Math.floor(minutes / 60);
   const remainingMinutes = minutes % 60;
   return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
-}
-
-function jobLabel(job) {
-  if (job?.meta?.title) return job.meta.title;
-  if (job?.meta?.label) return job.meta.label;
-  if (job?.type === "local_vision_analyze_continuous") return "Local vision annotation";
-  if (job?.type === "local_vision_analyze_window") return "Diagnostic local vision";
-  if (job?.type === "local_vision_ask_video") return "Local video question";
-  if (job?.type === "ai_invoke" && job?.meta?.source === "ai_video_pass") return "Cloud Sarah annotation";
-  if (job?.type === "tts_export") return "Audio render";
-  if (job?.type === "ai_invoke") return "AI analysis";
-  return job?.type || "Background task";
 }
 
 function jobRoute(job) {

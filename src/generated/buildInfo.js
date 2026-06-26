@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.32",
-  "commit": "1081897",
-  "commitMessage": "Show completed anatomy videos in library",
-  "builtAt": "2026-06-26T14:06:30.612Z"
+  "version": "0.1.33",
+  "commit": "ddce200",
+  "commitMessage": "Show anatomy videos immediately in library",
+  "builtAt": "2026-06-26T17:59:40.798Z"
 };
