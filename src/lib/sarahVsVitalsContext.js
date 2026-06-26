@@ -30,24 +30,40 @@ export function formatSarahVsTransfersForPrompt(transfers = []) {
   const usable = Array.isArray(transfers) ? transfers.filter(Boolean).slice(0, 6) : [];
   if (!usable.length) return "";
   const lines = usable.map((transfer, index) => {
-    const latest = transfer.payload?.latestWindow || {};
+    const latest = transfer.payload?.latestWindow || transfer.payload?.session || {};
     const hr = latest.heartRate || {};
     const hrv = latest.hrv || {};
     const bp = Array.isArray(transfer.payload?.recentBloodPressure) ? transfer.payload.recentBloodPressure[0] : null;
+    const sessionBp = Array.isArray(transfer.payload?.bloodPressureReadings) ? transfer.payload.bloodPressureReadings[0] : null;
+    const events = Array.isArray(transfer.payload?.events) ? transfer.payload.events : [];
     const parts = [
       `#${index + 1} ${latest.title || transfer.latest_session_title || "vitals window"}`,
       latest.startedAtUtc ? `started ${fmtDate(latest.startedAtUtc)}` : "",
+      transfer.payload?.scope === "full_session_vitals_context" ? "full session transfer" : "",
       hr.baselineBpm != null ? `baseline HR ${hr.baselineBpm}` : "",
       hr.finalBpm != null ? `final HR ${hr.finalBpm}` : "",
       hr.averageBpm != null ? `avg HR ${compactNumber(hr.averageBpm)}` : "",
       hr.maxBpm != null ? `max HR ${hr.maxBpm}` : "",
       hrv.rmssdMs != null ? `RMSSD ${compactNumber(hrv.rmssdMs, 1)} ms` : "",
-      bp ? `latest BP ${bp.systolic}/${bp.diastolic}${bp.meanArterialPressure ? ` MAP ${bp.meanArterialPressure}` : ""}` : "",
+      events.length ? `${events.length} event notes included` : "",
+      (bp || sessionBp) ? `latest BP ${(bp || sessionBp).systolic}/${(bp || sessionBp).diastolic}${(bp || sessionBp).meanArterialPressure ? ` MAP ${(bp || sessionBp).meanArterialPressure}` : ""}` : "",
     ].filter(Boolean);
-    return `- ${parts.join("; ")}.`;
+    const eventLines = events.map((event) => {
+      const eventHr = event.heartRateAtEvent || {};
+      const note = String(event.note || "").trim();
+      const label = event.label || event.type || "Event";
+      const elapsed = event.elapsedSeconds != null ? `${Math.round(Number(event.elapsedSeconds))}s` : "unknown time";
+      const hrText = [
+        eventHr.currentBpm != null ? `HR ${eventHr.currentBpm}` : "",
+        eventHr.averageBpmSoFar != null ? `avg ${compactNumber(eventHr.averageBpmSoFar)}` : "",
+        eventHr.maxBpmSoFar != null ? `max ${eventHr.maxBpmSoFar}` : "",
+      ].filter(Boolean).join(", ");
+      return `  - ${elapsed}: ${label}${note ? ` - ${note}` : ""}${hrText ? ` (${hrText})` : ""}`;
+    });
+    return [`- ${parts.join("; ")}.`, ...eventLines].join("\n");
   });
   return `RECENT SARAHVS LONGITUDINAL VITAL-SIGN CONTEXT:
-These are compact SarahVS transfers for baseline, final-state, HRV, BP, symptom/exercise/substance/recovery trend context across time. Use them as background physiology when relevant. Do not treat them as raw session evidence or invent exact second-by-second telemetry.
+These SarahVS transfers provide baseline/final-state HR, HRV, BP, event notes, and trend context across time. Full-session transfers include every event note with vital signs at that moment plus compact trend summaries. Use them as physiology context when relevant, while avoiding claims of diagnostic certainty or invented second-by-second telemetry.
 ${lines.join("\n")}`;
 }
 

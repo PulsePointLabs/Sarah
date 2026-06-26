@@ -16,7 +16,7 @@ function cleanText(value, fallback = '') {
 }
 
 function stableTransferId(payload = {}) {
-  const latest = payload.latestWindow || {};
+  const latest = payload.latestWindow || payload.session || {};
   const sessionId = cleanText(latest.sessionId || payload.sessionId);
   const exported = cleanText(payload.exportedAtUtc || new Date().toISOString()).replace(/[^0-9TZ]/g, '');
   if (sessionId) return `sarahvs-${sessionId}-${exported}`.slice(0, 180);
@@ -24,17 +24,20 @@ function stableTransferId(payload = {}) {
 }
 
 function summarizeTransfer(payload = {}) {
-  const latest = payload.latestWindow || {};
+  const latest = payload.latestWindow || payload.session || {};
   const hr = latest.heartRate || {};
   const hrv = latest.hrv || {};
   const bp = Array.isArray(payload.recentBloodPressure) ? payload.recentBloodPressure[0] : null;
+  const sessionBp = Array.isArray(payload.bloodPressureReadings) ? payload.bloodPressureReadings[0] : null;
+  const events = Array.isArray(payload.events) ? payload.events : [];
   const pieces = [];
   if (hr.baselineBpm != null) pieces.push(`baseline HR ${hr.baselineBpm}`);
   if (hr.finalBpm != null) pieces.push(`final HR ${hr.finalBpm}`);
   if (hr.averageBpm != null) pieces.push(`avg HR ${Math.round(Number(hr.averageBpm))}`);
   if (hr.maxBpm != null) pieces.push(`max HR ${hr.maxBpm}`);
   if (hrv.rmssdMs != null) pieces.push(`RMSSD ${Number(hrv.rmssdMs).toFixed(1)} ms`);
-  if (bp) pieces.push(`latest BP ${bp.systolic}/${bp.diastolic}`);
+  if (events.length) pieces.push(`${events.length} session events`);
+  if (bp || sessionBp) pieces.push(`latest BP ${(bp || sessionBp).systolic}/${(bp || sessionBp).diastolic}`);
   return pieces.length ? pieces.join(' · ') : cleanText(payload.humanSummary, 'SarahVS vitals summary received.');
 }
 
@@ -61,10 +64,10 @@ sarahVsRouter.get('/health', (_req, res) => {
 sarahVsRouter.post('/vitals/import', requireToken, (req, res) => {
   try {
     const payload = req.body && typeof req.body === 'object' ? req.body : {};
-    if (!payload.latestWindow && !Array.isArray(payload.recentSessions)) {
+    if (!payload.latestWindow && !payload.session && !Array.isArray(payload.recentSessions)) {
       return res.status(400).json({ error: 'Expected a SarahVS vitals summary payload.' });
     }
-    const latest = payload.latestWindow || {};
+    const latest = payload.latestWindow || payload.session || {};
     const id = stableTransferId(payload);
     const doc = upsertEntity('SarahVsVitalsTransfer', id, {
       id,

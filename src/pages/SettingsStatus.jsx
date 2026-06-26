@@ -474,7 +474,7 @@ function SarahVsVitalsPanel() {
             <h2 className="text-sm font-bold uppercase tracking-wider">SarahVS vital signs</h2>
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Compact transferred summaries for long-term baseline, final-state, BP, HRV, symptom, exercise, and recovery context. Raw SarahVS samples stay in the phone app.
+            Transferred SarahVS context for long-term baseline, final-state, BP, HRV, symptoms, exercise, recovery, and full-session event notes. Raw ECG and high-resolution samples stay in the phone app.
           </p>
         </div>
         <button
@@ -493,19 +493,21 @@ function SarahVsVitalsPanel() {
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
         {transfers.map((transfer) => {
           const latest = transfer.payload?.latestWindow || {};
-          const hr = latest.heartRate || {};
-          const hrv = latest.hrv || {};
+          const session = transfer.payload?.session || latest;
+          const events = Array.isArray(transfer.payload?.events) ? transfer.payload.events : [];
+          const hr = session.heartRate || {};
+          const hrv = session.hrv || {};
           return (
             <article key={transfer.id} className="rounded-xl border border-border bg-muted/15 p-3">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-bold text-foreground">{transfer.latest_session_title || "SarahVS vitals window"}</p>
+                  <p className="truncate text-sm font-bold text-foreground">{transfer.latest_session_title || session.title || "SarahVS vitals window"}</p>
                   <p className="mt-1 text-xs text-muted-foreground">
                     Imported {fmtDateTime(transfer.imported_at)}{transfer.app_version ? ` · ${transfer.app_version}` : ""}
                   </p>
                 </div>
                 <span className="rounded-full bg-primary/10 px-2 py-1 text-[11px] font-semibold uppercase text-primary">
-                  Vitals
+                  {transfer.payload?.scope === "full_session_vitals_context" ? "Session" : "Vitals"}
                 </span>
               </div>
               <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{transfer.summary}</p>
@@ -527,6 +529,11 @@ function SarahVsVitalsPanel() {
                   <p className="font-bold text-foreground">{hrv.rmssdMs != null ? Number(hrv.rmssdMs).toFixed(1) : "--"}</p>
                 </div>
               </div>
+              {events.length > 0 && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {events.length} event note{events.length === 1 ? "" : "s"} included with HR context.
+                </p>
+              )}
             </article>
           );
         })}
