@@ -29,7 +29,11 @@ function summarizeTransfer(payload = {}) {
   const hrv = latest.hrv || {};
   const bp = Array.isArray(payload.recentBloodPressure) ? payload.recentBloodPressure[0] : null;
   const sessionBp = Array.isArray(payload.bloodPressureReadings) ? payload.bloodPressureReadings[0] : null;
-  const events = Array.isArray(payload.events) ? payload.events : [];
+  const events = Array.isArray(payload.events)
+    ? payload.events
+    : Array.isArray(latest.events)
+      ? latest.events
+      : [];
   const pieces = [];
   if (hr.baselineBpm != null) pieces.push(`baseline HR ${hr.baselineBpm}`);
   if (hr.finalBpm != null) pieces.push(`final HR ${hr.finalBpm}`);

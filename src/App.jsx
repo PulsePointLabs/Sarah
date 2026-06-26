@@ -33,6 +33,7 @@ import PredictiveModeler from './pages/PredictiveModeler';
 import JournalList from './pages/JournalList';
 import LiveCapture from './pages/LiveCapture';
 import SettingsStatus from './pages/SettingsStatus';
+import VitalSigns from './pages/VitalSigns';
 import BodyExploration from './pages/BodyExploration';
 import BodyExplorationDetail from './pages/BodyExplorationDetail';
 import NewBodyExploration from './pages/NewBodyExploration';
@@ -171,6 +172,7 @@ const AuthenticatedApp = () => {
         <Route path="/modeler" element={<PredictiveModeler />} />
         <Route path="/journal" element={<JournalList />} />
         <Route path="/capture" element={<LiveCapture />} />
+        <Route path="/vitals" element={<VitalSigns />} />
         <Route path="/settings" element={<SettingsStatus />} />
         <Route path="*" element={<PageNotFound />} />
       </Route>

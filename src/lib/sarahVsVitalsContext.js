@@ -35,7 +35,19 @@ export function formatSarahVsTransfersForPrompt(transfers = []) {
     const hrv = latest.hrv || {};
     const bp = Array.isArray(transfer.payload?.recentBloodPressure) ? transfer.payload.recentBloodPressure[0] : null;
     const sessionBp = Array.isArray(transfer.payload?.bloodPressureReadings) ? transfer.payload.bloodPressureReadings[0] : null;
-    const events = Array.isArray(transfer.payload?.events) ? transfer.payload.events : [];
+    const events = Array.isArray(transfer.payload?.events)
+      ? transfer.payload.events
+      : Array.isArray(latest.events)
+        ? latest.events
+        : [];
+    const bloodPressureReadings = Array.isArray(transfer.payload?.bloodPressureReadings)
+      ? transfer.payload.bloodPressureReadings
+      : Array.isArray(latest.bloodPressureReadings)
+        ? latest.bloodPressureReadings
+        : [];
+    const trend = Array.isArray(transfer.payload?.heartRateTrend) ? transfer.payload.heartRateTrend : [];
+    const gaps = Array.isArray(transfer.payload?.connectionGaps) ? transfer.payload.connectionGaps : [];
+    const rawStreams = latest.rawStreams || {};
     const parts = [
       `#${index + 1} ${latest.title || transfer.latest_session_title || "vitals window"}`,
       latest.startedAtUtc ? `started ${fmtDate(latest.startedAtUtc)}` : "",
@@ -46,6 +58,8 @@ export function formatSarahVsTransfersForPrompt(transfers = []) {
       hr.maxBpm != null ? `max HR ${hr.maxBpm}` : "",
       hrv.rmssdMs != null ? `RMSSD ${compactNumber(hrv.rmssdMs, 1)} ms` : "",
       events.length ? `${events.length} event notes included` : "",
+      trend.length ? `${trend.length} HR trend points spanning the session` : "",
+      gaps.length ? `${gaps.length} connection gaps documented` : "",
       (bp || sessionBp) ? `latest BP ${(bp || sessionBp).systolic}/${(bp || sessionBp).diastolic}${(bp || sessionBp).meanArterialPressure ? ` MAP ${(bp || sessionBp).meanArterialPressure}` : ""}` : "",
     ].filter(Boolean);
     const eventLines = events.map((event) => {
@@ -60,7 +74,28 @@ export function formatSarahVsTransfersForPrompt(transfers = []) {
       ].filter(Boolean).join(", ");
       return `  - ${elapsed}: ${label}${note ? ` - ${note}` : ""}${hrText ? ` (${hrText})` : ""}`;
     });
-    return [`- ${parts.join("; ")}.`, ...eventLines].join("\n");
+    const bpLines = bloodPressureReadings.map((reading) => [
+      `  - BP ${reading.systolic}/${reading.diastolic}`,
+      reading.meanArterialPressure != null ? `MAP ${reading.meanArterialPressure}` : "",
+      reading.pulse != null ? `pulse ${reading.pulse}` : "",
+      reading.bodyPosition || "",
+      reading.notes || "",
+    ].filter(Boolean).join("; "));
+    const trendLine = trend.length
+      ? `  - HR trend: ${trend.map((point) => `${Math.round(Number(point.elapsedSeconds || 0))}s=${point.heartRateBpm ?? "?"}`).join(", ")}`
+      : "";
+    const gapLines = gaps.map((gap) => `  - Connection gap ${Math.round(Number(gap.startElapsedSeconds || 0))}s-${gap.endElapsedSeconds != null ? `${Math.round(Number(gap.endElapsedSeconds))}s` : "open"}${gap.reason ? `: ${gap.reason}` : ""}`);
+    const coverageLine = transfer.payload?.scope === "full_session_vitals_context"
+      ? `  - Capture coverage: ECG ${compactNumber(rawStreams.ecg?.coveragePercent, 0) || "unknown"}%; movement ${compactNumber(rawStreams.movement?.coveragePercent, 0) || "unknown"}%; RR accepted ${hrv.acceptedRrIntervals ?? "unknown"}/${hrv.totalRrIntervals ?? "unknown"}.`
+      : "";
+    return [
+      `- ${parts.join("; ")}.`,
+      ...eventLines,
+      ...bpLines,
+      trendLine,
+      ...gapLines,
+      coverageLine,
+    ].filter(Boolean).join("\n");
   });
   return `RECENT SARAHVS LONGITUDINAL VITAL-SIGN CONTEXT:
 These SarahVS transfers provide baseline/final-state HR, HRV, BP, event notes, and trend context across time. Full-session transfers include every event note with vital signs at that moment plus compact trend summaries. Use them as physiology context when relevant, while avoiding claims of diagnostic certainty or invented second-by-second telemetry.

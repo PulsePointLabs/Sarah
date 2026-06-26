@@ -440,108 +440,6 @@ function ProviderCard({ status }) {
   );
 }
 
-function SarahVsVitalsPanel() {
-  const [transfers, setTransfers] = useState([]);
-  const [message, setMessage] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const loadTransfers = async () => {
-    setLoading(true);
-    setMessage("");
-    try {
-      const response = await fetch(apiUrl("/sarahvs/vitals/recent?limit=8"), { cache: "no-store" });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || `SarahVS vitals failed: ${response.status}`);
-      setTransfers(Array.isArray(data.transfers) ? data.transfers : []);
-      setMessage(data.count ? "" : "No SarahVS transfers received yet.");
-    } catch (error) {
-      setMessage(error?.message || "Could not load SarahVS transfers.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadTransfers();
-  }, []);
-
-  return (
-    <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2 text-primary">
-            <Activity className="h-4 w-4" />
-            <h2 className="text-sm font-bold uppercase tracking-wider">SarahVS vital signs</h2>
-          </div>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Transferred SarahVS context for long-term baseline, final-state, BP, HRV, symptoms, exercise, recovery, and full-session event notes. Raw ECG and high-resolution samples stay in the phone app.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={loadTransfers}
-          disabled={loading}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80 disabled:opacity-60"
-        >
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </button>
-      </div>
-
-      {message && <p className="mt-3 rounded-lg bg-muted/25 px-3 py-2 text-sm text-muted-foreground">{message}</p>}
-
-      <div className="mt-4 grid gap-3 lg:grid-cols-2">
-        {transfers.map((transfer) => {
-          const latest = transfer.payload?.latestWindow || {};
-          const session = transfer.payload?.session || latest;
-          const events = Array.isArray(transfer.payload?.events) ? transfer.payload.events : [];
-          const hr = session.heartRate || {};
-          const hrv = session.hrv || {};
-          return (
-            <article key={transfer.id} className="rounded-xl border border-border bg-muted/15 p-3">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-bold text-foreground">{transfer.latest_session_title || session.title || "SarahVS vitals window"}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Imported {fmtDateTime(transfer.imported_at)}{transfer.app_version ? ` · ${transfer.app_version}` : ""}
-                  </p>
-                </div>
-                <span className="rounded-full bg-primary/10 px-2 py-1 text-[11px] font-semibold uppercase text-primary">
-                  {transfer.payload?.scope === "full_session_vitals_context" ? "Session" : "Vitals"}
-                </span>
-              </div>
-              <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{transfer.summary}</p>
-              <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-                <div className="rounded-lg bg-card px-2 py-2">
-                  <p className="text-muted-foreground">Baseline</p>
-                  <p className="font-bold text-foreground">{hr.baselineBpm ?? "--"} bpm</p>
-                </div>
-                <div className="rounded-lg bg-card px-2 py-2">
-                  <p className="text-muted-foreground">Final</p>
-                  <p className="font-bold text-foreground">{hr.finalBpm ?? "--"} bpm</p>
-                </div>
-                <div className="rounded-lg bg-card px-2 py-2">
-                  <p className="text-muted-foreground">Max</p>
-                  <p className="font-bold text-foreground">{hr.maxBpm ?? "--"} bpm</p>
-                </div>
-                <div className="rounded-lg bg-card px-2 py-2">
-                  <p className="text-muted-foreground">RMSSD</p>
-                  <p className="font-bold text-foreground">{hrv.rmssdMs != null ? Number(hrv.rmssdMs).toFixed(1) : "--"}</p>
-                </div>
-              </div>
-              {events.length > 0 && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {events.length} event note{events.length === 1 ? "" : "s"} included with HR context.
-                </p>
-              )}
-            </article>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
 export default function SettingsStatus() {
   const navigate = useNavigate();
   const [providerStatus, setProviderStatus] = useState(null);
@@ -1280,8 +1178,6 @@ export default function SettingsStatus() {
         </div>
         <AppVersionBadge />
       </header>
-
-      <SarahVsVitalsPanel />
 
       <section className="rounded-xl border border-border bg-card p-3 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">

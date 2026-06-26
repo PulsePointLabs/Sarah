@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
-import { LayoutDashboard, List, PlusCircle, GitCompare, TrendingUp, Waves, ScanSearch, GitMerge, LineChart, Menu, X, UserCircle, Grid3x3, Clapperboard, Music, BarChart2, FlaskConical, BookOpen, Radio, Settings2, Activity, MessageCircle, Sparkles, CheckCircle2, Loader2, ExternalLink } from "lucide-react";
+import { LayoutDashboard, List, PlusCircle, GitCompare, TrendingUp, Waves, ScanSearch, GitMerge, LineChart, Menu, X, UserCircle, Grid3x3, Clapperboard, Music, BarChart2, FlaskConical, BookOpen, Radio, Settings2, Activity, HeartPulse, MessageCircle, Sparkles, CheckCircle2, Loader2, ExternalLink } from "lucide-react";
 import pkg from "../../package.json";
 import InstallAppButton from "./InstallAppButton";
 import BackgroundJobStatusTray from "./BackgroundJobStatusTray";
@@ -41,6 +41,7 @@ const navGroups = [
     label: "Today",
     items: [
       { path: "/", icon: LayoutDashboard, label: "Dashboard" },
+      { path: "/vitals", icon: HeartPulse, label: "Vital Signs" },
       { path: "/sessions", icon: List, label: "Sessions" },
       { path: "/new", icon: PlusCircle, label: "New Session" },
       { path: "/journal", icon: BookOpen, label: "Journal" },
