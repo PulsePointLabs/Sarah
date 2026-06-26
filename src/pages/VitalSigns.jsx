@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Activity, ChevronRight, HeartPulse, RefreshCw, TriangleAlert } from "lucide-react";
 import AppVersionBadge from "@/components/AppVersionBadge";
+import TTSReader from "@/components/TTSReader";
 import { apiUrl } from "@/lib/mobileApiBase";
 
 function fmtDateTime(value) {
@@ -49,7 +50,40 @@ function Metric({ label, value }) {
   );
 }
 
-function TransferDetails({ transfer }) {
+function transferNarration(transfer) {
+  const payload = transfer?.payload || {};
+  const session = payload.session || payload.latestWindow || {};
+  const hr = session.heartRate || {};
+  const hrv = session.hrv || {};
+  const events = Array.isArray(payload.events) ? payload.events : Array.isArray(session.events) ? session.events : [];
+  const bloodPressure = Array.isArray(payload.bloodPressureReadings)
+    ? payload.bloodPressureReadings
+    : Array.isArray(session.bloodPressureReadings)
+      ? session.bloodPressureReadings
+      : [];
+  const trend = Array.isArray(payload.heartRateTrend) ? payload.heartRateTrend : [];
+  const gaps = Array.isArray(payload.connectionGaps) ? payload.connectionGaps : [];
+  const parts = [
+    `${transfer?.latest_session_title || session.title || "Sarah V S vital-sign window"}.`,
+    session.startedAtUtc ? `Started ${fmtDateTime(session.startedAtUtc)}.` : `Imported ${fmtDateTime(transfer?.imported_at)}.`,
+    session.durationSeconds != null ? `Duration ${fmtDuration(session.durationSeconds)}.` : "",
+    transfer?.summary ? `${transfer.summary}.` : "",
+    hr.baselineBpm != null ? `Baseline heart rate ${hr.baselineBpm} beats per minute.` : "",
+    hr.averageBpm != null ? `Average heart rate ${Math.round(Number(hr.averageBpm))} beats per minute.` : "",
+    hr.maxBpm != null ? `Maximum heart rate ${hr.maxBpm} beats per minute.` : "",
+    hr.finalBpm != null ? `Final heart rate ${hr.finalBpm} beats per minute.` : "",
+    hrv.rmssdMs != null ? `R M S S D ${Number(hrv.rmssdMs).toFixed(1)} milliseconds.` : "",
+    hrv.rrCoveragePercent != null ? `R R coverage ${Math.round(Number(hrv.rrCoveragePercent))} percent.` : "",
+    `${Number(hr.sampleCount || 0).toLocaleString()} heart-rate samples summarized.`,
+    `${trend.length} heart-rate trend points transferred.`,
+    `${events.length} documented events.`,
+    `${bloodPressure.length} blood-pressure readings.`,
+    `${gaps.length} connection gaps.`,
+  ].filter(Boolean);
+  return parts.join(" ");
+}
+
+function TransferDetails({ transfer, isActive = false, isBuffering = false }) {
   const payload = transfer.payload || {};
   const session = payload.session || payload.latestWindow || {};
   const hr = session.heartRate || {};
@@ -66,7 +100,7 @@ function TransferDetails({ transfer }) {
   const isFullSession = payload.scope === "full_session_vitals_context";
 
   return (
-    <article className="border-t border-border py-5 first:border-t-0 first:pt-0">
+    <article className={`border-t py-5 transition-colors first:border-t-0 first:pt-0 ${isActive ? "border-primary bg-primary/[0.06] px-3" : isBuffering ? "border-primary/40 bg-primary/[0.03] px-3" : "border-border"}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-lg font-bold text-foreground">
@@ -103,13 +137,14 @@ function TransferDetails({ transfer }) {
 
       <Link
         to={`/vitals/${encodeURIComponent(transfer.id)}`}
+        onClick={(event) => event.stopPropagation()}
         className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
       >
         View details <ChevronRight className="h-4 w-4" />
       </Link>
 
       {isFullSession && (
-        <details className="mt-4 border-t border-border pt-4">
+        <details className="mt-4 border-t border-border pt-4" onClick={(event) => event.stopPropagation()}>
           <summary className="cursor-pointer text-sm font-bold text-primary">Session details</summary>
           <div className="mt-4 grid gap-5 lg:grid-cols-2">
             <div>
@@ -255,8 +290,20 @@ export default function VitalSigns() {
           Loading transferred vital signs...
         </div>
       ) : transfers.length ? (
-        <section className="mt-6">
-          {transfers.map((transfer) => <TransferDetails key={transfer.id} transfer={transfer} />)}
+        <section className="mt-6" aria-label="Transferred vital-sign summaries">
+          <TTSReader
+            sessionId="sarahvs-vital-signs-overview"
+            title="SarahVS Vital Signs"
+            sourceGeneratedAt={transfers[0]?.imported_at || null}
+            paragraphs={transfers.map(transferNarration)}
+            renderParagraph={(_text, index, isActive, isBuffering) => (
+              <TransferDetails
+                transfer={transfers[index]}
+                isActive={isActive}
+                isBuffering={isBuffering}
+              />
+            )}
+          />
         </section>
       ) : !error ? (
         <p className="mt-8 text-sm text-muted-foreground">No SarahVS transfers have arrived yet.</p>
