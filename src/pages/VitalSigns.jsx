@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Activity, HeartPulse, RefreshCw, TriangleAlert } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Activity, ChevronRight, HeartPulse, RefreshCw, TriangleAlert } from "lucide-react";
 import AppVersionBadge from "@/components/AppVersionBadge";
 import { apiUrl } from "@/lib/mobileApiBase";
 
@@ -99,6 +100,13 @@ function TransferDetails({ transfer }) {
         <span>{bloodPressure.length} BP readings</span>
         <span>{gaps.length} connection gaps</span>
       </div>
+
+      <Link
+        to={`/vitals/${encodeURIComponent(transfer.id)}`}
+        className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+      >
+        View details <ChevronRight className="h-4 w-4" />
+      </Link>
 
       {isFullSession && (
         <details className="mt-4 border-t border-border pt-4">

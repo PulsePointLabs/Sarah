@@ -1651,6 +1651,7 @@ export default function AIChat({
     const shouldPivot = messages.length > 4 && Math.random() < 0.4;
 
     const groundingContext = buildAIGroundingContext(userProfile);
+    const sarahVsVitalsContext = await buildSarahVsVitalsPromptContext();
     const profileMechanicalContext = mode === "profile" ? `\n\n${PROFILE_MECHANICAL_RULE}` : "";
 
     const ANATOMY_RULE = `ANATOMY RULE: Use ONLY the anatomical and physiological details stated in the profile above. Never assume or infer biological sex, genitalia, or anatomy not explicitly mentioned. If anatomy is ambiguous, use neutral language (e.g. "genital stimulation", "pelvic region", "that area").`;

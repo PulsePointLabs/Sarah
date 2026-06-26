@@ -1,7 +1,14 @@
 import express from 'express';
-import { listEntities, upsertEntity } from '../db.js';
+import { getEntity, listEntities, upsertEntity } from '../db.js';
+import { aiInvokeInternal } from './internalAi.js';
+import {
+  buildVitalsAnalysisPrompt,
+  VITALS_ANALYSIS_SCHEMA,
+  wrapVitalsAnalysis,
+} from '../services/sarahVsVitalsAnalysis.js';
 
 export const sarahVsRouter = express.Router();
+const activeAnalysisRequests = new Map();
 
 function requireToken(req, res, next) {
   const expected = String(process.env.SARAHVS_TRANSFER_TOKEN || '').trim();
@@ -58,6 +65,7 @@ function publicTransfer(row = {}) {
     latest_session_started_at_utc: row.latest_session_started_at_utc,
     summary: row.summary,
     payload: row.payload,
+    analysis: row.analysis || null,
   };
 }
 
@@ -99,4 +107,45 @@ sarahVsRouter.get('/vitals/recent', (req, res) => {
     .slice(0, limit)
     .map(publicTransfer);
   res.json({ ok: true, transfers, count: transfers.length });
+});
+
+sarahVsRouter.get('/vitals/:id', (req, res) => {
+  const transfer = getEntity('SarahVsVitalsTransfer', req.params.id);
+  if (!transfer) return res.status(404).json({ error: 'SarahVS transfer was not found.' });
+  return res.json({ ok: true, transfer: publicTransfer(transfer) });
+});
+
+sarahVsRouter.post('/vitals/:id/analyze', async (req, res) => {
+  const transferId = req.params.id;
+  const transfer = getEntity('SarahVsVitalsTransfer', transferId);
+  if (!transfer) return res.status(404).json({ error: 'SarahVS transfer was not found.' });
+  if (transfer.analysis) {
+    return res.json({ ok: true, cached: true, analysis: transfer.analysis });
+  }
+
+  try {
+    let request = activeAnalysisRequests.get(transferId);
+    if (!request) {
+      request = (async () => {
+        const result = await aiInvokeInternal({
+          prompt: buildVitalsAnalysisPrompt(transfer),
+          response_json_schema: VITALS_ANALYSIS_SCHEMA,
+          model: 'claude_sonnet_4_6',
+          max_tokens: 5000,
+          temperature: 0.4,
+          forensicCaptureId: `sarahvs-vitals-${transferId}`,
+        });
+        const analysis = wrapVitalsAnalysis(result, { transfer });
+        upsertEntity('SarahVsVitalsTransfer', transferId, { analysis });
+        return analysis;
+      })();
+      activeAnalysisRequests.set(transferId, request);
+    }
+    const analysis = await request;
+    return res.json({ ok: true, cached: false, analysis });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || String(error) });
+  } finally {
+    activeAnalysisRequests.delete(transferId);
+  }
 });
