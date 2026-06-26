@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
 import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { readWatermarkSettings } from "@/lib/watermarkSettings";
 import { videoPosterDataUrl } from "@/lib/videoPoster";
@@ -7935,6 +7936,7 @@ function AIProfilePanel({ sessions, userProfile, journals, evidenceLoading = fal
     const sessionSummaries = sortedSessions.map(compactSessionLine).join("\n");
     const evidenceDigest = buildProfileEvidenceDigest(sortedSessions);
     const groundingContext = buildAIGroundingContext(userProfile);
+    const sarahVsVitalsContext = await buildSarahVsVitalsPromptContext(8);
     const firstNameToneCue = buildOptionalFirstNameToneCue(userProfile, { prioritizeProfileTone: true });
 
     const profileContext = userProfile ? `
@@ -7972,6 +7974,7 @@ Use the journals to surface recurring emotional themes, evolving insights, and s
       prompt: `You are an expert physiological and sexual response analyst. Based on ${sessions.length} recorded sessions and profile notes, generate a comprehensive, deeply personal physiological and arousal profile. Write directly to the person — use "you" and "your" throughout, as if speaking to them personally.
 
 ${groundingContext}
+${sarahVsVitalsContext ? `\n${sarahVsVitalsContext}` : ""}
 ${SESSION_CONTEXT_GROUNDING_RULE}
 SESSION CONTEXT PROFILE RULE:
 - Structured session context is longitudinal evidence. Use it in the AI Profiler wherever it helps explain recurring contextual sensitivities, session clusters, outliers, recovery differences, build quality differences, or preparation effects.
@@ -8375,6 +8378,7 @@ function AnatomicalPhysiologicalProfilePanel({
       const sessionSummaries = sortedSessions.slice(0, 80).map(compactAnatomicalSessionLine).join("\n");
       const longitudinalHrvEvidence = buildLongitudinalHrvEvidence(sortedSessions, allTimelines);
       const groundingContext = buildAIGroundingContext(userProfile);
+      const sarahVsVitalsContext = await buildSarahVsVitalsPromptContext(8);
       const firstNameToneCue = buildOptionalFirstNameToneCue(userProfile, { prioritizeProfileTone: true });
 
       const raw = await runProfilerAIJob({
@@ -8382,6 +8386,7 @@ function AnatomicalPhysiologicalProfilePanel({
         prompt: `You are producing an Anatomical & Physiological Profile for one person. Create a detailed, evidence-grounded synthesis using only populated saved profile fields and supported patterns in the session data. This is distinct from a narrative arousal profile: its purpose is to explain relevant constitutional, anatomical, functional-mechanical, and instrumentation context.
 
 ${groundingContext}
+${sarahVsVitalsContext ? `\n${sarahVsVitalsContext}` : ""}
 ${SESSION_CONTEXT_GROUNDING_RULE}
 ${SESSION_DATE_GROUNDING_RULE}
 ${MOTION_EVIDENCE_PRECEDENCE_RULE}

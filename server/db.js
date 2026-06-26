@@ -32,6 +32,7 @@ export const ENTITY_NAMES = [
   'RenderedVideo',
   'RenderPreset',
   'User',
+  'SarahVsVitalsTransfer',
 ];
 
 export function initDb() {

@@ -8,6 +8,7 @@ import { buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_AN
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { buildAudioChapterBundle } from "@/lib/audioChapters";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
 import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { readWatermarkSettings } from "@/lib/watermarkSettings";
 import { videoPosterDataUrl } from "@/lib/videoPoster";
@@ -2463,6 +2464,7 @@ ${JSON.stringify({
 Use this arousal profile to personalize analysis: compare the observed build arc and climax pattern against the user's known response style. Note deviations (e.g. faster/slower than typical, more/less sensitive). Reference preferred methods when interpreting session effectiveness.` : "";
 
     const groundingContext = buildAIGroundingContext(userProfile);
+    const sarahVsVitalsContext = await buildSarahVsVitalsPromptContext();
     const firstNameToneCue = !isTechnical ? buildOptionalFirstNameToneCue(userProfile) : "";
     const sarahPersonalityPrompt = buildSarahPersonalityPrompt(readSarahPersonalitySettings(), { isTechnical });
     const structuredSessionContext = structuredSessionContextForAI(session);
@@ -2528,6 +2530,7 @@ TARGET SESSION ANALYSIS STYLE:
 Default HRV style: use HRV as Sarah's behind-the-scenes physiological signal. Explain what it suggests about load, settling, breath-release, recovery, or artifact in plain language. Do not make the user wade through RMSSD, SDNN, pNN50, or dense HRV numbers unless one value is essential and immediately translated.`}
 
 ${groundingContext}
+${sarahVsVitalsContext ? `\n${sarahVsVitalsContext}` : ""}
 ${SESSION_CONTEXT_GROUNDING_RULE}
 ${structuredSessionContextText ? `
 LOGGED SESSION CONTEXT / INFLUENCES (user-entered context, not telemetry or visual proof):
