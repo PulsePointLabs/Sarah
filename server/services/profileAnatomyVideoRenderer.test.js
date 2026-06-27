@@ -75,6 +75,34 @@ test('head-to-toe follow-up keeps relevant genital evidence in its normal anatom
   assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
 });
 
+test('validated visual callout image stays synchronized with its measured narration segment', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'pelvic-callout-sync',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: [
+      'Foreskin',
+      'The foreskin and preputial margin are directly visible in this annotated view.',
+      'The foreskin remains intact without visible irritation.',
+    ],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'foreskin', section_label: 'Foreskin' },
+      { type: 'visual-callout', section_key: 'foreskin', section_label: 'Foreskin', evidence_image_ids: ['foreskin-validated'] },
+      { type: 'section', section_key: 'foreskin', section_label: 'Foreskin' },
+    ],
+    images: [
+      { id: 'foreskin-other', label: 'Foreskin reference view', coverage: 'foreskin prepuce', sectionKey: 'foreskin', url: '/uploads/foreskin-other.jpg' },
+      { id: 'foreskin-validated', label: 'Validated annotated foreskin view', coverage: 'foreskin prepuce coronal sulcus', sectionKey: 'foreskin', url: '/uploads/foreskin-validated.jpg' },
+    ],
+  });
+  const calloutSection = manifest.sections.find((section) => section.preferred_evidence_ids?.includes('foreskin-validated'));
+  assert.ok(calloutSection);
+  assert.equal(calloutSection.assigned_evidence.length, 1);
+  assert.equal(calloutSection.assigned_evidence[0].evidence_id, 'foreskin-validated');
+  assert.match(calloutSection.narration_text, /annotated view/i);
+  assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
+});
+
 const images = [
   {
     id: 'head-face-current',

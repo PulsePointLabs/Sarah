@@ -391,6 +391,7 @@ function naturalizeSpokenDates(value) {
 function cleanImageReviewProse(value) {
   const cleaned = naturalizeSpokenDates(value)
     .replace(/\[object Object\]/gi, "")
+    .replace(/\b[\w-]+\.(?:jpe?g|png|webp|gif|heic|mp4|mov|webm|mkv)\b/gi, "")
     .replace(/\bimg[_-]?0*(\d+)\b/gi, (_match, number) => `image ${Number(number) || number}`)
     .replace(/\bImage\s+\d+\s*(?:\([^)]+\))?\s*:\s*/gi, "")
     .replace(/\b(?:IMG|VID|PXL|DSC|Photo|Screenshot)[-_ ]?\d{4,}\b/gi, "the referenced view")
@@ -408,6 +409,7 @@ function cleanImageReviewProse(value) {
     .replace(/\b(?:No|The)\s+(?:bladder neck|prostate|internal sphincters?|urethral course|pelvic floor musculature|internal rectal structures?|internal hemorrhoids?)[^.]*\.?\s*/gi, "")
     .replace(/\bNo [^.]{0,80} assessment is possible from this batch\.?\s*/gi, "")
     .replace(/\b\d{7,}\b/g, "")
+    .replace(/^[\s.,;:]+/, "")
     .replace(/\s{2,}/g, " ")
     .trim();
   return cleanProfileImageReviewText(cleaned);
@@ -4399,16 +4401,28 @@ function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transie
   return selected.map((item) => item.imageId);
 }
 
-function uniqueImageMetadataParts(image = {}) {
+function cleanEvidenceCardText(value = "") {
+  return cleanImageReviewProse(String(value || ""))
+    .replace(/^[\s.,;:]+|[\s,;:]+$/g, "")
+    .trim();
+}
+
+function uniqueImageMetadataParts(image = {}, displayLabel = "") {
   const seen = new Set([
-    String(image.display_label || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(),
+    String(displayLabel || image.display_label || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(),
   ].filter(Boolean));
-  return [image.body_position, image.coverage, image.visibility_notes].filter((value) => {
-    const key = String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const parts = [];
+  for (const value of [image.body_position, image.coverage, image.visibility_notes]) {
+    const cleaned = cleanEvidenceCardText(value);
+    const fragments = cleaned.split(/\s*·\s*|(?<=[.!?])\s+/).map((item) => item.trim()).filter(Boolean);
+    for (const fragment of fragments) {
+      const key = fragment.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      parts.push(fragment);
+    }
+  }
+  return parts;
 }
 
 function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(var(--primary))", transientImages = [], onOpenImage = null, onCorrectFinding = null, onRemoveFinding = null }) {
@@ -4435,13 +4449,14 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
       </div>
       <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {imageIds.map((imageId) => {
-          const image = pelvicScoped
-            ? rawProfileImageById(result, imageId, transientImages)
-            : profileImageById(result, imageId, transientImages);
+          const image = profileImageById(result, imageId, transientImages);
           const imageFindings = findings.filter((finding) => finding.image_id === imageId).slice(0, 4);
           if (!image?.preview_url || !imageFindings.length) return null;
           const pinnedFindings = imageFindings.filter((finding) => finding.pin?.x != null && finding.pin?.y != null);
-          const metadataParts = uniqueImageMetadataParts(image);
+          const displayLabel = cleanEvidenceCardText(image.display_label)
+            || cleanEvidenceCardText(imageFindings[0]?.label || imageFindings[0]?.region)
+            || sectionLabel;
+          const metadataParts = uniqueImageMetadataParts(image, displayLabel);
           return (
             <div key={`${sectionKey}-${imageId}`} className="overflow-hidden rounded-lg border border-border bg-background shadow-sm">
               <div className="grid gap-0">
@@ -4455,7 +4470,7 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
                 />
                 <div className="space-y-2 p-3">
                   <div>
-                    <p className="text-sm font-semibold leading-snug text-foreground dark:text-white">{image.display_label || "Reviewed view"}</p>
+                    <p className="text-sm font-semibold leading-snug text-foreground dark:text-white">{displayLabel}</p>
                     {metadataParts.length > 0 && (
                       <p className="mt-1.5 line-clamp-4 text-xs leading-relaxed text-muted-foreground">
                         {metadataParts.join(" · ")}
@@ -4463,7 +4478,10 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
                     )}
                   </div>
                   <div className="space-y-1.5">
-                    {imageFindings.map((finding, index) => (
+                    {imageFindings.map((finding, index) => {
+                      const findingLabel = cleanEvidenceCardText(finding.label || finding.region) || "Visible finding";
+                      const findingText = cleanEvidenceCardText(finding.finding);
+                      return (
                       <div key={`${finding.finding_id}-inline`} className="rounded-md border border-border bg-muted/20 p-2.5">
                         <div className="flex flex-wrap items-center gap-1.5">
                           {finding.pin && (
@@ -4471,18 +4489,19 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
                               {index + 1}
                             </span>
                           )}
-                      <span className="text-sm font-semibold leading-snug text-foreground dark:text-white">{finding.label || finding.region || "Visible finding"}</span>
+                      <span className="text-sm font-semibold leading-snug text-foreground dark:text-white">{findingLabel}</span>
                       <Badge variant="outline" className="h-5 text-[10px]">{confidenceLabel(finding.confidence)}</Badge>
                       {finding.evidence_level && (
                         <Badge variant="secondary" className="h-5 text-[10px]">{confidenceLabel(finding.evidence_level)}</Badge>
                       )}
                     </div>
-                        {finding.finding && (
-                          <p className="mt-1.5 text-xs leading-relaxed text-foreground/90 dark:text-white/90">{finding.finding}</p>
+                        {findingText && (
+                          <p className="mt-1.5 text-xs leading-relaxed text-foreground/90 dark:text-white/90">{findingText}</p>
                         )}
                         <FindingCorrectionControl finding={finding} onCorrectFinding={onCorrectFinding} onRemoveFinding={onRemoveFinding} />
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -4513,7 +4532,7 @@ function imageCalloutNarrationParagraphs(result, sectionKey, transientImages = [
     const image = pelvicScoped
       ? rawProfileImageById(result, imageId, transientImages)
       : profileImageById(result, imageId, transientImages);
-    const imageContext = image?.display_label || image?.view_label || "Reviewed view";
+    const imageContext = cleanEvidenceCardText(image?.display_label || image?.view_label) || "Reviewed view";
     const callouts = imageFindings.slice(0, 4).map((finding, index) => {
       const label = finding.label || finding.region || `Callout ${index + 1}`;
       const confidence = confidenceLabel(finding.confidence);
@@ -4522,7 +4541,7 @@ function imageCalloutNarrationParagraphs(result, sectionKey, transientImages = [
     }).filter(Boolean);
     if (callouts.length) {
       const paragraph = cleanImageReviewProse(naturalizeSpokenDates(`${imageContext}. ${callouts.join(" ")}`));
-      if (paragraph) paragraphs.push(paragraph);
+      if (paragraph) paragraphs.push({ text: paragraph, imageId });
     }
   }
   return paragraphs;
@@ -7059,9 +7078,9 @@ ANNOTATED IMAGE OUTPUT RULES:
         paragraphs.push(calmSpokenHeading(section.label));
         paragraphMeta.push({ type: "section-title", section, displayLabel: section.label });
         if (includeImageCalloutsInTts) {
-          for (const calloutParagraph of imageCalloutNarrationParagraphs(cumulativeVisualResult, section.key, evidenceLookupImages)) {
-            paragraphs.push(calloutParagraph);
-            paragraphMeta.push({ type: "visual-callout", section });
+          for (const callout of imageCalloutNarrationParagraphs(cumulativeVisualResult, section.key, evidenceLookupImages)) {
+            paragraphs.push(callout.text);
+            paragraphMeta.push({ type: "visual-callout", section, evidence_image_ids: [callout.imageId] });
           }
         }
       }
@@ -7108,9 +7127,9 @@ ANNOTATED IMAGE OUTPUT RULES:
           ? rawProfileImageById(cumulativeVisualResult, imageId, evidenceLookupImages)
           : profileImageById(cumulativeVisualResult, imageId, evidenceLookupImages);
         const rawImage = rawProfileImageById(cumulativeVisualResult, imageId, evidenceLookupImages);
-        return { image, rawImage };
+        return { image, rawImage, requestedImageId: imageId };
       })
-      .filter(({ image, rawImage }) => {
+      .filter(({ image, rawImage, requestedImageId }) => {
         if (!image?.preview_url) return false;
         if (!pelvicScoped) return true;
         const sourceText = compactEvidenceText(
@@ -7124,7 +7143,8 @@ ANNOTATED IMAGE OUTPUT RULES:
           rawImage?.source_video?.purpose,
         );
         if (isPelvicGenitalTextOutOfScope(sourceText)) return false;
-        return PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(sourceText);
+        const hasValidatedSectionLink = (sectionsByImage.get(requestedImageId)?.size || 0) > 0;
+        return hasValidatedSectionLink || PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(sourceText);
       })
       .map(({ image, rawImage }, index) => {
         const imageId = image.image_id || `profile-image-${index + 1}`;
@@ -7262,12 +7282,13 @@ ANNOTATED IMAGE OUTPUT RULES:
         }))
         .filter((item) => item.text);
       const readableParagraphs = readableItems.map((item) => item.text);
-      const readableParagraphMeta = readableItems.map((item) => ({
-        type: item.meta.type || "",
-        displayLabel: item.meta.displayLabel || "",
-        section_key: item.meta.section?.key || "",
-        section_label: item.meta.section?.label || item.meta.displayLabel || "",
-      }));
+        const readableParagraphMeta = readableItems.map((item) => ({
+          type: item.meta.type || "",
+          displayLabel: item.meta.displayLabel || "",
+          section_key: item.meta.section?.key || "",
+          section_label: item.meta.section?.label || item.meta.displayLabel || "",
+          evidence_image_ids: Array.isArray(item.meta.evidence_image_ids) ? item.meta.evidence_image_ids.filter(Boolean) : [],
+        }));
       const title = `${config.shortTitle} Anatomy Video`;
       const chunks = buildProfilerVideoChunks(readableParagraphs);
       const chapters = buildAudioChapterBundle({

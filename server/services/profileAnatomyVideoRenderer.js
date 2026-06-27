@@ -1055,13 +1055,19 @@ function groupParagraphsIntoManifestSections(paragraphs = [], paragraphMeta = []
     current.narration_text = current.paragraphs.map((item) => item.text).join('\n\n').trim();
     current.paragraph_indices = current.paragraphs.map((item) => item.index);
     delete current.paragraphs;
+    delete current.has_visual_callout;
     sections.push(current);
     current = null;
   };
 
   for (const item of items) {
     const explicitKey = normalizeText(item.meta.section_key || item.meta.sectionKey || item.meta.section?.key || '').replace(/\s+/g, '_');
-    const isBoundary = item.meta.type === 'title' || item.meta.type === 'section-title' || !current || (explicitKey && explicitKey !== current.section_key && item.meta.type !== 'visual-callout');
+    const startsAnotherVisualCallout = item.meta.type === 'visual-callout' && current?.has_visual_callout;
+    const leavesVisualCallout = item.meta.type !== 'visual-callout' && current?.has_visual_callout;
+    const isBoundary = item.meta.type === 'title' || item.meta.type === 'section-title' || !current
+      || (explicitKey && explicitKey !== current.section_key && item.meta.type !== 'visual-callout')
+      || startsAnotherVisualCallout
+      || leavesVisualCallout;
     if (isBoundary) {
       pushCurrent();
       const resolution = item.meta.type === 'title'
@@ -1079,11 +1085,17 @@ function groupParagraphsIntoManifestSections(paragraphs = [], paragraphMeta = []
         paragraphs: [],
         allowed_anatomy_labels: [...(STRICT_ALLOWED_IMAGE_REGIONS.get(resolution.key) || new Set())],
         prohibited_anatomy_labels: [...(STRICT_FORBIDDEN_IMAGE_REGIONS.get(resolution.key) || new Set())],
+        preferred_evidence_ids: [],
+        has_visual_callout: false,
         hold_last_frame_allowed: false,
         placeholder_behavior: 'section_card',
       };
     }
     current.paragraphs.push(item);
+    if (item.meta.type === 'visual-callout') current.has_visual_callout = true;
+    for (const evidenceId of (Array.isArray(item.meta.evidence_image_ids) ? item.meta.evidence_image_ids : [])) {
+      if (evidenceId && !current.preferred_evidence_ids.includes(evidenceId)) current.preferred_evidence_ids.push(evidenceId);
+    }
   }
   pushCurrent();
   return sections;
@@ -1124,6 +1136,7 @@ export function createReviewEvidenceManifest({
   const evidenceUseCounts = new Map();
   const maxEvidencePerSection = reviewScope === 'pelvic_genital' ? 2 : 3;
   const manifestSections = sections.map((section) => {
+    const preferredEvidenceIds = new Set(section.preferred_evidence_ids || []);
     const meta = {
       section_key: section.section_key,
       section_label: section.section_title,
@@ -1154,8 +1167,9 @@ export function createReviewEvidenceManifest({
         const repeatPenalty = useCount * (reviewScope === 'pelvic_genital' ? 135 : 105);
         return {
           ...entry,
-          adjustedScore: entry.candidate.score - repeatPenalty,
+          adjustedScore: entry.candidate.score - repeatPenalty + (preferredEvidenceIds.has(imageId) ? 1000 : 0),
           repeatPenalty,
+          explicitlyPreferred: preferredEvidenceIds.has(imageId),
         };
       })
       .sort((a, b) => b.adjustedScore - a.adjustedScore || b.candidate.score - a.candidate.score);
@@ -1166,7 +1180,7 @@ export function createReviewEvidenceManifest({
         : bestSpecificSectionFallback(images, section.target_region, meta, section.narration_text, reviewScope, evidenceUseCounts);
     const selectedEntries = ranked
       .filter((entry) => entry.adjustedScore > 0)
-      .slice(0, maxEvidencePerSection);
+      .slice(0, preferredEvidenceIds.size ? 1 : maxEvidencePerSection);
     const selected = selectedEntries[0] || fallback;
     const directReason = selected
       ? fallback
