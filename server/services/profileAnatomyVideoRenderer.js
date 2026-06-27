@@ -101,6 +101,11 @@ const GENITAL_DETAIL_STRUCTURE_KEYS = new Set([
 ]);
 const PUBIC_GROIN_STRUCTURE_KEYS = new Set(['pubic_groin']);
 const STRICT_SECTION_SPECIFIC_KEYS = new Set([
+  'meatus',
+  'glans',
+  'foreskin',
+  'shaft',
+  'scrotum',
   'pubic_groin',
   'perineum',
   'anal_perianal',
@@ -460,8 +465,37 @@ function imageFineStructureText(image = {}) {
   ].filter(Boolean).flat().join(' '));
 }
 
+function imagePrimaryFineStructureText(image = {}) {
+  return normalizeText([
+    image.label,
+    image.display_label,
+  ].filter(Boolean).join(' '));
+}
+
 function directFineStructureKeysForImage(image = {}) {
-  return collectFineStructureKeys(imageFineStructureText(image));
+  return collectFineStructureKeys(imagePrimaryFineStructureText(image));
+}
+
+const STRICT_STRUCTURE_PATTERNS = new Map([
+  ['meatus', /\b(?:meatus|meatal|urethral\s+(?:opening|meatus|outlet))\b/i],
+  ['glans', /\b(?:glans|corona|coronal\s+ridge)\b/i],
+  ['foreskin', /\b(?:foreskin|prepuce|preputial)\b/i],
+  ['shaft', /\b(?:penis|penile\s+shaft|shaft)\b/i],
+  ['scrotum', /\b(?:scrotum|scrotal|testes|testicle|testicles)\b/i],
+  ['pubic_groin', /\b(?:pubic(?:\s+mound|\s+region)?|suprapubic|inguinal|groin|lower\s+abdomen|penile\s+base)\b/i],
+  ['perineum', /\b(?:perineum|perineal(?:\s+body)?)\b/i],
+  ['anal_perianal', /\b(?:anal(?:\s+(?:opening|verge))?|anus|perianal|rectal)\b/i],
+]);
+
+function primaryStrictStructureKey(requestedText = '') {
+  const text = normalizeText(requestedText);
+  let best = null;
+  for (const [key, pattern] of STRICT_STRUCTURE_PATTERNS) {
+    const match = pattern.exec(text);
+    if (!match) continue;
+    if (!best || match.index < best.index) best = { key, index: match.index };
+  }
+  return best?.key || '';
 }
 
 function hasStrongPubicGroinEvidence(image = {}) {
@@ -487,9 +521,16 @@ function imageTextHasAny(text = '', patterns = []) {
 function imageMatchesStrictSectionSpecificRequest(image = {}, requestedKeys = new Set(), requestedText = '') {
   if (!requestedKeys.size) return true;
   const imageText = imageFineStructureText(image);
+  const primaryText = imagePrimaryFineStructureText(image);
   const imageKeys = directFineStructureKeysForImage(image);
   const imageRegions = regionKeysForImage(image);
   const imageHasGenitalDetail = [...imageKeys].some((key) => GENITAL_DETAIL_STRUCTURE_KEYS.has(key));
+  const primaryRequestedKey = primaryStrictStructureKey(requestedText);
+
+  if (primaryRequestedKey && requestedKeys.has(primaryRequestedKey)) {
+    const directPattern = STRICT_STRUCTURE_PATTERNS.get(primaryRequestedKey);
+    if (!directPattern?.test(primaryText)) return false;
+  }
 
   if (requestedKeys.has('pubic_groin') || /\b(pubic|pubic\s+mound|inguinal|groin|lower\s+abdomen|penile\s+base)\b/i.test(requestedText)) {
     const hasPubicGroinText = imageTextHasAny(imageText, [
@@ -510,7 +551,6 @@ function imageMatchesStrictSectionSpecificRequest(image = {}, requestedKeys = ne
       /\bperineum\b/i,
       /\bperineal\b/i,
       /\bperineal\s+body\b/i,
-      /\binferior\b/i,
       /\bbetween\s+(?:scrotum|testes|testicles)\s+and\s+(?:anus|anal|perianal)\b/i,
     ]);
     if (!hasPerineumText && !imageKeys.has('perineum') && !imageRegions.has('buttocks_perianal')) return false;
@@ -523,7 +563,6 @@ function imageMatchesStrictSectionSpecificRequest(image = {}, requestedKeys = ne
       /\banus\b/i,
       /\bperianal\b/i,
       /\brectal\b/i,
-      /\binferior\b/i,
     ]);
     if (!hasAnalText && !imageKeys.has('anal_perianal') && !imageRegions.has('buttocks_perianal')) return false;
     if (imageHasGenitalDetail && !hasAnalText && !imageRegions.has('buttocks_perianal')) return false;
@@ -1585,6 +1624,7 @@ export function buildManifestVisualTimeline({ manifest = {}, narrationSegments =
       startSeconds,
       endSeconds,
       sectionId: section.section_id,
+      sectionKey: section.section_key,
       label: section.section_title,
       targetKey: section.target_region,
       manifestAssigned: Boolean(assignment),
@@ -1852,7 +1892,25 @@ async function resolveImageToFile(image, workDir, index) {
   throw new Error(`Image ${image.label || index + 1} is not available to the renderer.`);
 }
 
-function cropAnchorForRegion(targetKey = '') {
+function cropAnchorForRegion(targetKey = '', sectionKey = '') {
+  switch (sectionKey) {
+    case 'pubic_mound_lower_abdomen':
+    case 'inguinal_folds_groin_skin':
+      return { x: '(iw-ow)/2', y: '(ih-oh)*0.32' };
+    case 'penis':
+    case 'foreskin':
+    case 'glans_meatus':
+      return { x: '(iw-ow)/2', y: '(ih-oh)*0.30' };
+    case 'scrotum_testes':
+      return { x: '(iw-ow)/2', y: '(ih-oh)*0.46' };
+    case 'perineum':
+      return { x: '(iw-ow)/2', y: '(ih-oh)*0.60' };
+    case 'anal_opening_perianal_region':
+    case 'buttocks_gluteal_skin':
+      return { x: '(iw-ow)/2', y: '(ih-oh)*0.68' };
+    default:
+      break;
+  }
   switch (targetKey) {
     case 'head_face':
       return { x: '(iw-ow)/2', y: '0' };
@@ -1875,13 +1933,13 @@ function cropAnchorForRegion(targetKey = '') {
   }
 }
 
-async function renderImageSegment({ imagePath, outputPath, durationSeconds, index, targetKey }) {
+async function renderImageSegment({ imagePath, outputPath, durationSeconds, index, targetKey, sectionKey }) {
   const frames = Math.max(1, Math.round(durationSeconds * VIDEO_FPS));
   const zoomDirection = index % 2 === 0 ? 'in' : 'out';
   const zoomExpr = zoomDirection === 'in'
     ? `min(1.10,1.0+0.10*on/${frames})`
     : `max(1.0,1.10-0.10*on/${frames})`;
-  const cropAnchor = cropAnchorForRegion(targetKey);
+  const cropAnchor = cropAnchorForRegion(targetKey, sectionKey);
   const fade = Math.min(0.28, Math.max(0, (durationSeconds - 0.6) / 2));
   const fadeFilters = fade
     ? `,fade=t=in:st=0:d=${fade.toFixed(2)},fade=t=out:st=${Math.max(0, durationSeconds - fade).toFixed(2)}:d=${fade.toFixed(2)}`
@@ -2253,6 +2311,7 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
           durationSeconds: item.durationSeconds,
           index,
           targetKey: item.targetKey,
+          sectionKey: item.sectionKey,
         });
       } else {
         if (item.trace) console.info(traceLine(item.trace));

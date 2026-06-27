@@ -132,6 +132,74 @@ test('perineum section accepts the saved posterior-inferior perineal reference',
   assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
 });
 
+test('foreskin section rejects a perineal image whose archive coverage only mentions foreskin', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'foreskin-direct-label-fixture',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: ['Foreskin', 'The foreskin and preputial mobility are directly reviewed.'],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'foreskin', section_label: 'Foreskin' },
+      { type: 'section', section_key: 'foreskin', section_label: 'Foreskin' },
+    ],
+    images: [
+      {
+        id: 'perineum-with-archive-summary',
+        label: 'Posterior-inferior perineal body and gluteal view',
+        coverage: 'Cumulative review mentions foreskin, glans, shaft, scrotum, perineum and anal region.',
+        sectionKey: 'perineum',
+        url: '/uploads/perineum.jpg',
+        source: 'profile_review_archive',
+      },
+      {
+        id: 'foreskin-closeup',
+        label: 'Close-up foreskin and preputial margin with partial retraction',
+        coverage: 'Foreskin mobility and preputial tissue are directly visible.',
+        sectionKey: 'foreskin',
+        url: '/uploads/foreskin.jpg',
+        source: 'profile_review_archive',
+      },
+    ],
+  });
+  const section = manifest.sections.find((item) => item.section_key === 'foreskin');
+  assert.equal(section.assigned_evidence[0].evidence_id, 'foreskin-closeup');
+  assert.equal(section.assignment_candidates.find((item) => item.id === 'perineum-with-archive-summary')?.score, -1000);
+});
+
+test('perineum section rejects a foreskin close-up whose archive coverage only mentions perineum', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'perineum-direct-label-fixture',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: ['Perineum', 'The perineal body and surrounding skin are directly reviewed.'],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'perineum', section_label: 'Perineum' },
+      { type: 'section', section_key: 'perineum', section_label: 'Perineum' },
+    ],
+    images: [
+      {
+        id: 'foreskin-with-archive-summary',
+        label: 'Close-up foreskin and glans with full retraction',
+        coverage: 'Cumulative review mentions foreskin, glans, shaft, scrotum, perineum and anal region.',
+        sectionKey: 'foreskin',
+        url: '/uploads/foreskin.jpg',
+        source: 'profile_review_archive',
+      },
+      {
+        id: 'perineum-closeup',
+        label: 'Posterior-inferior perineal body and scrotal-base view',
+        coverage: 'Perineal body is directly visible.',
+        sectionKey: 'perineum',
+        url: '/uploads/perineum.jpg',
+        source: 'profile_review_archive',
+      },
+    ],
+  });
+  const section = manifest.sections.find((item) => item.section_key === 'perineum');
+  assert.equal(section.assigned_evidence[0].evidence_id, 'perineum-closeup');
+  assert.equal(section.assignment_candidates.find((item) => item.id === 'foreskin-with-archive-summary')?.score, -1000);
+});
+
 test('pelvic review accepts an anal close-up with incidental thighs and a positioning hand', () => {
   const manifest = createReviewEvidenceManifest({
     reviewId: 'anal-incidental-limbs-fixture',

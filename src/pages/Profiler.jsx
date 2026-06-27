@@ -4247,17 +4247,44 @@ const SECTION_REFERENCE_HINTS = {
   skin_summary: /\b(skin|lesion|rash|redness|erythema|scar|bruise|wound|bite|pigmentation|mark)\b/i,
   pubic_mound_lower_abdomen: /\b(pubic|pubic mound|suprapubic|lower abdomen|abdominal|inguinal|groin|pelvis|pelvic|scar)\b/i,
   inguinal_folds_groin_skin: /\b(inguinal|groin|crease|fold|pelvic|pubic)\b/i,
-  penis: /\b(penis|penile|shaft|foreskin|glans|meatus)\b/i,
-  foreskin: /\b(foreskin|prepuce|glans|penile)\b/i,
-  glans_meatus: /\b(glans|meatus|meatal|urethral|catheter|foley)\b/i,
+  penis: /\b(penis|penile shaft|shaft)\b/i,
+  foreskin: /\b(foreskin|prepuce|preputial)\b/i,
+  glans_meatus: /\b(glans|meatus|meatal|urethral opening)\b/i,
   scrotum_testes: /\b(scrotum|scrotal|testes|testicle|testicular)\b/i,
-  perineum: /\b(perineum|perineal|anal|scrotal base)\b/i,
+  perineum: /\b(perineum|perineal|perineal body)\b/i,
   anal_opening_perianal_region: /\b(anal|anus|perianal|rectal)\b/i,
   buttocks_gluteal_skin: /\b(buttocks|gluteal|glute)\b/i,
   device_contact_findings: /\b(device|foley|catheter|tube|tubing|statlock|contact|meatus|urethral)\b/i,
   tissue_health_safety_observations: /\b(tissue|skin|irritation|redness|erythema|lesion|wound|swelling|edema|moisture|drainage)\b/i,
   measurement_reconciliation: /\b(measurement|measure|ruler|diameter|length|circumference)\b/i,
 };
+
+const STRICT_INLINE_SECTION_HINTS = {
+  pubic_mound_lower_abdomen: /\b(pubic mound|pubic region|suprapubic|lower abdomen)\b/i,
+  inguinal_folds_groin_skin: /\b(inguinal|groin|inguinal fold)\b/i,
+  penis: /\b(penis|penile shaft|shaft)\b/i,
+  foreskin: /\b(foreskin|prepuce|preputial)\b/i,
+  glans_meatus: /\b(glans|meatus|meatal|urethral opening)\b/i,
+  scrotum_testes: /\b(scrotum|scrotal|testes|testicle|testicular)\b/i,
+  perineum: /\b(perineum|perineal|perineal body)\b/i,
+  anal_opening_perianal_region: /\b(anal opening|anal verge|anus|perianal|rectal)\b/i,
+  buttocks_gluteal_skin: /\b(buttock|buttocks|gluteal|glute)\b/i,
+};
+
+function inlineEvidencePrimaryText(result, imageId, transientImages = [], pelvicScoped = false) {
+  const image = pelvicScoped
+    ? rawProfileImageById(result, imageId, transientImages)
+    : profileImageById(result, imageId, transientImages);
+  const rawImage = rawProfileImageById(result, imageId, transientImages);
+  const annotation = Array.isArray(result?.annotated_images)
+    ? result.annotated_images.find((item) => item?.image_id === imageId) || {}
+    : {};
+  return compactEvidenceText(
+    image?.display_label,
+    rawImage?.display_label,
+    annotation?.view_label,
+  );
+}
 
 function inlineEvidenceImageText(result, imageId, transientImages = [], pelvicScoped = false) {
   const image = pelvicScoped
@@ -4297,6 +4324,10 @@ function inlineEvidenceImageScore(result, imageId, sectionKey, findingsForImage 
   if (!image?.preview_url) return -10000;
   const text = inlineEvidenceImageText(result, imageId, transientImages, pelvicScoped);
   const sectionHint = SECTION_REFERENCE_HINTS[sectionKey];
+  const strictHint = STRICT_INLINE_SECTION_HINTS[sectionKey];
+  if (strictHint && !strictHint.test(inlineEvidencePrimaryText(result, imageId, transientImages, pelvicScoped))) {
+    return -10000;
+  }
   let score = findingsForImage.length * 70;
   if (sectionHint?.test(text)) score += 90;
   if (CLINICAL_REFERENCE_IMAGE_CONTEXT_RE.test(text)) score += 35;
@@ -4370,11 +4401,8 @@ function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transie
       if (b.score !== a.score) return b.score - a.score;
       return Number(b.hasFinding) - Number(a.hasFinding);
     });
-  const withFindings = scored.filter((item) => item.hasFinding);
-  const bestWithFindings = withFindings.filter((item) => item.score > 0).slice(0, 2);
-  const fallbackWithFindings = withFindings.slice(0, 2);
-  const best = scored.filter((item) => item.score > 0).slice(0, 2);
-  const selected = bestWithFindings.length ? bestWithFindings : fallbackWithFindings.length ? fallbackWithFindings : best;
+  const best = scored.filter((item) => item.score > 0 && item.adjustedScore > 0).slice(0, 2);
+  const selected = best.length ? best : scored.filter((item) => item.score > 0).slice(0, 2);
   const selectedIds = new Set(selected.map((item) => item.imageId));
   if (selected.length === 1 && selected[0].priorUseCount > 0) {
     const alternate = best.find((item) => !selectedIds.has(item.imageId));
