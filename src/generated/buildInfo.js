@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.41",
-  "commit": "7369743",
-  "commitMessage": "Make profiler reviews longitudinal by default",
-  "builtAt": "2026-06-27T04:23:33.447Z"
+  "version": "0.1.42",
+  "commit": "8bc4ff2",
+  "commitMessage": "Refresh Sarah 0.1.41 build metadata",
+  "builtAt": "2026-06-27T17:29:37.754Z"
 };

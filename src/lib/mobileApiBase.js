@@ -96,8 +96,8 @@ export function getSarahApiBaseCandidates() {
   return uniqueBases([
     queryBase,
     ...configured,
-    ...CAPACITOR_API_BASES,
     storedBase,
+    ...CAPACITOR_API_BASES,
   ]);
 }
 
@@ -143,18 +143,24 @@ async function checkApiBase(base, timeoutMs) {
   }
 }
 
-export async function discoverSarahApiBase({ timeoutMs = 2500, onAttempt } = {}) {
+export async function discoverSarahApiBase({ timeoutMs = 2500, attempts = 1, retryDelayMs = 0, onAttempt } = {}) {
   const candidates = getSarahApiBaseCandidates();
   const failures = [];
+  const rounds = Math.max(1, Math.round(Number(attempts) || 1));
 
-  for (const base of candidates) {
-    onAttempt?.(base);
-    const result = await checkApiBase(base, timeoutMs);
-    if (result.ok) {
-      setSarahApiBase(base);
-      return result;
+  for (let round = 0; round < rounds; round += 1) {
+    for (const base of candidates) {
+      onAttempt?.(base, round + 1);
+      const result = await checkApiBase(base, timeoutMs);
+      if (result.ok) {
+        setSarahApiBase(base);
+        return result;
+      }
+      failures.push({ ...result, attempt: round + 1 });
     }
-    failures.push(result);
+    if (round < rounds - 1 && retryDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
   }
 
   const error = new Error(`No reachable Sarah API found. Tried: ${candidates.join(", ")}`);

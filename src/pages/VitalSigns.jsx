@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Activity, ChevronRight, HeartPulse, RefreshCw, TriangleAlert } from "lucide-react";
-import AppVersionBadge from "@/components/AppVersionBadge";
 import { apiUrl } from "@/lib/mobileApiBase";
+import { formatDurationWords, formatVitalSignsSpeech } from "@/lib/vitalSignsSpeech";
 
 function fmtDateTime(value) {
   if (!value) return "";
@@ -15,14 +15,6 @@ function fmtDateTime(value) {
     hour: "numeric",
     minute: "2-digit",
   });
-}
-
-function fmtDuration(seconds) {
-  const total = Math.max(0, Math.round(Number(seconds || 0)));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  if (hours) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
 }
 
 function fmtElapsed(seconds) {
@@ -66,23 +58,23 @@ function TransferDetails({ transfer }) {
   const isFullSession = payload.scope === "full_session_vitals_context";
 
   return (
-    <article className="border-t border-border py-5 first:border-t-0 first:pt-0">
+    <article className="rounded-lg border border-border bg-card p-4 shadow-sm sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-lg font-bold text-foreground">
-            {transfer.latest_session_title || session.title || "SarahVS vital-sign window"}
+            SarahVS vital-sign recording
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
             {session.startedAtUtc ? `Started ${fmtDateTime(session.startedAtUtc)}` : `Imported ${fmtDateTime(transfer.imported_at)}`}
-            {session.durationSeconds != null ? ` · ${fmtDuration(session.durationSeconds)}` : ""}
+            {session.durationSeconds != null ? ` · ${formatDurationWords(session.durationSeconds)}` : ""}
           </p>
         </div>
         <span className="border border-primary/25 bg-primary/10 px-2 py-1 text-xs font-semibold uppercase text-primary">
-          {isFullSession ? "Full session" : "Summary"}
+          {isFullSession ? "Full recording" : "Summary"}
         </span>
       </div>
 
-      <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{transfer.summary}</p>
+      <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{formatVitalSignsSpeech(transfer.summary)}</p>
 
       <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <Metric label="Baseline HR" value={hr.baselineBpm != null ? `${hr.baselineBpm} bpm` : "--"} />
@@ -228,7 +220,6 @@ export default function VitalSigns() {
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
             Refresh
           </button>
-          <AppVersionBadge />
         </div>
       </header>
 
@@ -255,7 +246,7 @@ export default function VitalSigns() {
           Loading transferred vital signs...
         </div>
       ) : transfers.length ? (
-        <section className="mt-6">
+        <section className="mt-6 space-y-4">
           {transfers.map((transfer) => <TransferDetails key={transfer.id} transfer={transfer} />)}
         </section>
       ) : !error ? (

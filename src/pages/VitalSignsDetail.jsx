@@ -24,6 +24,7 @@ import {
 } from "recharts";
 import TTSReader from "@/components/TTSReader";
 import { apiUrl } from "@/lib/mobileApiBase";
+import { formatDurationWords, formatVitalSignsSpeech } from "@/lib/vitalSignsSpeech";
 
 function number(value) {
   const parsed = Number(value);
@@ -38,13 +39,7 @@ function fmtDateTime(value) {
 }
 
 function fmtDuration(seconds) {
-  const total = Math.max(0, Math.round(number(seconds) || 0));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const remainder = total % 60;
-  return hours
-    ? `${hours}h ${minutes}m ${remainder}s`
-    : `${minutes}m ${remainder}s`;
+  return formatDurationWords(seconds);
 }
 
 function fmtElapsed(seconds) {
@@ -59,7 +54,7 @@ function fmtElapsed(seconds) {
 
 function Metric({ label, value, accent = false }) {
   return (
-    <div className={`min-w-0 rounded-lg border px-3 py-3 ${accent ? "border-primary/30 bg-primary/[0.08]" : "border-border bg-muted/15"}`}>
+    <div className={`min-w-0 rounded-lg border bg-card px-3 py-3 ${accent ? "border-primary/35" : "border-border"}`}>
       <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
       <p className="mt-1 break-words font-mono text-xl font-bold text-foreground">{value ?? "--"}</p>
     </div>
@@ -153,7 +148,7 @@ function BloodPressureChart({ readings }) {
 function AnalysisPanel({ analysis, loading, error, onRetry }) {
   if (loading) {
     return (
-      <Section title="Sarah’s read" icon={Brain} className="border-primary/25 bg-primary/[0.04]">
+      <Section title="Sarah’s read" icon={Brain} className="border-primary/25">
         <div className="flex items-start gap-3">
           <Sparkles className="mt-0.5 h-5 w-5 animate-pulse text-primary" />
           <div>
@@ -176,11 +171,11 @@ function AnalysisPanel({ analysis, loading, error, onRetry }) {
   }
   if (!analysis) return null;
   return (
-    <Section title="Sarah’s read" icon={Brain} className="border-primary/25 bg-primary/[0.04]">
+    <Section title="Sarah’s read" icon={Brain} className="border-primary/25">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">{analysis.headline}</h2>
-          <p className="mt-3 max-w-4xl text-base leading-relaxed text-foreground/90">{analysis.personal_read}</p>
+          <h2 className="text-2xl font-bold text-foreground">{formatVitalSignsSpeech(analysis.headline)}</h2>
+          <p className="mt-3 max-w-4xl text-base leading-relaxed text-foreground/90">{formatVitalSignsSpeech(analysis.personal_read)}</p>
         </div>
         <span className="inline-flex items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-2 py-1 text-xs font-semibold text-primary">
           <ShieldCheck className="h-3.5 w-3.5" /> Saved analysis
@@ -196,9 +191,9 @@ function AnalysisPanel({ analysis, loading, error, onRetry }) {
           ["Recovery", analysis.recovery_read],
           ["Data quality", analysis.data_quality],
         ].filter(([, text]) => text).map(([title, text]) => (
-          <div key={title} className="rounded-lg border border-border bg-background/35 p-3">
+          <div key={title} className="border-t border-border py-3 first:border-t-0 first:pt-0">
             <h3 className="text-xs font-bold uppercase tracking-wider text-primary">{title}</h3>
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{text}</p>
+            <p className="mt-2 text-sm leading-relaxed text-foreground/85">{formatVitalSignsSpeech(text)}</p>
           </div>
         ))}
       </div>
@@ -208,10 +203,10 @@ function AnalysisPanel({ analysis, loading, error, onRetry }) {
           <h3 className="text-sm font-bold uppercase tracking-wider text-foreground">What stood out</h3>
           <div className="mt-2 grid gap-3 md:grid-cols-2">
             {analysis.notable_findings.map((finding, index) => (
-              <div key={`${finding.title}-${index}`} className="rounded-lg border-l-2 border-primary bg-muted/15 p-3">
-                <p className="font-semibold text-foreground">{finding.title}</p>
-                <p className="mt-1 text-sm text-muted-foreground">{finding.detail}</p>
-                <p className="mt-2 text-xs text-primary/85">{finding.evidence}</p>
+              <div key={`${finding.title}-${index}`} className="border-l-2 border-primary bg-card py-2 pl-3">
+                <p className="font-semibold text-foreground">{formatVitalSignsSpeech(finding.title)}</p>
+                <p className="mt-1 text-sm text-foreground/80">{formatVitalSignsSpeech(finding.detail)}</p>
+                <p className="mt-2 text-xs text-primary/85">{formatVitalSignsSpeech(finding.evidence)}</p>
               </div>
             ))}
           </div>
@@ -219,10 +214,10 @@ function AnalysisPanel({ analysis, loading, error, onRetry }) {
       )}
 
       {!!analysis.takeaways?.length && (
-        <div className="mt-5 rounded-lg border border-border bg-muted/15 p-3">
+        <div className="mt-5 border-t border-border pt-4">
           <h3 className="text-sm font-bold uppercase tracking-wider text-foreground">Bottom line</h3>
           <ul className="mt-2 space-y-2 text-sm text-muted-foreground">
-            {analysis.takeaways.map((takeaway, index) => <li key={index}>• {takeaway}</li>)}
+            {analysis.takeaways.map((takeaway, index) => <li key={index}>• {formatVitalSignsSpeech(takeaway)}</li>)}
           </ul>
         </div>
       )}
@@ -245,7 +240,7 @@ function buildAnalysisNarration(analysis) {
     analysis.data_quality,
     ...(analysis.notable_findings || []).flatMap((finding) => [finding.title, finding.detail, finding.evidence]),
     ...(analysis.takeaways || []),
-  ].filter(Boolean).join(". ");
+  ].filter(Boolean).map(formatVitalSignsSpeech).join(". ");
 }
 
 export default function VitalSignsDetail() {
@@ -342,7 +337,7 @@ export default function VitalSignsDetail() {
         kind: "quality",
         text: `Capture quality. ${Number(hr.sampleCount || 0).toLocaleString()} heart-rate samples. ${rawStreams.ecg?.samplesCaptured != null ? `${Number(rawStreams.ecg.samplesCaptured).toLocaleString()} E C G samples.` : "E C G sample count unavailable."} ${hrv.contextualArtifacts ?? "Unknown number of"} contextual artifacts. ${Array.isArray(payload.connectionGaps) ? payload.connectionGaps.length : "Unknown number of"} connection gaps.`,
       },
-    ];
+    ].map((item) => ({ ...item, text: formatVitalSignsSpeech(item.text) }));
   }, [bloodPressure, events, hr, hrv, payload.connectionGaps, rawStreams.ecg?.samplesCaptured, session.durationSeconds, session.title, transfer, trend.length]);
 
   if (loading) return <div className="mx-auto max-w-7xl px-4 py-8 text-sm text-muted-foreground">Loading vital-sign details…</div>;
@@ -360,7 +355,7 @@ export default function VitalSignsDetail() {
         <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-primary"><HeartPulse className="h-5 w-5" /> SarahVS session</p>
-            <h1 className="mt-2 text-3xl font-bold text-foreground">{session.title || transfer.latest_session_title || "Vital-sign details"}</h1>
+            <h1 className="mt-2 text-3xl font-bold text-foreground">SarahVS vital-sign recording</h1>
             <p className="mt-2 text-sm text-muted-foreground">
               {fmtDateTime(session.startedAtUtc || transfer.latest_session_started_at_utc)} · {fmtDuration(session.durationSeconds)}
               {session.status === "recording" ? " · snapshot captured while recording" : ""}
@@ -424,7 +419,7 @@ export default function VitalSignsDetail() {
                       {events.map((event, eventIndex) => {
                         const eventHr = event.heartRateAtEvent || {};
                         return (
-                          <article key={event.markerId || `${event.timestampUtc}-${eventIndex}`} className="rounded-lg border border-border bg-muted/15 p-3">
+                          <article key={event.markerId || `${event.timestampUtc}-${eventIndex}`} className="rounded-lg border border-border bg-card p-3">
                             <div className="flex items-start justify-between gap-3">
                               <p className="font-semibold text-foreground">{event.label || event.type || "Event"}</p>
                               <span className="shrink-0 font-mono text-xs text-primary">{fmtElapsed(event.elapsedSeconds)}</span>
@@ -451,7 +446,7 @@ export default function VitalSignsDetail() {
                           const dia = number(reading.diastolic);
                           const pulsePressure = sys != null && dia != null ? sys - dia : null;
                           return (
-                            <article key={reading.id || readingIndex} className="rounded-lg border border-border bg-muted/15 p-3">
+                            <article key={reading.id || readingIndex} className="rounded-lg border border-border bg-card p-3">
                               <p className="font-mono text-xl font-bold text-foreground">{sys ?? "--"}/{dia ?? "--"}</p>
                               <p className="mt-1 text-xs text-muted-foreground">MAP {reading.meanArterialPressure ?? "--"} · PP {pulsePressure ?? "--"}{reading.pulse != null ? ` · pulse ${reading.pulse}` : ""}</p>
                               <p className="mt-2 text-xs text-muted-foreground">{fmtDateTime(reading.timestampUtc)}{reading.bodyPosition ? ` · ${reading.bodyPosition}` : ""}</p>

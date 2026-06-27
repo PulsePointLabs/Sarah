@@ -1,4 +1,4 @@
-const ANALYSIS_SCHEMA_VERSION = 'sarah.vitals.analysis.v1';
+const ANALYSIS_SCHEMA_VERSION = 'sarah.vitals.analysis.v2';
 
 function finite(value) {
   const number = Number(value);
@@ -93,6 +93,11 @@ export function buildVitalsAnalysisPrompt(transfer = {}) {
 
 Write a clinically literate but personal interpretation. Sound like a trusted, candid companion who understands physiology, not a generic report generator. Lead with what the data directly show, then clearly label plausible interpretations. Correlate event notes with the vital signs at those moments and with the later trend. Discuss HRV only to the degree supported by its quality and available metrics. Treat symptoms, nicotine, caffeine, cannabis, medication, exertion, position, and blood pressure as context when documented, never as proven causes.
 
+Provenance boundary:
+- This record is a SarahVS vital-sign recording or transfer. It is not evidence that a PulsePoint sexual, masturbation, arousal, or observed behavioral session occurred.
+- Imported session notes and event notes are user-entered context only. Never describe them as observed actions and never infer sexual activity from medication, symptoms, timing, heart rate, or a note.
+- Mention sexual activity only when an event note explicitly says it occurred, and then attribute it to the user's note rather than to observation.
+
 Requirements:
 - Explain the overall cardiovascular arc in plain English.
 - Call out notable peaks, recoveries, sustained changes, and event-linked changes using timestamps or elapsed times.
@@ -100,6 +105,7 @@ Requirements:
 - Explain signal quality, gaps, and important limitations briefly and specifically.
 - Do not invent ECG findings, diagnoses, arrhythmias, respiratory measurements, or causal certainty.
 - Keep the personal_read warm and direct, while clinical_summary remains concise and clinically organized.
+- Write narration-ready prose: spell out numbers and durations, use natural clock times, and expand abbreviations such as HR, HRV, BP, RR, MAP, PP, bpm, mmHg, min, and sec.
 - Return useful prose, not a metric dump.
 
 SESSION DATA:
@@ -167,4 +173,8 @@ export function wrapVitalsAnalysis(result, { model = 'claude-sonnet-4-6', genera
     source_exported_at_utc: transfer?.exported_at_utc || transfer?.payload?.exportedAtUtc || null,
     ...result,
   };
+}
+
+export function isCurrentVitalsAnalysis(analysis) {
+  return analysis?.schema_version === ANALYSIS_SCHEMA_VERSION;
 }

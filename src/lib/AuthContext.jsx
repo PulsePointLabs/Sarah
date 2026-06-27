@@ -32,7 +32,9 @@ export const AuthProvider = ({ children }) => {
       if (isSarahNativeShell()) {
         setBootStatus({ message: 'Finding Sarah server...', detail: '' });
         const discovery = await discoverSarahApiBase({
-          timeoutMs: 2600,
+          timeoutMs: 2200,
+          attempts: 2,
+          retryDelayMs: 900,
           onAttempt: (base) => setBootStatus({
             message: 'Finding Sarah server...',
             detail: base,

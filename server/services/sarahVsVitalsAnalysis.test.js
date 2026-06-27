@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildVitalsAnalysisInput,
   buildVitalsAnalysisPrompt,
+  isCurrentVitalsAnalysis,
   wrapVitalsAnalysis,
 } from './sarahVsVitalsAnalysis.js';
 
@@ -57,6 +58,9 @@ test('vital analysis prompt requires cautious event-linked interpretation', () =
   assert.match(prompt, /clinically literate but personal/i);
   assert.match(prompt, /Correlate event notes/i);
   assert.match(prompt, /Do not invent ECG findings/i);
+  assert.match(prompt, /not evidence that a PulsePoint sexual/i);
+  assert.match(prompt, /user-entered context only/i);
+  assert.match(prompt, /spell out numbers and durations/i);
   assert.match(prompt, /Walked upstairs/);
 });
 
@@ -67,8 +71,10 @@ test('wrapped analysis records generation and source export timestamps for cache
     model: 'test-model',
     generatedAt: '2026-06-26T23:11:00.000Z',
   });
-  assert.equal(wrapped.schema_version, 'sarah.vitals.analysis.v1');
+  assert.equal(wrapped.schema_version, 'sarah.vitals.analysis.v2');
   assert.equal(wrapped.generated_at, '2026-06-26T23:11:00.000Z');
   assert.equal(wrapped.source_exported_at_utc, transfer.exported_at_utc);
   assert.equal(wrapped.headline, 'A steady recovery');
+  assert.equal(isCurrentVitalsAnalysis(wrapped), true);
+  assert.equal(isCurrentVitalsAnalysis({ schema_version: 'sarah.vitals.analysis.v1' }), false);
 });

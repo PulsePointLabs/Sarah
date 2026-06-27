@@ -3,6 +3,7 @@ import { getEntity, listEntities, upsertEntity } from '../db.js';
 import { aiInvokeInternal } from './internalAi.js';
 import {
   buildVitalsAnalysisPrompt,
+  isCurrentVitalsAnalysis,
   VITALS_ANALYSIS_SCHEMA,
   wrapVitalsAnalysis,
 } from '../services/sarahVsVitalsAnalysis.js';
@@ -47,7 +48,7 @@ function summarizeTransfer(payload = {}) {
   if (hr.averageBpm != null) pieces.push(`avg HR ${Math.round(Number(hr.averageBpm))}`);
   if (hr.maxBpm != null) pieces.push(`max HR ${hr.maxBpm}`);
   if (hrv.rmssdMs != null) pieces.push(`RMSSD ${Number(hrv.rmssdMs).toFixed(1)} ms`);
-  if (events.length) pieces.push(`${events.length} session events`);
+  if (events.length) pieces.push(`${events.length} recorded events`);
   if (bp || sessionBp) pieces.push(`latest BP ${(bp || sessionBp).systolic}/${(bp || sessionBp).diastolic}`);
   return pieces.length ? pieces.join(' · ') : cleanText(payload.humanSummary, 'SarahVS vitals summary received.');
 }
@@ -65,7 +66,7 @@ function publicTransfer(row = {}) {
     latest_session_started_at_utc: row.latest_session_started_at_utc,
     summary: row.summary,
     payload: row.payload,
-    analysis: row.analysis || null,
+    analysis: isCurrentVitalsAnalysis(row.analysis) ? row.analysis : null,
   };
 }
 
@@ -119,7 +120,7 @@ sarahVsRouter.post('/vitals/:id/analyze', async (req, res) => {
   const transferId = req.params.id;
   const transfer = getEntity('SarahVsVitalsTransfer', transferId);
   if (!transfer) return res.status(404).json({ error: 'SarahVS transfer was not found.' });
-  if (transfer.analysis) {
+  if (isCurrentVitalsAnalysis(transfer.analysis)) {
     return res.json({ ok: true, cached: true, analysis: transfer.analysis });
   }
 
