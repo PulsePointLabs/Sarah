@@ -99,6 +99,7 @@ Provenance boundary:
 - Mention sexual activity only when an event note explicitly says it occurred, and then attribute it to the user's note rather than to observation.
 
 Requirements:
+- Address the user only as "you" and "your". Never write "Ben", "Ben's", "he", "him", or "his" in any returned field.
 - Explain the overall cardiovascular arc in plain English.
 - Call out notable peaks, recoveries, sustained changes, and event-linked changes using timestamps or elapsed times.
 - Include blood-pressure context with MAP and pulse pressure when present.

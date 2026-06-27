@@ -60,6 +60,7 @@ test('vital analysis prompt requires cautious event-linked interpretation', () =
   assert.match(prompt, /Do not invent ECG findings/i);
   assert.match(prompt, /not evidence that a PulsePoint sexual/i);
   assert.match(prompt, /user-entered context only/i);
+  assert.match(prompt, /Address the user only as "you" and "your"/i);
   assert.match(prompt, /spell out numbers and durations/i);
   assert.match(prompt, /Walked upstairs/);
 });

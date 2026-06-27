@@ -20,3 +20,9 @@ test("formatVitalSignsSpeech expands vital-sign measurements and clock times", (
   assert.match(result, /sixteen thousand two hundred forty-one R R intervals/i);
   assert.doesNotMatch(result, /\d/);
 });
+
+test("formatVitalSignsSpeech keeps Sarah's read in second person", () => {
+  const result = formatVitalSignsSpeech("Ben's heart rate stayed elevated. Ben was active, and Ben has a documented baseline.");
+  assert.equal(result, "Your heart rate stayed elevated. You were active, and you have a documented baseline.");
+  assert.doesNotMatch(result, /\bBen\b/i);
+});

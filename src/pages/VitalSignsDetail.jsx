@@ -16,6 +16,7 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -23,6 +24,7 @@ import {
   YAxis,
 } from "recharts";
 import TTSReader from "@/components/TTSReader";
+import { useChartZoom } from "@/hooks/useChartZoom";
 import { apiUrl } from "@/lib/mobileApiBase";
 import { formatDurationWords, formatVitalSignsSpeech } from "@/lib/vitalSignsSpeech";
 
@@ -73,46 +75,99 @@ function Section({ title, icon: Icon, children, className = "" }) {
 }
 
 function HeartRateChart({ rows, events }) {
-  if (!rows.length) return <p className="text-sm text-muted-foreground">No heart-rate trend was included in this transfer.</p>;
-  const data = rows.map((row) => ({
+  const data = useMemo(() => rows.map((row) => ({
     ...row,
     elapsed: number(row.elapsedSeconds) || 0,
-    label: fmtElapsed(row.elapsedSeconds),
     hr: number(row.heartRateBpm),
     smooth: number(row.smoothedBpm),
-  }));
-  const markerLabels = events.map((event) => {
-    const elapsed = number(event.elapsedSeconds);
-    if (elapsed == null) return null;
-    return data.reduce((closest, row) => (
-      Math.abs(row.elapsed - elapsed) < Math.abs(closest.elapsed - elapsed) ? row : closest
-    ), data[0])?.label;
-  }).filter(Boolean);
+  })).sort((a, b) => a.elapsed - b.elapsed), [rows]);
+  const dataMin = data[0]?.elapsed ?? 0;
+  const dataMax = data[data.length - 1]?.elapsed ?? dataMin;
+  const { zoomDomain, resetZoom, selectRange, chartProps, wrapperProps } = useChartZoom(dataMin, dataMax);
+  const visibleEvents = useMemo(() => {
+    const start = zoomDomain?.x1 ?? dataMin;
+    const end = zoomDomain?.x2 ?? dataMax;
+    return events
+      .filter((event) => {
+        const elapsed = number(event.elapsedSeconds);
+        return elapsed != null && elapsed >= start && elapsed <= end;
+      })
+      .sort((a, b) => number(a.elapsedSeconds) - number(b.elapsedSeconds));
+  }, [dataMax, dataMin, events, zoomDomain]);
+
+  if (!data.length) return <p className="text-sm text-muted-foreground">No heart-rate trend was included in this transfer.</p>;
   return (
-    <div className="h-72 w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 8, right: 10, bottom: 6, left: -12 }}>
-          <CartesianGrid strokeDasharray="3 4" stroke="hsl(var(--border))" opacity={0.45} />
-          <XAxis dataKey="label" minTickGap={42} tick={{ fontSize: 10 }} />
-          <YAxis domain={["dataMin - 8", "dataMax + 8"]} tick={{ fontSize: 10 }} width={42} />
-          <Tooltip
-            labelFormatter={(_label, entries = []) => entries?.[0]?.payload?.timestampUtc ? fmtDateTime(entries[0].payload.timestampUtc) : ""}
-            formatter={(value, name) => [`${Math.round(Number(value))} bpm`, name === "hr" ? "Heart rate" : "Smoothed"]}
-          />
-          <Legend formatter={(value) => value === "hr" ? "Heart rate" : "Smoothed"} />
-          {markerLabels.map((label, index) => (
-            <ReferenceLine
-              key={`${label}-${index}`}
-              x={label}
-              stroke="hsl(var(--chart-4))"
-              strokeDasharray="3 3"
-              ifOverflow="extendDomain"
+    <div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm">
+        <span className="text-muted-foreground">
+          {zoomDomain ? `Zoomed ${fmtElapsed(zoomDomain.x1)} to ${fmtElapsed(zoomDomain.x2)}` : `Full recording · ${fmtElapsed(dataMax)}`}
+        </span>
+        {zoomDomain && (
+          <button type="button" onClick={resetZoom} className="rounded-md border border-border bg-background px-3 py-1.5 font-semibold text-primary">
+            Reset zoom
+          </button>
+        )}
+      </div>
+      <div className="h-72 w-full select-none" {...wrapperProps}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 8, right: 10, bottom: 6, left: -12 }} {...chartProps}>
+            <CartesianGrid strokeDasharray="3 4" stroke="hsl(var(--border))" opacity={0.45} />
+            <XAxis
+              dataKey="elapsed"
+              type="number"
+              domain={zoomDomain ? [zoomDomain.x1, zoomDomain.x2] : [dataMin, dataMax]}
+              tickFormatter={fmtElapsed}
+              minTickGap={42}
+              tick={{ fontSize: 10 }}
+              allowDataOverflow
             />
-          ))}
-          <Line type="linear" dataKey="hr" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} isAnimationActive={false} />
-          <Line type="monotone" dataKey="smooth" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
-        </LineChart>
-      </ResponsiveContainer>
+            <YAxis domain={["dataMin - 8", "dataMax + 8"]} tick={{ fontSize: 10 }} width={42} />
+            <Tooltip
+              labelFormatter={(elapsed, entries = []) => {
+                const timestamp = entries?.[0]?.payload?.timestampUtc;
+                return `${fmtElapsed(elapsed)}${timestamp ? ` · ${fmtDateTime(timestamp)}` : ""}`;
+              }}
+              formatter={(value, name) => [`${Math.round(Number(value))} bpm`, name === "hr" ? "Heart rate" : "Smoothed"]}
+            />
+            <Legend formatter={(value) => value === "hr" ? "Heart rate" : "Smoothed"} />
+            {visibleEvents.map((event, index) => (
+              <ReferenceLine
+                key={event.markerId || `${event.timestampUtc}-${index}`}
+                x={number(event.elapsedSeconds)}
+                stroke="hsl(var(--chart-4))"
+                strokeDasharray="3 3"
+                ifOverflow="extendDomain"
+              />
+            ))}
+            {selectRange && <ReferenceArea x1={selectRange.x1} x2={selectRange.x2} fill="hsl(var(--primary))" fillOpacity={0.14} />}
+            <Line type="linear" dataKey="hr" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} isAnimationActive={false} />
+            <Line type="monotone" dataKey="smooth" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="mt-4 border-t border-border pt-4">
+        <h3 className="text-sm font-bold text-foreground">Events in {zoomDomain ? "zoom window" : "full recording"}</h3>
+        {visibleEvents.length ? (
+          <div className="mt-3 space-y-3">
+            {visibleEvents.map((event, index) => {
+              const eventHr = event.heartRateAtEvent || {};
+              return (
+                <article key={event.markerId || `${event.timestampUtc}-${index}`} className="rounded-lg border border-border bg-background p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="font-semibold text-foreground">{event.label || event.type || "Event"}</p>
+                    <span className="shrink-0 font-mono text-xs text-primary">{fmtElapsed(event.elapsedSeconds)}</span>
+                  </div>
+                  {event.note && <p className="mt-2 text-sm leading-relaxed text-foreground/90">{event.note}</p>}
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    HR {eventHr.currentBpm ?? "--"} · average {eventHr.averageBpmSoFar != null ? Math.round(number(eventHr.averageBpmSoFar)) : "--"} · max {eventHr.maxBpmSoFar ?? "--"}
+                  </p>
+                </article>
+              );
+            })}
+          </div>
+        ) : <p className="mt-2 text-sm text-muted-foreground">No events fall inside this window.</p>}
+      </div>
     </div>
   );
 }
@@ -361,9 +416,8 @@ export default function VitalSignsDetail() {
       ...(transfer?.analysis ? [{ kind: "analysis", text: buildAnalysisNarration(transfer.analysis) }] : []),
       {
         kind: "heart",
-        text: `Heart-rate timeline. ${trend.length} trend points span this session. Baseline ${hr.baselineBpm ?? "unavailable"}, average ${hr.averageBpm != null ? Math.round(number(hr.averageBpm)) : "unavailable"}, maximum ${hr.maxBpm ?? "unavailable"}, and final ${hr.finalBpm ?? "unavailable"} beats per minute.`,
+        text: `Heart-rate timeline. ${trend.length} trend points span this session. Baseline ${hr.baselineBpm ?? "unavailable"}, average ${hr.averageBpm != null ? Math.round(number(hr.averageBpm)) : "unavailable"}, maximum ${hr.maxBpm ?? "unavailable"}, and final ${hr.finalBpm ?? "unavailable"} beats per minute. Exact event timeline. ${eventNarration}`,
       },
-      { kind: "events", text: `Event timeline. ${eventNarration}` },
       { kind: "pressure", text: `Blood pressure. ${pressureNarration}` },
       {
         kind: "quality",
@@ -444,32 +498,8 @@ export default function VitalSignsDetail() {
             if (item.kind === "heart") return (
               <div className={stateClass}>
                 <Section title="Heart-rate timeline" icon={Activity}>
-                  <p className="mb-3 text-sm text-muted-foreground">Pink is measured HR, blue is the smoothed trend, and gold markers identify documented events.</p>
+                  <p className="mb-3 text-sm text-muted-foreground">Pink is measured HR, blue is the smoothed trend, and gold markers identify documented events. Drag across the graph to zoom.</p>
                   <HeartRateChart rows={trend} events={events} />
-                </Section>
-              </div>
-            );
-            if (item.kind === "events") return (
-              <div className={stateClass}>
-                <Section title="Event timeline" icon={Clock3}>
-                  {events.length ? (
-                    <div className="max-h-[34rem] space-y-3 overflow-y-auto pr-1">
-                      {events.map((event, eventIndex) => {
-                        const eventHr = event.heartRateAtEvent || {};
-                        return (
-                          <article key={event.markerId || `${event.timestampUtc}-${eventIndex}`} className="rounded-lg border border-border bg-card p-3">
-                            <div className="flex items-start justify-between gap-3">
-                              <p className="font-semibold text-foreground">{event.label || event.type || "Event"}</p>
-                              <span className="shrink-0 font-mono text-xs text-primary">{fmtElapsed(event.elapsedSeconds)}</span>
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">{fmtDateTime(event.timestampUtc)}</p>
-                            {event.note && <p className="mt-2 text-sm leading-relaxed text-foreground/90">{event.note}</p>}
-                            <p className="mt-2 text-xs text-muted-foreground">HR {eventHr.currentBpm ?? "--"} · average {eventHr.averageBpmSoFar != null ? Math.round(number(eventHr.averageBpmSoFar)) : "--"} · max {eventHr.maxBpmSoFar ?? "--"}</p>
-                          </article>
-                        );
-                      })}
-                    </div>
-                  ) : <p className="text-sm text-muted-foreground">No event notes were included.</p>}
                 </Section>
               </div>
             );

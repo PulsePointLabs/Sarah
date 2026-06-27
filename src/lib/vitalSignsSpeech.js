@@ -60,6 +60,18 @@ export function formatVitalSignsSpeech(value) {
   if (!text) return text;
 
   text = text
+    .replace(/(^|[.!?]\s+)Ben['’]s\b/g, "$1Your")
+    .replace(/(^|[.!?]\s+)Ben is\b/g, "$1You are")
+    .replace(/(^|[.!?]\s+)Ben was\b/g, "$1You were")
+    .replace(/(^|[.!?]\s+)Ben has\b/g, "$1You have")
+    .replace(/(^|[.!?]\s+)Ben had\b/g, "$1You had")
+    .replace(/\bBen['’]s\b/gi, "your")
+    .replace(/\bBen is\b/gi, "you are")
+    .replace(/\bBen was\b/gi, "you were")
+    .replace(/\bBen has\b/gi, "you have")
+    .replace(/\bBen had\b/gi, "you had")
+    .replace(/\bBen\b/gi, "you")
+    .replace(/\bhis\b/gi, "your")
     .replace(/\b(\d{1,2}):(\d{2})\s*(ET|Eastern Time)\b/gi, (_match, hours, minutes, zone) => formatClockWords(hours, minutes, zone))
     .replace(/\b(\d{1,3})\s*\/\s*(\d{1,3})\s*(?:mm\s*Hg|mmHg)\b/gi, (_match, systolic, diastolic) => `${numberToSpokenWords(systolic)} over ${numberToSpokenWords(diastolic)} millimeters of mercury`)
     .replace(/~\s*(\d+(?:\.\d+)?)\s*(?:min|minutes?)\b/gi, (_match, amount) => `approximately ${numberToSpokenWords(amount)} minutes`)
