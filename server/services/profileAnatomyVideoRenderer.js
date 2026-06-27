@@ -1124,6 +1124,43 @@ function assignmentMetadataForImage(image = {}, score = 0, reason = '', targetKe
   };
 }
 
+function isValidatedPreferredEvidenceAllowedForSection(image = {}, section = {}, reviewScope = '') {
+  const imageSectionKey = normalizeText(image.sectionKey || '').replace(/\s+/g, '_');
+  const sectionKey = normalizeText(section.section_key || '').replace(/\s+/g, '_');
+  if (!imageSectionKey || !sectionKey || imageSectionKey !== sectionKey) return false;
+
+  const targetKey = section.target_region || 'overview';
+  if (reviewScope === 'pelvic_genital' && !PELVIC_GENITAL_REVIEW_ALLOWED_REGIONS.has(targetKey)) return false;
+
+  const imageRegions = regionKeysForImage(image);
+  const forbidden = STRICT_FORBIDDEN_IMAGE_REGIONS.get(targetKey) || new Set();
+  const hasTargetRegion = targetKey === 'overview' || imageRegions.has(targetKey);
+  if ([...forbidden].some((key) => imageRegions.has(key)) && !hasTargetRegion) return false;
+
+  const meta = {
+    section_key: section.section_key,
+    section_label: section.section_title,
+  };
+  // Validate against the section identity, not callout prose that may describe
+  // what the image is not supposed to represent.
+  const requested = requestedStrictFineStructureKeys(meta, '');
+  const directlyVisible = directFineStructureKeysForImage(image);
+  const requestedAnatomy = new Set([...requested].filter((key) => !DEVICE_STRUCTURE_KEYS.has(key)));
+  const visibleAnatomy = new Set([...directlyVisible].filter((key) => !DEVICE_STRUCTURE_KEYS.has(key)));
+  if (requestedAnatomy.size && visibleAnatomy.size && ![...requestedAnatomy].some((key) => visibleAnatomy.has(key))) {
+    return false;
+  }
+
+  if (
+    isDeviceHeavyImage(image)
+    && !sectionRequestsDevice(meta, section.narration_text)
+    && !requestedAnatomy.size
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export function createReviewEvidenceManifest({
   reviewId = '',
   title = 'Profile Anatomy Video',
@@ -1159,15 +1196,25 @@ export function createReviewEvidenceManifest({
         candidate,
         image: images.find((image) => image.id === candidate.id),
       }))
-      .filter((entry) => entry.image && entry.candidate.score > 0)
-      .filter((entry) => isImageAllowedForManifestSection(entry.image, section.target_region, reviewScope, meta, section.narration_text))
+      .filter((entry) => entry.image && (entry.candidate.score > 0 || preferredEvidenceIds.has(entry.image.id)))
+      .filter((entry) => {
+        const isPreferred = preferredEvidenceIds.has(entry.image.id);
+        const hasExactSectionAssociation = normalizeText(entry.image.sectionKey || '').replace(/\s+/g, '_')
+          === normalizeText(section.section_key || '').replace(/\s+/g, '_');
+        if (isPreferred && hasExactSectionAssociation) {
+          return isValidatedPreferredEvidenceAllowedForSection(entry.image, section, reviewScope);
+        }
+        return isImageAllowedForManifestSection(entry.image, section.target_region, reviewScope, meta, section.narration_text);
+      })
       .map((entry) => {
         const imageId = entry.image?.id || entry.candidate?.id || '';
         const useCount = imageId ? (evidenceUseCounts.get(imageId) || 0) : 0;
         const repeatPenalty = useCount * (reviewScope === 'pelvic_genital' ? 135 : 105);
         return {
           ...entry,
-          adjustedScore: entry.candidate.score - repeatPenalty + (preferredEvidenceIds.has(imageId) ? 1000 : 0),
+          adjustedScore: preferredEvidenceIds.has(imageId)
+            ? 1000 - repeatPenalty
+            : entry.candidate.score - repeatPenalty,
           repeatPenalty,
           explicitlyPreferred: preferredEvidenceIds.has(imageId),
         };

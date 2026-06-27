@@ -103,6 +103,59 @@ test('validated visual callout image stays synchronized with its measured narrat
   assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
 });
 
+test('validated preferred evidence survives generic upload labeling for its exact anatomy section', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'validated-generic-penis-reference',
+    title: 'Pelvic/Genital Anatomy Video',
+    reviewScope: 'pelvic_genital',
+    paragraphs: ['Penis', 'Your penile shaft skin remains intact.', 'Clinical reference view.'],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'penis', section_label: 'Penis' },
+      { type: 'paragraph', section_key: 'penis', section_label: 'Penis' },
+      { type: 'visual-callout', section_key: 'penis', section_label: 'Penis', evidence_image_ids: ['validated-penis'] },
+    ],
+    images: [{
+      id: 'validated-penis',
+      display_label: 'Clinical reference view',
+      sectionKey: 'penis',
+      section: 'Penis',
+      url: '/uploads/validated-penis.jpg',
+      source: 'profile_review',
+    }],
+  });
+
+  const calloutSection = manifest.sections.find((section) => section.preferred_evidence_ids?.includes('validated-penis'));
+  assert.ok(calloutSection);
+  assert.deepEqual(calloutSection.explicitly_assigned_evidence_ids, ['validated-penis']);
+  assert.equal(validateReviewEvidenceManifest(manifest), true);
+});
+
+test('validated preferred evidence still rejects an explicitly conflicting fine structure', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'validated-conflicting-reference',
+    title: 'Pelvic/Genital Anatomy Video',
+    reviewScope: 'pelvic_genital',
+    paragraphs: ['Foreskin', 'Your foreskin remains fully retractable.', 'Perineum close-up.'],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'foreskin', section_label: 'Foreskin' },
+      { type: 'paragraph', section_key: 'foreskin', section_label: 'Foreskin' },
+      { type: 'visual-callout', section_key: 'foreskin', section_label: 'Foreskin', evidence_image_ids: ['wrong-perineum'] },
+    ],
+    images: [{
+      id: 'wrong-perineum',
+      display_label: 'Perineum close-up',
+      sectionKey: 'foreskin',
+      section: 'Foreskin',
+      url: '/uploads/wrong-perineum.jpg',
+      source: 'profile_review',
+    }],
+  });
+
+  const calloutSection = manifest.sections.find((section) => section.preferred_evidence_ids?.includes('wrong-perineum'));
+  assert.ok(calloutSection);
+  assert.deepEqual(calloutSection.explicitly_assigned_evidence_ids, []);
+});
+
 const images = [
   {
     id: 'head-face-current',

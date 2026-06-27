@@ -428,8 +428,9 @@ export function createJob(type, payload = {}, meta = {}) {
   jobs.set(id, job);
   saveJob(job);
   enqueueJob(job);
-  // Let the HTTP response containing the new job ID flush before heavy handlers run.
-  setImmediate(runNext);
+  // Give the HTTP 202 containing the new job ID time to flush before heavy handlers run.
+  // setImmediate can run before a slow mobile socket has actually received the response.
+  setTimeout(runNext, 150);
   return publicJob(job);
 }
 
