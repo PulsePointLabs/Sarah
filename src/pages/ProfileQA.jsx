@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { AlertCircle, ArrowLeft, ClipboardList, Loader2, MessageCircle, RefreshCw } from "lucide-react";
+import { AlertCircle, ClipboardList, Loader2, RefreshCw } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import AIChat from "@/components/AIChat";
@@ -94,7 +94,7 @@ export default function ProfileQA() {
 
         setProfile(hydratedProfile);
         setChatMessages(savedChatMessages);
-        setLoadState({ step: PROFILE_QA_LOAD_STEPS.length, message: "Profile Q&A ready", error: "" });
+        setLoadState({ step: PROFILE_QA_LOAD_STEPS.length, message: "Chat with Sarah is ready", error: "" });
         if (!savedQaFindings.length && importedQaFindings.length && !imageReviewBackfills.length) {
           base44.auth.updateMe({ profile_qa_findings: importedQaFindings }).catch(() => {});
         }
@@ -129,7 +129,7 @@ export default function ProfileQA() {
               {loadState.error ? <AlertCircle className="h-5 w-5" /> : <Loader2 className="h-5 w-5 animate-spin" />}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold uppercase tracking-wider text-primary">Profile Q&A</p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-primary">Chat with Sarah</p>
               <h1 className="mt-1 text-lg font-semibold">{loadState.error ? "Could not load Sarah chat" : loadState.message}</h1>
               <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                 {loadState.error
@@ -184,25 +184,7 @@ export default function ProfileQA() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 px-4 py-6 pb-24 sm:px-6 lg:px-8">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="max-w-3xl">
-          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-primary">Sarah interview workspace</p>
-          <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
-            <MessageCircle className="h-6 w-6 text-primary" /> Profile Q&A with Sarah
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            A dedicated place for the ongoing profile interview, image/video review, and saved Q&A findings.
-          </p>
-        </div>
-        <Button asChild variant="outline" className="shrink-0 gap-2">
-          <Link to="/profile">
-            <ArrowLeft className="h-4 w-4" />
-            Back to Profile
-          </Link>
-        </Button>
-      </div>
-
+    <div className="mx-auto max-w-6xl space-y-4 px-3 py-3 pb-24 sm:px-6 sm:py-5 lg:px-8">
       <AIChat
         mode="profile"
         userProfile={profile}
@@ -231,7 +213,7 @@ export default function ProfileQA() {
         >
           <div>
             <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
-              <ClipboardList className="h-3.5 w-3.5" /> Saved Profile Q&A Findings
+              <ClipboardList className="h-3.5 w-3.5" /> Saved Chat Findings
             </h2>
             <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
               Each finding is deduped, timestamped, and kept separate from the freeform arousal notes.

@@ -1,6 +1,6 @@
 import { useCallback, useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
-import { Send, ChevronDown, ChevronUp, Save, RefreshCw, Mic, MicOff, Volume2, VolumeX, Copy, Check, Maximize2, Minimize2, Paperclip, X, Image as ImageIcon, Film } from "lucide-react";
+import { ArrowLeft, Send, ChevronDown, ChevronUp, Save, RefreshCw, Mic, MicOff, Volume2, VolumeX, Copy, Check, Maximize2, Paperclip, X, Image as ImageIcon, Film } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
@@ -1824,26 +1824,26 @@ Return a conversational answer plus structured findings for review/persistence.`
     return "border-accent/30 bg-accent/10 text-accent";
   };
   const panelClass = fullScreen
-    ? "fixed inset-0 z-50 flex flex-col overflow-hidden border-0 bg-background text-foreground"
+    ? "fixed inset-0 z-[100] flex flex-col overflow-hidden border-0 bg-[#f7f5fa] text-foreground dark:bg-[#0b0e14]"
     : "border border-border rounded-xl overflow-hidden";
   const bodyClass = fullScreen
-    ? "flex min-h-0 flex-1 flex-col gap-3 p-3 sm:p-5"
+    ? "flex min-h-0 flex-1 flex-col"
     : "p-3 space-y-3";
   const threadClass = fullScreen
-    ? "flex min-h-0 flex-1 basis-0 flex-col gap-2 overflow-y-auto border-t border-border px-1 pt-3 sm:px-3"
+    ? "flex min-h-0 flex-1 basis-0 flex-col gap-3 overflow-y-auto px-3 py-4 sm:px-6"
     : "min-h-[36rem] max-h-[70vh] space-y-2 overflow-y-auto pr-1 border-t border-border pt-2";
   const messageClass = (role) => `group relative rounded-2xl px-3 py-2 text-sm leading-relaxed shadow-sm ${
-    fullScreen ? "max-w-[min(78%,52rem)] sm:text-[15px]" : "max-w-[85%]"
+    fullScreen ? "max-w-[84%] sm:max-w-[min(76%,46rem)] sm:px-4 sm:py-3 sm:text-[15px]" : "max-w-[85%]"
   } ${
     role === "user"
       ? "bg-primary text-primary-foreground rounded-br-md"
-      : "bg-muted/70 text-foreground rounded-bl-md cursor-pointer"
+      : `${fullScreen ? "border border-border/70 bg-card" : "bg-muted/70"} text-foreground rounded-bl-md cursor-pointer`
   }`;
   const composerClass = fullScreen
-    ? "sticky bottom-0 mt-auto space-y-2 border-t border-border bg-background/95 px-1 py-3 sm:px-3"
+    ? "sticky bottom-0 mt-auto grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 border-t border-border/80 bg-card/95 px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] shadow-[0_-8px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl sm:px-6"
     : "sticky bottom-0 space-y-2 bg-white pt-2 dark:bg-slate-900";
   const textareaClass = fullScreen
-    ? "min-h-24 w-full resize-none rounded-2xl border border-border bg-muted/30 px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 sm:text-base"
+    ? "min-h-11 max-h-32 w-full resize-none rounded-[1.35rem] border border-border bg-muted/35 px-4 py-3 text-sm leading-5 focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 sm:text-base"
     : "w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50";
   const effectiveSendDisabled = (!input.trim() && !selectedImages.length && !selectedVideoClip) || loading || uploadingImages || processingVideoClip;
 
@@ -2246,19 +2246,21 @@ Return a conversational answer plus structured findings for review/persistence.`
         onClick={() => imageInputRef.current?.click()}
         disabled={loading || transcribing || uploadingImages || processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
         title="Attach images for Sarah"
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-all hover:text-foreground disabled:opacity-40"
+        className={`flex h-9 w-9 shrink-0 items-center justify-center bg-muted text-muted-foreground transition-all hover:text-foreground disabled:opacity-40 ${fullScreen ? "rounded-full" : "rounded-lg"}`}
       >
         <Paperclip className="h-4 w-4" />
       </button>
-      <button
-        type="button"
-        onClick={() => videoInputRef.current?.click()}
-        disabled={loading || transcribing || uploadingImages || processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
-        title="Select a local video clip for Sarah"
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-all hover:text-foreground disabled:opacity-40"
-      >
-        <Film className="h-4 w-4" />
-      </button>
+      {!fullScreen && (
+        <button
+          type="button"
+          onClick={() => videoInputRef.current?.click()}
+          disabled={loading || transcribing || uploadingImages || processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
+          title="Select a local video clip for Sarah"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-all hover:text-foreground disabled:opacity-40"
+        >
+          <Film className="h-4 w-4" />
+        </button>
+      )}
     </>
   );
 
@@ -2270,7 +2272,7 @@ Return a conversational answer plus structured findings for review/persistence.`
         onClick={recording ? stopRecording : startRecording}
         disabled={loading || transcribing || uploadingImages}
         title={recording ? "Stop recording" : "Tap to dictate"}
-        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-all disabled:opacity-40 ${recording ? "bg-destructive text-destructive-foreground animate-pulse" : "bg-muted text-muted-foreground hover:text-foreground"}`}
+        className={`flex h-9 w-9 shrink-0 items-center justify-center transition-all disabled:opacity-40 ${fullScreen ? "rounded-full" : "rounded-lg"} ${recording ? "bg-destructive text-destructive-foreground animate-pulse" : "bg-muted text-muted-foreground hover:text-foreground"}`}
       >
         {transcribing
           ? <span className="h-3.5 w-3.5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
@@ -2280,7 +2282,7 @@ Return a conversational answer plus structured findings for review/persistence.`
         type="button"
         onClick={sendMessage}
         disabled={effectiveSendDisabled}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
+        className={`flex h-9 w-9 shrink-0 items-center justify-center bg-primary text-primary-foreground transition-opacity disabled:opacity-40 ${fullScreen ? "rounded-full" : "rounded-lg"}`}
       >
         {uploadingImages || processingVideoClip ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" /> : <Send className="h-4 w-4" />}
       </button>
@@ -2300,7 +2302,17 @@ Return a conversational answer plus structured findings for review/persistence.`
   return (
     <div className={panelClass}>
       {/* Header */}
-      <div className={`flex items-center gap-2 bg-muted/40 px-4 py-3 text-left ${fullScreen ? "border-b border-border" : ""}`}>
+      <div className={`flex items-center gap-2 text-left ${fullScreen ? "shrink-0 border-b border-border/80 bg-card/95 px-3 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] shadow-sm backdrop-blur-xl sm:px-6" : "bg-muted/40 px-4 py-3"}`}>
+        {fullScreen && (
+          <button
+            type="button"
+            onClick={() => setFullScreen(false)}
+            title="Return to Chat with Sarah"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+        )}
         <button
           type="button"
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
@@ -2309,11 +2321,14 @@ Return a conversational answer plus structured findings for review/persistence.`
             open ? setOpen(false) : handleOpen();
           }}
         >
-          <SarahAvatar className="h-8 w-8" />
-          <span className="truncate text-xs font-semibold text-foreground">
-            {mode === "profile" ? "Sarah Profile Chat" : "Sarah Session Chat"}
+          <SarahAvatar className={fullScreen ? "h-10 w-10" : "h-8 w-8"} />
+          <span className="min-w-0 flex-1">
+            <span className={`block truncate font-semibold text-foreground ${fullScreen ? "text-base" : "text-xs"}`}>
+              {fullScreen ? "Sarah" : mode === "profile" ? "Chat with Sarah" : "Sarah Session Chat"}
+            </span>
+            {fullScreen && <span className="block truncate text-[11px] text-muted-foreground">{mode === "profile" ? "Profile chat · autosaved" : "Session chat · autosaved"}</span>}
           </span>
-          {hasMessages && (
+          {hasMessages && !fullScreen && (
             <span className="shrink-0 text-[10px] text-muted-foreground">{messages.length} msg{messages.length !== 1 ? "s" : ""}</span>
           )}
         </button>
@@ -2328,17 +2343,17 @@ Return a conversational answer plus structured findings for review/persistence.`
               : <VolumeX className="w-4 h-4 text-muted-foreground" />}
           </button>
         )}
-        {open && (
+        {open && !fullScreen && (
           <button
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              fullScreen ? setFullScreen(false) : openFullScreen();
+              openFullScreen();
             }}
-            title={fullScreen ? "Exit full screen" : "Open full screen"}
+            title="Open full screen"
             className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-black/10 hover:text-foreground"
           >
-            {fullScreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            <Maximize2 className="h-4 w-4" />
           </button>
         )}
         {!fullScreen && (
@@ -2355,7 +2370,7 @@ Return a conversational answer plus structured findings for review/persistence.`
 
       {open && (
         <div className={bodyClass}>
-          {!fullScreen && (
+          {!fullScreen && mode !== "profile" && (
             <p className="text-[11px] text-muted-foreground">
               {mode === "profile"
                 ? "Start a conversation about your physiology and arousal. Findings save automatically to your profile Q&A."
@@ -2365,22 +2380,24 @@ Return a conversational answer plus structured findings for review/persistence.`
 
           {/* Message thread or input prompt */}
           {messages.length === 0 ? (
-            <div className={`${fullScreen ? "mx-auto mt-auto w-full max-w-4xl pb-4" : ""} space-y-2`}>
+            <div className={fullScreen ? "mt-auto w-full" : "space-y-2"}>
               {renderSavedVideoClips()}
               {renderSelectedImages()}
               {imageError && <p className="text-xs text-destructive">{imageError}</p>}
               {renderChatProcessingStatus()}
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMessage())}
-                placeholder={transcribing ? "Transcribing…" : recording ? "Recording… tap mic to stop" : `Tell Sarah something about your ${mode === "profile" ? "physiology" : "session"}…`}
-                disabled={loading || transcribing || uploadingImages}
-                rows={3}
-                className={textareaClass}
-              />
-              {renderComposerControls()}
+              <div className={fullScreen ? composerClass : "space-y-2"}>
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMessage())}
+                  placeholder={transcribing ? "Transcribing…" : recording ? "Recording… tap mic to stop" : `Tell Sarah something about your ${mode === "profile" ? "physiology" : "session"}…`}
+                  disabled={loading || transcribing || uploadingImages}
+                  rows={fullScreen ? 1 : 3}
+                  className={textareaClass}
+                />
+                {renderComposerControls()}
+              </div>
             </div>
           ) : (
             <div className={threadClass}>
@@ -2494,9 +2511,9 @@ Return a conversational answer plus structured findings for review/persistence.`
                     onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMessage())}
                     placeholder={transcribing ? "Transcribing…" : recording ? "Recording… tap mic to stop" : "Type or speak your response…"}
                     disabled={loading || transcribing || uploadingImages}
-                    rows={5}
-                    className={textareaClass}
-                  />
+                  rows={fullScreen ? 1 : 5}
+                  className={textareaClass}
+                />
                 {renderComposerControls()}
               </div>
               </div>

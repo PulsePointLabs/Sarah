@@ -886,7 +886,7 @@ export default function Profile() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
-              <MessageCircle className="h-3.5 w-3.5" /> Profile Q&A with Sarah
+              <MessageCircle className="h-3.5 w-3.5" /> Chat with Sarah
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
               The interview chat and saved findings now live on their own page, keeping this profile form focused.
@@ -898,7 +898,7 @@ export default function Profile() {
           <Button asChild className="shrink-0 gap-2">
             <Link to="/profile-qa">
               <MessageCircle className="h-4 w-4" />
-              Open Profile Q&A
+               Open Chat with Sarah
             </Link>
           </Button>
         </div>

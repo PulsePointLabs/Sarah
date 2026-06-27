@@ -59,7 +59,7 @@ const navGroups = [
     label: "Review & AI",
     items: [
       { path: "/profiler", icon: ScanSearch, label: "AI Profiler" },
-      { path: "/profile-qa", icon: MessageCircle, label: "Profiler QA" },
+      { path: "/profile-qa", icon: MessageCircle, label: "Chat with Sarah" },
       { path: "/ai-annotation", icon: Sparkles, label: "AI Annotation" },
       { path: "/review-player", icon: Clapperboard, label: "Review Player" },
       { path: "/video", icon: Clapperboard, label: "Video Sync" },
