@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Clapperboard, Download, Play, UploadCloud, Video } from "lucide-react";
 import { bloodPressureReadingsFromSession, pulseOxReadingsFromSession } from "@/lib/sessionContext";
+import { handOffVideoPlayToAndroid } from "@/lib/nativeMedia";
 import { videoPosterDataUrl } from "@/lib/videoPoster";
 
 const CHUNK_SIZE = 4 * 1024 * 1024;
@@ -238,6 +239,14 @@ export default function MobileSessionVideoRenderPanel({ session }) {
                 timestamp: renderedCreatedLabel ? `Created ${renderedCreatedLabel}` : "",
               })}
               src={base44.integrations.Core.renderedSessionVideoStreamUrl(rendered.id)}
+              onPlay={(event) => {
+                void handOffVideoPlayToAndroid(event, {
+                  url: base44.integrations.Core.renderedSessionVideoStreamUrl(rendered.id),
+                  title: rendered.filename || "Rendered session video",
+                }).catch((error) => {
+                  console.warn("Native rendered video playback failed:", error);
+                });
+              }}
             />
           </div>
         )}

@@ -8,6 +8,7 @@ import { buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_AN
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { buildAudioChapterBundle } from "@/lib/audioChapters";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { handOffVideoPlayToAndroid } from "@/lib/nativeMedia";
 import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
 import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { readWatermarkSettings } from "@/lib/watermarkSettings";
@@ -1100,6 +1101,14 @@ Answer directly and practically in conversational prose, not markdown. Describe 
             preload="metadata"
             playsInline
             className="aspect-video w-full bg-black object-contain"
+            onPlay={(event) => {
+              void handOffVideoPlayToAndroid(event, {
+                url: activeVideoUrl,
+                title: displayTitle || "Sarah Review Video",
+              }).catch((error) => {
+                console.warn("Native review video playback failed:", error);
+              });
+            }}
             onLoadedMetadata={(event) => setPreviewTime(event.currentTarget.currentTime || 0)}
             onTimeUpdate={(event) => setPreviewTime(event.currentTarget.currentTime || 0)}
             onSeeked={(event) => setPreviewTime(event.currentTarget.currentTime || 0)}

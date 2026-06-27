@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { isNativeMediaPlayerAvailable, openNativeMedia } from "@/lib/nativeMedia";
 import { downloadOrSaveUrl, openAndroidDownloads } from "@/lib/nativeFileSaver";
 import { getBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -554,15 +555,28 @@ export default function Library() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sessionReviewVideos"] }),
   });
 
-  const handlePlay = (export_) => {
+  const handlePlay = async (export_) => {
     if (playingId === export_.id) {
       audioRef?.pause();
       setPlayingId(null);
     } else {
       if (audioRef) audioRef.pause();
-      const audio = new Audio(getAudioUrl(export_));
+      const audioUrl = getAudioUrl(export_);
+      if (isNativeMediaPlayerAvailable() && /^https?:\/\//i.test(audioUrl)) {
+        setAudioRef(null);
+        setPlayingId(null);
+        await openNativeMedia({
+          url: audioUrl,
+          title: cleanDisplayTitle(export_) || "Sarah audio",
+          mimeType: export_?.format
+            ? `audio/${String(export_.format).replace(/^\./, "").replace("mp3", "mpeg")}`
+            : "audio/mpeg",
+        });
+        return;
+      }
+      const audio = new Audio(audioUrl);
       audio.onended = () => setPlayingId(null);
-      audio.play();
+      await audio.play();
       setAudioRef(audio);
       setPlayingId(export_.id);
     }

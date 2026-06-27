@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { handOffVideoPlayToAndroid } from "@/lib/nativeMedia";
 import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
 import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { readWatermarkSettings } from "@/lib/watermarkSettings";
@@ -7653,6 +7654,14 @@ ANNOTATED IMAGE OUTPUT RULES:
                   playsInline
                   preload="metadata"
                   className="block max-h-[34rem] w-full bg-black object-contain"
+                  onPlay={(event) => {
+                    void handOffVideoPlayToAndroid(event, {
+                      url: serverUrl(anatomyVideo.file_url),
+                      title: `${config.shortTitle} Anatomy Video`,
+                    }).catch((error) => {
+                      console.warn("Native anatomy video playback failed:", error);
+                    });
+                  }}
                 />
               </div>
             )}

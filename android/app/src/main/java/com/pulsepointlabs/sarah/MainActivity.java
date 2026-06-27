@@ -8,6 +8,8 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(BloodPressureHealthPlugin.class);
         registerPlugin(SarahFileSaverPlugin.class);
+        registerPlugin(SarahBackgroundJobsPlugin.class);
+        registerPlugin(SarahMediaPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

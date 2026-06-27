@@ -1,4 +1,5 @@
 import { apiUrl, discoverSarahApiBase, isSarahNativeShell } from "@/lib/mobileApiBase";
+import { trackNativeBackgroundJob } from "@/lib/nativeBackgroundJobs";
 
 const START_RECOVERY_WINDOW_MS = 4 * 60 * 1000;
 
@@ -140,9 +141,16 @@ export function startBackgroundJob(type, payload = {}, meta = {}) {
     throw error;
   };
 
+  const trackAcceptedJob = (request) => request.then((job) => {
+    void trackNativeBackgroundJob(job, enrichedMeta).catch((error) => {
+      console.warn("Native background job tracking was unavailable:", error);
+    });
+    return job;
+  });
+
   if (!isSarahNativeShell()) return startRequest().catch(recoverAfterTimeout);
 
-  return startRequest({ skipApiDiscovery: true }).catch(async (firstError) => {
+  return trackAcceptedJob(startRequest({ skipApiDiscovery: true }).catch(async (firstError) => {
     const recovered = await recoverAfterTimeout(firstError).catch(() => null);
     if (recovered?.id) return recovered;
     try {
@@ -156,7 +164,7 @@ export function startBackgroundJob(type, payload = {}, meta = {}) {
       }
       throw error;
     }
-  });
+  }));
 }
 
 export function getBackgroundJob(jobId) {
