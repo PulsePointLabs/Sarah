@@ -428,7 +428,8 @@ export function createJob(type, payload = {}, meta = {}) {
   jobs.set(id, job);
   saveJob(job);
   enqueueJob(job);
-  queueMicrotask(runNext);
+  // Let the HTTP response containing the new job ID flush before heavy handlers run.
+  setImmediate(runNext);
   return publicJob(job);
 }
 
@@ -476,7 +477,7 @@ export function retryJob(id, { priority } = {}) {
   jobs.set(job.id, job);
   enqueueJob(job);
   saveJob(job);
-  queueMicrotask(runNext);
+  setImmediate(runNext);
   return publicJob(job);
 }
 

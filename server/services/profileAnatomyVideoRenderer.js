@@ -2144,7 +2144,11 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
 
     const payloadImages = Array.isArray(payload.images) ? payload.images : [];
     const reviewScope = reviewScopeFromPayload(payload);
-    const expandedImages = augmentAnatomyImagesFromDatabase(payload, payloadImages);
+    // The Profiler sends its cumulative evidence library. Avoid reparsing every
+    // archived review on the API thread when that complete set is already here.
+    const expandedImages = payloadImages.length >= 40
+      ? payloadImages
+      : augmentAnatomyImagesFromDatabase(payload, payloadImages);
     const imageItems = safeImageItems(expandedImages);
     if (!imageItems.length) {
       const error = new Error('No review images are available for the anatomy video.');
