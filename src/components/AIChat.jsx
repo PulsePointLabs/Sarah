@@ -8,7 +8,7 @@ import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext } from "@/lib/
 import { extractVisualMediaContextFromConversation } from "@/lib/visualEvidence";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
-import { cleanWhisperTranscript } from "@/utils/whisperTranscript";
+import { finalizeWhisperTranscript } from "@/utils/whisperTranscript";
 import { SarahAvatar } from "@/components/SarahBrand";
 import { SARAH_CLINICAL_REASONING_CALIBRATION_RULE } from "@/utils/clinicalReasoningCalibration";
 
@@ -1379,6 +1379,7 @@ export default function AIChat({
 
   const startRecording = async () => {
     if (recording || transcribing || loading) return;
+    inputRef.current?.blur();
     setImageError("");
     setChatProcessingStatus({
       phase: "processing",
@@ -1447,7 +1448,7 @@ export default function AIChat({
           const base64 = btoa(bin);
           const res = await base44.functions.invoke("whisperSTT", { audio_base64: base64, mime_type: recorderMimeType, prompt: WHISPER_PROMPT });
           const rawText = res.data?.text?.trim() || "";
-          const text = cleanWhisperTranscript(rawText);
+          const text = finalizeWhisperTranscript(rawText);
           if (text) {
             setInput((prev) => (prev ? `${prev} ${text}` : text));
             setChatProcessingStatus(null);
@@ -1461,7 +1462,6 @@ export default function AIChat({
                 : "The recording completed, but Whisper did not return usable text.",
             });
           }
-          setTimeout(() => inputRef.current?.focus(), 100);
         } catch (error) {
           const message = friendlyWhisperError(error);
           setImageError("");
@@ -1840,10 +1840,10 @@ Return a conversational answer plus structured findings for review/persistence.`
       : `${fullScreen ? "border border-border/70 bg-card" : "bg-muted/70"} text-foreground rounded-bl-md cursor-pointer`
   }`;
   const composerClass = fullScreen
-    ? "sticky bottom-0 mt-auto grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 border-t border-border/80 bg-card/95 px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] shadow-[0_-8px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl sm:px-6"
+    ? "w-full shrink-0 border-t border-border/80 bg-card px-3 pt-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] shadow-[0_-8px_24px_rgba(0,0,0,0.06)] sm:px-6"
     : "sticky bottom-0 space-y-2 bg-white pt-2 dark:bg-slate-900";
   const textareaClass = fullScreen
-    ? "min-h-11 max-h-32 w-full resize-none rounded-[1.35rem] border border-border bg-muted/35 px-4 py-3 text-sm leading-5 focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 sm:text-base"
+    ? "min-h-[5.75rem] max-h-40 w-full resize-none rounded-xl border border-border bg-background px-4 py-3 text-sm leading-5 shadow-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 sm:text-base"
     : "w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50";
   const effectiveSendDisabled = (!input.trim() && !selectedImages.length && !selectedVideoClip) || loading || uploadingImages || processingVideoClip;
 
@@ -2265,7 +2265,7 @@ Return a conversational answer plus structured findings for review/persistence.`
   );
 
   const renderComposerControls = () => (
-    <div className="flex items-center justify-end gap-2">
+    <div className={fullScreen ? "mt-2 flex items-center justify-end gap-2" : "flex items-center justify-end gap-2"}>
       {renderAttachButton()}
       <button
         type="button"
@@ -2286,6 +2286,22 @@ Return a conversational answer plus structured findings for review/persistence.`
       >
         {uploadingImages || processingVideoClip ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" /> : <Send className="h-4 w-4" />}
       </button>
+    </div>
+  );
+
+  const renderComposer = (placeholder, compactRows = 5) => (
+    <div className={composerClass}>
+      <textarea
+        ref={inputRef}
+        value={input}
+        onChange={(event) => setInput(event.target.value)}
+        onKeyDown={(event) => event.key === "Enter" && !event.shiftKey && (event.preventDefault(), sendMessage())}
+        placeholder={transcribing ? "Transcribing…" : recording ? "Recording… tap mic to stop" : placeholder}
+        disabled={loading || transcribing || uploadingImages}
+        rows={fullScreen ? 3 : compactRows}
+        className={textareaClass}
+      />
+      {renderComposerControls()}
     </div>
   );
 
@@ -2380,24 +2396,12 @@ Return a conversational answer plus structured findings for review/persistence.`
 
           {/* Message thread or input prompt */}
           {messages.length === 0 ? (
-            <div className={fullScreen ? "mt-auto w-full" : "space-y-2"}>
+            <div className={fullScreen ? threadClass : "space-y-2"}>
               {renderSavedVideoClips()}
               {renderSelectedImages()}
               {imageError && <p className="text-xs text-destructive">{imageError}</p>}
               {renderChatProcessingStatus()}
-              <div className={fullScreen ? composerClass : "space-y-2"}>
-                <textarea
-                  ref={inputRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMessage())}
-                  placeholder={transcribing ? "Transcribing…" : recording ? "Recording… tap mic to stop" : `Tell Sarah something about your ${mode === "profile" ? "physiology" : "session"}…`}
-                  disabled={loading || transcribing || uploadingImages}
-                  rows={fullScreen ? 1 : 3}
-                  className={textareaClass}
-                />
-                {renderComposerControls()}
-              </div>
+              {!fullScreen && renderComposer(`Tell Sarah something about your ${mode === "profile" ? "physiology" : "session"}…`, 3)}
             </div>
           ) : (
             <div className={threadClass}>
@@ -2503,19 +2507,7 @@ Return a conversational answer plus structured findings for review/persistence.`
               {renderSelectedImages()}
               {imageError && <p className="text-xs text-destructive">{imageError}</p>}
               {renderChatProcessingStatus()}
-              <div className={composerClass}>
-                <textarea
-                    ref={inputRef}
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMessage())}
-                    placeholder={transcribing ? "Transcribing…" : recording ? "Recording… tap mic to stop" : "Type or speak your response…"}
-                    disabled={loading || transcribing || uploadingImages}
-                  rows={fullScreen ? 1 : 5}
-                  className={textareaClass}
-                />
-                {renderComposerControls()}
-              </div>
+              {!fullScreen && renderComposer("Type or speak your response…")}
               </div>
               )}
 
@@ -2586,6 +2578,10 @@ Return a conversational answer plus structured findings for review/persistence.`
                 <RefreshCw className="w-3 h-3" /> Clear chat
               </button>
             </div>
+          )}
+
+          {fullScreen && renderComposer(
+            messages.length ? "Type or speak your response…" : `Tell Sarah something about your ${mode === "profile" ? "physiology" : "session"}…`,
           )}
         </div>
       )}

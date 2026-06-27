@@ -29,8 +29,17 @@ export function cleanWhisperTranscript(rawText) {
   return text
     .replace(/\s+([.,!?;:])/g, "$1")
     .replace(/\s{2,}/g, " ")
-    .replace(/^[\s.,!?;:]+|[\s.,!?;:]+$/g, "")
+    .replace(/^[\s.,!?;:]+/g, "")
     .trim();
+}
+
+const TERMINAL_PUNCTUATION_PATTERN = /[.!?…](?:["')\]]+)?$/u;
+const QUESTION_OPENING_PATTERN = /^(?:who|what|when|where|why|how|which|whose|is|are|am|was|were|do|does|did|can|could|would|should|will|have|has|had|may|might)\b/i;
+
+export function finalizeWhisperTranscript(rawText) {
+  const text = cleanWhisperTranscript(rawText);
+  if (!text || TERMINAL_PUNCTUATION_PATTERN.test(text)) return text;
+  return `${text}${QUESTION_OPENING_PATTERN.test(text) ? "?" : "."}`;
 }
 
 export function isOnlyWhisperHallucination(rawText) {

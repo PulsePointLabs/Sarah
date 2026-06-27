@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.47",
-  "commit": "09c5127",
-  "commitMessage": "Make Chat with Sarah app-like",
-  "builtAt": "2026-06-27T18:55:57.004Z"
+  "version": "0.1.48",
+  "commit": "202c76e",
+  "commitMessage": "Add confirmed Vital Signs deletion",
+  "builtAt": "2026-06-27T19:07:04.442Z"
 };
