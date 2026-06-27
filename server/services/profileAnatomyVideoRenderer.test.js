@@ -3,10 +3,77 @@ import assert from 'node:assert/strict';
 import {
   buildManifestVisualTimeline,
   createReviewEvidenceManifest,
+  createReviewEvidenceManifestWithFallback,
   validateManifestTimelineIntegrity,
   validateReviewEvidenceManifest,
   validateVisualTimeline,
 } from './profileAnatomyVideoRenderer.js';
+
+test('complete payload manifest does not scan historical media during normal render', () => {
+  let historicalLoads = 0;
+  const { manifest, usedHistoricalFallback } = createReviewEvidenceManifestWithFallback({
+    reviewId: 'longitudinal-pelvic-follow-up',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: [
+      'Pubic Mound and Lower Abdomen',
+      'The pubic mound and lower abdomen remain stable.',
+      'Foreskin',
+      'The foreskin remains intact.',
+      'Glans and Meatus',
+      'The glans and meatus remain intact.',
+      'Perineum',
+      'The perineal skin remains intact.',
+    ],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'pubic_mound_lower_abdomen', section_label: 'Pubic Mound and Lower Abdomen' },
+      { type: 'section', section_key: 'pubic_mound_lower_abdomen', section_label: 'Pubic Mound and Lower Abdomen' },
+      { type: 'section-title', section_key: 'foreskin', section_label: 'Foreskin' },
+      { type: 'section', section_key: 'foreskin', section_label: 'Foreskin' },
+      { type: 'section-title', section_key: 'glans_meatus', section_label: 'Glans and Meatus' },
+      { type: 'section', section_key: 'glans_meatus', section_label: 'Glans and Meatus' },
+      { type: 'section-title', section_key: 'perineum', section_label: 'Perineum' },
+      { type: 'section', section_key: 'perineum', section_label: 'Perineum' },
+    ],
+    images: [
+      { id: 'pubic-reference', label: 'Validated pubic mound lower abdomen reference', coverage: 'pubic mound lower abdomen suprapubic', sectionKey: 'pubic_mound_lower_abdomen', url: '/uploads/pubic.jpg' },
+      { id: 'foreskin-reference', label: 'Validated foreskin close-up', coverage: 'foreskin prepuce penile shaft', sectionKey: 'foreskin', url: '/uploads/foreskin.jpg' },
+      { id: 'glans-reference', label: 'Validated glans meatus close-up', coverage: 'glans meatus urethral opening', sectionKey: 'glans_meatus', url: '/uploads/glans.jpg' },
+      { id: 'perineum-reference', label: 'Validated posterior inferior perineal view', coverage: 'perineum perineal body perineal raphe', sectionKey: 'perineum', url: '/uploads/perineum.jpg' },
+    ],
+    loadHistoricalImages: () => {
+      historicalLoads += 1;
+      return [];
+    },
+  });
+  assert.equal(historicalLoads, 0);
+  assert.equal(usedHistoricalFallback, false);
+  assert.equal(manifest.sections.every((section) => section.assigned_evidence.length > 0), true);
+  assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
+});
+
+test('head-to-toe follow-up keeps relevant genital evidence in its normal anatomy lane', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'head-to-toe-genital-follow-up',
+    title: 'Head-to-Toe Review',
+    reviewScope: 'head_to_toe',
+    paragraphs: ['Genitals and Perineum', 'Genital and perineal anatomy remains represented in the current chart.'],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'genitals_perineum', section_label: 'Genitals and Perineum' },
+      { type: 'section', section_key: 'genitals_perineum', section_label: 'Genitals and Perineum' },
+    ],
+    images: [{
+      id: 'validated-genital-reference',
+      label: 'Validated genital and perineal reference',
+      coverage: 'pelvis pubic region genitals perineum scrotum penis',
+      sectionKey: 'genitals_perineum',
+      url: '/uploads/genital-reference.jpg',
+    }],
+  });
+  const section = manifest.sections.find((item) => item.section_key === 'genitals_perineum');
+  assert.equal(section.assigned_evidence[0]?.evidence_id, 'validated-genital-reference');
+  assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
+});
 
 const images = [
   {

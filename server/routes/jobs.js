@@ -23,6 +23,8 @@ import {
   cleanupProfileImageReviewResult,
   dedupeProfileImageReviewItems,
   mergeCumulativeProfileVisualEvidence,
+  selectLongitudinalProfileReviewImages,
+  updateLongitudinalProfileChart,
 } from '../../src/lib/profileImageReviewCleanup.js';
 import { friendlyJobErrorMessage } from '../../src/lib/jobErrorMessages.js';
 import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
@@ -96,10 +98,14 @@ function persistCompletedProfileImageReviewResult(result, payload = {}, context 
     sections: payload?.sections || [],
     reviewedImages,
   });
+  const chartResult = updateLongitudinalProfileChart(existing?.[fields.resultKey] || {}, mergedResult, {
+    sections: payload?.sections || [],
+    generatedAt,
+  });
   const storedResult = {
-    ...mergedResult,
+    ...chartResult,
     _meta: {
-      ...(mergedResult._meta || currentMeta),
+      ...(chartResult._meta || currentMeta),
       reviewType,
       last_generated_at: currentMeta.last_generated_at || generatedAt,
       updated_at: generatedAt,
@@ -110,7 +116,7 @@ function persistCompletedProfileImageReviewResult(result, payload = {}, context 
       image_count: Number(payload?.image_count || payload?.full_review_image_count || context?.meta?.image_count || currentMeta.image_count || reviewedImages.length || 0) || currentMeta.image_count,
       fresh_image_count: Number(payload?.fresh_image_count || context?.meta?.fresh_image_count || currentMeta.fresh_image_count || 0) || 0,
       reused_saved_image_count: Number(payload?.reused_saved_image_count || context?.meta?.reused_saved_image_count || currentMeta.reused_saved_image_count || 0) || 0,
-      reviewed_images: mergedResult?._meta?.reviewed_images || reviewedImages,
+      reviewed_images: chartResult?._meta?.reviewed_images || reviewedImages,
     },
   };
   const archiveEntry = {
@@ -129,6 +135,74 @@ function persistCompletedProfileImageReviewResult(result, payload = {}, context 
     ...(sourceSessionCount != null ? { session_count: sourceSessionCount } : {}),
   });
   return storedResult;
+}
+
+const LONGITUDINAL_PROFILE_REVIEW_DIRECTIVE = `LONGITUDINAL FOLLOW-UP CHART MODE - HIGHEST PRIORITY:
+- Treat the existing structured profile as the established chart and the attached evidence as the current examination/update layer.
+- Update each anatomical section rather than rediscovering the patient from scratch.
+- State meaningful new, changed, stable, resolved, or follow-up findings when supported. Do not manufacture change language when the current evidence only confirms the chart.
+- Directly review only the attached current or validated structure-specific references. Do not imply that the complete historical media archive was reopened.
+- Keep catheter and device history in the device/contact lane unless it materially changes tissue visibility, tissue health, or the current anatomical finding.
+- In head-to-toe review, include pelvic and genital findings normally and briefly when relevant; do not suppress them merely because they are genital anatomy.`;
+
+function profileRequestImageId(image = {}) {
+  if (image.image_id) return String(image.image_id);
+  const filename = String(image.filename || '').split(/[\\/]/).pop() || '';
+  return filename.replace(/\.[^.]+$/, '');
+}
+
+function filterProfileRequestImages(request = {}, selectedIds = new Set(), knownIds = new Set()) {
+  if (!request || !selectedIds.size) return request;
+  const filter = (images) => (Array.isArray(images)
+    ? images.filter((image) => selectedIds.has(profileRequestImageId(image)))
+    : images);
+  const prompt = String(request.prompt || '')
+    .split('\n')
+    .filter((line) => {
+      const id = [...knownIds].find((candidate) => line.includes(candidate));
+      return !id || selectedIds.has(id);
+    })
+    .join('\n');
+  return {
+    ...request,
+    prompt: `${LONGITUDINAL_PROFILE_REVIEW_DIRECTIVE}\n\n${prompt}`,
+    imageRefs: filter(request.imageRefs),
+    images: filter(request.images),
+  };
+}
+
+function prepareLongitudinalProfileReviewPayload(payload = {}, context = {}) {
+  const reviewedImages = Array.isArray(context?.meta?.reviewed_images)
+    ? context.meta.reviewed_images
+    : Array.isArray(payload?.reviewed_images)
+      ? payload.reviewed_images
+      : [];
+  if (!reviewedImages.length) return payload;
+  const pelvic = /pelvic|genital/i.test(String(payload.reviewType || payload.reviewTitle || ''));
+  const selectedImages = selectLongitudinalProfileReviewImages(reviewedImages, [], {
+    freshImageCount: Number(context?.meta?.fresh_image_count || payload?.fresh_image_count || 0),
+    maxImages: pelvic ? 20 : 30,
+  });
+  if (!selectedImages.length) return payload;
+  const knownIds = new Set(reviewedImages.map((image) => String(image.image_id || '')).filter(Boolean));
+  const selectedIds = new Set(selectedImages.map((image) => String(image.image_id || '')).filter(Boolean));
+  const batchRequests = (Array.isArray(payload.batchRequests) ? payload.batchRequests : [])
+    .map((request) => filterProfileRequestImages(request, selectedIds, knownIds))
+    .filter((request) => (
+      (Array.isArray(request.imageRefs) && request.imageRefs.length)
+      || (Array.isArray(request.images) && request.images.length)
+    ));
+  return {
+    ...payload,
+    reviewed_images: selectedImages,
+    image_count: selectedImages.length,
+    batchRequests,
+    singleRequest: filterProfileRequestImages(payload.singleRequest, selectedIds, knownIds),
+    synthesisRequest: payload.synthesisRequest ? {
+      ...payload.synthesisRequest,
+      promptPrefix: `${LONGITUDINAL_PROFILE_REVIEW_DIRECTIVE}\n\n${payload.synthesisRequest.promptPrefix || ''}`,
+    } : payload.synthesisRequest,
+  };
 }
 
 function sessionDirectEvidenceCorpus(session = {}) {
@@ -767,6 +841,7 @@ function fallbackAssembleProfileImageReview(payload = {}, batchResults = []) {
 registerJobHandler('profile_image_review_full', async (payload, context) => {
   const originalPayload = payload || {};
   payload = await resolvePayload(originalPayload);
+  payload = prepareLongitudinalProfileReviewPayload(payload, context);
   const label = payload?.label || 'Profile image review';
   const batchRequests = Array.isArray(payload?.batchRequests) ? payload.batchRequests : [];
   const total = Math.max(1, batchRequests.length + (payload?.synthesisRequest ? 1 : 0));

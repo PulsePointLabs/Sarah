@@ -1850,6 +1850,48 @@ function profilerArchiveImagesForPayload(payload = {}) {
   return out;
 }
 
+function manifestNeedsHistoricalEvidence(manifest = {}) {
+  return (manifest.sections || []).some((section) => (
+    section.target_region
+    && section.target_region !== 'overview'
+    && !section.assigned_evidence?.length
+  ));
+}
+
+export function createReviewEvidenceManifestWithFallback({
+  reviewId,
+  title,
+  paragraphs = [],
+  paragraphMeta = [],
+  images = [],
+  reviewScope = 'head_to_toe',
+  loadHistoricalImages = () => images,
+} = {}) {
+  let imageItems = safeImageItems(images);
+  let manifest = createReviewEvidenceManifest({
+    reviewId,
+    title,
+    paragraphs,
+    paragraphMeta,
+    images: imageItems,
+    reviewScope,
+  });
+  let usedHistoricalFallback = false;
+  if (manifestNeedsHistoricalEvidence(manifest)) {
+    imageItems = safeImageItems(loadHistoricalImages());
+    manifest = createReviewEvidenceManifest({
+      reviewId,
+      title,
+      paragraphs,
+      paragraphMeta,
+      images: imageItems,
+      reviewScope,
+    });
+    usedHistoricalFallback = true;
+  }
+  return { manifest, imageItems, usedHistoricalFallback };
+}
+
 function augmentAnatomyImagesFromDatabase(payload = {}, initialImages = []) {
   const merged = [];
   const seen = new Set();
@@ -2203,25 +2245,21 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
 
     const payloadImages = Array.isArray(payload.images) ? payload.images : [];
     const reviewScope = reviewScopeFromPayload(payload);
-    // The client payload is intentionally bounded and can omit a structure that
-    // still exists in saved Profiler/archive evidence. Always merge the saved
-    // references; augmentAnatomyImagesFromDatabase deduplicates physical URLs.
-    const expandedImages = augmentAnatomyImagesFromDatabase(payload, payloadImages);
-    const imageItems = safeImageItems(expandedImages);
+    const evidence = createReviewEvidenceManifestWithFallback({
+      reviewId: payload.reviewId || jobId,
+      title,
+      paragraphs: payload.paragraphs || [],
+      paragraphMeta: payload.paragraphMeta || payload.paragraph_meta || [],
+      images: payloadImages,
+      reviewScope,
+      loadHistoricalImages: () => augmentAnatomyImagesFromDatabase(payload, payloadImages),
+    });
+    const { manifest, imageItems, usedHistoricalFallback } = evidence;
     if (!imageItems.length) {
       const error = new Error('No review images are available for the anatomy video.');
       error.status = 400;
       throw error;
     }
-
-    const manifest = createReviewEvidenceManifest({
-      reviewId: payload.reviewId || jobId,
-      title,
-      paragraphs: payload.paragraphs || [],
-      paragraphMeta: payload.paragraphMeta || payload.paragraph_meta || [],
-      images: imageItems,
-      reviewScope,
-    });
     validateReviewEvidenceManifest(manifest);
     validateNoSpecificSectionPlaceholders(manifest);
     onProgress({
@@ -2233,6 +2271,7 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
       manifest_section_count: manifest.sections.length,
       assigned_evidence_count: manifest.sections.filter((section) => section.assigned_evidence?.length).length,
       placeholder_count: manifest.sections.filter((section) => !section.assigned_evidence?.length).length,
+      historical_media_fallback_used: usedHistoricalFallback,
     });
     if (payload.qaOnly || payload.qa_only) {
       return {
@@ -2289,7 +2328,8 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
       message: `Rendering ${totalSegments} section-matched anatomy visuals...`,
       image_count: imageItems.length,
       payload_image_count: payloadImages.length,
-      database_augmented_image_count: Math.max(0, imageItems.length - payloadImages.length),
+      database_augmented_image_count: usedHistoricalFallback ? Math.max(0, imageItems.length - payloadImages.length) : 0,
+      historical_media_fallback_used: usedHistoricalFallback,
       review_scope: reviewScope,
       audio_duration_seconds: Math.round(audioDuration),
     });

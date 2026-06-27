@@ -6,6 +6,8 @@ import {
   cleanupProfileImageReviewResult,
   mergeCumulativeProfileVisualEvidence,
   reduceProfileFindingRepetition,
+  selectLongitudinalProfileReviewImages,
+  updateLongitudinalProfileChart,
 } from '../../src/lib/profileImageReviewCleanup.js';
 
 const HEAD_TO_TOE_SECTIONS = [
@@ -42,6 +44,49 @@ const PELVIC_SECTIONS = [
   { key: 'measurement_reconciliation' },
   { key: 'limitations_future_coverage' },
 ];
+
+test('follow-up chart updates structured findings without rebuilding established references', () => {
+  const previous = {
+    glans_meatus: ['Glans and meatus are visible without irritation.'],
+    perineum: ['Perineal skin is intact.'],
+    _meta: {
+      validated_structure_references: [{
+        structure_key: 'perineum',
+        image_id: 'perineum-baseline',
+        preview_url: '/uploads/perineum-baseline.jpg',
+        quality_score: 70,
+      }],
+    },
+  };
+  const current = {
+    glans_meatus: ['Glans and meatus are visible without irritation.'],
+    perineum: ['Perineal skin is intact.'],
+    annotated_images: [{ image_id: 'glans-current', section_key: 'glans_meatus', view_label: 'Current glans and meatus close-up' }],
+    image_region_findings: [{ image_id: 'glans-current', section_key: 'glans_meatus', finding: 'Glans and meatus remain intact without irritation.' }],
+    _meta: { reviewed_images: [{ image_id: 'glans-current', preview_url: '/uploads/glans-current.jpg', source: 'fresh_upload' }] },
+  };
+  const updated = updateLongitudinalProfileChart(previous, current, { sections: PELVIC_SECTIONS, generatedAt: '2026-06-27T12:00:00.000Z' });
+  assert.equal(updated._meta.chart_mode, 'longitudinal_follow_up');
+  assert.equal(updated._meta.longitudinal_section_status.find((item) => item.section_key === 'glans_meatus')?.status, 'stable');
+  assert.equal(updated._meta.validated_structure_references.find((item) => item.structure_key === 'perineum')?.image_id, 'perineum-baseline');
+  assert.equal(updated._meta.validated_structure_references.find((item) => item.structure_key === 'glans_meatus')?.image_id, 'glans-current');
+});
+
+test('longitudinal image selection keeps one useful anatomy reference per structure and bounds device history', () => {
+  const images = [
+    { image_id: 'fresh-perineum', source: 'fresh_upload', preview_url: '/uploads/fresh-perineum.jpg', coverage: 'current perineum perineal body' },
+    { image_id: 'glans-new', preview_url: '/uploads/glans-new.jpg', coverage: 'glans meatus close-up' },
+    { image_id: 'glans-old', preview_url: '/uploads/glans-old.jpg', coverage: 'glans meatus' },
+    { image_id: 'foley-one', preview_url: '/uploads/foley-one.jpg', coverage: 'Foley catheter tubing StatLock device contact glans meatus' },
+    { image_id: 'foley-two', preview_url: '/uploads/foley-two.jpg', coverage: 'Foley catheter drainage tubing device contact' },
+    { image_id: 'scrotum', preview_url: '/uploads/scrotum.jpg', coverage: 'scrotum testes midline raphe' },
+  ];
+  const selected = selectLongitudinalProfileReviewImages(images, [], { freshImageCount: 1, maxImages: 8 });
+  assert.equal(selected[0].image_id, 'fresh-perineum');
+  assert.equal(selected.some((image) => image.image_id === 'glans-new'), true);
+  assert.equal(selected.some((image) => image.image_id === 'scrotum'), true);
+  assert.ok(selected.filter((image) => /foley/i.test(image.coverage || '')).length <= 1);
+});
 
 function allText(value) {
   const chunks = [];

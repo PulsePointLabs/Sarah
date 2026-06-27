@@ -899,3 +899,199 @@ export function mergeCumulativeProfileVisualEvidence(result = {}, archive = [], 
     },
   };
 }
+
+const PROFILE_REFERENCE_STRUCTURE_RULES = [
+  ['head_face', /\b(head|face|facial|scalp|hair|forehead|ear)\b/i],
+  ['neck', /\bneck|cervical\b/i],
+  ['shoulders_upper_back', /\bshoulder|upper back|thoracic|scapul/i],
+  ['chest', /\bchest|pectoral|nipple|breast|sternum\b/i],
+  ['abdomen', /\babdomen|abdominal|umbilicus|navel|pannus\b/i],
+  ['pubic_mound_lower_abdomen', /\bpubic mound|suprapubic|lower abdomen|pubic base\b/i],
+  ['inguinal_folds_groin_skin', /\binguinal|groin|inner thigh|penile base|scrotal base\b/i],
+  ['penis', /\bpenis|penile|shaft\b/i],
+  ['foreskin', /\bforeskin|prepuce\b/i],
+  ['glans_meatus', /\bglans|meatus|meatal|urethral opening\b/i],
+  ['scrotum_testes', /\bscrot|testes|testicle|testicular\b/i],
+  ['perineum', /\bperineum|perineal|perineal body|perineal raphe\b/i],
+  ['anal_opening_perianal_region', /\banal opening|anal verge|perianal|anus\b/i],
+  ['buttocks_gluteal_skin', /\bbuttock|gluteal\b/i],
+  ['upper_limbs_hands', /\bupper limb|arm|forearm|hand|finger|wrist\b/i],
+  ['lower_limbs', /\blower limb|thigh|knee|calf|ankle|leg\b/i],
+  ['feet_toes', /\bfeet|foot|toe|toes|heel|plantar\b/i],
+  ['posture_alignment', /\bposture|alignment|lordosis|kyphosis|pelvic tilt\b/i],
+  ['skin_summary', /\bskin|lesion|scar|papule|erythema|pigment|wound|bruise\b/i],
+  ['device_contact_findings', /\bfoley|catheter|statlock|device contact|tubing\b/i],
+];
+
+const PROFILE_CHANGE_RE = /\b(new|newly|changed|change|increased|decreased|worse|worsened|larger|smaller|progressed|progression)\b/i;
+const PROFILE_RESOLVED_RE = /\b(resolved|resolution|healed|healing complete|no longer visible)\b/i;
+const PROFILE_FOLLOW_UP_RE = /\b(follow[- ]?up|monitor|recheck|needs? evaluation|needs? review|pending)\b/i;
+const PROFILE_DEVICE_RE = /\b(foley|catheter|statlock|drainage|tubing|balloon port|device)\b/i;
+
+function profileReferenceUrl(image = {}) {
+  return String(image.preview_url || image.previewUrl || image.storagePath || image.url || '').trim();
+}
+
+function profileReferenceText(image = {}, annotation = {}, finding = {}) {
+  return [
+    finding.section_key,
+    finding.label,
+    finding.region,
+    finding.finding,
+    annotation.section_key,
+    annotation.section_label,
+    annotation.view_label,
+    annotation.coverage,
+    annotation.visibility_notes,
+    ...(Array.isArray(annotation.major_regions_visible) ? annotation.major_regions_visible : []),
+    image.display_label,
+    image.upload_note,
+    image.coverage,
+    ...(Array.isArray(image.selection_tags) ? image.selection_tags : []),
+    image.source_video?.purpose,
+    image.source_video?.note,
+  ].filter(Boolean).join(' ');
+}
+
+function inferredProfileStructureKeys(text = '', explicitSection = '') {
+  const explicit = String(explicitSection || '').trim();
+  if (explicit) return [explicit];
+  return PROFILE_REFERENCE_STRUCTURE_RULES
+    .filter(([, pattern]) => pattern.test(String(text || '')))
+    .map(([key]) => key);
+}
+
+function profileReferenceQuality({ image = {}, annotation = {}, finding = {}, structureKey = '' } = {}) {
+  const text = profileReferenceText(image, annotation, finding);
+  let score = 0;
+  if (profileReferenceUrl(image)) score += 20;
+  if (finding.section_key === structureKey) score += 25;
+  if (annotation.section_key === structureKey) score += 20;
+  if (annotation.view_label) score += 8;
+  if (finding.finding) score += 8;
+  if (PROFILE_REFERENCE_STRUCTURE_RULES.find(([key]) => key === structureKey)?.[1]?.test(text)) score += 14;
+  if (structureKey !== 'device_contact_findings' && PROFILE_DEVICE_RE.test(text)) score -= 18;
+  return score;
+}
+
+function profileSectionText(result = {}, sectionKey = '') {
+  const values = Array.isArray(result?.[sectionKey]) ? result[sectionKey] : [];
+  return values.map((item) => cleanProfileImageReviewText(item)).filter(Boolean).join(' ');
+}
+
+function longitudinalSectionState(previousText = '', currentText = '') {
+  if (!previousText && currentText) return 'new';
+  if (PROFILE_RESOLVED_RE.test(currentText)) return 'resolved';
+  if (PROFILE_FOLLOW_UP_RE.test(currentText)) return 'follow_up';
+  if (PROFILE_CHANGE_RE.test(currentText)) return 'changed';
+  if (previousText && !currentText) return 'stable';
+  if (previousText && currentText) {
+    const previousKey = normalizedEvidenceHash(previousText);
+    const currentKey = normalizedEvidenceHash(currentText);
+    return previousKey === currentKey ? 'stable' : 'updated';
+  }
+  return 'unassessed';
+}
+
+export function updateLongitudinalProfileChart(previousResult = {}, currentResult = {}, {
+  sections = [],
+  generatedAt = new Date().toISOString(),
+} = {}) {
+  const previousReferences = Array.isArray(previousResult?._meta?.validated_structure_references)
+    ? previousResult._meta.validated_structure_references
+    : [];
+  const referencesByStructure = new Map(previousReferences
+    .filter((reference) => reference?.structure_key && profileReferenceUrl(reference))
+    .map((reference) => [reference.structure_key, { ...reference }]));
+  const reviewed = Array.isArray(currentResult?._meta?.reviewed_images) ? currentResult._meta.reviewed_images : [];
+  const annotated = Array.isArray(currentResult?.annotated_images) ? currentResult.annotated_images : [];
+  const findings = Array.isArray(currentResult?.image_region_findings) ? currentResult.image_region_findings : [];
+  const reviewedById = new Map(reviewed.filter((image) => image?.image_id).map((image) => [image.image_id, image]));
+  const annotatedById = new Map(annotated.filter((image) => image?.image_id).map((image) => [image.image_id, image]));
+
+  for (const finding of findings) {
+    const image = reviewedById.get(finding?.image_id);
+    if (!image || !profileReferenceUrl(image)) continue;
+    const annotation = annotatedById.get(finding.image_id) || {};
+    const text = profileReferenceText(image, annotation, finding);
+    for (const structureKey of inferredProfileStructureKeys(text, finding.section_key || annotation.section_key)) {
+      const quality = profileReferenceQuality({ image, annotation, finding, structureKey });
+      const previous = referencesByStructure.get(structureKey);
+      const sameImage = previous && profileReferenceUrl(previous) === profileReferenceUrl(image);
+      const meaningfulChange = PROFILE_CHANGE_RE.test(text) || PROFILE_RESOLVED_RE.test(text);
+      if (previous && !sameImage && !meaningfulChange && quality < Number(previous.quality_score || 0) + 8) continue;
+      referencesByStructure.set(structureKey, {
+        structure_key: structureKey,
+        image_id: image.image_id,
+        preview_url: profileReferenceUrl(image),
+        display_label: annotation.view_label || image.display_label || finding.label || structureKey,
+        coverage: cleanProfileImageReviewText([annotation.coverage, annotation.visibility_notes, finding.finding, image.upload_note].filter(Boolean).join('. ')),
+        source: image.source || 'profile_review',
+        source_generated_at: currentResult?._meta?.last_generated_at || currentResult?._meta?.updated_at || generatedAt,
+        validated_at: generatedAt,
+        quality_score: Math.max(quality, Number(previous?.quality_score || 0)),
+      });
+    }
+  }
+
+  const longitudinalStatus = (Array.isArray(sections) ? sections : [])
+    .map((section) => typeof section === 'string' ? { key: section, label: section } : section)
+    .filter((section) => section?.key)
+    .map((section) => ({
+      section_key: section.key,
+      label: section.label || section.key,
+      status: longitudinalSectionState(
+        profileSectionText(previousResult, section.key),
+        profileSectionText(currentResult, section.key),
+      ),
+      updated_at: generatedAt,
+    }));
+
+  return {
+    ...currentResult,
+    _meta: {
+      ...(currentResult._meta || {}),
+      chart_mode: 'longitudinal_follow_up',
+      longitudinal_section_status: longitudinalStatus,
+      validated_structure_references: [...referencesByStructure.values()],
+    },
+  };
+}
+
+export function selectLongitudinalProfileReviewImages(reviewedImages = [], validatedReferences = [], {
+  freshImageCount = 0,
+  maxImages = 24,
+} = {}) {
+  const images = Array.isArray(reviewedImages) ? reviewedImages : [];
+  const selected = [];
+  const selectedKeys = new Set();
+  const add = (image) => {
+    if (!image || selected.length >= maxImages) return;
+    const key = profileReferenceUrl(image) || String(image.image_id || '');
+    if (!key || selectedKeys.has(key)) return;
+    selectedKeys.add(key);
+    selected.push(image);
+  };
+
+  images.filter((image, index) => image?.source === 'fresh_upload' || index < Number(freshImageCount || 0)).forEach(add);
+
+  for (const reference of Array.isArray(validatedReferences) ? validatedReferences : []) {
+    const match = images.find((image) => (
+      (reference.image_id && image?.image_id === reference.image_id)
+      || (profileReferenceUrl(reference) && profileReferenceUrl(image) === profileReferenceUrl(reference))
+    ));
+    add(match || reference);
+  }
+
+  const bestByStructure = new Map();
+  for (const image of images) {
+    const text = profileReferenceText(image);
+    for (const structureKey of inferredProfileStructureKeys(text)) {
+      const score = profileReferenceQuality({ image, structureKey });
+      const existing = bestByStructure.get(structureKey);
+      if (!existing || score > existing.score) bestByStructure.set(structureKey, { image, score });
+    }
+  }
+  for (const { image } of bestByStructure.values()) add(image);
+  return selected.slice(0, maxImages);
+}
