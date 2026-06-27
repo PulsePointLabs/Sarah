@@ -1,5 +1,5 @@
 import express from 'express';
-import { getEntity, listEntities, upsertEntity } from '../db.js';
+import { deleteEntity, getEntity, listEntities, upsertEntity } from '../db.js';
 import { aiInvokeInternal } from './internalAi.js';
 import {
   buildVitalsAnalysisPrompt,
@@ -114,6 +114,17 @@ sarahVsRouter.get('/vitals/:id', (req, res) => {
   const transfer = getEntity('SarahVsVitalsTransfer', req.params.id);
   if (!transfer) return res.status(404).json({ error: 'SarahVS transfer was not found.' });
   return res.json({ ok: true, transfer: publicTransfer(transfer) });
+});
+
+sarahVsRouter.delete('/vitals/:id', (req, res) => {
+  const transferId = req.params.id;
+  const transfer = getEntity('SarahVsVitalsTransfer', transferId);
+  if (!transfer) return res.status(404).json({ error: 'SarahVS transfer was not found.' });
+  if (activeAnalysisRequests.has(transferId)) {
+    return res.status(409).json({ error: 'Sarah is still analyzing this recording. Wait for the read to finish, then delete it.' });
+  }
+  const result = deleteEntity('SarahVsVitalsTransfer', transferId);
+  return res.json({ ok: true, deleted: result.deleted, id: transferId });
 });
 
 sarahVsRouter.post('/vitals/:id/analyze', async (req, res) => {

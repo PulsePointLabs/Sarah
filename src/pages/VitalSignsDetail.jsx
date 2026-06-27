@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   Activity,
   ArrowLeft,
@@ -9,6 +9,7 @@ import {
   RefreshCw,
   ShieldCheck,
   Sparkles,
+  Trash2,
   TriangleAlert,
 } from "lucide-react";
 import {
@@ -24,6 +25,17 @@ import {
   YAxis,
 } from "recharts";
 import TTSReader from "@/components/TTSReader";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { useChartZoom } from "@/hooks/useChartZoom";
 import { apiUrl } from "@/lib/mobileApiBase";
 import { formatDurationWords, formatVitalSignsSpeech } from "@/lib/vitalSignsSpeech";
@@ -319,6 +331,7 @@ function buildAnalysisNarration(analysis) {
 
 export default function VitalSignsDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [transfer, setTransfer] = useState(null);
   const [loading, setLoading] = useState(true);
   const [analysisLoading, setAnalysisLoading] = useState(false);
@@ -326,6 +339,8 @@ export default function VitalSignsDetail() {
   const [analysisElapsedSeconds, setAnalysisElapsedSeconds] = useState(0);
   const [error, setError] = useState("");
   const [analysisError, setAnalysisError] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   const loadTransfer = useCallback(async () => {
     setLoading(true);
@@ -359,6 +374,21 @@ export default function VitalSignsDetail() {
       setAnalysisLoading(false);
     }
   }, [id]);
+
+  const deleteTransfer = useCallback(async () => {
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      const response = await fetch(apiUrl(`/sarahvs/vitals/${encodeURIComponent(id)}`), { method: "DELETE" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `Could not delete this recording: ${response.status}`);
+      navigate("/vitals", { replace: true });
+    } catch (deleteFailure) {
+      setDeleteError(deleteFailure?.message || "Could not delete this Vital Signs recording.");
+    } finally {
+      setDeleting(false);
+    }
+  }, [id, navigate]);
 
   useEffect(() => {
     if (!analysisLoading || !analysisStartedAt) return undefined;
@@ -447,11 +477,48 @@ export default function VitalSignsDetail() {
               {session.status === "recording" ? " · snapshot captured while recording" : ""}
             </p>
           </div>
-          <span className="rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-xs font-semibold uppercase text-primary">
-            {payload.scope === "full_session_vitals_context" ? "Full session" : "Summary window"}
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-xs font-semibold uppercase text-primary">
+              {payload.scope === "full_session_vitals_context" ? "Full session" : "Summary window"}
+            </span>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button
+                  type="button"
+                  disabled={deleting}
+                  className="inline-flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
+                >
+                  <Trash2 className="h-4 w-4" /> {deleting ? "Deleting…" : "Delete"}
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete this Vital Signs recording?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This permanently removes {session.title || transfer.latest_session_title || "this SarahVS recording"}, its imported timeline, event details, and cached Sarah read. This cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={deleteTransfer}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    Delete recording
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
         </div>
       </header>
+
+      {deleteError && (
+        <div className="mt-4 flex items-start gap-2 rounded-lg border border-destructive/35 bg-destructive/10 p-3 text-sm text-destructive">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{deleteError}</span>
+        </div>
+      )}
 
       {(!transfer.analysis || analysisLoading || analysisError) && (
         <div className="mt-5">
