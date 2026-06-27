@@ -119,6 +119,56 @@ export function listEntities(entity) {
   return db.prepare('SELECT data FROM entities WHERE entity = ?').all(entity).map((r) => safeJsonParse(r.data)).filter(Boolean);
 }
 
+const PROFILE_REVIEW_RESULT_KEYS = new Set([
+  'pelvic_genital_image_review_result',
+  'head_to_toe_image_review_result',
+]);
+const PROFILE_REVIEW_ARCHIVE_KEYS = new Set([
+  'pelvic_genital_image_review_archive',
+  'head_to_toe_image_review_archive',
+]);
+
+export function listLatestProfileReviewEvidenceSlices(resultKey, archiveKey, archiveLimit = 10) {
+  if (!PROFILE_REVIEW_RESULT_KEYS.has(resultKey) || !PROFILE_REVIEW_ARCHIVE_KEYS.has(archiveKey)) {
+    throw new Error('Unsupported profile review evidence keys.');
+  }
+  const limit = Math.max(0, Math.min(30, Number(archiveLimit) || 0));
+  const rows = db.prepare(`
+    WITH latest AS (
+      SELECT data
+      FROM entities
+      WHERE entity = 'SessionClusterAnalysis'
+      ORDER BY COALESCE(updated_date, created_date) DESC
+      LIMIT 1
+    )
+    SELECT
+      -1 AS archive_index,
+      json_extract(data, ?) AS reviewed_images,
+      json_extract(data, ?) AS annotated_images
+    FROM latest
+    UNION ALL
+    SELECT
+      CAST(entry.key AS INTEGER) AS archive_index,
+      json_extract(entry.value, '$.result._meta.reviewed_images') AS reviewed_images,
+      json_extract(entry.value, '$.result.annotated_images') AS annotated_images
+    FROM latest, json_each(json_extract(latest.data, ?)) AS entry
+    WHERE CAST(entry.key AS INTEGER) < ?
+    ORDER BY archive_index
+  `).all(
+    `$.${resultKey}._meta.reviewed_images`,
+    `$.${resultKey}.annotated_images`,
+    `$.${archiveKey}`,
+    limit,
+  );
+  return rows.map((row) => ({
+    archiveIndex: Number(row.archive_index),
+    result: {
+      _meta: { reviewed_images: safeJsonParse(row.reviewed_images) || [] },
+      annotated_images: safeJsonParse(row.annotated_images) || [],
+    },
+  }));
+}
+
 export function listProcessingJobSummaries({ type = '', statuses = [], meta = {}, limit = 100, includeCleared = false } = {}) {
   try {
     const clauses = ["entity = 'ProcessingJob'"];

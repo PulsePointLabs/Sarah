@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { resolveUploadPath, uploadDir, ttsRenderDir } from '../config.js';
-import { listEntities, upsertEntity } from '../db.js';
+import { listEntities, listLatestProfileReviewEvidenceSlices, upsertEntity } from '../db.js';
 import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart } from './ttsCore.js';
 import { resolveCachedFramePath } from './localVision/frameSampler.js';
@@ -1766,10 +1766,6 @@ function safeImageItems(images = []) {
     .slice(0, 300);
 }
 
-function archiveEntryResult(entryOrResult) {
-  return entryOrResult?.result || entryOrResult || null;
-}
-
 function reviewKeysForPayload(payload = {}) {
   const raw = String(payload.reviewType || payload.review_type || payload.title || '').toLowerCase();
   if (/pelvic|genital|pubic|perine/i.test(raw)) {
@@ -1843,18 +1839,13 @@ function reviewedImagesFromResult(result = {}, prefix = 'archive') {
 
 function profilerArchiveImagesForPayload(payload = {}) {
   const { resultKey, archiveKey } = reviewKeysForPayload(payload);
-  const rows = listEntities('SessionClusterAnalysis')
-    .sort((a, b) => String(b.updated_date || '').localeCompare(String(a.updated_date || '')));
   const out = [];
-  for (const row of rows) {
-    out.push(...reviewedImagesFromResult(row?.[resultKey], `current_${resultKey}`));
-    const archive = Array.isArray(row?.[archiveKey]) ? row[archiveKey] : [];
-    archive.forEach((entry, archiveIndex) => {
-      out.push(...reviewedImagesFromResult(
-        archiveEntryResult(entry),
-        `archive_${archiveIndex + 1}_${archiveKey}`
-      ));
-    });
+  const slices = listLatestProfileReviewEvidenceSlices(resultKey, archiveKey, 30);
+  for (const slice of slices) {
+    const prefix = slice.archiveIndex < 0
+      ? `current_${resultKey}`
+      : `archive_${slice.archiveIndex + 1}_${archiveKey}`;
+    out.push(...reviewedImagesFromResult(slice.result, prefix));
   }
   return out;
 }
