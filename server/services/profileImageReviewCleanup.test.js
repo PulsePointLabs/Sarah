@@ -5,10 +5,46 @@ import {
   classifyAnatomyReviewEvidence,
   cleanupProfileImageReviewResult,
   mergeCumulativeProfileVisualEvidence,
+  normalizeProfileReviewSecondPerson,
   reduceProfileFindingRepetition,
   selectLongitudinalProfileReviewImages,
   updateLongitudinalProfileChart,
 } from '../../src/lib/profileImageReviewCleanup.js';
+
+test('normalizes anatomy review prose to direct second person', () => {
+  const direct = normalizeProfileReviewSecondPerson(
+    'Ben is a 44-year-old active male. His lower-body contour is symmetric and he has stable posture.'
+  );
+  assert.match(direct, /You are a 44-year-old active male/i);
+  assert.match(direct, /Your lower-body contour is symmetric and you have stable posture/i);
+  assert.doesNotMatch(direct, /\bBen\b|\bhe\b|\bhis\b/i);
+  const result = cleanupProfileImageReviewResult({
+    executive_summary: [
+      'Ben is a 44-year-old active male.',
+    ],
+  }, { sections: HEAD_TO_TOE_SECTIONS });
+  const text = allText(result);
+  assert.match(text, /You are a 44-year-old active male/i);
+  assert.doesNotMatch(text, /\bBen\b|\bhe\b|\bhis\b/i);
+  assert.equal(normalizeProfileReviewSecondPerson('The patient appears stable.'), 'You appear stable.');
+});
+
+test('removes repeated image metadata while preserving distinct context', () => {
+  const result = cleanupProfileImageReviewResult({
+    annotated_images: [{
+      image_id: 'img_009',
+      view_label: 'Right lateral standing - full body.',
+      body_position: 'Right lateral standing - full body.',
+      coverage: 'Standing, weight-bearing, right side toward camera. Right lateral standing - full body.',
+      visibility_notes: 'Head to feet are visible.',
+    }],
+  }, { sections: HEAD_TO_TOE_SECTIONS });
+  const image = result.annotated_images[0];
+  assert.equal(image.view_label, 'Right lateral standing - full body.');
+  assert.equal(image.body_position, '');
+  assert.equal(image.coverage, 'Standing, weight-bearing, right side toward camera.');
+  assert.equal(image.visibility_notes, 'Head to feet are visible.');
+});
 
 const HEAD_TO_TOE_SECTIONS = [
   { key: 'executive_summary' },

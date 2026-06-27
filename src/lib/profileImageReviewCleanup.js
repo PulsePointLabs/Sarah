@@ -106,6 +106,33 @@ function normalizeForbiddenPhrasing(value = "") {
     .trim();
 }
 
+export function normalizeProfileReviewSecondPerson(value = "") {
+  return String(value || "")
+    .replace(/\bBen['’]s\b/g, "your")
+    .replace(/\bBen\s+is\b/gi, "You are")
+    .replace(/\bBen\s+has\b/gi, "You have")
+    .replace(/\bBen\s+was\b/gi, "You were")
+    .replace(/\bBen\s+(appears?|shows?|demonstrates?)\b/gi, (_match, verb) => `You ${String(verb).toLowerCase().replace(/s$/, "")}`)
+    .replace(/\bBen\b/g, "you")
+    .replace(/\b(?:the patient|he)\s+is\b/gi, "you are")
+    .replace(/\b(?:the patient|he)\s+has\b/gi, "you have")
+    .replace(/\b(?:the patient|he)\s+was\b/gi, "you were")
+    .replace(/\b(?:the patient|he)\s+does\b/gi, "you do")
+    .replace(/\b(?:the patient|he)\s+(appears?|shows?|demonstrates?)\b/gi, (_match, verb) => `you ${String(verb).toLowerCase().replace(/s$/, "")}`)
+    .replace(/\bHis\b/g, "Your")
+    .replace(/\bhis\b/g, "your")
+    .replace(/\bHimself\b/g, "Yourself")
+    .replace(/\bhimself\b/g, "yourself")
+    .replace(/\bHim\b/g, "You")
+    .replace(/\bhim\b/g, "you")
+    .replace(/\bHe\b/g, "You")
+    .replace(/\bhe\b/g, "you")
+    .replace(/\bthe patient\b/gi, "you")
+    .replace(/(^|[.!?]\s+)you\b/g, "$1You")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function sentenceChunks(value = "") {
   return String(value || "")
     .split(/(?<=[.!?])\s+/)
@@ -513,7 +540,7 @@ export function cleanProfileImageReviewText(value = "") {
   if (UI_CALLOUT_RE.test(raw)) return "";
   if (INCIDENTAL_OBJECT_RE.test(raw) && !DEVICE_KEEP_RE.test(raw)) return "";
 
-  let text = normalizeForbiddenPhrasing(raw)
+  let text = normalizeProfileReviewSecondPerson(normalizeForbiddenPhrasing(raw))
     .replace(/\bThis batch does not include[^.]*\.?\s*/gi, "")
     .replace(/\bThis image set does not include[^.]*\.?\s*/gi, "")
     .replace(/\bThis pass does not include[^.]*\.?\s*/gi, "")
@@ -578,6 +605,23 @@ function cleanProfileImageMetadataText(value = "") {
     .trim();
 }
 
+function dedupeProfileImageMetadataText(value = "", seen = new Set()) {
+  const cleaned = cleanProfileImageMetadataText(value);
+  if (!cleaned) return "";
+  const fragments = cleaned
+    .split(/\s*·\s*|(?<=[.!?])\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const unique = [];
+  for (const fragment of fragments) {
+    const key = fragment.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(fragment);
+  }
+  return unique.join(" ").trim();
+}
+
 function normalizeProfileImageMetadata(image = {}) {
   const combined = [
     image.view_label,
@@ -589,12 +633,13 @@ function normalizeProfileImageMetadata(image = {}) {
   const hasPelvicDisclaimer = /\bclose-up pelvic\/genital reference view\b|\bwhole-body standing posture is not established\b|\bposture labels are intentionally conservative for close-up pelvic views\b/i.test(
     [image.view_label, image.body_position, image.visibility_notes].filter(Boolean).join(" ")
   );
+  const seenMetadata = new Set();
   const cleaned = {
     ...image,
-    view_label: cleanProfileImageMetadataText(image.view_label || ""),
-    body_position: cleanProfileImageMetadataText(image.body_position || ""),
-    coverage: cleanProfileImageMetadataText(image.coverage || ""),
-    visibility_notes: cleanProfileImageMetadataText(image.visibility_notes || ""),
+    view_label: dedupeProfileImageMetadataText(image.view_label || "", seenMetadata),
+    body_position: dedupeProfileImageMetadataText(image.body_position || "", seenMetadata),
+    coverage: dedupeProfileImageMetadataText(image.coverage || "", seenMetadata),
+    visibility_notes: dedupeProfileImageMetadataText(image.visibility_notes || "", seenMetadata),
   };
   if (!hasPelvicDisclaimer) return cleaned;
   if (/\b(feet|foot|toes?|ankles?|heels?)\b/.test(combined)) {

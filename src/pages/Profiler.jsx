@@ -4365,15 +4365,8 @@ function priorInlineEvidenceImageUseCounts(result, sectionKey, sections = [], tr
 }
 
 function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transientImages = [], pelvicScoped = false, sections = []) {
-  const reviewed = Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images : [];
-  const annotated = Array.isArray(result?.annotated_images) ? result.annotated_images : [];
   const priorUseCounts = priorInlineEvidenceImageUseCounts(result, sectionKey, sections, transientImages, pelvicScoped);
-  const candidates = [
-    ...findings.map((finding) => finding.image_id),
-    ...reviewed.map((image) => image.image_id),
-    ...annotated.map((image) => image.image_id),
-    ...transientImages.map((image, index) => image.image_id || `img_${String(index + 1).padStart(3, "0")}`),
-  ].filter(Boolean);
+  const candidates = findings.map((finding) => finding.image_id).filter(Boolean);
   const seenCanonicalKeys = new Set();
   const uniqueIds = [...new Set(candidates)].filter((imageId) => {
     const key = inlineEvidenceCanonicalKey(result, imageId, transientImages, pelvicScoped);
@@ -4403,12 +4396,19 @@ function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transie
     });
   const best = scored.filter((item) => item.score > 0 && item.adjustedScore > 0).slice(0, 2);
   const selected = best.length ? best : scored.filter((item) => item.score > 0).slice(0, 2);
-  const selectedIds = new Set(selected.map((item) => item.imageId));
-  if (selected.length === 1 && selected[0].priorUseCount > 0) {
-    const alternate = best.find((item) => !selectedIds.has(item.imageId));
-    if (alternate) selected.push(alternate);
-  }
   return selected.map((item) => item.imageId);
+}
+
+function uniqueImageMetadataParts(image = {}) {
+  const seen = new Set([
+    String(image.display_label || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(),
+  ].filter(Boolean));
+  return [image.body_position, image.coverage, image.visibility_notes].filter((value) => {
+    const key = String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(var(--primary))", transientImages = [], onOpenImage = null, onCorrectFinding = null, onRemoveFinding = null }) {
@@ -4439,7 +4439,9 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
             ? rawProfileImageById(result, imageId, transientImages)
             : profileImageById(result, imageId, transientImages);
           const imageFindings = findings.filter((finding) => finding.image_id === imageId).slice(0, 4);
+          if (!image?.preview_url || !imageFindings.length) return null;
           const pinnedFindings = imageFindings.filter((finding) => finding.pin?.x != null && finding.pin?.y != null);
+          const metadataParts = uniqueImageMetadataParts(image);
           return (
             <div key={`${sectionKey}-${imageId}`} className="overflow-hidden rounded-lg border border-border bg-background shadow-sm">
               <div className="grid gap-0">
@@ -4454,14 +4456,14 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
                 <div className="space-y-2 p-3">
                   <div>
                     <p className="text-sm font-semibold leading-snug text-foreground dark:text-white">{image.display_label || "Reviewed view"}</p>
-                    {(image.body_position || image.coverage || image.visibility_notes) && (
+                    {metadataParts.length > 0 && (
                       <p className="mt-1.5 line-clamp-4 text-xs leading-relaxed text-muted-foreground">
-                        {[image.body_position, image.coverage, image.visibility_notes].filter(Boolean).join(" · ")}
+                        {metadataParts.join(" · ")}
                       </p>
                     )}
                   </div>
                   <div className="space-y-1.5">
-                    {imageFindings.length > 0 ? imageFindings.map((finding, index) => (
+                    {imageFindings.map((finding, index) => (
                       <div key={`${finding.finding_id}-inline`} className="rounded-md border border-border bg-muted/20 p-2.5">
                         <div className="flex flex-wrap items-center gap-1.5">
                           {finding.pin && (
@@ -4480,11 +4482,7 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
                         )}
                         <FindingCorrectionControl finding={finding} onCorrectFinding={onCorrectFinding} onRemoveFinding={onRemoveFinding} />
                       </div>
-                    )) : (
-                      <p className="rounded-md border border-border bg-muted/20 p-3 text-sm leading-relaxed text-muted-foreground">
-                        Reference view selected for this section. Sarah did not attach a separate pinned note to this exact image.
-                      </p>
-                    )}
+                    ))}
                   </div>
                 </div>
               </div>
@@ -4523,7 +4521,8 @@ function imageCalloutNarrationParagraphs(result, sectionKey, transientImages = [
       return `${index + 1}. ${label}. ${qualifier}${finding.finding || ""}`.trim();
     }).filter(Boolean);
     if (callouts.length) {
-      paragraphs.push(cleanImageReviewProse(naturalizeSpokenDates(`${imageContext}. ${callouts.join(" ")}`)));
+      const paragraph = cleanImageReviewProse(naturalizeSpokenDates(`${imageContext}. ${callouts.join(" ")}`));
+      if (paragraph) paragraphs.push(paragraph);
     }
   }
   return paragraphs;
