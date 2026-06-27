@@ -80,7 +80,7 @@ const FINE_STRUCTURE_ALIASES = [
   { key: 'scrotum', aliases: ['scrotum', 'scrotal', 'testes', 'testicle', 'testicles', 'raphe'] },
   { key: 'perineum', aliases: ['perineum', 'perineal', 'perineal body'] },
   { key: 'anal_perianal', aliases: ['anal', 'anus', 'perianal', 'rectal'] },
-  { key: 'pubic_groin', aliases: ['pubic', 'pubic mound', 'inguinal', 'groin', 'lower abdomen', 'penile base'] },
+  { key: 'pubic_groin', aliases: ['pubic', 'pubic mound', 'inguinal', 'groin', 'lower abdomen', 'abdominal reference', 'penile base'] },
   { key: 'catheter_device', aliases: ['catheter', 'foley', 'statlock', 'device', 'tube', 'tubing', 'leg bag'] },
   { key: 'abdomen_bruise', aliases: ['abdomen', 'abdominal', 'bruise', 'bruising', 'bite', 'bite wound', 'ecchymosis'] },
   { key: 'feet_toes', aliases: ['foot', 'feet', 'toe', 'toes', 'ankle', 'heel'] },
@@ -482,7 +482,7 @@ const STRICT_STRUCTURE_PATTERNS = new Map([
   ['foreskin', /\b(?:foreskin|prepuce|preputial)\b/i],
   ['shaft', /\b(?:penis|penile\s+shaft|shaft)\b/i],
   ['scrotum', /\b(?:scrotum|scrotal|testes|testicle|testicles)\b/i],
-  ['pubic_groin', /\b(?:pubic(?:\s+mound|\s+region)?|suprapubic|inguinal|groin|lower\s+abdomen|penile\s+base)\b/i],
+  ['pubic_groin', /\b(?:pubic(?:\s+mound|\s+region)?|suprapubic|inguinal|groin|lower\s+abdomen|abdominal\s+reference|penile\s+base)\b/i],
   ['perineum', /\b(?:perineum|perineal(?:\s+body)?)\b/i],
   ['anal_perianal', /\b(?:anal(?:\s+(?:opening|verge))?|anus|perianal|rectal)\b/i],
 ]);
@@ -507,6 +507,7 @@ function hasStrongPubicGroinEvidence(image = {}) {
     /\binguinal(?:\s+folds?|\s+skin|\s+region)?\b/i,
     /\bgroin(?:\s+skin|\s+region)?\b/i,
     /\blower\s+abdomen\b/i,
+    /\babdominal\s+reference\b/i,
     /\bpenile\s+base\b/i,
   ];
   if (patterns.some((pattern) => pattern.test(label))) return true;
@@ -527,6 +528,12 @@ function imageMatchesStrictSectionSpecificRequest(image = {}, requestedKeys = ne
   const imageHasGenitalDetail = [...imageKeys].some((key) => GENITAL_DETAIL_STRUCTURE_KEYS.has(key));
   const primaryRequestedKey = primaryStrictStructureKey(requestedText);
 
+  if (/\bpubic\s+mound\s+(?:and\s+)?lower\s+abdomen\b/i.test(requestedText)) {
+    if (!/\b(?:pubic(?:\s+mound|\s+region)|suprapubic|lower\s+abdomen|abdominal\s+reference)\b/i.test(primaryText)) {
+      return false;
+    }
+  }
+
   if (primaryRequestedKey && requestedKeys.has(primaryRequestedKey)) {
     const directPattern = STRICT_STRUCTURE_PATTERNS.get(primaryRequestedKey);
     if (!directPattern?.test(primaryText)) return false;
@@ -539,6 +546,7 @@ function imageMatchesStrictSectionSpecificRequest(image = {}, requestedKeys = ne
       /\binguinal\b/i,
       /\bgroin\b/i,
       /\blower\s+abdomen\b/i,
+      /\babdominal\s+reference\b/i,
       /\bpenile\s+base\b/i,
       /\bsuprapubic\b/i,
     ]);
@@ -2202,11 +2210,10 @@ export async function renderProfileAnatomyVideo(payload = {}, options = {}) {
 
     const payloadImages = Array.isArray(payload.images) ? payload.images : [];
     const reviewScope = reviewScopeFromPayload(payload);
-    // The Profiler sends its cumulative evidence library. Avoid reparsing every
-    // archived review on the API thread when that complete set is already here.
-    const expandedImages = payloadImages.length >= 40
-      ? payloadImages
-      : augmentAnatomyImagesFromDatabase(payload, payloadImages);
+    // The client payload is intentionally bounded and can omit a structure that
+    // still exists in saved Profiler/archive evidence. Always merge the saved
+    // references; augmentAnatomyImagesFromDatabase deduplicates physical URLs.
+    const expandedImages = augmentAnatomyImagesFromDatabase(payload, payloadImages);
     const imageItems = safeImageItems(expandedImages);
     if (!imageItems.length) {
       const error = new Error('No review images are available for the anatomy video.');

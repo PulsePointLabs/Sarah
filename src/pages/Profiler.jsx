@@ -4260,7 +4260,7 @@ const SECTION_REFERENCE_HINTS = {
 };
 
 const STRICT_INLINE_SECTION_HINTS = {
-  pubic_mound_lower_abdomen: /\b(pubic mound|pubic region|suprapubic|lower abdomen)\b/i,
+  pubic_mound_lower_abdomen: /\b(pubic mound|pubic region|suprapubic|lower abdomen|abdominal reference)\b/i,
   inguinal_folds_groin_skin: /\b(inguinal|groin|inguinal fold)\b/i,
   penis: /\b(penis|penile shaft|shaft)\b/i,
   foreskin: /\b(foreskin|prepuce|preputial)\b/i,

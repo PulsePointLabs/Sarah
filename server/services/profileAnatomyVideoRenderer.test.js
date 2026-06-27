@@ -272,6 +272,40 @@ test('pubic section accepts directly labeled anatomy when a Foley is incidental'
   assert.equal(section.assigned_evidence[0].evidence_id, 'pubic-with-foley');
 });
 
+test('pubic section accepts the verified legacy abdominal reference label', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'legacy-abdominal-reference-fixture',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: ['Pubic Mound and Lower Abdomen', 'The pubic mound and lower abdominal skin are directly reviewed.'],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'pubic_mound_lower_abdomen', section_label: 'Pubic Mound and Lower Abdomen' },
+      { type: 'section', section_key: 'pubic_mound_lower_abdomen', section_label: 'Pubic Mound and Lower Abdomen' },
+    ],
+    images: [
+      {
+        id: 'verified-abdominal-reference',
+        label: 'Abdominal reference view',
+        coverage: 'Lower abdomen, suprapubic skin and pubic mound are directly visible.',
+        sectionKey: 'pubic_mound_lower_abdomen',
+        url: '/uploads/verified-abdominal-reference.jpg',
+        source: 'profile_review_archive',
+      },
+      {
+        id: 'penile-base-decoy',
+        label: 'Inferior seated view, scrotal and penile base, foreskin-covered flaccid state',
+        coverage: 'Penile base and scrotum are visible; lower abdomen and pubic mound are outside the frame.',
+        sectionKey: 'penis',
+        url: '/uploads/penile-base.jpg',
+        source: 'profile_review_archive',
+      },
+    ],
+  });
+  const section = manifest.sections.find((item) => item.section_key === 'pubic_mound_lower_abdomen');
+  assert.equal(section.assigned_evidence[0].evidence_id, 'verified-abdominal-reference');
+  assert.equal(section.assigned_evidence.length, 1);
+});
+
 test('pubic mound section refuses genital close-up evidence', () => {
   const manifest = createReviewEvidenceManifest({
     reviewId: 'pubic-fixture-review',
