@@ -793,3 +793,109 @@ export function dedupeImageRegionFindings(findings = []) {
   }
   return order.map((key) => byTopic.get(key)).filter(Boolean);
 }
+
+function archivedReviewResult(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  return entry.result && typeof entry.result === "object" ? entry.result : entry;
+}
+
+function reviewedImageUrl(image = {}) {
+  return String(image.preview_url || image.previewUrl || image.storagePath || image.url || "").trim();
+}
+
+// Final synthesis can omit valid section callouts even though the underlying
+// image remains in the cumulative library. Carry only missing section-specific
+// visual evidence forward; current-run callouts always remain authoritative.
+export function mergeCumulativeProfileVisualEvidence(result = {}, archive = [], {
+  sections = [],
+  reviewedImages = [],
+  maxFindingsPerSection = 2,
+} = {}) {
+  if (!result || typeof result !== "object") return result;
+
+  const allowedSections = new Set((Array.isArray(sections) ? sections : [])
+    .map((section) => typeof section === "string" ? section : section?.key)
+    .filter(Boolean));
+  const currentReviewed = Array.isArray(reviewedImages) && reviewedImages.length
+    ? reviewedImages
+    : Array.isArray(result?._meta?.reviewed_images)
+      ? result._meta.reviewed_images
+      : [];
+  const nextReviewed = currentReviewed.map((image) => ({ ...image }));
+  const nextAnnotated = Array.isArray(result.annotated_images)
+    ? result.annotated_images.map((image) => ({ ...image }))
+    : [];
+  const nextFindings = Array.isArray(result.image_region_findings)
+    ? result.image_region_findings.map((finding) => ({ ...finding }))
+    : [];
+
+  const reviewedById = new Map(nextReviewed.filter((image) => image?.image_id).map((image) => [image.image_id, image]));
+  const reviewedByUrl = new Map(nextReviewed.map((image) => [reviewedImageUrl(image), image]).filter(([url]) => url));
+  const annotatedIds = new Set(nextAnnotated.map((image) => image?.image_id).filter(Boolean));
+  const findingKeys = new Set(nextFindings.map((finding) => (
+    `${finding?.section_key || ""}:${finding?.image_id || ""}:${finding?.finding_id || finding?.label || finding?.finding || ""}`
+  )));
+  const sectionCounts = new Map();
+  for (const finding of nextFindings) {
+    const key = String(finding?.section_key || "");
+    if (key) sectionCounts.set(key, (sectionCounts.get(key) || 0) + 1);
+  }
+
+  for (const entry of Array.isArray(archive) ? archive : []) {
+    const source = archivedReviewResult(entry);
+    if (!source) continue;
+    const sourceReviewed = Array.isArray(source?._meta?.reviewed_images) ? source._meta.reviewed_images : [];
+    const sourceAnnotated = Array.isArray(source.annotated_images) ? source.annotated_images : [];
+    const sourceFindings = Array.isArray(source.image_region_findings) ? source.image_region_findings : [];
+    const sourceReviewedById = new Map(sourceReviewed.filter((image) => image?.image_id).map((image) => [image.image_id, image]));
+    const sourceAnnotatedById = new Map(sourceAnnotated.filter((image) => image?.image_id).map((image) => [image.image_id, image]));
+
+    for (const finding of sourceFindings) {
+      const sectionKey = String(finding?.section_key || "");
+      const originalImageId = String(finding?.image_id || "");
+      if (!sectionKey || !originalImageId) continue;
+      if (allowedSections.size && !allowedSections.has(sectionKey)) continue;
+      if ((sectionCounts.get(sectionKey) || 0) >= maxFindingsPerSection) continue;
+
+      const sourceImage = sourceReviewedById.get(originalImageId);
+      const sourceUrl = reviewedImageUrl(sourceImage);
+      if (!sourceImage || !sourceUrl) continue;
+
+      let targetImage = reviewedByUrl.get(sourceUrl) || reviewedById.get(originalImageId);
+      let targetImageId = targetImage?.image_id || originalImageId;
+      if (targetImage && reviewedImageUrl(targetImage) && reviewedImageUrl(targetImage) !== sourceUrl) {
+        targetImage = null;
+        targetImageId = `archive_${String(entry?.id || entry?.generated_at || originalImageId).replace(/[^a-z0-9_-]+/gi, "_")}_${originalImageId}`;
+      }
+      if (!targetImage) {
+        targetImage = { ...sourceImage, image_id: targetImageId };
+        nextReviewed.push(targetImage);
+        reviewedById.set(targetImageId, targetImage);
+        reviewedByUrl.set(sourceUrl, targetImage);
+      }
+
+      const annotation = sourceAnnotatedById.get(originalImageId);
+      if (annotation && !annotatedIds.has(targetImageId)) {
+        nextAnnotated.push({ ...annotation, image_id: targetImageId });
+        annotatedIds.add(targetImageId);
+      }
+
+      const nextFinding = { ...finding, image_id: targetImageId };
+      const findingKey = `${sectionKey}:${targetImageId}:${nextFinding.finding_id || nextFinding.label || nextFinding.finding || ""}`;
+      if (findingKeys.has(findingKey)) continue;
+      nextFindings.push(nextFinding);
+      findingKeys.add(findingKey);
+      sectionCounts.set(sectionKey, (sectionCounts.get(sectionKey) || 0) + 1);
+    }
+  }
+
+  return {
+    ...result,
+    annotated_images: nextAnnotated,
+    image_region_findings: nextFindings,
+    _meta: {
+      ...(result._meta || {}),
+      reviewed_images: nextReviewed,
+    },
+  };
+}

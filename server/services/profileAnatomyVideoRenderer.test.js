@@ -104,6 +104,106 @@ test('pelvic or genital section rejects foot-only media and uses compatible geni
   assert.equal(genital.assigned_evidence[0].anatomy_labels.includes('feet_toes'), false);
 });
 
+test('perineum section accepts the saved posterior-inferior perineal reference', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'saved-perineum-fixture',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: [
+      'Perineum',
+      'The perineal body and raphe are directly visible with intact skin.',
+    ],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'perineum', section_label: 'Perineum' },
+      { type: 'section', section_key: 'perineum', section_label: 'Perineum' },
+    ],
+    images: [{
+      id: 'img-040-perineum',
+      label: 'Posterior-inferior seated close-up - perineum, anal verge, scrotal base, proximal gluteal surfaces',
+      coverage: 'Perineal body with midline raphe, anal verge and perianal skin, inferior scrotal surface and scrotal-perineal transition. No device visible.',
+      sectionKey: 'perineum',
+      url: '/uploads/perineum.jpg',
+      source: 'profile_review_archive',
+    }],
+  });
+  const perineum = manifest.sections.find((section) => section.section_key === 'perineum');
+  assert.equal(perineum.media_mode, 'assigned_evidence');
+  assert.equal(perineum.assigned_evidence[0].evidence_id, 'img-040-perineum');
+  assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
+});
+
+test('pelvic review accepts an anal close-up with incidental thighs and a positioning hand', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'anal-incidental-limbs-fixture',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: ['Anal Opening and Perianal Region', 'The anal opening, perianal skin, and surrounding gluteal surfaces are directly reviewed.'],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'anal_opening_perianal_region', section_label: 'Anal Opening and Perianal Region' },
+      { type: 'section', section_key: 'anal_opening_perianal_region', section_label: 'Anal Opening and Perianal Region' },
+    ],
+    images: [{
+      id: 'anal-with-positioning',
+      label: 'Posterior close-up of anal opening, perianal skin, perineum, proximal inner thighs and positioning hand',
+      coverage: 'Anal verge, perianal skin, gluteal cleft, perineal body and proximal thighs are visible.',
+      sectionKey: 'anal_opening_perianal_region',
+      url: '/uploads/anal.jpg',
+      source: 'fixture',
+    }],
+  });
+  const section = manifest.sections.find((item) => item.section_key === 'anal_opening_perianal_region');
+  assert.equal(section.media_mode, 'assigned_evidence');
+  assert.equal(section.assigned_evidence[0].evidence_id, 'anal-with-positioning');
+});
+
+test('pelvic review still rejects true distal lower-limb evidence', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'pelvic-distal-limb-decoy-fixture',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: ['Perineum', 'The perineal body and surrounding skin are directly reviewed.'],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'perineum', section_label: 'Perineum' },
+      { type: 'section', section_key: 'perineum', section_label: 'Perineum' },
+    ],
+    images: [{
+      id: 'perineum-foot-decoy',
+      label: 'Lower-body view mentioning the perineum with feet, toes, ankles, calves and knees dominant',
+      coverage: 'Feet toes ankles calves knees lower legs; perineum is not directly visible.',
+      sectionKey: 'limitations_future_coverage',
+      url: '/uploads/feet.jpg',
+      source: 'fixture',
+    }],
+  });
+  const section = manifest.sections.find((item) => item.section_key === 'perineum');
+  assert.equal(section.media_mode, 'placeholder');
+  assert.equal(section.assigned_evidence.length, 0);
+});
+
+test('pubic section accepts directly labeled anatomy when a Foley is incidental', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'pubic-incidental-device-fixture',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: ['Pubic Mound and Lower Abdomen', 'The pubic mound, suprapubic skin, lower abdomen, and inguinal folds are directly reviewed.'],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'pubic_mound_lower_abdomen', section_label: 'Pubic Mound and Lower Abdomen' },
+      { type: 'section', section_key: 'pubic_mound_lower_abdomen', section_label: 'Pubic Mound and Lower Abdomen' },
+    ],
+    images: [{
+      id: 'pubic-with-foley',
+      label: 'Wide-field pubic mound, suprapubic lower abdomen and inguinal folds with Foley tubing visible',
+      coverage: 'Pubic mound lower abdomen groin and inguinal skin are directly visible; Foley tubing is incidental.',
+      sectionKey: 'pubic_mound_lower_abdomen',
+      url: '/uploads/pubic-foley.jpg',
+      source: 'fixture',
+    }],
+  });
+  const section = manifest.sections.find((item) => item.section_key === 'pubic_mound_lower_abdomen');
+  assert.equal(section.media_mode, 'assigned_evidence');
+  assert.equal(section.assigned_evidence[0].evidence_id, 'pubic-with-foley');
+});
+
 test('pubic mound section refuses genital close-up evidence', () => {
   const manifest = createReviewEvidenceManifest({
     reviewId: 'pubic-fixture-review',

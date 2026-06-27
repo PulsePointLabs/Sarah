@@ -22,6 +22,7 @@ import {
   cleanProfileImageReviewText,
   cleanupProfileImageReviewResult,
   dedupeProfileImageReviewItems,
+  mergeCumulativeProfileVisualEvidence,
 } from '../../src/lib/profileImageReviewCleanup.js';
 import { friendlyJobErrorMessage } from '../../src/lib/jobErrorMessages.js';
 import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
@@ -79,13 +80,26 @@ function persistCompletedProfileImageReviewResult(result, payload = {}, context 
   if (!fields) return result;
 
   const generatedAt = new Date().toISOString();
+  const existing = listEntities('SessionClusterAnalysis')
+    .sort((a, b) => new Date(b?.updated_date || b?.created_date || 0) - new Date(a?.updated_date || a?.created_date || 0))[0];
   const sourceSessionCount = Number(payload?.source_session_count || payload?.session_count || 0) || undefined;
   const sourceMotionCount = Number(payload?.motion_evidence_session_count || 0) || undefined;
   const currentMeta = result._meta && typeof result._meta === 'object' ? result._meta : {};
+  const reviewedImages = Array.isArray(payload?.reviewed_images) && payload.reviewed_images.length
+    ? payload.reviewed_images
+    : Array.isArray(context?.meta?.reviewed_images) && context.meta.reviewed_images.length
+      ? context.meta.reviewed_images
+      : Array.isArray(currentMeta.reviewed_images)
+        ? currentMeta.reviewed_images
+        : [];
+  const mergedResult = mergeCumulativeProfileVisualEvidence(result, existing?.[fields.archiveKey] || [], {
+    sections: payload?.sections || [],
+    reviewedImages,
+  });
   const storedResult = {
-    ...result,
+    ...mergedResult,
     _meta: {
-      ...currentMeta,
+      ...(mergedResult._meta || currentMeta),
       reviewType,
       last_generated_at: currentMeta.last_generated_at || generatedAt,
       updated_at: generatedAt,
@@ -93,14 +107,12 @@ function persistCompletedProfileImageReviewResult(result, payload = {}, context 
       source_job_completed_at: generatedAt,
       ...(sourceSessionCount != null ? { source_session_count: sourceSessionCount } : {}),
       ...(sourceMotionCount != null ? { motion_evidence_session_count: sourceMotionCount } : {}),
-      image_count: Number(payload?.image_count || payload?.full_review_image_count || currentMeta.image_count || 0) || currentMeta.image_count,
-      fresh_image_count: Number(payload?.fresh_image_count || currentMeta.fresh_image_count || 0) || 0,
-      reused_saved_image_count: Number(payload?.reused_saved_image_count || currentMeta.reused_saved_image_count || 0) || 0,
+      image_count: Number(payload?.image_count || payload?.full_review_image_count || context?.meta?.image_count || currentMeta.image_count || reviewedImages.length || 0) || currentMeta.image_count,
+      fresh_image_count: Number(payload?.fresh_image_count || context?.meta?.fresh_image_count || currentMeta.fresh_image_count || 0) || 0,
+      reused_saved_image_count: Number(payload?.reused_saved_image_count || context?.meta?.reused_saved_image_count || currentMeta.reused_saved_image_count || 0) || 0,
+      reviewed_images: mergedResult?._meta?.reviewed_images || reviewedImages,
     },
   };
-
-  const existing = listEntities('SessionClusterAnalysis')
-    .sort((a, b) => new Date(b?.updated_date || b?.created_date || 0) - new Date(a?.updated_date || a?.created_date || 0))[0];
   const archiveEntry = {
     id: `${reviewType}-${storedResult._meta.last_generated_at}-${storedResult._meta.source_job_id || 'job'}`.replace(/[^a-zA-Z0-9_.:-]+/g, '-'),
     kind: reviewType,

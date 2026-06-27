@@ -27,6 +27,7 @@ import {
   ANATOMY_REVIEW_ASSIGNMENT_CONTRACT,
   cleanProfileImageReviewText,
   cleanupProfileImageReviewResult,
+  mergeCumulativeProfileVisualEvidence,
   profileImageReviewTopicKey,
 } from "@/lib/profileImageReviewCleanup";
 import {
@@ -2640,9 +2641,54 @@ function selectBalancedHeadToToeAttachments(attachments = [], limit = 20) {
   return selected.slice(0, limit).map(({ _headToToeRank, ...attachment }) => attachment);
 }
 
+const PELVIC_EVIDENCE_BUCKETS = [
+  { key: "pubic_groin", quota: 2, re: /\b(pubic|suprapubic|inguinal|groin|lower abdomen|hernia scar)\b/i },
+  { key: "penis_foreskin", quota: 2, re: /\b(penis|penile|shaft|foreskin|prepuce)\b/i },
+  { key: "glans_meatus", quota: 2, re: /\b(glans|meatus|meatal|urethral opening)\b/i },
+  { key: "scrotum_testes", quota: 2, re: /\b(scrotum|scrotal|testes|testicle|testicular)\b/i },
+  { key: "perineum", quota: 2, re: /\b(perineum|perineal|perineal body|perineal raphe|scrotal base)\b/i },
+  { key: "perianal_gluteal", quota: 2, re: /\b(perianal|anal verge|anal opening|anus|buttock|gluteal)\b/i },
+  { key: "device", quota: 1, re: /\b(foley|catheter|statlock|device contact)\b/i },
+];
+
+function selectBalancedPelvicAttachments(attachments = [], limit = 20) {
+  const seen = new Set();
+  const candidates = (Array.isArray(attachments) ? attachments : [])
+    .filter((attachment) => {
+      const key = savedAttachmentDedupeKey(attachment);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((attachment) => ({
+      attachment,
+      text: savedEvidenceAttachmentScopeText(attachment),
+      score: Number(attachment.selection_score) || 0,
+      savedAt: Date.parse(attachment.saved_at || attachment.selection_group_created_at || 0) || 0,
+    }))
+    .sort((a, b) => b.score - a.score || b.savedAt - a.savedAt);
+  const selected = [];
+  const selectedKeys = new Set();
+  const add = (entry) => {
+    const key = savedAttachmentDedupeKey(entry?.attachment);
+    if (!key || selectedKeys.has(key) || selected.length >= limit) return;
+    selectedKeys.add(key);
+    selected.push(entry.attachment);
+  };
+
+  for (const bucket of PELVIC_EVIDENCE_BUCKETS) {
+    candidates.filter((entry) => bucket.re.test(entry.text)).slice(0, bucket.quota).forEach(add);
+  }
+  candidates.forEach(add);
+  return selected.slice(0, limit);
+}
+
 function selectSavedAttachmentsForReview(attachments = [], limit = 20, purpose = "general") {
   if (purpose === "head_to_toe_body_reference") {
     return selectBalancedHeadToToeAttachments(attachments, limit);
+  }
+  if (purpose === "pelvic_genital") {
+    return selectBalancedPelvicAttachments(attachments, limit);
   }
   return (Array.isArray(attachments) ? attachments : []).slice(0, limit);
 }
@@ -4265,7 +4311,14 @@ function inlineEvidenceImageScore(result, imageId, sectionKey, findingsForImage 
   return score;
 }
 
-function priorInlineEvidenceImageUseCounts(result, sectionKey, sections = []) {
+function inlineEvidenceCanonicalKey(result, imageId, transientImages = [], pelvicScoped = false) {
+  const image = pelvicScoped
+    ? rawProfileImageById(result, imageId, transientImages)
+    : profileImageById(result, imageId, transientImages);
+  return String(image?.preview_url || image?.storagePath || imageId || "").trim();
+}
+
+function priorInlineEvidenceImageUseCounts(result, sectionKey, sections = [], transientImages = [], pelvicScoped = false) {
   const counts = new Map();
   const sectionKeys = Array.isArray(sections) ? sections.map((section) => section?.key).filter(Boolean) : [];
   const currentIndex = sectionKeys.indexOf(sectionKey);
@@ -4274,7 +4327,8 @@ function priorInlineEvidenceImageUseCounts(result, sectionKey, sections = []) {
   const allFindings = Array.isArray(result?.image_region_findings) ? result.image_region_findings : [];
   for (const finding of allFindings) {
     if (!finding?.image_id || !priorKeys.has(finding.section_key)) continue;
-    counts.set(finding.image_id, (counts.get(finding.image_id) || 0) + 1);
+    const key = inlineEvidenceCanonicalKey(result, finding.image_id, transientImages, pelvicScoped);
+    if (key) counts.set(key, (counts.get(key) || 0) + 1);
   }
   return counts;
 }
@@ -4282,19 +4336,26 @@ function priorInlineEvidenceImageUseCounts(result, sectionKey, sections = []) {
 function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transientImages = [], pelvicScoped = false, sections = []) {
   const reviewed = Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images : [];
   const annotated = Array.isArray(result?.annotated_images) ? result.annotated_images : [];
-  const priorUseCounts = priorInlineEvidenceImageUseCounts(result, sectionKey, sections);
+  const priorUseCounts = priorInlineEvidenceImageUseCounts(result, sectionKey, sections, transientImages, pelvicScoped);
   const candidates = [
     ...findings.map((finding) => finding.image_id),
     ...reviewed.map((image) => image.image_id),
     ...annotated.map((image) => image.image_id),
     ...transientImages.map((image, index) => image.image_id || `img_${String(index + 1).padStart(3, "0")}`),
   ].filter(Boolean);
-  const uniqueIds = [...new Set(candidates)];
+  const seenCanonicalKeys = new Set();
+  const uniqueIds = [...new Set(candidates)].filter((imageId) => {
+    const key = inlineEvidenceCanonicalKey(result, imageId, transientImages, pelvicScoped);
+    if (!key || seenCanonicalKeys.has(key)) return false;
+    seenCanonicalKeys.add(key);
+    return true;
+  });
   const scored = uniqueIds
     .map((imageId) => {
       const imageFindings = findings.filter((finding) => finding.image_id === imageId);
       const score = inlineEvidenceImageScore(result, imageId, sectionKey, imageFindings, transientImages, pelvicScoped);
-      const priorUseCount = priorUseCounts.get(imageId) || 0;
+      const canonicalKey = inlineEvidenceCanonicalKey(result, imageId, transientImages, pelvicScoped);
+      const priorUseCount = priorUseCounts.get(canonicalKey) || 0;
       return {
         imageId,
         score,
@@ -6766,6 +6827,9 @@ ANNOTATED IMAGE OUTPUT RULES:
   };
 
   const sections = profileReviewResultSections(config);
+  const cumulativeVisualResult = result
+    ? mergeCumulativeProfileVisualEvidence(result, archive, { sections })
+    : result;
   const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
   const profileStale = Boolean(result) && (
     isProfileAIContentStale(result, sessions) ||
@@ -6945,14 +7009,14 @@ ANNOTATED IMAGE OUTPUT RULES:
           : `${recoverableBatchSet?.total || recoverableBatchSet?.batches?.length || 0} completed batches can be assembled without rerunning image review.`,
     },
   ];
-  const pelvicResultScoped = isPelvicGenitalReviewResult(result, config);
-  const lightboxImageIds = result ? [...new Set([
-    ...(Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images.map((image) => image.image_id).filter(Boolean) : []),
-    ...(Array.isArray(result?.annotated_images) ? result.annotated_images.map((image) => image.image_id).filter(Boolean) : []),
-    ...(Array.isArray(result?.image_region_findings) ? result.image_region_findings.map((finding) => finding.image_id).filter(Boolean) : []),
+  const pelvicResultScoped = isPelvicGenitalReviewResult(cumulativeVisualResult, config);
+  const lightboxImageIds = cumulativeVisualResult ? [...new Set([
+    ...(Array.isArray(cumulativeVisualResult?._meta?.reviewed_images) ? cumulativeVisualResult._meta.reviewed_images.map((image) => image.image_id).filter(Boolean) : []),
+    ...(Array.isArray(cumulativeVisualResult?.annotated_images) ? cumulativeVisualResult.annotated_images.map((image) => image.image_id).filter(Boolean) : []),
+    ...(Array.isArray(cumulativeVisualResult?.image_region_findings) ? cumulativeVisualResult.image_region_findings.map((finding) => finding.image_id).filter(Boolean) : []),
   ])].filter((imageId) => {
     if (!pelvicResultScoped) return true;
-    const text = pelvicGenitalImageEvidenceText(result, imageId, evidenceLookupImages, null);
+    const text = pelvicGenitalImageEvidenceText(cumulativeVisualResult, imageId, evidenceLookupImages, null);
     return text.trim() && !isPelvicGenitalTextOutOfScope(text) && PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(text);
   }) : [];
   const paragraphs = [];
@@ -6968,7 +7032,7 @@ ANNOTATED IMAGE OUTPUT RULES:
         paragraphs.push(calmSpokenHeading(section.label));
         paragraphMeta.push({ type: "section-title", section, displayLabel: section.label });
         if (includeImageCalloutsInTts) {
-          for (const calloutParagraph of imageCalloutNarrationParagraphs(result, section.key, evidenceLookupImages)) {
+          for (const calloutParagraph of imageCalloutNarrationParagraphs(cumulativeVisualResult, section.key, evidenceLookupImages)) {
             paragraphs.push(calloutParagraph);
             paragraphMeta.push({ type: "visual-callout", section });
           }
@@ -6985,15 +7049,15 @@ ANNOTATED IMAGE OUTPUT RULES:
 
   const buildAnatomyVideoImages = () => {
     if (!result) return [];
-    const pelvicScoped = isPelvicGenitalReviewResult(result, config);
+    const pelvicScoped = isPelvicGenitalReviewResult(cumulativeVisualResult, config);
     const imageIds = [...new Set([
       ...lightboxImageIds,
       ...inlineReferenceImages.map((image, index) => image.image_id || `profile-image-${index + 1}`),
     ].filter(Boolean))];
     const sectionsByImage = new Map();
     const regionsByImage = new Map();
-    (Array.isArray(result.image_region_findings) ? result.image_region_findings : [])
-      .filter((finding) => !pelvicScoped || isPelvicGenitalFindingInScope(result, finding, evidenceLookupImages))
+    (Array.isArray(cumulativeVisualResult?.image_region_findings) ? cumulativeVisualResult.image_region_findings : [])
+      .filter((finding) => !pelvicScoped || isPelvicGenitalFindingInScope(cumulativeVisualResult, finding, evidenceLookupImages))
       .forEach((finding) => {
       if (!finding?.image_id) return;
       const section = sections.find((item) => item.key === finding.section_key);
@@ -7008,15 +7072,15 @@ ANNOTATED IMAGE OUTPUT RULES:
       }
     });
     const annotatedByImage = new Map();
-    (Array.isArray(result.annotated_images) ? result.annotated_images : []).forEach((image) => {
+    (Array.isArray(cumulativeVisualResult?.annotated_images) ? cumulativeVisualResult.annotated_images : []).forEach((image) => {
       if (image?.image_id) annotatedByImage.set(image.image_id, image);
     });
     return imageIds
       .map((imageId) => {
         const image = pelvicScoped
-          ? rawProfileImageById(result, imageId, evidenceLookupImages)
-          : profileImageById(result, imageId, evidenceLookupImages);
-        const rawImage = rawProfileImageById(result, imageId, evidenceLookupImages);
+          ? rawProfileImageById(cumulativeVisualResult, imageId, evidenceLookupImages)
+          : profileImageById(cumulativeVisualResult, imageId, evidenceLookupImages);
+        const rawImage = rawProfileImageById(cumulativeVisualResult, imageId, evidenceLookupImages);
         return { image, rawImage };
       })
       .filter(({ image, rawImage }) => {
@@ -7743,7 +7807,7 @@ ANNOTATED IMAGE OUTPUT RULES:
                     <>
                       {heading}
                       <InlineImageEvidence
-                        result={result}
+                        result={cumulativeVisualResult}
                         sectionKey={meta.section.key}
                         sections={sections}
                         color={color}
@@ -7803,7 +7867,7 @@ ANNOTATED IMAGE OUTPUT RULES:
         )}
 
         <ProfileImageLightbox
-          result={result}
+          result={cumulativeVisualResult}
           imageIds={lightboxImageIds}
           selectedImageId={selectedProfilerImageId}
           onSelectImageId={setSelectedProfilerImageId}

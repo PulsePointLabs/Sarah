@@ -382,17 +382,24 @@ function fineStructureKeysForImage(image = {}) {
 }
 
 function isDeviceHeavyImage(image = {}) {
-  const fineKeys = fineStructureKeysForImage(image);
-  if ([...fineKeys].some((key) => DEVICE_STRUCTURE_KEYS.has(key))) return true;
-  const haystack = normalizeText([
-    image.label,
+  const rawText = [
+    image.sectionKey,
     image.section,
+    image.label,
     image.coverage,
     image.regions,
     image.regionLabels,
+    image.anatomy_labels,
+    image.fine_structure_labels,
     image.source,
-  ].filter(Boolean).flat().join(' '));
-  return /\b(foley|catheter|drainage\s*bag|leg\s*bag|urine|tubing|statlock|device|procedure)\b/i.test(haystack);
+  ].filter(Boolean).flat().join(' ');
+  const positiveDeviceText = normalizeText(rawText).replace(
+    /\b(?:no|not|without|absent|lacks?)\s+(?:visible\s+|direct\s+|clear\s+|obvious\s+|active\s+){0,4}(?:foley|catheter|drainage\s*bag|leg\s*bag|urine|tube|tubing|statlock|device|procedure)(?:\s+(?:contact|visible|present|in\s+frame))?\b/gi,
+    ' ',
+  );
+  const fineKeys = collectFineStructureKeys(positiveDeviceText);
+  if ([...fineKeys].some((key) => DEVICE_STRUCTURE_KEYS.has(key))) return true;
+  return /\b(foley|catheter|drainage\s*bag|leg\s*bag|urine|tubing|statlock|device|procedure)\b/i.test(positiveDeviceText);
 }
 
 function sectionRequestsDevice(meta = {}, paragraphText = '') {
@@ -406,6 +413,15 @@ function sectionRequestsDevice(meta = {}, paragraphText = '') {
     paragraphText,
   ].filter(Boolean).join(' '));
   return [...requested].some((key) => DEVICE_STRUCTURE_KEYS.has(key));
+}
+
+function hasDirectRequestedAnatomyEvidence(image = {}, meta = {}, paragraphText = '') {
+  const requested = requestedStrictFineStructureKeys(meta, paragraphText);
+  const requestedAnatomy = [...requested].filter((key) => !DEVICE_STRUCTURE_KEYS.has(key));
+  if (!requestedAnatomy.length) return false;
+  if (requestedAnatomy.includes('pubic_groin') && !hasStrongPubicGroinEvidence(image)) return false;
+  const available = directFineStructureKeysForImage(image);
+  return requestedAnatomy.some((key) => available.has(key));
 }
 
 function requestedStrictFineStructureKeys(meta = {}, paragraphText = '') {
@@ -437,15 +453,31 @@ function requestedFineStructureText(meta = {}, paragraphText = '') {
 
 function imageFineStructureText(image = {}) {
   return normalizeText([
-    image.sectionKey,
-    image.section,
     image.label,
+    image.display_label,
     image.coverage,
-    image.regions,
-    image.regionLabels,
-    image.anatomy_labels,
-    image.fine_structure_labels,
+    image.source,
   ].filter(Boolean).flat().join(' '));
+}
+
+function directFineStructureKeysForImage(image = {}) {
+  return collectFineStructureKeys(imageFineStructureText(image));
+}
+
+function hasStrongPubicGroinEvidence(image = {}) {
+  const label = normalizeText([image.label, image.display_label].filter(Boolean).join(' '));
+  const coverage = normalizeText(image.coverage || '');
+  const patterns = [
+    /\bpubic(?:\s+mound|\s+region|\s+base)?\b/i,
+    /\bsuprapubic\b/i,
+    /\binguinal(?:\s+folds?|\s+skin|\s+region)?\b/i,
+    /\bgroin(?:\s+skin|\s+region)?\b/i,
+    /\blower\s+abdomen\b/i,
+    /\bpenile\s+base\b/i,
+  ];
+  if (patterns.some((pattern) => pattern.test(label))) return true;
+  if (/\b(?:glans|meatus|foreskin|penile\s+shaft|scrotum|perineum|dilator|catheter|foley)\b/i.test(label)) return false;
+  return patterns.filter((pattern) => pattern.test(coverage)).length >= 2;
 }
 
 function imageTextHasAny(text = '', patterns = []) {
@@ -455,7 +487,7 @@ function imageTextHasAny(text = '', patterns = []) {
 function imageMatchesStrictSectionSpecificRequest(image = {}, requestedKeys = new Set(), requestedText = '') {
   if (!requestedKeys.size) return true;
   const imageText = imageFineStructureText(image);
-  const imageKeys = fineStructureKeysForImage(image);
+  const imageKeys = directFineStructureKeysForImage(image);
   const imageRegions = regionKeysForImage(image);
   const imageHasGenitalDetail = [...imageKeys].some((key) => GENITAL_DETAIL_STRUCTURE_KEYS.has(key));
 
@@ -470,7 +502,7 @@ function imageMatchesStrictSectionSpecificRequest(image = {}, requestedKeys = ne
       /\bsuprapubic\b/i,
     ]);
     if (!hasPubicGroinText && !imageKeys.has('pubic_groin') && !imageRegions.has('pelvis_pubic_region')) return false;
-    if (imageHasGenitalDetail && !hasPubicGroinText && !imageKeys.has('pubic_groin')) return false;
+    if (imageHasGenitalDetail && !hasStrongPubicGroinEvidence(image)) return false;
   }
 
   if (requestedKeys.has('perineum') || /\bperineum|perineal|perineal\s+body\b/i.test(requestedText)) {
@@ -506,7 +538,7 @@ function imageMatchesFineStructureRequest(image = {}, targetKey = '', meta = {},
 
   const requestedText = requestedFineStructureText(meta, paragraphText);
   const requestedKeys = requestedStrictFineStructureKeys(meta, paragraphText);
-  const imageFineKeys = fineStructureKeysForImage(image);
+  const imageFineKeys = directFineStructureKeysForImage(image);
   const imageText = imageFineStructureText(image);
   const requestedPubicGroin = requestedKeys.has('pubic_groin')
     || /\b(pubic|pubic\s+mound|inguinal|groin|lower\s+abdomen|penile\s+base)\b/i.test(requestedText);
@@ -520,7 +552,7 @@ function imageMatchesFineStructureRequest(image = {}, targetKey = '', meta = {},
 
   if (requestedPubicGroin && !requestedGenitalDetail) {
     if (!imageHasPubicGroin) return false;
-    if (imageHasGenitalDetail && !requestedGenitalDetail) return false;
+    if (imageHasGenitalDetail && !requestedGenitalDetail && !hasStrongPubicGroinEvidence(image)) return false;
   }
 
   if (targetKey === 'pelvis_pubic_region' && !requestedGenitalDetail && imageHasGenitalDetail && !imageHasPubicGroin) {
@@ -545,7 +577,7 @@ function fineStructureMatchScore(image = {}, paragraphText = '', meta = {}) {
     paragraphText,
   ].filter(Boolean).join(' '));
   if (!requested.size) return 0;
-  const imageKeys = fineStructureKeysForImage(image);
+  const imageKeys = directFineStructureKeysForImage(image);
   let score = 0;
   for (const key of requested) {
     if (imageKeys.has(key)) score += 48;
@@ -664,6 +696,19 @@ function regionKeysForImage(image = {}) {
     if (SECTION_KEY_REGION_MAP.has(key)) keys.add(SECTION_KEY_REGION_MAP.get(key));
   }
   for (const key of negatedKeys) keys.delete(key);
+  if (
+    keys.has('lower_limbs')
+    && [...keys].some((key) => PELVIC_GENITAL_REVIEW_ALLOWED_REGIONS.has(key))
+  ) {
+    const allText = normalizeText([
+      textFields.label,
+      textFields.coverage,
+      textFields.meta,
+      image.sectionKey,
+    ].filter(Boolean).join(' ')).replace(/\bleg\s+bag\b/g, ' ');
+    const hasDistalLowerLimbEvidence = /\b(?:lower\s+limbs?|lower\s+extremit(?:y|ies)|lower\s+legs?|calves?|knees?|shins?|feet|foot|toes?|ankles?|heels?|plantar)\b/i.test(allText);
+    if (!hasDistalLowerLimbEvidence) keys.delete('lower_limbs');
+  }
   return keys;
 }
 
@@ -780,9 +825,14 @@ function scoreImageForReviewFallback(image, targetKey, meta = {}, paragraphText 
 function fallbackScoreForSpecificSection(image, targetKey, meta = {}, paragraphText = '', reviewScope = '') {
   if (!image || !targetKey || targetKey === 'overview') return -1000;
   if (!isImageAllowedForReviewScope(image, reviewScope)) return -1000;
-  if (isDeviceHeavyImage(image) && !sectionRequestsDevice(meta, paragraphText)) return -1000;
+  if (!imageMatchesFineStructureRequest(image, targetKey, meta, paragraphText, reviewScope)) return -1000;
+  if (
+    isDeviceHeavyImage(image)
+    && !sectionRequestsDevice(meta, paragraphText)
+    && !hasDirectRequestedAnatomyEvidence(image, meta, paragraphText)
+  ) return -1000;
   const keys = regionKeysForImage(image);
-  const fineKeys = fineStructureKeysForImage(image);
+  const fineKeys = directFineStructureKeysForImage(image);
   const requestedText = requestedFineStructureText(meta, paragraphText);
   const requestedKeys = requestedStrictFineStructureKeys(meta, paragraphText);
   const hasGenitalDetail = [...fineKeys].some((key) => GENITAL_DETAIL_STRUCTURE_KEYS.has(key));
@@ -913,6 +963,7 @@ function isImageAllowedForManifestSection(image, targetKey, reviewScope = '', me
   if (!imageMatchesFineStructureRequest(image, targetKey, meta, paragraphText, reviewScope)) return false;
   if (!isDeviceHeavyImage(image)) return true;
   if (sectionRequestsDevice(meta, paragraphText) && DEVICE_AUTHORIZED_REGION_KEYS.has(targetKey)) return true;
+  if (hasDirectRequestedAnatomyEvidence(image, meta, paragraphText)) return true;
   return false;
 }
 
@@ -964,7 +1015,9 @@ function groupParagraphsIntoManifestSections(paragraphs = [], paragraphMeta = []
     const isBoundary = item.meta.type === 'title' || item.meta.type === 'section-title' || !current || (explicitKey && explicitKey !== current.section_key && item.meta.type !== 'visual-callout');
     if (isBoundary) {
       pushCurrent();
-      const resolution = sectionRegionResolutionFromMeta(item.meta, item.text, reviewScope);
+      const resolution = item.meta.type === 'title'
+        ? { key: 'overview', source: 'document_title' }
+        : sectionRegionResolutionFromMeta(item.meta, item.text, reviewScope);
       const sectionKey = explicitKey || resolution.key || `section_${sections.length + 1}`;
       const title = displayLabelForMeta(item.meta, item.text);
       current = {
@@ -989,7 +1042,7 @@ function groupParagraphsIntoManifestSections(paragraphs = [], paragraphMeta = []
 
 function assignmentMetadataForImage(image = {}, score = 0, reason = '', targetKey = '') {
   const anatomyLabels = [...regionKeysForImage(image)];
-  const fineLabels = [...fineStructureKeysForImage(image)];
+  const fineLabels = [...directFineStructureKeysForImage(image)];
   const regionCropFallback = allowsRegionCropFallback(targetKey, new Set(anatomyLabels), image);
   return {
     evidence_id: image.id || null,
@@ -1132,7 +1185,15 @@ export function validateReviewEvidenceManifest(manifest = {}) {
           errors.push(`Section ${section.section_id} contains prohibited anatomy label ${blocked} from evidence ${evidence.evidence_id}.`);
         }
       }
-      if (evidence.device_related && !sectionRequestsDevice({ section_key: section.section_key, section_label: section.section_title }, section.narration_text)) {
+      if (
+        evidence.device_related
+        && !sectionRequestsDevice({ section_key: section.section_key, section_label: section.section_title }, section.narration_text)
+        && !hasDirectRequestedAnatomyEvidence(
+          evidence,
+          { section_key: section.section_key, section_label: section.section_title },
+          section.narration_text,
+        )
+      ) {
         errors.push(`Device evidence ${evidence.evidence_id} is not authorized for section ${section.section_id}.`);
       }
     });

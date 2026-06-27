@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.38",
-  "commit": "deb6ade",
-  "commitMessage": "Add Vital Signs card narration",
-  "builtAt": "2026-06-26T23:52:55.785Z"
+  "version": "0.1.39",
+  "commit": "ccb8369",
+  "commitMessage": "Move Vital Signs narration to session detail",
+  "builtAt": "2026-06-27T01:43:56.394Z"
 };

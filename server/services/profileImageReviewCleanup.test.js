@@ -4,6 +4,7 @@ import {
   ANATOMY_REVIEW_ASSIGNMENT_CONTRACT,
   classifyAnatomyReviewEvidence,
   cleanupProfileImageReviewResult,
+  mergeCumulativeProfileVisualEvidence,
   reduceProfileFindingRepetition,
 } from '../../src/lib/profileImageReviewCleanup.js';
 
@@ -53,6 +54,50 @@ function allText(value) {
   add(value);
   return chunks.join(' ');
 }
+
+test('carries missing perineum callout and its exact reviewed image forward from archive', () => {
+  const current = {
+    annotated_images: [{ image_id: 'img_030', view_label: 'Glans close-up' }],
+    image_region_findings: [{
+      finding_id: 'current-glans',
+      image_id: 'img_030',
+      section_key: 'glans_meatus',
+      finding: 'Glans tissue appears intact.',
+    }],
+    _meta: {
+      reviewed_images: [{ image_id: 'img_030', preview_url: '/uploads/glans.jpg' }],
+    },
+  };
+  const archive = [{
+    id: 'older-pelvic-review',
+    result: {
+      annotated_images: [{
+        image_id: 'img_040',
+        view_label: 'Posterior-inferior seated perineal reference',
+        coverage: 'Perineal body, perineal raphe, scrotal base, anterior anal margin',
+      }],
+      image_region_findings: [{
+        finding_id: 'archived-perineum',
+        image_id: 'img_040',
+        section_key: 'perineum',
+        finding: 'The perineal body and raphe are directly visible with intact skin.',
+      }],
+      _meta: {
+        reviewed_images: [{
+          image_id: 'img_040',
+          preview_url: '/uploads/perineum.jpg',
+          display_label: 'Posterior-inferior perineal and gluteal view',
+        }],
+      },
+    },
+  }];
+
+  const merged = mergeCumulativeProfileVisualEvidence(current, archive, { sections: PELVIC_SECTIONS });
+  assert.equal(merged.image_region_findings.some((finding) => finding.section_key === 'perineum'), true);
+  assert.equal(merged.image_region_findings.some((finding) => finding.finding_id === 'current-glans'), true);
+  assert.equal(merged.annotated_images.some((image) => image.image_id === 'img_040'), true);
+  assert.equal(merged._meta.reviewed_images.find((image) => image.image_id === 'img_040')?.preview_url, '/uploads/perineum.jpg');
+});
 
 test('consolidates repeated hair, glasses, and goatee findings', () => {
   const result = cleanupProfileImageReviewResult({
