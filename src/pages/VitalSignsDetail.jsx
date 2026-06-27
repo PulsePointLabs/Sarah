@@ -145,15 +145,34 @@ function BloodPressureChart({ readings }) {
   );
 }
 
-function AnalysisPanel({ analysis, loading, error, onRetry }) {
+function AnalysisPanel({ analysis, loading, error, onRetry, elapsedSeconds = 0 }) {
   if (loading) {
     return (
       <Section title="Sarah’s read" icon={Brain} className="border-primary/25">
         <div className="flex items-start gap-3">
-          <Sparkles className="mt-0.5 h-5 w-5 animate-pulse text-primary" />
-          <div>
-            <p className="font-semibold text-foreground">Sarah is reading the session once.</p>
-            <p className="mt-1 text-sm text-muted-foreground">She’s correlating the trend, HRV quality, events, blood pressure, recovery, and capture quality. The finished read will be saved and reused.</p>
+          <Sparkles className="mt-0.5 h-5 w-5 shrink-0 animate-pulse text-primary" />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="font-semibold text-foreground">Building a new saved read</p>
+              <span className="rounded-md border border-primary/25 bg-primary/10 px-2 py-1 text-xs font-semibold uppercase text-primary">
+                Analysis active
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              The desktop is correlating heart-rate trend, heart-rate variability quality, events, blood pressure, recovery, and capture quality.
+            </p>
+            <div className="mt-4 h-2 overflow-hidden rounded-full bg-muted">
+              <div className="h-full w-2/5 animate-pulse rounded-full bg-primary" />
+            </div>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <Clock3 className="h-3.5 w-3.5" /> Active for {formatDurationWords(elapsedSeconds)}
+              </span>
+              <span>Waiting for the desktop AI response</span>
+            </div>
+            <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+              When this finishes, Sarah saves the completed read to this exact Vital Signs transfer. Reloading the page will reuse that saved result.
+            </p>
           </div>
         </div>
       </Section>
@@ -248,6 +267,8 @@ export default function VitalSignsDetail() {
   const [transfer, setTransfer] = useState(null);
   const [loading, setLoading] = useState(true);
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisStartedAt, setAnalysisStartedAt] = useState(0);
+  const [analysisElapsedSeconds, setAnalysisElapsedSeconds] = useState(0);
   const [error, setError] = useState("");
   const [analysisError, setAnalysisError] = useState("");
 
@@ -267,6 +288,9 @@ export default function VitalSignsDetail() {
   }, [id]);
 
   const analyze = useCallback(async () => {
+    const startedAt = Date.now();
+    setAnalysisStartedAt(startedAt);
+    setAnalysisElapsedSeconds(0);
     setAnalysisLoading(true);
     setAnalysisError("");
     try {
@@ -280,6 +304,14 @@ export default function VitalSignsDetail() {
       setAnalysisLoading(false);
     }
   }, [id]);
+
+  useEffect(() => {
+    if (!analysisLoading || !analysisStartedAt) return undefined;
+    const updateElapsed = () => setAnalysisElapsedSeconds(Math.max(0, Math.floor((Date.now() - analysisStartedAt) / 1000)));
+    updateElapsed();
+    const intervalId = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [analysisLoading, analysisStartedAt]);
 
   useEffect(() => { loadTransfer(); }, [loadTransfer]);
   useEffect(() => {
@@ -369,7 +401,13 @@ export default function VitalSignsDetail() {
 
       {(!transfer.analysis || analysisLoading || analysisError) && (
         <div className="mt-5">
-          <AnalysisPanel analysis={transfer.analysis} loading={analysisLoading} error={analysisError} onRetry={analyze} />
+          <AnalysisPanel
+            analysis={transfer.analysis}
+            loading={analysisLoading}
+            error={analysisError}
+            onRetry={analyze}
+            elapsedSeconds={analysisElapsedSeconds}
+          />
         </div>
       )}
 
