@@ -8,6 +8,12 @@ import {
   validateReviewEvidenceManifest,
   validateVisualTimeline,
 } from './profileAnatomyVideoRenderer.js';
+import {
+  buildProfileAnatomyEvidenceItem,
+  filterProfileAnatomyReviewEvidence,
+  isEligibleProfileAnatomyEvidenceSource,
+  profileAnatomyDeviceClassification,
+} from '../../src/lib/profileAnatomyEvidence.js';
 
 test('complete payload manifest does not scan historical media during normal render', () => {
   let historicalLoads = 0;
@@ -36,10 +42,10 @@ test('complete payload manifest does not scan historical media during normal ren
       { type: 'section', section_key: 'perineum', section_label: 'Perineum' },
     ],
     images: [
-      { id: 'pubic-reference', label: 'Validated pubic mound lower abdomen reference', coverage: 'pubic mound lower abdomen suprapubic', sectionKey: 'pubic_mound_lower_abdomen', url: '/uploads/pubic.jpg' },
-      { id: 'foreskin-reference', label: 'Validated foreskin close-up', coverage: 'foreskin prepuce penile shaft', sectionKey: 'foreskin', url: '/uploads/foreskin.jpg' },
-      { id: 'glans-reference', label: 'Validated glans meatus close-up', coverage: 'glans meatus urethral opening', sectionKey: 'glans_meatus', url: '/uploads/glans.jpg' },
-      { id: 'perineum-reference', label: 'Validated posterior inferior perineal view', coverage: 'perineum perineal body perineal raphe', sectionKey: 'perineum', url: '/uploads/perineum.jpg' },
+      { id: 'pubic-reference', label: 'Validated pubic mound lower abdomen reference', coverage: 'pubic mound lower abdomen suprapubic', sectionKey: 'pubic_mound_lower_abdomen', url: '/uploads/pubic.jpg', source: 'fresh_upload' },
+      { id: 'foreskin-reference', label: 'Validated foreskin close-up', coverage: 'foreskin prepuce penile shaft', sectionKey: 'foreskin', url: '/uploads/foreskin.jpg', source: 'fresh_upload' },
+      { id: 'glans-reference', label: 'Validated glans meatus close-up', coverage: 'glans meatus urethral opening', sectionKey: 'glans_meatus', url: '/uploads/glans.jpg', source: 'fresh_upload' },
+      { id: 'perineum-reference', label: 'Validated posterior inferior perineal view', coverage: 'perineum perineal body perineal raphe', sectionKey: 'perineum', url: '/uploads/perineum.jpg', source: 'fresh_upload' },
     ],
     loadHistoricalImages: () => {
       historicalLoads += 1;
@@ -68,6 +74,7 @@ test('head-to-toe follow-up keeps relevant genital evidence in its normal anatom
       coverage: 'pelvis pubic region genitals perineum scrotum penis',
       sectionKey: 'genitals_perineum',
       url: '/uploads/genital-reference.jpg',
+      source: 'fresh_upload',
     }],
   });
   const section = manifest.sections.find((item) => item.section_key === 'genitals_perineum');
@@ -91,8 +98,8 @@ test('validated visual callout image stays synchronized with its measured narrat
       { type: 'section', section_key: 'foreskin', section_label: 'Foreskin' },
     ],
     images: [
-      { id: 'foreskin-other', label: 'Foreskin reference view', coverage: 'foreskin prepuce', sectionKey: 'foreskin', url: '/uploads/foreskin-other.jpg' },
-      { id: 'foreskin-validated', label: 'Validated annotated foreskin view', coverage: 'foreskin prepuce coronal sulcus', sectionKey: 'foreskin', url: '/uploads/foreskin-validated.jpg' },
+      { id: 'foreskin-other', label: 'Foreskin reference view', coverage: 'foreskin prepuce', sectionKey: 'foreskin', url: '/uploads/foreskin-other.jpg', source: 'fresh_upload' },
+      { id: 'foreskin-validated', label: 'Validated annotated foreskin view', coverage: 'foreskin prepuce coronal sulcus', sectionKey: 'foreskin', url: '/uploads/foreskin-validated.jpg', source: 'fresh_upload' },
     ],
   });
   const calloutSection = manifest.sections.find((section) => section.preferred_evidence_ids?.includes('foreskin-validated'));
@@ -120,7 +127,7 @@ test('validated preferred evidence survives generic upload labeling for its exac
       sectionKey: 'penis',
       section: 'Penis',
       url: '/uploads/validated-penis.jpg',
-      source: 'profile_review',
+      source: 'profile_review_image',
     }],
   });
 
@@ -163,7 +170,7 @@ const images = [
     coverage: 'head face scalp beard glasses',
     sectionKey: 'head_face',
     url: '/uploads/head.jpg',
-    source: 'fixture',
+    source: 'fresh_upload',
   },
   {
     id: 'body-current',
@@ -171,7 +178,7 @@ const images = [
     coverage: 'full body whole body standing posture alignment chest abdomen lower limbs feet',
     sectionKey: 'posture_alignment',
     url: '/uploads/body.jpg',
-    source: 'fixture',
+    source: 'fresh_upload',
   },
   {
     id: 'feet-only',
@@ -179,7 +186,7 @@ const images = [
     coverage: 'feet toes ankle heel plantar dorsal foot',
     sectionKey: 'feet_toes',
     url: '/uploads/feet.jpg',
-    source: 'fixture',
+    source: 'fresh_upload',
   },
   {
     id: 'pelvic-genital-current',
@@ -187,7 +194,7 @@ const images = [
     coverage: 'pelvic pubic groin penis penile shaft glans meatus scrotum testes perineum',
     sectionKey: 'genitals_perineum',
     url: '/uploads/pelvic.jpg',
-    source: 'fixture',
+    source: 'fresh_upload',
   },
   {
     id: 'foley-bag',
@@ -195,7 +202,7 @@ const images = [
     coverage: 'foley catheter drainage bag urine tubing device procedure',
     sectionKey: 'device_contact_findings',
     url: '/uploads/foley.jpg',
-    source: 'fixture',
+    source: 'fresh_upload',
   },
 ];
 
@@ -271,7 +278,7 @@ test('perineum section accepts the saved posterior-inferior perineal reference',
       coverage: 'Perineal body with midline raphe, anal verge and perianal skin, inferior scrotal surface and scrotal-perineal transition. No device visible.',
       sectionKey: 'perineum',
       url: '/uploads/perineum.jpg',
-      source: 'profile_review_archive',
+      source: 'profile_review_image',
     }],
   });
   const perineum = manifest.sections.find((section) => section.section_key === 'perineum');
@@ -297,7 +304,7 @@ test('foreskin section rejects a perineal image whose archive coverage only ment
         coverage: 'Cumulative review mentions foreskin, glans, shaft, scrotum, perineum and anal region.',
         sectionKey: 'perineum',
         url: '/uploads/perineum.jpg',
-        source: 'profile_review_archive',
+        source: 'profile_review_image',
       },
       {
         id: 'foreskin-closeup',
@@ -305,7 +312,7 @@ test('foreskin section rejects a perineal image whose archive coverage only ment
         coverage: 'Foreskin mobility and preputial tissue are directly visible.',
         sectionKey: 'foreskin',
         url: '/uploads/foreskin.jpg',
-        source: 'profile_review_archive',
+        source: 'profile_review_image',
       },
     ],
   });
@@ -339,7 +346,7 @@ test('perineum section rejects a foreskin close-up whose archive coverage only m
         coverage: 'Perineal body is directly visible.',
         sectionKey: 'perineum',
         url: '/uploads/perineum.jpg',
-        source: 'profile_review_archive',
+        source: 'profile_review_image',
       },
     ],
   });
@@ -364,7 +371,7 @@ test('pelvic review accepts an anal close-up with incidental thighs and a positi
       coverage: 'Anal verge, perianal skin, gluteal cleft, perineal body and proximal thighs are visible.',
       sectionKey: 'anal_opening_perianal_region',
       url: '/uploads/anal.jpg',
-      source: 'fixture',
+      source: 'fresh_upload',
     }],
   });
   const section = manifest.sections.find((item) => item.section_key === 'anal_opening_perianal_region');
@@ -415,7 +422,7 @@ test('mixed tissue-health section accepts safe pelvic evidence without forcing o
       coverage: 'Pelvic and genital skin surfaces are directly visible.',
       sectionKey: 'genitals_perineum',
       url: '/uploads/safe-pelvic-reference.jpg',
-      source: 'profile_review_archive',
+      source: 'profile_review_image',
     }],
   });
   const section = manifest.sections.find((item) => item.section_key === 'tissue_health_safety_observations');
@@ -439,7 +446,7 @@ test('pubic section accepts directly labeled anatomy when a Foley is incidental'
       coverage: 'Pubic mound lower abdomen groin and inguinal skin are directly visible; Foley tubing is incidental.',
       sectionKey: 'pubic_mound_lower_abdomen',
       url: '/uploads/pubic-foley.jpg',
-      source: 'fixture',
+      source: 'fresh_upload',
     }],
   });
   const section = manifest.sections.find((item) => item.section_key === 'pubic_mound_lower_abdomen');
@@ -464,7 +471,7 @@ test('pubic section accepts the verified legacy abdominal reference label', () =
         coverage: 'Lower abdomen, suprapubic skin and pubic mound are directly visible.',
         sectionKey: 'pubic_mound_lower_abdomen',
         url: '/uploads/verified-abdominal-reference.jpg',
-        source: 'profile_review_archive',
+        source: 'profile_review_image',
       },
       {
         id: 'penile-base-decoy',
@@ -501,7 +508,7 @@ test('pubic mound section refuses genital close-up evidence', () => {
         coverage: 'penis penile shaft glans meatus foreskin',
         sectionKey: 'genitals_perineum',
         url: '/uploads/genital-closeup.jpg',
-        source: 'fixture',
+        source: 'fresh_upload',
       },
       {
         id: 'pubic-mound-view',
@@ -509,7 +516,7 @@ test('pubic mound section refuses genital close-up evidence', () => {
         coverage: 'pubic mound lower abdomen inguinal folds groin skin penile base',
         sectionKey: 'pubic_mound_lower_abdomen',
         url: '/uploads/pubic-mound.jpg',
-        source: 'fixture',
+        source: 'fresh_upload',
       },
     ],
   });
@@ -542,7 +549,7 @@ test('pubic mound section uses a card instead of unrelated genital close-up when
         coverage: 'penis penile shaft glans meatus foreskin',
         sectionKey: 'genitals_perineum',
         url: '/uploads/genital-closeup.jpg',
-        source: 'fixture',
+        source: 'fresh_upload',
       },
     ],
   });
@@ -572,7 +579,7 @@ test('head-to-toe chest section uses a card instead of wrong-region feet evidenc
         coverage: 'feet toes ankle heel plantar dorsal foot',
         sectionKey: 'feet_toes',
         url: '/uploads/feet.jpg',
-        source: 'fixture',
+        source: 'fresh_upload',
       },
     ],
   });
@@ -606,7 +613,7 @@ test('head-to-toe head section uses a card instead of pelvic or genital evidence
         coverage: 'pelvic pubic groin penis penile shaft glans meatus scrotum testes perineum',
         sectionKey: 'genitals_perineum',
         url: '/uploads/pelvic.jpg',
-        source: 'fixture',
+        source: 'fresh_upload',
       },
     ],
   });
@@ -639,7 +646,7 @@ test('head-to-toe head section can crop from broad full-body evidence without re
         coverage: 'whole body full body posture head face chest abdomen pelvis pubic lower limbs feet',
         sectionKey: 'posture_alignment',
         url: '/uploads/full-body.jpg',
-        source: 'fixture',
+        source: 'fresh_upload',
       },
     ],
   });
@@ -670,7 +677,7 @@ test('head-to-toe validation allows multi-region evidence when the target region
         coverage: 'head face scalp pelvis pubic region',
         sectionKey: 'head_face',
         url: '/uploads/head-pelvis.jpg',
-        source: 'fixture',
+        source: 'fresh_upload',
       },
     ],
   });
@@ -786,7 +793,7 @@ test('head-to-toe sections rotate through multiple compatible images when availa
         coverage: 'head face scalp hairline anterior facial contour',
         sectionKey: 'head_face',
         url: '/uploads/head-front.jpg',
-        source: 'fixture',
+        source: 'fresh_upload',
       },
       {
         id: 'head-lateral',
@@ -794,7 +801,7 @@ test('head-to-toe sections rotate through multiple compatible images when availa
         coverage: 'head face scalp hairline lateral facial contour',
         sectionKey: 'head_face',
         url: '/uploads/head-lateral.jpg',
-        source: 'fixture',
+        source: 'fresh_upload',
       },
       {
         id: 'head-close',
@@ -802,7 +809,7 @@ test('head-to-toe sections rotate through multiple compatible images when availa
         coverage: 'head face scalp hairline close detail',
         sectionKey: 'head_face',
         url: '/uploads/head-close.jpg',
-        source: 'fixture',
+        source: 'fresh_upload',
       },
       {
         id: 'feet-only-decoy',
@@ -810,7 +817,7 @@ test('head-to-toe sections rotate through multiple compatible images when availa
         coverage: 'feet toes plantar heel',
         sectionKey: 'feet_toes',
         url: '/uploads/feet-decoy.jpg',
-        source: 'fixture',
+        source: 'fresh_upload',
       },
     ],
   });
@@ -835,6 +842,186 @@ test('head-to-toe sections rotate through multiple compatible images when availa
     24
   );
   validateManifestTimelineIntegrity({ manifest, narrationSegments, visualTimeline });
+});
+
+test('anatomy evidence source policy admits only Profiler uploads and approved chat references', () => {
+  assert.equal(isEligibleProfileAnatomyEvidenceSource({ source: 'fresh_upload', url: '/uploads/penis.jpg' }), true);
+  assert.equal(isEligibleProfileAnatomyEvidenceSource({ source: 'profile_review_image', url: '/uploads/back.jpg' }), true);
+  assert.equal(isEligibleProfileAnatomyEvidenceSource({ source: 'saved_profile_qa_attachment', anatomy_reference_approved: true, url: '/uploads/approved.jpg' }), true);
+  assert.equal(isEligibleProfileAnatomyEvidenceSource({ source: 'saved_profile_qa_attachment', url: '/uploads/unapproved.jpg' }), false);
+  assert.equal(isEligibleProfileAnatomyEvidenceSource({ source: 'body_exploration_video_frame', url: '/uploads/body-frame.jpg' }), false);
+  assert.equal(isEligibleProfileAnatomyEvidenceSource({ source: 'session_video_frame', url: '/uploads/session-frame.jpg' }), false);
+  assert.equal(isEligibleProfileAnatomyEvidenceSource({ source: 'profile_review_image', url: '/uploads/ai-video-pass-6-00-frame-01.jpg' }), false);
+});
+
+test('static evidence filtering and video evidence keep identical IDs and annotation geometry', () => {
+  const annotation = {
+    image_id: 'img_019',
+    view_label: 'Penile base, shaft, and visible foreskin',
+    width: 3024,
+    height: 4032,
+    annotations: [{ x: 0.25, y: 0.3, width: 0.2, height: 0.15 }],
+  };
+  const result = {
+    _meta: {
+      reviewed_images: [
+        { image_id: 'img_019', source: 'profile_review_image', preview_url: '/uploads/penis.jpg', width: 3024, height: 4032 },
+        { image_id: 'img_058', source: 'body_exploration_video_frame', preview_url: '/uploads/ai-video-pass-6-00-frame-01.jpg' },
+      ],
+    },
+    annotated_images: [annotation, { image_id: 'img_058', view_label: 'Procedure frame' }],
+    image_region_findings: [
+      { image_id: 'img_019', section_key: 'penis', label: 'Penis and foreskin', finding: 'Penile shaft and foreskin are directly visible.' },
+      { image_id: 'img_058', section_key: 'pubic_mound_lower_abdomen', label: 'Pubic mound' },
+    ],
+  };
+  const filtered = filterProfileAnatomyReviewEvidence(result);
+  assert.deepEqual(filtered._meta.reviewed_images.map((image) => image.image_id), ['img_019']);
+  assert.deepEqual(filtered.annotated_images, [annotation]);
+  assert.equal(filtered.annotated_images[0].annotations[0].x, 0.25);
+  assert.equal(filtered._meta.reviewed_images[0].width, 3024);
+
+  const videoItem = buildProfileAnatomyEvidenceItem(
+    filtered._meta.reviewed_images[0],
+    filtered.annotated_images[0],
+    filtered.image_region_findings,
+  );
+  assert.equal(videoItem.image_id, 'img_019');
+  assert.equal(videoItem.width, 3024);
+  assert.match(videoItem.display_label, /penile base/i);
+});
+
+function singleSectionManifest({ sectionKey, sectionLabel, text, images, reviewScope = 'pelvic_genital' }) {
+  return createReviewEvidenceManifest({
+    reviewId: `fixture-${sectionKey}`,
+    title: 'Anatomy evidence fixture',
+    reviewScope,
+    paragraphs: [sectionLabel, text],
+    paragraphMeta: [
+      { type: 'section-title', section_key: sectionKey, section_label: sectionLabel },
+      { type: 'section', section_key: sectionKey, section_label: sectionLabel },
+    ],
+    images,
+  });
+}
+
+test('direct Profiler anatomy labels select the matching structure', () => {
+  const cases = [
+    ['penis', 'Penis', 'Your penile shaft is directly visible.', 'penis-direct', 'Penile shaft and base'],
+    ['foreskin', 'Foreskin', 'Your foreskin and preputial margin are directly visible.', 'foreskin-direct', 'Foreskin and preputial margin'],
+    ['penis', 'Penis and Foreskin', 'Your penile shaft and foreskin are visible together.', 'penis-foreskin-direct', 'Penis shaft with foreskin visible'],
+    ['anal_opening_perianal_region', 'Anus and Perianal Region', 'Your anus and perianal skin are directly visible.', 'anus-direct', 'Anus and perianal close-up'],
+    ['shoulders_upper_back', 'Back', 'Your back and posterior trunk are directly visible.', 'back-direct', 'Posterior back and trunk'],
+    ['inguinal_folds_groin_skin', 'Right Inguinal Repair', 'Your right inguinal repair scar and groin are directly visible.', 'right-inguinal-direct', 'Right inguinal repair scar and groin'],
+  ];
+  for (const [sectionKey, sectionLabel, text, expectedId, label] of cases) {
+    const manifest = singleSectionManifest({
+      sectionKey,
+      sectionLabel,
+      text,
+      reviewScope: sectionKey === 'shoulders_upper_back' ? 'head_to_toe' : 'pelvic_genital',
+      images: [{ id: expectedId, label, coverage: `${label}. Direct validated anatomy reference.`, sectionKey, source: 'profile_review_image', url: `/uploads/${expectedId}.jpg` }],
+    });
+    const section = manifest.sections[0];
+    assert.equal(section.assigned_evidence[0]?.evidence_id, expectedId, sectionLabel);
+    assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
+  }
+});
+
+test('incidental device anatomy stays eligible while device-dominant media stays restricted', () => {
+  const incidental = {
+    id: 'pubic-with-incidental-foley',
+    label: 'Pubic mound and lower abdomen',
+    coverage: 'Pubic mound, lower abdomen, and penile base directly visible; Foley tubing is incidental at the edge.',
+    sectionKey: 'pubic_mound_lower_abdomen',
+    source: 'profile_review_image',
+    url: '/uploads/pubic-incidental-foley.jpg',
+  };
+  const dominant = {
+    id: 'routine-catheter-frame',
+    label: 'Foley catheter procedure',
+    coverage: 'Foley catheter tubing, StatLock, drainage bag, and procedure setup.',
+    sectionKey: 'device_contact_findings',
+    source: 'profile_review_image',
+    url: '/uploads/routine-catheter.jpg',
+  };
+  assert.equal(profileAnatomyDeviceClassification(incidental), 'incidental_device');
+  assert.equal(profileAnatomyDeviceClassification(dominant), 'device_dominant');
+
+  const anatomyManifest = singleSectionManifest({
+    sectionKey: 'pubic_mound_lower_abdomen',
+    sectionLabel: 'Pubic Mound and Lower Abdomen',
+    text: 'Your pubic mound and lower abdomen are directly visible.',
+    images: [dominant, incidental],
+  });
+  assert.equal(anatomyManifest.sections[0].assigned_evidence[0]?.evidence_id, incidental.id);
+  assert.doesNotThrow(() => validateReviewEvidenceManifest(anatomyManifest));
+
+  const deviceManifest = singleSectionManifest({
+    sectionKey: 'device_contact_findings',
+    sectionLabel: 'Device and Procedure Context',
+    text: 'Your Foley catheter, tubing, and StatLock are reviewed here.',
+    images: [dominant],
+  });
+  assert.equal(deviceManifest.sections[0].assigned_evidence[0]?.evidence_id, dominant.id);
+  assert.doesNotThrow(() => validateReviewEvidenceManifest(deviceManifest));
+});
+
+test('real img_058 procedure frame is rejected during selection instead of manifest validation', () => {
+  const manifest = singleSectionManifest({
+    sectionKey: 'pubic_mound_lower_abdomen',
+    sectionLabel: 'Pubic Mound and Lower Abdomen',
+    text: 'Your pubic mound and lower abdomen are directly visible.',
+    images: [
+      {
+        id: 'img_058',
+        label: 'AI video pass 6:00-6:24 frame 01',
+        coverage: '18 French Foley catheter procedure frame with tubing and device context.',
+        sectionKey: 'pubic_mound_lower_abdomen',
+        source: 'body_exploration_video_frame',
+        url: '/uploads/ai-video-pass-6-00-6-24-frame-01.jpg',
+      },
+      {
+        id: 'img_025',
+        label: 'Pubic mound, lower abdomen, and penile base',
+        coverage: 'Direct anterior pubic mound and lower abdomen reference.',
+        sectionKey: 'pubic_mound_lower_abdomen',
+        source: 'profile_review_image',
+        url: '/uploads/img-025.jpg',
+      },
+    ],
+  });
+  assert.deepEqual(manifest.sections[0].assigned_evidence.map((item) => item.evidence_id), ['img_025']);
+  assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
+});
+
+test('an exact validated section association outranks a nearby broad anatomy view', () => {
+  const manifest = singleSectionManifest({
+    sectionKey: 'pubic_mound_lower_abdomen',
+    sectionLabel: 'Pubic Mound and Lower Abdomen',
+    text: 'Your pubic mound and lower abdomen are directly visible.',
+    images: [
+      {
+        id: 'nearby-penile-base',
+        label: 'Inferior seated close-up - penile base and proximal perineum',
+        coverage: 'Penile base and proximal perineum.',
+        regions: ['pelvis_pubic_region'],
+        source: 'profile_review_image',
+        url: '/uploads/nearby-penile-base.jpg',
+      },
+      {
+        id: 'direct-pubic-reference',
+        label: 'Standing anterior lower-body reference',
+        coverage: 'Lower abdomen, pubic mound, and pubic hair distribution.',
+        regions: ['pelvis_pubic_region'],
+        validated_section_keys: ['penis', 'pubic_mound_lower_abdomen'],
+        source: 'profile_review_image',
+        url: '/uploads/direct-pubic-reference.jpg',
+      },
+    ],
+  });
+
+  assert.equal(manifest.sections[0].assigned_evidence[0]?.evidence_id, 'direct-pubic-reference');
 });
 
 test('timeline validation accepts manifest-assigned pelvic/genital evidence labels', () => {
@@ -863,7 +1050,7 @@ test('timeline validation accepts manifest-assigned pelvic/genital evidence labe
         coverage: 'pubic mound lower abdomen inguinal groin pelvis',
         sectionKey: 'pubic_mound_lower_abdomen',
         url: '/uploads/pubic.jpg',
-        source: 'fixture',
+        source: 'fresh_upload',
       },
       {
         id: 'glans-current',
@@ -871,7 +1058,7 @@ test('timeline validation accepts manifest-assigned pelvic/genital evidence labe
         coverage: 'glans meatus penis penile shaft',
         sectionKey: 'glans_meatus',
         url: '/uploads/glans.jpg',
-        source: 'fixture',
+        source: 'fresh_upload',
       },
     ],
   });

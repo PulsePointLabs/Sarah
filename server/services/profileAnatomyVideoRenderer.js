@@ -6,6 +6,12 @@ import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart } from './ttsCore.js';
 import { resolveCachedFramePath } from './localVision/frameSampler.js';
 import { normalizeWatermarkSettings, replaceVideoWithWatermarkedExport } from './watermark.js';
+import {
+  buildProfileAnatomyEvidenceItem,
+  isEligibleProfileAnatomyEvidenceSource,
+  profileAnatomyDeviceClassification,
+  profileAnatomyEvidenceSourceKind,
+} from '../../src/lib/profileAnatomyEvidence.js';
 
 const PROFILE_ANATOMY_VIDEO_RENDER_VERSION = 'profile_anatomy_video_v1_hd';
 const VIDEO_WIDTH = Number(process.env.PROFILE_ANATOMY_VIDEO_WIDTH || 1920);
@@ -387,24 +393,11 @@ function fineStructureKeysForImage(image = {}) {
 }
 
 function isDeviceHeavyImage(image = {}) {
-  const rawText = [
-    image.sectionKey,
-    image.section,
-    image.label,
-    image.coverage,
-    image.regions,
-    image.regionLabels,
-    image.anatomy_labels,
-    image.fine_structure_labels,
-    image.source,
-  ].filter(Boolean).flat().join(' ');
-  const positiveDeviceText = normalizeText(rawText).replace(
-    /\b(?:no|not|without|absent|lacks?)\s+(?:visible\s+|direct\s+|clear\s+|obvious\s+|active\s+){0,4}(?:foley|catheter|drainage\s*bag|leg\s*bag|urine|tube|tubing|statlock|device|procedure)(?:\s+(?:contact|visible|present|in\s+frame))?\b/gi,
-    ' ',
-  );
-  const fineKeys = collectFineStructureKeys(positiveDeviceText);
-  if ([...fineKeys].some((key) => DEVICE_STRUCTURE_KEYS.has(key))) return true;
-  return /\b(foley|catheter|drainage\s*bag|leg\s*bag|urine|tubing|statlock|device|procedure)\b/i.test(positiveDeviceText);
+  return profileAnatomyDeviceClassification(image) !== 'none';
+}
+
+function isDeviceDominantImage(image = {}) {
+  return profileAnatomyDeviceClassification(image) === 'device_dominant';
 }
 
 function sectionRequestsDevice(meta = {}, paragraphText = '') {
@@ -498,6 +491,31 @@ function primaryStrictStructureKey(requestedText = '') {
   return best?.key || '';
 }
 
+function hasValidatedStructureAssociation(image = {}, structureKey = '') {
+  const sectionKeys = new Set((Array.isArray(image.validated_section_keys)
+    ? image.validated_section_keys
+    : []
+  ).map((value) => normalizeText(value).replace(/\s+/g, '_')).filter(Boolean));
+  const matchingSectionKeys = new Map([
+    ['shaft', new Set(['penis'])],
+    ['foreskin', new Set(['foreskin'])],
+    ['glans', new Set(['glans_meatus', 'glans'])],
+    ['meatus', new Set(['glans_meatus', 'meatus'])],
+    ['scrotum', new Set(['scrotum_testes'])],
+    ['pubic_groin', new Set(['pubic_mound_lower_abdomen', 'inguinal_folds_groin_skin'])],
+    ['perineum', new Set(['perineum'])],
+    ['anal_perianal', new Set(['anal_opening_perianal_region'])],
+  ]).get(structureKey);
+  return Boolean(matchingSectionKeys && [...matchingSectionKeys].some((key) => sectionKeys.has(key)));
+}
+
+function hasExactValidatedSectionAssociation(image = {}, meta = {}) {
+  const requestedSectionKey = normalizeText(meta.section_key || meta.sectionKey || '').replace(/\s+/g, '_');
+  if (!requestedSectionKey) return false;
+  return (Array.isArray(image.validated_section_keys) ? image.validated_section_keys : [])
+    .some((value) => normalizeText(value).replace(/\s+/g, '_') === requestedSectionKey);
+}
+
 function hasStrongPubicGroinEvidence(image = {}) {
   const label = normalizeText([image.label, image.display_label].filter(Boolean).join(' '));
   const coverage = normalizeText(image.coverage || '');
@@ -527,16 +545,17 @@ function imageMatchesStrictSectionSpecificRequest(image = {}, requestedKeys = ne
   const imageRegions = regionKeysForImage(image);
   const imageHasGenitalDetail = [...imageKeys].some((key) => GENITAL_DETAIL_STRUCTURE_KEYS.has(key));
   const primaryRequestedKey = primaryStrictStructureKey(requestedText);
+  const exactValidatedPubicAssociation = hasValidatedStructureAssociation(image, 'pubic_groin');
 
   if (/\bpubic\s+mound\s+(?:and\s+)?lower\s+abdomen\b/i.test(requestedText)) {
-    if (!/\b(?:pubic(?:\s+mound|\s+region)|suprapubic|lower\s+abdomen|abdominal\s+reference)\b/i.test(primaryText)) {
+    if (!hasStrongPubicGroinEvidence(image) && !exactValidatedPubicAssociation) {
       return false;
     }
   }
 
   if (primaryRequestedKey && requestedKeys.has(primaryRequestedKey)) {
     const directPattern = STRICT_STRUCTURE_PATTERNS.get(primaryRequestedKey);
-    if (!directPattern?.test(primaryText)) return false;
+    if (!directPattern?.test(primaryText) && !hasValidatedStructureAssociation(image, primaryRequestedKey)) return false;
   }
 
   if (requestedKeys.has('pubic_groin') || /\b(pubic|pubic\s+mound|inguinal|groin|lower\s+abdomen|penile\s+base)\b/i.test(requestedText)) {
@@ -551,7 +570,7 @@ function imageMatchesStrictSectionSpecificRequest(image = {}, requestedKeys = ne
       /\bsuprapubic\b/i,
     ]);
     if (!hasPubicGroinText && !imageKeys.has('pubic_groin') && !imageRegions.has('pelvis_pubic_region')) return false;
-    if (imageHasGenitalDetail && !hasStrongPubicGroinEvidence(image)) return false;
+    if (imageHasGenitalDetail && !hasStrongPubicGroinEvidence(image) && !exactValidatedPubicAssociation) return false;
   }
 
   if (requestedKeys.has('perineum') || /\bperineum|perineal|perineal\s+body\b/i.test(requestedText)) {
@@ -601,14 +620,22 @@ function imageMatchesFineStructureRequest(image = {}, targetKey = '', meta = {},
 
   if (requestedPubicGroin && !requestedGenitalDetail) {
     if (!imageHasPubicGroin) return false;
-    if (imageHasGenitalDetail && !requestedGenitalDetail && !hasStrongPubicGroinEvidence(image)) return false;
+    if (
+      imageHasGenitalDetail
+      && !requestedGenitalDetail
+      && !hasStrongPubicGroinEvidence(image)
+      && !hasValidatedStructureAssociation(image, 'pubic_groin')
+    ) return false;
   }
 
   if (targetKey === 'pelvis_pubic_region' && !requestedGenitalDetail && imageHasGenitalDetail && !imageHasPubicGroin) {
     return false;
   }
 
-  if (requestedKeys.size && ![...requestedKeys].some((key) => imageFineKeys.has(key))) {
+  const hasRequestedFineStructure = [...requestedKeys].some((key) => imageFineKeys.has(key));
+  const hasStrongRequestedPubicEvidence = requestedPubicGroin
+    && (hasStrongPubicGroinEvidence(image) || hasValidatedStructureAssociation(image, 'pubic_groin'));
+  if (requestedKeys.size && !hasRequestedFineStructure && !hasStrongRequestedPubicEvidence) {
     return false;
   }
 
@@ -812,12 +839,13 @@ function scoreImageForSection(image, targetKey, meta = {}, paragraphText = '', r
   if (!imageMatchesFineStructureRequest(image, targetKey, meta, paragraphText, reviewScope)) return -1000;
   const imageKeys = regionKeysForImage(image);
   const cropFallback = allowsRegionCropFallback(targetKey, imageKeys, image);
-  if (isHardMismatch(targetKey, imageKeys) && !cropFallback) return -1000;
+  const exactValidatedSection = hasExactValidatedSectionAssociation(image, meta);
+  if (isHardMismatch(targetKey, imageKeys) && !cropFallback && !exactValidatedSection) return -1000;
   const allowed = STRICT_ALLOWED_IMAGE_REGIONS.get(targetKey);
   const hasAllowedRegion = allowed?.size ? [...imageKeys].some((key) => allowed.has(key)) : false;
   if (!hasAllowedRegion) return -1000;
   const forbidden = STRICT_FORBIDDEN_IMAGE_REGIONS.get(targetKey);
-  if (forbidden && [...imageKeys].some((key) => forbidden.has(key)) && !cropFallback) return -1000;
+  if (forbidden && [...imageKeys].some((key) => forbidden.has(key)) && !cropFallback && !exactValidatedSection) return -1000;
   let score = imageKeys.has(targetKey) ? (cropFallback ? 78 : 100) : 0;
   const haystack = normalizeText([
     image.sectionKey,
@@ -849,16 +877,19 @@ function scoreImageForSection(image, targetKey, meta = {}, paragraphText = '', r
   return score;
 }
 
-function isImageAllowedForReviewScope(image, reviewScope = '') {
+function isImageAllowedForReviewScope(image, reviewScope = '', meta = {}) {
   if (reviewScope !== 'pelvic_genital') return true;
   const keys = regionKeysForImage(image);
   if (![...keys].some((key) => PELVIC_GENITAL_REVIEW_ALLOWED_REGIONS.has(key))) return false;
-  if ([...keys].some((key) => PELVIC_GENITAL_REVIEW_FORBIDDEN_REGIONS.has(key))) return false;
+  if (
+    [...keys].some((key) => PELVIC_GENITAL_REVIEW_FORBIDDEN_REGIONS.has(key))
+    && !hasExactValidatedSectionAssociation(image, meta)
+  ) return false;
   return true;
 }
 
 function scoreImageForReviewFallback(image, targetKey, meta = {}, paragraphText = '', reviewScope = '') {
-  if (!isImageAllowedForReviewScope(image, reviewScope)) return -1000;
+  if (!isImageAllowedForReviewScope(image, reviewScope, meta)) return -1000;
   const score = scoreImageForSection(image, targetKey, meta, paragraphText, reviewScope);
   if (score > 0) return score;
   if (reviewScope !== 'pelvic_genital') return score;
@@ -873,7 +904,7 @@ function scoreImageForReviewFallback(image, targetKey, meta = {}, paragraphText 
 
 function fallbackScoreForSpecificSection(image, targetKey, meta = {}, paragraphText = '', reviewScope = '') {
   if (!image || !targetKey || targetKey === 'overview') return -1000;
-  if (!isImageAllowedForReviewScope(image, reviewScope)) return -1000;
+  if (!isImageAllowedForReviewScope(image, reviewScope, meta)) return -1000;
   if (!imageMatchesFineStructureRequest(image, targetKey, meta, paragraphText, reviewScope)) return -1000;
   if (
     isDeviceHeavyImage(image)
@@ -919,7 +950,11 @@ function bestSpecificSectionFallback(images = [], targetKey, meta = {}, paragrap
       const score = fallbackScoreForSpecificSection(image, targetKey, meta, paragraphText, reviewScope) - useCount * 120;
       return { image, score };
     })
-    .filter((entry) => entry.image && entry.score > 0)
+    .filter((entry) => (
+      entry.image
+      && entry.score > 0
+      && isImageAllowedForManifestSection(entry.image, targetKey, reviewScope, meta, paragraphText)
+    ))
     .sort((a, b) => b.score - a.score)[0] || null;
 }
 
@@ -933,7 +968,12 @@ function bestOverviewSectionFallback(images = [], reviewScope = '', usedIds = ne
         score: scoreOverviewImage(image, reviewScope) - useCount * 90,
       };
     })
-    .filter((entry) => entry.image && entry.score > 0 && !isDeviceHeavyImage(entry.image))
+    .filter((entry) => (
+      entry.image
+      && entry.score > 0
+      && isEligibleProfileAnatomyEvidenceSource(entry.image)
+      && !isDeviceHeavyImage(entry.image)
+    ))
     .sort((a, b) => b.score - a.score)[0] || null;
 }
 
@@ -956,11 +996,40 @@ function textPreview(value = '', maxLength = 180) {
 }
 
 function candidateTrace(images = [], targetKey, meta = {}, paragraphText = '', reviewScope = '') {
-  return images.map((image) => ({
-    ...imageRegionTrace(image),
-    score: scoreImageForReviewFallback(image, targetKey, meta, paragraphText, reviewScope),
-    review_scope_allowed: isImageAllowedForReviewScope(image, reviewScope),
-  }));
+  const requestedSectionKey = normalizeText(meta.section_key || meta.sectionKey || '').replace(/\s+/g, '_');
+  return images.map((image) => {
+    const sourceAllowed = isEligibleProfileAnatomyEvidenceSource(image);
+    const scopeAllowed = isImageAllowedForReviewScope(image, reviewScope, meta);
+    const structureAllowed = imageMatchesFineStructureRequest(image, targetKey, meta, paragraphText, reviewScope);
+    const regionAllowed = isImageAllowedForRegion(image, targetKey, reviewScope, meta);
+    const deviceAllowed = isDeviceEvidenceAuthorizedForSection(image, targetKey, meta, paragraphText);
+    const baseScore = scoreImageForReviewFallback(image, targetKey, meta, paragraphText, reviewScope);
+    const validatedSectionKeys = new Set((Array.isArray(image.validated_section_keys)
+      ? image.validated_section_keys
+      : []
+    ).map((value) => normalizeText(value).replace(/\s+/g, '_')).filter(Boolean));
+    const exactSectionBonus = baseScore > 0 && requestedSectionKey && validatedSectionKeys.has(requestedSectionKey)
+      ? 80
+      : 0;
+    return {
+      ...imageRegionTrace(image),
+      score: baseScore + exactSectionBonus,
+      review_scope_allowed: scopeAllowed,
+      rejection_reason: !sourceAllowed
+        ? 'source_not_allowed'
+        : !scopeAllowed
+          ? 'review_scope_mismatch'
+          : !structureAllowed
+            ? 'structure_mismatch'
+            : !regionAllowed
+              ? 'region_mismatch'
+              : !deviceAllowed
+                ? 'device_not_authorized'
+                : baseScore <= 0
+                  ? 'non_positive_score'
+                  : '',
+    };
+  });
 }
 
 function scoreOverviewImage(image = {}, reviewScope = '') {
@@ -991,9 +1060,9 @@ function overviewCandidateTrace(images = [], reviewScope = '') {
   }));
 }
 
-function isImageAllowedForRegion(image, targetKey, reviewScope = '') {
+function isImageAllowedForRegion(image, targetKey, reviewScope = '', meta = {}) {
   if (!image || !targetKey) return false;
-  if (!isImageAllowedForReviewScope(image, reviewScope)) return false;
+  if (!isImageAllowedForReviewScope(image, reviewScope, meta)) return false;
   if (targetKey === 'overview') {
     return reviewScope === 'pelvic_genital' ? true : isHeadToToeOverviewImageAllowed(image);
   }
@@ -1003,17 +1072,28 @@ function isImageAllowedForRegion(image, targetKey, reviewScope = '') {
   const hasAllowed = [...keys].some((key) => allowed.has(key));
   if (!hasAllowed) return false;
   const forbidden = STRICT_FORBIDDEN_IMAGE_REGIONS.get(targetKey);
-  if (forbidden && [...keys].some((key) => forbidden.has(key)) && !allowsRegionCropFallback(targetKey, keys, image)) return false;
+  const headToToeTargetIsDirectlyPresent = reviewScope !== 'pelvic_genital' && keys.has(targetKey);
+  if (
+    forbidden
+    && [...keys].some((key) => forbidden.has(key))
+    && !allowsRegionCropFallback(targetKey, keys, image)
+    && !headToToeTargetIsDirectlyPresent
+    && !hasExactValidatedSectionAssociation(image, meta)
+  ) return false;
   return true;
 }
 
-function isImageAllowedForManifestSection(image, targetKey, reviewScope = '', meta = {}, paragraphText = '') {
-  if (!isImageAllowedForRegion(image, targetKey, reviewScope)) return false;
-  if (!imageMatchesFineStructureRequest(image, targetKey, meta, paragraphText, reviewScope)) return false;
+function isDeviceEvidenceAuthorizedForSection(image = {}, targetKey = '', meta = {}, paragraphText = '') {
   if (!isDeviceHeavyImage(image)) return true;
   if (sectionRequestsDevice(meta, paragraphText) && DEVICE_AUTHORIZED_REGION_KEYS.has(targetKey)) return true;
-  if (hasDirectRequestedAnatomyEvidence(image, meta, paragraphText)) return true;
-  return false;
+  return !isDeviceDominantImage(image) && hasDirectRequestedAnatomyEvidence(image, meta, paragraphText);
+}
+
+function isImageAllowedForManifestSection(image, targetKey, reviewScope = '', meta = {}, paragraphText = '') {
+  if (!isEligibleProfileAnatomyEvidenceSource(image)) return false;
+  if (!isImageAllowedForRegion(image, targetKey, reviewScope, meta)) return false;
+  if (!imageMatchesFineStructureRequest(image, targetKey, meta, paragraphText, reviewScope)) return false;
+  return isDeviceEvidenceAuthorizedForSection(image, targetKey, meta, paragraphText);
 }
 
 function stableSectionId(value = '', index = 0) {
@@ -1118,6 +1198,8 @@ function assignmentMetadataForImage(image = {}, score = 0, reason = '', targetKe
     evidence_recency: image.source?.includes('archive') ? 'historical' : 'current_or_saved',
     evidence_role: isDeviceHeavyImage(image) ? 'device_related' : 'anatomy',
     device_related: isDeviceHeavyImage(image),
+    device_classification: profileAnatomyDeviceClassification(image),
+    source_kind: profileAnatomyEvidenceSourceKind(image),
     region_crop_fallback: regionCropFallback,
     procedure_related: /\b(procedure|catheter|foley|statlock|tubing|drainage)\b/i.test(normalizeText([image.label, image.coverage, image.source].join(' '))),
     display_label: image.label || null,
@@ -1125,6 +1207,7 @@ function assignmentMetadataForImage(image = {}, score = 0, reason = '', targetKe
 }
 
 function isValidatedPreferredEvidenceAllowedForSection(image = {}, section = {}, reviewScope = '') {
+  if (!isEligibleProfileAnatomyEvidenceSource(image)) return false;
   const imageSectionKey = normalizeText(image.sectionKey || '').replace(/\s+/g, '_');
   const sectionKey = normalizeText(section.section_key || '').replace(/\s+/g, '_');
   if (!imageSectionKey || !sectionKey || imageSectionKey !== sectionKey) return false;
@@ -1151,14 +1234,7 @@ function isValidatedPreferredEvidenceAllowedForSection(image = {}, section = {},
     return false;
   }
 
-  if (
-    isDeviceHeavyImage(image)
-    && !sectionRequestsDevice(meta, section.narration_text)
-    && !requestedAnatomy.size
-  ) {
-    return false;
-  }
-  return true;
+  return isDeviceEvidenceAuthorizedForSection(image, targetKey, meta, section.narration_text);
 }
 
 export function createReviewEvidenceManifest({
@@ -1295,15 +1371,8 @@ export function validateReviewEvidenceManifest(manifest = {}) {
           errors.push(`Section ${section.section_id} contains prohibited anatomy label ${blocked} from evidence ${evidence.evidence_id}.`);
         }
       }
-      if (
-        evidence.device_related
-        && !sectionRequestsDevice({ section_key: section.section_key, section_label: section.section_title }, section.narration_text)
-        && !hasDirectRequestedAnatomyEvidence(
-          evidence,
-          { section_key: section.section_key, section_label: section.section_title },
-          section.narration_text,
-        )
-      ) {
+      const sectionMeta = { section_key: section.section_key, section_label: section.section_title };
+      if (!isDeviceEvidenceAuthorizedForSection(evidence, section.target_region, sectionMeta, section.narration_text)) {
         errors.push(`Device evidence ${evidence.evidence_id} is not authorized for section ${section.section_id}.`);
       }
     });
@@ -1816,9 +1885,21 @@ function safeImageItems(images = []) {
       regionLabels: Array.isArray(image.section_labels) ? image.section_labels.map((item) => String(item || '').trim()).filter(Boolean) : [],
       url: String(image.preview_url || image.previewUrl || image.url || image.storagePath || '').trim(),
       source: String(image.source || '').trim(),
+      source_kind: String(image.source_kind || '').trim(),
+      source_video: image.source_video || null,
+      anatomy_reference_approved: image.anatomy_reference_approved === true,
+      anatomy_labels: Array.isArray(image.anatomy_labels) ? image.anatomy_labels : [],
+      fine_structure_labels: Array.isArray(image.fine_structure_labels) ? image.fine_structure_labels : [],
+      validated_section_keys: Array.isArray(image.validated_section_keys) ? image.validated_section_keys : [],
+      device_classification: image.device_classification || '',
+      width: image.width ?? image.image_width ?? null,
+      height: image.height ?? image.image_height ?? null,
+      image_width: image.image_width ?? image.width ?? null,
+      image_height: image.image_height ?? image.height ?? null,
     }))
     .filter((image) => {
       if (!image.url) return false;
+      if (!isEligibleProfileAnatomyEvidenceSource(image)) return false;
       const key = image.url;
       if (seen.has(key)) return false;
       seen.add(key);
@@ -1851,6 +1932,7 @@ function savedProfileAttachmentImagesFromUsers() {
       const reply = messages.slice(messageIndex + 1).find((candidate) => candidate?.role !== 'user' && String(candidate?.text || '').trim());
       for (const attachment of attachments) {
         if (attachment?.sourceVideo) continue;
+        if (!(attachment?.anatomy_reference_approved === true || attachment?.anatomyReferenceApproved === true || attachment?.approved_for_anatomy === true || attachment?.approvedForAnatomy === true)) continue;
         const url = String(attachment.previewUrl || attachment.storagePath || attachment.url || '').trim();
         if (!url) continue;
         out.push({
@@ -1858,6 +1940,7 @@ function savedProfileAttachmentImagesFromUsers() {
           display_label: attachment.filename || 'Saved Profile Q&A image',
           preview_url: url,
           source: 'saved_profile_qa_attachment',
+          anatomy_reference_approved: true,
           coverage: [message?.text, reply?.text].filter(Boolean).join('. '),
         });
       }
@@ -1875,25 +1958,12 @@ function reviewedImagesFromResult(result = {}, prefix = 'archive') {
       const annotation = annotated.find((item) => item?.image_id === originalId) || {};
       const url = String(image?.preview_url || annotation?.preview_url || '').trim();
       if (!url) return null;
-      return {
+      return buildProfileAnatomyEvidenceItem({
+        ...image,
         image_id: `${prefix}_${String(originalId).replace(/[^a-z0-9_-]+/gi, '_')}_${index + 1}`,
-        display_label: annotation.view_label || image.display_label || `Archived profile image ${index + 1}`,
-        section_key: annotation.section_key || '',
-        section_label: annotation.section_label || '',
-        section_labels: Array.isArray(annotation.section_labels) ? annotation.section_labels : [],
-        regions: [],
-        coverage: [
-          image.upload_note,
-          annotation.view_label,
-          annotation.coverage,
-          annotation.visibility_notes,
-          Array.isArray(annotation.major_regions_visible) ? annotation.major_regions_visible.join(', ') : '',
-          image.source_video?.purpose,
-          image.source_video?.note,
-        ].filter(Boolean).join('. '),
         preview_url: url,
-        source: image.source_video ? 'profile_review_archive_video_frame' : 'profile_review_archive',
-      };
+        source: image.source || (image.source_video ? 'profile_review_archive_video_frame' : 'profile_review_image'),
+      }, annotation, [], index);
     })
     .filter(Boolean);
 }

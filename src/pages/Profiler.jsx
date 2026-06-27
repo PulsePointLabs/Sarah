@@ -28,9 +28,14 @@ import {
   ANATOMY_REVIEW_ASSIGNMENT_CONTRACT,
   cleanProfileImageReviewText,
   cleanupProfileImageReviewResult,
-  mergeCumulativeProfileVisualEvidence,
   profileImageReviewTopicKey,
 } from "@/lib/profileImageReviewCleanup";
+import {
+  buildProfileAnatomyEvidenceItem,
+  filterProfileAnatomyReviewEvidence,
+  isEligibleProfileAnatomyEvidenceSource,
+  isExplicitlyApprovedChatAnatomyReference,
+} from "@/lib/profileAnatomyEvidence";
 import {
   buildBodyExplorationVideoPassDigest,
   buildBodyExplorationVisualEvidenceDigest,
@@ -2220,7 +2225,9 @@ function collectSavedProfileImageAttachments(userProfile, { limit = 5, purpose =
   for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
     const message = messages[messageIndex];
     const attachments = Array.isArray(message?.imageAttachments) ? message.imageAttachments : [];
-    const imageAttachments = attachments.filter((attachment) => !attachment?.sourceVideo);
+    const imageAttachments = attachments.filter((attachment) => (
+      !attachment?.sourceVideo && isExplicitlyApprovedChatAnatomyReference(attachment)
+    ));
     if (!imageAttachments.length) continue;
     const reply = messages.slice(messageIndex + 1).find((candidate) => candidate?.role !== "user" && String(candidate?.text || "").trim());
     const replyText = String(reply?.text || "");
@@ -2254,6 +2261,7 @@ function collectSavedProfileImageAttachments(userProfile, { limit = 5, purpose =
         url,
         saved_at: attachment.createdAt || message.createdAt || null,
         source: "saved_profile_qa_attachment",
+        anatomy_reference_approved: true,
         selection_score: groupScore,
         selection_context: purpose,
         selection_prompt: selectionPrompt,
@@ -2412,13 +2420,14 @@ function reviewedProfileImageAttachmentsFromResult(result, {
           image.source_video?.purpose,
         )
         : [];
-      return {
+      const attachment = buildProfileAnatomyEvidenceItem({
+        ...image,
         id: `${prefix}_${String(originalId).replace(/[^a-z0-9_-]+/gi, "_")}_${index + 1}`,
         filename: image.filename || `${prefix}-${String(index + 1).padStart(3, "0")}.jpg`,
         media_type: normalizeMediaType(image.media_type),
         url,
         saved_at: generatedAt || result?._meta?.generated_at || result?._meta?.last_generated_at || null,
-        source: image.source_video ? "profile_review_video_frame" : "profile_review_image",
+        source: image.source || (image.source_video ? "profile_review_video_frame" : "profile_review_image"),
         display_label: annotation.view_label || image.display_label || `Saved profile review view ${reviewImageLetter(index)}`,
         body_position: annotation.body_position || "",
         coverage,
@@ -2432,13 +2441,23 @@ function reviewedProfileImageAttachmentsFromResult(result, {
         selection_review_context: coverage,
         selection_tags: selectionTags,
         source_video: image.source_video || null,
+      }, annotation, [], index);
+      return {
+        ...attachment,
+        original_image_id: originalId,
+        image_id: `${prefix}_${String(originalId).replace(/[^a-z0-9_-]+/gi, "_")}_${index + 1}`,
       };
     })
-    .filter((attachment) => attachment.url && savedEvidenceAttachmentInScope(attachment, { purpose, sourceContextByUrl }));
+    .filter((attachment) => (
+      attachment.url
+      && isEligibleProfileAnatomyEvidenceSource(attachment)
+      && savedEvidenceAttachmentInScope(attachment, { purpose, sourceContextByUrl })
+    ));
 }
 
 function collectSavedProfileReviewImageAttachments({
   result,
+  additionalResults = [],
   archive,
   userProfile,
   config,
@@ -2460,23 +2479,9 @@ function collectSavedProfileReviewImageAttachments({
 
   addResult(result, "current_profile_review");
   addResult(userProfile?.[config?.resultKey], `saved_${config?.resultKey || "profile_review"}`);
-  (Array.isArray(archive) ? archive : []).forEach((entry, index) => {
-    const archivedResult = archiveEntryResult(entry);
-    addResult(
-      archivedResult,
-      `archive_${index + 1}_${config?.archiveKey || "profile_review"}`,
-      entry?.generated_at || entry?.created_at || entry?.updated_at || "",
-    );
+  (Array.isArray(additionalResults) ? additionalResults : []).forEach((additionalResult, index) => {
+    addResult(additionalResult, `current_profiler_inventory_${index + 1}`);
   });
-  (Array.isArray(userProfile?.[config?.archiveKey]) ? userProfile[config.archiveKey] : []).forEach((entry, index) => {
-    const archivedResult = archiveEntryResult(entry);
-    addResult(
-      archivedResult,
-      `saved_archive_${index + 1}_${config?.archiveKey || "profile_review"}`,
-      entry?.generated_at || entry?.created_at || entry?.updated_at || "",
-    );
-  });
-
   const seen = new Set();
   return candidates
     .sort((a, b) => {
@@ -6048,26 +6053,26 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
       const maxReviewImages = Math.max(freshReviewImageLimit, config.libraryImageLimit || freshReviewImageLimit);
       const savedReviewCandidateLimit = Math.max(maxReviewImages * 2, 120);
       const savedProfileContexts = collectSavedProfileImageAttachmentContexts(reviewUserProfile);
+      const siblingResultKey = config.resultKey === PELVIC_GENITAL_IMAGE_REVIEW_CONFIG.resultKey
+        ? HEAD_TO_TOE_IMAGE_REVIEW_CONFIG.resultKey
+        : PELVIC_GENITAL_IMAGE_REVIEW_CONFIG.resultKey;
+      const siblingResultRow = await loadLatestProfileReviewResultField(siblingResultKey).catch(() => null);
+      const siblingResult = siblingResultRow?.[siblingResultKey] || null;
       const savedProfileQaAttachments = collectSavedProfileImageAttachments(reviewUserProfile, {
         limit: savedReviewCandidateLimit,
         purpose: isHeadToToeBodyReference ? "head_to_toe_body_reference" : "pelvic_genital",
       });
       const savedProfileReviewAttachments = collectSavedProfileReviewImageAttachments({
         result,
-        archive,
+        additionalResults: siblingResult ? [siblingResult] : [],
         userProfile: reviewUserProfile,
         config,
         limit: savedReviewCandidateLimit,
         purpose: isHeadToToeBodyReference ? "head_to_toe_body_reference" : "pelvic_genital",
         savedProfileContexts,
       });
-      const bodyExplorationFrameAttachments = collectBodyExplorationFrameAttachments(bodyExplorations, {
-        limit: savedReviewCandidateLimit,
-        purpose: isHeadToToeBodyReference ? "head_to_toe_body_reference" : "pelvic_genital",
-      });
       const allSavedAttachments = mergeSavedReviewImageCandidates([
         savedProfileReviewAttachments,
-        bodyExplorationFrameAttachments,
         savedProfileQaAttachments,
       ], savedReviewCandidateLimit);
       const freshLimit = images.length > 0
@@ -6874,9 +6879,7 @@ ANNOTATED IMAGE OUTPUT RULES:
   };
 
   const sections = profileReviewResultSections(config);
-  const cumulativeVisualResult = result
-    ? mergeCumulativeProfileVisualEvidence(result, archive, { sections })
-    : result;
+  const cumulativeVisualResult = filterProfileAnatomyReviewEvidence(result);
   const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
   const profileStale = Boolean(result) && (
     isProfileAIContentStale(result, sessions) ||
@@ -6890,18 +6893,13 @@ ANNOTATED IMAGE OUTPUT RULES:
   const savedProfileAttachmentContexts = collectSavedProfileImageAttachmentContexts(userProfile);
   const reusableProfileReviewAttachments = collectSavedProfileReviewImageAttachments({
     result,
-    archive,
     userProfile,
     config,
     limit: 99,
     purpose: config.contextScope === "head_to_toe_body_reference" ? "head_to_toe_body_reference" : "pelvic_genital",
     savedProfileContexts: savedProfileAttachmentContexts,
   });
-  const reusableBodyExplorationFrameAttachments = collectBodyExplorationFrameAttachments(bodyExplorations, {
-    limit: 99,
-    purpose: config.contextScope === "head_to_toe_body_reference" ? "head_to_toe_body_reference" : "pelvic_genital",
-  });
-  const savedProfileContextImages = savedProfileAttachmentContexts.map((attachment, index) => ({
+  const savedProfileContextImages = reusableProfileAttachments.map((attachment, index) => ({
     image_id: `saved_context_${String(index + 1).padStart(3, "0")}`,
     previewUrl: attachment.url,
     storagePath: attachment.url,
@@ -6915,6 +6913,7 @@ ANNOTATED IMAGE OUTPUT RULES:
       attachment.selection_review_context,
     ].filter(Boolean).join(". ")),
     source: attachment.source || "saved_profile_qa_context",
+    anatomy_reference_approved: true,
   }));
   const fallbackReferenceImages = reusableProfileAttachments.map((attachment, index) => ({
     image_id: `saved_ref_${String(index + 1).padStart(3, "0")}`,
@@ -6926,51 +6925,9 @@ ANNOTATED IMAGE OUTPUT RULES:
       attachment.selection_review_context,
     ].filter(Boolean).join(". ")),
     source: "saved_profile_qa_attachment",
+    anatomy_reference_approved: true,
   }));
-  const archiveReferenceImages = (Array.isArray(archive) ? archive : [])
-    .flatMap((entry, runIndex) => {
-      const archivedResult = archiveEntryResult(entry);
-      const reviewed = Array.isArray(archivedResult?._meta?.reviewed_images) ? archivedResult._meta.reviewed_images : [];
-      const annotated = Array.isArray(archivedResult?.annotated_images) ? archivedResult.annotated_images : [];
-      return reviewed.map((image, imageIndex) => {
-        const originalId = image.image_id || `image_${imageIndex + 1}`;
-        const annotation = annotated.find((item) => item?.image_id === originalId) || {};
-        const archiveId = entry?.id || archivedResult?._meta?.last_generated_at || archivedResult?._meta?.updated_at || `run_${runIndex + 1}`;
-        return {
-          image_id: `archive_${runIndex + 1}_${String(originalId).replace(/[^a-z0-9_-]+/gi, "_")}`,
-          original_image_id: originalId,
-          previewUrl: image.preview_url || annotation.preview_url || "",
-          storagePath: image.preview_url || annotation.preview_url || "",
-          display_label: annotation.view_label || image.display_label || `Archived profile view ${reviewImageLetter(imageIndex)}`,
-          coverage: cleanImageReviewProse([
-            annotation.view_label,
-            annotation.coverage,
-            annotation.visibility_notes,
-            Array.isArray(annotation.major_regions_visible) ? annotation.major_regions_visible.join(", ") : "",
-            image.upload_note,
-            image.source_video?.note,
-            image.source_video?.purpose,
-          ].filter(Boolean).join(". ")),
-          source: image.source_video ? "profile_review_archive_video_frame" : "profile_review_archive",
-          archive_id: archiveId,
-          source_video: image.source_video || null,
-        };
-      });
-    })
-    .filter((image) => {
-      if (!(image.previewUrl || image.storagePath)) return false;
-      if (config.kind !== PELVIC_GENITAL_REVIEW_KIND) return true;
-      const sourceContext = savedProfileContextImages.find((contextImage) => (
-        contextImage.previewUrl && contextImage.previewUrl === (image.previewUrl || image.storagePath)
-      ));
-      const sourceText = compactEvidenceText(sourceContext?.coverage, sourceContext?.upload_note);
-      if (sourceText && isPelvicGenitalTextOutOfScope(sourceText)) return false;
-      if (sourceText && !PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(sourceText)) return false;
-      const archiveText = compactEvidenceText(image.display_label, image.coverage);
-      if (isPelvicGenitalTextOutOfScope(archiveText)) return false;
-      return PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(sourceText || archiveText);
-    });
-  const inlineReferenceImages = [...images, ...fallbackReferenceImages, ...archiveReferenceImages]
+  const inlineReferenceImages = [...images, ...fallbackReferenceImages]
     .reduce((items, image) => {
       const key = image.image_id || image.storagePath || image.previewUrl;
       if (!key || items.some((item) => (item.image_id || item.storagePath || item.previewUrl) === key)) return items;
@@ -7096,96 +7053,26 @@ ANNOTATED IMAGE OUTPUT RULES:
 
   const buildAnatomyVideoImages = () => {
     if (!result) return [];
-    const pelvicScoped = isPelvicGenitalReviewResult(cumulativeVisualResult, config);
-    const imageIds = [...new Set([
-      ...lightboxImageIds,
-      ...inlineReferenceImages.map((image, index) => image.image_id || `profile-image-${index + 1}`),
-    ].filter(Boolean))];
-    const sectionsByImage = new Map();
-    const regionsByImage = new Map();
-    (Array.isArray(cumulativeVisualResult?.image_region_findings) ? cumulativeVisualResult.image_region_findings : [])
-      .filter((finding) => !pelvicScoped || isPelvicGenitalFindingInScope(cumulativeVisualResult, finding, evidenceLookupImages))
-      .forEach((finding) => {
-      if (!finding?.image_id) return;
-      const section = sections.find((item) => item.key === finding.section_key);
-      if (section?.label) {
-        if (!sectionsByImage.has(finding.image_id)) sectionsByImage.set(finding.image_id, new Map());
-        sectionsByImage.get(finding.image_id).set(section.key, section.label);
-      }
-      const region = cleanImageReviewProse(finding.region || finding.label || "");
-      if (region) {
-        if (!regionsByImage.has(finding.image_id)) regionsByImage.set(finding.image_id, new Set());
-        regionsByImage.get(finding.image_id).add(region);
-      }
-    });
-    const annotatedByImage = new Map();
-    (Array.isArray(cumulativeVisualResult?.annotated_images) ? cumulativeVisualResult.annotated_images : []).forEach((image) => {
-      if (image?.image_id) annotatedByImage.set(image.image_id, image);
-    });
-    return imageIds
-      .map((imageId) => {
-        const image = pelvicScoped
-          ? rawProfileImageById(cumulativeVisualResult, imageId, evidenceLookupImages)
-          : profileImageById(cumulativeVisualResult, imageId, evidenceLookupImages);
-        const rawImage = rawProfileImageById(cumulativeVisualResult, imageId, evidenceLookupImages);
-        return { image, rawImage, requestedImageId: imageId };
-      })
-      .filter(({ image, rawImage, requestedImageId }) => {
-        if (!image?.preview_url) return false;
-        if (!pelvicScoped) return true;
-        const sourceText = compactEvidenceText(
-          rawImage?.display_label,
-          rawImage?.body_position,
-          rawImage?.coverage,
-          rawImage?.visibility_notes,
-          rawImage?.major_regions_visible,
-          rawImage?.upload_note,
-          rawImage?.source_video?.note,
-          rawImage?.source_video?.purpose,
-        );
-        if (isPelvicGenitalTextOutOfScope(sourceText)) return false;
-        const hasValidatedSectionLink = (sectionsByImage.get(requestedImageId)?.size || 0) > 0;
-        return hasValidatedSectionLink || PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(sourceText);
-      })
-      .map(({ image, rawImage }, index) => {
-        const imageId = image.image_id || `profile-image-${index + 1}`;
-        const sectionMap = sectionsByImage.get(imageId) || new Map();
-        const sectionKeys = [...sectionMap.keys()];
-        const sectionLabels = [...sectionMap.values()];
-        const annotated = annotatedByImage.get(imageId) || {};
-        const sourceText = cleanImageReviewProse([
-          rawImage.coverage,
-          rawImage.upload_note,
-          rawImage.visibility_notes,
-          Array.isArray(rawImage.major_regions_visible) ? rawImage.major_regions_visible.join(", ") : "",
-          rawImage.source_video?.note,
-          rawImage.source_video?.purpose,
-        ].filter(Boolean).join(". "));
-        const sourceHasScopeSignal = sourceText && (
-          isPelvicGenitalTextOutOfScope(sourceText) ||
-          PELVIC_GENITAL_STRONGLY_POSITIVE_RE.test(sourceText)
-        );
+    const reviewed = Array.isArray(cumulativeVisualResult?._meta?.reviewed_images) ? cumulativeVisualResult._meta.reviewed_images : [];
+    const annotated = Array.isArray(cumulativeVisualResult?.annotated_images) ? cumulativeVisualResult.annotated_images : [];
+    const findings = Array.isArray(cumulativeVisualResult?.image_region_findings) ? cumulativeVisualResult.image_region_findings : [];
+    return reviewed
+      .map((image, index) => {
+        const imageId = image?.image_id || `profile-image-${index + 1}`;
+        const annotation = annotated.find((item) => item?.image_id === imageId) || {};
+        const relatedFindings = findings.filter((finding) => finding?.image_id === imageId);
+        const item = buildProfileAnatomyEvidenceItem({
+          ...image,
+          source: image.source || (image.source_video ? "profile_review_video_frame" : "profile_review_image"),
+        }, annotation, relatedFindings, index);
         return {
-          image_id: imageId,
-          display_label: pelvicScoped
-            ? (rawImage.display_label || image.display_label || `Reference view ${reviewImageLetter(index)}`)
-            : (image.display_label || annotated.view_label || `Reference view ${reviewImageLetter(index)}`),
-          section_key: sectionKeys[0] || "",
-          section_label: sectionLabels[0] || "",
-          section_labels: sectionLabels,
-          regions: [...(regionsByImage.get(imageId) || new Set())],
-          coverage: cleanImageReviewProse([
-            sourceText,
-            sourceHasScopeSignal ? "" : image.coverage,
-            sourceHasScopeSignal ? "" : annotated.view_label,
-            sourceHasScopeSignal ? "" : annotated.coverage,
-            sourceHasScopeSignal ? "" : annotated.visibility_notes,
-            sourceHasScopeSignal ? "" : Array.isArray(annotated.major_regions_visible) ? annotated.major_regions_visible.join(", ") : "",
-          ].filter(Boolean).join(". ")),
-          preview_url: image.preview_url,
-          source: image.source || "profile_review",
+          ...item,
+          section_labels: item.section_key
+            ? [sections.find((section) => section.key === item.section_key)?.label || item.section_key]
+            : [],
         };
       })
+      .filter((image) => image.preview_url && isEligibleProfileAnatomyEvidenceSource(image))
       .slice(0, 80);
   };
 
@@ -7447,7 +7334,7 @@ ANNOTATED IMAGE OUTPUT RULES:
             {reusableProfileAttachments.length} relevant reusable Profile Q&A images
           </Badge>
           <Badge variant="outline" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">
-            {reusableProfileReviewAttachments.length + reusableBodyExplorationFrameAttachments.length} reusable saved review/frame images
+            {reusableProfileReviewAttachments.length} current validated Profiler images
           </Badge>
           <Badge variant="outline" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">{sessions.length} sessions loaded</Badge>
           {bodyExplorations.length > 0 && (

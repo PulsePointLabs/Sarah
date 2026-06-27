@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.51",
-  "commit": "0eec293",
-  "commitMessage": "Acknowledge video jobs before rendering",
-  "builtAt": "2026-06-27T21:11:58.103Z"
+  "version": "0.1.52",
+  "commit": "1790ee3",
+  "commitMessage": "Add native job status and media playback",
+  "builtAt": "2026-06-27T23:13:15.942Z"
 };
