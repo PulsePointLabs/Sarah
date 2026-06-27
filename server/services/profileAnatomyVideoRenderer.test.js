@@ -248,6 +248,33 @@ test('pelvic review still rejects true distal lower-limb evidence', () => {
   assert.equal(section.assigned_evidence.length, 0);
 });
 
+test('mixed tissue-health section accepts safe pelvic evidence without forcing one narrated structure', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'mixed-tissue-health-fixture',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: [
+      'Tissue Health / Safety Observations',
+      'The glans, foreskin, shaft, scrotum, perineum, and surrounding skin show no visible tissue breakdown.',
+    ],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'tissue_health_safety_observations', section_label: 'Tissue Health / Safety Observations' },
+      { type: 'section', section_key: 'tissue_health_safety_observations', section_label: 'Tissue Health / Safety Observations' },
+    ],
+    images: [{
+      id: 'safe-pelvic-reference',
+      label: 'Semi-reclined pelvic and genital reference view',
+      coverage: 'Pelvic and genital skin surfaces are directly visible.',
+      sectionKey: 'genitals_perineum',
+      url: '/uploads/safe-pelvic-reference.jpg',
+      source: 'profile_review_archive',
+    }],
+  });
+  const section = manifest.sections.find((item) => item.section_key === 'tissue_health_safety_observations');
+  assert.equal(section.media_mode, 'assigned_evidence');
+  assert.equal(section.assigned_evidence[0].evidence_id, 'safe-pelvic-reference');
+});
+
 test('pubic section accepts directly labeled anatomy when a Foley is incidental', () => {
   const manifest = createReviewEvidenceManifest({
     reviewId: 'pubic-incidental-device-fixture',

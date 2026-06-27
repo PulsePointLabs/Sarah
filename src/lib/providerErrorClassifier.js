@@ -150,7 +150,7 @@ export function classifyProviderError(error, options = {}) {
     retryable = true;
     nextAction = "retry_same_stage";
     userMessage = "The AI response was not valid structured output. Sarah preserved completed checkpoints.";
-  } else if (/refusal|safety|policy/.test(haystack)) {
+  } else if (/content[_ -]?policy|safety[_ -]?refusal|request\s+(?:was\s+)?refused|provider\s+(?:has\s+)?refused|policy\s+violation|\brefusal\b/.test(haystack)) {
     category = "safety_refusal";
     nextAction = "review_request_scope";
     userMessage = "The AI provider refused this request. Sarah preserved completed checkpoints.";

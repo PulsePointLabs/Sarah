@@ -582,6 +582,8 @@ function imageMatchesStrictSectionSpecificRequest(image = {}, requestedKeys = ne
 function imageMatchesFineStructureRequest(image = {}, targetKey = '', meta = {}, paragraphText = '', reviewScope = '') {
   if (reviewScope !== 'pelvic_genital') return true;
   if (!PELVIC_GENITAL_REVIEW_ALLOWED_REGIONS.has(targetKey)) return true;
+  const explicitSectionKey = normalizeText(meta.section_key || meta.sectionKey || meta.section?.key || '').replace(/\s+/g, '_');
+  if (IMAGE_SECTION_KEYS_WITHOUT_REGION_AUTHORITY.has(explicitSectionKey)) return true;
 
   const requestedText = requestedFineStructureText(meta, paragraphText);
   const requestedKeys = requestedStrictFineStructureKeys(meta, paragraphText);

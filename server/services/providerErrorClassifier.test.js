@@ -65,3 +65,12 @@ test('does not include secrets in normalized messages', () => {
   assert.equal(classified.category, 'insufficient_credits');
   assert.doesNotMatch(classified.user_message, /sk-ant/i);
 });
+
+test('does not misclassify local anatomy validation as a provider safety refusal', () => {
+  const classified = classifyProviderError({
+    status: 422,
+    message: 'No usable visual evidence was selected for Tissue Health / Safety Observations. Refusing to render a black anatomy title card.',
+  }, { provider: 'openai' });
+  assert.equal(classified.category, 'unknown_provider_error');
+  assert.match(classified.technical_message, /No usable visual evidence/i);
+});
