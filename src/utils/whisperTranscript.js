@@ -12,6 +12,7 @@ const WHISPER_OUTRO_PATTERNS = [
 ];
 
 const TRAILING_COMMAND_PATTERN = /(?:^|[\s.,!?;:])(stop|end)[\s.!?]*$/i;
+const STANDALONE_TRAILING_COURTESY_PATTERN = /(^|[.!?]\s+)(?:thank you|thanks)[.!?]*$/i;
 
 export function cleanWhisperTranscript(rawText) {
   let text = String(rawText || "")
@@ -25,6 +26,8 @@ export function cleanWhisperTranscript(rawText) {
   for (const pattern of WHISPER_OUTRO_PATTERNS) {
     text = text.replace(pattern, " ");
   }
+
+  text = text.replace(STANDALONE_TRAILING_COURTESY_PATTERN, "$1").trim();
 
   return text
     .replace(/\s+([.,!?;:])/g, "$1")

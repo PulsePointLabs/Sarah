@@ -17,4 +17,7 @@ test("finalizeWhisperTranscript adds punctuation only when Whisper omitted it", 
 test("finalizeWhisperTranscript still removes trailing voice commands and hallucinated outros", () => {
   assert.equal(finalizeWhisperTranscript("This is the message stop"), "This is the message.");
   assert.equal(finalizeWhisperTranscript("Thank you for watching."), "");
+  assert.equal(finalizeWhisperTranscript("Thank you."), "");
+  assert.equal(finalizeWhisperTranscript("This is the actual note. Thank you."), "This is the actual note.");
+  assert.equal(finalizeWhisperTranscript("I said thank you"), "I said thank you.");
 });

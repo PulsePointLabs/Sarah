@@ -1223,6 +1223,7 @@ export default function AIChat({
   };
 
   const WHISPER_PROMPT =
+    "Transcribe only words actually spoken. Do not add greetings, sign-offs, thank-yous, or commentary. " +
     "Session log note. Gentle strokes on the glans penis. Foreskin partially retracted. " +
     "Stimulation paused. Perineum pressure applied. Pelvic floor contraction. " +
     "E-stim via TENS unit. Foley catheter in place. Urethral stimulation. " +
@@ -2556,7 +2557,7 @@ Return a conversational answer plus structured findings for review/persistence.`
           )}
 
           {/* Actions */}
-          {hasUserReplied && (
+          {hasUserReplied && !fullScreen && (
             <div className="flex items-center gap-2 pt-2 border-t border-border flex-wrap">
               <Button
                 size="sm"
