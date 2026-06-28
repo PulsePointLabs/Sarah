@@ -1,3 +1,5 @@
+import { isKnownLongRunningBackgroundJob, shouldNotifyForJobDuration } from "@/lib/backgroundJobNotificationPolicy";
+
 const ENABLED_KEY = "pulsepoint.backgroundJobs.notificationsEnabled";
 const NOTIFIED_KEY = "pulsepoint.backgroundJobs.notifiedTerminalJobs.v1";
 const NATIVE_CHANNEL_ID = "pulsepoint-background-jobs";
@@ -224,7 +226,17 @@ async function showNativeNotification(job, message, { route } = {}) {
 }
 
 export async function notifyBackgroundJobFinished(job, { route, onOpen, force = false } = {}) {
-  if (!["complete", "error"].includes(job?.status) || !canNotifyForBackgroundJob({ force }) || hasNotified(job)) {
+  if (
+    !["complete", "error"].includes(job?.status)
+    || !shouldNotifyForJobDuration(job)
+    || !canNotifyForBackgroundJob({ force })
+    || hasNotified(job)
+  ) {
+    return false;
+  }
+
+  // The foreground service owns completion/failure notification for jobs it tracks.
+  if (isNativeAppShell() && isKnownLongRunningBackgroundJob(job)) {
     return false;
   }
 

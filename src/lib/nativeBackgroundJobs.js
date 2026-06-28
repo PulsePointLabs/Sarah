@@ -1,5 +1,6 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { API_BASE } from "@/lib/mobileApiBase";
+import { shouldTrackNativeBackgroundJob } from "@/lib/backgroundJobNotificationPolicy";
 
 const SarahBackgroundJobs = registerPlugin("SarahBackgroundJobs");
 
@@ -12,7 +13,7 @@ function isAndroidNative() {
 }
 
 export async function trackNativeBackgroundJob(job, meta = {}) {
-  if (!isAndroidNative() || !job?.id) return false;
+  if (!isAndroidNative() || !job?.id || !shouldTrackNativeBackgroundJob(job, meta)) return false;
   await SarahBackgroundJobs.track({
     jobId: job.id,
     apiBase: API_BASE,
