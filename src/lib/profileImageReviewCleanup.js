@@ -239,6 +239,28 @@ function cleanExecutiveSummaryItem(value = "") {
   return parts.slice(firstCoherentIndex).join(" ").trim();
 }
 
+function executiveSummaryIntroduction(sections = []) {
+  const sectionKeys = new Set((Array.isArray(sections) ? sections : [])
+    .map((section) => typeof section === "string" ? section : section?.key)
+    .filter(Boolean));
+  if (sectionKeys.has("foreskin") || sectionKeys.has("glans_meatus") || sectionKeys.has("perineum")) {
+    return "Your pelvic and genital review summarizes the visible external anatomy, tissue integrity, symmetry, and skin findings across the available direct views.";
+  }
+  if (sectionKeys.has("head_face") || sectionKeys.has("feet_toes") || sectionKeys.has("posture_alignment")) {
+    return "Your head-to-toe review summarizes the visible anatomy, body contours, posture, symmetry, and skin findings across the available anterior, posterior, and lateral views.";
+  }
+  return "Your visual anatomy review summarizes the directly supported anatomical and tissue findings across the available views.";
+}
+
+function assembleExecutiveSummary(items = [], sections = []) {
+  const cleaned = items.map(cleanExecutiveSummaryItem).filter(Boolean);
+  if (!cleaned.length) return [];
+  const introduction = executiveSummaryIntroduction(sections);
+  const summaryText = cleaned.join(" ").trim();
+  const alreadyIntroduced = /^(?:your|the)\s+(?:pelvic and genital|head-to-toe|visual anatomy|external anatomy)\s+review\b/i.test(summaryText);
+  return [`${alreadyIntroduced ? "" : `${introduction} `}${summaryText}`.trim()];
+}
+
 function reduceRepeatedClinicalWords(text = "") {
   let next = String(text || "");
   next = next.replace(/\b(focused)(?:\s+\1\b)+/gi, "$1");
@@ -811,7 +833,7 @@ export function cleanupProfileImageReviewResult(result = {}, { sections = [] } =
       sectionKey: section.key,
     });
     cleaned[section.key] = section.key === "executive_summary"
-      ? sectionItems.map(cleanExecutiveSummaryItem).filter(Boolean)
+      ? assembleExecutiveSummary(sectionItems, sections)
       : sectionItems;
   }
 

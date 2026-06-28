@@ -489,7 +489,26 @@ test('executive summary removes orphaned opening fragments but keeps coherent an
 
   const text = allText(result);
   assert.doesNotMatch(text, /This is more prominent|It is broad|More visible than/i);
-  assert.match(text, /^Your external pelvic anatomy|Your skin and tissue contours/m);
+  assert.equal(result.executive_summary.length, 1);
+  assert.match(text, /^Your pelvic and genital review summarizes/);
+  assert.match(text, /Your external pelvic anatomy|Your skin and tissue contours/);
+});
+
+test('executive summary assembles saved regional findings into one coherent overview', () => {
+  const result = cleanupProfileImageReviewResult({
+    executive_summary: [
+      'This remains your established skin baseline for these regions with no new lesions or spreading erythema.',
+      'The coronal margin tissue appears healthy across all retracted and forward states.',
+      'The perineal skin surface appears intact with no fissuring, lesion, or breakdown.',
+      'Both gluteal surfaces are symmetric with no pressure marks or skin breakdown.',
+    ],
+  }, { sections: PELVIC_SECTIONS });
+
+  assert.equal(result.executive_summary.length, 1);
+  assert.match(result.executive_summary[0], /^Your pelvic and genital review summarizes/);
+  assert.match(result.executive_summary[0], /coronal margin tissue appears healthy/);
+  assert.match(result.executive_summary[0], /perineal skin surface appears intact/);
+  assert.match(result.executive_summary[0], /gluteal surfaces are symmetric/);
 });
 
 test('assignment contract and evidence classification prioritize anatomy over incidental context', () => {

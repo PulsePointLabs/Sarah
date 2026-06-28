@@ -72,15 +72,33 @@ export function q(str) {
 
 export function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { windowsHide: true, ...options });
+    const { timeoutMs = 0, ...spawnOptions } = options;
+    const child = spawn(command, args, { windowsHide: true, ...spawnOptions });
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    let timedOut = false;
+    const timeout = Number(timeoutMs) > 0
+      ? setTimeout(() => {
+          timedOut = true;
+          child.kill();
+        }, Number(timeoutMs))
+      : null;
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      callback();
+    };
     child.stdout?.on('data', (data) => { stdout += data.toString(); });
     child.stderr?.on('data', (data) => { stderr += data.toString(); });
-    child.on('error', reject);
+    child.on('error', (error) => finish(() => reject(error)));
     child.on('close', (code) => {
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`${command} exited with ${code}: ${stderr || stdout}`));
+      finish(() => {
+        if (timedOut) reject(new Error(`${command} timed out after ${Number(timeoutMs)}ms.`));
+        else if (code === 0) resolve({ stdout, stderr });
+        else reject(new Error(`${command} exited with ${code}: ${stderr || stdout}`));
+      });
     });
   });
 }
@@ -100,14 +118,23 @@ export function runProcessBinary(command, args, options = {}) {
   });
 }
 
-export async function probeAudioDurationSeconds(filePath) {
-  const probe = await runProcess('ffprobe', [
-    '-v', 'error',
-    '-show_entries', 'format=duration',
-    '-of', 'default=noprint_wrappers=1:nokey=1',
-    filePath,
-  ]);
-  return Number(probe.stdout.trim()) || 0;
+export async function probeAudioDurationSeconds(filePath, { timeoutMs = 10000, attempts = 2 } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt < Math.max(1, Number(attempts) || 1); attempt += 1) {
+    try {
+      const probe = await runProcess('ffprobe', [
+        '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        filePath,
+      ], { timeoutMs });
+      return Number(probe.stdout.trim()) || 0;
+    } catch (error) {
+      lastError = error;
+      if (!/timed out/i.test(String(error?.message || '')) || attempt >= Math.max(1, Number(attempts) || 1) - 1) throw error;
+    }
+  }
+  throw lastError;
 }
 
 export function estimateTtsDurationSeconds(text = '') {
