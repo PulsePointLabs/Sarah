@@ -2417,8 +2417,12 @@ export function validateVisualTimeline(visualTimeline = [], reviewScope = '') {
   const violations = [];
   for (const [index, item] of visualTimeline.entries()) {
     if (item.type !== 'image') continue;
-    const regionAllowed = isImageAllowedForRegion(item.image, item.targetKey, reviewScope);
     const manifestAssigned = Boolean(item.manifestAssigned || item.image?.manifest_assigned);
+    // Manifest assignments have already passed section-specific anatomy, device,
+    // and prohibited-region validation. Re-running the older label-only region
+    // predicate here can reject an indexed image after its section authorization
+    // metadata has been reduced into the immutable timeline entry.
+    const regionAllowed = manifestAssigned || isImageAllowedForRegion(item.image, item.targetKey, reviewScope);
     const fineStructureAllowed = manifestAssigned || imageMatchesFineStructureRequest(
         item.image,
         item.targetKey,

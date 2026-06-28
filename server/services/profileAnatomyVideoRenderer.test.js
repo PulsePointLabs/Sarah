@@ -1338,6 +1338,51 @@ test('timeline validation accepts manifest-assigned pelvic/genital evidence labe
   assert.doesNotThrow(() => validateVisualTimeline(visualTimeline, 'pelvic_genital'));
 });
 
+test('timeline validation preserves a manifest-authorized indexed foreskin assignment', () => {
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'indexed-foreskin-timeline-fixture',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: [
+      'Foreskin',
+      'Your foreskin is visible in forward and retracted states.',
+    ],
+    paragraphMeta: [
+      {
+        type: 'section-title',
+        section_key: 'foreskin',
+        section_label: 'Foreskin',
+        evidence_image_ids: ['indexed-foreskin-reference'],
+      },
+      { type: 'section', section_key: 'foreskin', section_label: 'Foreskin' },
+    ],
+    images: [
+      {
+        id: 'indexed-foreskin-reference',
+        label: 'Reference view I',
+        sectionKey: 'foreskin',
+        source: 'profile_review_image',
+        url: '/uploads/indexed-foreskin-reference.jpg',
+        anatomy_classification: {
+          visible_anatomy: [],
+          fine_structures: [],
+          best_for_sections: ['foreskin'],
+          device_classification: 'none',
+        },
+      },
+    ],
+  });
+  const narrationSegments = manifest.sections.map((section) => ({
+    section_id: section.section_id,
+    durationSeconds: 3,
+  }));
+  const visualTimeline = buildManifestVisualTimeline({ manifest, narrationSegments });
+
+  assert.deepEqual(manifest.sections[0].explicitly_assigned_evidence_ids, ['indexed-foreskin-reference']);
+  assert.doesNotThrow(() => validateManifestTimelineIntegrity({ manifest, narrationSegments, visualTimeline }));
+  assert.doesNotThrow(() => validateVisualTimeline(visualTimeline, 'pelvic_genital'));
+});
+
 test('timeline validation rejects renderer access to unassigned evidence', () => {
   const manifest = buildManifest();
   const narrationSegments = manifest.sections.map((section) => ({
