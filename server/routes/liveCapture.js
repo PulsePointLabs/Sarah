@@ -17,6 +17,7 @@ import {
   normalizePulsoidTelemetry,
   parsePulsoidMessage,
 } from '../services/hrSources.js';
+import { SHARED_HR_PACKET_STALE_MS, isSharedHrPacketFresh } from '../services/hrFreshness.js';
 import { normalizeOverlayHeartRateSnapshot } from '../services/overlayHeartRate.js';
 
 export const liveCaptureRouter = express.Router();
@@ -51,7 +52,9 @@ let emgPollTimer = null;
 let lastEmgSignature = '';
 let pulsoidRecording = null;
 let directH10Recording = null;
-const HR_SOURCE_STALE_MS = 8000;
+// The Android source may batch network delivery while its BLE recording remains healthy.
+// Explicit disconnect events still propagate immediately; this only governs packet silence.
+const HR_SOURCE_STALE_MS = SHARED_HR_PACKET_STALE_MS;
 const derivedHrState = new Map();
 const CAPTURE_KINDS = new Set(['session', 'body_exploration']);
 let overlayHrSequence = 0;
@@ -181,8 +184,10 @@ function shouldUseTelemetrySource(source) {
 }
 
 function hasRecentDirectH10Packet(maxAgeMs = HR_SOURCE_STALE_MS) {
-  const last = Date.parse(state.hr.directH10.lastMessageAt || '');
-  return Boolean(state.hr.directH10.connected && Number.isFinite(last) && Date.now() - last <= maxAgeMs);
+  return Boolean(
+    state.hr.directH10.connected
+    && isSharedHrPacketFresh(state.hr.directH10.lastMessageAt, { staleMs: maxAgeMs })
+  );
 }
 
 function normalizeCaptureKind(value) {
@@ -250,7 +255,7 @@ function markSelectedHrStaleIfNeeded() {
   const source = state.hr.selectedSource;
   if (source === HR_SOURCE_IDS.DIRECT_H10) {
     const last = Date.parse(state.hr.directH10.lastMessageAt || '');
-    if (state.hr.directH10.connected && (!Number.isFinite(last) || Date.now() - last > HR_SOURCE_STALE_MS)) {
+    if (state.hr.directH10.connected && !isSharedHrPacketFresh(state.hr.directH10.lastMessageAt)) {
       state.hr.directH10 = {
         ...state.hr.directH10,
         connected: false,
@@ -952,7 +957,9 @@ function publishHrTelemetryToOverlay(telemetry) {
 }
 
 function refreshDirectH10TelemetryState(telemetry, fallbackDeviceName = '') {
-  const receivedIso = new Date(telemetry?.receivedAt || Date.now()).toISOString();
+  // Connection freshness is based on arrival at this server, not the sender's clock.
+  // measuredAt remains available separately for physiological timeline alignment.
+  const receivedIso = new Date().toISOString();
   state.hr.directH10 = {
     ...state.hr.directH10,
     connected: true,

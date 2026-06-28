@@ -93,6 +93,7 @@ const BATTERY_SERVICE_UUID = "0000180f-0000-1000-8000-00805f9b34fb";
 const DEVICE_INFORMATION_SERVICE_UUID = "0000180a-0000-1000-8000-00805f9b34fb";
 const DIRECT_H10_REMEMBERED_DEVICE_KEY = "pulsepoint.directH10.rememberedDevice";
 const DIRECT_H10_RECONNECT_DELAYS_MS = [1000, 2500, 5000, 10000, 15000, 30000];
+const SHARED_HR_PACKET_STALE_MS = 30000;
 
 function readRememberedDirectH10Device() {
   try {
@@ -2242,9 +2243,12 @@ export default function LiveCapture() {
       const signalLost = serverDirect.error && /signal lost|no hr packets/i.test(serverDirect.error);
       const sharedSample = latestHrRef.current || hrTelemetry || status?.hr?.latestTelemetry;
       const sharedHr = readNumber(sharedSample?.currentHr, sharedSample?.hr, sharedSample?.heartRate);
-      const sharedStamp = sharedSample?.measuredAt || sharedSample?.receivedAt || sharedSample?.source_at || sharedSample?.lastMessageAt || sharedSample?.engineReceivedAt;
+      const sharedStamp = sharedSample?.engineReceivedAt || sharedSample?.receivedAt || sharedSample?.lastMessageAt || sharedSample?.measuredAt || sharedSample?.source_at;
       const sharedAgeMs = sharedStamp ? Date.now() - timestampMs(sharedStamp) : NaN;
-      const sharedHrRecent = sharedHr != null && Number.isFinite(sharedAgeMs) && sharedAgeMs >= 0 && sharedAgeMs <= 15000;
+      const sharedHrRecent = sharedHr != null
+        && Number.isFinite(sharedAgeMs)
+        && sharedAgeMs >= -5000
+        && sharedAgeMs <= SHARED_HR_PACKET_STALE_MS;
 
       if (sharedHrRecent) {
         directH10ReconnectAttemptRef.current = 0;
@@ -2567,9 +2571,13 @@ export default function LiveCapture() {
     const sample = latestHrRef.current || hrTelemetry;
     const hr = readNumber(sample?.currentHr, sample?.hr, sample?.heartRate);
     if (hr == null) return false;
-    const stamp = sample?.measuredAt || sample?.receivedAt || sample?.source_at || sample?.lastMessageAt;
+    const stamp = sample?.engineReceivedAt || sample?.receivedAt || sample?.lastMessageAt || sample?.measuredAt || sample?.source_at;
     const ageMs = stamp ? Date.now() - timestampMs(stamp) : 0;
-    return !stamp || (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 10000);
+    return !stamp || (
+      Number.isFinite(ageMs)
+      && ageMs >= -5000
+      && ageMs < SHARED_HR_PACKET_STALE_MS
+    );
   }, [hrTelemetry]);
 
   const prediction = useMemo(() => computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory), [hrTelemetry, emgTelemetry, telemetryHistory]);
@@ -4974,7 +4982,11 @@ export default function LiveCapture() {
   const h10Recent = recentHrPacket;
   const serverHrSource = status?.hr?.sourceStatus?.source || status?.hr?.latestTelemetry?.source || hrTelemetry?.source || "";
   const serverHrLabel = status?.hr?.sourceStatus?.label || hrTelemetry?.sourceLabel || selectedHrSource.label;
-  const sharedServerHr = Boolean(h10Recent && serverHrSource && serverHrSource !== hrSourceSettings.source);
+  const sharedServerHr = Boolean(
+    h10Recent
+    && serverHrSource
+    && (serverHrSource !== hrSourceSettings.source || !directH10Status.connected)
+  );
   const launchActive = recordingActive || Boolean(liveSession?.activeSessionId);
   const launchReadiness = {
     h10: {

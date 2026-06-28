@@ -1,6 +1,7 @@
 import { cleanHr, HR_SOURCE_IDS, HR_SOURCE_LABELS } from './hrSources.js';
+import { SHARED_HR_PACKET_STALE_MS } from './hrFreshness.js';
 
-export const OVERLAY_HR_STALE_MS = 8000;
+export const OVERLAY_HR_STALE_MS = SHARED_HR_PACKET_STALE_MS;
 
 function cleanTimestamp(value) {
   const numeric = Number(value);
