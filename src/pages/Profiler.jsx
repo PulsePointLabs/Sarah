@@ -32,9 +32,11 @@ import {
 } from "@/lib/profileImageReviewCleanup";
 import {
   buildProfileAnatomyEvidenceItem,
+  applyProfileAnatomyIndexToResult,
   filterProfileAnatomyReviewEvidence,
   isEligibleProfileAnatomyEvidenceSource,
   isExplicitlyApprovedChatAnatomyReference,
+  scoreIndexedProfileAnatomyEvidence,
 } from "@/lib/profileAnatomyEvidence";
 import {
   buildBodyExplorationVideoPassDigest,
@@ -4330,6 +4332,8 @@ function inlineEvidenceImageScore(result, imageId, sectionKey, findingsForImage 
     ? rawProfileImageById(result, imageId, transientImages)
     : profileImageById(result, imageId, transientImages);
   if (!image?.preview_url) return -10000;
+  const indexedScore = scoreIndexedProfileAnatomyEvidence(image, sectionKey);
+  if (indexedScore != null) return indexedScore + findingsForImage.length * 20;
   const text = inlineEvidenceImageText(result, imageId, transientImages, pelvicScoped);
   const sectionHint = SECTION_REFERENCE_HINTS[sectionKey];
   const strictHint = STRICT_INLINE_SECTION_HINTS[sectionKey];
@@ -4374,7 +4378,11 @@ function priorInlineEvidenceImageUseCounts(result, sectionKey, sections = [], tr
 
 function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transientImages = [], pelvicScoped = false, sections = []) {
   const priorUseCounts = priorInlineEvidenceImageUseCounts(result, sectionKey, sections, transientImages, pelvicScoped);
-  const candidates = findings.map((finding) => finding.image_id).filter(Boolean);
+  const indexedCandidates = (Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images : [])
+    .filter((image) => scoreIndexedProfileAnatomyEvidence(image, sectionKey) > 0)
+    .map((image) => image.image_id)
+    .filter(Boolean);
+  const candidates = [...findings.map((finding) => finding.image_id).filter(Boolean), ...indexedCandidates];
   const seenCanonicalKeys = new Set();
   const uniqueIds = [...new Set(candidates)].filter((imageId) => {
     const key = inlineEvidenceCanonicalKey(result, imageId, transientImages, pelvicScoped);
@@ -4436,7 +4444,6 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
   const findings = Array.isArray(result?.image_region_findings)
     ? result.image_region_findings.filter((finding) => finding.section_key === sectionKey && (!pelvicScoped || isPelvicGenitalFindingInScope(result, finding, transientImages)))
     : [];
-  if (!findings.length) return null;
 
   const imageIds = selectInlineEvidenceImageIds(result, sectionKey, findings, transientImages, pelvicScoped, sections);
   if (!imageIds.length) return null;
@@ -4457,12 +4464,13 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
         {imageIds.map((imageId) => {
           const image = profileImageById(result, imageId, transientImages);
           const imageFindings = findings.filter((finding) => finding.image_id === imageId).slice(0, 4);
-          if (!image?.preview_url || !imageFindings.length) return null;
+          if (!image?.preview_url) return null;
           const pinnedFindings = imageFindings.filter((finding) => finding.pin?.x != null && finding.pin?.y != null);
           const displayLabel = cleanEvidenceCardText(image.display_label)
             || cleanEvidenceCardText(imageFindings[0]?.label || imageFindings[0]?.region)
             || sectionLabel;
           const metadataParts = uniqueImageMetadataParts(image, displayLabel);
+          const indexedNote = cleanEvidenceCardText(image?.anatomy_classification?.notes || "");
           return (
             <div key={`${sectionKey}-${imageId}`} className="overflow-hidden rounded-lg border border-border bg-background shadow-sm">
               <div className="grid gap-0">
@@ -4481,6 +4489,9 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
                       <p className="mt-1.5 line-clamp-4 text-xs leading-relaxed text-muted-foreground">
                         {metadataParts.join(" · ")}
                       </p>
+                    )}
+                    {!metadataParts.length && indexedNote && (
+                      <p className="mt-1.5 line-clamp-4 text-xs leading-relaxed text-muted-foreground">{indexedNote}</p>
                     )}
                   </div>
                   <div className="space-y-1.5">
@@ -4749,6 +4760,9 @@ function ProfileImageReviewPanel({
   const [activeAnatomyVideoJobId, setActiveAnatomyVideoJobId] = useState("");
   const [imageUploadStatus, setImageUploadStatus] = useState(null);
   const [videoUploadStatus, setVideoUploadStatus] = useState(null);
+  const [anatomyIndexInventory, setAnatomyIndexInventory] = useState(null);
+  const [anatomyIndexStatus, setAnatomyIndexStatus] = useState(null);
+  const [selectedAnatomyIndexKey, setSelectedAnatomyIndexKey] = useState("");
   const [includeImageCalloutsInTts, setIncludeImageCalloutsInTts] = useState(() => {
     try {
       return window.localStorage.getItem("pulsepoint_profile_image_tts_callouts_v2") === "true";
@@ -4758,6 +4772,78 @@ function ProfileImageReviewPanel({
   });
   const autoRecoveredBatchSetRef = useRef("");
   const anatomyVideoJobStorageKey = `sarah_profiler_anatomy_video_job_${config.kind}`;
+  const anatomyIndexReviewType = /pelvic|genital/i.test(config.kind) ? "pelvic_genital" : "head_to_toe";
+
+  const refreshAnatomyIndexInventory = async () => {
+    const inventory = await base44.integrations.Core.GetProfileAnatomyIndexInventory();
+    setAnatomyIndexInventory(inventory);
+    const first = inventory?.entries?.find((entry) => entry.reviewType === anatomyIndexReviewType && entry.fileExists);
+    setSelectedAnatomyIndexKey((current) => current || first?.inventoryKey || "");
+    return inventory;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    base44.integrations.Core.GetProfileAnatomyIndexInventory()
+      .then((inventory) => {
+        if (cancelled) return;
+        setAnatomyIndexInventory(inventory);
+        const first = inventory?.entries?.find((entry) => entry.reviewType === anatomyIndexReviewType && entry.fileExists);
+        if (first) setSelectedAnatomyIndexKey((current) => current || first.inventoryKey);
+      })
+      .catch((indexError) => console.warn("Profiler anatomy index inventory unavailable:", indexError));
+    return () => { cancelled = true; };
+  }, [anatomyIndexReviewType]);
+
+  const startAnatomyIndex = async (mode) => {
+    const relevant = (anatomyIndexInventory?.entries || []).filter((entry) => entry.reviewType === anatomyIndexReviewType && entry.fileExists);
+    const selected = mode === "selected"
+      ? relevant.filter((entry) => entry.inventoryKey === selectedAnatomyIndexKey)
+      : mode === "all"
+        ? relevant
+        : relevant.filter((entry) => entry.status === "unindexed");
+    if (!selected.length) {
+      setAnatomyIndexStatus({ type: "done", message: "No images require classification for this review." });
+      return;
+    }
+    const confirmed = window.confirm(`${selected.length} image${selected.length === 1 ? "" : "s"} will use approximately ${selected.length} Claude vision call${selected.length === 1 ? "" : "s"}. Continue?`);
+    if (!confirmed) return;
+    const requestedAt = new Date().toISOString();
+    setAnatomyIndexStatus({ type: "working", message: `Preparing ${selected.length} image${selected.length === 1 ? "" : "s"}...`, current: 0, total: selected.length });
+    try {
+      const job = await startBackgroundJob("profile_anatomy_image_index", {
+        mode,
+        inventoryKey: mode === "selected" ? selectedAnatomyIndexKey : "",
+        requestedAt,
+        confirmCredits: true,
+      }, {
+        title: `${config.shortTitle} anatomy image index`,
+        label: `${config.shortTitle} anatomy image index`,
+        source: "profile_anatomy_image_index",
+        reviewType: anatomyIndexReviewType,
+      });
+      const completed = await waitForBackgroundJob(job.id, {
+        intervalMs: 1200,
+        onProgress: (nextJob) => setAnatomyIndexStatus({
+          type: "working",
+          message: nextJob?.progress?.message || "Classifying Profiler images...",
+          current: nextJob?.progress?.current || 0,
+          total: nextJob?.progress?.total || selected.length,
+          currentImage: nextJob?.progress?.current_image || "",
+        }),
+      });
+      const inventory = completed?.result?.inventory || await refreshAnatomyIndexInventory();
+      setAnatomyIndexInventory(inventory);
+      setAnatomyIndexStatus({
+        type: completed?.result?.failed ? "error" : "done",
+        message: `${completed?.result?.completed || 0} indexed, ${completed?.result?.failed || 0} failed, ${completed?.result?.skippedCached || 0} reused from cache.`,
+        current: completed?.result?.completed || 0,
+        total: completed?.result?.requested || selected.length,
+      });
+    } catch (indexError) {
+      setAnatomyIndexStatus({ type: "error", message: indexError?.message || String(indexError) });
+    }
+  };
 
   useEffect(() => {
     try {
@@ -6879,7 +6965,8 @@ ANNOTATED IMAGE OUTPUT RULES:
   };
 
   const sections = profileReviewResultSections(config);
-  const cumulativeVisualResult = filterProfileAnatomyReviewEvidence(result);
+  const indexedResult = applyProfileAnatomyIndexToResult(result, anatomyIndexInventory, anatomyIndexReviewType);
+  const cumulativeVisualResult = filterProfileAnatomyReviewEvidence(indexedResult);
   const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
   const profileStale = Boolean(result) && (
     isProfileAIContentStale(result, sessions) ||
@@ -7449,6 +7536,65 @@ ANNOTATED IMAGE OUTPUT RULES:
               <span className="rounded-full border border-amber-400/40 bg-amber-400/15 px-2 py-0.5 font-semibold text-amber-700">
                 Newer saved evidence exists - re-review to update this synthesis
               </span>
+            )}
+          </div>
+        )}
+
+        {result && anatomyIndexInventory && (
+          <div className="rounded-xl border border-border bg-background p-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h4 className="flex items-center gap-1.5 text-sm font-bold text-foreground">
+                  <ImageIcon className="h-4 w-4 text-primary" />
+                  Anatomy image index
+                </h4>
+                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                  {(anatomyIndexInventory.entries || []).filter((entry) => entry.reviewType === anatomyIndexReviewType && entry.status === "indexed").length} indexed · {(anatomyIndexInventory.entries || []).filter((entry) => entry.reviewType === anatomyIndexReviewType && entry.status === "unindexed").length} unindexed. Cached files are reused without another AI call.
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={anatomyIndexStatus?.type === "working"}
+                onClick={() => startAnatomyIndex("unclassified")}
+                className="h-8 gap-1.5 text-xs"
+              >
+                {anatomyIndexStatus?.type === "working" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
+                Index unclassified
+              </Button>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+              <select
+                value={selectedAnatomyIndexKey}
+                onChange={(event) => setSelectedAnatomyIndexKey(event.target.value)}
+                disabled={anatomyIndexStatus?.type === "working"}
+                className="h-9 min-w-0 rounded-md border border-border bg-background px-2 text-xs text-foreground"
+              >
+                {(anatomyIndexInventory.entries || [])
+                  .filter((entry) => entry.reviewType === anatomyIndexReviewType && entry.fileExists)
+                  .map((entry) => (
+                    <option key={entry.inventoryKey} value={entry.inventoryKey}>
+                      {entry.displayLabel} · {entry.status}
+                    </option>
+                  ))}
+              </select>
+              <Button type="button" size="sm" variant="outline" disabled={!selectedAnatomyIndexKey || anatomyIndexStatus?.type === "working"} onClick={() => startAnatomyIndex("selected")} className="h-9 text-xs">
+                Reindex selected
+              </Button>
+              <Button type="button" size="sm" variant="outline" disabled={anatomyIndexStatus?.type === "working"} onClick={() => startAnatomyIndex("all")} className="h-9 text-xs">
+                Reindex all
+              </Button>
+            </div>
+            {anatomyIndexStatus && (
+              <div className={`mt-3 rounded-lg border px-3 py-2 text-xs leading-relaxed ${anatomyIndexStatus.type === "error" ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-primary/20 bg-primary/5 text-muted-foreground"}`}>
+                <p>{anatomyIndexStatus.message}</p>
+                {anatomyIndexStatus.type === "working" && Number(anatomyIndexStatus.total) > 0 && (
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div className="h-full bg-primary transition-all" style={{ width: `${Math.min(100, (Number(anatomyIndexStatus.current || 0) / Number(anatomyIndexStatus.total)) * 100)}%` }} />
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}

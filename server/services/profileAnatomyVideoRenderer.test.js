@@ -13,7 +13,91 @@ import {
   filterProfileAnatomyReviewEvidence,
   isEligibleProfileAnatomyEvidenceSource,
   profileAnatomyDeviceClassification,
+  applyProfileAnatomyIndexToResult,
+  selectIndexedProfileAnatomyEvidence,
 } from '../../src/lib/profileAnatomyEvidence.js';
+
+function classifiedImage(id, anatomy, sections, options = {}) {
+  return {
+    id,
+    image_id: id,
+    label: options.label || id,
+    display_label: options.label || id,
+    url: `/uploads/${id}.jpg`,
+    preview_url: `/uploads/${id}.jpg`,
+    source: 'profile_review_image',
+    anatomy_classification: {
+      visible_anatomy: anatomy,
+      fine_structures: options.fineStructures || [],
+      laterality: options.laterality || ['midline'],
+      positions: options.positions || ['close_up'],
+      device_classification: options.deviceClassification || 'none',
+      device_types: options.deviceTypes || [],
+      device_is_primary_subject: options.deviceClassification === 'device_dominant',
+      quality: options.quality || { overall: 'good', focus: 'good', lighting: 'good', anatomy_visibility: 'good' },
+      best_for_sections: sections,
+      combined_view_strengths: options.combined || [],
+      notes: options.notes || 'Indexed anatomy reference.',
+    },
+  };
+}
+
+test('saved classifications deterministically select penis, foreskin, anus, back, and right inguinal evidence', () => {
+  const images = [
+    classifiedImage('penis-only', ['penis', 'penile_shaft'], ['penis']),
+    classifiedImage('foreskin-forward', ['penis', 'foreskin', 'foreskin_forward'], ['foreskin']),
+    classifiedImage('combined', ['penis', 'penile_shaft', 'foreskin', 'foreskin_forward'], ['penis', 'foreskin', 'penis_and_foreskin'], { combined: ['penis_and_foreskin'], quality: { overall: 'excellent', focus: 'excellent', lighting: 'good', anatomy_visibility: 'excellent' } }),
+    classifiedImage('anus', ['anus', 'anal_margin', 'perianal_region'], ['anal_opening_perianal_region']),
+    classifiedImage('back', ['posterior_torso', 'thoracic_back', 'lumbar_back'], ['posterior_torso_back']),
+    classifiedImage('right-inguinal', ['right_inguinal_region', 'inguinal_repair_scar'], ['right_inguinal_repair', 'inguinal_folds_groin_skin'], { laterality: ['right'] }),
+  ];
+  assert.equal(selectIndexedProfileAnatomyEvidence(images, { sectionKey: 'penis' })[0].image.id, 'combined');
+  assert.equal(selectIndexedProfileAnatomyEvidence(images, { sectionKey: 'foreskin' })[0].image.id, 'combined');
+  assert.equal(selectIndexedProfileAnatomyEvidence(images, { sectionKey: 'penis_and_foreskin' })[0].image.id, 'combined');
+  assert.equal(selectIndexedProfileAnatomyEvidence(images, { sectionKey: 'anal_opening_perianal_region' })[0].image.id, 'anus');
+  assert.equal(selectIndexedProfileAnatomyEvidence(images, { sectionKey: 'posterior_torso_back' })[0].image.id, 'back');
+  assert.equal(selectIndexedProfileAnatomyEvidence(images, { sectionKey: 'right_inguinal_repair' })[0].image.id, 'right-inguinal');
+});
+
+test('incidental device remains anatomy eligible while device-dominant evidence is restricted', () => {
+  const incidental = classifiedImage('incidental', ['penis', 'foreskin'], ['penis'], { deviceClassification: 'incidental_device', deviceTypes: ['foley'] });
+  const dominant = classifiedImage('dominant', ['penis'], ['penis', 'device_contact_findings'], { deviceClassification: 'device_dominant', deviceTypes: ['foley'] });
+  assert.ok(selectIndexedProfileAnatomyEvidence([incidental], { sectionKey: 'penis' })[0]);
+  assert.equal(selectIndexedProfileAnatomyEvidence([dominant], { sectionKey: 'penis' }).length, 0);
+  assert.ok(selectIndexedProfileAnatomyEvidence([dominant], { sectionKey: 'device_contact_findings' })[0]);
+});
+
+test('static review mapping preserves original annotation image IDs and dimensions', () => {
+  const result = {
+    _meta: { reviewed_images: [{ image_id: 'img_025', preview_url: '/uploads/img-025.jpg', width: 1200, height: 1600, source: 'profile_review_image' }] },
+    annotated_images: [{ image_id: 'img_025', image_width: 1200, image_height: 1600, callouts: [{ x: 0.25, y: 0.4 }] }],
+  };
+  const classification = classifiedImage('img_025', ['pubic_mound', 'lower_abdomen', 'penis'], ['pubic_mound_lower_abdomen']).anatomy_classification;
+  const mapped = applyProfileAnatomyIndexToResult(result, { entries: [{ reviewType: 'pelvic_genital', imageId: 'img_025', sourceUrl: '/uploads/img-025.jpg', fileHash: 'abc', classificationVersion: 'v1', classification }] }, 'pelvic_genital');
+  assert.equal(mapped._meta.reviewed_images[0].image_id, 'img_025');
+  assert.equal(mapped._meta.reviewed_images[0].width, 1200);
+  assert.deepEqual(mapped.annotated_images, result.annotated_images);
+});
+
+test('video manifest and static selector agree on saved combined-view evidence', () => {
+  const images = [
+    classifiedImage('combined', ['penis', 'penile_shaft', 'foreskin', 'foreskin_forward'], ['penis_and_foreskin'], { combined: ['penis_and_foreskin'] }),
+    classifiedImage('penis-only', ['penis', 'penile_shaft'], ['penis']),
+  ];
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'indexed-combined', title: 'Pelvic review', reviewScope: 'pelvic_genital',
+    paragraphs: ['Penis and Foreskin', 'Your penis and foreskin are directly visible.'],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'penis_and_foreskin', section_label: 'Penis and Foreskin' },
+      { type: 'section', section_key: 'penis_and_foreskin', section_label: 'Penis and Foreskin' },
+    ],
+    images,
+  });
+  const staticId = selectIndexedProfileAnatomyEvidence(images, { sectionKey: 'penis_and_foreskin' })[0].image.id;
+  assert.equal(staticId, 'combined');
+  assert.equal(manifest.sections[0].assigned_evidence[0]?.evidence_id, staticId);
+  assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
+});
 
 test('complete payload manifest does not scan historical media during normal render', () => {
   let historicalLoads = 0;

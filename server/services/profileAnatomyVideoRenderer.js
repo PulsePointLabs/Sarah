@@ -11,6 +11,7 @@ import {
   isEligibleProfileAnatomyEvidenceSource,
   profileAnatomyDeviceClassification,
   profileAnatomyEvidenceSourceKind,
+  scoreIndexedProfileAnatomyEvidence,
 } from '../../src/lib/profileAnatomyEvidence.js';
 
 const PROFILE_ANATOMY_VIDEO_RENDER_VERSION = 'profile_anatomy_video_v1_hd';
@@ -466,6 +467,20 @@ function imagePrimaryFineStructureText(image = {}) {
 }
 
 function directFineStructureKeysForImage(image = {}) {
+  const classification = image.anatomy_classification || image.anatomyClassification;
+  if (classification) {
+    const indexed = new Set([...(classification.visible_anatomy || []), ...(classification.fine_structures || [])]);
+    const keys = new Set();
+    if ([...indexed].some((key) => ['penis', 'penile_base', 'penile_shaft'].includes(key))) keys.add('shaft');
+    if ([...indexed].some((key) => ['foreskin', 'foreskin_forward', 'foreskin_partially_retracted', 'foreskin_fully_retracted'].includes(key))) keys.add('foreskin');
+    if (indexed.has('glans') || indexed.has('corona')) keys.add('glans');
+    if (indexed.has('meatus')) keys.add('meatus');
+    if (indexed.has('scrotum') || indexed.has('testes')) keys.add('scrotum');
+    if ([...indexed].some((key) => ['pubic_mound', 'lower_abdomen', 'right_inguinal_region', 'left_inguinal_region', 'inguinal_repair_scar', 'penile_base'].includes(key))) keys.add('pubic_groin');
+    if (indexed.has('perineum')) keys.add('perineum');
+    if (indexed.has('anus') || indexed.has('anal_margin') || indexed.has('perianal_region')) keys.add('anal_perianal');
+    return keys;
+  }
   return collectFineStructureKeys(imagePrimaryFineStructureText(image));
 }
 
@@ -743,6 +758,29 @@ function sectionRegionKeyFromMeta(meta = {}, paragraphText = '') {
 
 function regionKeysForImage(image = {}) {
   const keys = new Set();
+  const classification = image.anatomy_classification || image.anatomyClassification;
+  if (classification) {
+    const indexed = new Set([...(classification.visible_anatomy || []), ...(classification.fine_structures || [])]);
+    const mappings = [
+      [['head', 'face', 'scalp'], 'head_face'],
+      [['neck'], 'neck'],
+      [['shoulders', 'upper_back', 'thoracic_back', 'posterior_torso'], 'shoulders_upper_back'],
+      [['chest'], 'chest'],
+      [['abdomen'], 'abdomen'],
+      [['pelvis', 'hips', 'lower_abdomen', 'pubic_mound', 'right_inguinal_region', 'left_inguinal_region', 'inguinal_repair_scar'], 'pelvis_pubic_region'],
+      [['penis', 'penile_base', 'penile_shaft', 'foreskin', 'foreskin_forward', 'foreskin_partially_retracted', 'foreskin_fully_retracted', 'glans', 'corona', 'meatus', 'scrotum', 'testes', 'perineum'], 'genitals_perineum'],
+      [['buttocks', 'anal_margin', 'anus', 'perianal_region'], 'buttocks_perianal'],
+      [['upper_limbs', 'hands'], 'upper_limbs_hands'],
+      [['lower_limbs', 'knees', 'calves'], 'lower_limbs'],
+      [['ankles', 'feet', 'toes'], 'feet_toes'],
+      [['posture'], 'posture_alignment'],
+      [['skin_finding'], 'skin_summary'],
+    ];
+    for (const [anatomyKeys, region] of mappings) {
+      if (anatomyKeys.some((key) => indexed.has(key))) keys.add(region);
+    }
+    return keys;
+  }
   const negatedKeys = new Set();
   const textFields = {
     label: image.label,
@@ -998,12 +1036,19 @@ function textPreview(value = '', maxLength = 180) {
 function candidateTrace(images = [], targetKey, meta = {}, paragraphText = '', reviewScope = '') {
   const requestedSectionKey = normalizeText(meta.section_key || meta.sectionKey || '').replace(/\s+/g, '_');
   return images.map((image) => {
+    const indexedScore = scoreIndexedProfileAnatomyEvidence(image, requestedSectionKey);
     const sourceAllowed = isEligibleProfileAnatomyEvidenceSource(image);
     const scopeAllowed = isImageAllowedForReviewScope(image, reviewScope, meta);
-    const structureAllowed = imageMatchesFineStructureRequest(image, targetKey, meta, paragraphText, reviewScope);
-    const regionAllowed = isImageAllowedForRegion(image, targetKey, reviewScope, meta);
+    const structureAllowed = indexedScore == null
+      ? imageMatchesFineStructureRequest(image, targetKey, meta, paragraphText, reviewScope)
+      : indexedScore > 0;
+    const regionAllowed = indexedScore == null
+      ? isImageAllowedForRegion(image, targetKey, reviewScope, meta)
+      : indexedScore > 0;
     const deviceAllowed = isDeviceEvidenceAuthorizedForSection(image, targetKey, meta, paragraphText);
-    const baseScore = scoreImageForReviewFallback(image, targetKey, meta, paragraphText, reviewScope);
+    const baseScore = indexedScore == null
+      ? scoreImageForReviewFallback(image, targetKey, meta, paragraphText, reviewScope)
+      : indexedScore;
     const validatedSectionKeys = new Set((Array.isArray(image.validated_section_keys)
       ? image.validated_section_keys
       : []
@@ -1084,6 +1129,25 @@ function isImageAllowedForRegion(image, targetKey, reviewScope = '', meta = {}) 
 }
 
 function isDeviceEvidenceAuthorizedForSection(image = {}, targetKey = '', meta = {}, paragraphText = '') {
+  if (image.indexed_classification) {
+    const deviceClass = image.device_classification || 'none';
+    if (deviceClass === 'none') return true;
+    const requestedSectionKey = normalizeText(meta.section_key || meta.sectionKey || '').replace(/\s+/g, '_');
+    if (deviceClass === 'incidental_device') {
+      return (image.authorized_section_keys || []).includes(requestedSectionKey);
+    }
+    return sectionRequestsDevice(meta, paragraphText) && DEVICE_AUTHORIZED_REGION_KEYS.has(targetKey);
+  }
+  const classification = image.anatomy_classification || image.anatomyClassification;
+  if (classification) {
+    const deviceClass = classification.device_classification || 'none';
+    if (deviceClass === 'none') return true;
+    const requestedSectionKey = normalizeText(meta.section_key || meta.sectionKey || '').replace(/\s+/g, '_');
+    if (deviceClass === 'incidental_device') {
+      return scoreIndexedProfileAnatomyEvidence(image, requestedSectionKey) > 0;
+    }
+    return sectionRequestsDevice(meta, paragraphText) && DEVICE_AUTHORIZED_REGION_KEYS.has(targetKey);
+  }
   if (!isDeviceHeavyImage(image)) return true;
   if (sectionRequestsDevice(meta, paragraphText) && DEVICE_AUTHORIZED_REGION_KEYS.has(targetKey)) return true;
   return !isDeviceDominantImage(image) && hasDirectRequestedAnatomyEvidence(image, meta, paragraphText);
@@ -1091,6 +1155,11 @@ function isDeviceEvidenceAuthorizedForSection(image = {}, targetKey = '', meta =
 
 function isImageAllowedForManifestSection(image, targetKey, reviewScope = '', meta = {}, paragraphText = '') {
   if (!isEligibleProfileAnatomyEvidenceSource(image)) return false;
+  const requestedSectionKey = normalizeText(meta.section_key || meta.sectionKey || '').replace(/\s+/g, '_');
+  const indexedScore = scoreIndexedProfileAnatomyEvidence(image, requestedSectionKey);
+  if (indexedScore != null) {
+    return indexedScore > 0 && isDeviceEvidenceAuthorizedForSection(image, targetKey, meta, paragraphText);
+  }
   if (!isImageAllowedForRegion(image, targetKey, reviewScope, meta)) return false;
   if (!imageMatchesFineStructureRequest(image, targetKey, meta, paragraphText, reviewScope)) return false;
   return isDeviceEvidenceAuthorizedForSection(image, targetKey, meta, paragraphText);
@@ -1181,10 +1250,20 @@ function groupParagraphsIntoManifestSections(paragraphs = [], paragraphMeta = []
   return sections;
 }
 
-function assignmentMetadataForImage(image = {}, score = 0, reason = '', targetKey = '') {
+function assignmentMetadataForImage(image = {}, score = 0, reason = '', targetKey = '', sectionKey = '') {
   const anatomyLabels = [...regionKeysForImage(image)];
   const fineLabels = [...directFineStructureKeysForImage(image)];
   const regionCropFallback = allowsRegionCropFallback(targetKey, new Set(anatomyLabels), image);
+  const indexedSectionScore = sectionKey ? scoreIndexedProfileAnatomyEvidence(image, sectionKey) : null;
+  const classifierSections = Array.isArray(image?.anatomy_classification?.best_for_sections)
+    ? image.anatomy_classification.best_for_sections
+    : Array.isArray(image?.anatomyClassification?.best_for_sections)
+      ? image.anatomyClassification.best_for_sections
+      : [];
+  const authorizedSectionKeys = [...new Set([
+    ...classifierSections,
+    ...(indexedSectionScore != null && indexedSectionScore > 0 && sectionKey ? [sectionKey] : []),
+  ])];
   return {
     evidence_id: image.id || null,
     source_collection: image.source || 'profile_review',
@@ -1203,6 +1282,9 @@ function assignmentMetadataForImage(image = {}, score = 0, reason = '', targetKe
     region_crop_fallback: regionCropFallback,
     procedure_related: /\b(procedure|catheter|foley|statlock|tubing|drainage)\b/i.test(normalizeText([image.label, image.coverage, image.source].join(' '))),
     display_label: image.label || null,
+    indexed_classification: Boolean(image.anatomy_classification || image.anatomyClassification),
+    authorized_section_keys: authorizedSectionKeys,
+    direct_section_authorized: Boolean(indexedSectionScore != null && indexedSectionScore > 0),
   };
 }
 
@@ -1285,7 +1367,12 @@ export function createReviewEvidenceManifest({
       .map((entry) => {
         const imageId = entry.image?.id || entry.candidate?.id || '';
         const useCount = imageId ? (evidenceUseCounts.get(imageId) || 0) : 0;
-        const repeatPenalty = useCount * (reviewScope === 'pelvic_genital' ? 135 : 105);
+        const indexedSectionScore = scoreIndexedProfileAnatomyEvidence(entry.image, section.section_key);
+        const repeatPenalty = useCount * (
+          indexedSectionScore != null && indexedSectionScore > 0
+            ? 20
+            : reviewScope === 'pelvic_genital' ? 135 : 105
+        );
         return {
           ...entry,
           adjustedScore: preferredEvidenceIds.has(imageId)
@@ -1318,7 +1405,7 @@ export function createReviewEvidenceManifest({
         const reason = index === 0
           ? directReason
           : `Selected additional compatible visual ${index + 1} for ${REGION_LABELS.get(section.target_region) || section.target_region}.`;
-        return assignmentMetadataForImage(entry.image, entry.candidate?.score ?? entry.score ?? 0, reason, section.target_region);
+        return assignmentMetadataForImage(entry.image, entry.candidate?.score ?? entry.score ?? 0, reason, section.target_region, section.section_key);
       })
       .filter(Boolean);
     for (const assignment of assignments) {
@@ -1367,7 +1454,12 @@ export function validateReviewEvidenceManifest(manifest = {}) {
         const allowedCropFromBroadReference = Boolean(evidence.region_crop_fallback && labels.has(section.target_region));
         const allowedHeadToToeMultiRegionReference = manifest.review_scope !== 'pelvic_genital'
           && labels.has(section.target_region);
-        if (labels.has(blocked) && !allowedCropFromBroadReference && !allowedHeadToToeMultiRegionReference) {
+        const allowedIndexedSectionReference = Boolean(
+          evidence.indexed_classification
+          && evidence.direct_section_authorized
+          && (evidence.authorized_section_keys || []).includes(section.section_key)
+        );
+        if (labels.has(blocked) && !allowedCropFromBroadReference && !allowedHeadToToeMultiRegionReference && !allowedIndexedSectionReference) {
           errors.push(`Section ${section.section_id} contains prohibited anatomy label ${blocked} from evidence ${evidence.evidence_id}.`);
         }
       }
@@ -1892,6 +1984,10 @@ function safeImageItems(images = []) {
       fine_structure_labels: Array.isArray(image.fine_structure_labels) ? image.fine_structure_labels : [],
       validated_section_keys: Array.isArray(image.validated_section_keys) ? image.validated_section_keys : [],
       device_classification: image.device_classification || '',
+      anatomy_classification: image.anatomy_classification || image.anatomyClassification || null,
+      anatomy_classification_version: image.anatomy_classification_version || '',
+      anatomy_file_hash: image.anatomy_file_hash || '',
+      combined_view_strengths: Array.isArray(image.combined_view_strengths) ? image.combined_view_strengths : [],
       width: image.width ?? image.image_width ?? null,
       height: image.height ?? image.image_height ?? null,
       image_width: image.image_width ?? image.width ?? null,

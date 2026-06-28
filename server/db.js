@@ -83,6 +83,20 @@ export function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_local_telemetry_events_session ON local_telemetry_events(session_id, kind, wall_time_ms);
     CREATE INDEX IF NOT EXISTS idx_local_telemetry_events_kind_time ON local_telemetry_events(kind, wall_time_ms);
+
+    CREATE TABLE IF NOT EXISTS profile_anatomy_image_classifications (
+      file_hash TEXT NOT NULL,
+      classification_version TEXT NOT NULL,
+      image_id TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_url TEXT,
+      classifier_model TEXT NOT NULL,
+      classified_at TEXT NOT NULL,
+      classification_json TEXT NOT NULL,
+      PRIMARY KEY (file_hash, classification_version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_profile_anatomy_classification_image
+      ON profile_anatomy_image_classifications(image_id, classification_version);
   `);
 
   const localVisionColumns = db.prepare("PRAGMA table_info(local_vision_results)").all().map((row) => row.name);
@@ -117,6 +131,51 @@ export function normalizeEntityName(name) {
 
 export function listEntities(entity) {
   return db.prepare('SELECT data FROM entities WHERE entity = ?').all(entity).map((r) => safeJsonParse(r.data)).filter(Boolean);
+}
+
+export function getProfileAnatomyImageClassification(fileHash, classificationVersion) {
+  const row = db.prepare(`
+    SELECT *
+    FROM profile_anatomy_image_classifications
+    WHERE file_hash = ? AND classification_version = ?
+  `).get(fileHash, classificationVersion);
+  if (!row) return null;
+  return {
+    fileHash: row.file_hash,
+    classificationVersion: row.classification_version,
+    imageId: row.image_id,
+    sourceType: row.source_type,
+    sourceUrl: row.source_url || '',
+    classifierModel: row.classifier_model,
+    classifiedAt: row.classified_at,
+    classification: safeJsonParse(row.classification_json),
+  };
+}
+
+export function upsertProfileAnatomyImageClassification(record = {}) {
+  db.prepare(`
+    INSERT INTO profile_anatomy_image_classifications(
+      file_hash, classification_version, image_id, source_type, source_url,
+      classifier_model, classified_at, classification_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(file_hash, classification_version) DO UPDATE SET
+      image_id = excluded.image_id,
+      source_type = excluded.source_type,
+      source_url = excluded.source_url,
+      classifier_model = excluded.classifier_model,
+      classified_at = excluded.classified_at,
+      classification_json = excluded.classification_json
+  `).run(
+    record.fileHash,
+    record.classificationVersion,
+    record.imageId,
+    record.sourceType,
+    record.sourceUrl || '',
+    record.classifierModel,
+    record.classifiedAt || nowIso(),
+    JSON.stringify(record.classification || {}),
+  );
+  return getProfileAnatomyImageClassification(record.fileHash, record.classificationVersion);
 }
 
 const PROFILE_REVIEW_RESULT_KEYS = new Set([

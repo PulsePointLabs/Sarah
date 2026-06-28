@@ -242,6 +242,7 @@ export const base44 = {
         body: JSON.stringify(payload || {}),
       }),
       GetLocalVisionHealth: async () => request('/local-vision/health'),
+      GetProfileAnatomyIndexInventory: async () => request('/profile-anatomy-index/inventory'),
       ListLocalVisionResults: async ({ sessionId, recordType = '', limit = 10 } = {}) => {
         const query = new URLSearchParams();
         if (sessionId) query.set('sessionId', sessionId);

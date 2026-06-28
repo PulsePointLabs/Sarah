@@ -28,6 +28,7 @@ import {
 } from '../../src/lib/profileImageReviewCleanup.js';
 import { friendlyJobErrorMessage } from '../../src/lib/jobErrorMessages.js';
 import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
+import { runProfileAnatomyImageIndex } from '../services/profileAnatomyImageIndex.js';
 
 export const jobsRouter = express.Router();
 export const largeJobsRouter = express.Router();
@@ -506,6 +507,10 @@ registerJobHandler('profile_anatomy_video', async (payload, context) => {
     signal: context.signal,
     onProgress: context.updateProgress,
   });
+});
+
+registerJobHandler('profile_anatomy_image_index', async (payload, context) => {
+  return runProfileAnatomyImageIndex(payload, context);
 });
 
 registerJobHandler('mobile_session_video_render', async (payload, context) => {
