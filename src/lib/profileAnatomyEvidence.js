@@ -480,7 +480,9 @@ export function applyProfileAnatomyIndexToResult(result = {}, inventory = {}, re
         // Image IDs are reused across archived Profiler runs. The source URL is
         // the stable identity for a concrete image; only fall back to the local
         // run ID when no URL match exists.
-        const entry = byUrl.get(url) || byUrl.get(profileEvidenceUrlIdentity(url)) || byId.get(image.image_id);
+        const entry = byUrl.get(url)
+          || byUrl.get(profileEvidenceUrlIdentity(url))
+          || (!url ? byId.get(image.image_id) : null);
         if (!entry?.classification) return { ...image, id: image.id || image.image_id };
         return {
           ...image,

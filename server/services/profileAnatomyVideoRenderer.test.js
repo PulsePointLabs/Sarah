@@ -208,6 +208,23 @@ test('absolute and relative URLs for one indexed file do not duplicate static ev
   assert.equal(mapped._meta.reviewed_images[0].anatomy_file_hash, 'same-file');
 });
 
+test('a dynamic-media URL cannot inherit a different Profiler image classification through a reused ID', () => {
+  const classification = classifiedImage('img_058', ['penis', 'penile_shaft'], ['penis']).anatomy_classification;
+  const result = {
+    _meta: { reviewed_images: [{
+      image_id: 'img_058',
+      preview_url: '/uploads/ai-video-pass-6-00-frame.jpg',
+      source: 'body_exploration_video_frame',
+    }] },
+  };
+  const mapped = applyProfileAnatomyIndexToResult(result, { entries: [{
+    reviewType: 'pelvic_genital', imageId: 'img_058', sourceUrl: '/uploads/direct-profiler-penis.jpg',
+    fileHash: 'profiler-file', classificationVersion: 'v1', classification,
+  }] }, 'pelvic_genital');
+  assert.equal(mapped._meta.reviewed_images[0].anatomy_classification, undefined);
+  assert.equal(mapped._meta.reviewed_images.some((image) => image.id === 'indexed_profiler-file'), true);
+});
+
 test('static and video evidence preserve the same direct-first order', () => {
   const direct = classifiedImage('direct-foreskin', ['penis', 'penile_shaft', 'foreskin', 'foreskin_forward'], ['foreskin'], {
     fineStructures: ['foreskin_forward'], positions: ['anterior', 'close_up'],
