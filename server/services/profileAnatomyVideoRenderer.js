@@ -1155,6 +1155,13 @@ function isDeviceEvidenceAuthorizedForSection(image = {}, targetKey = '', meta =
 
 function isImageAllowedForManifestSection(image, targetKey, reviewScope = '', meta = {}, paragraphText = '') {
   if (!isEligibleProfileAnatomyEvidenceSource(image)) return false;
+  // Overview narration is a presentation boundary, not an indexed anatomy
+  // section. Authorize it from the review-scope overview rules instead of
+  // requiring classifiers to emit a synthetic "overview" best-for key.
+  if (targetKey === 'overview') {
+    return isImageAllowedForRegion(image, targetKey, reviewScope, meta)
+      && isDeviceEvidenceAuthorizedForSection(image, targetKey, meta, paragraphText);
+  }
   const requestedSectionKey = normalizeText(meta.section_key || meta.sectionKey || '').replace(/\s+/g, '_');
   const indexedScore = scoreIndexedProfileAnatomyEvidence(image, requestedSectionKey);
   if (indexedScore != null) {
@@ -1488,7 +1495,6 @@ export function validateReviewEvidenceManifest(manifest = {}) {
 function validateNoSpecificSectionPlaceholders(manifest = {}) {
   const placeholders = (manifest.sections || []).filter((section) => (
     section.target_region
-    && section.target_region !== 'overview'
     && !section.assigned_evidence?.length
   ));
   if (!placeholders.length) return;

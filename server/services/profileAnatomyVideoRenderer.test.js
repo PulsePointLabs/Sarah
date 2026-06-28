@@ -1338,6 +1338,35 @@ test('timeline validation accepts manifest-assigned pelvic/genital evidence labe
   assert.doesNotThrow(() => validateVisualTimeline(visualTimeline, 'pelvic_genital'));
 });
 
+test('indexed anatomy evidence replaces the document-title card with a real overview image', () => {
+  const indexedOverview = classifiedImage(
+    'indexed-pelvic-overview',
+    ['pubic_mound', 'penis', 'foreskin', 'scrotum', 'inner_thighs'],
+    ['penis', 'foreskin', 'pubic_mound_lower_abdomen', 'scrotum_testes'],
+    { label: 'Direct anterior pelvic anatomy overview' },
+  );
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'indexed-overview-fixture',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: ['Pelvic & Genital Image Review'],
+    paragraphMeta: [{ type: 'title', section_label: 'Pelvic & Genital Image Review' }],
+    images: [indexedOverview],
+  });
+
+  const overview = manifest.sections[0];
+  assert.equal(overview.section_key, 'overview');
+  assert.equal(overview.media_mode, 'assigned_evidence');
+  assert.equal(overview.assigned_evidence[0].evidence_id, indexedOverview.id);
+
+  const visualTimeline = buildManifestVisualTimeline({
+    manifest,
+    narrationSegments: [{ section_id: overview.section_id, durationSeconds: 3 }],
+  });
+  assert.equal(visualTimeline[0].type, 'image');
+  assert.equal(visualTimeline[0].image.id, indexedOverview.id);
+});
+
 test('timeline validation preserves a manifest-authorized indexed foreskin assignment', () => {
   const manifest = createReviewEvidenceManifest({
     reviewId: 'indexed-foreskin-timeline-fixture',
