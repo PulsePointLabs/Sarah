@@ -1447,9 +1447,10 @@ export default function AIChat({
           let bin = "";
           for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
           const base64 = btoa(bin);
+          const liveReferenceText = liveSpeechPreviewRef.current;
           const res = await base44.functions.invoke("whisperSTT", { audio_base64: base64, mime_type: recorderMimeType, prompt: WHISPER_PROMPT });
           const rawText = res.data?.text?.trim() || "";
-          const text = finalizeWhisperTranscript(rawText);
+          const text = finalizeWhisperTranscript(rawText, { referenceText: liveReferenceText });
           if (text) {
             setInput((prev) => (prev ? `${prev} ${text}` : text));
             setChatProcessingStatus(null);

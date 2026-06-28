@@ -21,3 +21,31 @@ test("finalizeWhisperTranscript still removes trailing voice commands and halluc
   assert.equal(finalizeWhisperTranscript("This is the actual note. Thank you."), "This is the actual note.");
   assert.equal(finalizeWhisperTranscript("I said thank you"), "I said thank you.");
 });
+
+test("finalizeWhisperTranscript removes a trailing URL unsupported by the live transcript", () => {
+  const liveText = "It varies, but it is fairly consistent, I would say";
+  const whisperText = "It varies, but it is fairly consistent, I would say. www.ottobock.com.";
+  assert.equal(
+    finalizeWhisperTranscript(whisperText, { referenceText: liveText }),
+    "It varies, but it is fairly consistent, I would say.",
+  );
+  assert.equal(
+    finalizeWhisperTranscript(whisperText),
+    "It varies, but it is fairly consistent, I would say.",
+  );
+});
+
+test("finalizeWhisperTranscript preserves deliberately dictated web addresses", () => {
+  assert.equal(
+    finalizeWhisperTranscript("Please visit www.example.com.", { referenceText: "Please visit" }),
+    "Please visit www.example.com.",
+  );
+  assert.equal(
+    finalizeWhisperTranscript("www.example.com", { referenceText: "www.example.com" }),
+    "www.example.com.",
+  );
+  assert.equal(
+    finalizeWhisperTranscript("The website address is www.example.com."),
+    "The website address is www.example.com.",
+  );
+});
