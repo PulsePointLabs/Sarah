@@ -462,6 +462,8 @@ test('measurement cleanup removes malformed fragments', () => {
       'The 14.',
       'Meatal diameter is 4.',
       'Recorded width is 0.',
+      'The ruler-measured 20 French shaft confirms a visible length of 4.',
+      'The 20 French shaft is larger by approximately 0.',
       'Diameter.',
       'Meatal diameter is not cleanly measurable from the available views; prior values may need confirmation with a labeled reference.',
     ],
@@ -472,6 +474,8 @@ test('measurement cleanup removes malformed fragments', () => {
   assert.doesNotMatch(text, /\bThe 14\b/i);
   assert.doesNotMatch(text, /Meatal diameter is 4/i);
   assert.doesNotMatch(text, /Recorded width is 0/i);
+  assert.doesNotMatch(text, /visible length of 4/i);
+  assert.doesNotMatch(text, /larger by approximately 0/i);
   assert.doesNotMatch(text, /^diameter\.?$/i);
   assert.match(text, /Meatal diameter is not cleanly measurable/);
 });

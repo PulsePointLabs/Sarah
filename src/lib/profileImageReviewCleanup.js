@@ -218,6 +218,7 @@ function hasClearSubject(sentence = "") {
 function isMalformedMeasurementSentence(sentence = "") {
   const text = String(sentence || "").trim();
   if (!text) return true;
+  if (/\b\d+(?:\.\d+)?\.\s*$/.test(text) && !/\b\d+(?:\.\d+)?\s*(?:mm|millimeters?|cm|centimeters?|inches?|fr|french|degrees?|percent|%|°)\.\s*$/i.test(text)) return true;
   if (/^\s*(?:the\s+)?\d+(?:\.\d+)?\s*(?:mm|cm|in|inch|inches)?\.?\s*$/i.test(text)) return true;
   if (/^\s*(?:diameter|length|width|circumference|measurement)\.?\s*$/i.test(text)) return true;
   if (/^\s*\d+(?:\.\d+)?\s*(?:mm|cm|in|inch|inches)\s+(?:appear|appears|are|is|were|was)\s+transposed\.?\s*$/i.test(text)) return true;

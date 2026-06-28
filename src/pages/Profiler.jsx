@@ -4435,14 +4435,20 @@ function uniqueImageMetadataParts(image = {}, displayLabel = "") {
     String(displayLabel || image.display_label || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(),
   ].filter(Boolean));
   const parts = [];
-  for (const value of [image.body_position, image.coverage, image.visibility_notes]) {
+  const indexedNote = cleanEvidenceCardText(image?.anatomy_classification?.notes || "");
+  const preferredValues = indexedNote
+    ? [image.body_position, indexedNote]
+    : [image.body_position, image.coverage, image.visibility_notes];
+  for (const value of preferredValues) {
     const cleaned = cleanEvidenceCardText(value);
     const fragments = cleaned.split(/\s*·\s*|(?<=[.!?])\s+/).map((item) => item.trim()).filter(Boolean);
     for (const fragment of fragments) {
       const key = fragment.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
       if (!key || seen.has(key)) continue;
+      if (fragment.length > 520) continue;
       seen.add(key);
       parts.push(fragment);
+      if (parts.length >= 2) return parts;
     }
   }
   return parts;
@@ -4479,7 +4485,6 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
             || cleanEvidenceCardText(imageFindings[0]?.label || imageFindings[0]?.region)
             || sectionLabel;
           const metadataParts = uniqueImageMetadataParts(image, displayLabel);
-          const indexedNote = cleanEvidenceCardText(image?.anatomy_classification?.notes || "");
           return (
             <div key={`${sectionKey}-${imageId}`} className="overflow-hidden rounded-lg border border-border bg-background shadow-sm">
               <div className="grid gap-0">
@@ -4495,12 +4500,9 @@ function InlineImageEvidence({ result, sectionKey, sections = [], color = "hsl(v
                   <div>
                     <p className="text-sm font-semibold leading-snug text-foreground dark:text-white">{displayLabel}</p>
                     {metadataParts.length > 0 && (
-                      <p className="mt-1.5 line-clamp-4 text-xs leading-relaxed text-muted-foreground">
+                      <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
                         {metadataParts.join(" · ")}
                       </p>
-                    )}
-                    {!metadataParts.length && indexedNote && (
-                      <p className="mt-1.5 line-clamp-4 text-xs leading-relaxed text-muted-foreground">{indexedNote}</p>
                     )}
                   </div>
                   <div className="space-y-1.5">
@@ -4544,7 +4546,16 @@ function imageCalloutNarrationParagraphs(result, sectionKey, transientImages = [
   const findings = Array.isArray(result?.image_region_findings)
     ? result.image_region_findings.filter((finding) => finding.section_key === sectionKey && (!pelvicScoped || isPelvicGenitalFindingInScope(result, finding, transientImages)))
     : [];
-  if (!findings.length) return [];
+  const selectedImageIds = selectInlineEvidenceImageIds(result, sectionKey, findings, transientImages, pelvicScoped, []);
+  if (!findings.length) {
+    return selectedImageIds.map((imageId) => {
+      const image = profileImageById(result, imageId, transientImages);
+      const imageContext = cleanEvidenceCardText(image?.display_label || image?.view_label) || "Reviewed view";
+      const indexedNote = cleanEvidenceCardText(image?.anatomy_classification?.notes || "");
+      const paragraph = cleanImageReviewProse(naturalizeSpokenDates([imageContext, indexedNote].filter(Boolean).join(". ")));
+      return paragraph ? { text: paragraph, imageId } : null;
+    }).filter(Boolean);
+  }
 
   const byImage = new Map();
   for (const finding of findings) {
@@ -7473,21 +7484,6 @@ ANNOTATED IMAGE OUTPUT RULES:
           </div>
         </div>
 
-        {result && (
-          <label className="inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-card/60 px-3 py-2 text-xs text-foreground">
-            <input
-              type="checkbox"
-              checked={includeImageCalloutsInTts}
-              onChange={(event) => setIncludeImageCalloutsInTts(event.target.checked)}
-              className="h-4 w-4 accent-primary"
-            />
-            <span>
-              Include visual callouts in TTS/audio
-              <span className="ml-1 text-muted-foreground">Screen callouts stay visible either way.</span>
-            </span>
-          </label>
-        )}
-
         <div className="flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
           <Badge variant="outline" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">{existingEvidenceCount} saved visual/video evidence items</Badge>
           <Badge variant="outline" className="h-auto min-h-6 max-w-full whitespace-normal px-2 py-1 text-left text-[10px] leading-tight">
@@ -7947,6 +7943,18 @@ ANNOTATED IMAGE OUTPUT RULES:
 
         {result && !freshReviewPending && (
           <div className="mx-auto w-full max-w-6xl">
+            <label className="mb-3 inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-card/60 px-3 py-2 text-xs text-foreground">
+              <input
+                type="checkbox"
+                checked={includeImageCalloutsInTts}
+                onChange={(event) => setIncludeImageCalloutsInTts(event.target.checked)}
+                className="h-4 w-4 accent-primary"
+              />
+              <span>
+                Include visual callouts in TTS/audio
+                <span className="ml-1 text-muted-foreground">Screen callouts stay visible either way.</span>
+              </span>
+            </label>
             <TTSReader
               sessionId={config.ttsSessionId}
               title={config.title}

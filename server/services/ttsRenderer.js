@@ -169,7 +169,8 @@ export async function renderTTSExport(payload = {}, options = {}) {
     const chunkSilenceTrim = [];
     let completedChunks = 0;
     let nextChunkIndex = 0;
-    const renderChunk = async (i) => {
+    const renderChunk = async (i, integrityAttempt = 0) => {
+      try {
       if (options.signal?.aborted) throw new Error('Cancelled');
       const chunk = normalizedChunks[i];
       onProgress({
@@ -215,6 +216,9 @@ export async function renderTTSExport(payload = {}, options = {}) {
         await trimTtsChunkSilence(chunkPath, trimmedPath);
         const trimmedDuration = await probeAudioDurationSeconds(trimmedPath);
         if (trimmedDuration > 0.25 && originalDuration - trimmedDuration > 0.75) {
+          if (trimmedDuration < Math.max(0.5, expectedDurationSeconds * 0.45)) {
+            throw new Error(`TTS export chunk ${i + 1}/${normalizedChunks.length} failed audio integrity check after silence trim: decoded duration ${trimmedDuration.toFixed(1)}s is too short for the requested text (${expectedDurationSeconds.toFixed(1)}s expected).`);
+          }
           sourcePath = trimmedPath;
           trimMeta = {
             chunk: i,
@@ -246,6 +250,19 @@ export async function renderTTSExport(payload = {}, options = {}) {
           ? `Generated chunk ${i + 1} of ${normalizedChunks.length}; trimmed ${trimMeta.removed_seconds}s boundary silence`
           : `Generated chunk ${i + 1} of ${normalizedChunks.length}`,
       });
+      } catch (error) {
+        const retryableIntegrityFailure = /failed audio integrity check|too short for the requested text/i.test(String(error?.message || ''));
+        if (retryableIntegrityFailure && integrityAttempt < 1 && !options.signal?.aborted) {
+          onProgress({
+            phase: 'generating',
+            current: completedChunks,
+            total: normalizedChunks.length,
+            message: `Regenerating incomplete chunk ${i + 1} of ${normalizedChunks.length}...`,
+          });
+          return renderChunk(i, integrityAttempt + 1);
+        }
+        throw error;
+      }
     };
 
     const workerCount = Math.min(ttsExportConcurrency(), normalizedChunks.length);
