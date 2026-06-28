@@ -3,6 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { handOffVideoPlayToAndroid } from "@/lib/nativeMedia";
 import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
+import { buildStoredProfilerImageRef } from "@/lib/profilerReviewImagePayload";
 import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { readWatermarkSettings } from "@/lib/watermarkSettings";
 import { videoPosterDataUrl } from "@/lib/videoPoster";
@@ -3017,7 +3018,6 @@ function buildImageReviewReferences(images = []) {
 
 async function prepareFreshImageForReview(image, index, { onProgress, total = 0 } = {}) {
   let storagePath = image.storagePath || image.file_url || image.url || "";
-  let data = image.data || "";
   if (!storagePath && image.file) {
     onProgress?.({
       status: "preparing",
@@ -3031,43 +3031,11 @@ async function prepareFreshImageForReview(image, index, { onProgress, total = 0 
     const upload = await base44.integrations.Core.UploadFile({ file: image.file });
     storagePath = upload?.file_url || upload?.url || "";
   }
-  if (!storagePath) {
-    throw new Error(`Could not save a reusable preview for ${image.filename || `reference image ${index + 1}`}.`);
-  }
-  if (!data) {
-    onProgress?.({
-      status: "preparing",
-      progress: {
-        phase: "loading_images",
-        current: index + 1,
-        total,
-        message: `Loading saved reference image ${index + 1} for Sarah...`,
-      },
-    });
-    const response = await fetchWithTimeout(
-      serverUrl(storagePath),
-      PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
-      `${image.filename || `Reference image ${index + 1}`} did not finish loading within ${Math.round(PROFILER_IMAGE_RELOAD_TIMEOUT_MS / 1000)} seconds.`,
-    );
-    if (!response.ok) throw new Error(`Could not reload ${image.filename || `reference image ${index + 1}`}.`);
-    const blob = await withTimeout(
-      response.blob(),
-      PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
-      `${image.filename || `Reference image ${index + 1}`} did not finish reading within ${Math.round(PROFILER_IMAGE_RELOAD_TIMEOUT_MS / 1000)} seconds.`,
-    );
-    data = stripDataUrl(await readBlobAsDataUrl(blob, image.filename || `reference image ${index + 1}`));
-  }
-  return {
+  return buildStoredProfilerImageRef({
     ...image,
-    filename: image.filename || `profile-reference-${index + 1}.jpg`,
     media_type: normalizeMediaType(image.media_type),
-    data,
-    storagePath,
-    url: storagePath,
     previewUrl: image.previewUrl || serverUrl(storagePath),
-    source: "fresh_upload",
-    upload_note: String(image.upload_note || "").trim(),
-  };
+  }, index, storagePath);
 }
 
 function buildImageReviewMeta(images = [], sessions = [], previousMeta = null, evidenceCounts = {}, generatedAtOverride = null, reviewedImageOverride = null, countOverrides = {}) {
