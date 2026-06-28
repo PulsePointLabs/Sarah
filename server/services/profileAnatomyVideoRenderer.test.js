@@ -13,6 +13,7 @@ import {
   filterProfileAnatomyReviewEvidence,
   isEligibleProfileAnatomyEvidenceSource,
   profileAnatomyDeviceClassification,
+  profileAnatomyImageById,
   applyProfileAnatomyIndexToResult,
   buildProfileAnatomyEvidenceAvailability,
   reconcileProfileReviewEvidenceClaims,
@@ -79,6 +80,39 @@ test('static review mapping preserves original annotation image IDs and dimensio
   assert.equal(mapped._meta.reviewed_images[0].image_id, 'img_025');
   assert.equal(mapped._meta.reviewed_images[0].width, 1200);
   assert.deepEqual(mapped.annotated_images, result.annotated_images);
+});
+
+test('indexed penis, foreskin, and glans evidence remains displayable after claim reconciliation', () => {
+  const entries = [
+    ['22726d305c26f121', 'img_058', ['penis', 'penile_shaft'], ['penis'], '/uploads/penis.jpg'],
+    ['2193b4e6b153cabb', 'img_046', ['penis', 'foreskin', 'foreskin_forward'], ['foreskin'], '/uploads/foreskin.jpg'],
+    ['01baecc17a9f4081', 'img_057', ['glans', 'meatus', 'corona'], ['glans_meatus'], '/uploads/glans-meatus.jpg'],
+  ].map(([fileHash, imageId, anatomy, sections, sourceUrl]) => ({
+    reviewType: 'pelvic_genital', imageId, sourceUrl, fileHash,
+    classificationVersion: 'v1',
+    referenceImage: { display_label: imageId, source: 'profile_review_image' },
+    classification: classifiedImage(imageId, anatomy, sections).anatomy_classification,
+  }));
+  const result = {
+    _meta: { reviewed_images: [] },
+    penis: ['Your penile shaft is directly visible.'],
+    foreskin: ['Your foreskin is directly visible.'],
+    glans_meatus: ['Your glans and meatus are directly visible.'],
+  };
+  const indexed = applyProfileAnatomyIndexToResult(result, { entries }, 'pelvic_genital');
+  const reconciled = reconcileProfileReviewEvidenceClaims(result, indexed, [
+    { key: 'penis', label: 'Penis' },
+    { key: 'foreskin', label: 'Foreskin' },
+    { key: 'glans_meatus', label: 'Glans & Meatus' },
+  ]);
+
+  for (const entry of entries) {
+    const indexedId = `indexed_${entry.fileHash}`;
+    const image = profileAnatomyImageById(reconciled, indexedId);
+    assert.equal(image?.image_id, indexedId);
+    assert.equal(image?.preview_url, entry.sourceUrl);
+    assert.ok(image?.anatomy_classification);
+  }
 });
 
 test('video manifest and static selector agree on saved combined-view evidence', () => {

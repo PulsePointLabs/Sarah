@@ -460,6 +460,8 @@ test('measurement cleanup removes malformed fragments', () => {
     measurement_reconciliation: [
       '8 mm appear transposed.',
       'The 14.',
+      'Meatal diameter is 4.',
+      'Recorded width is 0.',
       'Diameter.',
       'Meatal diameter is not cleanly measurable from the available views; prior values may need confirmation with a labeled reference.',
     ],
@@ -468,8 +470,26 @@ test('measurement cleanup removes malformed fragments', () => {
   const text = allText(result);
   assert.doesNotMatch(text, /\b8 mm appear transposed\b/i);
   assert.doesNotMatch(text, /\bThe 14\b/i);
+  assert.doesNotMatch(text, /Meatal diameter is 4/i);
+  assert.doesNotMatch(text, /Recorded width is 0/i);
   assert.doesNotMatch(text, /^diameter\.?$/i);
   assert.match(text, /Meatal diameter is not cleanly measurable/);
+});
+
+test('executive summary removes orphaned opening fragments but keeps coherent anatomy statements', () => {
+  const result = cleanupProfileImageReviewResult({
+    executive_summary: [
+      'This is more prominent than before.',
+      'It is broad and unchanged.',
+      'More visible than the previous review.',
+      'This is more prominent than before. Your external pelvic anatomy remains directly represented with intact visible tissue.',
+      'Your skin and tissue contours remain directly represented across the reviewed views.',
+    ],
+  }, { sections: PELVIC_SECTIONS });
+
+  const text = allText(result);
+  assert.doesNotMatch(text, /This is more prominent|It is broad|More visible than/i);
+  assert.match(text, /^Your external pelvic anatomy|Your skin and tissue contours/m);
 });
 
 test('assignment contract and evidence classification prioritize anatomy over incidental context', () => {

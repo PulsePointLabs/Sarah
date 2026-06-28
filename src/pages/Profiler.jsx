@@ -37,6 +37,7 @@ import {
   isEligibleProfileAnatomyEvidenceSource,
   isExplicitlyApprovedChatAnatomyReference,
   formatProfileAnatomyEvidenceAvailabilityForPrompt,
+  profileAnatomyImageById,
   reconcileProfileReviewEvidenceClaims,
   scoreIndexedProfileAnatomyEvidence,
 } from "@/lib/profileAnatomyEvidence";
@@ -3800,7 +3801,6 @@ function ProfileImageSummaryCard({ summary, color = "hsl(var(--primary))", lean 
 }
 
 function rawProfileImageById(result, imageId, transientImages = []) {
-  const reviewed = Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images : [];
   const transient = transientImages.map((image, index) => ({
     image_id: image.image_id || `img_${String(index + 1).padStart(3, "0")}`,
     preview_url: image.previewUrl || image.preview_url || image.storagePath || "",
@@ -3813,7 +3813,7 @@ function rawProfileImageById(result, imageId, transientImages = []) {
     source_video: image.source_video || null,
     source: image.source || "",
   }));
-  const image = reviewed.find((item) => item.image_id === imageId) || {};
+  const image = profileAnatomyImageById(result, imageId) || {};
   const imageUrl = image.preview_url || image.storagePath || image.url || "";
   const transientImage = transient.find((item) => (
     item.image_id === imageId ||
@@ -3836,7 +3836,6 @@ function rawProfileImageById(result, imageId, transientImages = []) {
 }
 
 function profileImageById(result, imageId, transientImages = []) {
-  const reviewed = Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images : [];
   const annotated = Array.isArray(result?.annotated_images) ? result.annotated_images : [];
   const transient = transientImages.map((image, index) => ({
     image_id: image.image_id || `img_${String(index + 1).padStart(3, "0")}`,
@@ -3850,7 +3849,7 @@ function profileImageById(result, imageId, transientImages = []) {
     source_video: image.source_video || null,
     source: image.source || "",
   }));
-  const image = reviewed.find((item) => item.image_id === imageId) || {};
+  const image = profileAnatomyImageById(result, imageId) || {};
   const annotation = annotated.find((item) => item.image_id === imageId) || {};
   const imageUrl = image.preview_url || image.storagePath || image.url || "";
   const transientImage = transient.find((item) => (

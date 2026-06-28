@@ -37,6 +37,10 @@ const MEASUREMENT_SECTIONS = new Set(["measurement_reconciliation"]);
 const PROFILE_FINDING_NOVELTY_RE = /\b(?:new|newly|changed?|change|progress(?:ion|ed|ing)?|worsen(?:ed|ing)?|improv(?:ed|ing|ement)?|increase(?:d|s|ing)?|decrease(?:d|s|ing)?|reduc(?:ed|ing|tion)|resolved?|healing|evolving|current(?:ly)?|prior|previous|earlier|later|compared|comparison|from\s+\w+\s+to|now|no longer|more|less|greater|smaller|larger|mild|moderate|marked|severe|subtle|diffuse|focal|asymmetr(?:y|ic)|bilateral|unilateral|right|left|anterior|posterior|lateral|supine|standing|erect|flaccid|catheter|foley|meatus|glans|foreskin|shaft|scrot|perineal|perianal|fissure|ulcer|infection|open skin break)\b/i;
 const PROFILE_FINDING_NEGATIVE_RE = /\b(?:no|without|absent|not visible|not evident|not seen|no visible|no obvious|no open|no signs? of)\b/i;
 const PROFILE_FINDING_CONSOLIDATION = "Confirmed across multiple views.";
+const EXECUTIVE_SUMMARY_SUBJECT_RE = /\b(?:you|your|external anatomy|anatomy|body|habitus|posture|alignment|contour|symmetry|skin|tissue|head|face|scalp|neck|shoulders?|back|chest|abdomen|abdominal|pelvis|pelvic|pubic|inguinal|groin|penis|penile|foreskin|glans|meatus|scrotum|testes|perineum|perineal|anus|anal|perianal|buttocks?|gluteal|limbs?|hands?|feet|foot|toes?|scar|lesion|edema|swelling|erythema|papules?)\b/i;
+const ORPHANED_SUMMARY_OPENING_RE = /^(?:this|that|it|these|those)\s+(?:is|are|was|were|appears?|remains?|seems?)\s+(?:more|less|broad|prominent|marked|stable|unchanged|visible|notable|consistent|similar|different)\b/i;
+const MEASUREMENT_VALUE_RE = /\b\d+(?:\.\d+)?\b/;
+const MEASUREMENT_UNIT_RE = /(?:\b(?:mm|millimeters?|cm|centimeters?|inches?|fr|french|degrees?|percent)\b|[%°])/i;
 
 export const ANATOMY_REVIEW_ASSIGNMENT_CONTRACT = `
 Sarah Anatomy Review Assignment Contract:
@@ -221,7 +225,18 @@ function isMalformedMeasurementSentence(sentence = "") {
   if (/\b(?:appear|appears)\s+transposed\b/i.test(text) && !/\b(?:meatal|urethral|diameter|length|width|measurement|value|values|figure|figures|recorded|reported)\b/i.test(text)) return true;
   if (/\b(?:mm|cm|inch|inches)\b/i.test(text) && !hasClearSubject(text)) return true;
   if (/\b(?:diameter|length|width|circumference)\b/i.test(text) && !/\b(?:meatal|urethral|glans|shaft|penile|catheter|external|internal|recorded|reported|visible|measured|measurement)\b/i.test(text)) return true;
+  if (MEASUREMENT_VALUE_RE.test(text) && !MEASUREMENT_UNIT_RE.test(text)) return true;
   return false;
+}
+
+function cleanExecutiveSummaryItem(value = "") {
+  const parts = sentenceChunks(value);
+  const firstCoherentIndex = parts.findIndex((sentence) => (
+    !ORPHANED_SUMMARY_OPENING_RE.test(sentence)
+    && EXECUTIVE_SUMMARY_SUBJECT_RE.test(sentence)
+  ));
+  if (firstCoherentIndex < 0) return "";
+  return parts.slice(firstCoherentIndex).join(" ").trim();
 }
 
 function reduceRepeatedClinicalWords(text = "") {
@@ -789,12 +804,15 @@ export function cleanupProfileImageReviewResult(result = {}, { sections = [] } =
     if (section.key === "device_contact_findings") {
       incidentalDeviceItems.push(...cleaned[section.key]);
     }
-    cleaned[section.key] = dedupeProfileImageReviewItems(cleaned[section.key], {
+    const sectionItems = dedupeProfileImageReviewItems(cleaned[section.key], {
       limit: sectionLimit,
       coverage,
       suppressMissingCovered: true,
       sectionKey: section.key,
     });
+    cleaned[section.key] = section.key === "executive_summary"
+      ? sectionItems.map(cleanExecutiveSummaryItem).filter(Boolean)
+      : sectionItems;
   }
 
   if (Array.isArray(cleaned.device_contact_findings)) {

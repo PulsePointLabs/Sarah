@@ -334,6 +334,15 @@ export function buildProfileAnatomyEvidenceAvailability(result = {}, sections = 
     }));
 }
 
+export function profileAnatomyImageById(result = {}, imageId = '') {
+  const targetId = String(imageId || '').trim();
+  if (!targetId) return null;
+  const reviewed = Array.isArray(result?._meta?.reviewed_images) ? result._meta.reviewed_images : [];
+  return reviewed.find((image) => (
+    String(image?.image_id || '') === targetId || String(image?.id || '') === targetId
+  )) || null;
+}
+
 export function formatProfileAnatomyEvidenceAvailabilityForPrompt(result = {}, sections = [], max = 3) {
   const availability = buildProfileAnatomyEvidenceAvailability(result, sections, max);
   if (!availability.length) return '';
@@ -374,6 +383,15 @@ export function reconcileProfileReviewEvidenceClaims(result = {}, evidenceResult
   const availability = buildProfileAnatomyEvidenceAvailability(evidenceResult, sections, 3);
   const bySection = new Map(availability.map((entry) => [entry.sectionKey, entry]));
   const next = { ...result };
+  const indexedReviewedImages = Array.isArray(evidenceResult?._meta?.reviewed_images)
+    ? evidenceResult._meta.reviewed_images
+    : [];
+  if (indexedReviewedImages.length) {
+    next._meta = {
+      ...(result._meta || {}),
+      reviewed_images: indexedReviewedImages,
+    };
+  }
 
   for (const section of Array.isArray(sections) ? sections : []) {
     const key = typeof section === 'string' ? section : section?.key;
