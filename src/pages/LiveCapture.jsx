@@ -1191,6 +1191,7 @@ export default function LiveCapture() {
   const [searchParams, setSearchParams] = useSearchParams();
   const focusView = searchParams.get("display") === "focus";
   const { toast } = useToast();
+  const liveCaptureWakeLockRef = useRef(null);
   const [status, setStatus] = useState(null);
   const [hrTelemetry, setHrTelemetry] = useState(null);
   const [emgTelemetry, setEmgTelemetry] = useState(null);
@@ -2388,6 +2389,56 @@ export default function LiveCapture() {
 
   const prediction = useMemo(() => computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory), [hrTelemetry, emgTelemetry, telemetryHistory]);
   const recordingActive = Boolean(recording?.active);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const releaseWakeLock = async () => {
+      const wakeLock = liveCaptureWakeLockRef.current;
+      liveCaptureWakeLockRef.current = null;
+      try {
+        await wakeLock?.release?.();
+      } catch {
+        // The browser may already have released it when the app was backgrounded.
+      }
+    };
+
+    const requestWakeLock = async () => {
+      if (!recordingActive || document.hidden || liveCaptureWakeLockRef.current || !("wakeLock" in navigator)) return;
+      try {
+        const wakeLock = await navigator.wakeLock.request("screen");
+        if (cancelled || !recordingActive) {
+          await wakeLock.release();
+          return;
+        }
+        liveCaptureWakeLockRef.current = wakeLock;
+        wakeLock.addEventListener?.("release", () => {
+          if (liveCaptureWakeLockRef.current === wakeLock) liveCaptureWakeLockRef.current = null;
+        });
+      } catch {
+        // Unsupported or denied wake locks must not interrupt an active capture.
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        releaseWakeLock();
+      } else {
+        requestWakeLock();
+      }
+    };
+
+    if (recordingActive) requestWakeLock();
+    else releaseWakeLock();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      releaseWakeLock();
+    };
+  }, [recordingActive]);
+
   const recentHrPacket = hasRecentHrPacket();
   const hrConnected = Boolean(recentHrPacket || status?.hr?.sourceStatus?.connected || status?.hr?.connected);
   const emgSourceAt = emgTelemetry?.source_at || status?.emg?.lastSourceAt || status?.emg?.lastMessageAt;
