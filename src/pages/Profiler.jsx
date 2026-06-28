@@ -36,6 +36,8 @@ import {
   filterProfileAnatomyReviewEvidence,
   isEligibleProfileAnatomyEvidenceSource,
   isExplicitlyApprovedChatAnatomyReference,
+  formatProfileAnatomyEvidenceAvailabilityForPrompt,
+  reconcileProfileReviewEvidenceClaims,
   scoreIndexedProfileAnatomyEvidence,
 } from "@/lib/profileAnatomyEvidence";
 import {
@@ -4333,7 +4335,7 @@ function inlineEvidenceImageScore(result, imageId, sectionKey, findingsForImage 
     : profileImageById(result, imageId, transientImages);
   if (!image?.preview_url) return -10000;
   const indexedScore = scoreIndexedProfileAnatomyEvidence(image, sectionKey);
-  if (indexedScore != null) return indexedScore + findingsForImage.length * 20;
+  if (indexedScore != null) return indexedScore;
   const text = inlineEvidenceImageText(result, imageId, transientImages, pelvicScoped);
   const sectionHint = SECTION_REFERENCE_HINTS[sectionKey];
   const strictHint = STRICT_INLINE_SECTION_HINTS[sectionKey];
@@ -4394,12 +4396,19 @@ function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transie
     .map((imageId) => {
       const imageFindings = findings.filter((finding) => finding.image_id === imageId);
       const score = inlineEvidenceImageScore(result, imageId, sectionKey, imageFindings, transientImages, pelvicScoped);
+      const indexedScore = scoreIndexedProfileAnatomyEvidence(
+        pelvicScoped
+          ? rawProfileImageById(result, imageId, transientImages)
+          : profileImageById(result, imageId, transientImages),
+        sectionKey,
+      );
       const canonicalKey = inlineEvidenceCanonicalKey(result, imageId, transientImages, pelvicScoped);
       const priorUseCount = priorUseCounts.get(canonicalKey) || 0;
       return {
         imageId,
         score,
-        adjustedScore: score - priorUseCount * 120,
+        indexedScore,
+        adjustedScore: indexedScore != null ? indexedScore : score - priorUseCount * 120,
         hasFinding: imageFindings.length > 0,
         priorUseCount,
       };
@@ -4408,7 +4417,8 @@ function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transie
     .sort((a, b) => {
       if (b.adjustedScore !== a.adjustedScore) return b.adjustedScore - a.adjustedScore;
       if (b.score !== a.score) return b.score - a.score;
-      return Number(b.hasFinding) - Number(a.hasFinding);
+      if (Number(b.hasFinding) !== Number(a.hasFinding)) return Number(b.hasFinding) - Number(a.hasFinding);
+      return String(a.imageId).localeCompare(String(b.imageId));
     });
   const best = scored.filter((item) => item.score > 0 && item.adjustedScore > 0).slice(0, 2);
   const selected = best.length ? best : scored.filter((item) => item.score > 0).slice(0, 2);
@@ -4564,6 +4574,18 @@ function imageCalloutNarrationParagraphs(result, sectionKey, transientImages = [
   return paragraphs;
 }
 
+const DETAILED_VISUAL_EXAMINATION_RULES = `
+DETAILED VISUAL EXAMINATION STANDARD:
+- Write as a careful visual examination, not an abbreviated anatomy inventory. For every represented region, describe the view and position, structures visible, symmetry, contour and proportional relationships, color and pigmentation, texture, hair distribution where relevant, surface integrity, scars or procedure sites, swelling or edema, erythema, papules, lesions, ulcers, fissures, erosions, breakdown, visible fluid or moisture when relevant, normal variants, and supported longitudinal stability or change.
+- Use only visually supportable language: visible, appears, no visible evidence of, not assessable from this image, comparison suggests, and remains stable across reviewed views.
+- Never claim palpation, tenderness, internal masses, internal anatomy, or function from photographs.
+- Each section must describe the structure itself. Do not reduce a section to saying that the structure exists, is visible, or is normal.
+- The Executive Summary must be one coherent synthesis covering overall anatomy, tissue integrity, symmetry, major normal characteristics, active skin findings, important scars or procedural changes, strongest evidence coverage, meaningful limitations, and supported longitudinal findings. Do not return a loose stack of fragments.
+- The indexed evidence availability block is authoritative. Never call evidence absent, unassessable, or a coverage gap when its status is direct_strong. For direct_limited evidence, state exactly what remains limited without denying the anatomy that is directly visible.
+- Ordinary anatomy sections must lead with anatomy and tissue findings. Catheter/device history belongs in Device / Contact Findings unless it directly explains a visible current tissue response.
+- Avoid repetitive generic phrases. Combine stable normal findings into specific, information-dense sentences and spend additional detail on active findings, meaningful position/view comparisons, and supported changes.
+`.trim();
+
 const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
   title: "Head-to-Toe Image Review",
   shortTitle: "Head-to-Toe",
@@ -4581,6 +4603,7 @@ const HEAD_TO_TOE_IMAGE_REVIEW_CONFIG = {
   emptyText: "Review Existing Evidence uses the saved body-reference library first, including prior reviewed images, reusable frames, body-exploration evidence, sessions, and Profile Q&A as supporting context. Add fresh images or videos only when you want to expand the library.",
   reviewInstructions: `
 HEAD-TO-TOE REVIEW SCOPE:
+${DETAILED_VISUAL_EXAMINATION_RULES}
 - Produce one cumulative anatomical profile of Ben. This is not a batch report, image audit, provenance report, or process note.
 - Write directly to Ben in second person throughout. Use "you" and "your"; do not write "he", "his", "the person", "the subject", or "the patient" except inside a direct quote from saved source text.
 - Start with anatomy. Do not open with source details, image counts, batch status, timeout/recovery language, payment/cloud language, or "assembled from" language.
@@ -4662,6 +4685,7 @@ const PELVIC_GENITAL_IMAGE_REVIEW_CONFIG = {
   emptyText: "Click Review Existing Evidence to synthesize the saved pelvic/genital library: prior reviewed images, reusable frames, body-exploration evidence, sessions, and Profile Q&A as supporting context. Add focused images or videos only when you want to expand the library.",
   reviewInstructions: `
 PELVIC / GENITAL REVIEW SCOPE:
+${DETAILED_VISUAL_EXAMINATION_RULES}
 - Produce one cumulative pelvic/genital/perineal anatomical profile of Ben. This is not a batch report, image audit, source report, or process note.
 - Write directly to Ben in second person throughout. Use "you" and "your"; do not write "he", "his", "the person", "the subject", or "the patient" except inside a direct quote from saved source text.
 - Start with actual pelvic/genital/perineal findings. Do not open with source details, image counts, evidence-scope logistics, batch/source/rechecked-image explanations, or provenance.
@@ -4715,6 +4739,15 @@ PELVIC / GENITAL REVIEW SCOPE:
   13. Measurement Reconciliation: meaningful measurement notes only.
   14. Limitations / Future Useful Coverage: only truly useful missing states/views; do not list views already represented.
 - Keep the language anatomical and practical. Do not eroticize the review or write arousal-focused prose.
+- Pubic Mound & Lower Abdomen must address lower abdominal and suprapubic contour, overhang/fullness, pubic mound, hair distribution, inguinal folds, visible scars or hernia-related contour, penile-base relationship, and skin findings.
+- Penis must address base and shaft visibility, resting contour, alignment and apparent symmetry, color, texture, integrity, edema/erythema/lesions/scars, pubic-mound relationship, and supported position comparisons. Catheter history must not lead this section.
+- Foreskin must reconcile forward, partially retracted, and fully retracted indexed views when available, including glans coverage, visually demonstrated mobility, preputial edge, color, texture, and visible inflammation, fissuring, tethering, or scarring. Do not claim frenulum findings unless directly visible.
+- Glans & Meatus must use clean device-free evidence first and describe glans shape, corona, color, texture, moisture/sheen, meatal shape/orientation, and visible discharge, lesions, erosions, or inflammation across covered/retracted states.
+- Scrotum & Testes is visual only: bilateral contour, symmetry, rugae, pigmentation, raphe, skin findings, and visible swelling/asymmetry. Never imply palpation or internal testicular assessment.
+- Perineum must describe the perineal body, midline raphe, color, texture, moisture, erythema, fissuring, breakdown, and relationship to scrotal base and anal margin.
+- Anal Opening & Perianal Region must describe resting closure, margin, pigmentation, erythema, maceration, fissures, tags, visible hemorrhoidal tissue, lesions, bleeding, and surface integrity. Direct indexed anal evidence means this is not a coverage gap.
+- Buttocks / Gluteal Skin must describe bilateral contour and symmetry, skin condition, lesions, pressure marks, erythema, breaks, scars, cleft, and visible relationship to the perianal region.
+- Measurement Reconciliation is limited to entered measurements, what can or cannot be visually estimated, image limitations, and apparent proportions. Do not infer urethral length or use catheter-shaft measurements unless explicitly requested.
 `,
   sections: [
     { key: "executive_summary", label: "Executive Summary", color: "hsl(var(--primary))" },
@@ -4925,7 +4958,7 @@ function ProfileImageReviewPanel({
       setLatestAttemptStatus(fallbackStatus);
     }
     const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
-    const storedResult = {
+    let storedResult = {
       ...parsed,
       _meta: buildImageReviewMetaWithEvidence({
         images: sourceImages,
@@ -4966,6 +4999,16 @@ function ProfileImageReviewPanel({
       storedResult._meta.local_batch_assembled = true;
       storedResult._meta.result_kind = parsed?._meta?.result_kind || "recovered_batch_draft";
     }
+    const indexedStoredResult = applyProfileAnatomyIndexToResult(
+      storedResult,
+      anatomyIndexInventory,
+      anatomyIndexReviewType,
+    );
+    storedResult = reconcileProfileReviewEvidenceClaims(
+      storedResult,
+      indexedStoredResult,
+      profileReviewResultSections(config),
+    );
     setResult(storedResult);
     setViewingArchiveRunId("");
     const nextArchive = await saveProfileResultWithArchive({
@@ -5802,7 +5845,7 @@ function ProfileImageReviewPanel({
     const batchSet = batchSetOverride || recoverableBatchSet || {};
     const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
     const assembled = buildBatchAssembledImageReview(config, batchParsedResults, batchSet);
-    const storedResult = {
+    let storedResult = {
       ...assembled,
       _meta: buildImageReviewMetaWithEvidence({
         images: [],
@@ -5833,6 +5876,11 @@ function ProfileImageReviewPanel({
       batch_count: batchSet?.total || batchParsedResults.length,
       final_synthesis_required: false,
     };
+    storedResult = reconcileProfileReviewEvidenceClaims(
+      storedResult,
+      applyProfileAnatomyIndexToResult(storedResult, anatomyIndexInventory, anatomyIndexReviewType),
+      profileReviewResultSections(config),
+    );
     setResult(storedResult);
     setViewingArchiveRunId("");
     setLatestAttemptStatus(storedResult._meta.latest_attempt_status);
@@ -5998,6 +6046,10 @@ function ProfileImageReviewPanel({
         aggregateCumulativeAnatomyEvidence({ result, archive, userProfile: reviewUserProfile, config }),
         { limit: 48 },
       );
+      const indexedEvidenceContext = formatProfileAnatomyEvidenceAvailabilityForPrompt(
+        applyProfileAnatomyIndexToResult(result, anatomyIndexInventory, anatomyIndexReviewType),
+        config.sections,
+      );
       const firstNameToneCue = buildOptionalFirstNameToneCue(reviewUserProfile, { prioritizeProfileTone: true });
       const anatomicalFocusRule = isHeadToToeBodyReference ? "" : ANATOMICAL_REFERENCE_FOCUS_RULE;
       const sessionGroundingRule = isHeadToToeBodyReference ? "" : SESSION_CONTEXT_GROUNDING_RULE;
@@ -6027,6 +6079,7 @@ ${sessionGroundingRule}
 ${PROFILE_OBSERVATION_PRODUCT_RULE}
 ${PROFILE_IMAGE_REVIEW_RULE_BUNDLE}
 ${establishedEvidenceContext}
+${indexedEvidenceContext}
 
 RECOVERY SYNTHESIS RULES:
 - Do not mention filenames, camera-roll IDs, storage IDs, raw image numbers, job IDs, or batch job IDs.
@@ -6061,7 +6114,7 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
         batchParsedResults,
       );
       if (!parsed?.overview) throw new Error("Sarah returned an empty recovered image review.");
-      const storedResult = {
+      let storedResult = {
         ...parsed,
         _meta: buildImageReviewMetaWithEvidence({
           images: [],
@@ -6087,6 +6140,11 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
         older_saved_review_showing: false,
         latest_batch_findings_available: true,
       };
+      storedResult = reconcileProfileReviewEvidenceClaims(
+        storedResult,
+        applyProfileAnatomyIndexToResult(storedResult, anatomyIndexInventory, anatomyIndexReviewType),
+        profileReviewResultSections(config),
+      );
       setResult(storedResult);
       const nextArchive = await saveProfileResultWithArchive({
         resultKey: config.resultKey,
@@ -6235,6 +6293,10 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
         aggregateCumulativeAnatomyEvidence({ result, archive, userProfile: reviewUserProfile, config }),
         { limit: 48 },
       );
+      const indexedEvidenceContext = formatProfileAnatomyEvidenceAvailabilityForPrompt(
+        applyProfileAnatomyIndexToResult(result, anatomyIndexInventory, anatomyIndexReviewType),
+        config.sections,
+      );
       const firstNameToneCue = buildOptionalFirstNameToneCue(reviewUserProfile, { prioritizeProfileTone: true });
       const anatomicalFocusRule = isHeadToToeBodyReference ? "" : ANATOMICAL_REFERENCE_FOCUS_RULE;
       const sessionGroundingRule = isHeadToToeBodyReference ? "" : SESSION_CONTEXT_GROUNDING_RULE;
@@ -6310,6 +6372,7 @@ ${sessionGroundingRule}
 ${PROFILE_OBSERVATION_PRODUCT_RULE}
 ${PROFILE_IMAGE_REVIEW_RULE_BUNDLE}
 ${establishedEvidenceContext}
+${indexedEvidenceContext}
 
 This is a batch review, not the final user-facing synthesis. Analyze only the attached images in this batch as direct visual evidence, while preserving the image_id values exactly. Do not mention filenames, storage IDs, camera-roll IDs, or raw image numbers. Do not claim that images outside this batch were inspected in this batch. Keep view labels anatomical and practical.
 
@@ -6357,6 +6420,7 @@ ${sessionGroundingRule}
 ${PROFILE_OBSERVATION_PRODUCT_RULE}
 ${PROFILE_IMAGE_REVIEW_RULE_BUNDLE}
 ${establishedEvidenceContext}
+${indexedEvidenceContext}
 
 SYNTHESIS RULES:
 - Do not mention filenames, camera-roll IDs, storage IDs, or raw image numbers.
@@ -6451,6 +6515,7 @@ ${sessionGroundingRule}
 ${PROFILE_OBSERVATION_PRODUCT_RULE}
 ${PROFILE_IMAGE_REVIEW_RULE_BUNDLE}
 ${establishedEvidenceContext}
+${indexedEvidenceContext}
 
 This is a batch review, not the final user-facing synthesis. Analyze only the attached images in this batch as direct visual evidence, while preserving the image_id values exactly. Do not mention filenames, storage IDs, camera-roll IDs, or raw image numbers. Do not claim that images outside this batch were inspected in this batch. Keep view labels anatomical and practical.
 
@@ -6591,6 +6656,7 @@ ${sessionGroundingRule}
 ${PROFILE_OBSERVATION_PRODUCT_RULE}
 ${PROFILE_IMAGE_REVIEW_RULE_BUNDLE}
 ${establishedEvidenceContext}
+${indexedEvidenceContext}
 
 SYNTHESIS RULES:
 - Do not mention filenames, camera-roll IDs, storage IDs, or raw image numbers.
@@ -6641,6 +6707,7 @@ ${sessionGroundingRule}
 ${PROFILE_OBSERVATION_PRODUCT_RULE}
 ${PROFILE_IMAGE_REVIEW_RULE_BUNDLE}
 ${establishedEvidenceContext}
+${indexedEvidenceContext}
 
 IMAGE REVIEW RULES:
 - Treat these as consensual private profile-reference images for anatomical and physiological review.
@@ -6774,6 +6841,7 @@ ${sessionGroundingRule}
 ${PROFILE_OBSERVATION_PRODUCT_RULE}
 ${PROFILE_IMAGE_REVIEW_RULE_BUNDLE}
 ${establishedEvidenceContext}
+${indexedEvidenceContext}
 
 IMAGE REVIEW RULES:
 - Treat these as consensual private profile-reference images for anatomical and physiological review.
@@ -6909,7 +6977,7 @@ ANNOTATED IMAGE OUTPUT RULES:
         batchParsedResults,
       );
       if (!parsed?.overview) throw new Error("Sarah returned an empty image review.");
-      const storedResult = {
+      let storedResult = {
         ...parsed,
         _meta: buildImageReviewMetaWithEvidence({
           images: imagePayload,
@@ -6924,6 +6992,11 @@ ANNOTATED IMAGE OUTPUT RULES:
           },
         }),
       };
+      storedResult = reconcileProfileReviewEvidenceClaims(
+        storedResult,
+        applyProfileAnatomyIndexToResult(storedResult, anatomyIndexInventory, anatomyIndexReviewType),
+        profileReviewResultSections(config),
+      );
       setResult(storedResult);
       const nextArchive = await saveProfileResultWithArchive({
         resultKey: config.resultKey,
@@ -6966,7 +7039,8 @@ ANNOTATED IMAGE OUTPUT RULES:
 
   const sections = profileReviewResultSections(config);
   const indexedResult = applyProfileAnatomyIndexToResult(result, anatomyIndexInventory, anatomyIndexReviewType);
-  const cumulativeVisualResult = filterProfileAnatomyReviewEvidence(indexedResult);
+  const evidenceReconciledResult = reconcileProfileReviewEvidenceClaims(result, indexedResult, sections);
+  const cumulativeVisualResult = filterProfileAnatomyReviewEvidence(evidenceReconciledResult);
   const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
   const profileStale = Boolean(result) && (
     isProfileAIContentStale(result, sessions) ||

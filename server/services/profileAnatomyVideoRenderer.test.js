@@ -14,6 +14,8 @@ import {
   isEligibleProfileAnatomyEvidenceSource,
   profileAnatomyDeviceClassification,
   applyProfileAnatomyIndexToResult,
+  buildProfileAnatomyEvidenceAvailability,
+  reconcileProfileReviewEvidenceClaims,
   selectIndexedProfileAnatomyEvidence,
 } from '../../src/lib/profileAnatomyEvidence.js';
 
@@ -96,6 +98,136 @@ test('video manifest and static selector agree on saved combined-view evidence',
   const staticId = selectIndexedProfileAnatomyEvidence(images, { sectionKey: 'penis_and_foreskin' })[0].image.id;
   assert.equal(staticId, 'combined');
   assert.equal(manifest.sections[0].assigned_evidence[0]?.evidence_id, staticId);
+  assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
+});
+
+test('direct focused anatomy views outrank indirect or edge-of-frame evidence', () => {
+  const directForeskin = classifiedImage('direct-foreskin', ['penis', 'penile_shaft', 'foreskin', 'foreskin_forward'], ['foreskin'], {
+    fineStructures: ['foreskin_forward'],
+    positions: ['anterior', 'close_up'],
+  });
+  const indirectForeskin = classifiedImage('indirect-foreskin', ['scrotum', 'perineum', 'buttocks', 'foreskin'], ['scrotum_testes'], {
+    positions: ['inferior', 'wide_field'],
+  });
+  const directScrotum = classifiedImage('direct-scrotum', ['scrotum', 'testes'], ['scrotum_testes'], {
+    fineStructures: ['scrotum', 'testes'],
+    positions: ['inferior', 'close_up'],
+  });
+  const wideGlutealScrotum = classifiedImage('wide-gluteal-scrotum', ['buttocks', 'perianal_region', 'scrotum'], ['scrotum_testes'], {
+    positions: ['posterior', 'wide_field'],
+  });
+  const directPerineum = classifiedImage('direct-perineum', ['perineum', 'scrotum'], ['perineum'], {
+    fineStructures: ['perineum'],
+    positions: ['inferior', 'close_up'],
+  });
+  const analLedPerineum = classifiedImage('anal-led-perineum', ['anus', 'anal_margin', 'perianal_region', 'buttocks', 'perineum'], ['anus_perianal'], {
+    positions: ['posterior', 'close_up'],
+  });
+
+  assert.equal(selectIndexedProfileAnatomyEvidence([indirectForeskin, directForeskin], { sectionKey: 'foreskin' })[0].image.id, 'direct-foreskin');
+  assert.equal(selectIndexedProfileAnatomyEvidence([wideGlutealScrotum, directScrotum], { sectionKey: 'scrotum_testes' })[0].image.id, 'direct-scrotum');
+  assert.equal(selectIndexedProfileAnatomyEvidence([analLedPerineum, directPerineum], { sectionKey: 'perineum' })[0].image.id, 'direct-perineum');
+});
+
+test('direct indexed anal and gluteal evidence removes false coverage-gap language', () => {
+  const images = [
+    classifiedImage('direct-anus', ['anus', 'anal_margin', 'perianal_region'], ['anus_perianal'], { positions: ['posterior', 'close_up'] }),
+    classifiedImage('direct-buttocks', ['buttocks'], ['buttocks'], { positions: ['posterior', 'close_up'] }),
+  ];
+  const sections = [
+    { key: 'anal_opening_perianal_region', label: 'Anal Opening & Perianal Region' },
+    { key: 'buttocks_gluteal_skin', label: 'Buttocks / Gluteal Skin' },
+  ];
+  const result = {
+    _meta: { reviewed_images: images },
+    anal_opening_perianal_region: ['The anal margin is directly visible.', 'No direct anal view exists; dedicated coverage is needed.'],
+    buttocks_gluteal_skin: ['The gluteal skin is visible.', 'No gluteal view is available.'],
+    limitations_future_coverage: ['A direct anal view is needed to complete coverage.', 'No gluteal view exists.'],
+    summary_card: { key_limitations: ['No direct anal view exists.', 'No gluteal view is available.'] },
+  };
+  const availability = buildProfileAnatomyEvidenceAvailability(result, sections);
+  assert.deepEqual(availability.map((entry) => entry.status), ['direct_strong', 'direct_strong']);
+  const reconciled = reconcileProfileReviewEvidenceClaims(result, result, sections);
+  assert.deepEqual(reconciled.anal_opening_perianal_region, ['The anal margin is directly visible.']);
+  assert.deepEqual(reconciled.buttocks_gluteal_skin, ['The gluteal skin is visible.']);
+  assert.deepEqual(reconciled.limitations_future_coverage, []);
+  assert.deepEqual(reconciled.summary_card.key_limitations, []);
+});
+
+test('clean glans and meatus evidence outranks device-dominant evidence', () => {
+  const clean = classifiedImage('clean-glans-meatus', ['penis', 'glans', 'corona', 'meatus'], ['glans_meatus'], {
+    fineStructures: ['glans', 'corona', 'meatus'],
+    positions: ['anterior', 'close_up'],
+  });
+  const device = classifiedImage('device-glans-meatus', ['penis', 'glans', 'corona', 'meatus'], ['glans_meatus', 'device_contact_findings'], {
+    fineStructures: ['glans', 'corona', 'meatus'],
+    positions: ['anterior', 'close_up'],
+    deviceClassification: 'device_dominant',
+  });
+  const ranked = selectIndexedProfileAnatomyEvidence([device, clean], { sectionKey: 'glans_meatus' });
+  assert.equal(ranked[0].image.id, 'clean-glans-meatus');
+  assert.equal(ranked.some((entry) => entry.image.id === 'device-glans-meatus'), false);
+});
+
+test('ordinary penis findings lead with anatomy instead of catheter history', () => {
+  const image = classifiedImage('direct-penis', ['penis', 'penile_shaft'], ['penis'], { positions: ['anterior', 'close_up'] });
+  const result = {
+    _meta: { reviewed_images: [image] },
+    penis: ['A Foley catheter was present during a prior dwell. Your penile shaft is directly visible with intact skin.'],
+  };
+  const reconciled = reconcileProfileReviewEvidenceClaims(result, result, [{ key: 'penis', label: 'Penis' }]);
+  assert.equal(reconciled.penis[0], 'Your penile shaft is directly visible with intact skin. A Foley catheter was present during a prior dwell.');
+});
+
+test('URL identity wins when archived Profiler runs reuse the same image ID', () => {
+  const result = {
+    _meta: { reviewed_images: [{ image_id: 'img_005', preview_url: '/uploads/current-anus.jpg', source: 'profile_review_image' }] },
+    annotated_images: [{ image_id: 'img_005', callouts: [{ x: 0.2, y: 0.7 }] }],
+  };
+  const anus = classifiedImage('img_005', ['anus', 'anal_margin', 'perianal_region'], ['anus_perianal']).anatomy_classification;
+  const foot = classifiedImage('img_005', ['feet', 'toes'], ['feet_toes']).anatomy_classification;
+  const mapped = applyProfileAnatomyIndexToResult(result, { entries: [
+    { reviewType: 'pelvic_genital', imageId: 'img_005', sourceUrl: '/uploads/archived-foot.jpg', fileHash: 'foot', classificationVersion: 'v1', classification: foot },
+    { reviewType: 'pelvic_genital', imageId: 'img_005', sourceUrl: '/uploads/current-anus.jpg', fileHash: 'anus', classificationVersion: 'v1', classification: anus },
+  ] }, 'pelvic_genital');
+  assert.deepEqual(mapped._meta.reviewed_images[0].anatomy_classification.visible_anatomy, ['anus', 'anal_margin', 'perianal_region']);
+  assert.deepEqual(mapped.annotated_images, result.annotated_images);
+});
+
+test('absolute and relative URLs for one indexed file do not duplicate static evidence', () => {
+  const classification = classifiedImage('img_058', ['penis', 'penile_shaft'], ['penis']).anatomy_classification;
+  const result = {
+    _meta: { reviewed_images: [{ image_id: 'img_058', preview_url: 'http://127.0.0.1:8787/uploads/direct-penis.jpg', source: 'profile_review_image' }] },
+  };
+  const mapped = applyProfileAnatomyIndexToResult(result, { entries: [{
+    reviewType: 'pelvic_genital', imageId: 'img_058', sourceUrl: '/uploads/direct-penis.jpg',
+    fileHash: 'same-file', classificationVersion: 'v1', classification,
+  }] }, 'pelvic_genital');
+  assert.equal(mapped._meta.reviewed_images.length, 1);
+  assert.equal(mapped._meta.reviewed_images[0].id, 'img_058');
+  assert.equal(mapped._meta.reviewed_images[0].anatomy_file_hash, 'same-file');
+});
+
+test('static and video evidence preserve the same direct-first order', () => {
+  const direct = classifiedImage('direct-foreskin', ['penis', 'penile_shaft', 'foreskin', 'foreskin_forward'], ['foreskin'], {
+    fineStructures: ['foreskin_forward'], positions: ['anterior', 'close_up'],
+  });
+  const indirect = classifiedImage('indirect-foreskin', ['foreskin', 'scrotum', 'perineum', 'buttocks'], ['scrotum_testes'], {
+    positions: ['inferior', 'wide_field'],
+  });
+  const images = [indirect, direct];
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'direct-order', title: 'Pelvic review', reviewScope: 'pelvic_genital',
+    paragraphs: ['Foreskin', 'Your foreskin is directly visible in forward position.'],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'foreskin', section_label: 'Foreskin' },
+      { type: 'section', section_key: 'foreskin', section_label: 'Foreskin' },
+    ],
+    images,
+  });
+  const staticOrder = selectIndexedProfileAnatomyEvidence(images, { sectionKey: 'foreskin', max: 2 }).map((entry) => entry.image.id);
+  const videoOrder = manifest.sections[0].assigned_evidence.map((entry) => entry.evidence_id);
+  assert.deepEqual(videoOrder.slice(0, staticOrder.length), staticOrder);
   assert.doesNotThrow(() => validateReviewEvidenceManifest(manifest));
 });
 

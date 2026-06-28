@@ -1375,14 +1375,20 @@ export function createReviewEvidenceManifest({
         );
         return {
           ...entry,
+          indexedSectionScore,
           adjustedScore: preferredEvidenceIds.has(imageId)
             ? 1000 - repeatPenalty
-            : entry.candidate.score - repeatPenalty,
+            : indexedSectionScore != null && indexedSectionScore > 0
+              ? 100000 + indexedSectionScore
+              : entry.candidate.score - repeatPenalty,
           repeatPenalty,
           explicitlyPreferred: preferredEvidenceIds.has(imageId),
         };
       })
-      .sort((a, b) => b.adjustedScore - a.adjustedScore || b.candidate.score - a.candidate.score);
+      .sort((a, b) => b.adjustedScore - a.adjustedScore
+        || (b.indexedSectionScore || 0) - (a.indexedSectionScore || 0)
+        || b.candidate.score - a.candidate.score
+        || String(a.image?.id || '').localeCompare(String(b.image?.id || '')));
     const fallback = ranked[0]
       ? null
       : MIXED_SECTION_KEYS.has(section.section_key)
