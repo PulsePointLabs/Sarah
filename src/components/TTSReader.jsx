@@ -42,9 +42,9 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => {
     reject(new DOMException("TTS request cancelled", "AbortError"));
   }, { once: true });
 });
-// Report paragraphs are substantially longer than typical chat replies. Keep
-// progressive segments short enough to become playable quickly, then fetch
-// exactly one segment ahead like Chat with Sarah.
+// The first report segment must be small enough to start like Chat with Sarah.
+// Later segments can be longer because they are generated during playback.
+const TTS_FIRST_UNIT_MAX_CHARS = 140;
 const TTS_UNIT_MAX_CHARS = Math.min(TTS_CHUNK_TARGET_CHARS, 360);
 const TTS_PREFETCH_AHEAD = 1;
 const ttsCacheKey = (chunk, format, runtime, previousContext = "") =>
@@ -116,8 +116,38 @@ function formatDownloadTimestamp(value) {
   });
 }
 
-function splitForTTS(text) {
-  return splitIntoChunks(text, TTS_UNIT_MAX_CHARS);
+function splitLongSpeechPart(text, maxChars) {
+  const words = String(text || "").trim().split(/\s+/).filter(Boolean);
+  const parts = [];
+  let current = "";
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (current && next.length > maxChars) {
+      parts.push(current);
+      current = word;
+    } else {
+      current = next;
+    }
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+
+function splitForTTS(text, maxChars = TTS_UNIT_MAX_CHARS) {
+  return splitIntoChunks(text, maxChars).flatMap((part) => (
+    part.length > maxChars ? splitLongSpeechPart(part, maxChars) : [part]
+  ));
+}
+
+function splitForProgressiveStart(text, isFirstSegment) {
+  if (!isFirstSegment) return splitForTTS(text);
+  const initialParts = splitForTTS(text, TTS_FIRST_UNIT_MAX_CHARS);
+  const first = initialParts[0];
+  if (!first || initialParts.length === 1) return initialParts;
+  const firstOffset = text.indexOf(first);
+  if (firstOffset < 0) return initialParts;
+  const remainder = text.slice(firstOffset + first.length).trim();
+  return [first, ...splitForTTS(remainder)];
 }
 
 function countWords(text) {
@@ -179,7 +209,7 @@ function buildSpeechChunks(paragraphs, startIdx = 0, startSentenceIdx = 0) {
     if (!cleaned) continue;
     const resumeWordOffset = i === startIdx ? sentenceWordOffset(cleaned, startSentenceIdx) : 0;
 
-    const parts = splitForTTS(cleaned);
+    const parts = splitForProgressiveStart(cleaned, chunks.length === 0);
     for (const part of parts) {
       const startWord = countWords(currentText);
       const wordCount = countWords(part);
@@ -889,7 +919,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
   // Fire-and-forget: prefetch the next chunk into the cache without blocking playback.
   const prefetchNext = (gen) => {
-    if (document.hidden || !document.hasFocus()) return;
     if (!prefetchAbortRef.current || prefetchAbortRef.current.signal.aborted) {
       prefetchAbortRef.current = new AbortController();
     }
@@ -926,9 +955,8 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
 
     let audioChunk;
     try {
-      // Match Chat with Sarah: begin preparing the next segment before waiting
-      // for the current response, so playback and generation overlap.
-      prefetchNext(gen);
+      // Give the current segment exclusive use of the TTS request path. Starting
+      // a speculative request here delays the first spoken audio on Android.
       audioChunk = await fetchDecoded(chunk, gen);
     } catch (err) {
       if (isAbortError(err) || gen !== genRef.current) return;
@@ -946,6 +974,10 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     if (stateRef.current !== "playing") return;
 
     setBufferingPara(-1);
+
+    // The current audio is ready. Begin preparing the next segment now so its
+    // request overlaps playback without competing with startup.
+    prefetchNext(gen);
 
     if (gen !== genRef.current) return;
 
@@ -1006,7 +1038,6 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           ? `Playing Sarah audio ${segmentLabel}; preloading segment ${segmentIndex + 2}/${totalSegments}`
           : `Playing Sarah audio ${segmentLabel}`,
       });
-      prefetchNext(gen);
     } catch (err) {
       URL.revokeObjectURL(url);
       sourceRef.current = null;
