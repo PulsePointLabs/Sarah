@@ -91,6 +91,45 @@ const HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb";
 const HEART_RATE_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb";
 const BATTERY_SERVICE_UUID = "0000180f-0000-1000-8000-00805f9b34fb";
 const DEVICE_INFORMATION_SERVICE_UUID = "0000180a-0000-1000-8000-00805f9b34fb";
+const DIRECT_H10_REMEMBERED_DEVICE_KEY = "pulsepoint.directH10.rememberedDevice";
+const DIRECT_H10_RECONNECT_DELAYS_MS = [1000, 2500, 5000, 10000, 15000, 30000];
+
+function readRememberedDirectH10Device() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DIRECT_H10_REMEMBERED_DEVICE_KEY) || "null");
+    const deviceId = String(parsed?.deviceId || "").trim();
+    if (!deviceId) return null;
+    return {
+      deviceId,
+      name: String(parsed?.name || "Polar H10").trim() || "Polar H10",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function rememberDirectH10Device(device) {
+  const deviceId = String(device?.deviceId || "").trim();
+  if (!deviceId) return null;
+  const remembered = {
+    deviceId,
+    name: String(device?.name || "Polar H10").trim() || "Polar H10",
+  };
+  try {
+    localStorage.setItem(DIRECT_H10_REMEMBERED_DEVICE_KEY, JSON.stringify(remembered));
+  } catch {
+    // A storage failure should not prevent the current BLE connection.
+  }
+  return remembered;
+}
+
+function forgetRememberedDirectH10Device() {
+  try {
+    localStorage.removeItem(DIRECT_H10_REMEMBERED_DEVICE_KEY);
+  } catch {
+    // Nothing else is required when local storage is unavailable.
+  }
+}
 const CAPTURE_MODES = [
   { value: "full", label: "Full telemetry", helper: "HR, EMG, OBS, and voice notes" },
   { value: "media", label: "Media", helper: "Video-first live review" },
@@ -589,7 +628,7 @@ async function getDirectH10Device({ preferSaved = false, silent = false } = {}) 
   });
 }
 
-async function getNativeDirectH10Device() {
+async function getNativeDirectH10Device({ preferSaved = true, forcePicker = false, silent = false } = {}) {
   await BleClient.initialize({ androidNeverForLocation: true });
   if (typeof BleClient.isLocationEnabled === "function") {
     const enabled = await BleClient.isLocationEnabled().catch(() => true);
@@ -597,7 +636,10 @@ async function getNativeDirectH10Device() {
       throw new Error("Android Location services are off. Turn Location on, then try Connect H10 again so Android can scan for BLE devices.");
     }
   }
-  return BleClient.requestDevice({
+  const remembered = readRememberedDirectH10Device();
+  if (preferSaved && !forcePicker && remembered) return remembered;
+  if (silent) throw new Error("No remembered Polar H10 is available for automatic reconnect.");
+  const selected = await BleClient.requestDevice({
     services: [HEART_RATE_SERVICE_UUID],
     optionalServices: [
       HEART_RATE_SERVICE_UUID,
@@ -606,6 +648,8 @@ async function getNativeDirectH10Device() {
     ],
     namePrefix: "Polar H10",
   });
+  rememberDirectH10Device(selected);
+  return selected;
 }
 
 async function getHeartRateMeasurementCharacteristic(device) {
@@ -1206,14 +1250,17 @@ export default function LiveCapture() {
   const [hrSourceSettings, setHrSourceSettings] = useState(() => readHrSourceSettings());
   const [hrSourceSaving, setHrSourceSaving] = useState(false);
   const [hrSourceError, setHrSourceError] = useState("");
-  const [directH10Status, setDirectH10Status] = useState({
-    connected: false,
-    connecting: false,
-    deviceName: "",
-    message: "Direct H10 not connected",
-    error: "",
-    lastMessageAt: null,
-    rrCount: 0,
+  const [directH10Status, setDirectH10Status] = useState(() => {
+    const remembered = readRememberedDirectH10Device();
+    return {
+      connected: false,
+      connecting: false,
+      deviceName: remembered?.name || "",
+      message: remembered ? `Saved ${remembered.name} ready to reconnect` : "Direct H10 not connected",
+      error: "",
+      lastMessageAt: null,
+      rrCount: 0,
+    };
   });
   const [hrLossDialog, setHrLossDialog] = useState(null);
   const [captureKind, setCaptureKind] = useState(() => localStorage.getItem("pulsepoint.captureKind") || "session");
@@ -1326,6 +1373,10 @@ export default function LiveCapture() {
   const directH10RelaySocketRef = useRef(null);
   const directH10IntentionalDisconnectRef = useRef(false);
   const directH10ReconnectAttemptRef = useRef(0);
+  const directH10ReconnectTimerRef = useRef(null);
+  const directH10ReconnectEnabledRef = useRef(false);
+  const directH10ConnectRef = useRef(null);
+  const directH10AutoConnectStartedRef = useRef(false);
   const howlAutoLastActionRef = useRef({ at: 0, intensity: null, reason: "" });
   const bpSyncInFlightRef = useRef(false);
   const bpOmronActionInFlightRef = useRef(false);
@@ -1794,7 +1845,59 @@ export default function LiveCapture() {
     return true;
   }, [howlConnectionTest.status, howlControlForm.controlEnabled, sendHowlControlCommand, sendHowlEmergencyStop]);
 
-  const disconnectDirectH10 = useCallback(async ({ updateStatus = true } = {}) => {
+  const scheduleNativeH10Reconnect = useCallback(({ reason = "The H10 connection dropped." } = {}) => {
+    if (!canUseNativeAndroidBle() || !directH10ReconnectEnabledRef.current || !readRememberedDirectH10Device()) return false;
+    if (directH10ReconnectTimerRef.current) return true;
+
+    const attempt = directH10ReconnectAttemptRef.current;
+    if (attempt >= DIRECT_H10_RECONNECT_DELAYS_MS.length) {
+      setDirectH10Status((prev) => ({
+        ...prev,
+        connected: false,
+        connecting: false,
+        message: "Automatic H10 reconnect paused",
+        error: reason,
+      }));
+      setHrLossDialog({
+        title: "H10 needs attention",
+        message: `${reason} Automatic reconnect was unable to restore the saved strap. Wake or moisten the strap, then tap Reconnect H10.`,
+        reconnecting: false,
+      });
+      return false;
+    }
+
+    const delayMs = DIRECT_H10_RECONNECT_DELAYS_MS[attempt];
+    directH10ReconnectAttemptRef.current = attempt + 1;
+    setHrLossDialog(null);
+    setDirectH10Status((prev) => ({
+      ...prev,
+      connected: false,
+      connecting: false,
+      message: `Reconnecting saved H10 (attempt ${attempt + 1})`,
+      error: "",
+    }));
+    directH10ReconnectTimerRef.current = window.setTimeout(() => {
+      directH10ReconnectTimerRef.current = null;
+      if (!directH10ReconnectEnabledRef.current) return;
+      const current = directH10StatusRef.current || {};
+      const lastPacketMs = timestampMs(current.lastMessageAt);
+      const hasFreshPacket = current.connected && Number.isFinite(lastPacketMs) && Date.now() - lastPacketMs <= 9000;
+      if (current.connecting || hasFreshPacket) return;
+      directH10ConnectRef.current?.({ autoReconnect: true }).catch(() => {
+        // connectDirectH10 records the specific error and schedules the next attempt.
+      });
+    }, delayMs);
+    return true;
+  }, []);
+
+  const disconnectDirectH10 = useCallback(async ({ updateStatus = true, preserveAutoReconnect = false } = {}) => {
+    if (!preserveAutoReconnect) {
+      directH10ReconnectEnabledRef.current = false;
+      if (directH10ReconnectTimerRef.current) {
+        window.clearTimeout(directH10ReconnectTimerRef.current);
+        directH10ReconnectTimerRef.current = null;
+      }
+    }
     directH10IntentionalDisconnectRef.current = true;
     const nativeDeviceId = directH10NativeDeviceIdRef.current;
     if (nativeDeviceId) {
@@ -1857,6 +1960,7 @@ export default function LiveCapture() {
 
   const connectDirectH10 = useCallback(async (options = {}) => {
     const autoReconnect = options?.autoReconnect === true;
+    const forcePicker = options?.forcePicker === true;
     if (hrSourceSettings.source !== "direct_h10") {
       setDirectH10Status((prev) => ({
         ...prev,
@@ -1876,18 +1980,31 @@ export default function LiveCapture() {
       return;
     }
     if (useNativeAndroidBle) {
+      if (!autoReconnect) directH10ReconnectAttemptRef.current = 0;
+      directH10ReconnectEnabledRef.current = true;
+      if (directH10ReconnectTimerRef.current) {
+        window.clearTimeout(directH10ReconnectTimerRef.current);
+        directH10ReconnectTimerRef.current = null;
+      }
       setDirectH10Status((prev) => ({
         ...prev,
         connecting: true,
         error: "",
         message: autoReconnect
-          ? "Trying native Android H10 reconnect."
-          : "Opening Android BLE picker for Polar H10.",
+          ? "Reconnecting the saved Polar H10."
+          : readRememberedDirectH10Device() && !forcePicker
+            ? "Connecting the saved Polar H10."
+            : "Opening Android BLE picker for Polar H10.",
       }));
 
       try {
-        await disconnectDirectH10({ updateStatus: false });
-        const device = await getNativeDirectH10Device();
+        await disconnectDirectH10({ updateStatus: false, preserveAutoReconnect: true });
+        const device = await getNativeDirectH10Device({
+          preferSaved: !forcePicker,
+          forcePicker,
+          silent: autoReconnect,
+        });
+        rememberDirectH10Device(device);
         const deviceName = device?.name || "Polar H10";
         directH10TransportRef.current = "native";
         directH10NativeDeviceIdRef.current = device.deviceId;
@@ -1900,20 +2017,16 @@ export default function LiveCapture() {
           directH10TransportRef.current = "";
           directH10DeviceRef.current = null;
           directH10RrRef.current = [];
-          if (!intentionalDisconnect) {
-            setHrLossDialog({
-              title: "H10 disconnected",
-              message: "The native Android BLE connection dropped. Tap Reconnect H10 if it does not resume on its own.",
-              reconnecting: false,
-            });
-          }
           setDirectH10Status((prev) => ({
             ...prev,
             connected: false,
             connecting: false,
-            message: "Direct H10 disconnected",
+            message: intentionalDisconnect ? "Direct H10 disconnected" : "H10 disconnected; automatic reconnect scheduled",
             rrCount: 0,
           }));
+          if (!intentionalDisconnect) {
+            scheduleNativeH10Reconnect({ reason: "The native Android BLE connection dropped." });
+          }
         };
 
         setDirectH10Status((prev) => ({
@@ -1924,8 +2037,11 @@ export default function LiveCapture() {
           error: "",
         }));
 
-        // Android can keep stale BLE state after prior attempts; disconnect first when possible.
+        // Clear stale Android GATT state before opening a fresh connection to the remembered ID.
+        directH10IntentionalDisconnectRef.current = true;
         await BleClient.disconnect(device.deviceId).catch(() => {});
+        await wait(250);
+        directH10IntentionalDisconnectRef.current = false;
         await BleClient.connect(device.deviceId, handleNativeDisconnected, { timeout: 15000 });
         await BleClient.startNotifications(
           device.deviceId,
@@ -1943,6 +2059,7 @@ export default function LiveCapture() {
           message: "Native Direct H10 connected. Waiting for first HR packet.",
           error: "",
         }));
+        setHrLossDialog(null);
       } catch (error) {
         const message = friendlyDirectH10Error(error);
         directH10NativeDeviceIdRef.current = "";
@@ -1956,6 +2073,9 @@ export default function LiveCapture() {
           message: "Direct H10 not connected",
           error: message,
         }));
+        if (directH10ReconnectEnabledRef.current && readRememberedDirectH10Device()) {
+          scheduleNativeH10Reconnect({ reason: message });
+        }
       }
       return;
     }
@@ -2053,7 +2173,63 @@ export default function LiveCapture() {
         error: message,
       }));
     }
-  }, [disconnectDirectH10, hrSourceSettings.source, publishDirectH10Measurement]);
+  }, [disconnectDirectH10, hrSourceSettings.source, publishDirectH10Measurement, scheduleNativeH10Reconnect]);
+
+  useEffect(() => {
+    directH10ConnectRef.current = connectDirectH10;
+    return () => {
+      if (directH10ConnectRef.current === connectDirectH10) directH10ConnectRef.current = null;
+    };
+  }, [connectDirectH10]);
+
+  useEffect(() => {
+    if (hrSourceSettings.source !== "direct_h10") {
+      directH10ReconnectEnabledRef.current = false;
+      directH10AutoConnectStartedRef.current = false;
+      if (directH10ReconnectTimerRef.current) {
+        window.clearTimeout(directH10ReconnectTimerRef.current);
+        directH10ReconnectTimerRef.current = null;
+      }
+      return undefined;
+    }
+
+    directH10ReconnectEnabledRef.current = true;
+    if (!canUseNativeAndroidBle() || !readRememberedDirectH10Device()) return undefined;
+
+    let mounted = true;
+    let appStateHandle = null;
+    const reconnectRememberedH10 = () => {
+      if (!mounted || document.visibilityState === "hidden") return;
+      const current = directH10StatusRef.current || {};
+      const lastPacketMs = timestampMs(current.lastMessageAt);
+      const hasFreshPacket = current.connected && Number.isFinite(lastPacketMs) && Date.now() - lastPacketMs <= 9000;
+      if (current.connecting || hasFreshPacket) return;
+      scheduleNativeH10Reconnect({ reason: "Restoring the remembered Polar H10 connection." });
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") reconnectRememberedH10();
+    };
+
+    if (!directH10AutoConnectStartedRef.current) {
+      directH10AutoConnectStartedRef.current = true;
+      window.setTimeout(reconnectRememberedH10, 500);
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    import("@capacitor/app")
+      .then(({ App: CapacitorApp }) => CapacitorApp?.addListener?.("appStateChange", ({ isActive } = {}) => {
+        if (isActive) reconnectRememberedH10();
+      }))
+      .then((handle) => {
+        appStateHandle = handle;
+      })
+      .catch(() => {});
+
+    return () => {
+      mounted = false;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      appStateHandle?.remove?.();
+    };
+  }, [hrSourceSettings.source, scheduleNativeH10Reconnect]);
 
   useEffect(() => {
     if (hrSourceSettings.source !== "direct_h10") return undefined;
@@ -2091,21 +2267,26 @@ export default function LiveCapture() {
         return;
       }
 
-      setHrLossDialog({
-        title: "H10 signal lost",
-        message: canUseNativeAndroidBle()
-          ? `No heart-rate packet has arrived for ${Math.round(ageMs / 1000)} seconds. Tap Reconnect H10 to reopen the native Android BLE session.`
-          : `No heart-rate packet has arrived for ${Math.round(ageMs / 1000)} seconds. Sarah will try the saved H10 once; tap reconnect if Chrome needs permission again.`,
-        reconnecting: !canUseNativeAndroidBle() && directH10ReconnectAttemptRef.current < 2,
-      });
+      const nativeAndroidBle = canUseNativeAndroidBle();
+      if (nativeAndroidBle) {
+        setHrLossDialog(null);
+      } else {
+        setHrLossDialog({
+          title: "H10 signal lost",
+          message: `No heart-rate packet has arrived for ${Math.round(ageMs / 1000)} seconds. Sarah will try the saved H10 once; tap reconnect if Chrome needs permission again.`,
+          reconnecting: directH10ReconnectAttemptRef.current < 2,
+        });
+      }
       setDirectH10Status((prev) => ({
         ...prev,
         connected: false,
         error: "Direct H10 signal lost - no HR packets received recently.",
-        message: canUseNativeAndroidBle() ? "Direct H10 signal lost." : "Trying to reconnect Direct H10.",
+        message: nativeAndroidBle ? "H10 signal stale; reconnecting saved strap." : "Trying to reconnect Direct H10.",
       }));
 
-      if (!canUseNativeAndroidBle() && directH10ReconnectAttemptRef.current < 2) {
+      if (nativeAndroidBle) {
+        scheduleNativeH10Reconnect({ reason: `No heart-rate packet arrived for ${Math.round(ageMs / 1000)} seconds.` });
+      } else if (directH10ReconnectAttemptRef.current < 2) {
         directH10ReconnectAttemptRef.current += 1;
         connectDirectH10({ autoReconnect: true }).catch(() => {
           // Visible state is already updated by connectDirectH10.
@@ -2119,6 +2300,7 @@ export default function LiveCapture() {
     directH10Status.lastMessageAt,
     hrTelemetry,
     hrSourceSettings.source,
+    scheduleNativeH10Reconnect,
     status?.hr?.directH10?.connected,
     status?.hr?.directH10?.error,
     status?.hr?.directH10?.lastMessageAt,
@@ -2129,6 +2311,8 @@ export default function LiveCapture() {
 
   const forgetDirectH10 = useCallback(async () => {
     if (canUseNativeAndroidBle()) {
+      forgetRememberedDirectH10Device();
+      directH10AutoConnectStartedRef.current = false;
       await disconnectDirectH10({ updateStatus: false });
       directH10RrRef.current = [];
       setDirectH10Status((prev) => ({
@@ -2136,7 +2320,7 @@ export default function LiveCapture() {
         connected: false,
         connecting: false,
         deviceName: "",
-        message: "Native H10 disconnected. Android manages BLE permission through the system picker/app settings.",
+        message: "Forgot the saved H10. Tap Connect H10 to choose a strap.",
         error: "",
         lastMessageAt: null,
         rrCount: 0,
@@ -2158,6 +2342,7 @@ export default function LiveCapture() {
     }));
     try {
       await disconnectDirectH10({ updateStatus: false });
+      forgetRememberedDirectH10Device();
       const devices = await navigator.bluetooth.getDevices();
       const h10Devices = devices.filter((device) => /polar\s+h10/i.test(device?.name || ""));
       for (const device of h10Devices) {
