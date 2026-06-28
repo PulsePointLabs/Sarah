@@ -27,7 +27,7 @@ import {
   ttsCheckpointKey,
 } from "@/lib/ttsReadingCheckpoint";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
-import { apiUrl, discoverSarahApiBase, isSarahNativeShell, serverUrl } from "@/lib/mobileApiBase";
+import { serverUrl } from "@/lib/mobileApiBase";
 import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { repairCharacterSplitParagraph, repairDecimalSpacing, reduceConsistencyPhraseRepetition, splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 
@@ -55,7 +55,6 @@ const TTS_SIDE_TAB_BOTTOM_KEY = "pulsepoint.tts.sideTabBottom";
 const TTS_EXPORT_RENDER_VERSION = "tts_export_leading_trim_v2";
 const TTS_SIDE_TAB_DEFAULT_BOTTOM = 300;
 const SIDE_TAB_DRAG_THRESHOLD_PX = 6;
-const TTS_CHUNK_REQUEST_TIMEOUT_MS = 90000;
 const TTS_DECODE_TIMEOUT_MS = 7000;
 
 function playbackFormatForRuntime(format = "mp3") {
@@ -260,62 +259,31 @@ const getTtsStatus = (err) => {
 
 const isAbortError = (err) => err?.name === "AbortError" || /cancelled|aborted/i.test(String(err?.message || ""));
 
-async function fetchTTSBytesDirect(payload, signal) {
-  const requestOnce = async () => {
-    const response = await fetch(apiUrl("/functions/openaiTTS"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload || {}),
-      signal,
-    });
-    const contentType = response.headers.get("content-type") || "";
-    if (!response.ok) {
-      const data = contentType.includes("application/json")
-        ? await response.json().catch(() => ({}))
-        : { error: await response.text().catch(() => "") };
-      const error = new Error(data?.error || data?.message || `TTS request failed: ${response.status}`);
-      error.status = response.status;
-      error.data = data;
-      throw error;
-    }
-    if (!contentType.includes("audio/") && !contentType.includes("application/octet-stream")) {
-      const error = new Error(`TTS returned ${contentType || "unknown content"} instead of audio.`);
-      error.status = response.status || 502;
-      throw error;
-    }
-    const audioBuffer = await response.arrayBuffer();
-    const contentLength = Number(response.headers.get("content-length") || 0);
-    if (contentLength > 0 && audioBuffer.byteLength !== contentLength) {
-      const error = new Error(`TTS download was incomplete: received ${audioBuffer.byteLength} of ${contentLength} bytes.`);
-      error.status = 502;
-      throw error;
-    }
-    if (audioBuffer.byteLength < 512) {
-      const error = new Error(`TTS returned an audio payload that was too small (${audioBuffer.byteLength} bytes).`);
-      error.status = 502;
-      throw error;
-    }
-    return {
-      status: response.status,
-      data: {
-        audioBuffer,
-        model: response.headers.get("x-tts-model") || undefined,
-        voice: response.headers.get("x-tts-voice") || undefined,
-        speed: response.headers.get("x-tts-speed") || undefined,
-        format: response.headers.get("x-tts-format") || undefined,
-        latency_ms: response.headers.get("x-tts-latency-ms") || undefined,
-        retries: response.headers.get("x-tts-retries") || undefined,
-      },
-    };
-  };
-
-  try {
-    return await requestOnce();
-  } catch (error) {
-    if (!isSarahNativeShell() || isAbortError(error)) throw error;
-    await discoverSarahApiBase({ timeoutMs: 2200 });
-    return requestOnce();
+function base64AudioToArrayBuffer(audio = "") {
+  const binary = window.atob(String(audio || ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
   }
+  return bytes.buffer;
+}
+
+async function fetchTTSLikeChat(payload, signal) {
+  const response = await base44.functions.invoke("openaiTTS", payload, { signal });
+  const audioBuffer = base64AudioToArrayBuffer(response?.data?.audio);
+  if (audioBuffer.byteLength < 512) {
+    const error = new Error(`TTS returned an audio payload that was too small (${audioBuffer.byteLength} bytes).`);
+    error.status = response?.status || 502;
+    error.data = response?.data;
+    throw error;
+  }
+  return {
+    ...response,
+    data: {
+      ...response?.data,
+      audioBuffer,
+    },
+  };
 }
 
 async function callTTSWithRetries(payload, attempts = 3, signal) {
@@ -324,22 +292,7 @@ async function callTTSWithRetries(payload, attempts = 3, signal) {
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (signal?.aborted) throw new DOMException("TTS request cancelled", "AbortError");
     try {
-      const timeoutController = !signal ? new AbortController() : null;
-      const timeoutId = timeoutController
-        ? window.setTimeout(() => timeoutController.abort(), TTS_CHUNK_REQUEST_TIMEOUT_MS)
-        : null;
-      const requestSignal = signal || timeoutController?.signal;
-      let response;
-      try {
-        response = await fetchTTSBytesDirect(payload, requestSignal);
-      } catch (error) {
-        if (error?.name === "AbortError" && timeoutController) {
-          throw new Error(`Request timed out after ${Math.round(TTS_CHUNK_REQUEST_TIMEOUT_MS / 1000)}s: ${apiUrl("/functions/openaiTTS")}`);
-        }
-        throw error;
-      } finally {
-        if (timeoutId) window.clearTimeout(timeoutId);
-      }
+      const response = await fetchTTSLikeChat(payload, signal);
 
       if (response?.data?.error) {
         const error = new Error(getTtsErrorMessage(response));
@@ -359,9 +312,6 @@ async function callTTSWithRetries(payload, attempts = 3, signal) {
     } catch (err) {
       if (isAbortError(err)) throw err;
       lastError = err;
-      if (/request timed out|timed out after/i.test(String(err?.message || ""))) {
-        throw err;
-      }
 
       const status = getTtsStatus(err);
       const retryable = [408, 429, 500, 502, 503, 504].includes(status);

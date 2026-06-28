@@ -74,6 +74,9 @@ async function invokeFunction(name, payload, options = {}) {
     if (error?.name === "AbortError" && controller) {
       throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s: ${apiUrl(`/functions/${name}`)}`);
     }
+    if (error?.name === "AbortError") {
+      throw error;
+    }
     if (
       isSarahNativeShell()
       && !options.skipApiDiscovery
@@ -99,6 +102,17 @@ async function invokeFunction(name, payload, options = {}) {
 
   if (contentType.includes('audio/')) {
     const bytes = new Uint8Array(await response.arrayBuffer());
+    const contentLength = Number(response.headers.get('content-length') || 0);
+    if (contentLength > 0 && bytes.byteLength !== contentLength) {
+      const error = new Error(`Audio download was incomplete: received ${bytes.byteLength} of ${contentLength} bytes.`);
+      error.status = 502;
+      throw error;
+    }
+    if (bytes.byteLength < 512) {
+      const error = new Error(`Audio response was too small (${bytes.byteLength} bytes).`);
+      error.status = 502;
+      throw error;
+    }
     let binary = '';
     const chunkSize = 0x8000;
     for (let i = 0; i < bytes.length; i += chunkSize) {
