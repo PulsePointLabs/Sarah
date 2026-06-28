@@ -4586,6 +4586,7 @@ function imageCalloutNarrationParagraphs(result, sectionKey, transientImages = [
 
 const DETAILED_VISUAL_EXAMINATION_RULES = `
 DETAILED VISUAL EXAMINATION STANDARD:
+- Address Ben directly in second person in every generated finding. Use "you" and "your" anatomy. Do not emit detached specimen-style phrases such as "the subject", "the patient", "the male", "male external genitalia", "a supine subject", or "the body demonstrates"; rewrite them as direct clinical observations without reducing clinical detail.
 - Write as a careful visual examination, not an abbreviated anatomy inventory. For every represented region, describe the view and position, structures visible, symmetry, contour and proportional relationships, color and pigmentation, texture, hair distribution where relevant, surface integrity, scars or procedure sites, swelling or edema, erythema, papules, lesions, ulcers, fissures, erosions, breakdown, visible fluid or moisture when relevant, normal variants, and supported longitudinal stability or change.
 - Use only visually supportable language: visible, appears, no visible evidence of, not assessable from this image, comparison suggests, and remains stable across reviewed views.
 - Never claim palpation, tenderness, internal masses, internal anatomy, or function from photographs.
@@ -7196,20 +7197,37 @@ ANNOTATED IMAGE OUTPUT RULES:
   }) : [];
   const paragraphs = [];
   const paragraphMeta = [];
+  const staticEvidenceIdsBySection = new Map(sections.map((section) => {
+    const sectionFindings = Array.isArray(cumulativeVisualResult?.image_region_findings)
+      ? cumulativeVisualResult.image_region_findings.filter((finding) => (
+        finding.section_key === section.key
+        && (!pelvicResultScoped || isPelvicGenitalFindingInScope(cumulativeVisualResult, finding, evidenceLookupImages))
+      ))
+      : [];
+    return [section.key, selectInlineEvidenceImageIds(
+      cumulativeVisualResult,
+      section.key,
+      sectionFindings,
+      evidenceLookupImages,
+      pelvicResultScoped,
+      sections,
+    ).slice(0, 1)];
+  }));
   if (result) {
     paragraphs.push(calmSpokenHeading(config.title));
     paragraphMeta.push({ type: "title", color: config.color, displayLabel: config.title });
     for (const section of sections) {
+      const staticEvidenceIds = staticEvidenceIdsBySection.get(section.key) || [];
       const sectionFindings = pelvicResultScoped
         ? (result[section.key] || []).map(cleanPelvicGenitalScopeProseItem).filter(Boolean)
         : (result[section.key] || []);
       if (sectionFindings.length) {
         paragraphs.push(calmSpokenHeading(section.label));
-        paragraphMeta.push({ type: "section-title", section, displayLabel: section.label });
+        paragraphMeta.push({ type: "section-title", section, displayLabel: section.label, evidence_image_ids: staticEvidenceIds });
         if (includeImageCalloutsInTts) {
           for (const callout of imageCalloutNarrationParagraphs(cumulativeVisualResult, section.key, evidenceLookupImages)) {
             paragraphs.push(callout.text);
-            paragraphMeta.push({ type: "visual-callout", section, evidence_image_ids: [callout.imageId] });
+            paragraphMeta.push({ type: "visual-callout", section, evidence_image_ids: staticEvidenceIds });
           }
         }
       }
@@ -7217,7 +7235,7 @@ ANNOTATED IMAGE OUTPUT RULES:
         const cleanedFinding = cleanImageReviewProse(naturalizeSpokenDates(finding));
         if (!cleanedFinding) continue;
         paragraphs.push(cleanedFinding);
-        paragraphMeta.push({ type: "section", section });
+        paragraphMeta.push({ type: "section", section, evidence_image_ids: staticEvidenceIds });
       }
     }
   }

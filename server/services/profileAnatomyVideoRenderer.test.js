@@ -1367,6 +1367,60 @@ test('indexed anatomy evidence replaces the document-title card with a real over
   assert.equal(visualTimeline[0].image.id, indexedOverview.id);
 });
 
+test('consecutive narration sections switch to their authoritative static evidence IDs', () => {
+  const penisStatic = classifiedImage(
+    'indexed-penis-static',
+    ['penis', 'penile_shaft'],
+    ['penis'],
+    { label: 'Static Penis evidence' },
+  );
+  const penisAlternative = classifiedImage(
+    'indexed-penis-higher-ranked',
+    ['penis', 'penile_shaft'],
+    ['penis', 'penis_and_foreskin'],
+    { label: 'Alternative Penis evidence' },
+  );
+  const foreskinStatic = classifiedImage(
+    'indexed-foreskin-static',
+    ['penis', 'foreskin', 'foreskin_forward'],
+    ['foreskin'],
+    { label: 'Static Foreskin evidence' },
+  );
+  const manifest = createReviewEvidenceManifest({
+    reviewId: 'authoritative-static-section-switch',
+    title: 'Pelvic and Genital Review',
+    reviewScope: 'pelvic_genital',
+    paragraphs: [
+      'Penis',
+      'Your penile shaft appears straight and midline.',
+      'Foreskin',
+      'Your foreskin is forward and covers your glans at rest.',
+    ],
+    paragraphMeta: [
+      { type: 'section-title', section_key: 'penis', section_label: 'Penis', evidence_image_ids: [penisStatic.id] },
+      { type: 'section', section_key: 'penis', section_label: 'Penis', evidence_image_ids: [penisStatic.id] },
+      { type: 'section-title', section_key: 'foreskin', section_label: 'Foreskin', evidence_image_ids: [foreskinStatic.id] },
+      { type: 'section', section_key: 'foreskin', section_label: 'Foreskin', evidence_image_ids: [foreskinStatic.id] },
+    ],
+    images: [penisAlternative, penisStatic, foreskinStatic],
+  });
+  const narrationSegments = manifest.sections.map((section) => ({
+    section_id: section.section_id,
+    durationSeconds: 5,
+  }));
+  const visualTimeline = buildManifestVisualTimeline({ manifest, narrationSegments });
+
+  assert.deepEqual(
+    manifest.sections.map((section) => section.assigned_evidence[0].evidence_id),
+    [penisStatic.id, foreskinStatic.id],
+  );
+  assert.deepEqual(
+    visualTimeline.map((segment) => segment.image.id),
+    [penisStatic.id, foreskinStatic.id],
+  );
+  assert.notEqual(visualTimeline[0].image.id, visualTimeline[1].image.id);
+});
+
 test('timeline validation preserves a manifest-authorized indexed foreskin assignment', () => {
   const manifest = createReviewEvidenceManifest({
     reviewId: 'indexed-foreskin-timeline-fixture',

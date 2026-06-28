@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.60",
-  "commit": "2eafd8e",
-  "commitMessage": "Keep screen awake during live capture",
-  "builtAt": "2026-06-28T04:09:55.979Z"
+  "version": "0.1.61",
+  "commit": "77e8eb6",
+  "commitMessage": "Prevent anatomy overview title cards",
+  "builtAt": "2026-06-28T05:41:35.904Z"
 };

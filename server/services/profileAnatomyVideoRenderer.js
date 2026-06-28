@@ -1384,7 +1384,7 @@ export function createReviewEvidenceManifest({
           ...entry,
           indexedSectionScore,
           adjustedScore: preferredEvidenceIds.has(imageId)
-            ? 1000 - repeatPenalty
+            ? 1000000 - repeatPenalty
             : indexedSectionScore != null && indexedSectionScore > 0
               ? 100000 + indexedSectionScore
               : entry.candidate.score - repeatPenalty,
