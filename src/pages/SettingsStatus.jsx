@@ -398,6 +398,47 @@ function ToggleControl({ checked, disabled, onChange, label }) {
   );
 }
 
+function WatermarkNumberInput({ value, min, max, step, onCommit }) {
+  const [draft, setDraft] = useState(String(value ?? ""));
+
+  useEffect(() => {
+    setDraft(String(value ?? ""));
+  }, [value]);
+
+  const commitDraft = () => {
+    const parsed = Number(String(draft).trim());
+    if (!String(draft).trim() || !Number.isFinite(parsed)) {
+      setDraft(String(value ?? ""));
+      return;
+    }
+    const normalized = Math.max(Number(min), Math.min(Number(max), parsed));
+    setDraft(String(normalized));
+    onCommit(normalized);
+  };
+
+  return (
+    <input
+      type="number"
+      inputMode="decimal"
+      min={min}
+      max={max}
+      step={step}
+      value={draft}
+      onFocus={(event) => event.currentTarget.select()}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commitDraft}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          setDraft(String(value ?? ""));
+          event.currentTarget.blur();
+        }
+      }}
+      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+    />
+  );
+}
+
 function ProviderCard({ status }) {
   const report = status?.costReport;
   return (
@@ -1677,14 +1718,12 @@ export default function SettingsStatus() {
               ].map(([key, label, min, max, step]) => (
                 <label key={key} className="space-y-1">
                   <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{label}</span>
-                  <input
-                    type="number"
+                  <WatermarkNumberInput
+                    value={watermark[key]}
                     min={min}
                     max={max}
                     step={step}
-                    value={watermark[key]}
-                    onChange={(event) => updateWatermark({ [key]: Number(event.target.value) })}
-                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                    onCommit={(value) => updateWatermark({ [key]: value })}
                   />
                 </label>
               ))}
