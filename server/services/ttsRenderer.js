@@ -18,6 +18,32 @@ import {
 } from './ttsCore.js';
 import { writeChapterSidecars } from './audioChapters.js';
 
+const MAX_TTS_EXPORT_CHUNKS = 500;
+const MAX_TTS_EXPORT_CHARACTERS = 500_000;
+
+export function validateTTSExportChunkPayload(chunks = []) {
+  if (!chunks.length) {
+    const error = new Error('No TTS chunks provided');
+    error.status = 400;
+    throw error;
+  }
+
+  if (chunks.length > MAX_TTS_EXPORT_CHUNKS) {
+    const error = new Error(`Too many TTS chunks: ${chunks.length} (maximum ${MAX_TTS_EXPORT_CHUNKS})`);
+    error.status = 413;
+    throw error;
+  }
+
+  const totalCharacters = chunks.reduce((total, chunk) => total + String(chunk?.text || '').length, 0);
+  if (totalCharacters > MAX_TTS_EXPORT_CHARACTERS) {
+    const error = new Error(`TTS export text is too large: ${totalCharacters} characters (maximum ${MAX_TTS_EXPORT_CHARACTERS})`);
+    error.status = 413;
+    throw error;
+  }
+
+  return { chunkCount: chunks.length, totalCharacters };
+}
+
 async function trimTtsChunkSilence(inputPath, outputPath) {
   await runProcess('ffmpeg', [
     '-hide_banner',
@@ -139,16 +165,7 @@ export async function renderTTSExport(payload = {}, options = {}) {
       }))
       .filter((chunk) => chunk.text);
 
-    if (!normalizedChunks.length) {
-      const error = new Error('No TTS chunks provided');
-      error.status = 400;
-      throw error;
-    }
-    if (normalizedChunks.length > 120) {
-      const error = new Error(`Too many TTS chunks: ${normalizedChunks.length}`);
-      error.status = 413;
-      throw error;
-    }
+    validateTTSExportChunkPayload(normalizedChunks);
 
     onProgress({
       phase: 'starting',
