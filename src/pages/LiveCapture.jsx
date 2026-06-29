@@ -50,6 +50,10 @@ import {
   syncBloodPressureFromHealthConnect,
 } from "@/lib/bloodPressure";
 import {
+  resetBloodPressureCaptureForSession,
+  selectLiveSessionBloodPressure,
+} from "@/lib/liveSessionBloodPressure";
+import {
   getOmronBloodPressureListenerState,
   getRememberedOmronDevice,
   isOmronAutoListenEnabled,
@@ -1313,6 +1317,7 @@ export default function LiveCapture() {
   const [howlAdvancedOpen, setHowlAdvancedOpen] = useState(false);
   const [howlQuickModalOpen, setHowlQuickModalOpen] = useState(false);
   const [bpCapture, setBpCapture] = useState({
+    sessionId: null,
     status: "idle",
     message: "Blood pressure sync is watching the local PulsePoint database.",
     lastReading: null,
@@ -1382,6 +1387,7 @@ export default function LiveCapture() {
   const bpSyncInFlightRef = useRef(false);
   const bpOmronActionInFlightRef = useRef(false);
   const bpOmronSeenRef = useRef(new Set());
+  const bpSessionIdRef = useRef(null);
   const howlSettingsDirtyRef = useRef(false);
   const howlFocusedFieldRef = useRef("");
   const launchInFlightRef = useRef(null);
@@ -1393,6 +1399,13 @@ export default function LiveCapture() {
   useEffect(() => {
     directH10StatusRef.current = directH10Status;
   }, [directH10Status]);
+
+  useEffect(() => {
+    const activeSessionId = liveSession?.activeSessionId || null;
+    if (bpSessionIdRef.current === activeSessionId) return;
+    bpSessionIdRef.current = activeSessionId;
+    setBpCapture((previous) => resetBloodPressureCaptureForSession(previous, activeSessionId));
+  }, [liveSession?.activeSessionId]);
 
   useEffect(() => {
     if (restoredLaunchProfileRef.current) return;
@@ -2647,7 +2660,11 @@ export default function LiveCapture() {
   const rrCount = readNumber(hrTelemetry?.quality?.rrCount, hrv.sampleCount);
   const hrvRmssd = readNumber(hrv.rmssdMs, hrTelemetry?.hrv_rmssd_ms);
   const hrvQuality = hrv.quality || hrTelemetry?.hrv_quality || null;
-  const latestBpReading = bpCapture.lastReading || activeSessionDoc?.latest_blood_pressure_reading || activeSessionDoc?.session_context?.blood_pressure || null;
+  const latestBpReading = selectLiveSessionBloodPressure({
+    activeSessionId: liveSession?.activeSessionId,
+    activeSessionDoc,
+    captureState: bpCapture,
+  });
   const latestBpValue = latestBpReading?.systolic_mm_hg && latestBpReading?.diastolic_mm_hg
     ? `${latestBpReading.systolic_mm_hg}/${latestBpReading.diastolic_mm_hg}`
     : "--";
@@ -3193,10 +3210,14 @@ export default function LiveCapture() {
           ? manual ? "health_connect_manual_sync" : "health_connect_auto_sync"
           : manual ? "blood_pressure_database_manual_refresh" : "blood_pressure_database_auto_refresh",
       });
-      const latestReading = stamped.latest || readings[0] || null;
+      const latestStoredReading = readings[0] || null;
+      const activeSessionId = liveSession?.activeSessionId || null;
       const needsPermission = nativeStatus?.native !== false && !nativePermissionGranted;
       setBpCapture((prev) => ({
         ...prev,
+        sessionId: stamped.latest
+          ? activeSessionId
+          : prev.sessionId === activeSessionId ? prev.sessionId : null,
         native: nativeStatus?.native !== false,
         permissionGranted: nativePermissionGranted,
         syncing: false,
@@ -3206,16 +3227,16 @@ export default function LiveCapture() {
             ? "captured"
             : needsPermission
               ? "permission_needed"
-              : latestReading ? "ready" : "idle",
-        lastReading: latestReading || prev.lastReading,
+              : "idle",
+        lastReading: stamped.latest
+          ? stamped.latest
+          : prev.sessionId === activeSessionId ? prev.lastReading : null,
         lastCapturedAt: stamped.latest ? new Date().toISOString() : prev.lastCapturedAt,
         capturedCount: prev.capturedCount + stamped.stamped,
         message: stamped.stamped
           ? `Captured ${stamped.stamped} BP reading${stamped.stamped === 1 ? "" : "s"} into this session.`
-          : latestReading
-            ? nativeSyncAttempted
-              ? "Latest BP synced from Health Connect. Watching for session readings."
-              : "Latest BP loaded from the local PulsePoint database."
+          : latestStoredReading
+            ? "Saved BP readings exist, but none were captured during this session."
             : needsPermission
               ? "Health Connect BP permission is not granted on this device. Desktop will still show readings after the phone syncs them."
               : (manual ? "No saved BP reading found yet." : prev.message || "BP sync is watching the local database."),
@@ -3231,7 +3252,7 @@ export default function LiveCapture() {
     } finally {
       bpSyncInFlightRef.current = false;
     }
-  }, [bpOmronListening, stampBloodPressureReadings]);
+  }, [bpOmronListening, liveSession?.activeSessionId, stampBloodPressureReadings]);
 
   const saveOmronBloodPressureForLiveSession = useCallback(async (reading) => {
     if (!reading) throw new Error("OMRON did not return a blood pressure reading.");
@@ -3259,7 +3280,6 @@ export default function LiveCapture() {
       permissionGranted: prev.permissionGranted,
       syncing: false,
       status: "ready",
-      lastReading: latestReading,
       message: `OMRON captured ${formatBloodPressure(latestReading)} and saved it to PulsePoint.`,
     }));
 
@@ -3268,6 +3288,7 @@ export default function LiveCapture() {
         if (!stamped?.stamped) return;
         setBpCapture((prev) => ({
           ...prev,
+          sessionId: liveSession?.activeSessionId || null,
           status: "captured",
           lastReading: stamped.latest || latestReading,
           lastCapturedAt: new Date().toISOString(),
@@ -3282,7 +3303,7 @@ export default function LiveCapture() {
           message: `OMRON captured ${formatBloodPressure(latestReading)} and saved it to PulsePoint. Session stamp failed.`,
         }));
       });
-  }, [stampBloodPressureReadings]);
+  }, [liveSession?.activeSessionId, stampBloodPressureReadings]);
 
   const startOmronBloodPressureListenerForLiveSession = useCallback(async ({ auto = false, forceDevicePicker = false } = {}) => {
     if (bpOmronActionInFlightRef.current) {
