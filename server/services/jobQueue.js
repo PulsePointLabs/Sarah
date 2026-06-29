@@ -191,6 +191,13 @@ function isCleared(job) {
 function persistedJob(job) {
   if (!job) return null;
   const { abortController: _abortController, ...rest } = job;
+  if (rest.type === 'profile_anatomy_video' && rest.result) {
+    return {
+      ...rest,
+      result: summarizeJobResult(rest.result),
+      result_compacted: true,
+    };
+  }
   return rest;
 }
 

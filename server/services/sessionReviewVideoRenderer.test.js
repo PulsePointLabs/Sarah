@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildReviewVideoPlan } from './sessionReviewVideoPlanner.js';
 import {
+  canonicalPhaseAnchorForNarration,
+  resolveReviewSegmentPhaseCarryover,
   resolveTimestampViolationVisualFallback,
   selectDistinctReviewSourceStart,
   selectReviewVideoEventForSegment,
@@ -213,6 +215,55 @@ test('generic review b-roll falls back when no distinct source window exists', (
   });
 
   assert.equal(start, null);
+});
+
+test('recovery narration retains its marker and generic context never rewinds to zero', () => {
+  const canonicalRecovery = canonicalPhaseAnchorForNarration({
+    session: {
+      pre_climax_offset_s: 729,
+      climax_offset_s: 828,
+      recovery_offset_s: 837,
+    },
+    narrationText: 'Recovery, by contrast, showed the most open HRV of the session after the climax-to-recovery transition.',
+  });
+  assert.equal(canonicalRecovery.session_time_s, 837);
+
+  const recovery = {
+    id: 'recovery-marker',
+    paragraphIndex: 7,
+    session_time_s: 837,
+    label: 'Recovery shift',
+    reason: 'Logged recovery phase marker',
+    source: 'phase_marker',
+  };
+  const first = resolveReviewSegmentPhaseCarryover({
+    segment: { paragraphIndex: 7, text: 'Recovery begins after orgasm.' },
+    directEvent: recovery,
+    paragraphText: 'Recovery begins after orgasm. Your heart rate continues falling as contact lightens.',
+  });
+  const continued = resolveReviewSegmentPhaseCarryover({
+    segment: { paragraphIndex: 7, text: 'Your heart rate continues falling as contact lightens.' },
+    phaseAnchorEvent: first.nextPhaseAnchor,
+    paragraphText: 'Recovery begins after orgasm. Your heart rate continues falling as contact lightens.',
+  });
+  assert.equal(continued.carried, true);
+  assert.equal(continued.event.session_time_s, 837);
+
+  const unrelated = resolveReviewSegmentPhaseCarryover({
+    segment: { paragraphIndex: 1, text: 'The session opens at baseline.' },
+    directEvent: recovery,
+    paragraphText: 'The session opens at baseline before any stimulation contact.',
+  });
+  assert.equal(unrelated.nextPhaseAnchor, null);
+
+  const sourceStart = selectDistinctReviewSourceStart({
+    preferredStart: 875,
+    durationSeconds: 20,
+    sourceDuration: 905,
+    usedWindows: [{ start: 870, end: 900 }],
+    preventRewind: true,
+  });
+  assert.equal(sourceStart, null);
 });
 
 test('explicit review timestamps can reuse a nearby source-video window', () => {

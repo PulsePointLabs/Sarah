@@ -1160,6 +1160,7 @@ export function selectDistinctReviewSourceStart({
   usedWindows = [],
   minGapSeconds = REVIEW_VIDEO_MIN_GENERIC_BROLL_GAP_SECONDS,
   allowNearRepeat = false,
+  preventRewind = false,
 } = {}) {
   const duration = Math.max(0.5, Number(durationSeconds || 0.5));
   const availableDuration = Number(sourceDuration || 0);
@@ -1185,9 +1186,78 @@ export function selectDistinctReviewSourceStart({
 
   const sorted = candidates.sort((a, b) => Math.abs(a - preferred) - Math.abs(b - preferred));
   for (const candidate of sorted) {
+    if (preventRewind && candidate < preferred - 0.25) continue;
     if (!sourceWindowConflicts(candidate, duration, usedWindows, minGapSeconds)) return candidate;
   }
   return null;
+}
+
+function isPhaseAnchorEvent(event = {}) {
+  return event?.source === 'phase_marker'
+    || /\b(pre[-\s]?climax|climax|ejaculat|recovery|recovered|post[-\s]?(?:climax|orgasm))\b/i.test(eventText(event));
+}
+
+function phaseAnchorMatchesNarration(event = {}, narrationText = '') {
+  const source = eventText(event);
+  const target = String(narrationText || '');
+  if (/\b(recovery|recovered|post[-\s]?(?:climax|orgasm))\b/i.test(source)) {
+    return /\b(recovery|recovered|recovering|post[-\s]?(?:climax|orgasm)|after (?:climax|orgasm|ejaculation))\b/i.test(target);
+  }
+  if (/\bpre[-\s]?climax\b/i.test(source)) return /\bpre[-\s]?climax\b/i.test(target);
+  if (/\b(climax|ejaculat|orgasm)\b/i.test(source)) return /\b(climax|ejaculat|orgasm)\b/i.test(target);
+  return false;
+}
+
+export function canonicalPhaseAnchorForNarration({ session = {}, narrationText = '' } = {}) {
+  const text = String(narrationText || '');
+  const phase = (seconds, label, reason) => {
+    const value = Number(seconds);
+    return Number.isFinite(value) ? {
+      id: `canonical-phase-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+      session_time_s: value,
+      label,
+      reason,
+      source: 'phase_marker',
+    } : null;
+  };
+  if (/\b(post[-\s]?(?:climax|orgasm)|climax[-\s]?to[-\s]?recovery|after (?:climax|orgasm|ejaculation)|recovery phase|recovery itself|cardiovascular recovery)\b/i.test(text)) {
+    return phase(session?.recovery_offset_s, 'Recovery shift', 'Logged post-climax recovery phase marker');
+  }
+  if (/\bpre[-\s]?climax\b/i.test(text)) {
+    return phase(session?.pre_climax_offset_s, 'Pre-climax build', 'Logged pre-climax phase marker');
+  }
+  if (/\b(climax|ejaculation|orgasm)\b/i.test(text) && !/\bnear[-\s]?climax\b/i.test(text)) {
+    return phase(session?.climax_offset_s, 'Climax / ejaculation', 'Logged climax or ejaculation phase marker');
+  }
+  return null;
+}
+
+export function resolveReviewSegmentPhaseCarryover({
+  segment = {},
+  directEvent = null,
+  phaseAnchorEvent = null,
+  paragraphText = '',
+} = {}) {
+  const paragraphIndex = Number(segment?.paragraphIndex);
+  const sameParagraph = phaseAnchorEvent
+    && Number(phaseAnchorEvent?.paragraphIndex) === paragraphIndex;
+  const nextPhaseAnchor = directEvent
+    && isPhaseAnchorEvent(directEvent)
+    && phaseAnchorMatchesNarration(directEvent, paragraphText || segment?.text)
+    ? directEvent
+    : sameParagraph
+    ? phaseAnchorEvent
+    : null;
+  if (directEvent) return { event: directEvent, carried: false, nextPhaseAnchor };
+  if (!sameParagraph) return { event: null, carried: false, nextPhaseAnchor: null };
+  return {
+    event: {
+      ...phaseAnchorEvent,
+      reason: `${phaseAnchorEvent.reason || phaseAnchorEvent.label || 'Saved phase marker'}; retained for the rest of this narration paragraph.`,
+    },
+    carried: true,
+    nextPhaseAnchor,
+  };
 }
 
 function closestSpokenTimeInSegment(segment = {}, event = {}) {
@@ -1294,6 +1364,7 @@ async function renderSourceContextSegment({
     durationSeconds: duration,
     sourceDuration,
     usedWindows: usedSourceWindows,
+    preventRewind: true,
   });
   const start = Number.isFinite(Number(distinctStart))
     ? Number(distinctStart)
@@ -1467,6 +1538,8 @@ async function renderSegmentedSourceReviewVideo({
   const usedSourceWindows = [];
   let totalAudioDuration = 0;
   let ttsMeta = null;
+  let phaseAnchorEvent = null;
+  let phaseAnchorParagraph = null;
 
   for (const [index, segment] of narrationSegments.entries()) {
     if (signal?.aborted) throw new Error('Cancelled');
@@ -1491,8 +1564,27 @@ async function renderSegmentedSourceReviewVideo({
     totalAudioDuration += audioDurationSeconds;
 
     const timestampRequirement = timestampRequirementForSegment(segment);
+    if (phaseAnchorParagraph !== Number(segment.paragraphIndex)) {
+      phaseAnchorEvent = null;
+      phaseAnchorParagraph = Number(segment.paragraphIndex);
+    }
     const matchedEvent = chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds });
-    const event = matchedEvent || null;
+    const canonicalPhaseAnchor = canonicalPhaseAnchorForNarration({
+      session,
+      narrationText: paragraphs[Number(segment.paragraphIndex)] || segment.text,
+    });
+    const directEvent = timestampRequirement.required
+      ? matchedEvent
+      : canonicalPhaseAnchor || matchedEvent;
+    const phaseResolution = resolveReviewSegmentPhaseCarryover({
+      segment,
+      directEvent,
+      phaseAnchorEvent,
+      paragraphText: paragraphs[Number(segment.paragraphIndex)] || segment.text,
+    });
+    phaseAnchorEvent = phaseResolution.nextPhaseAnchor;
+    const event = phaseResolution.event;
+    const eventCarriedFromPhase = phaseResolution.carried;
     const eventRenderable = event
       ? canRenderSessionTimeFromPrimary({
         sessionSeconds: event.session_time_s,
@@ -1744,7 +1836,7 @@ async function renderSegmentedSourceReviewVideo({
     avSegments.push(avPath);
     rememberSourceWindow(usedSourceWindows, window);
     fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
-    const selectionReason = event?.reason || (!matchedEvent && !event
+    const selectionReason = event?.reason || (!event
       ? 'No exact event matched this untimed spoken segment; using continuous source video context.'
       : 'Matched narration segment to timestamped source video.');
     const timelineTrace = buildTimelineTrace({
@@ -1753,15 +1845,19 @@ async function renderSegmentedSourceReviewVideo({
       window,
       audio,
       selectionReason,
-      fallbackUsed: !matchedEvent,
-      fallbackType: !matchedEvent
+      fallbackUsed: !event,
+      fallbackType: !event
         ? 'continuous_source_context'
+        : eventCarriedFromPhase
+        ? 'paragraph_phase_marker_carryover'
         : null,
-      visualSource: matchedEvent
-        ? event?.source === 'spoken_segment_time'
-          ? 'explicit_spoken_timestamp'
-          : 'matched_event'
-        : 'continuous_source_context',
+      visualSource: !event
+        ? 'continuous_source_context'
+        : eventCarriedFromPhase
+        ? 'paragraph_phase_marker'
+        : event?.source === 'spoken_segment_time'
+        ? 'explicit_spoken_timestamp'
+        : 'matched_event',
     });
     generatedClips.push({
       id: event?.id || `context-${index + 1}`,
@@ -1782,7 +1878,7 @@ async function renderSegmentedSourceReviewVideo({
       spoken_anchor_offset_seconds: Math.round(Number(window.spokenAnchorOffset || 0) * 10) / 10,
       spoken_time_lead_seconds: Math.round(Number(window.spokenTimeLeadSeconds || 0) * 10) / 10,
       source_time_strategy: window.directSpokenTime ? 'spoken_time_phrase_aligned_to_source' : 'session_offset_or_event',
-      matched_event: Boolean(matchedEvent),
+      matched_event: Boolean(event),
       procedural_broll: false,
       procedural_broll_score: null,
       timeline_trace: { ...timelineTrace, spoken_segment_index: index + 1 },
