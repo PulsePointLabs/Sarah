@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
   "version": "0.1.69",
-  "commit": "530d214",
-  "commitMessage": "Align session review video with phase markers",
-  "builtAt": "2026-06-29T04:47:20.210Z"
+  "commit": "8d6cd1a",
+  "commitMessage": "Refresh Sarah 0.1.69 build metadata",
+  "builtAt": "2026-06-29T04:48:01.159Z"
 };
