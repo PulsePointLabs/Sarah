@@ -1,5 +1,6 @@
 import { apiUrl, discoverSarahApiBase, isSarahNativeShell } from "@/lib/mobileApiBase";
 import { trackNativeBackgroundJob } from "@/lib/nativeBackgroundJobs";
+import { isTransientBackgroundJobPollError } from "@/lib/backgroundJobPolling";
 
 const START_RECOVERY_WINDOW_MS = 4 * 60 * 1000;
 
@@ -208,9 +209,19 @@ export function listBackgroundJobs(params = {}) {
   return jobRequest(`/jobs${query.toString() ? `?${query}` : ""}`);
 }
 
-export async function waitForBackgroundJob(jobId, { onProgress, intervalMs = 1200 } = {}) {
+export async function waitForBackgroundJob(jobId, { onProgress, intervalMs = 1200, maxConsecutivePollErrors = 3 } = {}) {
+  let consecutivePollErrors = 0;
   while (true) {
-    const job = await getBackgroundJob(jobId);
+    let job;
+    try {
+      job = await getBackgroundJob(jobId);
+      consecutivePollErrors = 0;
+    } catch (error) {
+      consecutivePollErrors += 1;
+      if (!isTransientBackgroundJobPollError(error) || consecutivePollErrors > maxConsecutivePollErrors) throw error;
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      continue;
+    }
     onProgress?.(job);
 
     if (job.status === "complete") return job;

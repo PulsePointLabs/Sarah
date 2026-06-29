@@ -1,6 +1,7 @@
 import { useCallback, useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import { ArrowLeft, Send, ChevronDown, ChevronUp, Save, RefreshCw, Mic, MicOff, Volume2, VolumeX, Copy, Check, Maximize2, Paperclip, X, Image as ImageIcon, Film } from "lucide-react";
+import { mergeDatedChatFindings } from "@/lib/chatFindings";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
@@ -1533,20 +1534,24 @@ export default function AIChat({
 
   const persistFindings = async (messageList) => {
     setSavingFindings(true);
-    const findings = await summarizeFindings(messageList);
-    if (findings) {
-      const timestamp = new Date().toISOString().slice(0, 10);
-      const newNote = `\n\n[AI Interview — ${timestamp}]\n${findings}`;
-      const merged = mode === "profile" ? findings : (savedNotes || "") + newNote;
-      await onSaveNotes?.(merged, {
-        date: timestamp,
-        source: mode === "profile" ? "profile_ai_interview" : `${evidenceScope}_ai_interview`,
-        conversation: messageList,
-      });
+    try {
+      const findings = await summarizeFindings(messageList);
+      if (findings) {
+        const timestamp = new Date().toISOString().slice(0, 10);
+        const merged = mode === "profile"
+          ? findings
+          : mergeDatedChatFindings(savedNotes, timestamp, findings);
+        await onSaveNotes?.(merged, {
+          date: timestamp,
+          source: mode === "profile" ? "profile_ai_interview" : `${evidenceScope}_ai_interview`,
+          conversation: messageList,
+        });
+      }
+      setSavedFeedback(true);
+      setTimeout(() => setSavedFeedback(false), 3000);
+    } finally {
+      setSavingFindings(false);
     }
-    setSavingFindings(false);
-    setSavedFeedback(true);
-    setTimeout(() => setSavedFeedback(false), 3000);
   };
 
   const persistStructuredImageFindings = async (findings, finalMessages, chatResponse = "") => {
@@ -1791,9 +1796,14 @@ Return a conversational answer plus structured findings for review/persistence.`
     if (ttsEnabled) speakText(reply, newIdx);
     if (imagePayload.aiImages.length) {
       persistStructuredImageFindings(normalized.findings, finalMessages, reply).catch(() => {});
-    } else if (mode === "profile") {
+    } else {
       persistFindings(finalMessages).catch(() => {
         setSavingFindings(false);
+        setChatProcessingStatus({
+          phase: "error",
+          message: "Chat saved; findings summary needs attention",
+          detail: "Your full conversation is saved. Sarah could not refresh the short findings summary yet.",
+        });
       });
     }
     } catch (error) {
@@ -1826,17 +1836,17 @@ Return a conversational answer plus structured findings for review/persistence.`
     return "border-accent/30 bg-accent/10 text-accent";
   };
   const panelClass = fullScreen
-    ? "fixed inset-0 z-[100] flex flex-col overflow-hidden border-0 bg-[#f7f5fa] text-foreground dark:bg-[#0b0e14]"
-    : "border border-border rounded-xl overflow-hidden";
+    ? "fixed inset-0 z-[100] flex w-full max-w-[100vw] min-w-0 flex-col overflow-hidden border-0 bg-[#f7f5fa] text-foreground dark:bg-[#0b0e14]"
+    : "w-full max-w-full min-w-0 overflow-hidden rounded-xl border border-border";
   const bodyClass = fullScreen
-    ? "flex min-h-0 flex-1 flex-col"
-    : "p-3 space-y-3";
+    ? "flex min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden"
+    : "min-w-0 max-w-full space-y-3 overflow-hidden p-3";
   const threadClass = fullScreen
-    ? "flex min-h-0 flex-1 basis-0 flex-col gap-3 overflow-y-auto px-3 py-4 sm:px-6"
-    : "min-h-[36rem] max-h-[70vh] space-y-2 overflow-y-auto pr-1 border-t border-border pt-2";
+    ? "flex min-h-0 min-w-0 max-w-full flex-1 basis-0 flex-col gap-3 overflow-x-hidden overflow-y-auto px-3 py-4 sm:px-6"
+    : "min-h-[36rem] min-w-0 max-w-full space-y-2 overflow-x-hidden overflow-y-auto border-t border-border pr-1 pt-2";
   const messageClass = (role) => `group relative rounded-2xl px-3 py-2 text-sm leading-relaxed shadow-sm ${
     fullScreen ? "max-w-[84%] sm:max-w-[min(76%,46rem)] sm:px-4 sm:py-3 sm:text-[15px]" : "max-w-[85%]"
-  } ${
+  } min-w-0 break-words [overflow-wrap:anywhere] ${
     role === "user"
       ? "bg-primary text-primary-foreground rounded-br-md"
       : `${fullScreen ? "border border-border/70 bg-card" : "bg-muted/70"} text-foreground rounded-bl-md cursor-pointer`
@@ -1911,16 +1921,16 @@ Return a conversational answer plus structured findings for review/persistence.`
     const clips = Array.isArray(savedVideoClips) ? savedVideoClips.filter((clip) => clip?.url || clip?.clip_url || clip?.frames?.length) : [];
     if (!clips.length || mode !== "session") return null;
     return (
-      <div className="rounded-lg border border-primary/20 bg-primary/[0.05] p-2 text-xs">
+      <div className="min-w-0 max-w-full overflow-hidden rounded-lg border border-primary/20 bg-primary/[0.05] p-2 text-xs">
         <p className="mb-2 font-semibold text-primary">Saved key video moments</p>
-        <div className="flex gap-2 overflow-x-auto pb-1">
+        <div className="flex max-w-full gap-2 overflow-x-auto overscroll-x-contain pb-1">
           {clips.slice(0, 8).map((clip) => (
             <button
               key={clip.id || `${clip.label}-${clip.session_time_s}`}
               type="button"
               onClick={() => attachSavedVideoClipFrames(clip)}
               disabled={loading || uploadingImages || processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
-              className="min-w-[11rem] rounded-lg border border-border bg-background/75 px-2 py-1.5 text-left transition-colors hover:border-primary disabled:opacity-45"
+              className="w-[11rem] max-w-[calc(100vw-4rem)] flex-none rounded-lg border border-border bg-background/75 px-2 py-1.5 text-left transition-colors hover:border-primary disabled:opacity-45"
               title={clip.reason || "Attach sampled frames from this saved moment"}
             >
               <span className="block truncate font-semibold text-foreground">{clip.label || "Saved clip"}</span>
@@ -2414,7 +2424,7 @@ Return a conversational answer plus structured findings for review/persistence.`
                     if (el) messageRefs.current.set(i, el);
                     else messageRefs.current.delete(i);
                   }}
-                  className={`scroll-mt-4 flex gap-2 items-start ${msg.role === "user" ? "flex-row-reverse" : ""}`}
+                  className={`scroll-mt-4 flex min-w-0 max-w-full items-start gap-2 ${msg.role === "user" ? "flex-row-reverse" : ""}`}
                 >
                   {msg.role === "assistant" && (
                     <SarahAvatar className="mt-0.5 h-8 w-8" />

@@ -1175,7 +1175,7 @@ export default function SessionDetail() {
   );
 
   return (
-    <div className="max-w-full overflow-x-hidden">
+    <div className="w-full max-w-[100vw] overflow-x-clip">
       <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2 px-3 pt-4 md:px-4">
         <Button variant="ghost" size="icon" onClick={() => navigate(-1)} className="shrink-0">
           <ArrowLeft className="w-5 h-5" />
@@ -1851,7 +1851,7 @@ export default function SessionDetail() {
         {/* Ask the AI — Session Deep Dive */}
         <section
           id="session-interview"
-          className="scroll-mt-24 rounded-xl border border-primary/20 bg-card p-4"
+          className="scroll-mt-24 min-w-0 max-w-full overflow-hidden rounded-xl border border-primary/20 bg-card p-3 sm:p-4"
         >
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">
             Ask the AI{chatMessages.length > 0 ? ` (${chatMessages.length} saved messages)` : ""}
