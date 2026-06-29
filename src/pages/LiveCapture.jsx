@@ -30,6 +30,7 @@ import {
 import { DEFAULT_LIVE_CUE_SETTINGS, LIVE_CUE_PRESETS, resolveLiveCuePhraseBank } from "@/lib/liveCuePhrases";
 import { useLiveCueAudio } from "@/hooks/useLiveCueAudio";
 import { useLiveCueEngine } from "@/hooks/useLiveCueEngine";
+import { toLiveTelemetryNotice } from "@/lib/liveCueDisplay";
 import { computeLiveClimaxPrediction } from "@/utils/liveClimaxPrediction";
 import {
   buildPerinealEmgCalibration,
@@ -61,7 +62,6 @@ import {
   startOmronBloodPressureListener,
   stopOmronBloodPressureListener,
 } from "@/lib/omronBloodPressureBle";
-import AppVersionBadge from "@/components/AppVersionBadge";
 
 const MAX_TELEMETRY_POINTS = 240;
 const MAX_VOICE_NOTE_MS = 12000;
@@ -755,18 +755,18 @@ function CollapsibleControlSection({
       open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary className="flex cursor-pointer list-none items-start gap-3 p-4 [&::-webkit-details-marker]:hidden">
+      <summary className="grid cursor-pointer list-none grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2 p-4 [&::-webkit-details-marker]:hidden">
         {Icon && <Icon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />}
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-semibold uppercase tracking-wider text-primary">{title}</p>
+          <p className="break-normal text-xs font-semibold uppercase tracking-wider text-primary">{title}</p>
           {helper && <p className="mt-1 text-sm text-muted-foreground">{helper}</p>}
         </div>
+        <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
         {status && (
-          <span className="shrink-0 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-[10px] font-semibold text-muted-foreground">
+          <span className="col-start-2 max-w-full justify-self-start truncate rounded-full border border-border bg-muted/30 px-2.5 py-1 text-[10px] font-semibold text-muted-foreground">
             {status}
           </span>
         )}
-        <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
       </summary>
       <div className="border-t border-border p-4">{children}</div>
     </details>
@@ -1116,12 +1116,12 @@ function StatusDot({ active }) {
   );
 }
 
-function MetricCard({ icon, label, value, helper, active, level, large = false, beatPulse = 0 }) {
+function MetricCard({ icon, label, value, helper, active, level, large = false, beatPulse = 0, valueClassName = "" }) {
   const hasLevel = Number.isFinite(Number(level));
   const color = hasLevel ? levelColor(level) : null;
   return (
     <div
-      className={`relative overflow-hidden rounded-xl border transition-shadow ${large ? "p-5" : "p-4"} ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"} ${beatPulse ? "shadow-[0_0_30px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
+      className={`relative min-w-0 overflow-hidden rounded-xl border transition-shadow ${large ? "min-h-[10.5rem] p-5" : "min-h-[8rem] p-4"} ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"} ${beatPulse ? "shadow-[0_0_30px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
       style={hasLevel ? { borderColor: `${color}9a`, background: `linear-gradient(135deg, ${color}38, ${color}10 55%, hsl(var(--card)) 100%)` } : undefined}
     >
       {beatPulse ? <span key={`metric-beat-${label}-${beatPulse}`} className="pointer-events-none absolute right-4 top-4 h-5 w-5 rounded-full bg-rose-400/45 animate-ping" /> : null}
@@ -1138,8 +1138,8 @@ function MetricCard({ icon, label, value, helper, active, level, large = false, 
         </div>
         <StatusDot active={active || hasLevel} />
       </div>
-      <p className={`mt-3 font-bold tracking-tight text-foreground ${large ? "text-5xl" : "text-3xl"}`}>{value}</p>
-      {helper && <p className={`mt-1 text-muted-foreground ${large ? "text-sm" : "text-xs"}`}>{helper}</p>}
+      <p className={`mt-3 min-w-0 whitespace-nowrap font-bold leading-none tracking-normal text-foreground tabular-nums ${large ? "text-5xl" : "text-3xl"} ${valueClassName}`}>{value}</p>
+      {helper && <p className={`mt-2 min-h-[2.5rem] text-muted-foreground ${large ? "text-sm" : "text-xs"}`}>{helper}</p>}
     </div>
   );
 }
@@ -1273,6 +1273,7 @@ export default function LiveCapture() {
   const [captureMode, setCaptureMode] = useState(() => localStorage.getItem("pulsepoint.captureMode") || "full");
   const [emgSensorConfig, setEmgSensorConfig] = useState(() => localStorage.getItem("pulsepoint.emgSensorConfig") || "generic");
   const [telemetryNoticesEnabled, setTelemetryNoticesEnabled] = useState(() => localStorage.getItem("pulsepoint.telemetryNotices") !== "off");
+  const [latestTelemetryNotice, setLatestTelemetryNotice] = useState(null);
   const [heartbeatAudioEnabled, setHeartbeatAudioEnabled] = useState(() => localStorage.getItem("pulsepoint.heartbeatAudio") === "on");
   const [heartbeatPulseId, setHeartbeatPulseId] = useState(0);
   const [voiceWakeEnabled, setVoiceWakeEnabled] = useState(false);
@@ -4004,15 +4005,7 @@ export default function LiveCapture() {
         reason: prediction.reason || strongLabel,
       },
     ].slice(-20));
-    if (telemetryNoticesEnabled) {
-      toast({
-        title: <span className="text-lg font-semibold tracking-tight">{strongLabel}</span>,
-        description: <span className="text-base leading-relaxed">{prediction.reason || "Meaningful live telemetry pattern detected."}</span>,
-        duration: 6500,
-        className: "min-w-[22rem] border-primary/50 bg-card/95 p-5 shadow-2xl",
-      });
-    }
-  }, [buildLevel, captureIsBodyExploration, getCurrentSessionTime, prediction, recordingActive, telemetryHistory, telemetryNoticesEnabled, toast]);
+  }, [buildLevel, captureIsBodyExploration, getCurrentSessionTime, prediction, recordingActive, telemetryHistory]);
 
   useEffect(() => {
     if (!recordingActive || !telemetryHistory.length || !hrTelemetry) return;
@@ -4025,6 +4018,19 @@ export default function LiveCapture() {
       sessionTimeSec: getCurrentSessionTime(),
     });
   }, [emgTelemetry, getCurrentSessionTime, hrTelemetry, liveCueEngine, prediction, recordingActive, telemetryHistory.length]);
+
+  useEffect(() => {
+    const cue = liveCueEngine.latestCue;
+    if (!cue) return;
+    setLatestTelemetryNotice(toLiveTelemetryNotice(cue));
+  }, [liveCueEngine.latestCue]);
+
+  useEffect(() => {
+    if (recordingActive) return;
+    setLatestTelemetryNotice(null);
+    lastPhaseMarkerRef.current = { label: "", ts: 0 };
+    liveCueEngine.reset();
+  }, [liveCueEngine.reset, recordingActive]);
 
   const getAudioContext = useCallback(async () => {
     if (!audioContextRef.current || audioContextRef.current.state === "closed") {
@@ -5176,7 +5182,14 @@ export default function LiveCapture() {
       )}
 
       {!focusView && !mainTelemetryView && (
-        <div className="rounded-xl border border-border bg-card p-4">
+        <CollapsibleControlSection
+          icon={Activity}
+          title="Blood Pressure"
+          helper={bpCapture.lastReading
+            ? `Last reading: ${formatBloodPressure(bpCapture.lastReading)} · ${formatBloodPressureTime(bpCapture.lastReading.measured_at)}`
+            : "OMRON and Health Connect controls"}
+          status={bpOmronListening ? "OMRON armed" : bpCapture.lastReading ? "Latest ready" : "Not connected"}
+        >
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
               <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
@@ -5267,7 +5280,7 @@ export default function LiveCapture() {
               </button>
             </div>
           </div>
-        </div>
+        </CollapsibleControlSection>
       )}
 
       {!focusView && !mainTelemetryView && (
@@ -5322,7 +5335,6 @@ export default function LiveCapture() {
           icon={Radio}
         />
         <div className="flex flex-wrap items-center gap-2 md:mt-1">
-          <AppVersionBadge />
           <div className="inline-flex shrink-0 rounded-lg border border-border bg-card p-1 shadow-sm">
             {CAPTURE_KINDS.map((kind) => {
               const active = captureKind === kind.value;
@@ -5778,7 +5790,7 @@ export default function LiveCapture() {
           <button
             type="button"
             onClick={() => setHowlControlOpen((open) => !open)}
-            className="flex w-full items-start gap-3 p-4 text-left"
+            className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2 p-4 text-left"
             aria-expanded={howlControlOpen}
           >
             <Zap className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
@@ -5788,14 +5800,12 @@ export default function LiveCapture() {
                 Connect to Howl remote access, test /status, then unlock bounded manual controls.
               </p>
             </div>
-            <div className="ml-auto flex shrink-0 items-center gap-2">
-              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-                howlControlEnabled ? "border-primary/35 bg-primary/10 text-primary" : "border-border bg-muted/30 text-muted-foreground"
-              }`}>
-                {howlControlModeLabel}
-              </span>
-              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${howlControlOpen ? "rotate-180" : ""}`} />
-            </div>
+            <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${howlControlOpen ? "rotate-180" : ""}`} />
+            <span className={`col-start-2 max-w-full justify-self-start truncate rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+              howlControlEnabled ? "border-primary/35 bg-primary/10 text-primary" : "border-border bg-muted/30 text-muted-foreground"
+            }`}>
+              {howlControlModeLabel}
+            </span>
           </button>
           {howlControlOpen && (
             <div className="space-y-4 border-t border-border p-4">
@@ -6608,16 +6618,12 @@ export default function LiveCapture() {
       </div>}
 
       {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
-        <div className="rounded-xl border border-border bg-card p-4">
-          <div className="mb-3 flex flex-col gap-1">
-            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
-              <Footprints className="h-4 w-4" />
-              Lower-Body Tracker
-            </p>
-            <p className="text-sm text-muted-foreground">
-              Optional live foot/leg landmark capture. Keep it available, but out of the startup lane.
-            </p>
-          </div>
+        <CollapsibleControlSection
+          icon={Footprints}
+          title="Lower-Body Tracking"
+          helper="Optional foot and leg landmark capture"
+          status={recordingActive ? "Session active" : "Optional"}
+        >
           <LiveFootLandmarkTracker
             sessionId={liveSession?.activeSessionId}
             recordingActive={recordingActive}
@@ -6625,7 +6631,7 @@ export default function LiveCapture() {
             onTrackingSnapshot={handleFootTrackingSnapshot}
             compact
           />
-        </div>
+        </CollapsibleControlSection>
       )}
 
       <div className={`rounded-xl border border-border bg-card ${distanceTelemetryView ? "p-5 md:p-6 space-y-6" : "p-4 space-y-4"} ${focusView ? "h-[calc(100vh-2rem)] overflow-y-auto" : ""}`}>
@@ -6676,6 +6682,35 @@ export default function LiveCapture() {
           </div>
         </div>
 
+        {telemetryNoticesEnabled && latestTelemetryNotice && (
+          <div
+            className={`rounded-xl border border-primary/40 bg-primary/10 shadow-lg ${distanceTelemetryView ? "p-6" : "p-4"}`}
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flex min-w-0 items-start gap-3">
+              <Brain className={`${distanceTelemetryView ? "h-8 w-8" : "h-6 w-6"} mt-0.5 shrink-0 text-primary`} />
+              <div className="min-w-0 flex-1">
+                <p className={`font-bold tracking-normal text-foreground ${distanceTelemetryView ? "text-3xl md:text-4xl" : "text-xl md:text-2xl"}`}>
+                  {latestTelemetryNotice.label}
+                </p>
+                <p className={`mt-2 leading-snug text-muted-foreground ${distanceTelemetryView ? "text-xl md:text-2xl" : "text-base md:text-lg"}`}>
+                  {latestTelemetryNotice.message}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs font-semibold text-primary">
+                  {Number.isFinite(Number(latestTelemetryNotice.confidence)) && (
+                    <span>{Math.round(Number(latestTelemetryNotice.confidence))}% confidence</span>
+                  )}
+                  {Number.isFinite(Number(latestTelemetryNotice.sessionTimeSec)) && (
+                    <span>{fmtMmSs(latestTelemetryNotice.sessionTimeSec)}</span>
+                  )}
+                  <span>{latestTelemetryNotice.spoken ? "Sarah announced this cue" : "Visual cue only"}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3 text-xs sm:grid-cols-2 lg:grid-cols-6">
           <div className="flex items-center gap-2">
             {engineRunning ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : <AlertTriangle className="h-4 w-4 text-amber-500" />}
@@ -6711,7 +6746,7 @@ export default function LiveCapture() {
 
         <div className={`grid gap-3 sm:grid-cols-2 ${telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`}>
           <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large beatPulse={visibleHeartbeatPulseId} />
-          <MetricCard icon={<Activity className="w-4 h-4" />} label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} active={Boolean(latestBpReading)} large />
+          <MetricCard icon={<Activity className="w-4 h-4" />} label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} active={Boolean(latestBpReading)} valueClassName="!text-[clamp(2rem,8vw,3rem)]" large />
           {!captureIsBodyExploration && (
             <>
               <MetricCard icon={<Zap className="w-4 h-4" />} label="Build Confidence" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "No HR phase"} active={Number(hrTelemetry?.buildConfidence) > 40} level={buildLevel} large />

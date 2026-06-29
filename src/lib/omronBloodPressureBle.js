@@ -6,6 +6,7 @@ const CURRENT_TIME_SERVICE_UUID = "00001805-0000-1000-8000-00805f9b34fb";
 const BATTERY_SERVICE_UUID = "0000180f-0000-1000-8000-00805f9b34fb";
 const DEVICE_INFORMATION_SERVICE_UUID = "0000180a-0000-1000-8000-00805f9b34fb";
 const OMRON_RECONNECT_DELAY_MS = 2500;
+const OMRON_RECONNECT_MAX_DELAY_MS = 30000;
 const OMRON_DEVICE_STORAGE_KEY = "pulsepoint.omronBp.device";
 const OMRON_AUTO_LISTEN_STORAGE_KEY = "pulsepoint.omronBp.autoListen";
 
@@ -269,6 +270,7 @@ function clearReconnectTimer(listener) {
 
 function handleOmronDisconnected(listener) {
   if (!listener || activeOmronListener !== listener) return;
+  if (Date.now() < Number(listener.ignoreDisconnectUntil || 0)) return;
   if (listener.suppressNextDisconnect) {
     listener.suppressNextDisconnect = false;
     return;
@@ -292,9 +294,12 @@ async function connectAndSubscribeOmron(listener, { initial = false } = {}) {
 
   try {
     listener.onStatus?.(initial ? "Connecting to OMRON BP7000..." : "Trying to reconnect to OMRON BP7000...");
-    listener.suppressNextDisconnect = true;
-    await BleClient.disconnect(listener.deviceId).catch(() => {});
-    listener.suppressNextDisconnect = false;
+    if (initial) {
+      listener.suppressNextDisconnect = true;
+      listener.ignoreDisconnectUntil = Date.now() + 2000;
+      await BleClient.disconnect(listener.deviceId).catch(() => {});
+      listener.suppressNextDisconnect = false;
+    }
     await BleClient.connect(listener.deviceId, () => handleOmronDisconnected(listener), { timeout: initial ? 20000 : 8000 });
 
     const services = await BleClient.getServices(listener.deviceId).catch(() => []);
@@ -323,6 +328,8 @@ async function connectAndSubscribeOmron(listener, { initial = false } = {}) {
 
     listener.connected = true;
     listener.reconnecting = false;
+    listener.reconnectAttempt = 0;
+    listener.ignoreDisconnectUntil = 0;
     clearReconnectTimer(listener);
     listener.services = serviceSummary;
     listener.lastConnectedAt = new Date().toISOString();
@@ -345,6 +352,9 @@ async function connectAndSubscribeOmron(listener, { initial = false } = {}) {
 function scheduleOmronReconnect(listener) {
   if (!listener || listener.stopping || activeOmronListener !== listener) return;
   clearReconnectTimer(listener);
+  const attempt = Math.max(0, Number(listener.reconnectAttempt || 0));
+  const delayMs = Math.min(OMRON_RECONNECT_MAX_DELAY_MS, OMRON_RECONNECT_DELAY_MS * (2 ** Math.min(attempt, 4)));
+  listener.reconnectAttempt = attempt + 1;
   listener.reconnectTimer = window.setTimeout(() => {
     if (!listener || listener.stopping || activeOmronListener !== listener) return;
     connectAndSubscribeOmron(listener, { initial: false }).catch((error) => {
@@ -352,7 +362,7 @@ function scheduleOmronReconnect(listener) {
       listener.onStatus?.(`Still armed; OMRON reconnect is waiting for the cuff to wake. ${error?.message || ""}`.trim());
       scheduleOmronReconnect(listener);
     });
-  }, OMRON_RECONNECT_DELAY_MS);
+  }, delayMs);
 }
 
 export async function startOmronBloodPressureListener({
@@ -386,8 +396,10 @@ export async function startOmronBloodPressureListener({
       connected: false,
       reconnecting: false,
       reconnectTimer: null,
+      reconnectAttempt: 0,
       stopping: false,
       suppressNextDisconnect: false,
+      ignoreDisconnectUntil: 0,
       onStatus,
       onReading,
       onDisconnect,
