@@ -112,6 +112,22 @@ function normalizeForbiddenPhrasing(value = "") {
 
 export function normalizeProfileReviewSecondPerson(value = "") {
   return String(value || "")
+    .replace(/\b(?:the\s+)?(?:adult\s+male\s+)?(?:subject|patient)['’]s\b/gi, "your")
+    .replace(/\bmale external genitalia\s+(?:are|is)\s+visible\b/gi, "your external genital anatomy is clearly visible")
+    .replace(/\bmale external genitalia\b/gi, "your external genital anatomy")
+    .replace(/\b(?:the\s+)?(?:adult\s+male\s+)?(?:subject|patient)\s+is\b/gi, "you are")
+    .replace(/\b(?:the\s+)?(?:adult\s+male\s+)?(?:subject|patient)\s+has\b/gi, "you have")
+    .replace(/\b(?:the\s+)?(?:adult\s+male\s+)?(?:subject|patient)\s+was\b/gi, "you were")
+    .replace(/\b(?:the\s+)?(?:adult\s+male\s+)?(?:subject|patient)\s+does\b/gi, "you do")
+    .replace(/\b(?:the\s+)?(?:adult\s+male\s+)?(?:subject|patient)\s+(appears?|shows?|demonstrates?)\b/gi, (_match, verb) => `you ${String(verb).toLowerCase().replace(/s$/, "")}`)
+    .replace(/\b(?:an?\s+)?adult male subject\s+in\s+(?:a\s+)?([^.,;]+?)(?=[.,;]|$)/gi, "you are in a $1")
+    .replace(/\ba\s+(supine|prone|standing|seated|supported|lithotomy(?:-adjacent)?)\s+subject\b/gi, "you in a $1 position")
+    .replace(/\b(?:the\s+)?body\s+(?:demonstrates?|shows?)\b/gi, "you show")
+    .replace(/\b(?:the\s+)?body\s+appears?\b/gi, "you appear")
+    .replace(/\b(?:the\s+)?anatomy\s+(?:demonstrates?|shows?)\b/gi, "your anatomy shows")
+    .replace(/\b(?:the\s+)?anatomy\s+appears?\b/gi, "your anatomy appears")
+    .replace(/\b(?:the\s+)?soft tissue bulk\s+appears?\b/gi, "your soft tissue contours appear")
+    .replace(/\b(?:the\s+)?soft tissue bulk\s+is\b/gi, "your soft tissue contours are")
     .replace(/\bBen['’]s\b/g, "your")
     .replace(/\bBen\s+is\b/gi, "You are")
     .replace(/\bBen\s+has\b/gi, "You have")
@@ -131,11 +147,21 @@ export function normalizeProfileReviewSecondPerson(value = "") {
     .replace(/\bhim\b/g, "you")
     .replace(/\bHe\b/g, "You")
     .replace(/\bhe\b/g, "you")
-    .replace(/\bthe patient\b/gi, "you")
-    .replace(/(^|[.!?]\s+)you\b/g, "$1You")
+    .replace(/\b(?:the\s+)?(?:adult\s+male\s+)?(?:subject|patient)\b/gi, "you")
+    .replace(/(^|[.!?]\s+)(you|your)\b/g, (_match, prefix, pronoun) => `${prefix}${pronoun[0].toUpperCase()}${pronoun.slice(1).toLowerCase()}`)
     .replace(/\s{2,}/g, " ")
     .trim();
 }
+
+export const PROFILE_REVIEW_SECOND_PERSON_RULE = `
+VISIBLE NARRATIVE VOICE:
+- Address Ben directly as "you" and describe anatomy as "your" anatomy throughout every Head-to-Toe and Pelvic/Genital narrative section.
+- Preserve full clinical detail, measurements, comparisons, limitations, uncertainty, findings, and section structure.
+- Keep accurate positioning language, including standing, supine, prone, seated, supported, and lithotomy positions.
+- Never describe Ben as "the subject", "adult male subject", "the patient", "the male", or "male external genitalia".
+- Never use detached constructions such as "the body demonstrates", "the anatomy demonstrates", or "soft tissue bulk appears". Rewrite them as direct clinical observations such as "you show", "your anatomy shows", and "your soft tissue contours appear".
+- Do not make the report casual, simplified, generic, erotic, or less clinically precise.
+`.trim();
 
 function sentenceChunks(value = "") {
   return String(value || "")
@@ -211,7 +237,7 @@ export function classifyAnatomyReviewEvidence(value = "", { sectionKey = "", use
 function hasClearSubject(sentence = "") {
   const text = String(sentence || "").trim();
   if (!text) return false;
-  if (/^(?:the|a|an|this|that|these|those|overall|current|prior|previous|stable|mild|moderate|marked|short|wire[-\s]?frame|rounded|follicular|pale|right|left|bilateral|unilateral|focused|external|no|without|dog\s+(?:nip|bite)|bite|glans|meatus|penis|penile|shaft|foreskin|scrotum|testes|perineal|perianal|anal|pubic|inguinal|abdomen|abdominal|skin|tissue|lower|upper|feet|toes|head|neck|chest|shoulders|posture|foley|catheter|device|measurement|meatal|urethral)\b/i.test(text)) return true;
+  if (/^(?:you|your|the|a|an|this|that|these|those|overall|current|prior|previous|stable|mild|moderate|marked|short|wire[-\s]?frame|rounded|follicular|pale|right|left|bilateral|unilateral|focused|external|no|without|dog\s+(?:nip|bite)|bite|glans|meatus|penis|penile|shaft|foreskin|scrotum|testes|perineal|perianal|anal|pubic|inguinal|abdomen|abdominal|skin|tissue|lower|upper|feet|toes|head|neck|chest|shoulders|posture|foley|catheter|device|measurement|meatal|urethral)\b/i.test(text)) return true;
   return /^[A-Z][a-z]+(?:\s+[a-z]+){0,4}\s+(?:appears|is|are|shows?|remains|has|limits?|cannot|may|was|were)\b/.test(text);
 }
 

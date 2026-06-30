@@ -30,6 +30,7 @@ import {
   cleanProfileImageReviewText,
   cleanupProfileImageReviewResult,
   profileImageReviewTopicKey,
+  PROFILE_REVIEW_SECOND_PERSON_RULE,
 } from "@/lib/profileImageReviewCleanup";
 import {
   buildProfileAnatomyEvidenceItem,
@@ -4554,7 +4555,7 @@ function imageCalloutNarrationParagraphs(result, sectionKey, transientImages = [
 
 const DETAILED_VISUAL_EXAMINATION_RULES = `
 DETAILED VISUAL EXAMINATION STANDARD:
-- Address Ben directly in second person in every generated finding. Use "you" and "your" anatomy. Do not emit detached specimen-style phrases such as "the subject", "the patient", "the male", "male external genitalia", "a supine subject", or "the body demonstrates"; rewrite them as direct clinical observations without reducing clinical detail.
+${PROFILE_REVIEW_SECOND_PERSON_RULE}
 - Write as a careful visual examination, not an abbreviated anatomy inventory. For every represented region, describe the view and position, structures visible, symmetry, contour and proportional relationships, color and pigmentation, texture, hair distribution where relevant, surface integrity, scars or procedure sites, swelling or edema, erythema, papules, lesions, ulcers, fissures, erosions, breakdown, visible fluid or moisture when relevant, normal variants, and supported longitudinal stability or change.
 - Use only visually supportable language: visible, appears, no visible evidence of, not assessable from this image, comparison suggests, and remains stable across reviewed views.
 - Never claim palpation, tenderness, internal masses, internal anatomy, or function from photographs.

@@ -6,6 +6,7 @@ import {
   cleanupProfileImageReviewResult,
   mergeCumulativeProfileVisualEvidence,
   normalizeProfileReviewSecondPerson,
+  PROFILE_REVIEW_SECOND_PERSON_RULE,
   reduceProfileFindingRepetition,
   selectLongitudinalProfileReviewImages,
   updateLongitudinalProfileChart,
@@ -27,6 +28,64 @@ test('normalizes anatomy review prose to direct second person', () => {
   assert.match(text, /You are a 44-year-old active male/i);
   assert.doesNotMatch(text, /\bBen\b|\bhe\b|\bhis\b/i);
   assert.equal(normalizeProfileReviewSecondPerson('The patient appears stable.'), 'You appear stable.');
+});
+
+test('head-to-toe and pelvic narratives share direct clinical voice without losing detail', () => {
+  const detailedSentence = normalizeProfileReviewSecondPerson(
+    'Soft tissue bulk appears symmetric, abdominal circumference is 112 cm, and measurement uncertainty remains due to camera perspective.'
+  );
+  assert.match(detailedSentence, /Your soft tissue contours appear symmetric/i);
+  assert.match(detailedSentence, /112 cm/i);
+  assert.match(detailedSentence, /measurement uncertainty remains/i);
+
+  const headToToe = cleanupProfileImageReviewResult({
+    abdomen: [
+      'Adult male subject in standing position. The body demonstrates mild central adiposity. Soft tissue bulk appears symmetric. Abdominal circumference is 112 cm.',
+    ],
+    annotated_images: [{
+      image_id: 'indexed_head_to_toe_01',
+      width: 1200,
+      height: 1600,
+      view_label: 'Adult male subject in standing position.',
+      annotations: [{ id: 'a1', x: 0.25, y: 0.35 }],
+    }],
+  }, { sections: HEAD_TO_TOE_SECTIONS });
+  const pelvic = cleanupProfileImageReviewResult({
+    penis: [
+      'Male external genitalia are visible. The subject is supine on the examination table. The patient has an entered shaft length of 14 cm.',
+    ],
+    foreskin: [
+      'The subject\'s foreskin is forward and covers the glans at rest; no visible fissuring is present.',
+    ],
+    annotated_images: [{
+      image_id: 'indexed_pelvic_01',
+      width: 1000,
+      height: 1400,
+      annotations: [{ id: 'p1', x: 0.4, y: 0.5 }],
+    }],
+  }, { sections: PELVIC_SECTIONS });
+
+  const headText = headToToe.abdomen.join(' ');
+  const pelvicText = [...pelvic.penis, ...pelvic.foreskin].join(' ');
+  assert.match(headText, /You are in a standing position/i);
+  assert.match(headText, /You show mild central adiposity/i);
+  assert.match(headText, /112 cm/i);
+  assert.match(pelvicText, /Your external genital anatomy is clearly visible/i);
+  assert.match(pelvicText, /You are supine on the examination table/i);
+  assert.match(pelvicText, /You have an entered shaft length of 14 cm/i);
+  assert.match(pelvicText, /Your foreskin is forward/i);
+  assert.match(pelvicText, /no visible fissuring/i);
+  assert.doesNotMatch(`${headText} ${pelvicText}`, /\b(?:the subject|adult male subject|the patient|male external genitalia)\b/i);
+
+  assert.equal(headToToe.annotated_images.length, 1);
+  assert.equal(headToToe.annotated_images[0].image_id, 'indexed_head_to_toe_01');
+  assert.equal(headToToe.annotated_images[0].width, 1200);
+  assert.deepEqual(headToToe.annotated_images[0].annotations, [{ id: 'a1', x: 0.25, y: 0.35 }]);
+  assert.equal(pelvic.annotated_images.length, 1);
+  assert.equal(pelvic.annotated_images[0].image_id, 'indexed_pelvic_01');
+  assert.equal(pelvic.annotated_images[0].height, 1400);
+  assert.deepEqual(pelvic.annotated_images[0].annotations, [{ id: 'p1', x: 0.4, y: 0.5 }]);
+  assert.match(PROFILE_REVIEW_SECOND_PERSON_RULE, /Preserve full clinical detail, measurements, comparisons, limitations/i);
 });
 
 test('removes repeated image metadata while preserving distinct context', () => {
