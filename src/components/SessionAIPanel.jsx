@@ -19,6 +19,7 @@ import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessi
 import { buildSessionAIContentMeta, buildSessionPhaseMarkerFreshnessKey, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
 import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
 import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
+import { REVIEW_WINDOW_RESPONSE_STYLE } from "@/lib/reviewWindowResponseStyle";
 import { buildSarahPersonalityPrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
@@ -306,38 +307,33 @@ function formatEvidencePacketForPrompt(packet) {
 }
 
 function deterministicEvidenceAnswer(packet, question = "") {
-  const lines = [
-    `I checked the saved evidence mapped to player ${packet.player_window}.`,
-  ];
+  const lines = [];
   if (packet.manifest_segments?.length) {
-    lines.push(`That playback window maps to session/source context around ${packet.mapped_session_ranges.join("; ")}.`);
+    lines.push(`That part of the review video maps to the session around ${packet.mapped_session_ranges.join("; ")}.`);
   }
   if (packet.events?.length) {
-    lines.push("", "Nearest saved timeline notes:");
-    packet.events.slice(0, 5).forEach((event) => lines.push(`• ${formatVideoClock(event.time_s)}: ${event.text}`));
+    const nearbyEvents = packet.events.slice(0, 3)
+      .map((event) => `at ${formatVideoClock(event.time_s)}, ${String(event.text || "").replace(/[.]+$/, "")}`);
+    lines.push(`The nearest saved timeline entries say that ${nearbyEvents.join("; and ")}.`);
   }
   if (packet.telemetry?.heart_rate?.exact_window || packet.telemetry?.heart_rate?.context_window) {
     const exact = packet.telemetry.heart_rate.exact_window;
     const context = packet.telemetry.heart_rate.context_window;
     const hr = exact || context;
-    lines.push(
-      "",
-      `${exact ? "Exact-window" : "Nearby-context"} telemetry: HR averaged ${hr.bpm_avg} BPM, range ${hr.bpm_min}-${hr.bpm_max} BPM across ${hr.samples} sample${hr.samples === 1 ? "" : "s"}.`
-    );
+    lines.push(`Your heart rate averaged ${hr.bpm_avg} BPM and ranged from ${hr.bpm_min} to ${hr.bpm_max} BPM ${exact ? "in that window" : "nearby"}.`);
     const rmssd = packet.telemetry.rr_hrv?.exact_window?.rmssd_ms || packet.telemetry.rr_hrv?.context_window?.rmssd_ms;
-    if (rmssd) lines.push(`RR/HRV support: RMSSD averaged ${rmssd.avg} ms across ${rmssd.count} sample${rmssd.count === 1 ? "" : "s"} in the available ${exact ? "exact" : "context"} window.`);
+    if (rmssd) lines.push(`The available HRV data shows an average RMSSD of ${rmssd.avg} milliseconds in the same ${exact ? "window" : "nearby period"}.`);
   }
   if (packet.video_passes?.length) {
-    lines.push("", "Accepted video-pass evidence near that moment:");
-    packet.video_passes.slice(0, 3).forEach((entry) => {
-      lines.push(`• ${entry.range}: ${entry.summary || entry.label}`);
-      entry.findings?.slice(0, 2).forEach((finding) => lines.push(`  - ${finding}`));
-      entry.draft_events?.slice(0, 2).forEach((event) => lines.push(`  - ${event}`));
-    });
+    const observations = packet.video_passes.slice(0, 2)
+      .map((entry) => `${entry.range}: ${entry.summary || entry.label}`)
+      .filter(Boolean);
+    if (observations.length) lines.push(`The saved video review adds ${observations.join("; ")}.`);
   }
   if (packet.key_clips?.length) {
-    lines.push("", "Saved key clips near that moment:");
-    packet.key_clips.slice(0, 3).forEach((clip) => lines.push(`• ${clip.time}: ${clip.label}${clip.reason ? ` — ${clip.reason}` : ""}`));
+    const clips = packet.key_clips.slice(0, 2)
+      .map((clip) => `${clip.time}, ${clip.label}${clip.reason ? ` (${clip.reason})` : ""}`);
+    if (clips.length) lines.push(`The closest saved key clips are ${clips.join(" and ")}.`);
   }
   if (!packet.evidence_count) {
     lines.push("", "I do not have accepted local/timeline evidence close enough to answer that window confidently.");
@@ -916,7 +912,9 @@ ${conversationContext || "- This is the first evidence-only answer in this revie
 Saved evidence packet:
 ${formatEvidencePacketForPrompt(packet)}
 
-Answer directly and practically. If the evidence specifically supports the user's visual question, say so and cite the timestamp/source in natural language. If it does not support the specific visual claim, say that clearly and explain what the saved evidence does support. Keep the tone conversational, clinical, and not erotic. Do not include policy language. Do not invent visual confirmation beyond the packet. Do not lean on "consistent with", "consistent", or "consistently"; use direct observation or varied wording such as "matches", "supports", "fits with", "points toward", or "tracks with".`,
+${REVIEW_WINDOW_RESPONSE_STYLE}
+
+If the evidence specifically supports the user's visual question, say so and cite the timestamp/source naturally. If it does not support the specific visual claim, say that clearly and explain what the saved evidence does support. Keep the tone clinical and not erotic. Do not include policy language. Do not invent visual confirmation beyond the packet. Do not lean on "consistent with", "consistent", or "consistently"; use direct observation or varied wording such as "matches", "supports", "fits with", "points toward", or "tracks with".`,
       });
       const text = typeof response === "string" ? response : response?.response || "";
       if (isProviderRefusalText(text)) throw new Error("Provider refused text-only evidence synthesis.");
@@ -1028,7 +1026,9 @@ Content handling:
 
 Anatomical laterality rule: "your left" and "your right" must mean Ben's anatomical left/right, not viewer screen-left/screen-right. If the view is facing Ben, his anatomical right appears on viewer-left. If the camera perspective, supine positioning, mirroring, rotation, crop, or composite layout makes laterality uncertain, say screen-left/screen-right, near/far, upper/lower, one hand/the other hand, or one leg/the other leg instead of anatomical left/right. Preserve anatomical identity across poses and camera angles: a bruise, mole, scar, catheter/tubing position, pelvic finding, genital finding, or skin mark on Ben's anatomical right remains right-sided when he moves from supine to standing, turns toward the camera, rotates, or appears in another crop/camera lane.
 
-Answer directly and practically in conversational prose, not markdown. Describe only what is visible in the sampled frames, plus cautious interpretation of body mechanics, stroke/contact pattern, positioning, device interaction, or timing if supported. If the frames are unclear, say exactly what cannot be confirmed in one short sentence, then focus on what is visible. If a useful follow-up would clarify the review, ask one concise follow-up question at the end. Do not invent sensations or intent. Do not lean on "consistent with", "consistent", or "consistently"; use direct observation or varied wording such as "matches", "supports", "fits with", "points toward", or "tracks with".`,
+${REVIEW_WINDOW_RESPONSE_STYLE}
+
+Describe only what is visible in the sampled frames, plus cautious interpretation of body mechanics, stroke/contact pattern, positioning, device interaction, or timing if supported. If the frames are unclear, say exactly what cannot be confirmed in one short sentence, then focus on what is visible. If a useful follow-up would clarify the review, ask one concise follow-up question at the end. Do not invent sensations or intent. Do not lean on "consistent with", "consistent", or "consistently"; use direct observation or varied wording such as "matches", "supports", "fits with", "points toward", or "tracks with".`,
       });
       const text = typeof response === "string" ? response : response?.response || "";
       if (isProviderRefusalText(text)) {
