@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.72",
-  "commit": "dcf9160",
-  "commitMessage": "Stabilize Live Capture controls and cues",
-  "builtAt": "2026-06-29T21:18:24.023Z"
+  "version": "0.1.73",
+  "commit": "61ad55b",
+  "commitMessage": "Normalize visible Profiler review voice",
+  "builtAt": "2026-07-01T04:38:19.081Z"
 };
