@@ -22,6 +22,7 @@ import {
   buildClinicalJsonRetryPrompt,
   isMalformedStructuredResponseError,
   isRefusalShapedStructuredResponse,
+  shouldSkipPreviouslyExhaustedRefusalBatch,
 } from '../services/structuredResponseRetry.js';
 import {
   cleanProfileImageReviewText,
@@ -669,17 +670,28 @@ async function runInternalAIRequest(request = {}, context, label = 'AI analysis'
       retry_reason: message.slice(0, 240),
       max_tokens: retryMaxTokens,
     });
-    return aiInvokeInternal({
-      prompt: malformedStructuredResponse ? buildClinicalJsonRetryPrompt(prompt, error) : prompt,
-      response_json_schema,
-      model,
-      max_tokens: retryMaxTokens,
-      temperature,
-      schema_mode,
-      images: refusalShapedResponse ? [] : images,
-      invocationAttempt: 2,
-      signal: context.signal,
-    });
+    try {
+      return await aiInvokeInternal({
+        prompt: malformedStructuredResponse ? buildClinicalJsonRetryPrompt(prompt, error) : prompt,
+        response_json_schema,
+        model,
+        max_tokens: retryMaxTokens,
+        temperature,
+        schema_mode,
+        images: refusalShapedResponse ? [] : images,
+        invocationAttempt: 2,
+        signal: context.signal,
+      });
+    } catch (retryError) {
+      if (
+        refusalShapedResponse
+        && isMalformedStructuredResponseError(retryError)
+        && isRefusalShapedStructuredResponse(retryError)
+      ) {
+        retryError.clinicalMetadataRetryRefused = true;
+      }
+      throw retryError;
+    }
   }
 }
 
@@ -927,6 +939,21 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
     for (let index = batchResults.length; index < batchRequests.length; index += 1) {
       const batchNumber = index + 1;
       const batchLabel = `${label} batch ${batchNumber}/${batchRequests.length}`;
+      if (shouldSkipPreviouslyExhaustedRefusalBatch(context.getProgress?.(), batchNumber)) {
+        context.updateProgress({
+          phase: 'batch_provider_refusal_skipped',
+          current: batchNumber,
+          total,
+          message: `${label}: batch ${batchNumber}/${batchRequests.length} already exhausted its clinical metadata retry; continuing with preserved findings and the longitudinal chart.`,
+          batch_current: batchNumber,
+          batch_total: batchRequests.length,
+          completed_batch_count: batchResults.length,
+          completed_batch_results: batchResults,
+          provider_skipped_batch_numbers: [batchNumber],
+          provider_skipped_batch_count: 1,
+        });
+        continue;
+      }
       const expandedBatchRequest = materializeProfileReviewBatchRequest(
         batchRequests[index],
         payload?.sharedBatchPromptContext,
@@ -941,6 +968,27 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
           message: `${label}: Sarah batch ${batchNumber}/${batchRequests.length} running…`,
         });
       } catch (error) {
+        if (error?.clinicalMetadataRetryRefused) {
+          const skippedBatchNumbers = [
+            ...(Array.isArray(context.getProgress?.().provider_skipped_batch_numbers)
+              ? context.getProgress().provider_skipped_batch_numbers
+              : []),
+            batchNumber,
+          ].filter((value, position, values) => values.indexOf(value) === position);
+          context.updateProgress({
+            phase: 'batch_provider_refusal_skipped',
+            current: batchNumber,
+            total,
+            message: `${label}: provider refused batch ${batchNumber}/${batchRequests.length} after one clinical metadata retry; continuing with preserved findings and the longitudinal chart.`,
+            batch_current: batchNumber,
+            batch_total: batchRequests.length,
+            completed_batch_count: batchResults.length,
+            completed_batch_results: batchResults,
+            provider_skipped_batch_numbers: skippedBatchNumbers,
+            provider_skipped_batch_count: skippedBatchNumbers.length,
+          });
+          continue;
+        }
         const cleanErrorMessage = friendlyJobErrorMessage(error);
         const providerError = safeProviderError(error, { requestStage: 'batch_review', jobId: context.jobId });
         if (batchResults.length) {

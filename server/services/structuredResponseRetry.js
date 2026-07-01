@@ -9,7 +9,13 @@ export function isMalformedStructuredResponseError(error) {
 }
 
 export function isRefusalShapedStructuredResponse(error) {
-  return /^\s*(?:i(?:'m| am) not able|i can(?:not|'t)|sorry\b)/i.test(String(error?.rawPreview || ''));
+  return /^\s*(?:i(?:'m| am) not\b|i can(?:not|'t)|sorry\b)/i.test(String(error?.rawPreview || ''));
+}
+
+export function shouldSkipPreviouslyExhaustedRefusalBatch(progress = {}, batchNumber = 0) {
+  if (Number(progress?.batch_current || 0) !== Number(batchNumber || 0)) return false;
+  const raw = `${progress?.batch_error_raw || ''} ${progress?.retry_reason || ''}`;
+  return /["']i(?:'m| am) not\b/i.test(raw) && Number(progress?.completed_batch_count || 0) > 0;
 }
 
 export function buildClinicalJsonRetryPrompt(prompt = '', error = {}) {
