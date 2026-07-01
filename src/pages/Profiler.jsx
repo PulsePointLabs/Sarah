@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { profilerReviewHandoffState } from "@/lib/profilerReviewHandoff";
 import { handOffVideoPlayToAndroid } from "@/lib/nativeMedia";
 import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
 import { buildStoredProfilerImageRef } from "@/lib/profilerReviewImagePayload";
@@ -2082,6 +2083,7 @@ const PROFILER_UPLOAD_QUEUE_LIMIT = 40;
 const PROFILER_IMAGE_SAVE_TIMEOUT_MS = 90000;
 const PROFILER_IMAGE_RELOAD_TIMEOUT_MS = 30000;
 const PROFILER_VIDEO_SAVE_TIMEOUT_MS = 180000;
+const PROFILER_CONTEXT_REFRESH_TIMEOUT_MS = 5000;
 const PROFILER_VIDEO_SAMPLE_COUNT = 12;
 const PROFILER_VIDEO_UPLOAD_LIMIT = 4;
 
@@ -6170,17 +6172,28 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
     let batchParsedResults = [];
     let activeBatchSet = null;
     try {
-      const reviewUserProfile = (await refreshUserProfile?.().catch(() => null)) || userProfile;
       const isHeadToToeBodyReference = config.contextScope === "head_to_toe_body_reference";
       const visualEvidence = buildExistingVisualEvidenceDigest({ sessions, bodyExplorations });
       const freshReviewImageLimit = config.maxImages || 5;
       const maxReviewImages = Math.max(freshReviewImageLimit, config.libraryImageLimit || freshReviewImageLimit);
       const savedReviewCandidateLimit = Math.max(maxReviewImages * 2, 120);
-      const savedProfileContexts = collectSavedProfileImageAttachmentContexts(reviewUserProfile);
       const siblingResultKey = config.resultKey === PELVIC_GENITAL_IMAGE_REVIEW_CONFIG.resultKey
         ? HEAD_TO_TOE_IMAGE_REVIEW_CONFIG.resultKey
         : PELVIC_GENITAL_IMAGE_REVIEW_CONFIG.resultKey;
-      const siblingResultRow = await loadLatestProfileReviewResultField(siblingResultKey).catch(() => null);
+      const [refreshedProfile, siblingResultRow] = await Promise.all([
+        withTimeout(
+          refreshUserProfile?.() || Promise.resolve(null),
+          PROFILER_CONTEXT_REFRESH_TIMEOUT_MS,
+          "Saved profile refresh timed out; continuing with the profile already loaded on this page.",
+        ).catch(() => null),
+        withTimeout(
+          loadLatestProfileReviewResultField(siblingResultKey),
+          PROFILER_CONTEXT_REFRESH_TIMEOUT_MS,
+          "Related review refresh timed out; continuing with the review already loaded on this page.",
+        ).catch(() => null),
+      ]);
+      const reviewUserProfile = refreshedProfile || userProfile;
+      const savedProfileContexts = collectSavedProfileImageAttachmentContexts(reviewUserProfile);
       const siblingResult = siblingResultRow?.[siblingResultKey] || null;
       const savedProfileQaAttachments = collectSavedProfileImageAttachments(reviewUserProfile, {
         limit: savedReviewCandidateLimit,
@@ -6417,6 +6430,15 @@ ${config.reviewInstructions}
 Batch review JSON:`,
           promptSuffix: "",
         };
+        setJobStatus({
+          status: "starting",
+          progress: {
+            phase: "handing_off",
+            current: 0,
+            total: imageBatches.length + 1,
+            message: `Sending ${config.shortTitle} review to the desktop backend. Keep this screen open until the backend confirms the job ID.`,
+          },
+        });
         const startedFullJob = await startProfileImageReviewFullJob({
           mode: "batch",
           reviewType: config.kind,
@@ -6738,6 +6760,15 @@ ANNOTATED IMAGE OUTPUT RULES:
 - Callouts should stay anatomical and evidence-grounded: body region, visible posture/alignment, habitus/soft tissue, skin/surface finding, tissue state, visibility limitation, or clinical reference value.
 - For tiny structures or ambiguous findings such as meatus, meatal fluid/droplet, urethral fluid, device insertion, catheter/Foley presence, or fine tissue margins, use possible/uncertain unless the structure is unambiguous at the pin or box location.
 - For genital/pelvic regions, use neutral anatomical terms and do not infer arousal, pleasure, pain, intent, or function unless directly visible and relevant.`;
+        setJobStatus({
+          status: "starting",
+          progress: {
+            phase: "handing_off",
+            current: 0,
+            total: 1,
+            message: `Sending ${config.shortTitle} review to the desktop backend. Keep this screen open until the backend confirms the job ID.`,
+          },
+        });
         const startedFullJob = await startProfileImageReviewFullJob({
           mode: "single",
           reviewType: config.kind,
@@ -7088,9 +7119,9 @@ ANNOTATED IMAGE OUTPUT RULES:
   const videoSaveErrorCount = videos.filter((video) => video.upload_status === "error").length;
   const savingImageCount = images.filter((image) => image.upload_status === "saving").length;
   const savingVideoCount = videos.filter((video) => video.upload_status === "saving").length;
-  const reviewPhase = String(jobStatus?.progress?.phase || "");
-  const reviewIsPreparingLocally = loading && (jobStatus?.status === "starting" || reviewPhase === "preparing" || reviewPhase === "building");
-  const reviewIsBackendQueued = activeReviewJob && !reviewIsPreparingLocally;
+  const reviewHandoff = profilerReviewHandoffState({ loading, jobStatus });
+  const reviewIsPreparingLocally = reviewHandoff.preparingLocally;
+  const reviewIsBackendQueued = reviewHandoff.backendQueued;
   const reviewCardStatusItems = [
     {
       active: profileLoading,
@@ -7123,17 +7154,17 @@ ANNOTATED IMAGE OUTPUT RULES:
     {
       active: loading || activeReviewJob,
       loading: true,
-      headline: reviewIsPreparingLocally
-        ? `Preparing ${config.shortTitle} review`
-        : reviewIsBackendQueued
-          ? `${config.shortTitle} review is queued`
-          : `${config.shortTitle} review is running`,
-      label: reviewIsPreparingLocally
-        ? "Keep this screen open"
-        : "Safe to leave this page",
-      detail: jobStatus?.progress?.message || (reviewIsPreparingLocally
-        ? "Sarah is packaging the request locally. Backgrounding too early can prevent the job from being created."
-        : "The desktop backend has the job. Sarah will keep working even if the phone app backgrounds."),
+      headline: reviewHandoff.uploading
+        ? `Sending ${config.shortTitle} review to desktop`
+        : reviewIsPreparingLocally
+          ? `Preparing ${config.shortTitle} review`
+          : reviewIsBackendQueued
+            ? `${config.shortTitle} review is queued`
+            : `${config.shortTitle} review is running`,
+      label: reviewHandoff.safeToBackground ? "Safe to leave this page" : "Keep this screen open",
+      detail: jobStatus?.progress?.message || (reviewHandoff.safeToBackground
+        ? "The desktop backend has the job. Sarah will keep working even if the phone app backgrounds."
+        : "Sarah is preparing or transferring the request. Wait for desktop confirmation before backgrounding the app."),
     },
     {
       active: Boolean(availableCompletedReviewJob),
