@@ -4,6 +4,7 @@ import {
   ANATOMY_REVIEW_ASSIGNMENT_CONTRACT,
   classifyAnatomyReviewEvidence,
   cleanupProfileImageReviewResult,
+  formatProfileReviewVisibleText,
   mergeCumulativeProfileVisualEvidence,
   normalizeProfileReviewSecondPerson,
   PROFILE_REVIEW_SECOND_PERSON_RULE,
@@ -11,6 +12,25 @@ import {
   selectLongitudinalProfileReviewImages,
   updateLongitudinalProfileChart,
 } from '../../src/lib/profileImageReviewCleanup.js';
+
+test('visible evidence-card text uses the same direct clinical voice for both review types', () => {
+  const headToToeCard = formatProfileReviewVisibleText(
+    'Wide-field lateral view of adult male subject in supine position. Soft tissue bulk appears symmetric.'
+  );
+  const pelvicCard = formatProfileReviewVisibleText(
+    'Close-up anterior view of the male external genitalia. Subject is supine with legs abducted. Bilateral testes palpably outlined.'
+  );
+
+  assert.equal(
+    headToToeCard,
+    'Wide-field lateral view of you lying supine on the examination table. Your soft tissue contours appear symmetric.'
+  );
+  assert.equal(
+    pelvicCard,
+    'Close-up anterior view of your external genital anatomy. You are supine with your legs abducted. Your bilateral testicular contours are visible through your scrotal skin.'
+  );
+  assert.doesNotMatch(`${headToToeCard} ${pelvicCard}`, /\b(?:subject|adult male|patient|male external genitalia|palpably outlined)\b/i);
+});
 
 test('normalizes anatomy review prose to direct second person', () => {
   const direct = normalizeProfileReviewSecondPerson(

@@ -30,6 +30,7 @@ import {
   ANATOMY_REVIEW_ASSIGNMENT_CONTRACT,
   cleanProfileImageReviewText,
   cleanupProfileImageReviewResult,
+  formatProfileReviewVisibleText,
   profileImageReviewTopicKey,
   PROFILE_REVIEW_SECOND_PERSON_RULE,
 } from "@/lib/profileImageReviewCleanup";
@@ -3673,7 +3674,7 @@ function AnnotatedImageStage({
       {imageUrl && !imageFailed ? (
         <img
           src={imageUrl}
-          alt={image.display_label || "Reviewed anatomy reference"}
+          alt={formatProfileReviewVisibleText(image.display_label) || "Reviewed anatomy reference"}
           className={`absolute z-[1] object-contain ${imageClassName}`}
           decoding="async"
           style={rect ? {
@@ -3700,7 +3701,7 @@ function AnnotatedImageStage({
           key={`${finding.finding_id}-pin`}
           className="absolute z-10 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/80 bg-primary text-[10px] font-bold text-primary-foreground shadow-lg"
           style={imagePointStyle(rect, finding.pin)}
-          title={finding.label}
+          title={formatProfileReviewVisibleText(finding.label)}
         >
           {index + 1}
         </div>
@@ -3710,7 +3711,7 @@ function AnnotatedImageStage({
           key={`${finding.finding_id}-box`}
           className="absolute z-10 rounded border-2 border-primary/80 bg-primary/10"
           style={imageBoxStyle(rect, finding.box)}
-          title={finding.label}
+          title={formatProfileReviewVisibleText(finding.label)}
         />
       ))}
     </div>
@@ -3897,16 +3898,16 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
               />
               <div className="space-y-2 p-3">
                 <div>
-                  <p className="text-base font-semibold leading-snug text-foreground dark:text-white">{image.display_label || "Reviewed view"}</p>
+                  <p className="text-base font-semibold leading-snug text-foreground dark:text-white">{cleanEvidenceCardText(image.display_label) || "Reviewed view"}</p>
                   {(image.body_position || image.coverage || image.visibility_notes) && (
                     <p className="mt-2 text-sm leading-relaxed text-foreground/90 dark:text-white/90">
-                      {[image.body_position, image.coverage, image.visibility_notes].filter(Boolean).join(" · ")}
+                      {[image.body_position, image.coverage, image.visibility_notes].map(cleanEvidenceCardText).filter(Boolean).join(" · ")}
                     </p>
                   )}
                   {Array.isArray(image.major_regions_visible) && image.major_regions_visible.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-1">
                       {image.major_regions_visible.slice(0, 8).map((region) => (
-                        <Badge key={region} variant="secondary" className="text-[10px]">{region}</Badge>
+                        <Badge key={region} variant="secondary" className="text-[10px]">{cleanEvidenceCardText(region)}</Badge>
                       ))}
                     </div>
                   )}
@@ -3921,7 +3922,7 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
                               {index + 1}
                             </span>
                           )}
-                          <span className="text-base font-semibold leading-snug text-foreground dark:text-white">{finding.label || finding.region || "Visible finding"}</span>
+                          <span className="text-base font-semibold leading-snug text-foreground dark:text-white">{cleanEvidenceCardText(finding.label || finding.region) || "Visible finding"}</span>
                           <Badge variant="outline" className="h-5 text-[10px]">{confidenceLabel(finding.confidence)}</Badge>
                           {finding.evidence_level && (
                             <Badge variant="secondary" className="h-5 text-[10px]">{confidenceLabel(finding.evidence_level)}</Badge>
@@ -3930,12 +3931,12 @@ function ImageAnnotationBoard({ result, sections = [], color = "hsl(var(--primar
                             <Badge variant="secondary" className="h-5 text-[10px]">{sectionLabelForKey(sections, finding.section_key)}</Badge>
                           )}
                         </div>
-                        {finding.finding && (
-                          <p className="mt-2 text-[0.95rem] leading-relaxed text-foreground/90 dark:text-white/90">{finding.finding}</p>
+                        {cleanEvidenceCardText(finding.finding) && (
+                          <p className="mt-2 text-[0.95rem] leading-relaxed text-foreground/90 dark:text-white/90">{cleanEvidenceCardText(finding.finding)}</p>
                         )}
                         {finding.limitations?.length > 0 && (
                           <p className="mt-2 text-sm leading-relaxed text-foreground/80 dark:text-white/80">
-                            Limits: {finding.limitations.join("; ")}
+                            Limits: {finding.limitations.map(cleanEvidenceCardText).filter(Boolean).join("; ")}
                           </p>
                         )}
                       </div>
@@ -4123,7 +4124,7 @@ function ProfileImageLightbox({
               Annotated Image Viewer
             </p>
             <p className="truncate text-sm font-semibold text-foreground">
-              {imageDisplayNumber(imageId)}{image.display_label ? ` - ${image.display_label}` : ""}
+              {imageDisplayNumber(imageId)}{cleanEvidenceCardText(image.display_label) ? ` - ${cleanEvidenceCardText(image.display_label)}` : ""}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
@@ -4155,10 +4156,10 @@ function ProfileImageLightbox({
 
           <div className="min-h-0 space-y-3 overflow-y-auto rounded-lg border border-border bg-card/90 p-3">
             <div>
-              <p className="text-base font-semibold leading-snug text-foreground">{image.display_label || "Reviewed view"}</p>
+              <p className="text-base font-semibold leading-snug text-foreground">{cleanEvidenceCardText(image.display_label) || "Reviewed view"}</p>
               {(image.body_position || image.coverage || image.visibility_notes) && (
                 <p className="mt-2 text-sm leading-relaxed text-foreground/85">
-                  {[image.body_position, image.coverage, image.visibility_notes].filter(Boolean).join(" · ")}
+                  {[image.body_position, image.coverage, image.visibility_notes].map(cleanEvidenceCardText).filter(Boolean).join(" · ")}
                 </p>
               )}
             </div>
@@ -4180,18 +4181,18 @@ function ProfileImageLightbox({
                             {markerIndex + 1}
                           </span>
                         )}
-                        <span className="text-sm font-semibold leading-snug text-foreground">{finding.label || finding.region || "Visible finding"}</span>
+                        <span className="text-sm font-semibold leading-snug text-foreground">{cleanEvidenceCardText(finding.label || finding.region) || "Visible finding"}</span>
                         <Badge variant="outline" className="h-5 text-[10px]">{confidenceLabel(finding.confidence)}</Badge>
                         {finding.section_key && (
                           <Badge variant="secondary" className="h-5 text-[10px]">{sectionLabelForKey(sections, finding.section_key)}</Badge>
                         )}
                       </div>
-                      {finding.finding && (
-                        <p className="mt-2 text-sm leading-relaxed text-foreground/90">{finding.finding}</p>
+                      {cleanEvidenceCardText(finding.finding) && (
+                        <p className="mt-2 text-sm leading-relaxed text-foreground/90">{cleanEvidenceCardText(finding.finding)}</p>
                       )}
                       {finding.limitations?.length > 0 && (
                         <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                          Limits: {finding.limitations.join("; ")}
+                          Limits: {finding.limitations.map(cleanEvidenceCardText).filter(Boolean).join("; ")}
                         </p>
                       )}
                       <FindingCorrectionControl finding={finding} onCorrectFinding={onCorrectFinding} onRemoveFinding={onRemoveFinding} />
@@ -4396,7 +4397,7 @@ function selectInlineEvidenceImageIds(result, sectionKey, findings = [], transie
 }
 
 function cleanEvidenceCardText(value = "") {
-  return cleanImageReviewProse(String(value || ""))
+  return formatProfileReviewVisibleText(cleanImageReviewProse(String(value || "")))
     .replace(/^[\s.,;:]+|[\s,;:]+$/g, "")
     .trim();
 }

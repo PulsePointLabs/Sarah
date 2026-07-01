@@ -112,9 +112,16 @@ function normalizeForbiddenPhrasing(value = "") {
 
 export function normalizeProfileReviewSecondPerson(value = "") {
   return String(value || "")
+    .replace(/\bview of (?:an?\s+)?adult male subject in (?:a\s+)?supine position\b/gi, "view of you lying supine on the examination table")
+    .replace(/\bview of (?:an?\s+)?adult male subject in (?:a\s+)?prone position\b/gi, "view of you lying prone on the examination table")
+    .replace(/\bview of (?:an?\s+)?adult male subject in (?:a\s+)?(standing|seated|supported) position\b/gi, "view of you in a $1 position")
     .replace(/\b(?:the\s+)?(?:adult\s+male\s+)?(?:subject|patient)['’]s\b/gi, "your")
-    .replace(/\bmale external genitalia\s+(?:are|is)\s+visible\b/gi, "your external genital anatomy is clearly visible")
-    .replace(/\bmale external genitalia\b/gi, "your external genital anatomy")
+    .replace(/\b(?:the\s+)?male external genitalia\s+(?:are|is)\s+visible\b/gi, "your external genital anatomy is clearly visible")
+    .replace(/\b(?:the\s+)?male external genitalia\b/gi, "your external genital anatomy")
+    .replace(/\b(?:the\s+)?male perineal region\b/gi, "your perineal region")
+    .replace(/\b(?:bilateral\s+)?testes\s+(?:are\s+)?palpably outlined\b/gi, "your bilateral testicular contours are visible through your scrotal skin")
+    .replace(/\b(?:bilateral\s+)?testicles\s+(?:are\s+)?palpably outlined\b/gi, "your bilateral testicular contours are visible through your scrotal skin")
+    .replace(/\bpalpably outlined\b/gi, "visibly outlined")
     .replace(/\b(?:the\s+)?(?:adult\s+male\s+)?(?:subject|patient)\s+is\b/gi, "you are")
     .replace(/\b(?:the\s+)?(?:adult\s+male\s+)?(?:subject|patient)\s+has\b/gi, "you have")
     .replace(/\b(?:the\s+)?(?:adult\s+male\s+)?(?:subject|patient)\s+was\b/gi, "you were")
@@ -128,6 +135,13 @@ export function normalizeProfileReviewSecondPerson(value = "") {
     .replace(/\b(?:the\s+)?anatomy\s+appears?\b/gi, "your anatomy appears")
     .replace(/\b(?:the\s+)?soft tissue bulk\s+appears?\b/gi, "your soft tissue contours appear")
     .replace(/\b(?:the\s+)?soft tissue bulk\s+is\b/gi, "your soft tissue contours are")
+    .replace(/\b(?:the\s+)?male\s+is\b/gi, "you are")
+    .replace(/\b(?:the\s+)?male\s+has\b/gi, "you have")
+    .replace(/\b(?:the\s+)?male\s+was\b/gi, "you were")
+    .replace(/\b(?:the\s+)?male\s+(appears?|shows?|demonstrates?)\b/gi, (_match, verb) => `you ${String(verb).toLowerCase().replace(/s$/, "")}`)
+    .replace(/\b(?:the\s+)?male['’]s\b/gi, "your")
+    .replace(/\b(?:an?\s+)?adult male(?: subject)? on (?:the )?examination table\b/gi, "you are positioned on the examination table")
+    .replace(/\bthe male\b/gi, "you")
     .replace(/\bBen['’]s\b/g, "your")
     .replace(/\bBen\s+is\b/gi, "You are")
     .replace(/\bBen\s+has\b/gi, "You have")
@@ -148,7 +162,16 @@ export function normalizeProfileReviewSecondPerson(value = "") {
     .replace(/\bHe\b/g, "You")
     .replace(/\bhe\b/g, "you")
     .replace(/\b(?:the\s+)?(?:adult\s+male\s+)?(?:subject|patient)\b/gi, "you")
+    .replace(/\byou are (supine|prone|seated|standing|supported|in (?:a )?lithotomy(?:-adjacent)? position) with (?:the )?legs\b/gi, "you are $1 with your legs")
     .replace(/(^|[.!?]\s+)(you|your)\b/g, (_match, prefix, pronoun) => `${prefix}${pronoun[0].toUpperCase()}${pronoun.slice(1).toLowerCase()}`)
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+export function formatProfileReviewVisibleText(value = "") {
+  return normalizeProfileReviewSecondPerson(String(value || ""))
+    .replace(/\bof you lying (supine|prone)\b/gi, "of you lying $1")
+    .replace(/\byou in a (standing|seated|supported) position\b/gi, "you in a $1 position")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
