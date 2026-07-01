@@ -176,7 +176,19 @@ async function getSystemLoad() {
     }
   }
   if (!response.ok) throw new Error(`System status failed: ${response.status}`);
-  return response.json();
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  const body = await response.text();
+  if (!contentType.includes("application/json")) {
+    const isHtml = /^\s*<!doctype|^\s*<html/i.test(body);
+    throw new Error(isHtml
+      ? "Desktop Sarah is still running an older backend. Restart it after the current video job finishes."
+      : "Desktop system load returned an unexpected response.");
+  }
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new Error("Desktop system load returned invalid data.");
+  }
 }
 
 async function imageBlobToSarahCacheDataUrl(blob) {

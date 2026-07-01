@@ -3,6 +3,7 @@ import path from 'node:path';
 import { runProcess } from './ttsCore.js';
 
 const PUBLIC_DIR = path.resolve(process.cwd(), 'public');
+const WATERMARK_VIDEO_THREADS = Math.max(1, Math.min(16, Number(process.env.WATERMARK_VIDEO_THREADS || 4)));
 
 export const WATERMARK_PRESETS = {
   public_export: 'Public Export',
@@ -342,6 +343,7 @@ export async function applyWatermarkToVideo(inputPath, outputPath, settings = {}
     '-map', '0:a?',
     ...(!brandFilter && filter ? ['-vf', filter] : []),
     '-c:v', 'libx264',
+    '-threads', String(WATERMARK_VIDEO_THREADS),
     '-preset', process.env.WATERMARK_VIDEO_PRESET || 'medium',
     '-crf', String(process.env.WATERMARK_VIDEO_CRF || 18),
     '-pix_fmt', 'yuv420p',

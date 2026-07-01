@@ -15,6 +15,7 @@ const REVIEW_VIDEO_HEIGHT = Number(process.env.REVIEW_VIDEO_HEIGHT || 1080);
 const REVIEW_VIDEO_PRESET = process.env.REVIEW_VIDEO_PRESET || 'slow';
 const REVIEW_VIDEO_INTERMEDIATE_CRF = String(process.env.REVIEW_VIDEO_INTERMEDIATE_CRF || 14);
 const REVIEW_VIDEO_FINAL_CRF = String(process.env.REVIEW_VIDEO_FINAL_CRF || 17);
+const REVIEW_VIDEO_FINAL_THREADS = Math.max(1, Math.min(16, Number(process.env.REVIEW_VIDEO_FINAL_THREADS || 4)));
 const REVIEW_VIDEO_CARD_CRF = String(process.env.REVIEW_VIDEO_CARD_CRF || 17);
 const REVIEW_VIDEO_TRANSITION_SECONDS = Math.max(0, Math.min(0.6, Number(process.env.REVIEW_VIDEO_TRANSITION_SECONDS || 0.22)));
 const REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS = Math.max(0, Math.min(1.5, Number(process.env.REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS || 0.25)));
@@ -931,6 +932,7 @@ async function concatAvSegments(segmentPaths, outputPath, workDir) {
     '-map', '0:v:0',
     '-map', '0:a:0',
     '-c:v', 'libx264',
+    '-threads', String(REVIEW_VIDEO_FINAL_THREADS),
     '-preset', REVIEW_VIDEO_PRESET,
     '-crf', REVIEW_VIDEO_FINAL_CRF,
     '-profile:v', 'high',
