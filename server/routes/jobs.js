@@ -18,7 +18,11 @@ import { askLocalVisionVideo } from '../services/localVision/videoQa.js';
 import { resolveCachedFramePath } from '../services/localVision/frameSampler.js';
 import { deleteJobPayload, loadJobPayload, saveJobPayload } from '../services/jobPayloadStore.js';
 import { getEntity, listEntities, upsertEntity } from '../db.js';
-import { buildClinicalJsonRetryPrompt, isMalformedStructuredResponseError } from '../services/structuredResponseRetry.js';
+import {
+  buildClinicalJsonRetryPrompt,
+  isMalformedStructuredResponseError,
+  isRefusalShapedStructuredResponse,
+} from '../services/structuredResponseRetry.js';
 import {
   cleanProfileImageReviewText,
   cleanupProfileImageReviewResult,
@@ -654,12 +658,13 @@ async function runInternalAIRequest(request = {}, context, label = 'AI analysis'
     if (!canRetryForLength) throw error;
     const retryMaxTokens = Math.max(Number(max_tokens || 0), Number(process.env.ANTHROPIC_LONG_MAX_TOKENS || 20000));
     const malformedStructuredResponse = isMalformedStructuredResponseError(error);
+    const refusalShapedResponse = malformedStructuredResponse && isRefusalShapedStructuredResponse(error);
     context.updateProgress({
       phase: 'retrying',
       current: step.current ?? 0,
       total: step.total ?? 1,
       message: malformedStructuredResponse
-        ? `${label}: provider returned non-JSON text; correcting and retrying this batch automatically…`
+        ? `${label}: provider returned non-JSON text; correcting and retrying this batch automatically${refusalShapedResponse ? ' from the saved anatomy index' : ''}…`
         : `${label}: response was incomplete, retrying with a larger output budget…`,
       retry_reason: message.slice(0, 240),
       max_tokens: retryMaxTokens,
@@ -671,7 +676,7 @@ async function runInternalAIRequest(request = {}, context, label = 'AI analysis'
       max_tokens: retryMaxTokens,
       temperature,
       schema_mode,
-      images,
+      images: refusalShapedResponse ? [] : images,
       invocationAttempt: 2,
       signal: context.signal,
     });
