@@ -6314,6 +6314,20 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
       let raw;
       if (imagePayload.length > 0) {
         const imageBatches = chunkArray(imagePayload, PROFILE_IMAGE_REVIEW_BATCH_SIZE);
+        const sharedBatchPromptContext = `${groundingContext}
+${imageReviewContext}
+${canonicalAnatomyPacket}
+${imagePresenceRules}
+${cumulativeBaselineContext}
+${anatomicalFocusRule}
+${SARAH_APP_OVERLAY_TELEMETRY_RULE}
+${PERSONALIZED_ANATOMY_OUTPUT_RULE}
+${firstNameToneCue}
+${sessionGroundingRule}
+${PROFILE_OBSERVATION_PRODUCT_RULE}
+${PROFILE_IMAGE_REVIEW_RULE_BUNDLE}
+${establishedEvidenceContext}
+${indexedEvidenceContext}`;
         const batchRequests = imageBatches.map((batchImages, batchIndex) => ({
           model: "claude_sonnet_4_6",
           max_tokens: PROFILE_IMAGE_REVIEW_MAX_TOKENS,
@@ -6332,7 +6346,7 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
             preview_url: image.preview_url || image.url || image.storagePath || image.file_url || "",
             storagePath: image.storagePath || image.url || image.file_url || image.preview_url || "",
           })),
-          prompt: `You are Sarah, performing one batch of a larger Sarah profile image review.
+          promptPrefix: `You are Sarah, performing one batch of a larger Sarah profile image review.
 
 Review type: ${config.title}
 Review purpose: ${config.purpose}
@@ -6341,24 +6355,8 @@ Images in this batch: ${batchImages.length}
 Total images in full review: ${imagePayload.length}
 Attached fresh image count in full review: ${freshImagePayload.length}.
 Attached reused saved image count in full review: ${reusedSavedImages.length}.
-${imagePreparationWarning ? `Image preparation warning: ${imagePreparationWarning}` : ""}
-
-${groundingContext}
-${imageReviewContext}
-${canonicalAnatomyPacket}
-${imagePresenceRules}
-${cumulativeBaselineContext}
-${anatomicalFocusRule}
-${SARAH_APP_OVERLAY_TELEMETRY_RULE}
-${PERSONALIZED_ANATOMY_OUTPUT_RULE}
-${firstNameToneCue}
-${sessionGroundingRule}
-${PROFILE_OBSERVATION_PRODUCT_RULE}
-${PROFILE_IMAGE_REVIEW_RULE_BUNDLE}
-${establishedEvidenceContext}
-${indexedEvidenceContext}
-
-This is a batch review, not the final user-facing synthesis. Analyze only the attached images in this batch as direct visual evidence, while preserving the image_id values exactly. Do not mention filenames, storage IDs, camera-roll IDs, or raw image numbers. Do not claim that images outside this batch were inspected in this batch. Keep view labels anatomical and practical.
+${imagePreparationWarning ? `Image preparation warning: ${imagePreparationWarning}` : ""}`,
+          promptSuffix: `This is a batch review, not the final user-facing synthesis. Analyze only the attached images in this batch as direct visual evidence, while preserving the image_id values exactly. Do not mention filenames, storage IDs, camera-roll IDs, or raw image numbers. Do not claim that images outside this batch were inspected in this batch. Keep view labels anatomical and practical.
 
 ${config.reviewInstructions}
 
@@ -6435,6 +6433,7 @@ Batch review JSON:`,
           reviewType: config.kind,
           reviewTitle: config.title,
           sections: profileReviewResultSections(config),
+          sharedBatchPromptContext,
           batchRequests,
           synthesisRequest,
           fallbackOverview: `${config.shortTitle} visible anatomy review.`,

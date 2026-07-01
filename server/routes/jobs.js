@@ -29,6 +29,7 @@ import {
 import { friendlyJobErrorMessage } from '../../src/lib/jobErrorMessages.js';
 import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
 import { runProfileAnatomyImageIndex } from '../services/profileAnatomyImageIndex.js';
+import { materializeProfileReviewBatchRequest } from '../services/profileReviewBatchPayload.js';
 
 export const jobsRouter = express.Router();
 export const largeJobsRouter = express.Router();
@@ -917,7 +918,11 @@ registerJobHandler('profile_image_review_full', async (payload, context) => {
     for (let index = batchResults.length; index < batchRequests.length; index += 1) {
       const batchNumber = index + 1;
       const batchLabel = `${label} batch ${batchNumber}/${batchRequests.length}`;
-      const batchRequest = await hydrateRequestImageRefs(batchRequests[index], context, batchLabel);
+      const expandedBatchRequest = materializeProfileReviewBatchRequest(
+        batchRequests[index],
+        payload?.sharedBatchPromptContext,
+      );
+      const batchRequest = await hydrateRequestImageRefs(expandedBatchRequest, context, batchLabel);
       let result;
       try {
         result = await runInternalAIRequest(batchRequest, context, batchLabel, {
