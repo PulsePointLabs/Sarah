@@ -1,11 +1,66 @@
 import express from 'express';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import { dataDir, databasePath, defaultUploadDir, mediaOutputRoot, ttsRenderDir, uploadDir, uploadDirs } from '../config.js';
 
 export const statusRouter = express.Router();
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STATUS_TIMEOUT_MS = Math.max(3000, Number(process.env.PROVIDER_STATUS_TIMEOUT_MS || 12000));
+
+function cpuSnapshot() {
+  return os.cpus().map((cpu) => ({ ...cpu.times }));
+}
+
+function cpuPercentBetween(before = [], after = []) {
+  let idleDelta = 0;
+  let totalDelta = 0;
+  const count = Math.min(before.length, after.length);
+  for (let index = 0; index < count; index += 1) {
+    const previous = before[index] || {};
+    const current = after[index] || {};
+    const keys = ['user', 'nice', 'sys', 'idle', 'irq'];
+    totalDelta += keys.reduce((sum, key) => sum + Math.max(0, Number(current[key] || 0) - Number(previous[key] || 0)), 0);
+    idleDelta += Math.max(0, Number(current.idle || 0) - Number(previous.idle || 0));
+  }
+  if (totalDelta <= 0) return null;
+  return Math.max(0, Math.min(100, Math.round((1 - idleDelta / totalDelta) * 1000) / 10));
+}
+
+async function currentSystemLoad() {
+  const before = cpuSnapshot();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const after = cpuSnapshot();
+  const totalMemory = os.totalmem();
+  const freeMemory = os.freemem();
+  const usedMemory = Math.max(0, totalMemory - freeMemory);
+  const processMemory = process.memoryUsage();
+  const cpu = os.cpus()[0];
+  return {
+    checkedAt: new Date().toISOString(),
+    hostname: os.hostname(),
+    platform: os.platform(),
+    uptimeSeconds: os.uptime(),
+    cpu: {
+      percent: cpuPercentBetween(before, after),
+      cores: os.cpus().length,
+      model: cpu?.model || 'Unknown CPU',
+    },
+    memory: {
+      totalBytes: totalMemory,
+      usedBytes: usedMemory,
+      freeBytes: freeMemory,
+      percent: totalMemory > 0 ? Math.round((usedMemory / totalMemory) * 1000) / 10 : null,
+    },
+    backend: {
+      pid: process.pid,
+      uptimeSeconds: process.uptime(),
+      rssBytes: processMemory.rss,
+      heapUsedBytes: processMemory.heapUsed,
+      heapTotalBytes: processMemory.heapTotal,
+    },
+  };
+}
 
 async function pathStatus(dir = '') {
   try {
@@ -196,4 +251,12 @@ statusRouter.get('/storage', async (_req, res) => {
       ttsRenderDirStatus: await pathStatus(ttsRenderDir),
     },
   });
+});
+
+statusRouter.get('/system', async (_req, res) => {
+  try {
+    res.json({ ok: true, system: await currentSystemLoad() });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || 'Could not read desktop system load.' });
+  }
 });

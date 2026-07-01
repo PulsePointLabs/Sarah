@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, CheckCircle2, Info } from "lucide-react";
+import { isSarahNativeShell } from "@/lib/mobileApiBase";
 
 function isStandaloneDisplay() {
   return window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator.standalone === true;
@@ -10,6 +11,7 @@ function isIOSDevice() {
 }
 
 export default function InstallAppButton() {
+  const nativeShell = useMemo(() => isSarahNativeShell(), []);
   const [installPrompt, setInstallPrompt] = useState(null);
   const [installed, setInstalled] = useState(() => isStandaloneDisplay());
   const [showHelp, setShowHelp] = useState(false);
@@ -73,6 +75,8 @@ export default function InstallAppButton() {
     }
     return "If Chrome does not show the install option yet, reload once on the HTTPS Tailscale page, then open the menu and choose Install app or Add to Home screen.";
   })();
+
+  if (nativeShell) return null;
 
   return (
     <div className="border-t border-border p-2">

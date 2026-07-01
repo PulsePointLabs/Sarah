@@ -5,6 +5,7 @@ import {
   BellRing,
   Brain,
   CircleDollarSign,
+  Cpu,
   FolderOpen,
   HardDrive,
   Image,
@@ -114,6 +115,23 @@ function formatResultDuration(value) {
   return minutes ? `${minutes}:${String(rest).padStart(2, "0")}` : `0:${String(rest).padStart(2, "0")}`;
 }
 
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes < 0) return "--";
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${Math.round(bytes)} B`;
+}
+
+function formatUptime(value) {
+  const seconds = Math.max(0, Math.round(Number(value || 0)));
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return [days ? `${days}d` : "", hours ? `${hours}h` : "", `${minutes}m`].filter(Boolean).join(" ");
+}
+
 function jobResultSummary(job) {
   const summary = job?.result_summary || {};
   const progress = job?.progress || {};
@@ -142,6 +160,22 @@ async function getStorageStatus() {
     }
   }
   if (!response.ok) throw new Error(`Storage status failed: ${response.status}`);
+  return response.json();
+}
+
+async function getSystemLoad() {
+  let response;
+  try {
+    response = await fetch(apiUrl("/status/system"), { cache: "no-store" });
+  } catch (error) {
+    if (isSarahNativeShell()) {
+      await discoverSarahApiBase({ timeoutMs: 2200 });
+      response = await fetch(apiUrl("/status/system"), { cache: "no-store" });
+    } else {
+      throw error;
+    }
+  }
+  if (!response.ok) throw new Error(`System status failed: ${response.status}`);
   return response.json();
 }
 
@@ -521,6 +555,9 @@ export default function SettingsStatus() {
   const [desktopStorageSettings, setDesktopStorageSettings] = useState(null);
   const [storageMessage, setStorageMessage] = useState("");
   const [storageBusy, setStorageBusy] = useState(false);
+  const [systemLoad, setSystemLoad] = useState(null);
+  const [systemLoadError, setSystemLoadError] = useState("");
+  const [systemLoadRefreshing, setSystemLoadRefreshing] = useState(false);
 
   const updateUiPrefs = (patch) => {
     setUiPrefs((previous) => {
@@ -583,6 +620,25 @@ export default function SettingsStatus() {
 
   useEffect(() => {
     loadStorage();
+  }, []);
+
+  const loadSystemStatus = async ({ quiet = false } = {}) => {
+    if (!quiet) setSystemLoadRefreshing(true);
+    try {
+      const result = await getSystemLoad();
+      setSystemLoad(result?.system || null);
+      setSystemLoadError("");
+    } catch (error) {
+      setSystemLoadError(error?.message || "Could not read desktop system load.");
+    } finally {
+      if (!quiet) setSystemLoadRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    loadSystemStatus();
+    const timer = window.setInterval(() => loadSystemStatus({ quiet: true }), 5000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const chooseMediaRoot = async () => {
@@ -1219,6 +1275,50 @@ export default function SettingsStatus() {
         </div>
         <AppVersionBadge />
       </header>
+
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-primary">
+              <Cpu className="h-4 w-4" />
+              <h2 className="text-sm font-bold uppercase tracking-wider">Desktop System Load</h2>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">Live load reported by the desktop Sarah backend. Refreshes every five seconds.</p>
+          </div>
+          <button type="button" onClick={() => loadSystemStatus()} disabled={systemLoadRefreshing} className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80 disabled:opacity-60">
+            <RefreshCw className={`h-4 w-4 ${systemLoadRefreshing ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+        </div>
+
+        {systemLoadError && <p className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{systemLoadError}</p>}
+        {systemLoad ? (
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              ["CPU", systemLoad.cpu?.percent == null ? "Sampling" : `${systemLoad.cpu.percent}%`, `${systemLoad.cpu?.cores || "--"} logical cores`, systemLoad.cpu?.percent],
+              ["Memory", systemLoad.memory?.percent == null ? "--" : `${systemLoad.memory.percent}%`, `${formatBytes(systemLoad.memory?.usedBytes)} of ${formatBytes(systemLoad.memory?.totalBytes)}`, systemLoad.memory?.percent],
+              ["Sarah backend", formatBytes(systemLoad.backend?.rssBytes), `Heap ${formatBytes(systemLoad.backend?.heapUsedBytes)}`, null],
+              ["Desktop uptime", formatUptime(systemLoad.uptimeSeconds), systemLoad.hostname || "Desktop", null],
+            ].map(([label, value, detail, percent]) => (
+              <div key={label} className="min-w-0 rounded-lg border border-border bg-muted/15 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</p>
+                <p className="mt-1 text-2xl font-bold tabular-nums text-foreground">{value}</p>
+                <p className="mt-1 truncate text-xs text-muted-foreground" title={detail}>{detail}</p>
+                {Number.isFinite(Number(percent)) && (
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${Math.max(0, Math.min(100, Number(percent)))}%` }} />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : !systemLoadError ? (
+          <div className="mt-4 flex items-center gap-2 rounded-lg bg-muted/25 px-3 py-4 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Reading desktop CPU and memory load.
+          </div>
+        ) : null}
+      </section>
 
       <section className="rounded-xl border border-border bg-card p-3 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
