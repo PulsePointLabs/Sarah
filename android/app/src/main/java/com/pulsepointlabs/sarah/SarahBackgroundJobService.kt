@@ -40,6 +40,7 @@ class SarahBackgroundJobService : Service() {
         const val EXTRA_SUBMISSION_ID = "submissionId"
         const val EXTRA_PAYLOAD_FILE = "payloadFile"
         const val EXTRA_REQUEST_PATH = "requestPath"
+        const val EXTRA_CONTENT_ENCODING = "contentEncoding"
         const val EXTRA_API_BASE = "apiBase"
         const val EXTRA_TITLE = "title"
         const val EXTRA_ROUTE = "route"
@@ -97,6 +98,7 @@ class SarahBackgroundJobService : Service() {
         val apiBase = intent.getStringExtra(EXTRA_API_BASE).orEmpty().trimEnd('/')
         val requestPath = intent.getStringExtra(EXTRA_REQUEST_PATH).orEmpty()
         val payloadFile = File(intent.getStringExtra(EXTRA_PAYLOAD_FILE).orEmpty())
+        val contentEncoding = intent.getStringExtra(EXTRA_CONTENT_ENCODING).orEmpty()
         val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "Sarah background task" }
         val route = intent.getStringExtra(EXTRA_ROUTE).orEmpty().ifBlank { "/settings" }
         val headers = headersFromJson(intent.getStringExtra(EXTRA_HEADERS_JSON).orEmpty())
@@ -115,7 +117,7 @@ class SarahBackgroundJobService : Service() {
 
         monitors[submissionId] = scope.launch {
             try {
-                val response = postJsonFile("$apiBase$requestPath", payloadFile, headers)
+                val response = postJsonFile("$apiBase$requestPath", payloadFile, headers, contentEncoding)
                 val jobId = response.optString("id")
                 if (jobId.isBlank()) throw IOException("Sarah desktop accepted the request without returning a job ID.")
                 payloadFile.delete()
@@ -360,7 +362,7 @@ class SarahBackgroundJobService : Service() {
         }
     }
 
-    private fun postJsonFile(url: String, payloadFile: File, headers: Map<String, String>): JSONObject {
+    private fun postJsonFile(url: String, payloadFile: File, headers: Map<String, String>, contentEncoding: String): JSONObject {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15_000
             readTimeout = 60_000
@@ -369,6 +371,7 @@ class SarahBackgroundJobService : Service() {
             doOutput = true
             setRequestProperty("Accept", "application/json")
             setRequestProperty("Content-Type", "application/json")
+            if (contentEncoding.isNotBlank()) setRequestProperty("Content-Encoding", contentEncoding)
             setFixedLengthStreamingMode(payloadFile.length())
             for ((key, value) in headers) setRequestProperty(key, value)
             CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let { cookie ->

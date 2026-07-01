@@ -1,6 +1,7 @@
 package com.pulsepointlabs.sarah
 
 import android.content.Intent
+import android.util.Base64
 import androidx.core.content.ContextCompat
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -18,7 +19,9 @@ class SarahBackgroundJobsPlugin : Plugin() {
         val apiBase = call.getString("apiBase")?.trim()?.trimEnd('/').orEmpty()
         val requestPath = call.getString("path")?.trim().orEmpty()
         val body = call.getString("body").orEmpty()
-        if (apiBase.isBlank() || requestPath.isBlank() || body.isBlank()) {
+        val bodyBase64 = call.getString("bodyBase64").orEmpty()
+        val contentEncoding = call.getString("contentEncoding").orEmpty()
+        if (apiBase.isBlank() || requestPath.isBlank() || (body.isBlank() && bodyBase64.isBlank())) {
             call.reject("Sarah API base, request path, and job payload are required.")
             return
         }
@@ -28,12 +31,14 @@ class SarahBackgroundJobsPlugin : Plugin() {
         try {
             val submissionDir = File(context.cacheDir, "background-job-submissions").apply { mkdirs() }
             val payloadFile = File(submissionDir, "$submissionId.json")
-            payloadFile.writeText(body, Charsets.UTF_8)
+            if (bodyBase64.isNotBlank()) payloadFile.writeBytes(Base64.decode(bodyBase64, Base64.DEFAULT))
+            else payloadFile.writeText(body, Charsets.UTF_8)
             val intent = Intent(context, SarahBackgroundJobService::class.java).apply {
                 action = SarahBackgroundJobService.ACTION_SUBMIT
                 putExtra(SarahBackgroundJobService.EXTRA_SUBMISSION_ID, submissionId)
                 putExtra(SarahBackgroundJobService.EXTRA_PAYLOAD_FILE, payloadFile.absolutePath)
                 putExtra(SarahBackgroundJobService.EXTRA_REQUEST_PATH, requestPath)
+                putExtra(SarahBackgroundJobService.EXTRA_CONTENT_ENCODING, contentEncoding)
                 putExtra(SarahBackgroundJobService.EXTRA_API_BASE, apiBase)
                 putExtra(SarahBackgroundJobService.EXTRA_TITLE, call.getString("title") ?: "Sarah background task")
                 putExtra(SarahBackgroundJobService.EXTRA_ROUTE, call.getString("route") ?: "/settings")

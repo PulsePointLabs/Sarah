@@ -16,12 +16,27 @@ export function canSubmitNativeBackgroundJob() {
   return isAndroidNative();
 }
 
+async function gzipBodyForNativeBridge(body) {
+  if (typeof CompressionStream !== "function") return { body, contentEncoding: "" };
+  const stream = new Blob([body], { type: "application/json" })
+    .stream()
+    .pipeThrough(new CompressionStream("gzip"));
+  const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return { bodyBase64: btoa(binary), contentEncoding: "gzip" };
+}
+
 export async function submitNativeBackgroundJob({ path, body, meta = {}, type = "" } = {}) {
   if (!isAndroidNative()) return null;
+  const encoded = await gzipBodyForNativeBridge(body);
   const submission = await SarahBackgroundJobs.submit({
     apiBase: API_BASE,
     path,
-    body,
+    ...encoded,
     title: meta.title || meta.label || "Sarah background task",
     route: meta.route || "/settings",
     headers: meta.headers || {},
