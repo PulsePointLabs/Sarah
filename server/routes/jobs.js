@@ -18,6 +18,7 @@ import { askLocalVisionVideo } from '../services/localVision/videoQa.js';
 import { resolveCachedFramePath } from '../services/localVision/frameSampler.js';
 import { deleteJobPayload, loadJobPayload, saveJobPayload } from '../services/jobPayloadStore.js';
 import { getEntity, listEntities, upsertEntity } from '../db.js';
+import { buildClinicalJsonRetryPrompt, isMalformedStructuredResponseError } from '../services/structuredResponseRetry.js';
 import {
   cleanProfileImageReviewText,
   cleanupProfileImageReviewResult,
@@ -652,16 +653,19 @@ async function runInternalAIRequest(request = {}, context, label = 'AI analysis'
     const canRetryForLength = response_json_schema && /cut off|max_tokens|malformed JSON/i.test(message);
     if (!canRetryForLength) throw error;
     const retryMaxTokens = Math.max(Number(max_tokens || 0), Number(process.env.ANTHROPIC_LONG_MAX_TOKENS || 20000));
+    const malformedStructuredResponse = isMalformedStructuredResponseError(error);
     context.updateProgress({
       phase: 'retrying',
       current: step.current ?? 0,
       total: step.total ?? 1,
-      message: `${label}: response was incomplete, retrying with a larger output budget…`,
+      message: malformedStructuredResponse
+        ? `${label}: provider returned non-JSON text; correcting and retrying this batch automatically…`
+        : `${label}: response was incomplete, retrying with a larger output budget…`,
       retry_reason: message.slice(0, 240),
       max_tokens: retryMaxTokens,
     });
     return aiInvokeInternal({
-      prompt,
+      prompt: malformedStructuredResponse ? buildClinicalJsonRetryPrompt(prompt, error) : prompt,
       response_json_schema,
       model,
       max_tokens: retryMaxTokens,

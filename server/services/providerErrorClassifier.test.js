@@ -66,6 +66,18 @@ test('does not include secrets in normalized messages', () => {
   assert.doesNotMatch(classified.user_message, /sk-ant/i);
 });
 
+test('classifies malformed JSON before a generic 502 provider status', () => {
+  const error = Object.assign(new Error('AI returned malformed JSON. Unexpected token I'), {
+    status: 502,
+    code: 'AI_MALFORMED_JSON',
+    rawPreview: "I'm not able to return that response.",
+  });
+  const classified = classifyProviderError(error, { provider: 'anthropic' });
+  assert.equal(classified.category, 'malformed_structured_response');
+  assert.equal(classified.retryable, true);
+  assert.equal(classified.next_action, 'retry_same_stage');
+});
+
 test('does not misclassify local anatomy validation as a provider safety refusal', () => {
   const classified = classifyProviderError({
     status: 422,

@@ -43,6 +43,7 @@ function nestedStrings(value, out = []) {
   }
   if (value instanceof Error) {
     out.push(value.message || String(value));
+    if (value.rawPreview) out.push(String(value.rawPreview));
     nestedStrings(value.cause, out);
     return out;
   }
@@ -126,6 +127,11 @@ export function classifyProviderError(error, options = {}) {
     retryable = true;
     nextAction = "retry_after_delay";
     userMessage = "The AI provider rate-limited the request. Sarah preserved completed checkpoints.";
+  } else if (/malformed json|invalid json|structured response|not valid json|ai_malformed_json/.test(haystack)) {
+    category = "malformed_structured_response";
+    retryable = true;
+    nextAction = "retry_same_stage";
+    userMessage = "The AI response was not valid structured output. Sarah preserved completed checkpoints.";
   } else if (/overloaded|provider unavailable|service unavailable|temporarily unavailable/.test(haystack) || [500, 502, 503, 504, 529].includes(status)) {
     category = "provider_unavailable";
     retryable = true;
@@ -145,7 +151,7 @@ export function classifyProviderError(error, options = {}) {
     retryable = true;
     nextAction = "retry_with_smaller_output";
     userMessage = "The AI response was cut off. Sarah preserved completed checkpoints.";
-  } else if (/malformed json|invalid json|structured response|schema/.test(haystack)) {
+  } else if (/schema/.test(haystack)) {
     category = "malformed_structured_response";
     retryable = true;
     nextAction = "retry_same_stage";

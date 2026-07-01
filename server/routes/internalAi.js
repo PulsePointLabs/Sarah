@@ -32,6 +32,8 @@ function parseJsonOrThrow(text = '') {
   } catch (error) {
     const parseError = new Error(`AI returned malformed JSON. The response may have been cut off. ${error.message}`);
     parseError.status = 502;
+    parseError.code = 'AI_MALFORMED_JSON';
+    parseError.rawPreview = String(text || '').slice(0, 500);
     throw parseError;
   }
 }
