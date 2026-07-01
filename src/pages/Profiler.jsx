@@ -2084,7 +2084,6 @@ const PROFILER_UPLOAD_QUEUE_LIMIT = 40;
 const PROFILER_IMAGE_SAVE_TIMEOUT_MS = 90000;
 const PROFILER_IMAGE_RELOAD_TIMEOUT_MS = 30000;
 const PROFILER_VIDEO_SAVE_TIMEOUT_MS = 180000;
-const PROFILER_CONTEXT_REFRESH_TIMEOUT_MS = 5000;
 const PROFILER_VIDEO_SAMPLE_COUNT = 12;
 const PROFILER_VIDEO_UPLOAD_LIMIT = 4;
 
@@ -6181,21 +6180,12 @@ ${JSON.stringify(batchParsedResults.map(compactImageReviewForSynthesis), null, 2
       const siblingResultKey = config.resultKey === PELVIC_GENITAL_IMAGE_REVIEW_CONFIG.resultKey
         ? HEAD_TO_TOE_IMAGE_REVIEW_CONFIG.resultKey
         : PELVIC_GENITAL_IMAGE_REVIEW_CONFIG.resultKey;
-      const [refreshedProfile, siblingResultRow] = await Promise.all([
-        withTimeout(
-          refreshUserProfile?.() || Promise.resolve(null),
-          PROFILER_CONTEXT_REFRESH_TIMEOUT_MS,
-          "Saved profile refresh timed out; continuing with the profile already loaded on this page.",
-        ).catch(() => null),
-        withTimeout(
-          loadLatestProfileReviewResultField(siblingResultKey),
-          PROFILER_CONTEXT_REFRESH_TIMEOUT_MS,
-          "Related review refresh timed out; continuing with the review already loaded on this page.",
-        ).catch(() => null),
-      ]);
-      const reviewUserProfile = refreshedProfile || userProfile;
+      // The page has already loaded the persisted profile and review state. Re-fetching both
+      // here kept the Android WebView in the foreground before the desktop job even existed.
+      // Use the loaded snapshot for handoff; the desktop worker owns the long-running review.
+      const reviewUserProfile = userProfile;
       const savedProfileContexts = collectSavedProfileImageAttachmentContexts(reviewUserProfile);
-      const siblingResult = siblingResultRow?.[siblingResultKey] || null;
+      const siblingResult = reviewUserProfile?.[siblingResultKey] || null;
       const savedProfileQaAttachments = collectSavedProfileImageAttachments(reviewUserProfile, {
         limit: savedReviewCandidateLimit,
         purpose: isHeadToToeBodyReference ? "head_to_toe_body_reference" : "pelvic_genital",
