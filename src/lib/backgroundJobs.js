@@ -1,5 +1,9 @@
 import { apiUrl, discoverSarahApiBase, isSarahNativeShell } from "@/lib/mobileApiBase";
-import { trackNativeBackgroundJob } from "@/lib/nativeBackgroundJobs";
+import {
+  canSubmitNativeBackgroundJob,
+  submitNativeBackgroundJob,
+  trackNativeBackgroundJob,
+} from "@/lib/nativeBackgroundJobs";
 import { isTransientBackgroundJobPollError } from "@/lib/backgroundJobPolling";
 
 const START_RECOVERY_WINDOW_MS = 4 * 60 * 1000;
@@ -122,6 +126,9 @@ export function startBackgroundJob(type, payload = {}, meta = {}) {
   const body = JSON.stringify({ type, payload, meta: enrichedMeta });
   const largeBodyThreshold = 42 * 1024 * 1024;
   const path = body.length > largeBodyThreshold ? "/jobs/start-large" : "/jobs/start";
+  if (type === "profile_image_review_full" && canSubmitNativeBackgroundJob()) {
+    return submitNativeBackgroundJob({ path, body, meta: enrichedMeta, type });
+  }
   const startRequest = (options = {}) => jobRequest(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

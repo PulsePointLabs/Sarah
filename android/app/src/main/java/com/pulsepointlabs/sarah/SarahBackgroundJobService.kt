@@ -21,6 +21,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -31,10 +32,14 @@ import kotlin.math.max
 class SarahBackgroundJobService : Service() {
     companion object {
         const val ACTION_TRACK = "com.pulsepointlabs.sarah.jobs.TRACK"
+        const val ACTION_SUBMIT = "com.pulsepointlabs.sarah.jobs.SUBMIT"
         const val ACTION_CANCEL_JOB = "com.pulsepointlabs.sarah.jobs.CANCEL"
         const val ACTION_RETRY_JOB = "com.pulsepointlabs.sarah.jobs.RETRY"
 
         const val EXTRA_JOB_ID = "jobId"
+        const val EXTRA_SUBMISSION_ID = "submissionId"
+        const val EXTRA_PAYLOAD_FILE = "payloadFile"
+        const val EXTRA_REQUEST_PATH = "requestPath"
         const val EXTRA_API_BASE = "apiBase"
         const val EXTRA_TITLE = "title"
         const val EXTRA_ROUTE = "route"
@@ -72,6 +77,7 @@ class SarahBackgroundJobService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val config = configFromIntent(intent)
         when (intent?.action) {
+            ACTION_SUBMIT -> submitPayload(intent, startId)
             ACTION_TRACK -> if (config != null) startTracking(config, startId)
             ACTION_CANCEL_JOB -> if (config != null) performAction(config, "cancel", startId)
             ACTION_RETRY_JOB -> if (config != null) performAction(config, "retry", startId)
@@ -84,6 +90,44 @@ class SarahBackgroundJobService : Service() {
     override fun onDestroy() {
         scope.cancel()
         super.onDestroy()
+    }
+
+    private fun submitPayload(intent: Intent, startId: Int) {
+        val submissionId = intent.getStringExtra(EXTRA_SUBMISSION_ID).orEmpty()
+        val apiBase = intent.getStringExtra(EXTRA_API_BASE).orEmpty().trimEnd('/')
+        val requestPath = intent.getStringExtra(EXTRA_REQUEST_PATH).orEmpty()
+        val payloadFile = File(intent.getStringExtra(EXTRA_PAYLOAD_FILE).orEmpty())
+        val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "Sarah background task" }
+        val route = intent.getStringExtra(EXTRA_ROUTE).orEmpty().ifBlank { "/settings" }
+        val headers = headersFromJson(intent.getStringExtra(EXTRA_HEADERS_JSON).orEmpty())
+        if (submissionId.isBlank() || apiBase.isBlank() || requestPath.isBlank() || !payloadFile.isFile) {
+            stopSelf(startId)
+            return
+        }
+
+        val pendingConfig = TrackedJob(submissionId, apiBase, title, route, headers)
+        val notification = progressNotification(pendingConfig, "Sending request to desktop", 0.0, 0.0, null, true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(notificationId(submissionId), notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(notificationId(submissionId), notification)
+        }
+
+        monitors[submissionId] = scope.launch {
+            try {
+                val response = postJsonFile("$apiBase$requestPath", payloadFile, headers)
+                val jobId = response.optString("id")
+                if (jobId.isBlank()) throw IOException("Sarah desktop accepted the request without returning a job ID.")
+                payloadFile.delete()
+                notificationManager.cancel(notificationId(submissionId))
+                monitors.remove(submissionId)
+                startTracking(TrackedJob(jobId, apiBase, title, route, headers), startId)
+            } catch (error: Exception) {
+                Log.e(TAG, "submission failed id=$submissionId ${error.javaClass.simpleName}: ${error.message}")
+                terminalNotification(pendingConfig, "Submission failed", specificNetworkError(error), false)
+                finishMonitor(submissionId, startId)
+            }
+        }
     }
 
     private fun startTracking(config: TrackedJob, startId: Int) {
@@ -305,6 +349,36 @@ class SarahBackgroundJobService : Service() {
         }
         try {
             if (method == "POST") connection.outputStream.use { it.write("{}".toByteArray()) }
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (status !in 200..299) throw IOException("Sarah server returned HTTP $status${if (text.isNotBlank()) ": ${text.take(240)}" else "."}")
+            if (text.isBlank()) throw IOException("Sarah server returned no job status.")
+            return JSONObject(text)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun postJsonFile(url: String, payloadFile: File, headers: Map<String, String>): JSONObject {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15_000
+            readTimeout = 60_000
+            requestMethod = "POST"
+            instanceFollowRedirects = true
+            doOutput = true
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Content-Type", "application/json")
+            setFixedLengthStreamingMode(payloadFile.length())
+            for ((key, value) in headers) setRequestProperty(key, value)
+            CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let { cookie ->
+                if (!headers.keys.any { it.equals("Cookie", true) }) setRequestProperty("Cookie", cookie)
+            }
+        }
+        try {
+            payloadFile.inputStream().use { input ->
+                connection.outputStream.use { output -> input.copyTo(output, 64 * 1024) }
+            }
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()

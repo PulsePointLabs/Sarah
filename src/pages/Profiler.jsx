@@ -6455,7 +6455,9 @@ Batch review JSON:`,
             phase: "queued",
             current: 0,
             total: imageBatches.length + 1,
-            message: `${config.shortTitle} review is queued on the desktop backend. You can leave this page; Sarah will keep running it.`,
+            message: startedFullJob?.meta?.nativeSubmission
+              ? `${config.shortTitle} request is saved to Android. You can leave this page or app now; Android will finish sending it to the desktop.`
+              : `${config.shortTitle} review is queued on the desktop backend. You can leave this page; Sarah will keep running it.`,
           },
         });
         setLoading(false);
@@ -6805,7 +6807,9 @@ ANNOTATED IMAGE OUTPUT RULES:
             phase: "queued",
             current: 0,
             total: 1,
-            message: `${config.shortTitle} review is queued on the desktop backend. You can leave this page; Sarah will keep running it.`,
+            message: startedFullJob?.meta?.nativeSubmission
+              ? `${config.shortTitle} request is saved to Android. You can leave this page or app now; Android will finish sending it to the desktop.`
+              : `${config.shortTitle} review is queued on the desktop backend. You can leave this page; Sarah will keep running it.`,
           },
         });
         setLoading(false);
