@@ -1,4 +1,7 @@
 import { BleClient } from "@capacitor-community/bluetooth-le";
+import { registerPlugin } from "@capacitor/core";
+
+const NativeOmronBloodPressure = registerPlugin("OmronBloodPressure");
 
 const BLOOD_PRESSURE_SERVICE_UUID = "00001810-0000-1000-8000-00805f9b34fb";
 const BLOOD_PRESSURE_MEASUREMENT_UUID = "00002a35-0000-1000-8000-00805f9b34fb";
@@ -11,6 +14,60 @@ const OMRON_DEVICE_STORAGE_KEY = "pulsepoint.omronBp.device";
 const OMRON_AUTO_LISTEN_STORAGE_KEY = "pulsepoint.omronBp.autoListen";
 
 let activeOmronListener = null;
+let nativeOmronListener = null;
+
+function canUseNativeOmronListener() {
+  return Boolean(window.Capacitor?.isNativePlatform?.());
+}
+
+async function stopNativeOmronListener() {
+  const listener = nativeOmronListener;
+  nativeOmronListener = null;
+  if (!listener) return { ok: true, stopped: false };
+  await Promise.all((listener.handles || []).map((handle) => handle?.remove?.().catch?.(() => {})));
+  await NativeOmronBloodPressure.disarm().catch(() => {});
+  return { ok: true, stopped: true, device: listener.device };
+}
+
+async function startNativeOmronListener({ onStatus, onReading, onDisconnect, onError, forceDevicePicker, rememberDevice }) {
+  await stopNativeOmronListener();
+  await initializeAndroidBle(onStatus);
+  let device = !forceDevicePicker ? getRememberedOmronDevice() : null;
+  if (!device?.deviceId) {
+    device = await requestOmronDevice(onStatus);
+    if (rememberDevice) rememberOmronDevice(device);
+    await BleClient.disconnect(device.deviceId).catch(() => {});
+  }
+  const listener = { device, handles: [], listening: true, connected: false, state: "starting", onDisconnect };
+  nativeOmronListener = listener;
+  listener.handles = await Promise.all([
+    NativeOmronBloodPressure.addListener("status", (event) => {
+      if (nativeOmronListener !== listener) return;
+      listener.state = event?.state || listener.state;
+      listener.connected = Boolean(event?.connected);
+      onStatus?.(event?.message || "OMRON is armed and waiting for a reading.");
+    }),
+    NativeOmronBloodPressure.addListener("reading", (reading) => {
+      if (nativeOmronListener !== listener) return;
+      listener.connected = true;
+      onReading?.(reading, { device, native: true });
+    }),
+    NativeOmronBloodPressure.addListener("error", (event) => {
+      if (nativeOmronListener !== listener) return;
+      onError?.(new Error(event?.message || "OMRON Bluetooth listener failed."));
+    }),
+  ]);
+  try {
+    const result = await NativeOmronBloodPressure.arm({ deviceId: device.deviceId, name: device.name || device.displayName });
+    listener.state = result?.state || "waiting_for_cuff";
+    listener.connected = Boolean(result?.connected);
+    onStatus?.("OMRON is armed. Sarah will connect as soon as the cuff wakes or transmits.");
+    return { ok: true, device, services: [], native: true };
+  } catch (error) {
+    await stopNativeOmronListener();
+    throw error;
+  }
+}
 
 function readStoredJson(key, fallback = null) {
   try {
@@ -373,6 +430,9 @@ export async function startOmronBloodPressureListener({
   forceDevicePicker = false,
   rememberDevice = true,
 } = {}) {
+  if (canUseNativeOmronListener()) {
+    return startNativeOmronListener({ onStatus, onReading, onDisconnect, onError, forceDevicePicker, rememberDevice });
+  }
   await stopOmronBloodPressureListener().catch(() => {});
   await initializeAndroidBle(onStatus);
 
@@ -421,6 +481,7 @@ export async function startOmronBloodPressureListener({
 }
 
 export async function stopOmronBloodPressureListener() {
+  if (nativeOmronListener) return stopNativeOmronListener();
   const listener = activeOmronListener;
   activeOmronListener = null;
   if (!listener?.deviceId) return { ok: true, stopped: false };
@@ -432,6 +493,15 @@ export async function stopOmronBloodPressureListener() {
 }
 
 export function getOmronBloodPressureListenerState() {
+  if (nativeOmronListener) {
+    return {
+      listening: true,
+      connected: Boolean(nativeOmronListener.connected),
+      reconnecting: nativeOmronListener.state === "scanning" || nativeOmronListener.state === "connecting",
+      state: nativeOmronListener.state,
+      deviceName: nativeOmronListener.device?.name || "OMRON BP7000",
+    };
+  }
   return activeOmronListener
     ? {
       listening: true,

@@ -3349,6 +3349,8 @@ export default function LiveCapture() {
             syncing: false,
             status: "syncing",
             error: "",
+            sessionId: liveSession?.activeSessionId || null,
+            lastReading: reading,
             message: `Received OMRON reading ${formatBloodPressure(reading)}. Saving...`,
           }));
           saveOmronBloodPressureForLiveSession(reading).catch((error) => {
@@ -3361,13 +3363,16 @@ export default function LiveCapture() {
             }));
           });
         },
-        onDisconnect: () => {
-          setBpOmronListening(false);
+        onDisconnect: ({ stopped } = {}) => {
+          const stillArmed = !stopped && Boolean(getOmronBloodPressureListenerState()?.listening);
+          setBpOmronListening(stillArmed);
           setBpCapture((prev) => ({
             ...prev,
             syncing: false,
-            status: prev.lastReading ? "ready" : "idle",
-            message: prev.lastReading ? "OMRON disconnected. Latest BP is saved." : "OMRON disconnected before a BP reading arrived.",
+            status: stillArmed ? "syncing" : (prev.lastReading ? "ready" : "idle"),
+            message: stillArmed
+              ? "OMRON is armed and waiting for the cuff to wake."
+              : (prev.lastReading ? "OMRON listener stopped. Latest BP is saved." : "OMRON listener stopped before a BP reading arrived."),
           }));
         },
         onError: (error) => {
