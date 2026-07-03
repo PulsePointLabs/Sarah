@@ -6,6 +6,9 @@ import { dataDir } from '../config.js';
 const inFlight = new Map();
 const recent = new Map();
 const reservations = new Map();
+const featureRequestStarts = new Map();
+const activeByFeature = new Map();
+let activeRequests = 0;
 const defaultUsageFile = path.join(dataDir, 'openai-usage.jsonl');
 const RECENT_TTL_MS = 5 * 60 * 1000;
 
@@ -25,6 +28,57 @@ function envFlag(name, fallback = false) {
 function numberEnv(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function featureEnvSuffix(feature = '') {
+  return String(feature || 'unknown').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+}
+
+function featureBurstLimit(feature) {
+  const configured = numberEnv(`OPENAI_BURST_MAX_${featureEnvSuffix(feature)}`, -1);
+  if (configured >= 0) return configured;
+  if (feature === 'session_review_video_segment') return 30;
+  if (feature === 'tts_export') return 200;
+  if (feature === 'tts_live') return 120;
+  return numberEnv('OPENAI_FEATURE_BURST_MAX_REQUESTS', 60);
+}
+
+function assertFeatureBurstAvailable(feature) {
+  const now = Date.now();
+  const windowMs = Math.max(1_000, numberEnv('OPENAI_FEATURE_BURST_WINDOW_MS', 5 * 60 * 1000));
+  const limit = featureBurstLimit(feature);
+  const starts = (featureRequestStarts.get(feature) || []).filter((at) => now - at < windowMs);
+  if (limit > 0 && starts.length >= limit) {
+    const error = new Error(`OpenAI feature circuit is temporarily open for ${feature}: ${starts.length} unique requests in ${Math.round(windowMs / 1000)} seconds.`);
+    error.status = 429;
+    error.code = 'openai_feature_circuit_open';
+    error.retryable = false;
+    throw error;
+  }
+  starts.push(now);
+  featureRequestStarts.set(feature, starts);
+}
+
+function reserveConcurrency(feature) {
+  const globalLimit = Math.max(1, numberEnv('OPENAI_MAX_CONCURRENT_REQUESTS', 4));
+  const featureLimit = Math.max(1, numberEnv(`OPENAI_MAX_CONCURRENT_${featureEnvSuffix(feature)}`, numberEnv('OPENAI_MAX_CONCURRENT_PER_FEATURE', 2)));
+  const featureActive = activeByFeature.get(feature) || 0;
+  if (activeRequests >= globalLimit || featureActive >= featureLimit) {
+    const error = new Error(`OpenAI request concurrency limit reached for ${feature}; retry this action after current requests finish.`);
+    error.status = 429;
+    error.code = 'openai_concurrency_limit';
+    error.retryable = false;
+    throw error;
+  }
+  activeRequests += 1;
+  activeByFeature.set(feature, featureActive + 1);
+}
+
+function releaseConcurrency(feature) {
+  activeRequests = Math.max(0, activeRequests - 1);
+  const remaining = Math.max(0, (activeByFeature.get(feature) || 1) - 1);
+  if (remaining) activeByFeature.set(feature, remaining);
+  else activeByFeature.delete(feature);
 }
 
 function stableHash(value) {
@@ -166,14 +220,19 @@ export async function guardedOpenAIRequest({
   if (inFlight.has(finalDedupeKey)) return inFlight.get(finalDedupeKey);
 
   const totals = readUsageTotals();
-  const dayLimit = numberEnv('OPENAI_DAILY_BUDGET_USD', 1);
-  const monthLimit = numberEnv('OPENAI_MONTHLY_BUDGET_USD', 10);
+  assertFeatureBurstAvailable(feature);
+  reserveConcurrency(feature);
+
+  const dayLimit = numberEnv('OPENAI_DAILY_BUDGET_USD', 15);
+  const monthLimit = numberEnv('OPENAI_MONTHLY_BUDGET_USD', 100);
   const reservedDay = reservationTotal(todayKey());
   const reservedMonth = reservationTotal(monthKey());
   if (dayLimit > 0 && totals.day + reservedDay + estimatedCostUsd > dayLimit) {
+    releaseConcurrency(feature);
     throw openAIConfigurationError(`OpenAI daily spending guard reached ($${dayLimit.toFixed(2)}).`, 429);
   }
   if (monthLimit > 0 && totals.month + reservedMonth + estimatedCostUsd > monthLimit) {
+    releaseConcurrency(feature);
     throw openAIConfigurationError(`OpenAI monthly spending guard reached ($${monthLimit.toFixed(2)}).`, 429);
   }
 
@@ -224,6 +283,7 @@ export async function guardedOpenAIRequest({
   })().finally(() => {
     inFlight.delete(finalDedupeKey);
     reservations.delete(requestId);
+    releaseConcurrency(feature);
   });
 
   inFlight.set(finalDedupeKey, promise);
@@ -234,6 +294,9 @@ export function resetOpenAIGuardForTests() {
   inFlight.clear();
   recent.clear();
   reservations.clear();
+  featureRequestStarts.clear();
+  activeByFeature.clear();
+  activeRequests = 0;
 }
 
 export const OPENAI_USAGE_FILE = defaultUsageFile;

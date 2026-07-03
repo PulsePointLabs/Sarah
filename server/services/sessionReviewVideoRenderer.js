@@ -4,12 +4,11 @@ import { resolveUploadPath, uploadDir, ttsRenderDir } from '../config.js';
 import { listEntities, upsertEntity } from '../db.js';
 import { normalizeAudioChapters } from './audioChapters.js';
 import { renderTTSExport } from './ttsRenderer.js';
-import { q, runProcess, slugifyFilePart, synthesizeTTSChunk } from './ttsCore.js';
+import { q, runProcess, slugifyFilePart } from './ttsCore.js';
 import { buildReviewVideoPlan, extractCitedTimesFromText } from './sessionReviewVideoPlanner.js';
 import { normalizeWatermarkSettings, replaceVideoWithWatermarkedExport } from './watermark.js';
 
 const REVIEW_RENDER_VERSION = 'session_review_video_v11_hd';
-const TTS_REQUEST_TAIL = '\u200B';
 const REVIEW_VIDEO_WIDTH = Number(process.env.REVIEW_VIDEO_WIDTH || 1920);
 const REVIEW_VIDEO_HEIGHT = Number(process.env.REVIEW_VIDEO_HEIGHT || 1080);
 const REVIEW_VIDEO_PRESET = process.env.REVIEW_VIDEO_PRESET || 'slow';
@@ -72,13 +71,16 @@ async function mediaDurationSeconds(filePath) {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-function matchAudioExport(record, request) {
+export function matchAudioExport(record, request) {
   if (!record?.file_url) return false;
   if (record.render_version !== 'tts_export_leading_trim_v2') return false;
   if (String(record.tts_session_key || '') !== String(request.sessionId || '')) return false;
   if (String(record.source_generated_at || '') !== String(request.sourceGeneratedAt || '')) return false;
   if (String(record.review_type || '') && String(record.review_type || '') !== String(request.reviewType || '')) return false;
-  if (!String(record.review_type || '') && String(record.analysis_title || record.title || '') !== String(request.title || '')) return false;
+  // Older exports predate review_type. Exact session + source timestamp is the stable identity;
+  // display-title punctuation and date formatting are not.
+  if (!String(record.review_type || '') && !String(request.sourceGeneratedAt || '')
+    && String(record.analysis_title || record.title || '') !== String(request.title || '')) return false;
   if (String(record.voice || 'nova') !== String(request.voice || 'nova')) return false;
   if (String(record.model || '') !== String(request.model || '')) return false;
   if (String(record.format || 'mp3') !== String(request.outputFormat || 'mp3')) return false;
@@ -92,7 +94,8 @@ function matchCompletedTtsJob(job, request) {
   if (String(job?.meta?.sessionId || '') !== String(request.sessionId || '')) return false;
   if (String(job?.meta?.sourceGeneratedAt || '') !== String(request.sourceGeneratedAt || '')) return false;
   if (String(job?.meta?.reviewType || '') && String(job?.meta?.reviewType || '') !== String(request.reviewType || '')) return false;
-  if (!String(job?.meta?.reviewType || '') && String(job?.meta?.title || result.analysis_title || result.title || '') !== String(request.title || '')) return false;
+  if (!String(job?.meta?.reviewType || '') && !String(request.sourceGeneratedAt || '')
+    && String(job?.meta?.title || result.analysis_title || result.title || '') !== String(request.title || '')) return false;
   if (String(result.voice || 'nova') !== String(request.voice || 'nova')) return false;
   if (String(result.model || '') !== String(request.model || '')) return false;
   if (String(result.format || 'mp3') !== String(request.outputFormat || 'mp3')) return false;
@@ -945,23 +948,6 @@ async function concatAvSegments(segmentPaths, outputPath, workDir) {
   ]);
 }
 
-async function concatAudioSegments(audioPaths, outputPath, workDir) {
-  const concatPath = path.join(workDir, 'audio-segments.txt');
-  await fs.writeFile(concatPath, audioPaths.map((file) => `file ${q(file.replace(/\\/g, '/'))}`).join('\n'), 'utf8');
-  await runProcess('ffmpeg', [
-    '-hide_banner',
-    '-y',
-    '-f', 'concat',
-    '-safe', '0',
-    '-i', concatPath,
-    '-vn',
-    '-c:a', 'libmp3lame',
-    '-b:a', '320k',
-    '-compression_level', '0',
-    outputPath,
-  ]);
-}
-
 async function concatWavSegments(audioPaths, outputPath, workDir) {
   const concatPath = path.join(workDir, 'audio-wav-segments.txt');
   await fs.writeFile(concatPath, audioPaths.map((file) => `file ${q(file.replace(/\\/g, '/'))}`).join('\n'), 'utf8');
@@ -1016,6 +1002,90 @@ function buildReviewNarrationSegments(paragraphs = []) {
     flush();
   }
   return output;
+}
+
+function narrationChunkText(chunk) {
+  if (typeof chunk === 'string') return cleanParagraph(chunk);
+  return cleanParagraph(chunk?.text || chunk?.content || chunk?.input || '');
+}
+
+export function buildReusedNarrationSegmentPlan({
+  narrationSegments = [],
+  sourceChunks = [],
+  trimChunks = [],
+  durationSeconds = 0,
+} = {}) {
+  const segments = narrationSegments.map((segment) => ({
+    ...segment,
+    text: cleanParagraph(segment?.text),
+  })).filter((segment) => segment.text);
+  if (!segments.length) return [];
+
+  const source = sourceChunks.map(narrationChunkText);
+  const trims = Array.isArray(trimChunks) ? trimChunks : [];
+  const hasExactChunkTiming = source.length > 0
+    && source.length === trims.length
+    && trims.every((chunk) => Number(chunk?.trimmed_duration_seconds) > 0);
+  const totalDuration = hasExactChunkTiming
+    ? trims.reduce((sum, chunk) => sum + Number(chunk.trimmed_duration_seconds || 0), 0)
+    : Number(durationSeconds || 0);
+  if (!(totalDuration > 0)) throw new Error('Reusable narration duration is unavailable.');
+
+  const sourceLengths = hasExactChunkTiming
+    ? source.map((text) => Math.max(1, text.length))
+    : [Math.max(1, segments.reduce((sum, segment) => sum + segment.text.length, 0))];
+  const sourceDurations = hasExactChunkTiming
+    ? trims.map((chunk) => Number(chunk.trimmed_duration_seconds || 0))
+    : [totalDuration];
+  const sourceTotalCharacters = sourceLengths.reduce((sum, length) => sum + length, 0);
+  const segmentTotalCharacters = segments.reduce((sum, segment) => sum + segment.text.length, 0);
+
+  const timeAtSourceCharacter = (sourceCharacter) => {
+    let remaining = Math.max(0, Math.min(sourceTotalCharacters, sourceCharacter));
+    let elapsed = 0;
+    for (let index = 0; index < sourceLengths.length; index += 1) {
+      const length = sourceLengths[index];
+      const duration = sourceDurations[index];
+      if (remaining <= length) return elapsed + (remaining / length) * duration;
+      remaining -= length;
+      elapsed += duration;
+    }
+    return totalDuration;
+  };
+
+  let consumedCharacters = 0;
+  return segments.map((segment, index) => {
+    const startCharacter = consumedCharacters;
+    consumedCharacters += segment.text.length;
+    const endCharacter = index === segments.length - 1 ? segmentTotalCharacters : consumedCharacters;
+    const scaledStart = (startCharacter / segmentTotalCharacters) * sourceTotalCharacters;
+    const scaledEnd = (endCharacter / segmentTotalCharacters) * sourceTotalCharacters;
+    const startSeconds = timeAtSourceCharacter(scaledStart);
+    const endSeconds = index === segments.length - 1
+      ? totalDuration
+      : timeAtSourceCharacter(scaledEnd);
+    return {
+      ...segment,
+      startSeconds,
+      durationSeconds: Math.max(0.05, endSeconds - startSeconds),
+      timingSource: hasExactChunkTiming ? 'saved_export_chunk_durations' : 'saved_export_character_ratio',
+    };
+  });
+}
+
+async function sliceReusableNarrationAudio({ sourcePath, outputPath, startSeconds, durationSeconds }) {
+  await runProcess('ffmpeg', [
+    '-hide_banner',
+    '-y',
+    '-ss', Number(startSeconds || 0).toFixed(6),
+    '-i', sourcePath,
+    '-t', Number(durationSeconds || 0).toFixed(6),
+    '-vn',
+    '-af', 'aresample=48000:async=1:first_pts=0,aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=stereo',
+    '-c:a', 'pcm_s16le',
+    outputPath,
+  ]);
+  return outputPath;
 }
 
 function eventText(event = {}) {
@@ -1458,45 +1528,6 @@ export function resolveTimestampViolationVisualFallback({
   };
 }
 
-async function synthesizeReviewSegmentAudio({ segment, index, payload, workDir, previousText, jobId }) {
-  const inputText = `${String(segment.text || '').trim()}${TTS_REQUEST_TAIL}`;
-  const rendered = await synthesizeTTSChunk({
-    text: inputText,
-    voice: payload.voice || 'nova',
-    model: payload.model,
-    speed: payload.speed,
-    instructions: payload.instructions || '',
-    format: 'wav',
-    previousContext: previousText,
-    meta: {
-      jobId,
-      chunkIndex: index,
-      source: 'session_review_video_segment',
-    },
-  });
-  const rawAudioPath = path.join(workDir, `segment-audio-${String(index + 1).padStart(3, '0')}-raw.wav`);
-  await fs.writeFile(rawAudioPath, rendered.buffer);
-  const rawDuration = await mediaDurationSeconds(rawAudioPath).catch(() => Math.max(1, wordCount(segment.text) / 2.25));
-  const audioPath = path.join(workDir, `segment-audio-${String(index + 1).padStart(3, '0')}.wav`);
-  const fade = Math.min(0.018, Math.max(0, (Number(rawDuration || 0) - 0.12) / 2));
-  const filters = [
-    'aresample=48000:async=1:first_pts=0',
-    'aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=stereo',
-    fade ? `afade=t=in:st=0:d=${fade.toFixed(3)}` : null,
-    fade ? `afade=t=out:st=${Math.max(0, rawDuration - fade).toFixed(3)}:d=${fade.toFixed(3)}` : null,
-  ].filter(Boolean).join(',');
-  await runProcess('ffmpeg', [
-    '-hide_banner',
-    '-y',
-    '-i', rawAudioPath,
-    '-af', filters,
-    '-c:a', 'pcm_s16le',
-    audioPath,
-  ]);
-  const duration = await mediaDurationSeconds(audioPath).catch(() => rawDuration);
-  return { ...rendered, audioPath, durationSeconds: duration };
-}
-
 async function renderSegmentedSourceReviewVideo({
   payload,
   session,
@@ -1507,6 +1538,7 @@ async function renderSegmentedSourceReviewVideo({
   jobId,
   onProgress,
   signal,
+  narration,
 }) {
   const sourceDuration = await mediaDurationSeconds(primaryVideo.path).catch(() => 0);
   const existingSegmentSources = [];
@@ -1530,13 +1562,25 @@ async function renderSegmentedSourceReviewVideo({
   });
 
   const narrationSegments = buildReviewNarrationSegments(paragraphs);
+  if (!narration?.audioPath || !(await fileExists(narration.audioPath))) {
+    throw new Error('Narration audio file is unavailable.');
+  }
+  const narrationDuration = Number(
+    narration.rendered?.duration_seconds
+    || await mediaDurationSeconds(narration.audioPath).catch(() => 0)
+  );
+  const reusedSegmentPlan = buildReusedNarrationSegmentPlan({
+    narrationSegments,
+    sourceChunks: payload.chunks || [],
+    trimChunks: narration.audioExport?.silence_trim?.chunks || narration.rendered?.silence_trim?.chunks || [],
+    durationSeconds: narrationDuration,
+  });
   const usedEventIds = new Set();
   const avSegments = [];
   const videoSegments = [];
   const audioSegments = [];
   const segmentDurations = [];
   const generatedClips = [];
-  let previousText = '';
   let fallbackCursor = 0;
   const usedSourceWindows = [];
   let totalAudioDuration = 0;
@@ -1550,16 +1594,25 @@ async function renderSegmentedSourceReviewVideo({
       phase: 'segmented_narration',
       current: 1,
       total: 5,
-      message: `Rendering spoken segment ${index + 1} of ${narrationSegments.length}...`,
+      message: `Aligning saved narration segment ${index + 1} of ${narrationSegments.length}...`,
     });
-    const audio = await synthesizeReviewSegmentAudio({
-      segment,
-      index,
-      payload,
-      workDir,
-      previousText: previousText.slice(-320),
-      jobId,
+    const plannedAudio = reusedSegmentPlan[index];
+    const segmentAudioPath = path.join(workDir, `saved-narration-${String(index + 1).padStart(3, '0')}.wav`);
+    await sliceReusableNarrationAudio({
+      sourcePath: narration.audioPath,
+      outputPath: segmentAudioPath,
+      startSeconds: plannedAudio.startSeconds,
+      durationSeconds: plannedAudio.durationSeconds,
     });
+    const audio = {
+      audioPath: segmentAudioPath,
+      durationSeconds: await mediaDurationSeconds(segmentAudioPath).catch(() => plannedAudio.durationSeconds),
+      voice: narration.rendered?.voice || payload.voice || 'nova',
+      model: narration.rendered?.model || payload.model || null,
+      speed: Number(narration.rendered?.speed || payload.speed || 1),
+      reused: true,
+      timingSource: plannedAudio.timingSource,
+    };
     ttsMeta = ttsMeta || audio;
     audioSegments.push(audio.audioPath);
     const audioDurationSeconds = Number(audio.durationSeconds || 0);
@@ -1643,7 +1696,6 @@ async function renderSegmentedSourceReviewVideo({
         rememberSourceWindow(usedSourceWindows, window);
         fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
         generatedClips.push(sourceContext.generatedClip);
-        previousText = previousText ? `${previousText} ${segment.text}` : segment.text;
         continue;
       }
       onProgress?.({
@@ -1719,7 +1771,6 @@ async function renderSegmentedSourceReviewVideo({
           procedural_broll: false,
           timeline_trace: { ...trace, spoken_segment_index: index + 1 },
         });
-        previousText = previousText ? `${previousText} ${segment.text}` : segment.text;
         continue;
       }
       const videoClip = await cutReviewClip({
@@ -1772,7 +1823,6 @@ async function renderSegmentedSourceReviewVideo({
         procedural_broll: false,
         timeline_trace: { ...trace, spoken_segment_index: index + 1 },
       });
-      previousText = previousText ? `${previousText} ${segment.text}` : segment.text;
       continue;
     }
 
@@ -1805,7 +1855,6 @@ async function renderSegmentedSourceReviewVideo({
       rememberSourceWindow(usedSourceWindows, window);
       fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
       generatedClips.push(sourceContext.generatedClip);
-      previousText = previousText ? `${previousText} ${segment.text}` : segment.text;
       continue;
     }
 
@@ -1886,7 +1935,6 @@ async function renderSegmentedSourceReviewVideo({
       procedural_broll_score: null,
       timeline_trace: { ...timelineTrace, spoken_segment_index: index + 1 },
     });
-    previousText = previousText ? `${previousText} ${segment.text}` : segment.text;
   }
 
   const outputBase = `${slugifyFilePart(payload.title || 'session-review-video')}-${Date.now()}`;
@@ -1903,7 +1951,7 @@ async function renderSegmentedSourceReviewVideo({
   onProgress({ phase: 'muxing', current: 4, total: 5, message: 'Concatenating narration-locked audio/video segments...' });
   await concatWavSegments(audioSegments, continuousWavPath, workDir);
   await concatAvSegments(avSegments, outputPath, workDir);
-  await concatAudioSegments(audioSegments, audioOutputPath, workDir);
+  if (!narration.reused) await fs.copyFile(narration.audioPath, audioOutputPath);
 
   let finalDuration = await mediaDurationSeconds(outputPath).catch(() => totalAudioDuration);
   const continuousAudioDuration = await mediaDurationSeconds(continuousWavPath).catch(() => totalAudioDuration);
@@ -1921,7 +1969,9 @@ async function renderSegmentedSourceReviewVideo({
   });
   finalDuration = await mediaDurationSeconds(outputPath).catch(() => totalAudioDuration);
   const stat = await fs.stat(outputPath);
-  const audioStat = await fs.stat(audioOutputPath).catch(() => null);
+  const canonicalAudioPath = narration.reused ? narration.audioPath : audioOutputPath;
+  const canonicalAudioUrl = narration.reused ? narration.rendered.file_url : `/uploads/${audioFilename}`;
+  const audioStat = await fs.stat(canonicalAudioPath).catch(() => null);
   const chapters = normalizeAudioChapters(
     narrationSegments.map((segment, index) => ({
       id: `review-segment-${index + 1}`,
@@ -1938,8 +1988,8 @@ async function renderSegmentedSourceReviewVideo({
     title: payload.title || 'Session Review Video',
     session_id: payload.sessionId || session.id || null,
     generated_at: new Date().toISOString(),
-    audio_reused: false,
-    audio_file_url: `/uploads/${audioFilename}`,
+    audio_reused: Boolean(narration.reused),
+    audio_file_url: canonicalAudioUrl,
     visual_mode: 'segmented_tts_source_video',
     visual_duration_seconds: Math.round(finalDuration || 0),
     source_video_path: primaryVideo.path,
@@ -1967,8 +2017,8 @@ async function renderSegmentedSourceReviewVideo({
     mimeType: 'video/mp4',
     size: stat.size,
     duration_seconds: Math.round(finalDuration || 0),
-    audio_file_url: `/uploads/${audioFilename}`,
-    audio_reused: false,
+    audio_file_url: canonicalAudioUrl,
+    audio_reused: Boolean(narration.reused),
     audio_size: audioStat?.size || null,
     voice: ttsMeta?.voice || payload.voice || 'nova',
     model: ttsMeta?.model || payload.model || null,
@@ -1989,7 +2039,7 @@ async function renderSegmentedSourceReviewVideo({
     size: stat.size,
     duration_seconds: record.duration_seconds,
     audio_file_url: record.audio_file_url,
-    audio_reused: false,
+    audio_reused: Boolean(narration.reused),
     review_type: payload.reviewType || null,
     clip_count: record.clip_count,
     cited_time_count: record.cited_time_count,
@@ -2039,6 +2089,8 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
 
   try {
     onProgress({ phase: 'planning', current: 0, total: 5, message: 'Planning cited moments and review segments...' });
+    const narration = await resolveNarration(payload, { jobId, signal: options.signal, onProgress });
+    if (!narration.audioPath || !(await fileExists(narration.audioPath))) throw new Error('Narration audio file is unavailable.');
     const primaryVideo = await choosePrimaryVideo(session, { workDir, onProgress });
     if (primaryVideo?.path) {
       return await renderSegmentedSourceReviewVideo({
@@ -2051,11 +2103,9 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
         jobId,
         onProgress,
         signal: options.signal,
+        narration,
       });
     }
-
-    const narration = await resolveNarration(payload, { jobId, signal: options.signal, onProgress });
-    if (!narration.audioPath || !(await fileExists(narration.audioPath))) throw new Error('Narration audio file is unavailable.');
 
     const audioDuration = Number(narration.rendered?.duration_seconds || await mediaDurationSeconds(narration.audioPath).catch(() => 0));
     const chapters = normalizeAudioChapters(

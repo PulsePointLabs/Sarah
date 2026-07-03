@@ -2,12 +2,61 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildReviewVideoPlan } from './sessionReviewVideoPlanner.js';
 import {
+  buildReusedNarrationSegmentPlan,
+  matchAudioExport,
   canonicalPhaseAnchorForNarration,
   resolveReviewSegmentPhaseCarryover,
   resolveTimestampViolationVisualFallback,
   selectDistinctReviewSourceStart,
   selectReviewVideoEventForSegment,
 } from './sessionReviewVideoRenderer.js';
+
+test('matching saved narration is split locally using persisted export timing', () => {
+  const plan = buildReusedNarrationSegmentPlan({
+    narrationSegments: [
+      { paragraphIndex: 0, text: 'First saved sentence.' },
+      { paragraphIndex: 1, text: 'Second saved sentence is longer.' },
+    ],
+    sourceChunks: ['First saved sentence.', 'Second saved sentence is longer.'],
+    trimChunks: [
+      { trimmed_duration_seconds: 1.25 },
+      { trimmed_duration_seconds: 2.75 },
+    ],
+    durationSeconds: 99,
+  });
+
+  assert.equal(plan.length, 2);
+  assert.equal(plan[0].startSeconds, 0);
+  assert.equal(plan[0].timingSource, 'saved_export_chunk_durations');
+  assert.ok(Math.abs(plan.reduce((sum, item) => sum + item.durationSeconds, 0) - 4) < 0.001);
+});
+
+test('legacy saved MP3 with exact source identity matches despite title formatting', () => {
+  const request = {
+    sessionId: 'session-july-1',
+    title: 'AI Session Analysis · Jul 1, 2026',
+    reviewType: 'session_ai_analysis',
+    sourceGeneratedAt: '2026-07-03T18:31:39.069Z',
+    voice: 'nova',
+    model: 'tts-1-hd',
+    speed: 0.98,
+    outputFormat: 'mp3',
+  };
+  const legacyExport = {
+    file_url: '/uploads/july-1-2026-ai-session-analysis.mp3',
+    render_version: 'tts_export_leading_trim_v2',
+    tts_session_key: 'session-july-1',
+    source_generated_at: '2026-07-03T18:31:39.069Z',
+    title: 'July 1 2026 – AI Session Analysis',
+    voice: 'nova',
+    model: 'tts-1-hd',
+    speed: 0.98,
+    format: 'mp3',
+  };
+
+  assert.equal(matchAudioExport(legacyExport, request), true);
+  assert.equal(matchAudioExport({ ...legacyExport, source_generated_at: 'different' }, request), false);
+});
 
 test('untimed Foley placement narration does not jump to drainage-bag b-roll', () => {
   const segment = {

@@ -15,6 +15,9 @@ function configure() {
   process.env.OPENAI_DAILY_BUDGET_USD = '100';
   process.env.OPENAI_MONTHLY_BUDGET_USD = '100';
   process.env.OPENAI_MAX_INPUT_CHARACTERS = '1000';
+  process.env.OPENAI_MAX_CONCURRENT_REQUESTS = '4';
+  process.env.OPENAI_MAX_CONCURRENT_PER_FEATURE = '2';
+  process.env.OPENAI_FEATURE_BURST_MAX_REQUESTS = '60';
   resetOpenAIGuardForTests();
 }
 
@@ -103,4 +106,43 @@ test('daily spending guard rejects before execution', async () => {
     execute: async () => { calls += 1; return { ok: true }; },
   }), /daily spending guard reached/);
   assert.equal(calls, 0);
+});
+
+test('feature circuit breaker stops a request storm without disabling other features', async () => {
+  configure();
+  process.env.OPENAI_BURST_MAX_STORM_TEST = '2';
+  let calls = 0;
+  for (const key of ['one', 'two']) {
+    await guardedOpenAIRequest({
+      feature: 'storm_test', model: 'test', dedupeKey: key,
+      execute: async () => { calls += 1; return { ok: true, key }; },
+    });
+  }
+  await assert.rejects(guardedOpenAIRequest({
+    feature: 'storm_test', model: 'test', dedupeKey: 'three',
+    execute: async () => { calls += 1; return { ok: true }; },
+  }), /feature circuit is temporarily open/);
+  const other = await guardedOpenAIRequest({
+    feature: 'other_feature', model: 'test', dedupeKey: 'allowed',
+    execute: async () => ({ ok: true }),
+  });
+  assert.equal(calls, 2);
+  assert.equal(other.ok, true);
+});
+
+test('per-feature concurrency guard rejects accidental parallel fan-out beyond the cap', async () => {
+  configure();
+  process.env.OPENAI_MAX_CONCURRENT_PER_FEATURE = '1';
+  let release;
+  const first = guardedOpenAIRequest({
+    feature: 'parallel_test', model: 'test', dedupeKey: 'first',
+    execute: async () => new Promise((resolve) => { release = resolve; }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await assert.rejects(guardedOpenAIRequest({
+    feature: 'parallel_test', model: 'test', dedupeKey: 'second',
+    execute: async () => ({ ok: true }),
+  }), /concurrency limit reached/);
+  release({ ok: true });
+  assert.equal((await first).ok, true);
 });
