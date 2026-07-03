@@ -42,25 +42,18 @@ function ttsErrorMessage(error) {
 }
 
 async function requestSample(payload) {
-  let lastError;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      const response = await base44.functions.invoke("openaiTTS", payload);
-      if (response?.data?.error || !response?.data?.audio) {
-        const error = new Error(ttsErrorMessage(response));
-        error.status = response?.status || response?.data?.status || 502;
-        error.data = response?.data;
-        throw error;
-      }
-      return response;
-    } catch (error) {
-      lastError = error;
-      const status = error?.status || error?.response?.status || error?.data?.status || 500;
-      if (![408, 429, 500, 502, 503, 504].includes(status) || attempt === 3) throw error;
-      await new Promise((resolve) => window.setTimeout(resolve, Math.min(1500 * 2 ** attempt, 12000)));
-    }
+  const response = await base44.functions.invoke("openaiTTS", {
+    ...payload,
+    feature: "tts_settings_sample",
+    requestId: `tts-settings-sample-${Date.now()}`,
+  });
+  if (response?.data?.error || !response?.data?.audio) {
+    const error = new Error(ttsErrorMessage(response));
+    error.status = response?.status || response?.data?.status || 502;
+    error.data = response?.data;
+    throw error;
   }
-  throw lastError;
+  return response;
 }
 
 function binaryAudio(audio) {

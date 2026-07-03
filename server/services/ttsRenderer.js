@@ -18,8 +18,8 @@ import {
 } from './ttsCore.js';
 import { writeChapterSidecars } from './audioChapters.js';
 
-const MAX_TTS_EXPORT_CHUNKS = 500;
-const MAX_TTS_EXPORT_CHARACTERS = 500_000;
+const MAX_TTS_EXPORT_CHUNKS = Number(process.env.OPENAI_TTS_EXPORT_MAX_CHUNKS || 160);
+const MAX_TTS_EXPORT_CHARACTERS = Number(process.env.OPENAI_TTS_EXPORT_MAX_CHARACTERS || 150_000);
 
 export function validateTTSExportChunkPayload(chunks = []) {
   if (!chunks.length) {
@@ -135,12 +135,6 @@ export async function renderTTSExport(payload = {}, options = {}) {
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
   const jobId = String(options.jobId || payload.jobId || crypto.randomUUID());
 
-  if (!process.env.OPENAI_API_KEY) {
-    const error = new Error('Missing OPENAI_API_KEY');
-    error.status = 500;
-    throw error;
-  }
-
   try {
     const {
       chunks = [],
@@ -215,6 +209,8 @@ export async function renderTTSExport(payload = {}, options = {}) {
         format: 'wav',
         render: 'server',
         jobId,
+        source: String(payload?.feature || payload?.source || 'tts_export'),
+        idempotencyKey: `${jobId}:${i}`,
       };
       const { buffer } = await callOpenAITTS(body, meta);
       const chunkPath = path.join(workDir, `chunk-${String(i).padStart(4, '0')}.wav`);

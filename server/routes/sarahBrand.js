@@ -4,6 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { uploadDir } from '../config.js';
 import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
+import { estimateImageCostUsd, guardedOpenAIRequest, makeOpenAIHttpError } from '../services/openaiGuard.js';
 
 export const sarahBrandRouter = express.Router();
 
@@ -31,35 +32,28 @@ function buildSarahPortraitPrompt(userPrompt) {
 }
 
 async function callOpenAIImageGeneration(prompt) {
-  if (!process.env.OPENAI_API_KEY) {
-    const error = new Error('Missing OPENAI_API_KEY for Sarah image generation.');
-    error.status = 503;
-    throw error;
-  }
-
-  const response = await fetch('https://api.openai.com/v1/images/generations', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      'Content-Type': 'application/json',
+  const result = await guardedOpenAIRequest({
+    feature: 'sarah_portrait_generation',
+    model: IMAGE_MODEL,
+    inputCharacters: prompt.length,
+    estimatedCostUsd: estimateImageCostUsd(),
+    dedupeKey: `${IMAGE_MODEL}|${IMAGE_SIZE}|${IMAGE_QUALITY}|${prompt}`,
+    execute: async ({ requestId }) => {
+      const response = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+          'X-Client-Request-Id': requestId,
+        },
+        body: JSON.stringify({ model: IMAGE_MODEL, prompt, n: 1, size: IMAGE_SIZE, quality: IMAGE_QUALITY, output_format: 'png' }),
+      });
+      const raw = await response.text();
+      if (!response.ok) throw makeOpenAIHttpError(response, raw);
+      return { payload: JSON.parse(raw), providerRequestId: response.headers.get('x-request-id') || null };
     },
-    body: JSON.stringify({
-      model: IMAGE_MODEL,
-      prompt,
-      n: 1,
-      size: IMAGE_SIZE,
-      quality: IMAGE_QUALITY,
-      output_format: 'png',
-    }),
   });
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(payload?.error?.message || payload?.message || `OpenAI image generation failed (${response.status}).`);
-    error.status = response.status;
-    error.providerPayload = payload;
-    throw error;
-  }
+  const payload = result.payload;
 
   const item = Array.isArray(payload?.data) ? payload.data[0] : null;
   const b64 = item?.b64_json || item?.image_base64 || item?.base64;

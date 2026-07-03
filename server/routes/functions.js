@@ -7,6 +7,12 @@ import {
   synthesizeTTSChunk,
 } from '../services/ttsCore.js';
 import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
+import {
+  estimateAudioInputTokens,
+  estimateWhisperCostUsd,
+  guardedOpenAIRequest,
+  makeOpenAIHttpError,
+} from '../services/openaiGuard.js';
 
 export const functionsRouter = express.Router();
 const ttsRenderJobs = new Map();
@@ -24,16 +30,6 @@ function normalizeAudioMimeType(value = 'audio/webm') {
   if (raw.includes('wav')) return { mimeType: 'audio/wav', extension: 'wav' };
   if (raw.includes('webm')) return { mimeType: 'audio/webm', extension: 'webm' };
   return { mimeType: 'audio/webm', extension: 'webm' };
-}
-
-async function readOpenAIError(response) {
-  const raw = await response.text();
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed?.error?.message || parsed?.message || raw;
-  } catch {
-    return raw;
-  }
 }
 
 function setTtsRenderProgress(jobId, patch) {
@@ -116,7 +112,6 @@ functionsRouter.post('/purgeEMGData', (req, res) => {
 
 functionsRouter.post('/openaiTTS', async (req, res) => {
   try {
-    if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY' });
     const {
       text,
       voice = 'nova',
@@ -134,6 +129,8 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
       format: requestedFormat,
       meta: {
         chunkIndex: req.body?.chunkIndex,
+        source: req.body?.feature || 'tts_live',
+        idempotencyKey: req.get('x-idempotency-key') || req.body?.requestId,
       },
     });
     res.setHeader('Content-Type', TTS_CONTENT_TYPES[result.format]);
@@ -195,9 +192,11 @@ functionsRouter.post('/renderTTSExport', async (req, res) => {
 
 functionsRouter.post('/whisperSTT', async (req, res) => {
   try {
-    if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY' });
     const { audio_base64, mime_type = 'audio/webm', prompt } = req.body || {};
     if (!audio_base64) return res.status(400).json({ error: 'No audio provided' });
+    const audioBytes = Math.floor(String(audio_base64).replace(/^data:.*?;base64,/, '').length * 0.75);
+    const maxAudioBytes = Number(process.env.OPENAI_WHISPER_MAX_AUDIO_BYTES || 25 * 1024 * 1024);
+    if (audioBytes > maxAudioBytes) return res.status(413).json({ error: `Audio is too large (${audioBytes} bytes; maximum ${maxAudioBytes}).` });
     const { mimeType, extension } = normalizeAudioMimeType(mime_type);
     const form = new FormData();
     const blob = new Blob([b64ToBuffer(audio_base64)], { type: mimeType });
@@ -205,20 +204,26 @@ functionsRouter.post('/whisperSTT', async (req, res) => {
     form.append('model', 'whisper-1');
     form.append('language', 'en');
     if (prompt) form.append('prompt', prompt);
-    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-      body: form,
+    const estimatedDurationSeconds = Math.max(1, audioBytes / 32_000);
+    const result = await guardedOpenAIRequest({
+      feature: 'whisper_stt',
+      model: 'whisper-1',
+      inputCharacters: String(prompt || '').length,
+      estimatedInputTokens: estimateAudioInputTokens(estimatedDurationSeconds),
+      estimatedCostUsd: estimateWhisperCostUsd(estimatedDurationSeconds),
+      idempotencyKey: req.get('x-idempotency-key') || req.body?.requestId,
+      dedupeKey: `${audio_base64}|${prompt || ''}`,
+      execute: async ({ requestId }) => {
+        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'X-Client-Request-Id': requestId },
+          body: form,
+        });
+        if (!response.ok) throw makeOpenAIHttpError(response, await response.text());
+        return { data: await response.json(), providerRequestId: response.headers.get('x-request-id') || null };
+      },
     });
-    if (!response.ok) {
-      const message = await readOpenAIError(response);
-      return res.status(response.status).json({
-        error: message,
-        provider: 'openai',
-        endpoint: 'audio/transcriptions',
-      });
-    }
-    const data = await response.json();
+    const data = result.data;
     res.json({ text: data.text });
   } catch (error) {
     const message = error.message || String(error);

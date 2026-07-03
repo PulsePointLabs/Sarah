@@ -14,17 +14,17 @@ test('background TTS export accepts a long technical breakdown', () => {
 });
 
 test('background TTS export still rejects unbounded chunk counts', () => {
-  const chunks = Array.from({ length: 501 }, () => ({ text: 'Bounded export.' }));
+  const chunks = Array.from({ length: 161 }, () => ({ text: 'Bounded export.' }));
 
   assert.throws(
     () => validateTTSExportChunkPayload(chunks),
-    /Too many TTS chunks: 501 \(maximum 500\)/,
+    /Too many TTS chunks: 161 \(maximum 160\)/,
   );
 });
 
 test('background TTS export still rejects unbounded total text', () => {
   assert.throws(
-    () => validateTTSExportChunkPayload([{ text: 'x'.repeat(500_001) }]),
+    () => validateTTSExportChunkPayload([{ text: 'x'.repeat(150_001) }]),
     /TTS export text is too large/,
   );
 });

@@ -176,6 +176,7 @@ async function resolveNarration(payload, { jobId, signal, onProgress }) {
     message: 'Rendering TTS narration for review video...',
   });
   const rendered = await renderTTSExport({
+    feature: 'session_review_video_narration',
     title: request.title,
     chunks: payload.chunks || [],
     chapters: payload.chapters || [],

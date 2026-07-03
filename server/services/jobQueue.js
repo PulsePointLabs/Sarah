@@ -403,6 +403,19 @@ export function registerJobHandler(type, handler) {
 
 export function createJob(type, payload = {}, meta = {}) {
   if (!handlers.has(type)) throw new Error(`Unknown background job type: ${type}`);
+  const clientRequestId = String(meta?.clientRequestId || '').trim();
+  if (clientRequestId) {
+    const inMemory = [...jobs.values()]
+      .find((candidate) => candidate?.type === type && candidate?.meta?.clientRequestId === clientRequestId);
+    const persisted = inMemory || listProcessingJobSummaries({
+      type,
+      meta: { clientRequestId },
+      includeCleared: true,
+      limit: 1,
+    })[0];
+    const existing = inMemory || persisted;
+    if (existing?.id) return publicJob(existing);
+  }
   const id = crypto.randomUUID();
   const now = nowIso();
   const priority = defaultJobPriority(type, meta, payload);

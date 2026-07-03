@@ -2,6 +2,8 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 
 Deno.serve(async (req) => {
   try {
+    const enabled = ['1', 'true', 'yes', 'on'].includes(String(Deno.env.get('OPENAI_ENABLED') || '').toLowerCase());
+    if (!enabled) return Response.json({ error: 'OpenAI is disabled' }, { status: 503 });
     const base44 = createClientFromRequest(req);
     const user = await base44.auth.me();
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
@@ -16,6 +18,7 @@ Deno.serve(async (req) => {
     const audioBlob = new Blob([bytes], { type: mime_type || 'audio/webm' });
 
     const apiKey = Deno.env.get('OPENAI_API_KEY');
+    if (!apiKey) return Response.json({ error: 'OpenAI is not configured' }, { status: 503 });
     const whisperForm = new FormData();
     whisperForm.append('file', audioBlob, 'audio.webm');
     whisperForm.append('model', 'whisper-1');

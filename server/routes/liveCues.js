@@ -17,13 +17,6 @@ liveCuesRouter.post('/prepare', async (req, res) => {
   if (!Array.isArray(clips) || !clips.length) {
     return res.status(400).json({ error: 'No cue clips requested' });
   }
-  if (!process.env.OPENAI_API_KEY) {
-    return res.status(503).json({
-      error: 'Missing OPENAI_API_KEY',
-      category: 'provider_configuration_failure',
-      clips: [],
-    });
-  }
   try {
     const prepared = [];
     for (const clip of clips.slice(0, 40)) {

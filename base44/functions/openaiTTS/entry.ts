@@ -1,6 +1,7 @@
 import { corsHeaders } from "https://deno.land/x/base44@v0.5.0/mod.ts";
 
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+const OPENAI_ENABLED = ["1", "true", "yes", "on"].includes(String(Deno.env.get("OPENAI_ENABLED") || "").toLowerCase());
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -56,7 +57,7 @@ async function callOpenAITTS(
   let lastMessage = "Unknown TTS error";
 
   // Keep this short. Base44/serverless isolates can die if one request hangs too long.
-  const MAX_ATTEMPTS = 3;
+  const MAX_ATTEMPTS = 2;
   const FETCH_TIMEOUT_MS = 35_000;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -90,10 +91,12 @@ async function callOpenAITTS(
       lastStatus = response.status;
       lastMessage = await response.text();
 
-      const retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
+      const retryable = [408, 500, 502, 503, 504].includes(response.status);
 
       if (!retryable) {
-        throw new Error(lastMessage);
+        const error = new Error(lastMessage) as Error & { nonRetryable?: boolean };
+        error.nonRetryable = true;
+        throw error;
       }
 
       if (attempt === MAX_ATTEMPTS - 1) break;
@@ -118,6 +121,8 @@ async function callOpenAITTS(
         lastMessage
       );
 
+      if ((error as Error & { nonRetryable?: boolean })?.nonRetryable) break;
+
       if (attempt === MAX_ATTEMPTS - 1) break;
 
       const waitMs = Math.min(750 * 2 ** attempt, 4000);
@@ -139,8 +144,8 @@ Deno.serve(async (req) => {
   }
 
   try {
-    if (!OPENAI_API_KEY) {
-      return jsonResponse({ error: "Missing OPENAI_API_KEY" }, 500);
+    if (!OPENAI_ENABLED || !OPENAI_API_KEY) {
+      return jsonResponse({ error: "OpenAI is disabled or not configured" }, 503);
     }
 
     const body = await req.json();

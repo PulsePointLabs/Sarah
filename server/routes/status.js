@@ -139,9 +139,11 @@ function sumAnthropicCost(report) {
 }
 
 function openAIBaseStatus() {
+  const enabled = ['1', 'true', 'yes', 'on'].includes(String(process.env.OPENAI_ENABLED || '').trim().toLowerCase());
   return {
     provider: 'OpenAI API',
-    apiConfigured: Boolean(process.env.OPENAI_API_KEY),
+    enabled,
+    apiConfigured: enabled && Boolean(process.env.OPENAI_API_KEY),
     reportingConfigured: Boolean(process.env.OPENAI_ADMIN_API_KEY),
     reportingHint: process.env.OPENAI_ADMIN_API_KEY
       ? ''
@@ -151,9 +153,15 @@ function openAIBaseStatus() {
   };
 }
 
+let openAIStatusCache = null;
+
 async function getOpenAIStatus() {
   const status = openAIBaseStatus();
-  if (!process.env.OPENAI_ADMIN_API_KEY) return status;
+  if (!status.enabled || !process.env.OPENAI_ADMIN_API_KEY) return status;
+  const cacheTtlMs = Number(process.env.OPENAI_STATUS_CACHE_MS || 5 * 60 * 1000);
+  if (openAIStatusCache && Date.now() - openAIStatusCache.at < cacheTtlMs) {
+    return openAIStatusCache.value;
+  }
 
   try {
     const [sevenDay, thirtyDay] = await Promise.all([
@@ -173,6 +181,7 @@ async function getOpenAIStatus() {
   } catch (error) {
     status.error = error.message || String(error);
   }
+  openAIStatusCache = { at: Date.now(), value: status };
   return status;
 }
 

@@ -1607,6 +1607,7 @@ async function resolveNarration(payload, { jobId, signal, onProgress }) {
     message: 'Rendering anatomy narration...',
   });
   const rendered = await renderTTSExport({
+    feature: 'profile_anatomy_video_narration',
     title: request.title,
     chunks: payload.chunks || [],
     chapters: payload.chapters || [],
@@ -1744,6 +1745,7 @@ async function resolveManifestNarration(payload, manifest, { jobId, signal, onPr
       section_id: section.section_id,
     });
     const rendered = await renderTTSExport({
+      feature: 'profile_anatomy_video_section_narration',
       title: `${payload.title || 'Profile Anatomy Video'} - ${section.section_title}`,
       chunks,
       chapters: [{

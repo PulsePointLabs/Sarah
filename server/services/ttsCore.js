@@ -2,6 +2,12 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {
+  estimateTextTokens,
+  estimateTtsCostUsd,
+  guardedOpenAIRequest,
+  makeOpenAIHttpError,
+} from './openaiGuard.js';
 
 export const TTS_CONTENT_TYPES = {
   mp3: 'audio/mpeg',
@@ -190,9 +196,11 @@ export async function validateAudioBuffer(buffer, {
 }
 
 export function buildChunkInstructions(baseInstructions, previousContext, supportsInstructionsForModel) {
-  const base = String(baseInstructions || '').trim();
+  const base = String(baseInstructions || '').trim().slice(0, Number(process.env.OPENAI_TTS_MAX_INSTRUCTION_CHARS || 4000));
   if (!supportsInstructionsForModel) return '';
-  const context = String(previousContext || '').trim();
+  const maxContextChars = Number(process.env.OPENAI_TTS_MAX_PREVIOUS_CONTEXT_CHARS || 600);
+  const rawContext = String(previousContext || '').trim();
+  const context = rawContext.slice(Math.max(0, rawContext.length - maxContextChars));
   if (!context) return base;
   return `${base}
 
@@ -207,16 +215,33 @@ Read only the input text.`;
 }
 
 export async function callOpenAITTS(body, meta) {
-  const maxAttempts = Number(process.env.OPENAI_TTS_BACKEND_ATTEMPTS || 3);
-  let lastStatus = 502;
-  let lastMessage = 'Unknown OpenAI TTS error';
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  const inputCharacters = String(body?.input || '').length + String(body?.instructions || '').length;
+  return guardedOpenAIRequest({
+    feature: String(meta?.source || meta?.kind || meta?.render || 'tts_live'),
+    model: body?.model,
+    inputCharacters,
+    estimatedInputTokens: estimateTextTokens(inputCharacters),
+    estimatedCostUsd: estimateTtsCostUsd(String(body?.input || '').length),
+    idempotencyKey: meta?.idempotencyKey || meta?.clientRequestId || '',
+    dedupeKey: JSON.stringify({
+      model: body?.model,
+      input: body?.input,
+      instructions: body?.instructions,
+      voice: body?.voice,
+      response_format: body?.response_format,
+      speed: body?.speed,
+    }),
+    maxAttempts: Number(process.env.OPENAI_TTS_BACKEND_ATTEMPTS || process.env.OPENAI_MAX_ATTEMPTS || 2),
+    execute: async ({ requestId, attempt }) => {
     const startedAt = Date.now();
     try {
       const response = await fetchWithTimeout('https://api.openai.com/v1/audio/speech', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+          'X-Client-Request-Id': requestId,
+        },
         body: JSON.stringify(body),
       }, Number(process.env.OPENAI_TTS_TIMEOUT_MS || 45000));
       const latencyMs = Date.now() - startedAt;
@@ -232,32 +257,30 @@ export async function callOpenAITTS(body, meta) {
           label: `OpenAI TTS chunk ${meta?.chunkIndex != null ? Number(meta.chunkIndex) + 1 : ''}`.trim(),
           expectedDurationSeconds: meta?.estimatedDurationSec || 0,
         });
-        console.info('[openaiTTS] success', { ...meta, latencyMs, retries: attempt, bytes: buffer.length, durationSeconds: Math.round(integrity.durationSeconds * 10) / 10 });
-        return { response, buffer, latencyMs, retries: attempt };
+        console.info('[openaiTTS] success', { ...meta, requestId, latencyMs, retries: attempt - 1, bytes: buffer.length, durationSeconds: Math.round(integrity.durationSeconds * 10) / 10 });
+        return {
+          response,
+          buffer,
+          latencyMs,
+          retries: attempt - 1,
+          providerRequestId: response.headers.get('x-request-id') || null,
+        };
       }
-
-      lastStatus = response.status;
-      lastMessage = await response.text();
-      const retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
-      console.warn('[openaiTTS] upstream error', { ...meta, status: response.status, latencyMs, attempt: attempt + 1, retryable, message: lastMessage.slice(0, 300) });
-      if (!retryable || attempt === maxAttempts - 1) break;
-
-      const retryAfter = response.headers.get('retry-after');
-      const delay = retryAfter
-        ? Math.min(Math.max(Number(retryAfter) * 1000, 1000), 8000)
-        : Math.min(900 * 2 ** attempt, 8000) + Math.floor(Math.random() * 400);
-      await sleep(delay);
+      const message = await response.text();
+      const error = makeOpenAIHttpError(response, message);
+      console.warn('[openaiTTS] upstream error', { ...meta, requestId, status: response.status, latencyMs, attempt, retryable: error.retryable, message: error.message.slice(0, 300) });
+      throw error;
     } catch (error) {
-      lastMessage = error.message || String(error);
-      console.warn('[openaiTTS] exception', { ...meta, attempt: attempt + 1, message: lastMessage });
-      if (attempt === maxAttempts - 1) break;
-      await sleep(Math.min(900 * 2 ** attempt, 8000));
+      if (error?.name === 'AbortError') {
+        const timeoutError = new Error('OpenAI TTS request timed out.');
+        timeoutError.status = 408;
+        timeoutError.retryable = true;
+        throw timeoutError;
+      }
+      throw error;
     }
-  }
-
-  const error = new Error(lastMessage);
-  error.status = lastStatus;
-  throw error;
+    },
+  });
 }
 
 export async function synthesizeTTSChunk({
