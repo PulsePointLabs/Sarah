@@ -20,6 +20,29 @@ import { writeChapterSidecars } from './audioChapters.js';
 
 const MAX_TTS_EXPORT_CHUNKS = Number(process.env.OPENAI_TTS_EXPORT_MAX_CHUNKS || 160);
 const MAX_TTS_EXPORT_CHARACTERS = Number(process.env.OPENAI_TTS_EXPORT_MAX_CHARACTERS || 150_000);
+const TTS_EXPORT_MERGED_TARGET_CHARACTERS = Number(process.env.OPENAI_TTS_EXPORT_MERGED_TARGET_CHARACTERS || 1000);
+
+export function coalesceTTSExportChunks(chunks = [], targetCharacters = TTS_EXPORT_MERGED_TARGET_CHARACTERS) {
+  const target = Math.max(360, Math.min(2400, Number(targetCharacters) || 1000));
+  const merged = [];
+
+  for (const rawChunk of Array.isArray(chunks) ? chunks : []) {
+    const text = String(rawChunk?.text || '').trim();
+    if (!text) continue;
+    const previousContext = String(rawChunk?.previousContext || '').trim();
+    const current = merged[merged.length - 1];
+    const combinedLength = current ? current.text.length + 1 + text.length : text.length;
+
+    if (current && combinedLength <= target) {
+      current.text = `${current.text} ${text}`;
+      continue;
+    }
+
+    merged.push({ text, previousContext });
+  }
+
+  return merged;
+}
 
 export function validateTTSExportChunkPayload(chunks = []) {
   if (!chunks.length) {
@@ -152,12 +175,12 @@ export async function renderTTSExport(payload = {}, options = {}) {
     const finalSpeed = clampSpeed(speed);
     const outputFormat = normalizeTTSExportFormat(requestedOutputFormat);
     const supportsInstructionsForModel = supportsTTSInstructions(model);
-    const normalizedChunks = (Array.isArray(chunks) ? chunks : [])
+    const normalizedChunks = coalesceTTSExportChunks((Array.isArray(chunks) ? chunks : [])
       .map((chunk) => ({
         text: String(chunk?.text || '').trim(),
         previousContext: String(chunk?.previousContext || '').trim(),
       }))
-      .filter((chunk) => chunk.text);
+      .filter((chunk) => chunk.text));
 
     validateTTSExportChunkPayload(normalizedChunks);
 
