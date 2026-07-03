@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { BleClient } from "@capacitor-community/bluetooth-le";
-import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, Footprints, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, ScanSearch, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
+import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, Footprints, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
 import {
   CartesianGrid,
   Legend,
@@ -2652,7 +2652,7 @@ export default function LiveCapture() {
   const emgLive = captureMode !== "hr" && recordingActive && isRecent(emgSourceAt);
   const mainTelemetryView = captureMode === "hr";
   const telemetryEmgLive = recordingActive && isRecent(emgSourceAt);
-  const distanceTelemetryView = mainTelemetryView || focusView;
+  const distanceTelemetryView = true;
   const hasHrTrend = telemetryHistory.some((point) => point.hr != null || point.hrSmoothed != null);
   const hasEmgTrend = telemetryHistory.some((point) => point.left != null || point.right != null || point.diff != null);
   const currentHrLevel = hrLevelPercent(hrTelemetry?.currentHr, hrTelemetry?.baselineHr);
@@ -5078,10 +5078,7 @@ export default function LiveCapture() {
       : liveCueSettings.enabled && !liveCueAudio.ready
         ? "Prepare Sarah and Start Session"
         : "Start Session";
-  const launchCueSummary = liveCueEngine.latestCue
-    ? `Latest Sarah cue · ${liveCueEngine.latestCue.phrase}`
-    : `Sarah voice · ${LIVE_CUE_PRESETS[liveCueSettings.style]?.label || "Soft"} · ${Math.round((liveCueSettings.volume ?? 0.28) * 100)}% · ${liveCueAudio.ready ? "Preloaded" : liveCueSettings.enabled ? "Not preloaded yet" : "Disabled"}`;
-  const showAdvancedSetupConsole = advancedSetupOpen || launchActive;
+  const showAdvancedSetupConsole = advancedSetupOpen;
 
   return (
     <div className={`${focusView ? "h-screen overflow-y-auto p-4" : "p-4 md:p-6"} space-y-4`}>
@@ -5162,10 +5159,8 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {!focusView && !mainTelemetryView && (
+      {!focusView && !mainTelemetryView && !launchActive && (
         <LiveCaptureLaunchpad
-          captureKind={captureKind}
-          onCaptureKindChange={setCaptureKind}
           setupSummary={launchSetupSummary}
           readiness={launchReadiness}
           primaryLabel={launchPrimaryLabel}
@@ -5173,9 +5168,6 @@ export default function LiveCapture() {
           primaryDisabled={launchActive}
           progress={launchState.steps}
           active={launchActive}
-          cueSummary={launchCueSummary}
-          advancedOpen={advancedSetupOpen}
-          onChangeSetup={() => setAdvancedSetupOpen((open) => !open)}
           onStart={() => startFromLaunchpad().catch((error) => {
             toast({
               title: "Live Capture launch paused",
@@ -5186,7 +5178,7 @@ export default function LiveCapture() {
         />
       )}
 
-      {!focusView && !mainTelemetryView && (
+      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
         <CollapsibleControlSection
           icon={Activity}
           title="Blood Pressure"
@@ -5288,7 +5280,7 @@ export default function LiveCapture() {
         </CollapsibleControlSection>
       )}
 
-      {!focusView && !mainTelemetryView && (
+      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
         <LiveSessionMobileRecorder
           activeSessionDoc={activeSessionDoc}
           liveSession={liveSession}
@@ -5340,37 +5332,6 @@ export default function LiveCapture() {
           icon={Radio}
         />
         <div className="flex flex-wrap items-center gap-2 md:mt-1">
-          <div className="inline-flex shrink-0 rounded-lg border border-border bg-card p-1 shadow-sm">
-            {CAPTURE_KINDS.map((kind) => {
-              const active = captureKind === kind.value;
-              return (
-                <button
-                  key={kind.value}
-                  type="button"
-                  disabled={recordingActive}
-                  title={kind.helper}
-                  onClick={() => setCaptureKind(kind.value)}
-                  className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-semibold transition-colors ${
-                    active
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
-                  }`}
-                >
-                  {kind.value === "body_exploration" ? <ScanSearch className="h-3.5 w-3.5" /> : <Radio className="h-3.5 w-3.5" />}
-                  {kind.label}
-                </button>
-              );
-            })}
-          </div>
-          <label className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground shadow-sm">
-            <input
-              type="checkbox"
-              checked={telemetryNoticesEnabled}
-              onChange={(event) => setTelemetryNoticesEnabled(event.target.checked)}
-              className="h-4 w-4 accent-primary"
-            />
-            Live notices
-          </label>
           <button
             type="button"
             onClick={() => setFocusView(true)}
@@ -5381,14 +5342,59 @@ export default function LiveCapture() {
           </button>
           <button
             type="button"
-            onClick={() => setPresetModalOpen(true)}
+            onClick={() => setAdvancedSetupOpen((open) => !open)}
+            aria-expanded={advancedSetupOpen}
             className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground shadow-sm hover:bg-muted/50"
           >
             <SlidersHorizontal className="h-4 w-4 text-primary" />
-            <span>{selectedCaptureMode.label}</span>
+            <span>Settings & Devices</span>
+            <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${advancedSetupOpen ? "rotate-180" : ""}`} />
           </button>
         </div>
       </div>}
+
+      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
+        <div className="rounded-xl border border-border bg-card p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-primary">Session Settings</p>
+              <p className="mt-1 text-sm text-muted-foreground">Capture type, notices, presets, and optional devices.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <div className="inline-flex rounded-lg border border-border bg-muted/25 p-1">
+                {CAPTURE_KINDS.map((kind) => (
+                  <button
+                    key={kind.value}
+                    type="button"
+                    disabled={recordingActive}
+                    onClick={() => setCaptureKind(kind.value)}
+                    className={`rounded-md px-2.5 py-1.5 text-sm font-semibold ${captureKind === kind.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-background"}`}
+                  >
+                    {kind.label}
+                  </button>
+                ))}
+              </div>
+              <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold text-foreground">
+                <input
+                  type="checkbox"
+                  checked={telemetryNoticesEnabled}
+                  onChange={(event) => setTelemetryNoticesEnabled(event.target.checked)}
+                  className="h-4 w-4 accent-primary"
+                />
+                Live notices
+              </label>
+              <button
+                type="button"
+                onClick={() => setPresetModalOpen(true)}
+                className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted"
+              >
+                <SlidersHorizontal className="h-4 w-4 text-primary" />
+                {selectedCaptureMode.label}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {!focusView && captureKindError && (
         <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -6887,7 +6893,7 @@ export default function LiveCapture() {
         </div>
       </div>
 
-      {!focusView && <CollapsibleControlSection
+      {!focusView && showAdvancedSetupConsole && <CollapsibleControlSection
         icon={FileText}
         title="Capture Files"
         helper="Latest finalized HR and EMG exports."
