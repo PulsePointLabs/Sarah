@@ -218,3 +218,37 @@ export function sanitizeSleeveSessionText(text) {
     flags,
   };
 }
+
+function statedPauseDurationSeconds(text = '') {
+  const match = String(text).match(/\b(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s)\b/i);
+  return match ? Number(match[1]) : null;
+}
+
+export function hasConfirmedStimulationPauseEvidence(item, supportingText = '') {
+  const text = [
+    item?.title,
+    item?.text,
+    item?.findingText,
+    item?.note,
+    supportingText,
+  ].filter(Boolean).join(' ').toLowerCase();
+  if (!/(stimulation|stroking|stroke|genital contact|penile contact|hand motion|sleeve motion).{0,40}(pause|pauses|paused|stop|stops|stopped|cease|ceases|ceased)|\b(pause|pauses|paused|stops?|stopped|ceases?|ceased)\b.{0,40}(stimulation|stroking|stroke|contact|motion)/i.test(text)) return false;
+
+  const releasedContact = /(hand|hands|sleeve|device).{0,45}(lift(?:s|ed)? clear|leave(?:s)?|left|withdraw(?:s|n|al)?|release(?:s|d)?|separate(?:s|d)?|move(?:s|d)? away)|(?:no|without) (?:visible )?(?:hand|sleeve|device|genital|penile) contact|contact (?:is |remains )?(?:absent|released|broken)/i.test(text);
+  const allMotionStopped = /(?:all|whole[- ]frame|hand and device|hand\/device) (?:visible )?motion (?:is |remains )?(?:absent|still|stopped|ceased)|(?:complete|sustained) stillness/i.test(text);
+  const duration = statedPauseDurationSeconds(text);
+  const sustained = (Number.isFinite(duration) && duration >= 2.5)
+    || /(sustained|prolonged|for several seconds|through(?:out)? the remainder|remains absent|continues without contact|until the end of the window)/i.test(text);
+  return sustained && (releasedContact || allMotionStopped);
+}
+
+export function sanitizeUnsupportedStimulationPauseClaim(text, supportingText = '') {
+  const value = String(text || '');
+  if (!/(stimulation|stroking|stroke|genital contact|penile contact|hand motion|sleeve motion).{0,40}(pause|pauses|paused|stop|stops|stopped|cease|ceases|ceased)|\b(pause|pauses|paused|stops?|stopped|ceases?|ceased)\b.{0,40}(stimulation|stroking|stroke|contact|motion)/i.test(value)) return value;
+  if (hasConfirmedStimulationPauseEvidence({ text: value }, supportingText)) return value;
+  return value
+    .replace(/\b(?:stimulation|stroking|stroke(?:s)?|genital contact|penile contact|hand motion|sleeve motion)\s+(?:briefly\s+)?(?:pauses?|paused|stops?|stopped|ceases?|ceased)\b/gi, 'visible stimulation cadence briefly decreases')
+    .replace(/\b(?:brief\s+)?(?:pause|paused|stoppage)\s+(?:in|of)\s+(?:stimulation|stroking|stroke(?:s)?|genital contact|penile contact|hand motion|sleeve motion)\b/gi, 'brief decrease in visible stimulation cadence')
+    .replace(/\s+/g, ' ')
+    .trim();
+}

@@ -7,6 +7,8 @@ import {
   sanitizeSecondPersonProcedureLanguage,
   sanitizeFoleyProcedureText,
   sanitizeSleeveSessionText,
+  hasConfirmedStimulationPauseEvidence,
+  sanitizeUnsupportedStimulationPauseClaim,
 } from '../../src/lib/videoPassTextGuards.js';
 
 test('blocks Foley tip-at-meatus claims when contact is not explicitly confirmed', () => {
@@ -93,4 +95,22 @@ test('device evidence badge marks blocked claims', () => {
 
   assert.equal(result.blocked, true);
   assert.equal(result.stage, 'meatus contact not confirmed');
+});
+
+test('ongoing stroking with a brief motion dip is not accepted as a pause', () => {
+  const context = 'Repeated mid-shaft strokes remain visible while the hand briefly dwells at the base.';
+  assert.equal(hasConfirmedStimulationPauseEvidence({
+    note: 'Stimulation pauses briefly before the next stroke.',
+    category: ['stimulation_paused'],
+  }, context), false);
+  assert.doesNotMatch(
+    sanitizeUnsupportedStimulationPauseClaim('Stimulation pauses briefly before the next stroke.', context),
+    /stimulation pauses/i,
+  );
+});
+
+test('sustained released contact is accepted as a stimulation pause', () => {
+  const note = 'Your hand lifts clear of your penis and contact remains absent for 3.2 seconds while all visible stimulation motion stops.';
+  assert.equal(hasConfirmedStimulationPauseEvidence({ note, category: ['stimulation_paused'] }), true);
+  assert.equal(sanitizeUnsupportedStimulationPauseClaim(note), note);
 });

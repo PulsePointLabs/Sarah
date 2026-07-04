@@ -39,6 +39,8 @@ import {
   sanitizeFoleyProcedureText as sanitizeFoleyProcedureTextGuard,
   sanitizeSecondPersonProcedureLanguage,
   sanitizeSleeveSessionText,
+  hasConfirmedStimulationPauseEvidence,
+  sanitizeUnsupportedStimulationPauseClaim,
 } from "@/lib/videoPassTextGuards";
 import { reduceConsistencyPhraseRepetition } from "@/utils/aiTextRepair";
 import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
@@ -774,8 +776,15 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
       category: "other",
     }];
   const events = Array.isArray(value?.events) ? value.events : [];
+  const rawWindowText = [
+    value?.summary,
+    ...findings.flatMap((finding) => [finding?.title, finding?.text, finding?.findingText]),
+    ...events.flatMap((event) => [event?.note, event?.text]),
+  ].filter(Boolean).join(' ');
   const cleanTextForMode = (text) => (
-    isExploration ? sanitizeExplorationFoleyText(text) : sanitizeRegularSessionDeviceText(text)
+    isExploration
+      ? sanitizeExplorationFoleyText(text)
+      : sanitizeUnsupportedStimulationPauseClaim(sanitizeRegularSessionDeviceText(text), rawWindowText)
   );
   return {
     summary: cleanTextForMode(value?.summary || findings[0]?.text || "Review complete."),
@@ -795,7 +804,11 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
       confidence: (hasUnsupportedFoleySecurementClaim(finding) || hasUnsupportedFoleyStageForecast(finding) || hasUnsupportedAlreadyPlacedClaim(finding) || hasUnsupportedMeatusContactClaimGuard(finding) || hasUnsupportedSleeveUseClaimGuard(finding)) && finding.confidence === "high" ? "moderate" : finding.confidence || "moderate",
       category: finding.category || "other",
     })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding) && !isTelemetryOnlyFinding(finding) && !isGenericControlObjectMention(finding) && !isLowValueNoChangeForRole(finding, selectedRole) && !isOutOfLaneForRole(finding, selectedRole)),
-    events: events.map((event) => {
+    events: events.filter((event) => (
+      isExploration
+      || !/(stimulation_paused|motion_pause)/i.test(arrayFromMaybe(event?.category).join(' '))
+      || hasConfirmedStimulationPauseEvidence(event, rawWindowText)
+    )).map((event) => {
       const unsupportedFoleyForecast = isExploration && hasUnsupportedFoleyStageForecast(event);
       const unsupportedAlreadyPlaced = isExploration && hasUnsupportedAlreadyPlacedClaim(event);
       const unsupportedMeatusClaim = isExploration && hasUnsupportedMeatusContactClaimGuard(event);
@@ -2320,6 +2333,8 @@ Current-frame override rule: the sampled frames in this request are the primary 
 Scrotal/testicular observation rule: in regular session reviews, give the scrotum/testes the same attention as shaft/glans state when they are visible. Track scrotal/testicular position, progressive lift/retraction, relaxation/descent, asymmetry, skin tightening/wrinkling, surface sheen, and visible tissue color shifts such as flushing, darker/redder tone, blanching, or return toward baseline. Compare sampled frames and nearby windows before calling a change progressive. Do not overcall color or tissue changes from lighting, camera exposure, shadow, compression artifacts, or app overlays; use "visible color/tension change" or "possible lighting-related change" when uncertain.
 
 Positive action tracking rule: describe visible contact or motion before describing absence. For regular session reviews, if any sampled frame shows hand contact with the penis, glans, shaft, scrotal-base/perineal region, sleeve/device, or visible stimulation-related motion, treat the window as active stimulation/contact or a stimulation transition unless the sequence clearly shows a pause. Do not claim sleeve-based stimulation, sleeve stroking, or sleeve placement until the sleeve is visibly placed on/over the shaft or visibly used around the penis; if the sleeve is only nearby, in hand, or outside the frame, describe hand contact/prep instead. For body exploration reviews, if any sampled frame shows glove change, swab/wipe/applicator/tool/catheter/tubing contact, or setup movement, describe that procedural action rather than saying nothing is happening. For Foley reviews, prefer the exact visible action: table positioning, glove change/prep, drape/setup, swabbing, lubrication/dilation, penis stabilization, catheter not visible, catheter approach, catheter tip at the meatus, insertion beginning, active advancement from visible motion or shortening external catheter length, visible catheter/Foley-at-meatus state, tubing handling, balloon inflation, drape removal, or urine collection. Do not use already-in-place unless completion evidence is visible or manually logged.
+
+Stimulation-pause threshold rule: slower cadence, reversal at the end of a stroke, a brief hand dwell, low frame-difference motion, grip adjustment, or less visible movement is not a stimulation pause. Use stimulation_paused or motion_pause only when the sampled sequence shows at least 2.5 seconds of sustained cessation AND either the hand/sleeve/device visibly releases or separates from the penis, or all visible hand/device stimulation motion remains absent through that interval. If contact remains and repeated strokes continue anywhere in the sampled sequence, describe slower cadence or a grip/technique transition instead. A local low-motion candidate is only a whole-frame stillness hint and never proves a stimulation pause by itself.
 
 Sleeve/contact state rule: evaluate sleeve presence, sleeve motion, and body contact as three separate observations in every regular-session window. A sleeve visibly held stationary around the shaft or at the penile base means sleeve contact is maintained while stroking is paused; it is not a bare penis and it is not no-contact. Call the penis bare only when the shaft is directly visible and the sleeve is visibly separated from it. Call no contact only when neither a hand nor the sleeve/device is visibly touching the penis. Do not carry sleeve placement forward from a prior window: sleeve-on requires visible overlap with the shaft in the current sampled frames, while a sleeve merely held nearby or above the shaft is not sleeve contact.
 

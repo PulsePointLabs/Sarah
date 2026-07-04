@@ -378,7 +378,7 @@ function summarizeMotion(samples, fps) {
     if ((!isQuiet || index === diffs.length - 1) && runStart != null) {
       const runEnd = isQuiet && index === diffs.length - 1 ? index : index - 1;
       const duration = (runEnd - runStart + 1) / fps;
-      if (duration >= 0.8) {
+      if (duration >= 2.5) {
         pauseCandidates.push({
           startSeconds: Number((runStart / fps).toFixed(2)),
           endSeconds: Number(((runEnd + 1) / fps).toFixed(2)),
@@ -399,7 +399,7 @@ function summarizeMotion(samples, fps) {
     peak_motion: Number(peak.toFixed(4)),
     active_motion_pct: activePct,
     pause_candidates: pauseCandidates.slice(0, 6),
-    note: 'Motion is estimated locally from downscaled grayscale frame differences. It is useful for relative speed, pause, and intensity changes, not for confirming technique or intent by itself.',
+    note: 'Motion is estimated locally from downscaled grayscale frame differences. Quiet windows shorter than 2.5 seconds are ignored. Remaining candidates indicate sustained whole-frame stillness only and cannot confirm released genital contact or a stimulation pause by themselves.',
   };
 }
 
