@@ -114,3 +114,23 @@ test('sustained released contact is accepted as a stimulation pause', () => {
   assert.equal(hasConfirmedStimulationPauseEvidence({ note, category: ['stimulation_paused'] }), true);
   assert.equal(sanitizeUnsupportedStimulationPauseClaim(note), note);
 });
+
+test('maintained contact plus obvious shaft stroking is rewritten away from pause language', () => {
+  const context = 'Hand remains in contact with the penile shaft while repeated up-and-down shaft strokes continue.';
+  const result = sanitizeUnsupportedStimulationPauseClaim(
+    'Stimulation pauses and no hand contact is visible.',
+    context,
+  );
+
+  assert.match(result, /visible shaft stroking continues under maintained contact/i);
+  assert.match(result, /maintained contact remains visible/i);
+  assert.doesNotMatch(result, /stimulation pauses/i);
+  assert.doesNotMatch(result, /no hand contact is visible/i);
+});
+
+test('held-but-still sustained interval remains eligible as a true pause', () => {
+  const note = 'Stimulation pauses while your hand remains on the penile shaft with complete stillness for 2.8 seconds and all visible motion remains absent through the remainder of the window.';
+
+  assert.equal(hasConfirmedStimulationPauseEvidence({ note, category: ['stimulation_paused'] }), true);
+  assert.equal(sanitizeUnsupportedStimulationPauseClaim(note), note);
+});

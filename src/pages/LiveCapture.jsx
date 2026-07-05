@@ -1381,12 +1381,14 @@ export default function LiveCapture() {
   const directH10IntentionalDisconnectRef = useRef(false);
   const directH10ReconnectAttemptRef = useRef(0);
   const directH10ReconnectTimerRef = useRef(null);
+  const directH10ForegroundReconnectCooldownRef = useRef(0);
   const directH10ReconnectEnabledRef = useRef(false);
   const directH10ConnectRef = useRef(null);
   const directH10AutoConnectStartedRef = useRef(false);
   const howlAutoLastActionRef = useRef({ at: 0, intensity: null, reason: "" });
   const bpSyncInFlightRef = useRef(false);
   const bpOmronActionInFlightRef = useRef(false);
+  const bpForegroundRefreshCooldownRef = useRef(0);
   const bpOmronSeenRef = useRef(new Set());
   const bpSessionIdRef = useRef(null);
   const howlSettingsDirtyRef = useRef(false);
@@ -2215,10 +2217,13 @@ export default function LiveCapture() {
     let appStateHandle = null;
     const reconnectRememberedH10 = () => {
       if (!mounted || document.visibilityState === "hidden") return;
+      const now = Date.now();
       const current = directH10StatusRef.current || {};
       const lastPacketMs = timestampMs(current.lastMessageAt);
       const hasFreshPacket = current.connected && Number.isFinite(lastPacketMs) && Date.now() - lastPacketMs <= 9000;
       if (current.connecting || hasFreshPacket) return;
+      if (now - directH10ForegroundReconnectCooldownRef.current < 12000) return;
+      directH10ForegroundReconnectCooldownRef.current = now;
       scheduleNativeH10Reconnect({ reason: "Restoring the remembered Polar H10 connection." });
     };
     const onVisibilityChange = () => {
@@ -2413,7 +2418,6 @@ export default function LiveCapture() {
       setFiles(data.files || null);
       setLiveSession(data.session || null);
       setCalibrationCommandStatus(data.emg?.calibrationCommandStatus || null);
-      appendTelemetryPoint(nextHr, nextEmg);
     }).catch(() => {});
 
     const events = new EventSource(apiUrl("/live-capture/stream"));
@@ -2432,7 +2436,6 @@ export default function LiveCapture() {
       setFiles(data.files || null);
       setLiveSession(data.session || null);
       setCalibrationCommandStatus(data.emg?.calibrationCommandStatus || null);
-      appendTelemetryPoint(nextHr, nextEmg);
     });
     events.addEventListener("hr_telemetry", (event) => {
       const data = JSON.parse(event.data);
@@ -3534,8 +3537,15 @@ export default function LiveCapture() {
     let appStateHandle = null;
     const refreshAndRearmBloodPressure = () => {
       if (!mounted) return;
-      syncBloodPressureForLiveSession({ manual: false });
-      if (isOmronAutoListenEnabled() && !getOmronBloodPressureListenerState()?.listening) {
+      const now = Date.now();
+      if (now - bpForegroundRefreshCooldownRef.current < 12000) return;
+      bpForegroundRefreshCooldownRef.current = now;
+      const listenerState = getOmronBloodPressureListenerState();
+      const listenerActive = Boolean(bpOmronListening || listenerState?.listening);
+      if (!listenerActive && !bpOmronActionInFlightRef.current) {
+        syncBloodPressureForLiveSession({ manual: false });
+      }
+      if (isOmronAutoListenEnabled() && !listenerActive && !bpOmronActionInFlightRef.current) {
         startOmronBloodPressureListenerForLiveSession({ auto: true }).catch(() => {});
       }
     };
@@ -3562,6 +3572,7 @@ export default function LiveCapture() {
       appStateHandle?.remove?.();
     };
   }, [
+    bpOmronListening,
     liveSession?.activeSessionId,
     startOmronBloodPressureListenerForLiveSession,
     syncBloodPressureForLiveSession,

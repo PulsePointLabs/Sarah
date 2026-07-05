@@ -224,6 +224,16 @@ function statedPauseDurationSeconds(text = '') {
   return match ? Number(match[1]) : null;
 }
 
+function hasRepeatedActiveStrokeCue(text = '') {
+  const value = String(text);
+  return /(?:repeated|rhythmic|continuous|continued|ongoing|active|visible)\s+(?:up[-\s]?and[-\s]?down\s+)?(?:shaft\s+)?strok(?:e|es|ing)|(?:up[-\s]?and[-\s]?down|back[-\s]?and[-\s]?forth)\s+(?:shaft\s+)?strok(?:e|es|ing)|hand\s+(?:continues|continued|keeps)\s+(?:to\s+)?strok(?:e|es|ing)|shaft\s+strok(?:e|es|ing)\s+(?:remains|continues|continued)\s+visible/i.test(value);
+}
+
+function hasMaintainedContactCue(text = '') {
+  const value = String(text);
+  return /(?:hand|hands|sleeve|device|grip|fingers?)\s+(?:remains?|stays?|stayed|keeps?|kept)\s+(?:in|on|around|over)\s+contact|contact\s+(?:remains?|stays?|stayed|is)\s+(?:present|maintained|continuous)|(?:still|continued)\s+(?:holding|gripping|touching)\s+(?:the\s+)?penis|sleeve\s+(?:remains?|stays?|stayed|is)\s+(?:around|on|over)\s+(?:the\s+)?shaft/i.test(value);
+}
+
 export function hasConfirmedStimulationPauseEvidence(item, supportingText = '') {
   const text = [
     item?.title,
@@ -234,11 +244,14 @@ export function hasConfirmedStimulationPauseEvidence(item, supportingText = '') 
   ].filter(Boolean).join(' ').toLowerCase();
   if (!/(stimulation|stroking|stroke|genital contact|penile contact|hand motion|sleeve motion).{0,40}(pause|pauses|paused|stop|stops|stopped|cease|ceases|ceased)|\b(pause|pauses|paused|stops?|stopped|ceases?|ceased)\b.{0,40}(stimulation|stroking|stroke|contact|motion)/i.test(text)) return false;
 
+  const repeatedStroking = hasRepeatedActiveStrokeCue(text);
+  const maintainedContact = hasMaintainedContactCue(text);
   const releasedContact = /(hand|hands|sleeve|device).{0,45}(lift(?:s|ed)? clear|leave(?:s)?|left|withdraw(?:s|n|al)?|release(?:s|d)?|separate(?:s|d)?|move(?:s|d)? away)|(?:no|without) (?:visible )?(?:hand|sleeve|device|genital|penile) contact|contact (?:is |remains )?(?:absent|released|broken)/i.test(text);
   const allMotionStopped = /(?:all|whole[- ]frame|hand and device|hand\/device) (?:visible )?motion (?:is |remains )?(?:absent|still|stopped|ceased)|(?:complete|sustained) stillness/i.test(text);
   const duration = statedPauseDurationSeconds(text);
   const sustained = (Number.isFinite(duration) && duration >= 2.5)
     || /(sustained|prolonged|for several seconds|through(?:out)? the remainder|remains absent|continues without contact|until the end of the window)/i.test(text);
+  if (repeatedStroking && maintainedContact && !releasedContact) return false;
   return sustained && (releasedContact || allMotionStopped);
 }
 
@@ -246,9 +259,16 @@ export function sanitizeUnsupportedStimulationPauseClaim(text, supportingText = 
   const value = String(text || '');
   if (!/(stimulation|stroking|stroke|genital contact|penile contact|hand motion|sleeve motion).{0,40}(pause|pauses|paused|stop|stops|stopped|cease|ceases|ceased)|\b(pause|pauses|paused|stops?|stopped|ceases?|ceased)\b.{0,40}(stimulation|stroking|stroke|contact|motion)/i.test(value)) return value;
   if (hasConfirmedStimulationPauseEvidence({ text: value }, supportingText)) return value;
+  const contextualText = `${value} ${supportingText}`.trim();
+  const activeStrokeReplacement = hasRepeatedActiveStrokeCue(contextualText) && hasMaintainedContactCue(contextualText)
+    ? 'visible shaft stroking continues under maintained contact'
+    : 'visible stimulation cadence briefly decreases';
   return value
     .replace(/\b(?:stimulation|stroking|stroke(?:s)?|genital contact|penile contact|hand motion|sleeve motion)\s+(?:briefly\s+)?(?:pauses?|paused|stops?|stopped|ceases?|ceased)\b/gi, 'visible stimulation cadence briefly decreases')
     .replace(/\b(?:brief\s+)?(?:pause|paused|stoppage)\s+(?:in|of)\s+(?:stimulation|stroking|stroke(?:s)?|genital contact|penile contact|hand motion|sleeve motion)\b/gi, 'brief decrease in visible stimulation cadence')
+    .replace(/\b(?:visible stimulation cadence briefly decreases|brief decrease in visible stimulation cadence)\b/gi, activeStrokeReplacement)
+    .replace(/\b(?:no|without)\s+(?:visible\s+)?(?:hand|sleeve|device|genital|penile)\s+contact\b/gi, hasMaintainedContactCue(contextualText) ? 'maintained contact remains visible' : '$&')
+    .replace(/\b(?:penis|shaft)\s+(?:is\s+)?bare\b/gi, /sleeve/.test(contextualText) && hasMaintainedContactCue(contextualText) ? 'penis remains under visible sleeve/hand contact' : '$&')
     .replace(/\s+/g, ' ')
     .trim();
 }
