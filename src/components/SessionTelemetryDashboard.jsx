@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Clapperboard, Crosshair, HeartPulse, Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import HRTimelineChart from "./HRTimelineChart";
 import EMGTimelineChart from "./EMGTimelineChart";
 import PerinealEmgPanel from "./PerinealEmgPanel";
@@ -47,6 +54,7 @@ export default function SessionTelemetryDashboard({
   const [inspectorSpeed, setInspectorSpeed] = useState(1);
   const [inspectorDockOpen, setInspectorDockOpen] = useState(false);
   const [inspectorDockExpanded, setInspectorDockExpanded] = useState(false);
+  const [inspectorMobileOpen, setInspectorMobileOpen] = useState(false);
   const inspectionTimeRef = useRef(Number(inspectionTime) || 0);
   const events = Array.isArray(session.event_timeline) ? session.event_timeline : [];
   const perinealEmgSummary = useMemo(() => summarizePerinealEmg(session), [session]);
@@ -91,7 +99,20 @@ export default function SessionTelemetryDashboard({
       onInspectionTimeChange?.(0);
     }
     setInspectorDockOpen(true);
+    setInspectorMobileOpen(true);
     setInspectorPlaying((playing) => !playing);
+  };
+
+  const closeInspector = () => {
+    setInspectorPlaying(false);
+    setInspectorDockOpen(false);
+    setInspectorDockExpanded(false);
+    setInspectorMobileOpen(false);
+  };
+
+  const openMobileInspector = () => {
+    setInspectorDockOpen(true);
+    setInspectorMobileOpen(true);
   };
 
   const jumpToEvent = (entry) => {
@@ -195,9 +216,11 @@ export default function SessionTelemetryDashboard({
             onClick={() => onSelectEventIndex?.(events.indexOf(nearestEvent))}
             className="w-full rounded-lg border border-border bg-card/70 px-3 py-2 text-left text-sm hover:border-primary/40"
           >
-            <span className="mr-2 font-mono text-xs font-semibold text-primary">{formatTime(nearestEvent.time_s)}</span>
-            <span className="text-muted-foreground">Nearest event: </span>
-            <span className="text-foreground">{nearestEvent.note || "Untitled event"}</span>
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+              <span className="font-mono text-xs font-semibold text-primary">{formatTime(nearestEvent.time_s)}</span>
+              <span className="text-muted-foreground">Nearest event</span>
+            </div>
+            <p className="mt-1 whitespace-pre-wrap break-words text-foreground">{nearestEvent.note || "Untitled event"}</p>
           </button>
         )}
       </div>
@@ -267,13 +290,148 @@ export default function SessionTelemetryDashboard({
         </div>
       )}
 
+      <Sheet
+        open={inspectorMobileOpen}
+        onOpenChange={(open) => {
+          setInspectorMobileOpen(open);
+          if (!open) setInspectorPlaying(false);
+        }}
+      >
+        <SheetContent
+          side="bottom"
+          className="flex h-[100dvh] flex-col overflow-hidden rounded-none border-0 px-0 pb-0 pt-0 md:hidden"
+        >
+          <SheetHeader className="border-b border-border px-4 pb-3 pt-6 text-left">
+            <SheetTitle className="flex items-center gap-2 text-base">
+              <Crosshair className="h-4 w-4 text-rose-400" />
+              Playback Inspector
+            </SheetTitle>
+            <SheetDescription>
+              Full event note with the live evidence cursor and timeline marker.
+            </SheetDescription>
+          </SheetHeader>
+
+          <div className="flex-1 overflow-y-auto px-4 pb-6 pt-4">
+            {timelineRows.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Heart Rate Timeline
+                  </p>
+                  <span className="font-mono text-lg font-bold text-rose-400">{formatTime(inspectionTime)}</span>
+                </div>
+                <div className="rounded-xl border border-border bg-card p-2">
+                  <HRTimelineChart
+                    rows={timelineRows}
+                    savedMarkers={{
+                      pre_climax_offset_s: session.pre_climax_offset_s,
+                      climax_offset_s: session.climax_offset_s,
+                      recovery_offset_s: session.recovery_offset_s,
+                    }}
+                    onMarkersChange={onMarkersChange}
+                    highlightRange={highlightRange}
+                    noClimax={!!session.no_climax}
+                    nearClimaxEvents={nearClimaxEvents}
+                    events={events}
+                    selectedEventIndex={selectedEventIndex}
+                    onSelectEventIndex={onSelectEventIndex}
+                    initialWindow="full"
+                    inspectionTime={inspectionTime}
+                    onInspectionTimeChange={onInspectionTimeChange}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 rounded-xl border border-border bg-card p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Current event
+                  </p>
+                  <p className="mt-1 font-mono text-lg font-bold text-primary">
+                    {nearestEvent ? formatTime(nearestEvent.time_s) : formatTime(inspectionTime)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => jumpToEvent(previousEvent)}
+                    disabled={!previousEvent}
+                    className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1.5 text-[10px] font-semibold text-muted-foreground disabled:opacity-40"
+                    title={previousEvent ? `Jump to ${formatTime(previousEvent.timeS)}` : "No earlier event marker"}
+                  >
+                    <SkipBack className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => jumpToEvent(nextEvent)}
+                    disabled={!nextEvent}
+                    className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1.5 text-[10px] font-semibold text-muted-foreground disabled:opacity-40"
+                    title={nextEvent ? `Jump to ${formatTime(nextEvent.timeS)}` : "No later event marker"}
+                  >
+                    <SkipForward className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+              <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-foreground">
+                {nearestEvent?.note || "No saved event note at this cursor yet."}
+              </p>
+            </div>
+          </div>
+
+          <div className="border-t border-border bg-background/95 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={toggleInspectorPlayback}
+                disabled={durationS <= 0}
+                className="inline-flex items-center gap-1.5 rounded-md border border-rose-400/30 bg-rose-400/[0.08] px-3 py-2 text-xs font-semibold text-rose-300 disabled:opacity-45"
+              >
+                {inspectorPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                {inspectorPlaying ? "Pause" : "Play"}
+              </button>
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Speed</span>
+              {[0.5, 1, 2, 4].map((speed) => (
+                <button
+                  key={`mobile-${speed}`}
+                  type="button"
+                  onClick={() => setInspectorSpeed(speed)}
+                  className={`rounded-md border px-2 py-1.5 text-[10px] font-semibold ${inspectorSpeed === speed ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}
+                >
+                  {speed}x
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={closeInspector}
+                className="ml-auto rounded-md border border-border px-3 py-2 text-xs font-semibold text-muted-foreground"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+
       {inspectorDockOpen && (
         <div className="fixed bottom-20 left-1/2 z-40 flex w-[min(calc(100vw-2rem),30rem)] -translate-x-1/2 flex-col items-end gap-2 md:left-auto md:right-6 md:translate-x-0">
           {!inspectorDockExpanded && nearestEvent && (
             <button
               type="button"
+              onClick={openMobileInspector}
+              className="max-w-full rounded-lg border border-primary/20 bg-card/95 px-3 py-2 text-left text-xs shadow-lg backdrop-blur hover:border-primary/40 md:hidden"
+              title="Open full playback inspector"
+            >
+              <span className="mr-2 font-mono font-semibold text-primary">{formatTime(nearestEvent.time_s)}</span>
+              <span className="text-muted-foreground">Open inspector</span>
+            </button>
+          )}
+          {!inspectorDockExpanded && nearestEvent && (
+            <button
+              type="button"
               onClick={() => onSelectEventIndex?.(events.indexOf(nearestEvent))}
-              className="max-w-full rounded-lg border border-primary/20 bg-card/95 px-3 py-2 text-left text-xs shadow-lg backdrop-blur hover:border-primary/40"
+              className="hidden max-w-full rounded-lg border border-primary/20 bg-card/95 px-3 py-2 text-left text-xs shadow-lg backdrop-blur hover:border-primary/40 md:block"
               title="Select nearest event"
             >
               <span className="mr-2 font-mono font-semibold text-primary">{formatTime(nearestEvent.time_s)}</span>
@@ -286,6 +444,13 @@ export default function SessionTelemetryDashboard({
               <div className="flex items-center gap-2">
                 <Crosshair className="h-3.5 w-3.5 text-rose-400" />
                 <span className="font-mono text-sm font-bold text-rose-400">{formatTime(inspectionTime)}</span>
+                <button
+                  type="button"
+                  onClick={openMobileInspector}
+                  className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-[11px] font-semibold text-muted-foreground md:hidden"
+                >
+                  Open
+                </button>
                 <button
                   type="button"
                   onClick={toggleInspectorPlayback}
@@ -306,11 +471,7 @@ export default function SessionTelemetryDashboard({
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setInspectorPlaying(false);
-                    setInspectorDockOpen(false);
-                    setInspectorDockExpanded(false);
-                  }}
+                  onClick={closeInspector}
                   className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
                   aria-label="Close inspector playback controls"
                 >
@@ -334,11 +495,7 @@ export default function SessionTelemetryDashboard({
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setInspectorPlaying(false);
-                      setInspectorDockOpen(false);
-                      setInspectorDockExpanded(false);
-                    }}
+                    onClick={closeInspector}
                     className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                     aria-label="Close inspector playback controls"
                   >

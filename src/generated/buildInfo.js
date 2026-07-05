@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.83",
-  "commit": "d2dba7b",
-  "commitMessage": "Add toggleable HRV overlay to session chart",
-  "builtAt": "2026-07-05T01:41:05.820Z"
+  "version": "0.1.84",
+  "commit": "7102586",
+  "commitMessage": "Release Sarah 0.1.84",
+  "builtAt": "2026-07-05T17:28:26.465Z"
 };
