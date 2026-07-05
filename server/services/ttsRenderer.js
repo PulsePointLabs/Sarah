@@ -87,6 +87,19 @@ function ttsExportConcurrency() {
   return Math.max(1, Math.min(4, Math.round(configured)));
 }
 
+export function isRetryableTTSChunkFailure(error) {
+  const message = String(error?.message || error || '');
+  return /failed audio integrity check|too short for the requested text|fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(message);
+}
+
+export function shouldPropagateTTSChunkTrimFailure(error) {
+  return /failed audio integrity check after silence trim|too short for the requested text/i.test(String(error?.message || error || ''));
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function parseSilenceSpans(stderr = '') {
   const spans = [];
   let currentStart = null;
@@ -244,6 +257,10 @@ export async function renderTTSExport(payload = {}, options = {}) {
         expectedDurationSeconds,
         minBytes: 2048,
       });
+      await validateRenderedNarration(chunkPath, {
+        expectedDurationSeconds,
+        label: `TTS export chunk ${i + 1}/${normalizedChunks.length}`,
+      });
       let sourcePath = chunkPath;
       let trimMeta = { chunk: i, trimmed: false };
       try {
@@ -272,6 +289,7 @@ export async function renderTTSExport(payload = {}, options = {}) {
           };
         }
       } catch (error) {
+        if (shouldPropagateTTSChunkTrimFailure(error)) throw error;
         trimMeta = { chunk: i, trimmed: false, warning: error?.message || 'chunk silence trim failed' };
         console.warn('[renderTTSExport] chunk silence trim skipped', trimMeta);
       }
@@ -287,14 +305,15 @@ export async function renderTTSExport(payload = {}, options = {}) {
           : `Generated chunk ${i + 1} of ${normalizedChunks.length}`,
       });
       } catch (error) {
-        const retryableIntegrityFailure = /failed audio integrity check|too short for the requested text/i.test(String(error?.message || ''));
-        if (retryableIntegrityFailure && integrityAttempt < 1 && !options.signal?.aborted) {
+        const retryableFailure = isRetryableTTSChunkFailure(error);
+        if (retryableFailure && integrityAttempt < 1 && !options.signal?.aborted) {
           onProgress({
             phase: 'generating',
             current: completedChunks,
             total: normalizedChunks.length,
-            message: `Regenerating incomplete chunk ${i + 1} of ${normalizedChunks.length}...`,
+            message: `Retrying chunk ${i + 1} of ${normalizedChunks.length}...`,
           });
+          await wait(750);
           return renderChunk(i, integrityAttempt + 1);
         }
         throw error;

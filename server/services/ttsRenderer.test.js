@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { coalesceTTSExportChunks, validateTTSExportChunkPayload } from './ttsRenderer.js';
+import {
+  coalesceTTSExportChunks,
+  isRetryableTTSChunkFailure,
+  shouldPropagateTTSChunkTrimFailure,
+  validateTTSExportChunkPayload,
+} from './ttsRenderer.js';
 
 test('background TTS export merges small APK chunks into fewer requests', () => {
   const chunks = Array.from({ length: 170 }, (_, index) => ({
@@ -43,4 +48,16 @@ test('background TTS export still rejects unbounded total text', () => {
     () => validateTTSExportChunkPayload([{ text: 'x'.repeat(150_001) }]),
     /TTS export text is too large/,
   );
+});
+
+test('silent chunk integrity failures are propagated and retried', () => {
+  const error = new Error('TTS export chunk 46/56 failed audio integrity check after silence trim: decoded duration 2.0s is too short for the requested text (51.0s expected).');
+
+  assert.equal(shouldPropagateTTSChunkTrimFailure(error), true);
+  assert.equal(isRetryableTTSChunkFailure(error), true);
+});
+
+test('transient TTS fetch failures receive one bounded chunk retry', () => {
+  assert.equal(isRetryableTTSChunkFailure(new TypeError('fetch failed')), true);
+  assert.equal(isRetryableTTSChunkFailure(new Error('HTTP 401 authentication failed')), false);
 });
