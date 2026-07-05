@@ -144,6 +144,7 @@ export default function HRTimelineChart({
   const [showPhases, setShowPhases] = useState(true);
   const [showEvents, setShowEvents] = useState(true);
   const [showNearClimax, setShowNearClimax] = useState(true);
+  const [showHrvOverlay, setShowHrvOverlay] = useState(false);
   const [visibleLines, setVisibleLines] = useState({ hr: true, smoothed: true, baseline: true });
   const [showHrvGraph, setShowHrvGraph] = useState(true);
   const [visibleHrvLines, setVisibleHrvLines] = useState({ rmssd: true, sdnn: true, pnn50: false });
@@ -513,7 +514,7 @@ export default function HRTimelineChart({
             ["Build", showBuild, setShowBuild],
             ["Recovery", showRecovery, setShowRecovery],
           ]
-        ).map(([label, active, setter]) => (
+        ).concat(hasHrv ? [["HRV", showHrvOverlay, setShowHrvOverlay]] : []).map(([label, active, setter]) => (
           <Button
             key={label}
             size="sm"
@@ -532,7 +533,7 @@ export default function HRTimelineChart({
         <ResponsiveContainer width="100%" height="100%">
           <LineChart
             data={displayRows}
-            margin={{ top: 8, right: 4, bottom: 0, left: -20 }}
+            margin={{ top: 8, right: showHrvOverlay ? 0 : 4, bottom: 0, left: -20 }}
             {...chartProps}
             onMouseMove={handleInspectMove}
             onClick={handleChartInteraction}
@@ -544,12 +545,25 @@ export default function HRTimelineChart({
               tick={{ fontSize: 9 }}
               tickFormatter={fmtSec}
             />
-            <YAxis tick={{ fontSize: 9 }} domain={["auto", "auto"]} />
+            <YAxis yAxisId={0} tick={{ fontSize: 9 }} domain={["auto", "auto"]} />
+            {showHrvOverlay && hasHrv && (
+              <YAxis
+                yAxisId="hrv"
+                orientation="right"
+                tick={{ fontSize: 8, fill: "#0f766e" }}
+                tickFormatter={(value) => `${Math.round(value)}`}
+                domain={["auto", "auto"]}
+                width={28}
+              />
+            )}
             <Tooltip
               formatter={(val, name) => {
                 if (name === "hr") return [`${Math.round(val)} bpm`, "HR"];
                 if (name === "hr_smoothed") return [`${Math.round(val)} bpm`, "Smoothed"];
                 if (name === "baseline_hr") return [`${Math.round(val)} bpm`, "Baseline"];
+                if (name === "hrv_rmssd_ms") return [`${Math.round(val)} ms`, "RMSSD"];
+                if (name === "hrv_sdnn_ms") return [`${Math.round(val)} ms`, "SDNN"];
+                if (name === "hrv_pnn50") return [`${Math.round(val)}%`, "pNN50"];
                 return [val, name];
               }}
               labelFormatter={(v) => `Time: ${fmtSec(Math.round(Number(v)))}`}
@@ -695,13 +709,22 @@ export default function HRTimelineChart({
             )}
 
             {hasBaseline && visibleLines.baseline && (
-              <Line type="monotone" dataKey="baseline_hr" stroke="#6b7280" strokeWidth={1} strokeDasharray="6 3" dot={false} />
+              <Line yAxisId={0} type="monotone" dataKey="baseline_hr" stroke="#6b7280" strokeWidth={1} strokeDasharray="6 3" dot={false} />
             )}
             {hasSmoothed && visibleLines.smoothed && (
-              <Line type="monotone" dataKey="hr_smoothed" stroke="hsl(var(--chart-2))" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+              <Line yAxisId={0} type="monotone" dataKey="hr_smoothed" stroke="hsl(var(--chart-2))" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
             )}
             {visibleLines.hr && (
-              <Line type="monotone" dataKey="hr" stroke="hsl(var(--primary))" strokeWidth={2} dot={<MarkerDot />} activeDot={{ r: 4 }} isAnimationActive={false} />
+              <Line yAxisId={0} type="monotone" dataKey="hr" stroke="hsl(var(--primary))" strokeWidth={2} dot={<MarkerDot />} activeDot={{ r: 4 }} isAnimationActive={false} />
+            )}
+            {showHrvOverlay && hasRmssd && visibleHrvLines.rmssd && (
+              <Line yAxisId="hrv" type="monotone" dataKey="hrv_rmssd_ms" stroke="#14b8a6" strokeWidth={1.8} dot={false} activeDot={{ r: 3 }} connectNulls isAnimationActive={false} />
+            )}
+            {showHrvOverlay && hasSdnn && visibleHrvLines.sdnn && (
+              <Line yAxisId="hrv" type="monotone" dataKey="hrv_sdnn_ms" stroke="#a855f7" strokeWidth={1.6} dot={false} activeDot={{ r: 3 }} connectNulls isAnimationActive={false} />
+            )}
+            {showHrvOverlay && hasPnn50 && visibleHrvLines.pnn50 && (
+              <Line yAxisId="hrv" type="monotone" dataKey="hrv_pnn50" stroke="#f59e0b" strokeWidth={1.4} dot={false} activeDot={{ r: 3 }} strokeDasharray="4 2" connectNulls isAnimationActive={false} />
             )}
           </LineChart>
         </ResponsiveContainer>
@@ -1011,6 +1034,30 @@ export default function HRTimelineChart({
             className={`text-[10px] flex items-center gap-1 transition-opacity ${visibleLines.baseline ? "" : "opacity-40"}`}
           >
             <span className="w-4 h-0.5 inline-block" style={{ borderTop: "2px dashed #6b7280" }} /> Baseline
+          </button>
+        )}
+        {showHrvOverlay && hasRmssd && (
+          <button
+            onClick={() => toggleHrvLine("rmssd")}
+            className={`text-[10px] flex items-center gap-1 transition-opacity ${visibleHrvLines.rmssd ? "" : "opacity-40"}`}
+          >
+            <span className="w-4 h-0.5 inline-block" style={{ borderTop: "2px solid #14b8a6" }} /> RMSSD
+          </button>
+        )}
+        {showHrvOverlay && hasSdnn && (
+          <button
+            onClick={() => toggleHrvLine("sdnn")}
+            className={`text-[10px] flex items-center gap-1 transition-opacity ${visibleHrvLines.sdnn ? "" : "opacity-40"}`}
+          >
+            <span className="w-4 h-0.5 inline-block" style={{ borderTop: "2px solid #a855f7" }} /> SDNN
+          </button>
+        )}
+        {showHrvOverlay && hasPnn50 && (
+          <button
+            onClick={() => toggleHrvLine("pnn50")}
+            className={`text-[10px] flex items-center gap-1 transition-opacity ${visibleHrvLines.pnn50 ? "" : "opacity-40"}`}
+          >
+            <span className="w-4 h-0.5 inline-block" style={{ borderTop: "2px dashed #f59e0b" }} /> pNN50
           </button>
         )}
         {showEvents && events.length > 0 && (
