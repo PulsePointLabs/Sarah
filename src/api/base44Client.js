@@ -138,28 +138,30 @@ async function invokeFunction(name, payload, options = {}) {
 
 function entityApi(entity) {
   return {
-    list: (sort, limit, skip) => {
+    list: (sort, limit, skip, options = {}) => {
       const params = new URLSearchParams();
       if (sort) params.set('sort', sort);
       if (limit != null) params.set('limit', limit);
       if (skip != null) params.set('skip', skip);
-      return request(`/entities/${entity}?${params.toString()}`);
+      return request(`/entities/${entity}?${params.toString()}`, options);
     },
-    listFields: (fields = [], sort, limit, skip) => {
+    listFields: (fields = [], sort, limit, skip, options = {}) => {
       const params = new URLSearchParams();
       if (sort) params.set('sort', sort);
       if (limit != null) params.set('limit', limit);
       if (skip != null) params.set('skip', skip);
       if (Array.isArray(fields) && fields.length) params.set('fields', fields.join(','));
-      return request(`/entities/${entity}?${params.toString()}`);
+      return request(`/entities/${entity}?${params.toString()}`, options);
     },
-    filter: (criteria = {}, sort, limit, skip) => request(`/entities/${entity}/filter`, {
+    filter: (criteria = {}, sort, limit, skip, options = {}) => request(`/entities/${entity}/filter`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ criteria, sort, limit, skip }),
+      ...options,
     }),
-    filterFields: (criteria = {}, fields = [], sort, limit, skip) => request(`/entities/${entity}/filter`, {
+    filterFields: (criteria = {}, fields = [], sort, limit, skip, options = {}) => request(`/entities/${entity}/filter`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ criteria, fields, sort, limit, skip }),
+      ...options,
     }),
     create: (data) => request(`/entities/${entity}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data || {}),

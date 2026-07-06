@@ -9382,8 +9382,12 @@ export default function Profiler() {
     const loadSessionsAndTimelines = async () => {
       try {
         const [all, explorations] = await Promise.all([
-          base44.entities.Session.list("-date", 300),
-          base44.entities.BodyExploration.list("-date", 150).catch(() => []),
+          base44.entities.Session.list("-date", 300, undefined, {
+            timeoutMs: PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
+          }),
+          base44.entities.BodyExploration.list("-date", 150, undefined, {
+            timeoutMs: PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
+          }).catch(() => []),
         ]);
         if (cancelled) return;
         setSessions(all);
@@ -9462,8 +9466,12 @@ export default function Profiler() {
     setLoadError("");
     try {
       const [all, explorations] = await Promise.all([
-        base44.entities.Session.list("-date", 300),
-        base44.entities.BodyExploration.list("-date", 150).catch(() => []),
+        base44.entities.Session.list("-date", 300, undefined, {
+          timeoutMs: PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
+        }),
+        base44.entities.BodyExploration.list("-date", 150, undefined, {
+          timeoutMs: PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
+        }).catch(() => []),
       ]);
       setSessions(all);
       setBodyExplorations(explorations || []);
