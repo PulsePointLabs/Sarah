@@ -1407,7 +1407,8 @@ export default function VideoSyncPlayer({
               title="Open the video with telemetry overlays in fullscreen"
             >
               <Maximize2 className="h-3.5 w-3.5" />
-              Fullscreen Overlay
+              <span className="max-[950px]:hidden">Fullscreen Overlay</span>
+              <span className="min-[951px]:hidden">Fullscreen Viewer</span>
             </button>
           )}
           <button
@@ -1686,6 +1687,25 @@ export default function VideoSyncPlayer({
                   <span className="hidden rounded-lg border border-white/10 bg-black/55 px-2.5 py-2 text-[10px] text-white/70 backdrop-blur-sm lg:inline">
                     Space play/pause | arrows seek | S add event
                   </span>
+                </div>
+              )}
+              {fullscreenActive && (
+                <div className="pointer-events-none absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-40 flex justify-end px-3 min-[951px]:hidden">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      showFullscreenControls(2200);
+                      startAddAtPlayhead();
+                    }}
+                    className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground shadow-xl shadow-black/25 transition-transform hover:scale-[1.02] active:scale-[0.98]"
+                    aria-label={`Add event at ${fmtMmSs(playheadS)}`}
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span>Add event</span>
+                    <span className="rounded-full bg-primary-foreground/15 px-2 py-0.5 font-mono text-[11px] text-primary-foreground/90">
+                      {fmtMmSs(playheadS)}
+                    </span>
+                  </button>
                 </div>
               )}
               {fullscreenActive && (
