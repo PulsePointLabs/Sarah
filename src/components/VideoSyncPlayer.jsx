@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, Sparkles, Maximize2, Minimize2, Heart } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -464,6 +465,7 @@ export default function VideoSyncPlayer({
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
   const [mobileEventSheetOpen, setMobileEventSheetOpen] = useState(false);
   const fullscreenControlsTimerRef = useRef(null);
+  const resumeAfterShellFullscreenToggleRef = useRef(false);
   const suppressNextFullscreenVideoToggleRef = useRef(false);
   const nativeShell = isSarahNativeShell();
   const widthDragStartRef = useRef({ x: 0, width: 66, layoutWidth: 1 });
@@ -952,6 +954,13 @@ export default function VideoSyncPlayer({
       setVideoDuration(v.duration);
       v.playbackRate = playbackSpeed;
       syncSecondaryVideos(v.currentTime, false);
+      if (resumeAfterShellFullscreenToggleRef.current) {
+        resumeAfterShellFullscreenToggleRef.current = false;
+        const resumePromise = v.play();
+        if (resumePromise?.catch) {
+          resumePromise.catch(() => {});
+        }
+      }
     };
     v.addEventListener("timeupdate", handleTimeUpdate);
     v.addEventListener("play", handlePlay);
@@ -1034,6 +1043,10 @@ export default function VideoSyncPlayer({
     if (!surface && !video) return;
     try {
       if (nativeShell) {
+        if (video) {
+          pendingMasterTimeRef.current = video.currentTime;
+          resumeAfterShellFullscreenToggleRef.current = !video.paused;
+        }
         setTelemetryDisplayMode("overlay");
         setShellFullscreenActive((current) => !current);
         setFullscreenControlsVisible(true);
@@ -1576,27 +1589,35 @@ export default function VideoSyncPlayer({
           >
         {videoSrc ? (
           <div className="space-y-3">
-            <div
-              ref={fullscreenSurfaceRef}
-              className={`video-sync-surface relative flex w-full flex-col overflow-hidden bg-black ${
-                fullscreenActive
-                  ? `video-sync-fullscreen rounded-none ${shellFullscreenActive ? "fixed inset-0 z-[95] h-[100svh]" : "h-screen"}`
-                  : "rounded-lg"
-              }`}
-              style={fullscreenActive ? undefined : { height: `${playerHeight}vh`, minHeight: 280, maxHeight: "82vh" }}
-              onPointerMove={() => {
-                if (fullscreenActive) showFullscreenControls();
-              }}
-              onPointerDown={() => {
-                if (fullscreenActive && isPlaying && !fullscreenControlsVisible) {
-                  suppressNextFullscreenVideoToggleRef.current = true;
-                  showFullscreenControls();
-                }
-              }}
-              onTouchStart={() => {
-                if (fullscreenActive) showFullscreenControls();
-              }}
-            >
+            {(() => {
+              const videoSurface = (
+                <div
+                  ref={fullscreenSurfaceRef}
+                  className={`video-sync-surface relative flex w-full flex-col overflow-hidden bg-black ${
+                    fullscreenActive
+                      ? `video-sync-fullscreen rounded-none ${shellFullscreenActive ? "fixed inset-0 z-[95] h-[100svh]" : "h-screen"}`
+                      : "rounded-lg"
+                  }`}
+                  style={fullscreenActive ? undefined : {
+                    height: `${playerHeight}vh`,
+                    minHeight: 280,
+                    maxHeight: "82vh",
+                    "--video-sync-inline-height": `${playerHeight}vh`,
+                    "--video-sync-inline-max-height": "82vh",
+                  }}
+                  onPointerMove={() => {
+                    if (fullscreenActive) showFullscreenControls();
+                  }}
+                  onPointerDown={() => {
+                    if (fullscreenActive && isPlaying && !fullscreenControlsVisible) {
+                      suppressNextFullscreenVideoToggleRef.current = true;
+                      showFullscreenControls();
+                    }
+                  }}
+                  onTouchStart={() => {
+                    if (fullscreenActive) showFullscreenControls();
+                  }}
+                >
               <div className={`video-sync-media relative min-h-0 min-w-0 flex-1 bg-black ${videoLayout === "multi" && displayedFeeds.length > 1 ? "grid gap-px bg-border md:grid-cols-2" : ""}`}>
               {displayedFeeds.map((feed) => {
                 const isMaster = feed.key === activeFeedKey;
@@ -1785,7 +1806,7 @@ export default function VideoSyncPlayer({
               )}
               </div>
               {showMobileEventPanel && (
-                <div className={`video-sync-event-panel min-[951px]:hidden shrink-0 border-t border-border bg-card text-foreground shadow-2xl ${fullscreenActive ? "max-h-[42vh] pb-[calc(env(safe-area-inset-bottom)+0.5rem)]" : "max-h-[46vh]"} ${mobileEventPanelExpanded ? "overflow-y-auto" : "overflow-hidden"}`}>
+              <div className={`video-sync-event-panel min-[951px]:hidden shrink-0 border-t border-border bg-card text-foreground shadow-2xl ${fullscreenActive ? "max-h-[42vh] pb-[calc(env(safe-area-inset-bottom)+0.5rem)]" : "max-h-[46vh]"} ${mobileEventPanelExpanded ? "overflow-y-auto" : "overflow-hidden"}`}>
                   <button
                     type="button"
                     onClick={() => setMobileEventSheetOpen((value) => !value)}
@@ -1890,7 +1911,13 @@ export default function VideoSyncPlayer({
                   </div>
                 </div>
               )}
-            </div>
+              </div>
+              );
+              if (nativeShell && shellFullscreenActive && typeof document !== "undefined") {
+                return createPortal(videoSurface, document.body);
+              }
+              return videoSurface;
+            })()}
             <div className="flex flex-col md:flex-row md:items-center gap-2 rounded-lg bg-muted/40 px-3 py-2">
               <label className="flex items-center gap-3 flex-1 min-w-[220px]">
                 <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider shrink-0">Height</span>

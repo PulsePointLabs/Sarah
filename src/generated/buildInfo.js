@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.88",
-  "commit": "a10dc00",
+  "version": "0.1.89",
+  "commit": "fa321ce",
   "commitMessage": "Keep video sync fullscreen overlay inside Sarah on Android",
-  "builtAt": "2026-07-07T02:58:48.354Z"
+  "builtAt": "2026-07-07T22:52:59.480Z"
 };
