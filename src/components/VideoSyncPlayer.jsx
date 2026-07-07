@@ -458,7 +458,9 @@ export default function VideoSyncPlayer({
   const [feedsExpanded, setFeedsExpanded] = useState(true);
   const layoutRef = useRef(null);
   const fullscreenSurfaceRef = useRef(null);
-  const [fullscreenActive, setFullscreenActive] = useState(false);
+  const [domFullscreenActive, setDomFullscreenActive] = useState(false);
+  const [shellFullscreenActive, setShellFullscreenActive] = useState(false);
+  const fullscreenActive = domFullscreenActive || shellFullscreenActive;
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
   const [mobileEventSheetOpen, setMobileEventSheetOpen] = useState(false);
   const fullscreenControlsTimerRef = useRef(null);
@@ -975,7 +977,7 @@ export default function VideoSyncPlayer({
   useEffect(() => {
     const handleFullscreenChange = () => {
       const fullscreenElement = document.fullscreenElement;
-      setFullscreenActive(
+      setDomFullscreenActive(
         fullscreenElement === fullscreenSurfaceRef.current
         || fullscreenElement === videoRef.current
       );
@@ -984,6 +986,15 @@ export default function VideoSyncPlayer({
     document.addEventListener("fullscreenchange", handleFullscreenChange);
     return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
   }, []);
+
+  useEffect(() => {
+    if (!shellFullscreenActive) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [shellFullscreenActive]);
 
   const clearFullscreenControlsTimer = useCallback(() => {
     if (fullscreenControlsTimerRef.current) {
@@ -1022,15 +1033,17 @@ export default function VideoSyncPlayer({
     const video = videoRef.current;
     if (!surface && !video) return;
     try {
+      if (nativeShell) {
+        setTelemetryDisplayMode("overlay");
+        setShellFullscreenActive((current) => !current);
+        setFullscreenControlsVisible(true);
+        return;
+      }
       if (document.fullscreenElement === surface || document.fullscreenElement === video) {
         await document.exitFullscreen?.();
         return;
       }
       if (document.fullscreenElement) await document.exitFullscreen?.();
-      if (nativeShell && video?.requestFullscreen) {
-        await video.requestFullscreen();
-        return;
-      }
       setTelemetryDisplayMode("overlay");
       await surface?.requestFullscreen?.();
     } catch (err) {
@@ -1565,7 +1578,11 @@ export default function VideoSyncPlayer({
           <div className="space-y-3">
             <div
               ref={fullscreenSurfaceRef}
-              className={`video-sync-surface relative flex w-full flex-col overflow-hidden bg-black ${fullscreenActive ? "video-sync-fullscreen h-screen rounded-none" : "rounded-lg"}`}
+              className={`video-sync-surface relative flex w-full flex-col overflow-hidden bg-black ${
+                fullscreenActive
+                  ? `video-sync-fullscreen rounded-none ${shellFullscreenActive ? "fixed inset-0 z-[95] h-[100svh]" : "h-screen"}`
+                  : "rounded-lg"
+              }`}
               style={fullscreenActive ? undefined : { height: `${playerHeight}vh`, minHeight: 280, maxHeight: "82vh" }}
               onPointerMove={() => {
                 if (fullscreenActive) showFullscreenControls();
@@ -1592,8 +1609,8 @@ export default function VideoSyncPlayer({
                       src={feed.src}
                       muted={!isMaster}
                       className="h-full w-full object-contain cursor-pointer"
-                      controls={nativeShell && fullscreenActive && isMaster}
-                      playsInline={!nativeShell}
+                      controls={!nativeShell && fullscreenActive && isMaster}
+                      playsInline
                       onClick={() => {
                         if (isMaster) {
                           if (suppressNextFullscreenVideoToggleRef.current) {
