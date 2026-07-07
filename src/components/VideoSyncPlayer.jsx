@@ -1239,8 +1239,8 @@ export default function VideoSyncPlayer({
         : "";
   const hasSidebarContent = chartData.length > 0 || events.length > 0 || !!savedMotionSummary;
   const showSidebar = hasSidebarContent && telemetryDisplayMode === "sidebar";
-  const showMobileEventPanel = telemetryDisplayMode === "overlay" && closestVisibleEvent;
-  const mobileEventPanelExpanded = mobileEventSheetOpen || fullscreenActive;
+  const showMobileEventPanel = telemetryDisplayMode === "overlay" && closestVisibleEvent && !fullscreenActive;
+  const mobileEventPanelExpanded = mobileEventSheetOpen && !fullscreenActive;
   const mobileNearbyEventEntries = useMemo(() => visibleEventEntries
     .map(({ ev, i }) => ({ ev, i, dist: Math.abs(Number(ev.time_s) - playheadS) }))
     .filter(({ dist }) => dist <= 120)
@@ -1630,7 +1630,7 @@ export default function VideoSyncPlayer({
                       src={feed.src}
                       muted={!isMaster}
                       className="h-full w-full object-contain cursor-pointer"
-                      controls={!nativeShell && fullscreenActive && isMaster}
+                      controls={false}
                       playsInline
                       onClick={() => {
                         if (isMaster) {

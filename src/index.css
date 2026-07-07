@@ -190,28 +190,24 @@
   @media (orientation: landscape) and (max-height: 650px) and (pointer: coarse),
     (orientation: landscape) and (max-height: 650px) and (max-width: 1400px) {
     .video-sync-surface.video-sync-fullscreen {
-      display: grid !important;
-      grid-template-columns: minmax(0, 1fr) minmax(17rem, 34vw);
+      display: flex !important;
+      width: 100vw !important;
       height: 100svh !important;
-      min-height: 0 !important;
+      min-height: 100svh !important;
       max-height: 100svh !important;
     }
 
     .video-sync-surface.video-sync-fullscreen .video-sync-media {
-      aspect-ratio: auto;
-      height: 100%;
-      min-height: 0;
-      max-height: none;
+      flex: 1 1 auto !important;
+      width: 100% !important;
+      height: 100% !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      aspect-ratio: auto !important;
     }
 
     .video-sync-surface.video-sync-fullscreen .video-sync-event-panel {
-      display: block !important;
-      height: 100%;
-      max-height: 100svh !important;
-      overflow-y: auto !important;
-      border-top: 0;
-      border-left: 1px solid hsl(var(--border));
-      padding-bottom: calc(env(safe-area-inset-bottom) + 0.5rem);
+      display: none !important;
     }
   }
 }
