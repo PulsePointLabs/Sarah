@@ -464,10 +464,12 @@ export default function VideoSyncPlayer({
   const fullscreenActive = domFullscreenActive || shellFullscreenActive;
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
   const [mobileEventSheetOpen, setMobileEventSheetOpen] = useState(false);
+  const [mobileFullscreenPreferred, setMobileFullscreenPreferred] = useState(false);
   const fullscreenControlsTimerRef = useRef(null);
   const resumeAfterShellFullscreenToggleRef = useRef(false);
   const suppressNextFullscreenVideoToggleRef = useRef(false);
   const nativeShell = isSarahNativeShell();
+  const useSarahManagedFullscreen = nativeShell || mobileFullscreenPreferred;
   const widthDragStartRef = useRef({ x: 0, width: 66, layoutWidth: 1 });
   const [zoomWindow, setZoomWindow] = useState(60);
   const [activeEventIdx, setActiveEventIdx] = useState(null);
@@ -998,12 +1000,35 @@ export default function VideoSyncPlayer({
 
   useEffect(() => {
     if (!shellFullscreenActive) return undefined;
-    const previousOverflow = document.body.style.overflow;
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
     document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
     return () => {
-      document.body.style.overflow = previousOverflow;
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
     };
   }, [shellFullscreenActive]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const coarsePointerQuery = window.matchMedia?.("(pointer: coarse)");
+    const narrowViewportQuery = window.matchMedia?.("(max-width: 950px)");
+    const updatePreference = () => {
+      const coarse = !!coarsePointerQuery?.matches;
+      const narrow = !!narrowViewportQuery?.matches || window.innerWidth <= 950;
+      setMobileFullscreenPreferred(coarse || narrow);
+    };
+    updatePreference();
+    coarsePointerQuery?.addEventListener?.("change", updatePreference);
+    narrowViewportQuery?.addEventListener?.("change", updatePreference);
+    window.addEventListener("resize", updatePreference);
+    return () => {
+      coarsePointerQuery?.removeEventListener?.("change", updatePreference);
+      narrowViewportQuery?.removeEventListener?.("change", updatePreference);
+      window.removeEventListener("resize", updatePreference);
+    };
+  }, []);
 
   const clearFullscreenControlsTimer = useCallback(() => {
     if (fullscreenControlsTimerRef.current) {
@@ -1042,7 +1067,7 @@ export default function VideoSyncPlayer({
     const video = videoRef.current;
     if (!surface && !video) return;
     try {
-      if (nativeShell) {
+      if (useSarahManagedFullscreen) {
         if (video) {
           pendingMasterTimeRef.current = video.currentTime;
           resumeAfterShellFullscreenToggleRef.current = !video.paused;
@@ -1062,7 +1087,7 @@ export default function VideoSyncPlayer({
     } catch (err) {
       console.warn("Fullscreen playback could not be opened:", err);
     }
-  }, [nativeShell]);
+  }, [useSarahManagedFullscreen]);
 
   // Scroll-to-top
   const [showScrollTop, setShowScrollTop] = useState(false);
@@ -1595,7 +1620,7 @@ export default function VideoSyncPlayer({
                   ref={fullscreenSurfaceRef}
                   className={`video-sync-surface relative flex w-full flex-col overflow-hidden bg-black ${
                     fullscreenActive
-                      ? `video-sync-fullscreen rounded-none ${shellFullscreenActive ? "fixed inset-0 z-[95] h-[100svh]" : "h-screen"}`
+                      ? `video-sync-fullscreen rounded-none ${shellFullscreenActive ? "fixed inset-0 z-[95] h-[100svh] w-[100vw]" : "h-screen"}`
                       : "rounded-lg"
                   }`}
                   style={fullscreenActive ? undefined : {
@@ -1913,7 +1938,7 @@ export default function VideoSyncPlayer({
               )}
               </div>
               );
-              if (nativeShell && shellFullscreenActive && typeof document !== "undefined") {
+              if (shellFullscreenActive && typeof document !== "undefined") {
                 return createPortal(videoSurface, document.body);
               }
               return videoSurface;
