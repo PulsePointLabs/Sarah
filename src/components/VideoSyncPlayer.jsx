@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { createPortal } from "react-dom";
 import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, Sparkles, Maximize2, Minimize2, Heart } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -1938,9 +1937,6 @@ export default function VideoSyncPlayer({
               )}
               </div>
               );
-              if (shellFullscreenActive && typeof document !== "undefined") {
-                return createPortal(videoSurface, document.body);
-              }
               return videoSurface;
             })()}
             <div className="flex flex-col md:flex-row md:items-center gap-2 rounded-lg bg-muted/40 px-3 py-2">
