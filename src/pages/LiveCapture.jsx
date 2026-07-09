@@ -1884,8 +1884,8 @@ export default function LiveCapture() {
           requestedIntensity: extra.requestedIntensity,
           activityName: extra.activityName ?? howlCommandForm.mode,
           activityDisplayName: extra.activityDisplayName,
-          waveform: extra.waveform ?? howlWaveformLabel,
-          frequencyHz: extra.frequency_hz ?? howlTelemetry?.frequency_hz,
+          waveform: extra.waveform,
+          frequencyHz: extra.frequency_hz,
           source: eventSource,
           reason: extra.reason,
         });
@@ -1903,8 +1903,6 @@ export default function LiveCapture() {
     activeSessionDoc?.id,
     getCurrentSessionTime,
     howlCommandForm,
-    howlTelemetry?.frequency_hz,
-    howlWaveformLabel,
     liveSession?.activeSessionId,
     refreshHowlTelemetry,
   ]);

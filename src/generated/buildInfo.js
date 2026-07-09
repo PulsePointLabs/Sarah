@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.90",
-  "commit": "aedc052",
-  "commitMessage": "Fix mobile video sync fullscreen overlay",
-  "builtAt": "2026-07-08T01:03:44.135Z"
+  "version": "0.1.91",
+  "commit": "37a4620",
+  "commitMessage": "Enhance live HRV detection and Howl event logging",
+  "builtAt": "2026-07-09T17:50:40.907Z"
 };
