@@ -1327,6 +1327,25 @@ function SetupTile({ icon, label, value, helper, active, tone = "default", child
   );
 }
 
+function liveHealthToneClasses(tone = "neutral") {
+  if (tone === "good") return "border-emerald-400/30 bg-emerald-500/10 text-emerald-200";
+  if (tone === "warn") return "border-amber-400/30 bg-amber-400/10 text-amber-200";
+  if (tone === "bad") return "border-destructive/30 bg-destructive/10 text-destructive";
+  return "border-border bg-muted/30 text-muted-foreground";
+}
+
+function LiveHealthPill({ label, value, helper, tone = "neutral" }) {
+  return (
+    <div className={`rounded-xl border px-3 py-2 ${liveHealthToneClasses(tone)}`}>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[10px] font-semibold uppercase tracking-wider">{label}</p>
+        <span className="text-xs font-bold">{value}</span>
+      </div>
+      <p className="mt-1 text-[11px] leading-relaxed opacity-90">{helper}</p>
+    </div>
+  );
+}
+
 export default function LiveCapture() {
   const [searchParams, setSearchParams] = useSearchParams();
   const focusView = searchParams.get("display") === "focus";
@@ -5248,6 +5267,97 @@ export default function LiveCapture() {
         ? "Prepare Sarah and Start Session"
         : "Start Session";
   const showAdvancedSetupConsole = advancedSetupOpen;
+  const rrUsable = Boolean(
+    hrSourceSettings.source === "direct_h10"
+    && Number(rrCount) >= 10
+    && ["high", "moderate"].includes(String(hrvQuality || "").toLowerCase())
+  );
+  const rrWeak = Boolean(
+    hrSourceSettings.source === "direct_h10"
+    && recentHrPacket
+    && !rrUsable
+  );
+  const emgConfigured = captureMode !== "hr" && emgSensorConfig !== "generic";
+  const obsPreferred = Boolean(launchProfile.obsEnabled && !launchProfile.telemetryOnlyFallback);
+  const liveGuidanceMode = !recentHrPacket
+    ? {
+      label: "Telemetry unstable",
+      tone: "bad",
+      helper: "No recent HR packet. Sarah should not trust live phase/build guidance until heart-rate telemetry is current again.",
+    }
+    : rrWeak
+      ? {
+        label: "HR-only watch",
+        tone: "warn",
+        helper: "Heart rate is live, but RR/HRV quality is weak. Treat AI Magic as lower-confidence and lean on manual marks.",
+      }
+      : emgConfigured && !telemetryEmgLive
+        ? {
+          label: "HR-led watch",
+          tone: "warn",
+          helper: "HR and RR are live, but the configured EMG feed is not current. EMG-specific cues are stepped down until the feed stabilizes.",
+        }
+        : {
+          label: "Full guidance",
+          tone: "good",
+          helper: "Heart rate is current and Sarah has enough live signal quality for the normal guidance stack.",
+        };
+  const liveHealthPills = [
+    {
+      label: "HR Source",
+      value: recentHrPacket ? "Live" : hrConnected ? "Link only" : "Offline",
+      helper: recentHrPacket
+        ? `${serverHrLabel} packets are current.`
+        : hrConnected
+          ? "Connection exists, but Sarah is waiting for a fresh HR packet."
+          : "No live HR telemetry.",
+      tone: recentHrPacket ? "good" : hrConnected ? "warn" : "bad",
+    },
+    {
+      label: "RR / HRV",
+      value: hrSourceSettings.source === "direct_h10" ? (rrUsable ? "Usable" : rrWeak ? "Weak" : "Waiting") : "N/A",
+      helper: hrSourceSettings.source === "direct_h10"
+        ? rrUsable
+          ? `RR ${fmtNumber(rrCount, 0)} · HRV ${String(hrvQuality || "").toLowerCase() || "usable"}`
+          : rrWeak
+            ? `RR ${fmtNumber(rrCount, 0)} · HRV ${String(hrvQuality || "low").toLowerCase()}`
+            : "Direct H10 is live, but the RR window is not ready yet."
+        : "RR-driven HRV only applies to direct H10 sessions.",
+      tone: hrSourceSettings.source === "direct_h10" ? (rrUsable ? "good" : rrWeak ? "warn" : "neutral") : "neutral",
+    },
+    {
+      label: "EMG",
+      value: telemetryEmgLive ? "Live" : emgConfigured ? "Stale" : "Optional",
+      helper: telemetryEmgLive
+        ? selectedEmgConfig.trendSubtitle || "Recent EMG telemetry received."
+        : emgConfigured
+          ? "Configured, but no current EMG sample is landing."
+          : "No EMG preset selected for this capture.",
+      tone: telemetryEmgLive ? "good" : emgConfigured ? "warn" : "neutral",
+    },
+    {
+      label: "Session / OBS",
+      value: recordingActive ? "Recording" : obsReady ? "Ready" : obsPreferred ? "Missing" : "Optional",
+      helper: recordingActive
+        ? recording?.filename || "OBS recording is live."
+        : obsReady
+          ? "OBS relay/session shell identified."
+          : obsPreferred
+            ? "This launch profile expects OBS, but it is not currently ready."
+            : "Telemetry-only capture is acceptable here.",
+      tone: recordingActive || obsReady ? "good" : obsPreferred ? "warn" : "neutral",
+    },
+    {
+      label: "Blood Pressure",
+      value: latestBpReading ? "Recent" : bpOmronListening ? "Armed" : "Idle",
+      helper: latestBpReading
+        ? latestBpHelper
+        : bpOmronListening
+          ? "OMRON listener is armed and waiting for the cuff."
+          : "No recent BP reading is attached.",
+      tone: latestBpReading ? "good" : bpOmronListening ? "warn" : "neutral",
+    },
+  ];
 
   return (
     <div className={`${focusView ? "h-screen overflow-y-auto p-4" : "p-4 md:p-6"} space-y-4`}>
@@ -5327,6 +5437,35 @@ export default function LiveCapture() {
           </div>
         </div>
       )}
+
+      <section className={`rounded-2xl border p-4 shadow-sm ${liveHealthToneClasses(liveGuidanceMode.tone)}`} aria-live="polite">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
+              {liveGuidanceMode.tone === "good"
+                ? <CheckCircle2 className="h-4 w-4" />
+                : <AlertTriangle className="h-4 w-4" />}
+              Live Capture Health
+            </p>
+            <p className="mt-1 text-lg font-semibold">{liveGuidanceMode.label}</p>
+            <p className="mt-1 max-w-3xl text-sm leading-relaxed opacity-90">{liveGuidanceMode.helper}</p>
+          </div>
+          <div className="shrink-0 rounded-xl border border-current/15 bg-black/10 px-3 py-2 text-xs font-semibold uppercase tracking-wider">
+            {captureMode === "hr" ? "HR Distance View" : captureIsBodyExploration ? "Body Exploration Capture" : "Full Capture"}
+          </div>
+        </div>
+        <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-5">
+          {liveHealthPills.map((item) => (
+            <LiveHealthPill
+              key={item.label}
+              label={item.label}
+              value={item.value}
+              helper={item.helper}
+              tone={item.tone}
+            />
+          ))}
+        </div>
+      </section>
 
       {!focusView && !mainTelemetryView && !launchActive && (
         <LiveCaptureLaunchpad
