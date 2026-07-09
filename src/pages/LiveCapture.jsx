@@ -1850,6 +1850,12 @@ export default function LiveCapture() {
     }
   }, [howlControlForm]);
 
+  const getCurrentSessionTime = useCallback(() => {
+    const startMs = Number(recording?.startedAtMs) || (liveSession?.startedAt ? new Date(liveSession.startedAt).getTime() : 0);
+    if (!startMs || Number.isNaN(startMs)) return 0;
+    return Math.max(0, Math.round((Date.now() - startMs) / 1000));
+  }, [liveSession?.startedAt, recording?.startedAtMs]);
+
   const sendHowlControlCommand = useCallback(async (action = "set_state", extra = {}) => {
     setHowlControlBusy(action);
     setHowlError("");
@@ -3123,12 +3129,6 @@ export default function LiveCapture() {
   const embeddedObsStatus = status?.hr?.relay?.obs || null;
   const obsReady = Boolean(recordingActive || embeddedObsStatus?.identified);
   const emgRecent = isRecent(emgSourceAt);
-
-  const getCurrentSessionTime = useCallback(() => {
-    const startMs = Number(recording?.startedAtMs) || (liveSession?.startedAt ? new Date(liveSession.startedAt).getTime() : 0);
-    if (!startMs || Number.isNaN(startMs)) return 0;
-    return Math.max(0, Math.round((Date.now() - startMs) / 1000));
-  }, [liveSession?.startedAt, recording?.startedAtMs]);
 
   useEffect(() => {
     perinealProtocolRef.current = perinealProtocol;
