@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.95",
-  "commit": "8b0e006",
-  "commitMessage": "Improve Live Capture heartbeat beep timing",
-  "builtAt": "2026-07-09T20:36:12.898Z"
+  "version": "0.1.96",
+  "commit": "3d7f547",
+  "commitMessage": "Add Live Capture health banner and degraded modes",
+  "builtAt": "2026-07-09T22:53:00.964Z"
 };

@@ -2872,6 +2872,107 @@ export default function LiveCapture() {
   const captureDigest = activeSessionDoc?.capture_digest || null;
   const recentLiveEvents = useMemo(() => [...liveEvents].sort((a, b) => Number(b.time_s || 0) - Number(a.time_s || 0)).slice(0, 8), [liveEvents]);
   const recentPhaseMarkers = useMemo(() => [...phaseMarkers].reverse().slice(0, 5), [phaseMarkers]);
+  const quickEventPads = useMemo(() => (
+    captureIsBodyExploration
+      ? [
+        {
+          key: "instrument_change",
+          label: "Instrument Change",
+          category: ["instrumentation", "instrumentation_change"],
+          note: "Instrumentation changed.",
+        },
+        {
+          key: "finding",
+          label: "Physical Finding",
+          category: ["physical"],
+          note: "New physical finding observed.",
+        },
+        {
+          key: "comfort",
+          label: "Comfort Check",
+          category: ["comfort", "sensation"],
+          note: "Comfort or tolerance changed.",
+        },
+        {
+          key: "setup_change",
+          label: "Setup Change",
+          category: ["setup"],
+          note: "Position or setup changed.",
+        },
+        {
+          key: "artifact",
+          label: "Artifact",
+          category: ["other"],
+          note: "Movement or contact artifact likely affected telemetry.",
+        },
+        {
+          key: "bp_taken",
+          label: "BP Taken",
+          category: ["physical", "other"],
+          note: latestBpReading ? `Blood pressure captured: ${formatBloodPressure(latestBpReading)}.` : "Blood pressure check performed.",
+        },
+      ]
+      : [
+        {
+          key: "stim_start",
+          label: "Stim Start",
+          category: ["stimulation", "stimulation_started"],
+          note: "Stimulation started.",
+        },
+        {
+          key: "stim_pause",
+          label: "Stim Pause",
+          category: ["stimulation", "stimulation_paused"],
+          note: "Stimulation paused.",
+        },
+        {
+          key: "position_change",
+          label: "Position",
+          category: ["movement_observed", "other"],
+          note: "Position or body mechanics changed.",
+        },
+        {
+          key: "edging_window",
+          label: "Edging",
+          category: ["sensation", "other"],
+          note: "Edging or threshold hold started.",
+        },
+        {
+          key: "climax",
+          label: "Climax",
+          category: ["physical", "other"],
+          note: "Climax or release observed.",
+          phaseKey: "climax_offset_s",
+          phaseLabel: "Climax",
+        },
+        {
+          key: "recovery_start",
+          label: "Recovery",
+          category: ["physical", "other"],
+          note: "Recovery started.",
+          phaseKey: "recovery_offset_s",
+          phaseLabel: "Recovery",
+        },
+        {
+          key: "howl_change",
+          label: "Howl Change",
+          category: ["stimulation", "other"],
+          note: "Howl or device setting changed.",
+        },
+        {
+          key: "artifact",
+          label: "Artifact",
+          category: ["movement_observed", "other"],
+          note: "Movement or contact artifact likely affected telemetry.",
+        },
+        {
+          key: "bp_taken",
+          label: "BP Taken",
+          category: ["physical", "other"],
+          note: latestBpReading ? `Blood pressure captured: ${formatBloodPressure(latestBpReading)}.` : "Blood pressure check performed.",
+        },
+      ]
+  ), [captureIsBodyExploration, latestBpReading]);
   const selectedCaptureMode = CAPTURE_MODES.find((mode) => mode.value === captureMode) || CAPTURE_MODES[0];
   const selectedEmgConfig = EMG_SENSOR_CONFIGS.find((config) => config.value === emgSensorConfig) || EMG_SENSOR_CONFIGS[0];
   const usingPerinealEmgConfig = selectedEmgConfig.value === "perineal_body_small_electrodes";
@@ -4409,6 +4510,46 @@ export default function LiveCapture() {
     setVoiceStatus(`Removed last voice note at ${fmtMmSs(removed.time_s)}.`);
   }, [liveRecordApi, liveSession?.activeSessionId]);
 
+  const captureLiveMoment = useCallback(() => ({
+    timeS: getCurrentSessionTime(),
+    chartTime: telemetryHistory[telemetryHistory.length - 1]?.time,
+    createdAt: new Date().toISOString(),
+    hrBpm: readNumber(latestHrRef.current?.currentHr, latestHrRef.current?.hr),
+  }), [getCurrentSessionTime, telemetryHistory]);
+
+  const recordQuickLiveEvent = useCallback(async (command) => {
+    if (!command) return false;
+    const moment = captureLiveMoment();
+    const event = {
+      id: `livepad_${command.key || "event"}_${moment.timeS}_${Math.random().toString(36).slice(2, 7)}`,
+      time_s: moment.timeS,
+      note: typeof command.note === "function" ? command.note(moment) : command.note,
+      label: command.label,
+      category: Array.isArray(command.category) ? command.category : [command.category || "other"],
+      annotation_tags: command.annotationTags || ["quick_pad"],
+      source: command.source || "live_quick_pad",
+      created_at: moment.createdAt,
+      hr_bpm: moment.hrBpm ?? null,
+    };
+    await appendLiveSessionEvents(event);
+    if (command.phaseKey && !captureIsBodyExploration) {
+      await updateActiveSession({ [command.phaseKey]: moment.timeS });
+      setPhaseMarkers((prev) => [
+        ...prev,
+        {
+          time_s: moment.timeS,
+          chartTime: moment.chartTime,
+          label: command.phaseLabel || command.label,
+          kind: command.phaseKey,
+          confidence: 100,
+          reason: "Marked by quick pad",
+        },
+      ].slice(-20));
+    }
+    setVoiceStatus(`${command.label} marked at ${fmtMmSs(moment.timeS)}.`);
+    return true;
+  }, [appendLiveSessionEvents, captureIsBodyExploration, captureLiveMoment, updateActiveSession]);
+
   const applyLiveCommand = useCallback(async (command) => {
     if (!command) return false;
     if (command.type === "stop_listening") {
@@ -4420,20 +4561,23 @@ export default function LiveCapture() {
       await undoLastVoiceAnnotation();
       return true;
     }
+    if (command.type === "quick_event") {
+      await recordQuickLiveEvent(command);
+      return true;
+    }
     if (command.type === "mark_phase") {
       if (captureIsBodyExploration) {
         setVoiceStatus("Body Exploration mode is active; climax phase marks are disabled.");
         return false;
       }
-      const timeS = getCurrentSessionTime();
-      const chartTime = telemetryHistory[telemetryHistory.length - 1]?.time;
+      const { timeS, chartTime } = captureLiveMoment();
       await updateActiveSession({ [command.key]: timeS });
       setPhaseMarkers((prev) => [...prev, { time_s: timeS, chartTime, label: command.label, kind: command.key, confidence: 100, reason: "Marked by voice command" }].slice(-20));
       setVoiceStatus(`${command.label} marked at ${fmtMmSs(timeS)}.`);
       return true;
     }
     return false;
-  }, [captureIsBodyExploration, getCurrentSessionTime, telemetryHistory, undoLastVoiceAnnotation, updateActiveSession]);
+  }, [captureIsBodyExploration, captureLiveMoment, recordQuickLiveEvent, undoLastVoiceAnnotation, updateActiveSession]);
 
   useEffect(() => {
     applyLiveCommandRef.current = applyLiveCommand;
@@ -5464,6 +5608,34 @@ export default function LiveCapture() {
               tone={item.tone}
             />
           ))}
+        </div>
+        <div className="mt-4 rounded-xl border border-current/15 bg-black/10 p-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider">
+                <CircleDot className="h-4 w-4" /> Quick Event Pads
+              </p>
+              <p className="mt-1 text-sm opacity-90">
+                One tap stamps the current live moment into the session timeline.
+              </p>
+            </div>
+            <p className="text-[11px] font-semibold uppercase tracking-wider opacity-75">
+              Uses the same timestamp path as voice and live markers
+            </p>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            {quickEventPads.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => applyLiveCommand({ type: "quick_event", ...item })}
+                className="inline-flex items-center justify-between gap-3 rounded-lg border border-current/15 bg-background/70 px-3 py-2 text-left text-sm font-semibold text-foreground transition hover:bg-background/90"
+              >
+                <span>{item.label}</span>
+                <CircleDot className="h-4 w-4 shrink-0 opacity-70" />
+              </button>
+            ))}
+          </div>
         </div>
       </section>
 
