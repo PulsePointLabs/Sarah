@@ -427,6 +427,79 @@ function latestHowlCommandState(commands = []) {
   return (Array.isArray(commands) ? commands : []).find((command) => command?.dispatch?.howl) || null;
 }
 
+function readHowlActivityDisplayName(activityName) {
+  const normalized = String(activityName || "").trim().toUpperCase();
+  if (!normalized) return "";
+  const match = HOWL_ACTIVITY_MODES.find((mode) => mode.name === normalized);
+  return match?.displayName || normalized;
+}
+
+function buildHowlSessionEvent({
+  action,
+  timeS,
+  channel = "a",
+  intensity = null,
+  requestedIntensity = null,
+  activityName = "",
+  activityDisplayName = "",
+  waveform = "",
+  frequencyHz = null,
+  source = "howl_manual_control",
+  reason = "",
+} = {}) {
+  const normalizedAction = String(action || "").trim().toLowerCase();
+  const normalizedChannel = String(channel || "a").trim().toLowerCase() || "a";
+  const modeLabel = String(activityDisplayName || readHowlActivityDisplayName(activityName) || activityName || waveform || "").trim();
+  const roundedIntensity = Number.isFinite(Number(intensity)) ? Math.round(Number(intensity)) : null;
+  const roundedRequested = Number.isFinite(Number(requestedIntensity)) ? Math.round(Number(requestedIntensity)) : null;
+  const roundedFrequency = Number.isFinite(Number(frequencyHz)) ? Math.round(Number(frequencyHz)) : null;
+
+  let note = "";
+  let label = "Howl command";
+  let tags = ["howl", "device_control"];
+  if (normalizedAction === "load_activity") {
+    note = `Howl mode changed to ${modeLabel || "new activity"}${roundedFrequency != null ? ` at ${roundedFrequency} Hz` : ""}.`;
+    label = "Howl mode changed";
+    tags = [...tags, "mode_change"];
+  } else if (["set_power", "set_intensity", "increment_power", "decrement_power"].includes(normalizedAction)) {
+    const channelLabel = normalizedChannel === "all" ? "all channels" : `channel ${normalizedChannel.toUpperCase()}`;
+    if (roundedIntensity != null && roundedRequested != null && roundedRequested !== roundedIntensity) {
+      note = `Howl intensity set to ${roundedIntensity} on ${channelLabel} (requested ${roundedRequested}).`;
+    } else if (roundedIntensity != null) {
+      note = `Howl intensity set to ${roundedIntensity} on ${channelLabel}.`;
+    } else {
+      note = `Howl intensity adjusted on ${channelLabel}.`;
+    }
+    if (modeLabel) note = `${note.slice(0, -1)} while ${modeLabel} was loaded.`;
+    label = "Howl intensity adjusted";
+    tags = [...tags, "intensity_change"];
+  } else {
+    return null;
+  }
+
+  return {
+    id: `howl_${normalizedAction}_${Math.round(Number(timeS || 0) * 10)}_${Math.random().toString(36).slice(2, 7)}`,
+    time_s: Math.max(0, Math.round(Number(timeS) || 0)),
+    note,
+    label,
+    category: ["stimulation", "device_control"],
+    annotation_tags: tags,
+    source,
+    created_at: new Date().toISOString(),
+    howl_control: {
+      action: normalizedAction,
+      channel: normalizedChannel,
+      intensity: roundedIntensity,
+      requested_intensity: roundedRequested,
+      activity_name: activityName || null,
+      activity_display_name: modeLabel || null,
+      waveform: waveform || null,
+      frequency_hz: roundedFrequency,
+      reason: reason || null,
+    },
+  };
+}
+
 function buildHowlWavePoints(type = "", amplitude = 50) {
   const normalized = String(type || "").toLowerCase();
   const amp = Math.max(8, Math.min(44, Number(amplitude) || 20));
@@ -1386,6 +1459,7 @@ export default function LiveCapture() {
   const directH10ConnectRef = useRef(null);
   const directH10AutoConnectStartedRef = useRef(false);
   const howlAutoLastActionRef = useRef({ at: 0, intensity: null, reason: "" });
+  const appendLiveSessionEventsRef = useRef(null);
   const bpSyncInFlightRef = useRef(false);
   const bpOmronActionInFlightRef = useRef(false);
   const bpForegroundRefreshCooldownRef = useRef(0);
@@ -1795,6 +1869,29 @@ export default function LiveCapture() {
       if (!response.ok) throw new Error(data.error || "Howl command was rejected.");
       setHowlControlStatus(data.dispatch?.message || "Howl command queued.");
       await refreshHowlTelemetry({ quiet: true });
+      const eventSource = String(extra.reason || "").startsWith("voice_")
+        ? "howl_voice_control"
+        : String(extra.reason || "").startsWith("sarah_auto_")
+          ? "howl_auto_control"
+          : "howl_manual_control";
+      const sessionEvent = eventSource === "howl_auto_control"
+        ? null
+        : buildHowlSessionEvent({
+          action,
+          timeS: getCurrentSessionTime(),
+          channel: extra.channel ?? howlCommandForm.channel,
+          intensity: extra.intensity,
+          requestedIntensity: extra.requestedIntensity,
+          activityName: extra.activityName ?? howlCommandForm.mode,
+          activityDisplayName: extra.activityDisplayName,
+          waveform: extra.waveform ?? howlWaveformLabel,
+          frequencyHz: extra.frequency_hz ?? howlTelemetry?.frequency_hz,
+          source: eventSource,
+          reason: extra.reason,
+        });
+      if (sessionEvent) {
+        appendLiveSessionEventsRef.current?.(sessionEvent)?.catch?.(() => {});
+      }
       return data;
     } catch (error) {
       setHowlError(error?.message || "Unable to send Howl command.");
@@ -1802,7 +1899,15 @@ export default function LiveCapture() {
     } finally {
       setHowlControlBusy("");
     }
-  }, [activeSessionDoc?.id, howlCommandForm, liveSession?.activeSessionId, refreshHowlTelemetry]);
+  }, [
+    activeSessionDoc?.id,
+    getCurrentSessionTime,
+    howlCommandForm,
+    howlTelemetry?.frequency_hz,
+    howlWaveformLabel,
+    liveSession?.activeSessionId,
+    refreshHowlTelemetry,
+  ]);
 
   const sendHowlEmergencyStop = useCallback(async () => {
     setHowlControlBusy("emergency_stop");
@@ -3067,6 +3172,10 @@ export default function LiveCapture() {
     setLiveEvents(patch.event_timeline);
     setActiveSessionDoc((prev) => ({ ...(prev || session), ...patch }));
   }, [activeSessionDoc, ensureSession, liveRecordApi, liveSession]);
+
+  useEffect(() => {
+    appendLiveSessionEventsRef.current = appendLiveSessionEvents;
+  }, [appendLiveSessionEvents]);
 
   const resolveLiveSessionStartMs = useCallback((session = activeSessionDoc) => {
     const direct = Number(recording?.startedAtMs) || (liveSession?.startedAt ? new Date(liveSession.startedAt).getTime() : 0);
@@ -5866,6 +5975,7 @@ export default function LiveCapture() {
                         onBlur={() => { howlFocusedFieldRef.current = ""; }}
                         onChange={(event) => updateHowlControlForm({ controlUrl: event.target.value })}
                       />
+                      <span className="block text-[11px] text-muted-foreground">Bridge target for the phone or helper that exposes Howl control endpoints.</span>
                       <span className="block text-[11px] text-muted-foreground">
                         URL preview: <span className="font-mono text-foreground">{howlControlUrlPreview || "http://PHONE_IP:4695"}</span>
                       </span>
@@ -5883,6 +5993,7 @@ export default function LiveCapture() {
                         onBlur={() => { howlFocusedFieldRef.current = ""; }}
                         onChange={(event) => updateHowlControlForm({ remoteAccessKey: event.target.value })}
                       />
+                      <span className="block text-[11px] text-muted-foreground">Shared secret copied from Howl so PulsePoint can authenticate remote-control requests.</span>
                       <span className="block text-[11px] text-muted-foreground">Local setting: {maskHowlKey(howlControlForm.remoteAccessKey)}</span>
                     </label>
 
@@ -5897,12 +6008,14 @@ export default function LiveCapture() {
                           value={howlControlForm.intensityCeiling}
                           onChange={(event) => updateHowlControlForm({ intensityCeiling: event.target.value }, { resetConnection: false })}
                         />
+                        <span className="block text-[11px] text-muted-foreground">Upper safety bound applied to manual commands and Sarah auto-control.</span>
                       </label>
                       <label className="space-y-1">
                         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Default dispatch</span>
                         <div className="flex h-10 items-center rounded-lg border border-border bg-background px-3 text-sm font-semibold text-foreground">
                           Direct HTTP
                         </div>
+                        <span className="block text-[11px] text-muted-foreground">Primary command path: send requests straight to the configured Howl endpoint.</span>
                       </label>
                     </div>
 
@@ -5927,6 +6040,7 @@ export default function LiveCapture() {
                             <option value="queue">Helper queue</option>
                             <option value="queue_and_direct">Queue + direct</option>
                           </select>
+                          <span className="block text-[11px] text-muted-foreground">Choose whether commands go directly to Howl, through the helper queue, or both for redundancy.</span>
                         </label>
                         <p className="mt-2 text-[11px] text-muted-foreground">
                           Helper queue exposes commands at <span className="font-mono text-foreground">{howlHelperPollPath}</span>. Normal setup should stay on Direct HTTP.
@@ -6009,6 +6123,7 @@ export default function LiveCapture() {
                         value={Math.max(0, Math.min(100, Number(howlControlForm.intensityCeiling) || 0))}
                         onChange={(event) => updateHowlControlForm({ intensityCeiling: Number(event.target.value) }, { resetConnection: false })}
                       />
+                      <span className="block text-[11px] text-muted-foreground">Hard cap for manual and Sarah-driven intensity changes so the helper never ramps above this level.</span>
                     </label>
                     <label className="space-y-1 sm:col-span-2">
                       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Howl activity mode</span>
@@ -6103,6 +6218,9 @@ export default function LiveCapture() {
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                       Closed-loop stays off by default. Manual Howl control must be tested and enabled before Sarah can be armed.
                     </p>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      Sarah now stamps manual Howl mode and intensity changes into the active session timeline so later analysis can see when device control changed.
+                    </p>
                   </div>
                   <button
                     type="button"
@@ -6127,6 +6245,7 @@ export default function LiveCapture() {
                       value={howlControlForm.buildThreshold}
                       onChange={(event) => updateHowlControlForm({ buildThreshold: event.target.value }, { resetConnection: false })}
                     />
+                    <span className="block text-[11px] text-muted-foreground">Minimum Sarah approach score before auto-ramp is allowed to start nudging intensity upward.</span>
                   </label>
                   <label className="space-y-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Reduce near</span>
@@ -6138,6 +6257,7 @@ export default function LiveCapture() {
                       value={howlControlForm.nearClimaxThreshold}
                       onChange={(event) => updateHowlControlForm({ nearClimaxThreshold: event.target.value }, { resetConnection: false })}
                     />
+                    <span className="block text-[11px] text-muted-foreground">Sarah approach score where the controller backs intensity down to avoid pushing harder during threshold-adjacent periods.</span>
                   </label>
                   <label className="space-y-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Recovery</span>
@@ -6149,6 +6269,7 @@ export default function LiveCapture() {
                       value={howlControlForm.recoveryThreshold}
                       onChange={(event) => updateHowlControlForm({ recoveryThreshold: event.target.value }, { resetConnection: false })}
                     />
+                    <span className="block text-[11px] text-muted-foreground">Recovery score where Sarah treats the session as backing off and reduces intensity even if build was high a moment ago.</span>
                   </label>
                   <label className="space-y-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Step up</span>
@@ -6160,6 +6281,7 @@ export default function LiveCapture() {
                       value={howlControlForm.buildStep}
                       onChange={(event) => updateHowlControlForm({ buildStep: event.target.value }, { resetConnection: false })}
                     />
+                    <span className="block text-[11px] text-muted-foreground">How many intensity points Sarah adds per auto-ramp action while the build window is active.</span>
                   </label>
                   <label className="space-y-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Step down</span>
@@ -6171,6 +6293,7 @@ export default function LiveCapture() {
                       value={howlControlForm.reduceStep}
                       onChange={(event) => updateHowlControlForm({ reduceStep: event.target.value }, { resetConnection: false })}
                     />
+                    <span className="block text-[11px] text-muted-foreground">How many intensity points Sarah removes each time near-climax or recovery logic tells it to back off.</span>
                   </label>
                   <label className="space-y-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Cooldown sec</span>
@@ -6182,6 +6305,7 @@ export default function LiveCapture() {
                       value={howlControlForm.autoCooldownSeconds}
                       onChange={(event) => updateHowlControlForm({ autoCooldownSeconds: event.target.value }, { resetConnection: false })}
                     />
+                    <span className="block text-[11px] text-muted-foreground">Minimum wait between Sarah auto-actions so intensity does not thrash up and down every telemetry refresh.</span>
                   </label>
                   <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground md:col-span-2">
                     <input
@@ -6189,7 +6313,10 @@ export default function LiveCapture() {
                       checked={howlControlForm.buildRampEnabled !== false}
                       onChange={(event) => updateHowlControlForm({ buildRampEnabled: event.target.checked }, { resetConnection: false })}
                     />
-                    Gradually increase during build
+                    <span>
+                      Gradually increase during build
+                      <span className="block text-[11px] font-normal text-muted-foreground">Lets Sarah use the build threshold plus Step up to gently ramp intensity during sustained loading.</span>
+                    </span>
                   </label>
                   <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground md:col-span-2">
                     <input
@@ -6197,7 +6324,10 @@ export default function LiveCapture() {
                       checked={howlControlForm.nearClimaxReductionEnabled !== false}
                       onChange={(event) => updateHowlControlForm({ nearClimaxReductionEnabled: event.target.checked }, { resetConnection: false })}
                     />
-                    Reduce during near-climax watch
+                    <span>
+                      Reduce during near-climax watch
+                      <span className="block text-[11px] font-normal text-muted-foreground">Lets Sarah back intensity down once the approach score crosses the near threshold.</span>
+                    </span>
                   </label>
                   <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground">
                     <input
@@ -6205,7 +6335,10 @@ export default function LiveCapture() {
                       checked={howlControlForm.recoveryReductionEnabled !== false}
                       onChange={(event) => updateHowlControlForm({ recoveryReductionEnabled: event.target.checked }, { resetConnection: false })}
                     />
-                    Recovery
+                    <span>
+                      Recovery
+                      <span className="block text-[11px] font-normal text-muted-foreground">Lets Sarah cut intensity when the live signal looks like recovery or a post-peak drop rather than continued build.</span>
+                    </span>
                   </label>
                 </div>
 

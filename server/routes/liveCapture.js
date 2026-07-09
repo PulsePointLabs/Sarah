@@ -205,14 +205,32 @@ function median(values = []) {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+function hrvQualityScore(value) {
+  const quality = String(value || '').trim().toLowerCase();
+  if (quality === 'high') return 3;
+  if (quality === 'moderate') return 2;
+  if (quality === 'low') return 1;
+  return 0;
+}
+
+function readTelemetryRmssd(telemetry = {}) {
+  const direct = cleanNumber(telemetry?.hrv?.rmssdMs);
+  if (direct != null) return direct;
+  return cleanNumber(telemetry?.hrv_rmssd_ms);
+}
+
 function enrichHrTelemetry(telemetry) {
   const hr = cleanHr(telemetry?.heartRate || telemetry?.currentHr || telemetry?.hr);
   if (hr == null) return telemetry;
   const source = telemetry?.source || state.hr.selectedSource || 'unknown';
   const now = Number(telemetry?.receivedAt) || Date.now();
+  const hrv = telemetry?.hrv || {};
+  const rmssd = readTelemetryRmssd(telemetry);
+  const rrCount = cleanNumber(telemetry?.quality?.rrCount) ?? cleanNumber(hrv.sampleCount) ?? 0;
+  const hrvQuality = hrv.quality || telemetry?.hrv_quality || telemetry?.quality?.hrvQuality || null;
   const rows = (derivedHrState.get(source) || [])
     .filter((row) => now - row.t <= 8 * 60 * 1000);
-  rows.push({ t: now, hr });
+  rows.push({ t: now, hr, rmssd });
   const trimmed = rows.slice(-240);
   derivedHrState.set(source, trimmed);
 
@@ -228,14 +246,49 @@ function enrichHrTelemetry(telemetry) {
     : 0;
   const recentPeak = Math.max(...trimmed.slice(-45).map((row) => row.hr));
   const dropFromPeak = Math.max(0, recentPeak - smoothedHr);
-  const phase = elevatedDelta >= 8 || slopeBpm30s >= 2
-    ? 'build'
-    : dropFromPeak >= 8 && elevatedDelta <= 10
-      ? 'recovery'
+  const recentRmssd = trimmed.slice(-45).map((row) => cleanNumber(row.rmssd)).filter((value) => value != null);
+  const baselineRmssd = trimmed.slice(-120).map((row) => cleanNumber(row.rmssd)).filter((value) => value != null);
+  const baselineRmssdMedian = median(baselineRmssd);
+  const recentRmssdMedian = median(recentRmssd);
+  const referenceRmssd = baselineRmssdMedian ?? recentRmssdMedian ?? rmssd;
+  const hrvUsable = hrvQualityScore(hrvQuality) >= 2 || rrCount >= 40;
+  const firstRecentRmssd = recentRmssd.length ? recentRmssd[0] : null;
+  const rmssdTrend = rmssd != null && firstRecentRmssd != null ? rmssd - firstRecentRmssd : 0;
+  const hrvCompressed = hrvUsable && rmssd != null && (
+    ((referenceRmssd ?? 0) >= 8 && rmssd <= referenceRmssd * 0.72 && elevatedDelta >= 8)
+    || (rmssd <= 6 && elevatedDelta >= 10)
+  );
+  const hrvTightening = hrvUsable && rmssd != null && rmssdTrend <= -3 && elevatedDelta >= 8 && slopeBpm30s >= 0.6;
+  const hrvOpening = hrvUsable && rmssd != null && (referenceRmssd ?? 0) >= 5 && rmssd >= referenceRmssd * 1.55;
+  const hrvRecoveryBias = hrvOpening && dropFromPeak >= 4 && slopeBpm30s <= 0.5;
+
+  const phase = (dropFromPeak >= 8 && elevatedDelta <= 12 && (slopeBpm30s <= 0.5 || hrvRecoveryBias))
+    ? 'recovery'
+    : (elevatedDelta >= 8 || slopeBpm30s >= 2 || ((hrvCompressed || hrvTightening) && elevatedDelta >= 6))
+      ? 'build'
       : 'baseline';
-  const buildConfidence = Math.round(Math.max(0, Math.min(100,
-    elevatedDelta * 7 + Math.max(0, slopeBpm30s) * 4 - (phase === 'recovery' ? dropFromPeak * 2 : 0)
-  )));
+
+  let buildConfidence = elevatedDelta * 7 + Math.max(0, slopeBpm30s) * 4;
+  if (hrvCompressed) buildConfidence += 12;
+  else if (hrvTightening) buildConfidence += 8;
+  else if (hrvRecoveryBias) buildConfidence -= 8;
+  if (phase === 'recovery') {
+    buildConfidence -= dropFromPeak * 2;
+    if (hrvRecoveryBias) buildConfidence -= 8;
+  }
+  buildConfidence = Math.round(Math.max(0, Math.min(100, buildConfidence)));
+
+  const hrvSignal = !hrvUsable || rmssd == null
+    ? 'waiting'
+    : hrvCompressed
+      ? 'compressed'
+      : hrvRecoveryBias
+        ? 'release'
+        : hrvTightening
+          ? 'tightening'
+          : hrvOpening
+            ? 'opening'
+            : 'steady';
 
   return {
     ...telemetry,
@@ -248,6 +301,9 @@ function enrichHrTelemetry(telemetry) {
     elevatedDelta,
     phase,
     buildConfidence,
+    hrvUsable,
+    hrvSignal,
+    hrvReferenceRmssd: referenceRmssd != null ? Number(referenceRmssd.toFixed(1)) : null,
   };
 }
 
