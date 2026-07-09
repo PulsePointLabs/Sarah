@@ -279,6 +279,7 @@ const PERINEAL_EMG_PROTOCOL_PHASES = [
 const HOWL_TELEMETRY_POLL_MS = 2500;
 const BLOOD_PRESSURE_SYNC_POLL_MS = 10000;
 const ACTIVE_SESSION_REFRESH_MS = 5000;
+const HEARTBEAT_PREDICTION_STALE_MS = 2600;
 const HOWL_DEFAULT_CONTROL_FORM = {
   controlEnabled: false,
   sarahAutoEnabled: false,
@@ -643,6 +644,23 @@ function appendRollingRrIntervals(current, next, maxSamples = 180) {
     .map((value) => Number(value))
     .filter((value) => Number.isFinite(value) && value >= 300 && value <= 2000);
   return combined.slice(-maxSamples);
+}
+
+function readHeartbeatIntervalMs(telemetry) {
+  const rr = [
+    ...(Array.isArray(telemetry?.rrIntervalsMs) ? telemetry.rrIntervalsMs : []),
+    ...(Array.isArray(telemetry?.rr_intervals_ms) ? telemetry.rr_intervals_ms : []),
+  ]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value >= 300 && value <= 2000);
+  if (rr.length) {
+    const recent = rr.slice(-3);
+    const average = recent.reduce((total, value) => total + value, 0) / recent.length;
+    return Math.max(280, Math.min(1500, average));
+  }
+  const hr = readNumber(telemetry?.currentHr, telemetry?.hr, telemetry?.heartRate);
+  if (!Number.isFinite(hr) || hr <= 0) return null;
+  return Math.max(280, Math.min(1500, 60000 / Math.max(35, hr)));
 }
 
 function wait(ms) {
@@ -1437,6 +1455,9 @@ export default function LiveCapture() {
   const heartbeatAudioEnabledRef = useRef(heartbeatAudioEnabled);
   const lastHeartbeatAtRef = useRef(0);
   const lastHeartbeatTelemetryKeyRef = useRef("");
+  const lastHeartbeatSampleAtRef = useRef(0);
+  const lastHeartbeatIntervalMsRef = useRef(0);
+  const heartbeatPredictionTimerRef = useRef(null);
   const lastPhaseMarkerRef = useRef({ label: "", ts: 0 });
   const mediaVideoRef = useRef(null);
   const mediaInputRef = useRef(null);
@@ -1541,21 +1562,45 @@ export default function LiveCapture() {
     } catch {}
   }, [getHeartbeatAudioContext]);
 
-  const triggerHeartbeatPulse = useCallback((telemetry = latestHrRef.current) => {
+  const clearHeartbeatPrediction = useCallback(() => {
+    if (heartbeatPredictionTimerRef.current) {
+      window.clearTimeout(heartbeatPredictionTimerRef.current);
+      heartbeatPredictionTimerRef.current = null;
+    }
+  }, []);
+
+  const emitHeartbeatPulse = useCallback((telemetry = latestHrRef.current, { eventTimeMs = Date.now() } = {}) => {
     if (!heartbeatAudioEnabledRef.current) return;
     const hr = readNumber(telemetry?.currentHr, telemetry?.hr, telemetry?.heartRate);
-    if (hr == null) return;
-    const now = Date.now();
-    const minInterval = Math.max(240, Math.min(900, (60000 / Math.max(40, hr)) * 0.55));
-    if (now - lastHeartbeatAtRef.current < minInterval) return;
-    lastHeartbeatAtRef.current = now;
+    if (hr == null) return false;
+    const minInterval = Math.max(170, Math.min(900, (60000 / Math.max(40, hr)) * 0.38));
+    if (eventTimeMs - lastHeartbeatAtRef.current < minInterval) return false;
+    lastHeartbeatAtRef.current = eventTimeMs;
     setHeartbeatPulseId((value) => value + 1);
     playHeartbeatBeep();
+    return true;
   }, [playHeartbeatBeep]);
+
+  const schedulePredictedHeartbeat = useCallback((intervalMs) => {
+    clearHeartbeatPrediction();
+    const safeIntervalMs = Math.max(280, Math.min(1500, Number(intervalMs) || 0));
+    if (!safeIntervalMs) return;
+    lastHeartbeatIntervalMsRef.current = safeIntervalMs;
+    const targetMs = lastHeartbeatAtRef.current + safeIntervalMs;
+    const delayMs = Math.max(0, targetMs - Date.now());
+    heartbeatPredictionTimerRef.current = window.setTimeout(() => {
+      heartbeatPredictionTimerRef.current = null;
+      if (!heartbeatAudioEnabledRef.current) return;
+      if (Date.now() - lastHeartbeatSampleAtRef.current > HEARTBEAT_PREDICTION_STALE_MS) return;
+      const fired = emitHeartbeatPulse(latestHrRef.current, { eventTimeMs: targetMs });
+      if (fired) schedulePredictedHeartbeat(lastHeartbeatIntervalMsRef.current || safeIntervalMs);
+    }, delayMs);
+  }, [clearHeartbeatPrediction, emitHeartbeatPulse]);
 
   const maybeTriggerHeartbeatFromTelemetry = useCallback((telemetry) => {
     const hr = readNumber(telemetry?.currentHr, telemetry?.hr, telemetry?.heartRate);
     if (hr == null) return;
+    const now = Date.now();
     const key = [
       telemetry?.source || "",
       telemetry?.measuredAt || telemetry?.source_at || telemetry?.receivedAt || telemetry?.lastMessageAt || "",
@@ -1564,8 +1609,11 @@ export default function LiveCapture() {
     ].join("|");
     if (key && key === lastHeartbeatTelemetryKeyRef.current) return;
     lastHeartbeatTelemetryKeyRef.current = key;
-    triggerHeartbeatPulse(telemetry);
-  }, [triggerHeartbeatPulse]);
+    lastHeartbeatSampleAtRef.current = now;
+    emitHeartbeatPulse(telemetry, { eventTimeMs: now });
+    const intervalMs = readHeartbeatIntervalMs(telemetry);
+    if (intervalMs) schedulePredictedHeartbeat(intervalMs);
+  }, [emitHeartbeatPulse, schedulePredictedHeartbeat]);
 
   const markHowlSettingsDirty = useCallback((dirty) => {
     howlSettingsDirtyRef.current = Boolean(dirty);
@@ -2549,6 +2597,7 @@ export default function LiveCapture() {
     events.addEventListener("hr_telemetry", (event) => {
       const data = JSON.parse(event.data);
       latestHrRef.current = data;
+      maybeTriggerHeartbeatFromTelemetry(data);
     });
     events.addEventListener("emg_telemetry", (event) => {
       const data = JSON.parse(event.data);
@@ -2576,7 +2625,7 @@ export default function LiveCapture() {
       setLiveSession((prev) => ({ ...(prev || {}), lastImportedAt: new Date().toISOString(), lastImportResult: JSON.parse(event.data) }));
     });
     return () => events.close();
-  }, []);
+  }, [appendTelemetryPoint, maybeTriggerHeartbeatFromTelemetry]);
 
   useEffect(() => {
     localStorage.setItem("pulsepoint.captureKind", captureKind);
@@ -2620,11 +2669,13 @@ export default function LiveCapture() {
     heartbeatAudioEnabledRef.current = heartbeatAudioEnabled;
     localStorage.setItem("pulsepoint.heartbeatAudio", heartbeatAudioEnabled ? "on" : "off");
     if (heartbeatAudioEnabled) getHeartbeatAudioContext();
-  }, [getHeartbeatAudioContext, heartbeatAudioEnabled]);
+    else clearHeartbeatPrediction();
+  }, [clearHeartbeatPrediction, getHeartbeatAudioContext, heartbeatAudioEnabled]);
 
   useEffect(() => () => {
+    clearHeartbeatPrediction();
     heartbeatAudioContextRef.current?.close?.().catch?.(() => {});
-  }, []);
+  }, [clearHeartbeatPrediction]);
 
   useEffect(() => {
     maybeTriggerHeartbeatFromTelemetry(hrTelemetry);
