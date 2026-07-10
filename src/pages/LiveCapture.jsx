@@ -1358,6 +1358,7 @@ export default function LiveCapture() {
   const [files, setFiles] = useState(null);
   const [liveSession, setLiveSession] = useState(null);
   const [activeSessionDoc, setActiveSessionDoc] = useState(null);
+  const [endingSession, setEndingSession] = useState(false);
   const [connected, setConnected] = useState(false);
   const [telemetryHistory, setTelemetryHistory] = useState([]);
   const [liveEvents, setLiveEvents] = useState([]);
@@ -3311,6 +3312,37 @@ export default function LiveCapture() {
     return null;
   };
 
+  const endLiveSession = useCallback(async () => {
+    if (!liveSession?.activeSessionId || !liveSession?.active) return null;
+    setEndingSession(true);
+    try {
+      const res = await fetch(apiUrl("/live-capture/end-session"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recording }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not end the live session.");
+      if (data.session) setLiveSession(data.session);
+      toast({
+        title: "Session finalized",
+        description: data.result?.hr_rows
+          ? `Merged ${data.result.hr_rows} HR rows into the session.`
+          : "Live capture session ended.",
+      });
+      return data.session || null;
+    } catch (error) {
+      toast({
+        title: "End session failed",
+        description: error?.message || "Could not end the live session.",
+        variant: "destructive",
+      });
+      return null;
+    } finally {
+      setEndingSession(false);
+    }
+  }, [liveSession?.activeSessionId, liveSession?.active, recording, toast]);
+
   useEffect(() => {
     voiceWakeEnabledRef.current = voiceWakeEnabled;
   }, [voiceWakeEnabled]);
@@ -3325,6 +3357,7 @@ export default function LiveCapture() {
   const embeddedObsStatus = status?.hr?.relay?.obs || null;
   const obsReady = Boolean(recordingActive || embeddedObsStatus?.identified);
   const emgRecent = isRecent(emgSourceAt);
+  const liveSessionPaused = Boolean(liveSession?.activeSessionId && liveSession?.active && !recordingActive);
 
   useEffect(() => {
     perinealProtocolRef.current = perinealProtocol;
@@ -7091,6 +7124,11 @@ export default function LiveCapture() {
                 {liveSession.lastImportResult.emg_attached ? " · EMG attached" : " · EMG pending"}
               </p>
             )}
+            {liveSessionPaused && (
+              <p className="mt-2 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+                OBS is not actively recording, but this live session is still open. Capture is paused until OBS resumes or you press End Session.
+              </p>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {!liveSession?.activeSessionId && (
@@ -7109,6 +7147,16 @@ export default function LiveCapture() {
               >
                 <ExternalLink className="h-4 w-4" /> Open Session
               </Link>
+            )}
+            {liveSession?.activeSessionId && liveSession?.active && (
+              <button
+                type="button"
+                onClick={endLiveSession}
+                disabled={endingSession}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-destructive px-3 py-2 text-sm font-semibold text-destructive-foreground hover:bg-destructive/90 disabled:opacity-60"
+              >
+                <X className="h-4 w-4" /> {endingSession ? "Ending..." : "End Session"}
+              </button>
             )}
           </div>
         </div>

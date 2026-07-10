@@ -124,6 +124,9 @@ const state = {
     lastImportError: null,
     importing: false,
     finalizedRecordingKey: null,
+    pendingHrSegments: [],
+    pendingObsSegments: [],
+    pausedAt: null,
   },
   engine: null,
 };
@@ -760,6 +763,7 @@ function buildSessionSeed(recording) {
     live_capture: true,
     capture_status: 'recording',
     capture_started_at: started.toISOString(),
+    capture_segments: [],
     capture_source: `OBS + ${state.hr.selectedSourceLabel || 'HR relay'} + EMG bridge`,
     hr_source: state.hr.selectedSource,
     hr_source_label: state.hr.selectedSourceLabel,
@@ -785,12 +789,110 @@ function buildBodyExplorationSeed(recording) {
     capture_kind: 'body_exploration',
     capture_status: 'recording',
     capture_started_at: started.toISOString(),
+    capture_segments: [],
     capture_source: `OBS + ${state.hr.selectedSourceLabel || 'HR relay'} + EMG bridge`,
     hr_source: state.hr.selectedSource,
     hr_source_label: state.hr.selectedSourceLabel,
     purpose: 'Live Capture body exploration record created automatically when recording started.',
     notes: 'Body exploration capture created from Live Capture. Add findings, comfort notes, and setup details after recording.',
   };
+}
+
+function currentLiveSessionEntity(sessionId = state.session.activeSessionId) {
+  if (!sessionId) return null;
+  return getEntity(state.session.entity || 'Session', sessionId)
+    || getEntity('BodyExploration', sessionId)
+    || getEntity('Session', sessionId);
+}
+
+function patchCurrentLiveSession(patch = {}) {
+  const sessionId = state.session.activeSessionId;
+  if (!sessionId) return null;
+  const existing = currentLiveSessionEntity(sessionId);
+  if (!existing) return null;
+  const entity = state.session.entity || (getEntity('BodyExploration', sessionId) ? 'BodyExploration' : 'Session');
+  return upsertEntity(entity, sessionId, {
+    ...existing,
+    ...patch,
+  });
+}
+
+function normalizeRecordingSegment(recording = {}, reason = 'obs_record_stop') {
+  const filepath = recording?.filepath || null;
+  const outputPath = recording?.obsOutputPath || recording?.outputPath || null;
+  const startedAtMs = Number(recording?.startedAtMs || 0) || null;
+  const stoppedAtMs = Number(recording?.stoppedAtMs || 0) || Date.now();
+  if (!filepath && !outputPath) return null;
+  return {
+    id: randomUUID(),
+    reason,
+    filepath,
+    filename: recording?.filename || (filepath ? path.basename(filepath) : null),
+    outputPath,
+    startedAtMs,
+    stoppedAtMs,
+    startedAt: startedAtMs ? new Date(startedAtMs).toISOString() : null,
+    stoppedAt: new Date(stoppedAtMs).toISOString(),
+    source: state.hr.selectedSource,
+    sourceLabel: state.hr.selectedSourceLabel,
+  };
+}
+
+function mergeCaptureSegments(existingSegments = [], nextSegment = null) {
+  const merged = Array.isArray(existingSegments) ? [...existingSegments] : [];
+  if (!nextSegment) return merged;
+  const segmentKey = `${nextSegment.filepath || ''}|${nextSegment.outputPath || ''}|${nextSegment.startedAtMs || ''}|${nextSegment.stoppedAtMs || ''}`;
+  if (merged.some((segment) => `${segment.filepath || ''}|${segment.outputPath || ''}|${segment.startedAtMs || ''}|${segment.stoppedAtMs || ''}` === segmentKey)) {
+    return merged;
+  }
+  merged.push(nextSegment);
+  return merged.sort((a, b) => Number(a.startedAtMs || 0) - Number(b.startedAtMs || 0));
+}
+
+function stageRecordingSegmentForSession(recording = {}, reason = 'obs_record_stop') {
+  const sessionId = state.session.activeSessionId;
+  if (!sessionId) return null;
+  const segment = normalizeRecordingSegment(recording, reason);
+  if (!segment) return null;
+  const nextHrSegments = mergeCaptureSegments(state.session.pendingHrSegments, segment);
+  const nextObsSegments = segment.outputPath
+    ? mergeCaptureSegments(state.session.pendingObsSegments, {
+      id: segment.id,
+      outputPath: segment.outputPath,
+      startedAtMs: segment.startedAtMs,
+      stoppedAtMs: segment.stoppedAtMs,
+      startedAt: segment.startedAt,
+      stoppedAt: segment.stoppedAt,
+      reason: segment.reason,
+    })
+    : state.session.pendingObsSegments;
+  state.session = {
+    ...state.session,
+    pendingHrSegments: nextHrSegments,
+    pendingObsSegments: nextObsSegments,
+    pausedAt: new Date(segment.stoppedAtMs || Date.now()).toISOString(),
+  };
+  patchCurrentLiveSession({
+    capture_status: 'recording_paused',
+    capture_last_paused_at: state.session.pausedAt,
+    capture_segments: nextHrSegments,
+  });
+  broadcast('live_session', state.session);
+  return segment;
+}
+
+function markLiveSessionRecordingResumed(recording = {}) {
+  if (!state.session.activeSessionId || !state.session.active) return;
+  state.session = {
+    ...state.session,
+    pausedAt: null,
+  };
+  patchCurrentLiveSession({
+    capture_status: 'recording',
+    capture_last_paused_at: null,
+    capture_resumed_at: new Date(recording?.startedAtMs || Date.now()).toISOString(),
+  });
+  broadcast('live_session', state.session);
 }
 
 function ensureLiveSession(recording, options = {}) {
@@ -809,12 +911,129 @@ function ensureLiveSession(recording, options = {}) {
     startedAt: new Date(recording?.startedAtMs || Date.now()).toISOString(),
     finalizedAt: null,
     lastImportError: null,
+    pendingHrSegments: [],
+    pendingObsSegments: [],
+    pausedAt: null,
   };
+  patchCurrentLiveSession({ capture_status: 'recording', capture_last_paused_at: null, capture_segments: [] });
   broadcast('live_session', state.session);
   return id;
 }
 
-async function finalizeLiveSession(recording) {
+async function mergedCaptureRowsForSegments(segments = []) {
+  const parsedSegments = (await Promise.all((Array.isArray(segments) ? segments : [])
+    .filter((segment) => segment?.filepath)
+    .map(async (segment) => {
+      const text = await fs.readFile(segment.filepath, 'utf8');
+      const rows = parseHrRows(text);
+      const firstTimestampMs = rows.length ? Date.parse(rows[0].timestamp || '') : NaN;
+      return {
+        segment,
+        rows,
+        firstTimestampMs: Number.isFinite(firstTimestampMs) ? firstTimestampMs : null,
+      };
+    })))
+    .filter((item) => item.rows.length);
+  if (!parsedSegments.length) return { rows: [], originalRows: 0 };
+  const baseStartMs = parsedSegments
+    .map((item) => {
+      if (item.firstTimestampMs != null) return item.firstTimestampMs;
+      const startedAtMs = Number(item.segment?.startedAtMs || 0);
+      return Number.isFinite(startedAtMs) && startedAtMs > 0 ? startedAtMs : null;
+    })
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b)[0] || null;
+  let fallbackOffsetS = 0;
+  const mergedRows = [];
+  for (const item of parsedSegments.sort((a, b) => Number(a.segment?.startedAtMs || 0) - Number(b.segment?.startedAtMs || 0))) {
+    const localMaxOffset = item.rows.reduce((max, row) => Math.max(max, Number(row.time_offset_s) || 0), 0);
+    for (const row of item.rows) {
+      const timestampMs = Date.parse(row.timestamp || '');
+      const absoluteOffsetS = Number.isFinite(timestampMs) && baseStartMs
+        ? Math.max(0, Number(((timestampMs - baseStartMs) / 1000).toFixed(3)))
+        : Number((((Number(row.time_offset_s) || 0) + fallbackOffsetS)).toFixed(3));
+      mergedRows.push({
+        ...row,
+        time_offset_s: absoluteOffsetS,
+        time_offset_ms: Math.round(absoluteOffsetS * 1000),
+      });
+    }
+    fallbackOffsetS += localMaxOffset;
+  }
+  mergedRows.sort((a, b) => Number(a.time_offset_s || 0) - Number(b.time_offset_s || 0));
+  return {
+    rows: mergedRows,
+    originalRows: mergedRows.length,
+  };
+}
+
+function hrCsvTextFromRows(rows = []) {
+  const header = [
+    'timestamp',
+    'time_offset_ms',
+    'time_offset_s',
+    'hr',
+    'hr_smoothed',
+    'baseline_hr',
+    'elevated_delta',
+    'marker',
+    'note',
+    'hr_source',
+    'hr_measured_at',
+    'hr_received_at',
+    'hr_age_ms',
+    'rr_intervals_ms',
+    'hrv_rmssd_ms',
+    'hrv_sdnn_ms',
+    'hrv_pnn50',
+    'hrv_window_seconds',
+    'hrv_quality',
+  ].join(',');
+  const body = rows.map((row) => ([
+    csvEscape(row.timestamp),
+    csvEscape(row.time_offset_ms),
+    csvEscape(Number(row.time_offset_s ?? 0).toFixed(3)),
+    csvEscape(row.hr),
+    csvEscape(row.hr_smoothed),
+    csvEscape(row.baseline_hr),
+    csvEscape(row.elevated_delta),
+    csvEscape(row.marker),
+    csvEscape(row.note),
+    csvEscape(row.hr_source),
+    csvEscape(row.hr_measured_at),
+    csvEscape(row.hr_received_at),
+    csvEscape(row.hr_age_ms),
+    csvEscape(row.rr_intervals_ms),
+    csvEscape(row.hrv_rmssd_ms),
+    csvEscape(row.hrv_sdnn_ms),
+    csvEscape(row.hrv_pnn50),
+    csvEscape(row.hrv_window_seconds),
+    csvEscape(row.hrv_quality),
+  ].join(','))).join('\n');
+  return `${header}\n${body}${body ? '\n' : ''}`;
+}
+
+async function importHeartRateSegments(sessionId, hrSegments = []) {
+  const merged = await mergedCaptureRowsForSegments(hrSegments);
+  if (!sessionId || !merged.rows.length) return { rows: 0, originalRows: 0, upload: null, metrics: {}, rawRows: [] };
+  const finalRows = merged.rows.length > 10000
+    ? merged.rows.filter((_row, index) => index % Math.ceil(merged.rows.length / 10000) === 0)
+    : merged.rows;
+  bulkCreate('HeartRateTimeline', finalRows.map((row) => ({ ...row, session: sessionId })));
+  await fs.mkdir(HR_RECORDINGS_DIR, { recursive: true });
+  const mergedPath = path.join(HR_RECORDINGS_DIR, `hr_timeline_merged_${sessionId}_${formatFilenameDate()}.csv`);
+  await fs.writeFile(mergedPath, hrCsvTextFromRows(merged.rows), 'utf8');
+  return {
+    rows: finalRows.length,
+    originalRows: merged.rows.length,
+    upload: await copyCaptureFileToUploads(mergedPath, 'hr'),
+    metrics: summarizeHrRows(merged.rows),
+    rawRows: merged.rows,
+    sourcePath: mergedPath,
+  };
+}
+
+async function finalizeLiveSession(recording, options = {}) {
   const sessionId = state.session.activeSessionId;
   if (!sessionId) return null;
   const recordingKey = recording?.filepath || recording?.filename || recording?.obsOutputPath || recording?.outputPath || sessionId;
@@ -824,12 +1043,17 @@ async function finalizeLiveSession(recording) {
   broadcast('live_session', state.session);
   try {
     await refreshLatestFiles();
-    const hrCsv = recording?.filepath
-      ? { path: recording.filepath, name: path.basename(recording.filepath), modifiedAt: new Date().toISOString() }
-      : state.files.latestHrCsv;
+    const shouldStageCurrent = options.includeCurrentRecording !== false;
+    if (shouldStageCurrent) {
+      stageRecordingSegmentForSession(recording, options.reason || 'manual_end_session');
+    }
+    const hrSegments = mergeCaptureSegments(
+      currentLiveSessionEntity(sessionId)?.capture_segments || state.session.pendingHrSegments,
+      null,
+    );
     const emgCsv = await findEmgCsvForSession(state.session.startedAt);
     const [hrImport, emgUpload] = await Promise.all([
-      importHeartRateCsv(sessionId, hrCsv),
+      importHeartRateSegments(sessionId, hrSegments),
       attachEmgCsv(emgCsv),
     ]);
     const stoppedAt = recording?.stoppedAtMs ? new Date(recording.stoppedAtMs) : new Date();
@@ -839,9 +1063,17 @@ async function finalizeLiveSession(recording) {
       capture_finalized_at: stoppedAt.toISOString(),
       capture_files: {
         hr: hrImport.upload,
+        hr_segments: hrSegments.map((segment) => ({
+          filepath: segment.filepath || null,
+          filename: segment.filename || null,
+          outputPath: segment.outputPath || null,
+          startedAt: segment.startedAt || null,
+          stoppedAt: segment.stoppedAt || null,
+        })),
         emg: emgUpload,
         obsOutputPath: recording?.obsOutputPath || recording?.outputPath || null,
       },
+      capture_segments: hrSegments,
       hr_source: state.hr.selectedSource,
       hr_source_label: state.hr.selectedSourceLabel,
       hr_data_file: hrImport.upload?.file_url || undefined,
@@ -869,6 +1101,9 @@ async function finalizeLiveSession(recording) {
       lastImportError: null,
       importing: false,
       finalizedRecordingKey: recordingKey,
+      pendingHrSegments: [],
+      pendingObsSegments: [],
+      pausedAt: null,
     };
     telemetryEngine.setActiveSession(null);
     broadcast('live_session', state.session);
@@ -881,6 +1116,7 @@ async function finalizeLiveSession(recording) {
       lastImportError: error.message || String(error),
       importing: false,
       finalizedRecordingKey: recordingKey,
+      pausedAt: null,
     };
     broadcast('live_session', state.session);
     return null;
@@ -1249,6 +1485,7 @@ function connectHrBridge() {
         state.hr.recording = msg.recording || null;
         if (state.hr.recording?.active) {
           ensureLiveSession(state.hr.recording);
+          markLiveSessionRecordingResumed(state.hr.recording);
           if (state.hr.selectedSource === HR_SOURCE_IDS.PULSOID && !pulsoidRecording) {
             createPulsoidRecording(state.hr.recording, 'pulsoid_recording_info').catch((error) => {
               state.hr.pulsoid.error = `Pulsoid CSV start failed: ${error.message || error}`;
@@ -1277,6 +1514,7 @@ function connectHrBridge() {
         };
         if (state.hr.recording.active) {
           ensureLiveSession(state.hr.recording);
+          markLiveSessionRecordingResumed(state.hr.recording);
           if (state.hr.selectedSource === HR_SOURCE_IDS.PULSOID && !pulsoidRecording) {
             createPulsoidRecording(state.hr.recording).catch((error) => {
               state.hr.pulsoid.error = `Pulsoid CSV start failed: ${error.message || error}`;
@@ -1295,9 +1533,9 @@ function connectHrBridge() {
         broadcast('recording', state.hr.recording);
         refreshLatestFiles();
         if (!state.hr.recording.active) {
-          resolveHrRecordingForImport(state.hr.recording).then((recordingForImport) => finalizeLiveSession(recordingForImport).then((result) => {
-            if (result) broadcast('live_session_imported', result);
-          }));
+          resolveHrRecordingForImport(state.hr.recording).then((recordingForImport) => {
+            stageRecordingSegmentForSession(recordingForImport, 'obs_record_stop');
+          });
         }
       }
 
@@ -1308,9 +1546,9 @@ function connectHrBridge() {
         };
         broadcast('recording_finalized', state.hr.recording);
         refreshLatestFiles();
-        resolveHrRecordingForImport(state.hr.recording).then((recordingForImport) => finalizeLiveSession(recordingForImport).then((result) => {
-          if (result) broadcast('live_session_imported', result);
-        }));
+        resolveHrRecordingForImport(state.hr.recording).then((recordingForImport) => {
+          stageRecordingSegmentForSession(recordingForImport, 'recording_finalized');
+        });
       }
     });
 
@@ -1670,4 +1908,22 @@ liveCaptureRouter.post('/ensure-session', (req, res) => {
     captureKind: req.body?.captureKind,
   });
   res.json({ ok: true, sessionId, session: state.session });
+});
+
+liveCaptureRouter.post('/end-session', async (req, res) => {
+  if (!state.session.activeSessionId || !state.session.active) {
+    res.status(409).json({ error: 'No active live session is running.' });
+    return;
+  }
+  const recording = req.body?.recording || state.hr.recording || {};
+  const result = await finalizeLiveSession(recording, {
+    includeCurrentRecording: Boolean(recording?.filepath || recording?.filename || recording?.obsOutputPath || recording?.outputPath),
+    reason: 'manual_end_session',
+  });
+  if (!result) {
+    res.status(500).json({ error: state.session.lastImportError || 'Could not finalize the live session.' });
+    return;
+  }
+  broadcast('live_session_imported', result);
+  res.json({ ok: true, session: state.session, result });
 });
