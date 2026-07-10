@@ -2870,6 +2870,31 @@ export default function LiveCapture() {
     [emgTelemetry, telemetryHistory],
   );
   const captureDigest = activeSessionDoc?.capture_digest || null;
+  const postCaptureWrap = useMemo(() => {
+    const events = [...(activeSessionDoc?.event_timeline || [])]
+      .filter((event) => Number.isFinite(Number(event?.time_s)))
+      .sort((a, b) => Number(a.time_s) - Number(b.time_s));
+    if (!events.length && !captureDigest) return null;
+    const artifacts = events.filter((event) => {
+      const categories = asArray(event.category).map((category) => String(category).toLowerCase());
+      const note = String(event.note || "").toLowerCase();
+      return categories.includes("artifact") || note.includes("artifact") || note.includes("telemetry noise");
+    });
+    const bpEvents = events.filter((event) => event?.blood_pressure || asArray(event.category).includes("blood_pressure"));
+    const phaseMoments = [
+      activeSessionDoc?.pre_climax_offset_s != null ? { label: "Pre-Climax", timeS: Number(activeSessionDoc.pre_climax_offset_s) } : null,
+      activeSessionDoc?.climax_offset_s != null ? { label: "Climax", timeS: Number(activeSessionDoc.climax_offset_s) } : null,
+      activeSessionDoc?.recovery_offset_s != null ? { label: "Recovery", timeS: Number(activeSessionDoc.recovery_offset_s) } : null,
+    ].filter(Boolean);
+    return {
+      totalEvents: events.length,
+      quickPadEvents: events.filter((event) => asArray(event.annotation_tags).includes("quick_pad")).length,
+      artifactCount: artifacts.length,
+      bpCount: bpEvents.length,
+      phaseMoments,
+      notableEvents: [...events].reverse().slice(0, 5),
+    };
+  }, [activeSessionDoc, captureDigest]);
   const recentLiveEvents = useMemo(() => [...liveEvents].sort((a, b) => Number(b.time_s || 0) - Number(a.time_s || 0)).slice(0, 8), [liveEvents]);
   const recentPhaseMarkers = useMemo(() => [...phaseMarkers].reverse().slice(0, 5), [phaseMarkers]);
   const quickEventPads = useMemo(() => (
@@ -7109,6 +7134,26 @@ export default function LiveCapture() {
                   <p className="text-lg font-bold text-foreground">{captureDigest.hr_rows || 0}</p>
                 </div>
               </div>
+              {postCaptureWrap && (
+                <div className="mt-3 grid gap-2 sm:grid-cols-4">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Events</p>
+                    <p className="text-lg font-bold text-foreground">{postCaptureWrap.totalEvents}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Quick Pads</p>
+                    <p className="text-lg font-bold text-foreground">{postCaptureWrap.quickPadEvents}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">BP Stamps</p>
+                    <p className="text-lg font-bold text-foreground">{postCaptureWrap.bpCount}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Artifacts</p>
+                    <p className="text-lg font-bold text-foreground">{postCaptureWrap.artifactCount}</p>
+                  </div>
+                </div>
+              )}
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {(captureDigest.findings || []).slice(0, 8).map((finding) => (
                   <span key={finding} className="rounded-full bg-primary/10 px-2 py-1 text-[10px] font-medium text-primary">
@@ -7116,17 +7161,44 @@ export default function LiveCapture() {
                   </span>
                 ))}
               </div>
+              {postCaptureWrap?.phaseMoments?.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {postCaptureWrap.phaseMoments.map((moment) => (
+                    <span key={moment.label} className="rounded-full border border-primary/20 bg-background/70 px-2 py-1 text-[10px] font-semibold text-foreground">
+                      {moment.label} {fmtMmSs(moment.timeS)}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
-            <div className="rounded-lg border border-border bg-muted/25 p-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Review Queue</p>
-              <div className="mt-2 space-y-1.5">
-                {(captureDigest.review_items || []).map((item) => (
-                  <div key={item} className="flex gap-2 text-xs text-muted-foreground">
-                    <Flag className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
-                    <span>{item}</span>
-                  </div>
-                ))}
+            <div className="space-y-3">
+              <div className="rounded-lg border border-border bg-muted/25 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Review Queue</p>
+                <div className="mt-2 space-y-1.5">
+                  {(captureDigest.review_items || []).map((item) => (
+                    <div key={item} className="flex gap-2 text-xs text-muted-foreground">
+                      <Flag className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                      <span>{item}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
+              {postCaptureWrap?.notableEvents?.length > 0 && (
+                <div className="rounded-lg border border-border bg-muted/25 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Recent Markers</p>
+                  <div className="mt-2 space-y-2">
+                    {postCaptureWrap.notableEvents.map((event, index) => (
+                      <div key={`${event.time_s}-${index}`} className="rounded-lg bg-card/70 px-3 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono text-[10px] font-semibold text-primary">{fmtMmSs(event.time_s)}</span>
+                          <span className="text-[10px] text-muted-foreground">{asArray(event.category).slice(0, 2).join(" · ") || "event"}</span>
+                        </div>
+                        <p className="mt-1 line-clamp-2 text-xs text-foreground">{event.note || event.label || "Event note"}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -30,6 +30,49 @@ function getCategoryMeta(value) {
     || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
 }
 
+const REVIEW_EVENT_FILTERS = [
+  { key: "all", label: "All events" },
+  { key: "physical", label: "Physical" },
+  { key: "stimulation", label: "Stimulation" },
+  { key: "sensation", label: "Sensation" },
+  { key: "motion", label: "Motion-derived" },
+  { key: "artifact", label: "Artifacts" },
+  { key: "ai", label: "AI" },
+];
+
+function isArtifactEvent(event) {
+  const note = String(event?.note || "").toLowerCase();
+  const tags = Array.isArray(event?.annotation_tags) ? event.annotation_tags.map((tag) => String(tag).toLowerCase()) : [];
+  const categories = normalizeCategoryArray(event?.category).map((category) => String(category).toLowerCase());
+  return note.includes("artifact")
+    || tags.includes("artifact")
+    || categories.includes("artifact")
+    || note.includes("telemetry noise")
+    || note.includes("contact artifact");
+}
+
+function isAiEvent(event) {
+  return event?.source === "ai_video_pass"
+    || event?.source === "ai_audio_pass"
+    || event?.ai_generated === true
+    || event?.annotation_origin === "ai"
+    || event?.ai_annotation?.source === "ai"
+    || event?.ai_annotation?.source === "sarah_video_pass"
+    || event?.ai_annotation?.source === "sarah_audio_pass";
+}
+
+function matchesReviewEventFilter(event, filterKey) {
+  if (!filterKey || filterKey === "all") return true;
+  const categories = normalizeCategoryArray(event?.category);
+  if (filterKey === "motion") return event?.source === "motion_derived";
+  if (filterKey === "artifact") return isArtifactEvent(event);
+  if (filterKey === "ai") return isAiEvent(event);
+  if (filterKey === "physical") return categories.includes("physical");
+  if (filterKey === "stimulation") return categories.some((category) => category === "stimulation" || category.startsWith("stimulation_"));
+  if (filterKey === "sensation") return categories.includes("sensation");
+  return true;
+}
+
 function MotionDerivedBadge({ event }) {
   if (event?.verification_status === "reviewed_verified") {
     return (
@@ -183,18 +226,45 @@ export default function SessionReviewPlayer() {
   const [selectedEventIdx, setSelectedEventIdx] = useState(null);
   const [timelineWaypointDetail, setTimelineWaypointDetail] = useState(null);
   const [followTimeline, setFollowTimeline] = useState(true);
+  const [eventFilter, setEventFilter] = useState("all");
+  const [eventSearch, setEventSearch] = useState("");
   const reviewTime = Number.isFinite(Number(timelineSyncTime)) ? Number(timelineSyncTime) : videoTime;
 
+  const filteredEventEntries = useMemo(() => {
+    const searchNeedle = String(eventSearch || "").trim().toLowerCase();
+    return (selectedSession?.event_timeline || [])
+      .map((event, index) => ({ event, index }))
+      .filter(({ event }) => matchesReviewEventFilter(event, eventFilter))
+      .filter(({ event }) => {
+        if (!searchNeedle) return true;
+        const categoryText = normalizeCategoryArray(event.category).join(" ");
+        return `${event.note || ""} ${categoryText} ${event.source || ""}`.toLowerCase().includes(searchNeedle);
+      });
+  }, [eventFilter, eventSearch, selectedSession?.event_timeline]);
   const nearbyEvents = useMemo(() => (
-    (selectedSession?.event_timeline || [])
-      .map((event, index) => ({
+    filteredEventEntries
+      .map(({ event, index }) => ({
         event,
         index,
         distance: Math.abs(Number(event.time_s || 0) - reviewTime),
       }))
       .sort((a, b) => a.distance - b.distance)
       .slice(0, 3)
-  ), [reviewTime, selectedSession?.event_timeline]);
+  ), [filteredEventEntries, reviewTime]);
+  const reviewEventSummary = useMemo(() => {
+    const sourceEvents = selectedSession?.event_timeline || [];
+    return {
+      total: sourceEvents.length,
+      filtered: filteredEventEntries.length,
+      motion: sourceEvents.filter((event) => event?.source === "motion_derived").length,
+      artifacts: sourceEvents.filter((event) => isArtifactEvent(event)).length,
+      ai: sourceEvents.filter((event) => isAiEvent(event)).length,
+    };
+  }, [filteredEventEntries.length, selectedSession?.event_timeline]);
+  const nearbyEventsLabel = eventFilter === "all" && !eventSearch.trim()
+    ? "The closest observation to the current video moment stays first."
+    : `${filteredEventEntries.length} matching event${filteredEventEntries.length === 1 ? "" : "s"} in this review focus.`;
+
   const currentReviewEvent = nearbyEvents[0] || null;
   const currentReviewEventHR = useMemo(
     () => nearestHeartRate(timelineRows, currentReviewEvent?.event?.time_s),
@@ -360,6 +430,11 @@ export default function SessionReviewPlayer() {
   useEffect(() => {
     setSelectedEventIdx(nearbyEvents[0]?.index ?? null);
   }, [nearbyEvents]);
+
+  useEffect(() => {
+    setEventFilter("all");
+    setEventSearch("");
+  }, [selectedId]);
 
   const hasTimelineReview = selectedSession
     && (timelineRows.length > 0
@@ -927,6 +1002,60 @@ export default function SessionReviewPlayer() {
                   </div>
                 </div>
               </div>
+
+              <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-primary">Review Focus</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Narrow the event stream before you start chasing moments through the recording.
+                    </p>
+                  </div>
+                  <div className="grid min-w-[16rem] grid-cols-2 gap-2 sm:grid-cols-4">
+                    <FocusMetric label="Events" value={reviewEventSummary.total} />
+                    <FocusMetric label="Filtered" value={reviewEventSummary.filtered} accent="text-primary" />
+                    <FocusMetric label="Artifacts" value={reviewEventSummary.artifacts} />
+                    <FocusMetric label="Motion" value={reviewEventSummary.motion} />
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {REVIEW_EVENT_FILTERS.map((filter) => (
+                    <button
+                      key={filter.key}
+                      type="button"
+                      onClick={() => setEventFilter(filter.key)}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                        eventFilter === filter.key
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-border bg-muted/20 text-foreground hover:border-primary/40"
+                      }`}
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <input
+                    type="text"
+                    value={eventSearch}
+                    onChange={(event) => setEventSearch(event.target.value)}
+                    placeholder="Search event notes, categories, or source..."
+                    className="h-10 flex-1 rounded-lg border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground"
+                  />
+                  {(eventFilter !== "all" || eventSearch.trim()) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEventFilter("all");
+                        setEventSearch("");
+                      }}
+                      className="inline-flex h-10 items-center justify-center rounded-lg border border-border bg-muted/20 px-4 text-sm font-semibold text-foreground hover:border-primary/40"
+                    >
+                      Clear focus
+                    </button>
+                  )}
+                </div>
+              </div>
             </section>
 
             <section className="min-w-0 space-y-4">
@@ -974,7 +1103,7 @@ export default function SessionReviewPlayer() {
                         <div>
                           <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Nearby Events</p>
                           <p className="text-xs text-muted-foreground">
-                            The closest observation to the current video moment stays first.
+                            {nearbyEventsLabel}
                           </p>
                         </div>
                         <div className="space-y-2">
@@ -1020,6 +1149,11 @@ export default function SessionReviewPlayer() {
                           })}
                         </div>
                       </div>
+                    )}
+                    {!nearbyEvents.length && (
+                      <p className="rounded-lg border border-border bg-muted/25 px-3 py-3 text-sm text-muted-foreground">
+                        No event notes match the current review focus.
+                      </p>
                     )}
                   </div>
 

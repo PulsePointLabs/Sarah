@@ -469,6 +469,10 @@ export default function VideoSyncPlayer({
   const suppressNextFullscreenVideoToggleRef = useRef(false);
   const nativeShell = isSarahNativeShell();
   const useSarahManagedFullscreen = nativeShell || mobileFullscreenPreferred;
+  const pulseHaptic = useCallback((pattern = 18) => {
+    if (typeof navigator === "undefined" || typeof navigator.vibrate !== "function") return;
+    navigator.vibrate(pattern);
+  }, []);
   const widthDragStartRef = useRef({ x: 0, width: 66, layoutWidth: 1 });
   const [zoomWindow, setZoomWindow] = useState(60);
   const [activeEventIdx, setActiveEventIdx] = useState(null);
@@ -723,6 +727,7 @@ export default function VideoSyncPlayer({
       setAutoTagging(false);
       setSavingEvent(false);
       setAddingNew(false);
+      pulseHaptic([20, 35, 20]);
       if (resume && videoRef.current) {
         await new Promise((resolve) => requestAnimationFrame(() => resolve()));
         await videoRef.current.play();
@@ -737,6 +742,7 @@ export default function VideoSyncPlayer({
 
   const startAddAtPlayhead = () => {
     if (videoRef.current && !videoRef.current.paused) videoRef.current.pause();
+    pulseHaptic(15);
     setNewMin(String(Math.floor(playheadS / 60)));
     setNewSec(String(Math.round(playheadS % 60)));
     setNewCats([lastUsedCat]);
@@ -1074,19 +1080,22 @@ export default function VideoSyncPlayer({
         setTelemetryDisplayMode("overlay");
         setShellFullscreenActive((current) => !current);
         setFullscreenControlsVisible(true);
+        pulseHaptic([12, 24, 12]);
         return;
       }
       if (document.fullscreenElement === surface || document.fullscreenElement === video) {
         await document.exitFullscreen?.();
+        pulseHaptic([12, 24, 12]);
         return;
       }
       if (document.fullscreenElement) await document.exitFullscreen?.();
       setTelemetryDisplayMode("overlay");
       await surface?.requestFullscreen?.();
+      pulseHaptic([12, 24, 12]);
     } catch (err) {
       console.warn("Fullscreen playback could not be opened:", err);
     }
-  }, [useSarahManagedFullscreen]);
+  }, [pulseHaptic, useSarahManagedFullscreen]);
 
   // Scroll-to-top
   const [showScrollTop, setShowScrollTop] = useState(false);
@@ -1161,12 +1170,14 @@ export default function VideoSyncPlayer({
   const togglePlay = () => {
     const v = videoRef.current;
     if (!v) return;
+    pulseHaptic(10);
     if (v.paused) v.play(); else v.pause();
   };
 
   const stepFrames = (seconds) => {
     const v = videoRef.current;
     if (!v) return;
+    pulseHaptic(8);
     setSynchronizedVideoTime(Math.max(0, v.currentTime + seconds));
   };
 
@@ -1760,10 +1771,10 @@ export default function VideoSyncPlayer({
                       startAddAtPlayhead();
                     }}
                     className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground shadow-xl shadow-black/25 transition-transform hover:scale-[1.02] active:scale-[0.98]"
-                    aria-label={`Add event at ${fmtMmSs(playheadS)}`}
+                    aria-label={`Pause and add event at ${fmtMmSs(playheadS)}`}
                   >
                     <Plus className="h-4 w-4" />
-                    <span>Add event</span>
+                    <span>Pause + Add</span>
                     <span className="rounded-full bg-primary-foreground/15 px-2 py-0.5 font-mono text-[11px] text-primary-foreground/90">
                       {fmtMmSs(playheadS)}
                     </span>
