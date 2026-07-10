@@ -106,6 +106,10 @@ export function getAIContentGeneratedAt(result) {
 
 export function isSessionAIContentStale(result, session) {
   const phaseMarkerKey = buildSessionPhaseMarkerFreshnessKey(session);
+  const liveEvidenceFreshnessKey = [
+    getMotionEvidenceFreshnessKey(session),
+    phaseMarkerKey,
+  ].join("||phase:");
   if (result?._meta?.phase_marker_freshness_key) {
     return result._meta.phase_marker_freshness_key !== phaseMarkerKey;
   }
@@ -118,7 +122,7 @@ export function isSessionAIContentStale(result, session) {
     }
   }
   return Boolean(result?._meta?.evidence_freshness_key)
-    && result._meta.evidence_freshness_key !== getMotionEvidenceFreshnessKey(session);
+    && result._meta.evidence_freshness_key !== liveEvidenceFreshnessKey;
 }
 
 export function isProfileAIContentStale(result, sessions) {

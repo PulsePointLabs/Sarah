@@ -1556,6 +1556,19 @@ function shouldProcessCompletedJob(job, savedResult, session = null) {
   return job?.status === "complete" && savedResult && !hasKeyVideoClipMeta(savedResult);
 }
 
+function newestMatchingAnalysisJob(jobs, analysisLabel, session, phaseMarkerFreshnessKey) {
+  const candidates = (Array.isArray(jobs) ? jobs : [])
+    .filter((job) => job?.meta?.label === analysisLabel);
+  if (!candidates.length) return null;
+  const matchingMarkers = candidates.filter((job) => jobMatchesCurrentSessionMarkers(job, session, phaseMarkerFreshnessKey));
+  const pool = matchingMarkers.length ? matchingMarkers : candidates;
+  return [...pool].sort((a, b) => {
+    const timeA = new Date(completedAt(a) || 0).getTime();
+    const timeB = new Date(completedAt(b) || 0).getTime();
+    return timeB - timeA;
+  })[0] || null;
+}
+
 async function hydrateCompletedJobResult(job) {
   if (job?.status !== "complete" || job?.result) return job;
   return getBackgroundJob(job.id);
@@ -2091,6 +2104,42 @@ async function buildStoredSessionAnalysisResult({
   };
 }
 
+async function finalizeStoredSessionAnalysisResult(options) {
+  const {
+    parsed,
+    completedJob,
+    session,
+    analysisField,
+    previousResult,
+  } = options;
+  try {
+    return await buildStoredSessionAnalysisResult(options);
+  } catch (error) {
+    console.warn("Falling back to raw completed analysis result after local enrichment failed:", error);
+    const previousMeta = (previousResult || session?.[analysisField])?._meta || {};
+    const generatedAt = completedAt(completedJob) || new Date().toISOString();
+    const fallbackMeta = {
+      ...buildSessionAIContentMeta(session, previousMeta, generatedAt),
+      ...(parsed?._meta && typeof parsed._meta === "object" ? parsed._meta : {}),
+      source_job_id: completedJob?.id || null,
+      source_job_completed_at: generatedAt,
+    };
+    if (previousResult?._meta?.key_video_clips && !Array.isArray(parsed?._meta?.key_video_clips)) {
+      fallbackMeta.key_video_clips = previousResult._meta.key_video_clips;
+    }
+    if (previousResult?._meta?.key_video_clip_error && !parsed?._meta?.key_video_clip_error) {
+      fallbackMeta.key_video_clip_error = previousResult._meta.key_video_clip_error;
+    }
+    if (previousResult?._meta?.key_video_clip_schema_version && !parsed?._meta?.key_video_clip_schema_version) {
+      fallbackMeta.key_video_clip_schema_version = previousResult._meta.key_video_clip_schema_version;
+    }
+    return {
+      ...parsed,
+      _meta: fallbackMeta,
+    };
+  }
+}
+
 export default function SessionAIPanel({ session, timelineRows, emgRows = [], userProfile, sessionJournal, mode = "companion", onAnalysisSaved }) {
   const isTechnical = mode === "technical";
   const analysisField = isTechnical ? "ai_session_deep_dive" : "ai_analysis";
@@ -2122,9 +2171,8 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
           limit: 4,
         });
         if (cancelled) return;
-        const job = (data.jobs || []).find((item) => item.meta?.label === analysisLabel);
+        const job = newestMatchingAnalysisJob(data.jobs || [], analysisLabel, session, phaseMarkerFreshnessKey);
         if (!job) return;
-        if (!jobMatchesCurrentSessionMarkers(job, session, phaseMarkerFreshnessKey)) return;
         if (job.status === "complete" && !shouldProcessCompletedJob(job, result || session[analysisField], session)) return;
 
         setCollapsed(false);
@@ -2144,7 +2192,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
         if (!shouldProcessCompletedJob(completedJob, result || session[analysisField], session)) return;
 
         const parsed = normalizeSessionAnalysis(completedJob.result, session);
-        const storedResult = await buildStoredSessionAnalysisResult({
+        const storedResult = await finalizeStoredSessionAnalysisResult({
           parsed,
           completedJob,
           session,
@@ -2771,7 +2819,7 @@ Provide ${isTechnical
     });
 
     const parsed = normalizeSessionAnalysis(completedJob.result, session);
-    const storedResult = await buildStoredSessionAnalysisResult({
+    const storedResult = await finalizeStoredSessionAnalysisResult({
       parsed,
       completedJob,
       session,
