@@ -82,3 +82,14 @@ export async function findBloodPressureNearSession(sessionId, { beforeHours = 8,
   if (!response.ok) throw new Error(data?.error || `Could not load session BP context: HTTP ${response.status}`);
   return data;
 }
+
+export async function attachBloodPressureToSession(sessionId, readingIds = []) {
+  const response = await fetch(apiUrl(`/blood-pressure/attach-session/${encodeURIComponent(sessionId)}`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ readingIds }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error || `Could not attach BP readings: HTTP ${response.status}`);
+  return data;
+}

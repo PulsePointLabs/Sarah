@@ -88,9 +88,97 @@ function sessionWindow(session, beforeHours = 8, afterHours = 4) {
   };
 }
 
+function sessionStartMs(session) {
+  const baseMs = new Date(session?.date || session?.created_date || 0).getTime();
+  if (!Number.isFinite(baseMs) || baseMs <= 0) return 0;
+  if (session?.start_time && /^\d{1,2}:\d{2}/.test(String(session.start_time))) {
+    const date = new Date(baseMs);
+    const [hour, minute] = String(session.start_time).split(':').map(Number);
+    date.setHours(hour, minute, 0, 0);
+    return date.getTime();
+  }
+  return baseMs;
+}
+
 function publicReading(reading = {}) {
   const { raw: _raw, ...rest } = reading;
   return rest;
+}
+
+function attachReadingsToSession(session, readings = [], { source = 'manual_session_bp_attach' } = {}) {
+  const startMs = sessionStartMs(session);
+  if (!startMs) {
+    const error = new Error('Session is missing a usable start time.');
+    error.status = 400;
+    throw error;
+  }
+  const existingEvents = Array.isArray(session.event_timeline) ? session.event_timeline : [];
+  const existingReadingIds = new Set([
+    ...((session.blood_pressure_readings || []).map((reading) => reading?.id).filter(Boolean)),
+    ...((session.session_context?.blood_pressure_readings || []).map((reading) => reading?.id).filter(Boolean)),
+    ...existingEvents.map((event) => event?.blood_pressure?.reading_id || event?.blood_pressure?.id || '').filter(Boolean),
+  ]);
+  const existingEventIds = new Set(existingEvents.map((event) => event?.id).filter(Boolean));
+  const sortedReadings = sortRecent(readings).reverse();
+  const attachable = sortedReadings.filter((reading) => {
+    const readingId = cleanText(reading?.id || reading?.external_id || reading?.health_connect_id);
+    const eventId = `blood-pressure-${readingId || readingTime(reading)}`;
+    return !existingReadingIds.has(readingId) && !existingEventIds.has(eventId);
+  });
+  if (!attachable.length) return { session, attachedCount: 0, attachedReadings: [] };
+
+  const nextEvents = [...existingEvents];
+  attachable.forEach((reading) => {
+    const measuredMs = readingTime(reading);
+    const timeS = Math.max(0, Math.round((measuredMs - startMs) / 1000));
+    nextEvents.push({
+      id: `blood-pressure-${reading.id || measuredMs}`,
+      time_s: timeS,
+      note: `Blood pressure captured: ${reading.systolic_mm_hg}/${reading.diastolic_mm_hg} mmHg${reading.pulse_bpm ? ` · ${Math.round(Number(reading.pulse_bpm))} bpm` : ''}`,
+      label: 'Blood pressure captured',
+      category: ['physiology', 'blood_pressure'],
+      source,
+      created_at: new Date().toISOString(),
+      blood_pressure: {
+        reading_id: reading.id,
+        measured_at: reading.measured_at,
+        systolic_mm_hg: reading.systolic_mm_hg,
+        diastolic_mm_hg: reading.diastolic_mm_hg,
+        pulse_bpm: reading.pulse_bpm ?? null,
+        source_app: reading.source_app || 'Health Connect',
+        source_device: reading.source_device || '',
+      },
+    });
+  });
+
+  const mergedReadings = [
+    ...(Array.isArray(session.blood_pressure_readings) ? session.blood_pressure_readings : []),
+    ...attachable,
+  ].sort((a, b) => readingTime(a) - readingTime(b));
+  const latest = mergedReadings[mergedReadings.length - 1] || null;
+  const nextSession = upsertEntity('Session', session.id, {
+    ...session,
+    event_timeline: nextEvents.sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0)),
+    blood_pressure_readings: mergedReadings,
+    latest_blood_pressure_reading: latest,
+    session_context: {
+      ...(session.session_context || {}),
+      blood_pressure: latest
+        ? {
+          reading_id: latest.id,
+          measured_at: latest.measured_at,
+          systolic_mm_hg: latest.systolic_mm_hg,
+          diastolic_mm_hg: latest.diastolic_mm_hg,
+          pulse_bpm: latest.pulse_bpm ?? null,
+          source_app: latest.source_app || 'Health Connect',
+          source_device: latest.source_device || '',
+          relationship: 'manually_attached_to_session',
+        }
+        : session.session_context?.blood_pressure,
+      blood_pressure_readings: mergedReadings,
+    },
+  });
+  return { session: nextSession, attachedCount: attachable.length, attachedReadings: attachable.map(publicReading) };
 }
 
 bloodPressureRouter.get('/recent', (req, res) => {
@@ -135,3 +223,29 @@ bloodPressureRouter.get('/near-session/:sessionId', (req, res) => {
   });
 });
 
+bloodPressureRouter.post('/attach-session/:sessionId', (req, res) => {
+  try {
+    const session = getEntity('Session', req.params.sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    const requestedIds = Array.isArray(req.body?.readingIds)
+      ? req.body.readingIds.map((value) => cleanText(value)).filter(Boolean)
+      : [];
+    if (!requestedIds.length) {
+      return res.status(400).json({ error: 'Provide one or more readingIds to attach.' });
+    }
+    const readingMap = new Map(listEntities('BloodPressureReading').map((reading) => [reading.id, reading]));
+    const readings = requestedIds.map((id) => readingMap.get(id)).filter(Boolean);
+    if (!readings.length) {
+      return res.status(404).json({ error: 'No matching blood pressure readings were found.' });
+    }
+    const result = attachReadingsToSession(session, readings, { source: 'manual_session_bp_attach' });
+    res.json({
+      ok: true,
+      attached: result.attachedCount,
+      readings: result.attachedReadings,
+      session: result.session,
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || String(error) });
+  }
+});

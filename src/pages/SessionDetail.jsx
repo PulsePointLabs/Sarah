@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { attachBloodPressureToSession, findBloodPressureNearSession } from "@/lib/bloodPressure";
 import { loadUserProfileWithProfilerResults } from "@/lib/profileContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -121,7 +122,7 @@ function BloodPressureSessionChart({ session }) {
   const avgPulse = pulseValues.length ? Math.round(pulseValues.reduce((sum, value) => sum + value, 0) / pulseValues.length) : null;
 
   return (
-    <section id="session-blood-pressure" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+    <section id="session-blood-pressure-chart" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
@@ -177,6 +178,63 @@ function BloodPressureSessionChart({ session }) {
           </div>
         ))}
       </div>
+    </section>
+  );
+}
+
+function BloodPressureAttachPanel({
+  attachedReadings = [],
+  nearbyReadings = [],
+  attachBusy = false,
+  attachStatus = "",
+  onAttachReadings,
+}) {
+  const attachedIds = new Set(attachedReadings.map((reading) => reading?.id).filter(Boolean));
+  const attachable = nearbyReadings.filter((reading) => !attachedIds.has(reading?.id));
+  if (!attachable.length && !attachStatus) return null;
+
+  return (
+    <section className="rounded-xl border border-primary/20 bg-primary/[0.05] p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
+            <Activity className="h-3.5 w-3.5" /> Blood Pressure Association
+          </h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Attach saved cuff readings that landed near this session but were not stamped into it at capture time.
+          </p>
+        </div>
+        {attachable.length > 0 && (
+          <Button
+            type="button"
+            onClick={() => onAttachReadings?.(attachable.map((reading) => reading.id))}
+            disabled={attachBusy}
+            className="shrink-0"
+          >
+            {attachBusy ? "Attaching..." : `Attach ${attachable.length} Nearby Reading${attachable.length === 1 ? "" : "s"}`}
+          </Button>
+        )}
+      </div>
+      {attachStatus && (
+        <p className="mt-3 rounded-lg border border-border bg-background/70 px-3 py-2 text-xs text-muted-foreground">
+          {attachStatus}
+        </p>
+      )}
+      {attachable.length > 0 && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {attachable.map((reading) => (
+            <div key={reading.id || `${reading.measured_at}-${reading.systolic_mm_hg}-${reading.diastolic_mm_hg}`} className="rounded-lg border border-border bg-background/70 px-3 py-2">
+              <p className="font-mono text-lg font-bold text-foreground">
+                {reading.systolic_mm_hg}/{reading.diastolic_mm_hg} mmHg{reading.pulse_bpm ? ` · ${reading.pulse_bpm} bpm` : ""}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {reading.measured_at ? new Date(reading.measured_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "No timestamp"}
+                {reading.source_app ? ` · ${reading.source_app}` : ""}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -619,9 +677,50 @@ export default function SessionDetail() {
   const [sessionJournal, setSessionJournal] = useState(null);
   const [pendingSectionId, setPendingSectionId] = useState("");
   const [inspectionTime, setInspectionTime] = useState(0);
+  const [nearbyBloodPressure, setNearbyBloodPressure] = useState([]);
+  const [bpAttachBusy, setBpAttachBusy] = useState(false);
+  const [bpAttachStatus, setBpAttachStatus] = useState("");
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
+
+  const refreshNearbyBloodPressure = useCallback(async (sessionId) => {
+    if (!sessionId) {
+      setNearbyBloodPressure([]);
+      return;
+    }
+    try {
+      const result = await findBloodPressureNearSession(sessionId, { beforeHours: 1, afterHours: 2 });
+      setNearbyBloodPressure(Array.isArray(result?.readings) ? result.readings : []);
+    } catch (error) {
+      console.warn("[SessionDetail] Nearby BP lookup failed", error);
+      setNearbyBloodPressure([]);
+    }
+  }, []);
+
+  const handleAttachBloodPressure = useCallback(async (readingIds = []) => {
+    const currentSession = sessionRef.current;
+    if (!currentSession?.id || !readingIds.length) return;
+    setBpAttachBusy(true);
+    setBpAttachStatus("Attaching nearby blood pressure readings to this session...");
+    try {
+      const result = await attachBloodPressureToSession(currentSession.id, readingIds);
+      const nextSession = result?.session || currentSession;
+      sessionRef.current = nextSession;
+      setSession(nextSession);
+      const attached = Number(result?.attached || 0);
+      setBpAttachStatus(
+        attached
+          ? `Attached ${attached} blood pressure reading${attached === 1 ? "" : "s"} to this session.`
+          : "Those blood pressure readings were already attached to this session.",
+      );
+      await refreshNearbyBloodPressure(currentSession.id);
+    } catch (error) {
+      setBpAttachStatus(error?.message || "Could not attach blood pressure readings.");
+    } finally {
+      setBpAttachBusy(false);
+    }
+  }, [refreshNearbyBloodPressure]);
 
   const handleChatMessagesSave = useCallback(async (messages) => {
     const currentSession = sessionRef.current;
@@ -827,10 +926,12 @@ export default function SessionDetail() {
         const s = all[0];
         sessionRef.current = s;
         setSession(s);
+        setBpAttachStatus("");
         setUserProfile(me);
         const savedChatMessages = s?.ai_analysis?._chat_messages || [];
         setChatMessages(savedChatMessages);
         setSessionNotes(s?.notes || "");
+        await refreshNearbyBloodPressure(id);
         const rows = await base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000);
 
         // Load journal for this session so it can be factored into AI analyses
@@ -954,7 +1055,7 @@ export default function SessionDetail() {
         setLoading(false);
       }
     })();
-  }, [id]);
+  }, [id, refreshNearbyBloodPressure]);
 
   useEffect(() => {
     if (!pendingSectionId) return undefined;
@@ -1009,6 +1110,7 @@ export default function SessionDetail() {
   const cap = (str) => str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
   const contextRows = sessionContextDisplayRows(s);
   const bloodPressureReadings = bloodPressureReadingsFromSession(s);
+  const attachableBloodPressureReadings = nearbyBloodPressure.filter((reading) => !bloodPressureReadings.some((attached) => attached.id && attached.id === reading.id));
   const pulseOxReadings = pulseOxReadingsFromSession(s);
   const recorded = (value) => value !== undefined && value !== null && value !== "";
   const metricBadges = [
@@ -1056,7 +1158,7 @@ export default function SessionDetail() {
   const sectionLinks = [
     { id: "session-snapshot", label: "Session Snapshot", group: "Overview" },
     { id: "session-telemetry", label: "Evidence Dashboard", group: "Overview" },
-    ...(bloodPressureReadings.length ? [{ id: "session-blood-pressure", label: "Blood Pressure", group: "Overview" }] : []),
+    ...((bloodPressureReadings.length || attachableBloodPressureReadings.length) ? [{ id: "session-blood-pressure", label: "Blood Pressure", group: "Overview" }] : []),
     ...(pulseOxReadings.length ? [{ id: "session-pulse-ox", label: "Pulse Oximetry", group: "Overview" }] : []),
     { id: "session-summary", label: "Executive Summary", group: "Overview" },
     { id: "session-review", label: "Review Checklist", group: "Overview" },
@@ -1247,7 +1349,20 @@ export default function SessionDetail() {
           onMarkersChange={savePhaseMarkers}
           onOpenReview={() => navigate(`/review-player?session=${encodeURIComponent(s.id)}`)}
         />
-        {bloodPressureReadings.length > 0 && <BloodPressureSessionChart session={s} />}
+        {(bloodPressureReadings.length > 0 || attachableBloodPressureReadings.length > 0 || bpAttachStatus) && (
+          <div id="session-blood-pressure" className="scroll-mt-24 space-y-4">
+            {(attachableBloodPressureReadings.length > 0 || bpAttachStatus) && (
+              <BloodPressureAttachPanel
+                attachedReadings={bloodPressureReadings}
+                nearbyReadings={nearbyBloodPressure}
+                attachBusy={bpAttachBusy}
+                attachStatus={bpAttachStatus}
+                onAttachReadings={handleAttachBloodPressure}
+              />
+            )}
+            {bloodPressureReadings.length > 0 && <BloodPressureSessionChart session={s} />}
+          </div>
+        )}
         {pulseOxReadings.length > 0 && <PulseOxSessionChart session={s} />}
         {timelineRows.length > 0 && (
           <details className="rounded-xl border border-border bg-card p-4">
