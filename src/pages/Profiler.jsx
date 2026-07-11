@@ -8175,7 +8175,6 @@ function AIProfilePanel({ sessions, userProfile, journals, evidenceLoading = fal
         message: "Preparing the cross-session profile for background analysis…",
       },
     });
-    setResult(null);
     setError("");
 
     try {
@@ -8607,7 +8606,6 @@ function AnatomicalPhysiologicalProfilePanel({
 
   const analyze = async () => {
     setLoading(true);
-    setResult(null);
     setError("");
     setJobStatus({
       status: "starting",
@@ -9372,6 +9370,36 @@ export default function Profiler() {
   const [refreshingEvidence, setRefreshingEvidence] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
 
+  const loadProfilerEvidence = useCallback(async () => {
+    const attempts = [
+      { sessionLimit: 300, explorationLimit: 150 },
+      { sessionLimit: 180, explorationLimit: 120 },
+      { sessionLimit: 120, explorationLimit: 80 },
+    ];
+    let lastError = null;
+    for (const attempt of attempts) {
+      try {
+        const [all, explorations] = await Promise.all([
+          base44.entities.Session.list("-date", attempt.sessionLimit, undefined, {
+            timeoutMs: PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
+          }),
+          base44.entities.BodyExploration.list("-date", attempt.explorationLimit, undefined, {
+            timeoutMs: PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
+          }).catch(() => []),
+        ]);
+        return {
+          sessions: all,
+          bodyExplorations: explorations || [],
+          degraded: attempt.sessionLimit !== attempts[0].sessionLimit,
+          sessionLimit: attempt.sessionLimit,
+        };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error("Could not load current profiler evidence.");
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     setSessionEvidenceLoading(true);
@@ -9381,17 +9409,15 @@ export default function Profiler() {
 
     const loadSessionsAndTimelines = async () => {
       try {
-        const [all, explorations] = await Promise.all([
-          base44.entities.Session.list("-date", 300, undefined, {
-            timeoutMs: PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
-          }),
-          base44.entities.BodyExploration.list("-date", 150, undefined, {
-            timeoutMs: PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
-          }).catch(() => []),
-        ]);
+        const evidence = await loadProfilerEvidence();
+        const all = evidence.sessions;
+        const explorations = evidence.bodyExplorations;
         if (cancelled) return;
         setSessions(all);
         setBodyExplorations(explorations || []);
+        if (evidence.degraded) {
+          setLoadError(`Profiler evidence loaded in fallback mode (${evidence.sessionLimit} recent sessions) because the full request was too slow.`);
+        }
         setSessionEvidenceLoading(false);
 
         // HR timelines are useful for secondary analysis, but should never block the saved profile UI.
@@ -9427,7 +9453,7 @@ export default function Profiler() {
     return () => {
       cancelled = true;
     };
-  }, [loadAttempt]);
+  }, [loadAttempt, loadProfilerEvidence]);
 
   useEffect(() => {
     let cancelled = false;
@@ -9465,16 +9491,12 @@ export default function Profiler() {
     setRefreshingEvidence(true);
     setLoadError("");
     try {
-      const [all, explorations] = await Promise.all([
-        base44.entities.Session.list("-date", 300, undefined, {
-          timeoutMs: PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
-        }),
-        base44.entities.BodyExploration.list("-date", 150, undefined, {
-          timeoutMs: PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
-        }).catch(() => []),
-      ]);
-      setSessions(all);
-      setBodyExplorations(explorations || []);
+      const evidence = await loadProfilerEvidence();
+      setSessions(evidence.sessions);
+      setBodyExplorations(evidence.bodyExplorations || []);
+      if (evidence.degraded) {
+        setLoadError(`Profiler evidence loaded in fallback mode (${evidence.sessionLimit} recent sessions) because the full request was too slow.`);
+      }
     } catch (error) {
       setLoadError(error?.message || "Could not refresh current profiler evidence.");
     } finally {
