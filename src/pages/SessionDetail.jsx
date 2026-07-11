@@ -40,6 +40,7 @@ import MobileSessionVideoRenderPanel from "../components/MobileSessionVideoRende
 import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
 import { bloodPressureReadingsFromSession, pulseOxReadingsFromSession, sessionContextDisplayRows } from "@/lib/sessionContext";
 import { buildSessionKeyVideoClipDigest, buildSessionPhaseMarkerDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, getReviewedVisualClips, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionKeyVideoClips, normalizeSessionVisualEvidence, sessionEventsForCurrentPhaseMarkers } from "@/lib/visualEvidence";
+import { hydrateSessionChatMessages } from "@/lib/chatFindings";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "../components/session-form/EventTimelineSection";
 import { hasMixedPauseResumeEvidence, isVerifiedMotionEvent } from "@/utils/sessionMotionEvidence";
 import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
@@ -772,37 +773,41 @@ export default function SessionDetail() {
     const currentSession = sessionRef.current;
     if (!currentSession?.id) return;
     setSessionNotes(merged);
-    const patch = { notes: merged };
+    const conversation = Array.isArray(meta.conversation)
+      ? meta.conversation
+      : currentSession.ai_analysis?._chat_messages || [];
+    const nextAiAnalysis = {
+      ...(currentSession.ai_analysis || {}),
+      _chat_messages: conversation,
+    };
+    const patch = {
+      notes: merged,
+      ai_analysis: nextAiAnalysis,
+    };
     let nextSession = { ...currentSession, notes: merged };
+    setChatMessages(hydrateSessionChatMessages(conversation, merged));
 
     if (isVisualReviewSource(meta.source)) {
-      const conversation = Array.isArray(meta.conversation)
-        ? meta.conversation
-        : currentSession.ai_analysis?._chat_messages || [];
-      setChatMessages(conversation);
       const visualEntry = makeSessionVisualEvidenceEntry(meta, merged);
       const visualFindings = normalizeSessionVisualEvidence([
         visualEntry,
         ...(currentSession.ai_analysis?._visual_findings || []),
       ]);
       patch.ai_analysis = {
-        ...(currentSession.ai_analysis || {}),
-        _chat_messages: conversation,
+        ...nextAiAnalysis,
         _visual_findings: visualFindings,
       };
       nextSession = { ...nextSession, ai_analysis: patch.ai_analysis };
+    } else {
+      nextSession = { ...nextSession, ai_analysis: nextAiAnalysis };
     }
 
     sessionRef.current = nextSession;
     setSession(nextSession);
-    if (patch.ai_analysis) {
-      aiAnalysisSaveQueueRef.current = aiAnalysisSaveQueueRef.current
-        .catch(() => {})
-        .then(() => base44.entities.Session.update(currentSession.id, patch));
-      await aiAnalysisSaveQueueRef.current;
-      return;
-    }
-    await base44.entities.Session.update(currentSession.id, patch);
+    aiAnalysisSaveQueueRef.current = aiAnalysisSaveQueueRef.current
+      .catch(() => {})
+      .then(() => base44.entities.Session.update(currentSession.id, patch));
+    await aiAnalysisSaveQueueRef.current;
   }, []);
 
   const handleAnalysisSaved = useCallback((field, value) => {
@@ -958,7 +963,7 @@ export default function SessionDetail() {
         setBpAttachStatus("");
         setUserProfile(me);
         const savedChatMessages = s?.ai_analysis?._chat_messages || [];
-        setChatMessages(savedChatMessages);
+        setChatMessages(hydrateSessionChatMessages(savedChatMessages, s?.notes || ""));
         setSessionNotes(s?.notes || "");
         await refreshNearbyBloodPressure(id);
         const rows = await base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000);
