@@ -323,13 +323,15 @@ function PulseOxSessionChart({ session }) {
 function SessionKeyVideoMoments({ session }) {
   const clips = normalizeSessionKeyVideoClips(session);
   if (!clips.length) return null;
+  const previewClips = clips.slice(0, 6);
+  const hasMoreClips = clips.length > previewClips.length;
   return (
     <div className="rounded-xl border border-primary/20 bg-primary/[0.04] p-3">
       <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-primary">
         Key Video Moments
       </p>
       <div className="grid gap-2 sm:grid-cols-2">
-        {clips.slice(0, 8).map((clip) => {
+        {previewClips.map((clip) => {
           const src = serverUrl(clip.url || clip.clip_url || clip.file_url);
           return (
             <article key={`${clip.id}-${clip.url}`} className="overflow-hidden rounded-lg border border-border bg-card">
@@ -352,6 +354,28 @@ function SessionKeyVideoMoments({ session }) {
           );
         })}
       </div>
+      <details className="mt-3 rounded-lg border border-border bg-card/70 p-2">
+        <summary className="cursor-pointer list-none text-sm font-semibold text-primary">
+          All session moments ({clips.length})
+        </summary>
+        <div className="mt-2 max-h-64 space-y-2 overflow-y-auto pr-1">
+          {clips.map((clip) => (
+            <div key={`all-${clip.id}-${clip.session_time_s}`} className="rounded-lg border border-border bg-background/80 px-3 py-2 text-xs">
+              <p className="font-semibold text-foreground">{clip.label || "Saved key moment"}</p>
+              <p className="text-muted-foreground">
+                {clip.session_time_s != null ? _fmtMmSs(clip.session_time_s) : "time?"}
+                {clip.camera_angle ? ` · ${clip.camera_angle}` : ""}
+                {clip.frames?.length ? ` · ${clip.frames.length} frames` : clip.url || clip.clip_url || clip.file_url ? " · playable clip" : " · saved marker"}
+              </p>
+            </div>
+          ))}
+        </div>
+      </details>
+      {hasMoreClips ? (
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          The preview shows the first few moments in time order. Open “All session moments” for the full list, including later climax and recovery markers.
+        </p>
+      ) : null}
     </div>
   );
 }

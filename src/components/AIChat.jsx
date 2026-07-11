@@ -1923,11 +1923,13 @@ Return a conversational answer plus structured findings for review/persistence.`
       ? savedVideoClips.filter((clip) => clip?.url || clip?.clip_url || clip?.frames?.length || clip?.session_time_s != null)
       : [];
     if (!clips.length || mode !== "session") return null;
+    const previewClips = clips.slice(0, 6);
+    const hasMoreClips = clips.length > previewClips.length;
     return (
       <div className="min-w-0 max-w-full overflow-hidden rounded-lg border border-primary/20 bg-primary/[0.05] p-2 text-xs">
         <p className="mb-2 font-semibold text-primary">Saved key video moments</p>
         <div className="flex max-w-full gap-2 overflow-x-auto overscroll-x-contain pb-1">
-          {clips.slice(0, 8).map((clip) => (
+          {previewClips.map((clip) => (
             <button
               key={clip.id || `${clip.label}-${clip.session_time_s}`}
               type="button"
@@ -1945,6 +1947,35 @@ Return a conversational answer plus structured findings for review/persistence.`
             </button>
           ))}
         </div>
+        <details className="mt-2 rounded-lg border border-border bg-background/70 p-2">
+          <summary className="cursor-pointer list-none font-semibold text-primary">
+            All session moments ({clips.length})
+          </summary>
+          <div className="mt-2 max-h-52 space-y-2 overflow-y-auto pr-1">
+            {clips.map((clip) => (
+              <button
+                key={`all-${clip.id || `${clip.label}-${clip.session_time_s}`}`}
+                type="button"
+                onClick={() => attachSavedVideoClipFrames(clip)}
+                disabled={loading || uploadingImages || processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
+                className="block w-full rounded-lg border border-border bg-background/85 px-2 py-2 text-left transition-colors hover:border-primary disabled:opacity-45"
+                title={clip.frames?.length ? (clip.reason || "Attach sampled frames from this saved moment") : (clip.reason || "Ask Sarah about this saved moment")}
+              >
+                <span className="block font-semibold text-foreground">{clip.label || "Saved clip"}</span>
+                <span className="block text-[10px] text-muted-foreground">
+                  {clip.session_time_s != null ? formatSeconds(clip.session_time_s) : "time?"}
+                  {clip.camera_angle ? ` · ${clip.camera_angle}` : ""}
+                  {Array.isArray(clip.frames) && clip.frames.length ? ` · ${clip.frames.length} frames` : " · saved marker"}
+                </span>
+              </button>
+            ))}
+          </div>
+        </details>
+        {hasMoreClips ? (
+          <p className="mt-2 text-[10px] text-muted-foreground">
+            The top row is just a preview. Open the full list for later climax, orgasm, ejaculation, and recovery moments.
+          </p>
+        ) : null}
       </div>
     );
   };
