@@ -533,6 +533,67 @@ function buildSyntheticPhaseMarkerClips(session = {}, rawClips = []) {
     }));
 }
 
+function eventTextMatchesKeyMoment(event = {}) {
+  const categories = Array.isArray(event.category) ? event.category : [event.category].filter(Boolean);
+  const categoryText = categories.join(" ").toLowerCase();
+  const text = [
+    event.note,
+    event.label,
+    event.description,
+    event.text,
+    categoryText,
+  ].filter(Boolean).join(" ").toLowerCase();
+  if (categories.some((category) => ["pre_climax", "climax", "recovery"].includes(String(category)))) return true;
+  return /\b(pre[-\s]?climax|near[-\s]?orgasm|near[-\s]?climax|orgasm|ejaculat|emission|expulsion|release|climax|recovery)\b/i.test(text);
+}
+
+function labelForSyntheticEventMoment(event = {}) {
+  const text = cleanText(event.note || event.label || event.description || event.text || "Saved session moment", 90);
+  if (text) return text;
+  const categories = Array.isArray(event.category) ? event.category : [event.category].filter(Boolean);
+  if (categories.includes("pre_climax")) return "Pre-climax event";
+  if (categories.includes("climax")) return "Climax / orgasm event";
+  if (categories.includes("recovery")) return "Recovery event";
+  return "Saved session moment";
+}
+
+function buildSyntheticEventMomentClips(session = {}, rawClips = []) {
+  const clips = [];
+  const events = sessionEventsForCurrentPhaseMarkers(session);
+  for (const event of events) {
+    const time = markerNumber(event.time_s ?? event.offset_s ?? event.timestamp_s);
+    if (time == null || !eventTextMatchesKeyMoment(event)) continue;
+    const text = [
+      event.note,
+      event.label,
+      event.description,
+      event.text,
+    ].filter(Boolean).join(" ");
+    const alreadyCovered = rawClips.some((clip) => {
+      const clipTime = markerNumber(clip.session_time_s ?? clip.time_s ?? clip.startSeconds ?? clip.start_s ?? clip.offset_s);
+      if (clipTime == null || Math.abs(clipTime - time) > 8) return false;
+      const clipText = [clip.label, clip.reason, clip.note, clip.text, clip.description].filter(Boolean).join(" ");
+      return clipText && text && clipText.toLowerCase().includes(text.toLowerCase().slice(0, 24));
+    });
+    if (alreadyCovered) continue;
+    clips.push({
+      id: `session-event-marker-${time}-${clips.length}`,
+      label: labelForSyntheticEventMoment(event),
+      reason: cleanText(event.note || event.description || "Saved event timeline moment from this session.", 220),
+      session_time_s: time,
+      camera_angle: "primary",
+      source_panel: "session_event_timeline",
+      synthetic_phase_marker: true,
+      frames: [],
+      url: "",
+      clip_url: "",
+      file_url: "",
+      filename: "",
+    });
+  }
+  return clips;
+}
+
 export function normalizeSessionKeyVideoClips(sessionOrClips) {
   const hasSessionContext = !Array.isArray(sessionOrClips) && sessionOrClips && typeof sessionOrClips === "object";
   const rawClips = Array.isArray(sessionOrClips)
@@ -543,7 +604,11 @@ export function normalizeSessionKeyVideoClips(sessionOrClips) {
       ...(sessionOrClips?.ai_cascade?._meta?.key_video_clips || []),
     ];
   const sourceClips = hasSessionContext
-    ? [...rawClips, ...buildSyntheticPhaseMarkerClips(sessionOrClips, rawClips)]
+    ? [
+      ...rawClips,
+      ...buildSyntheticPhaseMarkerClips(sessionOrClips, rawClips),
+      ...buildSyntheticEventMomentClips(sessionOrClips, rawClips),
+    ]
     : rawClips;
   const seen = new Set();
   return sourceClips

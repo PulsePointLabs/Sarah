@@ -1182,7 +1182,7 @@ export default function SessionDetail() {
       { id: "session-timeline-advanced", label: "Advanced Views", group: "Timeline & Events" },
     ] : []),
     { id: "session-journal", label: "Journal", group: "Reflection" },
-    { id: "session-interview", label: "AI Interview", group: "Reflection" },
+    { id: "session-interview", label: "Ask Sarah", group: "Reflection" },
     { id: "session-devices", label: "Methods & Devices", group: "Session Context" },
     { id: "session-physiology", label: "Body Findings", group: "Session Context" },
     { id: "session-notes", label: "Session Notes", group: "Session Context" },
