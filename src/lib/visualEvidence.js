@@ -480,6 +480,59 @@ function normalizeKeyVideoClip(clip, sourceLabel = "", index = 0) {
   };
 }
 
+function clipMatchesExplicitPhaseMarker(clip, target) {
+  if (!clip) return false;
+  const text = [
+    clip.label,
+    clip.reason,
+    clip.note,
+    clip.text,
+    clip.description,
+  ].filter(Boolean).join(" ");
+  return phaseTargetFromText(text) === target && /\bmarker\b/i.test(text);
+}
+
+function buildSyntheticPhaseMarkerClips(session = {}, rawClips = []) {
+  const markers = currentSessionPhaseMarkers(session);
+  const specs = [
+    {
+      target: "pre_climax",
+      time: markers.pre_climax,
+      label: "Pre-climax marker",
+      reason: "Saved pre-climax marker from this session timeline.",
+    },
+    {
+      target: "climax",
+      time: markers.climax,
+      label: "Climax / orgasm marker",
+      reason: "Saved climax or orgasm marker from this session timeline.",
+    },
+    {
+      target: "recovery",
+      time: markers.recovery,
+      label: "Recovery marker",
+      reason: "Saved recovery marker from this session timeline.",
+    },
+  ];
+  return specs
+    .filter((spec) => spec.time != null)
+    .filter((spec) => !rawClips.some((clip) => clipMatchesExplicitPhaseMarker(clip, spec.target)))
+    .map((spec) => ({
+      id: `session-phase-marker-${spec.target}`,
+      label: spec.label,
+      reason: spec.reason,
+      session_time_s: spec.time,
+      camera_angle: "primary",
+      source_panel: "session_phase_markers",
+      synthetic_phase_marker: true,
+      frames: [],
+      url: "",
+      clip_url: "",
+      file_url: "",
+      filename: "",
+    }));
+}
+
 export function normalizeSessionKeyVideoClips(sessionOrClips) {
   const hasSessionContext = !Array.isArray(sessionOrClips) && sessionOrClips && typeof sessionOrClips === "object";
   const rawClips = Array.isArray(sessionOrClips)
@@ -489,8 +542,11 @@ export function normalizeSessionKeyVideoClips(sessionOrClips) {
       ...(sessionOrClips?.ai_session_deep_dive?._meta?.key_video_clips || []),
       ...(sessionOrClips?.ai_cascade?._meta?.key_video_clips || []),
     ];
+  const sourceClips = hasSessionContext
+    ? [...rawClips, ...buildSyntheticPhaseMarkerClips(sessionOrClips, rawClips)]
+    : rawClips;
   const seen = new Set();
-  return rawClips
+  return sourceClips
     .map((clip, index) => normalizeKeyVideoClip(clip, clip?.source_panel || "", index))
     .filter((clip) => clip && (clip.url || clip.frames.length || clip.label))
     .filter((clip) => !hasSessionContext || !isStalePhaseMarkerReference(clip, sessionOrClips))

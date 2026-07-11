@@ -331,7 +331,6 @@ function SessionKeyVideoMoments({ session }) {
       <div className="grid gap-2 sm:grid-cols-2">
         {clips.slice(0, 8).map((clip) => {
           const src = serverUrl(clip.url || clip.clip_url || clip.file_url);
-          if (!src) return null;
           return (
             <article key={`${clip.id}-${clip.url}`} className="overflow-hidden rounded-lg border border-border bg-card">
               <div className="px-2 py-1 text-[10px]">
@@ -339,10 +338,16 @@ function SessionKeyVideoMoments({ session }) {
                 <p className="truncate text-muted-foreground">
                   {clip.session_time_s != null ? _fmtMmSs(clip.session_time_s) : "time?"}
                   {clip.camera_angle ? ` · ${clip.camera_angle}` : ""}
-                  {clip.frames?.length ? ` · ${clip.frames.length} frames for Sarah Q&A` : " · playable clip"}
+                  {clip.frames?.length ? ` · ${clip.frames.length} frames for Sarah Q&A` : src ? " · playable clip" : " · saved session marker"}
                 </p>
               </div>
-              <video src={src} controls preload="metadata" className="block max-h-64 w-full bg-black object-contain" />
+              {src ? (
+                <video src={src} controls preload="metadata" className="block max-h-64 w-full bg-black object-contain" />
+              ) : (
+                <div className="flex min-h-24 items-center justify-center bg-muted/20 px-3 py-4 text-center text-xs text-muted-foreground">
+                  This moment comes from the saved session timeline or phase markers and can be referenced in Ask Sarah even without a sampled clip.
+                </div>
+              )}
             </article>
           );
         })}
@@ -1963,13 +1968,13 @@ export default function SessionDetail() {
           </div>
         </details>
 
-        {/* Ask the AI — Session Deep Dive */}
+        {/* Ask Sarah */}
         <section
           id="session-interview"
           className="scroll-mt-24 min-w-0 max-w-full overflow-hidden rounded-xl border border-primary/20 bg-card p-3 sm:p-4"
         >
           <h3 className="text-xs font-semibold uppercase tracking-wider text-primary">
-            Ask the AI{chatMessages.length > 0 ? ` (${chatMessages.length} saved messages)` : ""}
+            Ask Sarah{chatMessages.length > 0 ? ` (${chatMessages.length} saved messages)` : ""}
           </h3>
           <div className="mt-3">
         <p className="mb-3 text-xs leading-relaxed text-muted-foreground">

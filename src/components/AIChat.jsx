@@ -867,9 +867,11 @@ export default function AIChat({
   };
 
   const attachSavedVideoClipFrames = async (clip) => {
+    const clipPrompt = `Please review the saved moment "${clip.label || "session moment"}"${clip.session_time_s != null ? ` at ${formatTimePhrase(clip.session_time_s)}` : ""}. Focus on visible technique, body mechanics, telemetry, and what this moment likely represents in the session.`;
     const frames = Array.isArray(clip?.frames) ? clip.frames : [];
     if (!frames.length) {
-      setImageError("This saved clip can be referenced in context, but it does not have sampled frames yet. Regenerate Session Analysis or Technical Deep Dive once to refresh it.");
+      setImageError("");
+      setInput((current) => current.trim() ? current : clipPrompt);
       return;
     }
     const slots = MAX_IMAGE_COUNT - selectedImages.length;
@@ -937,7 +939,6 @@ export default function AIChat({
     }
     setSelectedImages((prev) => [...prev, ...accepted].slice(0, MAX_IMAGE_COUNT));
     setImageError("");
-    const clipPrompt = `Please review the saved key clip "${clip.label || "session moment"}"${clip.session_time_s != null ? ` at ${formatTimePhrase(clip.session_time_s)}` : ""}. Focus on visible technique, grip, movement cadence, and body response.`;
     setInput((current) => current.trim() ? current : clipPrompt);
   };
 
@@ -1918,7 +1919,9 @@ Return a conversational answer plus structured findings for review/persistence.`
   };
 
   const renderSavedVideoClips = () => {
-    const clips = Array.isArray(savedVideoClips) ? savedVideoClips.filter((clip) => clip?.url || clip?.clip_url || clip?.frames?.length) : [];
+    const clips = Array.isArray(savedVideoClips)
+      ? savedVideoClips.filter((clip) => clip?.url || clip?.clip_url || clip?.frames?.length || clip?.session_time_s != null)
+      : [];
     if (!clips.length || mode !== "session") return null;
     return (
       <div className="min-w-0 max-w-full overflow-hidden rounded-lg border border-primary/20 bg-primary/[0.05] p-2 text-xs">
@@ -1931,13 +1934,13 @@ Return a conversational answer plus structured findings for review/persistence.`
               onClick={() => attachSavedVideoClipFrames(clip)}
               disabled={loading || uploadingImages || processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
               className="w-[11rem] max-w-[calc(100vw-4rem)] flex-none rounded-lg border border-border bg-background/75 px-2 py-1.5 text-left transition-colors hover:border-primary disabled:opacity-45"
-              title={clip.reason || "Attach sampled frames from this saved moment"}
+              title={clip.frames?.length ? (clip.reason || "Attach sampled frames from this saved moment") : (clip.reason || "Ask Sarah about this saved moment")}
             >
               <span className="block truncate font-semibold text-foreground">{clip.label || "Saved clip"}</span>
               <span className="block text-[10px] text-muted-foreground">
                 {clip.session_time_s != null ? formatSeconds(clip.session_time_s) : "time?"}
                 {clip.camera_angle ? ` · ${clip.camera_angle}` : ""}
-                {Array.isArray(clip.frames) && clip.frames.length ? ` · ${clip.frames.length} frames` : " · needs refresh"}
+                {Array.isArray(clip.frames) && clip.frames.length ? ` · ${clip.frames.length} frames` : " · saved marker"}
               </span>
             </button>
           ))}
