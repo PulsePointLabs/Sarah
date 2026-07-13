@@ -39,6 +39,8 @@ const STRONG_PHASE_PATTERNS = {
 const PRE_EJACULATE_OBSERVATION_PATTERN = /\b(pre[-\s]?ejaculat(?:e|ory|ion)?|pre[-\s]?cum|precum|cowper'?s?|cowper|meatus)\b/i;
 const EXPLICIT_CLIMAX_PATTERN = /\b(ejaculat(?:ed|ion|ing)|orgasm(?:ed|ic)?|climax(?:ed|ing)?|came|cum(?:ming|med)?|ejaculatory reflex|ejaculatory contraction|semen emission|full release|release of semen)\b/i;
 const RELEASE_WITH_CONTEXT_PATTERN = /\b(release|released)\b/i;
+const LIVE_CUE_SOFT_CLIMAX_PATTERN = /\bsarah live cue:\s*climax\s+(possible|imminent)\b/i;
+const SOFT_APPROACH_CUE_PATTERN = /\b(climax possible|climax imminent|near climax|possible climax|imminent climax)\b/i;
 
 function isPreEjaculateObservation(note) {
   const text = String(note || "");
@@ -49,6 +51,10 @@ function isPreEjaculateObservation(note) {
 function hasExplicitClimaxCue(note) {
   const text = String(note || "");
   if (!text.trim() || isPreEjaculateObservation(text)) return false;
+  if (LIVE_CUE_SOFT_CLIMAX_PATTERN.test(text)) return false;
+  if (SOFT_APPROACH_CUE_PATTERN.test(text) && !/\b(ejaculat(?:ed|ion|ing)|orgasm(?:ed|ic)?|came|cum(?:ming|med)?|semen|emission|spurts?|ejaculatory)\b/i.test(text)) {
+    return false;
+  }
   if (EXPLICIT_CLIMAX_PATTERN.test(text)) return true;
   return RELEASE_WITH_CONTEXT_PATTERN.test(text) && /\b(semen|ejaculat|orgasm|climax|cum|ejaculatory|emission|expulsion|spurts?)\b/i.test(text);
 }
@@ -119,7 +125,8 @@ function findPhaseEvidenceAnchors(session) {
         PHASE_NOTE_PATTERNS.pre_climax.test(String(event.note || ""))
       );
     const finalWindow = preCandidates.filter(({ event }) => Number(event.time_s) >= Number(climaxTime) - 240);
-    const chosen = (finalWindow.length ? finalWindow : preCandidates).at(0);
+    const chosenPool = finalWindow.length ? finalWindow : preCandidates;
+    const chosen = chosenPool[chosenPool.length - 1];
     preClimax = chosen ? eventAt(chosen.event, chosen.index, "pre-climax escalation") : null;
   }
 
@@ -232,10 +239,16 @@ function buildWholeTimelineDraft(session, rows) {
   const scored = events.map((event, index) => scoreEventForPhase(event, index, events, hrHelpers));
   const sortedRows = hrHelpers.sortedRows;
   const evidence = [];
+  const durationS = Math.round(Math.max(...sortedRows.map((row) => Number(row.time_offset_s) || 0), 0));
+  const sessionEarlyGuardS = Math.min(10 * 60, Math.max(4 * 60, durationS * 0.3));
 
   const bestClimax = scored
     .filter((item) => item.climaxScore >= 60)
-    .sort((a, b) => b.climaxScore - a.climaxScore || a.time_s - b.time_s)[0];
+    .sort((a, b) => {
+      const aLateBonus = a.time_s >= sessionEarlyGuardS ? 1 : 0;
+      const bLateBonus = b.time_s >= sessionEarlyGuardS ? 1 : 0;
+      return bLateBonus - aLateBonus || b.climaxScore - a.climaxScore || b.time_s - a.time_s;
+    })[0];
 
   let climax = bestClimax?.time_s ?? null;
   let climaxConfidence = bestClimax ? Math.min(0.98, 0.68 + bestClimax.climaxScore / 300) : 0;
@@ -244,7 +257,9 @@ function buildWholeTimelineDraft(session, rows) {
   }
 
   if (climax == null && sortedRows.length) {
-    const peak = [...sortedRows].filter((row) => getHR(row) != null).sort((a, b) => getHR(b) - getHR(a))[0];
+    const lateRows = sortedRows.filter((row) => Number(row.time_offset_s) >= sessionEarlyGuardS);
+    const fallbackPool = lateRows.length ? lateRows : sortedRows;
+    const peak = [...fallbackPool].filter((row) => getHR(row) != null).sort((a, b) => getHR(b) - getHR(a))[0];
     if (peak) {
       climax = Math.round(Number(peak.time_offset_s));
       climaxConfidence = 0.42;
@@ -260,8 +275,9 @@ function buildWholeTimelineDraft(session, rows) {
       ...item,
       distancePenalty: climax != null ? Math.max(0, (climax - item.time_s - 210) / 15) : 0,
       clusterScore: preCandidates.filter((other) => Math.abs(other.time_s - item.time_s) <= 120).reduce((sum, other) => sum + other.preScore, 0),
+      recencyBonus: climax != null ? Math.max(0, 40 - Math.abs((climax - item.time_s) - 120) / 3) : 0,
     }))
-    .sort((a, b) => (b.preScore + b.clusterScore * 0.12 - b.distancePenalty) - (a.preScore + a.clusterScore * 0.12 - a.distancePenalty));
+    .sort((a, b) => (b.preScore + b.clusterScore * 0.12 + b.recencyBonus - b.distancePenalty) - (a.preScore + a.clusterScore * 0.12 + a.recencyBonus - a.distancePenalty));
   let pre = finalApproachCandidates[0]?.time_s ?? null;
   let preConfidence = finalApproachCandidates[0] ? Math.min(0.9, 0.5 + finalApproachCandidates[0].preScore / 180) : 0;
   if (pre != null && climax != null && pre >= climax) pre = null;

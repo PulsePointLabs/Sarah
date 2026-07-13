@@ -84,14 +84,14 @@ function telemetryStripItems(packet) {
 function TelemetryStrip({ items = [] }) {
   if (!items.length) return null;
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="flex flex-wrap gap-2">
       {items.map((item) => (
         <span
           key={`${item.label}-${item.value}`}
-          className="inline-flex items-center gap-1 rounded-full border border-current/10 bg-white/55 px-2 py-1 text-[10px] leading-none text-sky-700"
+          className="inline-flex min-w-0 items-center gap-1.5 rounded-full border border-sky-200/80 bg-white/80 px-2.5 py-1 text-[10px] leading-tight text-sky-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]"
         >
-          <span className="font-semibold uppercase tracking-wide opacity-80">{item.label}</span>
-          <span className="font-mono text-slate-900">{item.value}</span>
+          <span className="shrink-0 font-semibold uppercase tracking-[0.12em] opacity-85">{item.label}</span>
+          <span className="min-w-0 break-words font-mono text-slate-900">{item.value}</span>
         </span>
       ))}
     </div>
