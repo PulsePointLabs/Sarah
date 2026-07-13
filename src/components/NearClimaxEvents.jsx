@@ -1,5 +1,6 @@
 import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import { Zap, Sparkles, ChevronLeft, ChevronRight, Volume2, Loader2 } from "lucide-react";
+import { LineChart, Line, ResponsiveContainer, ReferenceArea, Tooltip, XAxis, YAxis } from "recharts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
@@ -90,6 +91,132 @@ function TelemetryStrip({ items = [] }) {
           <span className="font-mono text-slate-900">{item.value}</span>
         </span>
       ))}
+    </div>
+  );
+}
+
+function formatChartTick(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const minutes = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+function buildEventChartData(timelineRows = [], event = {}, padSeconds = 24) {
+  const start = Math.max(0, Number(event.start_offset_s) || 0);
+  const end = Math.max(start, Number(event.end_offset_s) || start);
+  const windowStart = Math.max(0, start - padSeconds);
+  const windowEnd = end + padSeconds;
+  return timelineRows
+    .map((row) => {
+      const time = numberOrNull(row?.time_offset_s ?? row?.time_s ?? row?.offset_s);
+      if (time == null || time < windowStart || time > windowEnd) return null;
+      return {
+        time_s: time,
+        label: formatChartTick(time),
+        hr: numberOrNull(row?.hr_smoothed ?? row?.hr ?? row?.heart_rate ?? row?.bpm),
+        rmssd: numberOrNull(row?.hrv_rmssd_ms),
+        sdnn: numberOrNull(row?.hrv_sdnn_ms),
+        inEvent: time >= start && time <= end,
+      };
+    })
+    .filter(Boolean);
+}
+
+function MiniEventTimeline({ data = [], event, selected = false }) {
+  if (!data.length || !event) return null;
+  const start = Math.max(0, Number(event.start_offset_s) || 0);
+  const end = Math.max(start, Number(event.end_offset_s) || start);
+  const hasHrv = data.some((point) => point.rmssd != null || point.sdnn != null);
+  const hrValues = data.map((point) => point.hr).filter(Number.isFinite);
+  const hrvValues = data.flatMap((point) => [point.rmssd, point.sdnn]).filter(Number.isFinite);
+  const hrDomain = hrValues.length
+    ? [Math.max(0, Math.min(...hrValues) - 6), Math.max(...hrValues) + 6]
+    : [0, 100];
+  const hrvDomain = hrvValues.length
+    ? [Math.max(0, Math.min(...hrvValues) - 5), Math.max(...hrvValues) + 5]
+    : [0, 40];
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-sky-200/80 bg-white/70 px-2 py-2">
+      <div className="mb-1 flex items-center justify-between gap-2 text-[10px]">
+        <span className="font-semibold uppercase tracking-wide text-sky-700">Event timeline</span>
+        <span className="font-mono text-slate-500">
+          {formatChartTick(start)}-{formatChartTick(end)}
+        </span>
+      </div>
+      <div className="h-28 w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 6, right: 2, left: 0, bottom: 0 }}>
+            <XAxis
+              dataKey="time_s"
+              type="number"
+              domain={["dataMin", "dataMax"]}
+              tickFormatter={formatChartTick}
+              tick={{ fontSize: 10, fill: "#64748b" }}
+              tickLine={false}
+              axisLine={false}
+              minTickGap={18}
+            />
+            <YAxis yAxisId="hr" domain={hrDomain} hide />
+            {hasHrv ? <YAxis yAxisId="hrv" orientation="right" domain={hrvDomain} hide /> : null}
+            <Tooltip
+              cursor={false}
+              contentStyle={{ borderRadius: 12, border: "1px solid rgba(14, 165, 233, 0.18)", fontSize: 11 }}
+              labelFormatter={(value) => `Time ${formatChartTick(value)}`}
+              formatter={(value, name) => {
+                if (!Number.isFinite(Number(value))) return ["--", name];
+                if (name === "HR") return [`${Math.round(Number(value))} bpm`, name];
+                return [`${Number(value).toFixed(1)} ms`, name];
+              }}
+            />
+            <ReferenceArea x1={start} x2={end} yAxisId="hr" fill="rgba(14, 165, 233, 0.14)" />
+            <Line
+              yAxisId="hr"
+              type="monotone"
+              dataKey="hr"
+              name="HR"
+              stroke={selected ? "#0284c7" : "#0ea5e9"}
+              strokeWidth={2.2}
+              dot={false}
+              activeDot={{ r: 3 }}
+              isAnimationActive={false}
+              connectNulls
+            />
+            {hasHrv ? (
+              <Line
+                yAxisId="hrv"
+                type="monotone"
+                dataKey="rmssd"
+                name="RMSSD"
+                stroke="#8b5cf6"
+                strokeWidth={1.7}
+                strokeDasharray="4 3"
+                dot={false}
+                activeDot={{ r: 2.5 }}
+                isAnimationActive={false}
+                connectNulls
+              />
+            ) : null}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="mt-1 flex flex-wrap gap-2 text-[10px] text-slate-600">
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-full bg-sky-500" />
+          HR
+        </span>
+        {hasHrv ? (
+          <span className="inline-flex items-center gap-1">
+            <span className="h-0.5 w-3 rounded-full bg-violet-500" />
+            RMSSD
+          </span>
+        ) : null}
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-sm bg-sky-200" />
+          active window
+        </span>
+      </div>
     </div>
   );
 }
@@ -288,6 +415,10 @@ export default function NearClimaxEvents({ timelineRows, session, selectedIndex,
       contextPadSeconds: 18,
     }))
   ), [events, session, timelineRows]);
+  const eventChartData = useMemo(
+    () => events.map((event) => buildEventChartData(timelineRows, event, 24)),
+    [events, timelineRows]
+  );
 
   const stopSpeech = useCallback(() => {
     if (audioRef.current) {
@@ -531,6 +662,7 @@ Return an array of near-climax events. If none exist, return an empty array.`,
             const idx = selectedIndex ?? 0;
             const ev = events[idx];
             const telemetry = eventTelemetry[idx];
+            const chartData = eventChartData[idx];
             const stripItems = telemetryStripItems(telemetry);
             const interpretation = normalizeNarrativeText(ev.ai_interpretation);
             return (
@@ -568,6 +700,7 @@ Return an array of near-climax events. If none exist, return an empty array.`,
                   </button>
                 </div>
                 <TelemetryStrip items={stripItems} />
+                <MiniEventTimeline data={chartData} event={ev} selected />
                 {/* Breakdown sentence */}
                 {interpretation && (
                   <p className="text-sm leading-snug text-foreground/80 px-1">
@@ -582,6 +715,7 @@ Return an array of near-climax events. If none exist, return an empty array.`,
             {events.map((ev, i) => {
             const isSelected = selectedIndex === i;
             const telemetry = eventTelemetry[i];
+            const chartData = eventChartData[i];
             const stripItems = telemetryStripItems(telemetry);
             const interpretation = normalizeNarrativeText(ev.ai_interpretation);
             const isSpeaking = speakingIndex === i;
@@ -615,6 +749,7 @@ Return an array of near-climax events. If none exist, return an empty array.`,
                     </div>
                   </div>
                   <TelemetryStrip items={stripItems} />
+                  <MiniEventTimeline data={chartData} event={ev} selected={isSelected} />
                   <div className="flex flex-wrap gap-2">
                     <span className="text-[10px] text-muted-foreground">
                       Base <strong className="text-foreground font-mono">{ev.base_hr}</strong> bpm
