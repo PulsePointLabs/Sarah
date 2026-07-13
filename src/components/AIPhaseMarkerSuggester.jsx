@@ -15,8 +15,33 @@ function fmtMmSs(value) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+function formatSpokenTimeValue(totalSeconds) {
+  const total = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  if (minutes > 0 && seconds > 0) {
+    return `${minutes} ${minutes === 1 ? "minute" : "minutes"} ${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+  }
+  if (minutes > 0) {
+    return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  }
+  return `${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+}
+
+function formatSpokenTimeCode(minutesText, secondsText) {
+  return formatSpokenTimeValue((Number(minutesText) * 60) + Number(secondsText));
+}
+
 function formatEvidenceTimeText(text) {
   return String(text || "").replace(/\b(\d{2,5})\s*s\b/g, (_, seconds) => `${fmtMmSs(Number(seconds))}`);
+}
+
+function humanizePhaseMarkerText(text) {
+  return String(text || "")
+    .replace(/\bE(\d+)\b/g, (_, index) => `event marker ${index}`)
+    .replace(/\b(\d+):([0-5]\d)\b/g, (_, minutes, seconds) => formatSpokenTimeCode(minutes, seconds))
+    .replace(/\b(\d{2,5})\s*s\b/g, (_, seconds) => formatSpokenTimeValue(Number(seconds)))
+    .replace(/\bHR\b/g, "heart rate");
 }
 
 function base64ToAudioBytes(b64) {
@@ -44,7 +69,7 @@ async function fetchTTSBase64(text) {
 }
 
 function normalizeFindingsText(text) {
-  return String(text || "")
+  return humanizePhaseMarkerText(String(text || ""))
     .replace(/\s*([,.;:!?])/g, "$1")
     .replace(/([,.;:!?])(?=\S)/g, "$1 ")
     .replace(/\s*[–—]\s*/g, " — ")
@@ -122,8 +147,10 @@ function normalizeSuggestion(res) {
     pre_climax_confidence: cleanConfidence(parsed?.pre_climax_confidence),
     climax_confidence: cleanConfidence(parsed?.climax_confidence),
     recovery_confidence: cleanConfidence(parsed?.recovery_confidence),
-    evidence: Array.isArray(parsed?.evidence) ? parsed.evidence.filter(Boolean).slice(0, 8).map(formatEvidenceTimeText) : [],
-    reasoning: formatEvidenceTimeText(String(parsed?.reasoning || "").trim()),
+    evidence: Array.isArray(parsed?.evidence)
+      ? parsed.evidence.filter(Boolean).slice(0, 8).map((item) => normalizeFindingsText(formatEvidenceTimeText(item)))
+      : [],
+    reasoning: normalizeFindingsText(formatEvidenceTimeText(String(parsed?.reasoning || "").trim())),
   };
 }
 
@@ -226,7 +253,7 @@ function validateTimelineSuggestion(suggestion, session, rows = []) {
     next.evidence.unshift(`Ordering check used final pre-climax cue: ${anchors.preClimax.evidence}`);
   }
 
-  next.evidence = [...new Set(next.evidence.map(formatEvidenceTimeText))].slice(0, 8);
+  next.evidence = [...new Set(next.evidence.map((item) => normalizeFindingsText(formatEvidenceTimeText(item))))].slice(0, 8);
   return next;
 }
 
