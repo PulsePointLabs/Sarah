@@ -1,10 +1,12 @@
-import { useMemo, useState } from "react";
-import { Zap, Sparkles, ChevronLeft, ChevronRight } from "lucide-react";
+import { useMemo, useState, useRef, useEffect, useCallback } from "react";
+import { Zap, Sparkles, ChevronLeft, ChevronRight, Volume2, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
+import { buildSessionMomentTelemetry } from "@/utils/sessionMomentTelemetry";
+import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput } from "@/components/TTSButton";
 
 function fmtSec(s) {
   if (s == null) return "—";
@@ -22,6 +24,98 @@ function fmtMmSs(s) {
   const m = Math.floor(totalS / 60);
   const sec = totalS % 60;
   return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatTelemetryValue(value, unit = "", digits = 0) {
+  const number = numberOrNull(value);
+  if (number == null) return null;
+  const rounded = digits > 0 ? number.toFixed(digits) : String(Math.round(number));
+  return `${rounded}${unit}`;
+}
+
+function normalizeNarrativeText(text) {
+  return String(text || "")
+    .replace(/\s*([,.;:!?])/g, "$1")
+    .replace(/([,.;:!?])(?=\S)/g, "$1 ")
+    .replace(/\s*[–—]\s*/g, " — ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/, —/g, " —")
+    .replace(/\b(\d+)\s*(?:seconds?|s\b)/gi, (_, n) => {
+      const v = parseInt(n, 10);
+      if (v >= 60) {
+        const m = Math.floor(v / 60);
+        const s = v % 60;
+        return s > 0 ? `${m} minutes and ${s} seconds` : `${m} minutes`;
+      }
+      return `${v} seconds`;
+    })
+    .replace(/\b(\d+)\s*(?:minutes?|min\b)/gi, (_, n) => {
+      const v = parseInt(n, 10);
+      return `${v} minute${v !== 1 ? "s" : ""}`;
+    })
+    .replace(/\b(\d+)\s*(?:bpm\b)/gi, (_, n) => `${n} beats per minute`)
+    .trim();
+}
+
+function telemetryStripItems(packet) {
+  const hrExact = packet?.heart_rate?.exact_window;
+  const hrvExact = packet?.rr_hrv?.exact_window;
+  const hrvContext = packet?.rr_hrv?.context_window;
+  const quality = hrvExact?.quality_values?.[0] || hrvContext?.quality_values?.[0] || null;
+  return [
+    hrExact?.bpm_avg != null ? { label: "HR avg", value: formatTelemetryValue(hrExact.bpm_avg, " bpm") } : null,
+    hrExact?.bpm_max != null ? { label: "HR peak", value: formatTelemetryValue(hrExact.bpm_max, " bpm") } : null,
+    hrvExact?.rmssd_ms?.avg != null ? { label: "RMSSD", value: formatTelemetryValue(hrvExact.rmssd_ms.avg, " ms", 1) } : null,
+    hrvExact?.sdnn_ms?.avg != null ? { label: "SDNN", value: formatTelemetryValue(hrvExact.sdnn_ms.avg, " ms", 1) } : null,
+    hrvExact?.pnn50?.avg != null ? { label: "pNN50", value: formatTelemetryValue(hrvExact.pnn50.avg * 100, "%", 0) } : null,
+    quality ? { label: "HRV quality", value: quality } : null,
+  ].filter(Boolean);
+}
+
+function TelemetryStrip({ items = [] }) {
+  if (!items.length) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {items.map((item) => (
+        <span
+          key={`${item.label}-${item.value}`}
+          className="inline-flex items-center gap-1 rounded-full border border-current/10 bg-white/55 px-2 py-1 text-[10px] leading-none text-sky-700"
+        >
+          <span className="font-semibold uppercase tracking-wide opacity-80">{item.label}</span>
+          <span className="font-mono text-slate-900">{item.value}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function base64ToAudioBytes(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer.slice(0);
+}
+
+async function fetchTTSBase64(text) {
+  const runtime = getTTSRuntime();
+  const format = runtime.format;
+  const res = await base44.functions.invoke("openaiTTS", {
+    text: prepareTTSInput(text),
+    voice: "nova",
+    model: runtime.model,
+    speed: runtime.speed,
+    instructions: runtime.supportsInstructions ? runtime.instructions : "",
+    format,
+  });
+  return {
+    audio: res?.data?.audio || "",
+    mimeType: getTTSMime(format),
+  };
 }
 
 // Keywords in event notes that corroborate a near-climax event
@@ -179,8 +273,39 @@ export default function NearClimaxEvents({ timelineRows, session, selectedIndex,
   const isAIRefined = hasAIEvents;
 
   const [refining, setRefining] = useState(false);
+  const [speakingIndex, setSpeakingIndex] = useState(null);
+  const [speechLoadingIndex, setSpeechLoadingIndex] = useState(null);
+  const audioRef = useRef(null);
+  const audioUrlRef = useRef("");
 
   const hasAIAnalysis = !!(session?.ai_analysis || session?.ai_cascade);
+  const eventTelemetry = useMemo(() => (
+    events.map((event) => buildSessionMomentTelemetry({
+      session,
+      timelineRows,
+      startSeconds: Number(event.start_offset_s) || 0,
+      endSeconds: Number(event.end_offset_s) || Number(event.start_offset_s) || 0,
+      contextPadSeconds: 18,
+    }))
+  ), [events, session, timelineRows]);
+
+  const stopSpeech = useCallback(() => {
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+        audioRef.current.src = "";
+      } catch {}
+      audioRef.current = null;
+    }
+    if (audioUrlRef.current) {
+      try { URL.revokeObjectURL(audioUrlRef.current); } catch {}
+      audioUrlRef.current = "";
+    }
+    setSpeakingIndex(null);
+    setSpeechLoadingIndex(null);
+  }, []);
+
+  useEffect(() => () => stopSpeech(), [stopSpeech]);
 
   const refineWithAI = async () => {
     setRefining(true);
@@ -298,11 +423,52 @@ Return an array of near-climax events. If none exist, return an empty array.`,
     setRefining(false);
   };
 
-  if (!timelineRows.length) return null;
+  const speakEventCard = useCallback(async (event, index) => {
+    const telemetry = eventTelemetry[index];
+    const stripItems = telemetryStripItems(telemetry);
+    const spokenText = cleanTextForSpeech([
+      event.ai_label ? `${event.ai_label}.` : `Near climax event ${index + 1}.`,
+      `Starts at ${fmtMmSs(event.start_offset_s)} and lasts ${fmtSec(event.duration_s)}.`,
+      `Heart rate rises from ${event.base_hr} to ${event.peak_hr} beats per minute.`,
+      stripItems.length
+        ? `Telemetry: ${stripItems.map((item) => `${item.label} ${item.value}`).join(", ")}.`
+        : "",
+      event.ai_interpretation ? normalizeNarrativeText(event.ai_interpretation) : "",
+    ].filter(Boolean).join(" "));
 
-  const handleTap = (i) => {
+    if (speakingIndex === index && audioRef.current) {
+      stopSpeech();
+      return;
+    }
+
+    stopSpeech();
+    setSpeechLoadingIndex(index);
+    try {
+      const { audio, mimeType } = await fetchTTSBase64(spokenText);
+      if (!audio) throw new Error("TTS returned no audio");
+      const url = URL.createObjectURL(new Blob([base64ToAudioBytes(audio)], { type: mimeType }));
+      const audioEl = new Audio(url);
+      audioUrlRef.current = url;
+      audioRef.current = audioEl;
+      audioEl.preload = "auto";
+      audioEl.onended = () => stopSpeech();
+      audioEl.onerror = () => stopSpeech();
+      setSpeakingIndex(index);
+      setSpeechLoadingIndex(null);
+      await audioEl.play();
+    } catch (error) {
+      console.error("Near-climax TTS failed:", error);
+      stopSpeech();
+    }
+  }, [eventTelemetry, speakingIndex, stopSpeech]);
+
+  const handleTap = useCallback((i) => {
     onSelectIndex?.(selectedIndex === i ? null : i);
-  };
+    const event = events[i];
+    if (event) speakEventCard(event, i);
+  }, [events, onSelectIndex, selectedIndex, speakEventCard]);
+
+  if (!timelineRows.length) return null;
 
   return (
     <div className="space-y-3 pt-1">
@@ -357,13 +523,16 @@ Return an array of near-climax events. If none exist, return an empty array.`,
           </div>
 
           <p className="text-[10px] text-muted-foreground italic">
-            Tap an event to highlight it on the chart above
+            Tap an event to highlight it on the chart above and have Sarah read it aloud
           </p>
 
           {/* Event Navigator Bar — sits just above the event cards */}
           {(() => {
             const idx = selectedIndex ?? 0;
             const ev = events[idx];
+            const telemetry = eventTelemetry[idx];
+            const stripItems = telemetryStripItems(telemetry);
+            const interpretation = normalizeNarrativeText(ev.ai_interpretation);
             return (
               <div className="rounded-xl border border-border bg-muted/40 px-3 py-3 flex flex-col gap-2">
                 {/* Navigation buttons + label */}
@@ -398,20 +567,11 @@ Return an array of near-climax events. If none exist, return an empty array.`,
                     <ChevronRight className="w-4 h-4" />
                   </button>
                 </div>
+                <TelemetryStrip items={stripItems} />
                 {/* Breakdown sentence */}
-                {ev.ai_interpretation && (
+                {interpretation && (
                   <p className="text-sm leading-snug text-foreground/80 px-1">
-                    {ev.ai_interpretation
-                      .replace(/\b(\d+)\s*(?:seconds?|s\b)/gi, (_, n) => {
-                        const v = parseInt(n, 10);
-                        if (v >= 60) { const m = Math.floor(v / 60); const s = v % 60; return s > 0 ? `${m} minutes and ${s} seconds` : `${m} minutes`; }
-                        return `${v} seconds`;
-                      })
-                      .replace(/\b(\d+)\s*(?:minutes?|min\b)/gi, (_, n) => {
-                        const v = parseInt(n, 10);
-                        return `${v} minute${v !== 1 ? "s" : ""}`;
-                      })
-                      .replace(/\b(\d+)\s*(?:bpm\b)/gi, (_, n) => `${n} beats per minute`)}
+                    {interpretation}
                   </p>
                 )}
               </div>
@@ -421,11 +581,17 @@ Return an array of near-climax events. If none exist, return an empty array.`,
           <div className="space-y-2">
             {events.map((ev, i) => {
             const isSelected = selectedIndex === i;
+            const telemetry = eventTelemetry[i];
+            const stripItems = telemetryStripItems(telemetry);
+            const interpretation = normalizeNarrativeText(ev.ai_interpretation);
+            const isSpeaking = speakingIndex === i;
+            const isLoadingSpeech = speechLoadingIndex === i;
             return (
               <button
                 key={i}
                 onClick={() => handleTap(i)}
                 className="w-full text-left rounded-lg px-3 py-2.5 space-y-1.5 transition-all"
+                title={isSpeaking ? "Tap to stop Sarah" : "Tap to hear Sarah read this card"}
                 style={{
                   background: isSelected ? "hsl(var(--chart-3) / 0.2)" : "hsl(var(--chart-3) / 0.08)",
                   borderLeft: `3px solid hsl(var(--chart-3) / ${isSelected ? "1" : "0.5"})`,
@@ -436,10 +602,19 @@ Return an array of near-climax events. If none exist, return an empty array.`,
                     <span className="text-xs font-bold font-mono" style={{ color: "hsl(var(--chart-3))" }}>
                       {ev.ai_label ? ev.ai_label : `Event ${i + 1}`} — {fmtMmSs(ev.start_offset_s)}
                     </span>
-                    <Badge variant="outline" className="text-[9px] h-4 px-1.5">
-                      {fmtSec(ev.duration_s)}
-                    </Badge>
+                    <div className="flex items-center gap-1.5">
+                      {(isLoadingSpeech || isSpeaking) && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[9px] font-semibold text-primary">
+                          {isLoadingSpeech ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Volume2 className="h-2.5 w-2.5" />}
+                          {isLoadingSpeech ? "Sarah loading" : "Sarah reading"}
+                        </span>
+                      )}
+                      <Badge variant="outline" className="text-[9px] h-4 px-1.5">
+                        {fmtSec(ev.duration_s)}
+                      </Badge>
+                    </div>
                   </div>
+                  <TelemetryStrip items={stripItems} />
                   <div className="flex flex-wrap gap-2">
                     <span className="text-[10px] text-muted-foreground">
                       Base <strong className="text-foreground font-mono">{ev.base_hr}</strong> bpm
@@ -461,19 +636,9 @@ Return an array of near-climax events. If none exist, return an empty array.`,
                       </span>
                   }
                   </div>
-                  {ev.ai_interpretation && (
+                  {interpretation && (
                   <p className="leading-snug mt-1 italic text-foreground/90 text-sm">
-                    {ev.ai_interpretation
-                      .replace(/\b(\d+)\s*(?:seconds?|s\b)/gi, (_, n) => {
-                        const v = parseInt(n, 10);
-                        if (v >= 60) { const m = Math.floor(v / 60); const s = v % 60; return s > 0 ? `${m} minutes and ${s} seconds` : `${m} minutes`; }
-                        return `${v} seconds`;
-                      })
-                      .replace(/\b(\d+)\s*(?:minutes?|min\b)/gi, (_, n) => {
-                        const v = parseInt(n, 10);
-                        return `${v} minute${v !== 1 ? "s" : ""}`;
-                      })
-                      .replace(/\b(\d+)\s*(?:bpm\b)/gi, (_, n) => `${n} beats per minute`)}
+                    {interpretation}
                   </p>
                 )}
                 </button>);
