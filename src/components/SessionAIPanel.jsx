@@ -2131,6 +2131,23 @@ async function finalizeStoredSessionAnalysisResult(options) {
   }
 }
 
+function mergeAnalysisPersistenceState(session, analysisField, nextResult) {
+  if (analysisField !== "ai_analysis") return nextResult;
+  const existing = session?.ai_analysis;
+  if (!existing || typeof existing !== "object") return nextResult;
+  return {
+    ...existing,
+    ...nextResult,
+    _meta: nextResult?._meta || existing._meta || {},
+    _chat_messages: Array.isArray(nextResult?._chat_messages)
+      ? nextResult._chat_messages
+      : (Array.isArray(existing._chat_messages) ? existing._chat_messages : []),
+    _visual_findings: Array.isArray(nextResult?._visual_findings)
+      ? nextResult._visual_findings
+      : (Array.isArray(existing._visual_findings) ? existing._visual_findings : []),
+  };
+}
+
 export default function SessionAIPanel({ session, timelineRows, emgRows = [], userProfile, sessionJournal, mode = "companion", onAnalysisSaved }) {
   const isTechnical = mode === "technical";
   const analysisField = isTechnical ? "ai_session_deep_dive" : "ai_analysis";
@@ -2204,7 +2221,8 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
           },
         });
         if (cancelled) return;
-        setResult(storedResult);
+        const persistedResult = mergeAnalysisPersistenceState(session, analysisField, storedResult);
+        setResult(persistedResult);
         setJobStatus({
           ...completedJob,
           progress: {
@@ -2215,8 +2233,8 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
             message: "Recovered complete analysis; saving it back to the session…",
           },
         });
-        await base44.entities.Session.update(session.id, { [analysisField]: storedResult });
-        onAnalysisSaved?.(analysisField, storedResult);
+        await base44.entities.Session.update(session.id, { [analysisField]: persistedResult });
+        onAnalysisSaved?.(analysisField, persistedResult);
       } catch (err) {
         if (!cancelled) {
           console.warn(`${analysisLabel} reconnect skipped:`, err);
@@ -2295,9 +2313,10 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
             key_video_clip_repair_reason: repairReason,
           },
         };
-        setResult(repairedResult);
-        await base44.entities.Session.update(session.id, { [analysisField]: repairedResult });
-        onAnalysisSaved?.(analysisField, repairedResult);
+        const persistedResult = mergeAnalysisPersistenceState(session, analysisField, repairedResult);
+        setResult(persistedResult);
+        await base44.entities.Session.update(session.id, { [analysisField]: persistedResult });
+        onAnalysisSaved?.(analysisField, persistedResult);
         if (!cancelled) {
           setJobStatus({
             status: "complete",
@@ -2828,7 +2847,8 @@ Provide ${isTechnical
         });
       },
     });
-    setResult(storedResult);
+    const persistedResult = mergeAnalysisPersistenceState(session, analysisField, storedResult);
+    setResult(persistedResult);
     setJobStatus({
       ...completedJob,
       progress: {
@@ -2839,8 +2859,8 @@ Provide ${isTechnical
         message: "Saving analysis to the session…",
       },
     });
-    await base44.entities.Session.update(session.id, { [analysisField]: storedResult });
-    onAnalysisSaved?.(analysisField, storedResult);
+    await base44.entities.Session.update(session.id, { [analysisField]: persistedResult });
+    onAnalysisSaved?.(analysisField, persistedResult);
     } catch (err) {
       console.error(`${analysisLabel} failed:`, err);
       setError(aiErrorMessage(err));

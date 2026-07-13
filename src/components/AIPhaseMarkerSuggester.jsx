@@ -780,7 +780,7 @@ ${session.notes || "none"}`,
   }
 
   return (
-    <div className="rounded-xl border border-border bg-muted/30 p-3 space-y-3">
+    <div className="min-w-0 rounded-xl border border-border bg-muted/30 p-3 space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h4 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
@@ -828,14 +828,14 @@ ${session.notes || "none"}`,
                     <button
                       type="button"
                       onClick={() => speakFindings(item, `evidence-${index}`, `Evidence ${index + 1}`)}
-                      className="flex w-full items-start gap-2 rounded-lg border border-transparent px-2 py-1.5 text-left transition-colors hover:border-primary/20 hover:bg-primary/5"
+                      className="flex min-w-0 w-full items-start gap-2 rounded-lg border border-transparent px-2 py-1.5 text-left transition-colors hover:border-primary/20 hover:bg-primary/5"
                       title={speakingKey === `evidence-${index}` ? "Tap to stop Sarah" : "Tap to hear Sarah read this finding"}
                     >
-                      <span className="mt-0.5 shrink-0 border-l border-primary/40 pl-3 text-xs text-foreground/85 leading-relaxed">
+                      <span className="mt-0.5 min-w-0 flex-1 break-words border-l border-primary/40 pl-3 text-xs text-foreground/85 leading-relaxed">
                         {item}
                       </span>
                       {(speechLoadingKey === `evidence-${index}` || speakingKey === `evidence-${index}`) && (
-                        <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[9px] font-semibold text-primary">
+                        <span className="ml-auto mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[9px] font-semibold text-primary">
                           {speechLoadingKey === `evidence-${index}` ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Volume2 className="h-2.5 w-2.5" />}
                           {speechLoadingKey === `evidence-${index}` ? "Sarah loading" : "Sarah reading"}
                         </span>
@@ -851,12 +851,12 @@ ${session.notes || "none"}`,
             <button
               type="button"
               onClick={() => speakFindings(suggestion.reasoning, "reasoning", "Reasoning")}
-              className="flex w-full items-start gap-2 rounded-lg border border-transparent px-2 py-1.5 text-left transition-colors hover:border-primary/20 hover:bg-primary/5"
+              className="flex min-w-0 w-full items-start gap-2 rounded-lg border border-transparent px-2 py-1.5 text-left transition-colors hover:border-primary/20 hover:bg-primary/5"
               title={speakingKey === "reasoning" ? "Tap to stop Sarah" : "Tap to hear Sarah read this reasoning"}
             >
-              <span className="text-xs leading-relaxed text-muted-foreground">{suggestion.reasoning}</span>
+              <span className="min-w-0 flex-1 break-words text-xs leading-relaxed text-muted-foreground">{suggestion.reasoning}</span>
               {(speechLoadingKey === "reasoning" || speakingKey === "reasoning") && (
-                <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[9px] font-semibold text-primary">
+                <span className="ml-auto mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[9px] font-semibold text-primary">
                   {speechLoadingKey === "reasoning" ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Volume2 className="h-2.5 w-2.5" />}
                   {speechLoadingKey === "reasoning" ? "Sarah loading" : "Sarah reading"}
                 </span>

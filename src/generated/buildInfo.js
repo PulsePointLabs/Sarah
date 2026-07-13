@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.114",
-  "commit": "de374b4",
-  "commitMessage": "Add TTS to phase marker findings",
-  "builtAt": "2026-07-13T23:37:36.782Z"
+  "version": "0.1.115",
+  "commit": "60eecd5",
+  "commitMessage": "Make phase marker evidence TTS-friendly",
+  "builtAt": "2026-07-13T23:42:35.658Z"
 };

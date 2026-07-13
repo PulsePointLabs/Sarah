@@ -62,18 +62,18 @@ export default function SessionSectionNavigator({ sections, onSelect }) {
   const [mobileTop, setMobileTop] = useState(defaultTop);
   const dragStateRef = useRef({ active: false, offset: 0 });
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const saved = Number(window.localStorage.getItem("session-section-nav-top"));
-    if (Number.isFinite(saved)) setMobileTop(saved);
-  }, []);
-
   const clampTop = (value) => {
     if (typeof window === "undefined") return value;
     const min = 96;
     const max = Math.max(min, window.innerHeight - 120);
     return Math.min(max, Math.max(min, value));
   };
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = Number(window.localStorage.getItem("session-section-nav-top"));
+    if (Number.isFinite(saved)) setMobileTop(clampTop(saved));
+  }, []);
 
   const persistTop = (value) => {
     const clamped = clampTop(value);
@@ -99,6 +99,14 @@ export default function SessionSectionNavigator({ sections, onSelect }) {
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
     };
+  }, []);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setMobileTop((current) => clampTop(current));
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
 
   const handleDragStart = (event) => {
