@@ -88,10 +88,10 @@ function TelemetryStrip({ items = [] }) {
       {items.map((item) => (
         <span
           key={`${item.label}-${item.value}`}
-          className="inline-flex min-w-0 items-center gap-1.5 rounded-full border border-sky-200/80 bg-white/80 px-2.5 py-1 text-[10px] leading-tight text-sky-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]"
+          className="inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border border-sky-200/80 bg-white/80 px-2.5 py-1 text-[10px] leading-tight text-sky-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]"
         >
-          <span className="shrink-0 font-semibold uppercase tracking-[0.12em] opacity-85">{item.label}</span>
-          <span className="min-w-0 break-words font-mono text-slate-900">{item.value}</span>
+          <span className="shrink-0 whitespace-nowrap font-semibold uppercase tracking-[0.12em] opacity-85">{item.label}</span>
+          <span className="min-w-0 whitespace-nowrap font-mono text-slate-900">{item.value}</span>
         </span>
       ))}
     </div>
@@ -473,12 +473,13 @@ Return an array of near-climax events. If none exist, return an empty array.`,
 
   return (
     <div className="space-y-3 pt-1">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5" style={{ color: "hsl(var(--chart-3))" }}>
-          <Zap className="w-3.5 h-3.5" /> Near-Climax Events
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <h3 className="min-w-0 text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5" style={{ color: "hsl(var(--chart-3))" }}>
+          <Zap className="w-3.5 h-3.5 shrink-0" />
+          <span>Near-Climax Events</span>
           {isAIRefined &&
-          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-accent/20 text-accent border border-accent/30">
-              <Sparkles className="w-2.5 h-2.5" /> AI
+          <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-accent/30 bg-accent/20 px-2 py-0.5 text-[9px] font-semibold text-accent">
+              <Sparkles className="h-2.5 w-2.5 shrink-0" /> AI
             </span>
           }
         </h3>
@@ -487,7 +488,7 @@ Return an array of near-climax events. If none exist, return an empty array.`,
           variant="ghost"
           disabled={refining}
           onClick={refineWithAI}
-          className="h-6 text-[10px] gap-1 px-2 text-muted-foreground hover:text-accent"
+          className="h-7 shrink-0 whitespace-nowrap rounded-full px-2.5 text-[10px] gap-1 text-muted-foreground hover:text-accent"
           title={hasAIAnalysis ? "Re-run AI refinement using session analysis" : "Run AI refinement (run session AI analysis first for best results)"}>
           
           {refining ?
@@ -511,16 +512,18 @@ Return an array of near-climax events. If none exist, return an empty array.`,
 
       <>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {[
-          ["Detected", events.length],
-          ["Total Time", fmtSec(events.reduce((a, e) => a + (e.duration_s || 0), 0))],
-          ["Avg Rise", `+${Math.round(events.reduce((a, e) => a + (e.rise_bpm || 0), 0) / events.length)} bpm`]].
-          map(([label, val]) =>
-          <div key={label} className="min-w-0 overflow-hidden rounded-lg bg-muted/50 p-2 text-center">
-                <p className="break-words text-base font-bold font-mono sm:text-lg">{val}</p>
-                <p className="text-[9px] text-muted-foreground">{label}</p>
-              </div>
-          )}
+            <div className="min-w-0 overflow-hidden rounded-lg bg-muted/50 px-3 py-2 text-center">
+              <p className="whitespace-nowrap text-base font-bold font-mono sm:text-lg">{events.length}</p>
+              <p className="text-[10px] text-muted-foreground">Detected</p>
+            </div>
+            <div className="min-w-0 overflow-hidden rounded-lg bg-muted/50 px-3 py-2 text-center sm:col-span-1">
+              <p className="text-sm font-bold font-mono leading-snug sm:text-base">{`+${Math.round(events.reduce((a, e) => a + (e.rise_bpm || 0), 0) / events.length)} bpm`}</p>
+              <p className="text-[10px] text-muted-foreground">Avg Rise</p>
+            </div>
+            <div className="col-span-2 min-w-0 overflow-hidden rounded-lg bg-muted/50 px-3 py-2 text-center sm:col-span-1">
+              <p className="text-base font-bold font-mono leading-snug sm:text-lg">{fmtSec(events.reduce((a, e) => a + (e.duration_s || 0), 0))}</p>
+              <p className="text-[10px] text-muted-foreground">Total Time</p>
+            </div>
           </div>
 
           <p className="text-[10px] text-muted-foreground italic">
@@ -554,11 +557,11 @@ Return an array of near-climax events. If none exist, return an empty array.`,
                       <span className="text-[9px] text-muted-foreground shrink-0">{idx + 1} / {events.length}</span>
                     </div>
                     <div className="mt-1 flex flex-wrap gap-2 overflow-hidden">
-                      <span className="min-w-0 break-words text-[10px] font-mono text-muted-foreground">{fmtMmSs(ev.start_offset_s)} – {fmtMmSs(ev.end_offset_s)}</span>
+                      <span className="min-w-0 whitespace-nowrap text-[10px] font-mono text-muted-foreground">{fmtMmSs(ev.start_offset_s)} – {fmtMmSs(ev.end_offset_s)}</span>
                       <span className="text-[10px] text-muted-foreground">· <strong className="text-foreground font-mono">{fmtSec(ev.duration_s)}</strong></span>
                       <span className="text-[10px] text-muted-foreground"><strong className="text-foreground font-mono">{ev.base_hr}–{ev.peak_hr}</strong> bpm</span>
-                      <span className="text-[10px] font-semibold" style={{ color: "hsl(var(--chart-3))" }}>↑ +{ev.rise_bpm} bpm</span>
-                      {ev.note_corroborated && <span className="text-[9px] px-1.5 py-0.5 rounded-full font-semibold" style={{ background: "hsl(var(--chart-3) / 0.2)", color: "hsl(var(--chart-3))" }}>✓ corroborated</span>}
+                      <span className="whitespace-nowrap text-[10px] font-semibold" style={{ color: "hsl(var(--chart-3))" }}>↑ +{ev.rise_bpm} bpm</span>
+                      {ev.note_corroborated && <span className="whitespace-nowrap text-[9px] px-1.5 py-0.5 rounded-full font-semibold" style={{ background: "hsl(var(--chart-3) / 0.2)", color: "hsl(var(--chart-3))" }}>✓ corroborated</span>}
                     </div>
                   </div>
                   <button
@@ -606,14 +609,14 @@ Return an array of near-climax events. If none exist, return an empty array.`,
                     <span className="block min-w-0 flex-1 truncate text-xs font-bold font-mono" style={{ color: "hsl(var(--chart-3))" }}>
                       {ev.ai_label ? ev.ai_label : `Event ${i + 1}`} — {fmtMmSs(ev.start_offset_s)}
                     </span>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       {(isLoadingSpeech || isSpeaking) && (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[9px] font-semibold text-primary">
+                        <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[9px] font-semibold text-primary">
                           {isLoadingSpeech ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Volume2 className="h-2.5 w-2.5" />}
                           {isLoadingSpeech ? "Sarah loading" : "Sarah reading"}
                         </span>
                       )}
-                      <Badge variant="outline" className="text-[9px] h-4 px-1.5">
+                      <Badge variant="outline" className="h-5 whitespace-nowrap px-1.5 text-[9px]">
                         {fmtSec(ev.duration_s)}
                       </Badge>
                     </div>
@@ -621,22 +624,22 @@ Return an array of near-climax events. If none exist, return an empty array.`,
                   <TelemetryStrip items={stripItems} />
                   <MiniEventTimeline data={chartData} event={ev} selected={isSelected} />
                   <div className="flex flex-wrap gap-2">
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="whitespace-nowrap text-[10px] text-muted-foreground">
                       Base <strong className="text-foreground font-mono">{ev.base_hr}</strong> bpm
                     </span>
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="whitespace-nowrap text-[10px] text-muted-foreground">
                       Peak <strong className="text-foreground font-mono">{ev.peak_hr}</strong> bpm
                     </span>
-                    <span className="text-[10px]" style={{ color: "hsl(var(--chart-3))" }}>
+                    <span className="whitespace-nowrap text-[10px]" style={{ color: "hsl(var(--chart-3))" }}>
                       ↑ +{ev.rise_bpm} bpm
                     </span>
                     {ev.sustained_s > 0 &&
-                  <span className="text-[10px] text-muted-foreground">
+                  <span className="whitespace-nowrap text-[10px] text-muted-foreground">
                         Sustained <strong className="text-foreground font-mono">{fmtSec(ev.sustained_s)}</strong>
                       </span>
                   }
                     {ev.note_corroborated &&
-                  <span className="text-[9px] px-1.5 py-0.5 rounded-full font-semibold" style={{ background: "hsl(var(--chart-3) / 0.2)", color: "hsl(var(--chart-3))" }}>
+                  <span className="whitespace-nowrap text-[9px] px-1.5 py-0.5 rounded-full font-semibold" style={{ background: "hsl(var(--chart-3) / 0.2)", color: "hsl(var(--chart-3))" }}>
                         ✓ corroborated
                       </span>
                   }

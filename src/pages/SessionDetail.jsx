@@ -121,6 +121,7 @@ function BloodPressureSessionChart({ session }) {
   const avgDia = Math.round(readings.reduce((sum, reading) => sum + Number(reading.diastolic_mm_hg || 0), 0) / readings.length);
   const pulseValues = readings.map((reading) => Number(reading.pulse_bpm)).filter(Number.isFinite);
   const avgPulse = pulseValues.length ? Math.round(pulseValues.reduce((sum, value) => sum + value, 0) / pulseValues.length) : null;
+  const compactReading = (systolic, diastolic) => `${systolic}/${diastolic}`;
 
   return (
     <section id="session-blood-pressure-chart" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
@@ -133,17 +134,17 @@ function BloodPressureSessionChart({ session }) {
             Session-linked BP readings plotted with pulse so Sarah can compare vascular load against HR/HRV context.
           </p>
         </div>
-        <div className="grid grid-cols-3 gap-2 text-right">
-          <div className="rounded-lg bg-muted/25 px-3 py-2">
-            <p className="font-mono text-xl font-bold text-foreground">{latest.systolic_mm_hg}/{latest.diastolic_mm_hg}</p>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:text-right">
+          <div className="rounded-lg bg-muted/25 px-3 py-2 text-left sm:text-right">
+            <p className="whitespace-nowrap font-mono text-lg font-bold text-foreground sm:text-xl">{compactReading(latest.systolic_mm_hg, latest.diastolic_mm_hg)}</p>
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">latest</p>
           </div>
-          <div className="rounded-lg bg-muted/25 px-3 py-2">
-            <p className="font-mono text-xl font-bold text-foreground">{avgSys}/{avgDia}</p>
+          <div className="rounded-lg bg-muted/25 px-3 py-2 text-left sm:text-right">
+            <p className="whitespace-nowrap font-mono text-lg font-bold text-foreground sm:text-xl">{compactReading(avgSys, avgDia)}</p>
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">average</p>
           </div>
-          <div className="rounded-lg bg-muted/25 px-3 py-2">
-            <p className="font-mono text-xl font-bold text-foreground">{avgPulse ?? "--"}</p>
+          <div className="col-span-2 rounded-lg bg-muted/25 px-3 py-2 text-left sm:col-span-1 sm:text-right">
+            <p className="whitespace-nowrap font-mono text-lg font-bold text-foreground sm:text-xl">{avgPulse ?? "--"}</p>
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">pulse</p>
           </div>
         </div>
@@ -169,8 +170,10 @@ function BloodPressureSessionChart({ session }) {
       <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {readings.slice(-6).reverse().map((reading) => (
           <div key={reading.id || `${reading.measured_at}-${reading.systolic_mm_hg}-${reading.diastolic_mm_hg}`} className="rounded-lg border border-border bg-muted/15 px-3 py-2">
-            <p className="font-mono text-lg font-bold text-foreground">
-              {reading.systolic_mm_hg}/{reading.diastolic_mm_hg} mmHg{reading.pulse_bpm ? ` · ${reading.pulse_bpm} bpm` : ""}
+            <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-lg font-bold text-foreground">
+              <span className="whitespace-nowrap">{compactReading(reading.systolic_mm_hg, reading.diastolic_mm_hg)}</span>
+              <span className="whitespace-nowrap text-base">mmHg</span>
+              {reading.pulse_bpm ? <span className="whitespace-nowrap text-base">· {reading.pulse_bpm} bpm</span> : null}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
               {reading.measured_at ? new Date(reading.measured_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "No timestamp"}
@@ -225,8 +228,10 @@ function BloodPressureAttachPanel({
         <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {attachable.map((reading) => (
             <div key={reading.id || `${reading.measured_at}-${reading.systolic_mm_hg}-${reading.diastolic_mm_hg}`} className="rounded-lg border border-border bg-background/70 px-3 py-2">
-              <p className="font-mono text-lg font-bold text-foreground">
-                {reading.systolic_mm_hg}/{reading.diastolic_mm_hg} mmHg{reading.pulse_bpm ? ` · ${reading.pulse_bpm} bpm` : ""}
+              <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-lg font-bold text-foreground">
+                <span className="whitespace-nowrap">{reading.systolic_mm_hg}/{reading.diastolic_mm_hg}</span>
+                <span className="whitespace-nowrap text-base">mmHg</span>
+                {reading.pulse_bpm ? <span className="whitespace-nowrap text-base">· {reading.pulse_bpm} bpm</span> : null}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
                 {reading.measured_at ? new Date(reading.measured_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "No timestamp"}
