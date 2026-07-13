@@ -510,14 +510,14 @@ Return an array of near-climax events. If none exist, return an empty array.`,
         </p> :
 
       <>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {[
           ["Detected", events.length],
           ["Total Time", fmtSec(events.reduce((a, e) => a + (e.duration_s || 0), 0))],
           ["Avg Rise", `+${Math.round(events.reduce((a, e) => a + (e.rise_bpm || 0), 0) / events.length)} bpm`]].
           map(([label, val]) =>
-          <div key={label} className="bg-muted/50 rounded-lg p-2 text-center">
-                <p className="text-lg font-bold font-mono">{val}</p>
+          <div key={label} className="min-w-0 overflow-hidden rounded-lg bg-muted/50 p-2 text-center">
+                <p className="break-words text-base font-bold font-mono sm:text-lg">{val}</p>
                 <p className="text-[9px] text-muted-foreground">{label}</p>
               </div>
           )}
@@ -536,7 +536,7 @@ Return an array of near-climax events. If none exist, return an empty array.`,
             const stripItems = telemetryStripItems(telemetry);
             const interpretation = normalizeNarrativeText(ev.ai_interpretation);
             return (
-              <div className="rounded-xl border border-border bg-muted/40 px-3 py-3 flex flex-col gap-2">
+              <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-muted/40 px-3 py-3 flex flex-col gap-2">
                 {/* Navigation buttons + label */}
                 <div className="flex items-center gap-2">
                   <button
@@ -548,13 +548,13 @@ Return an array of near-climax events. If none exist, return an empty array.`,
                   </button>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <span className="text-xs font-bold font-mono truncate" style={{ color: "hsl(var(--chart-3))" }}>
+                      <span className="block min-w-0 truncate text-xs font-bold font-mono" style={{ color: "hsl(var(--chart-3))" }}>
                         {ev.ai_label ? ev.ai_label : `Event ${idx + 1}`}
                       </span>
                       <span className="text-[9px] text-muted-foreground shrink-0">{idx + 1} / {events.length}</span>
                     </div>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      <span className="text-[10px] font-mono text-muted-foreground">{fmtMmSs(ev.start_offset_s)} – {fmtMmSs(ev.end_offset_s)}</span>
+                    <div className="mt-1 flex flex-wrap gap-2 overflow-hidden">
+                      <span className="min-w-0 break-words text-[10px] font-mono text-muted-foreground">{fmtMmSs(ev.start_offset_s)} – {fmtMmSs(ev.end_offset_s)}</span>
                       <span className="text-[10px] text-muted-foreground">· <strong className="text-foreground font-mono">{fmtSec(ev.duration_s)}</strong></span>
                       <span className="text-[10px] text-muted-foreground"><strong className="text-foreground font-mono">{ev.base_hr}–{ev.peak_hr}</strong> bpm</span>
                       <span className="text-[10px] font-semibold" style={{ color: "hsl(var(--chart-3))" }}>↑ +{ev.rise_bpm} bpm</span>
@@ -594,7 +594,7 @@ Return an array of near-climax events. If none exist, return an empty array.`,
               <button
                 key={i}
                 onClick={() => handleTap(i)}
-                className="w-full text-left rounded-lg px-3 py-2.5 space-y-1.5 transition-all"
+                className="w-full min-w-0 overflow-hidden rounded-lg px-3 py-2.5 text-left space-y-1.5 transition-all"
                 title={isSpeaking ? "Tap to stop Sarah" : "Tap to hear Sarah read this card"}
                 style={{
                   background: isSelected ? "hsl(var(--chart-3) / 0.2)" : "hsl(var(--chart-3) / 0.08)",
@@ -603,7 +603,7 @@ Return an array of near-climax events. If none exist, return an empty array.`,
                 }}>
                 
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold font-mono" style={{ color: "hsl(var(--chart-3))" }}>
+                    <span className="block min-w-0 flex-1 truncate text-xs font-bold font-mono" style={{ color: "hsl(var(--chart-3))" }}>
                       {ev.ai_label ? ev.ai_label : `Event ${i + 1}`} — {fmtMmSs(ev.start_offset_s)}
                     </span>
                     <div className="flex items-center gap-1.5">

@@ -1312,7 +1312,7 @@ export default function SessionDetail() {
   );
 
   return (
-    <div className="w-full max-w-[100vw] overflow-x-clip">
+    <div className="w-full max-w-[100vw] overflow-x-hidden overscroll-x-none">
       <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2 px-3 pt-4 md:px-4">
         <Button variant="ghost" size="icon" onClick={() => navigate(-1)} className="shrink-0">
           <ArrowLeft className="w-5 h-5" />
@@ -1366,7 +1366,7 @@ export default function SessionDetail() {
 
       <SessionSectionNavigator sections={sectionLinks} onSelect={selectSection} />
 
-      <div className="min-w-0 max-w-full space-y-4 overflow-x-hidden px-3 py-4 pb-24 md:px-4 xl:pr-60">
+      <div className="min-w-0 max-w-full space-y-4 overflow-x-hidden px-3 py-4 pb-24 md:px-4 xl:pr-60 [overflow-wrap:anywhere]">
         <section id="session-snapshot" className="scroll-mt-24">
           <SessionSnapshotHero session={s} timelineRows={timelineRows} motionSummary={s.motion_analysis_summary} />
         </section>

@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { Bookmark, MapPinned } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -57,6 +58,56 @@ function SectionButtons({ sections, onSelect, closeOnSelect = false }) {
 }
 
 export default function SessionSectionNavigator({ sections, onSelect }) {
+  const defaultTop = 420;
+  const [mobileTop, setMobileTop] = useState(defaultTop);
+  const dragStateRef = useRef({ active: false, offset: 0 });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = Number(window.localStorage.getItem("session-section-nav-top"));
+    if (Number.isFinite(saved)) setMobileTop(saved);
+  }, []);
+
+  const clampTop = (value) => {
+    if (typeof window === "undefined") return value;
+    const min = 96;
+    const max = Math.max(min, window.innerHeight - 120);
+    return Math.min(max, Math.max(min, value));
+  };
+
+  const persistTop = (value) => {
+    const clamped = clampTop(value);
+    setMobileTop(clamped);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("session-section-nav-top", String(clamped));
+    }
+  };
+
+  useEffect(() => {
+    const handlePointerMove = (event) => {
+      if (!dragStateRef.current.active) return;
+      persistTop(event.clientY - dragStateRef.current.offset);
+    };
+    const handlePointerUp = () => {
+      dragStateRef.current.active = false;
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+  }, []);
+
+  const handleDragStart = (event) => {
+    dragStateRef.current = {
+      active: true,
+      offset: event.clientY - mobileTop,
+    };
+  };
+
   return (
     <>
       <aside className="fixed right-4 top-28 z-30 hidden w-52 rounded-xl border border-border bg-card/95 p-3 shadow-xl backdrop-blur xl:block">
@@ -67,10 +118,13 @@ export default function SessionSectionNavigator({ sections, onSelect }) {
         <SectionButtons sections={sections} onSelect={onSelect} />
       </aside>
 
-      <div className="fixed bottom-24 left-4 z-40 sm:bottom-5 xl:hidden">
+      <div className="fixed left-2 z-40 xl:hidden" style={{ top: `${mobileTop}px` }}>
         <Sheet>
           <SheetTrigger asChild>
-            <Button className="h-11 rounded-full px-4 shadow-lg">
+            <Button
+              className="h-11 rounded-full px-4 shadow-lg touch-none"
+              onPointerDown={handleDragStart}
+            >
               <MapPinned className="h-4 w-4" />
               Jump
             </Button>
