@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
-import { AlertCircle, Brain, Check, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, Brain, Check, Loader2, Sparkles, Volume2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "./session-form/EventTimelineSection";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
+import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput } from "@/components/TTSButton";
 
 function fmtMmSs(value) {
   if (value == null || Number(value) < 0) return "--";
@@ -16,6 +17,39 @@ function fmtMmSs(value) {
 
 function formatEvidenceTimeText(text) {
   return String(text || "").replace(/\b(\d{2,5})\s*s\b/g, (_, seconds) => `${fmtMmSs(Number(seconds))}`);
+}
+
+function base64ToAudioBytes(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer.slice(0);
+}
+
+async function fetchTTSBase64(text) {
+  const runtime = getTTSRuntime();
+  const format = runtime.format;
+  const res = await base44.functions.invoke("openaiTTS", {
+    text: prepareTTSInput(text),
+    voice: "nova",
+    model: runtime.model,
+    speed: runtime.speed,
+    instructions: runtime.supportsInstructions ? runtime.instructions : "",
+    format,
+  });
+  return {
+    audio: res?.data?.audio || "",
+    mimeType: getTTSMime(format),
+  };
+}
+
+function normalizeFindingsText(text) {
+  return String(text || "")
+    .replace(/\s*([,.;:!?])/g, "$1")
+    .replace(/([,.;:!?])(?=\S)/g, "$1 ")
+    .replace(/\s*[–—]\s*/g, " — ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 function getCategoryLabel(value) {
@@ -538,12 +572,62 @@ function MarkerCell({ label, color, time, confidence }) {
 export default function AIPhaseMarkerSuggester({ session, timelineRows, userProfile, onApply }) {
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [speakingKey, setSpeakingKey] = useState(null);
+  const [speechLoadingKey, setSpeechLoadingKey] = useState(null);
   const localDraft = useMemo(() => buildWholeTimelineDraft(session, timelineRows), [session, timelineRows]);
   const [suggestion, setSuggestion] = useState(session.phase_marker_ai_suggestion || localDraft || null);
   const [error, setError] = useState("");
+  const audioRef = useRef(null);
+  const audioUrlRef = useRef("");
 
   const hasInputs = timelineRows.length > 5 && (session.event_timeline || []).length > 0;
   const { calcMetrics } = useMemo(() => buildHRHelpers(timelineRows), [timelineRows]);
+
+  const stopSpeech = useCallback(() => {
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+        audioRef.current.src = "";
+      } catch {}
+      audioRef.current = null;
+    }
+    if (audioUrlRef.current) {
+      try { URL.revokeObjectURL(audioUrlRef.current); } catch {}
+      audioUrlRef.current = "";
+    }
+    setSpeakingKey(null);
+    setSpeechLoadingKey(null);
+  }, []);
+
+  useEffect(() => () => stopSpeech(), [stopSpeech]);
+
+  const speakFindings = useCallback(async (text, key, label = "finding") => {
+    const spokenText = cleanTextForSpeech(normalizeFindingsText(text));
+    if (!spokenText) return;
+    if (speakingKey === key && audioRef.current) {
+      stopSpeech();
+      return;
+    }
+    stopSpeech();
+    setSpeechLoadingKey(key);
+    try {
+      const { audio, mimeType } = await fetchTTSBase64(`${label}. ${spokenText}`);
+      if (!audio) throw new Error("TTS returned no audio");
+      const url = URL.createObjectURL(new Blob([base64ToAudioBytes(audio)], { type: mimeType }));
+      const audioEl = new Audio(url);
+      audioUrlRef.current = url;
+      audioRef.current = audioEl;
+      audioEl.preload = "auto";
+      audioEl.onended = () => stopSpeech();
+      audioEl.onerror = () => stopSpeech();
+      setSpeakingKey(key);
+      setSpeechLoadingKey(null);
+      await audioEl.play();
+    } catch (speechError) {
+      console.error("Phase marker TTS failed:", speechError);
+      stopSpeech();
+    }
+  }, [speakingKey, stopSpeech]);
 
   const generate = async () => {
     setLoading(true);
@@ -713,8 +797,23 @@ ${session.notes || "none"}`,
               <p className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">Evidence</p>
               <ul className="space-y-1">
                 {suggestion.evidence.map((item, index) => (
-                  <li key={index} className="text-xs text-foreground/85 leading-relaxed pl-3 border-l border-primary/40">
-                    {item}
+                  <li key={index}>
+                    <button
+                      type="button"
+                      onClick={() => speakFindings(item, `evidence-${index}`, `Evidence ${index + 1}`)}
+                      className="flex w-full items-start gap-2 rounded-lg border border-transparent px-2 py-1.5 text-left transition-colors hover:border-primary/20 hover:bg-primary/5"
+                      title={speakingKey === `evidence-${index}` ? "Tap to stop Sarah" : "Tap to hear Sarah read this finding"}
+                    >
+                      <span className="mt-0.5 shrink-0 border-l border-primary/40 pl-3 text-xs text-foreground/85 leading-relaxed">
+                        {item}
+                      </span>
+                      {(speechLoadingKey === `evidence-${index}` || speakingKey === `evidence-${index}`) && (
+                        <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[9px] font-semibold text-primary">
+                          {speechLoadingKey === `evidence-${index}` ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Volume2 className="h-2.5 w-2.5" />}
+                          {speechLoadingKey === `evidence-${index}` ? "Sarah loading" : "Sarah reading"}
+                        </span>
+                      )}
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -722,7 +821,20 @@ ${session.notes || "none"}`,
           )}
 
           {suggestion.reasoning && (
-            <p className="text-xs text-muted-foreground leading-relaxed">{suggestion.reasoning}</p>
+            <button
+              type="button"
+              onClick={() => speakFindings(suggestion.reasoning, "reasoning", "Reasoning")}
+              className="flex w-full items-start gap-2 rounded-lg border border-transparent px-2 py-1.5 text-left transition-colors hover:border-primary/20 hover:bg-primary/5"
+              title={speakingKey === "reasoning" ? "Tap to stop Sarah" : "Tap to hear Sarah read this reasoning"}
+            >
+              <span className="text-xs leading-relaxed text-muted-foreground">{suggestion.reasoning}</span>
+              {(speechLoadingKey === "reasoning" || speakingKey === "reasoning") && (
+                <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[9px] font-semibold text-primary">
+                  {speechLoadingKey === "reasoning" ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Volume2 className="h-2.5 w-2.5" />}
+                  {speechLoadingKey === "reasoning" ? "Sarah loading" : "Sarah reading"}
+                </span>
+              )}
+            </button>
           )}
 
           <div className="flex justify-end">

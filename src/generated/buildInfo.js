@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.112",
-  "commit": "3fb8973",
-  "commitMessage": "Fix mobile session detail overflow",
-  "builtAt": "2026-07-13T20:57:49.722Z"
+  "version": "0.1.113",
+  "commit": "434db7b",
+  "commitMessage": "Tighten phase marker detection",
+  "builtAt": "2026-07-13T23:30:57.483Z"
 };
