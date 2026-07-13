@@ -6,8 +6,11 @@ import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
+import { detectNearClimaxEvents } from "@/utils/nearClimaxEvents";
 import { buildSessionMomentTelemetry } from "@/utils/sessionMomentTelemetry";
 import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput } from "@/components/TTSButton";
+
+export { detectNearClimaxEvents } from "@/utils/nearClimaxEvents";
 
 function fmtSec(s) {
   if (s == null) return "—";
@@ -243,139 +246,6 @@ async function fetchTTSBase64(text) {
     audio: res?.data?.audio || "",
     mimeType: getTTSMime(format),
   };
-}
-
-// Keywords in event notes that corroborate a near-climax event
-const NCE_KEYWORDS = [
-"tension", "tense", "tight", "tighten", "clench", "grip",
-"foot", "feet", "plant", "planting", "toe", "curl",
-"throb", "pulse", "pulsing", "twitch", "spasm",
-"edge", "edg", "near", "almost", "close", "threshold",
-"pressure", "build", "buildup", "surge", "wave", "rush",
-"intense", "intensity", "strong", "overwhelming",
-"breath", "breathing", "gasp", "hold",
-"shiver", "shak", "tremble"];
-
-
-function scoreEventNoteCorroboration(eventStartS, eventEndS, sessionEvents) {
-  if (!sessionEvents || sessionEvents.length === 0) return 0;
-  const windowS = 45;
-  let score = 0;
-  for (const ev of sessionEvents) {
-    const t = Number(ev.time_s);
-    if (t < eventStartS - windowS || t > eventEndS + windowS) continue;
-    const dist = Math.max(0, Math.min(Math.abs(t - eventStartS), Math.abs(t - eventEndS)));
-    const proximityWeight = dist < 15 ? 2 : 1;
-    const note = (ev.note || "").toLowerCase();
-    const cats = Array.isArray(ev.category) ? ev.category : [ev.category].filter(Boolean);
-    if (cats.some((c) => ["physical", "sensation"].includes(c))) score += 1 * proximityWeight;
-    for (const kw of NCE_KEYWORDS) {
-      if (note.includes(kw)) {score += 2 * proximityWeight;break;}
-    }
-  }
-  return score;
-}
-
-export function detectNearClimaxEvents(rows, climaxOffsetS, preClimaxOffsetS, sessionEvents = []) {
-  if (!rows || rows.length < 10) return [];
-
-  const smoothed = rows.map((r, i) => {
-    const win = rows.slice(Math.max(0, i - 3), i + 4);
-    const avg = win.reduce((a, w) => a + Number(w.hr), 0) / win.length;
-    return { t: Number(r.time_offset_s), hr: avg };
-  });
-
-  const excludeStart = climaxOffsetS != null ?
-  preClimaxOffsetS != null ?
-  Math.min(preClimaxOffsetS, climaxOffsetS - 60) :
-  climaxOffsetS - 90 :
-  Infinity;
-
-  const allHRs = smoothed.filter((p) => p.t < excludeStart).map((p) => p.hr);
-  if (allHRs.length < 10) return [];
-  const sessionMinHR = Math.min(...allHRs);
-  const sessionMaxHR = Math.max(...allHRs);
-  const sessionHRRange = sessionMaxHR - sessionMinHR;
-
-  const MIN_RISE_BPM = Math.max(7, sessionHRRange * 0.13);
-  const MAX_RISE_BPM = sessionHRRange * 0.78;
-  const RISE_WINDOW_S = 120;
-  const SUSTAINED_THRESHOLD_S = 20;
-  const SUSTAINED_TOLERANCE = 5;
-  const DROP_BPM = Math.max(5, MIN_RISE_BPM * 0.55);
-  const SEARCH_DROP_S = 150;
-  const MIN_DURATION_S = 25;
-  const MAX_DURATION_S = 300;
-  const COOLDOWN_S = 30;
-  const MIN_CONFIDENCE = 2;
-
-  const events = [];
-  let lastEventEnd = -Infinity;
-  let i = 0;
-
-  while (i < smoothed.length - 5) {
-    const { t: t0, hr: hr0 } = smoothed[i];
-
-    if (t0 < lastEventEnd + COOLDOWN_S) {i++;continue;}
-    if (t0 >= excludeStart) break;
-
-    let peakIdx = i;
-    let peakHr = hr0;
-    for (let j = i + 1; j < smoothed.length; j++) {
-      if (smoothed[j].t - t0 > RISE_WINDOW_S) break;
-      if (smoothed[j].t >= excludeStart) break;
-      if (smoothed[j].hr > peakHr) {peakHr = smoothed[j].hr;peakIdx = j;}
-    }
-
-    const rise = peakHr - hr0;
-    if (rise < MIN_RISE_BPM || rise > MAX_RISE_BPM || peakIdx === i) {i++;continue;}
-
-    const peakTime = smoothed[peakIdx].t;
-
-    let sustainedEndIdx = peakIdx;
-    for (let j = peakIdx + 1; j < smoothed.length; j++) {
-      if (smoothed[j].t - peakTime > 90) break;
-      if (smoothed[j].hr >= peakHr - SUSTAINED_TOLERANCE) sustainedEndIdx = j;
-    }
-    const sustainedDuration = smoothed[sustainedEndIdx].t - peakTime;
-    if (sustainedDuration < SUSTAINED_THRESHOLD_S) {i = peakIdx + 1;continue;}
-
-    let dropIdx = -1;
-    for (let j = sustainedEndIdx + 1; j < smoothed.length; j++) {
-      if (smoothed[j].t - peakTime > SEARCH_DROP_S) break;
-      if (smoothed[j].hr <= peakHr - DROP_BPM) {dropIdx = j;break;}
-    }
-    if (dropIdx === -1) {i = peakIdx + 1;continue;}
-
-    const eventDuration = smoothed[dropIdx].t - t0;
-    if (eventDuration < MIN_DURATION_S || eventDuration > MAX_DURATION_S) {i++;continue;}
-
-    if (peakHr >= sessionMaxHR * 0.96) {i = dropIdx + 1;continue;}
-
-    const noteScore = scoreEventNoteCorroboration(t0, smoothed[dropIdx].t, sessionEvents);
-    const hrConfidence = Math.min(4, Math.floor((rise / MIN_RISE_BPM - 1) * 2) + Math.floor(sustainedDuration / 20));
-    const totalConfidence = hrConfidence + noteScore;
-
-    if (totalConfidence < MIN_CONFIDENCE) {i++;continue;}
-
-    events.push({
-      start_offset_s: t0,
-      peak_offset_s: peakTime,
-      end_offset_s: smoothed[dropIdx].t,
-      base_hr: Math.round(hr0),
-      peak_hr: Math.round(peakHr),
-      rise_bpm: Math.round(rise),
-      sustained_s: Math.round(sustainedDuration),
-      duration_s: Math.round(eventDuration),
-      confidence: Math.min(10, totalConfidence),
-      note_corroborated: noteScore > 0
-    });
-
-    lastEventEnd = smoothed[dropIdx].t;
-    i = dropIdx + 1;
-  }
-
-  return events;
 }
 
 // Sample HR data for the prompt — every ~10s to keep token count manageable

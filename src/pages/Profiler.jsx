@@ -21,6 +21,7 @@ import { friendlyJobErrorMessage, providerErrorCategory } from "@/lib/jobErrorMe
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionContextFactorLabels } from "@/lib/sessionContext";
 import { getManualStimulationPauseResumeEvents, getMotionEvidenceSummary, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
 import { buildProfileAIContentMeta, formatGeneratedAt, isProfileAIContentStale } from "@/utils/aiContentMetadata";
+import { detectNearClimaxEvents as detectSharedNearClimaxEvents } from "@/utils/nearClimaxEvents";
 import { splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 import { buildLongitudinalHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import { buildProfileQaFindingCards, makeProfileQaEntry, normalizeProfileQaFindings } from "@/lib/profileQa";
@@ -1677,36 +1678,6 @@ function CompactError({ message }) {
 }
 
 // Import-equivalent: NCE keyword list for note corroboration (mirrored from NearClimaxEvents)
-const NCE_KEYWORDS = [
-  "tension", "tense", "tight", "tighten", "clench", "grip",
-  "foot", "feet", "plant", "planting", "toe", "curl",
-  "throb", "pulse", "pulsing", "twitch", "spasm",
-  "edge", "edg", "near", "almost", "close", "threshold",
-  "pressure", "build", "buildup", "surge", "wave", "rush",
-  "intense", "intensity", "strong", "overwhelming",
-  "breath", "breathing", "gasp", "hold",
-  "shiver", "shak", "tremble",
-];
-
-function scoreEventNoteCorroboration(eventStartS, eventEndS, sessionEvents) {
-  if (!sessionEvents || sessionEvents.length === 0) return 0;
-  const windowS = 45;
-  let score = 0;
-  for (const ev of sessionEvents) {
-    const t = Number(ev.time_s);
-    if (t < eventStartS - windowS || t > eventEndS + windowS) continue;
-    const dist = Math.max(0, Math.min(Math.abs(t - eventStartS), Math.abs(t - eventEndS)));
-    const proximityWeight = dist < 15 ? 2 : 1;
-    const note = (ev.note || "").toLowerCase();
-    const cats = Array.isArray(ev.category) ? ev.category : [ev.category].filter(Boolean);
-    if (cats.some(c => ["physical", "sensation"].includes(c))) score += 1 * proximityWeight;
-    for (const kw of NCE_KEYWORDS) {
-      if (note.includes(kw)) { score += 2 * proximityWeight; break; }
-    }
-  }
-  return score;
-}
-
 // Detect near-climax events: sustained HR elevations (not brief spikes) before the pre-climax marker.
 // Uses event note corroboration for confidence scoring.
 function detectNearClimaxEvents(rows, climaxOffsetS, preClimaxOffsetS, sessionEvents = []) {
@@ -8914,7 +8885,7 @@ function NearClimaxPanel({ sessions, allTimelines, userProfile, timelineLoading 
     for (const session of sessions) {
       const rows = allTimelines[session.id] || [];
       if (rows.length < 10) continue;
-      const events = detectNearClimaxEvents(rows, session.climax_offset_s, session.pre_climax_offset_s, session.event_timeline || []);
+      const events = detectSharedNearClimaxEvents(rows, session.climax_offset_s, session.pre_climax_offset_s, session.event_timeline || []);
       if (events.length > 0) {
         sessionEvents.push({
           date: sessionDateKey(session.date),
