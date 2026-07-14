@@ -447,9 +447,20 @@ function SessionStoryVideoPlayer({ linkedVideos = [], uploadedVideos = [], onAsk
   const activeVideo = playableVideos[activeIndex] || playableVideos[0];
 
   const openFullscreen = async () => {
-    const target = wrapperRef.current || videoRef.current;
-    if (!target?.requestFullscreen) return;
+    const video = videoRef.current;
+    if (!video) return;
+    video.controls = true;
     try {
+      if (typeof video.requestFullscreen === "function") {
+        await video.requestFullscreen();
+        return;
+      }
+      if (typeof video.webkitEnterFullscreen === "function") {
+        video.webkitEnterFullscreen();
+        return;
+      }
+      const target = wrapperRef.current || video;
+      if (!target?.requestFullscreen) return;
       await target.requestFullscreen();
     } catch (error) {
       console.warn("Could not open session video fullscreen:", error);
@@ -534,7 +545,9 @@ function SessionStoryVideoPlayer({ linkedVideos = [], uploadedVideos = [], onAsk
             src={activeVideo.url}
             controls
             playsInline
-            preload="metadata"
+            preload="auto"
+            controlsList="nodownload noplaybackrate"
+            disablePictureInPicture
             className="block max-h-[28rem] w-full bg-black object-contain"
             onLoadedMetadata={(event) => {
               event.currentTarget.playbackRate = playbackSpeed;

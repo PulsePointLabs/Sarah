@@ -623,16 +623,18 @@ filesRouter.get('/local-video/stream', async (req, res) => {
     const requestedPath = normalizeLocalVideoPath(req.query?.path);
     if (!requestedPath) return res.status(400).json({ error: 'Missing local video path.' });
     const meta = await localVideoMetadata(requestedPath);
+    const defaultChunkBytes = 1024 * 1024 * 16;
     const range = req.headers.range;
     if (!range) {
       res.setHeader('Content-Type', meta.mimeType);
       res.setHeader('Content-Length', meta.sizeBytes);
+      res.setHeader('Accept-Ranges', 'bytes');
       fs.createReadStream(meta.path).pipe(res);
       return;
     }
     const [startRaw, endRaw] = String(range).replace(/bytes=/, '').split('-');
     const start = Math.max(0, Number.parseInt(startRaw, 10) || 0);
-    const end = Math.min(meta.sizeBytes - 1, endRaw ? Number.parseInt(endRaw, 10) : start + 1024 * 1024 * 4);
+    const end = Math.min(meta.sizeBytes - 1, endRaw ? Number.parseInt(endRaw, 10) : start + defaultChunkBytes);
     if (start >= meta.sizeBytes || end < start) {
       res.writeHead(416, { 'Content-Range': `bytes */${meta.sizeBytes}` });
       res.end();
