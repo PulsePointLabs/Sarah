@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.119",
-  "commit": "ea2a1b7",
-  "commitMessage": "Fix session detail source video player",
-  "builtAt": "2026-07-14T00:49:28.172Z"
+  "version": "0.1.120",
+  "commit": "39875f7",
+  "commitMessage": "Improve session video fullscreen playback",
+  "builtAt": "2026-07-14T00:55:11.360Z"
 };

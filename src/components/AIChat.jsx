@@ -12,6 +12,7 @@ import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
 import { finalizeWhisperTranscript } from "@/utils/whisperTranscript";
 import { SarahAvatar } from "@/components/SarahBrand";
 import { SARAH_CLINICAL_REASONING_CALIBRATION_RULE } from "@/utils/clinicalReasoningCalibration";
+import { buildSarahPersonalityPrompt, readSarahPersonalitySettings, SARAH_PERSONALITY_EVENT } from "@/utils/sarahPersonality";
 
 const PROFILE_CATEGORIES = [
   { key: "physical", label: "Physical Baseline", emoji: "🫀", hint: "Body metrics, fitness, resting HR, medications" },
@@ -484,6 +485,7 @@ export default function AIChat({
   const [chatProcessingStatus, setChatProcessingStatus] = useState(null);
   const [imageError, setImageError] = useState("");
   const [uploadingImages, setUploadingImages] = useState(false);
+  const [sarahPersonality, setSarahPersonality] = useState(() => readSarahPersonalitySettings());
   const bottomRef = useRef(null);
   const messageRefs = useRef(new Map());
   const inputRef = useRef(null);
@@ -607,6 +609,23 @@ export default function AIChat({
   useEffect(() => {
     setMessages(savedMessages || []);
   }, [savedMessages]);
+
+  useEffect(() => {
+    const handlePersonalityUpdate = (event) => {
+      if (event?.detail) {
+        setSarahPersonality(event.detail);
+        return;
+      }
+      setSarahPersonality(readSarahPersonalitySettings());
+    };
+    if (typeof window === "undefined") return undefined;
+    window.addEventListener(SARAH_PERSONALITY_EVENT, handlePersonalityUpdate);
+    window.addEventListener("storage", handlePersonalityUpdate);
+    return () => {
+      window.removeEventListener(SARAH_PERSONALITY_EVENT, handlePersonalityUpdate);
+      window.removeEventListener("storage", handlePersonalityUpdate);
+    };
+  }, []);
 
   const isMobileViewport = useCallback(() => (
     typeof window !== "undefined" && window.matchMedia?.("(max-width: 640px)")?.matches
@@ -1065,6 +1084,11 @@ export default function AIChat({
     const promptText = `Please review the current session video moment at ${formatTimePhrase(sessionSeconds)}. Focus on visible technique, body mechanics, telemetry overlays, and what this moment likely represents in the session.`;
     setOpen(true);
     setImageError("");
+    setChatProcessingStatus({
+      phase: "queued",
+      message: "Preparing moment review",
+      detail: `Pulling frames from ${pendingTimestampReview?.sourceLabel || "the session video"} at ${formatTimePhrase(sessionSeconds)} before Sarah responds.`,
+    });
     attachSavedVideoClipFrames({
       label: pendingTimestampReview?.sourceLabel || "Session video",
       session_time_s: sessionSeconds,
@@ -1663,6 +1687,9 @@ export default function AIChat({
     const groundingContext = buildAIGroundingContext(userProfile);
     const sarahVsVitalsContext = await buildSarahVsVitalsPromptContext();
     const profileMechanicalContext = mode === "profile" ? `\n\n${PROFILE_MECHANICAL_RULE}` : "";
+    const sarahPersonalityPrompt = buildSarahPersonalityPrompt(sarahPersonality, {
+      isTechnical: false,
+    });
     const res = await base44.integrations.Core.InvokeLLM({
       prompt: `${localTimeContext}\n\n${groundingContext}${profileMechanicalContext}\n\nBased on this Q&A conversation about a person's ${conversationSubject}, write 2-4 concise bullet points summarizing only the NEW factual findings from the user's answers that would be useful to persist for future AI analysis. Do not repeat generic information already obvious from the base data. Be specific and factual. Do not preserve assumptions about intent unless the person explicitly stated them. Write every saved bullet in direct second person using "you" and "your"; do not use the person's name, "the user", "he", "she", "his", or "her".\n\nConversation:\n${history}\n\nOutput as plain bullet points starting with "•":`,
       source: "ai_chat_findings_summary",
@@ -1863,6 +1890,7 @@ No affirmations or pleasantries. 2–3 sentences.`;
 You are Sarah inside the Sarah app. The user may provide explicit adult anatomical or device images for private self-analysis. Analyze clinically/functionally, not erotically.
 ${ANATOMICAL_REFERENCE_FOCUS_RULE}
 ${SARAH_CLINICAL_REASONING_CALIBRATION_RULE}
+${sarahPersonalityPrompt}
 - Do not shame, moralize, flirt, rate attractiveness, or write erotic commentary.
 - Separate what is directly visible in the image from what is inferred from profile/session history.
 - Flag uncertainty from angle, lighting, state, occlusion, or single-image limits.
@@ -1913,7 +1941,7 @@ Return a conversational answer plus structured findings for review/persistence.`
 
     try {
     const res = await base44.integrations.Core.InvokeLLM({
-      prompt: `${imageReviewPrompt || systemPrompt}\n\n${TIME_FORMAT_RULE}\n\n${localTimeContext}${profileMechanicalContext}\n\n${groundingContext}${sarahVsVitalsContext ? `\n\n${sarahVsVitalsContext}` : ""}\n\nSession/profile data:\n${context}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
+      prompt: `${imageReviewPrompt || `${systemPrompt}\n\n${sarahPersonalityPrompt}`}\n\n${TIME_FORMAT_RULE}\n\n${localTimeContext}${profileMechanicalContext}\n\n${groundingContext}${sarahVsVitalsContext ? `\n\n${sarahVsVitalsContext}` : ""}\n\nSession/profile data:\n${context}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
       ...(imagePayload.aiImages.length ? { images: imagePayload.aiImages, response_json_schema: imageSchema, max_tokens: 5000 } : {}),
       source: "ai_chat_interactive",
       foreground: true,
@@ -2468,10 +2496,29 @@ Return a conversational answer plus structured findings for review/persistence.`
         disabled={effectiveSendDisabled}
         className={`flex h-9 w-9 shrink-0 items-center justify-center bg-primary text-primary-foreground transition-opacity disabled:opacity-40 ${fullScreen ? "rounded-full" : "rounded-lg"}`}
       >
-        {uploadingImages || processingVideoClip ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" /> : <Send className="h-4 w-4" />}
+        {loading || uploadingImages || processingVideoClip ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" /> : <Send className="h-4 w-4" />}
       </button>
     </div>
   );
+
+  const renderComposerStatus = () => {
+    if (!chatProcessingStatus) return null;
+    const tone = chatProcessingStatus.phase === "error"
+      ? "border-destructive/30 bg-destructive/10 text-destructive"
+      : "border-primary/20 bg-primary/[0.06] text-foreground";
+    const showSpinner = ["queued", "sampling", "uploading", "analyzing", "processing", "thinking"].includes(chatProcessingStatus.phase);
+    return (
+      <div className={`rounded-lg border px-3 py-2 text-xs ${tone}`}>
+        <div className="flex items-center gap-2 font-semibold">
+          {showSpinner && <span className="h-3 w-3 shrink-0 rounded-full border-2 border-current border-t-transparent animate-spin" />}
+          <span>{chatProcessingStatus.message}</span>
+        </div>
+        {chatProcessingStatus.detail ? (
+          <p className="mt-1 leading-relaxed opacity-90">{chatProcessingStatus.detail}</p>
+        ) : null}
+      </div>
+    );
+  };
 
   const renderComposer = (placeholder, compactRows = 5) => (
     <div className={composerClass}>
@@ -2485,6 +2532,7 @@ Return a conversational answer plus structured findings for review/persistence.`
         rows={fullScreen ? 3 : compactRows}
         className={textareaClass}
       />
+      {loading && renderComposerStatus()}
       {renderComposerControls()}
     </div>
   );

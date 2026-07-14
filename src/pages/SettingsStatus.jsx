@@ -414,6 +414,21 @@ const SARAH_PERSONALITY_TOGGLES = [
   },
 ];
 
+const SARAH_SETTING_EFFECTS = [
+  {
+    label: "What these settings do affect",
+    helper: "Ask Sarah chat replies, Session Analysis generation, and Sarah's spoken read-aloud style all use these settings after you save them.",
+  },
+  {
+    label: "What they do not affect",
+    helper: "They do not change event detection, HR/HRV math, AI phase-marker timing, clip sampling, or what evidence Sarah is allowed to invent, because she still has to stay grounded in the actual data.",
+  },
+  {
+    label: "Where you should notice the biggest difference",
+    helper: "Tone preset changes voice/personality, Clinical detail changes how much anatomy and mechanism Sarah explains, and the toggles mainly push emphasis rather than changing the raw conclusions.",
+  },
+];
+
 function readUiPreferences() {
   if (typeof window === "undefined") return DEFAULT_UI_PREFS;
   try {
@@ -2008,6 +2023,18 @@ export default function SettingsStatus() {
           </div>
 
           <div className="space-y-4">
+            <div className="rounded-xl border border-primary/20 bg-primary/[0.05] p-3">
+              <h3 className="text-sm font-bold text-foreground">What these settings actually change</h3>
+              <div className="mt-3 space-y-2">
+                {SARAH_SETTING_EFFECTS.map((item) => (
+                  <div key={item.label} className="rounded-lg border border-border bg-card px-3 py-2.5">
+                    <p className="text-sm font-semibold text-foreground">{item.label}</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{item.helper}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div className="rounded-xl border border-border bg-muted/20 p-3">
               <h3 className="text-sm font-bold text-foreground">Characteristics</h3>
               <div className="mt-3 space-y-2">
