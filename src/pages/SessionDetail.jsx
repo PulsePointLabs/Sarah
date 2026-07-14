@@ -44,6 +44,7 @@ import { sanitizeSessionChatMessages } from "@/lib/chatFindings";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "../components/session-form/EventTimelineSection";
 import { hasMixedPauseResumeEvidence, isVerifiedMotionEvent } from "@/utils/sessionMotionEvidence";
 import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
+import { videoPosterDataUrl } from "@/lib/videoPoster";
 
 function _getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -97,6 +98,13 @@ function buildSessionStoryVideoSources({ linkedVideos = [], uploadedVideos = [] 
           sourceKind: "uploaded_session_video",
         }))
     : [];
+}
+
+function cacheBustedMediaUrl(fileUrl = "", cacheKey = "") {
+  const url = serverUrl(fileUrl);
+  if (!url) return "";
+  const version = String(cacheKey || Date.now()).replace(/[^a-zA-Z0-9_.-]/g, "");
+  return `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}`;
 }
 
 function InfoRow({ label, value }) {
@@ -445,6 +453,15 @@ function SessionStoryVideoPlayer({ linkedVideos = [], uploadedVideos = [], onAsk
 
   if (!playableVideos.length) return null;
   const activeVideo = playableVideos[activeIndex] || playableVideos[0];
+  const activeVideoUrl = cacheBustedMediaUrl(
+    activeVideo.url,
+    [activeVideo.id, activeVideo.label, activeVideo.timelineOffsetSeconds, activeIndex].filter(Boolean).join("-"),
+  );
+  const activeVideoPoster = videoPosterDataUrl({
+    title: activeVideo.label || "Session video",
+    subtitle: activeVideo.sourceKind === "linked_local_video" ? "Sarah source session video" : "Uploaded session video",
+    timestamp: "Tap to play",
+  });
 
   const openFullscreen = async () => {
     const video = videoRef.current;
@@ -538,17 +555,20 @@ function SessionStoryVideoPlayer({ linkedVideos = [], uploadedVideos = [], onAsk
             ))}
           </div>
         )}
-        <div ref={wrapperRef} className="mt-3 overflow-hidden rounded-lg border border-border bg-black">
+        <div ref={wrapperRef} className="relative mt-3 max-w-full overflow-hidden rounded-lg border border-border bg-black">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 text-xs">
+            <span className="font-semibold text-foreground">Session video</span>
+            <span className="text-muted-foreground">{activeVideo.label || "Primary source video"}</span>
+          </div>
           <video
             ref={videoRef}
-            key={activeVideo.url}
-            src={activeVideo.url}
+            key={activeVideoUrl}
+            src={activeVideoUrl}
+            poster={activeVideoPoster}
             controls
             playsInline
-            preload="auto"
-            controlsList="nodownload noplaybackrate"
-            disablePictureInPicture
-            className="block max-h-[28rem] w-full bg-black object-contain"
+            preload="metadata"
+            className="aspect-video w-full bg-black object-contain"
             onLoadedMetadata={(event) => {
               event.currentTarget.playbackRate = playbackSpeed;
               setPlayheadSeconds(event.currentTarget.currentTime || 0);
@@ -556,7 +576,13 @@ function SessionStoryVideoPlayer({ linkedVideos = [], uploadedVideos = [], onAsk
             onTimeUpdate={(event) => {
               setPlayheadSeconds(event.currentTarget.currentTime || 0);
             }}
+            onSeeked={(event) => {
+              setPlayheadSeconds(event.currentTarget.currentTime || 0);
+            }}
           />
+          <div className="pointer-events-none absolute bottom-3 left-3 max-w-[calc(100%-1.5rem)] truncate rounded-md bg-black/75 px-2 py-1 font-mono text-xs font-semibold text-white shadow">
+            player {Math.floor(playheadSeconds / 60)}:{Math.round(playheadSeconds % 60).toString().padStart(2, "0")}
+          </div>
         </div>
       </div>
     </section>
