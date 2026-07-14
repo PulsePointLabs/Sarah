@@ -536,12 +536,23 @@ export default function AIChat({
     const sourceUrl = clip?.sourceUrl || directClipUrl || fallbackSessionVideoUrl;
     if (!sourceUrl) return [];
 
+    setChatProcessingStatus(nextChatStatus({
+      phase: "processing",
+      message: "Loading source video",
+      detail: `Opening ${clip?.sourceLabel || clip?.label || "the saved session video"} so Sarah can sample still frames.`,
+    }));
+
     const timelineOffset = Number(
       clip?.timelineOffsetSeconds
       ?? normalizedSessionVideoSource?.timelineOffsetSeconds
       ?? 0
     ) || 0;
     const sourceFile = await fetchUrlAsFile(sourceUrl, clip?.filename || clip?.label || "saved-session-moment.mp4");
+    setChatProcessingStatus(nextChatStatus({
+      phase: "processing",
+      message: "Mapping the review window",
+      detail: "Reading video metadata and aligning the requested moment to the session timeline.",
+    }));
     const loadedDuration = await loadVideoMetadata(sourceFile);
     const hasDirectClipSource = Boolean(directClipUrl);
     const timelineRangeStart = Number.isFinite(Number(clip?.startSeconds))
@@ -570,11 +581,11 @@ export default function AIChat({
       : timelineStartSeconds + (sampleEnd - sampleStart);
     const label = clip?.label?.trim() || "saved session moment";
 
-    setChatProcessingStatus({
+    setChatProcessingStatus(nextChatStatus({
       phase: "sampling",
       message: "Pulling saved moment frames",
-      detail: `Sampling ${formatTimePhrase(timelineStartSeconds)} to ${formatTimePhrase(timelineEndSeconds)} for Sarah's review.`,
-    });
+      detail: `Sampling ${Math.min(VIDEO_FRAME_SAMPLE_COUNT, MAX_IMAGE_COUNT - selectedImages.length)} stills from ${formatTimePhrase(timelineStartSeconds)} to ${formatTimePhrase(timelineEndSeconds)} for Sarah's review.`,
+    }));
 
     const frames = await sampleVideoFrames({
       file: sourceFile,
@@ -607,7 +618,7 @@ export default function AIChat({
         motionSummary: null,
       },
     }));
-  }, [fetchUrlAsFile, selectedImages.length, sessionVideoSources]);
+  }, [fetchUrlAsFile, nextChatStatus, selectedImages.length, sessionVideoSources]);
 
   useEffect(() => {
     setMessages(savedMessages || []);
@@ -637,6 +648,11 @@ export default function AIChat({
   const scrollToBottom = useCallback((behavior = "smooth") => {
     requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior, block: "end" }));
   }, []);
+
+  const nextChatStatus = useCallback((status = {}) => ({
+    startedAt: status.startedAt || chatProcessingStatus?.startedAt || Date.now(),
+    ...status,
+  }), [chatProcessingStatus?.startedAt]);
 
   useEffect(() => {
     if (!autoScrollOnMount && !initialAutoScrollSuppressedRef.current) {
@@ -1195,11 +1211,11 @@ export default function AIChat({
     }
     const label = selectedVideoClip.label?.trim() || selectedVideoClip.filename || "video technique example";
     setProcessingVideoClip(true);
-    setChatProcessingStatus({
+    setChatProcessingStatus(nextChatStatus({
       phase: "processing",
       message: "Preparing local video clip",
       detail: `Building a short review clip from ${formatTimePhrase(selectedVideoClip.startSeconds)} to ${formatTimePhrase(selectedVideoClip.endSeconds)}.`,
-    });
+    }));
     updateSelectedVideoClip({ processingStatus: "Processing clip with local FFmpeg..." }, { keepProcessed: true });
     try {
       const processed = await base44.integrations.Core.ProcessVideoClip({
@@ -1213,18 +1229,18 @@ export default function AIChat({
         processedClip: processed,
         processingStatus: "MP4 preview ready. Raw source was discarded after processing.",
       }, { keepProcessed: true });
-      setChatProcessingStatus({
+      setChatProcessingStatus(nextChatStatus({
         phase: "ready",
         message: "Video preview ready",
         detail: "Sarah will receive sampled frames plus local motion timing from this clip.",
-      });
+      }));
       return processed;
     } catch (error) {
       const message = error?.status === 404
         ? "Video processing endpoint is not available yet. Restart the local API server, then try Generate MP4 Preview again."
         : error?.message || "Could not process this video clip.";
       updateSelectedVideoClip({ processingStatus: message }, { keepProcessed: true });
-      setChatProcessingStatus({ phase: "error", message: "Video clip processing failed", detail: message });
+      setChatProcessingStatus(nextChatStatus({ phase: "error", message: "Video clip processing failed", detail: message }));
       setImageError(message);
       return null;
     } finally {
@@ -1274,11 +1290,11 @@ export default function AIChat({
       const timelineEndSeconds = selectedVideoClip.endSeconds + timelineOffsetSeconds;
       const timelineLabel = evidenceScope === "body_exploration" ? "body exploration timeline" : evidenceScope === "session" ? "session timeline" : "source video timeline";
       if (processed?.frames?.length) {
-        setChatProcessingStatus({
+        setChatProcessingStatus(nextChatStatus({
           phase: "sampling",
           message: "Extracting video evidence",
           detail: `Using ${processed.frames.length} sampled frames from ${formatTimePhrase(selectedVideoClip.startSeconds)} to ${formatTimePhrase(selectedVideoClip.endSeconds)}.`,
-        });
+        }));
         return processed.frames.slice(0, slots).map((frame, index) => {
           const frameTimeSeconds = Number(frame.frameTimeSeconds ?? selectedVideoClip.startSeconds);
           const dataUrl = frame.data ? `data:${frame.mimeType || "image/jpeg"};base64,${frame.data}` : frame.url || frame.file_url || "";
@@ -1313,11 +1329,11 @@ export default function AIChat({
           };
         });
       }
-      setChatProcessingStatus({
+      setChatProcessingStatus(nextChatStatus({
         phase: "sampling",
         message: "Sampling video frames in the browser",
         detail: `Using ${Math.min(slots, VIDEO_FRAME_SAMPLE_COUNT)} frames from ${formatTimePhrase(selectedVideoClip.startSeconds)} to ${formatTimePhrase(selectedVideoClip.endSeconds)}.`,
-      });
+      }));
       const frames = await sampleVideoFrames({
         file: selectedVideoClip.file,
         startSeconds: selectedVideoClip.startSeconds,
@@ -1357,17 +1373,24 @@ export default function AIChat({
     const pendingImages = [...selectedImages, ...videoFrames].slice(0, maxPending);
     if (!pendingImages.length) return { metadata: [], aiImages: [] };
     setUploadingImages(true);
-    setChatProcessingStatus({
-      phase: videoFrames.length ? "uploading" : "uploading",
+    setChatProcessingStatus(nextChatStatus({
+      phase: "uploading",
       message: videoFrames.length ? "Uploading sampled video frames" : "Uploading images",
       detail: videoFrames.length
-        ? `${videoFrames.length} frames are being attached for Sarah's review.`
+        ? `${videoFrames.length} frame${videoFrames.length === 1 ? "" : "s"} are queued for Sarah's review. Starting attachment upload now.`
         : `${pendingImages.length} image${pendingImages.length === 1 ? "" : "s"} are being attached.`,
-    });
+    }));
     const uploaded = [];
     const aiImages = [];
     try {
-      for (const image of pendingImages) {
+      for (let index = 0; index < pendingImages.length; index += 1) {
+        const image = pendingImages[index];
+        const isReused = Boolean(image.storagePath);
+        setChatProcessingStatus(nextChatStatus({
+          phase: "uploading",
+          message: isReused ? "Reusing saved image evidence" : "Uploading attachments",
+          detail: `${isReused ? "Using saved media" : "Uploading media"} ${index + 1} of ${pendingImages.length}: ${image.filename || "attachment"}.`,
+        }));
         const upload = image.storagePath
           ? { file_url: image.storagePath, url: image.storagePath }
           : await base44.integrations.Core.UploadFile({ file: image.file });
@@ -1396,6 +1419,11 @@ export default function AIChat({
           processingStatus: "Clip sent to Sarah. Keep this open to mark another range, or close it when finished.",
         }, { keepProcessed: true });
       }
+      setChatProcessingStatus(nextChatStatus({
+        phase: "processing",
+        message: "Preparing Sarah review request",
+        detail: `${pendingImages.length} attachment${pendingImages.length === 1 ? "" : "s"} are ready. Building the final request with session context, motion notes, and telemetry.`,
+      }));
       return { metadata: uploaded, aiImages };
     } finally {
       setUploadingImages(false);
@@ -1783,10 +1811,11 @@ export default function AIChat({
     const counts = Number.isFinite(Number(progress.current)) && Number.isFinite(Number(progress.total)) && Number(progress.total) > 0
       ? ` Step ${Math.max(1, Math.round(Number(progress.current) + 1))} of ${Math.max(1, Math.round(Number(progress.total)))}.`
       : "";
+    const phaseLabel = progress.phase ? ` Phase: ${String(progress.phase).replace(/_/g, " ")}.` : "";
     return {
       phase: job?.status === "queued" ? "queued" : "background",
       message: job?.status === "queued" ? "Queued for Sarah" : "Sarah is reviewing this moment in the background",
-      detail: `${progress.message || "This review can keep running even if you leave the page."}${counts} You can leave this page and come back; the job tray will keep tracking it.`,
+      detail: `${progress.message || "This review can keep running even if you leave the page."}${counts}${phaseLabel} You can leave this page and come back; the job tray will keep tracking it.`,
       startedAt: Date.parse(job?.startedAt || job?.createdAt || "") || Date.now(),
       jobId: job?.id || "",
     };
@@ -1997,14 +2026,14 @@ Return a conversational answer plus structured findings for review/persistence.`
       required: ["chatResponse", "findings", "limitations", "followUpQuestions"],
     };
 
-    setChatProcessingStatus({
+    setChatProcessingStatus(nextChatStatus({
       phase: "analyzing",
       message: imagePayload.aiImages.length ? "Sarah is reviewing the visual evidence" : "Sarah is composing a response",
       detail: imagePayload.aiImages.length
-        ? "Long video reviews can take a bit while the model reads frames, motion context, and session notes."
+        ? `Sarah now has ${imagePayload.aiImages.length} attached frame${imagePayload.aiImages.length === 1 ? "" : "s"}. Long video reviews can take a bit while the model reads frames, motion context, and session notes.`
         : "",
       startedAt: requestStartedAt,
-    });
+    }));
 
     const aiRequestPayload = {
       prompt: `${imageReviewPrompt || `${systemPrompt}\n\n${sarahPersonalityPrompt}`}\n\n${TIME_FORMAT_RULE}\n\n${localTimeContext}${profileMechanicalContext}\n\n${groundingContext}${sarahVsVitalsContext ? `\n\n${sarahVsVitalsContext}` : ""}\n\nSession/profile data:\n${context}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
@@ -2018,6 +2047,12 @@ Return a conversational answer plus structured findings for review/persistence.`
 
     try {
       if (shouldRunInBackground) {
+        setChatProcessingStatus(nextChatStatus({
+          phase: "background",
+          message: "Starting background moment review",
+          detail: `Submitting ${imagePayload.aiImages.length} frame${imagePayload.aiImages.length === 1 ? "" : "s"} to Sarah. The job tray will keep tracking it even if you leave this page.`,
+          startedAt: requestStartedAt,
+        }));
         const startedJob = await startBackgroundJob("ai_invoke", {
           ...aiRequestPayload,
           source: "ai_chat_session_moment_review",
