@@ -32,6 +32,7 @@ import {
   normalizeSessionVideoPassFindings,
 } from "@/lib/visualEvidence";
 import { SARAH_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
+import { serverUrl } from "@/lib/mobileApiBase";
 import {
   deviceEvidenceStageForText,
   hasUnsupportedMeatusContactClaim as hasUnsupportedMeatusContactClaimGuard,
@@ -5119,7 +5120,8 @@ Return only the structured JSON matching the requested schema.`,
             const accepted = isCardAccepted(card, session, acceptedIds, isExploration);
             const compactAccepted = accepted && !isExpanded;
             const showCardVideoPreview = Boolean(card.clipUrl) && !card.localVision;
-            const cardFramePreview = card.thumbnailUrl || card.sampledFrames?.[0]?.url || "";
+            const cardClipPreviewUrl = showCardVideoPreview ? serverUrl(card.clipUrl) : "";
+            const cardFramePreview = serverUrl(card.thumbnailUrl || card.sampledFrames?.[0]?.url || "");
             const deviceStatus = cardDeviceEvidenceStatus(card);
             return (
               <article key={card.id} className={`overflow-hidden rounded-xl border bg-card transition-opacity ${accepted ? "border-primary/25 opacity-80" : "border-border"}`}>
@@ -5160,7 +5162,7 @@ Return only the structured JSON matching the requested schema.`,
                   >
                     {showCardVideoPreview ? (
                       <video
-                        src={card.clipUrl}
+                        src={cardClipPreviewUrl}
                         muted
                         playsInline
                         preload="metadata"
