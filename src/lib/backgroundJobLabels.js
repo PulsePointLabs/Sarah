@@ -59,6 +59,7 @@ function labelFromSource(job) {
   if (!source) return "";
   if (source === "ai_video_pass") return "Cloud Sarah annotation";
   if (source === "ai_chat_findings_summary") return "Profile Q&A findings summary";
+  if (source === "ai_chat_session_moment_review") return "Ask Sarah moment review";
   if (source.includes("technical") && source.includes("deep")) return "Technical Session Deep Dive";
   if (source.includes("arousal") && source.includes("timeline")) return "Arousal Timeline Analysis";
   if (source.includes("session") && source.includes("analysis")) return "AI Session Analysis";

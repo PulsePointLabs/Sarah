@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.121",
-  "commit": "cd2f23f",
-  "commitMessage": "Clarify Sarah chat status and settings",
-  "builtAt": "2026-07-14T01:02:44.216Z"
+  "version": "0.1.122",
+  "commit": "dd717b5",
+  "commitMessage": "Match session player to review video shell",
+  "builtAt": "2026-07-14T01:21:51.004Z"
 };

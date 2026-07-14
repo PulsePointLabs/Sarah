@@ -8,6 +8,7 @@ import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput, splitIn
 import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext } from "@/lib/aiGrounding";
 import { extractVisualMediaContextFromConversation } from "@/lib/visualEvidence";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
 import { finalizeWhisperTranscript } from "@/utils/whisperTranscript";
 import { SarahAvatar } from "@/components/SarahBrand";
@@ -483,6 +484,8 @@ export default function AIChat({
   const [videoPlayheadSeconds, setVideoPlayheadSeconds] = useState(0);
   const [processingVideoClip, setProcessingVideoClip] = useState(false);
   const [chatProcessingStatus, setChatProcessingStatus] = useState(null);
+  const [chatProcessingElapsedSeconds, setChatProcessingElapsedSeconds] = useState(0);
+  const [activeReplyJobId, setActiveReplyJobId] = useState("");
   const [imageError, setImageError] = useState("");
   const [uploadingImages, setUploadingImages] = useState(false);
   const [sarahPersonality, setSarahPersonality] = useState(() => readSarahPersonalitySettings());
@@ -692,6 +695,19 @@ export default function AIChat({
     }, 1000);
     return () => window.clearInterval(timer);
   }, [ttsStatus]);
+
+  useEffect(() => {
+    const startedAt = Number(chatProcessingStatus?.startedAt || 0);
+    if (!startedAt) {
+      setChatProcessingElapsedSeconds(0);
+      return undefined;
+    }
+    setChatProcessingElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    const timer = window.setInterval(() => {
+      setChatProcessingElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [chatProcessingStatus?.startedAt]);
 
   useEffect(() => {
     if (!fullScreen) return undefined;
@@ -1762,15 +1778,65 @@ export default function AIChat({
     }
   };
 
+  const summarizeChatJobPhase = useCallback((job = {}) => {
+    const progress = job?.progress || {};
+    const counts = Number.isFinite(Number(progress.current)) && Number.isFinite(Number(progress.total)) && Number(progress.total) > 0
+      ? ` Step ${Math.max(1, Math.round(Number(progress.current) + 1))} of ${Math.max(1, Math.round(Number(progress.total)))}.`
+      : "";
+    return {
+      phase: job?.status === "queued" ? "queued" : "background",
+      message: job?.status === "queued" ? "Queued for Sarah" : "Sarah is reviewing this moment in the background",
+      detail: `${progress.message || "This review can keep running even if you leave the page."}${counts} You can leave this page and come back; the job tray will keep tracking it.`,
+      startedAt: Date.parse(job?.startedAt || job?.createdAt || "") || Date.now(),
+      jobId: job?.id || "",
+    };
+  }, []);
+
+  const finalizeAssistantReply = useCallback(async ({
+    updatedMessages,
+    imagePayload,
+    response,
+    startedAt,
+  }) => {
+    const normalized = imagePayload.aiImages.length ? normalizeAIImageResult(response) : null;
+    const reply = imagePayload.aiImages.length
+      ? normalized.chatResponse
+      : typeof response === "string" ? response.trim() : response?.response?.trim() ?? "";
+    const aiMsg = { role: "assistant", text: reply, createdAt: new Date().toISOString() };
+    const finalMessages = [...updatedMessages, aiMsg];
+    setMessages(finalMessages);
+    await persistChatMessages(finalMessages);
+    setLoading(false);
+    setActiveReplyJobId("");
+    setChatProcessingStatus(null);
+    const newIdx = finalMessages.length - 1;
+    if (ttsEnabled) speakText(reply, newIdx);
+    if (imagePayload.aiImages.length) {
+      persistStructuredImageFindings(normalized.findings, finalMessages, reply).catch(() => {});
+    } else {
+      persistFindings(finalMessages).catch(() => {
+        setSavingFindings(false);
+        setChatProcessingStatus({
+          phase: "error",
+          message: "Chat saved; findings summary needs attention",
+          detail: "Your full conversation is saved. Sarah could not refresh the short findings summary yet.",
+          startedAt: startedAt || Date.now(),
+        });
+      });
+    }
+  }, [persistChatMessages, persistFindings, persistStructuredImageFindings, ttsEnabled]);
+
   const sendMessage = async (overrideText = null) => {
     const requestedText = typeof overrideText === "string" ? overrideText : input;
-    if ((!requestedText.trim() && !selectedImages.length && !selectedVideoClip) || loading || uploadingImages || processingVideoClip) return;
+    if ((!requestedText.trim() && !selectedImages.length && !selectedVideoClip) || loading || uploadingImages || processingVideoClip || activeReplyJobId) return;
     const text = requestedText.trim();
+    const requestStartedAt = Date.now();
     setLoading(true);
     setChatProcessingStatus({
       phase: selectedVideoClip ? "queued" : selectedImages.length ? "queued" : "thinking",
       message: selectedVideoClip ? "Starting Sarah video review" : selectedImages.length ? "Starting Sarah image review" : "Sarah is thinking",
       detail: selectedVideoClip ? "Preparing the clip, frame evidence, motion summary, and session context." : "",
+      startedAt: requestStartedAt,
     });
     setImageError("");
     let imagePayload = { metadata: [], aiImages: [] };
@@ -1937,46 +2003,79 @@ Return a conversational answer plus structured findings for review/persistence.`
       detail: imagePayload.aiImages.length
         ? "Long video reviews can take a bit while the model reads frames, motion context, and session notes."
         : "",
+      startedAt: requestStartedAt,
     });
 
-    try {
-    const res = await base44.integrations.Core.InvokeLLM({
+    const aiRequestPayload = {
       prompt: `${imageReviewPrompt || `${systemPrompt}\n\n${sarahPersonalityPrompt}`}\n\n${TIME_FORMAT_RULE}\n\n${localTimeContext}${profileMechanicalContext}\n\n${groundingContext}${sarahVsVitalsContext ? `\n\n${sarahVsVitalsContext}` : ""}\n\nSession/profile data:\n${context}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
       ...(imagePayload.aiImages.length ? { images: imagePayload.aiImages, response_json_schema: imageSchema, max_tokens: 5000 } : {}),
       source: "ai_chat_interactive",
       foreground: true,
       interactive: true,
       priority: 100,
-    });
+    };
+    const shouldRunInBackground = imagePayload.metadata.some((item) => item?.sourceVideo);
 
-    const normalized = imagePayload.aiImages.length ? normalizeAIImageResult(res) : null;
-    const reply = imagePayload.aiImages.length
-      ? normalized.chatResponse
-      : typeof res === "string" ? res.trim() : res?.response?.trim() ?? "";
-    const aiMsg = { role: "assistant", text: reply, createdAt: new Date().toISOString() };
-    const finalMessages = [...updated, aiMsg];
-    setMessages(finalMessages);
-    await persistChatMessages(finalMessages);
-    setLoading(false);
-    setChatProcessingStatus(null);
-    const newIdx = finalMessages.length - 1;
-    if (ttsEnabled) speakText(reply, newIdx);
-    if (imagePayload.aiImages.length) {
-      persistStructuredImageFindings(normalized.findings, finalMessages, reply).catch(() => {});
-    } else {
-      persistFindings(finalMessages).catch(() => {
-        setSavingFindings(false);
-        setChatProcessingStatus({
-          phase: "error",
-          message: "Chat saved; findings summary needs attention",
-          detail: "Your full conversation is saved. Sarah could not refresh the short findings summary yet.",
+    try {
+      if (shouldRunInBackground) {
+        const startedJob = await startBackgroundJob("ai_invoke", {
+          ...aiRequestPayload,
+          source: "ai_chat_session_moment_review",
+          foreground: false,
+          interactive: false,
+          quietInTray: false,
+          priority: 90,
+          label: "Ask Sarah moment review",
+        }, {
+          sessionId: scopeId,
+          title: "Ask Sarah moment review",
+          label: "Ask Sarah moment review",
+          source: "ai_chat_session_moment_review",
+          route: scopeId ? `/sessions/${encodeURIComponent(scopeId)}#session-interview` : "/sessions",
+          quietInTray: false,
         });
+        setActiveReplyJobId(startedJob.id);
+        setLoading(false);
+        setChatProcessingStatus(summarizeChatJobPhase(startedJob));
+        void waitForBackgroundJob(startedJob.id, {
+          intervalMs: 1200,
+          onProgress: (job) => {
+            setChatProcessingStatus(summarizeChatJobPhase(job));
+          },
+        }).then((completedJob) => (
+          finalizeAssistantReply({
+            updatedMessages: updated,
+            imagePayload,
+            response: completedJob.result,
+            startedAt: requestStartedAt,
+          })
+        )).catch((error) => {
+          const message = friendlySarahError(error);
+          setActiveReplyJobId("");
+          setLoading(false);
+          setChatProcessingStatus({
+            phase: "error",
+            message: "Sarah response failed",
+            detail: message,
+            startedAt: requestStartedAt,
+          });
+          setImageError(message);
+        });
+        return;
+      }
+
+      const res = await base44.integrations.Core.InvokeLLM(aiRequestPayload);
+      await finalizeAssistantReply({
+        updatedMessages: updated,
+        imagePayload,
+        response: res,
+        startedAt: requestStartedAt,
       });
-    }
     } catch (error) {
       const message = friendlySarahError(error);
+      setActiveReplyJobId("");
       setLoading(false);
-      setChatProcessingStatus({ phase: "error", message: "Sarah response failed", detail: message });
+      setChatProcessingStatus({ phase: "error", message: "Sarah response failed", detail: message, startedAt: requestStartedAt });
       setImageError(message);
     }
   };
@@ -2024,7 +2123,7 @@ Return a conversational answer plus structured findings for review/persistence.`
   const textareaClass = fullScreen
     ? "min-h-[5.75rem] max-h-40 w-full resize-none rounded-xl border border-border bg-background px-4 py-3 text-sm leading-5 shadow-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 sm:text-base"
     : "w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50";
-  const effectiveSendDisabled = (!input.trim() && !selectedImages.length && !selectedVideoClip) || loading || uploadingImages || processingVideoClip;
+  const effectiveSendDisabled = (!input.trim() && !selectedImages.length && !selectedVideoClip) || loading || uploadingImages || processingVideoClip || Boolean(activeReplyJobId);
 
   const renderSelectedImages = () => selectedImages.length ? (
     <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
@@ -2055,13 +2154,20 @@ Return a conversational answer plus structured findings for review/persistence.`
     return (
       <div className={`rounded-lg border px-3 py-2 text-xs ${tone}`}>
         <div className="flex items-center gap-2 font-semibold">
-          {["processing", "recording"].includes(chatProcessingStatus.phase) && (
+          {["processing", "recording", "background"].includes(chatProcessingStatus.phase) && (
             <span className="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-current border-t-transparent animate-spin" />
           )}
           <span>{chatProcessingStatus.message}</span>
         </div>
         {chatProcessingStatus.detail && (
           <p className="mt-1 leading-relaxed opacity-90">{chatProcessingStatus.detail}</p>
+        )}
+        {chatProcessingElapsedSeconds > 0 && (
+          <p className="mt-1 opacity-80">
+            {chatProcessingElapsedSeconds < 60
+              ? `${chatProcessingElapsedSeconds}s elapsed`
+              : `${Math.floor(chatProcessingElapsedSeconds / 60)}m ${String(chatProcessingElapsedSeconds % 60).padStart(2, "0")}s elapsed`}
+          </p>
         )}
         {chatProcessingStatus.phase === "recording" && liveSpeechLastWord && (
           <div className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-full border border-current/20 bg-background/70 px-2 py-1 text-[11px] font-semibold">
@@ -2100,7 +2206,7 @@ Return a conversational answer plus structured findings for review/persistence.`
               key={clip.id || `${clip.label}-${clip.session_time_s}`}
               type="button"
               onClick={() => attachSavedVideoClipFrames(clip)}
-              disabled={loading || uploadingImages || processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
+              disabled={loading || uploadingImages || processingVideoClip || activeReplyJobId || selectedImages.length >= MAX_IMAGE_COUNT}
               className="w-[11rem] max-w-[calc(100vw-4rem)] flex-none rounded-lg border border-border bg-background/75 px-2 py-1.5 text-left transition-colors hover:border-primary disabled:opacity-45"
               title={clip.frames?.length ? (clip.reason || "Attach sampled frames from this saved moment") : (clip.reason || "Ask Sarah about this saved moment")}
             >
@@ -2123,7 +2229,7 @@ Return a conversational answer plus structured findings for review/persistence.`
                 key={`all-${clip.id || `${clip.label}-${clip.session_time_s}`}`}
                 type="button"
                 onClick={() => attachSavedVideoClipFrames(clip)}
-                disabled={loading || uploadingImages || processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
+                disabled={loading || uploadingImages || processingVideoClip || activeReplyJobId || selectedImages.length >= MAX_IMAGE_COUNT}
                 className="block w-full rounded-lg border border-border bg-background/85 px-2 py-2 text-left transition-colors hover:border-primary disabled:opacity-45"
                 title={clip.frames?.length ? (clip.reason || "Attach sampled frames from this saved moment") : (clip.reason || "Ask Sarah about this saved moment")}
               >
@@ -2325,7 +2431,7 @@ Return a conversational answer plus structured findings for review/persistence.`
           size="sm"
           variant="secondary"
           onClick={processSelectedVideoClip}
-          disabled={processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
+          disabled={processingVideoClip || activeReplyJobId || selectedImages.length >= MAX_IMAGE_COUNT}
           className="h-7 px-2 text-[11px]"
         >
           {processingVideoClip ? <RefreshCw className="mr-1 h-3 w-3 animate-spin" /> : <Film className="mr-1 h-3 w-3" />}
@@ -2337,7 +2443,7 @@ Return a conversational answer plus structured findings for review/persistence.`
               type="button"
               size="sm"
               onClick={sendSelectedVideoClipForReview}
-              disabled={loading || uploadingImages || processingVideoClip}
+              disabled={loading || uploadingImages || processingVideoClip || activeReplyJobId}
               className="h-7 px-2 text-[11px]"
             >
               Send Clip to Sarah
@@ -2456,7 +2562,7 @@ Return a conversational answer plus structured findings for review/persistence.`
       <button
         type="button"
         onClick={() => imageInputRef.current?.click()}
-        disabled={loading || transcribing || uploadingImages || processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
+        disabled={loading || transcribing || uploadingImages || processingVideoClip || activeReplyJobId || selectedImages.length >= MAX_IMAGE_COUNT}
         title="Attach images for Sarah"
         className={`flex h-9 w-9 shrink-0 items-center justify-center bg-muted text-muted-foreground transition-all hover:text-foreground disabled:opacity-40 ${fullScreen ? "rounded-full" : "rounded-lg"}`}
       >
@@ -2466,7 +2572,7 @@ Return a conversational answer plus structured findings for review/persistence.`
         <button
           type="button"
           onClick={() => videoInputRef.current?.click()}
-          disabled={loading || transcribing || uploadingImages || processingVideoClip || selectedImages.length >= MAX_IMAGE_COUNT}
+          disabled={loading || transcribing || uploadingImages || processingVideoClip || activeReplyJobId || selectedImages.length >= MAX_IMAGE_COUNT}
           title="Select a local video clip for Sarah"
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-all hover:text-foreground disabled:opacity-40"
         >
@@ -2482,7 +2588,7 @@ Return a conversational answer plus structured findings for review/persistence.`
       <button
         type="button"
         onClick={recording ? stopRecording : startRecording}
-        disabled={loading || transcribing || uploadingImages}
+        disabled={loading || transcribing || uploadingImages || activeReplyJobId}
         title={recording ? "Stop recording" : "Tap to dictate"}
         className={`flex h-9 w-9 shrink-0 items-center justify-center transition-all disabled:opacity-40 ${fullScreen ? "rounded-full" : "rounded-lg"} ${recording ? "bg-destructive text-destructive-foreground animate-pulse" : "bg-muted text-muted-foreground hover:text-foreground"}`}
       >
@@ -2496,7 +2602,7 @@ Return a conversational answer plus structured findings for review/persistence.`
         disabled={effectiveSendDisabled}
         className={`flex h-9 w-9 shrink-0 items-center justify-center bg-primary text-primary-foreground transition-opacity disabled:opacity-40 ${fullScreen ? "rounded-full" : "rounded-lg"}`}
       >
-        {loading || uploadingImages || processingVideoClip ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" /> : <Send className="h-4 w-4" />}
+        {loading || uploadingImages || processingVideoClip || activeReplyJobId ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" /> : <Send className="h-4 w-4" />}
       </button>
     </div>
   );
@@ -2506,7 +2612,7 @@ Return a conversational answer plus structured findings for review/persistence.`
     const tone = chatProcessingStatus.phase === "error"
       ? "border-destructive/30 bg-destructive/10 text-destructive"
       : "border-primary/20 bg-primary/[0.06] text-foreground";
-    const showSpinner = ["queued", "sampling", "uploading", "analyzing", "processing", "thinking"].includes(chatProcessingStatus.phase);
+    const showSpinner = ["queued", "sampling", "uploading", "analyzing", "processing", "thinking", "background"].includes(chatProcessingStatus.phase);
     return (
       <div className={`rounded-lg border px-3 py-2 text-xs ${tone}`}>
         <div className="flex items-center gap-2 font-semibold">
@@ -2515,6 +2621,13 @@ Return a conversational answer plus structured findings for review/persistence.`
         </div>
         {chatProcessingStatus.detail ? (
           <p className="mt-1 leading-relaxed opacity-90">{chatProcessingStatus.detail}</p>
+        ) : null}
+        {chatProcessingElapsedSeconds > 0 ? (
+          <p className="mt-1 text-[11px] opacity-80">
+            {chatProcessingElapsedSeconds < 60
+              ? `${chatProcessingElapsedSeconds}s elapsed`
+              : `${Math.floor(chatProcessingElapsedSeconds / 60)}m ${String(chatProcessingElapsedSeconds % 60).padStart(2, "0")}s elapsed`}
+          </p>
         ) : null}
       </div>
     );
@@ -2528,11 +2641,11 @@ Return a conversational answer plus structured findings for review/persistence.`
         onChange={(event) => setInput(event.target.value)}
         onKeyDown={(event) => event.key === "Enter" && !event.shiftKey && (event.preventDefault(), sendMessage())}
         placeholder={transcribing ? "Transcribing…" : recording ? "Recording… tap mic to stop" : placeholder}
-        disabled={loading || transcribing || uploadingImages}
+        disabled={loading || transcribing || uploadingImages || activeReplyJobId}
         rows={fullScreen ? 3 : compactRows}
         className={textareaClass}
       />
-      {loading && renderComposerStatus()}
+      {(loading || chatProcessingStatus) && renderComposerStatus()}
       {renderComposerControls()}
     </div>
   );
