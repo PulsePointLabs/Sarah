@@ -454,6 +454,7 @@ export default function AIChat({
   clipTimelineOffsetSeconds = 0,
   savedVideoClips = [],
   sessionVideoSources = [],
+  pendingTimestampReview = null,
   onSaveMessages,
   onSaveNotes,
   autoScrollOnMount = true,
@@ -504,6 +505,7 @@ export default function AIChat({
   const ttsRequestIdRef = useRef(0);
   const lastAssistantScrollKeyRef = useRef("");
   const initialAutoScrollSuppressedRef = useRef(false);
+  const lastTimestampReviewRequestRef = useRef("");
 
   const categories = mode === "profile" ? PROFILE_CATEGORIES : SESSION_CATEGORIES;
   const evidenceScope = ["profile", "session", "body_exploration"].includes(visualEvidenceScope) ? visualEvidenceScope : mode;
@@ -520,27 +522,39 @@ export default function AIChat({
 
   const buildSavedMomentVideoFrames = useCallback(async (clip) => {
     const directClipUrl = clip?.clip_url || clip?.url || clip?.file_url || "";
-    const fallbackSessionVideoUrl = Array.isArray(sessionVideoSources) ? sessionVideoSources.find(Boolean) : "";
-    const sourceUrl = directClipUrl || fallbackSessionVideoUrl;
+    const normalizedSessionVideoSource = Array.isArray(sessionVideoSources)
+      ? sessionVideoSources.find((source) => (typeof source === "string" ? source : source?.url || source?.src))
+      : null;
+    const fallbackSessionVideoUrl = typeof normalizedSessionVideoSource === "string"
+      ? normalizedSessionVideoSource
+      : normalizedSessionVideoSource?.url || normalizedSessionVideoSource?.src || "";
+    const sourceUrl = clip?.sourceUrl || directClipUrl || fallbackSessionVideoUrl;
     if (!sourceUrl) return [];
 
+    const timelineOffset = Number(
+      clip?.timelineOffsetSeconds
+      ?? normalizedSessionVideoSource?.timelineOffsetSeconds
+      ?? 0
+    ) || 0;
     const sourceFile = await fetchUrlAsFile(sourceUrl, clip?.filename || clip?.label || "saved-session-moment.mp4");
     const loadedDuration = await loadVideoMetadata(sourceFile);
     const hasDirectClipSource = Boolean(directClipUrl);
-    const rangeStart = Number.isFinite(Number(clip?.startSeconds))
+    const timelineRangeStart = Number.isFinite(Number(clip?.startSeconds))
       ? Number(clip.startSeconds)
       : Number.isFinite(Number(clip?.session_time_s))
         ? Math.max(0, Number(clip.session_time_s) - 4)
         : 0;
-    const rangeEnd = Number.isFinite(Number(clip?.endSeconds))
+    const timelineRangeEnd = Number.isFinite(Number(clip?.endSeconds))
       ? Number(clip.endSeconds)
       : Number.isFinite(Number(clip?.session_time_s))
         ? Number(clip.session_time_s) + 4
         : Math.max(6, loadedDuration || 6);
-    const sampleStart = hasDirectClipSource ? 0 : Math.max(0, rangeStart);
+    const localRangeStart = Math.max(0, timelineRangeStart - timelineOffset);
+    const localRangeEnd = Math.max(localRangeStart + 0.3, timelineRangeEnd - timelineOffset);
+    const sampleStart = hasDirectClipSource ? 0 : localRangeStart;
     const sampleEnd = hasDirectClipSource
       ? Math.max(0.3, loadedDuration || Number(clip?.durationSeconds) || 6)
-      : Math.max(sampleStart + 0.3, Math.min(rangeEnd, loadedDuration || rangeEnd));
+      : Math.max(localRangeStart + 0.3, Math.min(localRangeEnd, loadedDuration || localRangeEnd));
     const timelineStartSeconds = Number.isFinite(Number(clip?.startSeconds))
       ? Number(clip.startSeconds)
       : Number.isFinite(Number(clip?.session_time_s))
@@ -582,7 +596,7 @@ export default function AIChat({
         timelineStartSeconds,
         timelineEndSeconds,
         frameTimelineSeconds: Number((timelineStartSeconds + (frame.time - sampleStart)).toFixed(2)),
-        timelineLabel: hasDirectClipSource ? "saved moment clip" : "uploaded session video",
+        timelineLabel: clip?.timelineLabel || (hasDirectClipSource ? "saved moment clip" : "session video"),
         frameIndex: index + 1,
         processedClipUrl: hasDirectClipSource ? serverUrl(sourceUrl) : "",
         motionSummary: null,
@@ -947,8 +961,9 @@ export default function AIChat({
     setSelectedImages((prev) => prev.filter((image) => image.id !== id));
   };
 
-  const attachSavedVideoClipFrames = async (clip) => {
-    const clipPrompt = `Please review the saved moment "${clip.label || "session moment"}"${clip.session_time_s != null ? ` at ${formatTimePhrase(clip.session_time_s)}` : ""}. Focus on visible technique, body mechanics, telemetry, and what this moment likely represents in the session.`;
+  const attachSavedVideoClipFrames = useCallback(async (clip) => {
+    const clipPrompt = clip?.promptText
+      || `Please review the saved moment "${clip.label || "session moment"}"${clip.session_time_s != null ? ` at ${formatTimePhrase(clip.session_time_s)}` : ""}. Focus on visible technique, body mechanics, telemetry, and what this moment likely represents in the session.`;
     const frames = Array.isArray(clip?.frames) ? clip.frames : [];
     if (!frames.length) {
       const slots = MAX_IMAGE_COUNT - selectedImages.length;
@@ -1039,7 +1054,31 @@ export default function AIChat({
     setSelectedImages((prev) => [...prev, ...accepted].slice(0, MAX_IMAGE_COUNT));
     setImageError("");
     setInput((current) => current.trim() ? current : clipPrompt);
-  };
+  }, [buildSavedMomentVideoFrames, selectedImages.length]);
+
+  useEffect(() => {
+    const requestId = String(pendingTimestampReview?.requestId || "");
+    if (!requestId || lastTimestampReviewRequestRef.current === requestId) return;
+    lastTimestampReviewRequestRef.current = requestId;
+
+    const sessionSeconds = Math.max(0, Number(pendingTimestampReview?.timeSeconds) || 0);
+    const promptText = `Please review the current session video moment at ${formatTimePhrase(sessionSeconds)}. Focus on visible technique, body mechanics, telemetry overlays, and what this moment likely represents in the session.`;
+    setOpen(true);
+    setImageError("");
+    attachSavedVideoClipFrames({
+      label: pendingTimestampReview?.sourceLabel || "Session video",
+      session_time_s: sessionSeconds,
+      startSeconds: Math.max(0, sessionSeconds - 4),
+      endSeconds: sessionSeconds + 4,
+      sourceUrl: pendingTimestampReview?.sourceUrl || "",
+      timelineOffsetSeconds: Number(pendingTimestampReview?.timelineOffsetSeconds) || 0,
+      timelineLabel: "session timeline",
+      promptText,
+    }).catch((error) => {
+      setImageError(error?.message || "Could not pull frames for this session moment.");
+      setInput((current) => current.trim() ? current : promptText);
+    });
+  }, [attachSavedVideoClipFrames, pendingTimestampReview]);
 
   const seekVideoPreview = (seconds) => {
     const next = Math.max(0, Number(seconds) || 0);

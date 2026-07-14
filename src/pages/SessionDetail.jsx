@@ -61,6 +61,44 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
 } from "@/components/ui/alert-dialog";
 
+function inferStoryVideoPriority(video = {}) {
+  const text = `${video?.label || ""} ${video?.filename || ""} ${video?.path || ""}`.toLowerCase();
+  if (/\b(composite|pip|picture[-_\s]?in[-_\s]?picture|obs)\b/.test(text)) return 0;
+  if (/\b(main|focus|primary|close|genital|shaft|glans)\b/.test(text)) return 1;
+  if (/\b(side|lateral|angle)\b/.test(text)) return 8;
+  if (/\b(feet|foot|toe|toes|heel|heels|lower[-_\s]?body|legs?|pelvis)\b/.test(text)) return 9;
+  return 3;
+}
+
+function buildSessionStoryVideoSources({ linkedVideos = [], uploadedVideos = [] }) {
+  const linkedSources = Array.isArray(linkedVideos)
+    ? linkedVideos
+        .filter((video) => video?.path && video.exists !== false)
+        .sort((a, b) => inferStoryVideoPriority(a) - inferStoryVideoPriority(b))
+        .map((video, index) => ({
+          id: video.id || video.path || `linked-${index}`,
+          label: video.label || video.filename || (index === 0 ? "Session composite" : `Linked video ${index + 1}`),
+          url: base44.integrations.Core.localVideoStreamUrl(video.path),
+          timelineOffsetSeconds: Number(video.timelineOffsetSeconds) || 0,
+          sourceKind: "linked_local_video",
+        }))
+    : [];
+
+  if (linkedSources.length) return linkedSources;
+
+  return Array.isArray(uploadedVideos)
+    ? uploadedVideos
+        .filter(Boolean)
+        .map((url, index) => ({
+          id: `uploaded-${index}`,
+          label: index === 0 ? "Uploaded session video" : `Uploaded video ${index + 1}`,
+          url: serverUrl(url),
+          timelineOffsetSeconds: 0,
+          sourceKind: "uploaded_session_video",
+        }))
+    : [];
+}
+
 function InfoRow({ label, value }) {
   if (!value && value !== 0) return null;
   return (
@@ -386,10 +424,14 @@ function SessionKeyVideoMoments({ session }) {
   );
 }
 
-function SessionUploadedVideoPlayer({ videos = [] }) {
-  const playableVideos = Array.isArray(videos) ? videos.map((url) => serverUrl(url)).filter(Boolean) : [];
+function SessionStoryVideoPlayer({ linkedVideos = [], uploadedVideos = [], onAskSarahAtTimestamp }) {
+  const playableVideos = useMemo(
+    () => buildSessionStoryVideoSources({ linkedVideos, uploadedVideos }),
+    [linkedVideos, uploadedVideos],
+  );
   const [activeIndex, setActiveIndex] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const videoRef = useRef(null);
   const wrapperRef = useRef(null);
 
@@ -402,6 +444,7 @@ function SessionUploadedVideoPlayer({ videos = [] }) {
   }, [playbackSpeed, activeIndex]);
 
   if (!playableVideos.length) return null;
+  const activeVideo = playableVideos[activeIndex] || playableVideos[0];
 
   const openFullscreen = async () => {
     const target = wrapperRef.current || videoRef.current;
@@ -413,6 +456,17 @@ function SessionUploadedVideoPlayer({ videos = [] }) {
     }
   };
 
+  const askSarahAboutMoment = () => {
+    if (!activeVideo?.url) return;
+    onAskSarahAtTimestamp?.({
+      timeSeconds: Math.max(0, Number(playheadSeconds) || 0),
+      sourceUrl: activeVideo.url,
+      timelineOffsetSeconds: Number(activeVideo.timelineOffsetSeconds) || 0,
+      sourceLabel: activeVideo.label || "Session video",
+      sourceKind: activeVideo.sourceKind || "session_video",
+    });
+  };
+
   return (
     <section id="session-story-video" className="scroll-mt-24">
       <div className="ml-auto w-full max-w-2xl rounded-xl border border-primary/20 bg-card p-3 shadow-sm">
@@ -422,7 +476,7 @@ function SessionUploadedVideoPlayer({ videos = [] }) {
               <Clapperboard className="h-3.5 w-3.5" /> Session Video
             </h3>
             <p className="mt-1 text-xs text-muted-foreground">
-              Use this player for direct moment review. Ask Sarah about a saved moment and she can now pull fresh frames from the session video when needed.
+              This player follows Sarah&apos;s primary source video for the session. Use it to review the real composite/main recording and ask her about the current moment.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -444,18 +498,31 @@ function SessionUploadedVideoPlayer({ videos = [] }) {
             </Button>
           </div>
         </div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/20 px-3 py-2">
+          <div className="min-w-0">
+            <p className="truncate text-xs font-semibold text-foreground">{activeVideo.label}</p>
+            <p className="text-[11px] text-muted-foreground">
+              Current time {Math.floor(playheadSeconds / 60)}:{Math.round(playheadSeconds % 60).toString().padStart(2, "0")}
+              {activeVideo.timelineOffsetSeconds ? ` · sync offset ${activeVideo.timelineOffsetSeconds > 0 ? "+" : ""}${activeVideo.timelineOffsetSeconds}s` : ""}
+            </p>
+          </div>
+          <Button type="button" size="sm" className="h-8 gap-1.5" onClick={askSarahAboutMoment}>
+            <Sparkles className="h-3.5 w-3.5" />
+            Ask Sarah About This Moment
+          </Button>
+        </div>
         {playableVideos.length > 1 && (
           <div className="mt-3 flex flex-wrap gap-2">
-            {playableVideos.map((_video, index) => (
+            {playableVideos.map((video, index) => (
               <Button
-                key={index}
+                key={video.id || index}
                 type="button"
                 size="sm"
                 variant={index === activeIndex ? "default" : "outline"}
                 className="h-7 text-[10px]"
                 onClick={() => setActiveIndex(index)}
               >
-                Video {index + 1}
+                {video.label || `Video ${index + 1}`}
               </Button>
             ))}
           </div>
@@ -463,14 +530,18 @@ function SessionUploadedVideoPlayer({ videos = [] }) {
         <div ref={wrapperRef} className="mt-3 overflow-hidden rounded-lg border border-border bg-black">
           <video
             ref={videoRef}
-            key={playableVideos[activeIndex]}
-            src={playableVideos[activeIndex]}
+            key={activeVideo.url}
+            src={activeVideo.url}
             controls
             playsInline
             preload="metadata"
             className="block max-h-[28rem] w-full bg-black object-contain"
             onLoadedMetadata={(event) => {
               event.currentTarget.playbackRate = playbackSpeed;
+              setPlayheadSeconds(event.currentTarget.currentTime || 0);
+            }}
+            onTimeUpdate={(event) => {
+              setPlayheadSeconds(event.currentTarget.currentTime || 0);
             }}
           />
         </div>
@@ -804,6 +875,7 @@ export default function SessionDetail() {
   const [sessionNotes, setSessionNotes] = useState("");
   const [sessionJournal, setSessionJournal] = useState(null);
   const [pendingSectionId, setPendingSectionId] = useState("");
+  const [pendingTimestampReview, setPendingTimestampReview] = useState(null);
   const [inspectionTime, setInspectionTime] = useState(0);
   const [nearbyBloodPressure, setNearbyBloodPressure] = useState([]);
   const [bpAttachBusy, setBpAttachBusy] = useState(false);
@@ -1273,7 +1345,8 @@ export default function SessionDetail() {
   const hasTimelineSection = timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0 || !!s.motion_analysis_summary;
   const reviewedMediaClips = getReviewedVisualClips(s.ai_analysis?._visual_findings || []);
   const linkedLocalVideos = s.linked_local_videos || [];
-  const uploadedSessionVideos = Array.isArray(s.media_videos) ? s.media_videos.map((url) => serverUrl(url)).filter(Boolean) : [];
+  const uploadedSessionVideos = Array.isArray(s.media_videos) ? s.media_videos.filter(Boolean) : [];
+  const storyVideoSources = buildSessionStoryVideoSources({ linkedVideos: linkedLocalVideos, uploadedVideos: uploadedSessionVideos });
   const companionAnalysisData = buildSessionAnalysisReaderData({
     result: s.ai_analysis,
     session: s,
@@ -1297,7 +1370,7 @@ export default function SessionDetail() {
     { id: "session-summary", label: "Executive Summary", group: "Overview" },
     { id: "session-review", label: "Review Checklist", group: "Overview" },
     { id: "session-metrics-context", label: "Metrics & Context", group: "Overview" },
-    ...(uploadedSessionVideos.length ? [{ id: "session-story-video", label: "Session Video", group: "Session Story" }] : []),
+    ...(storyVideoSources.length ? [{ id: "session-story-video", label: "Session Video", group: "Session Story" }] : []),
     { id: "session-mobile-video-render", label: "Mobile Video Render", group: "Session Story" },
     ...(!s.no_climax ? [
       { id: "session-ai-companion", label: "Companion Analysis", group: "Session Story" },
@@ -1330,6 +1403,18 @@ export default function SessionDetail() {
       journal: "session-journal",
     };
     if (idByTarget[target]) setPendingSectionId(idByTarget[target]);
+  };
+  const handleAskSarahAtTimestamp = ({ timeSeconds, sourceUrl, timelineOffsetSeconds = 0, sourceLabel = "Session video", sourceKind = "session_video" }) => {
+    if (!sourceUrl) return;
+    setPendingSectionId("session-interview");
+    setPendingTimestampReview({
+      requestId: `session-video-review-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      timeSeconds: Math.max(0, Number(timeSeconds) || 0),
+      sourceUrl,
+      timelineOffsetSeconds: Number(timelineOffsetSeconds) || 0,
+      sourceLabel,
+      sourceKind,
+    });
   };
   const renderReviewVideoBuilder = ({
     id,
@@ -1364,7 +1449,13 @@ export default function SessionDetail() {
   };
   const sessionStorySection = !s.no_climax ? (
     <section className="space-y-4">
-      {uploadedSessionVideos.length > 0 && <SessionUploadedVideoPlayer videos={uploadedSessionVideos} />}
+      {storyVideoSources.length > 0 && (
+        <SessionStoryVideoPlayer
+          linkedVideos={linkedLocalVideos}
+          uploadedVideos={uploadedSessionVideos}
+          onAskSarahAtTimestamp={handleAskSarahAtTimestamp}
+        />
+      )}
       <section id="session-ai-companion" className="scroll-mt-24 space-y-3">
         <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} onAnalysisSaved={handleAnalysisSaved} />
         {renderReviewVideoBuilder({
@@ -2138,7 +2229,8 @@ export default function SessionDetail() {
             s.notes ? `Session notes: ${s.notes}` : null,
           ].filter(Boolean).join("\n")}
           savedVideoClips={normalizeSessionKeyVideoClips(s)}
-          sessionVideoSources={uploadedSessionVideos}
+          sessionVideoSources={storyVideoSources}
+          pendingTimestampReview={pendingTimestampReview}
           savedMessages={chatMessages}
           savedNotes={sessionNotes}
           defaultOpen
