@@ -525,6 +525,11 @@ export default function AIChat({
     return new File([blob], filename, { type });
   }, []);
 
+  const nextChatStatus = useCallback((status = {}) => ({
+    startedAt: status.startedAt || chatProcessingStatus?.startedAt || Date.now(),
+    ...status,
+  }), [chatProcessingStatus?.startedAt]);
+
   const buildSavedMomentVideoFrames = useCallback(async (clip) => {
     const directClipUrl = clip?.clip_url || clip?.url || clip?.file_url || "";
     const normalizedSessionVideoSource = Array.isArray(sessionVideoSources)
@@ -648,11 +653,6 @@ export default function AIChat({
   const scrollToBottom = useCallback((behavior = "smooth") => {
     requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior, block: "end" }));
   }, []);
-
-  const nextChatStatus = useCallback((status = {}) => ({
-    startedAt: status.startedAt || chatProcessingStatus?.startedAt || Date.now(),
-    ...status,
-  }), [chatProcessingStatus?.startedAt]);
 
   useEffect(() => {
     if (!autoScrollOnMount && !initialAutoScrollSuppressedRef.current) {
