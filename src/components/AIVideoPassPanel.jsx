@@ -35,10 +35,14 @@ import { SARAH_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
 import {
   deviceEvidenceStageForText,
   hasUnsupportedMeatusContactClaim as hasUnsupportedMeatusContactClaimGuard,
+  hasUnsupportedOrgasmClaim as hasUnsupportedOrgasmClaimGuard,
+  hasUnsupportedPenileBaseClaim as hasUnsupportedPenileBaseClaimGuard,
   hasUnsupportedSleeveUseClaim as hasUnsupportedSleeveUseClaimGuard,
   sanitizeFoleyProcedureText as sanitizeFoleyProcedureTextGuard,
   sanitizeSecondPersonProcedureLanguage,
   sanitizeSleeveSessionText,
+  sanitizeUnsupportedOrgasmClaim,
+  sanitizeUnsupportedPenileBaseClaim,
   hasConfirmedStimulationPauseEvidence,
   sanitizeUnsupportedStimulationPauseClaim,
 } from "@/lib/videoPassTextGuards";
@@ -503,7 +507,10 @@ function sanitizeExplorationFoleyText(text) {
 
 function sanitizeRegularSessionDeviceText(text) {
   const value = neutralizeIntentLanguage(text);
-  return reduceConsistencyPhraseRepetition(sanitizeSleeveSessionText(value).text, 1);
+  const sleeveSanitized = sanitizeSleeveSessionText(value).text;
+  const orgasmSanitized = sanitizeUnsupportedOrgasmClaim(sleeveSanitized).text;
+  const locationSanitized = sanitizeUnsupportedPenileBaseClaim(orgasmSanitized).text;
+  return reduceConsistencyPhraseRepetition(locationSanitized, 1);
 }
 
 function isGenericControlObjectMention(item) {
@@ -795,13 +802,23 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
         ? "Placement not confirmed"
         : hasUnsupportedMeatusContactClaimGuard(finding)
         ? "Meatus contact not confirmed"
+        : hasUnsupportedOrgasmClaimGuard(finding)
+        ? "Peak response not confirmed"
+        : hasUnsupportedPenileBaseClaimGuard(finding)
+        ? "Scrotal-base/perineal contact"
         : hasUnsupportedFoleyStageForecast(finding)
         ? "Field preparation"
         : hasUnsupportedSleeveUseClaimGuard(finding)
         ? "Sleeve use not confirmed"
         : cleanTextForMode(finding.title || "Finding"),
       text: cleanTextForMode(finding.text || finding.findingText || ""),
-      confidence: (hasUnsupportedFoleySecurementClaim(finding) || hasUnsupportedFoleyStageForecast(finding) || hasUnsupportedAlreadyPlacedClaim(finding) || hasUnsupportedMeatusContactClaimGuard(finding) || hasUnsupportedSleeveUseClaimGuard(finding)) && finding.confidence === "high" ? "moderate" : finding.confidence || "moderate",
+      confidence: (hasUnsupportedFoleySecurementClaim(finding)
+        || hasUnsupportedFoleyStageForecast(finding)
+        || hasUnsupportedAlreadyPlacedClaim(finding)
+        || hasUnsupportedMeatusContactClaimGuard(finding)
+        || hasUnsupportedSleeveUseClaimGuard(finding)
+        || hasUnsupportedOrgasmClaimGuard(finding)
+        || hasUnsupportedPenileBaseClaimGuard(finding)) && finding.confidence === "high" ? "moderate" : finding.confidence || "moderate",
       category: finding.category || "other",
     })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding) && !isTelemetryOnlyFinding(finding) && !isGenericControlObjectMention(finding) && !isLowValueNoChangeForRole(finding, selectedRole) && !isOutOfLaneForRole(finding, selectedRole)),
     events: events.filter((event) => (
@@ -813,6 +830,7 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
       const unsupportedAlreadyPlaced = isExploration && hasUnsupportedAlreadyPlacedClaim(event);
       const unsupportedMeatusClaim = isExploration && hasUnsupportedMeatusContactClaimGuard(event);
       const unsupportedSleeveUse = !isExploration && hasUnsupportedSleeveUseClaimGuard(event);
+      const unsupportedOrgasmClaim = !isExploration && hasUnsupportedOrgasmClaimGuard(event);
       const note = cleanTextForMode(cleanDraftEventNote(event.note || event.text || ""));
       return {
         time_s: clamp(
@@ -823,7 +841,7 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
         note,
         category: (unsupportedFoleyForecast || unsupportedMeatusClaim) ? ["setup"] : normalizeDraftEventCategories(event.category, note, fallbackWindow, isExploration),
         annotation_tags: Array.isArray(event.annotation_tags) ? event.annotation_tags : ["other_context"],
-        confidence: (unsupportedFoleyForecast || unsupportedAlreadyPlaced || unsupportedMeatusClaim || unsupportedSleeveUse) && event.confidence === "high" ? "moderate" : event.confidence || "moderate",
+        confidence: (unsupportedFoleyForecast || unsupportedAlreadyPlaced || unsupportedMeatusClaim || unsupportedSleeveUse || unsupportedOrgasmClaim) && event.confidence === "high" ? "moderate" : event.confidence || "moderate",
       };
     }).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note }) && !isTelemetryOnlyFinding({ title: "", text: event.note }) && !isGenericControlObjectMention(event) && !isLowValueNoChangeForRole(event, selectedRole) && !isOutOfLaneForRole(event, selectedRole)),
   };
@@ -2330,6 +2348,10 @@ ${isExploration ? "Procedure chronology rule: manual/user timeline notes are str
 
 Current-frame override rule: the sampled frames in this request are the primary evidence. Prior summaries, accepted cards, and continuity text can orient the sequence, but they must not override the current frames. If the prior window said "resting", "no stimulation", "no visible movement", or "HR rising without visible cause", actively re-check the current frames for hand/device contact, visible stroke or device motion, perineal contact, glans/shaft movement, sleeve/lubricant interaction, body/leg response, or procedure action before repeating that claim.
 
+Visible-first anatomy rule: in regular session reviews, build each finding in this order: 1. exact visible body area or contact zone, 2. exact visible motion or state, 3. cautious interpretation only if the first two support it. Prefer concrete wording like "your glans remains exposed with visible sheen", "your hand shifts from mid-shaft toward the glans", "contact sits below the scrotum at the scrotal-base/perineal region", or "your scrotum appears more lifted/tight than the prior window." Do not skip straight to summary labels like climax, orgasm, edging, intense stimulation, or recovery if the visible mechanics are not clearly shown first.
+
+Visible evidence buckets for regular session review: penile shaft/base, glans/meatus/foreskin, scrotum/testes, scrotal-base/perineal region, lubrication/moisture/fluid, hand/device contact mechanics, pelvic/body response, and feet/lower-body response. Use the most specific supported bucket instead of vague phrases like "genital activity", "area stimulation", or "motion near the body".
+
 Scrotal/testicular observation rule: in regular session reviews, give the scrotum/testes the same attention as shaft/glans state when they are visible. Track scrotal/testicular position, progressive lift/retraction, relaxation/descent, asymmetry, skin tightening/wrinkling, surface sheen, and visible tissue color shifts such as flushing, darker/redder tone, blanching, or return toward baseline. Compare sampled frames and nearby windows before calling a change progressive. Do not overcall color or tissue changes from lighting, camera exposure, shadow, compression artifacts, or app overlays; use "visible color/tension change" or "possible lighting-related change" when uncertain.
 
 Positive action tracking rule: describe visible contact or motion before describing absence. For regular session reviews, if any sampled frame shows hand contact with the penis, glans, shaft, scrotal-base/perineal region, sleeve/device, or visible stimulation-related motion, treat the window as active stimulation/contact or a stimulation transition unless the sequence clearly shows a pause. Do not claim sleeve-based stimulation, sleeve stroking, or sleeve placement until the sleeve is visibly placed on/over the shaft or visibly used around the penis; if the sleeve is only nearby, in hand, or outside the frame, describe hand contact/prep instead. For body exploration reviews, if any sampled frame shows glove change, swab/wipe/applicator/tool/catheter/tubing contact, or setup movement, describe that procedural action rather than saying nothing is happening. For Foley reviews, prefer the exact visible action: table positioning, glove change/prep, drape/setup, swabbing, lubrication/dilation, penis stabilization, catheter not visible, catheter approach, catheter tip at the meatus, insertion beginning, active advancement from visible motion or shortening external catheter length, visible catheter/Foley-at-meatus state, tubing handling, balloon inflation, drape removal, or urine collection. Do not use already-in-place unless completion evidence is visible or manually logged.
@@ -2341,6 +2363,8 @@ Sleeve/contact state rule: evaluate sleeve presence, sleeve motion, and body con
 Hard wording rule: do not use "edging", "edging maneuver", "intentional edging", "holding back", "delaying climax", or similar intent language unless the nearby session event, session note, or user caption explicitly uses that exact concept. If the visible behavior is a hand lift, withdrawal, pause, restart, speed change, or contact change, describe the observable behavior only.
 
 Ejaculation and fluid evidence rule: do not infer orgasm, climax, ejaculation, or cum from shiny/clear wetness, glans sheen, lubrication sheen, hand movement, erection state, or a stimulation pause alone. Clear or glossy moisture on the glans/shaft is more likely lubricant, pre-ejaculate, or unspecified moisture unless there is strong supporting context. Only call ejaculate when the visible fluid is clearly whitish/opaque, there is a visible emission/spurt, or there is a nearby confirmed climax/ejaculation event in the session notes/timeline. When that threshold is met, say "ejaculate" or "visible ejaculate" directly; do not use vague residue/euphemism wording. Treat HR/telemetry as consistency context: if the window does not align with the session climax marker, recovery transition, or a plausible autonomic peak, label fluid as "visible moisture/sheen" or "possible lubricant/pre-ejaculate" rather than ejaculate. Never create multiple orgasms/climax events from repeated wetness or sheen across adjacent windows; carry forward that it is likely the same lubricant/moisture unless there is a clear new emission or confirmed event.
+
+Peak-event evidence gate: do not draft an orgasm/climax event unless the sampled frames show a direct peak marker such as visible ejaculatory emission, unmistakable climax-level body response, or a nearby manual/session marker that lines up with the same sampled sequence. A high HR, near-climax overlay, glans sheen, hand speed change, or a pause by itself is not enough. When the body may be approaching a peak but the visible marker is missing, describe it as rising load, stronger stimulation, or possible near-threshold state instead of orgasm/climax.
 
 Perineum and underside anatomy rule: do not label the area under the scrotum as "base of penis" unless the penile shaft base is clearly visible and contacted. If contact is below or behind the scrotum, use "perineum", "perineal region", "underside/perineal contact", or "scrotal-base/perineal region" depending on what is visible. If the location is ambiguous between penile base, scrotal base, and perineum, state the uncertainty instead of forcing a penile-base label.
 
@@ -2914,10 +2938,13 @@ Evidence discipline:
 - If the window does not visually confirm the local candidate, say that plainly and explain what was checked.
 - Do not use raw second-offset wording in prose. Use clock-style window labels or plain chronological wording.
 - ${ANATOMICAL_LATERALITY_RULE}
+- In session mode, state visible anatomy/mechanics before interpretation: exact contact zone, visible motion/state change, then cautious inference if still supported.
+- Prefer specific buckets like glans/meatus, shaft, scrotum/testes, scrotal-base/perineal region, lubrication/moisture, hand/device contact mechanics, and lower-body response over vague phrases.
+- Do not call orgasm/climax unless the sampled frames show a direct peak marker such as visible emission/spurt, unmistakable climax-level body response, or a nearby confirmed marker that matches the same sampled sequence.
 
 ${isExploration ? `Body exploration / procedure mode:
 Use clinical procedure language. For Foley or urethral/procedure review, distinguish setup, prep, swabbing, lubrication/dilation, visible meatal contact, visible advancement, visible catheter/Foley-at-meatus state, tubing/field handling, urine return, balloon/securement, and cleanup. Do not claim advancement, insertion, urine return, balloon inflation, or securement unless that exact action/item is visible or explicitly logged. Do not claim already-in-place/dwell/post-placement merely because Foley/catheter material is first visible at the glans or meatus; first visibility at the meatus should be treated as meatal engagement or early insertion/advancement when motion supports it unless an earlier manual/corrected reviewed event confirms completed placement.` : `Session mode:
-Use clinical session language. Track visible hand/body/device contact, stimulation changes, pauses/resumptions, lubrication/device handling, posture/lower-body movement, visible genital/body state, and limitations. Do not label edging unless explicitly logged or unmistakably shown by repeated intended near-climax approach-and-withdraw cycles.`}
+Use clinical session language. Track visible hand/body/device contact, stimulation changes, pauses/resumptions, lubrication/device handling, posture/lower-body movement, visible genital/body state, and limitations. Do not label edging unless explicitly logged or unmistakably shown by repeated intended near-climax approach-and-withdraw cycles. If contact is below or behind the scrotum and the penile shaft base is not clearly visible, call it scrotal-base/perineal contact rather than penile-base contact.`}
 
 Local selector packet for this window:
 Candidate label: ${window.label}

@@ -58,6 +58,22 @@ export function hasUnsupportedSleeveUseClaim(item) {
     && !/(sleeve (?:is\s+)?visibly (?:placed|on|over|around)|visibly (?:placed|on|over).{0,40}sleeve|shaft (?:is\s+)?inside (?:the\s+)?sleeve|glans.{0,40}inside (?:the\s+)?sleeve)/i.test(text);
 }
 
+export function hasUnsupportedOrgasmClaim(item) {
+  const text = lowerItemText(item);
+  if (!/(orgasm|climax|ejaculat|ejaculate|ejaculatory|cum|spurt|spurting|release)/.test(text)) return false;
+  if (/(possible|may|might|uncertain|not confirmed|cannot confirm|question|suspected)/.test(text)) return false;
+  const strongEvidence = /(confirmed climax|confirmed orgasm|confirmed ejaculation|visible emission|visible spurt|spurts? (?:of )?(?:ejaculate|fluid)|whitish|opaque|milky|post[-\s]climax|post[-\s]orgasm|after climax|after orgasm)/.test(text);
+  const weakEvidenceOnly = /(wet(?:ness)?|sheen|shiny|glossy|moisture|lubricant|lube|clear fluid|clear wetness|pre[-\s]?ejac|engorg(?:ed|ement)?|pause|recovery|stillness)/.test(text);
+  return !strongEvidence && weakEvidenceOnly;
+}
+
+export function hasUnsupportedPenileBaseClaim(item) {
+  const text = lowerItemText(item);
+  if (!/(base of (?:the )?penis|penile base|shaft base)/.test(text)) return false;
+  if (/(uncertain|ambiguous|possible|may|might|scrotal-base\/perineal|perineal|below the scrotum|underside)/.test(text)) return false;
+  return /(below|behind|under|beneath).{0,20}(?:the )?scrot|perine|underside|between (?:the )?scrot/.test(text);
+}
+
 export function foleyEvidenceStageForText(text) {
   const value = String(text || "").toLowerCase();
   if (hasBlueObjectFoleyMislabel({ text: value })) return { stage: "tray object", blocked: true };
@@ -217,6 +233,44 @@ export function sanitizeSleeveSessionText(text) {
       .trim(),
     flags,
   };
+}
+
+export function sanitizeUnsupportedOrgasmClaim(text, supportingText = "") {
+  let next = String(text || "");
+  const flags = [];
+  if (!hasUnsupportedOrgasmClaim({ text: `${next} ${supportingText}`.trim() })) {
+    return { text: next, flags };
+  }
+  flags.push("Unsupported orgasm/ejaculate claim softened");
+  next = next
+    .replace(/\b(?:clear|glossy|shiny)\s+(?:ejaculate|cum)\b/gi, "visible moisture/sheen")
+    .replace(/\bejaculation\s+(?:is\s+)?visible\b/gi, "visible fluid release is not confirmed")
+    .replace(/\bvisible\s+ejaculate\b/gi, "visible moisture/fluid is present")
+    .replace(/\bejaculate\b/gi, "fluid")
+    .replace(/\bcum\b/gi, "fluid")
+    .replace(/\b(?:start of |onset of )?(?:orgasm|climax)\b/gi, "possible peak-response moment")
+    .replace(/\bpost[-\s]?(?:orgasm|climax)\b/gi, "possible recovery transition")
+    .replace(/\b(?:orgasmic|ejaculatory)\s+release\b/gi, "visible fluid release")
+    .replace(/\bspurts?\b/gi, "visible fluid movement")
+    .replace(/\s+/g, " ")
+    .trim();
+  return { text: next, flags };
+}
+
+export function sanitizeUnsupportedPenileBaseClaim(text) {
+  let next = String(text || "");
+  const flags = [];
+  if (!hasUnsupportedPenileBaseClaim({ text: next })) {
+    return { text: next, flags };
+  }
+  flags.push("Penile-base label softened to scrotal-base/perineal region");
+  next = next
+    .replace(/\bbase of (?:the )?penis\b/gi, "scrotal-base/perineal region")
+    .replace(/\bpenile base\b/gi, "scrotal-base/perineal region")
+    .replace(/\bshaft base\b/gi, "scrotal-base/perineal region")
+    .replace(/\s+/g, " ")
+    .trim();
+  return { text: next, flags };
 }
 
 function statedPauseDurationSeconds(text = '') {
