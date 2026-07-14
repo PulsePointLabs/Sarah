@@ -163,6 +163,96 @@ function cleanEvidenceText(value = "", maxLength = 360) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
+function clipFrameSessionTimeSeconds(frame = {}, clip = {}) {
+  const explicitSessionTime = Number(frame.sessionTimeSeconds ?? frame.session_time_s ?? frame.recordTimeSeconds ?? frame.record_time_s ?? frame.frameTimelineSeconds);
+  if (Number.isFinite(explicitSessionTime)) return explicitSessionTime;
+  const sourceFrameTime = Number(frame.frameTimeSeconds ?? frame.frame_time_seconds);
+  if (Number.isFinite(sourceFrameTime)) {
+    return Math.max(0, sourceFrameTime + Number(clip.timeline_offset_s || 0));
+  }
+  const clipSessionTime = Number(clip.session_time_s);
+  return Number.isFinite(clipSessionTime) ? clipSessionTime : null;
+}
+
+function telemetrySnapshotForLightbox(telemetry) {
+  if (!telemetry) return null;
+  const hr = telemetry?.heart_rate?.exact_window || telemetry?.heart_rate?.context_window || null;
+  const hrv = telemetry?.rr_hrv?.exact_window || telemetry?.rr_hrv?.context_window || null;
+  const emg = telemetry?.emg?.exact_window || telemetry?.emg?.context_window || null;
+  const quality = Array.isArray(hrv?.quality_values) ? hrv.quality_values.filter(Boolean).join(", ") : "";
+  const emgEntry = emg?.channels
+    ? Object.entries(emg.channels).find(([, value]) => Number.isFinite(Number(value?.avg))) || null
+    : null;
+  return {
+    windowLabel: telemetry?.requested_session_window?.label || "",
+    hrAvg: hr?.bpm_avg ?? null,
+    hrMin: hr?.bpm_min ?? null,
+    hrMax: hr?.bpm_max ?? null,
+    rmssdAvg: hrv?.rmssd_ms?.avg ?? null,
+    sdnnAvg: hrv?.sdnn_ms?.avg ?? null,
+    hrvQuality: quality || "",
+    emgLabel: emgEntry?.[0] || "",
+    emgAvg: emgEntry?.[1]?.avg ?? null,
+    nearbyEventCount: Array.isArray(telemetry?.nearby_events) ? telemetry.nearby_events.length : 0,
+  };
+}
+
+function enrichKeyMomentFrames(clip = {}, session, timelineRows = [], emgRows = []) {
+  const rawFrames = Array.isArray(clip.frames) ? clip.frames : [];
+  return rawFrames
+    .map((frame, index) => {
+      const sessionTimeSeconds = clipFrameSessionTimeSeconds(frame, clip);
+      const telemetry = Number.isFinite(sessionTimeSeconds)
+        ? buildSessionMomentTelemetry({
+            session,
+            timelineRows,
+            emgRows,
+            startSeconds: Math.max(0, sessionTimeSeconds - 2),
+            endSeconds: sessionTimeSeconds + 2,
+            contextPadSeconds: 10,
+          })
+        : null;
+      const timeLabel = Number.isFinite(sessionTimeSeconds) ? fmtMmSs(sessionTimeSeconds) : "";
+      return {
+        ...frame,
+        id: frame.id || `${clip.id || clip.label || "key-moment"}-frame-${index + 1}`,
+        sessionTimeSeconds,
+        sessionTimeLabel: timeLabel,
+        caption: `${clip.label || "Key moment still"}${timeLabel ? ` · ${timeLabel}` : ""}`,
+        detailCaption: clip.reason || "",
+        telemetrySummary: telemetrySnapshotForLightbox(telemetry),
+      };
+    })
+    .filter((frame) => frame?.url || frame?.file_url || frame?.data);
+}
+
+function enrichKeyMomentClipMedia(clip = {}, session, timelineRows = [], emgRows = []) {
+  const startSeconds = Number.isFinite(Number(clip.startSeconds))
+    ? Number(clip.startSeconds)
+    : Number.isFinite(Number(clip.session_time_s))
+      ? Math.max(0, Number(clip.session_time_s) - 4)
+      : 0;
+  const endSeconds = Number.isFinite(Number(clip.endSeconds))
+    ? Number(clip.endSeconds)
+    : Number.isFinite(Number(clip.session_time_s))
+      ? Number(clip.session_time_s) + 4
+      : startSeconds;
+  const telemetry = buildSessionMomentTelemetry({
+    session,
+    timelineRows,
+    emgRows,
+    startSeconds,
+    endSeconds,
+    contextPadSeconds: 12,
+  });
+  return {
+    ...clip,
+    mediaCaption: clip.reason || clip.label || "Saved key session moment",
+    telemetrySummary: telemetrySnapshotForLightbox(telemetry),
+    frames: enrichKeyMomentFrames(clip, session, timelineRows, emgRows),
+  };
+}
+
 function reviewManifestSegmentsForPlayback(manifest, windowStart, windowEnd) {
   const clips = Array.isArray(manifest?.generated_clips) ? manifest.generated_clips : [];
   const chapters = Array.isArray(manifest?.chapters) ? manifest.chapters : [];
@@ -421,7 +511,7 @@ function bestParagraphIndexForClipByText(clip, paragraphs = []) {
   return best.score >= 35 ? best.index : -1;
 }
 
-export function buildSessionAnalysisReaderData({ result, session, timelineRows = [], isTechnical = false }) {
+export function buildSessionAnalysisReaderData({ result, session, timelineRows = [], emgRows = [], isTechnical = false }) {
   if (!result) {
     return {
       paragraphs: [],
@@ -464,7 +554,7 @@ export function buildSessionAnalysisReaderData({ result, session, timelineRows =
     ai_analysis: result,
     ai_session_deep_dive: null,
     ai_cascade: null,
-  });
+  }).map((clip) => enrichKeyMomentClipMedia(clip, session, timelineRows, emgRows));
   const keyVideoClipError = result?._meta?.key_video_clip_error || "";
   const clipsByParagraph = keyVideoClips.reduce((map, clip) => {
     const paraIndex = paragraphIndexForClip(clip, sections, paragraphs.length, sessionDurationSeconds(session, timelineRows), paragraphs);
@@ -513,6 +603,23 @@ function sanitizeReviewClip(clip = {}) {
     startSeconds: clip.startSeconds ?? null,
     endSeconds: clip.endSeconds ?? null,
     durationSeconds: clip.durationSeconds ?? null,
+    mediaCaption: clip.mediaCaption || "",
+    telemetrySummary: clip.telemetrySummary || null,
+    frames: Array.isArray(clip.frames) ? clip.frames.map((frame) => ({
+      id: frame.id || null,
+      url: frame.url || frame.file_url || "",
+      file_url: frame.file_url || frame.url || "",
+      data: frame.data || "",
+      mimeType: frame.mimeType || "image/jpeg",
+      filename: frame.filename || "",
+      frameIndex: frame.frameIndex ?? null,
+      frameTimeSeconds: frame.frameTimeSeconds ?? null,
+      sessionTimeSeconds: frame.sessionTimeSeconds ?? null,
+      sessionTimeLabel: frame.sessionTimeLabel || "",
+      caption: frame.caption || "",
+      detailCaption: frame.detailCaption || "",
+      telemetrySummary: frame.telemetrySummary || null,
+    })) : [],
   };
 }
 
@@ -2938,7 +3045,7 @@ Provide ${isTechnical
           paragraphMeta,
           keyVideoClips,
           keyVideoClipError,
-        } = buildSessionAnalysisReaderData({ result, session, timelineRows, isTechnical });
+        } = buildSessionAnalysisReaderData({ result, session, timelineRows, emgRows, isTechnical });
 
         return (
           <div className="space-y-3">

@@ -1390,12 +1390,14 @@ export default function SessionDetail() {
     result: s.ai_analysis,
     session: s,
     timelineRows,
+    emgRows,
     isTechnical: false,
   });
   const technicalAnalysisData = buildSessionAnalysisReaderData({
     result: s.ai_session_deep_dive,
     session: s,
     timelineRows,
+    emgRows,
     isTechnical: true,
   });
   const technicalVideoSourceGeneratedAt = s.ai_session_deep_dive?._meta?.last_generated_at

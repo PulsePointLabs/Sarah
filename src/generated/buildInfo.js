@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.125",
-  "commit": "9a06650",
-  "commitMessage": "Tighten Sarah video-pass anatomy grounding",
-  "builtAt": "2026-07-14T22:09:47.583Z"
+  "version": "0.1.126",
+  "commit": "f8ee73c",
+  "commitMessage": "Fix APK AI annotation preview URLs",
+  "builtAt": "2026-07-14T23:07:37.100Z"
 };
