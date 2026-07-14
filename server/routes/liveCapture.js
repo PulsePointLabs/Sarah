@@ -264,10 +264,16 @@ function enrichHrTelemetry(telemetry) {
   const hrvTightening = hrvUsable && rmssd != null && rmssdTrend <= -3 && elevatedDelta >= 8 && slopeBpm30s >= 0.6;
   const hrvOpening = hrvUsable && rmssd != null && (referenceRmssd ?? 0) >= 5 && rmssd >= referenceRmssd * 1.55;
   const hrvRecoveryBias = hrvOpening && dropFromPeak >= 4 && slopeBpm30s <= 0.5;
+  const recentHrLiftCount = trimmed.slice(-12).filter((row) => row.hr >= baselineHr + 8).length;
+  const persistentHrLift = trimmed.slice(-12).filter((row) => row.hr >= baselineHr + 10).length >= 3;
+  const persistentSlopeRise = slopeBpm30s >= 2 && elevatedDelta >= 8 && recentHrLiftCount >= 3;
+  const buildCandidate = elevatedDelta >= 12
+    || persistentSlopeRise
+    || ((hrvCompressed || hrvTightening) && elevatedDelta >= 8);
 
   const phase = (dropFromPeak >= 8 && elevatedDelta <= 12 && (slopeBpm30s <= 0.5 || hrvRecoveryBias))
     ? 'recovery'
-    : (elevatedDelta >= 8 || slopeBpm30s >= 2 || ((hrvCompressed || hrvTightening) && elevatedDelta >= 6))
+    : (buildCandidate && (persistentHrLift || persistentSlopeRise || ((hrvCompressed || hrvTightening) && recentHrLiftCount >= 2)))
       ? 'build'
       : 'baseline';
 
@@ -278,6 +284,10 @@ function enrichHrTelemetry(telemetry) {
   if (phase === 'recovery') {
     buildConfidence -= dropFromPeak * 2;
     if (hrvRecoveryBias) buildConfidence -= 8;
+  } else if (phase !== 'build' && elevatedDelta < 10) {
+    buildConfidence = Math.min(buildConfidence, 42);
+  } else if (!persistentHrLift && !persistentSlopeRise && elevatedDelta < 12) {
+    buildConfidence = Math.min(buildConfidence, 55);
   }
   buildConfidence = Math.round(Math.max(0, Math.min(100, buildConfidence)));
 

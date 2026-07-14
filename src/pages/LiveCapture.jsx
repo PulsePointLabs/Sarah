@@ -1180,7 +1180,7 @@ function parseLiveCommand(text) {
   return null;
 }
 
-function makeTelemetryPoint(hrTelemetry, emgTelemetry) {
+function makeTelemetryPoint(hrTelemetry, emgTelemetry, options = {}) {
   const now = Date.now();
   const hrv = hrTelemetry?.hrv || {};
   return {
@@ -1190,6 +1190,8 @@ function makeTelemetryPoint(hrTelemetry, emgTelemetry) {
     hrSmoothed: readNumber(hrTelemetry?.hrSmoothed, hrTelemetry?.smoothedHr, hrTelemetry?.hr_smoothed),
     baseline: readNumber(hrTelemetry?.baselineHr, hrTelemetry?.baseline_hr),
     build: readNumber(hrTelemetry?.buildConfidence, hrTelemetry?.build_confidence),
+    phase: hrTelemetry?.phase || null,
+    sessionTimeSec: readNumber(options?.sessionTimeSec),
     hrSource: hrTelemetry?.source || hrTelemetry?.hr_source || null,
     hrvRmssd: readNumber(hrv.rmssdMs, hrTelemetry?.hrv_rmssd_ms),
     hrvSdnn: readNumber(hrv.sdnnMs, hrTelemetry?.hrv_sdnn_ms),
@@ -1793,7 +1795,9 @@ export default function LiveCapture() {
   const appendTelemetryPoint = (nextHr = latestHrRef.current, nextEmg = latestEmgRef.current) => {
     if (!nextHr && !nextEmg) return;
     setTelemetryHistory((prev) => {
-      const point = makeTelemetryPoint(nextHr, nextEmg);
+      const point = makeTelemetryPoint(nextHr, nextEmg, {
+        sessionTimeSec: getCurrentSessionTime(),
+      });
       const previous = prev[prev.length - 1];
       if (
         previous
@@ -1805,7 +1809,9 @@ export default function LiveCapture() {
       ) {
         return prev;
       }
-      const pointPrediction = computeLiveClimaxPrediction(nextHr, nextEmg, [...prev, point]);
+      const pointPrediction = computeLiveClimaxPrediction(nextHr, nextEmg, [...prev, point], {
+        sessionTimeSec: point.sessionTimeSec,
+      });
       point.nearClimax = pointPrediction.nearClimax;
       point.recovery = pointPrediction.recovery;
       point.hrvSignal = pointPrediction.hrvSignal;
@@ -2777,7 +2783,9 @@ export default function LiveCapture() {
     );
   }, [hrTelemetry]);
 
-  const prediction = useMemo(() => computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory), [hrTelemetry, emgTelemetry, telemetryHistory]);
+  const prediction = useMemo(() => computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory, {
+    sessionTimeSec: getCurrentSessionTime(),
+  }), [emgTelemetry, getCurrentSessionTime, hrTelemetry, telemetryHistory]);
   const recordingActive = Boolean(recording?.active);
 
   useEffect(() => {
@@ -4333,14 +4341,16 @@ export default function LiveCapture() {
 
   useEffect(() => {
     if (captureIsBodyExploration || !recordingActive || !telemetryHistory.length) return;
-    const strongLabel = prediction.nearClimax >= 75
+    const strongLabel = prediction.nearClimax >= 75 && prediction.buildEligibleForNearClimax && prediction.confirmationCount >= 2
       ? "Near-climax possibility"
       : prediction.recovery >= 70
         ? "Recovery watch"
         : Number(buildLevel) >= 55 && prediction.recentSlope > 0
           ? "Sustained build observed"
-        : prediction.nearClimax >= 45
+        : prediction.nearClimax >= 45 && (prediction.elapsedMinutes >= 5 || prediction.buildDurationSec >= 60)
           ? "Build intensifying"
+          : prediction.nearClimax >= 35
+            ? "Arousal/build signal rising"
           : "";
     if (!strongLabel) return;
     const now = Date.now();
