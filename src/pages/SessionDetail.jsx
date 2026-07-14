@@ -6,7 +6,7 @@ import { attachBloodPressureToSession, findBloodPressureNearSession } from "@/li
 import { loadUserProfileWithProfilerResults } from "@/lib/profileContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Activity, ArrowLeft, Star, Trash2, Heart, Clock, Zap, Pencil, XCircle, Clapperboard, Sparkles } from "lucide-react";
+import { Activity, ArrowLeft, Star, Trash2, Heart, Clock, Zap, Pencil, XCircle, Clapperboard, Sparkles, Maximize2 } from "lucide-react";
 import AITagSuggester from "../components/AITagSuggester";
 import AIChat from "../components/AIChat";
 import SessionExportButton from "../components/SessionExportButton";
@@ -383,6 +383,99 @@ function SessionKeyVideoMoments({ session }) {
         </p>
       ) : null}
     </div>
+  );
+}
+
+function SessionUploadedVideoPlayer({ videos = [] }) {
+  const playableVideos = Array.isArray(videos) ? videos.map((url) => serverUrl(url)).filter(Boolean) : [];
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const videoRef = useRef(null);
+  const wrapperRef = useRef(null);
+
+  useEffect(() => {
+    setActiveIndex((current) => Math.min(current, Math.max(0, playableVideos.length - 1)));
+  }, [playableVideos.length]);
+
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.playbackRate = playbackSpeed;
+  }, [playbackSpeed, activeIndex]);
+
+  if (!playableVideos.length) return null;
+
+  const openFullscreen = async () => {
+    const target = wrapperRef.current || videoRef.current;
+    if (!target?.requestFullscreen) return;
+    try {
+      await target.requestFullscreen();
+    } catch (error) {
+      console.warn("Could not open session video fullscreen:", error);
+    }
+  };
+
+  return (
+    <section id="session-story-video" className="scroll-mt-24">
+      <div className="ml-auto w-full max-w-2xl rounded-xl border border-primary/20 bg-card p-3 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
+              <Clapperboard className="h-3.5 w-3.5" /> Session Video
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Use this player for direct moment review. Ask Sarah about a saved moment and she can now pull fresh frames from the session video when needed.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="inline-flex rounded-full border border-border bg-muted/35 p-1">
+              {[0.5, 1, 1.5, 2].map((speed) => (
+                <button
+                  key={speed}
+                  type="button"
+                  onClick={() => setPlaybackSpeed(speed)}
+                  className={`rounded-full px-2 py-1 text-[10px] font-semibold ${playbackSpeed === speed ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  {speed}x
+                </button>
+              ))}
+            </div>
+            <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" onClick={openFullscreen}>
+              <Maximize2 className="h-3.5 w-3.5" />
+              Fullscreen
+            </Button>
+          </div>
+        </div>
+        {playableVideos.length > 1 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {playableVideos.map((_video, index) => (
+              <Button
+                key={index}
+                type="button"
+                size="sm"
+                variant={index === activeIndex ? "default" : "outline"}
+                className="h-7 text-[10px]"
+                onClick={() => setActiveIndex(index)}
+              >
+                Video {index + 1}
+              </Button>
+            ))}
+          </div>
+        )}
+        <div ref={wrapperRef} className="mt-3 overflow-hidden rounded-lg border border-border bg-black">
+          <video
+            ref={videoRef}
+            key={playableVideos[activeIndex]}
+            src={playableVideos[activeIndex]}
+            controls
+            playsInline
+            preload="metadata"
+            className="block max-h-[28rem] w-full bg-black object-contain"
+            onLoadedMetadata={(event) => {
+              event.currentTarget.playbackRate = playbackSpeed;
+            }}
+          />
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -1180,6 +1273,7 @@ export default function SessionDetail() {
   const hasTimelineSection = timelineRows.length > 0 || (s.event_timeline || []).length > 0 || (s.ai_near_climax_events || []).length > 0 || !!s.motion_analysis_summary;
   const reviewedMediaClips = getReviewedVisualClips(s.ai_analysis?._visual_findings || []);
   const linkedLocalVideos = s.linked_local_videos || [];
+  const uploadedSessionVideos = Array.isArray(s.media_videos) ? s.media_videos.map((url) => serverUrl(url)).filter(Boolean) : [];
   const companionAnalysisData = buildSessionAnalysisReaderData({
     result: s.ai_analysis,
     session: s,
@@ -1203,6 +1297,7 @@ export default function SessionDetail() {
     { id: "session-summary", label: "Executive Summary", group: "Overview" },
     { id: "session-review", label: "Review Checklist", group: "Overview" },
     { id: "session-metrics-context", label: "Metrics & Context", group: "Overview" },
+    ...(uploadedSessionVideos.length ? [{ id: "session-story-video", label: "Session Video", group: "Session Story" }] : []),
     { id: "session-mobile-video-render", label: "Mobile Video Render", group: "Session Story" },
     ...(!s.no_climax ? [
       { id: "session-ai-companion", label: "Companion Analysis", group: "Session Story" },
@@ -1269,6 +1364,7 @@ export default function SessionDetail() {
   };
   const sessionStorySection = !s.no_climax ? (
     <section className="space-y-4">
+      {uploadedSessionVideos.length > 0 && <SessionUploadedVideoPlayer videos={uploadedSessionVideos} />}
       <section id="session-ai-companion" className="scroll-mt-24 space-y-3">
         <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} onAnalysisSaved={handleAnalysisSaved} />
         {renderReviewVideoBuilder({
@@ -2042,6 +2138,7 @@ export default function SessionDetail() {
             s.notes ? `Session notes: ${s.notes}` : null,
           ].filter(Boolean).join("\n")}
           savedVideoClips={normalizeSessionKeyVideoClips(s)}
+          sessionVideoSources={uploadedSessionVideos}
           savedMessages={chatMessages}
           savedNotes={sessionNotes}
           defaultOpen

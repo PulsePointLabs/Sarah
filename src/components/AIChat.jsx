@@ -453,6 +453,7 @@ export default function AIChat({
   subjectLabel,
   clipTimelineOffsetSeconds = 0,
   savedVideoClips = [],
+  sessionVideoSources = [],
   onSaveMessages,
   onSaveNotes,
   autoScrollOnMount = true,
@@ -508,6 +509,86 @@ export default function AIChat({
   const evidenceScope = ["profile", "session", "body_exploration"].includes(visualEvidenceScope) ? visualEvidenceScope : mode;
   const conversationSubject = subjectLabel || (mode === "profile" ? "physiological and arousal profile" : "session");
   const timelineOffsetSeconds = Number(clipTimelineOffsetSeconds) || 0;
+
+  const fetchUrlAsFile = useCallback(async (url, filename = "session-video.mp4") => {
+    const response = await fetch(serverUrl(url));
+    if (!response.ok) throw new Error("Could not load the session video for frame review.");
+    const blob = await response.blob();
+    const type = blob.type || "video/mp4";
+    return new File([blob], filename, { type });
+  }, []);
+
+  const buildSavedMomentVideoFrames = useCallback(async (clip) => {
+    const directClipUrl = clip?.clip_url || clip?.url || clip?.file_url || "";
+    const fallbackSessionVideoUrl = Array.isArray(sessionVideoSources) ? sessionVideoSources.find(Boolean) : "";
+    const sourceUrl = directClipUrl || fallbackSessionVideoUrl;
+    if (!sourceUrl) return [];
+
+    const sourceFile = await fetchUrlAsFile(sourceUrl, clip?.filename || clip?.label || "saved-session-moment.mp4");
+    const loadedDuration = await loadVideoMetadata(sourceFile);
+    const hasDirectClipSource = Boolean(directClipUrl);
+    const rangeStart = Number.isFinite(Number(clip?.startSeconds))
+      ? Number(clip.startSeconds)
+      : Number.isFinite(Number(clip?.session_time_s))
+        ? Math.max(0, Number(clip.session_time_s) - 4)
+        : 0;
+    const rangeEnd = Number.isFinite(Number(clip?.endSeconds))
+      ? Number(clip.endSeconds)
+      : Number.isFinite(Number(clip?.session_time_s))
+        ? Number(clip.session_time_s) + 4
+        : Math.max(6, loadedDuration || 6);
+    const sampleStart = hasDirectClipSource ? 0 : Math.max(0, rangeStart);
+    const sampleEnd = hasDirectClipSource
+      ? Math.max(0.3, loadedDuration || Number(clip?.durationSeconds) || 6)
+      : Math.max(sampleStart + 0.3, Math.min(rangeEnd, loadedDuration || rangeEnd));
+    const timelineStartSeconds = Number.isFinite(Number(clip?.startSeconds))
+      ? Number(clip.startSeconds)
+      : Number.isFinite(Number(clip?.session_time_s))
+        ? Math.max(0, Number(clip.session_time_s) - ((sampleEnd - sampleStart) / 2))
+        : sampleStart;
+    const timelineEndSeconds = Number.isFinite(Number(clip?.endSeconds))
+      ? Number(clip.endSeconds)
+      : timelineStartSeconds + (sampleEnd - sampleStart);
+    const label = clip?.label?.trim() || "saved session moment";
+
+    setChatProcessingStatus({
+      phase: "sampling",
+      message: "Pulling saved moment frames",
+      detail: `Sampling ${formatTimePhrase(timelineStartSeconds)} to ${formatTimePhrase(timelineEndSeconds)} for Sarah's review.`,
+    });
+
+    const frames = await sampleVideoFrames({
+      file: sourceFile,
+      startSeconds: sampleStart,
+      endSeconds: sampleEnd,
+      label,
+      maxFrames: Math.min(VIDEO_FRAME_SAMPLE_COUNT, MAX_IMAGE_COUNT - selectedImages.length),
+    });
+
+    return frames.map((frame, index) => ({
+      id: makeId("saved-moment-frame"),
+      file: frame.file,
+      filename: frame.filename,
+      mimeType: "image/jpeg",
+      sizeBytes: frame.file.size,
+      previewUrl: frame.dataUrl,
+      createdAt: new Date().toISOString(),
+      sourceVideo: {
+        filename: sourceFile.name,
+        label,
+        startSeconds: sampleStart,
+        endSeconds: sampleEnd,
+        frameTimeSeconds: Number(frame.time.toFixed(2)),
+        timelineStartSeconds,
+        timelineEndSeconds,
+        frameTimelineSeconds: Number((timelineStartSeconds + (frame.time - sampleStart)).toFixed(2)),
+        timelineLabel: hasDirectClipSource ? "saved moment clip" : "uploaded session video",
+        frameIndex: index + 1,
+        processedClipUrl: hasDirectClipSource ? serverUrl(sourceUrl) : "",
+        motionSummary: null,
+      },
+    }));
+  }, [fetchUrlAsFile, selectedImages.length, sessionVideoSources]);
 
   useEffect(() => {
     setMessages(savedMessages || []);
@@ -870,7 +951,25 @@ export default function AIChat({
     const clipPrompt = `Please review the saved moment "${clip.label || "session moment"}"${clip.session_time_s != null ? ` at ${formatTimePhrase(clip.session_time_s)}` : ""}. Focus on visible technique, body mechanics, telemetry, and what this moment likely represents in the session.`;
     const frames = Array.isArray(clip?.frames) ? clip.frames : [];
     if (!frames.length) {
-      setImageError("");
+      const slots = MAX_IMAGE_COUNT - selectedImages.length;
+      if (slots <= 0) {
+        setImageError(`Attach up to ${MAX_IMAGE_COUNT} images per message.`);
+        return;
+      }
+      setProcessingVideoClip(true);
+      try {
+        const derivedFrames = await buildSavedMomentVideoFrames(clip);
+        if (derivedFrames.length) {
+          setSelectedImages((prev) => [...prev, ...derivedFrames].slice(0, MAX_IMAGE_COUNT));
+          setImageError("");
+          setInput((current) => current.trim() ? current : clipPrompt);
+          return;
+        }
+      } catch (error) {
+        setImageError(error?.message || "Could not pull frames for this saved moment.");
+      } finally {
+        setProcessingVideoClip(false);
+      }
       setInput((current) => current.trim() ? current : clipPrompt);
       return;
     }
@@ -1965,7 +2064,7 @@ Return a conversational answer plus structured findings for review/persistence.`
                 <span className="block text-[10px] text-muted-foreground">
                   {clip.session_time_s != null ? formatSeconds(clip.session_time_s) : "time?"}
                   {clip.camera_angle ? ` · ${clip.camera_angle}` : ""}
-                  {Array.isArray(clip.frames) && clip.frames.length ? ` · ${clip.frames.length} frames` : " · saved marker"}
+                  {Array.isArray(clip.frames) && clip.frames.length ? ` · ${clip.frames.length} frames` : clip?.url || clip?.clip_url || clip?.file_url || sessionVideoSources.length ? " · tap to pull frames" : " · saved marker"}
                 </span>
               </button>
             ))}
