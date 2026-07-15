@@ -47,6 +47,9 @@ const VOICE_AUTO_STOP_ENABLED = true;
 const VOICE_AUTO_STOP_SILENCE_MS = 3600;
 const VOICE_AUTO_STOP_RMS = 0.024;
 const VOICE_AUTO_STOP_MIN_RECORDING_MS = 1200;
+const OPTIONAL_VITALS_CONTEXT_TIMEOUT_MS = 12000;
+const REVIEW_PREP_SLOW_HINT_MS = 12000;
+const REVIEW_BACKGROUND_SLOW_HINT_MS = 45000;
 
 function getSpeechRecognitionConstructor() {
   if (typeof window === "undefined") return null;
@@ -101,6 +104,9 @@ function friendlySarahError(error) {
   const message = extractProviderErrorMessage(error) || "Sarah response failed.";
   if (/credit balance is too low|plans\s*&\s*billing|purchase credits|anthropic api/i.test(message)) {
     return "Sarah could not answer because Anthropic says the API credit balance is too low. Add credits in Anthropic Plans & Billing, then try again.";
+  }
+  if (/local background job api did not respond/i.test(message)) {
+    return "Sarah could not hand this review off to the desktop worker in time. Check that the local Sarah desktop API is awake and reachable, then try again.";
   }
   return message;
 }
@@ -378,6 +384,24 @@ function formatTimePhrase(value) {
   if (!minutes) return `${secondsText} second${seconds === 1 ? "" : "s"}`;
   if (!seconds) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
   return `${minutes} minute${minutes === 1 ? "" : "s"} and ${secondsText} second${seconds === 1 ? "" : "s"}`;
+}
+
+function formatElapsedShort(totalSeconds = 0) {
+  const seconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+async function withTimeout(promise, timeoutMs, message = "Request timed out.") {
+  let timeoutId = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), Math.max(1, Number(timeoutMs) || 0));
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) window.clearTimeout(timeoutId);
+  }
 }
 
 function isAllowedVideoFile(file) {
@@ -1880,10 +1904,22 @@ export default function AIChat({
     const userMsg = { role: "user", text: text || "Please review the attached media.", imageAttachments: imagePayload.metadata, createdAt: new Date().toISOString() };
     const updated = [...messages, userMsg];
     setMessages(updated);
+    setChatProcessingStatus(nextChatStatus({
+      phase: "processing",
+      message: "Saving your review request",
+      detail: "Writing this chat turn locally before Sarah starts the detailed review.",
+      startedAt: requestStartedAt,
+    }));
     await persistChatMessages(updated);
     setInput("");
     setSelectedImages([]);
 
+    setChatProcessingStatus(nextChatStatus({
+      phase: "processing",
+      message: "Building session review context",
+      detail: "Assembling the chat history, sampled frame timeline, and motion notes for Sarah.",
+      startedAt: requestStartedAt,
+    }));
     const localTimeContext = buildLocalTimeContext();
     const history = updated.map((m) => {
       const attachmentLine = m.imageAttachments?.length ? ` [${m.imageAttachments.length} attached image${m.imageAttachments.length === 1 ? "" : "s"}]` : "";
@@ -1918,8 +1954,29 @@ export default function AIChat({
 
     const shouldPivot = messages.length > 4 && Math.random() < 0.4;
 
+    setChatProcessingStatus(nextChatStatus({
+      phase: "processing",
+      message: "Loading physiology context",
+      detail: "Pulling grounding details and recent SarahVS vitals context before handing this review to Sarah.",
+      startedAt: requestStartedAt,
+    }));
     const groundingContext = buildAIGroundingContext(userProfile);
-    const sarahVsVitalsContext = await buildSarahVsVitalsPromptContext();
+    let sarahVsVitalsContext = "";
+    try {
+      sarahVsVitalsContext = await withTimeout(
+        buildSarahVsVitalsPromptContext(),
+        OPTIONAL_VITALS_CONTEXT_TIMEOUT_MS,
+        "Optional SarahVS vitals context timed out.",
+      );
+    } catch (error) {
+      console.warn("AIChat: optional SarahVS vitals context was skipped:", error);
+      setChatProcessingStatus(nextChatStatus({
+        phase: "processing",
+        message: "Continuing without extra vitals context",
+        detail: "The optional SarahVS longitudinal vitals layer took too long, so Sarah is continuing with the saved frames, motion notes, and session context already in hand.",
+        startedAt: requestStartedAt,
+      }));
+    }
     const profileMechanicalContext = mode === "profile" ? `\n\n${PROFILE_MECHANICAL_RULE}` : "";
 
     const ANATOMY_RULE = `ANATOMY RULE: Use ONLY the anatomical and physiological details stated in the profile above. Never assume or infer biological sex, genitalia, or anatomy not explicitly mentioned. If anatomy is ambiguous, use neutral language (e.g. "genital stimulation", "pelvic region", "that area").`;
@@ -2049,8 +2106,8 @@ Return a conversational answer plus structured findings for review/persistence.`
       if (shouldRunInBackground) {
         setChatProcessingStatus(nextChatStatus({
           phase: "background",
-          message: "Starting background moment review",
-          detail: `Submitting ${imagePayload.aiImages.length} frame${imagePayload.aiImages.length === 1 ? "" : "s"} to Sarah. The job tray will keep tracking it even if you leave this page.`,
+          message: "Handing off to Sarah's background worker",
+          detail: `Submitting ${imagePayload.aiImages.length} frame${imagePayload.aiImages.length === 1 ? "" : "s"} to the local desktop worker. This step should usually finish within a few seconds, then the job tray will keep tracking it.`,
           startedAt: requestStartedAt,
         }));
         const startedJob = await startBackgroundJob("ai_invoke", {
@@ -2648,6 +2705,19 @@ Return a conversational answer plus structured findings for review/persistence.`
       ? "border-destructive/30 bg-destructive/10 text-destructive"
       : "border-primary/20 bg-primary/[0.06] text-foreground";
     const showSpinner = ["queued", "sampling", "uploading", "analyzing", "processing", "thinking", "background"].includes(chatProcessingStatus.phase);
+    const slowHint = (() => {
+      if (chatProcessingStatus.phase === "error") return "";
+      if (chatProcessingStatus.phase === "processing" && chatProcessingElapsedSeconds >= REVIEW_PREP_SLOW_HINT_MS / 1000) {
+        return "Still preparing this review on the device before the background job can start. If this keeps climbing, the desktop Local API may be slow or unreachable.";
+      }
+      if (chatProcessingStatus.phase === "background" && chatProcessingElapsedSeconds >= REVIEW_BACKGROUND_SLOW_HINT_MS / 1000) {
+        return "This is taking longer than usual. The background job is still active, but if it sits here for over a minute, the desktop worker may be backed up.";
+      }
+      if (chatProcessingStatus.phase === "queued" && chatProcessingElapsedSeconds >= 20) {
+        return "This should usually leave the queue quickly. If it stays queued, check that the desktop app and local API are both running.";
+      }
+      return "";
+    })();
     return (
       <div className={`rounded-lg border px-3 py-2 text-xs ${tone}`}>
         <div className="flex items-center gap-2 font-semibold">
@@ -2659,10 +2729,11 @@ Return a conversational answer plus structured findings for review/persistence.`
         ) : null}
         {chatProcessingElapsedSeconds > 0 ? (
           <p className="mt-1 text-[11px] opacity-80">
-            {chatProcessingElapsedSeconds < 60
-              ? `${chatProcessingElapsedSeconds}s elapsed`
-              : `${Math.floor(chatProcessingElapsedSeconds / 60)}m ${String(chatProcessingElapsedSeconds % 60).padStart(2, "0")}s elapsed`}
+            {formatElapsedShort(chatProcessingElapsedSeconds)} elapsed
           </p>
+        ) : null}
+        {slowHint ? (
+          <p className="mt-1 text-[11px] leading-relaxed opacity-85">{slowHint}</p>
         ) : null}
       </div>
     );
