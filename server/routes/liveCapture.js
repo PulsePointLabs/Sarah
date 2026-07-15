@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import WebSocket from 'ws';
 import { parse } from 'csv-parse/sync';
-import { bulkCreate, getEntity, upsertEntity } from '../db.js';
+import { bulkCreate, getEntity, listEntities, upsertEntity } from '../db.js';
 import { liveCaptureConfig, uploadDir } from '../config.js';
 import { telemetryEngine } from '../localEngine/index.js';
 import {
@@ -60,6 +60,7 @@ const CAPTURE_KINDS = new Set(['session', 'body_exploration']);
 let overlayHrSequence = 0;
 let overlayLastDeliveryAt = null;
 let overlayTestTelemetry = null;
+let persistedLiveSessionRecoveryPromise = null;
 
 const state = {
   startedAt: new Date().toISOString(),
@@ -771,6 +772,7 @@ function buildSessionSeed(recording) {
     substances: [],
     is_favorite: false,
     live_capture: true,
+    capture_kind: 'session',
     capture_status: 'recording',
     capture_started_at: started.toISOString(),
     capture_segments: [],
@@ -806,6 +808,162 @@ function buildBodyExplorationSeed(recording) {
     purpose: 'Live Capture body exploration record created automatically when recording started.',
     notes: 'Body exploration capture created from Live Capture. Add findings, comfort notes, and setup details after recording.',
   };
+}
+
+function inferCaptureKind(record = {}, entity = 'Session') {
+  if (record?.capture_kind === 'body_exploration') return 'body_exploration';
+  if (record?.standalone_body_exploration) return 'body_exploration';
+  if (String(record?.exploration_type || '').trim()) return 'body_exploration';
+  if (Array.isArray(record?.tags) && record.tags.includes('body-exploration')) return 'body_exploration';
+  return entity === 'BodyExploration' ? 'body_exploration' : 'session';
+}
+
+function captureSegmentKey(segment = {}) {
+  return [
+    segment?.filepath || '',
+    segment?.outputPath || '',
+    segment?.startedAtMs || '',
+    segment?.stoppedAtMs || '',
+  ].join('|');
+}
+
+function mergedPersistedSegments(records = []) {
+  const merged = [];
+  const seen = new Set();
+  for (const record of records) {
+    for (const segment of Array.isArray(record?.capture_segments) ? record.capture_segments : []) {
+      const key = captureSegmentKey(segment);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(segment);
+    }
+  }
+  return merged.sort((a, b) => Number(a?.startedAtMs || 0) - Number(b?.startedAtMs || 0));
+}
+
+function parseSessionSortTime(record = {}) {
+  const candidates = [
+    record?.updated_date,
+    record?.capture_last_paused_at,
+    record?.capture_started_at,
+    record?.created_date,
+  ];
+  for (const value of candidates) {
+    const parsed = Date.parse(value || '');
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function listRecoverableLiveSessions() {
+  const candidates = [
+    ...listEntities('BodyExploration').map((record) => ({ ...record, __entity: 'BodyExploration' })),
+    ...listEntities('Session').map((record) => ({ ...record, __entity: 'Session' })),
+  ].filter((record) => record?.live_capture);
+  const groups = new Map();
+  for (const record of candidates) {
+    const id = String(record?.id || '').trim();
+    if (!id) continue;
+    const existing = groups.get(id) || [];
+    existing.push(record);
+    groups.set(id, existing);
+  }
+  return [...groups.entries()]
+    .map(([id, records]) => {
+      const hasImported = records.some((record) => (
+        Boolean(record?.live_capture_import?.imported_at)
+        || record?.capture_status === 'ready_for_review'
+      ));
+      if (hasImported) return null;
+      const segments = mergedPersistedSegments(records);
+      if (!segments.length) return null;
+      const preferred = records
+        .slice()
+        .sort((a, b) => parseSessionSortTime(b) - parseSessionSortTime(a))
+        .sort((a, b) => {
+          const aBody = inferCaptureKind(a, a.__entity) === 'body_exploration' ? 1 : 0;
+          const bBody = inferCaptureKind(b, b.__entity) === 'body_exploration' ? 1 : 0;
+          return bBody - aBody;
+        })[0];
+      const captureStatus = preferred?.capture_status || 'recording_paused';
+      if (!['recording', 'recording_paused'].includes(captureStatus)) return null;
+      const stoppedAtMs = segments
+        .map((segment) => Number(segment?.stoppedAtMs || 0))
+        .filter((value) => Number.isFinite(value) && value > 0)
+        .sort((a, b) => b - a)[0] || null;
+      return {
+        id,
+        entity: preferred?.__entity || 'Session',
+        captureKind: inferCaptureKind(preferred, preferred?.__entity),
+        record: preferred,
+        segments,
+        stoppedAtMs,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => parseSessionSortTime(b.record) - parseSessionSortTime(a.record));
+}
+
+function hydratePersistedLiveSession(candidate) {
+  if (!candidate?.id) return null;
+  const pausedAt = candidate.record?.capture_last_paused_at
+    || candidate.record?.updated_date
+    || candidate.record?.capture_started_at
+    || null;
+  state.session = {
+    ...state.session,
+    activeSessionId: candidate.id,
+    entity: candidate.entity || 'Session',
+    captureKind: candidate.captureKind || 'session',
+    active: true,
+    startedAt: candidate.record?.capture_started_at || candidate.record?.created_date || null,
+    finalizedAt: null,
+    lastImportedAt: null,
+    lastImportError: null,
+    importing: false,
+    finalizedRecordingKey: null,
+    pendingHrSegments: candidate.segments,
+    pendingObsSegments: candidate.segments
+      .filter((segment) => segment?.outputPath)
+      .map((segment) => ({
+        id: segment.id,
+        outputPath: segment.outputPath,
+        startedAtMs: segment.startedAtMs,
+        stoppedAtMs: segment.stoppedAtMs,
+        startedAt: segment.startedAt,
+        stoppedAt: segment.stoppedAt,
+        reason: segment.reason,
+      })),
+    pausedAt,
+  };
+  return state.session;
+}
+
+async function recoverPersistedLiveSession({ finalize = false } = {}) {
+  if (state.session.activeSessionId && state.session.active) return state.session;
+  if (persistedLiveSessionRecoveryPromise) return persistedLiveSessionRecoveryPromise;
+  persistedLiveSessionRecoveryPromise = (async () => {
+    const candidate = listRecoverableLiveSessions()[0] || null;
+    if (!candidate) return null;
+    hydratePersistedLiveSession(candidate);
+    if (!finalize) {
+      broadcast('live_session', state.session);
+      return state.session;
+    }
+    const stoppedAgeMs = candidate.stoppedAtMs ? Date.now() - candidate.stoppedAtMs : 0;
+    if (state.hr.recording?.active || stoppedAgeMs < 90_000) {
+      broadcast('live_session', state.session);
+      return state.session;
+    }
+    const finalized = await finalizeLiveSession({}, {
+      includeCurrentRecording: false,
+      reason: 'recovered_paused_session',
+    });
+    return finalized ? state.session : null;
+  })().finally(() => {
+    persistedLiveSessionRecoveryPromise = null;
+  });
+  return persistedLiveSessionRecoveryPromise;
 }
 
 function currentLiveSessionEntity(sessionId = state.session.activeSessionId) {
@@ -1798,9 +1956,10 @@ liveCaptureRouter.post('/emg/calibration-command', async (req, res) => {
   }
 });
 
-liveCaptureRouter.get('/status', (_req, res) => {
+liveCaptureRouter.get('/status', async (_req, res) => {
   markSelectedHrStaleIfNeeded();
   state.engine = telemetryEngine.snapshot().engine;
+  await recoverPersistedLiveSession({ finalize: true });
   res.json(state);
 });
 
@@ -1921,6 +2080,9 @@ liveCaptureRouter.post('/ensure-session', (req, res) => {
 });
 
 liveCaptureRouter.post('/end-session', async (req, res) => {
+  if (!state.session.activeSessionId || !state.session.active) {
+    await recoverPersistedLiveSession({ finalize: false });
+  }
   if (!state.session.activeSessionId || !state.session.active) {
     res.status(409).json({ error: 'No active live session is running.' });
     return;

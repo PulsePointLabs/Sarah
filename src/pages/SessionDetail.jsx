@@ -152,6 +152,149 @@ function downsampleRows(rows, maxRows = 900) {
   return rows.filter((_row, index) => index % step === 0);
 }
 
+function roundTrimSeconds(value) {
+  return Number(Number(value || 0).toFixed(1));
+}
+
+function readNumericTime(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function getSessionMaxOffset(timelineRows = [], emgRows = []) {
+  const hrMax = timelineRows.reduce((max, row) => {
+    const time = readNumericTime(row?.time_offset_s);
+    return time != null ? Math.max(max, time) : max;
+  }, 0);
+  const emgMax = emgRows.reduce((max, row) => {
+    const time = readNumericTime(row?.time_s);
+    return time != null ? Math.max(max, time) : max;
+  }, 0);
+  return Math.max(hrMax, emgMax);
+}
+
+function normalizeAnalysisTrim(trim, timelineRows = [], emgRows = []) {
+  const maxOffset = getSessionMaxOffset(timelineRows, emgRows);
+  if (!(maxOffset > 0)) return null;
+  const startRaw = readNumericTime(trim?.start_s);
+  const endRaw = readNumericTime(trim?.end_s);
+  const start = Math.max(0, startRaw ?? 0);
+  const end = Math.min(maxOffset, endRaw ?? maxOffset);
+  if (!(end > start)) return null;
+  const meaningfullyTrimmed = start > 0.25 || end < maxOffset - 0.25;
+  if (!meaningfullyTrimmed) return null;
+  return {
+    start_s: roundTrimSeconds(start),
+    end_s: roundTrimSeconds(end),
+    duration_s: roundTrimSeconds(end - start),
+    max_s: roundTrimSeconds(maxOffset),
+  };
+}
+
+function trimTimeValue(value, trim) {
+  const time = readNumericTime(value);
+  if (time == null || !trim) return value ?? null;
+  return roundTrimSeconds(time - trim.start_s);
+}
+
+function rowFallsInsideTrim(timeValue, trim) {
+  const time = readNumericTime(timeValue);
+  if (time == null || !trim) return true;
+  return time >= trim.start_s && time <= trim.end_s;
+}
+
+function trimTimelineRows(rows = [], trim) {
+  if (!trim) return rows;
+  return rows
+    .filter((row) => rowFallsInsideTrim(row?.time_offset_s, trim))
+    .map((row) => ({
+      ...row,
+      time_offset_s: trimTimeValue(row.time_offset_s, trim),
+    }));
+}
+
+function trimEmgRows(rows = [], trim) {
+  if (!trim) return rows;
+  return rows
+    .filter((row) => rowFallsInsideTrim(row?.time_s, trim))
+    .map((row) => ({
+      ...row,
+      time_s: trimTimeValue(row.time_s, trim),
+    }));
+}
+
+function trimEventTimeline(events = [], trim) {
+  if (!trim) return events;
+  return events
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => rowFallsInsideTrim(event?.time_s, trim))
+    .map(({ event, index }) => ({
+      ...event,
+      time_s: trimTimeValue(event.time_s, trim),
+      _trim_original_index: index,
+    }));
+}
+
+function trimNearClimaxEvents(events = [], trim) {
+  if (!trim) return events;
+  return events
+    .filter((event) => {
+      const start = readNumericTime(event?.start_offset_s);
+      const end = readNumericTime(event?.end_offset_s);
+      if (start == null && end == null) return true;
+      const safeStart = start ?? end ?? trim.start_s;
+      const safeEnd = end ?? start ?? trim.end_s;
+      return safeEnd >= trim.start_s && safeStart <= trim.end_s;
+    })
+    .map((event) => ({
+      ...event,
+      start_offset_s: readNumericTime(event?.start_offset_s) == null
+        ? event?.start_offset_s
+        : roundTrimSeconds(Math.max(0, Number(event.start_offset_s) - trim.start_s)),
+      peak_offset_s: trimTimeValue(event?.peak_offset_s, trim),
+      end_offset_s: readNumericTime(event?.end_offset_s) == null
+        ? event?.end_offset_s
+        : roundTrimSeconds(Math.max(0, Number(event.end_offset_s) - trim.start_s)),
+    }));
+}
+
+function trimPhaseMarker(value, trim) {
+  const time = readNumericTime(value);
+  if (time == null || !trim) return value ?? null;
+  if (time < trim.start_s || time > trim.end_s) return null;
+  return roundTrimSeconds(time - trim.start_s);
+}
+
+function buildTrimmedSessionView(session, timelineRows = [], emgRows = [], trim = null) {
+  if (!session) {
+    return {
+      session: null,
+      timelineRows,
+      emgRows,
+    };
+  }
+  if (!trim) {
+    return {
+      session,
+      timelineRows,
+      emgRows,
+    };
+  }
+  return {
+    session: {
+      ...session,
+      analysis_trim: trim,
+      pre_climax_offset_s: trimPhaseMarker(session.pre_climax_offset_s, trim),
+      climax_offset_s: trimPhaseMarker(session.climax_offset_s, trim),
+      recovery_offset_s: trimPhaseMarker(session.recovery_offset_s, trim),
+      event_timeline: trimEventTimeline(session.event_timeline || [], trim),
+      ai_near_climax_events: trimNearClimaxEvents(session.ai_near_climax_events || [], trim),
+    },
+    timelineRows: trimTimelineRows(timelineRows, trim),
+    emgRows: trimEmgRows(emgRows, trim),
+  };
+}
+
 function BloodPressureSessionChart({ session }) {
   const readings = bloodPressureReadingsFromSession(session);
   if (!readings.length) return null;
@@ -902,8 +1045,8 @@ export default function SessionDetail() {
   const [session, setSession] = useState(null);
   const sessionRef = useRef(null);
   const aiAnalysisSaveQueueRef = useRef(Promise.resolve());
-  const [timelineRows, setTimelineRows] = useState([]);
-  const [emgRows, setEmgRows] = useState([]);
+  const [rawTimelineRows, setRawTimelineRows] = useState([]);
+  const [rawEmgRows, setRawEmgRows] = useState([]);
   const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedNearClimaxIdx, setSelectedNearClimaxIdx] = useState(null);
@@ -919,9 +1062,40 @@ export default function SessionDetail() {
   const [nearbyBloodPressure, setNearbyBloodPressure] = useState([]);
   const [bpAttachBusy, setBpAttachBusy] = useState(false);
   const [bpAttachStatus, setBpAttachStatus] = useState("");
+  const [trimDraftStart, setTrimDraftStart] = useState("");
+  const [trimDraftEnd, setTrimDraftEnd] = useState("");
+  const [trimBusy, setTrimBusy] = useState(false);
+  const [trimStatus, setTrimStatus] = useState("");
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
+
+  const analysisTrim = useMemo(
+    () => normalizeAnalysisTrim(session?.analysis_trim, rawTimelineRows, rawEmgRows),
+    [session?.analysis_trim, rawTimelineRows, rawEmgRows],
+  );
+  const trimmedView = useMemo(
+    () => buildTrimmedSessionView(session, rawTimelineRows, rawEmgRows, analysisTrim),
+    [session, rawTimelineRows, rawEmgRows, analysisTrim],
+  );
+  const displaySession = trimmedView.session;
+  const timelineRows = trimmedView.timelineRows;
+  const emgRows = trimmedView.emgRows;
+  const rawSessionEndSec = useMemo(() => getSessionMaxOffset(rawTimelineRows, rawEmgRows), [rawTimelineRows, rawEmgRows]);
+  const trimOffsetToRaw = useCallback((value) => {
+    const numericValue = readNumericTime(value);
+    if (numericValue == null) return null;
+    return roundTrimSeconds(numericValue + (analysisTrim?.start_s || 0));
+  }, [analysisTrim]);
+  const trimNearClimaxEventsToRaw = useCallback((events = []) => {
+    if (!analysisTrim) return events;
+    return events.map((event) => ({
+      ...event,
+      start_offset_s: readNumericTime(event?.start_offset_s) == null ? event?.start_offset_s : trimOffsetToRaw(event.start_offset_s),
+      peak_offset_s: readNumericTime(event?.peak_offset_s) == null ? event?.peak_offset_s : trimOffsetToRaw(event.peak_offset_s),
+      end_offset_s: readNumericTime(event?.end_offset_s) == null ? event?.end_offset_s : trimOffsetToRaw(event.end_offset_s),
+    }));
+  }, [analysisTrim, trimOffsetToRaw]);
 
   const refreshNearbyBloodPressure = useCallback(async (sessionId) => {
     if (!sessionId) {
@@ -1039,20 +1213,20 @@ export default function SessionDetail() {
   const savePhaseMarkers = useCallback(async (markers) => {
     if (!id) return;
     const nextMarkers = {
-      pre_climax_offset_s: markers.pre_climax_offset_s ?? null,
-      climax_offset_s: markers.climax_offset_s ?? null,
-      recovery_offset_s: markers.recovery_offset_s ?? null,
+      pre_climax_offset_s: trimOffsetToRaw(markers.pre_climax_offset_s),
+      climax_offset_s: trimOffsetToRaw(markers.climax_offset_s),
+      recovery_offset_s: trimOffsetToRaw(markers.recovery_offset_s),
     };
     const patch = {
-      ...markers,
+      ...nextMarkers,
       phase_markers_updated_at: new Date().toISOString(),
     };
     const preClimax = Number(nextMarkers.pre_climax_offset_s);
     const climax = Number(nextMarkers.climax_offset_s);
-    if (Number.isFinite(preClimax) && Number.isFinite(climax) && timelineRows.length) {
+    if (Number.isFinite(preClimax) && Number.isFinite(climax) && rawTimelineRows.length) {
       const lo = Math.min(preClimax, climax);
       const hi = Math.max(preClimax, climax);
-      const seg = timelineRows.filter((row) => {
+      const seg = rawTimelineRows.filter((row) => {
         const t = Number(row.time_offset_s);
         return Number.isFinite(t) && t >= lo && t <= hi;
       });
@@ -1062,8 +1236,8 @@ export default function SessionDetail() {
     } else if ("pre_climax_offset_s" in markers || "climax_offset_s" in markers) {
       patch.hr_avg_pre_to_climax = null;
     }
-    if (Number.isFinite(climax) && timelineRows.length) {
-      const win = timelineRows.filter((row) => {
+    if (Number.isFinite(climax) && rawTimelineRows.length) {
+      const win = rawTimelineRows.filter((row) => {
         const t = Number(row.time_offset_s);
         return Number.isFinite(t) && Math.abs(t - climax) <= 30;
       });
@@ -1075,12 +1249,15 @@ export default function SessionDetail() {
     }
     await base44.entities.Session.update(id, patch);
     setSession((prev) => (prev ? { ...prev, ...patch } : prev));
-  }, [id, timelineRows]);
+  }, [id, rawTimelineRows, trimOffsetToRaw]);
 
   const handleMotionVerificationUpdate = useCallback(async (eventIndex, verificationStatus) => {
     if (!session?.id) return;
     const currentEvents = Array.isArray(session.event_timeline) ? session.event_timeline : [];
-    const selectedEvent = currentEvents[eventIndex];
+    const displayedEvents = Array.isArray(displaySession?.event_timeline) ? displaySession.event_timeline : [];
+    const displayedEvent = displayedEvents[eventIndex];
+    const rawIndex = Number.isInteger(displayedEvent?._trim_original_index) ? displayedEvent._trim_original_index : eventIndex;
+    const selectedEvent = currentEvents[rawIndex];
     if (!selectedEvent || selectedEvent.source !== "motion_derived") return;
     const verified = verificationStatus === "reviewed_verified" || verificationStatus === "reviewed_adjusted";
     const nextEvent = {
@@ -1089,28 +1266,37 @@ export default function SessionDetail() {
       verified_at: verified ? new Date().toISOString() : null,
       verified_by: verified ? "user" : null,
     };
-    const eventTimeline = currentEvents.map((event, index) => (index === eventIndex ? nextEvent : event));
+    const eventTimeline = currentEvents.map((event, index) => (index === rawIndex ? nextEvent : event));
     await base44.entities.Session.update(session.id, { event_timeline: eventTimeline });
     setSession((current) => (current ? { ...current, event_timeline: eventTimeline } : current));
-  }, [session]);
+  }, [displaySession, session]);
   const handleEventAnnotationUpdate = useCallback(async (eventIndex, updatedEvent) => {
     if (!session?.id) return;
     const currentEvents = Array.isArray(session.event_timeline) ? session.event_timeline : [];
+    const rawIndex = Number.isInteger(updatedEvent?._trim_original_index) ? updatedEvent._trim_original_index : eventIndex;
+    const nextEvent = {
+      ...updatedEvent,
+      time_s: trimOffsetToRaw(updatedEvent?.time_s),
+    };
+    delete nextEvent._trim_original_index;
     const eventTimeline = currentEvents
-      .map((event, index) => (index === eventIndex ? updatedEvent : event))
+      .map((event, index) => (index === rawIndex ? nextEvent : event))
       .sort((a, b) => Number(a.time_s) - Number(b.time_s));
     await base44.entities.Session.update(session.id, { event_timeline: eventTimeline });
     setSelectedEventIdx(null);
     setSession((current) => (current ? { ...current, event_timeline: eventTimeline } : current));
-  }, [session]);
+  }, [session, trimOffsetToRaw]);
   const handleEventAnnotationDelete = useCallback(async (eventIndex) => {
     if (!session?.id) return;
     const currentEvents = Array.isArray(session.event_timeline) ? session.event_timeline : [];
-    const eventTimeline = currentEvents.filter((_event, index) => index !== eventIndex);
+    const displayedEvents = Array.isArray(displaySession?.event_timeline) ? displaySession.event_timeline : [];
+    const displayedEvent = displayedEvents[eventIndex];
+    const rawIndex = Number.isInteger(displayedEvent?._trim_original_index) ? displayedEvent._trim_original_index : eventIndex;
+    const eventTimeline = currentEvents.filter((_event, index) => index !== rawIndex);
     await base44.entities.Session.update(session.id, { event_timeline: eventTimeline });
     setSelectedEventIdx(null);
     setSession((current) => (current ? { ...current, event_timeline: eventTimeline } : current));
-  }, [session]);
+  }, [displaySession, session]);
   const handleDeleteAllEventNotes = useCallback(async () => {
     if (!session?.id) return;
     await base44.entities.Session.update(session.id, { event_timeline: [] });
@@ -1119,10 +1305,10 @@ export default function SessionDetail() {
   }, [session?.id]);
 
   const nearClimaxEvents = useMemo(() => {
-    if (!session) return [];
-    if (session.ai_near_climax_events?.length > 0) return session.ai_near_climax_events;
-    return detectNearClimaxEvents(timelineRows, session.climax_offset_s, session.pre_climax_offset_s);
-  }, [timelineRows, session]);
+    if (!displaySession) return [];
+    if (displaySession.ai_near_climax_events?.length > 0) return displaySession.ai_near_climax_events;
+    return detectNearClimaxEvents(timelineRows, displaySession.climax_offset_s, displaySession.pre_climax_offset_s);
+  }, [displaySession, timelineRows]);
 
   // Auto-select first event once events are available
   useEffect(() => {
@@ -1132,7 +1318,7 @@ export default function SessionDetail() {
   }, [nearClimaxEvents.length]);
 
   useEffect(() => {
-    const events = session?.event_timeline || [];
+    const events = displaySession?.event_timeline || [];
     if (!events.length || !Number.isFinite(Number(inspectionTime))) return;
     const nearestIndex = events.reduce((closestIndex, event, index) => (
       Math.abs(Number(event.time_s) - Number(inspectionTime))
@@ -1141,7 +1327,13 @@ export default function SessionDetail() {
         : closestIndex
     ), 0);
     setSelectedEventIdx(nearestIndex);
-  }, [inspectionTime, session?.event_timeline]);
+  }, [displaySession?.event_timeline, inspectionTime]);
+
+  useEffect(() => {
+    setTrimDraftStart(analysisTrim ? String(analysisTrim.start_s) : "");
+    setTrimDraftEnd(analysisTrim ? String(analysisTrim.end_s) : rawSessionEndSec > 0 ? String(roundTrimSeconds(rawSessionEndSec)) : "");
+    setTrimStatus("");
+  }, [analysisTrim?.end_s, analysisTrim?.start_s, rawSessionEndSec, session?.id]);
 
   const highlightRange = useMemo(() => {
     if (selectedNearClimaxIdx == null || !nearClimaxEvents[selectedNearClimaxIdx]) return null;
@@ -1158,6 +1350,53 @@ export default function SessionDetail() {
         return total + (dt > 0 ? dt : 0);
       }, 0)
     : null;
+
+  const handleApplyAnalysisTrim = useCallback(async () => {
+    if (!id || !(rawSessionEndSec > 0)) return;
+    const start = Math.max(0, Number(trimDraftStart || 0));
+    const end = Math.min(rawSessionEndSec, Number(trimDraftEnd || rawSessionEndSec));
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      setTrimStatus("Pick a valid trim window. The end needs to be after the start.");
+      return;
+    }
+    if (end - start < 15) {
+      setTrimStatus("Keep at least 15 seconds in the trimmed analysis window.");
+      return;
+    }
+    const nextTrim = normalizeAnalysisTrim(
+      { start_s: start, end_s: end },
+      rawTimelineRows,
+      rawEmgRows,
+    );
+    setTrimBusy(true);
+    setTrimStatus("Saving analysis trim...");
+    try {
+      await base44.entities.Session.update(id, { analysis_trim: nextTrim ? { start_s: nextTrim.start_s, end_s: nextTrim.end_s } : null });
+      setSession((prev) => (prev ? { ...prev, analysis_trim: nextTrim ? { start_s: nextTrim.start_s, end_s: nextTrim.end_s } : null } : prev));
+      setTrimStatus(nextTrim
+        ? `Analysis view now starts at ${_fmtMmSs(nextTrim.start_s)} and ends at ${_fmtMmSs(nextTrim.end_s)}. Raw source timing stays untouched.`
+        : "Analysis trim cleared.");
+    } catch (error) {
+      setTrimStatus(error?.message || "Could not save the trim window.");
+    } finally {
+      setTrimBusy(false);
+    }
+  }, [id, rawEmgRows, rawSessionEndSec, rawTimelineRows, trimDraftEnd, trimDraftStart]);
+
+  const handleClearAnalysisTrim = useCallback(async () => {
+    if (!id) return;
+    setTrimBusy(true);
+    setTrimStatus("Clearing analysis trim...");
+    try {
+      await base44.entities.Session.update(id, { analysis_trim: null });
+      setSession((prev) => (prev ? { ...prev, analysis_trim: null } : prev));
+      setTrimStatus("Analysis trim cleared. The full raw session is back in view.");
+    } catch (error) {
+      setTrimStatus(error?.message || "Could not clear the trim window.");
+    } finally {
+      setTrimBusy(false);
+    }
+  }, [id]);
 
   useEffect(() => {
     (async () => {
@@ -1185,7 +1424,7 @@ export default function SessionDetail() {
         }).catch((error) => {
           console.warn("[SessionDetail] Journal load failed", error);
         });
-        setTimelineRows(rows);
+        setRawTimelineRows(rows);
 
         // Load EMG data from the stored CSV file (client-side parse — no DB rows needed)
         if (s?.emg_data_file) {
@@ -1197,11 +1436,13 @@ export default function SessionDetail() {
             if (!result.error) {
               const startRow = result.rows.find((r) => r.marker === "RECORD_START");
               const timeZero = startRow ? startRow.time_s : result.rows[0]?.time_s ?? 0;
-              setEmgRows(result.rows.map((r) => ({ ...r, time_s: parseFloat((r.time_s - timeZero).toFixed(6)) })));
+              setRawEmgRows(result.rows.map((r) => ({ ...r, time_s: parseFloat((r.time_s - timeZero).toFixed(6)) })));
             }
           } catch {
-            setEmgRows([]);
+            setRawEmgRows([]);
           }
+        } else {
+          setRawEmgRows([]);
         }
 
         const hasEventNotes = (s?.event_timeline || []).some((event) => String(event?.note || "").trim());
@@ -1350,7 +1591,7 @@ export default function SessionDetail() {
     return <div className="p-6 text-center text-muted-foreground">Session not found</div>;
   }
 
-  const s = session;
+  const s = displaySession;
   const cap = (str) => str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
   const contextRows = sessionContextDisplayRows(s);
   const bloodPressureReadings = bloodPressureReadingsFromSession(s);
@@ -1406,6 +1647,7 @@ export default function SessionDetail() {
   const sectionLinks = [
     { id: "session-snapshot", label: "Session Snapshot", group: "Overview" },
     { id: "session-telemetry", label: "Evidence Dashboard", group: "Overview" },
+    ...(rawSessionEndSec > 0 ? [{ id: "session-analysis-trim", label: "Analysis Trim", group: "Overview" }] : []),
     ...((bloodPressureReadings.length || attachableBloodPressureReadings.length) ? [{ id: "session-blood-pressure", label: "Blood Pressure", group: "Overview" }] : []),
     ...(pulseOxReadings.length ? [{ id: "session-pulse-ox", label: "Pulse Oximetry", group: "Overview" }] : []),
     { id: "session-summary", label: "Executive Summary", group: "Overview" },
@@ -1617,6 +1859,59 @@ export default function SessionDetail() {
           onMarkersChange={savePhaseMarkers}
           onOpenReview={() => navigate(`/review-player?session=${encodeURIComponent(s.id)}`)}
         />
+        {rawSessionEndSec > 0 && (
+          <section id="session-analysis-trim" className="scroll-mt-24 rounded-xl border border-border bg-card p-4 space-y-3">
+            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
+                  <Clock className="h-3.5 w-3.5" /> Analysis Trim
+                </h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Trim away pre-table lead-in or other dead air for charts, phase markers, and AI review without touching the raw source video.
+                </p>
+              </div>
+              <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                {analysisTrim
+                  ? `Showing ${_fmtMmSs(analysisTrim.start_s)} to ${_fmtMmSs(analysisTrim.end_s)} (${_fmtMmSs(analysisTrim.duration_s)}).`
+                  : `Showing full session window (${_fmtMmSs(rawSessionEndSec)}).`}
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,140px)_minmax(0,140px)_auto_auto] lg:items-end">
+              <label className="space-y-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Start (seconds)
+                <input
+                  type="number"
+                  min={0}
+                  step="0.1"
+                  value={trimDraftStart}
+                  onChange={(event) => setTrimDraftStart(event.target.value)}
+                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm font-mono text-foreground"
+                />
+              </label>
+              <label className="space-y-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                End (seconds)
+                <input
+                  type="number"
+                  min={0}
+                  step="0.1"
+                  value={trimDraftEnd}
+                  onChange={(event) => setTrimDraftEnd(event.target.value)}
+                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm font-mono text-foreground"
+                />
+              </label>
+              <Button onClick={handleApplyAnalysisTrim} disabled={trimBusy}>
+                {trimBusy ? "Saving..." : "Apply Trim"}
+              </Button>
+              <Button variant="outline" onClick={handleClearAnalysisTrim} disabled={trimBusy || !analysisTrim}>
+                Clear Trim
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Tip: after trimming, the visible timeline resets to zero for the kept window. Raw source timestamps and video files stay unchanged.
+            </p>
+            {trimStatus && <p className="text-xs text-muted-foreground">{trimStatus}</p>}
+          </section>
+        )}
         {(bloodPressureReadings.length > 0 || attachableBloodPressureReadings.length > 0 || bpAttachStatus) && (
           <div id="session-blood-pressure" className="scroll-mt-24 space-y-4">
             {(attachableBloodPressureReadings.length > 0 || bpAttachStatus) && (
@@ -1652,7 +1947,7 @@ export default function SessionDetail() {
                   session={s}
                   selectedIndex={selectedNearClimaxIdx}
                   onSelectIndex={setSelectedNearClimaxIdx}
-                  onEventsRefined={(refined) => setSession((prev) => ({ ...prev, ai_near_climax_events: refined }))}
+                  onEventsRefined={(refined) => setSession((prev) => ({ ...prev, ai_near_climax_events: trimNearClimaxEventsToRaw(refined) }))}
                   userProfile={userProfile}
                 />
               )}
@@ -1829,7 +2124,7 @@ export default function SessionDetail() {
                         session={s}
                         selectedIndex={selectedNearClimaxIdx}
                         onSelectIndex={setSelectedNearClimaxIdx}
-                        onEventsRefined={(refined) => setSession((prev) => ({ ...prev, ai_near_climax_events: refined }))}
+                        onEventsRefined={(refined) => setSession((prev) => ({ ...prev, ai_near_climax_events: trimNearClimaxEventsToRaw(refined) }))}
                         userProfile={userProfile}
                       />
                     )}

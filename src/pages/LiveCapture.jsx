@@ -1465,6 +1465,8 @@ export default function LiveCapture() {
   const voiceWakeEnabledRef = useRef(false);
   const annotationRecordingRef = useRef(false);
   const applyLiveCommandRef = useRef(null);
+  const startVoiceAnnotationRef = useRef(null);
+  const desktopWakeHoldoffUntilRef = useRef(0);
   const mediaRecorderRef = useRef(null);
   const voiceChunksRef = useRef([]);
   const voiceNoteTimeRef = useRef(0);
@@ -1474,6 +1476,7 @@ export default function LiveCapture() {
   const voiceSilenceStartedRef = useRef(null);
   const audioContextRef = useRef(null);
   const heartbeatAudioContextRef = useRef(null);
+  const heartbeatAudioBusRef = useRef(null);
   const heartbeatAudioEnabledRef = useRef(heartbeatAudioEnabled);
   const lastHeartbeatAtRef = useRef(0);
   const lastHeartbeatTelemetryKeyRef = useRef("");
@@ -1502,6 +1505,7 @@ export default function LiveCapture() {
   const directH10ConnectRef = useRef(null);
   const directH10AutoConnectStartedRef = useRef(false);
   const howlAutoLastActionRef = useRef({ at: 0, intensity: null, reason: "" });
+  const howlAutoCandidateRef = useRef({ key: "", since: 0, target: null });
   const appendLiveSessionEventsRef = useRef(null);
   const bpSyncInFlightRef = useRef(false);
   const bpOmronActionInFlightRef = useRef(false);
@@ -1557,9 +1561,24 @@ export default function LiveCapture() {
       const AudioCtor = window.AudioContext || window.webkitAudioContext;
       if (!AudioCtor) return null;
       heartbeatAudioContextRef.current = new AudioCtor();
+      heartbeatAudioBusRef.current = null;
     }
     if (heartbeatAudioContextRef.current.state === "suspended") {
       await heartbeatAudioContextRef.current.resume();
+    }
+    if (!heartbeatAudioBusRef.current) {
+      const ctx = heartbeatAudioContextRef.current;
+      const master = ctx.createGain();
+      const compressor = ctx.createDynamicsCompressor();
+      master.gain.value = 0.82;
+      compressor.threshold.value = -22;
+      compressor.knee.value = 18;
+      compressor.ratio.value = 3.5;
+      compressor.attack.value = 0.003;
+      compressor.release.value = 0.11;
+      master.connect(compressor);
+      compressor.connect(ctx.destination);
+      heartbeatAudioBusRef.current = { master, compressor };
     }
     return heartbeatAudioContextRef.current;
   }, []);
@@ -1569,18 +1588,36 @@ export default function LiveCapture() {
     try {
       const ctx = await getHeartbeatAudioContext();
       if (!ctx || ctx.state === "closed") return;
-      const t = ctx.currentTime + 0.006;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(880, t);
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(0.026, t + 0.008);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.055);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(t);
-      osc.stop(t + 0.065);
+      const t = ctx.currentTime + 0.004;
+      const bus = heartbeatAudioBusRef.current?.master || ctx.destination;
+      const bodyOsc = ctx.createOscillator();
+      const bodyGain = ctx.createGain();
+      const clickOsc = ctx.createOscillator();
+      const clickGain = ctx.createGain();
+
+      bodyOsc.type = "triangle";
+      bodyOsc.frequency.setValueAtTime(980, t);
+      bodyOsc.frequency.exponentialRampToValueAtTime(820, t + 0.042);
+      bodyGain.gain.setValueAtTime(0.0001, t);
+      bodyGain.gain.exponentialRampToValueAtTime(0.022, t + 0.0075);
+      bodyGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+
+      clickOsc.type = "sine";
+      clickOsc.frequency.setValueAtTime(1320, t);
+      clickOsc.frequency.exponentialRampToValueAtTime(1120, t + 0.018);
+      clickGain.gain.setValueAtTime(0.0001, t);
+      clickGain.gain.exponentialRampToValueAtTime(0.014, t + 0.0045);
+      clickGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.018);
+
+      bodyOsc.connect(bodyGain);
+      clickOsc.connect(clickGain);
+      bodyGain.connect(bus);
+      clickGain.connect(bus);
+
+      bodyOsc.start(t);
+      bodyOsc.stop(t + 0.06);
+      clickOsc.start(t);
+      clickOsc.stop(t + 0.024);
     } catch {}
   }, [getHeartbeatAudioContext]);
 
@@ -1591,11 +1628,12 @@ export default function LiveCapture() {
     }
   }, []);
 
-  const emitHeartbeatPulse = useCallback((telemetry = latestHrRef.current, { eventTimeMs = Date.now() } = {}) => {
+  const emitHeartbeatPulse = useCallback((telemetry = latestHrRef.current, { eventTimeMs = Date.now(), mode = "actual" } = {}) => {
     if (!heartbeatAudioEnabledRef.current) return;
     const hr = readNumber(telemetry?.currentHr, telemetry?.hr, telemetry?.heartRate);
     if (hr == null) return false;
-    const minInterval = Math.max(170, Math.min(900, (60000 / Math.max(40, hr)) * 0.38));
+    const baseIntervalMs = 60000 / Math.max(40, hr);
+    const minInterval = Math.max(280, Math.min(1100, baseIntervalMs * 0.72));
     if (eventTimeMs - lastHeartbeatAtRef.current < minInterval) return false;
     lastHeartbeatAtRef.current = eventTimeMs;
     setHeartbeatPulseId((value) => value + 1);
@@ -1614,7 +1652,7 @@ export default function LiveCapture() {
       heartbeatPredictionTimerRef.current = null;
       if (!heartbeatAudioEnabledRef.current) return;
       if (Date.now() - lastHeartbeatSampleAtRef.current > HEARTBEAT_PREDICTION_STALE_MS) return;
-      const fired = emitHeartbeatPulse(latestHrRef.current, { eventTimeMs: targetMs });
+      const fired = emitHeartbeatPulse(latestHrRef.current, { eventTimeMs: targetMs, mode: "predicted" });
       if (fired) schedulePredictedHeartbeat(lastHeartbeatIntervalMsRef.current || safeIntervalMs);
     }, delayMs);
   }, [clearHeartbeatPrediction, emitHeartbeatPulse]);
@@ -1632,7 +1670,7 @@ export default function LiveCapture() {
     if (key && key === lastHeartbeatTelemetryKeyRef.current) return;
     lastHeartbeatTelemetryKeyRef.current = key;
     lastHeartbeatSampleAtRef.current = now;
-    emitHeartbeatPulse(telemetry, { eventTimeMs: now });
+    emitHeartbeatPulse(telemetry, { eventTimeMs: now, mode: "actual" });
     const intervalMs = readHeartbeatIntervalMs(telemetry);
     if (intervalMs) schedulePredictedHeartbeat(intervalMs);
   }, [emitHeartbeatPulse, schedulePredictedHeartbeat]);
@@ -3083,10 +3121,12 @@ export default function LiveCapture() {
 
   useEffect(() => {
     if (!howlManualControlsUnlocked || !howlSarahAutoEnabled) {
+      howlAutoCandidateRef.current = { key: "", since: 0, target: null };
       setHowlAutoStatus(howlManualControlsUnlocked ? "Sarah auto-control is off." : "Manual Howl control must be enabled and tested first.");
       return;
     }
     if (!hrTelemetry || !hrConnected) {
+      howlAutoCandidateRef.current = { key: "", since: 0, target: null };
       setHowlAutoStatus("Sarah is armed, waiting for live HR/HRV.");
       return;
     }
@@ -3111,29 +3151,83 @@ export default function LiveCapture() {
     const nearThreshold = readNumber(howlControlForm.nearClimaxThreshold) ?? 72;
     const buildThreshold = readNumber(howlControlForm.buildThreshold) ?? 32;
     const recoveryThreshold = readNumber(howlControlForm.recoveryThreshold) ?? 55;
+    const stableBuildMs = 6000;
+    const stableReduceMs = 4500;
 
     let target = currentIntensity;
     let reason = "";
-    if (howlControlForm.recoveryReductionEnabled !== false && prediction.recovery >= recoveryThreshold) {
+    let desiredAction = "hold";
+    let dwellMs = 0;
+
+    const canBuildRamp = howlControlForm.buildRampEnabled !== false
+      && prediction.nearClimax >= buildThreshold
+      && prediction.nearClimax < Math.max(buildThreshold + 6, nearThreshold - 10)
+      && !prediction.earlySessionCapApplied
+      && prediction.elapsedMinutes >= 5
+      && (prediction.confirmationCount >= 2 || prediction.buildDurationSec >= 90);
+
+    const shouldNearReduce = howlControlForm.nearClimaxReductionEnabled !== false
+      && prediction.nearClimax >= nearThreshold
+      && prediction.buildEligibleForNearClimax
+      && prediction.confirmationCount >= 2;
+
+    const shouldRecoveryReduce = howlControlForm.recoveryReductionEnabled !== false
+      && prediction.recovery >= recoveryThreshold
+      && (prediction.dropFromRecentPeak >= 4 || prediction.hrvSignal === "release" || prediction.hrvSignal === "opening");
+
+    if (shouldRecoveryReduce) {
       target = Math.max(floor, currentIntensity - reduceStep);
       reason = `sarah_auto_recovery_reduce recovery=${prediction.recovery} near=${prediction.nearClimax}`;
-    } else if (howlControlForm.nearClimaxReductionEnabled !== false && prediction.nearClimax >= nearThreshold) {
+      desiredAction = "recovery_reduce";
+      dwellMs = stableReduceMs;
+    } else if (shouldNearReduce) {
       target = Math.max(floor, currentIntensity - reduceStep);
       reason = `sarah_auto_near_climax_reduce near=${prediction.nearClimax} recovery=${prediction.recovery}`;
-    } else if (howlControlForm.buildRampEnabled !== false && prediction.nearClimax >= buildThreshold && prediction.nearClimax < Math.max(buildThreshold + 6, nearThreshold - 10)) {
+      desiredAction = "near_reduce";
+      dwellMs = stableReduceMs;
+    } else if (canBuildRamp) {
       target = Math.min(ceiling, currentIntensity + buildStep);
       reason = `sarah_auto_gradual_build near=${prediction.nearClimax} recovery=${prediction.recovery}`;
+      desiredAction = "build_ramp";
+      dwellMs = stableBuildMs;
     }
 
     target = Math.max(floor, Math.min(ceiling, Math.round(target)));
     if (target === Math.round(currentIntensity)) {
+      howlAutoCandidateRef.current = { key: "", since: 0, target: null };
       setHowlAutoStatus(`Sarah holding intensity ${Math.round(currentIntensity)}. ${prediction.reason || prediction.label}`);
       return;
     }
 
+    const candidateKey = `${desiredAction}:${target}`;
+    const candidate = howlAutoCandidateRef.current || { key: "", since: 0, target: null };
+    if (candidate.key !== candidateKey) {
+      howlAutoCandidateRef.current = { key: candidateKey, since: now, target };
+      const waitSeconds = Math.max(1, Math.ceil(dwellMs / 1000));
+      setHowlAutoStatus(
+        desiredAction === "build_ramp"
+          ? `Sarah is watching a sustained build before nudging intensity to ${target}. Holding about ${waitSeconds}s to confirm it is not just noise.`
+          : `Sarah is watching for a real back-off window before dropping intensity to ${target}. Holding about ${waitSeconds}s to confirm it.`
+      );
+      return;
+    }
+
+    if (now - candidate.since < dwellMs) {
+      const remaining = Math.max(1, Math.ceil((dwellMs - (now - candidate.since)) / 1000));
+      setHowlAutoStatus(
+        desiredAction === "build_ramp"
+          ? `Sarah build watch holding ${remaining}s more before stepping up. ${prediction.reason || prediction.label}`
+          : `Sarah back-off watch holding ${remaining}s more before stepping down. ${prediction.reason || prediction.label}`
+      );
+      return;
+    }
+
     howlAutoLastActionRef.current = { at: now, intensity: target, reason };
+    howlAutoCandidateRef.current = { key: "", since: 0, target: null };
     setHowlCommandForm((prev) => ({ ...prev, intensity: target }));
-    setHowlAutoStatus(`Sarah ${target > currentIntensity ? "increased" : "reduced"} Howl intensity to ${target}.`);
+    setHowlAutoStatus(
+      `Sarah ${target > currentIntensity ? "increased" : "reduced"} Howl intensity to ${target} after ${Math.round(dwellMs / 1000)}s of steady ${desiredAction === "build_ramp" ? "build" : "back-off"} evidence.`
+    );
     sendHowlControlCommand("set_intensity", {
       channel,
       intensity: target,
@@ -3151,6 +3245,10 @@ export default function LiveCapture() {
         observedIntensity,
         previousIntensity: currentIntensity,
         targetIntensity: target,
+        desiredAction,
+        dwellMs,
+        confirmationCount: prediction.confirmationCount,
+        buildEligibleForNearClimax: prediction.buildEligibleForNearClimax,
       },
     });
   }, [
@@ -3361,7 +3459,11 @@ export default function LiveCapture() {
 
   const speechRecognitionSupported = typeof window !== "undefined" && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
   const voiceRecordingSupported = typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia) && typeof MediaRecorder !== "undefined";
-  const voiceReady = speechRecognitionSupported && voiceRecordingSupported;
+  const desktopVoiceWakeAvailable = typeof window !== "undefined" && Boolean(window.sarahDesktop?.startVoiceWake && window.sarahDesktop?.onVoiceWakeEvent);
+  const voiceWakeSupported = speechRecognitionSupported || desktopVoiceWakeAvailable;
+  const desktopWakeUnsupported = isSarahDesktop() && voiceRecordingSupported && !voiceWakeSupported;
+  const desktopWakeFallbackActive = isSarahDesktop() && desktopVoiceWakeAvailable && !speechRecognitionSupported;
+  const voiceReady = voiceWakeSupported && voiceRecordingSupported;
   const embeddedObsStatus = status?.hr?.relay?.obs || null;
   const obsReady = Boolean(recordingActive || embeddedObsStatus?.identified);
   const emgRecent = isRecent(emgSourceAt);
@@ -4654,6 +4756,9 @@ export default function LiveCapture() {
   const stopWakeListening = useCallback(() => {
     clearTimeout(wakeRestartTimerRef.current);
     wakeRestartTimerRef.current = null;
+    if (desktopVoiceWakeFallbackActive) {
+      try { window.sarahDesktop?.stopVoiceWake?.(); } catch {}
+    }
     const recognition = recognitionRef.current;
     recognitionRef.current = null;
     if (recognition) {
@@ -4664,7 +4769,47 @@ export default function LiveCapture() {
       try { recognition.stop(); } catch {}
     }
     setWakeListening(false);
-  }, []);
+  }, [desktopVoiceWakeFallbackActive]);
+
+  const handleWakeTranscript = useCallback(async (heard) => {
+    const normalized = String(heard || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (!normalized) return false;
+    if (isEndListeningCommand(normalized)) {
+      desktopWakeHoldoffUntilRef.current = Date.now() + 1500;
+      setVoiceWakeEnabled(false);
+      setVoiceStatus("Wake listening stopped.");
+      playVoiceFeedback("stop");
+      stopWakeListening();
+      return true;
+    }
+    const howlVoiceCommand = parseHowlVoiceCommand(heard, { ceiling: howlControlCeiling });
+    if (howlVoiceCommand) {
+      desktopWakeHoldoffUntilRef.current = Date.now() + 1500;
+      stopWakeListening();
+      await runHowlVoiceCommand(howlVoiceCommand);
+      return true;
+    }
+    const command = parseLiveCommand(normalized);
+    if (command) {
+      desktopWakeHoldoffUntilRef.current = Date.now() + 1500;
+      stopWakeListening();
+      await applyLiveCommandRef.current?.(command);
+      return true;
+    }
+    if (/\bsarah\b/.test(normalized)) {
+      desktopWakeHoldoffUntilRef.current = Date.now() + 2500;
+      setVoiceStatus("Wake phrase heard. Recording annotation…");
+      playVoiceFeedback("wake");
+      stopWakeListening();
+      window.setTimeout(() => {
+        if (voiceWakeEnabledRef.current && !annotationRecordingRef.current) {
+          startVoiceAnnotationRef.current?.();
+        }
+      }, 120);
+      return true;
+    }
+    return false;
+  }, [howlControlCeiling, playVoiceFeedback, runHowlVoiceCommand, stopWakeListening]);
 
   const stopVoiceAnnotation = useCallback(() => {
     clearTimeout(voiceNoteTimeoutRef.current);
@@ -4682,9 +4827,25 @@ export default function LiveCapture() {
     }
   }, []);
 
-  const startWakeListening = useCallback(() => {
-    if (!voiceWakeEnabledRef.current || annotationRecordingRef.current || !speechRecognitionSupported) return;
+  const startWakeListening = useCallback(async () => {
+    if (!voiceWakeEnabledRef.current || annotationRecordingRef.current || !voiceWakeSupported) return;
     stopWakeListening();
+    if (desktopVoiceWakeFallbackActive) {
+      try {
+        const result = await window.sarahDesktop.startVoiceWake();
+        if (!result?.ok) throw new Error(result?.error || "Windows wake listening could not start.");
+        setWakeListening(true);
+        setVoiceStatus("Listening for “Sarah”… say “end” to stop.");
+        setVoiceError("");
+      } catch (error) {
+        setVoiceWakeEnabled(false);
+        voiceWakeEnabledRef.current = false;
+        setWakeListening(false);
+        setVoiceError(error?.message || "Wake phrase could not start here. Use Record Now for timestamped voice notes.");
+        setVoiceStatus("Wake phrase paused. Record Now still works for timestamped voice notes.");
+      }
+      return;
+    }
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new Recognition();
     recognition.continuous = true;
@@ -4723,36 +4884,7 @@ export default function LiveCapture() {
         if (event.results[i].isFinal) hasFinal = true;
       }
       if (!hasFinal) return;
-      const normalized = heard.toLowerCase().replace(/[^a-z]+/g, " ").trim();
-      if (isEndListeningCommand(normalized)) {
-        setVoiceWakeEnabled(false);
-        setVoiceStatus("Wake listening stopped.");
-        playVoiceFeedback("stop");
-        try { recognition.stop(); } catch {}
-        return;
-      }
-      const howlVoiceCommand = parseHowlVoiceCommand(heard, { ceiling: howlControlCeiling });
-      if (howlVoiceCommand) {
-        runHowlVoiceCommand(howlVoiceCommand).catch((error) => setVoiceError(error.message || String(error)));
-        try { recognition.stop(); } catch {}
-        return;
-      }
-      const command = parseLiveCommand(normalized);
-      if (command) {
-        applyLiveCommandRef.current?.(command).catch((error) => setVoiceError(error.message || String(error)));
-        try { recognition.stop(); } catch {}
-        return;
-      }
-      if (/\bsarah\b/.test(normalized)) {
-        setVoiceStatus("Wake phrase heard. Recording annotation…");
-        playVoiceFeedback("wake");
-        try { recognition.stop(); } catch {}
-        setTimeout(() => {
-          if (voiceWakeEnabledRef.current && !annotationRecordingRef.current) {
-            startVoiceAnnotation();
-          }
-        }, 120);
-      }
+      handleWakeTranscript(heard).catch((error) => setVoiceError(error.message || String(error)));
     };
     recognition.onend = () => {
       const shouldRestart = voiceWakeEnabledRef.current && !annotationRecordingRef.current;
@@ -4773,10 +4905,56 @@ export default function LiveCapture() {
       setVoiceError("Wake phrase could not start here. Use Record Now for timestamped voice notes.");
       setVoiceStatus("Wake phrase paused. Record Now still works for timestamped voice notes.");
     }
-  }, [howlControlCeiling, playVoiceFeedback, runHowlVoiceCommand, speechRecognitionSupported, stopWakeListening]);
+  }, [desktopVoiceWakeFallbackActive, handleWakeTranscript, stopWakeListening, voiceWakeSupported]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.sarahDesktop?.onVoiceWakeEvent) return undefined;
+    return window.sarahDesktop.onVoiceWakeEvent((payload) => {
+      if (!payload || (!voiceWakeEnabledRef.current && payload.type !== "error")) return;
+      if (payload.type === "ready") {
+        setWakeListening(true);
+        setVoiceError("");
+        setVoiceStatus("Listening for “Sarah”… say “end” to stop.");
+        return;
+      }
+      if (payload.type === "recognized") {
+        handleWakeTranscript(payload.transcript || payload.text || "").catch((error) => {
+          setVoiceError(error?.message || String(error));
+        });
+        return;
+      }
+      if (payload.type === "error") {
+        setWakeListening(false);
+        setVoiceError(payload.message || "Windows wake listener failed.");
+        setVoiceStatus("Wake phrase paused. Record Now still works for timestamped voice notes.");
+        if (voiceWakeEnabledRef.current && !annotationRecordingRef.current && Date.now() >= desktopWakeHoldoffUntilRef.current) {
+          clearTimeout(wakeRestartTimerRef.current);
+          wakeRestartTimerRef.current = window.setTimeout(() => {
+            startWakeListening();
+          }, 1200);
+        }
+        return;
+      }
+      if (payload.type === "stopped") {
+        const shouldRestart = voiceWakeEnabledRef.current
+          && !annotationRecordingRef.current
+          && Date.now() >= desktopWakeHoldoffUntilRef.current;
+        if (shouldRestart) {
+          setWakeListening(false);
+          clearTimeout(wakeRestartTimerRef.current);
+          wakeRestartTimerRef.current = window.setTimeout(() => {
+            startWakeListening();
+          }, 900);
+        } else {
+          setWakeListening(false);
+        }
+      }
+    });
+  }, [handleWakeTranscript, startWakeListening]);
 
   const startVoiceAnnotation = useCallback(async () => {
     if (!voiceRecordingSupported || annotationRecordingRef.current) return;
+    desktopWakeHoldoffUntilRef.current = Date.now() + 2500;
     stopWakeListening();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -4876,6 +5054,10 @@ export default function LiveCapture() {
     }
   }, [appendVoiceAnnotation, getAudioContext, getCurrentSessionTime, startWakeListening, stopVoiceAnnotation, stopWakeListening, voiceRecordingSupported]);
 
+  useEffect(() => {
+    startVoiceAnnotationRef.current = startVoiceAnnotation;
+  }, [startVoiceAnnotation]);
+
   const toggleVoiceWake = useCallback(async () => {
     await getAudioContext();
     if (voiceWakeEnabled) playVoiceFeedback("stop");
@@ -4912,7 +5094,10 @@ export default function LiveCapture() {
             <Mic className={`h-4 w-4 ${annotationRecording || wakeListening ? "text-primary" : "text-muted-foreground"}`} />
             <span>{voiceStatus}</span>
           </div>
-          {!speechRecognitionSupported && (
+          {desktopWakeUnsupported && (
+            <p className="mt-1 text-xs text-destructive">Wake phrase listening is not available in the Windows EXE right now. Use Record Now for timestamped notes.</p>
+          )}
+          {!desktopWakeUnsupported && !speechRecognitionSupported && (
             <p className="mt-1 text-xs text-destructive">Wake phrase listening is not supported in this browser. Use Record Now instead.</p>
           )}
           {!voiceRecordingSupported && (
@@ -4930,13 +5115,13 @@ export default function LiveCapture() {
               setVoiceError("");
               setVoiceWakeEnabled((value) => !value);
             }}
-            disabled={!speechRecognitionSupported || !voiceRecordingSupported}
+            disabled={!voiceReady}
             className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:opacity-50 ${
               voiceWakeEnabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : "bg-muted text-foreground hover:bg-muted/80"
             }`}
           >
             <Mic className="h-3.5 w-3.5" />
-            {voiceWakeEnabled ? "Wake Listening On" : "Enable Wake"}
+            {desktopWakeUnsupported ? "Wake Unavailable" : voiceWakeEnabled ? "Wake Listening On" : "Enable Wake"}
           </button>
           {annotationRecording ? (
             <button
@@ -6219,7 +6404,11 @@ export default function LiveCapture() {
               icon={voiceWakeEnabled ? <Mic className="h-3.5 w-3.5 text-primary" /> : <MicOff className="h-3.5 w-3.5 text-primary" />}
               label="Voice Notes"
               value={annotationRecording ? "Recording" : voiceWakeEnabled ? "Listening" : "Manual"}
-              helper={voiceReady ? "Timestamp notes during the session." : "Microphone capture unavailable in this browser context."}
+              helper={desktopWakeUnsupported
+                ? "Wake phrase is unavailable in the Windows EXE right now. Record Note still timestamps the session."
+                : voiceReady
+                  ? "Timestamp notes during the session."
+                  : "Microphone capture unavailable in this browser context."}
               active={annotationRecording || voiceWakeEnabled}
             >
               <button
@@ -6228,7 +6417,7 @@ export default function LiveCapture() {
                 disabled={!voiceReady}
                 className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
               >
-                {voiceWakeEnabled ? "Wake Off" : "Wake On"}
+                {desktopWakeUnsupported ? "Wake Unavailable" : voiceWakeEnabled ? "Wake Off" : "Wake On"}
               </button>
               <button
                 type="button"
@@ -6331,7 +6520,11 @@ export default function LiveCapture() {
           <ReadinessItem
             label="Voice Notes"
             value={voiceReady ? "Available" : "Unavailable"}
-            helper={voiceReady ? "Wake phrase and Record Now can timestamp annotations." : "This browser context cannot provide wake listening or microphone capture."}
+            helper={desktopWakeFallbackActive
+              ? "Windows local wake listening is active in the EXE, and Record Now still handles the actual timestamped note."
+              : voiceReady
+                ? "Wake phrase and Record Now can timestamp annotations."
+                : "This browser context cannot provide wake listening or microphone capture."}
             ready={voiceReady}
           />
           <ReadinessItem

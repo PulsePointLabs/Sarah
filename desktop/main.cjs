@@ -23,6 +23,8 @@ let backendProcess = null;
 let backendUrl = '';
 let shutdownStarted = false;
 let bluetoothSelection = null;
+let desktopVoiceProcess = null;
+let desktopVoiceStopReason = '';
 
 function desktopSettingsPath() {
   return path.join(app.getPath('userData'), 'desktop-settings.json');
@@ -66,6 +68,24 @@ function desktopLog(message) {
   } catch {
     // Logging should never block app startup or Bluetooth pairing.
   }
+}
+
+function emitDesktopVoiceEvent(payload = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('voice-wake:event', payload);
+}
+
+function stopDesktopVoiceWake(reason = 'requested') {
+  if (!desktopVoiceProcess) return { ok: true, active: false };
+  desktopVoiceStopReason = reason;
+  const processToStop = desktopVoiceProcess;
+  desktopVoiceProcess = null;
+  try {
+    processToStop.kill();
+  } catch (error) {
+    desktopLog(`Desktop voice stop error: ${error.message}`);
+  }
+  return { ok: true, active: false };
 }
 
 function existingDir(dir) {
@@ -244,6 +264,90 @@ ipcMain.handle('storage:choose-media-root', async () => {
 ipcMain.handle('storage:clear-media-root', () => ({
   settings: saveDesktopSettings({ mediaRoot: '' }),
 }));
+
+ipcMain.handle('voice-wake:status', () => ({
+  ok: true,
+  available: process.platform === 'win32',
+  active: Boolean(desktopVoiceProcess),
+}));
+
+ipcMain.handle('voice-wake:stop', () => stopDesktopVoiceWake('requested'));
+
+ipcMain.handle('voice-wake:start', () => {
+  if (process.platform !== 'win32') {
+    return { ok: false, active: false, error: 'Windows wake listening is only available on the desktop EXE for Windows.' };
+  }
+  if (desktopVoiceProcess) {
+    return { ok: true, active: true };
+  }
+
+  const scriptPath = path.join(appRoot(), 'desktop', 'windows-voice-listener.ps1');
+  if (!fs.existsSync(scriptPath)) {
+    return { ok: false, active: false, error: 'Desktop wake listener script is missing from this build.' };
+  }
+
+  desktopVoiceStopReason = '';
+  const child = spawn('powershell.exe', [
+    '-NoLogo',
+    '-NoProfile',
+    '-ExecutionPolicy', 'Bypass',
+    '-File', scriptPath,
+  ], {
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  desktopVoiceProcess = child;
+  let stdoutBuffer = '';
+
+  const flushStdout = () => {
+    const lines = stdoutBuffer.split(/\r?\n/);
+    stdoutBuffer = lines.pop() || '';
+    for (const line of lines) {
+      const trimmed = String(line || '').trim();
+      if (!trimmed) continue;
+      try {
+        const payload = JSON.parse(trimmed);
+        emitDesktopVoiceEvent(payload);
+      } catch (error) {
+        desktopLog(`Desktop voice stdout parse failed: ${error.message} :: ${trimmed.slice(0, 200)}`);
+      }
+    }
+  };
+
+  child.stdout.on('data', (chunk) => {
+    stdoutBuffer += chunk.toString('utf8');
+    flushStdout();
+  });
+
+  child.stderr.on('data', (chunk) => {
+    const text = String(chunk || '').trim();
+    if (!text) return;
+    desktopLog(`Desktop voice stderr: ${text}`);
+  });
+
+  child.once('exit', (code, signal) => {
+    if (desktopVoiceProcess === child) {
+      desktopVoiceProcess = null;
+    }
+    const expectedStop = Boolean(desktopVoiceStopReason);
+    const reason = desktopVoiceStopReason || (signal ? `signal:${signal}` : code === 0 ? 'completed' : 'error');
+    desktopVoiceStopReason = '';
+    emitDesktopVoiceEvent(expectedStop || code === 0
+      ? { type: 'stopped', reason, code, signal }
+      : { type: 'error', reason, code, signal, message: `Windows wake listener stopped (${signal || code || 'unknown'}).` });
+  });
+
+  child.once('error', (error) => {
+    if (desktopVoiceProcess === child) {
+      desktopVoiceProcess = null;
+    }
+    desktopVoiceStopReason = '';
+    emitDesktopVoiceEvent({ type: 'error', message: error.message || 'Could not start Windows wake listening.' });
+  });
+
+  return { ok: true, active: true };
+});
 
 function configureBluetoothSelection(win) {
   win.webContents.on('select-bluetooth-device', (event, devices, callback) => {
