@@ -3,11 +3,11 @@ import multer from 'multer';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { estimateAudioInputTokens, estimateWhisperCostUsd, guardedOpenAIRequest, makeOpenAIHttpError } from '../services/openaiGuard.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { liveCaptureConfig, resolveUploadPath, uploadDir } from '../config.js';
 import { runProcess, runProcessBinary, slugifyFilePart } from '../services/ttsCore.js';
+import { transcribeAudioWithProvider } from '../services/sttProvider.js';
 
 export const filesRouter = express.Router();
 fs.mkdirSync(uploadDir, { recursive: true });
@@ -302,30 +302,17 @@ async function extractAudioSnippet(sourcePath, segment, filename) {
 
 async function transcribeAudioSnippet(filePath) {
   const bytes = await fsp.readFile(filePath);
-  const form = new FormData();
-  form.append('file', new Blob([bytes], { type: 'audio/mpeg' }), path.basename(filePath));
-  form.append('model', 'whisper-1');
-  form.append('language', 'en');
-  form.append('prompt', AUDIO_PASS_WHISPER_PROMPT);
-  const result = await guardedOpenAIRequest({
+  const result = await transcribeAudioWithProvider({
+    audioBuffer: bytes,
+    mimeType: 'audio/mpeg',
+    filename: path.basename(filePath),
+    prompt: AUDIO_PASS_WHISPER_PROMPT,
+    language: 'en',
+    requestedProvider: 'auto',
     feature: 'video_audio_pass_whisper',
-    model: 'whisper-1',
-    inputCharacters: AUDIO_PASS_WHISPER_PROMPT.length,
-    estimatedInputTokens: estimateAudioInputTokens(Math.max(1, bytes.length / 32_000)),
-    estimatedCostUsd: estimateWhisperCostUsd(Math.max(1, bytes.length / 32_000)),
     dedupeKey: `${filePath}:${bytes.length}`,
-    execute: async ({ requestId }) => {
-      const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'X-Client-Request-Id': requestId },
-        body: form,
-      });
-      if (!response.ok) throw makeOpenAIHttpError(response, await response.text());
-      return { data: await response.json(), providerRequestId: response.headers.get('x-request-id') || null };
-    },
   });
-  const data = result.data;
-  return String(data?.text || '').trim();
+  return result.text;
 }
 
 function audioEventFromTranscript(segment, transcript) {

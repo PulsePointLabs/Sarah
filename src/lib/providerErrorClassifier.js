@@ -77,12 +77,14 @@ function httpStatus(error) {
 function providerName(error, fallback = "unknown") {
   const text = nestedStrings(error).join(" ").toLowerCase();
   if (/anthropic|claude/.test(text)) return "anthropic";
+  if (/groq/.test(text)) return "groq";
   if (/openai|whisper|nova|gpt|tts-1|insufficient_quota/.test(text)) return "openai";
   return fallback;
 }
 
 function providerLabel(provider = "unknown") {
   if (provider === "anthropic") return "Anthropic";
+  if (provider === "groq") return "Groq";
   if (provider === "openai") return "OpenAI";
   return "The AI provider";
 }

@@ -7,12 +7,7 @@ import {
   synthesizeTTSChunk,
 } from '../services/ttsCore.js';
 import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
-import {
-  estimateAudioInputTokens,
-  estimateWhisperCostUsd,
-  guardedOpenAIRequest,
-  makeOpenAIHttpError,
-} from '../services/openaiGuard.js';
+import { transcribeAudioWithProvider } from '../services/sttProvider.js';
 
 export const functionsRouter = express.Router();
 const ttsRenderJobs = new Map();
@@ -192,39 +187,30 @@ functionsRouter.post('/renderTTSExport', async (req, res) => {
 
 functionsRouter.post('/whisperSTT', async (req, res) => {
   try {
-    const { audio_base64, mime_type = 'audio/webm', prompt } = req.body || {};
+    const { audio_base64, mime_type = 'audio/webm', prompt, provider = 'auto' } = req.body || {};
     if (!audio_base64) return res.status(400).json({ error: 'No audio provided' });
     const audioBytes = Math.floor(String(audio_base64).replace(/^data:.*?;base64,/, '').length * 0.75);
     const maxAudioBytes = Number(process.env.OPENAI_WHISPER_MAX_AUDIO_BYTES || 25 * 1024 * 1024);
     if (audioBytes > maxAudioBytes) return res.status(413).json({ error: `Audio is too large (${audioBytes} bytes; maximum ${maxAudioBytes}).` });
     const { mimeType, extension } = normalizeAudioMimeType(mime_type);
-    const form = new FormData();
-    const blob = new Blob([b64ToBuffer(audio_base64)], { type: mimeType });
-    form.append('file', blob, `audio.${extension}`);
-    form.append('model', 'whisper-1');
-    form.append('language', 'en');
-    if (prompt) form.append('prompt', prompt);
-    const estimatedDurationSeconds = Math.max(1, audioBytes / 32_000);
-    const result = await guardedOpenAIRequest({
+    const result = await transcribeAudioWithProvider({
+      audioBuffer: b64ToBuffer(audio_base64),
+      mimeType,
+      filename: `audio.${extension}`,
+      prompt,
+      language: 'en',
+      requestedProvider: provider,
       feature: 'whisper_stt',
-      model: 'whisper-1',
-      inputCharacters: String(prompt || '').length,
-      estimatedInputTokens: estimateAudioInputTokens(estimatedDurationSeconds),
-      estimatedCostUsd: estimateWhisperCostUsd(estimatedDurationSeconds),
       idempotencyKey: req.get('x-idempotency-key') || req.body?.requestId,
       dedupeKey: `${audio_base64}|${prompt || ''}`,
-      execute: async ({ requestId }) => {
-        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'X-Client-Request-Id': requestId },
-          body: form,
-        });
-        if (!response.ok) throw makeOpenAIHttpError(response, await response.text());
-        return { data: await response.json(), providerRequestId: response.headers.get('x-request-id') || null };
-      },
     });
-    const data = result.data;
-    res.json({ text: data.text });
+    res.json({
+      text: result.text,
+      data: { text: result.text },
+      provider: result.provider,
+      providerLabel: result.providerLabel,
+      model: result.model,
+    });
   } catch (error) {
     const message = error.message || String(error);
     res.status(500).json({

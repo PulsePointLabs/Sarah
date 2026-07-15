@@ -47,9 +47,10 @@ const VOICE_AUTO_STOP_ENABLED = true;
 const VOICE_AUTO_STOP_SILENCE_MS = 3600;
 const VOICE_AUTO_STOP_RMS = 0.024;
 const VOICE_AUTO_STOP_MIN_RECORDING_MS = 1200;
-const OPTIONAL_VITALS_CONTEXT_TIMEOUT_MS = 12000;
+const OPTIONAL_VITALS_CONTEXT_TIMEOUT_MS = 3500;
 const REVIEW_PREP_SLOW_HINT_MS = 12000;
 const REVIEW_BACKGROUND_SLOW_HINT_MS = 45000;
+const CHAT_PROVIDER_HISTORY_LIMIT = 10;
 
 function getSpeechRecognitionConstructor() {
   if (typeof window === "undefined") return null;
@@ -87,12 +88,12 @@ function extractProviderErrorMessage(error) {
 }
 
 function friendlyWhisperError(error) {
-  const message = extractProviderErrorMessage(error) || "Whisper transcription failed.";
+  const message = extractProviderErrorMessage(error) || "Speech-to-text failed.";
   if (/Invalid URL\s+\(POST\s+\/v1\/audio\/transcriptions\)/i.test(message)) {
     return "Whisper is using a stale transcription route. Restart the local Sarah API or rebuild/reopen the Android app, then try the mic again.";
   }
-  if (/Missing OPENAI_API_KEY/i.test(message)) {
-    return "Whisper needs OPENAI_API_KEY in the local API environment.";
+  if (/GROQ_API_KEY|OPENAI_API_KEY|speech-to-text provider is not configured|OpenAI transcription is not configured|Groq speech-to-text is not configured/i.test(message)) {
+    return "Speech-to-text is not configured on the Sarah backend. Add GROQ_API_KEY for Groq, or enable OpenAI transcription, then try the mic again.";
   }
   if (/invalid file format/i.test(message)) {
     return "Whisper received the recording but could not read the audio format. Try recording again; Sarah now normalizes Android recorder formats before sending them.";
@@ -1681,7 +1682,7 @@ export default function AIChat({
           const base64 = btoa(bin);
           const liveReferenceText = liveSpeechPreviewRef.current;
           const res = await base44.functions.invoke("whisperSTT", { audio_base64: base64, mime_type: recorderMimeType, prompt: WHISPER_PROMPT });
-          const rawText = res.data?.text?.trim() || "";
+          const rawText = String(res?.text || res?.data?.text || "").trim();
           const text = finalizeWhisperTranscript(rawText, { referenceText: liveReferenceText });
           if (text) {
             setInput((prev) => (prev ? `${prev} ${text}` : text));
@@ -1858,10 +1859,10 @@ export default function AIChat({
     const aiMsg = { role: "assistant", text: reply, createdAt: new Date().toISOString() };
     const finalMessages = [...updatedMessages, aiMsg];
     setMessages(finalMessages);
-    await persistChatMessages(finalMessages);
     setLoading(false);
     setActiveReplyJobId("");
     setChatProcessingStatus(null);
+    persistChatMessages(finalMessages).catch(() => {});
     const newIdx = finalMessages.length - 1;
     if (ttsEnabled) speakText(reply, newIdx);
     if (imagePayload.aiImages.length) {
@@ -1910,7 +1911,7 @@ export default function AIChat({
       detail: "Writing this chat turn locally before Sarah starts the detailed review.",
       startedAt: requestStartedAt,
     }));
-    await persistChatMessages(updated);
+    persistChatMessages(updated).catch(() => {});
     setInput("");
     setSelectedImages([]);
 
@@ -1921,7 +1922,7 @@ export default function AIChat({
       startedAt: requestStartedAt,
     }));
     const localTimeContext = buildLocalTimeContext();
-    const history = updated.map((m) => {
+    const history = updated.slice(-CHAT_PROVIDER_HISTORY_LIMIT).map((m) => {
       const attachmentLine = m.imageAttachments?.length ? ` [${m.imageAttachments.length} attached image${m.imageAttachments.length === 1 ? "" : "s"}]` : "";
       return `${m.role === "user" ? "User" : "AI"} (${formatMessagePromptTime(m)}): ${m.text}${attachmentLine}`;
     }).join("\n");
@@ -1962,20 +1963,22 @@ export default function AIChat({
     }));
     const groundingContext = buildAIGroundingContext(userProfile);
     let sarahVsVitalsContext = "";
-    try {
-      sarahVsVitalsContext = await withTimeout(
-        buildSarahVsVitalsPromptContext(),
-        OPTIONAL_VITALS_CONTEXT_TIMEOUT_MS,
-        "Optional SarahVS vitals context timed out.",
-      );
-    } catch (error) {
-      console.warn("AIChat: optional SarahVS vitals context was skipped:", error);
-      setChatProcessingStatus(nextChatStatus({
-        phase: "processing",
-        message: "Continuing without extra vitals context",
-        detail: "The optional SarahVS longitudinal vitals layer took too long, so Sarah is continuing with the saved frames, motion notes, and session context already in hand.",
-        startedAt: requestStartedAt,
-      }));
+    if (mode === "session") {
+      try {
+        sarahVsVitalsContext = await withTimeout(
+          buildSarahVsVitalsPromptContext(),
+          OPTIONAL_VITALS_CONTEXT_TIMEOUT_MS,
+          "Optional SarahVS vitals context timed out.",
+        );
+      } catch (error) {
+        console.warn("AIChat: optional SarahVS vitals context was skipped:", error);
+        setChatProcessingStatus(nextChatStatus({
+          phase: "processing",
+          message: "Continuing without extra vitals context",
+          detail: "The optional SarahVS longitudinal vitals layer took too long, so Sarah is continuing with the saved frames, motion notes, and session context already in hand.",
+          startedAt: requestStartedAt,
+        }));
+      }
     }
     const profileMechanicalContext = mode === "profile" ? `\n\n${PROFILE_MECHANICAL_RULE}` : "";
 

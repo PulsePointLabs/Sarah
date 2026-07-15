@@ -1372,9 +1372,23 @@ export default function SettingsStatus() {
             Checking configured provider reporting access.
           </div>
         ) : providerStatus ? (
-          <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            <ProviderCard status={providerStatus?.providers?.anthropic} />
-            <ProviderCard status={providerStatus?.providers?.openai} />
+          <div className="mt-4 space-y-3">
+            <div className="rounded-xl border border-border bg-muted/20 px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-primary">Speech To Text</p>
+              <p className="mt-1 text-sm text-foreground">
+                Active transcription provider: <span className="font-semibold">{providerStatus?.transcription?.active || "unconfigured"}</span>
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Requested mode: {providerStatus?.transcription?.requested || "auto"}.
+                {providerStatus?.transcription?.configured?.groq ? " Groq is configured." : " Groq is not configured yet."}
+                {providerStatus?.transcription?.configured?.openai ? " OpenAI transcription is available as fallback." : " OpenAI transcription fallback is not configured."}
+              </p>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-3">
+              <ProviderCard status={providerStatus?.providers?.groq} />
+              <ProviderCard status={providerStatus?.providers?.anthropic} />
+              <ProviderCard status={providerStatus?.providers?.openai} />
+            </div>
           </div>
         ) : (
           <p className="mt-4 rounded-lg bg-muted/25 px-3 py-4 text-sm text-muted-foreground">

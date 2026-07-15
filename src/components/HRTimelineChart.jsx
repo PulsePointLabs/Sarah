@@ -143,7 +143,7 @@ export default function HRTimelineChart({
   const [showRecovery, setShowRecovery] = useState(false);
   const [showPhases, setShowPhases] = useState(true);
   const [showEvents, setShowEvents] = useState(true);
-  const [showNearClimax, setShowNearClimax] = useState(true);
+  const [showNearClimax, setShowNearClimax] = useState(false);
   const [showHrvOverlay, setShowHrvOverlay] = useState(false);
   const [visibleLines, setVisibleLines] = useState({ hr: true, smoothed: true, baseline: true });
   const [showHrvGraph, setShowHrvGraph] = useState(true);
@@ -406,6 +406,21 @@ export default function HRTimelineChart({
     }));
   }, [eventsInView, visibleMax, visibleMin]);
 
+  const nearClimaxEventsInView = useMemo(() => {
+    if (!showNearClimax || noClimax) return [];
+    const [min, max] = zoomDomain ? [zoomDomain.x1, zoomDomain.x2] : [visibleMin, visibleMax];
+    return nearClimaxEvents
+      .filter((event) => {
+        const start = Number(event?.start_offset_s);
+        const end = Number(event?.end_offset_s);
+        if (!Number.isFinite(start) && !Number.isFinite(end)) return false;
+        const safeStart = Number.isFinite(start) ? start : end;
+        const safeEnd = Number.isFinite(end) ? end : start;
+        return safeEnd >= min && safeStart <= max;
+      })
+      .slice(0, 24);
+  }, [nearClimaxEvents, noClimax, showNearClimax, visibleMax, visibleMin, zoomDomain]);
+
   const hrChangeBands = useMemo(() => {
     if (!noClimax || !rows || rows.length < 8) return [];
     const points = rows
@@ -611,7 +626,7 @@ export default function HRTimelineChart({
             ))}
 
             {/* Near-climax event highlights */}
-            {showNearClimax && nearClimaxEvents.map((ev, i) => (
+            {nearClimaxEventsInView.map((ev, i) => (
               <ReferenceArea
                 key={`nce-${i}`}
                 x1={ev.start_offset_s}

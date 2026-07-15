@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import { dataDir, databasePath, defaultUploadDir, mediaOutputRoot, ttsRenderDir, uploadDir, uploadDirs } from '../config.js';
+import { resolveSttProvider } from '../services/sttProvider.js';
 
 export const statusRouter = express.Router();
 
@@ -229,16 +230,40 @@ async function getAnthropicStatus() {
   return status;
 }
 
+function groqBaseStatus() {
+  return {
+    provider: 'Groq API',
+    apiConfigured: Boolean(process.env.GROQ_API_KEY),
+    reportingConfigured: false,
+    reportingHint: 'Groq transcription can run here when GROQ_API_KEY is set. Official Groq cost reporting is not wired into Sarah yet.',
+    costReport: null,
+    error: null,
+  };
+}
+
 statusRouter.get('/providers', async (_req, res) => {
   const [openai, anthropic] = await Promise.all([
     getOpenAIStatus(),
     getAnthropicStatus(),
   ]);
+  const groq = groqBaseStatus();
+  let activeTranscriptionProvider = 'unconfigured';
+  try {
+    activeTranscriptionProvider = resolveSttProvider('auto');
+  } catch {}
 
   res.json({
     checkedAt: new Date().toISOString(),
-    providers: { openai, anthropic },
-    note: 'Provider APIs report configured usage and cost visibility here when admin reporting keys are available; a prepaid remaining-balance endpoint is not assumed.',
+    providers: { anthropic, openai, groq },
+    transcription: {
+      requested: String(process.env.SARAH_STT_PROVIDER || process.env.STT_PROVIDER || 'auto'),
+      active: activeTranscriptionProvider,
+      configured: {
+        groq: groq.apiConfigured,
+        openai: openai.apiConfigured,
+      },
+    },
+    note: 'Provider APIs report configured usage and cost visibility here when admin reporting keys are available; Groq transcription readiness is shown here even though Groq cost reporting is not yet wired in.',
   });
 });
 

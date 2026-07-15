@@ -82,7 +82,7 @@ export default function JournalRecorder({ session, timelineRows = [], userProfil
         mime_type:    mimeType,
         prompt:       WHISPER_PROMPT,
       });
-      const text = cleanWhisperTranscript(res.data?.text);
+      const text = cleanWhisperTranscript(res?.text || res?.data?.text);
       if (text) setTranscript(text);
       setTranscribing(false);
     };
