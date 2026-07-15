@@ -695,12 +695,16 @@ function isAndroidRuntime() {
 }
 
 function isSarahDesktopRuntime() {
-  return Boolean(window.sarahDesktop?.isDesktop);
+  return typeof window !== "undefined" && Boolean(window.sarahDesktop?.isDesktop);
 }
 
 async function getDirectH10Device({ preferSaved = false, silent = false } = {}) {
-  const grantedDevices = typeof navigator.bluetooth.getDevices === "function"
-    ? await navigator.bluetooth.getDevices().catch(() => [])
+  const bluetooth = typeof navigator !== "undefined" ? navigator.bluetooth : undefined;
+  if (!bluetooth) {
+    throw new Error("This browser does not expose Web Bluetooth.");
+  }
+  const grantedDevices = typeof bluetooth.getDevices === "function"
+    ? await bluetooth.getDevices().catch(() => [])
     : [];
   const pairedH10 = grantedDevices.find((device) => /polar\s+h10/i.test(device?.name || ""));
   if (preferSaved && pairedH10) return pairedH10;
@@ -709,7 +713,7 @@ async function getDirectH10Device({ preferSaved = false, silent = false } = {}) 
   }
 
   try {
-    return await navigator.bluetooth.requestDevice({
+    return await bluetooth.requestDevice({
       filters: [{ namePrefix: "Polar H10" }],
       optionalServices: ["heart_rate", "battery_service", "device_information"],
     });
@@ -718,7 +722,7 @@ async function getDirectH10Device({ preferSaved = false, silent = false } = {}) 
   }
 
   if (pairedH10) return pairedH10;
-  return navigator.bluetooth.requestDevice({
+  return bluetooth.requestDevice({
     acceptAllDevices: true,
     optionalServices: ["heart_rate", "battery_service", "device_information"],
   });
@@ -4756,7 +4760,7 @@ export default function LiveCapture() {
   const stopWakeListening = useCallback(() => {
     clearTimeout(wakeRestartTimerRef.current);
     wakeRestartTimerRef.current = null;
-    if (desktopVoiceWakeFallbackActive) {
+    if (desktopWakeFallbackActive) {
       try { window.sarahDesktop?.stopVoiceWake?.(); } catch {}
     }
     const recognition = recognitionRef.current;
@@ -4769,7 +4773,7 @@ export default function LiveCapture() {
       try { recognition.stop(); } catch {}
     }
     setWakeListening(false);
-  }, [desktopVoiceWakeFallbackActive]);
+  }, [desktopWakeFallbackActive]);
 
   const handleWakeTranscript = useCallback(async (heard) => {
     const normalized = String(heard || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -4830,7 +4834,7 @@ export default function LiveCapture() {
   const startWakeListening = useCallback(async () => {
     if (!voiceWakeEnabledRef.current || annotationRecordingRef.current || !voiceWakeSupported) return;
     stopWakeListening();
-    if (desktopVoiceWakeFallbackActive) {
+    if (desktopWakeFallbackActive) {
       try {
         const result = await window.sarahDesktop.startVoiceWake();
         if (!result?.ok) throw new Error(result?.error || "Windows wake listening could not start.");
@@ -4905,7 +4909,7 @@ export default function LiveCapture() {
       setVoiceError("Wake phrase could not start here. Use Record Now for timestamped voice notes.");
       setVoiceStatus("Wake phrase paused. Record Now still works for timestamped voice notes.");
     }
-  }, [desktopVoiceWakeFallbackActive, handleWakeTranscript, stopWakeListening, voiceWakeSupported]);
+  }, [desktopWakeFallbackActive, handleWakeTranscript, stopWakeListening, voiceWakeSupported]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.sarahDesktop?.onVoiceWakeEvent) return undefined;

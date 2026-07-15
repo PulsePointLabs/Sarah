@@ -480,6 +480,19 @@ function createWindow() {
     },
   });
 
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    desktopLog(`Renderer console [${level}] ${sourceId || 'unknown'}:${line || 0} ${message}`);
+  });
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    desktopLog(`Renderer did-fail-load code=${errorCode} mainFrame=${Boolean(isMainFrame)} url=${validatedURL || ''} error=${errorDescription || ''}`);
+  });
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    desktopLog(`Renderer process gone reason=${details?.reason || 'unknown'} exitCode=${details?.exitCode ?? 'unknown'}`);
+  });
+  mainWindow.webContents.on('unresponsive', () => {
+    desktopLog('Renderer became unresponsive');
+  });
+
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
