@@ -3461,8 +3461,8 @@ export default function LiveCapture() {
   const voiceRecordingSupported = typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia) && typeof MediaRecorder !== "undefined";
   const desktopVoiceWakeAvailable = typeof window !== "undefined" && Boolean(window.sarahDesktop?.startVoiceWake && window.sarahDesktop?.onVoiceWakeEvent);
   const voiceWakeSupported = speechRecognitionSupported || desktopVoiceWakeAvailable;
-  const desktopWakeUnsupported = isSarahDesktop() && voiceRecordingSupported && !voiceWakeSupported;
-  const desktopWakeFallbackActive = isSarahDesktop() && desktopVoiceWakeAvailable && !speechRecognitionSupported;
+  const desktopWakeUnsupported = isSarahDesktopRuntime() && voiceRecordingSupported && !voiceWakeSupported;
+  const desktopWakeFallbackActive = isSarahDesktopRuntime() && desktopVoiceWakeAvailable && !speechRecognitionSupported;
   const voiceReady = voiceWakeSupported && voiceRecordingSupported;
   const embeddedObsStatus = status?.hr?.relay?.obs || null;
   const obsReady = Boolean(recordingActive || embeddedObsStatus?.identified);
