@@ -68,6 +68,10 @@ const MAX_VOICE_NOTE_MS = 12000;
 const VOICE_NOTE_MIN_MS = 900;
 const VOICE_NOTE_SILENCE_MS = 1300;
 const VOICE_NOTE_SILENCE_RMS = 0.018;
+const LIVE_HEALTH_HR_GRACE_MS = 6000;
+const LIVE_HEALTH_RR_USABLE_GRACE_MS = 8000;
+const LIVE_HEALTH_RR_SEEN_GRACE_MS = 10000;
+const LIVE_HEALTH_EMG_GRACE_MS = 6000;
 const TERMINAL_WAKE_LISTENER_ERRORS = new Set([
   "network",
   "not-allowed",
@@ -2894,6 +2898,60 @@ export default function LiveCapture() {
   const rrCount = readNumber(hrTelemetry?.quality?.rrCount, hrv.sampleCount);
   const hrvRmssd = readNumber(hrv.rmssdMs, hrTelemetry?.hrv_rmssd_ms);
   const hrvQuality = hrv.quality || hrTelemetry?.hrv_quality || null;
+  const directH10Source = hrSourceSettings.source === "direct_h10";
+  const rawRrUsable = Boolean(
+    directH10Source
+    && Number(rrCount) >= 10
+    && ["high", "moderate"].includes(String(hrvQuality || "").toLowerCase())
+  );
+  const rawRrWeak = Boolean(
+    directH10Source
+    && recentHrPacket
+    && !rawRrUsable
+  );
+  const emgConfigured = captureMode !== "hr" && emgSensorConfig !== "generic";
+  const liveHealthHrSeenAtRef = useRef(recentHrPacket ? Date.now() : 0);
+  const liveHealthHrLinkAtRef = useRef(hrConnected ? Date.now() : 0);
+  const liveHealthRrUsableAtRef = useRef(rawRrUsable ? Date.now() : 0);
+  const liveHealthRrSeenAtRef = useRef(rawRrWeak ? Date.now() : 0);
+  const liveHealthEmgSeenAtRef = useRef(telemetryEmgLive ? Date.now() : 0);
+  const [liveHealthNowMs, setLiveHealthNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setLiveHealthNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    const now = Date.now();
+    if (recentHrPacket) liveHealthHrSeenAtRef.current = now;
+    if (hrConnected) liveHealthHrLinkAtRef.current = now;
+    if (rawRrUsable) liveHealthRrUsableAtRef.current = now;
+    if (rawRrWeak || (directH10Source && Number(rrCount) > 0)) liveHealthRrSeenAtRef.current = now;
+    if (telemetryEmgLive) liveHealthEmgSeenAtRef.current = now;
+  }, [recentHrPacket, hrConnected, rawRrUsable, rawRrWeak, directH10Source, rrCount, telemetryEmgLive]);
+
+  const healthRecentHrPacket = recentHrPacket || (liveHealthNowMs - liveHealthHrSeenAtRef.current) <= LIVE_HEALTH_HR_GRACE_MS;
+  const healthHrConnected = hrConnected || (liveHealthNowMs - liveHealthHrLinkAtRef.current) <= LIVE_HEALTH_HR_GRACE_MS;
+  const healthRrUsable = rawRrUsable || (
+    directH10Source
+    && (liveHealthNowMs - liveHealthRrUsableAtRef.current) <= LIVE_HEALTH_RR_USABLE_GRACE_MS
+  );
+  const healthRrWeak = Boolean(
+    directH10Source
+    && healthRecentHrPacket
+    && !healthRrUsable
+    && (
+      rawRrWeak
+      || (liveHealthNowMs - liveHealthRrSeenAtRef.current) <= LIVE_HEALTH_RR_SEEN_GRACE_MS
+    )
+  );
+  const healthTelemetryEmgLive = telemetryEmgLive || (
+    emgConfigured
+    && (liveHealthNowMs - liveHealthEmgSeenAtRef.current) <= LIVE_HEALTH_EMG_GRACE_MS
+  );
   const latestBpReading = selectLiveSessionBloodPressure({
     activeSessionId: liveSession?.activeSessionId,
     activeSessionDoc,
@@ -5668,31 +5726,20 @@ export default function LiveCapture() {
         ? "Prepare Sarah and Start Session"
         : "Start Session";
   const showAdvancedSetupConsole = advancedSetupOpen;
-  const rrUsable = Boolean(
-    hrSourceSettings.source === "direct_h10"
-    && Number(rrCount) >= 10
-    && ["high", "moderate"].includes(String(hrvQuality || "").toLowerCase())
-  );
-  const rrWeak = Boolean(
-    hrSourceSettings.source === "direct_h10"
-    && recentHrPacket
-    && !rrUsable
-  );
-  const emgConfigured = captureMode !== "hr" && emgSensorConfig !== "generic";
   const obsPreferred = Boolean(launchProfile.obsEnabled && !launchProfile.telemetryOnlyFallback);
-  const liveGuidanceMode = !recentHrPacket
+  const liveGuidanceMode = !healthRecentHrPacket
     ? {
       label: "Telemetry unstable",
       tone: "bad",
       helper: "No recent HR packet. Sarah should not trust live phase/build guidance until heart-rate telemetry is current again.",
     }
-    : rrWeak
+    : healthRrWeak
       ? {
         label: "HR-only watch",
         tone: "warn",
         helper: "Heart rate is live, but RR/HRV quality is weak. Treat AI Magic as lower-confidence and lean on manual marks.",
       }
-      : emgConfigured && !telemetryEmgLive
+      : emgConfigured && !healthTelemetryEmgLive
         ? {
           label: "HR-led watch",
           tone: "warn",
@@ -5706,35 +5753,35 @@ export default function LiveCapture() {
   const liveHealthPills = [
     {
       label: "HR Source",
-      value: recentHrPacket ? "Live" : hrConnected ? "Link only" : "Offline",
-      helper: recentHrPacket
+      value: healthRecentHrPacket ? "Live" : healthHrConnected ? "Link only" : "Offline",
+      helper: healthRecentHrPacket
         ? `${serverHrLabel} packets are current.`
-        : hrConnected
+        : healthHrConnected
           ? "Connection exists, but Sarah is waiting for a fresh HR packet."
           : "No live HR telemetry.",
-      tone: recentHrPacket ? "good" : hrConnected ? "warn" : "bad",
+      tone: healthRecentHrPacket ? "good" : healthHrConnected ? "warn" : "bad",
     },
     {
       label: "RR / HRV",
-      value: hrSourceSettings.source === "direct_h10" ? (rrUsable ? "Usable" : rrWeak ? "Weak" : "Waiting") : "N/A",
-      helper: hrSourceSettings.source === "direct_h10"
-        ? rrUsable
+      value: directH10Source ? (healthRrUsable ? "Usable" : healthRrWeak ? "Weak" : "Waiting") : "N/A",
+      helper: directH10Source
+        ? healthRrUsable
           ? `RR ${fmtNumber(rrCount, 0)} · HRV ${String(hrvQuality || "").toLowerCase() || "usable"}`
-          : rrWeak
+          : healthRrWeak
             ? `RR ${fmtNumber(rrCount, 0)} · HRV ${String(hrvQuality || "low").toLowerCase()}`
             : "Direct H10 is live, but the RR window is not ready yet."
         : "RR-driven HRV only applies to direct H10 sessions.",
-      tone: hrSourceSettings.source === "direct_h10" ? (rrUsable ? "good" : rrWeak ? "warn" : "neutral") : "neutral",
+      tone: directH10Source ? (healthRrUsable ? "good" : healthRrWeak ? "warn" : "neutral") : "neutral",
     },
     {
       label: "EMG",
-      value: telemetryEmgLive ? "Live" : emgConfigured ? "Stale" : "Optional",
-      helper: telemetryEmgLive
+      value: healthTelemetryEmgLive ? "Live" : emgConfigured ? "Stale" : "Optional",
+      helper: healthTelemetryEmgLive
         ? selectedEmgConfig.trendSubtitle || "Recent EMG telemetry received."
         : emgConfigured
           ? "Configured, but no current EMG sample is landing."
           : "No EMG preset selected for this capture.",
-      tone: telemetryEmgLive ? "good" : emgConfigured ? "warn" : "neutral",
+      tone: healthTelemetryEmgLive ? "good" : emgConfigured ? "warn" : "neutral",
     },
     {
       label: "Session / OBS",
