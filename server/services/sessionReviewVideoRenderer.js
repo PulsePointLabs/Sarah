@@ -22,6 +22,14 @@ const REVIEW_VIDEO_TIME_TOLERANCE_SECONDS = Math.max(0, Math.min(30, Number(proc
 const REVIEW_VIDEO_MIN_GENERIC_BROLL_GAP_SECONDS = Math.max(6, Number(process.env.REVIEW_VIDEO_MIN_GENERIC_BROLL_GAP_SECONDS || 18));
 const REVIEW_VIDEO_GENERIC_BROLL_SEARCH_STEPS = Math.max(3, Number(process.env.REVIEW_VIDEO_GENERIC_BROLL_SEARCH_STEPS || 8));
 
+function friendlyReviewVideoRenderError(error) {
+  const message = String(error?.message || error || '');
+  if (/no space left on device/i.test(message)) {
+    return new Error('Sarah ran out of free disk space while building temporary review-video segments in data/tts-render-work. Free up space on drive C, then try the produced video again.');
+  }
+  return error instanceof Error ? error : new Error(message || 'Review video render failed.');
+}
+
 function reviewVideoFitFilter() {
   return [
     `scale=${REVIEW_VIDEO_WIDTH}:${REVIEW_VIDEO_HEIGHT}:force_original_aspect_ratio=decrease:flags=lanczos`,
@@ -464,20 +472,19 @@ function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playb
   ].join('');
   const slowMoText = slowMoLabel ? drawTextSafe(slowMoLabel.toUpperCase()) : '';
   const badgeX = 34;
-  const badgeY = 'h-118';
-  const badgeWidth = slowMoText ? 430 : 305;
-  const badgeHeight = 78;
+  const badgeY = 'h-104';
+  const badgeWidth = slowMoText ? 352 : 208;
+  const badgeHeight = 58;
   return [
     reviewVideoFitFilter(),
     'format=yuv420p',
     Number.isFinite(rate) && rate > 0 && rate < 0.99 ? `setpts=${(1 / rate).toFixed(4)}*PTS` : null,
-    `drawbox=x=${badgeX}:y=${badgeY}:w=${badgeWidth}:h=${badgeHeight}:color=0x050711@0.66:t=fill`,
-    `drawbox=x=${badgeX}:y=${badgeY}:w=7:h=${badgeHeight}:color=0xa855f7@0.96:t=fill`,
-    `drawbox=x=${badgeX + 9}:y=h-116:w=${badgeWidth - 13}:h=1:color=0xffffff@0.18:t=fill`,
-    `drawtext=fontfile='${fontPath}':text='SESSION TIME':x=${badgeX + 22}:y=h-104:fontsize=17:fontcolor=0xd8b4fe@0.95:shadowcolor=0x000000@0.85:shadowx=1:shadowy=1`,
-    `drawtext=fontfile='${fontPath}':text='${timelineCounter}':x=${badgeX + 21}:y=h-82:fontsize=38:fontcolor=0xffffff@0.98:shadowcolor=0x000000@0.9:shadowx=2:shadowy=2`,
+    `drawbox=x=${badgeX}:y=${badgeY}:w=${badgeWidth}:h=${badgeHeight}:color=0x04060b@0.72:t=fill`,
+    `drawbox=x=${badgeX}:y=${badgeY}:w=${badgeWidth}:h=${badgeHeight}:color=0xffffff@0.08:t=2`,
+    `drawbox=x=${badgeX + 12}:y=h-82:w=4:h=14:color=0xa855f7@0.96:t=fill`,
+    `drawtext=fontfile='${fontPath}':text='${timelineCounter}':x=${badgeX + 28}:y=h-64:fontsize=34:fontcolor=0xf8fafc@0.99:shadowcolor=0x000000@0.92:shadowx=2:shadowy=2`,
     slowMoText
-      ? `drawtext=fontfile='${fontPath}':text='${slowMoText}':x=${badgeX + 167}:y=h-73:fontsize=18:fontcolor=0xf5d0fe@0.94:box=1:boxcolor=0x7e22ce@0.32:boxborderw=7:shadowcolor=0x000000@0.75:shadowx=1:shadowy=1`
+      ? `drawtext=fontfile='${fontPath}':text='${slowMoText}':x=${badgeX + 150}:y=h-61:fontsize=17:fontcolor=0xf5d0fe@0.95:box=1:boxcolor=0x7e22ce@0.30:boxborderw=6:shadowcolor=0x000000@0.75:shadowx=1:shadowy=1`
       : null,
     ...segmentFadeFilters(outputDurationSeconds),
   ].filter(Boolean).join(',');
@@ -1966,6 +1973,7 @@ async function renderSegmentedSourceReviewVideo({
     durationSeconds: finalDuration,
     contentType: 'session_review_video',
     onProgress,
+    appVersion: payload.appVersion || '',
   });
   finalDuration = await mediaDurationSeconds(outputPath).catch(() => totalAudioDuration);
   const stat = await fs.stat(outputPath);
@@ -2002,6 +2010,7 @@ async function renderSegmentedSourceReviewVideo({
     existing_clip_count: existingSegmentSources.length,
     chapters,
     watermark: watermarkDebug,
+    app_version: payload.appVersion || null,
   };
   const manifest_url = await writeManifest(outputBase, manifest);
   const record = upsertEntity('SessionReviewVideo', crypto.randomUUID(), {
@@ -2030,6 +2039,7 @@ async function renderSegmentedSourceReviewVideo({
     exported_at: new Date().toISOString(),
     watermark_enabled: Boolean(watermarkDebug?.watermark_enabled),
     watermark_preset: watermarkDebug?.preset || watermark.preset,
+    app_version: payload.appVersion || null,
   });
   const result = {
     ok: true,
@@ -2048,6 +2058,7 @@ async function renderSegmentedSourceReviewVideo({
     timeline_trace: generatedClips.map((clip) => clip.timeline_trace || null).filter(Boolean),
     record,
     render_version: REVIEW_RENDER_VERSION,
+    app_version: payload.appVersion || null,
   };
   onProgress({
     phase: 'complete',
@@ -2234,6 +2245,7 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       durationSeconds: finalDuration,
       contentType: 'session_review_video',
       onProgress,
+      appVersion: payload.appVersion || '',
     });
     finalDuration = await mediaDurationSeconds(outputPath).catch(() => audioDuration);
     const stat = await fs.stat(outputPath);
@@ -2258,6 +2270,7 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       existing_clip_count: existingSegmentSources.length,
       chapters,
       watermark: watermarkDebug,
+      app_version: payload.appVersion || null,
     };
     const manifest_url = await writeManifest(outputBase, manifest);
     const record = upsertEntity('SessionReviewVideo', crypto.randomUUID(), {
@@ -2285,6 +2298,7 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       exported_at: new Date().toISOString(),
       watermark_enabled: Boolean(watermarkDebug?.watermark_enabled),
       watermark_preset: watermarkDebug?.preset || watermark.preset,
+      app_version: payload.appVersion || null,
     });
 
     const result = {
@@ -2306,6 +2320,7 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
         .filter(Boolean),
       record,
       render_version: REVIEW_RENDER_VERSION,
+      app_version: payload.appVersion || null,
     };
     onProgress({
       phase: 'complete',
@@ -2316,6 +2331,8 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       filename: result.filename,
     });
     return result;
+  } catch (error) {
+    throw friendlyReviewVideoRenderError(error);
   } finally {
     fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
   }

@@ -12,6 +12,7 @@ import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
 import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { readWatermarkSettings } from "@/lib/watermarkSettings";
 import { videoPosterDataUrl } from "@/lib/videoPoster";
+import { BUILD_INFO } from "@/generated/buildInfo";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from "@/lib/sessionContext";
 import { buildSessionKeyVideoClipDigest, buildSessionPhaseMarkerDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, normalizeSessionKeyVideoClips, normalizeSessionVideoPassFindings, sessionEventsForCurrentPhaseMarkers } from "@/lib/visualEvidence";
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
@@ -25,6 +26,14 @@ import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TEL
 import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "./TTSButton";
 
 export const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v11_hd";
+
+function friendlyReviewVideoRenderErrorMessage(error) {
+  const message = String(error?.message || error || "Review video render failed.");
+  if (/no space left on device/i.test(message)) {
+    return "Sarah ran out of free disk space while building temporary review-video segments. Free up space on drive C, then try the produced video again.";
+  }
+  return message;
+}
 
 function trailingContext(text, maxChars = 320) {
   const cleaned = String(text || "").replace(/\s+/g, " ").trim();
@@ -891,6 +900,7 @@ export function SessionReviewVideoExportButton({
         outputFormat: runtime.format,
         normalize: runtime.settings.normalizeExport,
         watermark: readWatermarkSettings(),
+        appVersion: BUILD_INFO?.version || "",
       };
 
       setStatus({ type: "working", message: "Starting review video render..." });
@@ -927,7 +937,7 @@ export function SessionReviewVideoExportButton({
           : "Review video ready. Narration was rendered for this export.",
       });
     } catch (error) {
-      setStatus({ type: "error", message: error?.message || "Review video render failed." });
+      setStatus({ type: "error", message: friendlyReviewVideoRenderErrorMessage(error) });
     }
   };
 

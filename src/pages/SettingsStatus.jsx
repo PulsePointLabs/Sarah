@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import TTSSettingsPanel from "@/components/TTSSettingsPanel";
 import AppVersionBadge from "@/components/AppVersionBadge";
+import { BUILD_INFO } from "@/generated/buildInfo";
 import { Textarea } from "@/components/ui/textarea";
 import { SarahLogoMark } from "@/components/SarahBrand";
 import { cancelBackgroundJob, clearBackgroundJobs, listBackgroundJobs, retryBackgroundJob } from "@/lib/backgroundJobs";
@@ -1937,7 +1938,8 @@ export default function SettingsStatus() {
               )}
             </div>
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              The final video renderer bakes this Sarah portrait, icon, and text into the bottom-right corner. Source recordings are not modified.
+              Produced videos are rendered by Sarah v{BUILD_INFO?.version || "dev"} using the exact text, placement, and watermark toggles above.
+              The current export placement is <span className="font-semibold text-foreground">{watermark.positionMode.replace(/_/g, " ")}</span>. Source recordings are not modified.
             </p>
           </div>
         </div>

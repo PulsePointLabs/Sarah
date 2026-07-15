@@ -300,6 +300,7 @@ export async function applyWatermarkToVideo(inputPath, outputPath, settings = {}
   durationSeconds = 0,
   contentType = 'video',
   onProgress = null,
+  appVersion = '',
 } = {}) {
   const normalized = normalizeWatermarkSettings(settings);
   const portraitAsset = normalized.portraitEnabled ? await existingWatermarkAsset(normalized.portraitPath) : null;
@@ -324,6 +325,7 @@ export async function applyWatermarkToVideo(inputPath, outputPath, settings = {}
     positions_used: watermarkPositionPlan(normalized, durationSeconds),
     metadata_scrub_enabled: normalized.metadataScrubEnabled,
     metadata_fields_removed: normalized.metadataScrubEnabled ? ['all_input_metadata'] : [],
+    app_version: appVersion || null,
     output_path: outputPath,
   };
   const start = Date.now();
@@ -352,7 +354,7 @@ export async function applyWatermarkToVideo(inputPath, outputPath, settings = {}
     ...(normalized.metadataScrubEnabled ? [
       '-map_metadata', '-1',
       '-metadata', 'creator=PulsePointLabs',
-      '-metadata', 'application=Sarah',
+      '-metadata', `application=${appVersion ? `Sarah v${appVersion}` : 'Sarah'}`,
       '-metadata', 'brand=Clinical Climax',
       '-metadata', 'comment=Public export rendered by Sarah',
     ] : []),
