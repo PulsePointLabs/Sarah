@@ -469,6 +469,7 @@ function MessageMarkdown({ text }) {
 export default function AIChat({
   mode = "session",
   context,
+  extraReviewContext = "",
   userProfile,
   savedMessages,
   savedNotes,
@@ -1955,15 +1956,16 @@ export default function AIChat({
 
     const shouldPivot = messages.length > 4 && Math.random() < 0.4;
 
-    setChatProcessingStatus(nextChatStatus({
-      phase: "processing",
-      message: "Loading physiology context",
-      detail: "Pulling grounding details and recent SarahVS vitals context before handing this review to Sarah.",
-      startedAt: requestStartedAt,
-    }));
     const groundingContext = buildAIGroundingContext(userProfile);
     let sarahVsVitalsContext = "";
-    if (mode === "session") {
+    const shouldLoadSarahVsVitalsContext = mode === "session" && imagePayload.aiImages.length > 0;
+    if (shouldLoadSarahVsVitalsContext) {
+      setChatProcessingStatus(nextChatStatus({
+        phase: "processing",
+        message: "Loading physiology context",
+        detail: "Pulling grounding details and recent SarahVS vitals context before handing this review to Sarah.",
+        startedAt: requestStartedAt,
+      }));
       try {
         sarahVsVitalsContext = await withTimeout(
           buildSarahVsVitalsPromptContext(),
@@ -1981,6 +1983,10 @@ export default function AIChat({
       }
     }
     const profileMechanicalContext = mode === "profile" ? `\n\n${PROFILE_MECHANICAL_RULE}` : "";
+    const combinedContext = [
+      String(context || "").trim(),
+      imagePayload.aiImages.length ? String(extraReviewContext || "").trim() : "",
+    ].filter(Boolean).join("\n\n");
 
     const ANATOMY_RULE = `ANATOMY RULE: Use ONLY the anatomical and physiological details stated in the profile above. Never assume or infer biological sex, genitalia, or anatomy not explicitly mentioned. If anatomy is ambiguous, use neutral language (e.g. "genital stimulation", "pelvic region", "that area").`;
 
@@ -2096,7 +2102,7 @@ Return a conversational answer plus structured findings for review/persistence.`
     }));
 
     const aiRequestPayload = {
-      prompt: `${imageReviewPrompt || `${systemPrompt}\n\n${sarahPersonalityPrompt}`}\n\n${TIME_FORMAT_RULE}\n\n${localTimeContext}${profileMechanicalContext}\n\n${groundingContext}${sarahVsVitalsContext ? `\n\n${sarahVsVitalsContext}` : ""}\n\nSession/profile data:\n${context}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
+      prompt: `${imageReviewPrompt || `${systemPrompt}\n\n${sarahPersonalityPrompt}`}\n\n${TIME_FORMAT_RULE}\n\n${localTimeContext}${profileMechanicalContext}\n\n${groundingContext}${sarahVsVitalsContext ? `\n\n${sarahVsVitalsContext}` : ""}\n\nSession/profile data:\n${combinedContext}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
       ...(imagePayload.aiImages.length ? { images: imagePayload.aiImages, response_json_schema: imageSchema, max_tokens: 5000 } : {}),
       source: "ai_chat_interactive",
       foreground: true,

@@ -1310,6 +1310,46 @@ export default function SessionDetail() {
     return detectNearClimaxEvents(timelineRows, displaySession.climax_offset_s, displaySession.pre_climax_offset_s);
   }, [displaySession, timelineRows]);
 
+  const sessionChatContext = useMemo(() => ([
+    `Session date: ${s.date?.slice(0, 10)}`,
+    `Duration: ${s.duration_minutes ?? "?"}min`,
+    `Methods: ${(s.methods || []).join(", ")}`,
+    s.foley_size ? `Foley: ${s.foley_size}Fr ${s.foley_type || ""}` : null,
+    s.estim_notes ? `E-Stim notes: ${s.estim_notes}` : null,
+    `Intensity: ${s.intensity}/10, Build quality: ${s.build_quality}/10, Satisfaction: ${s.satisfaction}/10`,
+    `Build type: ${s.build_type}${s.custom_build_type ? " — " + s.custom_build_type : ""}`,
+    `Climax duration: ${s.climax_duration ?? "?"}`,
+    `Mood: ${s.mood}, Hydration: ${s.hydration}`,
+    s.avg_hr ? `HR: avg ${s.avg_hr}, max ${s.max_hr}, at climax ${s.hr_at_climax ?? "?"}` : null,
+    buildSessionPhaseMarkerDigest(s),
+    s.pre_climax_offset_s != null ? (() => {
+      const fmt = (v) => {
+        if (v == null) return "?";
+        const m = Math.floor(v / 60);
+        const sec = Math.round(v % 60);
+        return `${m}:${sec.toString().padStart(2, "0")}`;
+      };
+      return `Phase markers: pre-climax ${fmt(s.pre_climax_offset_s)}, climax ${fmt(s.climax_offset_s)}, recovery ${fmt(s.recovery_offset_s)}`;
+    })() : null,
+    s.ejaculate_volume ? `Ejaculate: ${s.ejaculate_volume}` : null,
+    s.unusual_sensations ? `Unusual sensations: ${s.unusual_sensations}` : null,
+    (s.discomfort_entries || []).length ? `Discomfort: ${s.discomfort_entries.map((e) => `sev ${e.severity}/10 — ${e.note}`).join("; ")}` : null,
+    sessionEventsForCurrentPhaseMarkers(s).length
+      ? `Events: ${sessionEventsForCurrentPhaseMarkers(s).slice(0, 10).map((e) => {
+          const m = Math.floor(e.time_s / 60);
+          const sec = Math.round(e.time_s % 60);
+          return `[${m}:${sec.toString().padStart(2, "0")}] ${e.note}`;
+        }).join(" | ")}`
+      : null,
+    s.notes ? `Session notes: ${s.notes}` : null,
+  ].filter(Boolean).join("\n")), [s]);
+
+  const sessionChatReviewContext = useMemo(() => ([
+    buildSessionVisualEvidenceDigest(s),
+    buildSessionVideoPassDigest(s),
+    buildSessionKeyVideoClipDigest(s),
+  ].filter(Boolean).join("\n\n")), [s]);
+
   useEffect(() => {
     const events = displaySession?.event_timeline || [];
     if (!events.length || !Number.isFinite(Number(inspectionTime))) return;
@@ -2535,28 +2575,8 @@ export default function SessionDetail() {
           mode="session"
           userProfile={userProfile}
           scopeId={id}
-          context={[
-            `Session date: ${s.date?.slice(0, 10)}`,
-            `Duration: ${s.duration_minutes ?? "?"}min`,
-            `Methods: ${(s.methods || []).join(", ")}`,
-            s.foley_size ? `Foley: ${s.foley_size}Fr ${s.foley_type || ""}` : null,
-            s.estim_notes ? `E-Stim notes: ${s.estim_notes}` : null,
-            `Intensity: ${s.intensity}/10, Build quality: ${s.build_quality}/10, Satisfaction: ${s.satisfaction}/10`,
-            `Build type: ${s.build_type}${s.custom_build_type ? " — " + s.custom_build_type : ""}`,
-            `Climax duration: ${s.climax_duration ?? "?"}`,
-            `Mood: ${s.mood}, Hydration: ${s.hydration}`,
-            s.avg_hr ? `HR: avg ${s.avg_hr}, max ${s.max_hr}, at climax ${s.hr_at_climax ?? "?"}` : null,
-            buildSessionPhaseMarkerDigest(s),
-            s.pre_climax_offset_s != null ? (() => { const fmt = (v) => { if (v == null) return "?"; const m = Math.floor(v/60); const sec = Math.round(v%60); return `${m}:${sec.toString().padStart(2,"0")}`; }; return `Phase markers: pre-climax ${fmt(s.pre_climax_offset_s)}, climax ${fmt(s.climax_offset_s)}, recovery ${fmt(s.recovery_offset_s)}`; })() : null,
-            s.ejaculate_volume ? `Ejaculate: ${s.ejaculate_volume}` : null,
-            s.unusual_sensations ? `Unusual sensations: ${s.unusual_sensations}` : null,
-            (s.discomfort_entries || []).length ? `Discomfort: ${s.discomfort_entries.map(e => `sev ${e.severity}/10 — ${e.note}`).join("; ")}` : null,
-            sessionEventsForCurrentPhaseMarkers(s).length ? `Events: ${sessionEventsForCurrentPhaseMarkers(s).map(e => { const m = Math.floor(e.time_s / 60); const sec = Math.round(e.time_s % 60); return `[${m}:${sec.toString().padStart(2,"0")}] ${e.note}`; }).join(" | ")}` : null,
-            buildSessionVisualEvidenceDigest(s),
-            buildSessionVideoPassDigest(s),
-            buildSessionKeyVideoClipDigest(s),
-            s.notes ? `Session notes: ${s.notes}` : null,
-          ].filter(Boolean).join("\n")}
+          context={sessionChatContext}
+          extraReviewContext={sessionChatReviewContext}
           savedVideoClips={normalizeSessionKeyVideoClips(s)}
           sessionVideoSources={storyVideoSources}
           pendingTimestampReview={pendingTimestampReview}
