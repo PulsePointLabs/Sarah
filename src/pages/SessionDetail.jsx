@@ -1310,45 +1310,51 @@ export default function SessionDetail() {
     return detectNearClimaxEvents(timelineRows, displaySession.climax_offset_s, displaySession.pre_climax_offset_s);
   }, [displaySession, timelineRows]);
 
-  const sessionChatContext = useMemo(() => ([
-    `Session date: ${s.date?.slice(0, 10)}`,
-    `Duration: ${s.duration_minutes ?? "?"}min`,
-    `Methods: ${(s.methods || []).join(", ")}`,
-    s.foley_size ? `Foley: ${s.foley_size}Fr ${s.foley_type || ""}` : null,
-    s.estim_notes ? `E-Stim notes: ${s.estim_notes}` : null,
-    `Intensity: ${s.intensity}/10, Build quality: ${s.build_quality}/10, Satisfaction: ${s.satisfaction}/10`,
-    `Build type: ${s.build_type}${s.custom_build_type ? " — " + s.custom_build_type : ""}`,
-    `Climax duration: ${s.climax_duration ?? "?"}`,
-    `Mood: ${s.mood}, Hydration: ${s.hydration}`,
-    s.avg_hr ? `HR: avg ${s.avg_hr}, max ${s.max_hr}, at climax ${s.hr_at_climax ?? "?"}` : null,
-    buildSessionPhaseMarkerDigest(s),
-    s.pre_climax_offset_s != null ? (() => {
+  const sessionChatContext = useMemo(() => {
+    if (!displaySession) return "";
+    return [
+    `Session date: ${displaySession.date?.slice(0, 10)}`,
+    `Duration: ${displaySession.duration_minutes ?? "?"}min`,
+    `Methods: ${(displaySession.methods || []).join(", ")}`,
+    displaySession.foley_size ? `Foley: ${displaySession.foley_size}Fr ${displaySession.foley_type || ""}` : null,
+    displaySession.estim_notes ? `E-Stim notes: ${displaySession.estim_notes}` : null,
+    `Intensity: ${displaySession.intensity}/10, Build quality: ${displaySession.build_quality}/10, Satisfaction: ${displaySession.satisfaction}/10`,
+    `Build type: ${displaySession.build_type}${displaySession.custom_build_type ? " — " + displaySession.custom_build_type : ""}`,
+    `Climax duration: ${displaySession.climax_duration ?? "?"}`,
+    `Mood: ${displaySession.mood}, Hydration: ${displaySession.hydration}`,
+    displaySession.avg_hr ? `HR: avg ${displaySession.avg_hr}, max ${displaySession.max_hr}, at climax ${displaySession.hr_at_climax ?? "?"}` : null,
+    buildSessionPhaseMarkerDigest(displaySession),
+    displaySession.pre_climax_offset_s != null ? (() => {
       const fmt = (v) => {
         if (v == null) return "?";
         const m = Math.floor(v / 60);
         const sec = Math.round(v % 60);
         return `${m}:${sec.toString().padStart(2, "0")}`;
       };
-      return `Phase markers: pre-climax ${fmt(s.pre_climax_offset_s)}, climax ${fmt(s.climax_offset_s)}, recovery ${fmt(s.recovery_offset_s)}`;
+      return `Phase markers: pre-climax ${fmt(displaySession.pre_climax_offset_s)}, climax ${fmt(displaySession.climax_offset_s)}, recovery ${fmt(displaySession.recovery_offset_s)}`;
     })() : null,
-    s.ejaculate_volume ? `Ejaculate: ${s.ejaculate_volume}` : null,
-    s.unusual_sensations ? `Unusual sensations: ${s.unusual_sensations}` : null,
-    (s.discomfort_entries || []).length ? `Discomfort: ${s.discomfort_entries.map((e) => `sev ${e.severity}/10 — ${e.note}`).join("; ")}` : null,
-    sessionEventsForCurrentPhaseMarkers(s).length
-      ? `Events: ${sessionEventsForCurrentPhaseMarkers(s).slice(0, 10).map((e) => {
+    displaySession.ejaculate_volume ? `Ejaculate: ${displaySession.ejaculate_volume}` : null,
+    displaySession.unusual_sensations ? `Unusual sensations: ${displaySession.unusual_sensations}` : null,
+    (displaySession.discomfort_entries || []).length ? `Discomfort: ${displaySession.discomfort_entries.map((e) => `sev ${e.severity}/10 — ${e.note}`).join("; ")}` : null,
+    sessionEventsForCurrentPhaseMarkers(displaySession).length
+      ? `Events: ${sessionEventsForCurrentPhaseMarkers(displaySession).slice(0, 10).map((e) => {
           const m = Math.floor(e.time_s / 60);
           const sec = Math.round(e.time_s % 60);
           return `[${m}:${sec.toString().padStart(2, "0")}] ${e.note}`;
         }).join(" | ")}`
       : null,
-    s.notes ? `Session notes: ${s.notes}` : null,
-  ].filter(Boolean).join("\n")), [s]);
+    displaySession.notes ? `Session notes: ${displaySession.notes}` : null,
+  ].filter(Boolean).join("\n");
+  }, [displaySession]);
 
-  const sessionChatReviewContext = useMemo(() => ([
-    buildSessionVisualEvidenceDigest(s),
-    buildSessionVideoPassDigest(s),
-    buildSessionKeyVideoClipDigest(s),
-  ].filter(Boolean).join("\n\n")), [s]);
+  const sessionChatReviewContext = useMemo(() => {
+    if (!displaySession) return "";
+    return [
+      buildSessionVisualEvidenceDigest(displaySession),
+      buildSessionVideoPassDigest(displaySession),
+      buildSessionKeyVideoClipDigest(displaySession),
+    ].filter(Boolean).join("\n\n");
+  }, [displaySession]);
 
   useEffect(() => {
     const events = displaySession?.event_timeline || [];
