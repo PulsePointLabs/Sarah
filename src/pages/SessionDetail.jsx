@@ -1612,36 +1612,6 @@ export default function SessionDetail() {
   }, [pendingSectionId]);
 
   useEffect(() => {
-    if (loading || typeof window === "undefined") return undefined;
-    const main = document.querySelector("main");
-    const sectionIds = sectionLinks.map((section) => section.id);
-    if (!sectionIds.length) return undefined;
-
-    const updateActiveSection = () => {
-      const anchorY = (main?.getBoundingClientRect()?.top || 0) + 120;
-      let nextActive = sectionIds[0];
-      for (const sectionId of sectionIds) {
-        const element = document.getElementById(sectionId);
-        if (!element) continue;
-        if (element.getBoundingClientRect().top <= anchorY) {
-          nextActive = sectionId;
-        } else {
-          break;
-        }
-      }
-      setActiveSectionId((current) => (current === nextActive ? current : nextActive));
-    };
-
-    updateActiveSection();
-    main?.addEventListener("scroll", updateActiveSection, { passive: true });
-    window.addEventListener("resize", updateActiveSection);
-    return () => {
-      main?.removeEventListener("scroll", updateActiveSection);
-      window.removeEventListener("resize", updateActiveSection);
-    };
-  }, [loading, sectionLinks]);
-
-  useEffect(() => {
     if (loading || typeof window === "undefined" || window.location.hash) return undefined;
     const scrollTop = () => {
       document.querySelector("main")?.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -1765,6 +1735,35 @@ export default function SessionDetail() {
     setActiveSectionId(section.id);
     setPendingSectionId(section.id);
   };
+  useEffect(() => {
+    if (loading || typeof window === "undefined") return undefined;
+    const main = document.querySelector("main");
+    const sectionIds = sectionLinks.map((section) => section.id);
+    if (!sectionIds.length) return undefined;
+
+    const updateActiveSection = () => {
+      const anchorY = (main?.getBoundingClientRect()?.top || 0) + 120;
+      let nextActive = sectionIds[0];
+      for (const sectionId of sectionIds) {
+        const element = document.getElementById(sectionId);
+        if (!element) continue;
+        if (element.getBoundingClientRect().top <= anchorY) {
+          nextActive = sectionId;
+        } else {
+          break;
+        }
+      }
+      setActiveSectionId((current) => (current === nextActive ? current : nextActive));
+    };
+
+    updateActiveSection();
+    main?.addEventListener("scroll", updateActiveSection, { passive: true });
+    window.addEventListener("resize", updateActiveSection);
+    return () => {
+      main?.removeEventListener("scroll", updateActiveSection);
+      window.removeEventListener("resize", updateActiveSection);
+    };
+  }, [loading, sectionLinks]);
   const openReviewSection = (target) => {
     const idByTarget = {
       physiology: "session-telemetry",

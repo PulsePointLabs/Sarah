@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
   "version": "0.1.130",
-  "commit": "aabc182",
-  "commitMessage": "Restore session detail timeline panels and mobile zoom",
-  "builtAt": "2026-07-16T06:28:20.634Z"
+  "commit": "6dee2f7",
+  "commitMessage": "Stabilize Session Details nav and chat sync",
+  "builtAt": "2026-07-16T06:35:14.578Z"
 };
