@@ -52,6 +52,10 @@ const OPTIONAL_VITALS_CONTEXT_TIMEOUT_MS = 3500;
 const REVIEW_PREP_SLOW_HINT_MS = 12000;
 const REVIEW_BACKGROUND_SLOW_HINT_MS = 45000;
 const CHAT_PROVIDER_HISTORY_LIMIT = 10;
+const CHAT_INTERACTIVE_HISTORY_LIMIT = 6;
+const CHAT_HISTORY_MESSAGE_MAX_CHARS = 520;
+const CHAT_INTERACTIVE_CONTEXT_MAX_CHARS = 4200;
+const CHAT_VISUAL_REVIEW_CONTEXT_MAX_CHARS = 9000;
 
 function getSpeechRecognitionConstructor() {
   if (typeof window === "undefined") return null;
@@ -60,6 +64,26 @@ function getSpeechRecognitionConstructor() {
 
 function compactSpeechPreview(value = "") {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function clipPromptText(value = "", maxChars = 800) {
+  const normalized = String(value || "").replace(/\s+\n/g, "\n").trim();
+  if (!normalized || normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 29)).trimEnd()}\n\n[truncated for faster live chat]`;
+}
+
+function buildPromptHistory(messages = [], options = {}) {
+  const {
+    limit = CHAT_PROVIDER_HISTORY_LIMIT,
+    perMessageChars = CHAT_HISTORY_MESSAGE_MAX_CHARS,
+  } = options;
+  return messages
+    .slice(-Math.max(1, limit))
+    .map((m) => {
+      const attachmentLine = m.imageAttachments?.length ? ` [${m.imageAttachments.length} attached image${m.imageAttachments.length === 1 ? "" : "s"}]` : "";
+      return `${m.role === "user" ? "User" : "AI"} (${formatMessagePromptTime(m)}): ${clipPromptText(m.text, perMessageChars)}${attachmentLine}`;
+    })
+    .join("\n");
 }
 
 function lastSpokenWord(value = "") {
@@ -1929,10 +1953,11 @@ export default function AIChat({
       startedAt: requestStartedAt,
     }));
     const localTimeContext = buildLocalTimeContext();
-    const history = updated.slice(-CHAT_PROVIDER_HISTORY_LIMIT).map((m) => {
-      const attachmentLine = m.imageAttachments?.length ? ` [${m.imageAttachments.length} attached image${m.imageAttachments.length === 1 ? "" : "s"}]` : "";
-      return `${m.role === "user" ? "User" : "AI"} (${formatMessagePromptTime(m)}): ${m.text}${attachmentLine}`;
-    }).join("\n");
+    const isVisualReviewRequest = imagePayload.aiImages.length > 0;
+    const history = buildPromptHistory(updated, {
+      limit: isVisualReviewRequest ? CHAT_PROVIDER_HISTORY_LIMIT : CHAT_INTERACTIVE_HISTORY_LIMIT,
+      perMessageChars: isVisualReviewRequest ? 760 : CHAT_HISTORY_MESSAGE_MAX_CHARS,
+    });
     const videoContext = imagePayload.metadata
       .filter((item) => item.sourceVideo)
       .map((item) => item.sourceVideo)
@@ -1962,9 +1987,11 @@ export default function AIChat({
 
     const shouldPivot = messages.length > 4 && Math.random() < 0.4;
 
-    const groundingContext = buildAIGroundingContext(userProfile);
+    const groundingContext = isVisualReviewRequest
+      ? clipPromptText(buildAIGroundingContext(userProfile), CHAT_VISUAL_REVIEW_CONTEXT_MAX_CHARS)
+      : "";
     let sarahVsVitalsContext = "";
-    const shouldLoadSarahVsVitalsContext = mode === "session" && imagePayload.aiImages.length > 0;
+    const shouldLoadSarahVsVitalsContext = mode === "session" && isVisualReviewRequest;
     if (shouldLoadSarahVsVitalsContext) {
       setChatProcessingStatus(nextChatStatus({
         phase: "processing",
@@ -1989,10 +2016,10 @@ export default function AIChat({
       }
     }
     const profileMechanicalContext = mode === "profile" ? `\n\n${PROFILE_MECHANICAL_RULE}` : "";
-    const combinedContext = [
+    const combinedContext = clipPromptText([
       String(context || "").trim(),
-      imagePayload.aiImages.length ? String(extraReviewContext || "").trim() : "",
-    ].filter(Boolean).join("\n\n");
+      isVisualReviewRequest ? String(extraReviewContext || "").trim() : "",
+    ].filter(Boolean).join("\n\n"), isVisualReviewRequest ? CHAT_VISUAL_REVIEW_CONTEXT_MAX_CHARS : CHAT_INTERACTIVE_CONTEXT_MAX_CHARS);
 
     const ANATOMY_RULE = `ANATOMY RULE: Use ONLY the anatomical and physiological details stated in the profile above. Never assume or infer biological sex, genitalia, or anatomy not explicitly mentioned. If anatomy is ambiguous, use neutral language (e.g. "genital stimulation", "pelvic region", "that area").`;
 
@@ -2053,7 +2080,7 @@ ${ANATOMY_RULE}
 ${SARAH_QA_STYLE_RULE}
 No affirmations or pleasantries. 2–3 sentences.`;
 
-    const imageReviewPrompt = imagePayload.aiImages.length ? `SARAH IMAGE REVIEW MODE:
+    const imageReviewPrompt = isVisualReviewRequest ? `SARAH IMAGE REVIEW MODE:
 You are Sarah inside the Sarah app. The user may provide explicit adult anatomical or device images for private self-analysis. Analyze clinically/functionally, not erotically.
 ${ANATOMICAL_REFERENCE_FOCUS_RULE}
 ${SARAH_CLINICAL_REASONING_CALIBRATION_RULE}
@@ -2100,8 +2127,8 @@ Return a conversational answer plus structured findings for review/persistence.`
 
     setChatProcessingStatus(nextChatStatus({
       phase: "analyzing",
-      message: imagePayload.aiImages.length ? "Sarah is reviewing the visual evidence" : "Sarah is composing a response",
-      detail: imagePayload.aiImages.length
+      message: isVisualReviewRequest ? "Sarah is reviewing the visual evidence" : "Sarah is composing a response",
+      detail: isVisualReviewRequest
         ? `Sarah now has ${imagePayload.aiImages.length} attached frame${imagePayload.aiImages.length === 1 ? "" : "s"}. Long video reviews can take a bit while the model reads frames, motion context, and session notes.`
         : "",
       startedAt: requestStartedAt,
@@ -2109,7 +2136,8 @@ Return a conversational answer plus structured findings for review/persistence.`
 
     const aiRequestPayload = {
       prompt: `${imageReviewPrompt || `${systemPrompt}\n\n${sarahPersonalityPrompt}`}\n\n${TIME_FORMAT_RULE}\n\n${localTimeContext}${profileMechanicalContext}\n\n${groundingContext}${sarahVsVitalsContext ? `\n\n${sarahVsVitalsContext}` : ""}\n\nSession/profile data:\n${combinedContext}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
-      ...(imagePayload.aiImages.length ? { images: imagePayload.aiImages, response_json_schema: imageSchema, max_tokens: 5000 } : {}),
+      ...(!isVisualReviewRequest ? { max_tokens: 800 } : {}),
+      ...(isVisualReviewRequest ? { images: imagePayload.aiImages, response_json_schema: imageSchema, max_tokens: 5000 } : {}),
       source: "ai_chat_interactive",
       foreground: true,
       interactive: true,
