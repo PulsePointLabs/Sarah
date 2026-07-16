@@ -1,6 +1,6 @@
 import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import { Zap, Sparkles, ChevronLeft, ChevronRight, Volume2, Loader2 } from "lucide-react";
-import { LineChart, Line, ResponsiveContainer, ReferenceArea, Tooltip, XAxis, YAxis } from "recharts";
+import { LineChart, Line, ResponsiveContainer, ReferenceLine, Tooltip, XAxis, YAxis } from "recharts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
@@ -173,7 +173,8 @@ function MiniEventTimeline({ data = [], event, selected = false }) {
                 return [`${Number(value).toFixed(1)} ms`, name];
               }}
             />
-            <ReferenceArea x1={start} x2={end} yAxisId="hr" fill="rgba(14, 165, 233, 0.14)" />
+            <ReferenceLine x={start} yAxisId="hr" stroke="rgba(14, 165, 233, 0.45)" strokeDasharray="3 3" strokeWidth={1} />
+            <ReferenceLine x={end} yAxisId="hr" stroke="rgba(14, 165, 233, 0.7)" strokeDasharray="3 3" strokeWidth={1.25} />
             <Line
               yAxisId="hr"
               type="monotone"

@@ -1584,14 +1584,30 @@ export default function SessionDetail() {
   useEffect(() => {
     if (!pendingSectionId) return undefined;
 
-    const frame = window.requestAnimationFrame(() => {
+    const scrollToPendingSection = () => {
       const section = document.getElementById(pendingSectionId);
-      if (!section) return;
-      section.scrollIntoView({ behavior: "smooth", block: "start" });
+      const main = document.querySelector("main");
+      if (!section || !main) {
+        setPendingSectionId("");
+        return;
+      }
+      const mainRect = main.getBoundingClientRect();
+      const sectionRect = section.getBoundingClientRect();
+      const nextTop = main.scrollTop + sectionRect.top - mainRect.top - 14;
+      main.scrollTo({
+        top: Math.max(0, nextTop),
+        left: 0,
+        behavior: "smooth",
+      });
       setPendingSectionId("");
-    });
+    };
 
-    return () => window.cancelAnimationFrame(frame);
+    const frame = window.requestAnimationFrame(scrollToPendingSection);
+    const retry = window.setTimeout(scrollToPendingSection, 180);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(retry);
+    };
   }, [pendingSectionId]);
 
   useEffect(() => {
@@ -2108,76 +2124,9 @@ export default function SessionDetail() {
           )}
           <div className="space-y-3">
               {timelineRows.length > 0 && (
-                <div className="space-y-3">
-                  <HRTimelineChart
-                    rows={timelineRows}
-                    savedMarkers={{
-                      pre_climax_offset_s: s.pre_climax_offset_s,
-                      climax_offset_s: s.climax_offset_s,
-                      recovery_offset_s: s.recovery_offset_s,
-                    }}
-                    onMarkersChange={savePhaseMarkers}
-                    highlightRange={highlightRange}
-                    noClimax={!!s.no_climax}
-                    nearClimaxEvents={nearClimaxEvents}
-                    events={s.event_timeline || []}
-                    selectedEventIndex={selectedEventIdx}
-                    onSelectEventIndex={setSelectedEventIdx}
-                  />
-                  <details className="rounded-xl border border-border bg-card p-3">
-                    <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
-                      Timeline Notes {(s.event_timeline || []).length ? `(${(s.event_timeline || []).length})` : ""}
-                    </summary>
-                    <div className="mt-3">
-                      <EventNotesPanel
-                        events={s.event_timeline || []}
-                        motionSummary={s.motion_analysis_summary}
-                        selectedIndex={selectedEventIdx}
-                        onSelect={setSelectedEventIdx}
-                        onUpdateEvent={handleEventAnnotationUpdate}
-                        onDeleteEvent={handleEventAnnotationDelete}
-                        onUpdateMotionVerification={handleMotionVerificationUpdate}
-                        helper="Tap a note to highlight its marker on the heart-rate chart."
-                      />
-                    </div>
-                  </details>
+                <div className="rounded-xl border border-border bg-muted/20 p-3 text-sm text-muted-foreground">
+                  Detailed chart tools live in the Evidence Dashboard and the Marker Tools section above. Keeping this area summary-only avoids rendering the same heavy HR and HRV panels twice on mobile.
                 </div>
-              )}
-              {timelineRows.length > 0 && (
-                <details className="rounded-xl border border-border bg-muted/20 p-3">
-                  <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
-                    Marker Tools & Supporting Analysis
-                  </summary>
-                  <div className="mt-3 space-y-3">
-                    {!s.no_climax && (
-                      <AIPhaseMarkerSuggester
-                        session={s}
-                        timelineRows={timelineRows}
-                        userProfile={userProfile}
-                        onApply={savePhaseMarkers}
-                      />
-                    )}
-                    {!s.no_climax && (
-                      <NearClimaxEvents
-                        timelineRows={timelineRows}
-                        session={s}
-                        selectedIndex={selectedNearClimaxIdx}
-                        onSelectIndex={setSelectedNearClimaxIdx}
-                        onEventsRefined={(refined) => setSession((prev) => ({ ...prev, ai_near_climax_events: trimNearClimaxEventsToRaw(refined) }))}
-                        userProfile={userProfile}
-                      />
-                    )}
-                    {!s.no_climax && nearClimaxEvents.length > 0 && (
-                      <NearClimaxSessionOverview
-                        session={s}
-                        nearClimaxEvents={nearClimaxEvents}
-                        userProfile={userProfile}
-                      />
-                    )}
-                    <HRZoneAnalysis rows={timelineRows} sessionMaxHR={s.max_hr} userProfile={userProfile} />
-                    <HRPhysiologicalAnalysis timelineRows={timelineRows} session={s} />
-                  </div>
-                </details>
               )}
               {timelineRows.length === 0 && s.hr_timeline?.length > 0 && (
                 <div className="h-32">

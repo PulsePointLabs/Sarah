@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback } from "react";
 import {
   ComposedChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
-  ReferenceLine, ReferenceArea, ResponsiveContainer,
+  ReferenceLine, ResponsiveContainer,
 } from "recharts";
 import { ZoomOut, ChevronDown, ChevronUp, ChevronLeft, ChevronRight } from "lucide-react";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "./session-form/EventTimelineSection";
@@ -329,16 +329,24 @@ export default function UnifiedSessionTimeline({ timelineRows, session }) {
 
                 {/* Drag-to-zoom area */}
                 {isSelecting && selectRange && (
-                  <ReferenceArea
-                    yAxisId="hr"
-                    x1={selectRange.x1}
-                    x2={selectRange.x2}
-                    fill="hsl(var(--primary))"
-                    fillOpacity={0.12}
-                    stroke="hsl(var(--primary))"
-                    strokeOpacity={0.4}
-                    strokeWidth={1}
-                  />
+                  <>
+                    <ReferenceLine
+                      yAxisId="hr"
+                      x={selectRange.x1}
+                      stroke="hsl(var(--primary))"
+                      strokeOpacity={0.45}
+                      strokeDasharray="3 3"
+                      strokeWidth={1}
+                    />
+                    <ReferenceLine
+                      yAxisId="hr"
+                      x={selectRange.x2}
+                      stroke="hsl(var(--primary))"
+                      strokeOpacity={0.6}
+                      strokeDasharray="3 3"
+                      strokeWidth={1.25}
+                    />
+                  </>
                 )}
 
                 {/* HR line */}

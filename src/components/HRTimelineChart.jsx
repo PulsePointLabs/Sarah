@@ -599,34 +599,56 @@ export default function HRTimelineChart({
               />
             )}
 
-            {/* Exploration HR rise/drop background bands */}
-            {noClimax && showNearClimax && hrChangeBands.map((band, index) => (
-              <ReferenceArea
-                key={`hr-shift-${index}`}
-                x1={band.x1}
-                x2={band.x2}
-                fill={band.type === "rise" ? "#f59e0b" : "#14b8a6"}
-                fillOpacity={Math.min(0.16, 0.06 + Math.abs(band.delta) / 120)}
-                stroke={band.type === "rise" ? "#f59e0b" : "#14b8a6"}
-                strokeOpacity={0.2}
-              />
-            ))}
+            {/* Exploration HR shifts as boundary lines only */}
+            {noClimax && showNearClimax && hrChangeBands.flatMap((band, index) => {
+              const color = band.type === "rise" ? "#f59e0b" : "#14b8a6";
+              return ([
+                <ReferenceLine
+                  key={`hr-shift-start-${index}`}
+                  x={band.x1}
+                  stroke={color}
+                  strokeOpacity={0.28}
+                  strokeDasharray="2 4"
+                  strokeWidth={1}
+                />,
+                <ReferenceLine
+                  key={`hr-shift-end-${index}`}
+                  x={band.x2}
+                  stroke={color}
+                  strokeOpacity={0.5}
+                  strokeDasharray="2 4"
+                  strokeWidth={1.25}
+                />,
+              ]);
+            })}
 
-            {/* Near-climax event highlights */}
-            {nearClimaxEventsInView.map((ev, i) => (
-              <ReferenceArea
-                key={`nce-${i}`}
-                x1={ev.start_offset_s}
-                x2={ev.end_offset_s}
-                fill={hoveredEventIdx === i ? "hsl(var(--chart-3))" : "hsl(var(--chart-3))"}
-                fillOpacity={hoveredEventIdx === i ? 0.25 : 0.08}
-                stroke={hoveredEventIdx === i ? "hsl(var(--chart-3))" : "hsl(var(--chart-3))"}
-                strokeOpacity={hoveredEventIdx === i ? 0.8 : 0.3}
-                strokeWidth={hoveredEventIdx === i ? 2 : 1}
-                onMouseEnter={() => setHoveredEventIdx(i)}
-                onMouseLeave={() => setHoveredEventIdx(null)}
-              />
-            ))}
+            {/* Near-climax event boundaries only */}
+            {nearClimaxEventsInView.flatMap((ev, i) => {
+              const active = hoveredEventIdx === i;
+              const color = "hsl(var(--chart-3))";
+              return ([
+                <ReferenceLine
+                  key={`nce-start-${i}`}
+                  x={ev.start_offset_s}
+                  stroke={color}
+                  strokeOpacity={active ? 0.85 : 0.3}
+                  strokeDasharray="3 3"
+                  strokeWidth={active ? 1.8 : 1}
+                  onMouseEnter={() => setHoveredEventIdx(i)}
+                  onMouseLeave={() => setHoveredEventIdx(null)}
+                />,
+                <ReferenceLine
+                  key={`nce-end-${i}`}
+                  x={ev.end_offset_s}
+                  stroke={color}
+                  strokeOpacity={active ? 0.85 : 0.3}
+                  strokeDasharray="3 3"
+                  strokeWidth={active ? 1.8 : 1}
+                  onMouseEnter={() => setHoveredEventIdx(i)}
+                  onMouseLeave={() => setHoveredEventIdx(null)}
+                />,
+              ]);
+            })}
 
             {/* Event pins */}
             {eventMarkers.map((marker) => {

@@ -110,6 +110,8 @@ export default function SessionSectionNavigator({ sections, onSelect }) {
   }, []);
 
   const handleDragStart = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
     dragStateRef.current = {
       active: true,
       offset: event.clientY - mobileTop,
@@ -129,13 +131,21 @@ export default function SessionSectionNavigator({ sections, onSelect }) {
       <div className="fixed left-2 z-40 xl:hidden" style={{ top: `${mobileTop}px` }}>
         <Sheet>
           <SheetTrigger asChild>
-            <Button
-              className="h-11 rounded-full px-4 shadow-lg touch-none"
-              onPointerDown={handleDragStart}
-            >
-              <MapPinned className="h-4 w-4" />
-              Jump
-            </Button>
+            <div className="flex flex-col items-start gap-1">
+              <button
+                type="button"
+                aria-label="Move jump button"
+                onPointerDown={handleDragStart}
+                className="ml-3 inline-flex h-5 w-10 items-center justify-center rounded-full border border-border bg-card/95 text-muted-foreground shadow-md backdrop-blur touch-none"
+                style={{ touchAction: "none" }}
+              >
+                <span className="h-1 w-4 rounded-full bg-muted-foreground/50" />
+              </button>
+              <Button className="h-11 rounded-full px-4 shadow-lg">
+                <MapPinned className="h-4 w-4" />
+                Jump
+              </Button>
+            </div>
           </SheetTrigger>
           <SheetContent side="bottom" className="max-h-[78vh] overflow-y-auto rounded-t-2xl px-4 pb-6 pt-5">
             <SheetHeader className="pr-8 text-left">
