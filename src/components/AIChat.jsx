@@ -2033,6 +2033,9 @@ export default function AIChat({
       }
     }
     const profileMechanicalContext = mode === "profile" ? `\n\n${PROFILE_MECHANICAL_RULE}` : "";
+    const sarahPersonalityPrompt = buildSarahPersonalityPrompt(sarahPersonality, {
+      isTechnical: false,
+    });
     const combinedContext = clipPromptText([
       String(context || "").trim(),
       isVisualReviewRequest ? String(extraReviewContext || "").trim() : "",

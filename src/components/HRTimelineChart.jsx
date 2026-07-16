@@ -7,6 +7,8 @@ import { ChevronDown, Layers, MapPin, SlidersHorizontal, ZoomIn, ZoomOut } from 
 import { useChartZoom } from "@/hooks/useChartZoom";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "./session-form/EventTimelineSection";
 
+const MAX_VISIBLE_POINTS = 1200;
+
 const MARKER_COLORS = {
   build: "#f59e0b",
   climax: "#ef4444",
@@ -45,6 +47,69 @@ function numberOrNull(value) {
   if (value == null || value === "") return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function averageNumbers(values = []) {
+  const nums = values.map(numberOrNull).filter((value) => value != null);
+  if (!nums.length) return null;
+  return nums.reduce((sum, value) => sum + value, 0) / nums.length;
+}
+
+function pickLastPresent(rows = [], key) {
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const value = rows[i]?.[key];
+    if (value != null && value !== "") return value;
+  }
+  return null;
+}
+
+function buildCleanChartRows(rows = [], maxPoints = MAX_VISIBLE_POINTS) {
+  const sortedRows = [...rows]
+    .map((row) => ({ ...row, time_offset_s: numberOrNull(row.time_offset_s) }))
+    .filter((row) => row.time_offset_s != null)
+    .sort((a, b) => a.time_offset_s - b.time_offset_s);
+
+  if (!sortedRows.length) return [];
+
+  const deduped = [];
+  let group = [];
+  let currentTime = null;
+
+  const flushGroup = () => {
+    if (!group.length) return;
+    deduped.push({
+      ...group[group.length - 1],
+      time_offset_s: currentTime,
+      hr: averageNumbers(group.map((row) => row.hr)),
+      hr_smoothed: averageNumbers(group.map((row) => row.hr_smoothed)),
+      baseline_hr: averageNumbers(group.map((row) => row.baseline_hr)),
+      elevated_delta: averageNumbers(group.map((row) => row.elevated_delta)),
+      hrv_rmssd_ms: averageNumbers(group.map((row) => row.hrv_rmssd_ms)),
+      hrv_sdnn_ms: averageNumbers(group.map((row) => row.hrv_sdnn_ms)),
+      hrv_pnn50: averageNumbers(group.map((row) => row.hrv_pnn50)),
+      marker: pickLastPresent(group, "marker"),
+      note: pickLastPresent(group, "note"),
+      hrv_quality: pickLastPresent(group, "hrv_quality"),
+    });
+    group = [];
+  };
+
+  sortedRows.forEach((row) => {
+    if (currentTime == null || row.time_offset_s === currentTime) {
+      currentTime = row.time_offset_s;
+      group.push(row);
+      return;
+    }
+    flushGroup();
+    currentTime = row.time_offset_s;
+    group = [row];
+  });
+  flushGroup();
+
+  if (deduped.length <= maxPoints) return deduped;
+
+  const step = Math.ceil(deduped.length / maxPoints);
+  return deduped.filter((_, index) => index % step === 0 || index === deduped.length - 1);
 }
 
 function MarkerDot(props) {
@@ -138,11 +203,12 @@ export default function HRTimelineChart({
   const defaultWindow = noClimax && (requestedDefaultWindow === "climax" || requestedDefaultWindow === "recovery")
     ? "full"
     : requestedDefaultWindow;
+  const chartRows = useMemo(() => buildCleanChartRows(rows), [rows]);
   const [window, setWindow] = useState(defaultWindow);
   const [showBuild, setShowBuild] = useState(false);
   const [showRecovery, setShowRecovery] = useState(false);
   const [showPhases, setShowPhases] = useState(false);
-  const [showEvents, setShowEvents] = useState(true);
+  const [showEvents, setShowEvents] = useState(false);
   const [showNearClimax, setShowNearClimax] = useState(false);
   const [showHrvOverlay, setShowHrvOverlay] = useState(false);
   const [visibleLines, setVisibleLines] = useState({ hr: true, smoothed: true, baseline: true });
@@ -172,24 +238,24 @@ export default function HRTimelineChart({
   }, [savedMarkers.pre_climax_offset_s, savedMarkers.climax_offset_s, savedMarkers.recovery_offset_s]);
 
   const visibleRows = useMemo(() => {
-    let nextRows = rows;
-    if (window === "full") return rows;
+    let nextRows = chartRows;
+    if (window === "full") return chartRows;
     if (window === "climax" && localMarkers.climax != null) {
       const start = Math.max(0, Number(localMarkers.climax) - 180);
       const end = Math.min(maxOffsetS, Number(localMarkers.climax) + 180);
-      nextRows = rows.filter((r) => Number(r.time_offset_s) >= start && Number(r.time_offset_s) <= end);
-      return nextRows.length ? nextRows : rows;
+      nextRows = chartRows.filter((r) => Number(r.time_offset_s) >= start && Number(r.time_offset_s) <= end);
+      return nextRows.length ? nextRows : chartRows;
     }
     if (window === "recovery" && localMarkers.climax != null) {
       const start = Math.max(0, Number(localMarkers.climax) - 30);
       const end = Math.min(maxOffsetS, Number(localMarkers.recovery ?? localMarkers.climax + 300) + 180);
-      nextRows = rows.filter((r) => Number(r.time_offset_s) >= start && Number(r.time_offset_s) <= end);
-      return nextRows.length ? nextRows : rows;
+      nextRows = chartRows.filter((r) => Number(r.time_offset_s) >= start && Number(r.time_offset_s) <= end);
+      return nextRows.length ? nextRows : chartRows;
     }
     const cutoff = maxOffsetS - window * 60;
-    nextRows = rows.filter((r) => Number(r.time_offset_s) >= cutoff);
-    return nextRows.length ? nextRows : rows;
-  }, [rows, window, maxOffsetS, localMarkers.climax, localMarkers.recovery]);
+    nextRows = chartRows.filter((r) => Number(r.time_offset_s) >= cutoff);
+    return nextRows.length ? nextRows : chartRows;
+  }, [chartRows, window, maxOffsetS, localMarkers.climax, localMarkers.recovery]);
 
   const visibleMin = useMemo(() => Math.min(...visibleRows.map(r => Number(r.time_offset_s))), [visibleRows]);
   const visibleMax = useMemo(() => Math.max(...visibleRows.map(r => Number(r.time_offset_s))), [visibleRows]);
@@ -213,12 +279,12 @@ export default function HRTimelineChart({
 
   const xDomain = zoomDomain ? [zoomDomain.x1, zoomDomain.x2] : ["dataMin", "dataMax"];
 
-  const hasSmoothed = rows.some((r) => r.hr_smoothed != null && r.hr_smoothed !== "");
-  const hasBaseline = rows.some((r) => r.baseline_hr != null && r.baseline_hr !== "");
-  const hasHrv = rows.some((r) => numberOrNull(r.hrv_rmssd_ms) != null || numberOrNull(r.hrv_sdnn_ms) != null || numberOrNull(r.hrv_pnn50) != null);
-  const hasRmssd = rows.some((r) => numberOrNull(r.hrv_rmssd_ms) != null);
-  const hasSdnn = rows.some((r) => numberOrNull(r.hrv_sdnn_ms) != null);
-  const hasPnn50 = rows.some((r) => numberOrNull(r.hrv_pnn50) != null);
+  const hasSmoothed = chartRows.some((r) => r.hr_smoothed != null && r.hr_smoothed !== "");
+  const hasBaseline = chartRows.some((r) => r.baseline_hr != null && r.baseline_hr !== "");
+  const hasHrv = chartRows.some((r) => numberOrNull(r.hrv_rmssd_ms) != null || numberOrNull(r.hrv_sdnn_ms) != null || numberOrNull(r.hrv_pnn50) != null);
+  const hasRmssd = chartRows.some((r) => numberOrNull(r.hrv_rmssd_ms) != null);
+  const hasSdnn = chartRows.some((r) => numberOrNull(r.hrv_sdnn_ms) != null);
+  const hasPnn50 = chartRows.some((r) => numberOrNull(r.hrv_pnn50) != null);
 
   const hrvDisplayRows = useMemo(() => (
     displayRows
@@ -481,7 +547,7 @@ export default function HRTimelineChart({
     }
   };
 
-  if (!rows || rows.length === 0) return null;
+  if (!chartRows.length) return null;
 
   return (
     <div>
@@ -588,15 +654,22 @@ export default function HRTimelineChart({
 
             {/* Drag-to-zoom selection area */}
             {isSelecting && selectRange && (
-              <ReferenceArea
-                x1={selectRange.x1}
-                x2={selectRange.x2}
-                fill="hsl(var(--primary))"
-                fillOpacity={0.15}
-                stroke="hsl(var(--primary))"
-                strokeOpacity={0.5}
-                strokeWidth={1}
-              />
+              <>
+                <ReferenceLine
+                  x={selectRange.x1}
+                  stroke="hsl(var(--primary))"
+                  strokeOpacity={0.45}
+                  strokeDasharray="3 3"
+                  strokeWidth={1}
+                />
+                <ReferenceLine
+                  x={selectRange.x2}
+                  stroke="hsl(var(--primary))"
+                  strokeOpacity={0.6}
+                  strokeDasharray="3 3"
+                  strokeWidth={1.25}
+                />
+              </>
             )}
 
             {/* Exploration HR shifts as boundary lines only */}
@@ -816,15 +889,22 @@ export default function HRTimelineChart({
                     />
 
                     {isSelecting && selectRange && (
-                      <ReferenceArea
-                        x1={selectRange.x1}
-                        x2={selectRange.x2}
-                        fill="hsl(var(--primary))"
-                        fillOpacity={0.15}
-                        stroke="hsl(var(--primary))"
-                        strokeOpacity={0.5}
-                        strokeWidth={1}
-                      />
+                      <>
+                        <ReferenceLine
+                          x={selectRange.x1}
+                          stroke="hsl(var(--primary))"
+                          strokeOpacity={0.45}
+                          strokeDasharray="3 3"
+                          strokeWidth={1}
+                        />
+                        <ReferenceLine
+                          x={selectRange.x2}
+                          stroke="hsl(var(--primary))"
+                          strokeOpacity={0.6}
+                          strokeDasharray="3 3"
+                          strokeWidth={1.25}
+                        />
+                      </>
                     )}
 
                     {!noClimax && MARKING_PHASES.map((phase) =>
