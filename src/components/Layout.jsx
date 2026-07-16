@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { listBackgroundJobs } from "@/lib/backgroundJobs";
 import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
+import { BUILD_INFO } from "@/generated/buildInfo";
 
 // UI_OLD_MAN_ACCESSIBILITY_V1
 const UI_PREFS_STORAGE_KEY = "pulsepoint-ui-preferences-v1";
@@ -90,6 +91,8 @@ const navGroups = [
 
 const navItems = navGroups.flatMap((group) => group.items);
 const APP_VERSION = pkg.version || "0.0.0";
+const APP_BUILD_COMMIT = BUILD_INFO?.commit ? String(BUILD_INFO.commit).slice(0, 7) : "local";
+const APP_BUILD_MESSAGE = BUILD_INFO?.commitMessage || "Local build";
 
 function isPathActive(path, pathname) {
   return path === "/" ? pathname === "/" : pathname === path || pathname.startsWith(`${path}/`);
@@ -324,6 +327,9 @@ export default function Layout() {
               <DialogTitle className="truncate text-2xl">Sarah</DialogTitle>
               <DialogDescription>Version {APP_VERSION}</DialogDescription>
             </DialogHeader>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Build {APP_BUILD_COMMIT} · {APP_BUILD_MESSAGE}
+            </p>
           </div>
           <div className="max-h-[calc(100dvh-20rem)] space-y-3 overflow-y-auto px-4 py-4 pb-[calc(env(safe-area-inset-bottom)+5rem)] sm:max-h-[24rem] sm:px-5 sm:pb-5">
             <div className="rounded-lg border border-border bg-muted/20">

@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea,
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, Layers, MapPin, SlidersHorizontal, ZoomIn, ZoomOut } from "lucide-react";
@@ -588,15 +588,22 @@ export default function HRTimelineChart({
 
             {/* Drag-to-zoom selection area */}
             {isSelecting && selectRange && (
-              <ReferenceArea
-                x1={selectRange.x1}
-                x2={selectRange.x2}
-                fill="hsl(var(--primary))"
-                fillOpacity={0.15}
-                stroke="hsl(var(--primary))"
-                strokeOpacity={0.5}
-                strokeWidth={1}
-              />
+              <>
+                <ReferenceLine
+                  x={selectRange.x1}
+                  stroke="hsl(var(--primary))"
+                  strokeOpacity={0.45}
+                  strokeDasharray="3 3"
+                  strokeWidth={1}
+                />
+                <ReferenceLine
+                  x={selectRange.x2}
+                  stroke="hsl(var(--primary))"
+                  strokeOpacity={0.6}
+                  strokeDasharray="3 3"
+                  strokeWidth={1.25}
+                />
+              </>
             )}
 
             {/* Exploration HR shifts as boundary lines only */}
@@ -816,15 +823,22 @@ export default function HRTimelineChart({
                     />
 
                     {isSelecting && selectRange && (
-                      <ReferenceArea
-                        x1={selectRange.x1}
-                        x2={selectRange.x2}
-                        fill="hsl(var(--primary))"
-                        fillOpacity={0.15}
-                        stroke="hsl(var(--primary))"
-                        strokeOpacity={0.5}
-                        strokeWidth={1}
-                      />
+                      <>
+                        <ReferenceLine
+                          x={selectRange.x1}
+                          stroke="hsl(var(--primary))"
+                          strokeOpacity={0.45}
+                          strokeDasharray="3 3"
+                          strokeWidth={1}
+                        />
+                        <ReferenceLine
+                          x={selectRange.x2}
+                          stroke="hsl(var(--primary))"
+                          strokeOpacity={0.6}
+                          strokeDasharray="3 3"
+                          strokeWidth={1.25}
+                        />
+                      </>
                     )}
 
                     {!noClimax && MARKING_PHASES.map((phase) =>

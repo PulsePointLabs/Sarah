@@ -16,6 +16,11 @@ export function useChartZoom(dataMin, dataMax) {
   dataMinRef.current = dataMin;
   dataMaxRef.current = dataMax;
 
+  const allowTouchZoom = useRef(true);
+  if (typeof window !== "undefined") {
+    allowTouchZoom.current = !window.matchMedia("(pointer: coarse)").matches;
+  }
+
   // Pixel X → data value
   function pixelToValue(clientX) {
     const el = containerRef.current;
@@ -35,6 +40,7 @@ export function useChartZoom(dataMin, dataMax) {
   const touchEndHandler = useRef(null);
 
   touchStartHandler.current = (e) => {
+    if (!allowTouchZoom.current) return;
     if (e.touches.length !== 1) return;
     const val = pixelToValue(e.touches[0].clientX);
     if (val == null) return;
@@ -44,6 +50,7 @@ export function useChartZoom(dataMin, dataMax) {
   };
 
   touchMoveHandler.current = (e) => {
+    if (!allowTouchZoom.current) return;
     if (e.touches.length !== 1 || selectStartRef.current == null) return;
     const val = pixelToValue(e.touches[0].clientX);
     if (val == null) return;
@@ -60,6 +67,7 @@ export function useChartZoom(dataMin, dataMax) {
   };
 
   touchEndHandler.current = (e) => {
+    if (!allowTouchZoom.current) return;
     if (selectStartRef.current == null) return;
     const val = pixelToValue(e.changedTouches[0].clientX);
     if (isDraggingRef.current && val != null) {
@@ -82,9 +90,11 @@ export function useChartZoom(dataMin, dataMax) {
     }
     containerRef.current = el;
     if (!el) return;
-    el.addEventListener("touchstart", stableTouchStart, { passive: true });
-    el.addEventListener("touchmove", stableTouchMove, { passive: false });
-    el.addEventListener("touchend", stableTouchEnd, { passive: true });
+    if (allowTouchZoom.current) {
+      el.addEventListener("touchstart", stableTouchStart, { passive: true });
+      el.addEventListener("touchmove", stableTouchMove, { passive: false });
+      el.addEventListener("touchend", stableTouchEnd, { passive: true });
+    }
   }, []);
 
   // Stable wrappers — these never change identity, so add/removeEventListener works
