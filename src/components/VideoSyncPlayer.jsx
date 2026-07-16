@@ -31,6 +31,7 @@ import MotionPlaybackReadout from "./MotionPlaybackReadout";
 import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { cleanWhisperTranscript } from "@/utils/whisperTranscript";
 import { isSarahNativeShell } from "@/lib/mobileApiBase";
+import { readSttProviderPreference } from "@/lib/sttSettings";
 
 function getCategoryMeta(value) {
   return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -631,6 +632,7 @@ export default function VideoSyncPlayer({
           audio_base64: base64Audio,
           mime_type: mimeType,
           prompt: WHISPER_PROMPT,
+          provider: readSttProviderPreference(),
         });
         const text = cleanWhisperTranscript(res.data?.text);
         if (text) {

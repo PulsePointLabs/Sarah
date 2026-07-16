@@ -21,6 +21,7 @@ import { base44 } from "@/api/base44Client";
 import { useToast } from "@/components/ui/use-toast";
 import { HR_SOURCE_OPTIONS, PULSOID_MODE_OPTIONS, computeHrvFromRr, maskPulsoidToken, readHrSourceSettings, writeHrSourceSettings } from "@/lib/hrSources";
 import { apiUrl, isSarahNativeShell } from "@/lib/mobileApiBase";
+import { readSttProviderPreference } from "@/lib/sttSettings";
 import {
   buildLaunchProfileFromRuntime,
   readLiveCaptureLaunchProfile,
@@ -5050,6 +5051,7 @@ export default function LiveCapture() {
             audio_base64: audioBase64,
             mime_type: mimeType,
             prompt: WHISPER_PROMPT,
+            provider: readSttProviderPreference(),
           });
           const text = normalizeVoiceAnnotationText(res.data?.text);
           if (text) {

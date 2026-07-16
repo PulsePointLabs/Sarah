@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { base44 } from "@/api/base44Client";
+import { readSttProviderPreference } from "@/lib/sttSettings";
 import { Play, Pause, Square, Upload, Volume2, VolumeX, ChevronDown, ChevronLeft, ChevronRight, ZoomOut, Mic, MicOff, Plus, ArrowUp } from "lucide-react";
 import { EVENT_CATEGORIES } from "@/components/session-form/EventTimelineSection";
 import { getTTSMime, getTTSRuntime, prepareTTSInput, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
@@ -433,6 +434,7 @@ export default function EventSyncPlayer() {
           audio_base64: base64,
           mime_type: "audio/webm",
           prompt: "Sexual health session log. Terms may include: glans, glans penis, perineum, frenulum, prostate, scrotum, foreskin, erection, ejaculation, edging, e-stim, TENS, foley, catheter, urethral, lubrication, climax, arousal, pelvic floor.",
+          provider: readSttProviderPreference(),
         });
         const text = res.data?.text || "";
         if (text) setNewEventNote((prev) => (prev ? prev + " " + text : text));

@@ -14,6 +14,7 @@ import { finalizeWhisperTranscript } from "@/utils/whisperTranscript";
 import { SarahAvatar } from "@/components/SarahBrand";
 import { SARAH_CLINICAL_REASONING_CALIBRATION_RULE } from "@/utils/clinicalReasoningCalibration";
 import { buildSarahPersonalityPrompt, readSarahPersonalitySettings, SARAH_PERSONALITY_EVENT } from "@/utils/sarahPersonality";
+import { readSttProviderPreference } from "@/lib/sttSettings";
 
 const PROFILE_CATEGORIES = [
   { key: "physical", label: "Physical Baseline", emoji: "🫀", hint: "Body metrics, fitness, resting HR, medications" },
@@ -1682,7 +1683,12 @@ export default function AIChat({
           for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
           const base64 = btoa(bin);
           const liveReferenceText = liveSpeechPreviewRef.current;
-          const res = await base44.functions.invoke("whisperSTT", { audio_base64: base64, mime_type: recorderMimeType, prompt: WHISPER_PROMPT });
+          const res = await base44.functions.invoke("whisperSTT", {
+            audio_base64: base64,
+            mime_type: recorderMimeType,
+            prompt: WHISPER_PROMPT,
+            provider: readSttProviderPreference(),
+          });
           const rawText = String(res?.text || res?.data?.text || "").trim();
           const text = finalizeWhisperTranscript(rawText, { referenceText: liveReferenceText });
           if (text) {

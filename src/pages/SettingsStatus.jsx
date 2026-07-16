@@ -32,6 +32,7 @@ import { backgroundJobRoute } from "@/lib/backgroundJobRoutes";
 import { apiUrl, discoverSarahApiBase, isSarahNativeShell, serverUrl } from "@/lib/mobileApiBase";
 import { friendlyJobStatusMessage } from "@/lib/jobErrorMessages";
 import { getProviderStatus } from "@/lib/providerStatus";
+import { readSttProviderPreference, saveSttProviderPreference, STT_PROVIDER_OPTIONS } from "@/lib/sttSettings";
 import {
   getSarahImageOption,
   getSarahImageOptions,
@@ -548,6 +549,7 @@ export default function SettingsStatus() {
   const [providerStatus, setProviderStatus] = useState(null);
   const [providerError, setProviderError] = useState("");
   const [providerLoading, setProviderLoading] = useState(true);
+  const [sttProviderPreference, setSttProviderPreference] = useState(readSttProviderPreference);
   const [jobs, setJobs] = useState([]);
   const [jobsError, setJobsError] = useState("");
   const [clearing, setClearing] = useState(false);
@@ -610,6 +612,18 @@ export default function SettingsStatus() {
   useEffect(() => {
     loadProviders();
   }, []);
+
+  useEffect(() => {
+    const handleSttProviderChange = (event) => {
+      setSttProviderPreference(String(event?.detail || readSttProviderPreference()));
+    };
+    window.addEventListener("sarah:stt-provider", handleSttProviderChange);
+    return () => window.removeEventListener("sarah:stt-provider", handleSttProviderChange);
+  }, []);
+
+  const updateSttProviderPreference = (value) => {
+    setSttProviderPreference(saveSttProviderPreference(value));
+  };
 
   const loadBloodPressure = async () => {
     setBpMessage("");
@@ -1383,6 +1397,26 @@ export default function SettingsStatus() {
                 {providerStatus?.transcription?.configured?.groq ? " Groq is configured." : " Groq is not configured yet."}
                 {providerStatus?.transcription?.configured?.openai ? " OpenAI transcription is available as fallback." : " OpenAI transcription fallback is not configured."}
               </p>
+              <div className="mt-3 space-y-2">
+                <label className="text-xs font-semibold text-foreground" htmlFor="stt-provider-select">
+                  App mic preference
+                </label>
+                <select
+                  id="stt-provider-select"
+                  value={sttProviderPreference}
+                  onChange={(event) => updateSttProviderPreference(event.target.value)}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                >
+                  {STT_PROVIDER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  {(STT_PROVIDER_OPTIONS.find((option) => option.value === sttProviderPreference) || STT_PROVIDER_OPTIONS[0]).helper}
+                </p>
+              </div>
             </div>
             <div className="grid gap-3 lg:grid-cols-3">
               <ProviderCard status={providerStatus?.providers?.groq} />
