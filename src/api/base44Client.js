@@ -199,6 +199,14 @@ export const base44 = {
   integrations: {
     Core: {
       InvokeLLM: async (payload) => {
+        if (payload?.foreground || payload?.interactive) {
+          return request('/ai/invoke', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload || {}),
+            timeoutMs: Number(payload?.timeoutMs || 90000),
+          });
+        }
         const { startBackgroundJob, waitForBackgroundJob } = await import('@/lib/backgroundJobs');
         const label = payload?.label || 'AI analysis';
         const source = payload?.source || 'base44_invoke_llm';
