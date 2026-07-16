@@ -946,6 +946,16 @@ function persistedCardFrom(card) {
   };
 }
 
+function hasPersistableVideoPassCard(card) {
+  if (!card) return false;
+  const summary = String(card.summary || "").trim();
+  return Boolean(
+    summary
+    || (Array.isArray(card.findings) && card.findings.length)
+    || (Array.isArray(card.events) && card.events.some((event) => String(event?.note || "").trim()))
+  );
+}
+
 function confidenceWord(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "moderate";
@@ -3442,8 +3452,15 @@ Return only the structured JSON matching the requested schema.`,
     const cleanedEvents = selectedEvents
       .map((event) => ({ ...event, note: String(event.note || "").trim() }))
       .filter((event) => event.note);
-    if (!selectedEvents.length && !card.findings.length) return;
-    if (!cleanedEvents.length && !card.findings.length) return;
+    const cardToPersist = {
+      ...card,
+      summary: String(card.summary || "").trim(),
+      events: cleanedEvents,
+    };
+    if (!hasPersistableVideoPassCard(cardToPersist)) {
+      setStatus("Nothing new to save from this card yet.");
+      return;
+    }
     const retainedEvents = (session?.event_timeline || []).filter((event) => {
       if (event?.source !== "ai_video_pass") return true;
       const annotation = event.ai_annotation || {};
@@ -3462,7 +3479,6 @@ Return only the structured JSON matching the requested schema.`,
     const existingVideoPassFindings = Array.isArray(existingAnalysis._video_pass_findings)
       ? existingAnalysis._video_pass_findings
       : [];
-    const cardToPersist = { ...card, events: cleanedEvents };
     const persistedCard = persistedCardFrom(cardToPersist);
     const nextVideoPassFindings = [
       persistedCard,
@@ -3485,6 +3501,8 @@ Return only the structured JSON matching the requested schema.`,
     onSessionUpdate?.({ ...session, ...updated, event_timeline: nextEvents, [analysisField]: nextAnalysis });
     setAcceptedIds((prev) => new Set([...prev, card.id]));
     setExpanded((prev) => ({ ...prev, [card.id]: false }));
+    setStatus(`Saved ${card.findings?.length ? "findings" : "summary"}${cleanedEvents.length ? ` and ${cleanedEvents.length} event${cleanedEvents.length === 1 ? "" : "s"}` : ""} for ${card.label}.`);
+    setError("");
   };
 
   const acceptAllDraftCards = async () => {
@@ -3493,60 +3511,72 @@ Return only the structured JSON matching the requested schema.`,
     const cardsToPersist = draftCards
       .map((card) => ({
         ...card,
+        summary: String(card.summary || "").trim(),
         events: (card.events || [])
           .map((event) => ({ ...event, note: String(event.note || "").trim() }))
           .filter((event) => event.note),
       }))
-      .filter((card) => card.events.length || card.findings.length);
-    if (!cardsToPersist.length) return;
+      .filter((card) => hasPersistableVideoPassCard(card));
+    if (!cardsToPersist.length) {
+      setStatus("No draft findings, summaries, or event notes were ready to save.");
+      return;
+    }
 
-    const retainedEvents = (session?.event_timeline || []).filter((event) => {
-      if (event?.source !== "ai_video_pass") return true;
-      const annotation = event.ai_annotation || {};
-      return !cardsToPersist.some((card) => (
-        sameClipRange(card.window?.start, card.window?.end, annotation.clip_start_s, annotation.clip_end_s)
-          && sameCardSource(card, {
-            filename: annotation.source_video || "",
-            label: annotation.source_video || "",
-            fingerprint: annotation.source_video_fingerprint || "",
-          })
-      ));
-    });
-    const nextEvents = [
-      ...retainedEvents,
-      ...cardsToPersist.flatMap((card) => card.events.map((event, index) => eventFromCard(card, event, index, isExploration))),
-    ].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0));
+    try {
+      const retainedEvents = (session?.event_timeline || []).filter((event) => {
+        if (event?.source !== "ai_video_pass") return true;
+        const annotation = event.ai_annotation || {};
+        return !cardsToPersist.some((card) => (
+          sameClipRange(card.window?.start, card.window?.end, annotation.clip_start_s, annotation.clip_end_s)
+            && sameCardSource(card, {
+              filename: annotation.source_video || "",
+              label: annotation.source_video || "",
+              fingerprint: annotation.source_video_fingerprint || "",
+            })
+        ));
+      });
+      const nextEvents = [
+        ...retainedEvents,
+        ...cardsToPersist.flatMap((card) => card.events.map((event, index) => eventFromCard(card, event, index, isExploration))),
+      ].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0));
 
-    const existingAnalysis = session?.[analysisField] || {};
-    const existingVideoPassFindings = Array.isArray(existingAnalysis._video_pass_findings)
-      ? existingAnalysis._video_pass_findings
-      : [];
-    const persistedCards = cardsToPersist.map((card) => persistedCardFrom(card));
-    const nextVideoPassFindings = [
-      ...persistedCards,
-      ...existingVideoPassFindings.filter((item) => (
-        !persistedCards.some((persistedCard) => item?.id === persistedCard.id)
-          && !cardsToPersist.some((card) => sameSavedCardClip(card, item))
-      )),
-    ].slice(0, 80);
-    const updatedAt = new Date().toISOString();
-    const nextAnalysisBase = {
-      ...existingAnalysis,
-      _video_pass_findings: nextVideoPassFindings,
-      _video_pass_findings_updated_at: updatedAt,
-      _video_pass_detail_flow: compactVideoPassFlow(nextVideoPassFindings),
-    };
-    const nextAnalysis = {
-      ...nextAnalysisBase,
-      _video_pass_digest: buildVideoPassDigestForRecord(nextAnalysisBase, isExploration),
-    };
-    const updated = await entity.update(session.id, {
-      event_timeline: nextEvents,
-      [analysisField]: nextAnalysis,
-    });
-    onSessionUpdate?.({ ...session, ...updated, event_timeline: nextEvents, [analysisField]: nextAnalysis });
-    setAcceptedIds((prev) => new Set([...prev, ...cardsToPersist.map((card) => card.id)]));
-    setExpanded((prev) => cardsToPersist.reduce((next, card) => ({ ...next, [card.id]: false }), { ...prev }));
+      const existingAnalysis = session?.[analysisField] || {};
+      const existingVideoPassFindings = Array.isArray(existingAnalysis._video_pass_findings)
+        ? existingAnalysis._video_pass_findings
+        : [];
+      const persistedCards = cardsToPersist.map((card) => persistedCardFrom(card));
+      const nextVideoPassFindings = [
+        ...persistedCards,
+        ...existingVideoPassFindings.filter((item) => (
+          !persistedCards.some((persistedCard) => item?.id === persistedCard.id)
+            && !cardsToPersist.some((card) => sameSavedCardClip(card, item))
+        )),
+      ].slice(0, 80);
+      const updatedAt = new Date().toISOString();
+      const nextAnalysisBase = {
+        ...existingAnalysis,
+        _video_pass_findings: nextVideoPassFindings,
+        _video_pass_findings_updated_at: updatedAt,
+        _video_pass_detail_flow: compactVideoPassFlow(nextVideoPassFindings),
+      };
+      const nextAnalysis = {
+        ...nextAnalysisBase,
+        _video_pass_digest: buildVideoPassDigestForRecord(nextAnalysisBase, isExploration),
+      };
+      const updated = await entity.update(session.id, {
+        event_timeline: nextEvents,
+        [analysisField]: nextAnalysis,
+      });
+      onSessionUpdate?.({ ...session, ...updated, event_timeline: nextEvents, [analysisField]: nextAnalysis });
+      setAcceptedIds((prev) => new Set([...prev, ...cardsToPersist.map((card) => card.id)]));
+      setExpanded((prev) => cardsToPersist.reduce((next, card) => ({ ...next, [card.id]: false }), { ...prev }));
+      const savedEventCount = cardsToPersist.reduce((sum, card) => sum + card.events.length, 0);
+      setStatus(`Saved ${cardsToPersist.length} card${cardsToPersist.length === 1 ? "" : "s"}${savedEventCount ? ` and ${savedEventCount} event${savedEventCount === 1 ? "" : "s"}` : ""} into the ${recordLabel} AI details.`);
+      setError("");
+    } catch (err) {
+      setError(err?.data?.error || err?.message || "Could not save all findings and events.");
+      setStatus("");
+    }
   };
 
   const localVisionFluidDynamics = Array.isArray(localVisionResult?.fluid_dynamics)
