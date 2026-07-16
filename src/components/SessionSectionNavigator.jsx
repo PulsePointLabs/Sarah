@@ -21,7 +21,7 @@ function groupSections(sections) {
   }, []);
 }
 
-function SectionButtons({ sections, onSelect, closeOnSelect = false }) {
+function SectionButtons({ sections, onSelect, closeOnSelect = false, activeSectionId = "" }) {
   return (
     <div className="space-y-3">
       {groupSections(sections).map((group) => (
@@ -36,7 +36,7 @@ function SectionButtons({ sections, onSelect, closeOnSelect = false }) {
                 type="button"
                 onClick={() => onSelect(section)}
                 className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
-                  section.id === "session-summary"
+                  section.id === activeSectionId
                     ? "border-primary/35 bg-primary/10 text-foreground"
                     : "border-transparent bg-muted/35 text-muted-foreground hover:border-primary/25 hover:bg-muted/55 hover:text-foreground"
                 }`}
@@ -57,7 +57,7 @@ function SectionButtons({ sections, onSelect, closeOnSelect = false }) {
   );
 }
 
-export default function SessionSectionNavigator({ sections, onSelect }) {
+export default function SessionSectionNavigator({ sections, onSelect, activeSectionId = "" }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -67,7 +67,7 @@ export default function SessionSectionNavigator({ sections, onSelect }) {
           <Bookmark className="h-3.5 w-3.5" />
           Session Sections
         </div>
-        <SectionButtons sections={sections} onSelect={onSelect} />
+        <SectionButtons sections={sections} onSelect={onSelect} activeSectionId={activeSectionId} />
       </aside>
 
       <div className="fixed bottom-[calc(env(safe-area-inset-bottom)+5.5rem)] left-3 z-40 xl:hidden">
@@ -87,7 +87,7 @@ export default function SessionSectionNavigator({ sections, onSelect }) {
               <SectionButtons sections={sections} onSelect={(section) => {
                 setOpen(false);
                 onSelect(section);
-              }} closeOnSelect />
+              }} closeOnSelect activeSectionId={activeSectionId} />
             </div>
           </SheetContent>
         </Sheet>

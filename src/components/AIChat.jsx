@@ -86,6 +86,15 @@ function buildPromptHistory(messages = [], options = {}) {
     .join("\n");
 }
 
+function buildMessageSyncKey(messages = []) {
+  return messages.map((message) => [
+    message?.role || "",
+    message?.createdAt || "",
+    message?.text || "",
+    message?.imageAttachments?.length || 0,
+  ].join("::")).join("\u241e");
+}
+
 function lastSpokenWord(value = "") {
   const words = compactSpeechPreview(value).match(/[\p{L}\p{N}'-]+/gu);
   return words?.length ? words[words.length - 1] : "";
@@ -677,8 +686,16 @@ export default function AIChat({
   }, [fetchUrlAsFile, nextChatStatus, selectedImages.length, sessionVideoSources]);
 
   useEffect(() => {
-    setMessages(savedMessages || []);
-  }, [savedMessages]);
+    const incoming = Array.isArray(savedMessages) ? savedMessages : [];
+    const incomingKey = buildMessageSyncKey(incoming);
+    setMessages((current) => {
+      const currentKey = buildMessageSyncKey(current);
+      if (currentKey === incomingKey) return current;
+      const hasUnsyncedLocalTail = current.length > incoming.length && (loading || Boolean(activeReplyJobId));
+      if (hasUnsyncedLocalTail) return current;
+      return incoming;
+    });
+  }, [savedMessages, loading, activeReplyJobId]);
 
   useEffect(() => {
     const handlePersonalityUpdate = (event) => {

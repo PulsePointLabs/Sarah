@@ -1057,6 +1057,7 @@ export default function SessionDetail() {
   const [sessionNotes, setSessionNotes] = useState("");
   const [sessionJournal, setSessionJournal] = useState(null);
   const [pendingSectionId, setPendingSectionId] = useState("");
+  const [activeSectionId, setActiveSectionId] = useState("session-snapshot");
   const [pendingTimestampReview, setPendingTimestampReview] = useState(null);
   const [inspectionTime, setInspectionTime] = useState(0);
   const [nearbyBloodPressure, setNearbyBloodPressure] = useState([]);
@@ -1611,6 +1612,36 @@ export default function SessionDetail() {
   }, [pendingSectionId]);
 
   useEffect(() => {
+    if (loading || typeof window === "undefined") return undefined;
+    const main = document.querySelector("main");
+    const sectionIds = sectionLinks.map((section) => section.id);
+    if (!sectionIds.length) return undefined;
+
+    const updateActiveSection = () => {
+      const anchorY = (main?.getBoundingClientRect()?.top || 0) + 120;
+      let nextActive = sectionIds[0];
+      for (const sectionId of sectionIds) {
+        const element = document.getElementById(sectionId);
+        if (!element) continue;
+        if (element.getBoundingClientRect().top <= anchorY) {
+          nextActive = sectionId;
+        } else {
+          break;
+        }
+      }
+      setActiveSectionId((current) => (current === nextActive ? current : nextActive));
+    };
+
+    updateActiveSection();
+    main?.addEventListener("scroll", updateActiveSection, { passive: true });
+    window.addEventListener("resize", updateActiveSection);
+    return () => {
+      main?.removeEventListener("scroll", updateActiveSection);
+      window.removeEventListener("resize", updateActiveSection);
+    };
+  }, [loading, sectionLinks]);
+
+  useEffect(() => {
     if (loading || typeof window === "undefined" || window.location.hash) return undefined;
     const scrollTop = () => {
       document.querySelector("main")?.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -1731,6 +1762,7 @@ export default function SessionDetail() {
     { id: "session-tags", label: "Tags", group: "Session Context" },
   ];
   const selectSection = (section) => {
+    setActiveSectionId(section.id);
     setPendingSectionId(section.id);
   };
   const openReviewSection = (target) => {
@@ -1894,7 +1926,7 @@ export default function SessionDetail() {
         </AlertDialog>
       </div>
 
-      <SessionSectionNavigator sections={sectionLinks} onSelect={selectSection} />
+      <SessionSectionNavigator sections={sectionLinks} onSelect={selectSection} activeSectionId={activeSectionId} />
 
       <div className="min-w-0 max-w-full space-y-4 overflow-x-hidden px-3 py-4 pb-24 md:px-4 xl:pr-60 [overflow-wrap:anywhere]">
         <section id="session-snapshot" className="scroll-mt-24">
