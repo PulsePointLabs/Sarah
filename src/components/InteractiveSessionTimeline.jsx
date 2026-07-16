@@ -348,31 +348,6 @@ export default function InteractiveSessionTimeline({ session, timelineRows }) {
               />
             )}
 
-            {/* Phase bands */}
-            {phases.length >= 2 && (() => {
-              const pre = phases.find((p) => p.key === "pre_climax");
-              const climax = phases.find((p) => p.key === "climax");
-              const rec = phases.find((p) => p.key === "recovery");
-              return (
-                <>
-                  {pre && climax && (
-                    <ReferenceArea
-                      yAxisId="hr"
-                      x1={pre.offset} x2={climax.offset}
-                      fill="#a855f7" fillOpacity={0.06}
-                    />
-                  )}
-                  {climax && rec && (
-                    <ReferenceArea
-                      yAxisId="hr"
-                      x1={climax.offset} x2={rec.offset}
-                      fill="#3b82f6" fillOpacity={0.06}
-                    />
-                  )}
-                </>
-              );
-            })()}
-
             {/* Phase marker lines */}
             {!session?.no_climax && phases.map((p) => (
               <ReferenceLine

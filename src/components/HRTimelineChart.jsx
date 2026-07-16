@@ -141,7 +141,7 @@ export default function HRTimelineChart({
   const [window, setWindow] = useState(defaultWindow);
   const [showBuild, setShowBuild] = useState(false);
   const [showRecovery, setShowRecovery] = useState(false);
-  const [showPhases, setShowPhases] = useState(true);
+  const [showPhases, setShowPhases] = useState(false);
   const [showEvents, setShowEvents] = useState(true);
   const [showNearClimax, setShowNearClimax] = useState(false);
   const [showHrvOverlay, setShowHrvOverlay] = useState(false);
@@ -599,19 +599,6 @@ export default function HRTimelineChart({
               />
             )}
 
-            {/* Phase background bands */}
-            {showPhases && phaseBands.map((band) => (
-              <ReferenceArea
-                key={band.key}
-                x1={band.x1}
-                x2={band.x2}
-                fill={band.color}
-                fillOpacity={band.opacity}
-                stroke={band.color}
-                strokeOpacity={0.12}
-              />
-            ))}
-
             {/* Exploration HR rise/drop background bands */}
             {noClimax && showNearClimax && hrChangeBands.map((band, index) => (
               <ReferenceArea
@@ -663,15 +650,22 @@ export default function HRTimelineChart({
 
             {/* Legacy highlight range */}
             {highlightRange && (
-              <ReferenceArea
-                x1={highlightRange.start}
-                x2={highlightRange.end}
-                fill="hsl(var(--chart-3))"
-                fillOpacity={0.15}
-                stroke="hsl(var(--chart-3))"
-                strokeOpacity={0.6}
-                strokeWidth={1}
-              />
+              <>
+                <ReferenceLine
+                  x={highlightRange.start}
+                  stroke="hsl(var(--chart-3))"
+                  strokeOpacity={0.75}
+                  strokeDasharray="4 2"
+                  strokeWidth={1.25}
+                />
+                <ReferenceLine
+                  x={highlightRange.end}
+                  stroke="hsl(var(--chart-3))"
+                  strokeOpacity={0.75}
+                  strokeDasharray="4 2"
+                  strokeWidth={1.25}
+                />
+              </>
             )}
 
             {/* Data-driven marker lines */}

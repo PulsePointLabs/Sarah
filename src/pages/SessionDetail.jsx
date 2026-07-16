@@ -1310,13 +1310,6 @@ export default function SessionDetail() {
     return detectNearClimaxEvents(timelineRows, displaySession.climax_offset_s, displaySession.pre_climax_offset_s);
   }, [displaySession, timelineRows]);
 
-  // Auto-select first event once events are available
-  useEffect(() => {
-    if (nearClimaxEvents.length > 0 && selectedNearClimaxIdx == null) {
-      setSelectedNearClimaxIdx(0);
-    }
-  }, [nearClimaxEvents.length]);
-
   useEffect(() => {
     const events = displaySession?.event_timeline || [];
     if (!events.length || !Number.isFinite(Number(inspectionTime))) return;
