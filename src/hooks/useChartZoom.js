@@ -16,11 +16,6 @@ export function useChartZoom(dataMin, dataMax) {
   dataMinRef.current = dataMin;
   dataMaxRef.current = dataMax;
 
-  const allowTouchZoom = useRef(true);
-  if (typeof window !== "undefined") {
-    allowTouchZoom.current = !window.matchMedia("(pointer: coarse)").matches;
-  }
-
   // Pixel X → data value
   function pixelToValue(clientX) {
     const el = containerRef.current;
@@ -38,9 +33,9 @@ export function useChartZoom(dataMin, dataMax) {
   const touchStartHandler = useRef(null);
   const touchMoveHandler = useRef(null);
   const touchEndHandler = useRef(null);
+  const touchCancelHandler = useRef(null);
 
   touchStartHandler.current = (e) => {
-    if (!allowTouchZoom.current) return;
     if (e.touches.length !== 1) return;
     const val = pixelToValue(e.touches[0].clientX);
     if (val == null) return;
@@ -50,7 +45,6 @@ export function useChartZoom(dataMin, dataMax) {
   };
 
   touchMoveHandler.current = (e) => {
-    if (!allowTouchZoom.current) return;
     if (e.touches.length !== 1 || selectStartRef.current == null) return;
     const val = pixelToValue(e.touches[0].clientX);
     if (val == null) return;
@@ -67,7 +61,6 @@ export function useChartZoom(dataMin, dataMax) {
   };
 
   touchEndHandler.current = (e) => {
-    if (!allowTouchZoom.current) return;
     if (selectStartRef.current == null) return;
     const val = pixelToValue(e.changedTouches[0].clientX);
     if (isDraggingRef.current && val != null) {
@@ -81,26 +74,33 @@ export function useChartZoom(dataMin, dataMax) {
     setSelectRange(null);
   };
 
+  touchCancelHandler.current = () => {
+    selectStartRef.current = null;
+    isDraggingRef.current = false;
+    setSelectRange(null);
+  };
+
   // Callback ref — attaches stable wrappers that delegate to the ref handlers
   const attachRef = useCallback((el) => {
     if (containerRef.current) {
       containerRef.current.removeEventListener("touchstart", stableTouchStart);
       containerRef.current.removeEventListener("touchmove", stableTouchMove);
       containerRef.current.removeEventListener("touchend", stableTouchEnd);
+      containerRef.current.removeEventListener("touchcancel", stableTouchCancel);
     }
     containerRef.current = el;
     if (!el) return;
-    if (allowTouchZoom.current) {
-      el.addEventListener("touchstart", stableTouchStart, { passive: true });
-      el.addEventListener("touchmove", stableTouchMove, { passive: false });
-      el.addEventListener("touchend", stableTouchEnd, { passive: true });
-    }
+    el.addEventListener("touchstart", stableTouchStart, { passive: true });
+    el.addEventListener("touchmove", stableTouchMove, { passive: false });
+    el.addEventListener("touchend", stableTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", stableTouchCancel, { passive: true });
   }, []);
 
   // Stable wrappers — these never change identity, so add/removeEventListener works
   function stableTouchStart(e) { touchStartHandler.current(e); }
   function stableTouchMove(e) { touchMoveHandler.current(e); }
   function stableTouchEnd(e) { touchEndHandler.current(e); }
+  function stableTouchCancel(e) { touchCancelHandler.current(e); }
 
   // Mouse events (recharts synthetic)
   const onMouseDown = useCallback((e) => {
