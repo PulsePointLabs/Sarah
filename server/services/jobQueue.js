@@ -1,4 +1,4 @@
-import { getEntity, listEntities, listProcessingJobSummaries, listRecoverableProcessingJobs, upsertEntity } from '../db.js';
+import { deleteEntity, getEntity, listEntities, listProcessingJobSummaries, listRecoverableProcessingJobs, upsertEntity } from '../db.js';
 import { friendlyJobErrorMessage } from '../../src/lib/jobErrorMessages.js';
 import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
 
@@ -724,4 +724,97 @@ export function clearJobs() {
   }
 
   return { ok: true, cleared, cancelled, clearedAt };
+}
+
+export function clearJobsByMeta({ type = '', meta = {}, includeTypes = [] } = {}) {
+  const clearedAt = nowIso();
+  const requestedTypes = [type, ...(Array.isArray(includeTypes) ? includeTypes : [])]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  const metaEntries = Object.entries(meta || {}).filter(([, value]) => value !== undefined && value !== null && value !== '');
+  const matches = (job) => {
+    if (!job?.id || isCleared(job)) return false;
+    if (requestedTypes.length && !requestedTypes.includes(String(job.type || ''))) return false;
+    return metaEntries.every(([key, value]) => String(job.meta?.[key] ?? '') === String(value));
+  };
+
+  const merged = new Map();
+  for (const record of listEntities('ProcessingJob')) {
+    if (record?.id) merged.set(record.id, record);
+  }
+  for (const job of jobs.values()) {
+    if (job?.id) merged.set(job.id, job);
+  }
+
+  let cancelled = 0;
+  let cleared = 0;
+  for (const job of merged.values()) {
+    if (!matches(job)) continue;
+    if (['queued', 'running'].includes(job.status)) {
+      cancelJob(job.id);
+      cancelled += 1;
+    }
+
+    const runtimeJob = jobs.get(job.id);
+    if (runtimeJob) {
+      patchJob(runtimeJob, {
+        meta: {
+          ...(runtimeJob.meta || {}),
+          clearedAt,
+        },
+      });
+    } else {
+      clearPersistedJob(job, clearedAt);
+    }
+    cleared += 1;
+  }
+
+  return {
+    ok: true,
+    cleared,
+    cancelled,
+    clearedAt,
+  };
+}
+
+export function purgeJobsByMeta({ type = '', meta = {}, includeTypes = [] } = {}) {
+  const requestedTypes = [type, ...(Array.isArray(includeTypes) ? includeTypes : [])]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  const metaEntries = Object.entries(meta || {}).filter(([, value]) => value !== undefined && value !== null && value !== '');
+  const matches = (job) => {
+    if (!job?.id) return false;
+    if (requestedTypes.length && !requestedTypes.includes(String(job.type || ''))) return false;
+    return metaEntries.every(([key, value]) => String(job.meta?.[key] ?? '') === String(value));
+  };
+
+  const merged = new Map();
+  for (const record of listEntities('ProcessingJob')) {
+    if (record?.id) merged.set(record.id, record);
+  }
+  for (const job of jobs.values()) {
+    if (job?.id) merged.set(job.id, job);
+  }
+
+  let cancelled = 0;
+  let deleted = 0;
+  for (const job of merged.values()) {
+    if (!matches(job)) continue;
+    if (['queued', 'running'].includes(job.status)) {
+      cancelJob(job.id);
+      cancelled += 1;
+    }
+    jobs.delete(job.id);
+    const queuedIndex = queue.findIndex((queued) => queued.id === job.id);
+    if (queuedIndex >= 0) queue.splice(queuedIndex, 1);
+    running.delete(job.id);
+    const deletedInfo = deleteEntity('ProcessingJob', job.id);
+    deleted += Number(deletedInfo?.deleted || 0);
+  }
+
+  return {
+    ok: true,
+    deleted,
+    cancelled,
+  };
 }

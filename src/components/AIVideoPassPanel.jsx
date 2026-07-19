@@ -13,7 +13,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { base44 } from "@/api/base44Client";
-import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import { clearScopedBackgroundJobs, getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import {
   compactFrameRefs,
   buildSarahLocalAnnotationCards,
@@ -636,7 +636,7 @@ function videoFocusInstruction(video = {}, selectedRole = "", isExploration = fa
   if (isExploration) {
     return "This is the main body exploration/procedure view. Follow the visible procedure sequence naturally using current-frame action plus exploration context: positioning on the table, draping, swabbing/antiseptic prep, lubrication or urethral dilation, initial Foley handling, penis/glans stabilization, visible meatal engagement, visible advancement through urethral landmarks, bladder entry or urine confirmation, balloon inflation, drape removal, and urine collection in the bag. Describe only the stage/action actually visible in the current window. Foley or tubing presence is state, not action; do not convert visible tubing/field handling into insertion, placement, advancement, balloon inflation, securement, or finalization unless that exact action is visible or logged nearby. Do not treat procedure handling as active stimulation unless active stimulation is visibly present or logged.";
   }
-  return "This is a main/genital-composite session view. Actively track visible stimulation mechanics and genital physiology: hand-to-genital contact, stroking/shaft or glans motion, sleeve/device movement, penile state, scrotal/testicular position, scrotal lift/retraction or relaxation/descent, scrotal skin tension/wrinkling, visible tissue color or sheen changes, perineal or scrotal-base contact, lubricant application, grip/contact changes, pauses/resumes, and device-plus-stimulation combinations such as Foley in place while stimulation continues. A Foley catheter, sleeve, lubricant, or other device being present does not make the window a resting state. Only call the window resting/no stimulation when sampled frames show no hand/device/body contact or stimulation motion across the window.";
+  return "This is a main/genital-composite session view. Treat it as a masturbation/stimulation session unless the record or nearby manual notes explicitly say a Foley/body-exploration procedure is happening in this window. Actively track visible stimulation mechanics and genital physiology: hand-to-genital contact, stroking/shaft or glans motion, sleeve/device movement, penile state, scrotal/testicular position, scrotal lift/retraction or relaxation/descent, scrotal skin tension/wrinkling, visible tissue color or sheen changes, perineal or scrotal-base contact, lubricant application, grip/contact changes, pauses/resumes, and device-plus-stimulation combinations such as Foley in place while stimulation continues. A Foley catheter, sleeve, lubricant, or other device being present does not make the window a resting state or a procedure window by itself. Only call the window resting/no stimulation when sampled frames show no hand/device/body contact or stimulation motion across the window.";
 }
 
 function videoRoleHelper(role, isExploration = false) {
@@ -2016,6 +2016,15 @@ export default function AIVideoPassPanel({
     delete retainedAnalysis._video_pass_detail_flow;
     delete retainedAnalysis._video_pass_digest;
     delete retainedAnalysis.ai_audio_passes;
+    await clearScopedBackgroundJobs({
+      type: "ai_invoke",
+      meta: {
+        sessionId: session.id,
+        source: "ai_video_pass",
+        recordType,
+      },
+      mode: "delete",
+    }).catch(() => null);
     const retainedEvents = (session?.event_timeline || []).filter((event) => !isAIGeneratedPassEvent(event));
     const updated = {
       event_timeline: retainedEvents,
@@ -2361,6 +2370,8 @@ ${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 ${MANUAL_NOTE_FOUNDATION_RULE}
 
 ${isExploration ? "Exploration/procedure context grounding" : "Session context grounding"} has priority when it identifies known setup, devices, materials, or technique. Use the ${recordLabel} notes, methods, devices, and timestamped/manual notes below to interpret ambiguous visible objects and contact locations. ${isExploration ? "For example, if the exploration context says an 18 French Foley catheter or urethral sound is in use and the frames show a matching device at the meatus, identify it as that supported instrumentation rather than vague stimulation or generic object handling." : "For example, if the session context says a vibrator is held at the perineum during stimulation and the frames show a matching device/contact at that location, call it a perineal vibrator/contact rather than a vague \"blue device near the scrotum and genitals.\""} If context and visuals do not line up, state the uncertainty instead of forcing the label.
+
+${isExploration ? "" : "Session-versus-procedure gate: this record is a masturbation/stimulation session, not a body-exploration or Foley-placement review, unless nearby manual notes explicitly document a Foley insertion, removal, adjustment, or other procedure step in this same window. A Foley being visible or in situ during stimulation is baseline device context, not proof of insertion/removal. Do not switch into procedure language such as placement, advancement, withdrawal, removal, securement, bladder entry, balloon inflation, or dwell interval unless the current sampled frames or nearby manual notes directly support that exact step."}
 
 ${isExploration ? "Procedure chronology rule: manual/user timeline notes are stronger than prior AI video-pass cards for stage order and timing. Use the current sampled frames to describe what is visible now, but do not back-date iodine, lubricant, Foley-at-meatus contact, insertion, urine return, balloon fill, securement, or cleanup into a window unless either the current frames show it or a nearby manual note says it has happened. If the video appears to show something before the manual timeline allows it, label the visual as ambiguous or possible conflict instead of merging both claims." : ""}
 

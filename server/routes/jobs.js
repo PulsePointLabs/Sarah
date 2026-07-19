@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { cancelJob, clearJobs, createJob, getJob, listJobs, registerJobHandler, retryJob } from '../services/jobQueue.js';
+import { cancelJob, clearJobs, clearJobsByMeta, createJob, getJob, listJobs, purgeJobsByMeta, registerJobHandler, retryJob } from '../services/jobQueue.js';
 import { renderTTSExport } from '../services/ttsRenderer.js';
 import { renderSessionReviewVideo } from '../services/sessionReviewVideoRenderer.js';
 import { renderProfileAnatomyVideo } from '../services/profileAnatomyVideoRenderer.js';
@@ -1228,6 +1228,19 @@ jobsRouter.get('/', (req, res) => {
 
 jobsRouter.post('/clear', (_req, res) => {
   res.json(clearJobs());
+});
+
+jobsRouter.post('/clear-scoped', (req, res) => {
+  const { type = '', includeTypes = [], meta = {}, mode = 'mark_cleared' } = req.body || {};
+  const payload = {
+    type,
+    includeTypes: Array.isArray(includeTypes) ? includeTypes : [],
+    meta: meta && typeof meta === 'object' ? meta : {},
+  };
+  if (mode === 'delete') {
+    return res.json(purgeJobsByMeta(payload));
+  }
+  return res.json(clearJobsByMeta(payload));
 });
 
 jobsRouter.post('/:jobId/retry', (req, res) => {

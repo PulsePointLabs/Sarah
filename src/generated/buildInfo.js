@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
   "version": "0.1.130",
-  "commit": "b9c2eaf",
-  "commitMessage": "Refresh build metadata for annotation accept fix",
-  "builtAt": "2026-07-19T01:22:20.957Z"
+  "commit": "f398f6f",
+  "commitMessage": "Fix Foley removal overclaims in AI annotation",
+  "builtAt": "2026-07-19T05:22:43.839Z"
 };

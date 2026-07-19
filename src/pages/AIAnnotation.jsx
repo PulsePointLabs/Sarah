@@ -15,6 +15,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { clearScopedBackgroundJobs } from "@/lib/backgroundJobs";
 import AIVideoPassPanel from "../components/AIVideoPassPanel";
 import LinkedLocalVideoManager from "../components/LinkedLocalVideoManager";
 
@@ -190,6 +191,15 @@ export default function AIAnnotation() {
     if (!record?.id || !clearableAIPassCount) return;
     const retainedEvents = (record.event_timeline || []).filter((event) => !isAIGeneratedAnnotation(event));
     const { analysisField, retainedAnalysis } = clearAIPassAnalysis(record, selectedType);
+    await clearScopedBackgroundJobs({
+      type: "ai_invoke",
+      meta: {
+        sessionId: record.id,
+        source: "ai_video_pass",
+        recordType: selectedType,
+      },
+      mode: "delete",
+    }).catch(() => null);
     const updated = {
       event_timeline: retainedEvents,
       [analysisField]: retainedAnalysis,

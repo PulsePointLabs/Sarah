@@ -199,6 +199,19 @@ export function clearBackgroundJobs() {
   });
 }
 
+export function clearScopedBackgroundJobs({ type = "", includeTypes = [], meta = {}, mode = "mark_cleared" } = {}) {
+  return jobRequest("/jobs/clear-scoped", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      type,
+      includeTypes,
+      meta,
+      mode,
+    }),
+  });
+}
+
 export function captureAIForensicFinal(captureId, payload) {
   if (!captureId) return Promise.resolve(null);
   return jobRequest(`/ai/forensics/${encodeURIComponent(captureId)}/final`, {
