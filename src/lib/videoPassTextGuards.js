@@ -41,6 +41,13 @@ export function hasVisibleFoleyAdvancementCue(item) {
     && /(meatus|meatal|glans|penis|urethra|insertion|advancement|continuous|aligned|same axis|tracks with)/.test(text);
 }
 
+export function hasVisibleFoleyWithdrawalCue(item) {
+  const text = lowerItemText(item);
+  if (!/(foley|catheter|shaft|tubing|tip)/.test(text)) return false;
+  return /(visible withdrawal|visibly withdrawing|withdrawal is visible|active withdrawal|actual withdrawal|progressive withdrawal|more (?:of the )?(?:external )?(?:catheter shaft|foley shaft|foley|catheter|shaft) (?:is |remains |becomes )?visible|(?:catheter shaft|foley shaft|foley|catheter|shaft) (?:becomes|is becoming|gets) more visible|external (?:catheter shaft|foley shaft|foley|catheter|shaft) (?:length )?(?:lengthens|increases|extends)|progressive(?:ly)? (?:lengthening|more visible)|remaining visible length (?:lengthens|increases|extends)|tip (?:is )?(?:clearly )?(?:visible outside|outside|fully outside)|tip visibly clears|clear withdrawal path|withdrawn clear of the meatus|held fully away from the body)/.test(text)
+    && /(meatus|meatal|glans|penis|urethra|withdraw|withdrawal|removal|continuous|aligned|same axis|tracks with)/.test(text);
+}
+
 export function hasUnsupportedMeatusContactClaim(item) {
   const text = lowerItemText(item);
   if (!/(foley|catheter|18\s*fr|tool|tip|shaft|tubing)/.test(text)) return false;
@@ -48,6 +55,16 @@ export function hasUnsupportedMeatusContactClaim(item) {
   if (/(not confirmed|cannot confirm|uncertain|possible|no visible|not visible|blocked|obscured)/.test(text)) return false;
   if (hasVisibleFoleyAdvancementCue(item)) return false;
   return /(toward\s+and\s+at|at\s+(?:the\s+)?meatus|contact(?:ing)?\s+(?:the\s+)?meatus|touch(?:ing)?\s+(?:the\s+)?meatus|aligned\s+(?:with|at)\s+(?:the\s+)?meatus|enter(?:ing|s)?\s+(?:the\s+)?meatus|advanc(?:e|ed|ing|ement)|through\s+(?:the\s+)?meatus|tip\s+(?:is\s+)?(?:visible\s+)?(?:at|touching|contacting|entering))/i.test(text);
+}
+
+export function hasUnsupportedFoleyRemovalClaim(item) {
+  const text = lowerItemText(item);
+  if (!/(foley|catheter|tubing|shaft|tip|meatus|glans|penis)/.test(text)) return false;
+  if (/(not confirmed|cannot confirm|uncertain|possible|may|might|ambiguous|still in place|still present|remains present|remains in place|in situ)/.test(text)) return false;
+  if (!/(withdraw|withdrawal|removed|removal|fully removed|tip has cleared|tip cleared|cleared the meatus|cleared from the meatus|separating upward away from the meatus|held away from the body|no longer in the body|out of the body|withdrawn clear)/.test(text)) return false;
+  if (hasVisibleFoleyWithdrawalCue(item)) return false;
+  if (/(manual(?:ly)?\s+(?:confirmed|logged)|explicitly\s+logged|documented\s+removal|confirmed\s+removal|catheter\s+removed\s+per\s+(?:note|timeline))/i.test(text)) return false;
+  return true;
 }
 
 export function hasUnsupportedSleeveUseClaim(item) {
@@ -79,6 +96,7 @@ export function foleyEvidenceStageForText(text) {
   if (hasBlueObjectFoleyMislabel({ text: value })) return { stage: "tray object", blocked: true };
   if (hasUnsupportedAlreadyPlacedClaim({ text: value })) return { stage: "placement not confirmed", blocked: true };
   if (hasUnsupportedMeatusContactClaim({ text: value })) return { stage: "meatus contact not confirmed", blocked: true };
+  if (hasUnsupportedFoleyRemovalClaim({ text: value })) return { stage: "withdrawal not confirmed", blocked: true };
   if (hasUnsupportedFoleyStageForecast({ text: value })) return { stage: "field preparation", blocked: true };
   if (hasUnsupportedFoleySecurementClaim({ text: value })) return { stage: "tubing/field handling", blocked: true };
   if (/\b(foley|catheter|tubing)\b/.test(value)) return { stage: "Foley evidence", blocked: false };
@@ -207,6 +225,23 @@ export function sanitizeFoleyProcedureText(text) {
       .replace(/\bentering\b/gi, "near")
       .replace(/\bappears\s+imminent\b/gi, "is not yet visible")
       .replace(/\bimminent\b/gi, "not yet visible");
+  }
+  if (hasUnsupportedFoleyRemovalClaim({ text: next })) {
+    flags.push("Unsupported Foley removal claim softened");
+    next = next
+      .replace(/\b(?:the\s+)?yellow\s+Foley\s+catheter\s+withdrawal\s+completes?\s+across\s+this\s+window\b/gi, "Foley withdrawal is not confirmed across this window")
+      .replace(/\b(?:the\s+)?Foley\s+catheter\s+withdrawal\s+completes?\b/gi, "Foley withdrawal is not confirmed")
+      .replace(/\bwithdrawal\s+completes?\b/gi, "withdrawal is not confirmed")
+      .replace(/\b(?:tip\s+has\s+cleared|tip\s+cleared)\b/gi, "tip clearance is not confirmed")
+      .replace(/\b(?:fully\s+removed|completely\s+removed)\b/gi, "not confirmed as removed")
+      .replace(/\bno\s+longer\s+in\s+the\s+body\b/gi, "not confirmed as outside the body")
+      .replace(/\bout\s+of\s+the\s+body\b/gi, "not confirmed as outside the body")
+      .replace(/\bheld\s+away\s+from\s+the\s+body\b/gi, "lifted away, with withdrawal status not confirmed")
+      .replace(/\bseparating\s+upward\s+away\s+from\s+the\s+meatus\b/gi, "lifting upward near the meatus, with withdrawal status not confirmed")
+      .replace(/\b(?:catheter|foley|tip)\s+(?:is\s+)?(?:fully\s+)?removed\b/gi, "catheter removal is not confirmed")
+      .replace(/\bwithdrawn\s+clear\s+of\s+the\s+meatus\b/gi, "withdrawal clear of the meatus is not confirmed")
+      .replace(/\bframes?\s+\d+\s*(?:-|to)\s*\d+\s+show\s+the\s+catheter\s+fully\s+removed\b/gi, "later frames do not confirm full catheter removal")
+      .replace(/\bthe\s+shaft\s+is\s+visible\s+bare\b/gi, "more of the shaft/glans is visible");
   }
   return { text: next.replace(/\bbegins advancing possible field\/tool handling\b/gi, "shows possible field/tool handling").replace(/\s+/g, " ").trim(), flags };
 }

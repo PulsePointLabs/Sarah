@@ -35,6 +35,7 @@ import { SARAH_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
 import { serverUrl } from "@/lib/mobileApiBase";
 import {
   deviceEvidenceStageForText,
+  hasUnsupportedFoleyRemovalClaim as hasUnsupportedFoleyRemovalClaimGuard,
   hasUnsupportedMeatusContactClaim as hasUnsupportedMeatusContactClaimGuard,
   hasUnsupportedOrgasmClaim as hasUnsupportedOrgasmClaimGuard,
   hasUnsupportedPenileBaseClaim as hasUnsupportedPenileBaseClaimGuard,
@@ -801,6 +802,8 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
         ? "Tubing/field handling"
         : hasUnsupportedAlreadyPlacedClaim(finding)
         ? "Placement not confirmed"
+        : hasUnsupportedFoleyRemovalClaimGuard(finding)
+        ? "Withdrawal not confirmed"
         : hasUnsupportedMeatusContactClaimGuard(finding)
         ? "Meatus contact not confirmed"
         : hasUnsupportedOrgasmClaimGuard(finding)
@@ -816,6 +819,7 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
       confidence: (hasUnsupportedFoleySecurementClaim(finding)
         || hasUnsupportedFoleyStageForecast(finding)
         || hasUnsupportedAlreadyPlacedClaim(finding)
+        || hasUnsupportedFoleyRemovalClaimGuard(finding)
         || hasUnsupportedMeatusContactClaimGuard(finding)
         || hasUnsupportedSleeveUseClaimGuard(finding)
         || hasUnsupportedOrgasmClaimGuard(finding)
@@ -829,6 +833,7 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
     )).map((event) => {
       const unsupportedFoleyForecast = isExploration && hasUnsupportedFoleyStageForecast(event);
       const unsupportedAlreadyPlaced = isExploration && hasUnsupportedAlreadyPlacedClaim(event);
+      const unsupportedFoleyRemoval = isExploration && hasUnsupportedFoleyRemovalClaimGuard(event);
       const unsupportedMeatusClaim = isExploration && hasUnsupportedMeatusContactClaimGuard(event);
       const unsupportedSleeveUse = !isExploration && hasUnsupportedSleeveUseClaimGuard(event);
       const unsupportedOrgasmClaim = !isExploration && hasUnsupportedOrgasmClaimGuard(event);
@@ -840,9 +845,9 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
           fallbackWindow.end,
         ),
         note,
-        category: (unsupportedFoleyForecast || unsupportedMeatusClaim) ? ["setup"] : normalizeDraftEventCategories(event.category, note, fallbackWindow, isExploration),
+        category: (unsupportedFoleyForecast || unsupportedFoleyRemoval || unsupportedMeatusClaim) ? ["setup"] : normalizeDraftEventCategories(event.category, note, fallbackWindow, isExploration),
         annotation_tags: Array.isArray(event.annotation_tags) ? event.annotation_tags : ["other_context"],
-        confidence: (unsupportedFoleyForecast || unsupportedAlreadyPlaced || unsupportedMeatusClaim || unsupportedSleeveUse || unsupportedOrgasmClaim) && event.confidence === "high" ? "moderate" : event.confidence || "moderate",
+        confidence: (unsupportedFoleyForecast || unsupportedAlreadyPlaced || unsupportedFoleyRemoval || unsupportedMeatusClaim || unsupportedSleeveUse || unsupportedOrgasmClaim) && event.confidence === "high" ? "moderate" : event.confidence || "moderate",
       };
     }).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note }) && !isTelemetryOnlyFinding({ title: "", text: event.note }) && !isGenericControlObjectMention(event) && !isLowValueNoChangeForRole(event, selectedRole) && !isOutOfLaneForRole(event, selectedRole)),
   };
@@ -2324,6 +2329,8 @@ Foley placement sequence to track when visible: positioning on the table; drapin
 
 Foley state-versus-action rule: Foley catheter/tubing already being visible means "Foley/tubing remains present", not "inserted", "placed", "advanced", or "secured". Yellow tubing being moved, lifted, routed, or resting across the field is tubing handling unless the catheter shaft is visibly advancing at the meatus or balloon hardware is visible. Do not mention StatLock, adhesive securement, securement finalization, balloon inflation, bladder entry, urine confirmation, or urine collection unless that exact item/action is visible in the sampled frames or explicitly logged in nearby manual notes. Prior AI-generated events/findings do not count as manual evidence.
 
+Foley withdrawal/removal gate: do not call the Foley/catheter "withdrawn", "fully removed", "tip cleared", "out of the body", or "held away from the body" from glans exposure, hand motion, yellow tubing lift, or a gap that could be caused by camera angle, crop, motion blur, or occlusion. Withdrawal begins only when actual catheter motion out through the meatus is visible OR when progressively more external catheter length becomes visible while remaining aligned with the meatus/glans. Full removal requires the catheter tip/shaft to be clearly outside the body with no continuing meatal engagement visible or supported by nearby manual notes. If the hand is visibly stroking your penis while Foley material remains visible, say that stimulation/contact continues with Foley material still present; do not rewrite it as catheter removal.
+
 Procedure timeline authority rule: timestamped manual/user event notes are the procedural timeline of record. Use video to support, clarify, or flag uncertainty around those notes; do not let an AI visual guess move a procedural step earlier or later than the manual timeline. If a sampled frame appears to conflict with a nearby manual note, say there is a possible visual/timeline mismatch and keep the manual note as the anchor unless the current frames directly and unmistakably show otherwise. Do not describe povidone-iodine, lubricant, Foley contact, meatal engagement, bladder entry, balloon inflation, urine return, or securement before the first manual note or current-frame evidence that supports that specific item/action.
 ${PRODUCTION_PROCEDURE_ANNOTATION_RULE}
 
@@ -2367,6 +2374,8 @@ Scrotal/testicular observation rule: in regular session reviews, give the scrotu
 
 Positive action tracking rule: describe visible contact or motion before describing absence. For regular session reviews, if any sampled frame shows hand contact with the penis, glans, shaft, scrotal-base/perineal region, sleeve/device, or visible stimulation-related motion, treat the window as active stimulation/contact or a stimulation transition unless the sequence clearly shows a pause. Do not claim sleeve-based stimulation, sleeve stroking, or sleeve placement until the sleeve is visibly placed on/over the shaft or visibly used around the penis; if the sleeve is only nearby, in hand, or outside the frame, describe hand contact/prep instead. For body exploration reviews, if any sampled frame shows glove change, swab/wipe/applicator/tool/catheter/tubing contact, or setup movement, describe that procedural action rather than saying nothing is happening. For Foley reviews, prefer the exact visible action: table positioning, glove change/prep, drape/setup, swabbing, lubrication/dilation, penis stabilization, catheter not visible, catheter approach, catheter tip at the meatus, insertion beginning, active advancement from visible motion or shortening external catheter length, visible catheter/Foley-at-meatus state, tubing handling, balloon inflation, drape removal, or urine collection. Do not use already-in-place unless completion evidence is visible or manually logged.
 
+Mixed-window priority rule: when a window contains both Foley/catheter evidence and obvious active hand-to-penis contact or stroking, describe the stimulation/contact first and the Foley state second. Foley presence does not erase visible masturbation/stroking mechanics. If your hand is visibly gripping or stroking your penis, do not summarize the window as pure Foley placement/removal/tubing handling unless those catheter actions are themselves clearly visible.
+
 Stimulation-pause threshold rule: slower cadence, reversal at the end of a stroke, a brief hand dwell, low frame-difference motion, grip adjustment, or less visible movement is not a stimulation pause. Use stimulation_paused or motion_pause only when the sampled sequence shows at least 2.5 seconds of sustained cessation AND either the hand/sleeve/device visibly releases or separates from the penis, or all visible hand/device stimulation motion remains absent through that interval. If contact remains and repeated strokes continue anywhere in the sampled sequence, describe slower cadence or a grip/technique transition instead. A local low-motion candidate is only a whole-frame stillness hint and never proves a stimulation pause by itself.
 
 Sleeve/contact state rule: evaluate sleeve presence, sleeve motion, and body contact as three separate observations in every regular-session window. A sleeve visibly held stationary around the shaft or at the penile base means sleeve contact is maintained while stroking is paused; it is not a bare penis and it is not no-contact. Call the penis bare only when the shaft is directly visible and the sleeve is visibly separated from it. Call no contact only when neither a hand nor the sleeve/device is visibly touching the penis. Do not carry sleeve placement forward from a prior window: sleeve-on requires visible overlap with the shaft in the current sampled frames, while a sleeve merely held nearby or above the shaft is not sleeve contact.
@@ -2395,7 +2404,7 @@ Feet-lane sensitivity rule: for feet/lower-body videos, look carefully for subtl
 
 Observation priorities, in order:
 1. Visible physiological response: erection/engorgement quality, genital position/state, glans/shaft/foreskin/scrotal/testicular/perineal state, scrotal lift/retraction or relaxation/descent, scrotal skin tension/wrinkling, visible tissue color or surface sheen, cautious visible fluid/moisture labeling, pelvic lift/drop, and whether these change from the prior window.
-2. ${isExploration ? "Procedure/instrumentation state: what body area or device/material is involved, whether procedure contact continues, starts, pauses, resumes, or changes, and whether motion/position shows glove change/prep, setup, prep/swabbing, lubrication/dilation, visible meatal contact/engagement, visible advancement, already-in-place catheter state, tubing/field handling, balloon inflation, drape removal, urine collection, or post-procedure checking. Do not claim insertion/advancement/securement from Foley or tubing presence alone. Do not claim meatal engagement is imminent; either the tip/contact at the meatus is visible now or it is not. If tip-at-meatus contact is visible but advancement is not, preserve that as meatal contact rather than downgrading to tubing handling." : "Stimulation state and technique: what body area is contacted, whether contact continues, starts, pauses, resumes, or changes, and whether motion/position suggests a technique shift."}
+2. ${isExploration ? "Procedure/instrumentation state: what body area or device/material is involved, whether procedure contact continues, starts, pauses, resumes, or changes, and whether motion/position shows glove change/prep, setup, prep/swabbing, lubrication/dilation, visible meatal contact/engagement, visible advancement, already-in-place catheter state, tubing/field handling, balloon inflation, drape removal, urine collection, or post-procedure checking. Do not claim insertion/advancement/securement from Foley or tubing presence alone. Do not claim removal/withdrawal from glans exposure, hand motion, or lifted tubing alone. Do not claim meatal engagement is imminent; either the tip/contact at the meatus is visible now or it is not. If tip-at-meatus contact is visible but advancement is not, preserve that as meatal contact rather than downgrading to tubing handling. If active stroking/contact is also visible, keep that as a co-equal visible action rather than collapsing the whole window into a Foley stage label." : "Stimulation state and technique: what body area is contacted, whether contact continues, starts, pauses, resumes, or changes, and whether motion/position suggests a technique shift."}
 3. Whole-body and lower-body response: leg/foot activity, toe/heel/planting/bracing changes, abdominal/chest movement or breathing estimate only when enough body surface is visible, posture shifts, tremor, shudder, and relaxation/tension cues.
 4. Device/material use: lubrication application, visible lubricant sheen, sleeve/Foley/e-stim/TENS/device use, device introduction/removal, and contact/fit changes when visible or supported.
 5. Sarah app overlay interpretation when readable: if the visible Sarah overlay or captured app panel shows Current HR, AVG, MAX, RR samples, RMSSD, HRV quality, build confidence, AI Magic, near-climax, recovery, phase labels, timers, EMG levels, or heart-rate trend, treat it as app-generated telemetry evidence for this window. Use it to support physiological interpretation and timing correlation with visible body/procedure/stimulation changes. Do not make a standalone finding from overlay text alone unless the overlay change is itself the useful evidence.
