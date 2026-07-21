@@ -14,6 +14,20 @@ test('extractCitedTimesFromText handles numeric and natural session times', () =
   assert.equal(times[0].seconds, 943);
 });
 
+test('relative durations are not treated as session timeline anchors', () => {
+  const times = extractCitedTimesFromText(
+    'Alcohol was consumed within the prior thirty minutes, cannabis approximately thirty to ninety minutes before, and the hold lasted for 30 seconds.'
+  );
+  assert.deepEqual(times, []);
+});
+
+test('natural-language session positions remain timeline anchors', () => {
+  const times = extractCitedTimesFromText(
+    'The massager was placed between roughly two minutes and twenty-five seconds and two minutes and forty-nine seconds.'
+  );
+  assert.deepEqual(times.map((time) => time.seconds), [145, 169]);
+});
+
 test('extractCitedTimesFromParagraphs keeps separate distant moments and paragraph indexes', () => {
   const times = extractCitedTimesFromParagraphs([
     'The first useful marker is around four minutes.',

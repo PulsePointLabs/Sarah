@@ -8,7 +8,7 @@ import { q, runProcess, slugifyFilePart } from './ttsCore.js';
 import { buildLoggedEventAnchors, buildReviewVideoPlan, extractCitedTimesFromText } from './sessionReviewVideoPlanner.js';
 import { normalizeWatermarkSettings, replaceVideoWithWatermarkedExport } from './watermark.js';
 
-const REVIEW_RENDER_VERSION = 'session_review_video_v15_validated_phase_anchors';
+const REVIEW_RENDER_VERSION = 'session_review_video_v16_semantic_bounded_motion';
 const REVIEW_VIDEO_WIDTH = Number(process.env.REVIEW_VIDEO_WIDTH || 1920);
 const REVIEW_VIDEO_HEIGHT = Number(process.env.REVIEW_VIDEO_HEIGHT || 1080);
 const REVIEW_VIDEO_PRESET = process.env.REVIEW_VIDEO_PRESET || 'slow';
@@ -373,8 +373,10 @@ function roundedSeconds(value) {
 }
 
 function timestampRequirementForSegment(segment = {}) {
+  const maxSessionSeconds = Number(segment?.maxSessionSeconds);
   const times = extractCitedTimesFromText(segment?.text || '', segment?.paragraphIndex)
     .filter((time) => Number.isFinite(Number(time.seconds)))
+    .filter((time) => !Number.isFinite(maxSessionSeconds) || Number(time.seconds) <= maxSessionSeconds + REVIEW_VIDEO_TIME_TOLERANCE_SECONDS)
     .sort((a, b) => Number(a.charIndex ?? 0) - Number(b.charIndex ?? 0));
   return {
     required: times.length > 0,
@@ -433,6 +435,10 @@ export function inferReviewVisualFocus(value = '') {
     return focus('pelvis', 0.58, 0.62, 1.14);
   }
   return null;
+}
+
+export function reviewVisualFocusForClip(focusText = '', label = '') {
+  return inferReviewVisualFocus(focusText || label || '');
 }
 
 function reviewVisualFocusFilter(visualFocus) {
@@ -762,9 +768,9 @@ function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playb
   ].filter(Boolean).join(',');
 }
 
-export async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, workDir, index, sessionSeconds = null, playbackRate = 1, focusText = '', onPreview = null, sourceDuration = 0, usedSourceWindows = [], activeCandidateStarts = [], alternateVideo = null, lockTimestamp = false, telemetryData = null }) {
+export async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, workDir, index, sessionSeconds = null, playbackRate = 1, focusText = '', onPreview = null, sourceDuration = 0, usedSourceWindows = [], activeCandidateStarts = [], alternateVideo = null, lockTimestamp = false, maxMotionDriftSeconds = Number.POSITIVE_INFINITY, telemetryData = null }) {
   const duration = Math.max(0.25, Math.min(180, Number(endSeconds || 0) - Number(startSeconds || 0)));
-  const requestedFocus = inferReviewVisualFocus(`${focusText} ${label || ''}`);
+  const requestedFocus = reviewVisualFocusForClip(focusText, label);
   const useAlternate = requestedFocus?.preferredRole === 'feet' && alternateVideo?.path;
   const selectedVideo = useAlternate ? alternateVideo : { path: sourcePath, role: 'main' };
   const selectedSourcePath = selectedVideo.path;
@@ -779,7 +785,7 @@ export async function cutReviewClip({ sourcePath, startSeconds, endSeconds, labe
       replaced: false,
     }
     : !useAlternate && selectedSourceDuration > 0
-    ? await resolveVisuallyActiveReviewStart({ sourcePath: selectedSourcePath, preferredStart: requestedStartSeconds, durationSeconds: duration, sourceDuration: selectedSourceDuration, usedWindows: usedSourceWindows, activeCandidateStarts })
+    ? await resolveVisuallyActiveReviewStart({ sourcePath: selectedSourcePath, preferredStart: requestedStartSeconds, durationSeconds: duration, sourceDuration: selectedSourceDuration, usedWindows: usedSourceWindows, activeCandidateStarts, maxDriftSeconds: maxMotionDriftSeconds })
     : { start: clampClipStart(requestedStartSeconds, duration, selectedSourceDuration), motionFrames: null, replaced: false };
   const effectiveStartSeconds = Number(visualSelection.start || 0);
   const effectiveSessionSeconds = Number.isFinite(Number(sessionSeconds))
@@ -832,6 +838,9 @@ export async function cutReviewClip({ sourcePath, startSeconds, endSeconds, labe
         segmentIndex: Number(index),
         label: label || 'Production segment',
         sourceSessionSeconds: Number(effectiveSessionSeconds),
+        requestedSessionSeconds: Number(sessionSeconds),
+        visualDriftSeconds: Number.isFinite(Number(sessionSeconds)) ? roundedSeconds(Number(effectiveSessionSeconds) - Number(sessionSeconds)) : null,
+        maxMotionDriftSeconds: Number.isFinite(Number(maxMotionDriftSeconds)) ? Number(maxMotionDriftSeconds) : null,
         motionFrames: visualSelection.motionFrames,
         replacedStaticWindow: Boolean(visualSelection.replaced),
         focus: visualFocus,
@@ -1560,13 +1569,34 @@ function segmentKeywordScore(event = {}, segmentText = '') {
   return positive - (wantsMeatusOrUrethra && sourceLooksPostProcedureBroll && !sourceHasMatchingProcedure ? 180 : 0);
 }
 
-function collectSegmentEvents({ segment, plan, clipByParagraph }) {
+function segmentEventCompatibilityScore(event = {}, segment = {}) {
+  const source = eventText(event);
+  const target = String(segment?.text || '').toLowerCase();
+  const sourceFoot = /\b(feet|foot|toes?|heels?|soles?|ankles?|plantar(?: |-)flexion|dorsiflexion|toe curl|lower[-\s]?body)\b/.test(source);
+  const targetFoot = /\b(feet|foot|toes?|heels?|soles?|ankles?|plantar(?: |-)flexion|dorsiflexion|toe curl|lower[-\s]?body)\b/.test(target);
+  const targetSetup = /\b(mount(?:ing|ed)? the table|settling|settled|session opens|session begins|baseline|pre[-\s]?session|low nineties)\b/.test(target);
+  const sourceSetup = /\b(mount(?:ing|ed)? the table|settling|settled on the table|session recording begins|session start|baseline|pre[-\s]?stimulation|early stimulation)\b/.test(source);
+  const maxSessionSeconds = Number(segment?.maxSessionSeconds);
+  const eventTime = Number(event?.session_time_s);
+  let score = 0;
+  if (sourceFoot && !targetFoot) score -= 180;
+  if (targetFoot && !sourceFoot) score -= 120;
+  if (targetSetup) score += sourceSetup ? 220 : -160;
+  if (targetSetup && Number.isFinite(maxSessionSeconds) && maxSessionSeconds > 0 && Number.isFinite(eventTime) && eventTime > maxSessionSeconds * 0.3) {
+    score -= 140;
+  }
+  return score;
+}
+
+function collectSegmentEvents({ segment, plan, clipByParagraph, session = {} }) {
   const paragraphIndex = Number(segment.paragraphIndex);
-  const explicitTimes = extractCitedTimesFromText(segment.text, paragraphIndex);
+  const maxSessionSeconds = Number(segment?.maxSessionSeconds);
+  const explicitTimes = timestampRequirementForSegment(segment).times;
   const requests = (plan.generatedClipRequests || [])
     .filter((request) => Number(request.paragraphIndex) === paragraphIndex);
   const clips = (clipByParagraph.get(paragraphIndex) || [])
     .filter((clip) => Number.isFinite(Number(clipSessionTime(clip))));
+  const sessionEvents = buildLoggedEventAnchors(session);
   const synthetic = explicitTimes.map((time, index) => ({
     id: `segment-time-${paragraphIndex}-${index}-${Math.round(time.seconds)}`,
     paragraphIndex,
@@ -1582,18 +1612,26 @@ function collectSegmentEvents({ segment, plan, clipByParagraph }) {
     direct_spoken_time: true,
     force_direct_cut: true,
   }));
-  return [...requests, ...clips, ...synthetic]
+  const seen = new Set();
+  return [...requests, ...clips, ...synthetic, ...sessionEvents]
     .map((event) => ({
       ...event,
       session_time_s: Number(event.session_time_s ?? clipSessionTime(event)),
     }))
-    .filter((event) => Number.isFinite(Number(event.session_time_s)));
+    .filter((event) => Number.isFinite(Number(event.session_time_s)))
+    .filter((event) => !Number.isFinite(maxSessionSeconds) || Number(event.session_time_s) <= maxSessionSeconds + REVIEW_VIDEO_TIME_TOLERANCE_SECONDS)
+    .filter((event) => {
+      const key = String(event.id || `${Math.round(Number(event.session_time_s))}:${event.label || event.note || ''}`);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
-function chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds }) {
-  const candidates = collectSegmentEvents({ segment, plan, clipByParagraph });
+function chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds, session = {} }) {
+  const candidates = collectSegmentEvents({ segment, plan, clipByParagraph, session });
   if (!candidates.length) return null;
-  const explicitTimes = extractCitedTimesFromText(segment.text, segment.paragraphIndex);
+  const explicitTimes = timestampRequirementForSegment(segment).times;
   if (explicitTimes.length) {
     const explicitCandidate = candidates
       .filter((event) => event.source === 'spoken_segment_time')
@@ -1622,7 +1660,10 @@ function chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds }) {
     const directTimeScore = explicitTimes.some((time) => Math.abs(Number(time.seconds) - Number(event.session_time_s)) <= 14)
       ? 220
       : 0;
-    const score = directTimeScore + segmentKeywordScore(event, segment.text) - reusePenalty;
+    const score = directTimeScore
+      + segmentKeywordScore(event, segment.text)
+      + segmentEventCompatibilityScore(event, segment)
+      - reusePenalty;
     if (!best || score > best.score) best = { event, score, id };
   }
   if (!best || best.score < 20) return null;
@@ -1630,8 +1671,8 @@ function chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds }) {
   return best.event;
 }
 
-export function selectReviewVideoEventForSegment({ segment, plan, clipByParagraph = new Map(), usedEventIds = new Set() } = {}) {
-  return chooseSegmentEvent({ segment, plan: plan || {}, clipByParagraph, usedEventIds });
+export function selectReviewVideoEventForSegment({ segment, plan, clipByParagraph = new Map(), usedEventIds = new Set(), session = {} } = {}) {
+  return chooseSegmentEvent({ segment, plan: plan || {}, clipByParagraph, usedEventIds, session });
 }
 
 function clampClipStart(startSeconds, durationSeconds, sourceDuration) {
@@ -1912,6 +1953,7 @@ async function renderSourceContextSegment({
       activeCandidateStarts,
       alternateVideo,
       lockTimestamp: Boolean(window.directSpokenTime),
+      maxMotionDriftSeconds: 24,
       telemetryData,
     });
     syncWindowToRenderedClip(window, videoClip);
@@ -1989,6 +2031,7 @@ async function renderSourceContextSegment({
     activeCandidateStarts,
     alternateVideo,
     lockTimestamp: Boolean(window.directSpokenTime),
+    maxMotionDriftSeconds: 36,
     telemetryData,
   });
   syncWindowToRenderedClip(window, videoClip);
@@ -2144,6 +2187,7 @@ async function renderSegmentedSourceReviewVideo({
 
   for (const [index, segment] of narrationSegments.entries()) {
     if (signal?.aborted) throw new Error('Cancelled');
+    segment.maxSessionSeconds = sessionTimeForSource(sourceDuration, primaryVideo);
     onProgress?.({
       phase: 'segmented_narration',
       current: 1,
@@ -2178,7 +2222,7 @@ async function renderSegmentedSourceReviewVideo({
       phaseAnchorEvent = null;
       phaseAnchorParagraph = Number(segment.paragraphIndex);
     }
-    const matchedEvent = chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds });
+    const matchedEvent = chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds, session });
     const canonicalPhaseAnchor = canonicalPhaseAnchorForNarration({
       session,
       narrationText: paragraphs[Number(segment.paragraphIndex)] || segment.text,
@@ -2527,6 +2571,7 @@ async function renderSegmentedSourceReviewVideo({
       activeCandidateStarts,
       alternateVideo: feetVideo,
       lockTimestamp: timestampRequirement.required || Boolean(window.directSpokenTime),
+      maxMotionDriftSeconds: eventCarriedFromPhase ? 8 : 12,
       telemetryData,
     });
     syncWindowToRenderedClip(window, videoClip);
@@ -2996,12 +3041,14 @@ export async function reviewWindowMotionFrames(sourcePath, startSeconds, duratio
   return (String(stderr || '').match(/Parsed_showinfo[^\r\n]*pts_time/g) || []).length;
 }
 
-export async function resolveVisuallyActiveReviewStart({ sourcePath, preferredStart, durationSeconds, sourceDuration, usedWindows = [], activeCandidateStarts = [] }) {
+export async function resolveVisuallyActiveReviewStart({ sourcePath, preferredStart, durationSeconds, sourceDuration, usedWindows = [], activeCandidateStarts = [], maxDriftSeconds = Number.POSITIVE_INFINITY }) {
   const duration = Math.max(1.5, Number(durationSeconds || 1.5));
   const maxStart = Math.max(0, Number(sourceDuration || 0) - duration);
+  const allowedDrift = Number(maxDriftSeconds);
   const candidates = [];
   const add = (value) => {
     const start = Math.max(0, Math.min(maxStart, Number(value || 0)));
+    if (Number.isFinite(allowedDrift) && Math.abs(start - Number(preferredStart || 0)) > allowedDrift) return;
     if (!candidates.some((item) => Math.abs(item - start) < 0.5)) candidates.push(start);
   };
   add(preferredStart);

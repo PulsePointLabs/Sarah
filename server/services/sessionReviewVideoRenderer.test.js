@@ -7,6 +7,7 @@ import {
   inferReviewVisualFocus,
   matchAudioExport,
   canonicalPhaseAnchorForNarration,
+  reviewVisualFocusForClip,
   resolveReviewSegmentPhaseCarryover,
   resolveTimestampViolationVisualFallback,
   selectDistinctReviewSourceStart,
@@ -35,6 +36,69 @@ test('review video focus preserves laterality for plantar flexion without the wo
 
 test('review video leaves telemetry-only narration full frame', () => {
   assert.equal(inferReviewVisualFocus('Heart rate rises to 118 BPM while RMSSD falls.'), null);
+});
+
+test('event labels cannot hijack narration-first camera selection', () => {
+  const focus = reviewVisualFocusForClip(
+    'Mounting the table raised heart rate into the low nineties while your body settled.',
+    'Screen-left sole flush deepens with toe curl and plantar flexion.'
+  );
+  assert.equal(focus, null);
+});
+
+test('segment-level matching prefers early table context over a later foot HR event', () => {
+  const selected = selectReviewVideoEventForSegment({
+    segment: {
+      paragraphIndex: 2,
+      maxSessionSeconds: 1222,
+      text: 'Mounting the table pushed heart rate into the low nineties while your body spent the next minute settling.',
+    },
+    plan: {
+      generatedClipRequests: [{
+        id: 'paragraph-foot-event',
+        paragraphIndex: 2,
+        session_time_s: 660,
+        label: 'Screen-left sole flush deepens and toe curl is visible; HR 103 BPM.',
+        note: 'Foot and toe activity during later build.',
+        source: 'event_timeline',
+      }],
+    },
+    session: {
+      event_timeline: [
+        {
+          id: 'table-settling',
+          time_s: 72,
+          note: 'You are settled on the table with no stimulation contact yet; HR holds at 92–93 BPM while settling from table-mounting elevation.',
+          category: ['other'],
+          annotation_tags: ['pre-stimulation', 'hr-elevated-settling'],
+        },
+      ],
+    },
+  });
+
+  assert.ok(selected);
+  assert.equal(selected.id, 'table-settling');
+  assert.equal(selected.session_time_s, 72);
+});
+
+test('out-of-range spoken timestamps are rejected instead of clamped to video end', () => {
+  const selected = selectReviewVideoEventForSegment({
+    segment: {
+      paragraphIndex: 1,
+      maxSessionSeconds: 1222,
+      text: 'Referenced 30:00 in a shorter session.',
+    },
+    plan: {
+      generatedClipRequests: [{
+        id: 'bad-thirty-minute-anchor',
+        paragraphIndex: 1,
+        session_time_s: 1800,
+        label: 'Referenced 30:00',
+        source: 'spoken_segment_time',
+      }],
+    },
+  });
+  assert.equal(selected, null);
 });
 
 test('review video telemetry uses the nearest session-time HR sample', () => {

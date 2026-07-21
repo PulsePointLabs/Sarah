@@ -34,6 +34,16 @@ function pushTime(times, seconds, meta = {}) {
   });
 }
 
+function isRelativeDurationReference(source = '', offset = 0, matchLength = 0) {
+  const before = String(source).slice(Math.max(0, offset - 64), offset).toLowerCase();
+  const after = String(source).slice(offset + matchLength, offset + matchLength + 48).toLowerCase();
+  const explicitTimelineCue = /\b(?:at|around|near|by|from|between)\s+(?:(?:about|roughly|approximately)\s+)?$/.test(before);
+  if (explicitTimelineCue && !/^\s*(?:before|ago|earlier|later)\b/.test(after)) return false;
+  return /\b(?:prior|previous|past|last|next|within|for|over|lasting|held for|at least)\s+(?:(?:the|about|roughly|approximately)\s+)*$/.test(before)
+    || /\bto\s+$/.test(before)
+    || /^\s*(?:before|ago|earlier|later|long|in duration)\b/.test(after);
+}
+
 function words(value = '') {
   const stop = new Set([
     'about', 'after', 'again', 'also', 'around', 'being', 'during', 'from', 'into', 'that', 'this', 'there', 'these',
@@ -241,12 +251,16 @@ export function extractCitedTimesFromText(text, paragraphIndex = null) {
   });
 
   source.replace(/\b(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b/gi, (match, seconds, offset) => {
-    pushTime(times, Number(seconds), { text: match, paragraphIndex, source: 'seconds_text', charIndex: offset });
+    if (!isRelativeDurationReference(source, offset, match.length)) {
+      pushTime(times, Number(seconds), { text: match, paragraphIndex, source: 'seconds_text', charIndex: offset });
+    }
     return match;
   });
 
   source.replace(/\b(\d+(?:\.\d+)?)\s*(?:m|min|mins|minute|minutes)\s*(?:and\s*)?(?:(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds))?\b/gi, (match, minutes, seconds, offset) => {
-    pushTime(times, (Number(minutes) * 60) + Number(seconds || 0), { text: match, paragraphIndex, source: 'numeric_minute_text', charIndex: offset });
+    if (!isRelativeDurationReference(source, offset, match.length)) {
+      pushTime(times, (Number(minutes) * 60) + Number(seconds || 0), { text: match, paragraphIndex, source: 'numeric_minute_text', charIndex: offset });
+    }
     return match;
   });
 
@@ -255,7 +269,7 @@ export function extractCitedTimesFromText(text, paragraphIndex = null) {
   source.replace(wordTime, (match, minuteText, secondText, offset) => {
     const minutes = wordNumber(minuteText);
     const seconds = secondText ? wordNumber(secondText) : 0;
-    if (minutes != null && seconds != null) {
+    if (minutes != null && seconds != null && !isRelativeDurationReference(source, offset, match.length)) {
       pushTime(times, (minutes * 60) + seconds, { text: match, paragraphIndex, source: 'word_minute_text', charIndex: offset });
     }
     return match;
