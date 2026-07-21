@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { BleClient } from "@capacitor-community/bluetooth-le";
-import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, Footprints, HeartPulse, Maximize2, Mic, MicOff, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
+import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, Footprints, HeartPulse, Maximize2, Mic, MicOff, Pause, Play, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
 import {
   CartesianGrid,
   Legend,
@@ -1407,6 +1407,7 @@ export default function LiveCapture() {
   const [mediaVideo, setMediaVideo] = useState(null);
   const [mediaDragging, setMediaDragging] = useState(false);
   const [mediaFullscreen, setMediaFullscreen] = useState(false);
+  const [mediaPlaying, setMediaPlaying] = useState(false);
   const [mediaProcessing, setMediaProcessing] = useState("");
   const [mediaError, setMediaError] = useState("");
   const [presetModalOpen, setPresetModalOpen] = useState(false);
@@ -3394,6 +3395,7 @@ export default function LiveCapture() {
       mediaObjectUrlRef.current = null;
     }
     setMediaVideo(null);
+    setMediaPlaying(false);
     setMediaProcessing("");
     setMediaError("");
     if (mediaInputRef.current) mediaInputRef.current.value = "";
@@ -3420,6 +3422,7 @@ export default function LiveCapture() {
           convertedSize: converted.size,
           converted: true,
         });
+        setMediaPlaying(false);
       } catch (error) {
         setMediaError(error?.data?.error || error?.message || "Could not convert that WMV for playback.");
       } finally {
@@ -3430,6 +3433,7 @@ export default function LiveCapture() {
     const url = URL.createObjectURL(file);
     mediaObjectUrlRef.current = url;
     setMediaVideo({ url, name: file.name, size: file.size, converted: false });
+    setMediaPlaying(false);
     setMediaProcessing("");
   }, []);
 
@@ -3460,6 +3464,38 @@ export default function LiveCapture() {
 
   useEffect(() => () => {
     if (mediaObjectUrlRef.current) URL.revokeObjectURL(mediaObjectUrlRef.current);
+  }, []);
+
+  useEffect(() => {
+    const video = mediaVideoRef.current;
+    if (!video) {
+      setMediaPlaying(false);
+      return undefined;
+    }
+    const syncPlaying = () => setMediaPlaying(!video.paused && !video.ended);
+    syncPlaying();
+    video.addEventListener("play", syncPlaying);
+    video.addEventListener("pause", syncPlaying);
+    video.addEventListener("ended", syncPlaying);
+    return () => {
+      video.removeEventListener("play", syncPlaying);
+      video.removeEventListener("pause", syncPlaying);
+      video.removeEventListener("ended", syncPlaying);
+    };
+  }, [mediaVideo]);
+
+  const toggleMediaPlayback = useCallback(async () => {
+    const video = mediaVideoRef.current;
+    if (!video) return;
+    try {
+      if (video.paused || video.ended) {
+        await video.play();
+      } else {
+        video.pause();
+      }
+    } catch (error) {
+      setMediaError(error?.message || "Could not start video playback.");
+    }
   }, []);
 
   const refreshFiles = async () => {
@@ -5496,13 +5532,34 @@ export default function LiveCapture() {
           }}
         >
           {mediaVideo ? (
-            <video
-              ref={mediaVideoRef}
-              src={mediaVideo.url}
-              controls
-              playsInline
-              className={`${focusView ? "h-full min-h-0 max-h-full" : "max-h-[calc(100vh-17rem)] min-h-[22rem]"} w-full bg-black object-contain`}
-            />
+            <>
+              <video
+                ref={mediaVideoRef}
+                src={mediaVideo.url}
+                controls
+                preload="metadata"
+                playsInline
+                onClick={() => {
+                  toggleMediaPlayback().catch(() => {});
+                }}
+                className={`${focusView ? "h-full min-h-0 max-h-full" : "max-h-[calc(100vh-17rem)] min-h-[22rem]"} w-full cursor-pointer bg-black object-contain`}
+              />
+              {!mediaFullscreen && (
+                <div className="absolute bottom-3 left-3 flex items-center gap-2 rounded-lg border border-white/15 bg-black/70 px-2 py-2 text-white shadow-xl backdrop-blur-sm">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toggleMediaPlayback().catch(() => {});
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-white/10 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-white/20"
+                  >
+                    {mediaPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                    {mediaPlaying ? "Pause" : "Play"}
+                  </button>
+                  <span className="text-[11px] text-white/75">{mediaVideo.name}</span>
+                </div>
+              )}
+            </>
           ) : mediaProcessing ? (
             <div className="flex h-full min-h-[22rem] w-full flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
               <RefreshCw className="h-10 w-10 animate-spin text-primary" />
@@ -5522,7 +5579,7 @@ export default function LiveCapture() {
           )}
           {mediaVideo && !mediaFullscreen && (
             <div className="pointer-events-none absolute left-3 top-3 max-w-[70%] rounded-lg bg-black/65 px-3 py-2 text-xs text-white backdrop-blur-sm">
-              <p className="truncate font-semibold">{mediaVideo.name}</p>
+              <p className="truncate font-semibold">Loaded video</p>
               {mediaVideo.converted && <p className="mt-0.5 text-[10px] text-white/75">WMV converted to MP4 preview</p>}
             </div>
           )}

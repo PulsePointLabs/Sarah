@@ -25,7 +25,7 @@ import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hr
 import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
 import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "./TTSButton";
 
-export const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v11_hd";
+export const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v14_timeline_locked_multicamera_telemetry";
 
 function friendlyReviewVideoRenderErrorMessage(error) {
   const message = String(error?.message || error || "Review video render failed.");

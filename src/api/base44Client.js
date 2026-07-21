@@ -290,11 +290,27 @@ export const base44 = {
         form.append('label', label);
         return request('/files/video-playback-preview', { method: 'POST', body: form });
       },
-      ConvertLocalVideoForPlayback: async ({ path, label = '' }) => request('/files/local-video/playback-preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path, label }),
-      }),
+      ConvertLocalVideoForPlayback: async ({ path, label = '', signal }) => {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < 2 * 60 * 60 * 1000) {
+          const result = await request('/files/local-video/playback-preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, label }),
+            signal,
+          });
+          if (!result?.processing) return result;
+          const delayMs = Math.max(500, Number(result.retry_after_ms) || 2000);
+          await new Promise((resolve, reject) => {
+            const timeoutId = window.setTimeout(resolve, delayMs);
+            signal?.addEventListener('abort', () => {
+              window.clearTimeout(timeoutId);
+              reject(new DOMException('Playback preparation cancelled.', 'AbortError'));
+            }, { once: true });
+          });
+        }
+        throw new Error('Timed out preparing the local video for browser playback.');
+      },
       GetLocalVideoMetadata: async ({ path }) => request('/files/local-video/metadata', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -12,6 +12,7 @@ import { transcribeAudioWithProvider } from '../services/sttProvider.js';
 export const filesRouter = express.Router();
 fs.mkdirSync(uploadDir, { recursive: true });
 const execFileAsync = promisify(execFile);
+const localPlaybackJobs = new Map();
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
@@ -510,6 +511,7 @@ filesRouter.post('/local-video/playback-preview', async (req, res) => {
     const cacheKey = slugifyFilePart(`${meta.fingerprint}-${label}`);
     const filename = `local-playback-${cacheKey}.mp4`;
     const outputPath = path.join(uploadDir, filename);
+    const partialPath = `${outputPath}.partial`;
 
     try {
       const existing = await fsp.stat(outputPath);
@@ -530,34 +532,55 @@ filesRouter.post('/local-video/playback-preview', async (req, res) => {
       // Cache miss, convert below.
     }
 
-    await runProcess('ffmpeg', [
-      '-hide_banner',
-      '-y',
-      '-i', meta.path,
-      '-map', '0:v:0',
-      '-map', '0:a?',
-      '-vf', 'scale=min(1280\\,iw):-2',
-      '-c:v', 'libx264',
-      '-preset', 'veryfast',
-      '-crf', '24',
-      '-c:a', 'aac',
-      '-b:a', '128k',
-      '-pix_fmt', 'yuv420p',
-      '-movflags', '+faststart',
-      outputPath,
-    ]);
+    const existingJob = localPlaybackJobs.get(cacheKey);
+    if (existingJob?.status === 'failed') {
+      localPlaybackJobs.delete(cacheKey);
+      return res.status(500).json({
+        error: existingJob.error || 'Could not convert local video for browser playback',
+      });
+    }
+    if (existingJob) {
+      return res.status(202).json({
+        ok: true,
+        processing: true,
+        retry_after_ms: 2000,
+        source_filename: meta.filename,
+      });
+    }
 
-    const stat = await fsp.stat(outputPath);
-    res.json({
+    const job = { status: 'processing', error: '' };
+    localPlaybackJobs.set(cacheKey, job);
+    fsp.unlink(partialPath).catch(() => {}).then(async () => {
+      await runProcess('ffmpeg', [
+        '-hide_banner',
+        '-y',
+        '-i', meta.path,
+        '-map', '0:v:0',
+        '-map', '0:a?',
+        '-vf', 'scale=min(1280\\,iw):-2',
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '24',
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        '-f', 'mp4',
+        partialPath,
+      ]);
+      await fsp.rename(partialPath, outputPath);
+      localPlaybackJobs.delete(cacheKey);
+    }).catch((error) => {
+      job.status = 'failed';
+      job.error = error?.message || 'Could not convert local video for browser playback';
+      fsp.unlink(partialPath).catch(() => {});
+    });
+
+    return res.status(202).json({
       ok: true,
-      cached: false,
-      url: `/uploads/${filename}`,
-      file_url: `/uploads/${filename}`,
-      filename,
-      mimeType: 'video/mp4',
-      size: stat.size,
+      processing: true,
+      retry_after_ms: 2000,
       source_filename: meta.filename,
-      source_fingerprint: meta.fingerprint,
     });
   } catch (error) {
     res.status(error?.status || 500).json({ error: error?.message || 'Could not convert local video for browser playback' });

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { Bell, BellOff, CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Loader2, Square, X, XCircle } from "lucide-react";
+import { Bell, BellOff, CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Loader2, Maximize2, Square, X, XCircle } from "lucide-react";
 import { cancelBackgroundJob, listBackgroundJobs } from "@/lib/backgroundJobs";
 import { stabilizeBackgroundJobEta } from "@/lib/backgroundJobEta";
 import { backgroundJobLabel as jobLabel } from "@/lib/backgroundJobLabels";
@@ -21,6 +22,77 @@ const DISMISSED_RESULTS_KEY = "pulsepoint.backgroundJobs.dismissedTerminalIds";
 const COLLAPSED_DOCK_BOTTOM_KEY = "pulsepoint.backgroundJobs.collapsedDockBottom";
 const DEFAULT_COLLAPSED_DOCK_BOTTOM = 112;
 const SIDE_DOCK_DRAG_THRESHOLD_PX = 6;
+
+function ProductionPreviewModal({ job, onClose }) {
+  const progress = job?.progress || {};
+  const frames = Array.isArray(progress.preview_frames) ? progress.preview_frames : [];
+  const [selectedUrl, setSelectedUrl] = useState(progress.preview_frame?.url || "");
+  const selectedFrame = frames.find((frame) => frame.url === selectedUrl) || progress.preview_frame;
+
+  useEffect(() => {
+    setSelectedUrl(progress.preview_frame?.url || "");
+  }, [progress.preview_frame?.url]);
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [onClose]);
+
+  if (!selectedFrame?.url) return null;
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] flex bg-slate-950/95 text-white backdrop-blur-md" role="dialog" aria-modal="true" aria-label="Live production preview">
+      <div className="flex h-full w-full flex-col overflow-hidden landscape:flex-row">
+        <div className="relative flex min-h-0 flex-1 items-center justify-center bg-black p-2 sm:p-4">
+          <img
+            src={serverUrl(selectedFrame.url)}
+            alt={`Produced review-video frame ${selectedFrame.segmentIndex || ""}`}
+            className="max-h-full max-w-full rounded-lg object-contain shadow-2xl"
+          />
+          <button type="button" onClick={onClose} className="absolute right-3 top-3 rounded-full border border-white/25 bg-black/75 p-2.5 text-white shadow-lg" aria-label="Close production preview">
+            <X className="h-5 w-5" />
+          </button>
+          <div className="absolute bottom-3 left-3 rounded-full border border-white/20 bg-black/75 px-3 py-1.5 text-xs font-semibold backdrop-blur">
+            Segment {selectedFrame.segmentIndex || progress.preview_segment_current || 0} / {progress.preview_segment_total || "?"}
+          </div>
+        </div>
+        <aside className="max-h-[46vh] shrink-0 overflow-y-auto border-t border-white/15 bg-slate-900/95 p-4 landscape:max-h-none landscape:w-[22rem] landscape:border-l landscape:border-t-0 lg:w-[28rem]">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-fuchsia-300">Live Production Preview</p>
+          <h2 className="mt-2 text-lg font-semibold leading-snug">{selectedFrame.label || "Production segment"}</h2>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
+            {Number.isFinite(Number(selectedFrame.sourceSessionSeconds)) && <span className="rounded-full border border-white/15 px-2.5 py-1">{formatDuration(selectedFrame.sourceSessionSeconds)}</span>}
+            {selectedFrame.focus?.target && <span className="rounded-full border border-white/15 px-2.5 py-1">Focus: {String(selectedFrame.focus.target).replace(/_/g, " ")}</span>}
+            {selectedFrame.motionFrames != null && <span className="rounded-full border border-white/15 px-2.5 py-1">Motion: {selectedFrame.motionFrames}</span>}
+            {selectedFrame.sourceLabel && <span className="max-w-full truncate rounded-full border border-white/15 px-2.5 py-1">Camera: {selectedFrame.sourceLabel}</span>}
+          </div>
+          {selectedFrame.replacedStaticWindow && <p className="mt-3 rounded-lg border border-amber-300/35 bg-amber-300/10 p-3 text-sm font-semibold text-amber-100">Static timestamp rejected; showing a verified active window instead.</p>}
+          {selectedFrame.narration && <p className="mt-4 text-sm leading-relaxed text-slate-200">{selectedFrame.narration}</p>}
+          {frames.length > 1 && (
+            <div className="mt-5">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Recent Produced Frames</p>
+              <div className="grid grid-cols-4 gap-2 landscape:grid-cols-2 lg:grid-cols-2">
+                {frames.map((frame) => (
+                  <button key={`${frame.segmentIndex}-${frame.url}`} type="button" onClick={() => setSelectedUrl(frame.url)} className={`overflow-hidden rounded-md border-2 ${frame.url === selectedFrame.url ? "border-fuchsia-400" : "border-transparent opacity-70"}`}>
+                    <img src={serverUrl(frame.url)} alt={`Produced segment ${frame.segmentIndex}`} className="aspect-video w-full bg-black object-cover" />
+                    <span className="block bg-black/70 px-1 py-0.5 text-[10px]">#{frame.segmentIndex}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </aside>
+      </div>
+    </div>,
+    document.body,
+  );
+}
 
 function clampDockBottom(value, dockHeight = 74) {
   if (typeof window === "undefined") return DEFAULT_COLLAPSED_DOCK_BOTTOM;
@@ -184,6 +256,7 @@ export default function BackgroundJobStatusTray() {
   const navigate = useNavigate();
   const [jobs, setJobs] = useState([]);
   const [expanded, setExpanded] = useState(false);
+  const [previewJobId, setPreviewJobId] = useState(null);
   const [cycleIndex, setCycleIndex] = useState(0);
   const [collapsedDockBottom, setCollapsedDockBottom] = useState(loadCollapsedDockBottom);
   const [dismissedTerminalIds, setDismissedTerminalIds] = useState(loadDismissedResults);
@@ -504,6 +577,7 @@ export default function BackgroundJobStatusTray() {
   }
 
   return (
+    <>
     <div className="fixed bottom-2 left-2 right-2 z-50 sm:bottom-3 sm:left-auto sm:right-3 sm:w-[24rem]">
       <div className="rounded-xl border border-border bg-card/95 shadow-2xl backdrop-blur">
         <div className="flex items-center gap-1 px-1 py-1">
@@ -633,6 +707,22 @@ export default function BackgroundJobStatusTray() {
                   <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/20">
                     <div className="h-full rounded-full bg-current transition-all" style={{ width: `${pct}%` }} />
                   </div>
+                  {job.type === "session_review_video" && progress.preview_frame?.url && (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setPreviewJobId(job.id);
+                      }}
+                      className="mt-2 flex w-full items-center justify-between gap-3 rounded-lg border border-current/25 bg-black/10 px-3 py-2 text-left hover:bg-black/15"
+                    >
+                      <span className="min-w-0">
+                        <span className="block text-xs font-semibold">Open live production preview</span>
+                        <span className="block truncate text-[10px] opacity-75">Frame {progress.preview_segment_current || progress.preview_frame.segmentIndex || 0} of {progress.preview_segment_total || "?"}</span>
+                      </span>
+                      <Maximize2 className="h-4 w-4 shrink-0" />
+                    </button>
+                  )}
                   {job.progress?.latest_summary && (
                     <p className="mt-2 rounded-md border border-current/20 bg-black/10 px-2 py-1.5 text-[10px] leading-relaxed opacity-90">
                       <span className="font-semibold">Latest evidence:</span> {job.progress.latest_summary}
@@ -731,5 +821,12 @@ export default function BackgroundJobStatusTray() {
         )}
       </div>
     </div>
+    {previewJobId && (
+      <ProductionPreviewModal
+        job={visibleJobs.find((job) => job.id === previewJobId)}
+        onClose={() => setPreviewJobId(null)}
+      />
+    )}
+    </>
   );
 }

@@ -80,6 +80,7 @@ function buildSessionStoryVideoSources({ linkedVideos = [], uploadedVideos = [] 
           id: video.id || video.path || `linked-${index}`,
           label: video.label || video.filename || (index === 0 ? "Session composite" : `Linked video ${index + 1}`),
           url: base44.integrations.Core.localVideoStreamUrl(video.path),
+          path: video.path,
           timelineOffsetSeconds: Number(video.timelineOffsetSeconds) || 0,
           sourceKind: "linked_local_video",
         }))
@@ -583,6 +584,8 @@ function SessionStoryVideoPlayer({ linkedVideos = [], uploadedVideos = [], onAsk
   const [activeIndex, setActiveIndex] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
+  const [resolvedVideoUrls, setResolvedVideoUrls] = useState({});
+  const [videoLoadState, setVideoLoadState] = useState({ busy: false, error: "" });
   const videoRef = useRef(null);
   const wrapperRef = useRef(null);
 
@@ -594,34 +597,75 @@ function SessionStoryVideoPlayer({ linkedVideos = [], uploadedVideos = [], onAsk
     if (videoRef.current) videoRef.current.playbackRate = playbackSpeed;
   }, [playbackSpeed, activeIndex]);
 
-  if (!playableVideos.length) return null;
-  const activeVideo = playableVideos[activeIndex] || playableVideos[0];
+  const activeVideo = playableVideos[activeIndex] || playableVideos[0] || null;
+  const activeResolvedVideoUrl = activeVideo
+    ? resolvedVideoUrls[activeVideo.id] || activeVideo.url
+    : "";
   const activeVideoUrl = cacheBustedMediaUrl(
-    activeVideo.url,
-    [activeVideo.id, activeVideo.label, activeVideo.timelineOffsetSeconds, activeIndex].filter(Boolean).join("-"),
+    activeResolvedVideoUrl,
+    [activeVideo?.id, activeVideo?.label, activeVideo?.timelineOffsetSeconds, activeResolvedVideoUrl, activeIndex].filter(Boolean).join("-"),
   );
   const activeVideoPoster = videoPosterDataUrl({
-    title: activeVideo.label || "Session video",
-    subtitle: activeVideo.sourceKind === "linked_local_video" ? "Sarah source session video" : "Uploaded session video",
+    title: activeVideo?.label || "Session video",
+    subtitle: activeVideo?.sourceKind === "linked_local_video" ? "Sarah source session video" : "Uploaded session video",
     timestamp: "Tap to play",
   });
 
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    const current = playableVideos[activeIndex] || playableVideos[0];
+    if (!current?.id) return undefined;
+    if (current.sourceKind !== "linked_local_video") {
+      setVideoLoadState((prev) => (prev.busy || prev.error ? { busy: false, error: "" } : prev));
+      return undefined;
+    }
+    if (resolvedVideoUrls[current.id]) {
+      setVideoLoadState((prev) => (prev.busy || prev.error ? { busy: false, error: "" } : prev));
+      return undefined;
+    }
+
+    setVideoLoadState({ busy: true, error: "" });
+    base44.integrations.Core.ConvertLocalVideoForPlayback({
+      path: current.path,
+      label: current.label || "session-video",
+      signal: controller.signal,
+    }).then((result) => {
+      if (cancelled) return;
+      const nextUrl = result?.url || result?.file_url || "";
+      if (!nextUrl) throw new Error("Playback preview did not return a video URL.");
+      setResolvedVideoUrls((prev) => ({ ...prev, [current.id]: nextUrl }));
+      setVideoLoadState({ busy: false, error: "" });
+    }).catch((error) => {
+      if (cancelled) return;
+      setVideoLoadState({
+        busy: false,
+        error: error?.data?.error || error?.message || "Could not prepare this local session video for browser playback.",
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [activeIndex, playableVideos, resolvedVideoUrls]);
+
+  if (!activeVideo) return null;
+
   const openFullscreen = async () => {
     const video = videoRef.current;
-    if (!video) return;
+    const target = wrapperRef.current || video;
+    if (!video || !target) return;
     video.controls = true;
     try {
-      if (typeof video.requestFullscreen === "function") {
-        await video.requestFullscreen();
-        return;
-      }
-      if (typeof video.webkitEnterFullscreen === "function") {
+      const requestFullscreen = target.requestFullscreen
+        || target.webkitRequestFullscreen
+        || target.msRequestFullscreen;
+      if (requestFullscreen) {
+        await requestFullscreen.call(target);
+      } else if (typeof video.webkitEnterFullscreen === "function") {
         video.webkitEnterFullscreen();
-        return;
       }
-      const target = wrapperRef.current || video;
-      if (!target?.requestFullscreen) return;
-      await target.requestFullscreen();
     } catch (error) {
       console.warn("Could not open session video fullscreen:", error);
     }
@@ -698,11 +742,22 @@ function SessionStoryVideoPlayer({ linkedVideos = [], uploadedVideos = [], onAsk
             ))}
           </div>
         )}
-        <div ref={wrapperRef} className="relative mt-3 max-w-full overflow-hidden rounded-lg border border-border bg-black">
+        <div ref={wrapperRef} className="session-video-fullscreen relative mt-3 max-w-full overflow-hidden rounded-lg border border-border bg-black">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 text-xs">
             <span className="font-semibold text-foreground">Session video</span>
             <span className="text-muted-foreground">{activeVideo.label || "Primary source video"}</span>
           </div>
+          {videoLoadState.busy ? (
+            <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 bg-black px-6 text-center">
+              <p className="text-sm font-semibold text-white">Preparing browser playback</p>
+              <p className="max-w-md text-xs text-white/75">Converting this local source video to a browser-friendly MP4 preview so play/seek works reliably in Session Details.</p>
+            </div>
+          ) : videoLoadState.error ? (
+            <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 bg-black px-6 text-center">
+              <p className="text-sm font-semibold text-white">Video preview unavailable</p>
+              <p className="max-w-md text-xs text-white/75">{videoLoadState.error}</p>
+            </div>
+          ) : (
           <video
             ref={videoRef}
             key={activeVideoUrl}
@@ -723,6 +778,7 @@ function SessionStoryVideoPlayer({ linkedVideos = [], uploadedVideos = [], onAsk
               setPlayheadSeconds(event.currentTarget.currentTime || 0);
             }}
           />
+          )}
           <div className="pointer-events-none absolute bottom-3 left-3 max-w-[calc(100%-1.5rem)] truncate rounded-full border border-white/15 bg-black/72 px-3 py-1.5 text-[12px] font-semibold tracking-[0.18em] text-white shadow-[0_6px_18px_rgba(0,0,0,0.34)] tabular-nums backdrop-blur-sm">
             {Math.floor(playheadSeconds / 60)}:{Math.round(playheadSeconds % 60).toString().padStart(2, "0")}
           </div>

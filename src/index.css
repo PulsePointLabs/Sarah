@@ -177,14 +177,33 @@
     }
 
     .video-sync-surface:not(.video-sync-fullscreen) .video-sync-media {
-      flex: 0 0 auto !important;
-      aspect-ratio: 16 / 9;
-      max-height: min(58svh, 26rem);
+      flex: 1 1 auto !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      aspect-ratio: auto !important;
     }
 
     .video-sync-surface:not(.video-sync-fullscreen) .video-sync-event-panel {
       max-height: min(38svh, 18rem);
     }
+  }
+
+  .session-video-fullscreen:fullscreen,
+  .session-video-fullscreen:-webkit-full-screen {
+    display: flex;
+    width: 100vw;
+    height: 100vh;
+    flex-direction: column;
+    background: #000;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .session-video-fullscreen:fullscreen video,
+  .session-video-fullscreen:-webkit-full-screen video {
+    min-height: 0;
+    flex: 1 1 auto;
+    aspect-ratio: auto;
   }
 
   @media (orientation: landscape) and (max-height: 650px) and (pointer: coarse),

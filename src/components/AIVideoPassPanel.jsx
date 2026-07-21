@@ -1702,6 +1702,50 @@ function compactSavedContinuity(entry) {
   ].filter(Boolean).join("\n");
 }
 
+function isContinuityOnlyStrokingText(value) {
+  const text = String(value || "").toLowerCase();
+  if (!/(strok|masturbat|manual stimulation|genital contact|hand contact)/.test(text)) return false;
+  if (!/(continues?|continuing|ongoing|remains?|maintained|persists?)/.test(text)) return false;
+  return !/(pause|stop|resume|restart|begin|start|shift|change|transition|increase|decrease|speeds? up|slows? down|faster|slower|switch|moves? (?:to|from)|lubricat(?:ion|e|ed)|device (?:added|removed|starts|stops)|tension (?:rises|drops)|relax(?:es|ation)|trem|shudder|climax|ejaculat|erection (?:rises|drops|changes)|scrot(?:um|al) (?:lifts|drops|tightens|relaxes)|perineal contact (?:starts|stops|resumes))/i.test(text);
+}
+
+function suppressRepeatedStrokingContinuity(result, previousCard, isExploration = false) {
+  if (isExploration) return result;
+  const previousText = [
+    previousCard?.summary,
+    ...(previousCard?.findings || []).flatMap((finding) => [finding.title, finding.text]),
+    ...(previousCard?.events || []).map((event) => event.note),
+  ].filter(Boolean).join(" ");
+  const priorStrokingEstablished = /(strok|masturbat|manual stimulation|genital contact|hand contact)/i.test(previousText);
+
+  const findings = (result.findings || []).filter((finding) => (
+    !priorStrokingEstablished || !isContinuityOnlyStrokingText(`${finding.title || ""} ${finding.text || ""}`)
+  ));
+  let confirmedPauseBeforeWindow = (previousCard?.events || []).some((event) => (
+    /(stimulation_paused|motion_pause)/i.test(arrayFromMaybe(event.category).join(" "))
+  ));
+  const events = (result.events || []).filter((event) => {
+    if (priorStrokingEstablished && isContinuityOnlyStrokingText(event.note)) return false;
+    const categories = arrayFromMaybe(event.category).join(" ");
+    if (/(stimulation_paused|motion_pause)/i.test(categories)) {
+      confirmedPauseBeforeWindow = true;
+      return true;
+    }
+    if (/(stimulation_resumed|motion_resume)/i.test(categories) && !confirmedPauseBeforeWindow) return false;
+    return true;
+  });
+  const summarySentences = String(result.summary || "")
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !priorStrokingEstablished || !isContinuityOnlyStrokingText(sentence));
+
+  return {
+    ...result,
+    summary: summarySentences.join(" ").trim() || "No new visible stimulation change is added in this window.",
+    findings,
+    events,
+  };
+}
+
 function compactExplorationSequenceLedger(cards = []) {
   const recentCards = (cards || []).slice(-5);
   if (!recentCards.length) return "";
@@ -2387,7 +2431,7 @@ Positive action tracking rule: describe visible contact or motion before describ
 
 Mixed-window priority rule: when a window contains both Foley/catheter evidence and obvious active hand-to-penis contact or stroking, describe the stimulation/contact first and the Foley state second. Foley presence does not erase visible masturbation/stroking mechanics. If your hand is visibly gripping or stroking your penis, do not summarize the window as pure Foley placement/removal/tubing handling unless those catheter actions are themselves clearly visible.
 
-Stimulation-pause threshold rule: slower cadence, reversal at the end of a stroke, a brief hand dwell, low frame-difference motion, grip adjustment, or less visible movement is not a stimulation pause. Use stimulation_paused or motion_pause only when the sampled sequence shows at least 2.5 seconds of sustained cessation AND either the hand/sleeve/device visibly releases or separates from the penis, or all visible hand/device stimulation motion remains absent through that interval. If contact remains and repeated strokes continue anywhere in the sampled sequence, describe slower cadence or a grip/technique transition instead. A local low-motion candidate is only a whole-frame stillness hint and never proves a stimulation pause by itself.
+Stimulation-pause threshold rule: slower or irregular cadence, reversal at the end of a stroke, a brief hand dwell, low frame-difference motion, grip adjustment, hand repositioning under maintained contact, partial occlusion, or less visible movement is not a stimulation pause. Use stimulation_paused or motion_pause only when the sampled sequence shows at least 2.5 seconds of sustained cessation AND the hand/sleeve/device visibly releases or separates from the penis with contact remaining absent through that interval. Maintained contact, even with a temporary still hold, is a cadence/technique change rather than a pause. If repeated strokes appear anywhere across the proposed pause interval, do not create pause or resume events. A local low-motion candidate is only a whole-frame stillness hint and never proves a stimulation pause by itself. Create stimulation_resumed or motion_resume only after a prior window or earlier event in this window contains a confirmed pause meeting this release-and-separation gate.
 
 Sleeve/contact state rule: evaluate sleeve presence, sleeve motion, and body contact as three separate observations in every regular-session window. A sleeve visibly held stationary around the shaft or at the penile base means sleeve contact is maintained while stroking is paused; it is not a bare penis and it is not no-contact. Call the penis bare only when the shaft is directly visible and the sleeve is visibly separated from it. Call no contact only when neither a hand nor the sleeve/device is visibly touching the penis. Do not carry sleeve placement forward from a prior window: sleeve-on requires visible overlap with the shaft in the current sampled frames, while a sleeve merely held nearby or above the shaft is not sleeve contact.
 
@@ -2401,7 +2445,7 @@ Perineum and underside anatomy rule: do not label the area under the scrotum as 
 
 Timeline timing rule: sampled frames can lag the true transition. Do not assume the event happened exactly at the window start or window end. Use the most likely visible transition time from the sampled frames and nearby session notes. If the exact second is uncertain, keep the note phrased as "visible by", "around", "continues", "pauses", or "resumes" rather than claiming a precise start/stop. Never write filler such as "This window opens with", "Window opens at", "This window closes with", or "Window closes with" in event notes.
 
-${isExploration ? "" : "Stimulation lifecycle rule: there should usually be only one \"stimulation_started\" event for the initial obvious masturbation/contact and only one \"stimulation_stopped\" event for the true post-climax/end-of-session cessation. Inside the session, use \"stimulation_paused\", \"stimulation_resumed\", or plain \"stimulation\" for hand lifts, contact changes, technique shifts, lubrication breaks, device handling, and post-climax milking/recovery transitions. Do not create repeated start/stop events for adjacent windows that are really pause/resume or method changes."}
+${isExploration ? "" : "Stimulation lifecycle rule: there should usually be only one \"stimulation_started\" event for the initial obvious masturbation/contact and only one \"stimulation_stopped\" event for the true post-climax/end-of-session cessation. Use plain \"stimulation\" for cadence, grip, contact-location, technique, lubrication, device-handling, and post-climax milking/recovery changes while contact continues. Use \"stimulation_paused\" only for a sustained visible release/separation meeting the pause gate, and use \"stimulation_resumed\" only after such a confirmed pause. Do not create repeated start/stop or pause/resume events for adjacent windows that are really cadence or method changes."}
 
 Camera/view focus:
 ${videoFocusInstruction(selectedVideo, selectedVideoRole, isExploration)}
@@ -2435,7 +2479,7 @@ Foot and body tracking dots rule: circular dots or bright reflective spots on th
 
 Do not create a standalone finding or timeline event just because static tracking markers are visible. Treat unchanged marker dots as scene context. Mention them only if they materially support a movement observation, marker loss/reacquisition, toe/heel/planting state, foot asymmetry, bracing, or a clear change in marker position/visibility.
 
-Continuity rule: each window is part of a sequential review. Use the previous reviewed window below as context. In this current window, prioritize what continues, what changed, what started, what stopped, and what became more or less visible. Do not repeat stable background details from the prior window unless they changed or are needed to explain a new observation.
+Continuity rule: each window is part of a sequential review. Use the previous reviewed window below as context. Ongoing stroking/manual stimulation is assumed after it is established; do not repeatedly write "stroking continues", "stimulation continues", "ongoing stroking", or equivalent in summaries, findings, or timeline events for every adjacent window. Mention stroking again only when it pauses, stops, resumes, restarts, or meaningfully changes technique, rhythm, speed, grip, contact location, device use, or visible physiological response. Preserve ongoing stimulation internally as continuity context without creating another card/event. Prioritize what changed, started, stopped, or became more or less visible. Do not repeat stable background details from the prior window unless they changed or are needed to explain a new observation.
 No-change claims require a fresh current-frame check. Avoid repeating "resting pre-stimulation state continues", "no manual stimulation visible", "no visible cause", or similar no-action language across adjacent windows unless the current sampled frames independently support it.
 ${continuityContext}
 
@@ -2512,7 +2556,11 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
             },
           });
           const ai = completedJob.result;
-          const normalized = normalizeAIResult(ai, reviewWindow, selectedVideoRole, isExploration);
+          const normalized = suppressRepeatedStrokingContinuity(
+            normalizeAIResult(ai, reviewWindow, selectedVideoRole, isExploration),
+            nextCards[nextCards.length - 1],
+            isExploration,
+          );
           const card = {
             id: `${Date.now()}-${batchNumber}-${i}`,
             label,

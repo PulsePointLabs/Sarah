@@ -128,9 +128,9 @@ test('maintained contact plus obvious shaft stroking is rewritten away from paus
   assert.doesNotMatch(result, /no hand contact is visible/i);
 });
 
-test('held-but-still sustained interval remains eligible as a true pause', () => {
+test('held-but-still sustained interval is treated as cadence change, not a pause', () => {
   const note = 'Stimulation pauses while your hand remains on the penile shaft with complete stillness for 2.8 seconds and all visible motion remains absent through the remainder of the window.';
 
-  assert.equal(hasConfirmedStimulationPauseEvidence({ note, category: ['stimulation_paused'] }), true);
-  assert.equal(sanitizeUnsupportedStimulationPauseClaim(note), note);
+  assert.equal(hasConfirmedStimulationPauseEvidence({ note, category: ['stimulation_paused'] }), false);
+  assert.doesNotMatch(sanitizeUnsupportedStimulationPauseClaim(note), /stimulation pauses/i);
 });

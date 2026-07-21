@@ -464,12 +464,11 @@ export default function VideoSyncPlayer({
   const fullscreenActive = domFullscreenActive || shellFullscreenActive;
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
   const [mobileEventSheetOpen, setMobileEventSheetOpen] = useState(false);
-  const [mobileFullscreenPreferred, setMobileFullscreenPreferred] = useState(false);
   const fullscreenControlsTimerRef = useRef(null);
   const resumeAfterShellFullscreenToggleRef = useRef(false);
   const suppressNextFullscreenVideoToggleRef = useRef(false);
   const nativeShell = isSarahNativeShell();
-  const useSarahManagedFullscreen = nativeShell || mobileFullscreenPreferred;
+  const useSarahManagedFullscreen = nativeShell;
   const pulseHaptic = useCallback((pattern = 18) => {
     if (typeof navigator === "undefined" || typeof navigator.vibrate !== "function") return;
     navigator.vibrate(pattern);
@@ -808,7 +807,7 @@ export default function VideoSyncPlayer({
     });
   }, [activeFeedKey, loadedFeeds, playbackSpeed]);
 
-  const selectMasterFeed = useCallback((key) => {
+  const selectMasterFeed = useCallback(async (key) => {
     const feed = videoFeeds[key];
     if (!feed?.src || key === activeFeedKey) return;
     pendingMasterTimeRef.current = Math.max(0, playheadS - videoOffset);
@@ -817,6 +816,23 @@ export default function VideoSyncPlayer({
     setVideoOffset(Number(linkedVideo?.timelineOffsetSeconds) || 0);
     setActiveFeedKey(key);
     setVideoSrc(feed.src);
+    if (feed.localPath) {
+      try {
+        const result = await base44.integrations.Core.ConvertLocalVideoForPlayback({
+          path: feed.localPath,
+          label: feed.fileName || feed.label || "video-sync",
+        });
+        const playbackUrl = result?.url || result?.file_url;
+        if (!playbackUrl) return;
+        setVideoFeeds((current) => ({
+          ...current,
+          [key]: { ...current[key], src: playbackUrl },
+        }));
+        setVideoSrc(playbackUrl);
+      } catch (error) {
+        console.warn("Could not prepare linked Video Sync feed for browser playback:", error);
+      }
+    }
   }, [activeFeedKey, linkedLocalVideos, playheadS, videoFeeds, videoOffset]);
 
   // Load browser-local video feeds. Files remain in memory only for this review.
@@ -839,7 +855,7 @@ export default function VideoSyncPlayer({
     e.target.value = "";
   };
 
-  const loadLinkedLocalVideo = useCallback((video, feedKey = "composite") => {
+  const loadLinkedLocalVideo = useCallback(async (video, feedKey = "composite") => {
     if (!video?.path) return;
     const previousUrl = videoFeedUrls.current[feedKey];
     if (previousUrl) {
@@ -859,6 +875,21 @@ export default function VideoSyncPlayer({
     if (!videoSrc || feedKey === activeFeedKey) {
       setActiveFeedKey(feedKey);
       setVideoSrc(url);
+    }
+    try {
+      const result = await base44.integrations.Core.ConvertLocalVideoForPlayback({
+        path: video.path,
+        label: video.label || video.filename || "video-sync",
+      });
+      const playbackUrl = result?.url || result?.file_url;
+      if (!playbackUrl) return;
+      setVideoFeeds((current) => ({
+        ...current,
+        [feedKey]: { ...current[feedKey], src: playbackUrl },
+      }));
+      if (!videoSrc || feedKey === activeFeedKey) setVideoSrc(playbackUrl);
+    } catch (error) {
+      console.warn("Could not prepare linked Video Sync feed for browser playback:", error);
     }
   }, [activeFeedKey, videoSrc]);
 
@@ -896,6 +927,23 @@ export default function VideoSyncPlayer({
       setActiveFeedKey(firstAssignment.slotKey);
       setVideoSrc(firstUrl);
       setVideoOffset(Number(firstAssignment.video.timelineOffsetSeconds) || 0);
+      base44.integrations.Core.ConvertLocalVideoForPlayback({
+        path: firstAssignment.video.path,
+        label: firstAssignment.video.label || firstAssignment.video.filename || "video-sync",
+      }).then((result) => {
+        const playbackUrl = result?.url || result?.file_url;
+        if (!playbackUrl) return;
+        setVideoFeeds((current) => ({
+          ...current,
+          [firstAssignment.slotKey]: {
+            ...current[firstAssignment.slotKey],
+            src: playbackUrl,
+          },
+        }));
+        setVideoSrc(playbackUrl);
+      }).catch((error) => {
+        console.warn("Could not prepare initial Video Sync feed for browser playback:", error);
+      });
     } else {
       const activePath = videoFeeds[activeFeedKey]?.localPath;
       const activeLinkedVideo = linkedLocalVideos.find((video) => video.path === activePath);
@@ -1017,26 +1065,6 @@ export default function VideoSyncPlayer({
     };
   }, [shellFullscreenActive]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-    const coarsePointerQuery = window.matchMedia?.("(pointer: coarse)");
-    const narrowViewportQuery = window.matchMedia?.("(max-width: 950px)");
-    const updatePreference = () => {
-      const coarse = !!coarsePointerQuery?.matches;
-      const narrow = !!narrowViewportQuery?.matches || window.innerWidth <= 950;
-      setMobileFullscreenPreferred(coarse || narrow);
-    };
-    updatePreference();
-    coarsePointerQuery?.addEventListener?.("change", updatePreference);
-    narrowViewportQuery?.addEventListener?.("change", updatePreference);
-    window.addEventListener("resize", updatePreference);
-    return () => {
-      coarsePointerQuery?.removeEventListener?.("change", updatePreference);
-      narrowViewportQuery?.removeEventListener?.("change", updatePreference);
-      window.removeEventListener("resize", updatePreference);
-    };
-  }, []);
-
   const clearFullscreenControlsTimer = useCallback(() => {
     if (fullscreenControlsTimerRef.current) {
       window.clearTimeout(fullscreenControlsTimerRef.current);
@@ -1091,8 +1119,12 @@ export default function VideoSyncPlayer({
         return;
       }
       if (document.fullscreenElement) await document.exitFullscreen?.();
+      const requestFullscreen = surface?.requestFullscreen
+        || surface?.webkitRequestFullscreen
+        || surface?.msRequestFullscreen;
+      if (!requestFullscreen) throw new Error("This browser does not expose the Fullscreen API.");
+      await requestFullscreen.call(surface);
       setTelemetryDisplayMode("overlay");
-      await surface?.requestFullscreen?.();
       pulseHaptic([12, 24, 12]);
     } catch (err) {
       console.warn("Fullscreen playback could not be opened:", err);
@@ -1283,6 +1315,22 @@ export default function VideoSyncPlayer({
     .filter(({ dist }) => dist <= 120)
     .sort((a, b) => a.dist - b.dist)
     .slice(0, 5), [playheadS, visibleEventEntries]);
+  const fullscreenEventSequence = useMemo(() => {
+    if (!visibleEventEntries.length) return [];
+    const ordered = [...visibleEventEntries].sort((a, b) => Number(a.ev.time_s) - Number(b.ev.time_s));
+    let nearestIndex = 0;
+    for (let index = 1; index < ordered.length; index += 1) {
+      if (
+        Math.abs(Number(ordered[index].ev.time_s) - playheadS)
+        < Math.abs(Number(ordered[nearestIndex].ev.time_s) - playheadS)
+      ) nearestIndex = index;
+    }
+    return [
+      { ...ordered[nearestIndex - 1], position: "Previous" },
+      { ...ordered[nearestIndex], position: "Nearest" },
+      { ...ordered[nearestIndex + 1], position: "Next" },
+    ].filter((entry) => entry.ev);
+  }, [playheadS, visibleEventEntries]);
   const displayedFeeds = videoLayout === "multi"
     ? loadedFeeds
     : loadedFeeds.filter((feed) => feed.key === activeFeedKey);
@@ -1655,7 +1703,10 @@ export default function VideoSyncPlayer({
                     if (fullscreenActive) showFullscreenControls();
                   }}
                 >
-              <div className={`video-sync-media relative min-h-0 min-w-0 flex-1 bg-black ${videoLayout === "multi" && displayedFeeds.length > 1 ? "grid gap-px bg-border md:grid-cols-2" : ""}`}>
+              <div
+                className={`video-sync-media relative min-h-0 min-w-0 flex-1 bg-black ${videoLayout === "multi" && displayedFeeds.length > 1 ? "grid gap-px bg-border md:grid-cols-2" : ""}`}
+                style={fullscreenActive ? undefined : { height: `${playerHeight}vh` }}
+              >
               {displayedFeeds.map((feed) => {
                 const isMaster = feed.key === activeFeedKey;
                 return (
@@ -1700,7 +1751,7 @@ export default function VideoSyncPlayer({
                   </div>
                 );
               })}
-              {telemetryDisplayMode === "overlay" && closestVisibleEvent && (
+              {telemetryDisplayMode === "overlay" && closestVisibleEvent && !fullscreenActive && (
                 <>
                   <div className="pointer-events-none absolute right-3 top-3 z-20 hidden w-[min(18rem,calc(100%-1.5rem))] overflow-hidden rounded-full border border-white/15 bg-black/70 px-3 py-2 text-white shadow-lg min-[951px]:block">
                     <div className="flex items-center justify-between gap-2">
@@ -1730,7 +1781,7 @@ export default function VideoSyncPlayer({
                 </>
               )}
               {telemetryDisplayMode === "overlay" && savedMotionSummary && (
-                <div className={`absolute right-3 z-10 w-[min(24rem,calc(100%-1.5rem))] pointer-events-none max-[950px]:hidden ${closestVisibleEvent ? (fullscreenActive ? "bottom-28" : "bottom-3") : "top-3"}`}>
+                <div className={`absolute right-3 z-10 w-[min(24rem,calc(100%-1.5rem))] pointer-events-none max-[950px]:hidden ${closestVisibleEvent ? (fullscreenActive ? "bottom-[16rem]" : "bottom-3") : "top-3"}`}>
                   <div className="pointer-events-auto">
                     <MotionPlaybackReadout
                       summary={savedMotionSummary}
@@ -1781,6 +1832,53 @@ export default function VideoSyncPlayer({
                       {fmtMmSs(playheadS)}
                     </span>
                   </button>
+                </div>
+              )}
+              {fullscreenActive && fullscreenEventSequence.length > 0 && (
+                <div className={`pointer-events-none absolute inset-x-3 z-40 hidden transition-[bottom] duration-300 min-[951px]:block ${fullscreenControlsShown ? "bottom-[8.75rem]" : "bottom-3"}`}>
+                  <div className="pointer-events-auto mx-auto max-w-5xl rounded-xl border border-white/30 bg-black/95 p-2 text-white shadow-[0_12px_40px_rgba(0,0,0,0.85)] backdrop-blur-lg">
+                    {closestVisibleEvent && (
+                      <button
+                        type="button"
+                        onClick={() => seekToEvent(closestVisibleEvent.ev, closestVisibleEvent.i)}
+                        className="mb-2 flex w-full items-center gap-2 rounded-lg border border-white/25 bg-[rgba(12,12,16,0.96)] px-3 py-1.5 text-left text-[11px] text-white/95 hover:bg-[rgba(24,24,30,0.98)]"
+                      >
+                        <span className="shrink-0 font-mono font-bold text-primary">{fmtMmSs(closestVisibleEvent.ev.time_s)}</span>
+                        <span className="shrink-0 font-bold uppercase tracking-[0.12em] text-white/70">Nearest event</span>
+                        <span className="min-w-0 flex-1 text-white/95">{closestVisibleEvent.ev.note || "Event note"}</span>
+                      </button>
+                    )}
+                    <div className="grid grid-cols-3 gap-2">
+                    {fullscreenEventSequence.map(({ ev, i, position }) => {
+                      const categories = normalizeCategoryArray(ev.category);
+                      const meta = getCategoryMeta(categories[0] || "other");
+                      const delta = Math.round(Number(ev.time_s) - playheadS);
+                      const relative = Math.abs(delta) < 1
+                        ? "now"
+                        : `${Math.abs(delta)}s ${delta < 0 ? "ago" : "ahead"}`;
+                      const nearest = position === "Nearest";
+                      return (
+                        <button
+                          key={`${position}-${i}-${ev.time_s}`}
+                          type="button"
+                          onClick={() => seekToEvent(ev, i)}
+                          className={`min-w-0 rounded-lg border px-3 py-2 text-left shadow-inner transition-colors ${nearest ? "border-primary bg-[rgba(45,25,58,0.98)]" : "border-white/25 bg-[rgba(12,12,16,0.96)] hover:bg-[rgba(24,24,30,0.98)]"}`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-white/80">{position}</span>
+                            <span className="font-mono text-[10px] font-semibold text-white/90">{relative}</span>
+                          </div>
+                          <div className="mt-1 flex min-w-0 items-center gap-2">
+                            <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: meta.color }} />
+                            <span className="shrink-0 font-mono text-xs font-bold" style={{ color: meta.color }}>{fmtMmSs(ev.time_s)}</span>
+                            <span className="min-w-0 truncate text-xs font-semibold text-white">{meta.label || "Event"}</span>
+                          </div>
+                          <p className="mt-1 truncate text-[11px] text-white/90">{ev.note || "Event note"}</p>
+                        </button>
+                      );
+                    })}
+                    </div>
+                  </div>
                 </div>
               )}
               {fullscreenActive && (

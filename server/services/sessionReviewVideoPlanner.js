@@ -148,7 +148,7 @@ function eventWindowForAnchor(anchor = {}, paragraphText = '') {
   return { before: 3, after: 12 };
 }
 
-function buildLoggedEventAnchors(session = {}) {
+export function buildLoggedEventAnchors(session = {}) {
   const anchors = [];
   addAnchor(anchors, session.pre_climax_offset_s, 'Pre-climax build', 'Logged pre-climax phase marker', { source: 'phase_marker' });
   addAnchor(anchors, session.climax_offset_s, 'Climax / ejaculation', 'Logged climax or ejaculation phase marker', { source: 'phase_marker' });

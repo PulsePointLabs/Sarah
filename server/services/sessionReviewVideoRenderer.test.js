@@ -2,14 +2,55 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildReviewVideoPlan } from './sessionReviewVideoPlanner.js';
 import {
+  buildActiveStimulationFallbackEvent,
   buildReusedNarrationSegmentPlan,
+  inferReviewVisualFocus,
   matchAudioExport,
   canonicalPhaseAnchorForNarration,
   resolveReviewSegmentPhaseCarryover,
   resolveTimestampViolationVisualFallback,
   selectDistinctReviewSourceStart,
   selectReviewVideoEventForSegment,
+  telemetryAtSessionTime,
 } from './sessionReviewVideoRenderer.js';
+
+test('review video focus targets named glans findings with a restrained push-in', () => {
+  const focus = inferReviewVisualFocus('At 6:12, glans engorgement and meatal flushing become visible.');
+  assert.equal(focus.target, 'glans');
+  assert.equal(focus.preferredRole, 'main');
+  assert.ok(focus.zoom > 1 && focus.zoom <= 1.3);
+});
+
+test('review video focus targets the named foot and prefers foot-camera imagery', () => {
+  const focus = inferReviewVisualFocus('Right foot flushing increases near 12:40.');
+  assert.equal(focus.target, 'right_foot');
+  assert.equal(focus.preferredRole, 'feet');
+});
+
+test('review video focus preserves laterality for plantar flexion without the word foot', () => {
+  const focus = inferReviewVisualFocus('Right plantar flexion and toe curl become visible at 10:54.');
+  assert.equal(focus.target, 'right_foot');
+  assert.equal(focus.preferredRole, 'feet');
+});
+
+test('review video leaves telemetry-only narration full frame', () => {
+  assert.equal(inferReviewVisualFocus('Heart rate rises to 118 BPM while RMSSD falls.'), null);
+});
+
+test('review video telemetry uses the nearest session-time HR sample', () => {
+  const telemetry = telemetryAtSessionTime({
+    avg: 99,
+    max: 119,
+    baseline: 88,
+    rows: [
+      { time: 240, hr: 101, baseline: 88 },
+      { time: 243, hr: 104, baseline: 88 },
+      { time: 246, hr: 107, baseline: 88 },
+    ],
+  }, 243.4);
+
+  assert.deepEqual(telemetry, { hr: 104, avg: 99, max: 119, load: 52 });
+});
 
 test('matching saved narration is split locally using persisted export timing', () => {
   const plan = buildReusedNarrationSegmentPlan({
@@ -241,6 +282,75 @@ test('direct narrated timestamps keep clip lead-in on the timeline counter', () 
   assert.ok(fallback.window.start < 272);
   assert.ok(fallback.window.sessionStartSeconds < 272);
   assert.equal(Math.round(fallback.window.sessionSeconds), 272);
+});
+
+test('active stimulation fallback prefers on-table stimulation over empty-table or ambulatory context', () => {
+  const fallback = buildActiveStimulationFallbackEvent({
+    session: {
+      event_timeline: [
+        {
+          id: 'empty-room',
+          time_s: 18,
+          note: 'Table vacant while the room is empty and setup remains visible.',
+          category: ['context'],
+        },
+        {
+          id: 'ambulatory',
+          time_s: 44,
+          note: 'Ambulatory and walking away from the table while checking tubing.',
+          category: ['context'],
+        },
+        {
+          id: 'active-contact',
+          time_s: 96,
+          note: 'Right-hand stroking continues on the penis with active stimulation on the table.',
+          category: ['stimulation'],
+          annotation_tags: ['hand_contact', 'stroking', 'active_stimulation'],
+        },
+      ],
+    },
+    segment: {
+      paragraphIndex: 1,
+      text: 'Sarah is still discussing active stimulation and visible masturbation technique.',
+    },
+    primaryVideo: { path: 'E:/recordings/source.mp4' },
+    sourceDuration: 780,
+    fallbackCursor: 90,
+  });
+
+  assert.ok(fallback);
+  assert.equal(Math.round(fallback.session_time_s), 96);
+  assert.match(fallback.note, /stroking continues/i);
+});
+
+test('active stimulation fallback returns null when only empty-room or off-table anchors exist', () => {
+  const fallback = buildActiveStimulationFallbackEvent({
+    session: {
+      event_timeline: [
+        {
+          id: 'empty-room',
+          time_s: 18,
+          note: 'Table vacant while the room is empty and setup remains visible.',
+          category: ['context'],
+        },
+        {
+          id: 'ambulatory',
+          time_s: 44,
+          note: 'Ambulatory and walking away from the table while checking tubing.',
+          category: ['context'],
+        },
+      ],
+    },
+    segment: {
+      paragraphIndex: 1,
+      text: 'Generic narration without a saved timed event.',
+    },
+    primaryVideo: { path: 'E:/recordings/source.mp4' },
+    sourceDuration: 780,
+    fallbackCursor: 30,
+  });
+
+  assert.equal(fallback, null);
 });
 
 test('generic review b-roll avoids reusing a nearby source-video window', () => {

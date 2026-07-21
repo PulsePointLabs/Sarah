@@ -5,10 +5,10 @@ import { listEntities, upsertEntity } from '../db.js';
 import { normalizeAudioChapters } from './audioChapters.js';
 import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart } from './ttsCore.js';
-import { buildReviewVideoPlan, extractCitedTimesFromText } from './sessionReviewVideoPlanner.js';
+import { buildLoggedEventAnchors, buildReviewVideoPlan, extractCitedTimesFromText } from './sessionReviewVideoPlanner.js';
 import { normalizeWatermarkSettings, replaceVideoWithWatermarkedExport } from './watermark.js';
 
-const REVIEW_RENDER_VERSION = 'session_review_video_v11_hd';
+const REVIEW_RENDER_VERSION = 'session_review_video_v14_timeline_locked_multicamera_telemetry';
 const REVIEW_VIDEO_WIDTH = Number(process.env.REVIEW_VIDEO_WIDTH || 1920);
 const REVIEW_VIDEO_HEIGHT = Number(process.env.REVIEW_VIDEO_HEIGHT || 1080);
 const REVIEW_VIDEO_PRESET = process.env.REVIEW_VIDEO_PRESET || 'slow';
@@ -21,6 +21,7 @@ const REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS = Math.max(0, Math.min(1.5, Number(p
 const REVIEW_VIDEO_TIME_TOLERANCE_SECONDS = Math.max(0, Math.min(30, Number(process.env.REVIEW_VIDEO_TIME_TOLERANCE_SECONDS || 8)));
 const REVIEW_VIDEO_MIN_GENERIC_BROLL_GAP_SECONDS = Math.max(6, Number(process.env.REVIEW_VIDEO_MIN_GENERIC_BROLL_GAP_SECONDS || 18));
 const REVIEW_VIDEO_GENERIC_BROLL_SEARCH_STEPS = Math.max(3, Number(process.env.REVIEW_VIDEO_GENERIC_BROLL_SEARCH_STEPS || 8));
+const REVIEW_VIDEO_MIN_ACTIVITY_FRAMES = Math.max(4, Number(process.env.REVIEW_VIDEO_MIN_ACTIVITY_FRAMES || 20));
 
 function friendlyReviewVideoRenderError(error) {
   const message = String(error?.message || error || '');
@@ -330,6 +331,23 @@ async function choosePrimaryVideo(session = {}, { workDir, onProgress } = {}) {
   return fallback;
 }
 
+export async function chooseFeetVideo(session = {}, primaryVideo = {}) {
+  const primaryPath = path.resolve(String(primaryVideo?.path || '')).toLowerCase();
+  for (const video of rankedVideoCandidates(session)) {
+    const videoPath = path.resolve(String(video?.path || '')).toLowerCase();
+    const text = `${video?.label || ''} ${video?.role || ''} ${video?.camera_angle || ''} ${video?.filename || ''} ${path.basename(videoPath)}`.toLowerCase();
+    if (!videoPath || videoPath === primaryPath) continue;
+    if (!/(?:feet|foot|toe|heel|sole|ankle|leg|lower[-_\s]?body|footcam)/.test(text)) continue;
+    if (!(await fileExists(video.path))) continue;
+    return {
+      ...video,
+      role: 'feet',
+      _review_duration: await mediaDurationSeconds(video.path).catch(() => Number(video.durationSeconds || 0)),
+    };
+  }
+  return null;
+}
+
 function sourceTimeForSession(sessionTime, video = {}) {
   const offset = Number(video.timelineOffsetSeconds ?? video.timeline_offset_s ?? video.offset_seconds ?? video.session_time_offset_s ?? 0);
   return Math.max(0, Number(sessionTime || 0) - (Number.isFinite(offset) ? offset : 0));
@@ -384,6 +402,136 @@ function canRenderSessionTimeFromPrimary({ sessionSeconds, primaryVideo, sourceD
   const sourceTime = sourceTimeForSession(sessionTime, primaryVideo);
   const duration = Number(sourceDuration || 0);
   return duration <= 0 || sourceTime <= duration + REVIEW_VIDEO_TIME_TOLERANCE_SECONDS;
+}
+
+export function inferReviewVisualFocus(value = '') {
+  const text = String(value || '').toLowerCase();
+  const focus = (target, x, y, zoom, preferredRole = 'main') => ({ target, x, y, zoom, preferredRole });
+  const footAction = '(?:plantar(?: |-)flexion|dorsiflexion|toe curl|toe spread|foot inversion|foot eversion)';
+  if (new RegExp(`\\bright[^.]{0,32}${footAction}|${footAction}[^.]{0,32}\\bright`).test(text)) {
+    return focus('right_foot', 0.20, 0.25, 1.22, 'feet');
+  }
+  if (new RegExp(`\\bleft[^.]{0,32}${footAction}|${footAction}[^.]{0,32}\\bleft`).test(text)) {
+    return focus('left_foot', 0.34, 0.25, 1.22, 'feet');
+  }
+  if (/\b(right (?:foot|toes?|heel|sole|ankle)|(?:foot|toe|heel|sole|ankle)s?[^.]{0,24}\bright)\b/.test(text)) {
+    return focus('right_foot', 0.20, 0.25, 1.22, 'feet');
+  }
+  if (/\b(left (?:foot|toes?|heel|sole|ankle)|(?:foot|toe|heel|sole|ankle)s?[^.]{0,24}\bleft)\b/.test(text)) {
+    return focus('left_foot', 0.34, 0.25, 1.22, 'feet');
+  }
+  if (/\b(feet|foot|toes?|heels?|soles?|ankles?|lower bod(?:y|ies)|plantar(?: |-)flexion|dorsiflexion|toe curl|toe spread|foot inversion|foot eversion)\b/.test(text)) {
+    return focus('lower_body', 0.27, 0.28, 1.17, 'feet');
+  }
+  if (/\b(glans|meatus|corona|foreskin|frenulum)\b/.test(text)) {
+    return focus('glans', 0.62, 0.61, 1.24);
+  }
+  if (/\b(penis|penile|shaft|stroking|masturbat|erection|engorgement)\b/.test(text)) {
+    return focus('penis', 0.60, 0.61, 1.18);
+  }
+  if (/\b(scrotum|testi(?:cle|cular)|perine(?:um|al)|pelvic|catheter|foley)\b/.test(text)) {
+    return focus('pelvis', 0.58, 0.62, 1.14);
+  }
+  return null;
+}
+
+function reviewVisualFocusFilter(visualFocus) {
+  if (!visualFocus) return null;
+  const zoom = Math.max(1.05, Math.min(1.3, Number(visualFocus.zoom || 1.15)));
+  const x = Math.max(0.08, Math.min(0.92, Number(visualFocus.x || 0.5)));
+  const y = Math.max(0.08, Math.min(0.92, Number(visualFocus.y || 0.5)));
+  const step = ((zoom - 1) / 75).toFixed(6);
+  return `zoompan=z='min(max(zoom\,pzoom)+${step}\,${zoom.toFixed(3)})':x='max(0\,min(iw-iw/zoom\,iw*${x.toFixed(3)}-iw/zoom/2))':y='max(0\,min(ih-ih/zoom\,ih*${y.toFixed(3)}-ih/zoom/2))':d=1:s=${REVIEW_VIDEO_WIDTH}x${REVIEW_VIDEO_HEIGHT}:fps=30`;
+}
+
+function focusForReviewSource(visualFocus, sourceRole = 'main') {
+  if (!visualFocus || sourceRole !== 'feet') return visualFocus;
+  if (visualFocus.target === 'right_foot') return { ...visualFocus, x: 0.28, y: 0.58, zoom: 1.24 };
+  if (visualFocus.target === 'left_foot') return { ...visualFocus, x: 0.72, y: 0.58, zoom: 1.24 };
+  return { ...visualFocus, x: 0.5, y: 0.55, zoom: 1.16 };
+}
+
+function reviewAnchorText(event = {}) {
+  return [
+    event?.label,
+    event?.reason,
+    event?.note,
+    Array.isArray(event?.category) ? event.category.join(' ') : event?.category,
+    Array.isArray(event?.annotation_tags) ? event.annotation_tags.join(' ') : event?.annotation_tags,
+    event?.tags,
+    event?.cited_text,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function activeStimulationAnchorScore(event = {}) {
+  const text = reviewAnchorText(event);
+  if (!text.trim()) return -200;
+  const positivePatterns = [
+    [/\b(active stimulation|stimulation continues|contact continues|ongoing contact|ongoing stimulation)\b/, 170],
+    [/\b(masturbat|stroking|stroke speed|stroke|hand contact|grip|touching|touch|jerk(?:ing)?|pump(?:ing)?)\b/, 155],
+    [/\b(penis|shaft|glans|foreskin)\b/, 85],
+    [/\b(arousal|build|edging|near[-\s]?climax|pre[-\s]?climax|climax|orgasm|ejaculat)\b/, 80],
+    [/\b(foley evidence|catheter in place|with foley in place|catheter remains|catheter still in)\b/, 55],
+    [/\b(on table|supine|lying back|laid back|on the exam table)\b/, 45],
+  ];
+  const negativePatterns = [
+    [/\b(table vacant|empty table|vacant table|table only|room only)\b/, 260],
+    [/\b(ambulatory|walking|standing|getting off|off the table|exiting the table|away from the table)\b/, 240],
+    [/\b(no visible hand contact|contact withdraw|withdrawn contact|paused|pause|prep|preparation|lubric|lube)\b/, 180],
+    [/\b(drainage bag|leg[-\s]?bag|secured off[-\s]?camera|device only|background object)\b/, 160],
+  ];
+  const positive = positivePatterns.reduce((sum, [pattern, score]) => (pattern.test(text) ? sum + score : sum), 0);
+  const negative = negativePatterns.reduce((sum, [pattern, score]) => (pattern.test(text) ? sum + score : sum), 0);
+  return positive - negative;
+}
+
+export function buildActiveStimulationFallbackEvent({
+  session = {},
+  segment = {},
+  primaryVideo = {},
+  sourceDuration = 0,
+  fallbackCursor = 0,
+} = {}) {
+  const anchors = buildLoggedEventAnchors(session)
+    .map((anchor) => {
+      const score = activeStimulationAnchorScore(anchor);
+      if (score < 70) return null;
+      const sessionCursor = sessionTimeForSource(fallbackCursor, primaryVideo);
+      const distance = Number.isFinite(sessionCursor)
+        ? Math.abs(Number(anchor.session_time_s) - sessionCursor)
+        : 0;
+      const relevance = segmentKeywordScore(anchor, segment.text || '');
+      return {
+        ...anchor,
+        _active_score: score,
+        _distance_score: Math.max(0, 90 - Math.min(90, distance / 3)),
+        _relevance_score: relevance,
+      };
+    })
+    .filter(Boolean)
+    .filter((anchor) => canRenderSessionTimeFromPrimary({
+      sessionSeconds: anchor.session_time_s,
+      primaryVideo,
+      sourceDuration,
+    }))
+    .sort((a, b) => (b._active_score + b._distance_score + b._relevance_score) - (a._active_score + a._distance_score + a._relevance_score));
+
+  const selected = anchors[0];
+  if (!selected) return null;
+  const text = reviewAnchorText(selected);
+  const before = /\b(climax|orgasm|ejaculat)\b/.test(text) ? 4 : 2.5;
+  const after = /\b(climax|orgasm|ejaculat)\b/.test(text) ? 18 : 12;
+  return {
+    ...selected,
+    label: selected.label || 'Active stimulation context',
+    reason: selected.reason || 'Timestamped active-stimulation event selected for review-video context.',
+    startSeconds: Math.max(0, Number(selected.session_time_s) - before),
+    endSeconds: Number(selected.session_time_s) + after,
+    source: selected.source || 'event_timeline',
+  };
 }
 
 function fallbackEventFromTimestampRequirement(segment = {}, timestampRequirement = {}) {
@@ -459,7 +607,85 @@ function drawTextSafe(value = '') {
     .trim();
 }
 
-function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playbackRate = 1, outputDurationSeconds = 0 } = {}) {
+function parseCsvLine(line = '') {
+  const values = [];
+  let current = '';
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      if (quoted && line[index + 1] === '"') {
+        current += '"';
+        index += 1;
+      } else quoted = !quoted;
+    } else if (char === ',' && !quoted) {
+      values.push(current);
+      current = '';
+    } else current += char;
+  }
+  values.push(current);
+  return values;
+}
+
+async function loadReviewHrTelemetry(session = {}) {
+  const csvPath = uploadPathFromUrl(session.hr_data_file || '');
+  const digest = session.capture_digest || {};
+  const summary = {
+    avg: Number(session.avg_hr ?? digest.avg_hr),
+    max: Number(session.max_hr ?? digest.peak_hr),
+    baseline: Number(digest.baseline_hr),
+    rows: [],
+  };
+  if (!csvPath || !(await fileExists(csvPath))) return summary;
+  const lines = (await fs.readFile(csvPath, 'utf8')).split(/\r?\n/).filter(Boolean);
+  const headers = parseCsvLine(lines.shift() || '');
+  const timeIndex = headers.indexOf('time_offset_s');
+  const hrIndex = headers.indexOf('hr');
+  const smoothedIndex = headers.indexOf('hr_smoothed');
+  const baselineIndex = headers.indexOf('baseline_hr');
+  summary.rows = lines.map((line) => {
+    const values = parseCsvLine(line);
+    return {
+      time: Number(values[timeIndex]),
+      hr: Number(values[hrIndex]) || Number(values[smoothedIndex]),
+      baseline: Number(values[baselineIndex]),
+    };
+  }).filter((row) => Number.isFinite(row.time) && Number.isFinite(row.hr) && row.hr > 0);
+  return summary;
+}
+
+export function telemetryAtSessionTime(telemetry = {}, sessionSeconds = 0) {
+  const rows = Array.isArray(telemetry.rows) ? telemetry.rows : [];
+  const target = Number(sessionSeconds || 0);
+  let nearest = null;
+  for (const row of rows) {
+    if (!nearest || Math.abs(row.time - target) < Math.abs(nearest.time - target)) nearest = row;
+    if (row.time > target && nearest) break;
+  }
+  const hr = Math.round(Number(nearest?.hr || telemetry.avg || 0));
+  const avg = Math.round(Number(telemetry.avg || 0));
+  const max = Math.round(Number(telemetry.max || 0));
+  const baseline = Number(nearest?.baseline || telemetry.baseline || avg || hr);
+  const load = max > baseline ? Math.round(Math.max(0, Math.min(100, ((hr - baseline) / (max - baseline)) * 100))) : 0;
+  return hr > 0 ? { hr, avg, max, load } : null;
+}
+
+function telemetryOverlayFilters(telemetry) {
+  if (!telemetry?.hr) return [];
+  const fontPath = process.env.REVIEW_VIDEO_FONT || 'C\\:/Windows/Fonts/arial.ttf';
+  return [
+    'drawbox=x=iw-520:y=28:w=490:h=92:color=0x160f27@0.92:t=fill',
+    'drawbox=x=iw-520:y=28:w=490:h=92:color=0xec4899@0.45:t=2',
+    `drawtext=fontfile='${fontPath}':text='♥':x=w-494:y=43:fontsize=48:fontcolor=0xff176d@1.0`,
+    `drawtext=fontfile='${fontPath}':text='${telemetry.hr}':x=w-430:y=34:fontsize=56:fontcolor=white@1.0`,
+    `drawtext=fontfile='${fontPath}':text='BPM':x=w-320:y=82:fontsize=15:fontcolor=0xcbd5e1@0.95`,
+    `drawtext=fontfile='${fontPath}':text='AVG ${telemetry.avg || '--'}':x=w-245:y=43:fontsize=20:fontcolor=0xf9a8d4@1.0`,
+    `drawtext=fontfile='${fontPath}':text='MAX ${telemetry.max || '--'}':x=w-245:y=69:fontsize=20:fontcolor=0xf9a8d4@1.0`,
+    `drawtext=fontfile='${fontPath}':text='LOAD ${telemetry.load}':x=w-115:y=56:fontsize=18:fontcolor=0x86efac@1.0`,
+  ];
+}
+
+function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playbackRate = 1, outputDurationSeconds = 0, visualFocus = null, telemetry = null } = {}) {
   const fontPath = process.env.REVIEW_VIDEO_FONT || 'C\\:/Windows/Fonts/arial.ttf';
   const rate = Number(playbackRate);
   const slowMoLabel = Number.isFinite(rate) && rate > 0 && rate < 0.99 ? `${Math.round(rate * 100)}% speed` : '';
@@ -477,6 +703,7 @@ function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playb
   const badgeHeight = 58;
   return [
     reviewVideoFitFilter(),
+    reviewVisualFocusFilter(visualFocus),
     'format=yuv420p',
     Number.isFinite(rate) && rate > 0 && rate < 0.99 ? `setpts=${(1 / rate).toFixed(4)}*PTS` : null,
     `drawbox=x=${badgeX}:y=${badgeY}:w=${badgeWidth}:h=${badgeHeight}:color=0x04060b@0.72:t=fill`,
@@ -486,24 +713,55 @@ function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playb
     slowMoText
       ? `drawtext=fontfile='${fontPath}':text='${slowMoText}':x=${badgeX + 150}:y=h-61:fontsize=17:fontcolor=0xf5d0fe@0.95:box=1:boxcolor=0x7e22ce@0.30:boxborderw=6:shadowcolor=0x000000@0.75:shadowx=1:shadowy=1`
       : null,
+    ...telemetryOverlayFilters(telemetry),
     ...segmentFadeFilters(outputDurationSeconds),
   ].filter(Boolean).join(',');
 }
 
-async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, workDir, index, sessionSeconds = null, playbackRate = 1 }) {
+export async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, workDir, index, sessionSeconds = null, playbackRate = 1, focusText = '', onPreview = null, sourceDuration = 0, usedSourceWindows = [], activeCandidateStarts = [], alternateVideo = null, lockTimestamp = false, telemetryData = null }) {
   const duration = Math.max(0.25, Math.min(180, Number(endSeconds || 0) - Number(startSeconds || 0)));
+  const requestedFocus = inferReviewVisualFocus(`${focusText} ${label || ''}`);
+  const useAlternate = requestedFocus?.preferredRole === 'feet' && alternateVideo?.path;
+  const selectedVideo = useAlternate ? alternateVideo : { path: sourcePath, role: 'main' };
+  const selectedSourcePath = selectedVideo.path;
+  const selectedSourceDuration = useAlternate ? Number(selectedVideo._review_duration || selectedVideo.durationSeconds || 0) : sourceDuration;
+  const requestedStartSeconds = useAlternate && Number.isFinite(Number(sessionSeconds))
+    ? sourceTimeForSession(sessionSeconds, selectedVideo)
+    : Number(startSeconds || 0);
+  const visualSelection = lockTimestamp
+    ? {
+      start: clampClipStart(requestedStartSeconds, duration, selectedSourceDuration),
+      motionFrames: await reviewWindowMotionFrames(selectedSourcePath, requestedStartSeconds, duration).catch(() => null),
+      replaced: false,
+    }
+    : !useAlternate && selectedSourceDuration > 0
+    ? await resolveVisuallyActiveReviewStart({ sourcePath: selectedSourcePath, preferredStart: requestedStartSeconds, durationSeconds: duration, sourceDuration: selectedSourceDuration, usedWindows: usedSourceWindows, activeCandidateStarts })
+    : { start: clampClipStart(requestedStartSeconds, duration, selectedSourceDuration), motionFrames: null, replaced: false };
+  const effectiveStartSeconds = Number(visualSelection.start || 0);
+  const effectiveSessionSeconds = Number.isFinite(Number(sessionSeconds))
+    ? Number(sessionSeconds) + effectiveStartSeconds - requestedStartSeconds
+    : sessionSeconds;
+  const visualFocus = focusForReviewSource(requestedFocus, selectedVideo.role);
+  const telemetry = telemetryAtSessionTime(telemetryData || {}, effectiveSessionSeconds);
   const rate = Number(playbackRate);
   const outputDuration = Number.isFinite(rate) && rate > 0 && rate < 0.99 ? duration / rate : duration;
   const output = path.join(workDir, `segment-source-${String(index).padStart(3, '0')}.mp4`);
   await runProcess('ffmpeg', [
     '-hide_banner',
     '-y',
-    '-ss', String(Math.max(0, Number(startSeconds || 0))),
+    '-ss', String(Math.max(0, effectiveStartSeconds)),
     '-t', String(duration),
-    '-i', sourcePath,
+    '-i', selectedSourcePath,
     '-map', '0:v:0',
     '-an',
-    '-vf', timestampOverlayFilter({ startSeconds, sessionSeconds, playbackRate, outputDurationSeconds: outputDuration }),
+    '-vf', timestampOverlayFilter({
+      startSeconds: effectiveStartSeconds,
+      sessionSeconds: effectiveSessionSeconds,
+      playbackRate,
+      outputDurationSeconds: outputDuration,
+      visualFocus,
+      telemetry,
+    }),
     '-c:v', 'libx264',
     '-preset', REVIEW_VIDEO_PRESET,
     '-crf', REVIEW_VIDEO_INTERMEDIATE_CRF,
@@ -512,11 +770,64 @@ async function cutReviewClip({ sourcePath, startSeconds, endSeconds, label, work
     '-movflags', '+faststart',
     output,
   ]);
+  if (typeof onPreview === 'function') {
+    try {
+      const previewFilename = `review-video-preview-${path.basename(workDir)}-${String(index).padStart(3, '0')}.jpg`;
+      const previewPath = path.join(uploadDir, previewFilename);
+      await runProcess('ffmpeg', [
+        '-hide_banner', '-y',
+        '-ss', String(Math.max(0.1, outputDuration * 0.52)),
+        '-i', output,
+        '-frames:v', '1',
+        '-vf', 'scale=960:-2:flags=lanczos',
+        '-q:v', '3',
+        previewPath,
+      ]);
+      await onPreview({
+        url: `/uploads/${encodeURIComponent(previewFilename)}`,
+        segmentIndex: Number(index),
+        label: label || 'Production segment',
+        sourceSessionSeconds: Number(effectiveSessionSeconds),
+        motionFrames: visualSelection.motionFrames,
+        replacedStaticWindow: Boolean(visualSelection.replaced),
+        focus: visualFocus,
+        sourceRole: selectedVideo.role || 'main',
+        sourceLabel: selectedVideo.label || selectedVideo.filename || path.basename(selectedSourcePath),
+        narration: String(focusText || '').slice(0, 280),
+      });
+    } catch {
+      // A diagnostic preview must never fail the production render.
+    }
+  }
+  if (selectedSourceDuration > 0) {
+    rememberSourceWindow(usedSourceWindows, {
+      start: effectiveStartSeconds,
+      end: effectiveStartSeconds + duration,
+      label,
+    });
+  }
   return {
     path: output,
     label,
+    sourceStartSeconds: effectiveStartSeconds,
+    sourceEndSeconds: effectiveStartSeconds + duration,
+    sourceSessionSeconds: effectiveSessionSeconds,
+    motionFrames: visualSelection.motionFrames,
+    replacedStaticWindow: Boolean(visualSelection.replaced),
+    sourcePath: selectedSourcePath,
+    sourceRole: selectedVideo.role || 'main',
     durationSeconds: await mediaDurationSeconds(output).catch(() => duration),
   };
+}
+
+function syncWindowToRenderedClip(window, videoClip) {
+  if (!window || !videoClip) return window;
+  window.start = Number(videoClip.sourceStartSeconds ?? window.start);
+  window.end = Number(videoClip.sourceEndSeconds ?? window.end);
+  window.sessionStartSeconds = Number(videoClip.sourceSessionSeconds ?? window.sessionStartSeconds);
+  window.sourcePath = videoClip.sourcePath || window.sourcePath || null;
+  window.sourceRole = videoClip.sourceRole || window.sourceRole || 'main';
+  return window;
 }
 
 function wordCount(value) {
@@ -557,6 +868,7 @@ async function buildNarrationAlignedSegments({
   paragraphs,
   paragraphSlots,
   plan,
+  session,
   primaryVideo,
   sourceDuration,
   clipByParagraph,
@@ -616,16 +928,22 @@ async function buildNarrationAlignedSegments({
       const sliceDuration = Math.max(4, slot.durationSeconds / playableEvents.length);
       let slotVisualDuration = 0;
       for (const event of playableEvents) {
-        const center = sourceTimeForSession(event.session_time_s, primaryVideo);
-        const requestedStart = Number(event.source?.startSeconds);
-        const requestedEnd = Number(event.source?.endSeconds);
-        const sourceOffset = center - Number(event.session_time_s);
-        const start = Number.isFinite(requestedStart)
-          ? Math.max(0, requestedStart + sourceOffset)
-          : Math.max(0, center - Math.min(4, sliceDuration * 0.25));
-        const end = Number.isFinite(requestedEnd) && requestedEnd > requestedStart
-          ? Math.max(start + 1, requestedEnd + sourceOffset)
-          : start + sliceDuration;
+        const alignedEvent = {
+          ...event.source,
+          session_time_s: Number(event.session_time_s),
+          label: event.label || event.source?.label || 'Referenced moment',
+        };
+        const window = sourceWindowForSegment({
+          event: alignedEvent,
+          segment: {
+            paragraphIndex,
+            text: paragraphs[paragraphIndex] || '',
+          },
+          audioDuration: sliceDuration,
+          primaryVideo,
+          sourceDuration,
+          fallbackCursor: continuitySourceCursor,
+        });
         onProgress?.({
           phase: 'segments',
           current: 3,
@@ -635,28 +953,37 @@ async function buildNarrationAlignedSegments({
         try {
           const clip = await cutReviewClip({
             sourcePath: primaryVideo.path,
-            startSeconds: start,
-            endSeconds: end,
-            label: event.label,
+            startSeconds: window.start,
+            endSeconds: window.end,
+            label: window.label,
             workDir,
             index: segmentIndex++,
-            sessionSeconds: sessionTimeForSource(start, primaryVideo),
+            sessionSeconds: window.sessionStartSeconds,
+            playbackRate: window.playbackRate || 1,
           });
           segments.push(clip.path);
           const actualDuration = Number(clip.durationSeconds || sliceDuration);
           visualDuration += actualDuration;
           slotVisualDuration += actualDuration;
-          rememberSourceWindow(usedSourceWindows, { start, end: start + actualDuration, label: event.label });
+          rememberSourceWindow(usedSourceWindows, { start: window.start, end: window.start + actualDuration, label: window.label });
           generatedClips.push({
             ...event.source,
             paragraphIndex,
             session_time_s: event.session_time_s,
             source_video_path: primaryVideo.path,
+            visual_session_start_s: roundedSeconds(window.sessionStartSeconds),
+            source_start_s: roundedSeconds(window.start),
+            source_end_s: roundedSeconds(window.end),
             aligned_narration_start_s: Math.round(slot.startSeconds * 10) / 10,
             aligned_narration_end_s: Math.round(slot.endSeconds * 10) / 10,
             durationSeconds: Number(clip.durationSeconds || sliceDuration),
+            playback_rate: Number(window.playbackRate || 1),
+            slow_motion: Boolean(window.slowMotion),
+            direct_spoken_time: Boolean(window.directSpokenTime),
+            spoken_anchor_offset_seconds: roundedSeconds(window.spokenAnchorOffset || 0),
+            spoken_time_lead_seconds: roundedSeconds(window.spokenTimeLeadSeconds || 0),
           });
-          continuitySourceCursor = Math.min(Math.max(0, sourceDuration || Number.POSITIVE_INFINITY), start + actualDuration);
+          continuitySourceCursor = Math.min(Math.max(0, sourceDuration || Number.POSITIVE_INFINITY), window.start + actualDuration);
         } catch (error) {
           generatedClips.push({
             ...event.source,
@@ -668,75 +995,137 @@ async function buildNarrationAlignedSegments({
         }
       }
       if (slotVisualDuration <= 0) {
-        const fallbackStart = selectDistinctReviewSourceStart({
+        const fallbackEvent = buildActiveStimulationFallbackEvent({
+          session,
+          segment: {
+            paragraphIndex,
+            text: paragraphs[paragraphIndex] || '',
+          },
+          primaryVideo,
+          sourceDuration,
+          fallbackCursor: continuitySourceCursor,
+        });
+        const fallbackWindow = fallbackEvent
+          ? sourceWindowForSegment({
+            event: fallbackEvent,
+            segment: {
+              paragraphIndex,
+              text: paragraphs[paragraphIndex] || '',
+            },
+            audioDuration: slot.durationSeconds,
+            primaryVideo,
+            sourceDuration,
+            fallbackCursor: continuitySourceCursor,
+          })
+          : null;
+        const fallbackStart = !fallbackWindow ? selectDistinctReviewSourceStart({
           preferredStart: continuitySourceCursor,
           durationSeconds: slot.durationSeconds,
           sourceDuration,
           usedWindows: usedSourceWindows,
-        });
-        const sourceStart = fallbackStart == null
+        }) : null;
+        const sourceStart = fallbackWindow
+          ? fallbackWindow.start
+          : fallbackStart == null
           ? clampClipStart(continuitySourceCursor, slot.durationSeconds, sourceDuration)
           : fallbackStart;
-        const fallbackEnd = sourceStart + slot.durationSeconds;
+        const fallbackEnd = fallbackWindow ? fallbackWindow.end : sourceStart + slot.durationSeconds;
         const clip = await cutReviewClip({
           sourcePath: primaryVideo.path,
           startSeconds: sourceStart,
           endSeconds: fallbackEnd,
-          label: slotTitle(paragraphIndex, payloadTitle),
+          label: fallbackEvent?.label || slotTitle(paragraphIndex, payloadTitle),
           workDir,
           index: segmentIndex++,
-          sessionSeconds: sessionTimeForSource(sourceStart, primaryVideo),
+          sessionSeconds: fallbackWindow?.sessionStartSeconds ?? sessionTimeForSource(sourceStart, primaryVideo),
+          playbackRate: fallbackWindow?.playbackRate || 1,
         });
         segments.push(clip.path);
         const actualDuration = Number(clip.durationSeconds || slot.durationSeconds);
         visualDuration += actualDuration;
-        rememberSourceWindow(usedSourceWindows, { start: sourceStart, end: sourceStart + actualDuration, label: slotTitle(paragraphIndex, payloadTitle) });
+        rememberSourceWindow(usedSourceWindows, { start: sourceStart, end: sourceStart + actualDuration, label: fallbackEvent?.label || slotTitle(paragraphIndex, payloadTitle) });
         continuitySourceCursor = sourceStart + actualDuration;
       }
       continue;
     }
 
     if (primaryVideo?.path) {
-      const fallbackStart = selectDistinctReviewSourceStart({
+      const fallbackEvent = buildActiveStimulationFallbackEvent({
+        session,
+        segment: {
+          paragraphIndex,
+          text: paragraphs[paragraphIndex] || '',
+        },
+        primaryVideo,
+        sourceDuration,
+        fallbackCursor: continuitySourceCursor,
+      });
+      const fallbackWindow = fallbackEvent
+        ? sourceWindowForSegment({
+          event: fallbackEvent,
+          segment: {
+            paragraphIndex,
+            text: paragraphs[paragraphIndex] || '',
+          },
+          audioDuration: slot.durationSeconds,
+          primaryVideo,
+          sourceDuration,
+          fallbackCursor: continuitySourceCursor,
+        })
+        : null;
+      const fallbackStart = !fallbackWindow ? selectDistinctReviewSourceStart({
         preferredStart: continuitySourceCursor,
         durationSeconds: slot.durationSeconds,
         sourceDuration,
         usedWindows: usedSourceWindows,
-      });
-      const sourceStart = fallbackStart == null
+      }) : null;
+      const sourceStart = fallbackWindow
+        ? fallbackWindow.start
+        : fallbackStart == null
         ? clampClipStart(continuitySourceCursor, slot.durationSeconds, sourceDuration)
         : fallbackStart;
-      const fallbackEnd = sourceStart + slot.durationSeconds;
+      const fallbackEnd = fallbackWindow ? fallbackWindow.end : sourceStart + slot.durationSeconds;
       onProgress?.({
         phase: 'segments',
         current: 3,
         total: 5,
-        message: `Filling narration section ${paragraphIndex + 1} with source video context...`,
+        message: fallbackEvent
+          ? `Filling narration section ${paragraphIndex + 1} with active stimulation context...`
+          : `Filling narration section ${paragraphIndex + 1} with source video context...`,
       });
       const clip = await cutReviewClip({
         sourcePath: primaryVideo.path,
         startSeconds: sourceStart,
         endSeconds: fallbackEnd,
-        label: slotTitle(paragraphIndex, payloadTitle),
+        label: fallbackEvent?.label || slotTitle(paragraphIndex, payloadTitle),
         workDir,
         index: segmentIndex++,
-        sessionSeconds: sessionTimeForSource(sourceStart, primaryVideo),
+        sessionSeconds: fallbackWindow?.sessionStartSeconds ?? sessionTimeForSource(sourceStart, primaryVideo),
+        playbackRate: fallbackWindow?.playbackRate || 1,
       });
       segments.push(clip.path);
       const actualDuration = Number(clip.durationSeconds || slot.durationSeconds);
       visualDuration += actualDuration;
-      rememberSourceWindow(usedSourceWindows, { start: sourceStart, end: sourceStart + actualDuration, label: slotTitle(paragraphIndex, payloadTitle) });
+      rememberSourceWindow(usedSourceWindows, { start: sourceStart, end: sourceStart + actualDuration, label: fallbackEvent?.label || slotTitle(paragraphIndex, payloadTitle) });
       generatedClips.push({
-        id: `context-${paragraphIndex}`,
+        id: fallbackEvent?.id || `context-${paragraphIndex}`,
         paragraphIndex,
-        session_time_s: Math.round(sourceStart * 10) / 10,
-        cited_text: 'Continuous source video context',
-        label: slotTitle(paragraphIndex, payloadTitle),
-        reason: 'No exact logged event or explicit timestamp matched this narration slot; using source video instead of title-card filler.',
+        session_time_s: fallbackEvent ? roundedSeconds(fallbackEvent.session_time_s) : Math.round(sourceStart * 10) / 10,
+        cited_text: fallbackEvent?.cited_text || (fallbackEvent ? fallbackEvent.label : 'Continuous source video context'),
+        label: fallbackEvent?.label || slotTitle(paragraphIndex, payloadTitle),
+        reason: fallbackEvent
+          ? 'No exact logged event or explicit timestamp matched this narration slot; using active stimulation context instead of empty-room filler.'
+          : 'No exact logged event or explicit timestamp matched this narration slot; using source video instead of title-card filler.',
         source_video_path: primaryVideo.path,
+        visual_session_start_s: roundedSeconds(fallbackWindow?.sessionStartSeconds ?? sessionTimeForSource(sourceStart, primaryVideo)),
+        source_start_s: roundedSeconds(sourceStart),
+        source_end_s: roundedSeconds(fallbackEnd),
         aligned_narration_start_s: Math.round(slot.startSeconds * 10) / 10,
         aligned_narration_end_s: Math.round(slot.endSeconds * 10) / 10,
         durationSeconds: actualDuration,
+        playback_rate: Number(fallbackWindow?.playbackRate || 1),
+        slow_motion: Boolean(fallbackWindow?.slowMotion),
+        direct_spoken_time: Boolean(fallbackWindow?.directSpokenTime),
       });
       continuitySourceCursor = sourceStart + actualDuration;
       continue;
@@ -1080,7 +1469,7 @@ export function buildReusedNarrationSegmentPlan({
   });
 }
 
-async function sliceReusableNarrationAudio({ sourcePath, outputPath, startSeconds, durationSeconds }) {
+export async function sliceReusableNarrationAudio({ sourcePath, outputPath, startSeconds, durationSeconds }) {
   await runProcess('ffmpeg', [
     '-hide_banner',
     '-y',
@@ -1425,6 +1814,7 @@ function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, s
 }
 
 async function renderSourceContextSegment({
+  session,
   primaryVideo,
   sourceDuration,
   workDir,
@@ -1437,8 +1827,88 @@ async function renderSourceContextSegment({
   selectionReason = 'No exact event matched this spoken segment; using source video context instead of a title card.',
   fallbackType = 'continuous_source_context',
   visualSource = 'continuous_source_context',
+  onPreview = null,
+  activeCandidateStarts = [],
+  alternateVideo = null,
+  telemetryData = null,
 }) {
   const duration = Number(audio?.durationSeconds || 1);
+  const activeFallbackEvent = buildActiveStimulationFallbackEvent({
+    session,
+    segment,
+    primaryVideo,
+    sourceDuration,
+    fallbackCursor,
+  });
+  if (activeFallbackEvent) {
+    const window = sourceWindowForSegment({
+      event: activeFallbackEvent,
+      segment,
+      audioDuration: duration,
+      primaryVideo,
+      sourceDuration,
+      fallbackCursor,
+    });
+    window.label = activeFallbackEvent.label || label || 'Active stimulation context';
+    const videoClip = await cutReviewClip({
+      sourcePath: primaryVideo.path,
+      startSeconds: window.start,
+      endSeconds: window.end,
+      label: window.label,
+      workDir,
+      index,
+      sessionSeconds: window.sessionStartSeconds,
+      playbackRate: window.playbackRate || 1,
+      focusText: segment.text,
+      onPreview,
+      sourceDuration,
+      usedSourceWindows,
+      activeCandidateStarts,
+      alternateVideo,
+      lockTimestamp: Boolean(window.directSpokenTime),
+      telemetryData,
+    });
+    syncWindowToRenderedClip(window, videoClip);
+    return {
+      videoClip,
+      window,
+      generatedClip: {
+        id: activeFallbackEvent.id || `active-source-context-${index}`,
+        paragraphIndex: segment.paragraphIndex,
+        session_time_s: roundedSeconds(activeFallbackEvent.session_time_s),
+        visual_session_start_s: roundedSeconds(window.sessionStartSeconds),
+        source_start_s: roundedSeconds(window.start),
+        source_end_s: roundedSeconds(window.end),
+        spoken_segment_index: index,
+        spoken_text: segment.text.slice(0, 240),
+        label: window.label,
+        reason: selectionReason,
+        source_video_path: videoClip.sourcePath || primaryVideo.path,
+        source_camera_role: videoClip.sourceRole || 'main',
+        audio_duration_seconds: roundedSeconds(duration),
+        playback_rate: Number(window.playbackRate || 1),
+        slow_motion: Boolean(window.slowMotion),
+        direct_spoken_time: false,
+        source_time_strategy: 'active_stimulation_context',
+        matched_event: true,
+        procedural_broll: false,
+        procedural_broll_score: roundedSeconds(activeFallbackEvent._active_score),
+        timeline_trace: {
+          ...buildTimelineTrace({
+            segment,
+            event: activeFallbackEvent,
+            window,
+            audio,
+            selectionReason,
+            fallbackUsed: true,
+            fallbackType,
+            visualSource: 'active_stimulation_context',
+          }),
+          spoken_segment_index: index,
+        },
+      },
+    };
+  }
   const distinctStart = selectDistinctReviewSourceStart({
     preferredStart: fallbackCursor,
     durationSeconds: duration,
@@ -1466,7 +1936,16 @@ async function renderSourceContextSegment({
     workDir,
     index,
     sessionSeconds: window.sessionStartSeconds,
+    focusText: segment.text,
+    onPreview,
+    sourceDuration,
+    usedSourceWindows,
+    activeCandidateStarts,
+    alternateVideo,
+    lockTimestamp: Boolean(window.directSpokenTime),
+    telemetryData,
   });
+  syncWindowToRenderedClip(window, videoClip);
   return {
     videoClip,
     window,
@@ -1481,7 +1960,8 @@ async function renderSourceContextSegment({
       spoken_text: segment.text.slice(0, 240),
       label: window.label,
       reason: selectionReason,
-      source_video_path: primaryVideo.path,
+      source_video_path: videoClip.sourcePath || primaryVideo.path,
+      source_camera_role: videoClip.sourceRole || 'main',
       audio_duration_seconds: roundedSeconds(duration),
       playback_rate: 1,
       slow_motion: false,
@@ -1548,6 +2028,12 @@ async function renderSegmentedSourceReviewVideo({
   narration,
 }) {
   const sourceDuration = await mediaDurationSeconds(primaryVideo.path).catch(() => 0);
+  const feetVideo = await chooseFeetVideo(session, primaryVideo);
+  const telemetryData = await loadReviewHrTelemetry(session);
+  const activeCandidateStarts = buildLoggedEventAnchors(session)
+    .filter((anchor) => activeStimulationAnchorScore(anchor) >= 70)
+    .map((anchor) => sourceTimeForSession(anchor.session_time_s, primaryVideo))
+    .filter((start) => Number.isFinite(start) && start >= 0 && start < sourceDuration);
   const existingSegmentSources = [];
   for (const clip of plan.existingClips.slice(0, 24)) {
     const clipPath = uploadPathFromUrl(clip.file_url || clip.url || clip.clip_url);
@@ -1594,6 +2080,21 @@ async function renderSegmentedSourceReviewVideo({
   let ttsMeta = null;
   let phaseAnchorEvent = null;
   let phaseAnchorParagraph = null;
+  const previewFrames = [];
+  const publishPreview = async (preview) => {
+    previewFrames.push(preview);
+    if (previewFrames.length > 4) previewFrames.shift();
+    onProgress?.({
+      phase: 'segmented_narration',
+      current: 3,
+      total: 5,
+      message: `Produced preview frame ${preview.segmentIndex} of ${narrationSegments.length}.`,
+      preview_frame: preview,
+      preview_frames: [...previewFrames],
+      preview_segment_current: preview.segmentIndex,
+      preview_segment_total: narrationSegments.length,
+    });
+  };
 
   for (const [index, segment] of narrationSegments.entries()) {
     if (signal?.aborted) throw new Error('Cancelled');
@@ -1636,9 +2137,19 @@ async function renderSegmentedSourceReviewVideo({
       session,
       narrationText: paragraphs[Number(segment.paragraphIndex)] || segment.text,
     });
-    const directEvent = timestampRequirement.required
-      ? matchedEvent
-      : canonicalPhaseAnchor || matchedEvent;
+    const exactNarratedEvent = timestampRequirement.required && timestampRequirement.primary
+      ? {
+        ...(matchedEvent || {}),
+        id: matchedEvent?.id || `spoken-${index + 1}-${Math.round(timestampRequirement.primary.seconds)}`,
+        session_time_s: Number(timestampRequirement.primary.seconds),
+        label: `Referenced ${formatTimestamp(timestampRequirement.primary.seconds)}`,
+        source: 'spoken_segment_time',
+        direct_spoken_time: true,
+        force_direct_cut: true,
+        spoken_char_index: Number(timestampRequirement.primary.charIndex || 0),
+      }
+      : null;
+    const directEvent = exactNarratedEvent || canonicalPhaseAnchor || matchedEvent;
     const phaseResolution = resolveReviewSegmentPhaseCarryover({
       segment,
       directEvent,
@@ -1679,30 +2190,80 @@ async function renderSegmentedSourceReviewVideo({
           phase: 'segments',
           current: 3,
           total: 5,
-          message: `No exact visual for ${narratedLabel}; using source video context instead of a title card...`,
+          message: `No exact visual for ${narratedLabel}; clamping to the referenced source-video time...`,
         });
-        const sourceContext = await renderSourceContextSegment({
+        const fallback = resolveTimestampViolationVisualFallback({
+          segment,
+          timestampRequirement,
+          audioDuration: audio.durationSeconds,
           primaryVideo,
           sourceDuration,
+          fallbackCursor,
+        });
+        const fallbackEvent = fallback?.event || null;
+        const window = fallback?.window;
+        const videoClip = await cutReviewClip({
+          sourcePath: primaryVideo.path,
+          startSeconds: window.start,
+          endSeconds: window.end,
+          label: window.label,
           workDir,
           index: index + 1,
-          segment,
-          audio,
-          fallbackCursor,
+          sessionSeconds: window.sessionStartSeconds,
+          playbackRate: window.playbackRate || 1,
+          focusText: segment.text,
+          onPreview: publishPreview,
+          sourceDuration,
           usedSourceWindows,
-          label: `Source context for ${narratedLabel}`,
-          selectionReason: `${reason} No exact timestamp anchor was available, so the renderer used continuous source video context instead of a title card.`,
-          fallbackType: 'source_context_for_unmatched_timestamp',
-          visualSource: 'continuous_source_context',
+          activeCandidateStarts,
+          alternateVideo: feetVideo,
+          lockTimestamp: true,
+          telemetryData,
         });
-        const { videoClip, window } = sourceContext;
+        syncWindowToRenderedClip(window, videoClip);
         const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
         await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
         avSegments.push(avPath);
         videoSegments.push(videoClip.path);
         rememberSourceWindow(usedSourceWindows, window);
         fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
-        generatedClips.push(sourceContext.generatedClip);
+        generatedClips.push({
+          id: fallbackEvent?.id || `spoken-clamped-source-${index + 1}`,
+          paragraphIndex: segment.paragraphIndex,
+          session_time_s: fallbackEvent ? roundedSeconds(fallbackEvent.session_time_s) : null,
+          visual_session_start_s: roundedSeconds(window.sessionStartSeconds),
+          source_start_s: roundedSeconds(window.start),
+          source_end_s: roundedSeconds(window.end),
+          spoken_segment_index: index + 1,
+          spoken_text: segment.text.slice(0, 240),
+          label: window.label || `Referenced ${narratedLabel}`,
+          reason: `${reason} The renderer clamped directly to the spoken timestamp in the source video instead of drifting to generic context.`,
+          source_video_path: videoClip.sourcePath || primaryVideo.path,
+          source_camera_role: videoClip.sourceRole || 'main',
+          audio_duration_seconds: roundedSeconds(audio.durationSeconds),
+          playback_rate: Number(window.playbackRate || 1),
+          slow_motion: Boolean(window.slowMotion),
+          direct_spoken_time: Boolean(window.directSpokenTime),
+          spoken_anchor_offset_seconds: roundedSeconds(window.spokenAnchorOffset || 0),
+          spoken_time_lead_seconds: roundedSeconds(window.spokenTimeLeadSeconds || 0),
+          source_time_strategy: fallback?.sourceTimeStrategy || 'clamped_to_nearest_available_source_video',
+          matched_event: false,
+          procedural_broll: false,
+          timeline_trace: {
+            ...buildTimelineTrace({
+              segment,
+              event: fallbackEvent,
+              window,
+              audio,
+              selectionReason: `${reason} The renderer clamped directly to the spoken timestamp in the source video instead of drifting to generic context.`,
+              fallbackUsed: true,
+              fallbackType: fallback?.fallbackType || 'nearest_available_source_video',
+              visualSource: fallback?.visualSource || 'clamped_source_video',
+              violation: 'TIMESTAMP_VISUAL_CLAMPED_TO_SPOKEN_TIME_WITHOUT_MATCHING_EVENT',
+            }),
+            spoken_segment_index: index + 1,
+          },
+        });
         continue;
       }
       onProgress?.({
@@ -1739,7 +2300,16 @@ async function renderSegmentedSourceReviewVideo({
           index: index + 1,
           sessionSeconds: window.sessionStartSeconds,
           playbackRate: window.playbackRate || 1,
+          focusText: segment.text,
+          onPreview: publishPreview,
+          sourceDuration,
+          usedSourceWindows,
+          activeCandidateStarts,
+          alternateVideo: feetVideo,
+          lockTimestamp: true,
+          telemetryData,
         });
+        syncWindowToRenderedClip(window, videoClip);
         videoSegments.push(videoClip.path);
         const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
         await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
@@ -1768,7 +2338,8 @@ async function renderSegmentedSourceReviewVideo({
           spoken_text: segment.text.slice(0, 240),
           label: window.label || 'Nearest available source video',
           reason: 'Narration referenced a time whose nearest source-video window was already used nearby; repeated source video was used instead of a title card.',
-          source_video_path: primaryVideo.path,
+          source_video_path: videoClip.sourcePath || primaryVideo.path,
+          source_camera_role: videoClip.sourceRole || 'main',
           audio_duration_seconds: roundedSeconds(audio.durationSeconds),
           playback_rate: Number(window.playbackRate || 1),
           slow_motion: Boolean(window.slowMotion),
@@ -1789,7 +2360,16 @@ async function renderSegmentedSourceReviewVideo({
         index: index + 1,
         sessionSeconds: window.sessionStartSeconds,
         playbackRate: window.playbackRate || 1,
+        focusText: segment.text,
+        onPreview: publishPreview,
+        sourceDuration,
+        usedSourceWindows,
+        activeCandidateStarts,
+        alternateVideo: feetVideo,
+        lockTimestamp: true,
+        telemetryData,
       });
+      syncWindowToRenderedClip(window, videoClip);
       videoSegments.push(videoClip.path);
       const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
       await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
@@ -1818,7 +2398,8 @@ async function renderSegmentedSourceReviewVideo({
         spoken_text: segment.text.slice(0, 240),
         label: window.label || 'Nearest available source video',
         reason,
-        source_video_path: primaryVideo.path,
+        source_video_path: videoClip.sourcePath || primaryVideo.path,
+        source_camera_role: videoClip.sourceRole || 'main',
         audio_duration_seconds: roundedSeconds(audio.durationSeconds),
         playback_rate: Number(window.playbackRate || 1),
         slow_motion: Boolean(window.slowMotion),
@@ -1841,6 +2422,7 @@ async function renderSegmentedSourceReviewVideo({
         message: `No exact visual for spoken segment ${index + 1}; using source video context instead of a title card...`,
       });
       const sourceContext = await renderSourceContextSegment({
+        session,
         primaryVideo,
         sourceDuration,
         workDir,
@@ -1849,10 +2431,14 @@ async function renderSegmentedSourceReviewVideo({
         audio,
         fallbackCursor,
         usedSourceWindows,
-        label: payload.title || 'Session Review',
-        selectionReason: 'No exact event matched this untimed spoken segment; using continuous source video context instead of title-card filler.',
-        fallbackType: 'continuous_source_context_for_untimed_narration',
-        visualSource: 'continuous_source_context',
+        label: 'Active stimulation context',
+        selectionReason: 'No exact event matched this untimed spoken segment; using active stimulation context instead of empty-room or off-table filler.',
+        fallbackType: 'active_stimulation_context_for_untimed_narration',
+        visualSource: 'active_stimulation_context',
+        onPreview: publishPreview,
+        activeCandidateStarts,
+        alternateVideo: feetVideo,
+        telemetryData,
       });
       const { videoClip, window } = sourceContext;
       videoSegments.push(videoClip.path);
@@ -1888,7 +2474,16 @@ async function renderSegmentedSourceReviewVideo({
       index: index + 1,
       sessionSeconds: window.sessionStartSeconds,
       playbackRate: window.playbackRate || 1,
+      focusText: segment.text,
+      onPreview: publishPreview,
+      sourceDuration,
+      usedSourceWindows,
+      activeCandidateStarts,
+      alternateVideo: feetVideo,
+      lockTimestamp: timestampRequirement.required || Boolean(window.directSpokenTime),
+      telemetryData,
     });
+    syncWindowToRenderedClip(window, videoClip);
     videoSegments.push(videoClip.path);
     const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
     await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
@@ -1929,7 +2524,8 @@ async function renderSegmentedSourceReviewVideo({
       spoken_text: segment.text.slice(0, 240),
       label: window.label,
       reason: selectionReason,
-      source_video_path: primaryVideo.path,
+      source_video_path: videoClip.sourcePath || primaryVideo.path,
+      source_camera_role: videoClip.sourceRole || 'main',
       audio_duration_seconds: Math.round(Number(audio.durationSeconds || 0) * 10) / 10,
       playback_rate: Number(window.playbackRate || 1),
       slow_motion: Boolean(window.slowMotion),
@@ -2165,6 +2761,7 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       paragraphs,
       paragraphSlots,
       plan,
+      session,
       primaryVideo,
       sourceDuration: primaryVideoDuration,
       clipByParagraph,
@@ -2336,4 +2933,48 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
   } finally {
     fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+export async function reviewWindowMotionFrames(sourcePath, startSeconds, durationSeconds) {
+  const scanDuration = Math.max(1.5, Math.min(3, Number(durationSeconds || 3)));
+  const { stderr } = await runProcess('ffmpeg', [
+    '-hide_banner',
+    '-ss', String(Math.max(0, Number(startSeconds || 0))),
+    '-t', String(scanDuration),
+    '-i', sourcePath,
+    '-vf', 'crop=iw*0.72:ih*0.78:iw*0.28:ih*0.22,scale=320:-2,select=gt(scene\\,0.001),showinfo',
+    '-an',
+    '-f', 'null',
+    '-',
+  ]);
+  return (String(stderr || '').match(/Parsed_showinfo[^\r\n]*pts_time/g) || []).length;
+}
+
+export async function resolveVisuallyActiveReviewStart({ sourcePath, preferredStart, durationSeconds, sourceDuration, usedWindows = [], activeCandidateStarts = [] }) {
+  const duration = Math.max(1.5, Number(durationSeconds || 1.5));
+  const maxStart = Math.max(0, Number(sourceDuration || 0) - duration);
+  const candidates = [];
+  const add = (value) => {
+    const start = Math.max(0, Math.min(maxStart, Number(value || 0)));
+    if (!candidates.some((item) => Math.abs(item - start) < 0.5)) candidates.push(start);
+  };
+  add(preferredStart);
+  [...activeCandidateStarts]
+    .map(Number)
+    .filter(Number.isFinite)
+    .sort((a, b) => Math.abs(a - preferredStart) - Math.abs(b - preferredStart))
+    .forEach(add);
+  for (const delta of [30, -30, 60, -60, 90, -90, 150, -150, 240, -240]) add(Number(preferredStart || 0) + delta);
+  for (const ratio of [0.12, 0.25, 0.38, 0.5, 0.62, 0.75, 0.88]) add(maxStart * ratio);
+
+  let best = null;
+  for (const start of candidates) {
+    const conflicts = sourceWindowConflicts(start, duration, usedWindows);
+    if (start !== candidates[0] && conflicts) continue;
+    const motionFrames = await reviewWindowMotionFrames(sourcePath, start, duration).catch(() => 0);
+    const candidate = { start, motionFrames, replaced: Math.abs(start - Number(preferredStart || 0)) >= 0.5 };
+    if (!best || candidate.motionFrames > best.motionFrames) best = candidate;
+    if (!conflicts && motionFrames >= REVIEW_VIDEO_MIN_ACTIVITY_FRAMES) return candidate;
+  }
+  return best || { start: Number(preferredStart || 0), motionFrames: 0, replaced: false };
 }

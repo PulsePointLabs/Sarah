@@ -336,12 +336,12 @@ export function hasConfirmedStimulationPauseEvidence(item, supportingText = '') 
   const repeatedStroking = hasRepeatedActiveStrokeCue(text);
   const maintainedContact = hasMaintainedContactCue(text);
   const releasedContact = /(hand|hands|sleeve|device).{0,45}(lift(?:s|ed)? clear|leave(?:s)?|left|withdraw(?:s|n|al)?|release(?:s|d)?|separate(?:s|d)?|move(?:s|d)? away)|(?:no|without) (?:visible )?(?:hand|sleeve|device|genital|penile) contact|contact (?:is |remains )?(?:absent|released|broken)/i.test(text);
-  const allMotionStopped = /(?:all|whole[- ]frame|hand and device|hand\/device) (?:visible )?motion (?:is |remains )?(?:absent|still|stopped|ceased)|(?:complete|sustained) stillness/i.test(text);
   const duration = statedPauseDurationSeconds(text);
   const sustained = (Number.isFinite(duration) && duration >= 2.5)
     || /(sustained|prolonged|for several seconds|through(?:out)? the remainder|remains absent|continues without contact|until the end of the window)/i.test(text);
   if (repeatedStroking && maintainedContact && !releasedContact) return false;
-  return sustained && (releasedContact || allMotionStopped);
+  // Cadence dips and held contact are not pause events. Require visible release/separation.
+  return sustained && releasedContact;
 }
 
 export function sanitizeUnsupportedStimulationPauseClaim(text, supportingText = '') {
