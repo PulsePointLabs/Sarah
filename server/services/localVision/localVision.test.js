@@ -71,11 +71,58 @@ test('candidate question routing is domain-specific', () => {
   const masturbationIds = questionIdsForCandidate('masturbation', { type: 'hand_genital_motion_candidate' });
   assert.ok(masturbationIds.includes('stroking_motion_visible'));
   assert.ok(masturbationIds.includes('hand_contact_with_genitals_visible'));
+  assert.ok(masturbationIds.includes('respiratory_cycles_visible'));
+  assert.ok(masturbationIds.includes('possible_breath_hold_visible'));
   assert.ok(!masturbationIds.includes('statlock_visible'));
   const foleyIds = questionIdsForCandidate('foley_procedure', { type: 'foley_tool_or_tubing_activity_candidate' });
   assert.ok(foleyIds.includes('foley_tubing_visible'));
   assert.ok(foleyIds.includes('visible_advancement_motion'));
+  assert.ok(foleyIds.includes('chest_or_abdomen_visible_for_respiration'));
   assert.ok(!foleyIds.includes('ejaculation_or_fluid_release_visible'));
+});
+
+test('local respiration derives rate from complete cycles over the actual frame span', () => {
+  const respirationFrames = [
+    { frame_id: 'r001', time_ms: 120000, image_path: '/api/local-vision/frame/test/window/r001.jpg' },
+    { frame_id: 'r002', time_ms: 128000, image_path: '/api/local-vision/frame/test/window/r002.jpg' },
+    { frame_id: 'r003', time_ms: 136000, image_path: '/api/local-vision/frame/test/window/r003.jpg' },
+  ];
+  const questions = getQuestionBank();
+  const answers = normalizeVlmAnswers([
+    { question_id: 'chest_or_abdomen_visible_for_respiration', answer: 'visible', confidence: 0.85, evidence_frames: ['r001', 'r002', 'r003'], reason: 'Abdominal surface remains visible.' },
+    { question_id: 'respiratory_cycles_visible', answer: 'visible', confidence: 0.8, evidence_frames: ['r001', 'r002', 'r003'], reason: 'Four complete rise/fall cycles.', attributes: { breaths_observed: 4, observation_seconds: 16, estimated_rate_bpm: 99 } },
+    { question_id: 'possible_breath_hold_visible', answer: 'not_visible', confidence: 0.8, evidence_frames: ['r001', 'r002', 'r003'], reason: 'No sustained still interval.' },
+  ], questions, respirationFrames);
+  const result = deriveLocalVisionResult({
+    request: { sessionId: 'test', recordType: 'masturbation', startMs: 120000, endMs: 144000, previousVisualState: {} },
+    frames: respirationFrames,
+    questions,
+    answers,
+    engine: 'local_qwen25vl',
+    model: 'test',
+  });
+
+  assert.equal(result.respiration.assessable, true);
+  assert.equal(result.respiration.estimated_rate_bpm, 15);
+  assert.ok(result.stage_candidates.some((stage) => stage.stage === 'visible_respiratory_pattern'));
+});
+
+test('local respiration blocks rates when sampled frame coverage is under eight seconds', () => {
+  const questions = getQuestionBank();
+  const answers = normalizeVlmAnswers([
+    { question_id: 'chest_or_abdomen_visible_for_respiration', answer: 'visible', confidence: 0.9, evidence_frames: ['f001', 'f002'], reason: 'Abdomen visible.' },
+    { question_id: 'respiratory_cycles_visible', answer: 'visible', confidence: 0.9, evidence_frames: ['f001', 'f002'], reason: 'Model proposed cycles.', attributes: { breaths_observed: 4, observation_seconds: 16, estimated_rate_bpm: 15 } },
+  ], questions, frames);
+  const result = deriveLocalVisionResult({
+    request: { sessionId: 'test', recordType: 'masturbation', startMs: 120000, endMs: 150000, previousVisualState: {} },
+    frames,
+    questions,
+    answers,
+    engine: 'local_qwen25vl',
+    model: 'test',
+  });
+
+  assert.equal(result.respiration.estimated_rate_bpm, null);
 });
 
 test('candidate ranking caps selected windows and preserves chronological output', () => {

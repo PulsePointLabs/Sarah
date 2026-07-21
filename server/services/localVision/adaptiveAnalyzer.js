@@ -60,20 +60,21 @@ export function questionIdsForCandidate(recordType, candidate = {}) {
   const type = String(candidate.type || '').toLowerCase();
   const record = String(recordType || '').toLowerCase();
   const general = ['anatomy_obscured_or_unclear', 'genital_state_visible', 'genital_visibility_obscured', 'leg_or_foot_position_visible'];
-  const bodyMotion = ['pelvic_motion_visible', 'body_tension_or_relaxation_visible', 'toe_curling_or_foot_flexion_visible'];
+  const bodyMotion = ['pelvic_motion_visible', 'body_tension_or_relaxation_visible', 'chest_or_abdomen_visible_for_respiration', 'respiratory_cycles_visible', 'possible_breath_hold_visible', 'toe_curling_or_foot_flexion_visible'];
+  const respiration = ['chest_or_abdomen_visible_for_respiration', 'respiratory_cycles_visible', 'possible_breath_hold_visible'];
   const masturbation = ['hand_contact_with_genitals_visible', 'stroking_motion_visible', 'grip_or_contact_change_visible', 'erection_state_visible'];
   const fluid = ['ejaculation_or_fluid_release_visible', 'visible_fluid_present', 'visible_fluid_release_onset', 'fluid_stream_or_droplet_visible', 'fluid_projection_distance_estimate', 'fluid_velocity_proxy_estimate', 'post_event_fluid_presence', 'cleanup_or_wipe_visible'];
   const foley = ['foley_catheter_visible', 'foley_tubing_visible', 'statlock_visible', 'adhesive_securement_device_visible', 'gloved_hands_visible', 'hands_touching_glans_or_meatus', 'catheter_tip_at_or_entering_meatus', 'visible_advancement_motion', 'tubing_routing_or_field_handling', 'urine_visible', 'balloon_inflation_visible'];
 
   if (record === 'foley_procedure' || type.includes('foley') || type.includes('procedure') || type.includes('tubing')) {
-    return [...new Set([...foley, 'anatomy_obscured_or_unclear'])];
+    return [...new Set([...foley, ...respiration, 'anatomy_obscured_or_unclear'])];
   }
   if (type.includes('fluid')) return [...new Set([...general, ...fluid])];
   if (record === 'masturbation' || type.includes('hand_genital') || type.includes('genital_motion')) {
     return [...new Set([...general, ...masturbation, ...bodyMotion, ...fluid])];
   }
   if (record === 'body_exploration') return [...new Set([...general, ...bodyMotion, 'cleanup_material_visible', 'lubricant_visible', 'device_or_toy_visible'])];
-  return [...new Set([...general, 'device_or_toy_visible', 'cleanup_material_visible'])];
+  return [...new Set([...general, ...respiration, 'device_or_toy_visible', 'cleanup_material_visible'])];
 }
 
 function candidateDomainBoost(recordType, candidate) {

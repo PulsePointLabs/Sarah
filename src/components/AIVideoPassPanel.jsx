@@ -34,6 +34,11 @@ import {
 import { SARAH_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
 import { serverUrl } from "@/lib/mobileApiBase";
 import {
+  normalizeVideoRespirationAssessment,
+  respirationEventForAssessment,
+  respirationFindingForAssessment,
+} from "@/lib/videoRespirationAssessment";
+import {
   deviceEvidenceStageForText,
   hasUnsupportedFoleyRemovalClaim as hasUnsupportedFoleyRemovalClaimGuard,
   hasUnsupportedMeatusContactClaim as hasUnsupportedMeatusContactClaimGuard,
@@ -776,15 +781,20 @@ function isOutOfLaneForRole(item, role) {
 
 function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExploration = false) {
   const value = typeof raw === "string" ? null : raw;
+  const respirationAssessment = normalizeVideoRespirationAssessment(value?.respiration_assessment, fallbackWindow, selectedRole);
+  const respirationFinding = respirationFindingForAssessment(respirationAssessment);
+  const respirationEvent = respirationEventForAssessment(respirationAssessment);
   const findings = Array.isArray(value?.findings)
-    ? value.findings
+    ? [...value.findings]
     : [{
       title: "Video window review",
       text: typeof raw === "string" ? raw.trim() : "Sarah reviewed this window but did not return separate findings.",
       confidence: "moderate",
       category: "other",
     }];
-  const events = Array.isArray(value?.events) ? value.events : [];
+  if (respirationFinding) findings.push(respirationFinding);
+  const events = Array.isArray(value?.events) ? [...value.events] : [];
+  if (respirationEvent) events.push(respirationEvent);
   const rawWindowText = [
     value?.summary,
     ...findings.flatMap((finding) => [finding?.title, finding?.text, finding?.findingText]),
@@ -796,6 +806,7 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
       : sanitizeUnsupportedStimulationPauseClaim(sanitizeRegularSessionDeviceText(text), rawWindowText)
   );
   return {
+    respirationAssessment,
     summary: cleanTextForMode(value?.summary || findings[0]?.text || "Review complete."),
     findings: findings.map((finding) => ({
       title: hasUnsupportedFoleySecurementClaim(finding)
@@ -922,6 +933,7 @@ function isAIGeneratedPassEvent(event) {
 
 function persistedCardFrom(card) {
   return {
+    respiration_assessment: card.respirationAssessment || card.respiration_assessment || null,
     id: card.id,
     saved_at: new Date().toISOString(),
     label: card.label,
@@ -2301,7 +2313,7 @@ export default function AIVideoPassPanel({
             startSeconds: sourceStart,
             endSeconds: sourceEnd,
             label,
-            frameCount: 10,
+            frameCount: selectedVideoRole === "feet" ? 10 : 18,
           });
           const reviewWindow = {
             start: sessionTimeForSource(preview.startSeconds ?? sourceStart, selectedVideo),
@@ -2370,8 +2382,26 @@ export default function AIVideoPassPanel({
                     required: ["time_s", "note", "category", "annotation_tags", "confidence"],
                   },
                 },
+                respiration_assessment: {
+                  type: "object",
+                  properties: {
+                    assessable: { type: "boolean" },
+                    visibility_quality: { type: "string", enum: ["unavailable", "limited", "adequate", "good"] },
+                    breaths_observed: { type: "number" },
+                    observation_seconds: { type: "number" },
+                    estimated_rate_bpm: { type: "number" },
+                    possible_breath_hold: { type: "boolean" },
+                    hold_start_time_s: { type: "number" },
+                    hold_end_time_s: { type: "number" },
+                    hold_duration_seconds: { type: "number" },
+                    pattern: { type: "string", enum: ["unavailable", "regular", "irregular", "deep", "shallow", "possible_breath_hold"] },
+                    evidence: { type: "string" },
+                    confidence: { type: "string", enum: ["low", "moderate", "high"] },
+                  },
+                  required: ["assessable", "visibility_quality", "breaths_observed", "observation_seconds", "estimated_rate_bpm", "possible_breath_hold", "hold_start_time_s", "hold_end_time_s", "hold_duration_seconds", "pattern", "evidence", "confidence"],
+                },
               },
-              required: ["summary", "findings", "events"],
+              required: ["summary", "findings", "events", "respiration_assessment"],
             },
             images,
             prompt: `${isExploration ? `HIGH-PRIORITY BODY EXPLORATION MODE:
@@ -2451,6 +2481,8 @@ Camera/view focus:
 ${videoFocusInstruction(selectedVideo, selectedVideoRole, isExploration)}
 
 Source-lane rule: treat the selected camera as its own evidence lane. Main/composite owns genital, stimulation, hand contact, device, lubricant, and technique observations. Feet/lower-body owns feet, toes, heels, soles, ankles, legs, planting, bracing, tremor, shudder, and lower-body tension/relaxation observations. Lateral/full-body owns posture, pelvic lift/drop, breathing cues, whole-body tension, and major body transitions. For a feet/lower-body pass, do not draft timeline events about right/left hand movement, genital contact, control objects, lube/device handling, erection/genital state, or stimulation pause/resume unless a visible foot/leg change is the main event.
+
+Respiration measurement rule: complete respiration_assessment for every main/composite or lateral/full-body window, but set assessable=false and all numeric values to 0 when the chest and abdomen are cropped, covered, obstructed by hands/body motion, distorted by camera motion/zoom, or otherwise not continuously visible enough. A rough respiratory rate requires at least 2 complete chest-or-abdominal rise/fall cycles across at least 8 seconds of timed sampled frames. Count complete cycles, use the actual first-to-last supporting frame span, and calculate breaths/min as cycles * 60 / observation seconds; do not estimate from HR, stimulation cadence, sound, facial expression, or one isolated inhale/exhale. Flag only a possible breath hold when assessable chest/abdomen remains visibly still for at least 4 seconds across consecutive timed frames. Distinguish a true hold candidate from shallow breathing, a postural brace, hand/arm occlusion, active stroking transmitted through the torso, camera movement, and sparse frame sampling. Breath-hold language must remain "possible" unless direct visible respiratory motion before and after brackets the still interval. Use absolute ${recordLabel} seconds for hold_start_time_s and hold_end_time_s. Do not create a finding/event when respiration is unavailable or below these gates.
 
 ${ANATOMICAL_LATERALITY_RULE}
 ${PRODUCTION_PROCEDURE_ANNOTATION_RULE}

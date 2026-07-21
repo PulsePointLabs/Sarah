@@ -63,6 +63,65 @@ function boundedVolumeProxy(value) {
   return ['none', 'trace', 'low', 'moderate', 'high', 'uncertain'].includes(normalized) ? normalized : 'uncertain';
 }
 
+function deriveRespiration({ request, frames, answers, forbidden }) {
+  const visibility = answers.get('chest_or_abdomen_visible_for_respiration');
+  const cycles = answers.get('respiratory_cycles_visible');
+  const hold = answers.get('possible_breath_hold_visible');
+  const asked = [visibility, cycles, hold].some(Boolean);
+  if (!asked) return null;
+
+  const checkedFrames = frames.map((frame) => frame.frame_id);
+  const frameTimes = frames.map((frame) => Number(frame.time_ms)).filter(Number.isFinite).sort((a, b) => a - b);
+  const frameStart = frameTimes[0] ?? Number(request.startMs || 0);
+  const frameEnd = frameTimes[frameTimes.length - 1] ?? Number(request.endMs || frameStart);
+  const frameSpanSeconds = Math.max(0, (frameEnd - frameStart) / 1000);
+  const assessable = isVisible(visibility, 0.55);
+  const breathsObserved = Math.max(0, Math.round(firstNumber(cycles?.attributes?.breaths_observed, cycles?.attributes?.cycle_count, 0)));
+  const reportedObservationSeconds = Math.max(0, firstNumber(cycles?.attributes?.observation_seconds, cycles?.attributes?.duration_seconds, 0));
+  const observationSeconds = Math.min(reportedObservationSeconds, frameSpanSeconds);
+  const calculatedRate = observationSeconds >= 8 && breathsObserved >= 2
+    ? Number(((breathsObserved * 60) / observationSeconds).toFixed(1))
+    : null;
+  const estimatedRate = assessable && isVisible(cycles, 0.6) && calculatedRate != null
+    ? Number(Math.max(3, Math.min(80, calculatedRate)).toFixed(1))
+    : null;
+  const rawHoldStart = firstNumber(hold?.attributes?.hold_start_ms, hold?.attributes?.start_ms);
+  const rawHoldEnd = firstNumber(hold?.attributes?.hold_end_ms, hold?.attributes?.end_ms);
+  const holdStart = rawHoldStart == null ? null : Math.max(frameStart, Math.min(frameEnd, rawHoldStart));
+  const holdEnd = rawHoldEnd == null ? null : Math.max(holdStart ?? frameStart, Math.min(frameEnd, rawHoldEnd));
+  const reportedHoldDuration = firstNumber(hold?.attributes?.hold_duration_seconds, hold?.attributes?.duration_seconds, 0);
+  const timedHoldDuration = holdStart != null && holdEnd != null ? Math.max(0, (holdEnd - holdStart) / 1000) : 0;
+  const holdDuration = Math.min(frameSpanSeconds, Math.max(reportedHoldDuration || 0, timedHoldDuration));
+  const possibleHold = assessable && isVisible(hold, 0.65) && holdDuration >= 4;
+
+  if (!assessable) {
+    addForbidden(forbidden, 'respiratory rate or breath hold', 'Chest/abdomen visibility is insufficient or confounded, so visual respiration cannot be estimated.', checkedFrames);
+  } else if (estimatedRate == null) {
+    addForbidden(forbidden, 'respiratory rate', 'Fewer than two complete visible respiratory cycles or less than eight seconds of usable evidence.', checkedFrames);
+  }
+  if (!possibleHold) {
+    addForbidden(forbidden, 'breath hold', 'No assessable chest/abdominal still interval of at least four seconds is visibly confirmed.', checkedFrames);
+  }
+
+  return {
+    assessable,
+    breaths_observed: estimatedRate == null ? null : breathsObserved,
+    observation_seconds: estimatedRate == null ? null : observationSeconds,
+    estimated_rate_bpm: estimatedRate,
+    pattern: cycles?.attributes?.pattern || (possibleHold ? 'possible_breath_hold' : estimatedRate != null ? 'visible_cycles' : 'unavailable'),
+    possible_breath_hold: possibleHold,
+    hold_start_ms: possibleHold ? (holdStart ?? Number(request.startMs || 0)) : null,
+    hold_end_ms: possibleHold ? (holdEnd ?? Number(request.startMs || 0) + holdDuration * 1000) : null,
+    hold_duration_seconds: possibleHold ? Number(holdDuration.toFixed(1)) : null,
+    confidence: Math.max(clamp01(visibility?.confidence), clamp01(cycles?.confidence), clamp01(hold?.confidence)),
+    frame_refs: refs(visibility, cycles, hold),
+    limitations: [
+      'Visual estimate only; shallow breathing, body motion, occlusion, camera motion, and sparse sampling can reduce accuracy.',
+      'A visible still interval is labeled only as a possible breath hold.',
+    ],
+  };
+}
+
 function deriveFluidDynamics({ request, frames, answers, visibleFluid, fluidRelease, forbidden }) {
   const get = (id) => answers.get(id);
   const onset = get('visible_fluid_release_onset');
@@ -192,6 +251,7 @@ export function deriveLocalVisionResult({
     'genital_state_visible',
     'erection_state_visible',
     'genital_visibility_obscured',
+    'chest_or_abdomen_visible_for_respiration',
     'leg_or_foot_position_visible',
     'visible_fluid_present',
     'cleanup_material_visible',
@@ -220,6 +280,8 @@ export function deriveLocalVisionResult({
     'grip_or_contact_change_visible',
     'pelvic_motion_visible',
     'body_tension_or_relaxation_visible',
+    'respiratory_cycles_visible',
+    'possible_breath_hold_visible',
     'toe_curling_or_foot_flexion_visible',
     'ejaculation_or_fluid_release_visible',
     'visible_fluid_release_onset',
@@ -275,6 +337,9 @@ export function deriveLocalVisionResult({
     'ejaculation_or_fluid_release_visible',
     'visible_fluid_present',
     'toe_curling_or_foot_flexion_visible',
+    'chest_or_abdomen_visible_for_respiration',
+    'respiratory_cycles_visible',
+    'possible_breath_hold_visible',
   ]);
 
   if (foleyAsked && (isVisible(prep, 0.5) || isVisible(drape, 0.5))) {
@@ -323,6 +388,7 @@ export function deriveLocalVisionResult({
   const streamDroplet = get('fluid_stream_or_droplet_visible');
   const postEventFluid = get('post_event_fluid_presence');
   const cleanupWipe = get('cleanup_or_wipe_visible');
+  const respiration = deriveRespiration({ request, frames, answers, forbidden });
 
   if (bodyAsked && isVisible(handContact, 0.55) && (isVisible(stroking, 0.55) || isVisible(gripChange, 0.55))) {
     addStage(stageCandidates, 'manual_stimulation', Math.max(clamp01(stroking?.confidence), clamp01(gripChange?.confidence), clamp01(handContact?.confidence) * 0.85), 'Hand/genital contact plus repeated motion or grip/contact change is visually supported.', refs(handContact, stroking, gripChange));
@@ -362,6 +428,19 @@ export function deriveLocalVisionResult({
   }
   if (bodyAsked && (isVisible(bodyTension, 0.55) || isVisible(footFlex, 0.55))) {
     addStage(stageCandidates, 'body_or_foot_tension_change', Math.max(clamp01(bodyTension?.confidence), clamp01(footFlex?.confidence)), 'Visible physical movement, bracing, tension, relaxation, or foot/toe change is supported.', refs(bodyTension, footFlex));
+  }
+  if (respiration?.estimated_rate_bpm != null) {
+    addStage(stageCandidates, 'visible_respiratory_pattern', respiration.confidence, `${respiration.breaths_observed} complete visible chest/abdominal cycles across ${respiration.observation_seconds} seconds support a rough rate of ${respiration.estimated_rate_bpm} breaths/min.`, respiration.frame_refs);
+  }
+  if (respiration?.possible_breath_hold) {
+    addStage(stageCandidates, 'possible_breath_hold', respiration.confidence, `Possible ${respiration.hold_duration_seconds}-second breath hold based on sustained assessable chest/abdominal stillness; shallow breathing remains a confounder.`, respiration.frame_refs);
+    events.push({
+      time_ms: respiration.hold_start_ms,
+      event_type: 'physical',
+      label: `Possible breath hold (${respiration.hold_duration_seconds}s)`,
+      confidence: clamp01(respiration.confidence),
+      frame_ref: respiration.frame_refs[0] || null,
+    });
   }
 
   if (!stageCandidates.length) {
@@ -411,6 +490,7 @@ export function deriveLocalVisionResult({
     stage_candidates: stageCandidates.sort((a, b) => b.confidence - a.confidence),
     forbidden_or_not_visible: forbidden,
     fluid_dynamics: fluidDynamics,
+    respiration,
     confidence: qualityFromAnswers(answers),
     timeline_events: events,
     frame_evidence: frames.map((frame) => ({
