@@ -36,6 +36,10 @@ function pointElevatedDelta(point) {
   return Math.max(0, hr - baseline);
 }
 
+function pointNumber(point, ...keys) {
+  return numberOrNull(...keys.map((key) => point?.[key]));
+}
+
 function pointLooksLikeBuild(point) {
   const phase = String(point?.phase || "").toLowerCase();
   const build = numberOrNull(point?.build, point?.buildConfidence, point?.build_confidence) || 0;
@@ -76,6 +80,18 @@ export function computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, history =
   const hrvQuality = hrv.quality || hrTelemetry?.hrv_quality || null;
   const rrCount = numberOrNull(hrTelemetry?.quality?.rrCount, hrv.sampleCount) || 0;
   const hrvUsable = hrvQualityScore(hrvQuality) >= 2 || rrCount >= 40;
+  const multimodal = hrTelemetry?.multimodal || {};
+  const signalConfidence = numberOrNull(multimodal?.signalConfidence?.score);
+  const multimodalAvailable = signalConfidence != null || Number(multimodal?.streams?.accelerometer?.sampleCount || 0) > 0;
+  const multimodalTrusted = !multimodalAvailable || signalConfidence >= 55;
+  const respiration = multimodal?.respiration || {};
+  const respirationBpm = respiration.available ? numberOrNull(respiration.bpm) : null;
+  const possibleBreathHold = Boolean(respiration.possibleBreathHold);
+  const breathHoldDurationSeconds = numberOrNull(respiration.holdDurationSeconds) || 0;
+  const motion = multimodal?.motion || {};
+  const motionClass = String(motion.class || "unavailable").toLowerCase();
+  const motionRms = numberOrNull(motion.dynamicRmsMilliG);
+  const multimodalRecoveryDrop = numberOrNull(multimodal?.recovery?.currentDropBpm) || 0;
 
   const left = numberOrNull(emgTelemetry?.left_pct, emgTelemetry?.level_pct) || 0;
   const right = numberOrNull(emgTelemetry?.right_pct) || 0;
@@ -110,6 +126,21 @@ export function computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, history =
     0,
     Math.round(numberOrNull(options?.buildDurationSec, estimateBuildDurationSec(history, numberOrNull(options?.sessionTimeSec, history[history.length - 1]?.sessionTimeSec) || 0)) || 0),
   );
+  const longerRespiration = longer.map((point) => pointNumber(point, "respirationBpm")).filter(Number.isFinite);
+  const respirationReference = median(longerRespiration.slice(0, Math.max(5, Math.floor(longerRespiration.length / 2))))
+    || median(longerRespiration)
+    || respirationBpm;
+  const respirationRatio = respirationBpm != null && respirationReference
+    ? respirationBpm / Math.max(1, respirationReference)
+    : null;
+  const recentApproachPoints = history.slice(-45).filter((point) => Number.isFinite(Number(point?.nearClimax)));
+  const sustainedApproach = recentApproachPoints.length >= 12
+    && median(recentApproachPoints.map((point) => Number(point.nearClimax))) >= 48;
+  const firstApproachPoint = recentApproachPoints[0];
+  const lastApproachPoint = recentApproachPoints[recentApproachPoints.length - 1];
+  const approachVelocity = firstApproachPoint && lastApproachPoint && lastApproachPoint.ts !== firstApproachPoint.ts
+    ? ((Number(lastApproachPoint.nearClimax) - Number(firstApproachPoint.nearClimax)) / ((lastApproachPoint.ts - firstApproachPoint.ts) / 1000)) * 30
+    : 0;
 
   let hrvContribution = 0;
   let hrvSignal = "waiting";
@@ -160,16 +191,38 @@ export function computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, history =
   const sustainedHrElevation = elevatedDelta >= 12 && buildDurationSec >= 60;
   const meaningfulPositiveSlope = recentSlope >= 1.5 && buildDurationSec >= 45 && elevatedDelta >= 8;
   const peakProximityWithoutRecoveryDrop = elevatedDelta >= 10 && dropFromRecentPeak <= 4;
+  const respiratoryStrain = multimodalTrusted && elevatedDelta >= 10 && buildDurationSec >= 60 && (
+    (possibleBreathHold && breathHoldDurationSeconds >= 4)
+    || (respirationRatio != null && respirationRatio >= 1.18)
+  );
+  const coordinatedMotion = multimodalTrusted
+    && ["moderate_motion", "high_motion"].includes(motionClass)
+    && elevatedDelta >= 12
+    && (emgRise || buildDurationSec >= 90);
+  const steadyLoadedHr = Math.abs(recentSlope) <= 1.5 && elevatedDelta >= 12 && buildDurationSec >= 90;
+  let plateauScore = 0;
+  plateauScore += clamp(elevatedDelta * 1.7, 0, 24);
+  plateauScore += clamp(buildDurationSec / 6, 0, 25);
+  if (hrvCompressedOrTightening) plateauScore += 15;
+  if (emgRise) plateauScore += clamp(emgPeak * 0.35, 0, 12);
+  if (sustainedApproach) plateauScore += 14;
+  if (steadyLoadedHr) plateauScore += 8;
+  if (respiratoryStrain) plateauScore += 6;
+  plateauScore = Math.round(clamp(plateauScore));
+  const plateauDwell = plateauScore >= 58 && buildDurationSec >= 90;
   const confirmationSignals = {
     sustainedHrElevation,
     hrvCompressedOrTightening,
     meaningfulPositiveSlope,
     emgRise,
     peakProximityWithoutRecoveryDrop,
+    respiratoryStrain,
+    coordinatedMotion,
+    plateauDwell,
   };
   const confirmationCount = Object.values(confirmationSignals).filter(Boolean).length;
   const strongMultiSignalEvidence = confirmationCount >= 3;
-  const buildEligibleForNearClimax = buildDurationSec >= 90 && (
+  const buildEligibleForNearClimax = (buildDurationSec >= 90 || (buildDurationSec >= 45 && strongMultiSignalEvidence)) && (
     elevatedDelta >= 10
     || (elevatedDelta >= 8 && hrvCompressedOrTightening)
     || (elevatedDelta >= 8 && emgRise)
@@ -180,6 +233,9 @@ export function computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, history =
   nearClimax += clamp(elevatedDelta * 3.6, 0, 32);
   nearClimax += clamp(emgPeak * 0.16, 0, 16);
   nearClimax += hrvContribution;
+  if (respiratoryStrain) nearClimax += possibleBreathHold ? 5 : clamp((respirationRatio - 1) * 22, 0, 6);
+  if (coordinatedMotion) nearClimax += 4;
+  if (plateauDwell) nearClimax += clamp((plateauScore - 50) * 0.18, 0, 8);
   if (recentSlope > 1.5) nearClimax += clamp(recentSlope * 2.2, 0, 14);
   if (dropFromRecentPeak > 8) nearClimax -= 12;
   if (phase.includes("build")) nearClimax += 8;
@@ -201,17 +257,54 @@ export function computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, history =
     earlySessionCapValue = 50;
     cappedNearClimax = Math.min(cappedNearClimax, 50);
   }
-  if (elevatedDelta > 0 && buildDurationSec < 60) {
+  if (elevatedDelta > 0 && buildDurationSec < 60 && !strongMultiSignalEvidence) {
     cappedNearClimax = Math.min(cappedNearClimax, confirmationCount >= 2 ? 50 : 45);
   }
   if (!buildEligibleForNearClimax) {
     cappedNearClimax = Math.min(cappedNearClimax, confirmationCount >= 2 ? 60 : 55);
   }
+  let lowMultimodalConfidenceCapApplied = false;
+  if (multimodalAvailable && !multimodalTrusted) {
+    lowMultimodalConfidenceCapApplied = true;
+    cappedNearClimax = Math.min(cappedNearClimax, 55);
+  }
   const nearClimaxAfterCaps = Math.round(clamp(cappedNearClimax));
 
-  const recovery = phase.includes("recovery")
+  const baseRecovery = phase.includes("recovery")
     ? Math.max(65, Math.min(100, 65 + Math.max(0, 100 - buildConfidence) * 0.25))
     : clamp(Math.round((buildConfidence < 25 && elevatedDelta < 6 ? 35 : 0) + (emgPeak < 10 ? 10 : 0) + (dropFromRecentPeak > 8 ? 20 : 0)));
+  const recovery = clamp(Math.max(
+    baseRecovery,
+    multimodalRecoveryDrop >= 4 ? 42 + multimodalRecoveryDrop * 4 : 0,
+    ["release", "opening"].includes(hrvSignal) && dropFromRecentPeak >= 4 ? 58 : 0,
+  ));
+
+  const physiologicalIntensity = recovery >= 60
+    ? "recovery"
+    : nearClimaxAfterCaps >= 85 && plateauScore >= 65
+      ? "threshold"
+      : plateauScore >= 65
+        ? "high_plateau"
+        : nearClimaxAfterCaps >= 55
+          ? "high"
+          : nearClimaxAfterCaps >= 30
+            ? "moderate"
+            : "low";
+  const physiologicalIntensityLabel = {
+    recovery: "Recovery window",
+    threshold: "Threshold physiology",
+    high_plateau: "Sustained high plateau",
+    high: "High-intensity response",
+    moderate: "Moderate loading",
+    low: "Low-intensity response",
+  }[physiologicalIntensity];
+  const controllerConfidence = Math.round(clamp(
+    25
+    + confirmationCount * 9
+    + (hrvUsable ? 12 : 0)
+    + (multimodalAvailable ? Math.max(0, (signalConfidence || 0) - 40) * 0.45 : 0)
+    - (multimodalAvailable && !multimodalTrusted ? 18 : 0),
+  ));
 
   const label = phase.includes("recovery")
     ? "Recovery likely"
@@ -238,6 +331,9 @@ export function computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, history =
     dropFromRecentPeak > 8 ? `drop ${Math.round(dropFromRecentPeak)} from recent peak` : null,
     hrvUsable && rmssd != null ? `HRV ${hrvSignal}, RMSSD ${rmssd.toFixed(1)}` : null,
     emgPeak ? `EMG ${Math.round(emgPeak)}%` : null,
+    respiratoryStrain && respirationBpm != null ? `respiration ${respirationBpm.toFixed(1)}/min` : null,
+    possibleBreathHold ? `possible ${Math.round(breathHoldDurationSeconds)}s breath hold` : null,
+    plateauDwell ? `plateau ${plateauScore}%` : null,
     buildDurationSec ? `build dwell ${buildDurationSec}s` : null,
     !buildEligibleForNearClimax && nearClimaxBeforeCaps > nearClimaxAfterCaps ? "high watch held back pending longer build" : null,
   ].filter(Boolean).join(" · ");
@@ -267,5 +363,24 @@ export function computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, history =
     hrvOpeningPenaltyApplied,
     nearClimaxBeforeCaps,
     nearClimaxAfterCaps,
+    plateauScore,
+    plateauDwell,
+    approachVelocity: Number(approachVelocity.toFixed(2)),
+    physiologicalIntensity,
+    physiologicalIntensityLabel,
+    controllerConfidence,
+    signalConfidence,
+    multimodalAvailable,
+    multimodalTrusted,
+    lowMultimodalConfidenceCapApplied,
+    respirationBpm,
+    respirationRatio: respirationRatio == null ? null : Number(respirationRatio.toFixed(2)),
+    respiratoryStrain,
+    possibleBreathHold,
+    breathHoldDurationSeconds,
+    motionClass,
+    motionRms,
+    coordinatedMotion,
+    multimodalRecoveryDrop,
   };
 }

@@ -3,7 +3,9 @@ import { Link, useSearchParams } from "react-router-dom";
 import { BleClient } from "@capacitor-community/bluetooth-le";
 import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, Footprints, HeartPulse, Maximize2, Mic, MicOff, Pause, Play, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
 import {
+  Area,
   CartesianGrid,
+  ComposedChart,
   Legend,
   Line,
   LineChart,
@@ -33,6 +35,10 @@ import { useLiveCueAudio } from "@/hooks/useLiveCueAudio";
 import { useLiveCueEngine } from "@/hooks/useLiveCueEngine";
 import { toLiveTelemetryNotice } from "@/lib/liveCueDisplay";
 import { computeLiveClimaxPrediction } from "@/utils/liveClimaxPrediction";
+import {
+  computeHowlPhysiologyAction,
+  createHowlPhysiologyControllerState,
+} from "@/lib/howlPhysiologyController";
 import {
   H10_ACCELEROMETER_START_COMMAND,
   H10_ECG_START_COMMAND,
@@ -340,9 +346,13 @@ const HOWL_DEFAULT_CONTROL_FORM = {
   buildRampEnabled: true,
   nearClimaxReductionEnabled: true,
   recoveryReductionEnabled: true,
+  finalApproachEnabled: true,
   buildStep: 1,
+  finalApproachStep: 1,
   reduceStep: 2,
+  maxRecoveryRetreat: 3,
   nearClimaxThreshold: 72,
+  plateauThreshold: 60,
   buildThreshold: 32,
   recoveryThreshold: 55,
   autoCooldownSeconds: 8,
@@ -1256,8 +1266,12 @@ function makeTelemetryPoint(hrTelemetry, emgTelemetry, options = {}) {
     motionRms: readNumber(multimodal.motion?.dynamicRmsMilliG),
     respirationBpm: readNumber(multimodal.respiration?.bpm),
     respirationConfidence: multimodal.respiration?.confidence || null,
+    possibleBreathHold: Boolean(multimodal.respiration?.possibleBreathHold),
+    breathHoldDurationSeconds: readNumber(multimodal.respiration?.holdDurationSeconds),
     signalConfidence: readNumber(multimodal.signalConfidence?.score),
     autonomicState: multimodal.state?.key || null,
+    recoveryDropBpm: readNumber(multimodal.recovery?.currentDropBpm),
+    howlIntensity: readNumber(options?.howlIntensity),
     left: readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct),
     right: readNumber(emgTelemetry?.right_pct),
     diff: readNumber(emgTelemetry?.diff_pct),
@@ -1576,6 +1590,7 @@ export default function LiveCapture() {
   const directH10AutoConnectStartedRef = useRef(false);
   const howlAutoLastActionRef = useRef({ at: 0, intensity: null, reason: "" });
   const howlAutoCandidateRef = useRef({ key: "", since: 0, target: null });
+  const howlPhysiologyControllerRef = useRef(createHowlPhysiologyControllerState());
   const appendLiveSessionEventsRef = useRef(null);
   const bpSyncInFlightRef = useRef(false);
   const bpOmronActionInFlightRef = useRef(false);
@@ -2002,6 +2017,7 @@ export default function LiveCapture() {
     setTelemetryHistory((prev) => {
       const point = makeTelemetryPoint(nextHr, nextEmg, {
         sessionTimeSec: getCurrentSessionTime(),
+        howlIntensity: readHowlChannelIntensity(howlTelemetry, howlCommandForm.channel),
       });
       const previous = prev[prev.length - 1];
       if (
@@ -2020,6 +2036,9 @@ export default function LiveCapture() {
       point.nearClimax = pointPrediction.nearClimax;
       point.recovery = pointPrediction.recovery;
       point.hrvSignal = pointPrediction.hrvSignal;
+      point.plateau = pointPrediction.plateauScore;
+      point.controllerConfidence = pointPrediction.controllerConfidence;
+      point.physiologicalIntensity = pointPrediction.physiologicalIntensity;
       return [...prev, point].slice(-MAX_TELEMETRY_POINTS);
     });
   };
@@ -3456,6 +3475,21 @@ export default function LiveCapture() {
     howlCommandForm.intensity,
     0,
   ) ?? 0;
+  const physiologyChartData = useMemo(() => telemetryHistory.map((point) => ({
+    ...point,
+    motionLoad: point.motionRms == null ? null : Math.min(100, Number(point.motionRms) / 3.6),
+    howlDose: point.howlIntensity == null || howlControlCeiling <= 0
+      ? null
+      : Math.min(100, (Number(point.howlIntensity) / howlControlCeiling) * 100),
+    breathHoldBand: point.possibleBreathHold ? 100 : null,
+  })), [howlControlCeiling, telemetryHistory]);
+  const hasThresholdPhysiologyTrend = physiologyChartData.some((point) => (
+    point.plateau != null
+    || point.controllerConfidence != null
+    || point.respirationBpm != null
+    || point.motionLoad != null
+  ));
+  const howlControllerMode = String(howlPhysiologyControllerRef.current?.mode || "baseline").replaceAll("_", " ");
   const howlWaveformLabel = readHowlChannelText(howlTelemetry, howlCommandForm.channel, "waveform")
     || readHowlChannelText(howlTelemetry, howlCommandForm.channel, "mode")
     || selectedHowlActivity?.displayName
@@ -3486,6 +3520,7 @@ export default function LiveCapture() {
   useEffect(() => {
     if (!howlManualControlsUnlocked || !howlSarahAutoEnabled) {
       howlAutoCandidateRef.current = { key: "", since: 0, target: null };
+      howlPhysiologyControllerRef.current = createHowlPhysiologyControllerState(howlCommandForm.intensity);
       setHowlAutoStatus(howlManualControlsUnlocked ? "Sarah auto-control is off." : "Manual Howl control must be enabled and tested first.");
       return;
     }
@@ -3510,56 +3545,24 @@ export default function LiveCapture() {
     const currentIntensity = readNumber(observedIntensity, last.intensity, howlCommandForm.intensity, 0) ?? 0;
     const floor = Math.max(0, howlControlFloor);
     const ceiling = Math.max(floor, howlControlCeiling);
-    const buildStep = Math.max(0, readNumber(howlControlForm.buildStep) ?? 1);
-    const reduceStep = Math.max(0, readNumber(howlControlForm.reduceStep) ?? 2);
-    const nearThreshold = readNumber(howlControlForm.nearClimaxThreshold) ?? 72;
-    const buildThreshold = readNumber(howlControlForm.buildThreshold) ?? 32;
-    const recoveryThreshold = readNumber(howlControlForm.recoveryThreshold) ?? 55;
-    const stableBuildMs = 6000;
-    const stableReduceMs = 4500;
+    const decision = computeHowlPhysiologyAction({
+      prediction,
+      multimodal: hrTelemetry?.multimodal || {},
+      currentIntensity,
+      floor,
+      ceiling,
+      settings: howlControlForm,
+      state: howlPhysiologyControllerRef.current,
+    });
+    howlPhysiologyControllerRef.current = decision.state;
+    const target = decision.target;
+    const desiredAction = decision.action;
+    const dwellMs = decision.dwellMs;
+    const reason = `sarah_auto_${desiredAction} near=${prediction.nearClimax} plateau=${prediction.plateauScore} recovery=${prediction.recovery} confidence=${prediction.controllerConfidence}`;
 
-    let target = currentIntensity;
-    let reason = "";
-    let desiredAction = "hold";
-    let dwellMs = 0;
-
-    const canBuildRamp = howlControlForm.buildRampEnabled !== false
-      && prediction.nearClimax >= buildThreshold
-      && prediction.nearClimax < Math.max(buildThreshold + 6, nearThreshold - 10)
-      && !prediction.earlySessionCapApplied
-      && prediction.elapsedMinutes >= 5
-      && (prediction.confirmationCount >= 2 || prediction.buildDurationSec >= 90);
-
-    const shouldNearReduce = howlControlForm.nearClimaxReductionEnabled !== false
-      && prediction.nearClimax >= nearThreshold
-      && prediction.buildEligibleForNearClimax
-      && prediction.confirmationCount >= 2;
-
-    const shouldRecoveryReduce = howlControlForm.recoveryReductionEnabled !== false
-      && prediction.recovery >= recoveryThreshold
-      && (prediction.dropFromRecentPeak >= 4 || prediction.hrvSignal === "release" || prediction.hrvSignal === "opening");
-
-    if (shouldRecoveryReduce) {
-      target = Math.max(floor, currentIntensity - reduceStep);
-      reason = `sarah_auto_recovery_reduce recovery=${prediction.recovery} near=${prediction.nearClimax}`;
-      desiredAction = "recovery_reduce";
-      dwellMs = stableReduceMs;
-    } else if (shouldNearReduce) {
-      target = Math.max(floor, currentIntensity - reduceStep);
-      reason = `sarah_auto_near_climax_reduce near=${prediction.nearClimax} recovery=${prediction.recovery}`;
-      desiredAction = "near_reduce";
-      dwellMs = stableReduceMs;
-    } else if (canBuildRamp) {
-      target = Math.min(ceiling, currentIntensity + buildStep);
-      reason = `sarah_auto_gradual_build near=${prediction.nearClimax} recovery=${prediction.recovery}`;
-      desiredAction = "build_ramp";
-      dwellMs = stableBuildMs;
-    }
-
-    target = Math.max(floor, Math.min(ceiling, Math.round(target)));
     if (target === Math.round(currentIntensity)) {
       howlAutoCandidateRef.current = { key: "", since: 0, target: null };
-      setHowlAutoStatus(`Sarah holding intensity ${Math.round(currentIntensity)}. ${prediction.reason || prediction.label}`);
+      setHowlAutoStatus(`${decision.explanation} ${prediction.reason || prediction.label}`);
       return;
     }
 
@@ -3571,7 +3574,9 @@ export default function LiveCapture() {
       setHowlAutoStatus(
         desiredAction === "build_ramp"
           ? `Sarah is watching a sustained build before nudging intensity to ${target}. Holding about ${waitSeconds}s to confirm it is not just noise.`
-          : `Sarah is watching for a real back-off window before dropping intensity to ${target}. Holding about ${waitSeconds}s to confirm it.`
+          : desiredAction === "final_approach" || desiredAction === "reapproach"
+            ? `Sarah is confirming ${desiredAction === "reapproach" ? "recovery clearance" : "threshold stability"} for about ${waitSeconds}s before advancing to ${target}.`
+            : `Sarah is confirming a genuine recovery window for about ${waitSeconds}s before the shallow retreat to ${target}.`
       );
       return;
     }
@@ -3581,7 +3586,9 @@ export default function LiveCapture() {
       setHowlAutoStatus(
         desiredAction === "build_ramp"
           ? `Sarah build watch holding ${remaining}s more before stepping up. ${prediction.reason || prediction.label}`
-          : `Sarah back-off watch holding ${remaining}s more before stepping down. ${prediction.reason || prediction.label}`
+          : desiredAction === "final_approach" || desiredAction === "reapproach"
+            ? `Sarah final-approach watch holding ${remaining}s more before stepping up. ${prediction.reason || prediction.label}`
+            : `Sarah recovery watch holding ${remaining}s more before the bounded retreat. ${prediction.reason || prediction.label}`
       );
       return;
     }
@@ -3590,7 +3597,7 @@ export default function LiveCapture() {
     howlAutoCandidateRef.current = { key: "", since: 0, target: null };
     setHowlCommandForm((prev) => ({ ...prev, intensity: target }));
     setHowlAutoStatus(
-      `Sarah ${target > currentIntensity ? "increased" : "reduced"} Howl intensity to ${target} after ${Math.round(dwellMs / 1000)}s of steady ${desiredAction === "build_ramp" ? "build" : "back-off"} evidence.`
+      `Sarah ${target > currentIntensity ? "increased" : "reduced"} Howl intensity to ${target} after ${Math.round(dwellMs / 1000)}s of stable ${decision.state.mode.replaceAll("_", " ")} evidence.`
     );
     sendHowlControlCommand("set_intensity", {
       channel,
@@ -3613,6 +3620,15 @@ export default function LiveCapture() {
         dwellMs,
         confirmationCount: prediction.confirmationCount,
         buildEligibleForNearClimax: prediction.buildEligibleForNearClimax,
+        plateauScore: prediction.plateauScore,
+        physiologicalIntensity: prediction.physiologicalIntensity,
+        controllerConfidence: prediction.controllerConfidence,
+        multimodalTrusted: prediction.multimodalTrusted,
+        respirationBpm: prediction.respirationBpm,
+        possibleBreathHold: prediction.possibleBreathHold,
+        motionClass: prediction.motionClass,
+        retainedPeakIntensity: decision.state.peakIntensity,
+        recoveryFloor: decision.state.recoveryFloor,
       },
     });
   }, [
@@ -3625,8 +3641,12 @@ export default function LiveCapture() {
     howlControlForm.buildRampEnabled,
     howlControlForm.buildStep,
     howlControlForm.buildThreshold,
+    howlControlForm.finalApproachEnabled,
+    howlControlForm.finalApproachStep,
+    howlControlForm.maxRecoveryRetreat,
     howlControlForm.nearClimaxReductionEnabled,
     howlControlForm.nearClimaxThreshold,
+    howlControlForm.plateauThreshold,
     howlControlForm.recoveryReductionEnabled,
     howlControlForm.recoveryThreshold,
     howlControlForm.reduceStep,
@@ -7283,7 +7303,7 @@ export default function LiveCapture() {
               <div className="rounded-lg border border-primary/20 bg-primary/[0.045] p-3">
                 <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                   <div>
-                    <p className="text-sm font-semibold text-foreground">Sarah HR/HRV controller</p>
+                    <p className="text-sm font-semibold text-foreground">Sarah multimodal threshold controller</p>
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                       Closed-loop stays off by default. Manual Howl control must be tested and enabled before Sarah can be armed.
                     </p>
@@ -7317,7 +7337,7 @@ export default function LiveCapture() {
                     <span className="block text-[11px] text-muted-foreground">Minimum Sarah approach score before auto-ramp is allowed to start nudging intensity upward.</span>
                   </label>
                   <label className="space-y-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Reduce near</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Final approach</span>
                     <input
                       className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
                       type="number"
@@ -7326,7 +7346,19 @@ export default function LiveCapture() {
                       value={howlControlForm.nearClimaxThreshold}
                       onChange={(event) => updateHowlControlForm({ nearClimaxThreshold: event.target.value }, { resetConnection: false })}
                     />
-                    <span className="block text-[11px] text-muted-foreground">Sarah approach score where the controller backs intensity down to avoid pushing harder during threshold-adjacent periods.</span>
+                    <span className="block text-[11px] text-muted-foreground">Approach score where Sarah begins the bounded final-approach push instead of automatically reducing intensity.</span>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Plateau gate</span>
+                    <input
+                      className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={howlControlForm.plateauThreshold}
+                      onChange={(event) => updateHowlControlForm({ plateauThreshold: event.target.value }, { resetConnection: false })}
+                    />
+                    <span className="block text-[11px] text-muted-foreground">Minimum sustained-load score before plateau is treated as a stable launch point.</span>
                   </label>
                   <label className="space-y-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Recovery</span>
@@ -7338,7 +7370,19 @@ export default function LiveCapture() {
                       value={howlControlForm.recoveryThreshold}
                       onChange={(event) => updateHowlControlForm({ recoveryThreshold: event.target.value }, { resetConnection: false })}
                     />
-                    <span className="block text-[11px] text-muted-foreground">Recovery score where Sarah treats the session as backing off and reduces intensity even if build was high a moment ago.</span>
+                    <span className="block text-[11px] text-muted-foreground">Requires a corroborated HR drop, HRV opening, H10 recovery slope, or extended possible breath hold before retreat.</span>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Final step</span>
+                    <input
+                      className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                      type="number"
+                      min="0"
+                      max="10"
+                      value={howlControlForm.finalApproachStep}
+                      onChange={(event) => updateHowlControlForm({ finalApproachStep: event.target.value }, { resetConnection: false })}
+                    />
+                    <span className="block text-[11px] text-muted-foreground">Bounded step used during plateau, final approach, and recovery re-approach.</span>
                   </label>
                   <label className="space-y-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Step up</span>
@@ -7362,7 +7406,19 @@ export default function LiveCapture() {
                       value={howlControlForm.reduceStep}
                       onChange={(event) => updateHowlControlForm({ reduceStep: event.target.value }, { resetConnection: false })}
                     />
-                    <span className="block text-[11px] text-muted-foreground">How many intensity points Sarah removes each time near-climax or recovery logic tells it to back off.</span>
+                    <span className="block text-[11px] text-muted-foreground">Size of each temporary retreat when recovery is physiologically corroborated.</span>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Max retreat</span>
+                    <input
+                      className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                      type="number"
+                      min="0"
+                      max="25"
+                      value={howlControlForm.maxRecoveryRetreat}
+                      onChange={(event) => updateHowlControlForm({ maxRecoveryRetreat: event.target.value }, { resetConnection: false })}
+                    />
+                    <span className="block text-[11px] text-muted-foreground">Hard limit below the highest intensity reached in the current build cycle.</span>
                   </label>
                   <label className="space-y-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Cooldown sec</span>
@@ -7375,6 +7431,17 @@ export default function LiveCapture() {
                       onChange={(event) => updateHowlControlForm({ autoCooldownSeconds: event.target.value }, { resetConnection: false })}
                     />
                     <span className="block text-[11px] text-muted-foreground">Minimum wait between Sarah auto-actions so intensity does not thrash up and down every telemetry refresh.</span>
+                  </label>
+                  <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground md:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={howlControlForm.finalApproachEnabled !== false}
+                      onChange={(event) => updateHowlControlForm({ finalApproachEnabled: event.target.checked }, { resetConnection: false })}
+                    />
+                    <span>
+                      Push through sustained plateau
+                      <span className="block text-[11px] font-normal text-muted-foreground">Uses trusted multimodal plateau/threshold evidence to continue bounded increases toward the configured ceiling.</span>
+                    </span>
                   </label>
                   <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground md:col-span-2">
                     <input
@@ -7394,8 +7461,8 @@ export default function LiveCapture() {
                       onChange={(event) => updateHowlControlForm({ nearClimaxReductionEnabled: event.target.checked }, { resetConnection: false })}
                     />
                     <span>
-                      Reduce during near-climax watch
-                      <span className="block text-[11px] font-normal text-muted-foreground">Lets Sarah back intensity down once the approach score crosses the near threshold.</span>
+                      Protect retained cycle intensity
+                      <span className="block text-[11px] font-normal text-muted-foreground">Prevents repeated recovery actions from walking intensity below the configured Max retreat from the cycle peak.</span>
                     </span>
                   </label>
                   <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground">
@@ -7405,8 +7472,8 @@ export default function LiveCapture() {
                       onChange={(event) => updateHowlControlForm({ recoveryReductionEnabled: event.target.checked }, { resetConnection: false })}
                     />
                     <span>
-                      Recovery
-                      <span className="block text-[11px] font-normal text-muted-foreground">Lets Sarah cut intensity when the live signal looks like recovery or a post-peak drop rather than continued build.</span>
+                      Allow verified recovery retreat
+                      <span className="block text-[11px] font-normal text-muted-foreground">Allows a shallow temporary reduction only when multiple physiological signals support recovery.</span>
                     </span>
                   </label>
                 </div>
@@ -8095,15 +8162,33 @@ export default function LiveCapture() {
               <p className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
                 <Brain className="w-4 h-4" /> Real-Time Phase Watch
               </p>
-              <p className="mt-1 text-lg font-medium text-foreground">{prediction.label}</p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <p className="text-lg font-medium text-foreground">{prediction.label}</p>
+                <span className="rounded-full border border-rose-400/45 bg-rose-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-rose-600 dark:text-rose-300">
+                  {prediction.physiologicalIntensityLabel}
+                </span>
+                {howlSarahAutoEnabled && (
+                  <span className="rounded-full border border-cyan-400/45 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-700 dark:text-cyan-300">
+                    Howl: {howlControllerMode}
+                  </span>
+                )}
+              </div>
               <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
                 {prediction.hrvExplanation}
               </p>
             </div>
-            <div className="grid grid-cols-2 gap-2 text-right">
+            <div className="grid grid-cols-2 gap-2 text-right lg:grid-cols-4">
               <div className="rounded-lg border px-4 py-3" style={{ borderColor: `${levelColor(prediction.nearClimax)}80`, backgroundColor: `${levelColor(prediction.nearClimax)}20` }}>
                 <p className="text-xs uppercase tracking-wider text-primary font-semibold">Near-Climax</p>
                 <p className="text-4xl font-bold text-foreground">{prediction.nearClimax}%</p>
+              </div>
+              <div className="rounded-lg border border-amber-400/45 bg-amber-500/10 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-300">Plateau</p>
+                <p className="text-4xl font-bold text-foreground">{prediction.plateauScore}%</p>
+              </div>
+              <div className="rounded-lg border border-cyan-400/45 bg-cyan-500/10 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-cyan-700 dark:text-cyan-300">Control Trust</p>
+                <p className="text-4xl font-bold text-foreground">{prediction.controllerConfidence}%</p>
               </div>
               <div className="rounded-lg border px-4 py-3" style={{ borderColor: `${levelColor(prediction.recovery)}80`, backgroundColor: `${levelColor(prediction.recovery)}20` }}>
                 <p className="text-xs uppercase tracking-wider text-chart-2 font-semibold">Recovery</p>
@@ -8113,6 +8198,12 @@ export default function LiveCapture() {
           </div>
           <div className="mt-3 h-3 overflow-hidden rounded-full bg-muted">
             <div className="h-full rounded-full transition-all" style={{ width: `${prediction.nearClimax}%`, backgroundColor: levelColor(prediction.nearClimax) }} />
+          </div>
+          <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-lg border border-border bg-card/70 px-3 py-2"><span className="text-muted-foreground">Respiratory load</span><p className="mt-1 font-semibold text-foreground">{prediction.possibleBreathHold ? `Possible ${fmtNumber(prediction.breathHoldDurationSeconds, 1)}s hold` : prediction.respirationBpm != null ? `${fmtNumber(prediction.respirationBpm, 1)} breaths/min` : "Withheld"}</p></div>
+            <div className="rounded-lg border border-border bg-card/70 px-3 py-2"><span className="text-muted-foreground">Somatic motion</span><p className="mt-1 font-semibold capitalize text-foreground">{String(prediction.motionClass || "unavailable").replaceAll("_", " ")}</p></div>
+            <div className="rounded-lg border border-border bg-card/70 px-3 py-2"><span className="text-muted-foreground">Approach velocity</span><p className="mt-1 font-semibold text-foreground">{prediction.approachVelocity > 0 ? "+" : ""}{fmtNumber(prediction.approachVelocity, 1)} points/30s</p></div>
+            <div className="rounded-lg border border-border bg-card/70 px-3 py-2"><span className="text-muted-foreground">Signal gate</span><p className="mt-1 font-semibold text-foreground">{prediction.multimodalTrusted ? "Trusted multimodal" : "Hold escalation"}</p></div>
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             {[
@@ -8144,6 +8235,74 @@ export default function LiveCapture() {
               ))}
             </div>
           )}
+          </div>
+        )}
+
+        {!captureIsBodyExploration && directH10Source && (
+          <div className="grid gap-4 xl:grid-cols-2">
+            <TrendPanel
+              title="Threshold Load Matrix"
+              subtitle="Approach, sustained plateau, controller trust, recovery, and normalized Howl dose"
+              empty={!hasThresholdPhysiologyTrend}
+              heightClass="h-80 md:h-[24rem]"
+              distanceView={distanceTelemetryView}
+            >
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={physiologyChartData} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
+                  <defs>
+                    <linearGradient id="approachLoadFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#fb7185" stopOpacity={0.52} />
+                      <stop offset="100%" stopColor="#fb7185" stopOpacity={0.03} />
+                    </linearGradient>
+                    <linearGradient id="plateauLoadFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.38} />
+                      <stop offset="100%" stopColor="#f59e0b" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} />
+                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} minTickGap={28} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} width={36} />
+                  <Tooltip content={<ChartTooltip />} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <ReferenceLine y={60} stroke="#f59e0b" strokeDasharray="5 5" opacity={0.65} />
+                  <ReferenceLine y={72} stroke="#fb7185" strokeDasharray="5 5" opacity={0.65} />
+                  <Area type="monotone" dataKey="nearClimax" name="Approach" stroke="#fb7185" fill="url(#approachLoadFill)" strokeWidth={2.5} dot={false} connectNulls />
+                  <Area type="monotone" dataKey="plateau" name="Plateau" stroke="#f59e0b" fill="url(#plateauLoadFill)" strokeWidth={2} dot={false} connectNulls />
+                  <Line type="monotone" dataKey="controllerConfidence" name="Control trust" stroke="#22d3ee" strokeWidth={2} dot={false} connectNulls />
+                  <Line type="monotone" dataKey="recovery" name="Recovery" stroke="#34d399" strokeWidth={1.75} dot={false} connectNulls />
+                  <Line type="stepAfter" dataKey="howlDose" name="Howl dose %" stroke="#e879f9" strokeWidth={2} dot={false} connectNulls />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </TrendPanel>
+
+            <TrendPanel
+              title="Respiratory & Somatic Response"
+              subtitle="Quality-gated breathing estimate, chest movement load, and possible breath-hold windows"
+              empty={!hasThresholdPhysiologyTrend}
+              heightClass="h-80 md:h-[24rem]"
+              distanceView={distanceTelemetryView}
+            >
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={physiologyChartData} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
+                  <defs>
+                    <linearGradient id="motionLoadFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#38bdf8" stopOpacity={0.42} />
+                      <stop offset="100%" stopColor="#38bdf8" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} />
+                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} minTickGap={28} />
+                  <YAxis yAxisId="resp" domain={[0, "auto"]} tick={{ fontSize: 11, fill: "#14b8a6" }} tickLine={false} axisLine={false} width={36} />
+                  <YAxis yAxisId="load" orientation="right" domain={[0, 100]} tick={{ fontSize: 11, fill: "#38bdf8" }} tickLine={false} axisLine={false} width={36} />
+                  <Tooltip content={<ChartTooltip />} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Area yAxisId="load" type="monotone" dataKey="motionLoad" name="Chest motion load" stroke="#38bdf8" fill="url(#motionLoadFill)" strokeWidth={2} dot={false} connectNulls />
+                  <Line yAxisId="resp" type="monotone" dataKey="respirationBpm" name="Respiration/min" stroke="#14b8a6" strokeWidth={2.5} dot={false} connectNulls />
+                  <Line yAxisId="load" type="stepAfter" dataKey="breathHoldBand" name="Possible hold" stroke="#f97316" strokeWidth={3} dot={false} connectNulls />
+                  <Line yAxisId="load" type="monotone" dataKey="signalConfidence" name="Signal confidence" stroke="#a3e635" strokeWidth={1.75} dot={false} connectNulls />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </TrendPanel>
           </div>
         )}
 
