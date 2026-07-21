@@ -3,7 +3,6 @@ import { Bookmark, MapPinned } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
-  SheetClose,
   SheetContent,
   SheetDescription,
   SheetHeader,
@@ -21,7 +20,7 @@ function groupSections(sections) {
   }, []);
 }
 
-function SectionButtons({ sections, onSelect, closeOnSelect = false, activeSectionId = "" }) {
+function SectionButtons({ sections, onSelect, activeSectionId = "" }) {
   return (
     <div className="space-y-3">
       {groupSections(sections).map((group) => (
@@ -45,11 +44,7 @@ function SectionButtons({ sections, onSelect, closeOnSelect = false, activeSecti
               </button>
             );
 
-            return closeOnSelect ? (
-              <SheetClose key={section.id} asChild>
-                {button}
-              </SheetClose>
-            ) : button;
+            return button;
           })}
         </div>
       ))}
@@ -87,7 +82,7 @@ export default function SessionSectionNavigator({ sections, onSelect, activeSect
               <SectionButtons sections={sections} onSelect={(section) => {
                 setOpen(false);
                 onSelect(section);
-              }} closeOnSelect activeSectionId={activeSectionId} />
+              }} activeSectionId={activeSectionId} />
             </div>
           </SheetContent>
         </Sheet>

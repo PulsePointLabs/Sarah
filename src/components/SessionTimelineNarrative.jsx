@@ -23,7 +23,7 @@ const SECTION_DEFS = [
 ];
 
 export default function SessionTimelineNarrative({ session, timelineRows, userProfile, sessionJournal }) {
-  const [collapsed, setCollapsed] = useState(!session.ai_timeline_narrative);
+  const [collapsed, setCollapsed] = useState(true);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(session.ai_timeline_narrative ?? null);
   const generatedAt = getAIContentGeneratedAt(result);

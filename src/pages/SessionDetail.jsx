@@ -1641,29 +1641,31 @@ export default function SessionDetail() {
   useEffect(() => {
     if (!pendingSectionId) return undefined;
 
+    let cancelled = false;
+    let retryTimer;
+    let attempts = 0;
     const scrollToPendingSection = () => {
+      if (cancelled) return;
       const section = document.getElementById(pendingSectionId);
-      const main = document.querySelector("main");
-      if (!section || !main) {
-        setPendingSectionId("");
+      if (!section) {
+        attempts += 1;
+        if (attempts < 8) retryTimer = window.setTimeout(scrollToPendingSection, 100);
+        else setPendingSectionId("");
         return;
       }
-      const mainRect = main.getBoundingClientRect();
-      const sectionRect = section.getBoundingClientRect();
-      const nextTop = main.scrollTop + sectionRect.top - mainRect.top - 14;
-      main.scrollTo({
-        top: Math.max(0, nextTop),
-        left: 0,
-        behavior: "smooth",
+      if (section instanceof HTMLDetailsElement) section.open = true;
+      window.requestAnimationFrame(() => {
+        if (cancelled) return;
+        section.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
+        setPendingSectionId("");
       });
-      setPendingSectionId("");
     };
 
     const frame = window.requestAnimationFrame(scrollToPendingSection);
-    const retry = window.setTimeout(scrollToPendingSection, 180);
     return () => {
+      cancelled = true;
       window.cancelAnimationFrame(frame);
-      window.clearTimeout(retry);
+      window.clearTimeout(retryTimer);
     };
   }, [pendingSectionId]);
 
@@ -1853,7 +1855,6 @@ export default function SessionDetail() {
         />
       )}
       <section id="session-ai-companion" className="scroll-mt-24 space-y-3">
-        <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} onAnalysisSaved={handleAnalysisSaved} />
         {renderReviewVideoBuilder({
           id: "session-ai-video-companion",
           title: "AI Session Analysis",
@@ -1862,9 +1863,9 @@ export default function SessionDetail() {
           analysisData: companionAnalysisData,
           routeHash: "session-ai-companion",
         })}
+        <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} onAnalysisSaved={handleAnalysisSaved} />
       </section>
       <section id="session-ai-technical" className="scroll-mt-24 space-y-3">
-        <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" onAnalysisSaved={handleAnalysisSaved} />
         {renderReviewVideoBuilder({
           id: "session-ai-video-technical",
           title: "Technical Deep Dive",
@@ -1873,6 +1874,7 @@ export default function SessionDetail() {
           analysisData: technicalAnalysisData,
           routeHash: "session-ai-technical",
         })}
+        <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" onAnalysisSaved={handleAnalysisSaved} />
       </section>
       <section id="session-ai-support" className="scroll-mt-24 rounded-xl border border-primary/20 bg-card p-4 space-y-3">
         <div>

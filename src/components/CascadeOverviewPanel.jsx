@@ -93,7 +93,7 @@ function PhaseBlock({ color, icon, title, items }) {
 }
 
 export default function CascadeOverviewPanel({ session, timelineRows, emgRows = [], userProfile, sessionJournal }) {
-  const [collapsed, setCollapsed] = useState(!session.ai_cascade);
+  const [collapsed, setCollapsed] = useState(true);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(session.ai_cascade ?? null);
   const [error, setError] = useState("");

@@ -25,7 +25,7 @@ import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hr
 import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
 import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "./TTSButton";
 
-export const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v14_timeline_locked_multicamera_telemetry";
+export const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v16_semantic_bounded_motion";
 
 function friendlyReviewVideoRenderErrorMessage(error) {
   const message = String(error?.message || error || "Review video render failed.");
@@ -170,6 +170,22 @@ function overlapSeconds(aStart, aEnd, bStart, bEnd) {
 
 function cleanEvidenceText(value = "", maxLength = 360) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+export function reviewVideoResultForJob(job = {}) {
+  const summary = job.result_summary || {};
+  const progress = job.progress || {};
+  const result = job.result || {};
+  const fileUrl = result.file_url || summary.file_url || progress.result_file_url || progress.file_url || "";
+  if (!fileUrl) return null;
+  return {
+    ...summary,
+    ...result,
+    file_url: fileUrl,
+    filename: result.filename || summary.filename || progress.result_filename || String(fileUrl).split("/").pop(),
+    duration_seconds: result.duration_seconds ?? summary.duration_seconds ?? progress.result_duration_seconds,
+    render_version: result.render_version || summary.render_version || progress.render_version || "",
+  };
 }
 
 function clipFrameSessionTimeSeconds(frame = {}, clip = {}) {
@@ -723,32 +739,37 @@ export function SessionReviewVideoExportButton({
           reviewRecordMatchesIdentity(record, reviewType, displayTitle, analysisTitle) &&
           (!sourceGeneratedAt || !record.source_generated_at || record.source_generated_at === sourceGeneratedAt)
         ));
-        const matchingJob = (jobsResult?.jobs || []).find((job) => (
-          job?.result?.file_url &&
-          job?.result?.render_version === REVIEW_VIDEO_RENDER_VERSION &&
+        const matchingJob = (jobsResult?.jobs || []).find((job) => {
+          const jobResult = reviewVideoResultForJob(job);
+          return (
+          jobResult?.file_url &&
+          jobResult?.render_version === REVIEW_VIDEO_RENDER_VERSION &&
           reviewRecordMatchesIdentity(
             {
-              review_type: job?.meta?.reviewType || job?.payload?.reviewType || job?.result?.record?.review_type,
-              analysis_title: job?.meta?.analysisTitle || job?.payload?.title || job?.result?.record?.analysis_title,
-              title: job?.meta?.title || job?.payload?.title || job?.result?.record?.title,
+              review_type: job?.meta?.reviewType || job?.payload?.reviewType || jobResult?.record?.review_type,
+              analysis_title: job?.meta?.analysisTitle || job?.payload?.title || jobResult?.record?.analysis_title,
+              title: job?.meta?.title || job?.payload?.title || jobResult?.record?.title,
             },
             reviewType,
             displayTitle,
             analysisTitle
           ) &&
           (!sourceGeneratedAt || !job?.meta?.sourceGeneratedAt || job.meta.sourceGeneratedAt === sourceGeneratedAt)
-        ));
-        const recovered = matchingRecord || (matchingJob ? {
+          );
+        });
+        const matchingJobResult = reviewVideoResultForJob(matchingJob);
+        const recovered = matchingRecord || (matchingJob && matchingJobResult ? {
           id: `job:${matchingJob.id}`,
-          file_url: matchingJob.result.file_url,
-          filename: matchingJob.result.filename || String(matchingJob.result.file_url).split("/").pop(),
-          duration_seconds: matchingJob.result.duration_seconds,
-          audio_reused: matchingJob.result.audio_reused,
+          file_url: matchingJobResult.file_url,
+          filename: matchingJobResult.filename,
+          duration_seconds: matchingJobResult.duration_seconds,
+          audio_reused: matchingJobResult.audio_reused,
+          render_version: matchingJobResult.render_version,
           review_type: reviewType,
           source_generated_at: matchingJob.meta?.sourceGeneratedAt || null,
           exported_at: matchingJob.finishedAt || matchingJob.updatedAt || matchingJob.createdAt || null,
-          watermark_enabled: Boolean(matchingJob.result.watermark?.watermark_enabled ?? matchingJob.result.watermark_enabled),
-          watermark_preset: matchingJob.result.watermark?.preset || matchingJob.result.watermark_preset || null,
+          watermark_enabled: Boolean(matchingJobResult.watermark?.watermark_enabled ?? matchingJobResult.watermark_enabled),
+          watermark_preset: matchingJobResult.watermark?.preset || matchingJobResult.watermark_preset || null,
           _source: "completed_review_video_job",
         } : null);
         setExistingVideo(recovered);
@@ -1180,27 +1201,6 @@ Describe only what is visible in the sampled frames, plus cautious interpretatio
 
   return (
     <div className="max-w-full min-w-0 space-y-3 overflow-hidden rounded-xl border border-primary/20 bg-card p-3 shadow-sm sm:p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <h3 className="flex min-w-0 items-center gap-2 break-words text-xs font-semibold uppercase tracking-wider text-primary">
-            <MessageCircle className="h-3.5 w-3.5" /> Ask Sarah About The Review Video
-          </h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Ask about the current playback window. Sarah samples that moment and keeps the thread open for follow-up questions.
-          </p>
-        </div>
-        {chatMessages.length > 0 && (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => setChatMessages([])}
-            className="h-8 shrink-0 text-xs"
-          >
-            Clear chat
-          </Button>
-        )}
-      </div>
       {activeVideoUrl && (
         <div className="relative max-w-full overflow-hidden rounded-lg border border-border bg-black">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 text-xs">
@@ -1226,6 +1226,27 @@ Describe only what is visible in the sampled frames, plus cautious interpretatio
           </div>
         </div>
       )}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <h3 className="flex min-w-0 items-center gap-2 break-words text-xs font-semibold uppercase tracking-wider text-primary">
+            <MessageCircle className="h-3.5 w-3.5" /> Ask Sarah About The Review Video
+          </h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Ask about the current playback window. Sarah samples that moment and keeps the thread open for follow-up questions.
+          </p>
+        </div>
+        {chatMessages.length > 0 && (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => setChatMessages([])}
+            className="h-8 shrink-0 text-xs"
+          >
+            Clear chat
+          </Button>
+        )}
+      </div>
       {activeVideoUrl && (
         <div className="max-w-full min-w-0 space-y-3 overflow-hidden rounded-lg border border-border bg-muted/20 p-3">
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -2300,7 +2321,6 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
         if (!job) return;
         if (job.status === "complete" && !shouldProcessCompletedJob(job, result || session[analysisField], session)) return;
 
-        setCollapsed(false);
         setJobStatus(job);
         setLoading(job.status !== "complete");
 
