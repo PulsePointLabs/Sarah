@@ -431,6 +431,40 @@ test('final-build narration prefers late active evidence over stronger early set
   assert.ok(fallback._phase_position_score > 150);
 });
 
+test('untimed active fallback rotates away from a source window already used nearby', () => {
+  const fallback = buildActiveStimulationFallbackEvent({
+    session: {
+      event_timeline: [
+        {
+          id: 'first-active',
+          time_s: 150,
+          note: 'Active hand stimulation and stroking are visible on the table.',
+          category: ['stimulation'],
+        },
+        {
+          id: 'second-active',
+          time_s: 420,
+          note: 'Active hand stimulation continues with visible penile contact on the table.',
+          category: ['stimulation'],
+        },
+      ],
+    },
+    segment: { paragraphIndex: 5, text: 'The session remains physically active.' },
+    primaryVideo: { path: 'E:/recordings/source.mp4' },
+    sourceDuration: 780,
+    fallbackCursor: 150,
+    usedSourceWindows: [
+      { start: 145, end: 166, label: 'Previously used active context' },
+      { start: 147, end: 162, label: 'Repeated active context' },
+    ],
+  });
+
+  assert.ok(fallback);
+  assert.equal(fallback.id, 'second-active');
+  assert.equal(Math.round(fallback.session_time_s), 420);
+  assert.equal(fallback._reuse_penalty, 0);
+});
+
 test('generic review b-roll avoids reusing a nearby source-video window', () => {
   const start = selectDistinctReviewSourceStart({
     preferredStart: 124,

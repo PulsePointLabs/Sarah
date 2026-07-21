@@ -511,12 +511,24 @@ function segmentPhasePositionScore(event = {}, segmentText = '', primaryVideo = 
   return Math.round(Math.max(0, (ratio - 0.35) / 0.65) * 260);
 }
 
+function activeAnchorReusePenalty(event = {}, primaryVideo = {}, usedSourceWindows = []) {
+  const sourceTime = sourceTimeForSession(event?.session_time_s, primaryVideo);
+  if (!Number.isFinite(sourceTime)) return 0;
+  const nearbyUses = (Array.isArray(usedSourceWindows) ? usedSourceWindows : []).filter((window) => {
+    const start = Number(window?.start);
+    const end = Number(window?.end);
+    return Number.isFinite(start) && Number.isFinite(end) && sourceTime >= start - 8 && sourceTime <= end + 8;
+  }).length;
+  return Math.min(480, nearbyUses * 180);
+}
+
 export function buildActiveStimulationFallbackEvent({
   session = {},
   segment = {},
   primaryVideo = {},
   sourceDuration = 0,
   fallbackCursor = 0,
+  usedSourceWindows = [],
 } = {}) {
   const anchors = buildLoggedEventAnchors(session)
     .map((anchor) => {
@@ -529,12 +541,14 @@ export function buildActiveStimulationFallbackEvent({
         : 0;
       const relevance = segmentKeywordScore(anchor, segment.text || '');
       const phasePosition = segmentPhasePositionScore(anchor, segment.text || '', primaryVideo, sourceDuration);
+      const reusePenalty = activeAnchorReusePenalty(anchor, primaryVideo, usedSourceWindows);
       return {
         ...anchor,
         _active_score: score,
         _distance_score: Math.max(0, 90 - Math.min(90, distance / 3)),
         _relevance_score: relevance,
         _phase_position_score: phasePosition,
+        _reuse_penalty: reusePenalty,
       };
     })
     .filter(Boolean)
@@ -544,9 +558,9 @@ export function buildActiveStimulationFallbackEvent({
       sourceDuration,
     }))
     .sort((a, b) => (
-      b._active_score + b._distance_score + b._relevance_score + b._phase_position_score
+      b._active_score + b._distance_score + b._relevance_score + b._phase_position_score - b._reuse_penalty
     ) - (
-      a._active_score + a._distance_score + a._relevance_score + a._phase_position_score
+      a._active_score + a._distance_score + a._relevance_score + a._phase_position_score - a._reuse_penalty
     ));
 
   const selected = anchors[0];
@@ -1870,6 +1884,7 @@ async function renderSourceContextSegment({
     primaryVideo,
     sourceDuration,
     fallbackCursor,
+    usedSourceWindows,
   });
   if (activeFallbackEvent) {
     const window = sourceWindowForSegment({
