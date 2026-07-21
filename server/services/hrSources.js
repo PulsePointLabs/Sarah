@@ -168,6 +168,9 @@ export function normalizePulsoidTelemetry(payload, receivedAt = Date.now()) {
 
 export function normalizeDirectH10Telemetry(payload, receivedAt = Date.now()) {
   const data = payload?.data || payload || {};
+  const rawPayload = payload && typeof payload === 'object'
+    ? Object.fromEntries(Object.entries(payload).filter(([key]) => key !== 'sensorBatch'))
+    : payload;
   const heartRate = cleanHr(pickFirst(
     data.heart_rate,
     data.heartRate,
@@ -198,11 +201,12 @@ export function normalizeDirectH10Telemetry(payload, receivedAt = Date.now()) {
     hr: heartRate,
     rrIntervalsMs,
     hrv,
+    multimodal: data.multimodal || payload?.multimodal || null,
     quality: {
       ...(payload?.quality || data.quality || {}),
       stale: ageMs > 5000,
       ageMs,
     },
-    raw: payload,
+    raw: rawPayload,
   };
 }

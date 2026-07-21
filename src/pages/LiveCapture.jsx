@@ -34,6 +34,20 @@ import { useLiveCueEngine } from "@/hooks/useLiveCueEngine";
 import { toLiveTelemetryNotice } from "@/lib/liveCueDisplay";
 import { computeLiveClimaxPrediction } from "@/utils/liveClimaxPrediction";
 import {
+  H10_ACCELEROMETER_START_COMMAND,
+  H10_ECG_START_COMMAND,
+  H10_PMD_CONTROL_UUID,
+  H10_PMD_DATA_UUID,
+  H10_PMD_SERVICE_UUID,
+  appendBoundedSamples,
+  commandDataView,
+  createH10PmdParserState,
+  deriveH10MultimodalSnapshot,
+  detectH10TapGesture,
+  parseH10PmdControlResponse,
+  parseH10PmdFrame,
+} from "@/lib/h10Multimodal";
+import {
   buildPerinealEmgCalibration,
   calibrationFromSession,
   createPerinealEmgDetector,
@@ -103,6 +117,35 @@ const DEVICE_INFORMATION_SERVICE_UUID = "0000180a-0000-1000-8000-00805f9b34fb";
 const DIRECT_H10_REMEMBERED_DEVICE_KEY = "pulsepoint.directH10.rememberedDevice";
 const DIRECT_H10_RECONNECT_DELAYS_MS = [1000, 2500, 5000, 10000, 15000, 30000];
 const SHARED_HR_PACKET_STALE_MS = 30000;
+
+function emptyH10MultimodalSnapshot() {
+  return {
+    signalConfidence: { score: 0, level: "unavailable", ecg: "unavailable", accelerometer: "unavailable", respiration: "unavailable", motionGate: "closed" },
+    motion: { available: false, class: "unavailable" },
+    position: { state: "unavailable" },
+    respiration: { available: false, reason: "sensor_unavailable" },
+    recovery: { available: false },
+    responseLatency: { available: false, sampleCount: 0 },
+    state: { key: "waiting", label: "WAITING", tone: "neutral" },
+    streams: { ecg: { sampleCount: 0 }, accelerometer: { sampleCount: 0 } },
+  };
+}
+
+function createH10PmdStore() {
+  return {
+    parserStates: {
+      ecg: createH10PmdParserState(130),
+      accelerometer: createH10PmdParserState(25),
+    },
+    ecgSamples: [],
+    accelerometerSamples: [],
+    pendingEcgSamples: [],
+    pendingAccelerometerSamples: [],
+    tapState: {},
+    baselineOrientation: null,
+    lastDerivedAt: 0,
+  };
+}
 
 function readRememberedDirectH10Device() {
   try {
@@ -720,7 +763,7 @@ async function getDirectH10Device({ preferSaved = false, silent = false } = {}) 
   try {
     return await bluetooth.requestDevice({
       filters: [{ namePrefix: "Polar H10" }],
-      optionalServices: ["heart_rate", "battery_service", "device_information"],
+      optionalServices: ["heart_rate", "battery_service", "device_information", H10_PMD_SERVICE_UUID],
     });
   } catch (error) {
     if (/user cancelled|user canceled|cancelled|canceled/i.test(error?.message || "")) throw error;
@@ -729,7 +772,7 @@ async function getDirectH10Device({ preferSaved = false, silent = false } = {}) 
   if (pairedH10) return pairedH10;
   return bluetooth.requestDevice({
     acceptAllDevices: true,
-    optionalServices: ["heart_rate", "battery_service", "device_information"],
+    optionalServices: ["heart_rate", "battery_service", "device_information", H10_PMD_SERVICE_UUID],
   });
 }
 
@@ -750,6 +793,7 @@ async function getNativeDirectH10Device({ preferSaved = true, forcePicker = fals
       HEART_RATE_SERVICE_UUID,
       BATTERY_SERVICE_UUID,
       DEVICE_INFORMATION_SERVICE_UUID,
+      H10_PMD_SERVICE_UUID,
     ],
     namePrefix: "Polar H10",
   });
@@ -1010,7 +1054,8 @@ function HrSourceSelector({
         {isPulsoid && pulsoidStatus.lastMessageAt && <span>Last Pulsoid HR {fmtTime(pulsoidStatus.lastMessageAt)}</span>}
         {isPulsoid && pulsoidStatus.error && <span className="text-destructive">{pulsoidStatus.error}</span>}
         {(directStatus?.lastMessageAt || directH10Status.lastMessageAt) && <span>Last H10 HR {fmtTime(directStatus?.lastMessageAt || directH10Status.lastMessageAt)}</span>}
-        {isDirectH10 && <span>ECG waveform is not enabled yet; this pass captures standard H10 HR + RR intervals for HRV.</span>}
+        {isDirectH10 && <span>{directStatus?.pmdMessage || "Raw ECG and chest motion start after HR/RR connects; failures fall back to HR/RR without stopping capture."}</span>}
+        {isDirectH10 && directStatus?.pmdActive && <span className="text-primary">Triple-tap the H10 for a hands-free timeline/sync marker.</span>}
         {nativeAndroidBleAvailable && isDirectH10 && <span className="text-primary">Android native BLE bridge enabled for Direct H10.</span>}
         {directH10BlockedOnAndroid && <span className="text-amber-300">Use Pulsoid on Android browser for now. Install/open Sarah for native Direct H10; browser Bluetooth stays disabled on phones to avoid crashes.</span>}
         {(directStatus?.error || directH10Status.error) && <span className="text-destructive">{directStatus?.error || directH10Status.error}</span>}
@@ -1192,6 +1237,7 @@ function parseLiveCommand(text) {
 function makeTelemetryPoint(hrTelemetry, emgTelemetry, options = {}) {
   const now = Date.now();
   const hrv = hrTelemetry?.hrv || {};
+  const multimodal = hrTelemetry?.multimodal || {};
   return {
     ts: now,
     time: new Date(now).toLocaleTimeString([], { minute: "2-digit", second: "2-digit" }),
@@ -1206,6 +1252,12 @@ function makeTelemetryPoint(hrTelemetry, emgTelemetry, options = {}) {
     hrvSdnn: readNumber(hrv.sdnnMs, hrTelemetry?.hrv_sdnn_ms),
     hrvPnn50: readNumber(hrv.pnn50, hrTelemetry?.hrv_pnn50),
     hrvQuality: hrv.quality || hrTelemetry?.hrv_quality || null,
+    motionClass: multimodal.motion?.class || null,
+    motionRms: readNumber(multimodal.motion?.dynamicRmsMilliG),
+    respirationBpm: readNumber(multimodal.respiration?.bpm),
+    respirationConfidence: multimodal.respiration?.confidence || null,
+    signalConfidence: readNumber(multimodal.signalConfidence?.score),
+    autonomicState: multimodal.state?.key || null,
     left: readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct),
     right: readNumber(emgTelemetry?.right_pct),
     diff: readNumber(emgTelemetry?.diff_pct),
@@ -1390,6 +1442,7 @@ export default function LiveCapture() {
     };
   });
   const [hrLossDialog, setHrLossDialog] = useState(null);
+  const [h10Multimodal, setH10Multimodal] = useState(() => emptyH10MultimodalSnapshot());
   const [captureKind, setCaptureKind] = useState(() => localStorage.getItem("pulsepoint.captureKind") || "session");
   const [captureKindError, setCaptureKindError] = useState("");
   const [captureMode, setCaptureMode] = useState(() => localStorage.getItem("pulsepoint.captureMode") || "full");
@@ -1505,6 +1558,13 @@ export default function LiveCapture() {
   const directH10CharacteristicRef = useRef(null);
   const directH10NotificationHandlerRef = useRef(null);
   const directH10RrRef = useRef([]);
+  const directH10PmdStoreRef = useRef(createH10PmdStore());
+  const directH10PmdNativeActiveRef = useRef(false);
+  const directH10PmdBrowserRef = useRef(null);
+  const directH10PmdControlWaitersRef = useRef(new Map());
+  const h10MultimodalRef = useRef(h10Multimodal);
+  const telemetryHistoryRef = useRef(telemetryHistory);
+  const liveEventsRef = useRef(liveEvents);
   const directH10StatusRef = useRef(directH10Status);
   const directH10RelaySocketRef = useRef(null);
   const directH10IntentionalDisconnectRef = useRef(false);
@@ -1533,6 +1593,18 @@ export default function LiveCapture() {
   useEffect(() => {
     directH10StatusRef.current = directH10Status;
   }, [directH10Status]);
+
+  useEffect(() => {
+    h10MultimodalRef.current = h10Multimodal;
+  }, [h10Multimodal]);
+
+  useEffect(() => {
+    telemetryHistoryRef.current = telemetryHistory;
+  }, [telemetryHistory]);
+
+  useEffect(() => {
+    liveEventsRef.current = liveEvents;
+  }, [liveEvents]);
 
   useEffect(() => {
     const activeSessionId = liveSession?.activeSessionId || null;
@@ -1750,6 +1822,85 @@ export default function LiveCapture() {
     }
   }, [markHowlSettingsDirty]);
 
+  const handleH10PmdData = useCallback((value) => {
+    const store = directH10PmdStoreRef.current;
+    try {
+      const parsed = parseH10PmdFrame(value, store.parserStates);
+      if (parsed.type === "ecg") {
+        store.ecgSamples = appendBoundedSamples(store.ecgSamples, parsed.samples, {
+          maxAgeMs: 70_000,
+          maxSamples: 9_500,
+        });
+        store.pendingEcgSamples.push(...parsed.samples);
+        if (store.pendingEcgSamples.length > 520) store.pendingEcgSamples.splice(0, store.pendingEcgSamples.length - 520);
+        return;
+      }
+
+      store.accelerometerSamples = appendBoundedSamples(store.accelerometerSamples, parsed.samples, {
+        maxAgeMs: 70_000,
+        maxSamples: 1_900,
+      });
+      store.pendingAccelerometerSamples.push(...parsed.samples);
+      if (store.pendingAccelerometerSamples.length > 100) {
+        store.pendingAccelerometerSamples.splice(0, store.pendingAccelerometerSamples.length - 100);
+      }
+      const tapResult = detectH10TapGesture(parsed.samples, store.tapState);
+      store.tapState = tapResult.state;
+      if (tapResult.gesture && appendLiveSessionEventsRef.current) {
+        const sessionStartMs = Number(recording?.startedAtMs || recording?.startEpochMs || 0);
+        const timeS = sessionStartMs > 0
+          ? Math.max(0, (tapResult.gesture.timestampMs - sessionStartMs) / 1000)
+          : 0;
+        appendLiveSessionEventsRef.current({
+          id: `h10_tap_${Math.round(tapResult.gesture.timestampMs)}`,
+          time_s: Math.round(timeS * 10) / 10,
+          label: "H10 tap marker",
+          note: "Hands-free triple-tap marker detected on the Polar H10 chest sensor.",
+          category: ["physical", "manual_marker"],
+          annotation_tags: ["h10", "accelerometer", "triple_tap", "sync_anchor"],
+          source: "h10_accelerometer_gesture",
+          created_at: new Date(tapResult.gesture.timestampMs).toISOString(),
+        }).catch(() => {});
+      }
+    } catch (error) {
+      setDirectH10Status((previous) => ({
+        ...previous,
+        pmdMessage: `Raw sensor frame rejected: ${error?.message || error}`,
+      }));
+    }
+  }, [recording?.startEpochMs, recording?.startedAtMs]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const store = directH10PmdStoreRef.current;
+      const telemetry = latestHrRef.current || {};
+      const recordingStartMs = Number(recording?.startedAtMs || recording?.startEpochMs || 0);
+      const eventHistory = liveEventsRef.current.map((event) => ({
+        ...event,
+        timestampMs: recordingStartMs > 0 && Number.isFinite(Number(event?.time_s))
+          ? recordingStartMs + Number(event.time_s) * 1000
+          : Date.parse(event?.created_at || ""),
+      }));
+      const snapshot = deriveH10MultimodalSnapshot({
+        accelerometerSamples: store.accelerometerSamples,
+        ecgSamples: store.ecgSamples,
+        rrQuality: telemetry?.hrv?.quality || telemetry?.hrv_quality || "unavailable",
+        hrHistory: telemetryHistoryRef.current,
+        eventHistory,
+        currentHr: telemetry?.currentHr ?? telemetry?.heartRate ?? telemetry?.hr,
+        baselineHr: telemetry?.baselineHr ?? telemetry?.baseline_hr,
+        baselineOrientation: store.baselineOrientation,
+      });
+      if (!store.baselineOrientation && snapshot.motion?.class === "low_motion" && snapshot.position?.currentOrientation) {
+        store.baselineOrientation = snapshot.position.currentOrientation;
+      }
+      store.lastDerivedAt = Date.now();
+      h10MultimodalRef.current = snapshot;
+      setH10Multimodal(snapshot);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [recording?.startEpochMs, recording?.startedAtMs]);
+
   const publishDirectH10Measurement = useCallback((parsed, deviceName = "Polar H10") => {
     if (!parsed?.heartRate) return;
     const receivedAt = Date.now();
@@ -1757,6 +1908,11 @@ export default function LiveCapture() {
     setHrLossDialog(null);
     directH10RrRef.current = appendRollingRrIntervals(directH10RrRef.current, parsed.rrIntervalsMs);
     const hrv = computeHrvFromRr(directH10RrRef.current);
+    const pmdStore = directH10PmdStoreRef.current;
+    const sensorBatch = {
+      ecg: pmdStore.pendingEcgSamples.splice(0),
+      accelerometer: pmdStore.pendingAccelerometerSamples.splice(0),
+    };
     const telemetry = {
       source: "direct_h10",
       sourceLabel: "Direct Polar H10",
@@ -1768,6 +1924,7 @@ export default function LiveCapture() {
       hr: parsed.heartRate,
       rrIntervalsMs: parsed.rrIntervalsMs,
       hrv,
+      multimodal: h10MultimodalRef.current,
       quality: {
         stale: false,
         ageMs: 0,
@@ -1821,7 +1978,7 @@ export default function LiveCapture() {
     fetch(apiUrl("/live-capture/hr-direct-h10/telemetry"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(telemetry),
+      body: JSON.stringify({ ...telemetry, sensorBatch }),
     })
       .then(async (response) => {
         if (!response.ok) {
@@ -2138,6 +2295,101 @@ export default function LiveCapture() {
     return true;
   }, []);
 
+  const handleH10PmdControl = useCallback((value) => {
+    const response = parseH10PmdControlResponse(value);
+    if (!response) return;
+    const waiterKey = `${response.command}:${response.measurement}`;
+    const waiter = directH10PmdControlWaitersRef.current.get(waiterKey);
+    if (waiter) {
+      directH10PmdControlWaitersRef.current.delete(waiterKey);
+      window.clearTimeout(waiter.timerId);
+      waiter.resolve(response);
+    }
+    const streamName = response.measurement === 0 ? "ECG" : response.measurement === 2 ? "accelerometer" : "PMD";
+    setDirectH10Status((previous) => ({
+      ...previous,
+      pmdActive: response.success ? true : previous.pmdActive,
+      pmdMessage: response.success
+        ? `${streamName} raw stream active`
+        : `${streamName} raw stream unavailable (PMD status ${response.status})`,
+    }));
+  }, []);
+
+  const waitForH10PmdControlResponse = useCallback((measurement, timeoutMs = 5000) => new Promise((resolve, reject) => {
+    const waiterKey = `2:${measurement}`;
+    const previous = directH10PmdControlWaitersRef.current.get(waiterKey);
+    if (previous) {
+      window.clearTimeout(previous.timerId);
+      previous.reject(new Error("H10 PMD command superseded"));
+    }
+    const timerId = window.setTimeout(() => {
+      directH10PmdControlWaitersRef.current.delete(waiterKey);
+      reject(new Error(`H10 PMD ${measurement === 0 ? "ECG" : "accelerometer"} start response timed out`));
+    }, timeoutMs);
+    directH10PmdControlWaitersRef.current.set(waiterKey, { resolve, reject, timerId });
+  }), []);
+
+  const startNativeH10Pmd = useCallback(async (deviceId) => {
+    directH10PmdStoreRef.current = createH10PmdStore();
+    await BleClient.startNotifications(
+      deviceId,
+      H10_PMD_SERVICE_UUID,
+      H10_PMD_CONTROL_UUID,
+      handleH10PmdControl,
+      { timeout: 12000 },
+    );
+    await BleClient.startNotifications(
+      deviceId,
+      H10_PMD_SERVICE_UUID,
+      H10_PMD_DATA_UUID,
+      handleH10PmdData,
+      { timeout: 12000 },
+    );
+    const ecgResponsePromise = waitForH10PmdControlResponse(0);
+    const [, ecgResponse] = await Promise.all([
+      BleClient.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ECG_START_COMMAND), { timeout: 12000 }),
+      ecgResponsePromise,
+    ]);
+    if (!ecgResponse.success) throw new Error(`H10 rejected ECG stream (status ${ecgResponse.status})`);
+    const accelerometerResponsePromise = waitForH10PmdControlResponse(2);
+    const [, accelerometerResponse] = await Promise.all([
+      BleClient.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ACCELEROMETER_START_COMMAND), { timeout: 12000 }),
+      accelerometerResponsePromise,
+    ]);
+    if (!accelerometerResponse.success) throw new Error(`H10 rejected accelerometer stream (status ${accelerometerResponse.status})`);
+    directH10PmdNativeActiveRef.current = true;
+    setDirectH10Status((previous) => ({ ...previous, pmdActive: true, pmdMessage: "ECG + chest motion starting" }));
+  }, [handleH10PmdControl, handleH10PmdData, waitForH10PmdControlResponse]);
+
+  const startBrowserH10Pmd = useCallback(async (device) => {
+    const server = device?.gatt;
+    if (!server?.connected) throw new Error("H10 GATT disconnected before PMD setup");
+    directH10PmdStoreRef.current = createH10PmdStore();
+    const service = await withTimeout(server.getPrimaryService(H10_PMD_SERVICE_UUID), 12000, "Timed out opening H10 PMD service.");
+    const control = await withTimeout(service.getCharacteristic(H10_PMD_CONTROL_UUID), 12000, "Timed out opening H10 PMD control.");
+    const data = await withTimeout(service.getCharacteristic(H10_PMD_DATA_UUID), 12000, "Timed out opening H10 PMD data.");
+    const controlHandler = (event) => handleH10PmdControl(event.target.value);
+    const dataHandler = (event) => handleH10PmdData(event.target.value);
+    control.addEventListener("characteristicvaluechanged", controlHandler);
+    data.addEventListener("characteristicvaluechanged", dataHandler);
+    await withTimeout(control.startNotifications(), 12000, "Timed out starting H10 PMD control notifications.");
+    await withTimeout(data.startNotifications(), 12000, "Timed out starting H10 PMD data notifications.");
+    const ecgResponsePromise = waitForH10PmdControlResponse(0);
+    const [, ecgResponse] = await Promise.all([
+      control.writeValueWithResponse(H10_ECG_START_COMMAND),
+      ecgResponsePromise,
+    ]);
+    if (!ecgResponse.success) throw new Error(`H10 rejected ECG stream (status ${ecgResponse.status})`);
+    const accelerometerResponsePromise = waitForH10PmdControlResponse(2);
+    const [, accelerometerResponse] = await Promise.all([
+      control.writeValueWithResponse(H10_ACCELEROMETER_START_COMMAND),
+      accelerometerResponsePromise,
+    ]);
+    if (!accelerometerResponse.success) throw new Error(`H10 rejected accelerometer stream (status ${accelerometerResponse.status})`);
+    directH10PmdBrowserRef.current = { control, data, controlHandler, dataHandler };
+    setDirectH10Status((previous) => ({ ...previous, pmdActive: true, pmdMessage: "ECG + chest motion starting" }));
+  }, [handleH10PmdControl, handleH10PmdData, waitForH10PmdControlResponse]);
+
   const disconnectDirectH10 = useCallback(async ({ updateStatus = true, preserveAutoReconnect = false } = {}) => {
     if (!preserveAutoReconnect) {
       directH10ReconnectEnabledRef.current = false;
@@ -2149,6 +2401,10 @@ export default function LiveCapture() {
     directH10IntentionalDisconnectRef.current = true;
     const nativeDeviceId = directH10NativeDeviceIdRef.current;
     if (nativeDeviceId) {
+      if (directH10PmdNativeActiveRef.current) {
+        await BleClient.stopNotifications(nativeDeviceId, H10_PMD_SERVICE_UUID, H10_PMD_DATA_UUID).catch(() => {});
+        await BleClient.stopNotifications(nativeDeviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID).catch(() => {});
+      }
       try {
         await BleClient.stopNotifications(nativeDeviceId, HEART_RATE_SERVICE_UUID, HEART_RATE_MEASUREMENT_UUID);
       } catch {
@@ -2159,6 +2415,14 @@ export default function LiveCapture() {
       } catch {
         // Native BLE may already be disconnected.
       }
+    }
+
+    const browserPmd = directH10PmdBrowserRef.current;
+    if (browserPmd) {
+      browserPmd.control?.removeEventListener?.("characteristicvaluechanged", browserPmd.controlHandler);
+      browserPmd.data?.removeEventListener?.("characteristicvaluechanged", browserPmd.dataHandler);
+      await browserPmd.data?.stopNotifications?.().catch?.(() => {});
+      await browserPmd.control?.stopNotifications?.().catch?.(() => {});
     }
 
     const characteristic = directH10CharacteristicRef.current;
@@ -2191,6 +2455,16 @@ export default function LiveCapture() {
     directH10NativeDeviceIdRef.current = "";
     directH10TransportRef.current = "";
     directH10RrRef.current = [];
+    directH10PmdNativeActiveRef.current = false;
+    directH10PmdBrowserRef.current = null;
+    directH10PmdStoreRef.current = createH10PmdStore();
+    directH10PmdControlWaitersRef.current.forEach((waiter) => {
+      window.clearTimeout(waiter.timerId);
+      waiter.reject(new Error("H10 disconnected"));
+    });
+    directH10PmdControlWaitersRef.current.clear();
+    h10MultimodalRef.current = emptyH10MultimodalSnapshot();
+    setH10Multimodal(emptyH10MultimodalSnapshot());
     if (updateStatus) {
       setDirectH10Status((prev) => ({
         ...prev,
@@ -2199,6 +2473,8 @@ export default function LiveCapture() {
         message: "Direct H10 disconnected",
         error: "",
         rrCount: 0,
+        pmdActive: false,
+        pmdMessage: "Raw ECG + motion stopped",
       }));
     }
     window.setTimeout(() => {
@@ -2298,6 +2574,13 @@ export default function LiveCapture() {
           (value) => publishDirectH10Measurement(parseHeartRateMeasurement(value), deviceName),
           { timeout: 12000 },
         );
+        startNativeH10Pmd(device.deviceId).catch((error) => {
+          setDirectH10Status((previous) => ({
+            ...previous,
+            pmdActive: false,
+            pmdMessage: `HR/RR live; raw ECG/motion unavailable: ${error?.message || error}`,
+          }));
+        });
 
         setDirectH10Status((prev) => ({
           ...prev,
@@ -2396,6 +2679,13 @@ export default function LiveCapture() {
         12000,
         "Timed out starting H10 heart-rate notifications.",
       );
+      startBrowserH10Pmd(device).catch((error) => {
+        setDirectH10Status((previous) => ({
+          ...previous,
+          pmdActive: false,
+          pmdMessage: `HR/RR live; raw ECG/motion unavailable: ${error?.message || error}`,
+        }));
+      });
       setDirectH10Status((prev) => ({
         ...prev,
         connected: true,
@@ -2421,7 +2711,7 @@ export default function LiveCapture() {
         error: message,
       }));
     }
-  }, [disconnectDirectH10, hrSourceSettings.source, publishDirectH10Measurement, scheduleNativeH10Reconnect]);
+  }, [disconnectDirectH10, hrSourceSettings.source, publishDirectH10Measurement, scheduleNativeH10Reconnect, startBrowserH10Pmd, startNativeH10Pmd]);
 
   useEffect(() => {
     directH10ConnectRef.current = connectDirectH10;
@@ -2901,6 +3191,16 @@ export default function LiveCapture() {
   const hrvRmssd = readNumber(hrv.rmssdMs, hrTelemetry?.hrv_rmssd_ms);
   const hrvQuality = hrv.quality || hrTelemetry?.hrv_quality || null;
   const directH10Source = hrSourceSettings.source === "direct_h10";
+  const effectiveH10Multimodal = hrTelemetry?.multimodal?.streams?.ecg?.sampleCount > 0
+    ? hrTelemetry.multimodal
+    : h10Multimodal;
+  const h10SignalConfidence = effectiveH10Multimodal?.signalConfidence || {};
+  const h10Motion = effectiveH10Multimodal?.motion || {};
+  const h10Respiration = effectiveH10Multimodal?.respiration || {};
+  const h10Recovery = effectiveH10Multimodal?.recovery || {};
+  const h10Position = effectiveH10Multimodal?.position || {};
+  const h10Latency = effectiveH10Multimodal?.responseLatency || {};
+  const h10State = effectiveH10Multimodal?.state || { label: "WAITING", tone: "neutral" };
   const rawRrUsable = Boolean(
     directH10Source
     && Number(rrCount) >= 10
@@ -5786,6 +6086,10 @@ export default function LiveCapture() {
         : "Start Session";
   const showAdvancedSetupConsole = advancedSetupOpen;
   const obsPreferred = Boolean(launchProfile.obsEnabled && !launchProfile.telemetryOnlyFallback);
+  const h10RawStreamsActive = Boolean(
+    directH10Source
+    && (effectiveH10Multimodal?.streams?.ecg?.sampleCount > 0 || effectiveH10Multimodal?.streams?.accelerometer?.sampleCount > 0)
+  );
   const liveGuidanceMode = !healthRecentHrPacket
     ? {
       label: "Telemetry unstable",
@@ -5805,9 +6109,11 @@ export default function LiveCapture() {
           helper: "HR and RR are live, but the configured EMG feed is not current. EMG-specific cues are stepped down until the feed stabilizes.",
         }
         : {
-          label: "Full guidance",
+          label: h10RawStreamsActive ? h10State.label || "Multimodal tracking" : "Full guidance",
           tone: "good",
-          helper: "Heart rate is current and Sarah has enough live signal quality for the normal guidance stack.",
+          helper: h10RawStreamsActive
+            ? `Raw H10 ECG and chest motion are active. Signal confidence ${fmtNumber(h10SignalConfidence.score, 0)}%; motion and respiration claims remain quality-gated.`
+            : "Heart rate is current and Sarah has enough live signal quality for the normal guidance stack.",
         };
   const liveHealthPills = [
     {
@@ -5831,6 +6137,38 @@ export default function LiveCapture() {
             : "Direct H10 is live, but the RR window is not ready yet."
         : "RR-driven HRV only applies to direct H10 sessions.",
       tone: directH10Source ? (healthRrUsable ? "good" : healthRrWeak ? "warn" : "neutral") : "neutral",
+    },
+    {
+      label: "Raw H10 Sensors",
+      value: h10RawStreamsActive ? `${fmtNumber(h10SignalConfidence.score, 0)}%` : directH10Source ? "Warming" : "N/A",
+      helper: h10RawStreamsActive
+        ? `ECG ${h10SignalConfidence.ecg || "waiting"} · accelerometer ${h10SignalConfidence.accelerometer || "waiting"}`
+        : directH10Source
+          ? directH10Status.pmdMessage || "HR/RR remains live while ECG and chest motion start."
+          : "Available with Direct Polar H10.",
+      tone: h10RawStreamsActive ? (h10SignalConfidence.level === "high" ? "good" : "warn") : "neutral",
+    },
+    {
+      label: "Respiration",
+      value: h10Respiration.possibleBreathHold ? "HOLD?" : h10Respiration.available ? `${fmtNumber(h10Respiration.bpm, 1)}/min` : "Withheld",
+      helper: h10Respiration.available
+        ? `${h10Respiration.source?.replaceAll?.("_", " ") || "H10"} · ${h10Respiration.confidence || "limited"} confidence${h10Respiration.possibleBreathHold ? " · at least 4 s low-motion stillness" : ""}`
+        : `Reason: ${(h10Respiration.reason || "waiting for 45 s low-motion window").replaceAll?.("_", " ")}`,
+      tone: h10Respiration.available ? (h10Respiration.confidence === "high" ? "good" : "warn") : "neutral",
+    },
+    {
+      label: "Chest Motion / Position",
+      value: (h10Motion.class || "unavailable").replaceAll?.("_", " "),
+      helper: `${(h10Position.state || "unavailable").replaceAll?.("_", " ")}${h10Position.orientationChangeDegrees != null ? ` · ${h10Position.orientationChangeDegrees}° from reference` : ""}`,
+      tone: h10Motion.class === "low_motion" ? "good" : h10Motion.available ? "warn" : "neutral",
+    },
+    {
+      label: "Recovery / Response",
+      value: h10Recovery.available ? `-${fmtNumber(h10Recovery.currentDropBpm, 0)} bpm` : "Learning",
+      helper: h10Recovery.available
+        ? `30 s ${h10Recovery.drop30Bpm != null ? `-${h10Recovery.drop30Bpm}` : "--"} · 60 s ${h10Recovery.drop60Bpm != null ? `-${h10Recovery.drop60Bpm}` : "--"} · latency ${h10Latency.available ? `${h10Latency.medianSeconds}s` : "learning"}`
+        : `Response latency ${h10Latency.available ? `${h10Latency.medianSeconds}s median` : `needs ${Math.max(0, 2 - Number(h10Latency.sampleCount || 0))} more marked response${Math.max(0, 2 - Number(h10Latency.sampleCount || 0)) === 1 ? "" : "s"}`}`,
+      tone: h10Recovery.available ? "good" : "neutral",
     },
     {
       label: "EMG",
@@ -7713,6 +8051,33 @@ export default function LiveCapture() {
             <>
               <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="RR Samples" value={fmtNumber(rrCount, 0)} helper="rolling H10 interval window" active={Number(rrCount) > 0} level={Math.min(100, (Number(rrCount) || 0) * 1.25)} large />
               <MetricCard icon={<Activity className="w-4 h-4" />} label="RMSSD" value={fmtNumber(hrvRmssd, 1)} helper={hrvQuality ? `HRV quality: ${hrvQuality}` : "waiting for RR window"} active={hrvRmssd != null} level={hrvQuality === "high" ? 90 : hrvQuality === "moderate" ? 65 : hrvQuality === "low" ? 35 : 0} large />
+              <MetricCard
+                icon={<Activity className="w-4 h-4" />}
+                label="Respiration"
+                value={h10Respiration.possibleBreathHold ? "HOLD?" : h10Respiration.available ? fmtNumber(h10Respiration.bpm, 1) : "--"}
+                helper={h10Respiration.available ? `breaths/min · ${h10Respiration.confidence} confidence${h10Respiration.possibleBreathHold ? " · possible 4 s hold" : ""}` : `withheld · ${(h10Respiration.reason || "warming up").replaceAll?.("_", " ")}`}
+                active={h10Respiration.available}
+                level={h10Respiration.available ? (h10Respiration.confidence === "high" ? 90 : 65) : 0}
+                large
+              />
+              <MetricCard
+                icon={<Radio className="w-4 h-4" />}
+                label="Chest Motion"
+                value={h10Motion.dynamicRmsMilliG != null ? fmtNumber(h10Motion.dynamicRmsMilliG, 0) : "--"}
+                helper={h10Motion.available ? `mg RMS · ${(h10Motion.class || "").replaceAll?.("_", " ")}` : "waiting for H10 accelerometer"}
+                active={h10Motion.available}
+                level={h10Motion.available ? Math.min(100, Number(h10Motion.dynamicRmsMilliG || 0) / 3.6) : 0}
+                large
+              />
+              <MetricCard
+                icon={<RefreshCw className="w-4 h-4" />}
+                label="Recovery"
+                value={h10Recovery.available ? `-${fmtNumber(h10Recovery.currentDropBpm, 0)}` : "--"}
+                helper={h10Recovery.available ? `bpm from ${fmtNumber(h10Recovery.peakHr, 0)} peak · ${fmtNumber(h10Recovery.secondsSincePeak, 0)} s` : "learns after a sustained HR peak"}
+                active={h10Recovery.available}
+                level={h10Recovery.available ? Math.min(100, Number(h10Recovery.currentDropBpm || 0) * 5) : 0}
+                large
+              />
             </>
           )}
           {telemetryEmgLive && (

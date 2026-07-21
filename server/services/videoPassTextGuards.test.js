@@ -7,6 +7,7 @@ import {
   sanitizeSecondPersonProcedureLanguage,
   sanitizeFoleyProcedureText,
   sanitizeSleeveSessionText,
+  hasFoleySleeveIdentityConflict,
   hasConfirmedStimulationPauseEvidence,
   sanitizeUnsupportedStimulationPauseClaim,
 } from '../../src/lib/videoPassTextGuards.js';
@@ -95,6 +96,24 @@ test('device evidence badge marks blocked claims', () => {
 
   assert.equal(result.blocked, true);
   assert.equal(result.stage, 'meatus contact not confirmed');
+});
+
+test('corrects Foley tubing hallucinated as a sleeve in a Foley-only session', () => {
+  const context = { foleyKnown: true, sleeveKnown: false };
+  const input = 'The yellow sleeve lifts fully off the shaft, and the scrotum descends after sleeve removal.';
+  const result = sanitizeSleeveSessionText(input, context);
+
+  assert.equal(hasFoleySleeveIdentityConflict({ text: input }, context), true);
+  assert.match(result.text, /Foley tubing remains visible/i);
+  assert.match(result.text, /bare-hand stimulation with the Foley in place/i);
+  assert.doesNotMatch(result.text, /\bsleeve\b/i);
+});
+
+test('does not rewrite sleeve language when a sleeve is configured', () => {
+  const input = 'The sleeve lifts fully off the shaft.';
+  const result = sanitizeSleeveSessionText(input, { foleyKnown: true, sleeveKnown: true });
+
+  assert.equal(result.text, input);
 });
 
 test('ongoing stroking with a brief motion dip is not accepted as a pause', () => {

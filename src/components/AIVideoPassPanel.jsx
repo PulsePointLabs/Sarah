@@ -45,6 +45,7 @@ import {
   hasUnsupportedOrgasmClaim as hasUnsupportedOrgasmClaimGuard,
   hasUnsupportedPenileBaseClaim as hasUnsupportedPenileBaseClaimGuard,
   hasUnsupportedSleeveUseClaim as hasUnsupportedSleeveUseClaimGuard,
+  hasFoleySleeveIdentityConflict,
   sanitizeFoleyProcedureText as sanitizeFoleyProcedureTextGuard,
   sanitizeSecondPersonProcedureLanguage,
   sanitizeSleeveSessionText,
@@ -474,6 +475,23 @@ function hasUnsupportedAlreadyPlacedClaim(item) {
     && !/(manual(?:ly)?\s+(?:confirmed|logged)|explicitly\s+logged|urine\s+(?:return|visible|collection|collected)|balloon\s+(?:inflation|inflated)|bag\s+collection|drape\s+removal\s+with\s+urine)/.test(text);
 }
 
+function sessionDeviceIdentityContext(session) {
+  const methods = listText(session?.methods);
+  const tags = listText(session?.tags);
+  const contextText = [
+    methods,
+    tags,
+    session?.foley_type,
+    session?.foley_size,
+    session?.sleeve_type,
+    session?.devices,
+  ].filter(Boolean).join(" ").toLowerCase();
+  return {
+    foleyKnown: Boolean(session?.foley_type || session?.foley_size || /\b(?:foley|catheter)\b/.test(contextText)),
+    sleeveKnown: Boolean(session?.sleeve_type || /\b(?:masturbation\s+)?sleeve\b/.test(`${methods} ${tags}`.toLowerCase())),
+  };
+}
+
 function sanitizeExplorationFoleyText(text) {
   const value = neutralizeIntentLanguage(text);
   const { text: next } = sanitizeFoleyProcedureTextGuard(value);
@@ -512,9 +530,9 @@ function sanitizeExplorationFoleyText(text) {
     .trim(), 1);
 }
 
-function sanitizeRegularSessionDeviceText(text) {
+function sanitizeRegularSessionDeviceText(text, deviceContext = {}, supportingText = "") {
   const value = neutralizeIntentLanguage(text);
-  const sleeveSanitized = sanitizeSleeveSessionText(value).text;
+  const sleeveSanitized = sanitizeSleeveSessionText(value, { ...deviceContext, supportingText }).text;
   const orgasmSanitized = sanitizeUnsupportedOrgasmClaim(sleeveSanitized).text;
   const locationSanitized = sanitizeUnsupportedPenileBaseClaim(orgasmSanitized).text;
   return reduceConsistencyPhraseRepetition(locationSanitized, 1);
@@ -779,7 +797,7 @@ function isOutOfLaneForRole(item, role) {
   return otherIndex < lowerIndex;
 }
 
-function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExploration = false) {
+function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExploration = false, deviceContext = {}) {
   const value = typeof raw === "string" ? null : raw;
   const respirationAssessment = normalizeVideoRespirationAssessment(value?.respiration_assessment, fallbackWindow, selectedRole);
   const respirationFinding = respirationFindingForAssessment(respirationAssessment);
@@ -803,7 +821,7 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
   const cleanTextForMode = (text) => (
     isExploration
       ? sanitizeExplorationFoleyText(text)
-      : sanitizeUnsupportedStimulationPauseClaim(sanitizeRegularSessionDeviceText(text), rawWindowText)
+      : sanitizeUnsupportedStimulationPauseClaim(sanitizeRegularSessionDeviceText(text, deviceContext, rawWindowText), rawWindowText)
   );
   return {
     respirationAssessment,
@@ -823,6 +841,8 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
         ? "Scrotal-base/perineal contact"
         : hasUnsupportedFoleyStageForecast(finding)
         ? "Field preparation"
+        : hasFoleySleeveIdentityConflict(finding, { ...deviceContext, supportingText: rawWindowText })
+        ? "Foley tubing with bare-hand stimulation"
         : hasUnsupportedSleeveUseClaimGuard(finding)
         ? "Sleeve use not confirmed"
         : cleanTextForMode(finding.title || "Finding"),
@@ -833,6 +853,7 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
         || hasUnsupportedFoleyRemovalClaimGuard(finding)
         || hasUnsupportedMeatusContactClaimGuard(finding)
         || hasUnsupportedSleeveUseClaimGuard(finding)
+        || hasFoleySleeveIdentityConflict(finding, { ...deviceContext, supportingText: rawWindowText })
         || hasUnsupportedOrgasmClaimGuard(finding)
         || hasUnsupportedPenileBaseClaimGuard(finding)) && finding.confidence === "high" ? "moderate" : finding.confidence || "moderate",
       category: finding.category || "other",
@@ -846,7 +867,10 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
       const unsupportedAlreadyPlaced = isExploration && hasUnsupportedAlreadyPlacedClaim(event);
       const unsupportedFoleyRemoval = isExploration && hasUnsupportedFoleyRemovalClaimGuard(event);
       const unsupportedMeatusClaim = isExploration && hasUnsupportedMeatusContactClaimGuard(event);
-      const unsupportedSleeveUse = !isExploration && hasUnsupportedSleeveUseClaimGuard(event);
+      const unsupportedSleeveUse = !isExploration && (
+        hasUnsupportedSleeveUseClaimGuard(event)
+        || hasFoleySleeveIdentityConflict(event, { ...deviceContext, supportingText: rawWindowText })
+      );
       const unsupportedOrgasmClaim = !isExploration && hasUnsupportedOrgasmClaimGuard(event);
       const note = cleanTextForMode(cleanDraftEventNote(event.note || event.text || ""));
       return {
@@ -1554,7 +1578,13 @@ function cardFromAIVideoJob(job, isExploration = false) {
   const cardMeta = meta.card || {};
   const result = job?.result;
   if (!result || !cardMeta.window) return null;
-  const normalized = normalizeAIResult(result, cardMeta.window, cardMeta.sourceVideoRole || "main", isExploration);
+  const normalized = normalizeAIResult(
+    result,
+    cardMeta.window,
+    cardMeta.sourceVideoRole || "main",
+    isExploration,
+    cardMeta.deviceContext || {},
+  );
   return {
     id: `job-${job.id}`,
     label: cardMeta.label || meta.title || "AI video pass",
@@ -1893,6 +1923,7 @@ export default function AIVideoPassPanel({
 }) {
   const isExploration = recordType === "body_exploration" || session?.standalone_body_exploration;
   const recordLabel = isExploration ? "exploration" : "session";
+  const deviceIdentityContext = useMemo(() => sessionDeviceIdentityContext(session), [session]);
   const analysisField = isExploration ? "ai_body_exploration" : "ai_analysis";
   const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
   const availableVideos = useMemo(() => linkedLocalVideos.filter((video) => video?.path && video.exists !== false), [linkedLocalVideos]);
@@ -2465,6 +2496,8 @@ Stimulation-pause threshold rule: slower or irregular cadence, reversal at the e
 
 Sleeve/contact state rule: evaluate sleeve presence, sleeve motion, and body contact as three separate observations in every regular-session window. A sleeve visibly held stationary around the shaft or at the penile base means sleeve contact is maintained while stroking is paused; it is not a bare penis and it is not no-contact. Call the penis bare only when the shaft is directly visible and the sleeve is visibly separated from it. Call no contact only when neither a hand nor the sleeve/device is visibly touching the penis. Do not carry sleeve placement forward from a prior window: sleeve-on requires visible overlap with the shaft in the current sampled frames, while a sleeve merely held nearby or above the shaft is not sleeve contact.
 
+Sleeve-versus-Foley identity gate: a narrow yellow tube, drainage line, catheter connector, or tubing exiting/routing near the meatus is Foley material, not a masturbation sleeve. A sleeve must have a visibly broad hollow body enclosing or surrounding a meaningful portion of the shaft; hand blur, lubricant sheen, exposed glans, and lifted Foley tubing do not establish one. Never describe Foley tubing as a yellow sleeve or turn hand repositioning/tubing lift into sleeve insertion or removal. ${deviceIdentityContext.foleyKnown && !deviceIdentityContext.sleeveKnown ? "This session establishes a Foley/catheter and does not establish a masturbation sleeve. Treat visible stimulation as bare-hand stimulation with the Foley in situ unless the current frames unmistakably show a separate broad sleeve device." : "Keep Foley tubing and any separately visible sleeve as distinct devices."}
+
 Hard wording rule: do not use "edging", "edging maneuver", "intentional edging", "holding back", "delaying climax", or similar intent language unless the nearby session event, session note, or user caption explicitly uses that exact concept. If the visible behavior is a hand lift, withdrawal, pause, restart, speed change, or contact change, describe the observable behavior only.
 
 Ejaculation and fluid evidence rule: do not infer orgasm, climax, ejaculation, or cum from shiny/clear wetness, glans sheen, lubrication sheen, hand movement, erection state, or a stimulation pause alone. Clear or glossy moisture on the glans/shaft is more likely lubricant, pre-ejaculate, or unspecified moisture unless there is strong supporting context. Only call ejaculate when the visible fluid is clearly whitish/opaque, there is a visible emission/spurt, or there is a nearby confirmed climax/ejaculation event in the session notes/timeline. When that threshold is met, say "ejaculate" or "visible ejaculate" directly; do not use vague residue/euphemism wording. Treat HR/telemetry as consistency context: if the window does not align with the session climax marker, recovery transition, or a plausible autonomic peak, label fluid as "visible moisture/sheen" or "possible lubricant/pre-ejaculate" rather than ejaculate. Never create multiple orgasms/climax events from repeated wetness or sheen across adjacent windows; carry forward that it is likely the same lubricant/moisture unless there is a clear new emission or confirmed event.
@@ -2574,6 +2607,7 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
             })),
             motionSummary: preview.motion_summary || null,
             telemetry,
+            deviceContext: deviceIdentityContext,
           };
           const completedJob = await runBackgroundAIVideoReview({
             aiPayload,
@@ -2589,7 +2623,7 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
           });
           const ai = completedJob.result;
           const normalized = suppressRepeatedStrokingContinuity(
-            normalizeAIResult(ai, reviewWindow, selectedVideoRole, isExploration),
+            normalizeAIResult(ai, reviewWindow, selectedVideoRole, isExploration, deviceIdentityContext),
             nextCards[nextCards.length - 1],
             isExploration,
           );
@@ -2747,7 +2781,7 @@ Return a corrected compact card for this same window. Keep timeline events only 
             if (progress.message) setStatus(progress.message);
           },
         });
-        const normalized = normalizeAIResult(completedJob.result, card.window, card.sourceVideoRole, true);
+        const normalized = normalizeAIResult(completedJob.result, card.window, card.sourceVideoRole, true, deviceIdentityContext);
         revisedCards = revisedCards.map((item, itemIndex) => (
           itemIndex === index
             ? { ...item, ...normalized, reassessed: true }
@@ -3099,6 +3133,7 @@ Return only the structured JSON matching the requested schema.`,
             })),
             motionSummary: preview.motion_summary,
             telemetry,
+            deviceContext: deviceIdentityContext,
           },
           session,
           recordType,
@@ -3108,7 +3143,7 @@ Return only the structured JSON matching the requested schema.`,
             if (progress.message) setStatus(progress.message);
           },
         });
-        const normalized = normalizeAIResult(completedJob.result, reviewWindow, selectedVideoRole, isExploration);
+        const normalized = normalizeAIResult(completedJob.result, reviewWindow, selectedVideoRole, isExploration, deviceIdentityContext);
         const verifiedCard = {
           id: `hybrid-sarah-${completedJob.id || Date.now()}-${i}`,
           label,

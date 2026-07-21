@@ -75,6 +75,16 @@ export function hasUnsupportedSleeveUseClaim(item) {
     && !/(sleeve (?:is\s+)?visibly (?:placed|on|over|around)|visibly (?:placed|on|over).{0,40}sleeve|shaft (?:is\s+)?inside (?:the\s+)?sleeve|glans.{0,40}inside (?:the\s+)?sleeve)/i.test(text);
 }
 
+export function hasFoleySleeveIdentityConflict(item, context = {}) {
+  const text = lowerItemText(item);
+  if (!/\bsleeve\b/.test(text)) return false;
+  const supportingText = String(context?.supportingText || "").toLowerCase();
+  const foleyKnown = Boolean(context?.foleyKnown)
+    || /\b(foley|catheter|drainage tubing|catheter tubing|yellow tubing)\b/.test(supportingText);
+  const sleeveKnown = Boolean(context?.sleeveKnown);
+  return foleyKnown && !sleeveKnown;
+}
+
 export function hasUnsupportedOrgasmClaim(item) {
   const text = lowerItemText(item);
   if (!/(orgasm|climax|ejaculat|ejaculate|ejaculatory|cum|spurt|spurting|release)/.test(text)) return false;
@@ -246,9 +256,19 @@ export function sanitizeFoleyProcedureText(text) {
   return { text: next.replace(/\bbegins advancing possible field\/tool handling\b/gi, "shows possible field/tool handling").replace(/\s+/g, " ").trim(), flags };
 }
 
-export function sanitizeSleeveSessionText(text) {
+export function sanitizeSleeveSessionText(text, context = {}) {
   let next = String(text || "");
   const flags = [];
+  if (hasFoleySleeveIdentityConflict({ text: next }, context)) {
+    flags.push("Foley/sleeve identity conflict corrected");
+    next = next
+      .replace(/\bwith (?:the )?sleeve removed\b/gi, "with your bare hand visible and the Foley still in place")
+      .replace(/\bafter (?:the )?sleeve removal\b/gi, "during continued bare-hand stimulation with the Foley in place")
+      .replace(/\b(?:the )?(?:yellow )?sleeve (?:lifts?|lifted|moves?|moved|pulls?|pulled|slides?|slid) (?:fully )?(?:off|away from) (?:the )?(?:penile )?shaft\b/gi, "your hand repositions while the Foley tubing remains visible")
+      .replace(/\b(?:yellow )?sleeve removal\b/gi, "continued bare-hand stimulation with the Foley in place")
+      .replace(/\b(?:the )?yellow sleeve\b/gi, "the yellow Foley tubing")
+      .replace(/\b(?:the )?sleeve\b/gi, "the Foley tubing");
+  }
   if (hasUnsupportedSleeveUseClaim({ text: next })) {
     flags.push("Sleeve active-use claim blocked");
     const beforeSleeveCleanup = next;

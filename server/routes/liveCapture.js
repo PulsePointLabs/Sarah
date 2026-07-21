@@ -537,6 +537,24 @@ async function createDirectH10Recording(recording = {}, reason = 'obs_record_sta
     'hrv_pnn50',
     'hrv_window_seconds',
     'hrv_quality',
+    'signal_confidence_score',
+    'signal_confidence_level',
+    'motion_class',
+    'motion_dynamic_rms_mg',
+    'motion_peak_dynamic_mg',
+    'respiration_bpm',
+    'respiration_confidence',
+    'respiration_source',
+    'respiration_unavailable_reason',
+    'possible_breath_hold',
+    'breath_hold_duration_seconds',
+    'position_state',
+    'orientation_change_degrees',
+    'multimodal_state',
+    'recovery_drop_30_bpm',
+    'recovery_drop_60_bpm',
+    'recovery_drop_90_bpm',
+    'response_latency_seconds',
   ].join(',') + '\n';
   await fs.writeFile(filepath, header, 'utf8');
   directH10Recording = {
@@ -546,7 +564,9 @@ async function createDirectH10Recording(recording = {}, reason = 'obs_record_sta
     startEpochMs: Number(recording?.startedAtMs) || Date.now(),
     lastEpochMs: null,
     reason,
+    rawSensorPath: filepath.replace(/\.csv$/i, '.sensors.ndjson'),
   };
+  await fs.writeFile(directH10Recording.rawSensorPath, '', 'utf8');
   state.hr.directH10Recording = {
     filename,
     filepath,
@@ -565,6 +585,13 @@ async function appendDirectH10TelemetryRow(telemetry) {
   if (hr == null) return;
   const timeOffsetMs = epochMs - directH10Recording.startEpochMs;
   const hrv = telemetry?.hrv || {};
+  const multimodal = telemetry?.multimodal || {};
+  const confidence = multimodal.signalConfidence || {};
+  const motion = multimodal.motion || {};
+  const respiration = multimodal.respiration || {};
+  const position = multimodal.position || {};
+  const recovery = multimodal.recovery || {};
+  const latency = multimodal.responseLatency || {};
   const rr = Array.isArray(telemetry?.rrIntervalsMs) ? telemetry.rrIntervalsMs.join('|') : '';
   const note = hrv.quality && hrv.quality !== 'unavailable'
     ? `direct_h10=true; real_rr_intervals=true; hrv_quality=${hrv.quality}`
@@ -589,9 +616,50 @@ async function appendDirectH10TelemetryRow(telemetry) {
     csvEscape(hrv.pnn50 ?? ''),
     csvEscape(hrv.windowSeconds ?? ''),
     csvEscape(hrv.quality || 'unavailable'),
+    csvEscape(confidence.score ?? ''),
+    csvEscape(confidence.level || 'unavailable'),
+    csvEscape(motion.class || 'unavailable'),
+    csvEscape(motion.dynamicRmsMilliG ?? ''),
+    csvEscape(motion.peakDynamicMilliG ?? ''),
+    csvEscape(respiration.bpm ?? ''),
+    csvEscape(respiration.confidence || ''),
+    csvEscape(respiration.source || ''),
+    csvEscape(respiration.available === false ? respiration.reason || 'unavailable' : ''),
+    csvEscape(respiration.possibleBreathHold ? 'true' : 'false'),
+    csvEscape(respiration.holdDurationSeconds ?? ''),
+    csvEscape(position.state || 'unavailable'),
+    csvEscape(position.orientationChangeDegrees ?? ''),
+    csvEscape(multimodal.state?.key || ''),
+    csvEscape(recovery.drop30Bpm ?? ''),
+    csvEscape(recovery.drop60Bpm ?? ''),
+    csvEscape(recovery.drop90Bpm ?? ''),
+    csvEscape(latency.medianSeconds ?? ''),
   ].join(',') + '\n';
   await fs.appendFile(directH10Recording.filepath, row, 'utf8');
   directH10Recording.lastEpochMs = epochMs;
+}
+
+async function appendDirectH10SensorBatch(sensorBatch, telemetry) {
+  if (!state.hr.recording?.active || state.hr.selectedSource !== HR_SOURCE_IDS.DIRECT_H10) return;
+  if (!directH10Recording) await createDirectH10Recording(state.hr.recording, 'direct_h10_sensor_auto_start');
+  const ecg = Array.isArray(sensorBatch?.ecg) ? sensorBatch.ecg.slice(-520).map((sample) => ({
+    timestamp_ms: cleanNumber(sample?.timestampMs),
+    microvolts: cleanNumber(sample?.microvolts),
+  })).filter((sample) => sample.timestamp_ms != null && sample.microvolts != null) : [];
+  const accelerometer = Array.isArray(sensorBatch?.accelerometer) ? sensorBatch.accelerometer.slice(-100).map((sample) => ({
+    timestamp_ms: cleanNumber(sample?.timestampMs),
+    x_mg: cleanNumber(sample?.xMilliG),
+    y_mg: cleanNumber(sample?.yMilliG),
+    z_mg: cleanNumber(sample?.zMilliG),
+  })).filter((sample) => sample.timestamp_ms != null && sample.x_mg != null && sample.y_mg != null && sample.z_mg != null) : [];
+  if (!ecg.length && !accelerometer.length) return;
+  const receivedAt = Number(telemetry?.receivedAt) || Date.now();
+  await fs.appendFile(directH10Recording.rawSensorPath, `${JSON.stringify({
+    received_at_ms: receivedAt,
+    session_offset_ms: receivedAt - directH10Recording.startEpochMs,
+    ecg,
+    accelerometer,
+  })}\n`, 'utf8');
 }
 
 async function finalizeDirectH10Recording(recording = {}) {
@@ -606,11 +674,13 @@ async function finalizeDirectH10Recording(recording = {}) {
     source: HR_SOURCE_IDS.DIRECT_H10,
     sourceLabel: HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10],
     obsOutputPath: recording?.obsOutputPath || recording?.outputPath || null,
+    rawSensorPath: current.rawSensorPath,
   }, null, 2), 'utf8');
   state.hr.directH10Recording = {
     filename: current.filename,
     filepath: current.filepath,
     metaPath,
+    rawSensorPath: current.rawSensorPath,
     active: false,
     startedAtMs: current.startEpochMs,
   };
@@ -1909,11 +1979,13 @@ liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
     refreshHrSourceStatus('Direct H10 HR + RR live');
     telemetry = applySelectedHrTelemetry(telemetry);
     publishHrTelemetryToOverlay(telemetry);
-    appendDirectH10TelemetryRow(telemetry).catch((error) => {
-      state.hr.directH10.error = `Direct H10 CSV write failed: ${error.message || error}`;
-      refreshHrSourceStatus();
-      broadcast('status', state);
-    });
+    appendDirectH10TelemetryRow(telemetry)
+      .then(() => appendDirectH10SensorBatch(req.body?.sensorBatch, telemetry))
+      .catch((error) => {
+        state.hr.directH10.error = `Direct H10 sensor recording failed: ${error.message || error}`;
+        refreshHrSourceStatus();
+        broadcast('status', state);
+      });
   } else {
     telemetry = applySelectedHrTelemetry(telemetry);
     publishHrTelemetryToOverlay(telemetry);
