@@ -1576,13 +1576,21 @@ function segmentEventCompatibilityScore(event = {}, segment = {}) {
   const targetFoot = /\b(feet|foot|toes?|heels?|soles?|ankles?|plantar(?: |-)flexion|dorsiflexion|toe curl|lower[-\s]?body)\b/.test(target);
   const targetSetup = /\b(mount(?:ing|ed)? the table|settling|settled|session opens|session begins|baseline|pre[-\s]?session|low nineties)\b/.test(target);
   const sourceSetup = /\b(mount(?:ing|ed)? the table|settling|settled on the table|session recording begins|session start|baseline|pre[-\s]?stimulation|early stimulation)\b/.test(source);
+  const targetMassagerPlacement = /\b(?:prostate\s+)?massager\b|\b(?:device|massager)\s+(?:placement|positioning|insertion|seating)\b|\b(?:placed|positioned|inserted|seated)\s+(?:the\s+)?(?:device|massager)\b/.test(target);
+  const sourceHasMassagerPlacementEvidence = /\bmassager\b/.test(source)
+    && /\b(actively handled|handling|guided|guidance|insert(?:ed|ion)?|position(?:ed|ing)?|seated|remains? in place|perineal|anal)\b/.test(source);
+  const sourceLooksObjectOnly = /\b(table (?:is |visible )?empty|empty (?:exam )?table|table vacant|side table|pre[-\s]?session setup|setup baseline|supplies|visible in background)\b/.test(source);
   const maxSessionSeconds = Number(segment?.maxSessionSeconds);
   const eventTime = Number(event?.session_time_s);
   let score = 0;
   if (sourceFoot && !targetFoot) score -= 180;
   if (targetFoot && !sourceFoot) score -= 120;
-  if (targetSetup) score += sourceSetup ? 220 : -160;
-  if (targetSetup && Number.isFinite(maxSessionSeconds) && maxSessionSeconds > 0 && Number.isFinite(eventTime) && eventTime > maxSessionSeconds * 0.3) {
+  if (targetMassagerPlacement) {
+    score += sourceHasMassagerPlacementEvidence ? 360 : -220;
+    if (sourceLooksObjectOnly && !sourceHasMassagerPlacementEvidence) score -= 220;
+  }
+  if (targetSetup && !targetMassagerPlacement) score += sourceSetup ? 220 : -160;
+  if (targetSetup && !targetMassagerPlacement && Number.isFinite(maxSessionSeconds) && maxSessionSeconds > 0 && Number.isFinite(eventTime) && eventTime > maxSessionSeconds * 0.3) {
     score -= 140;
   }
   return score;

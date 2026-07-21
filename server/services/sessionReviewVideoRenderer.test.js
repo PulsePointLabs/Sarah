@@ -81,6 +81,48 @@ test('segment-level matching prefers early table context over a later foot HR ev
   assert.equal(selected.session_time_s, 72);
 });
 
+test('massager placement narration rejects empty-table setup and selects visible placement evidence', () => {
+  const selected = selectReviewVideoEventForSegment({
+    segment: {
+      paragraphIndex: 2,
+      maxSessionSeconds: 1223,
+      text: 'HR held steady in the high eighties to low nineties during device placement, while your system appeared to be organizing rather than building.',
+    },
+    plan: {
+      generatedClipRequests: [
+        {
+          id: 'massager-handled',
+          paragraphIndex: 2,
+          session_time_s: 145,
+          label: 'Passive prostate massager becomes visible and is actively handled near the perineal and anal region.',
+          source: 'event_timeline',
+        },
+        {
+          id: 'massager-seated',
+          paragraphIndex: 2,
+          session_time_s: 169,
+          label: 'Passive prostate massager is visibly seated at the anal and perineal region; insertion guidance ends.',
+          source: 'event_timeline',
+        },
+      ],
+    },
+    session: {
+      event_timeline: [
+        {
+          id: 'empty-table-baseline',
+          time_s: 41,
+          note: 'Session table visible empty with stirrups deployed; side table shows supplies including a purple device; pre-session setup baseline established.',
+          category: ['setup'],
+        },
+      ],
+    },
+  });
+
+  assert.ok(selected);
+  assert.notEqual(selected.session_time_s, 41);
+  assert.match(selected.label, /massager/i);
+});
+
 test('out-of-range spoken timestamps are rejected instead of clamped to video end', () => {
   const selected = selectReviewVideoEventForSegment({
     segment: {
