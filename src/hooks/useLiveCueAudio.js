@@ -37,6 +37,7 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
   const gainRef = useRef(null);
   const activeSourceRef = useRef(null);
   const decodedRef = useRef(new Map());
+  const phraseSignature = useMemo(() => JSON.stringify(phrases || {}), [phrases]);
   const [status, setStatus] = useState({ phase: enabled ? "idle" : "disabled", message: "", decoded: 0, total: 0 });
 
   const getAudioContext = useCallback(async () => {
@@ -149,6 +150,11 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
     } catch {}
     activeSourceRef.current = null;
   }, []);
+
+  useEffect(() => {
+    decodedRef.current = new Map();
+    setStatus({ phase: enabled ? "idle" : "disabled", message: enabled ? "Sarah encouragement is ready to prepare." : "Sarah encouragement disabled.", decoded: 0, total: 0 });
+  }, [enabled, phraseSignature, settings?.format, settings?.model, settings?.speed, settings?.voice]);
 
   useEffect(() => stop, [stop]);
 

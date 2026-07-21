@@ -1,7 +1,8 @@
-export const LIVE_CUE_PROFILE_VERSION = "live-cue-v1";
+export const LIVE_CUE_PROFILE_VERSION = "live-cue-v2";
 
 export const LIVE_CUE_TYPES = Object.freeze({
   sustained_build: "sustained_build",
+  plateau_encouragement: "plateau_encouragement",
   climax_possible: "climax_possible",
   climax_imminent: "climax_imminent",
   recovery: "recovery",
@@ -11,6 +12,7 @@ export const LIVE_CUE_TYPES = Object.freeze({
 export const LIVE_CUE_PRIORITY = Object.freeze({
   climax_imminent: 5,
   climax_possible: 4,
+  plateau_encouragement: 3.5,
   build_resumed: 3,
   sustained_build: 2,
   recovery: 1,
@@ -23,6 +25,7 @@ export const LIVE_CUE_PRESETS = Object.freeze({
     helper: "Sparse, neutral physiology notices.",
     phrases: {
       sustained_build: ["Sustained build detected."],
+      plateau_encouragement: ["Sustained plateau detected."],
       climax_possible: ["Climax looks possible now."],
       climax_imminent: ["Threshold appears close."],
       recovery: ["Recovery detected."],
@@ -32,25 +35,27 @@ export const LIVE_CUE_PRESETS = Object.freeze({
   sarah_soft: {
     id: "sarah_soft",
     label: "Sarah Soft",
-    helper: "Warm, quiet, and lightly personal.",
+    helper: "Warm, calming encouragement without explicit language.",
     phrases: {
-      sustained_build: ["You're holding a sustained build.", "Your body is staying in the build.", "That build is holding."],
-      climax_possible: ["Climax looks possible now.", "You're moving closer.", "Your body may be approaching threshold."],
-      climax_imminent: ["You're very close now.", "Climax appears imminent.", "Your body looks close to crossing threshold."],
-      recovery: ["Recovery is settling in.", "Your system is coming down now.", "Recovery detected."],
-      build_resumed: ["The build is returning.", "You're rising again.", "Your body is building again."],
+      sustained_build: ["That's it. You're building steadily. Keep doing what is working.", "Your body is staying with the build. Keep your breathing easy.", "That build is holding. Stay calm and keep the rhythm steady."],
+      plateau_encouragement: ["You're holding a strong plateau. Stay relaxed and keep the stimulation steady.", "The plateau is holding. Do not rush it. Let your body keep climbing.", "You're maintaining the build. Stay with the pace that brought you here."],
+      climax_possible: ["You're getting close now. Keep your breathing easy and continue what is working.", "Your body is moving closer. Stay with it.", "Orgasm looks possible now. Keep the pace steady and let the build continue."],
+      climax_imminent: ["You're very close now. Stay with it and let your body cross the threshold.", "Orgasm appears close. Keep going without rushing.", "Your body looks ready. Stay calm and continue exactly like that."],
+      recovery: ["Let your body settle for a moment. Keep the connection and allow the build to return.", "Take the small recovery. Breathe, stay present, and do not lose the rhythm completely.", "Your system is easing briefly. Let it recover, then continue."],
+      build_resumed: ["There it is. The build is returning. Stay with it.", "You're rising again. Keep the pressure steady.", "Your body is building again. Continue what is working."],
     },
   },
   intimate_coaching: {
     id: "intimate_coaching",
     label: "Intimate Coaching",
-    helper: "Direct threshold-focused cues, still calibrated.",
+    helper: "More direct orgasm-focused encouragement, still non-graphic.",
     phrases: {
-      sustained_build: ["That build is holding.", "Your body is staying with it."],
-      climax_possible: ["You're getting close now.", "Your body may be approaching threshold."],
-      climax_imminent: ["You're very close now.", "Your body looks committed to the climb."],
-      recovery: ["Recovery is settling in. Let it happen.", "Your system is coming down now."],
-      build_resumed: ["The build is returning.", "You're rising again."],
+      sustained_build: ["Good. Keep going. Your body is responding and the build is holding.", "Stay with that rhythm. You're moving in the right direction."],
+      plateau_encouragement: ["Hold this plateau. Keep the stimulation consistent and let the pressure build.", "Stay right here and keep going. Your body is holding close to threshold.", "Do not back away yet. Keep the pace controlled and steady."],
+      climax_possible: ["You're getting close now. Keep going and let the build deepen.", "Orgasm is becoming possible. Stay with the stimulation that is working."],
+      climax_imminent: ["You're very close. Keep going and let yourself cross the threshold.", "Stay with it. Your body looks close to orgasm.", "Keep the rhythm steady. You are nearly there."],
+      recovery: ["Take the brief recovery without letting the build disappear.", "Ease back only enough to settle, then return to the climb."],
+      build_resumed: ["The build is back. Keep going.", "You're rising again. Stay with it and continue toward orgasm."],
     },
   },
 });

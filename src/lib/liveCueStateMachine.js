@@ -6,6 +6,8 @@ export const DEFAULT_LIVE_CUE_MACHINE_OPTIONS = Object.freeze({
   allowSessionStyleCues: false,
   sustainedBuildThreshold: 42,
   sustainedBuildMs: 10_000,
+  plateauThreshold: 62,
+  plateauMs: 10_000,
   climaxPossibleThreshold: 68,
   climaxPossibleMs: 5_000,
   climaxImminentThreshold: 85,
@@ -17,6 +19,7 @@ export const DEFAULT_LIVE_CUE_MACHINE_OPTIONS = Object.freeze({
   globalCooldownMs: 14_000,
   cooldowns: {
     sustained_build: 45_000,
+    plateau_encouragement: 55_000,
     climax_possible: 30_000,
     climax_imminent: 20_000,
     recovery: 90_000,
@@ -113,6 +116,7 @@ function acceptCue(state, cue, phrases, at, prediction, sample) {
     priority: LIVE_CUE_PRIORITY[cue.type] || 0,
     detector: {
       nearClimax: Number(prediction.nearClimax || 0),
+      plateauScore: Number(prediction.plateauScore || 0),
       recovery: Number(prediction.recovery || 0),
       label: prediction.label || "",
       phase: prediction.phase || "",
@@ -121,6 +125,8 @@ function acceptCue(state, cue, phrases, at, prediction, sample) {
       hrvSignal: prediction.hrvSignal || "",
       rmssd: prediction.rmssd ?? null,
       confidenceBand: prediction.confidenceBand || "",
+      controllerConfidence: prediction.controllerConfidence ?? null,
+      physiologicalIntensity: prediction.physiologicalIntensity || "",
     },
     sample: {
       hr: sample.hr ?? sample.currentHr ?? null,
@@ -162,7 +168,10 @@ export function stepLiveCueStateMachine(previousState, prediction = {}, sample =
 
   const near = Number(prediction.nearClimax || 0);
   const recovery = Number(prediction.recovery || 0);
+  const plateau = Number(prediction.plateauScore || 0);
   const recovering = isRecovery(prediction);
+  const multimodalTrusted = prediction.multimodalAvailable ? prediction.multimodalTrusted === true : true;
+  const controllerTrusted = Number(prediction.controllerConfidence || 0) >= 50 || !prediction.multimodalAvailable;
   const families = supportFamilies(prediction, sample);
   const usefulFamilyCount = families.length;
   const hrvOnly = families.length === 1 && families[0] === "hrv";
@@ -205,14 +214,14 @@ export function stepLiveCueStateMachine(previousState, prediction = {}, sample =
   const possibleReady = setCandidate(
     state,
     LIVE_CUE_TYPES.climax_possible,
-    near >= options.climaxPossibleThreshold && !recovering && !hrvOnly && usefulFamilyCount >= 1,
+    near >= options.climaxPossibleThreshold && !recovering && !hrvOnly && usefulFamilyCount >= 1 && multimodalTrusted && controllerTrusted,
     at,
     options.climaxPossibleMs
   );
   const imminentReady = setCandidate(
     state,
     LIVE_CUE_TYPES.climax_imminent,
-    near >= options.climaxImminentThreshold && !recovering && !hrvOnly && usefulFamilyCount >= (sample.hasMultipleSignalFamilies ? 2 : 1),
+    near >= options.climaxImminentThreshold && !recovering && !hrvOnly && usefulFamilyCount >= (sample.hasMultipleSignalFamilies ? 2 : 1) && multimodalTrusted && controllerTrusted,
     at,
     options.climaxImminentMs
   );
@@ -222,6 +231,18 @@ export function stepLiveCueStateMachine(previousState, prediction = {}, sample =
     (recovering || recovery >= options.recoveryThreshold) && near < options.climaxImminentThreshold,
     at,
     options.recoveryMs
+  );
+  const plateauReady = setCandidate(
+    state,
+    LIVE_CUE_TYPES.plateau_encouragement,
+    plateau >= options.plateauThreshold
+      && Boolean(prediction.plateauDwell || prediction.physiologicalIntensity === "high_plateau")
+      && !recovering
+      && usefulFamilyCount >= 1
+      && multimodalTrusted
+      && controllerTrusted,
+    at,
+    options.plateauMs
   );
   const resumedReady = setCandidate(
     state,
@@ -234,6 +255,7 @@ export function stepLiveCueStateMachine(previousState, prediction = {}, sample =
   const candidates = [
     imminentReady && hasPhrase(phrases, LIVE_CUE_TYPES.climax_imminent) ? { type: LIVE_CUE_TYPES.climax_imminent, state: "climax_imminent" } : null,
     possibleReady && hasPhrase(phrases, LIVE_CUE_TYPES.climax_possible) ? { type: LIVE_CUE_TYPES.climax_possible, state: "climax_possible" } : null,
+    plateauReady && hasPhrase(phrases, LIVE_CUE_TYPES.plateau_encouragement) ? { type: LIVE_CUE_TYPES.plateau_encouragement, state: "plateau_encouragement" } : null,
     resumedReady && hasPhrase(phrases, LIVE_CUE_TYPES.build_resumed) ? { type: LIVE_CUE_TYPES.build_resumed, state: "build_resumed" } : null,
     sustainedReady && hasPhrase(phrases, LIVE_CUE_TYPES.sustained_build) ? { type: LIVE_CUE_TYPES.sustained_build, state: "sustained_build" } : null,
     recoveryReady && hasPhrase(phrases, LIVE_CUE_TYPES.recovery) ? { type: LIVE_CUE_TYPES.recovery, state: "recovery" } : null,

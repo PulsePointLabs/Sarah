@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { BleClient } from "@capacitor-community/bluetooth-le";
-import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, Footprints, HeartPulse, Maximize2, Mic, MicOff, Pause, Play, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, X, Zap } from "lucide-react";
+import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, Footprints, HeartPulse, Maximize2, Mic, MicOff, Pause, Play, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, Volume2, X, Zap } from "lucide-react";
 import {
   Area,
   CartesianGrid,
@@ -2334,6 +2334,19 @@ export default function LiveCapture() {
     }));
   }, []);
 
+  useEffect(() => {
+    if (!restoredLaunchProfileRef.current) return;
+    const saved = saveLiveCaptureLaunchProfile({
+      ...readLiveCaptureLaunchProfile(),
+      livePhysiologyCuesEnabled: liveCueSettings.enabled,
+      cueStyle: liveCueSettings.style,
+      cueVolume: liveCueSettings.volume,
+      cuePan: liveCueSettings.pan,
+      mediaDucking: liveCueSettings.mediaDucking,
+    });
+    setLaunchProfile(saved);
+  }, [liveCueSettings.enabled, liveCueSettings.mediaDucking, liveCueSettings.pan, liveCueSettings.style, liveCueSettings.volume]);
+
   const waitForH10PmdControlResponse = useCallback((measurement, timeoutMs = 5000) => new Promise((resolve, reject) => {
     const waiterKey = `2:${measurement}`;
     const previous = directH10PmdControlWaitersRef.current.get(waiterKey);
@@ -4472,6 +4485,36 @@ export default function LiveCapture() {
       appendLiveSessionEvents(finalEvent).catch(() => {});
     },
   });
+
+  const toggleLiveEncouragement = useCallback(async () => {
+    if (liveCueSettings.enabled) {
+      liveCueAudio.stop();
+      liveCueEngine.reset();
+      setLiveCueSettings((previous) => ({ ...previous, enabled: false }));
+      return;
+    }
+    try {
+      await liveCueAudio.unlock();
+      setLiveCueSettings((previous) => ({ ...previous, enabled: true }));
+    } catch (error) {
+      toast({
+        title: "Sarah encouragement could not start",
+        description: error?.message || "Audio playback is unavailable in this browser context.",
+        variant: "destructive",
+      });
+    }
+  }, [liveCueAudio, liveCueEngine, liveCueSettings.enabled, toast]);
+
+  useEffect(() => {
+    if (!recordingActive || !liveCueSettings.enabled || liveCueAudio.ready || liveCueAudio.status.phase === "preparing") return;
+    liveCueAudio.prepare().catch((error) => {
+      toast({
+        title: "Sarah encouragement is unavailable",
+        description: error?.message || "The encouragement clips could not be prepared.",
+        variant: "destructive",
+      });
+    });
+  }, [liveCueAudio, liveCueSettings.enabled, recordingActive, toast]);
 
   const waitForRecentHrPacket = useCallback((timeoutMs = 25000) => new Promise((resolve) => {
     const started = Date.now();
@@ -6899,6 +6942,36 @@ export default function LiveCapture() {
 
             {!captureIsBodyExploration && (
               <SetupTile
+                icon={<Volume2 className="h-3.5 w-3.5 text-primary" />}
+                label="Sarah Encouragement"
+                value={liveCueSettings.enabled ? "On" : "Off"}
+                helper={liveCueSettings.enabled
+                  ? `${LIVE_CUE_PRESETS[liveCueSettings.style]?.label || "Sarah"} · ${liveCueAudio.ready ? "voice ready" : liveCueAudio.status.message || "prepares at session start"}`
+                  : "Opt-in calming encouragement during build, plateau, final approach, and recovery."}
+                active={liveCueSettings.enabled}
+              >
+                <button
+                  type="button"
+                  onClick={toggleLiveEncouragement}
+                  className={`rounded-md px-2.5 py-1.5 text-xs font-semibold ${liveCueSettings.enabled ? "bg-primary text-primary-foreground" : "border border-border bg-background text-foreground hover:bg-muted"}`}
+                >
+                  {liveCueSettings.enabled ? "Encouragement On" : "Turn On"}
+                </button>
+                <select
+                  value={liveCueSettings.style}
+                  onChange={(event) => setLiveCueSettings((previous) => ({ ...previous, style: event.target.value }))}
+                  className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground"
+                  aria-label="Sarah encouragement style"
+                >
+                  <option value="clinical_minimal">Clinical minimal</option>
+                  <option value="sarah_soft">Warm encouragement</option>
+                  <option value="intimate_coaching">Direct encouragement</option>
+                </select>
+              </SetupTile>
+            )}
+
+            {!captureIsBodyExploration && (
+              <SetupTile
                 icon={<Brain className="h-3.5 w-3.5 text-primary" />}
                 label="Phase Watch"
                 value={`${prediction.nearClimax}%`}
@@ -8176,6 +8249,45 @@ export default function LiveCapture() {
               <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
                 {prediction.hrvExplanation}
               </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={toggleLiveEncouragement}
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${liveCueSettings.enabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : "border border-border bg-card text-foreground hover:bg-muted"}`}
+                >
+                  <Volume2 className="h-3.5 w-3.5" />
+                  {liveCueSettings.enabled ? "Sarah Encouragement On" : "Turn Sarah Encouragement On"}
+                </button>
+                <select
+                  value={liveCueSettings.style}
+                  onChange={(event) => setLiveCueSettings((previous) => ({ ...previous, style: event.target.value }))}
+                  className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground"
+                  aria-label="Sarah encouragement style"
+                >
+                  <option value="clinical_minimal">Clinical minimal</option>
+                  <option value="sarah_soft">Warm encouragement</option>
+                  <option value="intimate_coaching">Direct encouragement</option>
+                </select>
+                <label className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs font-medium text-muted-foreground">
+                  Volume
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="0.7"
+                    step="0.05"
+                    value={liveCueSettings.volume}
+                    onChange={(event) => setLiveCueSettings((previous) => ({ ...previous, volume: Number(event.target.value) }))}
+                    className="w-24 accent-primary"
+                    aria-label="Sarah encouragement volume"
+                  />
+                  <span className="w-8 text-right tabular-nums text-foreground">{Math.round(liveCueSettings.volume * 100)}%</span>
+                </label>
+              </div>
+              {liveCueSettings.enabled && liveCueEngine.latestCue?.phrase && (
+                <p className="mt-2 rounded-lg border border-primary/20 bg-primary/[0.06] px-3 py-2 text-xs text-muted-foreground">
+                  Last encouragement: <span className="font-medium text-foreground">{liveCueEngine.latestCue.phrase}</span>
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-2 text-right lg:grid-cols-4">
               <div className="rounded-lg border px-4 py-3" style={{ borderColor: `${levelColor(prediction.nearClimax)}80`, backgroundColor: `${levelColor(prediction.nearClimax)}20` }}>
