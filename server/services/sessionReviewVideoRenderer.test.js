@@ -353,6 +353,84 @@ test('active stimulation fallback returns null when only empty-room or off-table
   assert.equal(fallback, null);
 });
 
+test('missing phase offsets never create fake climax or recovery anchors at session zero', () => {
+  const fallback = buildActiveStimulationFallbackEvent({
+    session: {
+      pre_climax_offset_s: null,
+      climax_offset_s: null,
+      recovery_offset_s: null,
+      event_timeline: [
+        {
+          id: 'setup-zero',
+          time_s: 0,
+          note: 'Session recording begins with an empty exam table and no body or stimulation visible yet.',
+          category: ['other'],
+        },
+        {
+          id: 'active-contact',
+          time_s: 102,
+          note: 'Hand contact begins at the penis and active stimulation is visible on the table.',
+          category: ['stimulation_resumed'],
+          annotation_tags: ['hand_contact', 'stimulation_start'],
+        },
+      ],
+    },
+    segment: {
+      paragraphIndex: 4,
+      text: 'The final build and orgasm discussion continues here without an explicit timestamp.',
+    },
+    primaryVideo: { path: 'E:/recordings/source.mp4' },
+    sourceDuration: 780,
+    fallbackCursor: 0,
+  });
+
+  assert.ok(fallback);
+  assert.equal(Math.round(fallback.session_time_s), 102);
+  assert.equal(fallback.id, 'active-contact');
+  assert.equal(canonicalPhaseAnchorForNarration({
+    session: { climax_offset_s: null },
+    narrationText: 'Climax and ejaculation are discussed here.',
+  }), null);
+  assert.equal(canonicalPhaseAnchorForNarration({
+    session: { recovery_offset_s: 0 },
+    narrationText: 'Recovery follows the climax.',
+  }), null);
+});
+
+test('final-build narration prefers late active evidence over stronger early setup contact', () => {
+  const fallback = buildActiveStimulationFallbackEvent({
+    session: {
+      event_timeline: [
+        {
+          id: 'early-contact',
+          time_s: 150,
+          note: 'Hand contact at the scrotal-base and penis during early stimulation positioning.',
+          category: ['stimulation'],
+        },
+        {
+          id: 'late-build',
+          time_s: 1070,
+          note: 'Bilateral tension and high-load build continue immediately before the terminal recovery transition.',
+          category: ['movement_observed'],
+          annotation_tags: ['high_load_plateau', 'pre_recovery', 'build'],
+        },
+      ],
+    },
+    segment: {
+      paragraphIndex: 8,
+      text: 'The final build provides the cardiovascular correlate of orgasm and climax.',
+    },
+    primaryVideo: { path: 'E:/recordings/source.mp4' },
+    sourceDuration: 1222,
+    fallbackCursor: 0,
+  });
+
+  assert.ok(fallback);
+  assert.equal(fallback.id, 'late-build');
+  assert.equal(Math.round(fallback.session_time_s), 1070);
+  assert.ok(fallback._phase_position_score > 150);
+});
+
 test('generic review b-roll avoids reusing a nearby source-video window', () => {
   const start = selectDistinctReviewSourceStart({
     preferredStart: 124,

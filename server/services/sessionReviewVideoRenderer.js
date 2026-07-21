@@ -8,7 +8,7 @@ import { q, runProcess, slugifyFilePart } from './ttsCore.js';
 import { buildLoggedEventAnchors, buildReviewVideoPlan, extractCitedTimesFromText } from './sessionReviewVideoPlanner.js';
 import { normalizeWatermarkSettings, replaceVideoWithWatermarkedExport } from './watermark.js';
 
-const REVIEW_RENDER_VERSION = 'session_review_video_v14_timeline_locked_multicamera_telemetry';
+const REVIEW_RENDER_VERSION = 'session_review_video_v15_validated_phase_anchors';
 const REVIEW_VIDEO_WIDTH = Number(process.env.REVIEW_VIDEO_WIDTH || 1920);
 const REVIEW_VIDEO_HEIGHT = Number(process.env.REVIEW_VIDEO_HEIGHT || 1080);
 const REVIEW_VIDEO_PRESET = process.env.REVIEW_VIDEO_PRESET || 'slow';
@@ -488,6 +488,29 @@ function activeStimulationAnchorScore(event = {}) {
   return positive - negative;
 }
 
+function isKnownInactiveReviewAnchor(event = {}) {
+  const text = reviewAnchorText(event);
+  return [
+    /\b(table vacant|vacant table|empty table|empty exam table|empty room|room only|table only)\b/,
+    /\bpre[-\s]?session\b/,
+    /\bno (?:body|person|subject)(?: [^.]{0,24})? visible\b/,
+    /\bno (?:active )?(?:stimulation|contact)(?: [^.]{0,24})? visible\b/,
+    /\bno stimulation contact\b/,
+    /\b(ambulatory|walking|standing beside|getting off|off the table|exiting the table|away from the table)\b/,
+  ].some((pattern) => pattern.test(text));
+}
+
+function segmentPhasePositionScore(event = {}, segmentText = '', primaryVideo = {}, sourceDuration = 0) {
+  const target = String(segmentText || '').toLowerCase();
+  const wantsLatePeak = /\b(final build|late[-\s]?session|terminal build|culminat|climax|orgasm|ejaculat|peak state|peak response)\b/.test(target);
+  if (!wantsLatePeak) return 0;
+  const eventTime = Number(event?.session_time_s);
+  const sessionEnd = sessionTimeForSource(Number(sourceDuration || 0), primaryVideo);
+  if (!Number.isFinite(eventTime) || !Number.isFinite(sessionEnd) || sessionEnd <= 0) return 0;
+  const ratio = Math.max(0, Math.min(1, eventTime / sessionEnd));
+  return Math.round(Math.max(0, (ratio - 0.35) / 0.65) * 260);
+}
+
 export function buildActiveStimulationFallbackEvent({
   session = {},
   segment = {},
@@ -497,6 +520,7 @@ export function buildActiveStimulationFallbackEvent({
 } = {}) {
   const anchors = buildLoggedEventAnchors(session)
     .map((anchor) => {
+      if (isKnownInactiveReviewAnchor(anchor)) return null;
       const score = activeStimulationAnchorScore(anchor);
       if (score < 70) return null;
       const sessionCursor = sessionTimeForSource(fallbackCursor, primaryVideo);
@@ -504,11 +528,13 @@ export function buildActiveStimulationFallbackEvent({
         ? Math.abs(Number(anchor.session_time_s) - sessionCursor)
         : 0;
       const relevance = segmentKeywordScore(anchor, segment.text || '');
+      const phasePosition = segmentPhasePositionScore(anchor, segment.text || '', primaryVideo, sourceDuration);
       return {
         ...anchor,
         _active_score: score,
         _distance_score: Math.max(0, 90 - Math.min(90, distance / 3)),
         _relevance_score: relevance,
+        _phase_position_score: phasePosition,
       };
     })
     .filter(Boolean)
@@ -517,7 +543,11 @@ export function buildActiveStimulationFallbackEvent({
       primaryVideo,
       sourceDuration,
     }))
-    .sort((a, b) => (b._active_score + b._distance_score + b._relevance_score) - (a._active_score + a._distance_score + a._relevance_score));
+    .sort((a, b) => (
+      b._active_score + b._distance_score + b._relevance_score + b._phase_position_score
+    ) - (
+      a._active_score + a._distance_score + a._relevance_score + a._phase_position_score
+    ));
 
   const selected = anchors[0];
   if (!selected) return null;
@@ -1680,8 +1710,9 @@ function phaseAnchorMatchesNarration(event = {}, narrationText = '') {
 export function canonicalPhaseAnchorForNarration({ session = {}, narrationText = '' } = {}) {
   const text = String(narrationText || '');
   const phase = (seconds, label, reason) => {
+    if (seconds == null || String(seconds).trim() === '') return null;
     const value = Number(seconds);
-    return Number.isFinite(value) ? {
+    return Number.isFinite(value) && value > 0 ? {
       id: `canonical-phase-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
       session_time_s: value,
       label,

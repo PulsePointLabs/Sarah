@@ -123,8 +123,10 @@ function anchorScore(anchor, paragraphText = '') {
 }
 
 function addAnchor(anchors, time, label, reason, extra = {}) {
+  if (time == null || String(time).trim() === '') return;
   const seconds = Number(time);
-  if (!Number.isFinite(seconds) || seconds < 0) return;
+  const minimumSeconds = extra.allowZero === false ? Number.EPSILON : 0;
+  if (!Number.isFinite(seconds) || seconds < minimumSeconds) return;
   anchors.push({
     id: extra.id || `${label}:${Math.round(seconds)}`,
     label,
@@ -150,9 +152,9 @@ function eventWindowForAnchor(anchor = {}, paragraphText = '') {
 
 export function buildLoggedEventAnchors(session = {}) {
   const anchors = [];
-  addAnchor(anchors, session.pre_climax_offset_s, 'Pre-climax build', 'Logged pre-climax phase marker', { source: 'phase_marker' });
-  addAnchor(anchors, session.climax_offset_s, 'Climax / ejaculation', 'Logged climax or ejaculation phase marker', { source: 'phase_marker' });
-  addAnchor(anchors, session.recovery_offset_s, 'Recovery shift', 'Logged recovery phase marker', { source: 'phase_marker' });
+  addAnchor(anchors, session.pre_climax_offset_s, 'Pre-climax build', 'Logged pre-climax phase marker', { source: 'phase_marker', allowZero: false });
+  addAnchor(anchors, session.climax_offset_s, 'Climax / ejaculation', 'Logged climax or ejaculation phase marker', { source: 'phase_marker', allowZero: false });
+  addAnchor(anchors, session.recovery_offset_s, 'Recovery shift', 'Logged recovery phase marker', { source: 'phase_marker', allowZero: false });
 
   (Array.isArray(session.event_timeline) ? session.event_timeline : []).forEach((event, index) => {
     const category = Array.isArray(event?.category) ? event.category.join(' ') : event?.category || '';
