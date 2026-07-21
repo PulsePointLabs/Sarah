@@ -25,7 +25,7 @@ function tryRemoveDir(target) {
     removeDir(target);
     return true;
   } catch (error) {
-    if (error?.code !== 'EPERM' && error?.code !== 'EBUSY') throw error;
+    if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(error?.code)) throw error;
     return false;
   }
 }
