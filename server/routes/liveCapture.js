@@ -19,6 +19,7 @@ import {
 } from '../services/hrSources.js';
 import { SHARED_HR_PACKET_STALE_MS, isSharedHrPacketFresh } from '../services/hrFreshness.js';
 import { normalizeOverlayHeartRateSnapshot } from '../services/overlayHeartRate.js';
+import { summarizeCapturePauseIntervals } from '../services/capturePauseIntervals.js';
 
 export const liveCaptureRouter = express.Router();
 
@@ -128,6 +129,8 @@ const state = {
     pendingHrSegments: [],
     pendingObsSegments: [],
     pausedAt: null,
+    resumedAt: null,
+    pauseIntervals: [],
   },
   engine: null,
 };
@@ -207,6 +210,22 @@ function median(values = []) {
   if (!sorted.length) return null;
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function fmtLocalCaptureTimestamp(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+    timeZoneName: 'short',
+  });
 }
 
 function hrvQualityScore(value) {
@@ -452,7 +471,7 @@ async function createPulsoidRecording(recording = {}, reason = 'obs_record_start
 }
 
 async function appendPulsoidTelemetryRow(telemetry) {
-  if (!state.hr.recording?.active || state.hr.selectedSource !== HR_SOURCE_IDS.PULSOID) return;
+  if (!state.hr.recording?.active || state.hr.recording?.paused || state.hr.selectedSource !== HR_SOURCE_IDS.PULSOID) return;
   if (!pulsoidRecording) await createPulsoidRecording(state.hr.recording, 'pulsoid_auto_start');
   const epochMs = Number(telemetry?.receivedAt) || Date.now();
   if (pulsoidRecording.lastEpochMs != null && epochMs <= pulsoidRecording.lastEpochMs) return;
@@ -577,7 +596,7 @@ async function createDirectH10Recording(recording = {}, reason = 'obs_record_sta
 }
 
 async function appendDirectH10TelemetryRow(telemetry) {
-  if (!state.hr.recording?.active || state.hr.selectedSource !== HR_SOURCE_IDS.DIRECT_H10) return;
+  if (!state.hr.recording?.active || state.hr.recording?.paused || state.hr.selectedSource !== HR_SOURCE_IDS.DIRECT_H10) return;
   if (!directH10Recording) await createDirectH10Recording(state.hr.recording, 'direct_h10_auto_start');
   const epochMs = Number(telemetry?.receivedAt) || Date.now();
   if (directH10Recording.lastEpochMs != null && epochMs <= directH10Recording.lastEpochMs) return;
@@ -640,7 +659,7 @@ async function appendDirectH10TelemetryRow(telemetry) {
 }
 
 async function appendDirectH10SensorBatch(sensorBatch, telemetry) {
-  if (!state.hr.recording?.active || state.hr.selectedSource !== HR_SOURCE_IDS.DIRECT_H10) return;
+  if (!state.hr.recording?.active || state.hr.recording?.paused || state.hr.selectedSource !== HR_SOURCE_IDS.DIRECT_H10) return;
   if (!directH10Recording) await createDirectH10Recording(state.hr.recording, 'direct_h10_sensor_auto_start');
   const ecg = Array.isArray(sensorBatch?.ecg) ? sensorBatch.ecg.slice(-520).map((sample) => ({
     timestamp_ms: cleanNumber(sample?.timestampMs),
@@ -864,6 +883,7 @@ function buildSessionSeed(recording) {
     capture_status: 'recording',
     capture_started_at: started.toISOString(),
     capture_segments: [],
+    capture_pause_intervals: [],
     capture_source: `OBS + ${state.hr.selectedSourceLabel || 'HR relay'} + EMG bridge`,
     hr_source: state.hr.selectedSource,
     hr_source_label: state.hr.selectedSourceLabel,
@@ -890,6 +910,7 @@ function buildBodyExplorationSeed(recording) {
     capture_status: 'recording',
     capture_started_at: started.toISOString(),
     capture_segments: [],
+    capture_pause_intervals: [],
     capture_source: `OBS + ${state.hr.selectedSourceLabel || 'HR relay'} + EMG bridge`,
     hr_source: state.hr.selectedSource,
     hr_source_label: state.hr.selectedSourceLabel,
@@ -994,10 +1015,12 @@ function listRecoverableLiveSessions() {
 
 function hydratePersistedLiveSession(candidate) {
   if (!candidate?.id) return null;
-  const pausedAt = candidate.record?.capture_last_paused_at
-    || candidate.record?.updated_date
-    || candidate.record?.capture_started_at
-    || null;
+  const pausedAt = candidate.record?.capture_status === 'recording_paused'
+    ? candidate.record?.capture_last_paused_at
+      || candidate.record?.updated_date
+      || candidate.record?.capture_started_at
+      || null
+    : null;
   state.session = {
     ...state.session,
     activeSessionId: candidate.id,
@@ -1023,6 +1046,10 @@ function hydratePersistedLiveSession(candidate) {
         reason: segment.reason,
       })),
     pausedAt,
+    resumedAt: candidate.record?.capture_last_resumed_at || null,
+    pauseIntervals: Array.isArray(candidate.record?.capture_pause_intervals)
+      ? candidate.record.capture_pause_intervals
+      : [],
   };
   return state.session;
 }
@@ -1139,14 +1166,90 @@ function stageRecordingSegmentForSession(recording = {}, reason = 'obs_record_st
 
 function markLiveSessionRecordingResumed(recording = {}) {
   if (!state.session.activeSessionId || !state.session.active) return;
+  const resumedAtMs = Number(recording?.resumedAtMs || recording?.startedAtMs || Date.now());
+  const intervals = Array.isArray(state.session.pauseIntervals) ? [...state.session.pauseIntervals] : [];
+  const openIndex = intervals.findLastIndex((interval) => !interval?.resumedAt);
+  if (openIndex < 0 && !state.session.pausedAt) return;
+  const resumedAt = new Date(resumedAtMs).toISOString();
+  if (openIndex >= 0) {
+    intervals[openIndex] = {
+      ...intervals[openIndex],
+      resumedAt,
+      resumedAtMs,
+      resumedLocalTime: fmtLocalCaptureTimestamp(resumedAtMs),
+      durationMs: Math.max(0, resumedAtMs - Number(intervals[openIndex]?.pausedAtMs || resumedAtMs)),
+    };
+  }
   state.session = {
     ...state.session,
     pausedAt: null,
+    resumedAt,
+    pauseIntervals: intervals,
   };
   patchCurrentLiveSession({
     capture_status: 'recording',
-    capture_last_paused_at: null,
-    capture_resumed_at: new Date(recording?.startedAtMs || Date.now()).toISOString(),
+    capture_last_resumed_at: resumedAt,
+    capture_pause_intervals: intervals,
+    event_timeline: appendCaptureBoundaryEvent(currentLiveSessionEntity()?.event_timeline, {
+      type: 'resumed',
+      atMs: resumedAtMs,
+    }),
+  });
+  broadcast('live_session', state.session);
+}
+
+function appendCaptureBoundaryEvent(events = [], { type, atMs }) {
+  const rows = Array.isArray(events) ? [...events] : [];
+  const timestampMs = Number(atMs) || Date.now();
+  const id = `obs_record_${type}_${timestampMs}`;
+  if (rows.some((event) => event?.id === id)) return rows;
+  const sessionStartMs = Date.parse(state.session.startedAt || '') || timestampMs;
+  rows.push({
+    id,
+    time_s: Number(Math.max(0, (timestampMs - sessionStartMs) / 1000).toFixed(1)),
+    label: type === 'paused' ? 'OBS recording paused' : 'OBS recording resumed',
+    note: type === 'paused'
+      ? 'Session capture paused; the following wall-clock interval is intentionally inactive.'
+      : 'Session capture resumed after the recorded break.',
+    category: ['capture', type],
+    annotation_tags: ['obs', 'recording', type, 'sync_anchor'],
+    source: 'obs_record_state',
+    created_at: new Date(timestampMs).toISOString(),
+    local_time: fmtLocalCaptureTimestamp(timestampMs),
+  });
+  return rows.sort((a, b) => Number(a?.time_s || 0) - Number(b?.time_s || 0));
+}
+
+function markLiveSessionRecordingPaused(recording = {}) {
+  if (!state.session.activeSessionId || !state.session.active || state.session.pausedAt) return;
+  const pausedAtMs = Number(recording?.pausedAtMs || Date.now());
+  const pausedAt = new Date(pausedAtMs).toISOString();
+  const intervals = [
+    ...(Array.isArray(state.session.pauseIntervals) ? state.session.pauseIntervals : []),
+    {
+      pausedAt,
+      pausedAtMs,
+      pausedLocalTime: fmtLocalCaptureTimestamp(pausedAtMs),
+      resumedAt: null,
+      resumedAtMs: null,
+      resumedLocalTime: null,
+      durationMs: null,
+    },
+  ];
+  state.session = {
+    ...state.session,
+    pausedAt,
+    resumedAt: null,
+    pauseIntervals: intervals,
+  };
+  patchCurrentLiveSession({
+    capture_status: 'recording_paused',
+    capture_last_paused_at: pausedAt,
+    capture_pause_intervals: intervals,
+    event_timeline: appendCaptureBoundaryEvent(currentLiveSessionEntity()?.event_timeline, {
+      type: 'paused',
+      atMs: pausedAtMs,
+    }),
   });
   broadcast('live_session', state.session);
 }
@@ -1170,8 +1273,16 @@ function ensureLiveSession(recording, options = {}) {
     pendingHrSegments: [],
     pendingObsSegments: [],
     pausedAt: null,
+    resumedAt: null,
+    pauseIntervals: [],
   };
-  patchCurrentLiveSession({ capture_status: 'recording', capture_last_paused_at: null, capture_segments: [] });
+  patchCurrentLiveSession({
+    capture_status: 'recording',
+    capture_last_paused_at: null,
+    capture_last_resumed_at: null,
+    capture_pause_intervals: [],
+    capture_segments: [],
+  });
   broadcast('live_session', state.session);
   return id;
 }
@@ -1357,10 +1468,19 @@ async function finalizeLiveSession(recording, options = {}) {
       attachEmgCsv(emgCsv),
     ]);
     const stoppedAt = recording?.stoppedAtMs ? new Date(recording.stoppedAtMs) : new Date();
+    const pauseSummary = summarizeCapturePauseIntervals(
+      currentLiveSessionEntity(sessionId)?.capture_pause_intervals || state.session.pauseIntervals,
+      state.session.startedAt,
+      stoppedAt.getTime(),
+    );
     const update = {
       ...hrImport.metrics,
       capture_status: 'ready_for_review',
       capture_finalized_at: stoppedAt.toISOString(),
+      capture_pause_intervals: pauseSummary.intervals,
+      capture_paused_duration_seconds: Number((pauseSummary.pausedDurationMs / 1000).toFixed(1)),
+      capture_active_duration_seconds: Number((pauseSummary.activeDurationMs / 1000).toFixed(1)),
+      capture_wall_duration_seconds: Number((pauseSummary.wallDurationMs / 1000).toFixed(1)),
       capture_files: {
         hr: hrImport.upload,
         hr_segments: hrSegments.map((segment) => ({
@@ -1404,6 +1524,8 @@ async function finalizeLiveSession(recording, options = {}) {
       pendingHrSegments: [],
       pendingObsSegments: [],
       pausedAt: null,
+      resumedAt: state.session.resumedAt,
+      pauseIntervals: pauseSummary.intervals,
     };
     telemetryEngine.setActiveSession(null);
     broadcast('live_session', state.session);
@@ -1785,7 +1907,8 @@ function connectHrBridge() {
         state.hr.recording = msg.recording || null;
         if (state.hr.recording?.active) {
           ensureLiveSession(state.hr.recording);
-          markLiveSessionRecordingResumed(state.hr.recording);
+          if (state.hr.recording.paused) markLiveSessionRecordingPaused(state.hr.recording);
+          else markLiveSessionRecordingResumed(state.hr.recording);
           if (state.hr.selectedSource === HR_SOURCE_IDS.PULSOID && !pulsoidRecording) {
             createPulsoidRecording(state.hr.recording, 'pulsoid_recording_info').catch((error) => {
               state.hr.pulsoid.error = `Pulsoid CSV start failed: ${error.message || error}`;
@@ -1808,6 +1931,7 @@ function connectHrBridge() {
         state.hr.recording = {
           ...(state.hr.recording || {}),
           active: !!msg.active,
+          paused: Boolean(msg.paused),
           startedAtMs: msg.startedAtMs || state.hr.recording?.startedAtMs || null,
           stoppedAtMs: msg.stoppedAtMs || null,
           outputPath: msg.outputPath || null,
@@ -1839,10 +1963,26 @@ function connectHrBridge() {
         }
       }
 
+      if (msg.type === 'obs_record_pause') {
+        state.hr.recording = {
+          ...(state.hr.recording || {}),
+          active: true,
+          paused: Boolean(msg.paused),
+          pausedAtMs: msg.pausedAtMs || null,
+          resumedAtMs: msg.resumedAtMs || null,
+        };
+        ensureLiveSession(state.hr.recording);
+        if (state.hr.recording.paused) markLiveSessionRecordingPaused(state.hr.recording);
+        else markLiveSessionRecordingResumed(state.hr.recording);
+        broadcast('recording', state.hr.recording);
+        broadcast('status', state);
+      }
+
       if (msg.type === 'recording_finalized') {
         state.hr.recording = {
           ...(msg.recording || state.hr.recording || {}),
           active: false,
+          paused: false,
         };
         broadcast('recording_finalized', state.hr.recording);
         refreshLatestFiles();

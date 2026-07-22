@@ -1899,7 +1899,7 @@ export default function LiveCapture() {
       }
       const tapResult = detectH10TapGesture(parsed.samples, store.tapState);
       store.tapState = tapResult.state;
-      if (tapResult.gesture && appendLiveSessionEventsRef.current) {
+      if (tapResult.gesture && !recording?.paused && appendLiveSessionEventsRef.current) {
         const sessionStartMs = Number(recording?.startedAtMs || recording?.startEpochMs || 0);
         const timeS = sessionStartMs > 0
           ? Math.max(0, (tapResult.gesture.timestampMs - sessionStartMs) / 1000)
@@ -1921,7 +1921,7 @@ export default function LiveCapture() {
         pmdMessage: `Raw sensor frame rejected: ${error?.message || error}`,
       }));
     }
-  }, [recording?.startEpochMs, recording?.startedAtMs]);
+  }, [recording?.paused, recording?.startEpochMs, recording?.startedAtMs]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -3235,7 +3235,9 @@ export default function LiveCapture() {
   const prediction = useMemo(() => computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory, {
     sessionTimeSec: getCurrentSessionTime(),
   }), [emgTelemetry, getCurrentSessionTime, hrTelemetry, telemetryHistory]);
-  const recordingActive = Boolean(recording?.active);
+  const recordingTransportActive = Boolean(recording?.active);
+  const recordingPaused = Boolean(recordingTransportActive && recording?.paused);
+  const recordingActive = Boolean(recordingTransportActive && !recordingPaused);
 
   useEffect(() => {
     let cancelled = false;
@@ -6951,8 +6953,10 @@ export default function LiveCapture() {
             <SetupTile
               icon={<Video className="h-3.5 w-3.5 text-primary" />}
               label="OBS Session Boundary"
-              value={recordingActive ? "Recording" : obsReady ? "Ready" : "Waiting"}
-              helper={recordingActive
+              value={recordingPaused ? "Paused" : recordingActive ? "Recording" : obsReady ? "Ready" : "Waiting"}
+              helper={recordingPaused
+                ? "OBS pause is timestamped; resume continues this session."
+                : recordingActive
                 ? recording?.filename || "OBS recording is driving the live session."
                 : obsReady
                   ? "OBS relay identified. Start recording when ready."
@@ -7183,9 +7187,11 @@ export default function LiveCapture() {
           />
           <ReadinessItem
             label="OBS Sync"
-            value={recordingActive ? "Recording" : obsReady ? "Ready" : embeddedObsStatus ? "Waiting" : "Relay connected"}
+            value={recordingPaused ? "Paused" : recordingActive ? "Recording" : obsReady ? "Ready" : embeddedObsStatus ? "Waiting" : "Relay connected"}
             helper={
-              recordingActive
+              recordingPaused
+                ? "Physiology persistence is paused; OBS Resume continues the same timestamped session."
+                : recordingActive
                 ? recording?.filename || "OBS recording is driving the live session."
                 : embeddedObsStatus?.error
                   ? embeddedObsStatus.error
@@ -8024,7 +8030,13 @@ export default function LiveCapture() {
           <MetricCard icon={<Radio className="w-4 h-4" />} label="Sarah Stream" value={connected ? "Live" : "Offline"} helper="App telemetry bridge" active={connected} />
           <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="HR Source" value={hrConnected ? "Connected" : "Waiting"} helper={status?.hr?.sourceStatus?.label || status?.hr?.url || "ws://127.0.0.1:8765"} active={hrConnected} />
           {emgLive && <MetricCard icon={<Activity className="w-4 h-4" />} label="EMG Feed" value="Live" helper={status?.emg?.textDir || "EMG text files"} active />}
-          <MetricCard icon={<Video className="w-4 h-4" />} label="OBS Recording" value={recordingActive ? "Recording" : "Stopped"} helper={recording?.filename || "No active capture"} active={recordingActive} />
+          <MetricCard
+            icon={<Video className="w-4 h-4" />}
+            label="OBS Recording"
+            value={recordingPaused ? "Paused" : recordingActive ? "Recording" : "Stopped"}
+            helper={recordingPaused ? "Same session remains open; resume in OBS when ready." : recording?.filename || "No active capture"}
+            active={recordingActive}
+          />
         </div>
       </CollapsibleControlSection>}
 
@@ -8039,7 +8051,9 @@ export default function LiveCapture() {
                 ? liveSession.importing
                   ? "Finalizing telemetry and attaching capture files…"
                   : liveSession.active
-                    ? "Recording into a new Sarah session shell."
+                    ? recordingPaused
+                      ? "OBS is paused. Sarah is preserving this break and will resume the same session."
+                      : "Recording into a new Sarah session shell."
                     : "Capture session ready for review and detail entry."
                 : "A new session will be created automatically when OBS recording starts."}
             </p>
@@ -8054,7 +8068,9 @@ export default function LiveCapture() {
             )}
             {liveSessionPaused && (
               <p className="mt-2 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
-                OBS is not actively recording, but this live session is still open. Capture is paused until OBS resumes or you press End Session.
+                {recordingPaused
+                  ? `OBS paused at ${new Date(liveSession?.pausedAt || Date.now()).toLocaleTimeString()}. Sarah is not saving physiology during the break; Resume Recording in OBS continues this same session with a timestamped boundary.`
+                  : "OBS is not actively recording, but this live session is still open. Start OBS again to add another segment or press End Session."}
               </p>
             )}
           </div>

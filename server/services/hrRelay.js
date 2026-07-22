@@ -107,13 +107,14 @@ function sha256Base64(input) {
   return crypto.createHash('sha256').update(input).digest('base64');
 }
 
-class HeartRateRelay {
+export class HeartRateRelay {
   constructor({ WebSocket, WebSocketServer }) {
     this.WebSocket = WebSocket;
     this.WebSocketServer = WebSocketServer;
     this.latestConfig = { ...DEFAULT_CONFIG };
     this.currentRecording = null;
     this.obsRecordActive = false;
+    this.obsRecordPaused = false;
     this.obsOutputPath = null;
     this.obsConnected = false;
     this.obsIdentified = false;
@@ -174,6 +175,7 @@ class HeartRateRelay {
         connected: this.obsConnected,
         identified: this.obsIdentified,
         recording: this.obsRecordActive,
+        paused: this.obsRecordPaused,
         error: this.obsError,
       },
     };
@@ -224,6 +226,7 @@ class HeartRateRelay {
       startEpochMs: Date.now(),
       lastEpochMs: null,
       reason,
+      pauseIntervals: [],
     };
     this.obsOutputPath = null;
     console.log(`Sarah HR relay started recording CSV: ${filename} (${reason})`);
@@ -233,6 +236,7 @@ class HeartRateRelay {
         filename,
         filepath,
         active: this.obsRecordActive,
+        paused: this.obsRecordPaused,
         startedAtMs: this.currentRecording.startEpochMs,
       },
     });
@@ -247,6 +251,7 @@ class HeartRateRelay {
       createdAt: this.currentRecording.createdAt.toISOString(),
       endedAt: new Date().toISOString(),
       obsOutputPath: this.obsOutputPath,
+      pauseIntervals: this.currentRecording.pauseIntervals,
     }, null, 2), 'utf8');
     console.log(`Sarah HR relay finalized recording: ${this.currentRecording.filename}`);
     this.broadcast({
@@ -261,7 +266,7 @@ class HeartRateRelay {
   }
 
   appendTelemetryRow(data) {
-    if (!this.obsRecordActive) return;
+    if (!this.obsRecordActive || this.obsRecordPaused) return;
     if (!this.currentRecording) this.createNewRecording('obs_auto_start');
     const now = new Date();
     const epochMs = now.getTime();
@@ -372,6 +377,7 @@ class HeartRateRelay {
         const status = await this.obsRequest('GetRecordStatus');
         if (status?.outputActive) {
           this.obsRecordActive = true;
+          this.obsRecordPaused = Boolean(status?.outputPaused);
           this.createNewRecording('obs_already_recording');
         }
       } catch (error) {
@@ -400,26 +406,78 @@ class HeartRateRelay {
 
   handleObsEvent(eventType, eventData) {
     if (eventType !== 'RecordStateChanged') return;
+    const outputState = String(eventData?.outputState || '').toUpperCase();
+    const eventAtMs = Date.now();
     const wasActive = this.obsRecordActive;
     this.obsRecordActive = Boolean(eventData.outputActive);
+    if (this.obsRecordActive && outputState.endsWith('_PAUSED')) {
+      if (!this.obsRecordPaused) {
+        this.obsRecordPaused = true;
+        this.currentRecording?.pauseIntervals?.push({
+          pausedAtMs: eventAtMs,
+          pausedAt: new Date(eventAtMs).toISOString(),
+          resumedAtMs: null,
+          resumedAt: null,
+        });
+        this.broadcastRelayStatus();
+        this.broadcast({
+          type: 'obs_record_pause',
+          active: true,
+          paused: true,
+          pausedAtMs: eventAtMs,
+          eventData,
+        });
+      }
+      return;
+    }
+    if (this.obsRecordActive && outputState.endsWith('_RESUMED')) {
+      if (this.obsRecordPaused) {
+        this.obsRecordPaused = false;
+        const interval = this.currentRecording?.pauseIntervals?.findLast?.((item) => !item.resumedAtMs);
+        if (interval) {
+          interval.resumedAtMs = eventAtMs;
+          interval.resumedAt = new Date(eventAtMs).toISOString();
+        }
+        this.broadcastRelayStatus();
+        this.broadcast({
+          type: 'obs_record_pause',
+          active: true,
+          paused: false,
+          resumedAtMs: eventAtMs,
+          eventData,
+        });
+      }
+      return;
+    }
     if (!wasActive && this.obsRecordActive) {
+      this.obsRecordPaused = false;
       this.createNewRecording('obs_record_start');
       this.broadcastRelayStatus();
       this.broadcast({
         type: 'obs_record_state',
         active: true,
+        paused: false,
         startedAtMs: this.currentRecording?.startEpochMs || Date.now(),
         eventData,
       });
       return;
     }
     if (wasActive && !this.obsRecordActive) {
+      if (this.obsRecordPaused) {
+        const interval = this.currentRecording?.pauseIntervals?.findLast?.((item) => !item.resumedAtMs);
+        if (interval) {
+          interval.resumedAtMs = eventAtMs;
+          interval.resumedAt = new Date(eventAtMs).toISOString();
+        }
+      }
+      this.obsRecordPaused = false;
       this.obsOutputPath = eventData.outputPath || null;
       this.finalizeRecording('obs_record_stop');
       this.broadcastRelayStatus();
       this.broadcast({
         type: 'obs_record_state',
         active: false,
+        paused: false,
         stoppedAtMs: Date.now(),
         outputPath: this.obsOutputPath,
         eventData,
@@ -453,6 +511,7 @@ class HeartRateRelay {
             filename: this.currentRecording.filename,
             filepath: this.currentRecording.filepath,
             active: this.obsRecordActive,
+            paused: this.obsRecordPaused,
             startedAtMs: this.currentRecording.startEpochMs,
           }
         : null,
