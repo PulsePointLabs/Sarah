@@ -6,8 +6,7 @@ import { base44 } from "@/api/base44Client";
 import PageHeader from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import HRTimelineChart from "@/components/HRTimelineChart";
-import EMGTimelineChart from "@/components/EMGTimelineChart";
+import SessionTelemetryDashboard from "@/components/SessionTelemetryDashboard";
 import BodyExplorationAIPanel from "@/components/BodyExplorationAIPanel";
 import AIChat from "@/components/AIChat";
 import LinkedLocalVideoManager from "@/components/LinkedLocalVideoManager";
@@ -112,6 +111,8 @@ export default function BodyExplorationDetail() {
   const [userProfile, setUserProfile] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [explorationNotes, setExplorationNotes] = useState("");
+  const [inspectionTime, setInspectionTime] = useState(0);
+  const [selectedEventIndex, setSelectedEventIndex] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -167,6 +168,21 @@ export default function BodyExplorationDetail() {
             </div>
           </div>
         </div>
+
+        <SessionTelemetryDashboard
+          session={exploration}
+          timelineRows={timelineRows}
+          emgRows={emgRows}
+          inspectionTime={inspectionTime}
+          onInspectionTimeChange={setInspectionTime}
+          selectedEventIndex={selectedEventIndex}
+          onSelectEventIndex={(index) => {
+            setSelectedEventIndex(index);
+            const eventTime = Number(exploration.event_timeline?.[index]?.time_s);
+            if (Number.isFinite(eventTime)) setInspectionTime(eventTime);
+          }}
+          recordType="body_exploration"
+        />
 
         <section className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -287,22 +303,6 @@ export default function BodyExplorationDetail() {
                   timelineRows={timelineRows}
                   recordType="body_exploration"
                 />
-              </div>
-            </details>
-          )}
-          {timelineRows.length > 0 && (
-            <details className="rounded-xl border border-border bg-card p-4">
-              <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Heart Rate Timeline</summary>
-              <div className="mt-3">
-                <HRTimelineChart rows={timelineRows} events={exploration.event_timeline || []} noClimax />
-              </div>
-            </details>
-          )}
-          {emgRows.length > 0 && (
-            <details className="rounded-xl border border-border bg-card p-4">
-              <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">EMG Timeline</summary>
-              <div className="mt-3">
-                <EMGTimelineChart rows={emgRows} channelMode={exploration.emg_channels || "single"} events={exploration.event_timeline || []} timelineRows={timelineRows} />
               </div>
             </details>
           )}

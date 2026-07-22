@@ -724,6 +724,24 @@ function parseHrRows(text) {
       hrv_pnn50: cleanNumber(row.hrv_pnn50),
       hrv_window_seconds: cleanNumber(row.hrv_window_seconds),
       hrv_quality: row.hrv_quality || null,
+      signal_confidence_score: cleanNumber(row.signal_confidence_score),
+      signal_confidence_level: row.signal_confidence_level || null,
+      motion_class: row.motion_class || null,
+      motion_dynamic_rms_mg: cleanNumber(row.motion_dynamic_rms_mg),
+      motion_peak_dynamic_mg: cleanNumber(row.motion_peak_dynamic_mg),
+      respiration_bpm: cleanNumber(row.respiration_bpm),
+      respiration_confidence: row.respiration_confidence || null,
+      respiration_source: row.respiration_source || null,
+      respiration_unavailable_reason: row.respiration_unavailable_reason || null,
+      possible_breath_hold: String(row.possible_breath_hold || '').toLowerCase() === 'true',
+      breath_hold_duration_seconds: cleanNumber(row.breath_hold_duration_seconds),
+      position_state: row.position_state || null,
+      orientation_change_degrees: cleanNumber(row.orientation_change_degrees),
+      multimodal_state: row.multimodal_state || null,
+      recovery_drop_30_bpm: cleanNumber(row.recovery_drop_30_bpm),
+      recovery_drop_60_bpm: cleanNumber(row.recovery_drop_60_bpm),
+      recovery_drop_90_bpm: cleanNumber(row.recovery_drop_90_bpm),
+      response_latency_seconds: cleanNumber(row.response_latency_seconds),
     }))
     .filter((row) => row.hr != null);
 }
@@ -1159,7 +1177,15 @@ function ensureLiveSession(recording, options = {}) {
 }
 
 async function mergedCaptureRowsForSegments(segments = []) {
-  const parsedSegments = (await Promise.all((Array.isArray(segments) ? segments : [])
+  const uniqueSegments = [];
+  const seenPaths = new Set();
+  for (const segment of Array.isArray(segments) ? segments : []) {
+    const filepath = String(segment?.filepath || '').trim().toLowerCase();
+    if (!filepath || seenPaths.has(filepath)) continue;
+    seenPaths.add(filepath);
+    uniqueSegments.push(segment);
+  }
+  const parsedSegments = (await Promise.all(uniqueSegments
     .filter((segment) => segment?.filepath)
     .map(async (segment) => {
       const text = await fs.readFile(segment.filepath, 'utf8');
@@ -1226,6 +1252,24 @@ function hrCsvTextFromRows(rows = []) {
     'hrv_pnn50',
     'hrv_window_seconds',
     'hrv_quality',
+    'signal_confidence_score',
+    'signal_confidence_level',
+    'motion_class',
+    'motion_dynamic_rms_mg',
+    'motion_peak_dynamic_mg',
+    'respiration_bpm',
+    'respiration_confidence',
+    'respiration_source',
+    'respiration_unavailable_reason',
+    'possible_breath_hold',
+    'breath_hold_duration_seconds',
+    'position_state',
+    'orientation_change_degrees',
+    'multimodal_state',
+    'recovery_drop_30_bpm',
+    'recovery_drop_60_bpm',
+    'recovery_drop_90_bpm',
+    'response_latency_seconds',
   ].join(',');
   const body = rows.map((row) => ([
     csvEscape(row.timestamp),
@@ -1247,6 +1291,24 @@ function hrCsvTextFromRows(rows = []) {
     csvEscape(row.hrv_pnn50),
     csvEscape(row.hrv_window_seconds),
     csvEscape(row.hrv_quality),
+    csvEscape(row.signal_confidence_score),
+    csvEscape(row.signal_confidence_level),
+    csvEscape(row.motion_class),
+    csvEscape(row.motion_dynamic_rms_mg),
+    csvEscape(row.motion_peak_dynamic_mg),
+    csvEscape(row.respiration_bpm),
+    csvEscape(row.respiration_confidence),
+    csvEscape(row.respiration_source),
+    csvEscape(row.respiration_unavailable_reason),
+    csvEscape(row.possible_breath_hold ? 'true' : 'false'),
+    csvEscape(row.breath_hold_duration_seconds),
+    csvEscape(row.position_state),
+    csvEscape(row.orientation_change_degrees),
+    csvEscape(row.multimodal_state),
+    csvEscape(row.recovery_drop_30_bpm),
+    csvEscape(row.recovery_drop_60_bpm),
+    csvEscape(row.recovery_drop_90_bpm),
+    csvEscape(row.response_latency_seconds),
   ].join(','))).join('\n');
   return `${header}\n${body}${body ? '\n' : ''}`;
 }

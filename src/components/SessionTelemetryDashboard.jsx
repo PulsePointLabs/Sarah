@@ -13,6 +13,7 @@ import EMGTimelineChart from "./EMGTimelineChart";
 import PerinealEmgPanel from "./PerinealEmgPanel";
 import SavedMotionSummaryCard from "./SavedMotionSummaryCard";
 import ClimaxMotionSnapshotCard from "./ClimaxMotionSnapshotCard";
+import PhysiologyTimelineCharts from "./PhysiologyTimelineCharts";
 import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
 import { pulseOxReadingsFromSession } from "@/lib/sessionContext";
 
@@ -49,6 +50,7 @@ export default function SessionTelemetryDashboard({
   onInspectionTimeChange,
   onMarkersChange,
   onOpenReview,
+  recordType = "session",
 }) {
   const [inspectorPlaying, setInspectorPlaying] = useState(false);
   const [inspectorSpeed, setInspectorSpeed] = useState(1);
@@ -57,6 +59,7 @@ export default function SessionTelemetryDashboard({
   const [inspectorMobileOpen, setInspectorMobileOpen] = useState(false);
   const inspectionTimeRef = useRef(Number(inspectionTime) || 0);
   const events = Array.isArray(session.event_timeline) ? session.event_timeline : [];
+  const isBodyExploration = recordType === "body_exploration" || session.capture_kind === "body_exploration" || session.standalone_body_exploration;
   const perinealEmgSummary = useMemo(() => summarizePerinealEmg(session), [session]);
   const pulseOxRows = useMemo(() => pulseOxReadingsFromSession(session), [session]);
   const orderedEvents = useMemo(
@@ -143,10 +146,10 @@ export default function SessionTelemetryDashboard({
         <div>
           <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary">
             <HeartPulse className="h-4 w-4" />
-            Unified Evidence Dashboard
+            {isBodyExploration ? "Body Physiology Dashboard" : "Unified Evidence Dashboard"}
           </h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Heart rate, saved motion, cadence, EMG, and events on one inspection cursor.
+            Heart rate, HRV, respiration, chest motion, recovery, EMG, and events on one inspection cursor.
           </p>
         </div>
         {onOpenReview && (
@@ -225,30 +228,39 @@ export default function SessionTelemetryDashboard({
         )}
       </div>
 
-      <ClimaxMotionSnapshotCard session={session} />
+      {!isBodyExploration && <ClimaxMotionSnapshotCard session={session} />}
 
       {timelineRows.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Heart Rate And Phase Markers</p>
-          <HRTimelineChart
-            rows={timelineRows}
-            savedMarkers={{
-              pre_climax_offset_s: session.pre_climax_offset_s,
-              climax_offset_s: session.climax_offset_s,
-              recovery_offset_s: session.recovery_offset_s,
-            }}
-            onMarkersChange={onMarkersChange}
-            highlightRange={highlightRange}
-            noClimax={!!session.no_climax}
-            nearClimaxEvents={nearClimaxEvents}
-            events={events}
-            selectedEventIndex={selectedEventIndex}
-            onSelectEventIndex={onSelectEventIndex}
-            initialWindow="full"
+        <>
+          <details open className="rounded-xl border border-border bg-muted/10 p-3">
+            <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-primary">Heart Rate & RR-Derived HRV</summary>
+            <div className="mt-3">
+              <HRTimelineChart
+                rows={timelineRows}
+                savedMarkers={{
+                  pre_climax_offset_s: session.pre_climax_offset_s,
+                  climax_offset_s: session.climax_offset_s,
+                  recovery_offset_s: session.recovery_offset_s,
+                }}
+                onMarkersChange={onMarkersChange}
+                highlightRange={highlightRange}
+                noClimax={isBodyExploration || !!session.no_climax}
+                nearClimaxEvents={isBodyExploration ? [] : nearClimaxEvents}
+                events={events}
+                selectedEventIndex={selectedEventIndex}
+                onSelectEventIndex={onSelectEventIndex}
+                initialWindow="full"
+                inspectionTime={inspectionTime}
+                onInspectionTimeChange={onInspectionTimeChange}
+              />
+            </div>
+          </details>
+          <PhysiologyTimelineCharts
+            timelineRows={timelineRows}
             inspectionTime={inspectionTime}
             onInspectionTimeChange={onInspectionTimeChange}
           />
-        </div>
+        </>
       )}
 
       {(perinealEmgSummary.hasPerinealEvents || perinealEmgSummary.hasPerinealSetup) && (
