@@ -12,6 +12,7 @@ import {
 } from "recharts";
 
 const numberOrNull = (value) => {
+  if (value == null || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 };
@@ -121,7 +122,9 @@ export default function PhysiologyTimelineCharts({ timelineRows = [], inspection
   const respirationAverage = average(timelineRows.map((row) => row.respiration_bpm));
   const motionPeak = maximum(timelineRows.map((row) => row.motion_peak_dynamic_mg));
   const recoveryPeak = maximum(timelineRows.flatMap((row) => [row.recovery_drop_30_bpm, row.recovery_drop_60_bpm, row.recovery_drop_90_bpm]));
-  const unavailableReason = timelineRows.find((row) => row.respiration_unavailable_reason)?.respiration_unavailable_reason;
+  const unavailableReason = !hasMotion && !hasRespiration
+    ? "No H10 PMD sensor samples were saved"
+    : [...timelineRows].reverse().find((row) => row.respiration_unavailable_reason)?.respiration_unavailable_reason;
   const breathHolds = timelineRows.filter((row) => row.possible_breath_hold === true || String(row.possible_breath_hold).toLowerCase() === "true").length;
 
   if (!timelineRows.length) return null;

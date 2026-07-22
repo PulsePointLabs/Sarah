@@ -5,6 +5,7 @@ import {
   createH10PmdParserState,
   deriveH10MultimodalSnapshot,
   detectH10TapGesture,
+  fuseRespiration,
   isH10PmdStreamActiveResponse,
   parseH10PmdFrame,
 } from "./h10Multimodal.js";
@@ -75,6 +76,17 @@ test("respiration stays unavailable during high motion", () => {
   assert.equal(result.motion.class, "high_motion");
   assert.equal(result.respiration.available, false);
   assert.equal(result.respiration.reason, "motion_limited");
+});
+
+test("ECG-derived respiration remains available when ambulatory motion blocks accelerometer breathing", () => {
+  const result = fuseRespiration(
+    { accepted: false, reason: "motion_limited" },
+    { accepted: true, bpm: 17, confidence: "high", source: "ecg_derived" },
+  );
+  assert.equal(result.available, true);
+  assert.equal(result.bpm, 17);
+  assert.equal(result.source, "ecg_derived");
+  assert.equal(result.confidence, "moderate");
 });
 
 test("stable periodic chest acceleration can produce a conservative rate", () => {

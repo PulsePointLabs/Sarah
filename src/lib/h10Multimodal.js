@@ -16,6 +16,9 @@ export const H10_ACCELEROMETER_START_COMMAND = Uint8Array.from([
   0x04, 0x01, 0x03,
 ]);
 
+export const H10_ECG_STOP_COMMAND = Uint8Array.from([0x03, 0x00]);
+export const H10_ACCELEROMETER_STOP_COMMAND = Uint8Array.from([0x03, 0x02]);
+
 export const H10_PMD_ALREADY_ACTIVE_STATUS = 6;
 
 export function isH10PmdStreamActiveResponse(response) {
@@ -414,7 +417,7 @@ function ecgDerivedRespiration(samples) {
   };
 }
 
-function fuseRespiration(accelerometer, ecg) {
+export function fuseRespiration(accelerometer, ecg) {
   if (accelerometer.accepted && ecg.accepted) {
     const difference = Math.abs(accelerometer.bpm - ecg.bpm);
     if (difference > 3.5) {
@@ -441,6 +444,18 @@ function fuseRespiration(accelerometer, ecg) {
       source: accelerometer.source,
       possibleBreathHold: Boolean(accelerometer.possibleBreathHold),
       holdDurationSeconds: accelerometer.holdDurationSeconds || null,
+      accelerometer,
+      ecg,
+    };
+  }
+  if (ecg.accepted) {
+    return {
+      available: true,
+      bpm: ecg.bpm,
+      confidence: "moderate",
+      source: ecg.source,
+      possibleBreathHold: false,
+      holdDurationSeconds: null,
       accelerometer,
       ecg,
     };

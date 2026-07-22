@@ -40,7 +40,9 @@ import {
   createHowlPhysiologyControllerState,
 } from "@/lib/howlPhysiologyController";
 import {
+  H10_ACCELEROMETER_STOP_COMMAND,
   H10_ACCELEROMETER_START_COMMAND,
+  H10_ECG_STOP_COMMAND,
   H10_ECG_START_COMMAND,
   H10_PMD_CONTROL_UUID,
   H10_PMD_DATA_UUID,
@@ -2365,9 +2367,9 @@ export default function LiveCapture() {
     const streamName = response.measurement === 0 ? "ECG" : response.measurement === 2 ? "accelerometer" : "PMD";
     setDirectH10Status((previous) => ({
       ...previous,
-      pmdActive: streamActive ? true : previous.pmdActive,
+      pmdActive: previous.pmdActive,
       pmdMessage: streamActive
-        ? `${streamName} raw stream active${response.status === 6 ? " (resumed)" : ""}`
+        ? `${streamName} start accepted; awaiting sensor samples${response.status === 6 ? " after stale-stream reset" : ""}`
         : `${streamName} raw stream unavailable (PMD status ${response.status})`,
     }));
   }, []);
@@ -2385,8 +2387,8 @@ export default function LiveCapture() {
     setLaunchProfile(saved);
   }, [liveCueSettings.enabled, liveCueSettings.mediaDucking, liveCueSettings.pan, liveCueSettings.style, liveCueSettings.volume]);
 
-  const waitForH10PmdControlResponse = useCallback((measurement, timeoutMs = 5000) => new Promise((resolve, reject) => {
-    const waiterKey = `2:${measurement}`;
+  const waitForH10PmdControlResponse = useCallback((measurement, command = 2, timeoutMs = 5000) => new Promise((resolve, reject) => {
+    const waiterKey = `${command}:${measurement}`;
     const previous = directH10PmdControlWaitersRef.current.get(waiterKey);
     if (previous) {
       window.clearTimeout(previous.timerId);
@@ -2394,10 +2396,21 @@ export default function LiveCapture() {
     }
     const timerId = window.setTimeout(() => {
       directH10PmdControlWaitersRef.current.delete(waiterKey);
-      reject(new Error(`H10 PMD ${measurement === 0 ? "ECG" : "accelerometer"} start response timed out`));
+      reject(new Error(`H10 PMD ${measurement === 0 ? "ECG" : "accelerometer"} ${command === 3 ? "stop" : "start"} response timed out`));
     }, timeoutMs);
     directH10PmdControlWaitersRef.current.set(waiterKey, { resolve, reject, timerId });
   }), []);
+
+  const waitForH10PmdSamples = useCallback(async (timeoutMs = 7000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const store = directH10PmdStoreRef.current;
+      if (store.ecgSamples.length > 0 && store.accelerometerSamples.length > 0) return true;
+      await wait(200);
+    }
+    const store = directH10PmdStoreRef.current;
+    throw new Error(`H10 PMD started but delivered no complete sensor stream (ECG ${store.ecgSamples.length}, accelerometer ${store.accelerometerSamples.length})`);
+  }, []);
 
   const startNativeH10Pmd = useCallback(async (deviceId) => {
     directH10PmdStoreRef.current = createH10PmdStore();
@@ -2415,21 +2428,32 @@ export default function LiveCapture() {
       handleH10PmdData,
       { timeout: 12000 },
     );
-    const ecgResponsePromise = waitForH10PmdControlResponse(0);
+    const resetMeasurement = async (measurement, command) => {
+      const responsePromise = waitForH10PmdControlResponse(measurement, 3, 2500);
+      await Promise.all([
+        BleClient.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(command), { timeout: 5000 }),
+        responsePromise,
+      ]).catch(() => {});
+    };
+    await resetMeasurement(0, H10_ECG_STOP_COMMAND);
+    await resetMeasurement(2, H10_ACCELEROMETER_STOP_COMMAND);
+    const ecgResponsePromise = waitForH10PmdControlResponse(0, 2);
     const [, ecgResponse] = await Promise.all([
       BleClient.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ECG_START_COMMAND), { timeout: 12000 }),
       ecgResponsePromise,
     ]);
     if (!isH10PmdStreamActiveResponse(ecgResponse)) throw new Error(`H10 rejected ECG stream (status ${ecgResponse.status})`);
-    const accelerometerResponsePromise = waitForH10PmdControlResponse(2);
+    const accelerometerResponsePromise = waitForH10PmdControlResponse(2, 2);
     const [, accelerometerResponse] = await Promise.all([
       BleClient.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ACCELEROMETER_START_COMMAND), { timeout: 12000 }),
       accelerometerResponsePromise,
     ]);
     if (!isH10PmdStreamActiveResponse(accelerometerResponse)) throw new Error(`H10 rejected accelerometer stream (status ${accelerometerResponse.status})`);
     directH10PmdNativeActiveRef.current = true;
-    setDirectH10Status((previous) => ({ ...previous, pmdActive: true, pmdMessage: "ECG + chest motion starting" }));
-  }, [handleH10PmdControl, handleH10PmdData, waitForH10PmdControlResponse]);
+    setDirectH10Status((previous) => ({ ...previous, pmdActive: false, pmdMessage: "Confirming ECG + chest motion samples" }));
+    await waitForH10PmdSamples();
+    setDirectH10Status((previous) => ({ ...previous, pmdActive: true, pmdMessage: "ECG + chest motion verified" }));
+  }, [handleH10PmdControl, handleH10PmdData, waitForH10PmdControlResponse, waitForH10PmdSamples]);
 
   const startBrowserH10Pmd = useCallback(async (device) => {
     const server = device?.gatt;
@@ -2444,21 +2468,32 @@ export default function LiveCapture() {
     data.addEventListener("characteristicvaluechanged", dataHandler);
     await withTimeout(control.startNotifications(), 12000, "Timed out starting H10 PMD control notifications.");
     await withTimeout(data.startNotifications(), 12000, "Timed out starting H10 PMD data notifications.");
-    const ecgResponsePromise = waitForH10PmdControlResponse(0);
+    directH10PmdBrowserRef.current = { control, data, controlHandler, dataHandler };
+    const resetMeasurement = async (measurement, command) => {
+      const responsePromise = waitForH10PmdControlResponse(measurement, 3, 2500);
+      await Promise.all([
+        control.writeValueWithResponse(command),
+        responsePromise,
+      ]).catch(() => {});
+    };
+    await resetMeasurement(0, H10_ECG_STOP_COMMAND);
+    await resetMeasurement(2, H10_ACCELEROMETER_STOP_COMMAND);
+    const ecgResponsePromise = waitForH10PmdControlResponse(0, 2);
     const [, ecgResponse] = await Promise.all([
       control.writeValueWithResponse(H10_ECG_START_COMMAND),
       ecgResponsePromise,
     ]);
     if (!isH10PmdStreamActiveResponse(ecgResponse)) throw new Error(`H10 rejected ECG stream (status ${ecgResponse.status})`);
-    const accelerometerResponsePromise = waitForH10PmdControlResponse(2);
+    const accelerometerResponsePromise = waitForH10PmdControlResponse(2, 2);
     const [, accelerometerResponse] = await Promise.all([
       control.writeValueWithResponse(H10_ACCELEROMETER_START_COMMAND),
       accelerometerResponsePromise,
     ]);
     if (!isH10PmdStreamActiveResponse(accelerometerResponse)) throw new Error(`H10 rejected accelerometer stream (status ${accelerometerResponse.status})`);
-    directH10PmdBrowserRef.current = { control, data, controlHandler, dataHandler };
-    setDirectH10Status((previous) => ({ ...previous, pmdActive: true, pmdMessage: "ECG + chest motion starting" }));
-  }, [handleH10PmdControl, handleH10PmdData, waitForH10PmdControlResponse]);
+    setDirectH10Status((previous) => ({ ...previous, pmdActive: false, pmdMessage: "Confirming ECG + chest motion samples" }));
+    await waitForH10PmdSamples();
+    setDirectH10Status((previous) => ({ ...previous, pmdActive: true, pmdMessage: "ECG + chest motion verified" }));
+  }, [handleH10PmdControl, handleH10PmdData, waitForH10PmdControlResponse, waitForH10PmdSamples]);
 
   const disconnectDirectH10 = useCallback(async ({ updateStatus = true, preserveAutoReconnect = false } = {}) => {
     if (!preserveAutoReconnect) {
@@ -2472,6 +2507,8 @@ export default function LiveCapture() {
     const nativeDeviceId = directH10NativeDeviceIdRef.current;
     if (nativeDeviceId) {
       if (directH10PmdNativeActiveRef.current) {
+        await BleClient.write(nativeDeviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ECG_STOP_COMMAND), { timeout: 3000 }).catch(() => {});
+        await BleClient.write(nativeDeviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ACCELEROMETER_STOP_COMMAND), { timeout: 3000 }).catch(() => {});
         await BleClient.stopNotifications(nativeDeviceId, H10_PMD_SERVICE_UUID, H10_PMD_DATA_UUID).catch(() => {});
         await BleClient.stopNotifications(nativeDeviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID).catch(() => {});
       }
@@ -2489,6 +2526,8 @@ export default function LiveCapture() {
 
     const browserPmd = directH10PmdBrowserRef.current;
     if (browserPmd) {
+      await browserPmd.control?.writeValueWithResponse?.(H10_ECG_STOP_COMMAND).catch?.(() => {});
+      await browserPmd.control?.writeValueWithResponse?.(H10_ACCELEROMETER_STOP_COMMAND).catch?.(() => {});
       browserPmd.control?.removeEventListener?.("characteristicvaluechanged", browserPmd.controlHandler);
       browserPmd.data?.removeEventListener?.("characteristicvaluechanged", browserPmd.dataHandler);
       await browserPmd.data?.stopNotifications?.().catch?.(() => {});
@@ -6221,11 +6260,14 @@ export default function LiveCapture() {
   const obsPreferred = Boolean(launchProfile.obsEnabled && !launchProfile.telemetryOnlyFallback);
   const h10RawStreamsActive = Boolean(
     directH10Source
-    && (
-      directH10Status.pmdActive
-      || effectiveH10Multimodal?.streams?.ecg?.sampleCount > 0
-      || effectiveH10Multimodal?.streams?.accelerometer?.sampleCount > 0
-    )
+    && effectiveH10Multimodal?.streams?.ecg?.sampleCount > 0
+    && effectiveH10Multimodal?.streams?.accelerometer?.sampleCount > 0
+  );
+  const h10RawStreamFailure = Boolean(
+    directH10Source
+    && healthHrConnected
+    && !h10RawStreamsActive
+    && /unavailable|rejected|timed out|delivered no complete sensor stream|failed/i.test(directH10Status.pmdMessage || "")
   );
   const liveGuidanceMode = !healthRecentHrPacket
     ? {
@@ -6245,13 +6287,21 @@ export default function LiveCapture() {
           tone: "warn",
           helper: "HR and RR are live, but the configured EMG feed is not current. EMG-specific cues are stepped down until the feed stabilizes.",
         }
-        : {
+        : directH10Source && !h10RawStreamsActive
+          ? {
+            label: "HR / HRV only",
+            tone: "warn",
+            helper: h10RawStreamFailure
+              ? `Raw H10 physiology failed: ${directH10Status.pmdMessage}. Motion and respiration are not being collected.`
+              : "HR and RR are live. Sarah is still confirming real ECG and accelerometer packets before enabling motion or respiration tracking.",
+          }
+          : {
           label: h10RawStreamsActive ? h10State.label || "Multimodal tracking" : "Full guidance",
           tone: "good",
           helper: h10RawStreamsActive
             ? `Raw H10 ECG and chest motion are active. Signal confidence ${fmtNumber(h10SignalConfidence.score, 0)}%; motion and respiration claims remain quality-gated.`
             : "Heart rate is current and Sarah has enough live signal quality for the normal guidance stack.",
-        };
+          };
   const liveHealthPills = [
     {
       label: "HR Source",
@@ -6277,13 +6327,13 @@ export default function LiveCapture() {
     },
     {
       label: "Raw H10 Sensors",
-      value: h10RawStreamsActive ? `${fmtNumber(h10SignalConfidence.score, 0)}%` : directH10Source ? "Warming" : "N/A",
+      value: h10RawStreamsActive ? `${fmtNumber(h10SignalConfidence.score, 0)}%` : h10RawStreamFailure ? "FAILED" : directH10Source ? "Confirming" : "N/A",
       helper: h10RawStreamsActive
         ? `ECG ${h10SignalConfidence.ecg || "waiting"} · accelerometer ${h10SignalConfidence.accelerometer || "waiting"}`
         : directH10Source
           ? directH10Status.pmdMessage || "HR/RR remains live while ECG and chest motion start."
           : "Available with Direct Polar H10.",
-      tone: h10RawStreamsActive ? (h10SignalConfidence.level === "high" ? "good" : "warn") : "neutral",
+      tone: h10RawStreamsActive ? (h10SignalConfidence.level === "high" ? "good" : "warn") : h10RawStreamFailure ? "bad" : "neutral",
     },
     {
       label: "Respiration",
@@ -7117,6 +7167,19 @@ export default function LiveCapture() {
             value={hrConnected ? "Ready" : "Waiting"}
             helper={status?.hr?.sourceStatus?.message || (hrConnected ? "Live Capture is connected to the selected HR source." : status?.hr?.error || status?.hr?.url || "Start the Sarah server and HR source.")}
             ready={hrConnected}
+          />
+          <ReadinessItem
+            label="Raw H10 Physiology"
+            value={!directH10Source ? "N/A" : h10RawStreamsActive ? "Verified" : h10RawStreamFailure ? "Failed" : "Confirming"}
+            helper={!directH10Source
+              ? "Select Direct Polar H10 to collect ECG-derived respiration and chest motion."
+              : h10RawStreamsActive
+                ? `Real ECG and accelerometer packets are landing: ECG ${effectiveH10Multimodal?.streams?.ecg?.sampleCount || 0} · motion ${effectiveH10Multimodal?.streams?.accelerometer?.sampleCount || 0}.`
+                : h10RawStreamFailure
+                  ? `${directH10Status.pmdMessage}. Reconnect the H10 before recording if motion and respiration are required.`
+                  : "Waiting for real ECG and accelerometer packets. Do not treat this as ready until it says Verified."}
+            ready={h10RawStreamsActive}
+            optional={!directH10Source}
           />
           <ReadinessItem
             label="OBS Sync"
