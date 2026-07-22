@@ -5,6 +5,7 @@ import {
   buildActiveStimulationFallbackEvent,
   buildReusedNarrationSegmentPlan,
   inferReviewVisualFocus,
+  losslessConcatAvArgs,
   matchAudioExport,
   canonicalPhaseAnchorForNarration,
   reviewVisualFocusForClip,
@@ -14,6 +15,13 @@ import {
   selectReviewVideoEventForSegment,
   telemetryAtSessionTime,
 } from './sessionReviewVideoRenderer.js';
+
+test('final narration segment assembly is lossless stream copy', () => {
+  const args = losslessConcatAvArgs('segments.txt', 'output.mp4');
+  assert.deepEqual(args.slice(args.indexOf('-c'), args.indexOf('-c') + 2), ['-c', 'copy']);
+  assert.equal(args.includes('libx264'), false);
+  assert.equal(args.includes('aac'), false);
+});
 
 test('review video focus targets named glans findings with a restrained push-in', () => {
   const focus = inferReviewVisualFocus('At 6:12, glans engorgement and meatal flushing become visible.');
