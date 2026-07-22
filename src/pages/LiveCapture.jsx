@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { BleClient } from "@capacitor-community/bluetooth-le";
-import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, Footprints, HeartPulse, Maximize2, Mic, MicOff, Pause, Play, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, Volume2, X, Zap } from "lucide-react";
+import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, Footprints, HeartPulse, Maximize2, Mic, MicOff, MoveDown, MoveUp, Pause, Play, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, Volume2, X, Zap } from "lucide-react";
 import {
   Area,
   CartesianGrid,
@@ -86,6 +86,38 @@ import {
 } from "@/lib/omronBloodPressureBle";
 
 const MAX_TELEMETRY_POINTS = 240;
+const TELEMETRY_DASHBOARD_STORAGE_KEY = "pulsepoint.telemetryDashboard.v1";
+const TELEMETRY_DASHBOARD_PANELS = [
+  { id: "notices", label: "Sarah live cue", helper: "Current physiological cue and confidence" },
+  { id: "engine", label: "Acquisition health", helper: "Engine, sample rates, buffer, and storage" },
+  { id: "howl", label: "Howl control", helper: "Current intensity and direct controls" },
+  { id: "vitals", label: "Vital cards", helper: "HR, BP, HRV, respiration, motion, and EMG" },
+  { id: "phase", label: "Phase watch", helper: "Approach, plateau, recovery, and markers" },
+  { id: "multimodal", label: "Multimodal timelines", helper: "Threshold, respiration, motion, and Howl dose" },
+  { id: "cardiac", label: "Cardiac timeline", helper: "HR, baseline, HRV, and approach" },
+  { id: "emg", label: "EMG timeline", helper: "Perineal or dual-channel muscle activity" },
+];
+
+function defaultTelemetryDashboard() {
+  return TELEMETRY_DASHBOARD_PANELS.map((panel) => ({ id: panel.id, enabled: true }));
+}
+
+function readTelemetryDashboard() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(TELEMETRY_DASHBOARD_STORAGE_KEY) || "null");
+    if (!Array.isArray(stored)) return defaultTelemetryDashboard();
+    const known = new Map(stored.map((item) => [item?.id, item]));
+    const ordered = stored
+      .filter((item) => TELEMETRY_DASHBOARD_PANELS.some((panel) => panel.id === item?.id))
+      .map((item) => ({ id: item.id, enabled: item.enabled !== false }));
+    TELEMETRY_DASHBOARD_PANELS.forEach((panel) => {
+      if (!known.has(panel.id)) ordered.push({ id: panel.id, enabled: true });
+    });
+    return ordered;
+  } catch {
+    return defaultTelemetryDashboard();
+  }
+}
 const MAX_VOICE_NOTE_MS = 12000;
 const VOICE_NOTE_MIN_MS = 900;
 const VOICE_NOTE_SILENCE_MS = 1300;
@@ -1479,6 +1511,8 @@ export default function LiveCapture() {
   const [mediaProcessing, setMediaProcessing] = useState("");
   const [mediaError, setMediaError] = useState("");
   const [presetModalOpen, setPresetModalOpen] = useState(false);
+  const [telemetryDashboardOpen, setTelemetryDashboardOpen] = useState(false);
+  const [telemetryDashboard, setTelemetryDashboard] = useState(() => readTelemetryDashboard());
   const [calibrationOpen, setCalibrationOpen] = useState(false);
   const [calibrationSaving, setCalibrationSaving] = useState("");
   const [calibrationStatus, setCalibrationStatus] = useState("");
@@ -3727,6 +3761,36 @@ export default function LiveCapture() {
     }
     setSearchParams(nextParams);
   }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    localStorage.setItem(TELEMETRY_DASHBOARD_STORAGE_KEY, JSON.stringify(telemetryDashboard));
+  }, [telemetryDashboard]);
+
+  const telemetryPanelEnabled = useCallback((id) => (
+    telemetryDashboard.find((panel) => panel.id === id)?.enabled !== false
+  ), [telemetryDashboard]);
+
+  const telemetryPanelOrder = useCallback((id) => {
+    const index = telemetryDashboard.findIndex((panel) => panel.id === id);
+    return index < 0 ? TELEMETRY_DASHBOARD_PANELS.length : index;
+  }, [telemetryDashboard]);
+
+  const updateTelemetryPanel = useCallback((id, update) => {
+    setTelemetryDashboard((previous) => previous.map((panel) => (
+      panel.id === id ? { ...panel, ...update } : panel
+    )));
+  }, []);
+
+  const moveTelemetryPanel = useCallback((id, direction) => {
+    setTelemetryDashboard((previous) => {
+      const index = previous.findIndex((panel) => panel.id === id);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= previous.length) return previous;
+      const next = [...previous];
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+      return next;
+    });
+  }, []);
 
   const clearMediaVideo = useCallback(() => {
     if (mediaObjectUrlRef.current) {
@@ -8120,6 +8184,13 @@ export default function LiveCapture() {
                 </label>
                 <button
                   type="button"
+                  onClick={() => setTelemetryDashboardOpen(true)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
+                >
+                  <SlidersHorizontal className="h-4 w-4" /> Customize display
+                </button>
+                <button
+                  type="button"
                   onClick={() => setFocusView(false)}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
                 >
@@ -8130,9 +8201,59 @@ export default function LiveCapture() {
           </div>
         </div>
 
-        {telemetryNoticesEnabled && latestTelemetryNotice && (
+        {telemetryDashboardOpen && (
+          <div className="fixed inset-0 z-[80] flex items-start justify-end bg-black/55 p-4 pt-20 md:p-7 md:pt-24" onMouseDown={() => setTelemetryDashboardOpen(false)}>
+            <div className="max-h-[calc(100vh-7rem)] w-full max-w-xl overflow-y-auto rounded-2xl border border-border bg-card p-5 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Custom telemetry dashboard</p>
+                  <p className="mt-1 text-sm text-muted-foreground">Choose the blocks you want and put them in viewing order. This device remembers the layout.</p>
+                </div>
+                <button type="button" onClick={() => setTelemetryDashboardOpen(false)} className="rounded-lg bg-muted p-2 text-muted-foreground hover:text-foreground" aria-label="Close dashboard customization">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="mt-5 space-y-2">
+                {telemetryDashboard.map((item, index) => {
+                  const definition = TELEMETRY_DASHBOARD_PANELS.find((panel) => panel.id === item.id);
+                  if (!definition) return null;
+                  return (
+                    <div key={item.id} className={`flex items-center gap-3 rounded-xl border p-3 ${item.enabled ? "border-primary/30 bg-primary/[0.07]" : "border-border bg-muted/20"}`}>
+                      <input
+                        type="checkbox"
+                        checked={item.enabled}
+                        onChange={(event) => updateTelemetryPanel(item.id, { enabled: event.target.checked })}
+                        className="h-5 w-5 shrink-0 accent-primary"
+                        aria-label={`Show ${definition.label}`}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold text-foreground">{definition.label}</p>
+                        <p className="text-xs text-muted-foreground">{definition.helper}</p>
+                      </div>
+                      <button type="button" disabled={index === 0} onClick={() => moveTelemetryPanel(item.id, -1)} className="rounded-lg border border-border p-2 text-foreground disabled:opacity-25" aria-label={`Move ${definition.label} up`}>
+                        <MoveUp className="h-4 w-4" />
+                      </button>
+                      <button type="button" disabled={index === telemetryDashboard.length - 1} onClick={() => moveTelemetryPanel(item.id, 1)} className="rounded-lg border border-border p-2 text-foreground disabled:opacity-25" aria-label={`Move ${definition.label} down`}>
+                        <MoveDown className="h-4 w-4" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-5 flex items-center justify-between border-t border-border pt-4">
+                <button type="button" onClick={() => setTelemetryDashboard(defaultTelemetryDashboard())} className="rounded-lg border border-border px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted">Reset default</button>
+                <button type="button" onClick={() => setTelemetryDashboardOpen(false)} className="rounded-lg bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">Use this dashboard</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-col gap-6">
+
+        {telemetryPanelEnabled("notices") && telemetryNoticesEnabled && latestTelemetryNotice && (
           <div
             className={`rounded-xl border border-primary/40 bg-primary/10 shadow-lg ${distanceTelemetryView ? "p-6" : "p-4"}`}
+            style={{ order: telemetryPanelOrder("notices") }}
             role="status"
             aria-live="polite"
           >
@@ -8159,7 +8280,7 @@ export default function LiveCapture() {
           </div>
         )}
 
-        <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3 text-xs sm:grid-cols-2 lg:grid-cols-6">
+        {telemetryPanelEnabled("engine") && <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3 text-xs sm:grid-cols-2 lg:grid-cols-6" style={{ order: telemetryPanelOrder("engine") }}>
           <div className="flex items-center gap-2">
             {engineRunning ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : <AlertTriangle className="h-4 w-4 text-amber-500" />}
             <div>
@@ -8190,9 +8311,9 @@ export default function LiveCapture() {
               <p className="text-muted-foreground">{engineStorageOk ? "OK" : engineStatus?.storage?.lastError || engineStatus?.queue?.lastWarning || "Review"}</p>
             </div>
           </div>
-        </div>
+        </div>}
 
-        <div className="rounded-xl border border-cyan-400/25 bg-cyan-500/[0.06] p-4 shadow-sm">
+        {telemetryPanelEnabled("howl") && <div className="rounded-xl border border-cyan-400/25 bg-cyan-500/[0.06] p-4 shadow-sm" style={{ order: telemetryPanelOrder("howl") }}>
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -8225,9 +8346,9 @@ export default function LiveCapture() {
               <button type="button" onClick={() => setHowlQuickModalOpen(true)} className="h-11 rounded-lg border border-border bg-muted px-4 text-sm font-bold text-foreground">Details</button>
             </div>
           </div>
-        </div>
+        </div>}
 
-        <div className={`grid gap-3 sm:grid-cols-2 ${focusView ? "xl:grid-cols-3 2xl:grid-cols-5" : telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`}>
+        {telemetryPanelEnabled("vitals") && <div className={`grid gap-3 sm:grid-cols-2 ${focusView ? "xl:grid-cols-3 2xl:grid-cols-5" : telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`} style={{ order: telemetryPanelOrder("vitals") }}>
           <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large display={focusView} beatPulse={visibleHeartbeatPulseId} />
           <MetricCard icon={<Activity className="w-4 h-4" />} label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} active={Boolean(latestBpReading)} valueClassName={focusView ? "!text-[clamp(3rem,5vw,6rem)]" : "!text-[clamp(2rem,8vw,3rem)]"} large display={focusView} />
           {!captureIsBodyExploration && (
@@ -8290,10 +8411,10 @@ export default function LiveCapture() {
               <MetricCard icon={<Activity className="w-4 h-4" />} label={selectedEmgConfig.rightLabel} value={`${fmtNumber(emgTelemetry?.right_pct)}%`} helper={emgTelemetry?.right_pct != null ? `diff ${fmtNumber(emgTelemetry?.diff_pct)}%` : selectedEmgConfig.rightHelper} active={emgTelemetry?.right_pct != null} level={rightEmgLevel} large display={focusView} />
             </>
           )}
-        </div>
+        </div>}
 
-        {!captureIsBodyExploration && (
-          <div className="rounded-xl border border-border bg-muted/20 p-4">
+        {telemetryPanelEnabled("phase") && !captureIsBodyExploration && (
+          <div className="rounded-xl border border-border bg-muted/20 p-4" style={{ order: telemetryPanelOrder("phase") }}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
@@ -8414,8 +8535,8 @@ export default function LiveCapture() {
           </div>
         )}
 
-        {directH10Source && (
-          <div className="grid gap-4 xl:grid-cols-2">
+        {telemetryPanelEnabled("multimodal") && directH10Source && (
+          <div className="grid gap-4 xl:grid-cols-2" style={{ order: telemetryPanelOrder("multimodal") }}>
             <TrendPanel
               title="Threshold Load Matrix"
               subtitle="Approach, sustained plateau, controller trust, recovery, and normalized Howl dose"
@@ -8482,7 +8603,8 @@ export default function LiveCapture() {
           </div>
         )}
 
-        <div className={distanceTelemetryView && telemetryEmgLive ? "grid gap-4 xl:grid-cols-2" : "space-y-4"}>
+        <div className="contents">
+        {telemetryPanelEnabled("cardiac") && <div style={{ order: telemetryPanelOrder("cardiac") }}>
         <TrendPanel title="Cardiac & Autonomic Trend" subtitle="Heart rate, smoothed baseline, RMSSD, SDNN, and session approach load" empty={!hasHrTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-72 md:h-80"} distanceView={distanceTelemetryView}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={telemetryHistory} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
@@ -8513,9 +8635,10 @@ export default function LiveCapture() {
             </LineChart>
           </ResponsiveContainer>
         </TrendPanel>
+        </div>}
 
-        {telemetryEmgLive && (
-          <TrendPanel title={selectedEmgConfig.trendTitle} subtitle={selectedEmgConfig.trendSubtitle} empty={!hasEmgTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-64 md:h-72"} distanceView={distanceTelemetryView}>
+        {telemetryPanelEnabled("emg") && telemetryEmgLive && (
+          <div style={{ order: telemetryPanelOrder("emg") }}><TrendPanel title={selectedEmgConfig.trendTitle} subtitle={selectedEmgConfig.trendSubtitle} empty={!hasEmgTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-64 md:h-72"} distanceView={distanceTelemetryView}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={telemetryHistory} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.45} />
@@ -8528,8 +8651,9 @@ export default function LiveCapture() {
                 <Line type="monotone" dataKey="diff" name="Diff" stroke="hsl(var(--chart-4))" strokeWidth={1.75} dot={false} connectNulls />
               </LineChart>
             </ResponsiveContainer>
-          </TrendPanel>
+          </TrendPanel></div>
         )}
+        </div>
         </div>
       </div>
 
