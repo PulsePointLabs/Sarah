@@ -50,6 +50,7 @@ import {
   createH10PmdParserState,
   deriveH10MultimodalSnapshot,
   detectH10TapGesture,
+  isH10PmdStreamActiveResponse,
   parseH10PmdControlResponse,
   parseH10PmdFrame,
 } from "@/lib/h10Multimodal";
@@ -1284,12 +1285,12 @@ function StatusDot({ active }) {
   );
 }
 
-function MetricCard({ icon, label, value, helper, active, level, large = false, beatPulse = 0, valueClassName = "" }) {
+function MetricCard({ icon, label, value, helper, active, level, large = false, display = false, beatPulse = 0, valueClassName = "" }) {
   const hasLevel = Number.isFinite(Number(level));
   const color = hasLevel ? levelColor(level) : null;
   return (
     <div
-      className={`relative min-w-0 overflow-hidden rounded-xl border transition-shadow ${large ? "min-h-[10.5rem] p-5" : "min-h-[8rem] p-4"} ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"} ${beatPulse ? "shadow-[0_0_30px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
+      className={`relative min-w-0 overflow-hidden rounded-xl border transition-shadow ${display ? "min-h-[14rem] p-6" : large ? "min-h-[10.5rem] p-5" : "min-h-[8rem] p-4"} ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"} ${beatPulse ? "shadow-[0_0_30px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
       style={hasLevel ? { borderColor: `${color}9a`, background: `linear-gradient(135deg, ${color}38, ${color}10 55%, hsl(var(--card)) 100%)` } : undefined}
     >
       {beatPulse ? <span key={`metric-beat-${label}-${beatPulse}`} className="pointer-events-none absolute right-4 top-4 h-5 w-5 rounded-full bg-rose-400/45 animate-ping" /> : null}
@@ -1306,8 +1307,8 @@ function MetricCard({ icon, label, value, helper, active, level, large = false, 
         </div>
         <StatusDot active={active || hasLevel} />
       </div>
-      <p className={`mt-3 min-w-0 whitespace-nowrap font-bold leading-none tracking-normal text-foreground tabular-nums ${large ? "text-5xl" : "text-3xl"} ${valueClassName}`}>{value}</p>
-      {helper && <p className={`mt-2 min-h-[2.5rem] text-muted-foreground ${large ? "text-sm" : "text-xs"}`}>{helper}</p>}
+      <p className={`mt-3 min-w-0 whitespace-nowrap font-bold leading-none tracking-normal text-foreground tabular-nums ${display ? "text-[clamp(3.75rem,6.5vw,7.5rem)]" : large ? "text-5xl" : "text-3xl"} ${valueClassName}`}>{value}</p>
+      {helper && <p className={`mt-2 min-h-[2.5rem] text-muted-foreground ${display ? "text-xl" : large ? "text-sm" : "text-xs"}`}>{helper}</p>}
     </div>
   );
 }
@@ -1578,6 +1579,7 @@ export default function LiveCapture() {
   const directH10PmdControlWaitersRef = useRef(new Map());
   const h10MultimodalRef = useRef(h10Multimodal);
   const telemetryHistoryRef = useRef(telemetryHistory);
+  const appendTelemetryPointRef = useRef(() => {});
   const liveEventsRef = useRef(liveEvents);
   const directH10StatusRef = useRef(directH10Status);
   const directH10RelaySocketRef = useRef(null);
@@ -2042,6 +2044,7 @@ export default function LiveCapture() {
       return [...prev, point].slice(-MAX_TELEMETRY_POINTS);
     });
   };
+  appendTelemetryPointRef.current = appendTelemetryPoint;
 
   const updateHrSourceSettings = useCallback((patch) => {
     setHrSourceSettings((prev) => {
@@ -2317,6 +2320,7 @@ export default function LiveCapture() {
   const handleH10PmdControl = useCallback((value) => {
     const response = parseH10PmdControlResponse(value);
     if (!response) return;
+    const streamActive = isH10PmdStreamActiveResponse(response);
     const waiterKey = `${response.command}:${response.measurement}`;
     const waiter = directH10PmdControlWaitersRef.current.get(waiterKey);
     if (waiter) {
@@ -2327,9 +2331,9 @@ export default function LiveCapture() {
     const streamName = response.measurement === 0 ? "ECG" : response.measurement === 2 ? "accelerometer" : "PMD";
     setDirectH10Status((previous) => ({
       ...previous,
-      pmdActive: response.success ? true : previous.pmdActive,
-      pmdMessage: response.success
-        ? `${streamName} raw stream active`
+      pmdActive: streamActive ? true : previous.pmdActive,
+      pmdMessage: streamActive
+        ? `${streamName} raw stream active${response.status === 6 ? " (resumed)" : ""}`
         : `${streamName} raw stream unavailable (PMD status ${response.status})`,
     }));
   }, []);
@@ -2382,13 +2386,13 @@ export default function LiveCapture() {
       BleClient.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ECG_START_COMMAND), { timeout: 12000 }),
       ecgResponsePromise,
     ]);
-    if (!ecgResponse.success) throw new Error(`H10 rejected ECG stream (status ${ecgResponse.status})`);
+    if (!isH10PmdStreamActiveResponse(ecgResponse)) throw new Error(`H10 rejected ECG stream (status ${ecgResponse.status})`);
     const accelerometerResponsePromise = waitForH10PmdControlResponse(2);
     const [, accelerometerResponse] = await Promise.all([
       BleClient.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ACCELEROMETER_START_COMMAND), { timeout: 12000 }),
       accelerometerResponsePromise,
     ]);
-    if (!accelerometerResponse.success) throw new Error(`H10 rejected accelerometer stream (status ${accelerometerResponse.status})`);
+    if (!isH10PmdStreamActiveResponse(accelerometerResponse)) throw new Error(`H10 rejected accelerometer stream (status ${accelerometerResponse.status})`);
     directH10PmdNativeActiveRef.current = true;
     setDirectH10Status((previous) => ({ ...previous, pmdActive: true, pmdMessage: "ECG + chest motion starting" }));
   }, [handleH10PmdControl, handleH10PmdData, waitForH10PmdControlResponse]);
@@ -2411,13 +2415,13 @@ export default function LiveCapture() {
       control.writeValueWithResponse(H10_ECG_START_COMMAND),
       ecgResponsePromise,
     ]);
-    if (!ecgResponse.success) throw new Error(`H10 rejected ECG stream (status ${ecgResponse.status})`);
+    if (!isH10PmdStreamActiveResponse(ecgResponse)) throw new Error(`H10 rejected ECG stream (status ${ecgResponse.status})`);
     const accelerometerResponsePromise = waitForH10PmdControlResponse(2);
     const [, accelerometerResponse] = await Promise.all([
       control.writeValueWithResponse(H10_ACCELEROMETER_START_COMMAND),
       accelerometerResponsePromise,
     ]);
-    if (!accelerometerResponse.success) throw new Error(`H10 rejected accelerometer stream (status ${accelerometerResponse.status})`);
+    if (!isH10PmdStreamActiveResponse(accelerometerResponse)) throw new Error(`H10 rejected accelerometer stream (status ${accelerometerResponse.status})`);
     directH10PmdBrowserRef.current = { control, data, controlHandler, dataHandler };
     setDirectH10Status((previous) => ({ ...previous, pmdActive: true, pmdMessage: "ECG + chest motion starting" }));
   }, [handleH10PmdControl, handleH10PmdData, waitForH10PmdControlResponse]);
@@ -2993,6 +2997,8 @@ export default function LiveCapture() {
     events.addEventListener("hr_telemetry", (event) => {
       const data = JSON.parse(event.data);
       latestHrRef.current = data;
+      setHrTelemetry(data);
+      appendTelemetryPointRef.current(data, latestEmgRef.current);
       maybeTriggerHeartbeatFromTelemetry(data);
     });
     events.addEventListener("emg_telemetry", (event) => {
@@ -3008,7 +3014,7 @@ export default function LiveCapture() {
       setStatus((prev) => ({ ...(prev || {}), engine: snapshot.engine || null }));
       setHrTelemetry(nextHr);
       setEmgTelemetry(nextEmg);
-      appendTelemetryPoint(nextHr, nextEmg);
+      appendTelemetryPointRef.current(nextHr, nextEmg);
     });
     events.addEventListener("emg_calibration_status", (event) => {
       setCalibrationCommandStatus(JSON.parse(event.data));
@@ -3021,7 +3027,7 @@ export default function LiveCapture() {
       setLiveSession((prev) => ({ ...(prev || {}), lastImportedAt: new Date().toISOString(), lastImportResult: JSON.parse(event.data) }));
     });
     return () => events.close();
-  }, [appendTelemetryPoint, maybeTriggerHeartbeatFromTelemetry]);
+  }, [maybeTriggerHeartbeatFromTelemetry]);
 
   useEffect(() => {
     localStorage.setItem("pulsepoint.captureKind", captureKind);
@@ -5773,7 +5779,7 @@ export default function LiveCapture() {
     </div>
   );
 
-  const mediaPanel = (captureMode === "media" || focusView) ? (
+  const mediaPanel = captureMode === "media" ? (
     <div className={focusView ? "flex h-full flex-col bg-background p-3" : "rounded-xl border border-border bg-card p-3 md:p-4"}>
       <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
@@ -6151,7 +6157,11 @@ export default function LiveCapture() {
   const obsPreferred = Boolean(launchProfile.obsEnabled && !launchProfile.telemetryOnlyFallback);
   const h10RawStreamsActive = Boolean(
     directH10Source
-    && (effectiveH10Multimodal?.streams?.ecg?.sampleCount > 0 || effectiveH10Multimodal?.streams?.accelerometer?.sampleCount > 0)
+    && (
+      directH10Status.pmdActive
+      || effectiveH10Multimodal?.streams?.ecg?.sampleCount > 0
+      || effectiveH10Multimodal?.streams?.accelerometer?.sampleCount > 0
+    )
   );
   const liveGuidanceMode = !healthRecentHrPacket
     ? {
@@ -6268,7 +6278,7 @@ export default function LiveCapture() {
   ];
 
   return (
-    <div className={`${focusView ? "h-screen overflow-y-auto p-4" : "p-4 md:p-6"} space-y-4`}>
+    <div className={`${focusView ? "h-screen overflow-hidden bg-[#071016] p-0" : "p-4 md:p-6"} space-y-4`}>
       {hrLossDialog && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4">
           <div
@@ -6346,7 +6356,7 @@ export default function LiveCapture() {
         </div>
       )}
 
-      <section className={`rounded-2xl border p-4 shadow-sm ${liveHealthToneClasses(liveGuidanceMode.tone)}`} aria-live="polite">
+      {!focusView && (<section className={`rounded-2xl border p-4 shadow-sm ${liveHealthToneClasses(liveGuidanceMode.tone)}`} aria-live="polite">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
@@ -6401,7 +6411,7 @@ export default function LiveCapture() {
             ))}
           </div>
         </div>
-      </section>
+      </section>)}
 
       {!focusView && !mainTelemetryView && !launchActive && (
         <LiveCaptureLaunchpad
@@ -8060,10 +8070,22 @@ export default function LiveCapture() {
         </CollapsibleControlSection>
       )}
 
-      <div className={`rounded-xl border border-border bg-card ${distanceTelemetryView ? "p-5 md:p-6 space-y-6" : "p-4 space-y-4"} ${focusView ? "h-[calc(100vh-2rem)] overflow-y-auto" : ""}`}>
+      <div
+        className={`rounded-xl border border-border bg-card ${distanceTelemetryView ? "p-5 md:p-6 space-y-6" : "p-4 space-y-4"} ${focusView ? "fixed inset-0 z-[60] h-screen overflow-y-auto rounded-none border-0 p-5 md:p-7" : ""}`}
+        style={focusView ? {
+          "--background": "204 46% 7%",
+          "--card": "204 38% 11%",
+          "--popover": "204 38% 11%",
+          "--foreground": "198 33% 96%",
+          "--muted": "204 26% 18%",
+          "--muted-foreground": "199 18% 70%",
+          "--border": "199 28% 25%",
+        } : undefined}
+      >
         <div className="flex items-center justify-between gap-3">
-          <h3 className={`${distanceTelemetryView ? "text-lg" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex items-center gap-2`}>
+          <h3 className={`${focusView ? "text-2xl md:text-3xl" : distanceTelemetryView ? "text-lg" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex items-center gap-2`}>
             <CircleDot className={distanceTelemetryView ? "w-6 h-6" : "w-4 h-4"} /> Live Telemetry
+            {focusView && <span className="ml-2 font-mono text-xl font-medium tracking-normal text-muted-foreground">{new Date(liveHealthNowMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}
           </h3>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <span className={`${distanceTelemetryView ? "text-sm" : "text-[10px]"} text-muted-foreground`}>
@@ -8170,12 +8192,47 @@ export default function LiveCapture() {
           </div>
         </div>
 
-        <div className={`grid gap-3 sm:grid-cols-2 ${telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`}>
-          <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large beatPulse={visibleHeartbeatPulseId} />
-          <MetricCard icon={<Activity className="w-4 h-4" />} label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} active={Boolean(latestBpReading)} valueClassName="!text-[clamp(2rem,8vw,3rem)]" large />
+        <div className="rounded-xl border border-cyan-400/25 bg-cyan-500/[0.06] p-4 shadow-sm">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="flex items-center gap-2 text-sm font-bold uppercase tracking-[0.16em] text-cyan-500">
+                  <Zap className="h-5 w-5" /> Howl Control
+                </p>
+                <span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${howlSarahAutoEnabled ? "bg-primary/20 text-primary" : howlManualControlsUnlocked ? "bg-emerald-500/15 text-emerald-500" : "bg-muted text-muted-foreground"}`}>
+                  {howlSarahAutoEnabled ? "Sarah auto armed" : howlManualControlsUnlocked ? "Manual ready" : "Locked"}
+                </span>
+              </div>
+              <p className="mt-1 truncate text-sm text-muted-foreground">{howlDisplayStatus}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={howlCommandForm.channel || "a"}
+                onChange={(event) => setHowlCommandForm((previous) => ({ ...previous, channel: event.target.value }))}
+                className="h-11 rounded-lg border border-border bg-card px-3 text-sm font-bold text-foreground"
+                aria-label="Howl control channel"
+              >
+                <option value="a">Channel A</option>
+                <option value="b">Channel B</option>
+                <option value="all">Both channels</option>
+              </select>
+              <span className="min-w-20 rounded-lg border border-border bg-card px-4 py-2 text-center font-mono text-2xl font-bold tabular-nums text-foreground">
+                {fmtNumber(howlSelectedChannelIntensity, 0)}
+              </span>
+              <button type="button" onClick={() => sendHowlControlCommand("decrement_power", { channel: howlCommandForm.channel || "a", step: 1 })} disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy)} className="h-11 rounded-lg border border-border bg-card px-4 text-lg font-bold text-foreground disabled:opacity-40">-</button>
+              <button type="button" onClick={() => sendHowlControlCommand("increment_power", { channel: howlCommandForm.channel || "a", step: 1 })} disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy)} className="h-11 rounded-lg bg-primary px-4 text-lg font-bold text-primary-foreground disabled:opacity-40">+</button>
+              <button type="button" onClick={sendHowlEmergencyStop} disabled={!howlControlEnabled || Boolean(howlControlBusy)} className="h-11 rounded-lg bg-destructive px-4 text-sm font-bold text-destructive-foreground disabled:opacity-40">Mute</button>
+              <button type="button" onClick={() => setHowlQuickModalOpen(true)} className="h-11 rounded-lg border border-border bg-muted px-4 text-sm font-bold text-foreground">Details</button>
+            </div>
+          </div>
+        </div>
+
+        <div className={`grid gap-3 sm:grid-cols-2 ${focusView ? "xl:grid-cols-3 2xl:grid-cols-5" : telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`}>
+          <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large display={focusView} beatPulse={visibleHeartbeatPulseId} />
+          <MetricCard icon={<Activity className="w-4 h-4" />} label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} active={Boolean(latestBpReading)} valueClassName={focusView ? "!text-[clamp(3rem,5vw,6rem)]" : "!text-[clamp(2rem,8vw,3rem)]"} large display={focusView} />
           {!captureIsBodyExploration && (
             <>
-              <MetricCard icon={<Zap className="w-4 h-4" />} label="Build Confidence" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "No HR phase"} active={Number(hrTelemetry?.buildConfidence) > 40} level={buildLevel} large />
+              <MetricCard icon={<Zap className="w-4 h-4" />} label="Build Confidence" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "No HR phase"} active={Number(hrTelemetry?.buildConfidence) > 40} level={buildLevel} large display={focusView} />
               <MetricCard
                 icon={<Brain className="w-4 h-4" />}
                 label="AI Magic"
@@ -8184,46 +8241,53 @@ export default function LiveCapture() {
                 active={prediction.nearClimax >= 42}
                 level={prediction.nearClimax}
                 large
+                display={focusView}
               />
             </>
           )}
           {hrTelemetry?.source === "direct_h10" && (
             <>
-              <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="RR Samples" value={fmtNumber(rrCount, 0)} helper="rolling H10 interval window" active={Number(rrCount) > 0} level={Math.min(100, (Number(rrCount) || 0) * 1.25)} large />
-              <MetricCard icon={<Activity className="w-4 h-4" />} label="RMSSD" value={fmtNumber(hrvRmssd, 1)} helper={hrvQuality ? `HRV quality: ${hrvQuality}` : "waiting for RR window"} active={hrvRmssd != null} level={hrvQuality === "high" ? 90 : hrvQuality === "moderate" ? 65 : hrvQuality === "low" ? 35 : 0} large />
+              <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="RR Samples" value={fmtNumber(rrCount, 0)} helper="rolling H10 interval window" active={Number(rrCount) > 0} level={Math.min(100, (Number(rrCount) || 0) * 1.25)} large display={focusView} />
+              <MetricCard icon={<Activity className="w-4 h-4" />} label="RMSSD" value={fmtNumber(hrvRmssd, 1)} helper={hrvQuality ? `HRV quality: ${hrvQuality}` : "waiting for RR window"} active={hrvRmssd != null} level={hrvQuality === "high" ? 90 : hrvQuality === "moderate" ? 65 : hrvQuality === "low" ? 35 : 0} large display={focusView} />
               <MetricCard
                 icon={<Activity className="w-4 h-4" />}
                 label="Respiration"
-                value={h10Respiration.possibleBreathHold ? "HOLD?" : h10Respiration.available ? fmtNumber(h10Respiration.bpm, 1) : "--"}
-                helper={h10Respiration.available ? `breaths/min · ${h10Respiration.confidence} confidence${h10Respiration.possibleBreathHold ? " · possible 4 s hold" : ""}` : `withheld · ${(h10Respiration.reason || "warming up").replaceAll?.("_", " ")}`}
+                value={h10Respiration.possibleBreathHold ? "HOLD?" : h10Respiration.available ? fmtNumber(h10Respiration.bpm, 1) : h10RawStreamsActive ? "WARMING" : "NO PMD"}
+                helper={h10Respiration.available ? `breaths/min · ${h10Respiration.confidence} confidence${h10Respiration.possibleBreathHold ? " · possible 4 s hold" : ""}` : h10RawStreamsActive ? `withheld · ${(h10Respiration.reason || "collecting sensor window").replaceAll?.("_", " ")}` : "ECG and accelerometer stream unavailable"}
                 active={h10Respiration.available}
                 level={h10Respiration.available ? (h10Respiration.confidence === "high" ? 90 : 65) : 0}
                 large
+                display={focusView}
+                valueClassName={!h10Respiration.available && focusView ? "!text-[clamp(2.5rem,4vw,4.5rem)]" : ""}
               />
               <MetricCard
                 icon={<Radio className="w-4 h-4" />}
                 label="Chest Motion"
-                value={h10Motion.dynamicRmsMilliG != null ? fmtNumber(h10Motion.dynamicRmsMilliG, 0) : "--"}
-                helper={h10Motion.available ? `mg RMS · ${(h10Motion.class || "").replaceAll?.("_", " ")}` : "waiting for H10 accelerometer"}
+                value={h10Motion.dynamicRmsMilliG != null ? fmtNumber(h10Motion.dynamicRmsMilliG, 0) : h10RawStreamsActive ? "WARMING" : "NO PMD"}
+                helper={h10Motion.available ? `mg RMS · ${(h10Motion.class || "").replaceAll?.("_", " ")}` : h10RawStreamsActive ? "collecting H10 accelerometer window" : "H10 accelerometer stream unavailable"}
                 active={h10Motion.available}
                 level={h10Motion.available ? Math.min(100, Number(h10Motion.dynamicRmsMilliG || 0) / 3.6) : 0}
                 large
+                display={focusView}
+                valueClassName={!h10Motion.available && focusView ? "!text-[clamp(2.5rem,4vw,4.5rem)]" : ""}
               />
               <MetricCard
                 icon={<RefreshCw className="w-4 h-4" />}
                 label="Recovery"
-                value={h10Recovery.available ? `-${fmtNumber(h10Recovery.currentDropBpm, 0)}` : "--"}
+                value={h10Recovery.available ? `-${fmtNumber(h10Recovery.currentDropBpm, 0)}` : "LEARNING"}
                 helper={h10Recovery.available ? `bpm from ${fmtNumber(h10Recovery.peakHr, 0)} peak · ${fmtNumber(h10Recovery.secondsSincePeak, 0)} s` : "learns after a sustained HR peak"}
                 active={h10Recovery.available}
                 level={h10Recovery.available ? Math.min(100, Number(h10Recovery.currentDropBpm || 0) * 5) : 0}
                 large
+                display={focusView}
+                valueClassName={!h10Recovery.available && focusView ? "!text-[clamp(2.5rem,4vw,4.5rem)]" : ""}
               />
             </>
           )}
           {telemetryEmgLive && (
             <>
-              <MetricCard icon={<Activity className="w-4 h-4" />} label={selectedEmgConfig.leftLabel} value={`${fmtNumber(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct)}%`} helper={selectedEmgConfig.leftHelper} active={(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct) != null} level={leftEmgLevel} large />
-              <MetricCard icon={<Activity className="w-4 h-4" />} label={selectedEmgConfig.rightLabel} value={`${fmtNumber(emgTelemetry?.right_pct)}%`} helper={emgTelemetry?.right_pct != null ? `diff ${fmtNumber(emgTelemetry?.diff_pct)}%` : selectedEmgConfig.rightHelper} active={emgTelemetry?.right_pct != null} level={rightEmgLevel} large />
+              <MetricCard icon={<Activity className="w-4 h-4" />} label={selectedEmgConfig.leftLabel} value={`${fmtNumber(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct)}%`} helper={selectedEmgConfig.leftHelper} active={(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct) != null} level={leftEmgLevel} large display={focusView} />
+              <MetricCard icon={<Activity className="w-4 h-4" />} label={selectedEmgConfig.rightLabel} value={`${fmtNumber(emgTelemetry?.right_pct)}%`} helper={emgTelemetry?.right_pct != null ? `diff ${fmtNumber(emgTelemetry?.diff_pct)}%` : selectedEmgConfig.rightHelper} active={emgTelemetry?.right_pct != null} level={rightEmgLevel} large display={focusView} />
             </>
           )}
         </div>
@@ -8350,7 +8414,7 @@ export default function LiveCapture() {
           </div>
         )}
 
-        {!captureIsBodyExploration && directH10Source && (
+        {directH10Source && (
           <div className="grid gap-4 xl:grid-cols-2">
             <TrendPanel
               title="Threshold Load Matrix"
@@ -8419,13 +8483,14 @@ export default function LiveCapture() {
         )}
 
         <div className={distanceTelemetryView && telemetryEmgLive ? "grid gap-4 xl:grid-cols-2" : "space-y-4"}>
-        <TrendPanel title="Heart Rate Trend" subtitle="Current, smoothed, and baseline HR" empty={!hasHrTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-72 md:h-80"} distanceView={distanceTelemetryView}>
+        <TrendPanel title="Cardiac & Autonomic Trend" subtitle="Heart rate, smoothed baseline, RMSSD, SDNN, and session approach load" empty={!hasHrTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-72 md:h-80"} distanceView={distanceTelemetryView}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={telemetryHistory} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.45} />
               <XAxis dataKey="time" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} minTickGap={28} />
               <YAxis yAxisId="hr" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} domain={["dataMin - 4", "dataMax + 4"]} width={distanceTelemetryView ? 44 : 34} />
-              <YAxis yAxisId="watch" orientation="right" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--destructive))" }} tickLine={false} axisLine={false} domain={[0, 100]} width={distanceTelemetryView ? 44 : 34} />
+              <YAxis yAxisId="hrv" orientation="right" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "#22d3ee" }} tickLine={false} axisLine={false} domain={[0, "auto"]} width={distanceTelemetryView ? 44 : 34} />
+              <YAxis yAxisId="watch" hide domain={[0, 100]} />
               <Tooltip content={<ChartTooltip />} />
               <Legend wrapperStyle={{ fontSize: distanceTelemetryView ? 14 : 11 }} />
               {phaseMarkers.map((marker, index) => marker.chartTime ? (
@@ -8442,6 +8507,8 @@ export default function LiveCapture() {
               <Line yAxisId="hr" type="monotone" dataKey="baseline" name="Baseline" stroke="hsl(var(--muted-foreground))" strokeDasharray="5 5" strokeWidth={1.5} dot={false} connectNulls />
               <Line yAxisId="hr" type="monotone" dataKey="hrSmoothed" name="Smoothed" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} connectNulls />
               <Line yAxisId="hr" type="monotone" dataKey="hr" name="HR" stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} connectNulls />
+              <Line yAxisId="hrv" type="monotone" dataKey="hrvRmssd" name="RMSSD" stroke="#22d3ee" strokeWidth={2.25} dot={false} connectNulls />
+              <Line yAxisId="hrv" type="monotone" dataKey="hrvSdnn" name="SDNN" stroke="#a78bfa" strokeWidth={1.75} dot={false} connectNulls />
               {!captureIsBodyExploration && <Line yAxisId="watch" type="monotone" dataKey="nearClimax" name="Approach" stroke="hsl(var(--destructive))" strokeWidth={2} dot={false} connectNulls />}
             </LineChart>
           </ResponsiveContainer>

@@ -16,6 +16,15 @@ export const H10_ACCELEROMETER_START_COMMAND = Uint8Array.from([
   0x04, 0x01, 0x03,
 ]);
 
+export const H10_PMD_ALREADY_ACTIVE_STATUS = 6;
+
+export function isH10PmdStreamActiveResponse(response) {
+  return Boolean(
+    response
+    && (response.success || response.status === H10_PMD_ALREADY_ACTIVE_STATUS)
+  );
+}
+
 const ACCEL_RATE_HZ = 25;
 const ECG_RATE_HZ = 130;
 const RESPIRATION_WINDOW_MS = 60_000;

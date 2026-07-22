@@ -5,6 +5,7 @@ import {
   createH10PmdParserState,
   deriveH10MultimodalSnapshot,
   detectH10TapGesture,
+  isH10PmdStreamActiveResponse,
   parseH10PmdFrame,
 } from "./h10Multimodal.js";
 
@@ -42,6 +43,11 @@ test("bounded sensor buffers discard stale samples", () => {
     { maxAgeMs: 5000, maxSamples: 10, nowMs: 10_000 },
   );
   assert.deepEqual(result.map((sample) => sample.timestampMs), [5000, 9000]);
+});
+
+test("treats PMD already-in-state as an idempotent active stream", () => {
+  assert.equal(isH10PmdStreamActiveResponse({ success: false, status: 6 }), true);
+  assert.equal(isH10PmdStreamActiveResponse({ success: false, status: 5 }), false);
 });
 
 test("triple H10 impulses create one debounced marker gesture", () => {
