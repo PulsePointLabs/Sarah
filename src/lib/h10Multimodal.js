@@ -417,7 +417,58 @@ function ecgDerivedRespiration(samples) {
   };
 }
 
-export function fuseRespiration(accelerometer, ecg) {
+function rrDerivedRespiration(rrIntervalsMs = []) {
+  const intervals = rrIntervalsMs
+    .map((value) => finite(value))
+    .filter((value) => Number.isFinite(value) && value >= 300 && value <= 2000)
+    .slice(-180);
+  const durationMs = intervals.reduce((sum, value) => sum + value, 0);
+  if (intervals.length < 45 || durationMs < RESPIRATION_MIN_WINDOW_MS) {
+    return { accepted: false, reason: "insufficient_rr_window" };
+  }
+
+  let elapsedMs = 0;
+  const beats = intervals.map((interval) => {
+    elapsedMs += interval;
+    return { timestampMs: elapsedMs, value: interval };
+  });
+  const sampleRateHz = 2;
+  const stepMs = 1000 / sampleRateHz;
+  const resampled = [];
+  let beatIndex = 1;
+  for (let timestampMs = beats[0].timestampMs; timestampMs <= elapsedMs; timestampMs += stepMs) {
+    while (beatIndex < beats.length && beats[beatIndex].timestampMs < timestampMs) beatIndex += 1;
+    if (beatIndex >= beats.length) break;
+    const left = beats[beatIndex - 1];
+    const right = beats[beatIndex];
+    const span = Math.max(1, right.timestampMs - left.timestampMs);
+    const ratio = (timestampMs - left.timestampMs) / span;
+    resampled.push(left.value + ((right.value - left.value) * ratio));
+  }
+  const filtered = bandpass(resampled, sampleRateHz);
+  const modulationMs = standardDeviation(filtered) || 0;
+  const estimate = autocorrelationRate(filtered, sampleRateHz);
+  if (!estimate || estimate.periodicity < 0.62 || modulationMs < 2.5) {
+    return {
+      accepted: false,
+      reason: estimate ? "low_rr_periodicity" : "insufficient_rr_periodicity",
+      periodicity: round(estimate?.periodicity, 2),
+    };
+  }
+  if (estimate.bpm < RESPIRATION_MIN_BPM || estimate.bpm > RESPIRATION_MAX_BPM) {
+    return { accepted: false, reason: "rr_rate_out_of_range" };
+  }
+  return {
+    accepted: true,
+    bpm: round(estimate.bpm),
+    periodicity: round(estimate.periodicity, 2),
+    confidence: estimate.periodicity >= 0.78 ? "moderate" : "limited",
+    source: "rr_interval_modulation",
+    caveat: "Indirect RR modulation estimate; motion and autonomic shifts can affect it.",
+  };
+}
+
+export function fuseRespiration(accelerometer, ecg, rr = { accepted: false }) {
   if (accelerometer.accepted && ecg.accepted) {
     const difference = Math.abs(accelerometer.bpm - ecg.bpm);
     if (difference > 3.5) {
@@ -458,13 +509,29 @@ export function fuseRespiration(accelerometer, ecg) {
       holdDurationSeconds: null,
       accelerometer,
       ecg,
+      rr,
+    };
+  }
+  if (rr.accepted) {
+    return {
+      available: true,
+      bpm: rr.bpm,
+      confidence: rr.confidence || "limited",
+      source: rr.source,
+      possibleBreathHold: false,
+      holdDurationSeconds: null,
+      caveat: rr.caveat,
+      accelerometer,
+      ecg,
+      rr,
     };
   }
   return {
     available: false,
-    reason: accelerometer.reason || ecg.reason || "sensor_unavailable",
+    reason: accelerometer.reason || ecg.reason || rr.reason || "sensor_unavailable",
     accelerometer,
     ecg,
+    rr,
   };
 }
 
@@ -556,6 +623,7 @@ function autonomicState({ motion, respiration, recovery, currentHr, baselineHr, 
 export function deriveH10MultimodalSnapshot({
   accelerometerSamples = [],
   ecgSamples = [],
+  rrIntervalsMs = [],
   rrQuality = "unavailable",
   hrHistory = [],
   eventHistory = [],
@@ -583,7 +651,8 @@ export function deriveH10MultimodalSnapshot({
   };
   const accelRespiration = accelerometerRespiration(accelWindow, motion);
   const ecgRespiration = ecgDerivedRespiration(ecgWindow);
-  const respiration = fuseRespiration(accelRespiration, ecgRespiration);
+  const rrRespiration = rrDerivedRespiration(rrIntervalsMs);
+  const respiration = fuseRespiration(accelRespiration, ecgRespiration, rrRespiration);
   const accelCoverage = windowCoverage(accelWindow, ACCEL_RATE_HZ);
   const ecgCoverage = windowCoverage(ecgWindow, ECG_RATE_HZ);
   const confidence = signalConfidence({ accelCoverage, ecgCoverage, motion, respiration, rrQuality });

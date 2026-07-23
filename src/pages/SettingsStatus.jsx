@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { base44 } from "@/api/base44Client";
 import {
   Activity,
   BellRing,
@@ -57,6 +58,11 @@ import {
   SARAH_TONE_PRESETS,
   saveSarahPersonalitySettings,
 } from "@/utils/sarahPersonality";
+import {
+  DEFAULT_LIVE_CUE_CUSTOMIZATION,
+  readLiveCueCustomization,
+  saveLiveCueCustomization,
+} from "@/lib/liveCueCustomization";
 import {
   areBackgroundNotificationsEnabled,
   getNotificationPermission,
@@ -576,6 +582,10 @@ export default function SettingsStatus() {
   const [sarahPersonality, setSarahPersonality] = useState(readSarahPersonalitySettings);
   const [sarahPersonalityDirty, setSarahPersonalityDirty] = useState(false);
   const [sarahPersonalityMessage, setSarahPersonalityMessage] = useState("");
+  const [liveCueCustomization, setLiveCueCustomization] = useState(readLiveCueCustomization);
+  const [liveCueCustomizationDirty, setLiveCueCustomizationDirty] = useState(false);
+  const [liveCueCustomizationStatus, setLiveCueCustomizationStatus] = useState("");
+  const [liveCueCustomizationGenerating, setLiveCueCustomizationGenerating] = useState(false);
   const [bpStatus, setBpStatus] = useState(null);
   const [bpReadings, setBpReadings] = useState([]);
   const [bpMessage, setBpMessage] = useState("");
@@ -1097,6 +1107,66 @@ export default function SettingsStatus() {
     setSarahPersonalityMessage("Starter instructions restored. Press Save Sarah Settings to keep them.");
   };
 
+  const updateLiveCueCustomization = (patch) => {
+    setLiveCueCustomization((previous) => ({ ...previous, ...patch }));
+    setLiveCueCustomizationDirty(true);
+    setLiveCueCustomizationStatus("");
+  };
+
+  const saveCustomEncouragement = () => {
+    const saved = saveLiveCueCustomization(liveCueCustomization);
+    setLiveCueCustomization(saved);
+    setLiveCueCustomizationDirty(false);
+    setLiveCueCustomizationStatus("Custom encouragement saved. Choose Custom encouragement in Live Capture.");
+  };
+
+  const generateCustomEncouragement = async () => {
+    const instructions = String(liveCueCustomization.instructions || "").trim();
+    if (!instructions) {
+      setLiveCueCustomizationStatus("Add instructions first.");
+      return;
+    }
+    setLiveCueCustomizationGenerating(true);
+    setLiveCueCustomizationStatus("Sarah is building a private phrase bank from your instructions...");
+    try {
+      const response = await base44.integrations.Core.InvokeLLM({
+        prompt: `Create a concise live encouragement phrase bank for an adult user's private masturbation physiology session.
+
+User customization instructions:
+${instructions}
+
+Generate four distinct phrases for each physiological state: sustained build, sustained plateau, climax possible, climax imminent, brief recovery, and build resumed.
+Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, and point of view. The output may be sensual and explicitly orgasm-focused, but must remain non-vulgar, non-degrading, non-coercive, and safe for calm spoken TTS. Do not claim certainty from physiology. Do not include medical claims, commands to ignore pain/distress, breath-holding commands, or unsafe device instructions. Keep each phrase under 24 words and make adjacent phrases meaningfully different.`,
+        response_json_schema: {
+          type: "object",
+          properties: {
+            sustained_build: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
+            plateau_encouragement: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
+            climax_possible: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
+            climax_imminent: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
+            recovery: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
+            build_resumed: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
+          },
+          required: ["sustained_build", "plateau_encouragement", "climax_possible", "climax_imminent", "recovery", "build_resumed"],
+        },
+      });
+      const parsed = typeof response === "string" ? JSON.parse(response) : response;
+      const phrases = parsed?.response || parsed;
+      const saved = saveLiveCueCustomization({
+        ...liveCueCustomization,
+        enabled: true,
+        phrases,
+      });
+      setLiveCueCustomization(saved);
+      setLiveCueCustomizationDirty(false);
+      setLiveCueCustomizationStatus("Custom phrase bank generated and saved.");
+    } catch (error) {
+      setLiveCueCustomizationStatus(error?.message || "Custom encouragement generation failed.");
+    } finally {
+      setLiveCueCustomizationGenerating(false);
+    }
+  };
+
   const resetPwaShell = async () => {
     setPwaCleanupBusy(true);
     setPwaCleanupMessage("");
@@ -1433,6 +1503,104 @@ export default function SettingsStatus() {
         <div className="mt-3 flex items-start gap-2 rounded-lg bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
           <KeyRound className="mt-0.5 h-4 w-4 shrink-0" />
           <span>Standard Claude and OpenAI API keys still power analysis and TTS. Optional admin reporting keys only add cost visibility here.</span>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-primary">
+              <Sparkles className="h-4 w-4" />
+              <h2 className="text-sm font-bold uppercase tracking-wider">Live Encouragement Customization</h2>
+            </div>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+              Separate from Sarah's general personality. These instructions shape only the short phrases spoken during masturbation-session build, plateau, near-climax, recovery, and resumed-build states.
+            </p>
+          </div>
+          <ToggleControl
+            checked={liveCueCustomization.enabled}
+            onChange={(enabled) => updateLiveCueCustomization({ enabled })}
+            label="Enable custom live encouragement"
+          />
+        </div>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+          <div className="rounded-xl border border-primary/20 bg-primary/[0.04] p-3">
+            <label className="text-sm font-bold text-foreground" htmlFor="live-cue-custom-instructions">
+              How Sarah should encourage you
+            </label>
+            <Textarea
+              id="live-cue-custom-instructions"
+              value={liveCueCustomization.instructions}
+              onChange={(event) => updateLiveCueCustomization({ instructions: event.target.value })}
+              placeholder="Example: Use a warm trusted-lover voice. Be more specific and sensual near climax, use my name occasionally, keep recovery language gentle, and avoid clinical terminology."
+              className="mt-3 min-h-36 resize-y bg-background text-sm"
+            />
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              This text stays in Sarah's local settings. Generating phrases sends only these instructions to the configured AI provider; session video and telemetry are not included.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={generateCustomEncouragement}
+                disabled={liveCueCustomizationGenerating || !liveCueCustomization.instructions.trim()}
+                className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+              >
+                {liveCueCustomizationGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                Generate Phrase Bank
+              </button>
+              <button
+                type="button"
+                onClick={saveCustomEncouragement}
+                disabled={!liveCueCustomizationDirty}
+                className="rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold text-foreground disabled:opacity-50"
+              >
+                Save Without Regenerating
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLiveCueCustomization({ ...DEFAULT_LIVE_CUE_CUSTOMIZATION });
+                  setLiveCueCustomizationDirty(true);
+                  setLiveCueCustomizationStatus("Custom encouragement reset. Save to keep the reset.");
+                }}
+                className="rounded-lg px-3 py-2 text-sm font-semibold text-muted-foreground hover:bg-muted"
+              >
+                Reset
+              </button>
+            </div>
+            {liveCueCustomizationStatus && (
+              <p className="mt-3 text-xs font-medium text-muted-foreground">{liveCueCustomizationStatus}</p>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-border bg-muted/20 p-3">
+            <h3 className="text-sm font-bold text-foreground">Generated coverage</h3>
+            <div className="mt-3 space-y-2">
+              {[
+                ["sustained_build", "Build"],
+                ["plateau_encouragement", "Plateau"],
+                ["climax_possible", "Climax possible"],
+                ["climax_imminent", "Climax imminent"],
+                ["recovery", "Recovery"],
+                ["build_resumed", "Build resumed"],
+              ].map(([key, label]) => {
+                const phrases = Array.isArray(liveCueCustomization.phrases?.[key]) ? liveCueCustomization.phrases[key] : [];
+                return (
+                  <div key={key} className="rounded-lg border border-border bg-card px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs font-semibold text-foreground">{label}</span>
+                      <span className="font-mono text-xs text-primary">{phrases.length}/4</span>
+                    </div>
+                    {phrases[0] && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{phrases[0]}</p>}
+                  </div>
+                );
+              })}
+            </div>
+            <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+              In Live Capture, choose <span className="font-semibold text-foreground">Custom encouragement</span>. Sarah still uses the same physiological state gates and cooldowns; only the spoken language changes.
+            </p>
+          </div>
         </div>
       </section>
 

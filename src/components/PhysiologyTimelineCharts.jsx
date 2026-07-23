@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { Activity, Gauge, HeartPulse, Radio, Wind } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Activity, Crosshair, Gauge, HeartPulse, Radio, ShieldCheck, Sparkles, Wind } from "lucide-react";
 import {
   CartesianGrid,
   Line,
@@ -32,6 +32,35 @@ function average(values) {
 function maximum(values) {
   const usable = values.map(numberOrNull).filter(Number.isFinite);
   return usable.length ? Math.max(...usable) : null;
+}
+
+function validPositive(value) {
+  const parsed = numberOrNull(value);
+  return parsed != null && parsed > 0 ? parsed : null;
+}
+
+function rowReliability(row) {
+  const hr = validPositive(row.hr);
+  const rr = String(row.rr_intervals_ms || "").trim();
+  const hrv = validPositive(row.hrv_rmssd_ms);
+  const respiration = validPositive(row.respiration_bpm);
+  const motion = validPositive(row.motion_peak_dynamic_mg);
+  const pmdScore = numberOrNull(row.signal_confidence_score);
+  const core = hr != null ? Math.min(100, 60 + (rr ? 25 : 0) + (hrv != null ? 15 : 0)) : 0;
+  const multimodal = Math.min(100, Math.max(
+    pmdScore != null && row.signal_confidence_level !== "unavailable" ? pmdScore : 0,
+    (respiration != null ? 50 : 0) + (motion != null ? 35 : 0),
+  ));
+  return { core, multimodal };
+}
+
+function nearestTimelineRow(rows, seconds) {
+  if (!rows.length) return null;
+  return rows.reduce((nearest, row) => (
+    Math.abs(Number(row.time_offset_s) - seconds) < Math.abs(Number(nearest.time_offset_s) - seconds)
+      ? row
+      : nearest
+  ), rows[0]);
 }
 
 function Metric({ icon: Icon, label, value, detail, tone = "text-primary" }) {
@@ -95,6 +124,7 @@ function TimelineChart({ rows, lines, inspectionTime, onInspectionTimeChange, ri
 }
 
 export default function PhysiologyTimelineCharts({ timelineRows = [], inspectionTime, onInspectionTimeChange }) {
+  const [localReplayTime, setLocalReplayTime] = useState(0);
   const chartRows = useMemo(() => {
     const stride = Math.max(1, Math.ceil(timelineRows.length / 900));
     return timelineRows.filter((_row, index) => index % stride === 0).map((row) => ({
@@ -109,23 +139,49 @@ export default function PhysiologyTimelineCharts({ timelineRows = [], inspection
       recovery_drop_60_bpm: numberOrNull(row.recovery_drop_60_bpm),
       recovery_drop_90_bpm: numberOrNull(row.recovery_drop_90_bpm),
       response_latency_seconds: numberOrNull(row.response_latency_seconds),
+      reliability_core: rowReliability(row).core,
+      reliability_multimodal: rowReliability(row).multimodal,
     })).filter((row) => row.time_offset_s != null);
   }, [timelineRows]);
 
-  const hasRespiration = chartRows.some((row) => row.respiration_bpm != null);
-  const hasMotion = chartRows.some((row) => row.motion_dynamic_rms_mg != null || row.motion_peak_dynamic_mg != null);
+  const hasRespiration = chartRows.some((row) => Number(row.respiration_bpm) > 0);
+  const hasMotion = chartRows.some((row) => Number(row.motion_dynamic_rms_mg) > 0 || Number(row.motion_peak_dynamic_mg) > 0);
   const hasRecovery = chartRows.some((row) => row.recovery_drop_30_bpm != null || row.recovery_drop_60_bpm != null || row.recovery_drop_90_bpm != null);
   const hasResponseLatency = chartRows.some((row) => row.response_latency_seconds != null);
   const hasSignal = chartRows.some((row) => row.signal_confidence_score != null && row.signal_confidence_level !== "unavailable");
   const hasPosition = chartRows.some((row) => row.orientation_change_degrees != null);
   const hrvMedian = median(timelineRows.map((row) => row.hrv_rmssd_ms));
-  const respirationAverage = average(timelineRows.map((row) => row.respiration_bpm));
-  const motionPeak = maximum(timelineRows.map((row) => row.motion_peak_dynamic_mg));
+  const respirationAverage = average(timelineRows.map((row) => Number(row.respiration_bpm) > 0 ? row.respiration_bpm : null));
+  const motionPeak = maximum(timelineRows.map((row) => Number(row.motion_peak_dynamic_mg) > 0 ? row.motion_peak_dynamic_mg : null));
   const recoveryPeak = maximum(timelineRows.flatMap((row) => [row.recovery_drop_30_bpm, row.recovery_drop_60_bpm, row.recovery_drop_90_bpm]));
   const unavailableReason = !hasMotion && !hasRespiration
     ? "No H10 PMD sensor samples were saved"
     : [...timelineRows].reverse().find((row) => row.respiration_unavailable_reason)?.respiration_unavailable_reason;
   const breathHolds = timelineRows.filter((row) => row.possible_breath_hold === true || String(row.possible_breath_hold).toLowerCase() === "true").length;
+  const maxTime = chartRows.length ? Number(chartRows[chartRows.length - 1].time_offset_s) || 0 : 0;
+  const replayTime = Number.isFinite(Number(inspectionTime)) ? Number(inspectionTime) : localReplayTime;
+  const inspectedRow = nearestTimelineRow(chartRows, replayTime);
+  const inspectedReliability = inspectedRow ? rowReliability(inspectedRow) : { core: 0, multimodal: 0 };
+  const coreCoverage = chartRows.length
+    ? Math.round(chartRows.filter((row) => row.reliability_core >= 80).length / chartRows.length * 100)
+    : 0;
+  const multimodalCoverage = chartRows.length
+    ? Math.round(chartRows.filter((row) => row.reliability_multimodal >= 50).length / chartRows.length * 100)
+    : 0;
+  const hrValues = timelineRows.map((row) => validPositive(row.hr)).filter(Number.isFinite);
+  const baselineHr = median(hrValues.slice(0, Math.max(10, Math.round(hrValues.length * 0.12))));
+  const peakHr = maximum(hrValues);
+  const earlyHrv = median(timelineRows.slice(0, Math.max(10, Math.round(timelineRows.length * 0.2))).map((row) => row.hrv_rmssd_ms));
+  const lowHrv = median(timelineRows.map((row) => row.hrv_rmssd_ms).filter((value) => validPositive(value) != null).sort((a, b) => a - b).slice(0, Math.max(5, Math.round(timelineRows.length * 0.15))));
+  const responseLoad = baselineHr != null && peakHr != null ? peakHr - baselineHr : null;
+  const hrvSuppression = earlyHrv != null && lowHrv != null && earlyHrv > 0
+    ? Math.max(0, Math.min(100, ((earlyHrv - lowHrv) / earlyHrv) * 100))
+    : null;
+  const setReplayTime = (seconds) => {
+    const next = Math.max(0, Math.min(maxTime, Number(seconds) || 0));
+    setLocalReplayTime(next);
+    onInspectionTimeChange?.(next);
+  };
 
   if (!timelineRows.length) return null;
 
@@ -137,6 +193,63 @@ export default function PhysiologyTimelineCharts({ timelineRows = [], inspection
         <Metric icon={Activity} label="Chest Motion" value={motionPeak != null ? `${motionPeak.toFixed(0)} mg` : "--"} detail={hasMotion ? "Peak dynamic H10 acceleration" : "H10 accelerometer was unavailable"} tone="text-amber-500" />
         <Metric icon={Gauge} label="Recovery Drop" value={recoveryPeak != null ? `${recoveryPeak.toFixed(0)} bpm` : "--"} detail={hasRecovery ? "Largest saved 30/60/90-second drop" : "No sustained recovery window saved"} tone="text-rose-500" />
       </div>
+
+      <details className="rounded-xl border border-primary/20 bg-primary/5 p-3">
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Physiology Replay & Evidence Inspector</summary>
+        <p className="mt-1 text-[10px] text-muted-foreground">Scrub the saved session clock to inspect what was measured, estimated, or unavailable at that exact moment.</p>
+        <input
+          type="range"
+          min="0"
+          max={Math.max(1, maxTime)}
+          step="0.5"
+          value={Math.min(replayTime, Math.max(1, maxTime))}
+          onChange={(event) => setReplayTime(event.target.value)}
+          className="mt-3 w-full accent-primary"
+          aria-label="Physiology replay time"
+        />
+        <div className="mt-2 flex items-center justify-between font-mono text-[10px] text-muted-foreground">
+          <span>0:00</span>
+          <span className="font-semibold text-primary">{formatTime(replayTime)}</span>
+          <span>{formatTime(maxTime)}</span>
+        </div>
+        {inspectedRow && (
+          <div className="mt-3 grid gap-2 grid-cols-2 lg:grid-cols-4">
+            <Metric icon={HeartPulse} label="Heart Rate" value={validPositive(inspectedRow.hr) != null ? `${Math.round(Number(inspectedRow.hr))} bpm` : "--"} detail={String(inspectedRow.hr_source || "source unavailable").replaceAll("_", " ")} tone="text-rose-500" />
+            <Metric icon={Activity} label="RR / HRV" value={validPositive(inspectedRow.hrv_rmssd_ms) != null ? `${Number(inspectedRow.hrv_rmssd_ms).toFixed(1)} ms` : "--"} detail={inspectedRow.rr_intervals_ms ? `${String(inspectedRow.hrv_quality || "unknown")} quality RR evidence` : "No RR intervals saved at this moment"} tone="text-teal-500" />
+            <Metric icon={Wind} label="Respiration" value={validPositive(inspectedRow.respiration_bpm) != null ? `${Number(inspectedRow.respiration_bpm).toFixed(1)}/min` : "--"} detail={validPositive(inspectedRow.respiration_bpm) != null ? `${String(inspectedRow.respiration_source || "estimated").replaceAll("_", " ")} · ${inspectedRow.respiration_confidence || "limited"} confidence` : `Unavailable: ${String(inspectedRow.respiration_unavailable_reason || "no respiratory evidence").replaceAll("_", " ")}`} tone="text-sky-500" />
+            <Metric icon={ShieldCheck} label="Evidence Reliability" value={`${inspectedReliability.core}% core`} detail={`${inspectedReliability.multimodal}% multimodal · zero means unavailable, not absent physiology`} tone="text-emerald-500" />
+          </div>
+        )}
+      </details>
+
+      <details className="rounded-xl border border-border bg-muted/10 p-3">
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Reliability Timeline</summary>
+        <p className="mt-1 text-[10px] text-muted-foreground">Core reliability scores HR plus RR/HRV. Multimodal reliability separately scores respiration, motion, position, and raw PMD evidence.</p>
+        <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
+          <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-emerald-600">{coreCoverage}% core coverage</span>
+          <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-sky-600">{multimodalCoverage}% multimodal coverage</span>
+        </div>
+        <TimelineChart
+          rows={chartRows}
+          inspectionTime={replayTime}
+          onInspectionTimeChange={setReplayTime}
+          lines={[
+            { key: "reliability_core", label: "Core HR/RR reliability", color: "#10b981" },
+            { key: "reliability_multimodal", label: "Multimodal reliability", color: "#0ea5e9", dash: "4 2" },
+          ]}
+        />
+      </details>
+
+      <details className="rounded-xl border border-border bg-muted/10 p-3">
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Personal Response Model</summary>
+        <p className="mt-1 text-[10px] text-muted-foreground">A transparent session-specific response profile. It summarizes saved evidence; it does not invent missing sensor channels.</p>
+        <div className="mt-3 grid gap-2 grid-cols-2 lg:grid-cols-4">
+          <Metric icon={Gauge} label="Cardiac Load" value={responseLoad != null ? `+${responseLoad.toFixed(0)} bpm` : "--"} detail={baselineHr != null && peakHr != null ? `Approx. baseline ${baselineHr.toFixed(0)} · peak ${peakHr.toFixed(0)}` : "Insufficient HR evidence"} tone="text-rose-500" />
+          <Metric icon={Sparkles} label="HRV Compression" value={hrvSuppression != null ? `${hrvSuppression.toFixed(0)}%` : "--"} detail={hrvSuppression != null ? "Early RMSSD compared with the session's lower-RMSSD windows" : "Insufficient RR-derived HRV"} tone="text-violet-500" />
+          <Metric icon={Crosshair} label="Recovery Capacity" value={recoveryPeak != null ? `${recoveryPeak.toFixed(0)} bpm` : "--"} detail="Largest observed 30/60/90-second post-peak drop" tone="text-amber-500" />
+          <Metric icon={ShieldCheck} label="Model Basis" value={`${coreCoverage}%`} detail={`${timelineRows.length.toLocaleString()} rows · ${multimodalCoverage}% with additional sensor evidence`} tone="text-emerald-500" />
+        </div>
+      </details>
 
       {(hasRespiration || hasMotion) && (
         <details className="rounded-xl border border-border bg-muted/10 p-3">

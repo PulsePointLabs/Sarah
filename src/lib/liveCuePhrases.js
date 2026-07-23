@@ -93,6 +93,19 @@ export const LIVE_CUE_PRESETS = Object.freeze({
       ],
     },
   },
+  custom: {
+    id: "custom",
+    label: "Custom Encouragement",
+    helper: "Your private live-session instructions and generated phrase bank from Settings.",
+    phrases: {
+      sustained_build: ["Keep going. Your body is building steadily."],
+      plateau_encouragement: ["Stay with the rhythm that is working and let the build continue."],
+      climax_possible: ["You are getting closer. Stay present and keep going."],
+      climax_imminent: ["You are very close. Keep the rhythm steady and let your body respond."],
+      recovery: ["Take the brief recovery, keep the connection, and let the build return."],
+      build_resumed: ["The build is returning. Stay with it."],
+    },
+  },
 });
 
 export const DEFAULT_LIVE_CUE_SETTINGS = Object.freeze({
@@ -139,8 +152,9 @@ export function resolveLiveCuePhraseBank(settings = {}, { captureKind = "session
   const preset = LIVE_CUE_PRESETS[normalized.style] || LIVE_CUE_PRESETS.sarah_soft;
   const phrases = {};
   for (const cueType of Object.values(LIVE_CUE_TYPES)) {
-    const custom = Array.isArray(customPhrases[cueType])
-      ? customPhrases[cueType].map((value) => String(value || "").trim()).filter(Boolean)
+    const configuredPhrases = settings.customPhrases || customPhrases;
+    const custom = Array.isArray(configuredPhrases[cueType])
+      ? configuredPhrases[cueType].map((value) => String(value || "").trim()).filter(Boolean)
       : [];
     phrases[cueType] = custom.length ? custom : [...(preset.phrases[cueType] || [])];
   }

@@ -31,6 +31,7 @@ import {
   summarizeLaunchProfile,
 } from "@/lib/liveCaptureLaunchProfile";
 import { DEFAULT_LIVE_CUE_SETTINGS, LIVE_CUE_PRESETS, resolveLiveCuePhraseBank } from "@/lib/liveCuePhrases";
+import { readLiveCueCustomization } from "@/lib/liveCueCustomization";
 import { useLiveCueAudio } from "@/hooks/useLiveCueAudio";
 import { useLiveCueEngine } from "@/hooks/useLiveCueEngine";
 import { toLiveTelemetryNotice } from "@/lib/liveCueDisplay";
@@ -1651,6 +1652,8 @@ export default function LiveCapture() {
   const [launchState, setLaunchState] = useState({ phase: "idle", message: "", steps: [], busy: false, error: "" });
   const [liveCueSettings, setLiveCueSettings] = useState(() => ({
     ...DEFAULT_LIVE_CUE_SETTINGS,
+    customPhrases: readLiveCueCustomization().phrases,
+    customInstructions: readLiveCueCustomization().instructions,
     enabled: readLiveCaptureLaunchProfile().livePhysiologyCuesEnabled,
     style: readLiveCaptureLaunchProfile().cueStyle,
     volume: readLiveCaptureLaunchProfile().cueVolume,
@@ -2026,6 +2029,7 @@ export default function LiveCapture() {
       const snapshot = deriveH10MultimodalSnapshot({
         accelerometerSamples: store.accelerometerSamples,
         ecgSamples: store.ecgSamples,
+        rrIntervalsMs: directH10RrRef.current,
         rrQuality: telemetry?.hrv?.quality || telemetry?.hrv_quality || "unavailable",
         hrHistory: telemetryHistoryRef.current,
         eventHistory,
@@ -7261,6 +7265,8 @@ export default function LiveCapture() {
                   <option value="clinical_minimal">Clinical minimal</option>
                   <option value="sarah_soft">Warm encouragement</option>
                   <option value="intimate_coaching">Direct encouragement</option>
+                  <option value="intimate_lovers_voice">Intimate lover</option>
+                  <option value="custom">Custom encouragement</option>
                   <option value="intimate_lovers_voice">Intimate lover (opt-in)</option>
                 </select>
               </SetupTile>
@@ -8769,6 +8775,8 @@ export default function LiveCapture() {
                   <option value="clinical_minimal">Clinical minimal</option>
                   <option value="sarah_soft">Warm encouragement</option>
                   <option value="intimate_coaching">Direct encouragement</option>
+                  <option value="intimate_lovers_voice">Intimate lover</option>
+                  <option value="custom">Custom encouragement</option>
                   <option value="intimate_lovers_voice">Intimate lover (opt-in)</option>
                 </select>
                 <label className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs font-medium text-muted-foreground">

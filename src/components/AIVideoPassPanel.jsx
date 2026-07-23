@@ -62,6 +62,7 @@ import {
 } from "@/lib/videoPassTextGuards";
 import { reduceConsistencyPhraseRepetition } from "@/utils/aiTextRepair";
 import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
+import { buildAiCorrectionMemoryPrompt, rememberAiCorrection } from "@/lib/aiCorrectionMemory";
 
 function fmtMmSs(totalSeconds) {
   const v = Math.max(0, Math.round(Number(totalSeconds) || 0));
@@ -2524,6 +2525,8 @@ ${isExploration ? (deviceIdentityContext.enemaKnown && !deviceIdentityContext.ur
 
 Current-frame override rule: the sampled frames in this request are the primary evidence. Prior summaries, accepted cards, and continuity text can orient the sequence, but they must not override the current frames. If the prior window said "resting", "no stimulation", "no visible movement", or "HR rising without visible cause", actively re-check the current frames for hand/device contact, visible stroke or device motion, perineal contact, glans/shaft movement, sleeve/lubricant interaction, body/leg response, or procedure action before repeating that claim.
 
+${buildAiCorrectionMemoryPrompt({ recordType: isExploration ? "body_exploration" : "session" })}
+
 Visible-first anatomy rule: in regular session reviews, build each finding in this order: 1. exact visible body area or contact zone, 2. exact visible motion or state, 3. cautious interpretation only if the first two support it. Prefer concrete wording like "your glans remains exposed with visible sheen", "your hand shifts from mid-shaft toward the glans", "contact sits below the scrotum at the scrotal-base/perineal region", or "your scrotum appears more lifted/tight than the prior window." Do not skip straight to summary labels like climax, orgasm, edging, intense stimulation, or recovery if the visible mechanics are not clearly shown first.
 
 Visible evidence buckets for regular session review: penile shaft/base, glans/meatus/foreskin, scrotum/testes, scrotal-base/perineal region, lubrication/moisture/fluid, hand/device contact mechanics, pelvic/body response, and feet/lower-body response. Use the most specific supported bucket instead of vague phrases like "genital activity", "area stimulation", or "motion near the body".
@@ -3640,7 +3643,7 @@ Return only the structured JSON matching the requested schema.`,
         ? {
             ...card,
             events: (card.events || []).map((event, index) => (
-              index === eventIndex ? { ...event, note } : event
+              index === eventIndex ? { ...event, _original_note: event._original_note || event.note, note } : event
             )),
           }
         : card
@@ -3659,6 +3662,14 @@ Return only the structured JSON matching the requested schema.`,
       summary: String(card.summary || "").trim(),
       events: cleanedEvents,
     };
+    cleanedEvents.forEach((event) => {
+      rememberAiCorrection({
+        before: event._original_note,
+        after: event.note,
+        context: `${card.label || "Video pass"} · ${fmtMmSs(card.window?.start)}-${fmtMmSs(card.window?.end)}`,
+        recordType: isExploration ? "body_exploration" : "session",
+      });
+    });
     if (!hasPersistableVideoPassCard(cardToPersist)) {
       setStatus("Nothing new to save from this card yet.");
       return;
@@ -3723,6 +3734,16 @@ Return only the structured JSON matching the requested schema.`,
       setStatus("No draft findings, summaries, or event notes were ready to save.");
       return;
     }
+    cardsToPersist.forEach((card) => {
+      card.events.forEach((event) => {
+        rememberAiCorrection({
+          before: event._original_note,
+          after: event.note,
+          context: `${card.label || "Video pass"} · ${fmtMmSs(card.window?.start)}-${fmtMmSs(card.window?.end)}`,
+          recordType: isExploration ? "body_exploration" : "session",
+        });
+      });
+    });
 
     try {
       const retainedEvents = (session?.event_timeline || []).filter((event) => {

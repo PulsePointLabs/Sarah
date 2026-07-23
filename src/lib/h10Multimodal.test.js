@@ -89,6 +89,21 @@ test("ECG-derived respiration remains available when ambulatory motion blocks ac
   assert.equal(result.confidence, "moderate");
 });
 
+test("RR modulation provides an explicitly indirect fallback when PMD streams are unavailable", () => {
+  const rrIntervalsMs = Array.from({ length: 120 }, (_unused, index) => (
+    800 + (45 * Math.sin(2 * Math.PI * index / 5))
+  ));
+  const result = deriveH10MultimodalSnapshot({
+    rrIntervalsMs,
+    rrQuality: "high",
+    nowMs: 70_000,
+  });
+  assert.equal(result.respiration.available, true);
+  assert.equal(result.respiration.source, "rr_interval_modulation");
+  assert.ok(["limited", "moderate"].includes(result.respiration.confidence));
+  assert.equal(result.respiration.possibleBreathHold, false);
+});
+
 test("stable periodic chest acceleration can produce a conservative rate", () => {
   const nowMs = 70_000;
   const accelerometerSamples = Array.from({ length: 1500 }, (_unused, index) => {
