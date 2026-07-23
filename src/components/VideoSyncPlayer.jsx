@@ -32,6 +32,11 @@ import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { cleanWhisperTranscript } from "@/utils/whisperTranscript";
 import { isSarahNativeShell } from "@/lib/mobileApiBase";
 import { readSttProviderPreference } from "@/lib/sttSettings";
+import {
+  getVideoSyncCorrection,
+  mediaTimeToSessionTime,
+  sessionTimeToMediaTime,
+} from "@/lib/videoSyncClock";
 
 function getCategoryMeta(value) {
   return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -120,6 +125,7 @@ function blankVideoFeeds() {
     fileName: "",
     src: null,
     localPath: "",
+    timelineOffsetSeconds: 0,
   }]));
 }
 
@@ -443,6 +449,9 @@ export default function VideoSyncPlayer({
   const videoFeedRefs = useRef({});
   const videoFeedUrls = useRef({});
   const pendingMasterTimeRef = useRef(null);
+  const pendingFeedTimesRef = useRef({});
+  const playbackClockFrameRef = useRef(null);
+  const lastSecondarySyncAtRef = useRef(0);
   const autoLinkedSignatureRef = useRef("");
   const [videoSrc, setVideoSrc] = useState(null);
   const [videoFeeds, setVideoFeeds] = useState(blankVideoFeeds);
@@ -667,6 +676,13 @@ export default function VideoSyncPlayer({
     const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
     try {
       await entity.update(session.id, { linked_local_videos: nextVideos });
+      setVideoFeeds((current) => ({
+        ...current,
+        [activeFeedKey]: {
+          ...current[activeFeedKey],
+          timelineOffsetSeconds: Number(videoOffset) || 0,
+        },
+      }));
     } catch (err) {
       console.warn("Could not save linked video timeline offset:", err);
     }
@@ -775,14 +791,31 @@ export default function VideoSyncPlayer({
   }, [playheadS, zoomWindow, maxT]);
 
   const setSynchronizedVideoTime = useCallback((timeS) => {
-    const safeTime = Math.max(0, Number(timeS) || 0);
-    if (videoRef.current) videoRef.current.currentTime = safeTime;
+    const masterDuration = videoRef.current?.duration || videoDuration || Infinity;
+    const safeTime = sessionTimeToMediaTime(
+      mediaTimeToSessionTime(timeS, videoOffset),
+      videoOffset,
+      masterDuration,
+    );
+    const sessionTime = mediaTimeToSessionTime(safeTime, videoOffset);
+    setPlayheadS(sessionTime);
+    if (videoRef.current?.readyState > 0) {
+      videoRef.current.currentTime = safeTime;
+    } else {
+      pendingMasterTimeRef.current = safeTime;
+    }
     loadedFeeds.forEach((feed) => {
-      if (feed.key !== activeFeedKey && videoFeedRefs.current[feed.key]?.readyState > 0) {
-        videoFeedRefs.current[feed.key].currentTime = safeTime;
-      }
+      if (feed.key === activeFeedKey) return;
+      const video = videoFeedRefs.current[feed.key];
+      const targetTime = sessionTimeToMediaTime(
+        sessionTime,
+        feed.timelineOffsetSeconds,
+        video?.duration,
+      );
+      pendingFeedTimesRef.current[feed.key] = targetTime;
+      if (video?.readyState > 0) video.currentTime = targetTime;
     });
-  }, [activeFeedKey, loadedFeeds]);
+  }, [activeFeedKey, loadedFeeds, videoDuration, videoOffset]);
 
   useEffect(() => {
     const requestedTime = typeof externalSeekTime === "object" && externalSeekTime !== null
@@ -795,25 +828,46 @@ export default function VideoSyncPlayer({
     setSynchronizedVideoTime(localTime);
   }, [externalSeekTime, setSynchronizedVideoTime, videoOffset]);
 
-  const syncSecondaryVideos = useCallback((primaryTime, playing = false) => {
+  const syncSecondaryVideos = useCallback((primaryTime, playing = false, force = false) => {
+    const sessionTime = mediaTimeToSessionTime(primaryTime, videoOffset);
     loadedFeeds.forEach((feed) => {
       if (feed.key === activeFeedKey) return;
       const video = videoFeedRefs.current[feed.key];
+      const targetTime = sessionTimeToMediaTime(
+        sessionTime,
+        feed.timelineOffsetSeconds,
+        video?.duration,
+      );
+      pendingFeedTimesRef.current[feed.key] = targetTime;
       if (!video || video.readyState === 0) return;
-      if (Math.abs(video.currentTime - primaryTime) > 0.2) video.currentTime = primaryTime;
-      video.playbackRate = playbackSpeed;
-      if (playing && video.paused) video.play().catch(() => {});
-      if (!playing && !video.paused) video.pause();
+
+      const correction = getVideoSyncCorrection(video.currentTime, targetTime, playbackSpeed);
+      if (force || correction.seek) video.currentTime = targetTime;
+      video.playbackRate = force ? playbackSpeed : correction.playbackRate;
+
+      const feedHasStarted = sessionTime >= (Number(feed.timelineOffsetSeconds) || 0);
+      const feedHasEnded = Number.isFinite(video.duration) && targetTime >= video.duration;
+      if (playing && feedHasStarted && !feedHasEnded && video.paused) video.play().catch(() => {});
+      if ((!playing || !feedHasStarted || feedHasEnded) && !video.paused) video.pause();
     });
-  }, [activeFeedKey, loadedFeeds, playbackSpeed]);
+  }, [activeFeedKey, loadedFeeds, playbackSpeed, videoOffset]);
+
+  const handleSecondaryReady = useCallback((feedKey) => {
+    const master = videoRef.current;
+    const video = videoFeedRefs.current[feedKey];
+    if (!master || !video || video.readyState === 0) return;
+    const pendingTime = pendingFeedTimesRef.current[feedKey];
+    if (Number.isFinite(pendingTime)) video.currentTime = pendingTime;
+    syncSecondaryVideos(master.currentTime, !master.paused, true);
+  }, [syncSecondaryVideos]);
 
   const selectMasterFeed = useCallback(async (key) => {
     const feed = videoFeeds[key];
     if (!feed?.src || key === activeFeedKey) return;
-    pendingMasterTimeRef.current = Math.max(0, playheadS - videoOffset);
+    const nextOffset = Number(feed.timelineOffsetSeconds) || 0;
+    pendingMasterTimeRef.current = sessionTimeToMediaTime(playheadS, nextOffset);
     videoRef.current?.pause();
-    const linkedVideo = linkedLocalVideos.find((video) => video.path === feed.localPath);
-    setVideoOffset(Number(linkedVideo?.timelineOffsetSeconds) || 0);
+    setVideoOffset(nextOffset);
     setActiveFeedKey(key);
     setVideoSrc(feed.src);
     if (feed.localPath) {
@@ -833,7 +887,7 @@ export default function VideoSyncPlayer({
         console.warn("Could not prepare linked Video Sync feed for browser playback:", error);
       }
     }
-  }, [activeFeedKey, linkedLocalVideos, playheadS, videoFeeds, videoOffset]);
+  }, [activeFeedKey, playheadS, videoFeeds]);
 
   // Load browser-local video feeds. Files remain in memory only for this review.
   const handleFileLoad = (e, feedKey = "composite") => {
@@ -845,7 +899,13 @@ export default function VideoSyncPlayer({
     videoFeedUrls.current[feedKey] = url;
     setVideoFeeds((current) => ({
       ...current,
-      [feedKey]: { ...current[feedKey], src: url, fileName: file.name, localPath: "" },
+      [feedKey]: {
+        ...current[feedKey],
+        src: url,
+        fileName: file.name,
+        localPath: "",
+        timelineOffsetSeconds: 0,
+      },
     }));
     if (!videoSrc || feedKey === activeFeedKey) {
       setActiveFeedKey(feedKey);
@@ -870,6 +930,7 @@ export default function VideoSyncPlayer({
         src: url,
         fileName: video.label || video.filename || video.path,
         localPath: video.path,
+        timelineOffsetSeconds: Number(video.timelineOffsetSeconds) || 0,
       },
     }));
     if (!videoSrc || feedKey === activeFeedKey) {
@@ -918,6 +979,7 @@ export default function VideoSyncPlayer({
           src: base44.integrations.Core.localVideoStreamUrl(video.path),
           fileName: video.label || video.filename || video.path,
           localPath: video.path,
+          timelineOffsetSeconds: Number(video.timelineOffsetSeconds) || 0,
         };
       });
       return next;
@@ -967,15 +1029,23 @@ export default function VideoSyncPlayer({
     const remaining = loadedFeeds.filter((feed) => feed.key !== feedKey);
     setVideoFeeds((current) => ({
       ...current,
-      [feedKey]: { ...current[feedKey], src: null, fileName: "", localPath: "" },
+      [feedKey]: {
+        ...current[feedKey],
+        src: null,
+        fileName: "",
+        localPath: "",
+        timelineOffsetSeconds: 0,
+      },
     }));
     delete videoFeedRefs.current[feedKey];
     delete videoFeedUrls.current[feedKey];
     if (feedKey === activeFeedKey) {
       const next = remaining[0];
-      pendingMasterTimeRef.current = Math.max(0, playheadS - videoOffset);
+      const nextOffset = Number(next?.timelineOffsetSeconds) || 0;
+      pendingMasterTimeRef.current = sessionTimeToMediaTime(playheadS, nextOffset);
       setActiveFeedKey(next?.key || "composite");
       setVideoSrc(next?.src || null);
+      setVideoOffset(nextOffset);
       setVideoDuration(0);
     }
     if (removedUrl) URL.revokeObjectURL(removedUrl);
@@ -986,7 +1056,7 @@ export default function VideoSyncPlayer({
   const handleTimeUpdate = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
-    const sessionTime = v.currentTime + videoOffset;
+    const sessionTime = mediaTimeToSessionTime(v.currentTime, videoOffset);
     setPlayheadS(sessionTime);
     syncSecondaryVideos(v.currentTime, !v.paused);
   }, [syncSecondaryVideos, videoOffset]);
@@ -996,11 +1066,11 @@ export default function VideoSyncPlayer({
     if (!v) return;
     const handlePlay = () => {
       setIsPlaying(true);
-      syncSecondaryVideos(v.currentTime, true);
+      syncSecondaryVideos(v.currentTime, true, true);
     };
     const handlePause = () => {
       setIsPlaying(false);
-      syncSecondaryVideos(v.currentTime, false);
+      syncSecondaryVideos(v.currentTime, false, true);
     };
     const handleLoadedMetadata = () => {
       const desiredTime = pendingMasterTimeRef.current;
@@ -1010,7 +1080,7 @@ export default function VideoSyncPlayer({
       }
       setVideoDuration(v.duration);
       v.playbackRate = playbackSpeed;
-      syncSecondaryVideos(v.currentTime, false);
+      syncSecondaryVideos(v.currentTime, false, true);
       if (resumeAfterShellFullscreenToggleRef.current) {
         resumeAfterShellFullscreenToggleRef.current = false;
         const resumePromise = v.play();
@@ -1032,8 +1102,29 @@ export default function VideoSyncPlayer({
   }, [handleTimeUpdate, playbackSpeed, syncSecondaryVideos, videoSrc]);
 
   useEffect(() => {
+    if (!isPlaying) return undefined;
+
+    const updatePlaybackClock = (now) => {
+      const master = videoRef.current;
+      if (!master || master.paused) return;
+      setPlayheadS(mediaTimeToSessionTime(master.currentTime, videoOffset));
+      if (now - lastSecondarySyncAtRef.current >= 100) {
+        lastSecondarySyncAtRef.current = now;
+        syncSecondaryVideos(master.currentTime, true);
+      }
+      playbackClockFrameRef.current = requestAnimationFrame(updatePlaybackClock);
+    };
+
+    playbackClockFrameRef.current = requestAnimationFrame(updatePlaybackClock);
+    return () => {
+      if (playbackClockFrameRef.current) cancelAnimationFrame(playbackClockFrameRef.current);
+      playbackClockFrameRef.current = null;
+    };
+  }, [isPlaying, syncSecondaryVideos, videoOffset]);
+
+  useEffect(() => {
     if (!videoRef.current) return;
-    syncSecondaryVideos(videoRef.current.currentTime, !videoRef.current.paused);
+    syncSecondaryVideos(videoRef.current.currentTime, !videoRef.current.paused, true);
   }, [syncSecondaryVideos, videoLayout]);
 
   useEffect(() => () => {
@@ -1249,15 +1340,42 @@ export default function VideoSyncPlayer({
     window.addEventListener("mouseup", onUp);
   }, [playerWidth]);
 
-  const handleTimelineScrub = (e) => {
+  const scrubTimelineFromPointer = useCallback((e) => {
     const v = videoRef.current;
     if (!v || !videoDuration) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     setSynchronizedVideoTime(frac * videoDuration);
-  };
+  }, [setSynchronizedVideoTime, videoDuration]);
+
+  const handleTimelinePointerDown = useCallback((e) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    scrubTimelineFromPointer(e);
+  }, [scrubTimelineFromPointer]);
+
+  const handleTimelinePointerMove = useCallback((e) => {
+    if (!e.currentTarget.hasPointerCapture?.(e.pointerId)) return;
+    scrubTimelineFromPointer(e);
+  }, [scrubTimelineFromPointer]);
+
+  const handleTimelinePointerUp = useCallback((e) => {
+    if (!e.currentTarget.hasPointerCapture?.(e.pointerId)) return;
+    scrubTimelineFromPointer(e);
+    e.currentTarget.releasePointerCapture?.(e.pointerId);
+    if (videoRef.current) {
+      syncSecondaryVideos(videoRef.current.currentTime, !videoRef.current.paused, true);
+    }
+  }, [scrubTimelineFromPointer, syncSecondaryVideos]);
+
+  const handleTimelinePointerCancel = useCallback((e) => {
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+      e.currentTarget.releasePointerCapture?.(e.pointerId);
+    }
+  }, []);
 
   const currentHR = useMemo(() => nearestHR(chartData, playheadS), [chartData, playheadS]);
+  const displayedVideoTime = sessionTimeToMediaTime(playheadS, videoOffset, videoDuration);
 
   // Chart: only show data in visible window
   const visibleChartData = useMemo(() => {
@@ -1720,6 +1838,12 @@ export default function VideoSyncPlayer({
                       className="h-full w-full object-contain cursor-pointer"
                       controls={false}
                       playsInline
+                      onLoadedMetadata={() => {
+                        if (!isMaster) handleSecondaryReady(feed.key);
+                      }}
+                      onCanPlay={() => {
+                        if (!isMaster) handleSecondaryReady(feed.key);
+                      }}
                       onClick={() => {
                         if (isMaster) {
                           if (suppressNextFullscreenVideoToggleRef.current) {
@@ -1886,21 +2010,24 @@ export default function VideoSyncPlayer({
                   {videoDuration > 0 && (
                     <div className="mb-2 space-y-1 max-[950px]:mb-1.5">
                       <div
-                        className="relative h-3 cursor-pointer rounded-full bg-white/15 max-[950px]:h-2.5"
-                        onClick={handleTimelineScrub}
-                        title="Click to seek video"
+                        className="relative h-3 touch-none cursor-pointer rounded-full bg-white/15 max-[950px]:h-2.5"
+                        onPointerDown={handleTimelinePointerDown}
+                        onPointerMove={handleTimelinePointerMove}
+                        onPointerUp={handleTimelinePointerUp}
+                        onPointerCancel={handleTimelinePointerCancel}
+                        title="Drag to seek video"
                       >
                         <div
                           className="absolute inset-y-0 left-0 rounded-full bg-primary"
-                          style={{ width: `${((videoRef.current?.currentTime || 0) / videoDuration) * 100}%` }}
+                          style={{ width: `${(displayedVideoTime / videoDuration) * 100}%` }}
                         />
                         <div
                           className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-primary bg-white shadow"
-                          style={{ left: `${((videoRef.current?.currentTime || 0) / videoDuration) * 100}%` }}
+                          style={{ left: `${(displayedVideoTime / videoDuration) * 100}%` }}
                         />
                       </div>
                       <div className="flex justify-between px-0.5 font-mono text-[10px] text-white/70">
-                        <span>{fmtMmSs(videoRef.current?.currentTime || 0)}</span>
+                        <span>{fmtMmSs(displayedVideoTime)}</span>
                         <span>{fmtMmSs(videoDuration)}</span>
                       </div>
                     </div>
@@ -2080,20 +2207,23 @@ export default function VideoSyncPlayer({
             {videoDuration > 0 && (
               <div className="space-y-1">
                 <div
-                  className="relative h-3 bg-muted rounded-full cursor-pointer group"
-                  onClick={handleTimelineScrub}
+                  className="relative h-3 touch-none bg-muted rounded-full cursor-pointer group"
+                  onPointerDown={handleTimelinePointerDown}
+                  onPointerMove={handleTimelinePointerMove}
+                  onPointerUp={handleTimelinePointerUp}
+                  onPointerCancel={handleTimelinePointerCancel}
                 >
                   <div
                     className="absolute inset-y-0 left-0 bg-primary rounded-full transition-none"
-                    style={{ width: `${((videoRef.current?.currentTime || 0) / videoDuration) * 100}%` }}
+                    style={{ width: `${(displayedVideoTime / videoDuration) * 100}%` }}
                   />
                   <div
                     className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white border-2 border-primary rounded-full shadow -translate-x-1/2"
-                    style={{ left: `${((videoRef.current?.currentTime || 0) / videoDuration) * 100}%` }}
+                    style={{ left: `${(displayedVideoTime / videoDuration) * 100}%` }}
                   />
                 </div>
                 <div className="flex justify-between text-[10px] font-mono text-muted-foreground px-0.5">
-                  <span>{fmtMmSs(videoRef.current?.currentTime || 0)}</span>
+                  <span>{fmtMmSs(displayedVideoTime)}</span>
                   <span>{fmtMmSs(videoDuration)}</span>
                 </div>
               </div>
