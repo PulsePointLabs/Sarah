@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.134",
-  "commit": "304ae72",
-  "commitMessage": "Teach annotation enema exploration context",
-  "builtAt": "2026-07-23T10:10:48.472Z"
+  "version": "0.1.135",
+  "commit": "a069c83",
+  "commitMessage": "Clean HR and HRV timeline rendering",
+  "builtAt": "2026-07-23T10:41:45.036Z"
 };

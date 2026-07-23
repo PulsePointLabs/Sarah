@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, Sparkles, Maximize2, Minimize2, Heart } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -126,6 +127,8 @@ function blankVideoFeeds() {
     src: null,
     localPath: "",
     timelineOffsetSeconds: 0,
+    preparing: false,
+    playbackError: "",
   }]));
 }
 
@@ -488,6 +491,14 @@ export default function VideoSyncPlayer({
   const [selectedEventFilters, setSelectedEventFilters] = useState([]);
   const loadedFeeds = useMemo(
     () => VIDEO_FEED_SLOTS.map((meta) => ({ ...meta, ...videoFeeds[meta.key] })).filter((feed) => feed.src),
+    [videoFeeds],
+  );
+  const preparingFeeds = useMemo(
+    () => VIDEO_FEED_SLOTS.map((meta) => ({ ...meta, ...videoFeeds[meta.key] })).filter((feed) => feed.preparing),
+    [videoFeeds],
+  );
+  const playbackFeedErrors = useMemo(
+    () => VIDEO_FEED_SLOTS.map((meta) => ({ ...meta, ...videoFeeds[meta.key] })).filter((feed) => feed.playbackError),
     [videoFeeds],
   );
   const linkedLocalVideos = useMemo(
@@ -870,23 +881,6 @@ export default function VideoSyncPlayer({
     setVideoOffset(nextOffset);
     setActiveFeedKey(key);
     setVideoSrc(feed.src);
-    if (feed.localPath) {
-      try {
-        const result = await base44.integrations.Core.ConvertLocalVideoForPlayback({
-          path: feed.localPath,
-          label: feed.fileName || feed.label || "video-sync",
-        });
-        const playbackUrl = result?.url || result?.file_url;
-        if (!playbackUrl) return;
-        setVideoFeeds((current) => ({
-          ...current,
-          [key]: { ...current[key], src: playbackUrl },
-        }));
-        setVideoSrc(playbackUrl);
-      } catch (error) {
-        console.warn("Could not prepare linked Video Sync feed for browser playback:", error);
-      }
-    }
   }, [activeFeedKey, playheadS, videoFeeds]);
 
   // Load browser-local video feeds. Files remain in memory only for this review.
@@ -905,54 +899,79 @@ export default function VideoSyncPlayer({
         fileName: file.name,
         localPath: "",
         timelineOffsetSeconds: 0,
+        preparing: false,
+        playbackError: "",
       },
     }));
     if (!videoSrc || feedKey === activeFeedKey) {
       setActiveFeedKey(feedKey);
       setVideoSrc(url);
-      setVideoOffset(Number(video.timelineOffsetSeconds) || 0);
+      setVideoOffset(0);
     }
     e.target.value = "";
   };
 
-  const loadLinkedLocalVideo = useCallback(async (video, feedKey = "composite") => {
+  const prepareLinkedVideoForPlayback = useCallback(async (video, feedKey, { activate = false } = {}) => {
     if (!video?.path) return;
     const previousUrl = videoFeedUrls.current[feedKey];
     if (previousUrl) {
       URL.revokeObjectURL(previousUrl);
       delete videoFeedUrls.current[feedKey];
     }
-    const url = base44.integrations.Core.localVideoStreamUrl(video.path);
     setVideoFeeds((current) => ({
       ...current,
       [feedKey]: {
         ...current[feedKey],
-        src: url,
+        label: video.label || video.filename || current[feedKey]?.label || "Linked video",
+        src: null,
         fileName: video.label || video.filename || video.path,
         localPath: video.path,
         timelineOffsetSeconds: Number(video.timelineOffsetSeconds) || 0,
+        preparing: true,
+        playbackError: "",
       },
     }));
-    if (!videoSrc || feedKey === activeFeedKey) {
+    if (activate) {
       setActiveFeedKey(feedKey);
-      setVideoSrc(url);
+      setVideoSrc(null);
+      setVideoOffset(Number(video.timelineOffsetSeconds) || 0);
     }
     try {
       const result = await base44.integrations.Core.ConvertLocalVideoForPlayback({
         path: video.path,
         label: video.label || video.filename || "video-sync",
       });
-      const playbackUrl = result?.url || result?.file_url;
-      if (!playbackUrl) return;
+      const rawPlaybackUrl = result?.url || result?.file_url;
+      if (!rawPlaybackUrl) throw new Error("Playback conversion did not return an MP4 URL.");
+      const playbackUrl = base44.integrations.Core.localVisionAssetUrl(rawPlaybackUrl);
       setVideoFeeds((current) => ({
         ...current,
-        [feedKey]: { ...current[feedKey], src: playbackUrl },
+        [feedKey]: {
+          ...current[feedKey],
+          src: playbackUrl,
+          preparing: false,
+          playbackError: "",
+        },
       }));
-      if (!videoSrc || feedKey === activeFeedKey) setVideoSrc(playbackUrl);
+      if (activate) setVideoSrc(playbackUrl);
     } catch (error) {
       console.warn("Could not prepare linked Video Sync feed for browser playback:", error);
+      setVideoFeeds((current) => ({
+        ...current,
+        [feedKey]: {
+          ...current[feedKey],
+          src: null,
+          preparing: false,
+          playbackError: error?.data?.error || error?.message || "Could not prepare a mobile-friendly MP4 preview.",
+        },
+      }));
     }
-  }, [activeFeedKey, videoSrc]);
+  }, []);
+
+  const loadLinkedLocalVideo = useCallback(async (video, feedKey = "composite") => {
+    const activate = !videoSrc || feedKey === activeFeedKey;
+    await prepareLinkedVideoForPlayback(video, feedKey, { activate });
+  }, [activeFeedKey, prepareLinkedVideoForPlayback, videoSrc]);
 
   useEffect(() => {
     if (!linkedLocalVideos.length) return;
@@ -964,49 +983,14 @@ export default function VideoSyncPlayer({
 
     const assignments = assignLinkedVideosToFeeds(linkedLocalVideos);
     if (!assignments.length) return;
-    const firstAssignment = assignments[0];
-    const firstUrl = base44.integrations.Core.localVideoStreamUrl(firstAssignment.video.path);
-
-    setVideoFeeds((current) => {
-      const next = { ...current };
-      assignments.forEach(({ video, slotKey }) => {
-        const currentFeed = next[slotKey] || {};
-        const isManualBrowserFile = currentFeed.src && !currentFeed.localPath;
-        if (isManualBrowserFile) return;
-        next[slotKey] = {
-          ...currentFeed,
-          label: video.label || video.filename || currentFeed.label || VIDEO_FEED_SLOTS.find((slot) => slot.key === slotKey)?.label || "Linked video",
-          src: base44.integrations.Core.localVideoStreamUrl(video.path),
-          fileName: video.label || video.filename || video.path,
-          localPath: video.path,
-          timelineOffsetSeconds: Number(video.timelineOffsetSeconds) || 0,
-        };
+    const shouldActivateFirst = !videoSrc;
+    assignments.forEach(({ video, slotKey }, index) => {
+      prepareLinkedVideoForPlayback(video, slotKey, {
+        activate: shouldActivateFirst && index === 0,
       });
-      return next;
     });
 
-    if (!videoSrc) {
-      setActiveFeedKey(firstAssignment.slotKey);
-      setVideoSrc(firstUrl);
-      setVideoOffset(Number(firstAssignment.video.timelineOffsetSeconds) || 0);
-      base44.integrations.Core.ConvertLocalVideoForPlayback({
-        path: firstAssignment.video.path,
-        label: firstAssignment.video.label || firstAssignment.video.filename || "video-sync",
-      }).then((result) => {
-        const playbackUrl = result?.url || result?.file_url;
-        if (!playbackUrl) return;
-        setVideoFeeds((current) => ({
-          ...current,
-          [firstAssignment.slotKey]: {
-            ...current[firstAssignment.slotKey],
-            src: playbackUrl,
-          },
-        }));
-        setVideoSrc(playbackUrl);
-      }).catch((error) => {
-        console.warn("Could not prepare initial Video Sync feed for browser playback:", error);
-      });
-    } else {
+    if (!shouldActivateFirst) {
       const activePath = videoFeeds[activeFeedKey]?.localPath;
       const activeLinkedVideo = linkedLocalVideos.find((video) => video.path === activePath);
       if (activeLinkedVideo) setVideoOffset(Number(activeLinkedVideo.timelineOffsetSeconds) || 0);
@@ -1015,7 +999,7 @@ export default function VideoSyncPlayer({
       setVideoLayout("multi");
       setFeedsExpanded(false);
     }
-  }, [activeFeedKey, linkedLocalVideos, videoFeeds, videoSrc]);
+  }, [activeFeedKey, linkedLocalVideos, prepareLinkedVideoForPlayback, videoFeeds, videoSrc]);
 
   const renameFeed = (feedKey, label) => {
     setVideoFeeds((current) => ({
@@ -1035,6 +1019,8 @@ export default function VideoSyncPlayer({
         fileName: "",
         localPath: "",
         timelineOffsetSeconds: 0,
+        preparing: false,
+        playbackError: "",
       },
     }));
     delete videoFeedRefs.current[feedKey];
@@ -1605,11 +1591,11 @@ export default function VideoSyncPlayer({
         </DialogContent>
       </Dialog>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+      <div className="flex flex-col gap-2 border-b border-border px-3 py-3 min-[951px]:flex-row min-[951px]:items-center min-[951px]:justify-between min-[951px]:px-4">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
           <Video className="w-4 h-4" /> Video Sync Player
         </h3>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 min-[951px]:w-auto min-[951px]:justify-end">
           {hasSidebarContent && videoSrc && (
             <div className="inline-flex rounded-lg border border-border bg-background p-1">
               <button
@@ -1705,7 +1691,30 @@ export default function VideoSyncPlayer({
                     {isMaster && <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold text-primary">Master</span>}
                   </div>
                   <p className="mt-1 line-clamp-2 text-[10px] text-muted-foreground">{slot.description}</p>
-                  {feed.src ? (
+                  {feed.preparing ? (
+                    <div className="mt-3 rounded-lg border border-primary/20 bg-primary/[0.06] px-3 py-3">
+                      <div className="flex items-center gap-2 text-xs font-semibold text-primary">
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                        Preparing MP4 preview
+                      </div>
+                      <p className="mt-1 truncate text-[10px] text-muted-foreground">{feed.fileName}</p>
+                    </div>
+                  ) : feed.playbackError ? (
+                    <div className="mt-3 rounded-lg border border-destructive/25 bg-destructive/[0.06] px-3 py-3">
+                      <p className="text-xs font-semibold text-destructive">Playback preview unavailable</p>
+                      <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">{feed.playbackError}</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const linked = linkedLocalVideos.find((video) => video.path === feed.localPath);
+                          if (linked) loadLinkedLocalVideo(linked, slot.key);
+                        }}
+                        className="mt-2 rounded-md border border-destructive/25 px-2 py-1 text-[10px] font-semibold text-destructive"
+                      >
+                        Retry preview
+                      </button>
+                    </div>
+                  ) : feed.src ? (
                     <>
                       <input
                         value={feed.label}
@@ -1716,6 +1725,9 @@ export default function VideoSyncPlayer({
                       <p className="mt-1 truncate text-[10px] text-muted-foreground">{feed.fileName}</p>
                       {feed.localPath && (
                         <p className="mt-1 truncate font-mono text-[9px] text-muted-foreground">{feed.localPath}</p>
+                      )}
+                      {feed.localPath && (
+                        <p className="mt-1 text-[10px] font-medium text-emerald-600">Cached MP4 playback preview</p>
                       )}
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {!isMaster && (
@@ -1798,7 +1810,7 @@ export default function VideoSyncPlayer({
                   ref={fullscreenSurfaceRef}
                   className={`video-sync-surface relative flex w-full flex-col overflow-hidden bg-black ${
                     fullscreenActive
-                      ? `video-sync-fullscreen rounded-none ${shellFullscreenActive ? "fixed inset-0 z-[95] h-[100svh] w-[100vw]" : "h-screen"}`
+                      ? `video-sync-fullscreen rounded-none ${shellFullscreenActive ? "fixed inset-0 z-[10000] h-[100svh] w-[100vw]" : "h-screen"}`
                       : "rounded-lg"
                   }`}
                   style={fullscreenActive ? undefined : {
@@ -2175,9 +2187,11 @@ export default function VideoSyncPlayer({
               )}
               </div>
               );
-              return videoSurface;
+              return shellFullscreenActive
+                ? createPortal(videoSurface, document.body)
+                : videoSurface;
             })()}
-            <div className="flex flex-col md:flex-row md:items-center gap-2 rounded-lg bg-muted/40 px-3 py-2">
+            <div className="hidden min-[951px]:flex md:flex-row md:items-center gap-2 rounded-lg bg-muted/40 px-3 py-2">
               <label className="flex items-center gap-3 flex-1 min-w-[220px]">
                 <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider shrink-0">Height</span>
                 <Slider
@@ -2284,6 +2298,21 @@ export default function VideoSyncPlayer({
               <span className="text-xs text-muted-foreground">s</span>
               <span className="text-xs text-muted-foreground ml-auto">Video 0:00 = {isExploration ? "Exploration" : "Session"} {fmtSignedMmSs(videoOffset)}</span>
             </div>
+          </div>
+        ) : preparingFeeds.length > 0 ? (
+          <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl border border-primary/20 bg-black px-6 text-center text-white">
+            <span className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <div>
+              <p className="text-sm font-semibold">Preparing mobile-friendly playback</p>
+              <p className="mt-1 text-xs text-white/70">
+                Converting {preparingFeeds.length} linked MKV feed{preparingFeeds.length === 1 ? "" : "s"} to cached MP4 preview{preparingFeeds.length === 1 ? "" : "s"}.
+              </p>
+            </div>
+          </div>
+        ) : playbackFeedErrors.length > 0 ? (
+          <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-xl border border-destructive/25 bg-black px-6 text-center text-white">
+            <p className="text-sm font-semibold">Video Sync preview unavailable</p>
+            <p className="max-w-md text-xs text-white/70">{playbackFeedErrors[0].playbackError}</p>
           </div>
         ) : (
           <button
