@@ -7422,7 +7422,6 @@ export default function LiveCapture() {
                   <option value="intimate_coaching">Direct encouragement</option>
                   <option value="intimate_lovers_voice">Intimate lover</option>
                   <option value="custom">Custom encouragement</option>
-                  <option value="intimate_lovers_voice">Intimate lover (opt-in)</option>
                 </select>
               </SetupTile>
             )}
@@ -8932,7 +8931,6 @@ export default function LiveCapture() {
                   <option value="intimate_coaching">Direct encouragement</option>
                   <option value="intimate_lovers_voice">Intimate lover</option>
                   <option value="custom">Custom encouragement</option>
-                  <option value="intimate_lovers_voice">Intimate lover (opt-in)</option>
                 </select>
                 <label className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs font-medium text-muted-foreground">
                   Volume
