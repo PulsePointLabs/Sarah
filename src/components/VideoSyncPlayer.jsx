@@ -20,15 +20,12 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import {
-  ComposedChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  ReferenceLine, CartesianGrid,
-} from "recharts";
 import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES, normalizeCategoryArray } from "./session-form/EventTimelineSection";
 import { base44 } from "@/api/base44Client";
 import SavedMotionSummaryCard from "./SavedMotionSummaryCard";
 import ClimaxMotionSnapshotCard from "./ClimaxMotionSnapshotCard";
 import MotionPlaybackReadout from "./MotionPlaybackReadout";
+import VideoSyncPhysiologySidebar from "./VideoSyncPhysiologySidebar";
 import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { cleanWhisperTranscript } from "@/utils/whisperTranscript";
 import { isSarahNativeShell } from "@/lib/mobileApiBase";
@@ -54,12 +51,6 @@ function fmtSignedMmSs(totalSeconds) {
   const value = Number(totalSeconds) || 0;
   return `${value < 0 ? "-" : ""}${fmtMmSs(Math.abs(value))}`;
 }
-
-const PHASE_LINES = [
-  { key: "pre_climax_offset_s", label: "Pre", color: "#a855f7" },
-  { key: "climax_offset_s",     label: "Climax", color: "#ef4444" },
-  { key: "recovery_offset_s",   label: "Recovery", color: "#3b82f6" },
-];
 
 const EVENT_COLORS = [
   "#f59e0b", "#a855f7", "#10b981", "#f43f5e", "#0ea5e9",
@@ -1550,12 +1541,6 @@ export default function VideoSyncPlayer({
   const currentHR = useMemo(() => nearestHR(chartData, playheadS), [chartData, playheadS]);
   const displayedVideoTime = sessionTimeToMediaTime(playheadS, videoOffset, videoDuration);
 
-  // Chart: only show data in visible window
-  const visibleChartData = useMemo(() => {
-    const [lo, hi] = xDomain;
-    return chartData.filter(d => d.t >= lo - 5 && d.t <= hi + 5);
-  }, [chartData, xDomain]);
-
   const savedMotionSummary = !isExploration ? session.motion_analysis_summary : null;
   const motionEvidence = !isExploration ? getMotionEvidenceSummary(session) : null;
   const visibleEventEntries = useMemo(() => events
@@ -2649,87 +2634,16 @@ export default function VideoSyncPlayer({
                 </p>
               </div>
             )}
-            {/* HR Timeline */}
+            {/* Saved physiology synchronized to the video playhead */}
             {chartData.length > 0 && (
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5">HR Timeline — click to seek</p>
-                <div className="flex items-center gap-1 mb-1.5 flex-wrap">
-                  <span className="text-[9px] text-muted-foreground">Zoom:</span>
-                  {[30, 60, 120, 300].map((w) => (
-                    <button
-                      key={w}
-                      onClick={() => setZoomWindow(w)}
-                      className={`text-[9px] px-2 py-0.5 rounded font-medium transition-colors ${zoomWindow === w ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/70"}`}
-                    >
-                      {w < 60 ? `${w}s` : `${w / 60}m`}
-                    </button>
-                  ))}
-                </div>
-                <div className="h-48 cursor-pointer">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart
-                      data={visibleChartData}
-                      margin={{ top: 8, right: 4, bottom: 0, left: -20 }}
-                      onClick={handleChartClick}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} />
-                      <XAxis
-                        dataKey="t"
-                        type="number"
-                        domain={xDomain}
-                        tick={{ fontSize: 9 }}
-                        tickFormatter={fmtMmSs}
-                        tickCount={8}
-                        allowDataOverflow
-                      />
-                      <YAxis tick={{ fontSize: 9 }} domain={["auto", "auto"]} />
-                      <Tooltip
-                        formatter={(val) => [`${val} bpm`, "HR"]}
-                        labelFormatter={(v) => fmtMmSs(Math.round(Number(v)))}
-                        contentStyle={{ fontSize: 11 }}
-                      />
-
-                      {/* Phase markers */}
-                      {!isExploration && PHASE_LINES.map(({ key, label, color }) =>
-                        session[key] != null ? (
-                          <ReferenceLine key={key} x={session[key]} stroke={color} strokeWidth={1.5}
-                            strokeDasharray="4 2"
-                            label={{ value: label, fontSize: 7, fill: color, position: "top" }}
-                          />
-                        ) : null
-                      )}
-
-                      {/* Event markers */}
-                      {visibleEventEntries.map(({ ev, i }) => {
-                        const color = EVENT_COLORS[i % EVENT_COLORS.length];
-                        return (
-                          <ReferenceLine key={i} x={ev.time_s} stroke={color} strokeWidth={1.5}
-                            strokeDasharray="2 3"
-                            label={{ value: `E${i + 1}`, fontSize: 7, fill: color, position: "insideTopLeft" }}
-                          />
-                        );
-                      })}
-
-                      {/* Live playhead */}
-                      <ReferenceLine
-                        x={playheadS}
-                        stroke="hsl(var(--foreground))"
-                        strokeWidth={2}
-                        label={{ value: "▶", fontSize: 10, fill: "hsl(var(--foreground))", position: "top" }}
-                      />
-
-                      <Line
-                        type="monotone"
-                        dataKey="hr"
-                        stroke="hsl(var(--primary))"
-                        strokeWidth={2}
-                        dot={false}
-                        isAnimationActive={false}
-                      />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
+              <VideoSyncPhysiologySidebar
+                timelineRows={timelineRows}
+                playheadS={playheadS}
+                xDomain={xDomain}
+                zoomWindow={zoomWindow}
+                onZoomWindowChange={setZoomWindow}
+                onSeek={(sessionTime) => handleChartClick({ activeLabel: sessionTime })}
+              />
             )}
 
             {savedMotionSummary && (
