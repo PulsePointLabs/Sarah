@@ -5,6 +5,31 @@ import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js'
 
 export const liveCuesRouter = express.Router();
 
+async function prepareInBatches(clips, settings, concurrency = 3) {
+  const prepared = new Array(clips.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < clips.length) {
+      const index = cursor;
+      cursor += 1;
+      const clip = clips[index];
+      prepared[index] = await prepareLiveCueAudioClip({
+        text: clip.text,
+        voice: clip.voice || settings.voice,
+        model: clip.model || settings.model,
+        speed: clip.speed || settings.speed,
+        format: clip.format || settings.format,
+        profileVersion: settings.profileVersion,
+      });
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(concurrency, clips.length) },
+    () => worker()
+  ));
+  return prepared;
+}
+
 liveCuesRouter.post('/prepare', async (req, res) => {
   const {
     clips = [],
@@ -18,17 +43,14 @@ liveCuesRouter.post('/prepare', async (req, res) => {
     return res.status(400).json({ error: 'No cue clips requested' });
   }
   try {
-    const prepared = [];
-    for (const clip of clips.slice(0, 40)) {
-      prepared.push(await prepareLiveCueAudioClip({
-        text: clip.text,
-        voice: clip.voice || voice,
-        model: clip.model || model,
-        speed: clip.speed || speed,
-        format: clip.format || format,
-        profileVersion,
-      }));
-    }
+    const requested = clips.slice(0, 48);
+    const prepared = await prepareInBatches(requested, {
+      voice,
+      model,
+      speed,
+      format,
+      profileVersion,
+    });
     res.json({ ok: true, clips: prepared });
   } catch (error) {
     const classified = classifyProviderError(error, {

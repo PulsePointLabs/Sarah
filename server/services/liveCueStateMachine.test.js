@@ -4,6 +4,10 @@ import {
   createLiveCueStateMachineState,
   stepLiveCueStateMachine,
 } from "../../src/lib/liveCueStateMachine.js";
+import {
+  pickCuePhrase,
+  resolveCuePhysiologyBucket,
+} from "../../src/lib/liveCuePhrases.js";
 
 const plateauPhrases = {
   plateau_encouragement: ["Stay calm and keep the stimulation steady."],
@@ -90,4 +94,45 @@ test("plateau encouragement respects its anti-chatter cooldown", () => {
   );
   assert.equal(repeated.cue, null);
   assert.equal(repeated.suppressed[0]?.reason, "cue_cooldown");
+});
+
+test("adaptive phrase selection follows current physiology and alternates within its pair", () => {
+  const phrases = {
+    climax_possible: [
+      "rising one", "rising two",
+      "steady one", "steady two",
+      "intense one", "intense two",
+      "autonomic one", "autonomic two",
+    ],
+  };
+  const rising = { prediction: { nearClimax: 70, recentSlope: 0.4 }, sample: {} };
+  const intense = { prediction: { nearClimax: 88 }, sample: {} };
+  const autonomic = {
+    prediction: {
+      nearClimax: 72,
+      hrvUsable: true,
+      hrvSignal: "suppressed",
+      hrvContribution: 9,
+    },
+    sample: {},
+  };
+
+  assert.equal(pickCuePhrase(phrases, "climax_possible", 0, rising), "rising one");
+  assert.equal(pickCuePhrase(phrases, "climax_possible", 1, rising), "rising two");
+  assert.equal(pickCuePhrase(phrases, "climax_possible", 0, intense), "intense one");
+  assert.equal(pickCuePhrase(phrases, "climax_possible", 0, autonomic), "autonomic one");
+});
+
+test("physiology routing identifies recovery and steady states without inventing evidence", () => {
+  assert.equal(resolveCuePhysiologyBucket("recovery", { recovery: 78 }, {}), "intense");
+  assert.equal(resolveCuePhysiologyBucket("recovery", {
+    recovery: 62,
+    hrvUsable: true,
+    hrvSignal: "opening",
+  }, {}), "autonomic");
+  assert.equal(resolveCuePhysiologyBucket("plateau_encouragement", {
+    nearClimax: 62,
+    recentSlope: 0.02,
+    plateauScore: 70,
+  }, {}), "steady");
 });

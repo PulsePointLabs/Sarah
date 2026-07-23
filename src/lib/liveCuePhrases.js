@@ -1,4 +1,6 @@
-export const LIVE_CUE_PROFILE_VERSION = "live-cue-v3";
+export const LIVE_CUE_PROFILE_VERSION = "live-cue-v4";
+
+export const LIVE_CUE_ADAPTIVE_VARIANTS_PER_STATE = 8;
 
 export const LIVE_CUE_TYPES = Object.freeze({
   sustained_build: "sustained_build",
@@ -166,8 +168,53 @@ export function resolveLiveCuePhraseBank(settings = {}, { captureKind = "session
   return { settings: normalized, phrases, suppressed: false };
 }
 
-export function pickCuePhrase(phrases = {}, cueType, sequence = 0) {
+export function resolveCuePhysiologyBucket(cueType, prediction = {}, sample = {}) {
+  const nearClimax = Number(prediction.nearClimax || 0);
+  const recovery = Number(prediction.recovery || 0);
+  const slope = Number(prediction.recentSlope ?? sample.recentSlope ?? 0);
+  const intensity = String(prediction.physiologicalIntensity || "").toLowerCase();
+  const hrvSignal = String(prediction.hrvSignal || "").toLowerCase();
+  const rmssd = Number(prediction.rmssd);
+  const hrvSpecific = Boolean(
+    prediction.hrvUsable
+    && (hrvSignal || Number.isFinite(rmssd))
+  );
+
+  if (cueType === LIVE_CUE_TYPES.recovery) {
+    if (hrvSpecific) return "autonomic";
+    return recovery >= 72 ? "intense" : recovery >= 55 ? "steady" : "rising";
+  }
+  if (hrvSpecific && (
+    hrvSignal.includes("suppres")
+    || hrvSignal.includes("opening")
+    || hrvSignal.includes("recover")
+    || Number(prediction.hrvContribution || 0) >= 8
+  )) return "autonomic";
+  if (
+    nearClimax >= 82
+    || intensity.includes("high")
+    || Number(prediction.plateauScore || 0) >= 78
+  ) return "intense";
+  if (slope >= 0.2 || cueType === LIVE_CUE_TYPES.build_resumed) return "rising";
+  return "steady";
+}
+
+function physiologyPhrasePool(list, bucket) {
+  if (list.length < LIVE_CUE_ADAPTIVE_VARIANTS_PER_STATE) return list;
+  const offsets = {
+    rising: 0,
+    steady: 2,
+    intense: 4,
+    autonomic: 6,
+  };
+  const start = offsets[bucket] ?? offsets.steady;
+  return list.slice(start, start + 2);
+}
+
+export function pickCuePhrase(phrases = {}, cueType, sequence = 0, context = {}) {
   const list = phrases[cueType] || [];
   if (!list.length) return "";
-  return list[Math.abs(Number(sequence) || 0) % list.length];
+  const bucket = resolveCuePhysiologyBucket(cueType, context.prediction, context.sample);
+  const pool = physiologyPhrasePool(list, bucket);
+  return pool[Math.abs(Number(sequence) || 0) % pool.length];
 }

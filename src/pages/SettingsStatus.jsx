@@ -1164,17 +1164,23 @@ export default function SettingsStatus() {
 User customization instructions:
 ${instructions}
 
-Generate four distinct phrases for each physiological state: sustained build, sustained plateau, climax possible, climax imminent, brief recovery, and build resumed.
+Generate eight distinct phrases for each physiological state: sustained build, sustained plateau, climax possible, climax imminent, brief recovery, and build resumed.
+Order every array deliberately:
+- phrases 1-2 fit a clearly rising physiological load;
+- phrases 3-4 fit a steady or sustained state;
+- phrases 5-6 fit a strong/high-intensity state;
+- phrases 7-8 fit corroborating autonomic evidence such as HRV suppression/opening or a clear recovery response.
+Sarah selects from the matching pair live using the current physiology, so each pair must make sense for that state without quoting invented measurements.
 Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, and point of view. The output may be sensual and explicitly orgasm-focused, but must remain non-vulgar, non-degrading, non-coercive, and safe for calm spoken TTS. Do not claim certainty from physiology. Do not include medical claims, commands to ignore pain/distress, breath-holding commands, or unsafe device instructions. Keep each phrase under 24 words and make adjacent phrases meaningfully different.`,
         response_json_schema: {
           type: "object",
           properties: {
-            sustained_build: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
-            plateau_encouragement: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
-            climax_possible: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
-            climax_imminent: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
-            recovery: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
-            build_resumed: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
+            sustained_build: { type: "array", minItems: 8, maxItems: 8, items: { type: "string" } },
+            plateau_encouragement: { type: "array", minItems: 8, maxItems: 8, items: { type: "string" } },
+            climax_possible: { type: "array", minItems: 8, maxItems: 8, items: { type: "string" } },
+            climax_imminent: { type: "array", minItems: 8, maxItems: 8, items: { type: "string" } },
+            recovery: { type: "array", minItems: 8, maxItems: 8, items: { type: "string" } },
+            build_resumed: { type: "array", minItems: 8, maxItems: 8, items: { type: "string" } },
           },
           required: ["sustained_build", "plateau_encouragement", "climax_possible", "climax_imminent", "recovery", "build_resumed"],
         },
@@ -1576,7 +1582,7 @@ Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, 
                 className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
               >
                 {liveCueCustomizationGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                Generate Phrase Bank
+                Generate Adaptive Phrase Bank
               </button>
               <button
                 type="button"
@@ -1619,7 +1625,7 @@ Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, 
                   <div key={key} className="rounded-lg border border-border bg-card px-3 py-2">
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-xs font-semibold text-foreground">{label}</span>
-                      <span className="font-mono text-xs text-primary">{phrases.length}/4</span>
+                      <span className="font-mono text-xs text-primary">{phrases.length}/8</span>
                     </div>
                     {phrases[0] && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{phrases[0]}</p>}
                   </div>
@@ -1627,7 +1633,7 @@ Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, 
               })}
             </div>
             <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-              In Live Capture, choose <span className="font-semibold text-foreground">Custom encouragement</span>. Sarah still uses the same physiological state gates and cooldowns; only the spoken language changes.
+              In Live Capture, choose <span className="font-semibold text-foreground">Custom encouragement</span>. Sarah routes the adaptive bank using current load, trajectory, plateau strength, HRV evidence, and recovery while keeping the same safety gates and cooldowns.
             </p>
           </div>
         </div>

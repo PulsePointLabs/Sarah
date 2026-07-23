@@ -99,8 +99,8 @@ function selectCue(candidates) {
 }
 
 function acceptCue(state, cue, phrases, at, prediction, sample) {
-  const nextIndex = (state.lastCuePhraseIndex[cue.type] || 0) + (state.lastCueType === cue.type ? 1 : 0);
-  const phrase = pickCuePhrase(phrases, cue.type, nextIndex);
+  const nextIndex = state.lastCuePhraseIndex[cue.type] || 0;
+  const phrase = pickCuePhrase(phrases, cue.type, nextIndex, { prediction, sample });
   state.lastCuePhraseIndex[cue.type] = nextIndex + 1;
   state.lastCueAt[cue.type] = at;
   state.lastAnyCueAt = at;
