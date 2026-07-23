@@ -653,6 +653,33 @@ export default function VideoSyncPlayer({
     }
   }, []);
 
+  const refineQuickVoiceEventTags = useCallback(async (eventId, note) => {
+    try {
+      const classification = await classifyEventNoteWithAI(note, isExploration);
+      const currentEvents = eventsRef.current;
+      if (!currentEvents.some((event) => event.event_id === eventId)) return;
+
+      const updatedEvents = currentEvents.map((event) => (
+        event.event_id === eventId
+          ? {
+              ...event,
+              category: classification.categories,
+              annotation_tags: classification.annotation_tags,
+              ai_annotation: {
+                source: classification.rationale === "Local keyword fallback" ? "local-fallback" : "ai",
+                rationale: classification.rationale,
+              },
+            }
+          : event
+      ));
+      await saveEvents(updatedEvents);
+      setLastUsedCat(classification.categories[0] || defaultCategory);
+    } catch (error) {
+      // The event already has local tags, so an AI outage must not remove or lose it.
+      console.warn("Quick voice event AI tagging failed; local tags remain:", error);
+    }
+  }, [defaultCategory, isExploration]);
+
   const saveQuickVoiceEvent = useCallback(async (rawText) => {
     const cleanNote = String(rawText || "").trim();
     if (!cleanNote) {
@@ -666,15 +693,19 @@ export default function VideoSyncPlayer({
       ? classification.categories
       : [lastUsedCat || defaultCategory];
     const eventTime = Math.max(0, Number(quickDictationRef.current.timeS) || 0);
+    const eventId = typeof globalThis.crypto?.randomUUID === "function"
+      ? `voice-${globalThis.crypto.randomUUID()}`
+      : `voice-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const event = {
+      event_id: eventId,
       time_s: eventTime,
       note: cleanNote,
       category: categories,
       source: "voice",
       annotation_tags: classification.annotation_tags,
       ai_annotation: {
-        source: "local-fallback",
-        rationale: classification.rationale,
+        source: "local-pending-ai",
+        rationale: "Local tags saved; AI classification pending",
       },
     };
 
@@ -684,13 +715,14 @@ export default function VideoSyncPlayer({
       pulseHaptic([20, 35, 20]);
       const preview = cleanNote.length > 110 ? `${cleanNote.slice(0, 107)}...` : cleanNote;
       showQuickNotice(`Saved at ${fmtMmSs(eventTime)}: "${preview}"`);
+      void refineQuickVoiceEventTags(eventId, cleanNote);
     } catch (error) {
       console.error("Failed to save quick voice event:", error);
       showQuickNotice("Voice note was transcribed but could not be saved.", "error");
     } finally {
       await resumeAfterQuickDictation();
     }
-  }, [defaultCategory, isExploration, lastUsedCat, pulseHaptic, resumeAfterQuickDictation, showQuickNotice]);
+  }, [defaultCategory, isExploration, lastUsedCat, pulseHaptic, refineQuickVoiceEventTags, resumeAfterQuickDictation, showQuickNotice]);
 
   const transcribeAudio = useCallback(async (blob, mimeType) => {
     const ab = await blob.arrayBuffer();
