@@ -3,6 +3,7 @@ import { Activity, AlertCircle, Brain, Lightbulb, ScanSearch, ShieldCheck } from
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
+import { pulseOxReadingsFromSession } from "@/lib/sessionContext";
 import { buildBodyExplorationVideoPassDigest, buildBodyExplorationVisualEvidenceDigest } from "@/lib/visualEvidence";
 import AIOutputReader from "./AIOutputReader";
 import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
@@ -135,6 +136,25 @@ function telemetrySummary(rows, exploration) {
     hr_min: hrs.length ? Math.round(Math.min(...hrs)) : null,
     hr_max: hrs.length ? Math.round(Math.max(...hrs)) : exploration.max_hr || null,
     hr_avg: exploration.avg_hr || null,
+  };
+}
+
+function pulseOxSummary(exploration) {
+  const readings = pulseOxReadingsFromSession(exploration);
+  if (!readings.length) return null;
+  const spo2Values = readings.map((reading) => Number(reading.spo2_percent)).filter(Number.isFinite);
+  const pulseValues = readings.map((reading) => Number(reading.pulse_bpm)).filter(Number.isFinite);
+  return {
+    total_points: readings.length,
+    spo2_latest_percent: readings[readings.length - 1]?.spo2_percent ?? null,
+    spo2_average_percent: Math.round(spo2Values.reduce((sum, value) => sum + value, 0) / spo2Values.length),
+    spo2_minimum_percent: Math.min(...spo2Values),
+    pulse_average_bpm: pulseValues.length
+      ? Math.round(pulseValues.reduce((sum, value) => sum + value, 0) / pulseValues.length)
+      : null,
+    source: readings.find((reading) => reading.source_app || reading.source_device)?.source_app
+      || readings.find((reading) => reading.source_device)?.source_device
+      || null,
   };
 }
 
@@ -303,6 +323,7 @@ ${JSON.stringify({
   unusual_sensations: exploration.unusual_sensations,
   tags: exploration.tags,
   heart_rate: telemetrySummary(timelineRows, exploration),
+  pulse_oximetry: pulseOxSummary(exploration),
   emg_rows: emgRows.length,
   reviewed_visual_evidence: visualEvidenceContext || null,
   reviewed_video_pass_evidence: videoPassEvidenceContext || null,

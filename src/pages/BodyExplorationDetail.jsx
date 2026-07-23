@@ -7,10 +7,12 @@ import PageHeader from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import SessionTelemetryDashboard from "@/components/SessionTelemetryDashboard";
+import PulseOxSessionChart from "@/components/PulseOxSessionChart";
 import BodyExplorationAIPanel from "@/components/BodyExplorationAIPanel";
 import AIChat from "@/components/AIChat";
 import LinkedLocalVideoManager from "@/components/LinkedLocalVideoManager";
 import VideoSyncPlayer from "@/components/VideoSyncPlayer";
+import { pulseOxReadingsFromSession } from "@/lib/sessionContext";
 import {
   buildBodyExplorationVisualEvidenceDigest,
   buildBodyExplorationVideoPassDigest,
@@ -71,6 +73,9 @@ function TimestampedNotes({ events }) {
 }
 
 function buildExplorationChatContext(exploration, timelineRows, emgRows) {
+  const pulseOxReadings = pulseOxReadingsFromSession(exploration);
+  const spo2Values = pulseOxReadings.map((reading) => Number(reading.spo2_percent)).filter(Number.isFinite);
+  const pulseValues = pulseOxReadings.map((reading) => Number(reading.pulse_bpm)).filter(Number.isFinite);
   const events = (exploration.event_timeline || []).map((event) => {
     const m = Math.floor(Number(event.time_s || 0) / 60);
     const sec = Math.round(Number(event.time_s || 0) % 60);
@@ -96,6 +101,9 @@ function buildExplorationChatContext(exploration, timelineRows, emgRows) {
     exploration.unusual_sensations ? `Unusual sensations: ${exploration.unusual_sensations}` : null,
     exploration.notes ? `Exploration notes: ${exploration.notes}` : null,
     timelineRows.length ? `Heart-rate rows available: ${timelineRows.length}; avg ${exploration.avg_hr || "unknown"} bpm; max ${exploration.max_hr || "unknown"} bpm.` : null,
+    spo2Values.length
+      ? `Pulse oximetry: ${pulseOxReadings.length} samples; average SpO2 ${Math.round(spo2Values.reduce((sum, value) => sum + value, 0) / spo2Values.length)}%; minimum SpO2 ${Math.min(...spo2Values)}%${pulseValues.length ? `; average pulse ${Math.round(pulseValues.reduce((sum, value) => sum + value, 0) / pulseValues.length)} bpm` : ""}.`
+      : null,
     emgRows.length ? `EMG rows available: ${emgRows.length}.` : null,
     events.length ? `Timestamped notes:\n${events.join("\n")}` : null,
     buildBodyExplorationVisualEvidenceDigest(exploration),
@@ -136,6 +144,7 @@ export default function BodyExplorationDetail() {
   if (!exploration) return <div className="p-6 text-center text-muted-foreground">Body exploration record not found.</div>;
   const reviewedMediaClips = getReviewedVisualClips(exploration.ai_body_exploration?._visual_findings || []);
   const linkedLocalVideos = exploration.linked_local_videos || [];
+  const pulseOxReadings = pulseOxReadingsFromSession(exploration);
 
   return (
     <div>
@@ -151,6 +160,7 @@ export default function BodyExplorationDetail() {
             {(exploration.methods || []).map((method) => <Badge key={method} variant="secondary">{method}</Badge>)}
             {timelineRows.length > 0 && <Badge variant="outline" className="gap-1"><Activity className="h-3 w-3" /> HR</Badge>}
             {emgRows.length > 0 && <Badge variant="outline">EMG</Badge>}
+            {pulseOxReadings.length > 0 && <Badge variant="outline">SpO2</Badge>}
           </div>
           <div className="mt-3 grid gap-4 lg:grid-cols-2">
             <div>
@@ -183,6 +193,9 @@ export default function BodyExplorationDetail() {
           }}
           recordType="body_exploration"
         />
+        {pulseOxReadings.length > 0 && (
+          <PulseOxSessionChart session={exploration} sectionId="body-exploration-pulse-ox" />
+        )}
 
         <section className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
