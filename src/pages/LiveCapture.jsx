@@ -2464,7 +2464,7 @@ export default function LiveCapture() {
       ...previous,
       pmdActive: previous.pmdActive,
       pmdMessage: streamActive
-        ? `${streamName} start accepted; awaiting sensor samples${response.status === 6 ? " after stale-stream reset" : ""}`
+        ? `${streamName} start accepted; awaiting sensor samples${response.status === 6 ? " (stream was already active)" : ""}`
         : `${streamName} raw stream unavailable (PMD status ${response.status})`,
     }));
   }, []);
@@ -2541,6 +2541,7 @@ export default function LiveCapture() {
       handleH10PmdData,
       { timeout: 12000 },
     );
+    await wait(300);
     const resetMeasurement = async (measurement, command) => {
       const responsePromise = waitForH10PmdControlResponse(measurement, 3, 2500);
       await Promise.all([
@@ -2550,6 +2551,8 @@ export default function LiveCapture() {
     };
     await resetMeasurement(0, H10_ECG_STOP_COMMAND);
     await resetMeasurement(2, H10_ACCELEROMETER_STOP_COMMAND);
+    // The H10 can acknowledge STOP before its PMD state transition has settled.
+    await wait(350);
     const ecgResponsePromise = waitForH10PmdControlResponse(0, 2);
     const [, ecgResponse] = await Promise.all([
       BleClient.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ECG_START_COMMAND), { timeout: 12000 }),
@@ -2592,6 +2595,7 @@ export default function LiveCapture() {
     await withTimeout(control.startNotifications(), 12000, "Timed out starting H10 PMD control notifications.");
     await withTimeout(data.startNotifications(), 12000, "Timed out starting H10 PMD data notifications.");
     directH10PmdBrowserRef.current = { control, data, controlHandler, dataHandler };
+    await wait(300);
     const resetMeasurement = async (measurement, command) => {
       const responsePromise = waitForH10PmdControlResponse(measurement, 3, 2500);
       await Promise.all([
@@ -2601,6 +2605,7 @@ export default function LiveCapture() {
     };
     await resetMeasurement(0, H10_ECG_STOP_COMMAND);
     await resetMeasurement(2, H10_ACCELEROMETER_STOP_COMMAND);
+    await wait(350);
     const ecgResponsePromise = waitForH10PmdControlResponse(0, 2);
     const [, ecgResponse] = await Promise.all([
       control.writeValueWithResponse(H10_ECG_START_COMMAND),

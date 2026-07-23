@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import {
@@ -21,6 +21,7 @@ import {
   Square,
   Trash2,
   TriangleAlert,
+  Volume2,
 } from "lucide-react";
 import TTSSettingsPanel from "@/components/TTSSettingsPanel";
 import AppVersionBadge from "@/components/AppVersionBadge";
@@ -67,6 +68,10 @@ import {
   saveSyncedLiveCueCustomization,
 } from "@/lib/liveCueCustomization";
 import {
+  DEFAULT_LIVE_CUE_SETTINGS,
+  LIVE_CUE_PROFILE_VERSION,
+} from "@/lib/liveCuePhrases";
+import {
   areBackgroundNotificationsEnabled,
   getNotificationPermission,
   isNotificationSupported,
@@ -93,6 +98,15 @@ import {
   startOmronBloodPressureListener,
   stopOmronBloodPressureListener,
 } from "@/lib/omronBloodPressureBle";
+
+const LIVE_CUE_COVERAGE_STATES = [
+  ["sustained_build", "Build"],
+  ["plateau_encouragement", "Plateau"],
+  ["climax_possible", "Climax possible"],
+  ["climax_imminent", "Climax imminent"],
+  ["recovery", "Recovery"],
+  ["build_resumed", "Build resumed"],
+];
 
 function fmtMoney(value) {
   const n = Number(value);
@@ -589,6 +603,8 @@ export default function SettingsStatus() {
   const [liveCueCustomizationDirty, setLiveCueCustomizationDirty] = useState(false);
   const [liveCueCustomizationStatus, setLiveCueCustomizationStatus] = useState("");
   const [liveCueCustomizationGenerating, setLiveCueCustomizationGenerating] = useState(false);
+  const [liveCuePreview, setLiveCuePreview] = useState({ key: "", index: -1, busy: false });
+  const liveCuePreviewAudioRef = useRef(null);
   const [bpStatus, setBpStatus] = useState(null);
   const [bpReadings, setBpReadings] = useState([]);
   const [bpMessage, setBpMessage] = useState("");
@@ -1157,48 +1173,101 @@ export default function SettingsStatus() {
     }
     setLiveCueCustomizationGenerating(true);
     setLiveCueCustomizationStatus("Sarah is building a private phrase bank from your instructions...");
+    let checkpoint = liveCueCustomization;
+    let completed = 0;
+    const failures = [];
     try {
-      const response = await base44.integrations.Core.InvokeLLM({
-        prompt: `Create a concise live encouragement phrase bank for an adult user's private masturbation physiology session.
+      for (const [key, label] of LIVE_CUE_COVERAGE_STATES) {
+        setLiveCueCustomizationStatus(`Generating ${label.toLowerCase()} phrases (${completed + 1}/${LIVE_CUE_COVERAGE_STATES.length})...`);
+        try {
+          const response = await base44.integrations.Core.InvokeLLM({
+            prompt: `Create eight concise ${label.toLowerCase()} encouragement phrases for an adult user's private masturbation physiology session.
 
 User customization instructions:
 ${instructions}
 
-Generate eight distinct phrases for each physiological state: sustained build, sustained plateau, climax possible, climax imminent, brief recovery, and build resumed.
 Order every array deliberately:
 - phrases 1-2 fit a clearly rising physiological load;
 - phrases 3-4 fit a steady or sustained state;
 - phrases 5-6 fit a strong/high-intensity state;
 - phrases 7-8 fit corroborating autonomic evidence such as HRV suppression/opening or a clear recovery response.
-Sarah selects from the matching pair live using the current physiology, so each pair must make sense for that state without quoting invented measurements.
+Sarah selects from the matching pair live using current physiology. Every phrase must fit the ${label.toLowerCase()} state without quoting invented measurements.
 Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, and point of view. The output may be sensual and explicitly orgasm-focused, but must remain non-vulgar, non-degrading, non-coercive, and safe for calm spoken TTS. Do not claim certainty from physiology. Do not include medical claims, commands to ignore pain/distress, breath-holding commands, or unsafe device instructions. Keep each phrase under 24 words and make adjacent phrases meaningfully different.`,
-        response_json_schema: {
-          type: "object",
-          properties: {
-            sustained_build: { type: "array", minItems: 8, maxItems: 8, items: { type: "string" } },
-            plateau_encouragement: { type: "array", minItems: 8, maxItems: 8, items: { type: "string" } },
-            climax_possible: { type: "array", minItems: 8, maxItems: 8, items: { type: "string" } },
-            climax_imminent: { type: "array", minItems: 8, maxItems: 8, items: { type: "string" } },
-            recovery: { type: "array", minItems: 8, maxItems: 8, items: { type: "string" } },
-            build_resumed: { type: "array", minItems: 8, maxItems: 8, items: { type: "string" } },
-          },
-          required: ["sustained_build", "plateau_encouragement", "climax_possible", "climax_imminent", "recovery", "build_resumed"],
-        },
-      });
-      const parsed = typeof response === "string" ? JSON.parse(response) : response;
-      const phrases = parsed?.response || parsed;
-      const saved = await saveSyncedLiveCueCustomization({
-        ...liveCueCustomization,
-        enabled: true,
-        phrases,
-      });
-      setLiveCueCustomization(saved);
+            response_json_schema: {
+              type: "object",
+              properties: {
+                phrases: { type: "array", minItems: 8, maxItems: 8, items: { type: "string" } },
+              },
+              required: ["phrases"],
+            },
+          });
+          const parsed = typeof response === "string" ? JSON.parse(response) : response;
+          const generated = parsed?.response?.phrases || parsed?.phrases;
+          const phrases = Array.isArray(generated)
+            ? [...new Set(generated.map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 8)
+            : [];
+          if (phrases.length !== 8) throw new Error(`Sarah returned ${phrases.length} of 8 usable phrases.`);
+          checkpoint = await saveSyncedLiveCueCustomization({
+            ...checkpoint,
+            enabled: true,
+            instructions,
+            phrases: {
+              ...(checkpoint.phrases || {}),
+              [key]: phrases,
+            },
+          });
+          setLiveCueCustomization(checkpoint);
+          completed += 1;
+        } catch (error) {
+          failures.push(`${label}: ${error?.message || error}`);
+        }
+      }
       setLiveCueCustomizationDirty(false);
-      setLiveCueCustomizationStatus("Custom phrase bank generated and synchronized for EXE and APK.");
-    } catch (error) {
-      setLiveCueCustomizationStatus(error?.message || "Custom encouragement generation failed.");
+      setLiveCueCustomizationStatus(failures.length
+        ? `Saved ${completed}/${LIVE_CUE_COVERAGE_STATES.length} phrase groups. ${failures[0]}`
+        : "Custom phrase bank generated and synchronized for EXE and APK.");
     } finally {
       setLiveCueCustomizationGenerating(false);
+    }
+  };
+
+  const previewCustomEncouragement = async (key, phrases) => {
+    if (!phrases.length || liveCuePreview.busy) return;
+    const nextIndex = liveCuePreview.key === key
+      ? (liveCuePreview.index + 1) % phrases.length
+      : 0;
+    const text = phrases[nextIndex];
+    liveCuePreviewAudioRef.current?.pause?.();
+    setLiveCuePreview({ key, index: nextIndex, busy: true });
+    setLiveCueCustomizationStatus(`Preparing ${nextIndex + 1}/${phrases.length}: ${text}`);
+    try {
+      const response = await fetch(apiUrl("/live-cues/prepare"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clips: [{ type: key, index: nextIndex, text }],
+          voice: DEFAULT_LIVE_CUE_SETTINGS.voice,
+          model: DEFAULT_LIVE_CUE_SETTINGS.model,
+          speed: DEFAULT_LIVE_CUE_SETTINGS.speed,
+          format: DEFAULT_LIVE_CUE_SETTINGS.format,
+          profileVersion: LIVE_CUE_PROFILE_VERSION,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Sarah could not prepare this preview.");
+      const clip = payload.clips?.[0];
+      if (!clip?.url) throw new Error("Sarah returned no preview audio.");
+      const src = String(clip.url).startsWith("/live-cues/")
+        ? apiUrl(String(clip.url).replace(/^\/live-cues/, "/live-cues"))
+        : serverUrl(clip.url);
+      const audio = new Audio(src);
+      liveCuePreviewAudioRef.current = audio;
+      await audio.play();
+      setLiveCueCustomizationStatus(`Playing ${nextIndex + 1}/${phrases.length}: ${text}`);
+    } catch (error) {
+      setLiveCueCustomizationStatus(error?.message || "Sarah could not play this preview.");
+    } finally {
+      setLiveCuePreview((previous) => ({ ...previous, busy: false }));
     }
   };
 
@@ -1612,22 +1681,31 @@ Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, 
           <div className="rounded-xl border border-border bg-muted/20 p-3">
             <h3 className="text-sm font-bold text-foreground">Generated coverage</h3>
             <div className="mt-3 space-y-2">
-              {[
-                ["sustained_build", "Build"],
-                ["plateau_encouragement", "Plateau"],
-                ["climax_possible", "Climax possible"],
-                ["climax_imminent", "Climax imminent"],
-                ["recovery", "Recovery"],
-                ["build_resumed", "Build resumed"],
-              ].map(([key, label]) => {
+              {LIVE_CUE_COVERAGE_STATES.map(([key, label]) => {
                 const phrases = Array.isArray(liveCueCustomization.phrases?.[key]) ? liveCueCustomization.phrases[key] : [];
+                const previewIndex = liveCuePreview.key === key ? liveCuePreview.index : 0;
+                const previewPhrase = phrases[previewIndex] || phrases[0];
                 return (
                   <div key={key} className="rounded-lg border border-border bg-card px-3 py-2">
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-xs font-semibold text-foreground">{label}</span>
-                      <span className="font-mono text-xs text-primary">{phrases.length}/8</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs text-primary">{phrases.length}/8</span>
+                        <button
+                          type="button"
+                          onClick={() => previewCustomEncouragement(key, phrases)}
+                          disabled={!phrases.length || liveCuePreview.busy}
+                          className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] font-semibold text-primary disabled:opacity-40"
+                          aria-label={`Preview next ${label.toLowerCase()} phrase`}
+                        >
+                          {liveCuePreview.busy && liveCuePreview.key === key
+                            ? <Loader2 className="h-3 w-3 animate-spin" />
+                            : <Volume2 className="h-3 w-3" />}
+                          Preview
+                        </button>
+                      </div>
                     </div>
-                    {phrases[0] && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{phrases[0]}</p>}
+                    {previewPhrase && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{previewPhrase}</p>}
                   </div>
                 );
               })}

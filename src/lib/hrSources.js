@@ -1,10 +1,5 @@
 export const HR_SOURCE_OPTIONS = [
   {
-    value: "heartrateonstream",
-    label: "HeartRateOnStream",
-    helper: "Existing OBS relay workflow",
-  },
-  {
     value: "pulsoid",
     label: "Pulsoid / Polar H10",
     helper: "Polar H10 through Pulsoid",
@@ -32,13 +27,12 @@ export function maskPulsoidToken(token = "") {
 
 export function readHrSourceSettings() {
   let source = localStorage.getItem("pulsepoint.hrSource");
-  if (!localStorage.getItem(DIRECT_H10_SOURCE_MIGRATION_KEY)) {
+  if (!localStorage.getItem(DIRECT_H10_SOURCE_MIGRATION_KEY) || source === "heartrateonstream") {
     localStorage.setItem(DIRECT_H10_SOURCE_MIGRATION_KEY, "1");
-    if (!source || source === "heartrateonstream") {
-      source = "direct_h10";
-      localStorage.setItem("pulsepoint.hrSource", source);
-    }
+    source = "direct_h10";
+    localStorage.setItem("pulsepoint.hrSource", source);
   }
+  if (!HR_SOURCE_OPTIONS.some((option) => option.value === source)) source = "direct_h10";
   return {
     source: source || "direct_h10",
     pulsoidToken: localStorage.getItem("pulsepoint.pulsoid.accessToken") || "",
@@ -47,7 +41,12 @@ export function readHrSourceSettings() {
 }
 
 export function writeHrSourceSettings(settings) {
-  if (settings.source) localStorage.setItem("pulsepoint.hrSource", settings.source);
+  if (settings.source) {
+    const source = HR_SOURCE_OPTIONS.some((option) => option.value === settings.source)
+      ? settings.source
+      : "direct_h10";
+    localStorage.setItem("pulsepoint.hrSource", source);
+  }
   if (settings.pulsoidToken != null) localStorage.setItem("pulsepoint.pulsoid.accessToken", settings.pulsoidToken);
   if (settings.pulsoidMode) localStorage.setItem("pulsepoint.pulsoid.mode", settings.pulsoidMode);
 }

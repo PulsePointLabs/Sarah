@@ -71,14 +71,14 @@ const state = {
     connected: false,
     recording: null,
     latestTelemetry: null,
-    selectedSource: HR_SOURCE_IDS.HEART_RATE_ON_STREAM,
-    selectedSourceLabel: HR_SOURCE_LABELS[HR_SOURCE_IDS.HEART_RATE_ON_STREAM],
+    selectedSource: HR_SOURCE_IDS.DIRECT_H10,
+    selectedSourceLabel: HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10],
     sourceStatus: {
-      source: HR_SOURCE_IDS.HEART_RATE_ON_STREAM,
-      label: HR_SOURCE_LABELS[HR_SOURCE_IDS.HEART_RATE_ON_STREAM],
+      source: HR_SOURCE_IDS.DIRECT_H10,
+      label: HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10],
       connected: false,
-      message: 'Using HeartRateOnStream relay',
-      mode: 'websocket',
+      message: 'Connect the H10 from Live Capture',
+      mode: 'web_bluetooth',
       tokenMasked: '',
     },
     pulsoid: {
@@ -129,6 +129,8 @@ const state = {
     finalizedRecordingKey: null,
     pendingHrSegments: [],
     pendingObsSegments: [],
+    hrSource: HR_SOURCE_IDS.DIRECT_H10,
+    hrSourceLabel: HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10],
     pausedAt: null,
     resumedAt: null,
     pauseIntervals: [],
@@ -370,7 +372,7 @@ function sanitizeHrSourceSettings(body = {}) {
   const requestedSource = String(body.source || '');
   const source = [HR_SOURCE_IDS.PULSOID, HR_SOURCE_IDS.DIRECT_H10].includes(requestedSource)
     ? requestedSource
-    : HR_SOURCE_IDS.HEART_RATE_ON_STREAM;
+    : HR_SOURCE_IDS.DIRECT_H10;
   const mode = body.pulsoidMode === 'http' ? 'http' : 'websocket';
   return {
     source,
@@ -593,6 +595,27 @@ async function createDirectH10Recording(recording = {}, reason = 'obs_record_sta
     active: Boolean(recording?.active ?? true),
     startedAtMs: directH10Recording.startEpochMs,
   };
+  if (state.session.activeSessionId) {
+    const activeRecording = {
+      filepath,
+      filename,
+      rawSensorPath: directH10Recording.rawSensorPath,
+      startedAtMs: directH10Recording.startEpochMs,
+      startedAt: new Date(directH10Recording.startEpochMs).toISOString(),
+      source: HR_SOURCE_IDS.DIRECT_H10,
+      sourceLabel: HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10],
+    };
+    state.session = {
+      ...state.session,
+      hrSource: HR_SOURCE_IDS.DIRECT_H10,
+      hrSourceLabel: HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10],
+    };
+    patchCurrentLiveSession({
+      hr_source: HR_SOURCE_IDS.DIRECT_H10,
+      hr_source_label: HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10],
+      capture_active_hr_recording: activeRecording,
+    });
+  }
   return directH10Recording;
 }
 
@@ -709,14 +732,21 @@ async function finalizeDirectH10Recording(recording = {}) {
 }
 
 async function resolveHrRecordingForImport(recording = {}) {
-  if (![HR_SOURCE_IDS.PULSOID, HR_SOURCE_IDS.DIRECT_H10].includes(state.hr.selectedSource)) return recording;
-  const sourceRecording = state.hr.selectedSource === HR_SOURCE_IDS.DIRECT_H10
+  const source = [HR_SOURCE_IDS.PULSOID, HR_SOURCE_IDS.DIRECT_H10].includes(recording?.source)
+    ? recording.source
+    : [HR_SOURCE_IDS.PULSOID, HR_SOURCE_IDS.DIRECT_H10].includes(state.session.hrSource)
+      ? state.session.hrSource
+      : state.hr.selectedSource;
+  if (![HR_SOURCE_IDS.PULSOID, HR_SOURCE_IDS.DIRECT_H10].includes(source)) return recording;
+  const sourceRecording = source === HR_SOURCE_IDS.DIRECT_H10
     ? (directH10Recording ? await finalizeDirectH10Recording(recording) : state.hr.directH10Recording)
     : (pulsoidRecording ? await finalizePulsoidRecording(recording) : state.hr.pulsoidRecording);
   if (!sourceRecording?.filepath) return recording;
   return {
     ...recording,
     ...sourceRecording,
+    source,
+    sourceLabel: HR_SOURCE_LABELS[source] || source,
     obsOutputPath: recording?.obsOutputPath || recording?.outputPath || null,
   };
 }
@@ -941,7 +971,11 @@ function mergedPersistedSegments(records = []) {
   const merged = [];
   const seen = new Set();
   for (const record of records) {
-    for (const segment of Array.isArray(record?.capture_segments) ? record.capture_segments : []) {
+    const persistedSegments = Array.isArray(record?.capture_segments) ? record.capture_segments : [];
+    const activeRecording = record?.capture_active_hr_recording?.filepath
+      ? [record.capture_active_hr_recording]
+      : [];
+    for (const segment of [...persistedSegments, ...activeRecording]) {
       const key = captureSegmentKey(segment);
       if (!key || seen.has(key)) continue;
       seen.add(key);
@@ -1046,6 +1080,12 @@ function hydratePersistedLiveSession(candidate) {
         stoppedAt: segment.stoppedAt,
         reason: segment.reason,
       })),
+    hrSource: [HR_SOURCE_IDS.PULSOID, HR_SOURCE_IDS.DIRECT_H10].includes(candidate.record?.hr_source)
+      ? candidate.record.hr_source
+      : HR_SOURCE_IDS.DIRECT_H10,
+    hrSourceLabel: [HR_SOURCE_IDS.PULSOID, HR_SOURCE_IDS.DIRECT_H10].includes(candidate.record?.hr_source)
+      ? HR_SOURCE_LABELS[candidate.record.hr_source]
+      : HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10],
     pausedAt,
     resumedAt: candidate.record?.capture_last_resumed_at || null,
     pauseIntervals: Array.isArray(candidate.record?.capture_pause_intervals)
@@ -1107,6 +1147,11 @@ function normalizeRecordingSegment(recording = {}, reason = 'obs_record_stop') {
   const startedAtMs = Number(recording?.startedAtMs || 0) || null;
   const stoppedAtMs = Number(recording?.stoppedAtMs || 0) || Date.now();
   if (!filepath && !outputPath) return null;
+  const source = [HR_SOURCE_IDS.PULSOID, HR_SOURCE_IDS.DIRECT_H10].includes(recording?.source)
+    ? recording.source
+    : [HR_SOURCE_IDS.PULSOID, HR_SOURCE_IDS.DIRECT_H10].includes(state.session.hrSource)
+      ? state.session.hrSource
+      : state.hr.selectedSource;
   return {
     id: randomUUID(),
     reason,
@@ -1117,8 +1162,9 @@ function normalizeRecordingSegment(recording = {}, reason = 'obs_record_stop') {
     stoppedAtMs,
     startedAt: startedAtMs ? new Date(startedAtMs).toISOString() : null,
     stoppedAt: new Date(stoppedAtMs).toISOString(),
-    source: state.hr.selectedSource,
-    sourceLabel: state.hr.selectedSourceLabel,
+    rawSensorPath: recording?.rawSensorPath || null,
+    source,
+    sourceLabel: HR_SOURCE_LABELS[source] || source,
   };
 }
 
@@ -1279,6 +1325,8 @@ function ensureLiveSession(recording, options = {}) {
     lastImportError: null,
     pendingHrSegments: [],
     pendingObsSegments: [],
+    hrSource: state.hr.selectedSource,
+    hrSourceLabel: state.hr.selectedSourceLabel,
     pausedAt: null,
     resumedAt: null,
     pauseIntervals: [],
@@ -1453,6 +1501,25 @@ async function importHeartRateSegments(sessionId, hrSegments = []) {
   };
 }
 
+function inferImportedHrSource(rows = [], segments = [], fallback = HR_SOURCE_IDS.DIRECT_H10) {
+  const counts = new Map();
+  for (const row of rows) {
+    const source = String(row?.hr_source || '').trim();
+    if (![HR_SOURCE_IDS.PULSOID, HR_SOURCE_IDS.DIRECT_H10].includes(source)) continue;
+    counts.set(source, (counts.get(source) || 0) + 1);
+  }
+  const rowSource = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (rowSource) return rowSource;
+  const segmentSource = segments
+    .map((segment) => segment?.source)
+    .find((source) => [HR_SOURCE_IDS.PULSOID, HR_SOURCE_IDS.DIRECT_H10].includes(source));
+  return segmentSource || (
+    [HR_SOURCE_IDS.PULSOID, HR_SOURCE_IDS.DIRECT_H10].includes(fallback)
+      ? fallback
+      : HR_SOURCE_IDS.DIRECT_H10
+  );
+}
+
 async function finalizeLiveSession(recording, options = {}) {
   const sessionId = state.session.activeSessionId;
   if (!sessionId) return null;
@@ -1482,6 +1549,12 @@ async function finalizeLiveSession(recording, options = {}) {
       state.session.startedAt,
       stoppedAt.getTime(),
     );
+    const importedHrSource = inferImportedHrSource(
+      hrImport.rawRows,
+      hrSegments,
+      currentLiveSessionEntity(sessionId)?.hr_source || state.session.hrSource,
+    );
+    const importedHrSourceLabel = HR_SOURCE_LABELS[importedHrSource] || importedHrSource;
     const update = {
       ...hrImport.metrics,
       capture_status: 'ready_for_review',
@@ -1503,8 +1576,8 @@ async function finalizeLiveSession(recording, options = {}) {
         obsOutputPath: recording?.obsOutputPath || recording?.outputPath || null,
       },
       capture_segments: hrSegments,
-      hr_source: state.hr.selectedSource,
-      hr_source_label: state.hr.selectedSourceLabel,
+      hr_source: importedHrSource,
+      hr_source_label: importedHrSourceLabel,
       hr_data_file: hrImport.upload?.file_url || undefined,
       emg_data_file: emgUpload?.file_url || undefined,
       emg_enabled: Boolean(emgUpload),
@@ -1513,11 +1586,12 @@ async function finalizeLiveSession(recording, options = {}) {
         imported_at: new Date().toISOString(),
         hr_rows: hrImport.rows,
         hr_original_rows: hrImport.originalRows,
-        hr_source: state.hr.selectedSource,
-        hr_source_label: state.hr.selectedSourceLabel,
+        hr_source: importedHrSource,
+        hr_source_label: importedHrSourceLabel,
         emg_attached: Boolean(emgUpload),
       },
       capture_digest: buildCaptureDigest({ hrRows: hrImport.rawRows, hrImport, emgUpload, recording }),
+      capture_active_hr_recording: null,
     };
     Object.keys(update).forEach((key) => update[key] === undefined && delete update[key]);
     const targetEntity = state.session.entity || (getEntity('BodyExploration', sessionId) ? 'BodyExploration' : 'Session');
