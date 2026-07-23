@@ -10,7 +10,7 @@ import { buildAudioChapterBundle } from "@/lib/audioChapters";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
 import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
-import { readWatermarkSettings } from "@/lib/watermarkSettings";
+import { loadSyncedWatermarkSettings } from "@/lib/watermarkSettings";
 import { videoPosterDataUrl } from "@/lib/videoPoster";
 import { BUILD_INFO } from "@/generated/buildInfo";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from "@/lib/sessionContext";
@@ -928,7 +928,7 @@ export function SessionReviewVideoExportButton({
         instructions: runtime.instructions,
         outputFormat: runtime.format,
         normalize: runtime.settings.normalizeExport,
-        watermark: readWatermarkSettings(),
+        watermark: await loadSyncedWatermarkSettings(),
         appVersion: BUILD_INFO?.version || "",
       };
 

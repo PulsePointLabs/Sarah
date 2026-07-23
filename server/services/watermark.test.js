@@ -1,14 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   buildSarahBrandFilterComplex,
   buildWatermarkFilter,
   DEFAULT_WATERMARK_SETTINGS,
   normalizeWatermarkSettings,
   safeExportFilename,
+  WATERMARK_ASSET_DIRS,
   watermarkPositionPlan,
   watermarkText,
 } from './watermark.js';
+
+test('packaged watermark assets resolve from the app root instead of the launch directory', () => {
+  assert.equal(WATERMARK_ASSET_DIRS.some((directory) => fs.existsSync(path.join(directory, 'brand', 'sarah-lab.jpg'))), true);
+  assert.equal(WATERMARK_ASSET_DIRS.some((directory) => fs.existsSync(path.join(directory, 'icons', 'sarah-192.png'))), true);
+});
 
 test('public export preset enables Clinical Climax watermark by default', () => {
   const settings = normalizeWatermarkSettings();
@@ -64,6 +72,7 @@ test('Sarah brand watermark graph places portrait, icon, and text in the top rig
     hasLogo: true,
   });
   assert.match(filter, /sarahPortrait/);
+  assert.match(filter, /geq=/);
   assert.match(filter, /sarahLogo/);
   assert.match(filter, /overlay=x=max\(.*w-/);
   assert.match(filter, /y=\(min\(main_w\\,main_h\)\*0\.0400\)/);

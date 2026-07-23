@@ -1,8 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { rootDir } from '../config.js';
 import { runProcess } from './ttsCore.js';
 
-const PUBLIC_DIR = path.resolve(process.cwd(), 'public');
+export const WATERMARK_ASSET_DIRS = [
+  path.join(rootDir, 'public'),
+  path.join(rootDir, 'dist'),
+];
 const WATERMARK_VIDEO_THREADS = Math.max(1, Math.min(16, Number(process.env.WATERMARK_VIDEO_THREADS || 4)));
 
 export const WATERMARK_PRESETS = {
@@ -156,21 +160,22 @@ function fixedPositionExpression(position, padExpression) {
   return { x: padExpression, y: padExpression };
 }
 
-function assetPath(relativePath) {
+function assetPaths(relativePath) {
   const cleaned = cleanAssetPath(relativePath);
-  if (!cleaned) return null;
-  return path.join(PUBLIC_DIR, cleaned);
+  if (!cleaned) return [];
+  return WATERMARK_ASSET_DIRS.map((directory) => path.join(directory, cleaned));
 }
 
 async function existingWatermarkAsset(relativePath) {
-  const resolved = assetPath(relativePath);
-  if (!resolved) return null;
-  try {
-    await fs.access(resolved);
-    return resolved;
-  } catch {
-    return null;
+  for (const resolved of assetPaths(relativePath)) {
+    try {
+      await fs.access(resolved);
+      return resolved;
+    } catch {
+      // Try the next source/package asset root.
+    }
   }
+  return null;
 }
 
 export function watermarkPositionPlan(settings = {}, durationSeconds = 0) {
@@ -281,7 +286,7 @@ export function buildSarahBrandFilterComplex(settings = {}, { hasPortrait = fals
   let current = 'base0';
   let inputIndex = 1;
   if (hasPortrait) {
-    steps.push(`[${inputIndex}:v]scale=${portraitSize}:${portraitSize}:force_original_aspect_ratio=increase,crop=${portraitSize}:${portraitSize},format=rgba,colorchannelmixer=aa=${alpha}[sarahPortrait]`);
+    steps.push(`[${inputIndex}:v]scale=${portraitSize}:${portraitSize}:force_original_aspect_ratio=increase,crop=${portraitSize}:${portraitSize},format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte((X-W/2)*(X-W/2)+(Y-H/2)*(Y-H/2)\\,(W/2)*(W/2))\\,255*${alpha}\\,0)'[sarahPortrait]`);
     steps.push(`[${current}][sarahPortrait]overlay=x=${portraitX}:y=${portraitY}:format=auto[withPortrait]`);
     current = 'withPortrait';
     inputIndex += 1;
@@ -344,6 +349,7 @@ export async function applyWatermarkToVideo(inputPath, outputPath, settings = {}
     ...(brandFilter ? ['-filter_complex', brandFilter, '-map', '[vout]'] : ['-map', '0:v:0']),
     '-map', '0:a?',
     ...(!brandFilter && filter ? ['-vf', filter] : []),
+    ...(brandFilter && Number(durationSeconds) > 0 ? ['-t', Number(durationSeconds).toFixed(3)] : []),
     '-c:v', 'libx264',
     '-threads', String(WATERMARK_VIDEO_THREADS),
     '-preset', process.env.WATERMARK_VIDEO_PRESET || 'medium',

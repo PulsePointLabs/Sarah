@@ -6,7 +6,7 @@ import { handOffVideoPlayToAndroid } from "@/lib/nativeMedia";
 import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
 import { buildStoredProfilerImageRef } from "@/lib/profilerReviewImagePayload";
 import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
-import { readWatermarkSettings } from "@/lib/watermarkSettings";
+import { loadSyncedWatermarkSettings } from "@/lib/watermarkSettings";
 import { videoPosterDataUrl } from "@/lib/videoPoster";
 import { Brain, Activity, AlertCircle, Zap, TrendingUp, Heart, Lightbulb, User, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, RefreshCw, History, Film, Image as ImageIcon, Upload, X, Download, Loader2, Video } from "lucide-react";
 import TTSReader from "../components/TTSReader";
@@ -7360,7 +7360,7 @@ ANNOTATED IMAGE OUTPUT RULES:
         instructions: runtime.instructions,
         outputFormat: runtime.format,
         normalize: runtime.settings.normalizeExport,
-        watermark: readWatermarkSettings(),
+        watermark: await loadSyncedWatermarkSettings(),
       }, {
         title,
         source: "Profiler",

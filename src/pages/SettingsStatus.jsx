@@ -47,7 +47,9 @@ import {
 } from "@/lib/sarahBrand";
 import {
   DEFAULT_WATERMARK_SETTINGS,
+  loadSyncedWatermarkSettings,
   readWatermarkSettings,
+  saveSyncedWatermarkSettings,
   saveWatermarkSettings,
   WATERMARK_PRESETS,
 } from "@/lib/watermarkSettings";
@@ -626,6 +628,16 @@ export default function SettingsStatus() {
 
   useEffect(() => {
     let active = true;
+    loadSyncedWatermarkSettings().then((saved) => {
+      if (active) setWatermark(saved);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
     loadSyncedLiveCueCustomization().then((saved) => {
       if (active && !liveCueCustomizationDirty) setLiveCueCustomization(saved);
     });
@@ -1083,7 +1095,11 @@ export default function SettingsStatus() {
   };
 
   const updateWatermark = (patch) => {
-    setWatermark((previous) => saveWatermarkSettings({ ...previous, ...patch }));
+    setWatermark((previous) => {
+      const next = saveWatermarkSettings({ ...previous, ...patch, updatedAt: new Date().toISOString() });
+      saveSyncedWatermarkSettings(next).catch(() => {});
+      return next;
+    });
   };
 
   const applyWatermarkPreset = (preset) => {
@@ -1096,7 +1112,9 @@ export default function SettingsStatus() {
   };
 
   const resetWatermark = () => {
-    setWatermark(saveWatermarkSettings(DEFAULT_WATERMARK_SETTINGS));
+    const next = saveWatermarkSettings({ ...DEFAULT_WATERMARK_SETTINGS, updatedAt: new Date().toISOString() });
+    setWatermark(next);
+    saveSyncedWatermarkSettings(next).catch(() => {});
   };
 
   const updateSarahPersonality = (patch) => {

@@ -1,5 +1,8 @@
+import { base44 } from "@/api/base44Client";
+
 export const WATERMARK_SETTINGS_KEY = "sarah-watermark-settings-v1";
 export const WATERMARK_SETTINGS_VERSION = 2;
+const REMOTE_WATERMARK_KEY = "watermark_settings";
 
 export const WATERMARK_PRESETS = [
   {
@@ -93,6 +96,7 @@ export function normalizeWatermarkSettings(input = {}) {
     backgroundPlateEnabled: Boolean(input?.backgroundPlateEnabled ?? DEFAULT_WATERMARK_SETTINGS.backgroundPlateEnabled),
     subtleCenterEnabled: Boolean(input?.subtleCenterEnabled ?? DEFAULT_WATERMARK_SETTINGS.subtleCenterEnabled),
     metadataScrubEnabled: Boolean(input?.metadataScrubEnabled ?? presetDefaults.metadataScrubEnabled),
+    updatedAt: input?.updatedAt || null,
   };
 }
 
@@ -110,4 +114,52 @@ export function saveWatermarkSettings(settings, storage = globalThis?.localStora
   if (storage) storage.setItem(WATERMARK_SETTINGS_KEY, JSON.stringify(normalized));
   globalThis?.window?.dispatchEvent?.(new CustomEvent("sarah:watermark-settings", { detail: normalized }));
   return normalized;
+}
+
+function watermarkTimestamp(value = {}) {
+  const timestamp = new Date(value.updatedAt || value.updated_date || 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function withUpdatedAt(settings = {}) {
+  return {
+    ...normalizeWatermarkSettings(settings),
+    updatedAt: settings.updatedAt || new Date().toISOString(),
+  };
+}
+
+export async function loadSyncedWatermarkSettings() {
+  const local = readWatermarkSettings();
+  try {
+    const rows = await base44.entities.AppSetting.filter({ key: REMOTE_WATERMARK_KEY }, "-updated_date", 1);
+    const remote = rows?.[0]?.value;
+    if (!remote) {
+      const seeded = withUpdatedAt(local);
+      await base44.entities.AppSetting.create({ key: REMOTE_WATERMARK_KEY, value: seeded });
+      return saveWatermarkSettings(seeded);
+    }
+    if (watermarkTimestamp(local) > watermarkTimestamp(remote)) {
+      await base44.entities.AppSetting.update(rows[0].id, { key: REMOTE_WATERMARK_KEY, value: local });
+      return local;
+    }
+    if (watermarkTimestamp(remote) > watermarkTimestamp(local)) {
+      return saveWatermarkSettings(remote);
+    }
+    return local;
+  } catch {
+    return local;
+  }
+}
+
+export async function saveSyncedWatermarkSettings(settings = {}) {
+  const saved = saveWatermarkSettings(withUpdatedAt(settings));
+  try {
+    const rows = await base44.entities.AppSetting.filter({ key: REMOTE_WATERMARK_KEY }, "-updated_date", 1);
+    const payload = { key: REMOTE_WATERMARK_KEY, value: saved };
+    if (rows?.[0]?.id) await base44.entities.AppSetting.update(rows[0].id, payload);
+    else await base44.entities.AppSetting.create(payload);
+  } catch {
+    // The local profile remains usable until the desktop backend is reachable.
+  }
+  return saved;
 }
