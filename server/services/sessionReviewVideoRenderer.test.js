@@ -3,6 +3,7 @@ import test from 'node:test';
 import { buildReviewVideoPlan } from './sessionReviewVideoPlanner.js';
 import {
   buildActiveStimulationFallbackEvent,
+  buildParagraphTimelineEvent,
   buildReusedNarrationSegmentPlan,
   inferReviewVisualFocus,
   losslessConcatAvArgs,
@@ -184,6 +185,41 @@ test('matching saved narration is split locally using persisted export timing', 
   assert.equal(plan[0].startSeconds, 0);
   assert.equal(plan[0].timingSource, 'saved_export_chunk_durations');
   assert.ok(Math.abs(plan.reduce((sum, item) => sum + item.durationSeconds, 0) - 4) < 0.001);
+});
+
+test('untimed narration continues from the current paragraph timeline', () => {
+  const event = buildParagraphTimelineEvent({
+    segment: {
+      paragraphIndex: 4,
+      text: 'Heart rate remains elevated as the same procedural interval continues.',
+    },
+    cursorSeconds: 392.4,
+    nextNarratedSeconds: 445,
+    leadInDurationSeconds: 20,
+  });
+
+  assert.ok(event);
+  assert.equal(event.session_time_s, 392.4);
+  assert.equal(event.source, 'paragraph_timeline_continuity');
+  assert.equal(event.lock_timeline, true);
+  assert.match(event.reason, /instead of jumping/i);
+});
+
+test('untimed paragraph introduction leads into its next spoken timestamp', () => {
+  const event = buildParagraphTimelineEvent({
+    segment: {
+      paragraphIndex: 1,
+      text: 'Pre-procedure setup and baseline are reviewed first.',
+    },
+    nextNarratedSeconds: 75,
+    leadInDurationSeconds: 24,
+  });
+
+  assert.ok(event);
+  assert.equal(event.session_time_s, 51);
+  assert.equal(event.source, 'paragraph_timeline_lead_in');
+  assert.equal(event.lock_timeline, true);
+  assert.match(event.reason, /1:15/);
 });
 
 test('legacy saved MP3 with exact source identity matches despite title formatting', () => {

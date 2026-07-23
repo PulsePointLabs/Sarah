@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.136",
-  "commit": "7ab3257",
-  "commitMessage": "Fix mobile Video Sync playback and fullscreen",
-  "builtAt": "2026-07-23T11:24:05.952Z"
+  "version": "0.1.137",
+  "commit": "6dcbb89",
+  "commitMessage": "Add resizable fullscreen telemetry dashboard",
+  "builtAt": "2026-07-23T15:08:55.081Z"
 };

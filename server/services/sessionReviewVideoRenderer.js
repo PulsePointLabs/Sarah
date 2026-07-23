@@ -8,7 +8,7 @@ import { q, runProcess, slugifyFilePart } from './ttsCore.js';
 import { buildLoggedEventAnchors, buildReviewVideoPlan, extractCitedTimesFromText } from './sessionReviewVideoPlanner.js';
 import { normalizeWatermarkSettings, replaceVideoWithWatermarkedExport } from './watermark.js';
 
-const REVIEW_RENDER_VERSION = 'session_review_video_v16_semantic_bounded_motion';
+const REVIEW_RENDER_VERSION = 'session_review_video_v17_paragraph_timeline_lock';
 const REVIEW_VIDEO_WIDTH = Number(process.env.REVIEW_VIDEO_WIDTH || 1920);
 const REVIEW_VIDEO_HEIGHT = Number(process.env.REVIEW_VIDEO_HEIGHT || 1080);
 const REVIEW_VIDEO_PRESET = process.env.REVIEW_VIDEO_PRESET || 'slow';
@@ -382,6 +382,75 @@ function timestampRequirementForSegment(segment = {}) {
     times,
     primary: times[0] || null,
   };
+}
+
+export function buildParagraphTimelineEvent({
+  segment = {},
+  cursorSeconds = null,
+  nextNarratedSeconds = null,
+  leadInDurationSeconds = 0,
+} = {}) {
+  const cursor = Number(cursorSeconds);
+  const nextNarrated = Number(nextNarratedSeconds);
+  const leadInDuration = Math.max(0, Number(leadInDurationSeconds || 0));
+  const hasCursor = cursorSeconds !== null && cursorSeconds !== undefined && cursorSeconds !== ''
+    && Number.isFinite(cursor);
+  const hasNextNarrated = nextNarratedSeconds !== null && nextNarratedSeconds !== undefined && nextNarratedSeconds !== ''
+    && Number.isFinite(nextNarrated);
+  if (!hasCursor && !hasNextNarrated) return null;
+
+  const sessionSeconds = hasCursor
+    ? cursor
+    : Math.max(0, nextNarrated - leadInDuration);
+  const paragraphIndex = Number(segment?.paragraphIndex);
+  const source = hasCursor
+    ? 'paragraph_timeline_continuity'
+    : 'paragraph_timeline_lead_in';
+  return {
+    id: `${source}-${Number.isFinite(paragraphIndex) ? paragraphIndex : 'unknown'}-${Math.round(sessionSeconds * 10)}`,
+    paragraphIndex: Number.isFinite(paragraphIndex) ? paragraphIndex : null,
+    session_time_s: sessionSeconds,
+    label: hasCursor ? 'Continuous paragraph timeline' : `Lead-in to ${formatTimestamp(nextNarrated)}`,
+    reason: hasCursor
+      ? 'Untimed narration remains on the current paragraph timeline instead of jumping to an unrelated session event.'
+      : `Untimed narration leads continuously into the next spoken timestamp at ${formatTimestamp(nextNarrated)}.`,
+    startSeconds: sessionSeconds,
+    source,
+    lock_timeline: true,
+    paragraph_timeline: true,
+  };
+}
+
+function nextNarratedTimestampInParagraph(narrationSegments = [], index = 0) {
+  const segment = narrationSegments[index];
+  const paragraphIndex = Number(segment?.paragraphIndex);
+  for (let cursor = index + 1; cursor < narrationSegments.length; cursor += 1) {
+    const candidate = narrationSegments[cursor];
+    if (Number(candidate?.paragraphIndex) !== paragraphIndex) break;
+    const requirement = timestampRequirementForSegment(candidate);
+    if (requirement.primary) {
+      return {
+        ...requirement.primary,
+        segmentIndex: cursor,
+      };
+    }
+  }
+  return null;
+}
+
+function paragraphLeadInDurationSeconds({
+  narrationSegments = [],
+  reusedSegmentPlan = [],
+  index = 0,
+  nextSegmentIndex = null,
+} = {}) {
+  const end = Number(nextSegmentIndex);
+  if (!Number.isFinite(end) || end <= index) return 0;
+  return narrationSegments
+    .slice(index, end)
+    .reduce((sum, _segment, offset) => (
+      sum + Math.max(0, Number(reusedSegmentPlan[index + offset]?.durationSeconds || 0))
+    ), 0);
 }
 
 function nearestNarratedTime(segment = {}, selectedSessionSeconds = null) {
@@ -2175,6 +2244,7 @@ async function renderSegmentedSourceReviewVideo({
   let ttsMeta = null;
   let phaseAnchorEvent = null;
   let phaseAnchorParagraph = null;
+  let paragraphTimelineCursor = null;
   const previewFrames = [];
   const publishPreview = async (preview) => {
     previewFrames.push(preview);
@@ -2227,12 +2297,33 @@ async function renderSegmentedSourceReviewVideo({
     if (phaseAnchorParagraph !== Number(segment.paragraphIndex)) {
       phaseAnchorEvent = null;
       phaseAnchorParagraph = Number(segment.paragraphIndex);
+      paragraphTimelineCursor = null;
     }
-    const matchedEvent = chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds, session });
-    const canonicalPhaseAnchor = canonicalPhaseAnchorForNarration({
-      session,
-      narrationText: paragraphs[Number(segment.paragraphIndex)] || segment.text,
-    });
+    const nextNarrated = timestampRequirement.required
+      ? null
+      : nextNarratedTimestampInParagraph(narrationSegments, index);
+    const paragraphTimelineEvent = timestampRequirement.required
+      ? null
+      : buildParagraphTimelineEvent({
+        segment,
+        cursorSeconds: paragraphTimelineCursor,
+        nextNarratedSeconds: nextNarrated?.seconds,
+        leadInDurationSeconds: paragraphLeadInDurationSeconds({
+          narrationSegments,
+          reusedSegmentPlan,
+          index,
+          nextSegmentIndex: nextNarrated?.segmentIndex,
+        }),
+      });
+    const canonicalPhaseAnchor = !paragraphTimelineEvent && !timestampRequirement.required
+      ? canonicalPhaseAnchorForNarration({
+        session,
+        narrationText: paragraphs[Number(segment.paragraphIndex)] || segment.text,
+      })
+      : null;
+    const matchedEvent = timestampRequirement.required || (!paragraphTimelineEvent && !canonicalPhaseAnchor)
+      ? chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds, session })
+      : null;
     const exactNarratedEvent = timestampRequirement.required && timestampRequirement.primary
       ? {
         ...(matchedEvent || {}),
@@ -2245,7 +2336,7 @@ async function renderSegmentedSourceReviewVideo({
         spoken_char_index: Number(timestampRequirement.primary.charIndex || 0),
       }
       : null;
-    const directEvent = exactNarratedEvent || canonicalPhaseAnchor || matchedEvent;
+    const directEvent = exactNarratedEvent || paragraphTimelineEvent || canonicalPhaseAnchor || matchedEvent;
     const phaseResolution = resolveReviewSegmentPhaseCarryover({
       segment,
       directEvent,
@@ -2317,6 +2408,7 @@ async function renderSegmentedSourceReviewVideo({
           telemetryData,
         });
         syncWindowToRenderedClip(window, videoClip);
+        paragraphTimelineCursor = sessionTimeForSource(window.end, primaryVideo);
         const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
         await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
         avSegments.push(avPath);
@@ -2406,6 +2498,7 @@ async function renderSegmentedSourceReviewVideo({
           telemetryData,
         });
         syncWindowToRenderedClip(window, videoClip);
+        paragraphTimelineCursor = sessionTimeForSource(window.end, primaryVideo);
         videoSegments.push(videoClip.path);
         const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
         await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
@@ -2466,6 +2559,7 @@ async function renderSegmentedSourceReviewVideo({
         telemetryData,
       });
       syncWindowToRenderedClip(window, videoClip);
+      paragraphTimelineCursor = sessionTimeForSource(window.end, primaryVideo);
       videoSegments.push(videoClip.path);
       const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
       await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
@@ -2537,6 +2631,7 @@ async function renderSegmentedSourceReviewVideo({
         telemetryData,
       });
       const { videoClip, window } = sourceContext;
+      paragraphTimelineCursor = sessionTimeForSource(window.end, primaryVideo);
       videoSegments.push(videoClip.path);
       const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
       await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
@@ -2576,11 +2671,12 @@ async function renderSegmentedSourceReviewVideo({
       usedSourceWindows,
       activeCandidateStarts,
       alternateVideo: feetVideo,
-      lockTimestamp: timestampRequirement.required || Boolean(window.directSpokenTime),
+      lockTimestamp: timestampRequirement.required || Boolean(window.directSpokenTime) || Boolean(event?.lock_timeline),
       maxMotionDriftSeconds: eventCarriedFromPhase ? 8 : 12,
       telemetryData,
     });
     syncWindowToRenderedClip(window, videoClip);
+    paragraphTimelineCursor = sessionTimeForSource(window.end, primaryVideo);
     videoSegments.push(videoClip.path);
     const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
     await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
@@ -2606,6 +2702,8 @@ async function renderSegmentedSourceReviewVideo({
         ? 'continuous_source_context'
         : eventCarriedFromPhase
         ? 'paragraph_phase_marker'
+        : event?.paragraph_timeline
+        ? event.source
         : event?.source === 'spoken_segment_time'
         ? 'explicit_spoken_timestamp'
         : 'matched_event',
@@ -2629,7 +2727,11 @@ async function renderSegmentedSourceReviewVideo({
       direct_spoken_time: Boolean(window.directSpokenTime),
       spoken_anchor_offset_seconds: Math.round(Number(window.spokenAnchorOffset || 0) * 10) / 10,
       spoken_time_lead_seconds: Math.round(Number(window.spokenTimeLeadSeconds || 0) * 10) / 10,
-      source_time_strategy: window.directSpokenTime ? 'spoken_time_phrase_aligned_to_source' : 'session_offset_or_event',
+      source_time_strategy: window.directSpokenTime
+        ? 'spoken_time_phrase_aligned_to_source'
+        : event?.paragraph_timeline
+        ? event.source
+        : 'session_offset_or_event',
       matched_event: Boolean(event),
       procedural_broll: false,
       procedural_broll_score: null,
