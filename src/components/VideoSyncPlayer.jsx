@@ -541,17 +541,22 @@ export default function VideoSyncPlayer({
   const autoTagRequestIdRef = useRef(0);
   const latestNewNoteRef = useRef("");
 
-  // STT — Whisper via MediaRecorder, single-blob transcription on stop
+  // Speech-to-text uses the configured provider through the existing local API.
   const [isListening, setIsListening] = useState(false);
   const [interimText, setInterimText] = useState("");
+  const [quickListening, setQuickListening] = useState(false);
+  const [quickTranscribing, setQuickTranscribing] = useState(false);
+  const [quickNotice, setQuickNotice] = useState(null);
   const mediaRecorderRef = useRef(null);
+  const mediaStreamRef = useRef(null);
   const audioChunksRef = useRef([]);
-  const sttSupported = !!navigator.mediaDevices?.getUserMedia;
+  const quickDictationRef = useRef({ timeS: 0, resume: false });
+  const quickNoticeTimerRef = useRef(null);
+  const eventsRef = useRef(events);
+  const sttSupported = !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined";
   const newNoteRef = useRef(null);
 
-  // Rich Whisper prompt written as a natural sentence so the decoder learns the vocabulary
-  // and your speech pattern (deliberate pauses, short clauses, anatomical terms).
-  const WHISPER_PROMPT = isExploration
+  const STT_PROMPT = isExploration
     ? "Body exploration note. Foley catheter insertion. Urethral sounding observation. " +
       "Device movement at the meatus. Balloon awareness. Pressure and comfort noted. " +
       "Instrumentation paused for repositioning. Gentle withdrawal. Tissue appearance observed. " +
@@ -566,6 +571,10 @@ export default function VideoSyncPlayer({
   useEffect(() => {
     latestNewNoteRef.current = newNote.trim();
   }, [newNote]);
+
+  useEffect(() => {
+    eventsRef.current = events;
+  }, [events]);
 
   const getEventClassification = useCallback(async (note) => {
     const cleanNote = String(note || "").trim();
@@ -615,11 +624,150 @@ export default function VideoSyncPlayer({
     return promise;
   }, [autoTagSuggestion, autoTagSuggestionNote, isExploration, newCatsTouched]);
 
+  const saveEvents = async (updated) => {
+    const sorted = [...updated].sort((a, b) => a.time_s - b.time_s);
+    eventsRef.current = sorted;
+    setEvents(sorted);
+    const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
+    await entity.update(session.id, { event_timeline: sorted });
+    onEventsChange?.(sorted);
+  };
+
+  const showQuickNotice = useCallback((message, tone = "success") => {
+    if (quickNoticeTimerRef.current) clearTimeout(quickNoticeTimerRef.current);
+    setQuickNotice({ message, tone });
+    quickNoticeTimerRef.current = setTimeout(() => {
+      setQuickNotice(null);
+      quickNoticeTimerRef.current = null;
+    }, 3200);
+  }, []);
+
+  const resumeAfterQuickDictation = useCallback(async () => {
+    const shouldResume = quickDictationRef.current.resume;
+    quickDictationRef.current.resume = false;
+    if (!shouldResume || !videoRef.current) return;
+    try {
+      await videoRef.current.play();
+    } catch (error) {
+      console.warn("Video could not resume after voice event:", error);
+    }
+  }, []);
+
+  const saveQuickVoiceEvent = useCallback(async (rawText) => {
+    const cleanNote = String(rawText || "").trim();
+    if (!cleanNote) {
+      showQuickNotice("No speech detected. Nothing was saved.", "error");
+      await resumeAfterQuickDictation();
+      return;
+    }
+
+    const classification = heuristicTagEventNote(cleanNote, isExploration);
+    const categories = classification.categories.length
+      ? classification.categories
+      : [lastUsedCat || defaultCategory];
+    const eventTime = Math.max(0, Number(quickDictationRef.current.timeS) || 0);
+    const event = {
+      time_s: eventTime,
+      note: cleanNote,
+      category: categories,
+      source: "voice",
+      annotation_tags: classification.annotation_tags,
+      ai_annotation: {
+        source: "local-fallback",
+        rationale: classification.rationale,
+      },
+    };
+
+    try {
+      await saveEvents([...eventsRef.current, event]);
+      setLastUsedCat(categories[0] || defaultCategory);
+      pulseHaptic([20, 35, 20]);
+      const preview = cleanNote.length > 110 ? `${cleanNote.slice(0, 107)}...` : cleanNote;
+      showQuickNotice(`Saved at ${fmtMmSs(eventTime)}: "${preview}"`);
+    } catch (error) {
+      console.error("Failed to save quick voice event:", error);
+      showQuickNotice("Voice note was transcribed but could not be saved.", "error");
+    } finally {
+      await resumeAfterQuickDictation();
+    }
+  }, [defaultCategory, isExploration, lastUsedCat, pulseHaptic, resumeAfterQuickDictation, showQuickNotice]);
+
+  const transcribeAudio = useCallback(async (blob, mimeType) => {
+    const ab = await blob.arrayBuffer();
+    const bytes = new Uint8Array(ab);
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
+    const res = await base44.functions.invoke("whisperSTT", {
+      audio_base64: btoa(bin),
+      mime_type: mimeType,
+      prompt: STT_PROMPT,
+      provider: readSttProviderPreference(),
+    });
+    return cleanWhisperTranscript(res.data?.text);
+  }, [STT_PROMPT]);
+
   const stopListening = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
     }
   }, []);
+
+  const startSpeechRecording = useCallback(async (mode) => {
+    if (mediaRecorderRef.current?.state === "recording") return;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaStreamRef.current = stream;
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/ogg";
+    const recorder = new MediaRecorder(stream, { mimeType });
+    audioChunksRef.current = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) audioChunksRef.current.push(event.data);
+    };
+    recorder.onstop = async () => {
+      stream.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+      mediaRecorderRef.current = null;
+      const blob = new Blob(audioChunksRef.current, { type: mimeType });
+      audioChunksRef.current = [];
+
+      if (mode === "quick") {
+        setQuickListening(false);
+        setQuickTranscribing(true);
+        showQuickNotice("Transcribing voice event...", "working");
+      } else {
+        setIsListening(false);
+        setInterimText("Transcribing...");
+      }
+
+      try {
+        const text = await transcribeAudio(blob, mimeType);
+        if (mode === "quick") {
+          await saveQuickVoiceEvent(text);
+        } else if (text) {
+          setNewNote((previous) => {
+            const base = previous.trim();
+            return base ? `${base} ${text}` : text;
+          });
+        }
+      } catch (error) {
+        console.error("Speech transcription failed:", error);
+        if (mode === "quick") {
+          showQuickNotice("Speech-to-text failed. Nothing was saved.", "error");
+          await resumeAfterQuickDictation();
+        } else {
+          setAutoTagError("Speech-to-text failed. Please try again.");
+        }
+      } finally {
+        if (mode === "quick") setQuickTranscribing(false);
+        else setInterimText("");
+      }
+    };
+    recorder.start();
+    mediaRecorderRef.current = recorder;
+    if (mode === "quick") setQuickListening(true);
+    else setIsListening(true);
+  }, [resumeAfterQuickDictation, saveQuickVoiceEvent, showQuickNotice, transcribeAudio]);
 
   const toggleListening = useCallback(async () => {
     if (isListening) {
@@ -627,56 +775,42 @@ export default function VideoSyncPlayer({
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/ogg";
-      const recorder = new MediaRecorder(stream, { mimeType });
-      audioChunksRef.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        setIsListening(false);
-        setInterimText("Transcribing…");
-        const blob = new Blob(audioChunksRef.current, { type: mimeType });
-        audioChunksRef.current = [];
-        const ab = await blob.arrayBuffer();
-        const bytes = new Uint8Array(ab);
-        let bin = "";
-        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-        const base64Audio = btoa(bin);
-        const res = await base44.functions.invoke("whisperSTT", {
-          audio_base64: base64Audio,
-          mime_type: mimeType,
-          prompt: WHISPER_PROMPT,
-          provider: readSttProviderPreference(),
-        });
-        const text = cleanWhisperTranscript(res.data?.text);
-        if (text) {
-          setNewNote((prev) => {
-            const base = prev.trim();
-            return base ? base + " " + text : text;
-          });
-        }
-        setInterimText("");
-      };
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      setIsListening(true);
-    } catch (err) {
-      console.error("Mic access error:", err);
+      await startSpeechRecording("dialog");
+    } catch (error) {
+      console.error("Mic access error:", error);
+      setAutoTagError("Microphone access failed. Check the app permission and try again.");
     }
-  }, [isListening, stopListening]);
+  }, [isListening, startSpeechRecording, stopListening]);
 
-  const saveEvents = async (updated) => {
-    const sorted = [...updated].sort((a, b) => a.time_s - b.time_s);
-    setEvents(sorted);
-    const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
-    await entity.update(session.id, { event_timeline: sorted });
-    onEventsChange?.(sorted);
-  };
+  const toggleQuickDictation = useCallback(async () => {
+    if (quickListening) {
+      stopListening();
+      return;
+    }
+    if (quickTranscribing || isListening) return;
+
+    const video = videoRef.current;
+    quickDictationRef.current = {
+      timeS: Math.max(0, Number(playheadS) || 0),
+      resume: !!video && !video.paused,
+    };
+    video?.pause();
+    pulseHaptic(15);
+    try {
+      await startSpeechRecording("quick");
+      showQuickNotice(`Recording event at ${fmtMmSs(quickDictationRef.current.timeS)}. Tap mic again to save.`, "recording");
+    } catch (error) {
+      console.error("Mic access error:", error);
+      showQuickNotice("Microphone access failed. Check the app permission.", "error");
+      await resumeAfterQuickDictation();
+    }
+  }, [isListening, playheadS, pulseHaptic, quickListening, quickTranscribing, resumeAfterQuickDictation, showQuickNotice, startSpeechRecording, stopListening]);
+
+  useEffect(() => () => {
+    if (quickNoticeTimerRef.current) clearTimeout(quickNoticeTimerRef.current);
+    if (mediaRecorderRef.current?.state !== "inactive") mediaRecorderRef.current?.stop();
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+  }, []);
 
   const persistVideoOffset = async () => {
     const activePath = videoFeeds[activeFeedKey]?.localPath;
@@ -1460,6 +1594,12 @@ export default function VideoSyncPlayer({
     ? loadedFeeds
     : loadedFeeds.filter((feed) => feed.key === activeFeedKey);
   const fullscreenControlsShown = !fullscreenActive || !isPlaying || fullscreenControlsVisible;
+  const quickDictationBusy = quickListening || quickTranscribing;
+  const quickDictationLabel = quickListening
+    ? "Stop recording and save event"
+    : quickTranscribing
+      ? "Transcribing voice event"
+      : `Dictate event at ${fmtMmSs(playheadS)}`;
 
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -1854,6 +1994,28 @@ export default function VideoSyncPlayer({
                     if (fullscreenActive) showFullscreenControls();
                   }}
                 >
+              {quickNotice && (
+                <div
+                  className={`pointer-events-none absolute left-1/2 top-3 z-[70] max-w-[calc(100%-1.5rem)] -translate-x-1/2 rounded-xl border px-4 py-2.5 text-center text-xs font-semibold text-white shadow-2xl backdrop-blur-md ${
+                    quickNotice.tone === "error"
+                      ? "border-red-300/45 bg-red-950/90"
+                      : quickNotice.tone === "recording"
+                        ? "border-rose-300/45 bg-rose-950/90"
+                        : quickNotice.tone === "working"
+                          ? "border-sky-300/45 bg-slate-950/90"
+                          : "border-emerald-300/45 bg-emerald-950/90"
+                  }`}
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span className="inline-flex items-center gap-2">
+                    {(quickNotice.tone === "recording" || quickNotice.tone === "working") && (
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${quickNotice.tone === "recording" ? "animate-pulse bg-rose-300" : "animate-pulse bg-sky-300"}`} />
+                    )}
+                    {quickNotice.message}
+                  </span>
+                </div>
+              )}
               <div
                 className={`video-sync-media relative min-h-0 min-w-0 flex-1 bg-black ${videoLayout === "multi" && displayedFeeds.length > 1 ? "grid gap-px bg-border md:grid-cols-2" : ""}`}
                 style={fullscreenActive ? undefined : { height: `${playerHeight}vh` }}
@@ -1973,13 +2135,33 @@ export default function VideoSyncPlayer({
                 </div>
               )}
               {fullscreenActive && (
-                <div className="pointer-events-none absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-40 flex justify-end px-3 min-[951px]:hidden">
+                <div className="pointer-events-none absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-40 flex justify-end gap-2 px-3 min-[951px]:hidden">
+                  {sttSupported && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        showFullscreenControls(2200);
+                        toggleQuickDictation();
+                      }}
+                      disabled={quickTranscribing || isListening}
+                      className={`pointer-events-auto inline-flex h-12 w-12 items-center justify-center rounded-full border text-white shadow-xl shadow-black/25 transition-transform active:scale-95 disabled:cursor-wait disabled:opacity-70 ${
+                        quickListening
+                          ? "animate-pulse border-rose-300/60 bg-rose-600"
+                          : "border-white/25 bg-black/75 backdrop-blur-md"
+                      }`}
+                      aria-label={quickDictationLabel}
+                      title={quickDictationLabel}
+                    >
+                      {quickListening ? <MicOff className="h-5 w-5" /> : <Mic className={`h-5 w-5 ${quickTranscribing ? "animate-pulse" : ""}`} />}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
                       showFullscreenControls(2200);
                       startAddAtPlayhead();
                     }}
+                    disabled={quickDictationBusy || isListening}
                     className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground shadow-xl shadow-black/25 transition-transform hover:scale-[1.02] active:scale-[0.98]"
                     aria-label={`Pause and add event at ${fmtMmSs(playheadS)}`}
                   >
@@ -2088,10 +2270,27 @@ export default function VideoSyncPlayer({
                         </button>
                       ))}
                     </div>
+                    {sttSupported && (
+                      <button
+                        type="button"
+                        onClick={toggleQuickDictation}
+                        disabled={quickTranscribing || isListening}
+                        className={`ml-auto inline-flex items-center justify-center rounded-lg border p-2 transition-colors disabled:cursor-wait disabled:opacity-70 max-[950px]:p-1.5 ${
+                          quickListening
+                            ? "animate-pulse border-rose-300/60 bg-rose-600 text-white"
+                            : "border-white/20 bg-white/10 text-white hover:bg-white/20"
+                        }`}
+                        aria-label={quickDictationLabel}
+                        title={quickDictationLabel}
+                      >
+                        {quickListening ? <MicOff className="h-4 w-4" /> : <Mic className={`h-4 w-4 ${quickTranscribing ? "animate-pulse" : ""}`} />}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={startAddAtPlayhead}
-                      className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-primary/35 bg-primary/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/25 max-[950px]:px-2 max-[950px]:py-1.5"
+                      disabled={quickDictationBusy || isListening}
+                      className={`${sttSupported ? "" : "ml-auto"} inline-flex items-center gap-1.5 rounded-lg border border-primary/35 bg-primary/15 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/25 disabled:cursor-not-allowed disabled:opacity-50 max-[950px]:px-2 max-[950px]:py-1.5`}
                     >
                       <Plus className="h-3.5 w-3.5" />
                       <span className="max-[950px]:hidden">Add Event at </span>{fmtMmSs(playheadS)}
@@ -2298,12 +2497,31 @@ export default function VideoSyncPlayer({
               ))}
             </div>
 
-            <button
-              onClick={startAddAtPlayhead}
-              className="w-full flex items-center justify-center gap-2 h-10 rounded-xl bg-primary/10 text-primary font-semibold text-sm hover:bg-primary/20 transition-colors border border-primary/20"
-            >
-              <Plus className="w-4 h-4" /> Add Event at {fmtMmSs(playheadS)} <span className="text-[9px] font-normal opacity-60 ml-1">(or press S)</span>
-            </button>
+            <div className="flex items-stretch gap-2">
+              <button
+                onClick={startAddAtPlayhead}
+                disabled={quickDictationBusy || isListening}
+                className="flex h-10 flex-1 items-center justify-center gap-2 rounded-xl border border-primary/20 bg-primary/10 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Plus className="w-4 h-4" /> Add Event at {fmtMmSs(playheadS)} <span className="text-[9px] font-normal opacity-60 ml-1">(or press S)</span>
+              </button>
+              {sttSupported && (
+                <button
+                  type="button"
+                  onClick={toggleQuickDictation}
+                  disabled={quickTranscribing || isListening}
+                  className={`flex h-10 w-11 shrink-0 items-center justify-center rounded-xl border transition-colors disabled:cursor-wait disabled:opacity-70 ${
+                    quickListening
+                      ? "animate-pulse border-rose-400 bg-rose-500 text-white"
+                      : "border-primary/25 bg-primary text-primary-foreground hover:bg-primary/90"
+                  }`}
+                  aria-label={quickDictationLabel}
+                  title={quickDictationLabel}
+                >
+                  {quickListening ? <MicOff className="h-4 w-4" /> : <Mic className={`h-4 w-4 ${quickTranscribing ? "animate-pulse" : ""}`} />}
+                </button>
+              )}
+            </div>
 
             {/* Video offset alignment */}
             <div className="flex items-center gap-2 bg-muted/50 rounded-lg px-3 py-2">
