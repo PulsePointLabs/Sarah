@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.135",
-  "commit": "a069c83",
-  "commitMessage": "Clean HR and HRV timeline rendering",
-  "builtAt": "2026-07-23T10:41:45.036Z"
+  "version": "0.1.136",
+  "commit": "7ab3257",
+  "commitMessage": "Fix mobile Video Sync playback and fullscreen",
+  "builtAt": "2026-07-23T11:24:05.952Z"
 };
