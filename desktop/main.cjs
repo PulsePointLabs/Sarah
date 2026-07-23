@@ -61,10 +61,27 @@ function ensureDir(dir) {
   return dir;
 }
 
+const MAX_DESKTOP_LOG_BYTES = 10 * 1024 * 1024;
+let lastRendererConsoleMessage = '';
+let lastRendererConsoleAt = 0;
+
+function rotateDesktopLog(logPath) {
+  try {
+    if (!fs.existsSync(logPath) || fs.statSync(logPath).size < MAX_DESKTOP_LOG_BYTES) return;
+    const rotatedPath = `${logPath}.1`;
+    if (fs.existsSync(rotatedPath)) fs.rmSync(rotatedPath, { force: true });
+    fs.renameSync(logPath, rotatedPath);
+  } catch {
+    // Rotation is best-effort; logging must never block app startup.
+  }
+}
+
 function desktopLog(message) {
   try {
     const logDir = ensureDir(path.join(app.getPath('userData'), 'logs'));
-    fs.appendFileSync(path.join(logDir, 'desktop.log'), `${new Date().toISOString()} ${message}\n`);
+    const logPath = path.join(logDir, 'desktop.log');
+    rotateDesktopLog(logPath);
+    fs.appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
   } catch {
     // Logging should never block app startup or Bluetooth pairing.
   }
@@ -481,6 +498,11 @@ function createWindow() {
   });
 
   mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    const now = Date.now();
+    const signature = `${level}|${sourceId || ''}|${line || 0}|${message}`;
+    if (signature === lastRendererConsoleMessage && now - lastRendererConsoleAt < 5000) return;
+    lastRendererConsoleMessage = signature;
+    lastRendererConsoleAt = now;
     desktopLog(`Renderer console [${level}] ${sourceId || 'unknown'}:${line || 0} ${message}`);
   });
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {

@@ -2091,18 +2091,19 @@ export default function LiveCapture() {
     setHrSourceError("");
   }, []);
 
-  const applyHrSourceSettings = useCallback(async (settings = hrSourceSettings) => {
+  const applyHrSourceSettings = useCallback(async (settings) => {
+    const resolvedSettings = settings || readHrSourceSettings();
     setHrSourceSaving(true);
     setHrSourceError("");
-    writeHrSourceSettings(settings);
+    writeHrSourceSettings(resolvedSettings);
     try {
       const response = await fetch(apiUrl("/live-capture/hr-source"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          source: settings.source,
-          pulsoidToken: settings.pulsoidToken,
-          pulsoidMode: settings.pulsoidMode,
+          source: resolvedSettings.source,
+          pulsoidToken: resolvedSettings.pulsoidToken,
+          pulsoidMode: resolvedSettings.pulsoidMode,
         }),
       });
       const responseText = await response.text();
@@ -2122,7 +2123,7 @@ export default function LiveCapture() {
     } finally {
       setHrSourceSaving(false);
     }
-  }, [hrSourceSettings]);
+  }, []);
 
   const saveHowlControlSettings = useCallback(async (patch = {}) => {
     const nextSettings = { ...howlControlForm, ...patch };
@@ -3027,7 +3028,8 @@ export default function LiveCapture() {
   useEffect(() => {
     const settings = readHrSourceSettings();
     setHrSourceSettings(settings);
-  }, []);
+    applyHrSourceSettings(settings);
+  }, [applyHrSourceSettings]);
 
   useEffect(() => () => {
     directH10RelaySocketRef.current?.close?.();
@@ -3297,6 +3299,14 @@ export default function LiveCapture() {
   const distanceTelemetryView = true;
   const hasHrTrend = telemetryHistory.some((point) => point.hr != null || point.hrSmoothed != null);
   const hasEmgTrend = telemetryHistory.some((point) => point.left != null || point.right != null || point.diff != null);
+  const visiblePhaseMarkerTimes = useMemo(
+    () => new Set(telemetryHistory.map((point) => point.time).filter(Boolean)),
+    [telemetryHistory],
+  );
+  const visiblePhaseMarkers = useMemo(
+    () => phaseMarkers.filter((marker) => marker.chartTime && visiblePhaseMarkerTimes.has(marker.chartTime)),
+    [phaseMarkers, visiblePhaseMarkerTimes],
+  );
   const currentHrLevel = hrLevelPercent(hrTelemetry?.currentHr, hrTelemetry?.baselineHr);
   const buildLevel = readNumber(hrTelemetry?.buildConfidence, hrTelemetry?.build_confidence);
   const hrv = hrTelemetry?.hrv || {};
@@ -6129,7 +6139,7 @@ export default function LiveCapture() {
                   <YAxis yAxisId="hr" hide domain={["dataMin - 4", "dataMax + 4"]} />
                   <YAxis yAxisId="watch" hide orientation="right" domain={[0, 100]} />
                   <Tooltip content={<ChartTooltip />} />
-                  {phaseMarkers.map((marker, index) => marker.chartTime ? (
+                  {visiblePhaseMarkers.map((marker, index) => (
                     <ReferenceLine
                       key={`${marker.label}-${marker.chartTime}-media-${index}`}
                       yAxisId="hr"
@@ -6138,7 +6148,7 @@ export default function LiveCapture() {
                       strokeDasharray="4 3"
                       ifOverflow="extendDomain"
                     />
-                  ) : null)}
+                  ))}
                   <Line yAxisId="hr" type="monotone" dataKey="baseline" name="Baseline" stroke="hsl(var(--muted-foreground))" strokeDasharray="5 5" strokeWidth={1.25} dot={false} connectNulls />
                   <Line yAxisId="hr" type="monotone" dataKey="hrSmoothed" name="Smoothed" stroke="hsl(var(--chart-2))" strokeWidth={1.75} dot={false} connectNulls />
                   <Line yAxisId="hr" type="monotone" dataKey="hr" name="HR" stroke="hsl(var(--primary))" strokeWidth={2.25} dot={false} connectNulls />
@@ -7094,6 +7104,7 @@ export default function LiveCapture() {
                   <option value="clinical_minimal">Clinical minimal</option>
                   <option value="sarah_soft">Warm encouragement</option>
                   <option value="intimate_coaching">Direct encouragement</option>
+                  <option value="intimate_lovers_voice">Intimate lover (opt-in)</option>
                 </select>
               </SetupTile>
             )}
@@ -8531,6 +8542,7 @@ export default function LiveCapture() {
                   <option value="clinical_minimal">Clinical minimal</option>
                   <option value="sarah_soft">Warm encouragement</option>
                   <option value="intimate_coaching">Direct encouragement</option>
+                  <option value="intimate_lovers_voice">Intimate lover (opt-in)</option>
                 </select>
                 <label className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs font-medium text-muted-foreground">
                   Volume
@@ -8694,7 +8706,7 @@ export default function LiveCapture() {
               <YAxis yAxisId="watch" hide domain={[0, 100]} />
               <Tooltip content={<ChartTooltip />} />
               <Legend wrapperStyle={{ fontSize: distanceTelemetryView ? 14 : 11 }} />
-              {phaseMarkers.map((marker, index) => marker.chartTime ? (
+              {visiblePhaseMarkers.map((marker, index) => (
                 <ReferenceLine
                   key={`${marker.label}-${marker.chartTime}-${index}`}
                   yAxisId="hr"
@@ -8704,7 +8716,7 @@ export default function LiveCapture() {
                   ifOverflow="extendDomain"
                   label={{ value: marker.label, position: "top", fill: phaseMarkerColor(marker.label), fontSize: 10 }}
                 />
-              ) : null)}
+              ))}
               <Line yAxisId="hr" type="monotone" dataKey="baseline" name="Baseline" stroke="hsl(var(--muted-foreground))" strokeDasharray="5 5" strokeWidth={1.5} dot={false} connectNulls />
               <Line yAxisId="hr" type="monotone" dataKey="hrSmoothed" name="Smoothed" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} connectNulls />
               <Line yAxisId="hr" type="monotone" dataKey="hr" name="HR" stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} connectNulls />

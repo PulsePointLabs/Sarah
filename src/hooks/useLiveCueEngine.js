@@ -32,6 +32,8 @@ export function useLiveCueEngine({
   const step = useCallback((prediction, sample = {}) => {
     const now = Date.now();
     const sessionTimeSec = typeof getSessionTime === "function" ? getSessionTime() : sample.sessionTimeSec;
+    const intimateCadence = cueSettings?.style === "intimate_lovers_voice";
+    const warmCadence = intimateCadence || cueSettings?.style === "intimate_coaching" || cueSettings?.style === "sarah_soft";
     const result = stepLiveCueStateMachine(
       machineRef.current,
       prediction,
@@ -40,6 +42,18 @@ export function useLiveCueEngine({
         enabled: cueSettings?.enabled !== false,
         captureKind,
         allowSessionStyleCues: Boolean(cueSettings?.allowSessionStyleCues),
+        ...(warmCadence ? {
+          globalCooldownMs: intimateCadence ? 9_000 : 11_000,
+          cooldowns: {
+            sustained_build: intimateCadence ? 24_000 : 32_000,
+            plateau_encouragement: intimateCadence ? 28_000 : 38_000,
+            climax_possible: intimateCadence ? 20_000 : 25_000,
+            climax_imminent: intimateCadence ? 14_000 : 18_000,
+            recovery: intimateCadence ? 50_000 : 65_000,
+            build_resumed: intimateCadence ? 24_000 : 32_000,
+          },
+          maxCuesPerMinute: intimateCadence ? 5 : 4,
+        } : {}),
       },
       phraseBank.phrases
     );

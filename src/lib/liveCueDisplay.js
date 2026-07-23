@@ -1,5 +1,6 @@
 export const LIVE_CUE_DISPLAY_LABELS = Object.freeze({
   sustained_build: "Sustained build observed",
+  plateau_encouragement: "Sustained plateau observed",
   climax_possible: "Climax approach detected",
   climax_imminent: "Near-climax probability high",
   recovery: "Recovery detected",

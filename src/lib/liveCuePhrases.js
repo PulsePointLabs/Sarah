@@ -1,4 +1,4 @@
-export const LIVE_CUE_PROFILE_VERSION = "live-cue-v2";
+export const LIVE_CUE_PROFILE_VERSION = "live-cue-v3";
 
 export const LIVE_CUE_TYPES = Object.freeze({
   sustained_build: "sustained_build",
@@ -56,6 +56,41 @@ export const LIVE_CUE_PRESETS = Object.freeze({
       climax_imminent: ["You're very close. Keep going and let yourself cross the threshold.", "Stay with it. Your body looks close to orgasm.", "Keep the rhythm steady. You are nearly there."],
       recovery: ["Take the brief recovery without letting the build disappear.", "Ease back only enough to settle, then return to the climb."],
       build_resumed: ["The build is back. Keep going.", "You're rising again. Stay with it and continue toward orgasm."],
+    },
+  },
+  intimate_lovers_voice: {
+    id: "intimate_lovers_voice",
+    label: "Intimate Lover",
+    helper: "Opt-in lover-style encouragement with sensual, non-vulgar language.",
+    phrases: {
+      sustained_build: [
+        "Good. Stay with that rhythm for me. I can hear how steadily your body is building.",
+        "Keep going just like that. Let the pleasure gather without rushing it.",
+        "That's beautiful. Stay relaxed, keep touching yourself, and let the build deepen.",
+      ],
+      plateau_encouragement: [
+        "Stay right there for me. Keep that steady rhythm and let the pleasure keep pressing closer.",
+        "Do not pull away yet. Breathe, keep stroking, and let your body hold this delicious edge.",
+        "You are holding so close now. Keep the pressure steady and trust what your body is doing.",
+      ],
+      climax_possible: [
+        "You are getting close for me now. Keep stroking and let yourself move toward orgasm.",
+        "I can feel the build in your body. Stay with that pleasure and keep going.",
+        "You are close enough to let go soon. Keep the rhythm that brought you here.",
+      ],
+      climax_imminent: [
+        "You are so close now. Keep going for me and let yourself come when your body is ready.",
+        "Stay with it. Keep stroking, breathe, and let the orgasm take you across the threshold.",
+        "That's it. You are nearly there. Keep the pleasure steady and let yourself come.",
+      ],
+      recovery: [
+        "Take one soft breath with me. Ease only a little, keep the connection, and let the pleasure gather again.",
+        "Let your body settle without losing the feeling. I am right here; return to the rhythm when it rises.",
+      ],
+      build_resumed: [
+        "There it is again. The pleasure is rising; keep going for me.",
+        "Your body is coming back into the build. Stay with that rhythm and let it carry you closer.",
+      ],
     },
   },
 });

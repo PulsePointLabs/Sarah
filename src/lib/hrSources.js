@@ -21,6 +21,8 @@ export const PULSOID_MODE_OPTIONS = [
   { value: "http", label: "HTTP latest" },
 ];
 
+const DIRECT_H10_SOURCE_MIGRATION_KEY = "pulsepoint.hrSource.directH10DefaultV1";
+
 export function maskPulsoidToken(token = "") {
   const value = String(token || "").trim();
   if (!value) return "";
@@ -29,8 +31,16 @@ export function maskPulsoidToken(token = "") {
 }
 
 export function readHrSourceSettings() {
+  let source = localStorage.getItem("pulsepoint.hrSource");
+  if (!localStorage.getItem(DIRECT_H10_SOURCE_MIGRATION_KEY)) {
+    localStorage.setItem(DIRECT_H10_SOURCE_MIGRATION_KEY, "1");
+    if (!source || source === "heartrateonstream") {
+      source = "direct_h10";
+      localStorage.setItem("pulsepoint.hrSource", source);
+    }
+  }
   return {
-    source: localStorage.getItem("pulsepoint.hrSource") || "heartrateonstream",
+    source: source || "direct_h10",
     pulsoidToken: localStorage.getItem("pulsepoint.pulsoid.accessToken") || "",
     pulsoidMode: localStorage.getItem("pulsepoint.pulsoid.mode") || "websocket",
   };
