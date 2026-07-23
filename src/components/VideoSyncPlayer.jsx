@@ -1119,7 +1119,7 @@ export default function VideoSyncPlayer({
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      const fullscreenElement = document.fullscreenElement;
+      const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
       setDomFullscreenActive(
         fullscreenElement === fullscreenSurfaceRef.current
         || fullscreenElement === videoRef.current
@@ -1127,7 +1127,11 @@ export default function VideoSyncPlayer({
       setFullscreenControlsVisible(true);
     };
     document.addEventListener("fullscreenchange", handleFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -1185,7 +1189,24 @@ export default function VideoSyncPlayer({
           resumeAfterShellFullscreenToggleRef.current = !video.paused;
         }
         setTelemetryDisplayMode("overlay");
-        setShellFullscreenActive((current) => !current);
+        const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+        if (fullscreenElement === video || fullscreenElement === surface) {
+          const exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
+          await exitFullscreen?.call(document);
+        } else {
+          if (fullscreenElement) {
+            const exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
+            await exitFullscreen?.call(document);
+          }
+          const requestVideoFullscreen = video?.requestFullscreen
+            || video?.webkitRequestFullscreen
+            || video?.webkitEnterFullscreen;
+          if (requestVideoFullscreen) {
+            await Promise.resolve(requestVideoFullscreen.call(video));
+          } else {
+            setShellFullscreenActive((current) => !current);
+          }
+        }
         setFullscreenControlsVisible(true);
         pulseHaptic([12, 24, 12]);
         return;
@@ -1848,8 +1869,8 @@ export default function VideoSyncPlayer({
                       src={feed.src}
                       muted={!isMaster}
                       className="h-full w-full object-contain cursor-pointer"
-                      controls={false}
-                      playsInline
+                      controls={nativeShell && isMaster}
+                      playsInline={!nativeShell}
                       onLoadedMetadata={() => {
                         if (!isMaster) handleSecondaryReady(feed.key);
                       }}
