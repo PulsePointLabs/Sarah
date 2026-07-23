@@ -104,6 +104,16 @@ test("RR modulation provides an explicitly indirect fallback when PMD streams ar
   assert.equal(result.respiration.possibleBreathHold, false);
 });
 
+test("respiration exposes the RR fallback failure when raw PMD streams are unavailable", () => {
+  const result = fuseRespiration(
+    { accepted: false, reason: "insufficient_window" },
+    { accepted: false, reason: "insufficient_window" },
+    { accepted: false, reason: "low_rr_periodicity" },
+  );
+  assert.equal(result.available, false);
+  assert.equal(result.reason, "low_rr_periodicity");
+});
+
 test("stable periodic chest acceleration can produce a conservative rate", () => {
   const nowMs = 70_000;
   const accelerometerSamples = Array.from({ length: 1500 }, (_unused, index) => {

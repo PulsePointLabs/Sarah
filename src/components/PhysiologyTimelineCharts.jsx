@@ -57,11 +57,22 @@ function rowReliability(row) {
 
 function nearestTimelineRow(rows, seconds) {
   if (!rows.length) return null;
-  return rows.reduce((nearest, row) => (
-    Math.abs(Number(row.time_offset_s) - seconds) < Math.abs(Number(nearest.time_offset_s) - seconds)
-      ? row
-      : nearest
-  ), rows[0]);
+  const distance = (row) => Math.abs(Number(row.time_offset_s) - seconds);
+  const closestDistance = rows.reduce((closest, row) => Math.min(closest, distance(row)), Number.POSITIVE_INFINITY);
+  const nearby = rows.filter((row) => distance(row) <= closestDistance + 0.75);
+  const evidenceScore = (row) => (
+    (validPositive(row.hr) != null ? 1 : 0)
+    + (String(row.rr_intervals_ms || "").trim() ? 5 : 0)
+    + (validPositive(row.hrv_rmssd_ms) != null ? 4 : 0)
+    + (validPositive(row.respiration_bpm) != null ? 4 : 0)
+    + (validPositive(row.motion_peak_dynamic_mg) != null ? 3 : 0)
+    + (numberOrNull(row.signal_confidence_score) != null ? 1 : 0)
+  );
+  return nearby.reduce((best, row) => {
+    const scoreDifference = evidenceScore(row) - evidenceScore(best);
+    if (scoreDifference !== 0) return scoreDifference > 0 ? row : best;
+    return distance(row) < distance(best) ? row : best;
+  }, nearby[0]);
 }
 
 function Metric({ icon: Icon, label, value, detail, tone = "text-primary" }) {
@@ -181,7 +192,7 @@ export default function PhysiologyTimelineCharts({ session = {}, timelineRows = 
   const breathHolds = timelineRows.filter((row) => row.possible_breath_hold === true || String(row.possible_breath_hold).toLowerCase() === "true").length;
   const maxTime = chartRows.length ? Number(chartRows[chartRows.length - 1].time_offset_s) || 0 : 0;
   const replayTime = Number.isFinite(Number(inspectionTime)) ? Number(inspectionTime) : localReplayTime;
-  const inspectedRow = nearestTimelineRow(chartRows, replayTime);
+  const inspectedRow = nearestTimelineRow(timelineRows, replayTime);
   const inspectedReliability = inspectedRow ? rowReliability(inspectedRow) : { core: 0, multimodal: 0 };
   const coreCoverage = chartRows.length
     ? Math.round(chartRows.filter((row) => row.reliability_core >= 80).length / chartRows.length * 100)

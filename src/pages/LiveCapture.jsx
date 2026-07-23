@@ -1705,6 +1705,7 @@ export default function LiveCapture() {
   const directH10PmdNativeActiveRef = useRef(false);
   const directH10PmdBrowserRef = useRef(null);
   const directH10PmdControlWaitersRef = useRef(new Map());
+  const directH10PmdVerificationRef = useRef(null);
   const h10MultimodalRef = useRef(h10Multimodal);
   const telemetryHistoryRef = useRef(telemetryHistory);
   const appendTelemetryPointRef = useRef(() => {});
@@ -2522,6 +2523,9 @@ export default function LiveCapture() {
   }, []);
 
   const startNativeH10Pmd = useCallback(async (deviceId) => {
+    await BleClient.stopNotifications(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_DATA_UUID).catch(() => {});
+    await BleClient.stopNotifications(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID).catch(() => {});
+    directH10PmdNativeActiveRef.current = false;
     directH10PmdStoreRef.current = createH10PmdStore();
     await BleClient.startNotifications(
       deviceId,
@@ -2567,6 +2571,16 @@ export default function LiveCapture() {
   const startBrowserH10Pmd = useCallback(async (device) => {
     const server = device?.gatt;
     if (!server?.connected) throw new Error("H10 GATT disconnected before PMD setup");
+    const previous = directH10PmdBrowserRef.current;
+    if (previous) {
+      await previous.control?.writeValueWithResponse?.(H10_ECG_STOP_COMMAND).catch?.(() => {});
+      await previous.control?.writeValueWithResponse?.(H10_ACCELEROMETER_STOP_COMMAND).catch?.(() => {});
+      previous.control?.removeEventListener?.("characteristicvaluechanged", previous.controlHandler);
+      previous.data?.removeEventListener?.("characteristicvaluechanged", previous.dataHandler);
+      await previous.data?.stopNotifications?.().catch?.(() => {});
+      await previous.control?.stopNotifications?.().catch?.(() => {});
+      directH10PmdBrowserRef.current = null;
+    }
     directH10PmdStoreRef.current = createH10PmdStore();
     const service = await withTimeout(server.getPrimaryService(H10_PMD_SERVICE_UUID), 12000, "Timed out opening H10 PMD service.");
     const control = await withTimeout(service.getCharacteristic(H10_PMD_CONTROL_UUID), 12000, "Timed out opening H10 PMD control.");
@@ -2603,6 +2617,51 @@ export default function LiveCapture() {
     await waitForH10PmdSamples();
     setDirectH10Status((previous) => ({ ...previous, pmdActive: true, pmdMessage: "ECG + chest motion verified" }));
   }, [handleH10PmdControl, handleH10PmdData, waitForH10PmdControlResponse, waitForH10PmdSamples]);
+
+  const verifyDirectH10Pmd = useCallback(async () => {
+    const store = directH10PmdStoreRef.current;
+    if (store.ecgSamples.length > 0 && store.accelerometerSamples.length > 0) return true;
+    if (directH10PmdVerificationRef.current) return directH10PmdVerificationRef.current;
+
+    const verification = (async () => {
+      const updatePmdStatus = (patch) => {
+        const next = { ...(directH10StatusRef.current || {}), ...patch };
+        directH10StatusRef.current = next;
+        setDirectH10Status(next);
+      };
+      updatePmdStatus({
+        pmdActive: false,
+        pmdMessage: "Retrying raw H10 ECG and accelerometer streams before capture",
+      });
+      try {
+        const nativeDeviceId = directH10NativeDeviceIdRef.current;
+        const browserDevice = directH10DeviceRef.current;
+        if (nativeDeviceId) {
+          await startNativeH10Pmd(nativeDeviceId);
+        } else if (browserDevice?.gatt?.connected) {
+          await startBrowserH10Pmd(browserDevice);
+        } else {
+          throw new Error("H10 heart-rate link exists without an active PMD-capable GATT connection");
+        }
+        updatePmdStatus({
+          pmdActive: true,
+          pmdMessage: "ECG + chest motion verified",
+        });
+        return true;
+      } catch (error) {
+        const message = `HR/RR live; raw ECG/motion unavailable after retry: ${error?.message || error}`;
+        updatePmdStatus({
+          pmdActive: false,
+          pmdMessage: message,
+        });
+        throw new Error(message);
+      } finally {
+        directH10PmdVerificationRef.current = null;
+      }
+    })();
+    directH10PmdVerificationRef.current = verification;
+    return verification;
+  }, [startBrowserH10Pmd, startNativeH10Pmd]);
 
   const disconnectDirectH10 = useCallback(async ({ updateStatus = true, preserveAutoReconnect = false } = {}) => {
     if (!preserveAutoReconnect) {
@@ -4111,6 +4170,22 @@ export default function LiveCapture() {
   };
 
   const ensureSession = async () => {
+    const currentPmdStore = directH10PmdStoreRef.current;
+    const currentMultimodal = h10MultimodalRef.current || {};
+    const currentPmdMessage = directH10StatusRef.current?.pmdMessage || directH10Status.pmdMessage || "";
+    const currentRawStreamsActive = Boolean(
+      directH10Source
+      && currentPmdStore.ecgSamples.length > 0
+      && currentPmdStore.accelerometerSamples.length > 0
+    );
+    const currentRawStreamFailure = Boolean(
+      directH10Source
+      && healthHrConnected
+      && !currentRawStreamsActive
+      && /unavailable|rejected|timed out|delivered no complete sensor stream|failed/i.test(currentPmdMessage)
+    );
+    const currentRespiration = currentMultimodal.respiration || h10Respiration;
+    const currentMotion = currentMultimodal.motion || h10Motion;
     const capturePreflight = {
       capturedAt: new Date().toISOString(),
       guidanceMode: liveGuidanceMode.label,
@@ -4125,22 +4200,22 @@ export default function LiveCapture() {
         sampleCount: Number(rrCount || 0),
       },
       rawH10: {
-        available: Boolean(h10RawStreamsActive),
-        failed: Boolean(h10RawStreamFailure),
-        ecgSamples: Number(effectiveH10Multimodal?.streams?.ecg?.sampleCount || 0),
-        accelerometerSamples: Number(effectiveH10Multimodal?.streams?.accelerometer?.sampleCount || 0),
-        message: directH10Status.pmdMessage || "",
+        available: currentRawStreamsActive,
+        failed: currentRawStreamFailure,
+        ecgSamples: Number(currentPmdStore.ecgSamples.length || 0),
+        accelerometerSamples: Number(currentPmdStore.accelerometerSamples.length || 0),
+        message: currentPmdMessage,
       },
       respiration: {
-        available: Boolean(h10Respiration.available),
-        source: h10Respiration.source || "unavailable",
-        confidence: h10Respiration.confidence || "unavailable",
-        reason: h10Respiration.reason || "",
+        available: Boolean(currentRespiration.available),
+        source: currentRespiration.source || "unavailable",
+        confidence: currentRespiration.confidence || "unavailable",
+        reason: currentRespiration.reason || "",
       },
       motion: {
-        available: Boolean(h10Motion.available),
-        source: h10Motion.source || "unavailable",
-        state: h10Motion.class || "unavailable",
+        available: Boolean(currentMotion.available),
+        source: currentMotion.source || "unavailable",
+        state: currentMotion.class || "unavailable",
       },
       emg: {
         configured: Boolean(emgConfigured),
@@ -4846,7 +4921,7 @@ export default function LiveCapture() {
 
   const setLaunchStep = useCallback((label, state = "active") => {
     setLaunchState((prev) => {
-      const labels = ["Restoring setup", "Preparing voice", "Connecting H10", "Waiting for heart rate", "Checking OBS", "Starting session", "Live"];
+      const labels = ["Restoring setup", "Preparing voice", "Connecting H10", "Waiting for heart rate", "Verifying raw sensors", "Checking OBS", "Starting session", "Live"];
       const currentIndex = labels.indexOf(label);
       return {
         ...prev,
@@ -4877,7 +4952,7 @@ export default function LiveCapture() {
     setLaunchProfile(next);
   }, [captureKind, captureMode, emgSensorConfig, heartbeatAudioEnabled, howlControlForm, hrSourceSettings, liveCueSettings, liveSession, mediaVideo, telemetryNoticesEnabled]);
 
-  const startFromLaunchpad = useCallback(async ({ allowWithoutVoice = false } = {}) => {
+  const startFromLaunchpad = useCallback(async ({ allowWithoutVoice = false, allowWithoutRawSensors = false } = {}) => {
     if (launchInFlightRef.current) return launchInFlightRef.current;
     const transaction = (async () => {
       setLaunchState({ phase: "starting", message: "Starting session...", steps: [], busy: true, error: "" });
@@ -4924,6 +4999,16 @@ export default function LiveCapture() {
           throw new Error(directH10Launch
             ? "H10 is selected, but Sarah has not received the first heart-rate packet yet. Wake the strap, then tap Retry failed step."
             : "H10/source is connected or configured, but no recent heart-rate packet has arrived.");
+        }
+
+        if (directH10Launch && !allowWithoutRawSensors) {
+          setLaunchStep("Verifying raw sensors");
+          try {
+            await waitForH10PmdSamples(7000);
+          } catch {
+            await verifyDirectH10Pmd();
+          }
+          await wait(1200);
         }
 
         setLaunchStep("Checking OBS");
@@ -4973,6 +5058,8 @@ export default function LiveCapture() {
     obsReady,
     saveSuccessfulLaunchProfile,
     setLaunchStep,
+    verifyDirectH10Pmd,
+    waitForH10PmdSamples,
     waitForRecentHrPacket,
   ]);
 
@@ -6908,6 +6995,13 @@ export default function LiveCapture() {
               className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground"
             >
               Start without optional voice
+            </button>
+            <button
+              type="button"
+              onClick={() => startFromLaunchpad({ allowWithoutRawSensors: true }).catch(() => {})}
+              className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground"
+            >
+              Start HR / HRV only
             </button>
             <button
               type="button"

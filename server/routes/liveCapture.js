@@ -20,6 +20,7 @@ import {
 import { SHARED_HR_PACKET_STALE_MS, isSharedHrPacketFresh } from '../services/hrFreshness.js';
 import { normalizeOverlayHeartRateSnapshot } from '../services/overlayHeartRate.js';
 import { summarizeCapturePauseIntervals } from '../services/capturePauseIntervals.js';
+import { coalesceDuplicateHrRows } from '../services/hrCaptureMerge.js';
 
 export const liveCaptureRouter = express.Router();
 
@@ -1343,9 +1344,10 @@ async function mergedCaptureRowsForSegments(segments = []) {
     fallbackOffsetS += localMaxOffset;
   }
   mergedRows.sort((a, b) => Number(a.time_offset_s || 0) - Number(b.time_offset_s || 0));
+  const originalRows = mergedRows.length;
   return {
-    rows: mergedRows,
-    originalRows: mergedRows.length,
+    rows: coalesceDuplicateHrRows(mergedRows),
+    originalRows,
   };
 }
 

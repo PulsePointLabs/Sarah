@@ -526,9 +526,11 @@ export function fuseRespiration(accelerometer, ecg, rr = { accepted: false }) {
       rr,
     };
   }
+  const meaningfulRawReason = [accelerometer.reason, ecg.reason]
+    .find((reason) => reason && reason !== "insufficient_window");
   return {
     available: false,
-    reason: accelerometer.reason || ecg.reason || rr.reason || "sensor_unavailable",
+    reason: meaningfulRawReason || rr.reason || accelerometer.reason || ecg.reason || "sensor_unavailable",
     accelerometer,
     ecg,
     rr,
