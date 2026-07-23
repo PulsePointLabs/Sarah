@@ -67,10 +67,31 @@ export function hasUnsupportedFoleyRemovalClaim(item) {
   return true;
 }
 
-export function hasUnsupportedSleeveUseClaim(item) {
+export function hasDirectBareGlansEvidence(item) {
+  const text = lowerItemText(item);
+  if (!/\b(glans|corona|meatus|sleeve)\b/.test(text)) return false;
+  if (/\bglans\b.{0,45}\b(not visible|not clearly visible|obscured|covered|hidden|occluded)\b/.test(text)) return false;
+  return /(?:glans|corona|meatus).{0,55}\b(?:clearly|directly|fully|visibly)\s+(?:visible|exposed|uncovered|bare)\b/.test(text)
+    || /\b(?:clearly|directly|fully|visibly)\s+(?:visible|exposed|uncovered|bare)\s+(?:glans|corona|meatus)\b/.test(text)
+    || /\b(?:glans|corona)\b.{0,45}\b(?:outside|clear of)\s+(?:the\s+)?sleeve\b/.test(text)
+    || /\bsleeve\b.{0,55}\b(?:visibly\s+)?(?:separates?|separated|lifts?\s+clear|lifted\s+clear|removed|off\s+(?:the\s+)?shaft|held\s+away)\b/.test(text);
+}
+
+export function hasUnsupportedBareHandClaim(item, context = {}) {
+  if (!context?.sleeveKnown) return false;
+  const text = lowerItemText(item);
+  const claimsBareContact = /\b(?:bare[-\s]?hand(?:ed)?|bare\s+(?:penis|shaft)|(?:penis|shaft)\s+(?:is\s+|remains?\s+)?bare|without\s+(?:the\s+)?sleeve|sleeve\s+(?:is\s+)?(?:absent|removed|off|not\s+in\s+use)|direct\s+hand[-\s]?to[-\s]?(?:penis|shaft|glans)|hand\s+(?:directly\s+)?(?:grips?|strokes?|contacts?)\s+(?:the\s+)?(?:bare\s+)?(?:penis|shaft|glans))\b/.test(text);
+  if (!claimsBareContact) return false;
+  return !hasDirectBareGlansEvidence({
+    text: `${text} ${String(context?.supportingText || "")}`,
+  });
+}
+
+export function hasUnsupportedSleeveUseClaim(item, context = {}) {
   const text = lowerItemText(item);
   if (!/\bsleeve\b/.test(text)) return false;
   if (/(not confirmed|cannot confirm|uncertain|possible|no visible|not visible|before placement|not yet placed|not placed)/.test(text)) return false;
+  if (context?.sleeveKnown) return false;
   return /(sleeve[-\s]?based stimulation|stimulation (?:continues|underway|resumes) (?:with|in|through)?\s*(?:the\s+)?sleeve|gripping and stroking (?:the\s+)?sleeve|stroking (?:inside|with|through)?\s*(?:the\s+)?sleeve|sleeve (?:continues|underway|placed|on shaft|over shaft|encases|covers))/i.test(text)
     && !/(sleeve (?:is\s+)?visibly (?:placed|on|over|around)|visibly (?:placed|on|over).{0,40}sleeve|shaft (?:is\s+)?inside (?:the\s+)?sleeve|glans.{0,40}inside (?:the\s+)?sleeve)/i.test(text);
 }
@@ -269,7 +290,18 @@ export function sanitizeSleeveSessionText(text, context = {}) {
       .replace(/\b(?:the )?yellow sleeve\b/gi, "the yellow Foley tubing")
       .replace(/\b(?:the )?sleeve\b/gi, "the Foley tubing");
   }
-  if (hasUnsupportedSleeveUseClaim({ text: next })) {
+  if (hasUnsupportedBareHandClaim({ text: next }, context)) {
+    flags.push("Unsupported bare-hand claim corrected to translucent sleeve");
+    next = next
+      .replace(/\bbare[-\s]?hand(?:ed)?\s+stimulation\b/gi, "translucent-sleeve stimulation")
+      .replace(/\bbare[-\s]?hand(?:ed)?\s+(?:stroking|contact)\b/gi, "hand contact through the translucent sleeve")
+      .replace(/\b(?:the\s+)?(?:penis|shaft)\s+(?:is\s+|remains?\s+)?bare\b/gi, "the penis remains covered by the translucent sleeve")
+      .replace(/\bbare\s+(?:penis|shaft)\b/gi, "penis covered by the translucent sleeve")
+      .replace(/\bdirect\s+hand[-\s]?to[-\s]?(?:penis|shaft|glans)\s+contact\b/gi, "hand contact through the translucent sleeve")
+      .replace(/\bwithout\s+(?:the\s+)?sleeve\b/gi, "with the translucent sleeve presumed in place")
+      .replace(/\bsleeve\s+(?:is\s+)?(?:absent|removed|off|not\s+in\s+use)\b/gi, "translucent sleeve remains presumed in place because the glans is not clearly uncovered");
+  }
+  if (hasUnsupportedSleeveUseClaim({ text: next }, context)) {
     flags.push("Sleeve active-use claim blocked");
     const beforeSleeveCleanup = next;
     next = next

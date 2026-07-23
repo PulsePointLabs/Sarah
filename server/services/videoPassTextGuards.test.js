@@ -8,6 +8,7 @@ import {
   sanitizeFoleyProcedureText,
   sanitizeSleeveSessionText,
   hasFoleySleeveIdentityConflict,
+  hasUnsupportedBareHandClaim,
   hasConfirmedStimulationPauseEvidence,
   sanitizeUnsupportedStimulationPauseClaim,
 } from '../../src/lib/videoPassTextGuards.js';
@@ -113,6 +114,33 @@ test('does not rewrite sleeve language when a sleeve is configured', () => {
   const input = 'The sleeve lifts fully off the shaft.';
   const result = sanitizeSleeveSessionText(input, { foleyKnown: true, sleeveKnown: true });
 
+  assert.equal(result.text, input);
+});
+
+test('known translucent sleeve sessions allow sleeve contact when the glans is obscured', () => {
+  const input = 'Stroking continues through the translucent sleeve while the glans remains obscured by the grip.';
+  const result = sanitizeSleeveSessionText(input, { sleeveKnown: true });
+
+  assert.equal(result.text, input);
+  assert.equal(result.flags.length, 0);
+});
+
+test('known sleeve sessions reject bare-hand assumptions without uncovered glans evidence', () => {
+  const context = { sleeveKnown: true };
+  const input = 'Bare-hand stimulation continues while the hand and motion blur obscure the glans.';
+  const result = sanitizeSleeveSessionText(input, context);
+
+  assert.equal(hasUnsupportedBareHandClaim({ text: input }, context), true);
+  assert.match(result.text, /translucent-sleeve stimulation/i);
+  assert.doesNotMatch(result.text, /bare-hand stimulation/i);
+});
+
+test('known sleeve sessions permit bare-hand wording when the uncovered glans is clearly visible', () => {
+  const context = { sleeveKnown: true };
+  const input = 'Bare-hand stimulation continues; the fully exposed glans and corona are clearly visible and uncovered.';
+  const result = sanitizeSleeveSessionText(input, context);
+
+  assert.equal(hasUnsupportedBareHandClaim({ text: input }, context), false);
   assert.equal(result.text, input);
 });
 

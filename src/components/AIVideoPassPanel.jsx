@@ -49,6 +49,7 @@ import {
   hasUnsupportedMeatusContactClaim as hasUnsupportedMeatusContactClaimGuard,
   hasUnsupportedOrgasmClaim as hasUnsupportedOrgasmClaimGuard,
   hasUnsupportedPenileBaseClaim as hasUnsupportedPenileBaseClaimGuard,
+  hasUnsupportedBareHandClaim as hasUnsupportedBareHandClaimGuard,
   hasUnsupportedSleeveUseClaim as hasUnsupportedSleeveUseClaimGuard,
   hasFoleySleeveIdentityConflict,
   sanitizeFoleyProcedureText as sanitizeFoleyProcedureTextGuard,
@@ -863,7 +864,9 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
         ? "Field preparation"
         : hasFoleySleeveIdentityConflict(finding, { ...deviceContext, supportingText: rawWindowText })
         ? "Foley tubing with bare-hand stimulation"
-        : hasUnsupportedSleeveUseClaimGuard(finding)
+        : hasUnsupportedBareHandClaimGuard(finding, { ...deviceContext, supportingText: rawWindowText })
+        ? "Translucent sleeve contact"
+        : hasUnsupportedSleeveUseClaimGuard(finding, { ...deviceContext, supportingText: rawWindowText })
         ? "Sleeve use not confirmed"
         : cleanTextForMode(finding.title || "Finding"),
       text: cleanTextForMode(finding.text || finding.findingText || ""),
@@ -872,7 +875,8 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
         || hasUnsupportedAlreadyPlacedClaim(finding)
         || hasUnsupportedFoleyRemovalClaimGuard(finding)
         || hasUnsupportedMeatusContactClaimGuard(finding)
-        || hasUnsupportedSleeveUseClaimGuard(finding)
+        || hasUnsupportedBareHandClaimGuard(finding, { ...deviceContext, supportingText: rawWindowText })
+        || hasUnsupportedSleeveUseClaimGuard(finding, { ...deviceContext, supportingText: rawWindowText })
         || hasFoleySleeveIdentityConflict(finding, { ...deviceContext, supportingText: rawWindowText })
         || hasUnsupportedOrgasmClaimGuard(finding)
         || hasUnsupportedPenileBaseClaimGuard(finding)) && finding.confidence === "high" ? "moderate" : finding.confidence || "moderate",
@@ -891,9 +895,11 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
       const unsupportedFoleyRemoval = isExploration && hasUnsupportedFoleyRemovalClaimGuard(event);
       const unsupportedMeatusClaim = isExploration && hasUnsupportedMeatusContactClaimGuard(event);
       const unsupportedSleeveUse = !isExploration && (
-        hasUnsupportedSleeveUseClaimGuard(event)
+        hasUnsupportedSleeveUseClaimGuard(event, { ...deviceContext, supportingText: rawWindowText })
         || hasFoleySleeveIdentityConflict(event, { ...deviceContext, supportingText: rawWindowText })
       );
+      const unsupportedBareHand = !isExploration
+        && hasUnsupportedBareHandClaimGuard(event, { ...deviceContext, supportingText: rawWindowText });
       const unsupportedOrgasmClaim = !isExploration && hasUnsupportedOrgasmClaimGuard(event);
       const note = cleanTextForMode(cleanDraftEventNote(event.note || event.text || ""));
       return {
@@ -905,7 +911,7 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
         note,
         category: (unsupportedFoleyForecast || unsupportedFoleyRemoval || unsupportedMeatusClaim) ? ["setup"] : normalizeDraftEventCategories(event.category, note, fallbackWindow, isExploration),
         annotation_tags: Array.isArray(event.annotation_tags) ? event.annotation_tags : ["other_context"],
-        confidence: (unsupportedFoleyForecast || unsupportedAlreadyPlaced || unsupportedFoleyRemoval || unsupportedMeatusClaim || unsupportedSleeveUse || unsupportedOrgasmClaim) && event.confidence === "high" ? "moderate" : event.confidence || "moderate",
+        confidence: (unsupportedFoleyForecast || unsupportedAlreadyPlaced || unsupportedFoleyRemoval || unsupportedMeatusClaim || unsupportedSleeveUse || unsupportedBareHand || unsupportedOrgasmClaim) && event.confidence === "high" ? "moderate" : event.confidence || "moderate",
       };
     }).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note }) && !isTelemetryOnlyFinding({ title: "", text: event.note }) && !isGenericControlObjectMention(event) && !isLowValueNoChangeForRole(event, selectedRole) && !isOutOfLaneForRole(event, selectedRole)),
   };
@@ -2524,14 +2530,14 @@ Visible evidence buckets for regular session review: penile shaft/base, glans/me
 
 Scrotal/testicular observation rule: in regular session reviews, give the scrotum/testes the same attention as shaft/glans state when they are visible. Track scrotal/testicular position, progressive lift/retraction, relaxation/descent, asymmetry, skin tightening/wrinkling, surface sheen, and visible tissue color shifts such as flushing, darker/redder tone, blanching, or return toward baseline. Compare sampled frames and nearby windows before calling a change progressive. Do not overcall color or tissue changes from lighting, camera exposure, shadow, compression artifacts, or app overlays; use "visible color/tension change" or "possible lighting-related change" when uncertain.
 
-Positive action tracking rule: describe visible contact or motion before describing absence. For regular session reviews, if any sampled frame shows hand contact with the penis, glans, shaft, scrotal-base/perineal region, sleeve/device, or visible stimulation-related motion, treat the window as active stimulation/contact or a stimulation transition unless the sequence clearly shows a pause. Do not claim sleeve-based stimulation, sleeve stroking, or sleeve placement until the sleeve is visibly placed on/over the shaft or visibly used around the penis; if the sleeve is only nearby, in hand, or outside the frame, describe hand contact/prep instead. For body exploration reviews, if any sampled frame shows glove change, swab/wipe/applicator/tool/catheter/tubing contact, or setup movement, describe that procedural action rather than saying nothing is happening. For Foley reviews, prefer the exact visible action: table positioning, glove change/prep, drape/setup, swabbing, lubrication/dilation, penis stabilization, catheter not visible, catheter approach, catheter tip at the meatus, insertion beginning, active advancement from visible motion or shortening external catheter length, visible catheter/Foley-at-meatus state, tubing handling, balloon inflation, drape removal, or urine collection. Do not use already-in-place unless completion evidence is visible or manually logged.
+Positive action tracking rule: describe visible contact or motion before describing absence. For regular session reviews, if any sampled frame shows hand contact with the penis, glans, shaft, scrotal-base/perineal region, sleeve/device, or visible stimulation-related motion, treat the window as active stimulation/contact or a stimulation transition unless the sequence clearly shows a pause. When the record does not establish sleeve use, do not introduce sleeve-based stimulation until a broad sleeve body is visibly placed on/over the shaft; a sleeve merely nearby, in hand, or outside the frame is preparation rather than confirmed use. When the record does establish sleeve use, follow the translucent-sleeve default and uncovered-glans gate below instead of demanding opaque sleeve edges in every frame. For body exploration reviews, if any sampled frame shows glove change, swab/wipe/applicator/tool/catheter/tubing contact, or setup movement, describe that procedural action rather than saying nothing is happening. For Foley reviews, prefer the exact visible action: table positioning, glove change/prep, drape/setup, swabbing, lubrication/dilation, penis stabilization, catheter not visible, catheter approach, catheter tip at the meatus, insertion beginning, active advancement from visible motion or shortening external catheter length, visible catheter/Foley-at-meatus state, tubing handling, balloon inflation, drape removal, or urine collection. Do not use already-in-place unless completion evidence is visible or manually logged.
 ${deviceIdentityContext.enemaKnown && !deviceIdentityContext.urethralKnown ? "Enema override for positive action tracking: in this exploration, prioritize visible rectal/nozzle/tubing action, anus/perianal tissue, genital state, abdominal/pelvic response, breathing, and lower-body response. Ignore the Foley-specific examples above; unsupported catheter/meatal/Hegar/sounding findings are prohibited." : ""}
 
 Mixed-window priority rule: when a window contains both Foley/catheter evidence and obvious active hand-to-penis contact or stroking, describe the stimulation/contact first and the Foley state second. Foley presence does not erase visible masturbation/stroking mechanics. If your hand is visibly gripping or stroking your penis, do not summarize the window as pure Foley placement/removal/tubing handling unless those catheter actions are themselves clearly visible.
 
 Stimulation-pause threshold rule: slower or irregular cadence, reversal at the end of a stroke, a brief hand dwell, low frame-difference motion, grip adjustment, hand repositioning under maintained contact, partial occlusion, or less visible movement is not a stimulation pause. Use stimulation_paused or motion_pause only when the sampled sequence shows at least 2.5 seconds of sustained cessation AND the hand/sleeve/device visibly releases or separates from the penis with contact remaining absent through that interval. Maintained contact, even with a temporary still hold, is a cadence/technique change rather than a pause. If repeated strokes appear anywhere across the proposed pause interval, do not create pause or resume events. A local low-motion candidate is only a whole-frame stillness hint and never proves a stimulation pause by itself. Create stimulation_resumed or motion_resume only after a prior window or earlier event in this window contains a confirmed pause meeting this release-and-separation gate.
 
-Sleeve/contact state rule: evaluate sleeve presence, sleeve motion, and body contact as three separate observations in every regular-session window. A sleeve visibly held stationary around the shaft or at the penile base means sleeve contact is maintained while stroking is paused; it is not a bare penis and it is not no-contact. Call the penis bare only when the shaft is directly visible and the sleeve is visibly separated from it. Call no contact only when neither a hand nor the sleeve/device is visibly touching the penis. Do not carry sleeve placement forward from a prior window: sleeve-on requires visible overlap with the shaft in the current sampled frames, while a sleeve merely held nearby or above the shaft is not sleeve contact.
+Sleeve/contact state rule: evaluate sleeve presence, sleeve motion, and body contact as three separate observations in every regular-session window. The masturbation sleeves can be translucent and may preserve skin tone, shaft outline, lubricant sheen, and some anatomy through the sleeve material. In a session where sleeve use is configured or already confirmed, if the glans is not clearly visible and uncovered, classify ongoing penile contact or stroking as sleeve contact by default. Do not call stimulation bare-hand merely because skin tone, shaft contour, hand motion, or sheen remains visible through translucent material. Bare-hand stimulation requires clearly visible uncovered glans/corona with no sleeve material overlapping it, or the broad sleeve body visibly separated from and held away from the penis in the current sequence. If the hand, crop, motion blur, or translucent material obscures the glans, retain sleeve-on continuity. A sleeve held stationary around the shaft or penile base is maintained sleeve contact, not a bare penis and not no-contact. Call no contact only when neither a hand nor the sleeve/device is visibly touching the penis. ${deviceIdentityContext.sleeveKnown ? "This record establishes sleeve use: default ambiguous or glans-obscured stimulation windows to translucent sleeve contact, and switch to bare-hand only after the uncovered-glans gate is satisfied." : "When sleeve use is not established by the record, require a visibly broad sleeve body before introducing sleeve-based stimulation."}
 
 Sleeve-versus-Foley identity gate: a narrow yellow tube, drainage line, catheter connector, or tubing exiting/routing near the meatus is Foley material, not a masturbation sleeve. A sleeve must have a visibly broad hollow body enclosing or surrounding a meaningful portion of the shaft; hand blur, lubricant sheen, exposed glans, and lifted Foley tubing do not establish one. Never describe Foley tubing as a yellow sleeve or turn hand repositioning/tubing lift into sleeve insertion or removal. ${deviceIdentityContext.foleyKnown && !deviceIdentityContext.sleeveKnown ? "This session establishes a Foley/catheter and does not establish a masturbation sleeve. Treat visible stimulation as bare-hand stimulation with the Foley in situ unless the current frames unmistakably show a separate broad sleeve device." : "Keep Foley tubing and any separately visible sleeve as distinct devices."}
 
