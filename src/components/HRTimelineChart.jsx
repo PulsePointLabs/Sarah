@@ -1,13 +1,11 @@
 import { useEffect, useState, useMemo } from "react";
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea,
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, Layers, MapPin, SlidersHorizontal, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronDown, Layers, SlidersHorizontal, ZoomIn, ZoomOut } from "lucide-react";
 import { useChartZoom } from "@/hooks/useChartZoom";
-import { EVENT_CATEGORIES, normalizeCategoryArray } from "./session-form/EventTimelineSection";
-
-const MAX_VISIBLE_POINTS = 1200;
+import { buildCleanChartRows, numberOrNull } from "@/lib/hrTimelineChartData";
 
 const MARKER_COLORS = {
   build: "#f59e0b",
@@ -22,15 +20,6 @@ const PHASE_COLORS = {
   recovery: "#3b82f6",
 };
 
-function getCategoryMeta(value) {
-  return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
-}
-
-function getEventColor(event) {
-  const categories = normalizeCategoryArray(event?.category);
-  return getCategoryMeta(categories[0] || "other").color;
-}
-
 function fmtSec(v) {
   const total = Math.round(Number(v));
   const m = Math.floor(total / 60);
@@ -41,75 +30,6 @@ function fmtSec(v) {
 function deltaSec(a, b) {
   if (a == null || b == null) return null;
   return Math.round(Math.abs(b - a));
-}
-
-function numberOrNull(value) {
-  if (value == null || value === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
-function averageNumbers(values = []) {
-  const nums = values.map(numberOrNull).filter((value) => value != null);
-  if (!nums.length) return null;
-  return nums.reduce((sum, value) => sum + value, 0) / nums.length;
-}
-
-function pickLastPresent(rows = [], key) {
-  for (let i = rows.length - 1; i >= 0; i -= 1) {
-    const value = rows[i]?.[key];
-    if (value != null && value !== "") return value;
-  }
-  return null;
-}
-
-function buildCleanChartRows(rows = [], maxPoints = MAX_VISIBLE_POINTS) {
-  const sortedRows = [...rows]
-    .map((row) => ({ ...row, time_offset_s: numberOrNull(row.time_offset_s) }))
-    .filter((row) => row.time_offset_s != null)
-    .sort((a, b) => a.time_offset_s - b.time_offset_s);
-
-  if (!sortedRows.length) return [];
-
-  const deduped = [];
-  let group = [];
-  let currentTime = null;
-
-  const flushGroup = () => {
-    if (!group.length) return;
-    deduped.push({
-      ...group[group.length - 1],
-      time_offset_s: currentTime,
-      hr: averageNumbers(group.map((row) => row.hr)),
-      hr_smoothed: averageNumbers(group.map((row) => row.hr_smoothed)),
-      baseline_hr: averageNumbers(group.map((row) => row.baseline_hr)),
-      elevated_delta: averageNumbers(group.map((row) => row.elevated_delta)),
-      hrv_rmssd_ms: averageNumbers(group.map((row) => row.hrv_rmssd_ms)),
-      hrv_sdnn_ms: averageNumbers(group.map((row) => row.hrv_sdnn_ms)),
-      hrv_pnn50: averageNumbers(group.map((row) => row.hrv_pnn50)),
-      marker: pickLastPresent(group, "marker"),
-      note: pickLastPresent(group, "note"),
-      hrv_quality: pickLastPresent(group, "hrv_quality"),
-    });
-    group = [];
-  };
-
-  sortedRows.forEach((row) => {
-    if (currentTime == null || row.time_offset_s === currentTime) {
-      currentTime = row.time_offset_s;
-      group.push(row);
-      return;
-    }
-    flushGroup();
-    currentTime = row.time_offset_s;
-    group = [row];
-  });
-  flushGroup();
-
-  if (deduped.length <= maxPoints) return deduped;
-
-  const step = Math.ceil(deduped.length / maxPoints);
-  return deduped.filter((_, index) => index % step === 0 || index === deduped.length - 1);
 }
 
 function MarkerDot(props) {
@@ -187,9 +107,6 @@ export default function HRTimelineChart({
   highlightRange = null,
   noClimax = false,
   nearClimaxEvents = [],
-  events = [],
-  selectedEventIndex = null,
-  onSelectEventIndex,
   initialWindow,
   compact = false,
   playbackTime,
@@ -208,7 +125,6 @@ export default function HRTimelineChart({
   const [showBuild, setShowBuild] = useState(false);
   const [showRecovery, setShowRecovery] = useState(false);
   const [showPhases, setShowPhases] = useState(false);
-  const [showEvents, setShowEvents] = useState(false);
   const [showNearClimax, setShowNearClimax] = useState(false);
   const [showHrvOverlay, setShowHrvOverlay] = useState(false);
   const [visibleLines, setVisibleLines] = useState({ hr: true, smoothed: true, baseline: true });
@@ -441,37 +357,6 @@ export default function HRTimelineChart({
     ].filter(Boolean).filter((band) => band.x2 > band.x1);
   }, [localMarkers, noClimax]);
 
-  const eventsInView = useMemo(() => {
-    if (!showEvents) return [];
-    const [min, max] = zoomDomain ? [zoomDomain.x1, zoomDomain.x2] : [visibleMin, visibleMax];
-    return events
-      .map((event, index) => ({ event, index }))
-      .filter(({ event }) => Number(event.time_s) >= min && Number(event.time_s) <= max);
-  }, [events, showEvents, zoomDomain, visibleMin, visibleMax]);
-
-  const eventMarkers = useMemo(() => {
-    if (eventsInView.length <= 10 || visibleMax - visibleMin <= 180) {
-      return eventsInView.map(({ event, index }) => ({
-        key: `event-${index}`,
-        timeS: Number(event.time_s),
-        events: [{ event, index }],
-      }));
-    }
-    const bucketS = Math.max(30, Math.ceil((visibleMax - visibleMin) / 12));
-    const clusters = new Map();
-    eventsInView.forEach(({ event, index }) => {
-      const bucket = Math.floor((Number(event.time_s) - visibleMin) / bucketS);
-      const existing = clusters.get(bucket) || [];
-      existing.push({ event, index });
-      clusters.set(bucket, existing);
-    });
-    return [...clusters.entries()].map(([bucket, clusteredEvents]) => ({
-      key: `cluster-${bucket}`,
-      timeS: clusteredEvents.reduce((sum, item) => sum + Number(item.event.time_s), 0) / clusteredEvents.length,
-      events: clusteredEvents,
-    }));
-  }, [eventsInView, visibleMax, visibleMin]);
-
   const nearClimaxEventsInView = useMemo(() => {
     if (!showNearClimax || noClimax) return [];
     const [min, max] = zoomDomain ? [zoomDomain.x1, zoomDomain.x2] : [visibleMin, visibleMax];
@@ -585,12 +470,10 @@ export default function HRTimelineChart({
         <span className="text-[10px] text-muted-foreground flex items-center gap-1"><Layers className="w-3 h-3" /> Layers</span>
         {(noClimax
           ? [
-            ["Events", showEvents, setShowEvents],
             ["HR shifts", showNearClimax, setShowNearClimax],
           ]
           : [
             ["Phases", showPhases, setShowPhases],
-            ["Events", showEvents, setShowEvents],
             ["Surges", showNearClimax, setShowNearClimax],
             ["Build", showBuild, setShowBuild],
             ["Recovery", showRecovery, setShowRecovery],
@@ -721,26 +604,6 @@ export default function HRTimelineChart({
                   onMouseLeave={() => setHoveredEventIdx(null)}
                 />,
               ]);
-            })}
-
-            {/* Event pins */}
-            {eventMarkers.map((marker) => {
-              const first = marker.events[0];
-              const color = getEventColor(first.event);
-              const isSelected = marker.events.some(({ index }) => selectedEventIndex === index);
-              const label = marker.events.length > 1 ? `[${marker.events.length}]` : `E${first.index + 1}`;
-              return (
-                <ReferenceLine
-                  key={marker.key}
-                  x={marker.timeS}
-                  stroke={color}
-                  strokeWidth={isSelected ? 2.4 : 1.2}
-                  strokeOpacity={isSelected ? 0.95 : 0.52}
-                  strokeDasharray={isSelected ? "none" : "2 3"}
-                  label={{ value: label, fontSize: 8, fill: color, position: "insideTopRight" }}
-                  onClick={() => onSelectEventIndex?.(selectedEventIndex === first.index ? null : first.index)}
-                />
-              );
             })}
 
             {/* Legacy highlight range */}
@@ -1170,11 +1033,6 @@ export default function HRTimelineChart({
           >
             <span className="w-4 h-0.5 inline-block" style={{ borderTop: "2px dashed #f59e0b" }} /> pNN50
           </button>
-        )}
-        {showEvents && events.length > 0 && (
-          <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-            <MapPin className="w-3 h-3" />{events.length} event pins
-          </span>
         )}
         {noClimax && showNearClimax && hrChangeBands.length > 0 && (
           <span className="text-[10px] text-muted-foreground flex items-center gap-1">
