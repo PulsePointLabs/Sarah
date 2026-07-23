@@ -34,6 +34,11 @@ import {
 import { SARAH_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
 import { serverUrl } from "@/lib/mobileApiBase";
 import {
+  detectBodyExplorationAnnotationMode,
+  isUnsupportedUrethralClaimForMode,
+  removeUnsupportedUrethralSentences,
+} from "@/lib/bodyExplorationAnnotationMode";
+import {
   normalizeVideoRespirationAssessment,
   respirationEventForAssessment,
   respirationFindingForAssessment,
@@ -478,6 +483,7 @@ function hasUnsupportedAlreadyPlacedClaim(item) {
 function sessionDeviceIdentityContext(session) {
   const methods = listText(session?.methods);
   const tags = listText(session?.tags);
+  const explorationMode = detectBodyExplorationAnnotationMode(session);
   const contextText = [
     methods,
     tags,
@@ -489,6 +495,7 @@ function sessionDeviceIdentityContext(session) {
   return {
     foleyKnown: Boolean(session?.foley_type || session?.foley_size || /\b(?:foley|catheter)\b/.test(contextText)),
     sleeveKnown: Boolean(session?.sleeve_type || /\b(?:masturbation\s+)?sleeve\b/.test(`${methods} ${tags}`.toLowerCase())),
+    ...explorationMode,
   };
 }
 
@@ -643,7 +650,7 @@ function videoRoleLabel(role) {
   return VIDEO_ROLE_OPTIONS.find((option) => option.value === role)?.shortLabel || "Main";
 }
 
-function videoFocusInstruction(video = {}, selectedRole = "", isExploration = false) {
+function videoFocusInstruction(video = {}, selectedRole = "", isExploration = false, annotationMode = {}) {
   const role = selectedRole || inferVideoRole(video);
   if (role === "feet") {
     if (isExploration) {
@@ -653,17 +660,22 @@ function videoFocusInstruction(video = {}, selectedRole = "", isExploration = fa
   }
   if (role === "lateral") {
     return isExploration
-      ? "This is a lateral/full-body angle for a body exploration/procedure review. Prioritize posture, positioning, breathing/body settling when visible, leg/foot tension or relaxation, comfort/tolerance cues, and meaningful whole-body response during instrumentation or setup changes."
+      ? annotationMode.enemaKnown && !annotationMode.urethralKnown
+        ? "This is a lateral/full-body angle for an enema body-exploration review. Prioritize posture, pelvic and abdominal bracing or release, chest/abdominal breathing when assessable, buttock and lower-body positioning, comfort/tolerance cues, and meaningful whole-body response around rectal instillation, retention, leakage/return, or expulsion. Do not search this lane for urethral instrumentation."
+        : "This is a lateral/full-body angle for a body exploration/procedure review. Prioritize posture, positioning, breathing/body settling when visible, leg/foot tension or relaxation, comfort/tolerance cues, and meaningful whole-body response during instrumentation or setup changes."
       : "This is a lateral/full-body angle. Prioritize head-to-toe body state: posture, pelvic lift/drop, abdominal or chest motion if visible enough for cautious breathing assessment, leg/foot tension, relaxation, and meaningful whole-body transitions.";
   }
   if (isExploration) {
+    if (annotationMode.enemaKnown && !annotationMode.urethralKnown) {
+      return "This is the main enema/rectal body-exploration view. Prioritize the anus and perianal tissue, buttock/pelvic positioning, visible rectal nozzle or tube approach/contact/insertion/withdrawal only when shown, instillation or fluid flow only when visible or manually logged, leakage/fluid return/expulsion when visible, and local tissue response without guessing internal pressure or sensation. Also track genital state when visible, including penile flaccidity/erection or engorgement, glans/shaft appearance, scrotal position/retraction/descent, tissue color/tension, and incidental genital contact, plus abdominal bracing/release, breathing, leg/foot response, tremor, and whole-body settling. This record establishes an enema context, not Foley placement or urethral sounding: do not hunt for a catheter, Hegar dilator, urethral tool, meatal contact, or Foley stage unless a separate urethral procedure is explicitly documented and visibly supported.";
+    }
     return "This is the main body exploration/procedure view. Follow the visible procedure sequence naturally using current-frame action plus exploration context: positioning on the table, draping, swabbing/antiseptic prep, lubrication or urethral dilation, initial Foley handling, penis/glans stabilization, visible meatal engagement, visible advancement through urethral landmarks, bladder entry or urine confirmation, balloon inflation, drape removal, and urine collection in the bag. Describe only the stage/action actually visible in the current window. Foley or tubing presence is state, not action; do not convert visible tubing/field handling into insertion, placement, advancement, balloon inflation, securement, or finalization unless that exact action is visible or logged nearby. Do not treat procedure handling as active stimulation unless active stimulation is visibly present or logged.";
   }
   return "This is a main/genital-composite session view. Treat it as a masturbation/stimulation session unless the record or nearby manual notes explicitly say a Foley/body-exploration procedure is happening in this window. Actively track visible stimulation mechanics and genital physiology: hand-to-genital contact, stroking/shaft or glans motion, sleeve/device movement, penile state, scrotal/testicular position, scrotal lift/retraction or relaxation/descent, scrotal skin tension/wrinkling, visible tissue color or sheen changes, perineal or scrotal-base contact, lubricant application, grip/contact changes, pauses/resumes, and device-plus-stimulation combinations such as Foley in place while stimulation continues. A Foley catheter, sleeve, lubricant, or other device being present does not make the window a resting state or a procedure window by itself. Only call the window resting/no stimulation when sampled frames show no hand/device/body contact or stimulation motion across the window.";
 }
 
-function videoRoleHelper(role, isExploration = false) {
-  if (isExploration) return videoFocusInstruction({}, role, true);
+function videoRoleHelper(role, isExploration = false, annotationMode = {}) {
+  if (isExploration) return videoFocusInstruction({}, role, true, annotationMode);
   return VIDEO_ROLE_OPTIONS.find((option) => option.value === role)?.helper || "";
 }
 
@@ -818,15 +830,23 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
     ...findings.flatMap((finding) => [finding?.title, finding?.text, finding?.findingText]),
     ...events.flatMap((event) => [event?.note, event?.text]),
   ].filter(Boolean).join(' ');
+  const isUnsupportedUrethralItem = (item) => isUnsupportedUrethralClaimForMode([
+    item?.title,
+    item?.text,
+    item?.findingText,
+    item?.note,
+  ].filter(Boolean).join(" "), deviceContext);
   const cleanTextForMode = (text) => (
     isExploration
-      ? sanitizeExplorationFoleyText(text)
+      ? removeUnsupportedUrethralSentences(sanitizeExplorationFoleyText(text), deviceContext)
       : sanitizeUnsupportedStimulationPauseClaim(sanitizeRegularSessionDeviceText(text, deviceContext, rawWindowText), rawWindowText)
   );
+  const retainedFindings = findings.filter((finding) => !isUnsupportedUrethralItem(finding));
   return {
     respirationAssessment,
-    summary: cleanTextForMode(value?.summary || findings[0]?.text || "Review complete."),
-    findings: findings.map((finding) => ({
+    summary: cleanTextForMode(value?.summary || findings[0]?.text || "Review complete.")
+      || (deviceContext.enemaKnown ? "Enema-focused visual review complete." : "Review complete."),
+    findings: retainedFindings.map((finding) => ({
       title: hasUnsupportedFoleySecurementClaim(finding)
         ? "Tubing/field handling"
         : hasUnsupportedAlreadyPlacedClaim(finding)
@@ -859,9 +879,12 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
       category: finding.category || "other",
     })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding) && !isTelemetryOnlyFinding(finding) && !isGenericControlObjectMention(finding) && !isLowValueNoChangeForRole(finding, selectedRole) && !isOutOfLaneForRole(finding, selectedRole)),
     events: events.filter((event) => (
-      isExploration
-      || !/(stimulation_paused|motion_pause)/i.test(arrayFromMaybe(event?.category).join(' '))
-      || hasConfirmedStimulationPauseEvidence(event, rawWindowText)
+      !isUnsupportedUrethralItem(event)
+      && (
+        isExploration
+        || !/(stimulation_paused|motion_pause)/i.test(arrayFromMaybe(event?.category).join(' '))
+        || hasConfirmedStimulationPauseEvidence(event, rawWindowText)
+      )
     )).map((event) => {
       const unsupportedFoleyForecast = isExploration && hasUnsupportedFoleyStageForecast(event);
       const unsupportedAlreadyPlaced = isExploration && hasUnsupportedAlreadyPlacedClaim(event);
@@ -1924,6 +1947,7 @@ export default function AIVideoPassPanel({
   const isExploration = recordType === "body_exploration" || session?.standalone_body_exploration;
   const recordLabel = isExploration ? "exploration" : "session";
   const deviceIdentityContext = useMemo(() => sessionDeviceIdentityContext(session), [session]);
+  const enemaOnlyExploration = isExploration && deviceIdentityContext.enemaKnown && !deviceIdentityContext.urethralKnown;
   const analysisField = isExploration ? "ai_body_exploration" : "ai_analysis";
   const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
   const availableVideos = useMemo(() => linkedLocalVideos.filter((video) => video?.path && video.exists !== false), [linkedLocalVideos]);
@@ -2057,7 +2081,7 @@ export default function AIVideoPassPanel({
   const [playbackPreviewConverting, setPlaybackPreviewConverting] = useState(false);
   const selectedVideoStreamUrl = playbackPreviewUrl || rawSelectedVideoStreamUrl;
   const [selectedVideoRole, setSelectedVideoRole] = useState(inferVideoRole(selectedVideo));
-  const selectedVideoRoleHelper = videoRoleHelper(selectedVideoRole, isExploration);
+  const selectedVideoRoleHelper = videoRoleHelper(selectedVideoRole, isExploration, deviceIdentityContext);
   const estimatedSessionEnd = useMemo(() => estimateSessionEnd(session, timelineRows), [session, timelineRows]);
   const sessionEnd = useMemo(
     () => selectedVideoSessionEnd(selectedVideo, estimatedSessionEnd, metadataDurationSeconds),
@@ -2435,7 +2459,19 @@ export default function AIVideoPassPanel({
               required: ["summary", "findings", "events", "respiration_assessment"],
             },
             images,
-            prompt: `${isExploration ? `HIGH-PRIORITY BODY EXPLORATION MODE:
+            prompt: `${isExploration ? (deviceIdentityContext.enemaKnown && !deviceIdentityContext.urethralKnown ? `HIGH-PRIORITY ENEMA BODY EXPLORATION MODE:
+This is an enema/rectal body-exploration review, not a Foley placement, urethral sounding, or Hegar dilation review. Apply this automatically from the record context; no user setting is required.
+
+Primary evidence targets: the anus and perianal tissue; buttock and pelvic positioning; visible enema nozzle/tube/applicator approach, anal contact, insertion, dwell, adjustment, withdrawal, leakage, fluid return, or expulsion only when the current frames or nearby manual notes support that exact stage; abdominal/chest breathing and bracing; pelvic, leg, foot, tremor, and whole-body response; and visible genital state including penile flaccidity/erection/engorgement, glans/shaft appearance, scrotal retraction/descent, skin tension, and cautious color change.
+
+Anal-stage evidence gate: visible equipment near the body is not proof of anal contact or insertion. Call anal contact only when the nozzle/tube is visibly at the anus. Call insertion/advancement only from visible entry or frame-to-frame inward movement. Call instillation/flow only when fluid movement, bag/tubing behavior, or a nearby manual note supports it. Call withdrawal only from visible outward movement. Call expulsion, leakage, or fluid return only when visible or manually logged. Do not infer internal depth, retained volume, pressure, cramping, pain, pleasure, or sphincter state beyond visible external evidence.
+
+Genital/body-state rule: genital state is an important parallel observation even when the anus is the procedure focus. Track meaningful change rather than repeating a static state in every window. Describe visible erection/flaccidity, engorgement, scrotal position/tension, tissue color, incidental genital contact, abdominal bracing/release, breath pattern when assessable, pelvic motion, lower-body tension/relaxation, and autonomic telemetry support without turning the review into a masturbation lifecycle unless active stimulation is actually visible or logged.
+
+Hard exclusion rule: do not search for or speculate about a Foley catheter, urinary catheter, Hegar dilator, urethral sound, urethral dilation, meatal engagement, bladder entry, balloon inflation, urinary drainage, or catheter placement/removal. Omit those findings and events entirely unless this same record explicitly documents a separate urethral procedure and the current frames visibly support it.
+
+Use exploration event categories only: instrumentation, instrumentation_change, physical, sensation, comfort, setup, or other.
+Draft event examples: "Rectal nozzle approaches the anus" only when visible, "Nozzle contact is visible at the anus", "Visible rectal insertion begins", "Enema tubing position changes", "Visible fluid leakage/return begins", "Nozzle withdrawal is visible", "Abdomen braces during instillation", "Pelvis and legs relax after the procedure change", "Penile state becomes more erect", or "Scrotum retracts with visible lower-body tension". Keep only useful changes; do not repeat static anatomy or unchanged equipment.` : `HIGH-PRIORITY BODY EXPLORATION MODE:
 This is a Body Exploration / instrumentation review, not an active-stimulation session analysis. Watch for procedure, setup, device position, genital/body state, tissue appearance, Foley catheter or urethral sound/dilator presence, insertion/withdrawal/adjustment, meatal/urethral context when visible or logged, comfort/tolerance cues, breathing/legs/body response, and telemetry-supported autonomic response.
 Do not force a stimulation lifecycle. Do not create stimulation start/pause/resume/stop events. If masturbation or active stimulation is not visibly present and not logged, treat hands/devices as procedure/instrumentation context, not stimulation. Interpret Foley/sound/catheter evidence through the exploration notes and mechanical profile context when provided, while staying strict about what is visible.
 
@@ -2466,7 +2502,7 @@ Handedness/camera rule: do not label hands, feet, legs, or body sides as left or
 Hands and participation rule: assume visible hands are your hands unless another participant is clearly visible or explicitly logged as assisting. Do not introduce another person, helper, clinician, operator, or assistant from hands alone.
 Personal language rule: write about Ben directly as "you" and "your". Never call him "the subject", "subject", "patient", "participant", "operator", "the person", "the user", "the user's", "a gloved hand", or "the gloved hand". Use "your hand" or "your hands"; use "your gloved hand" only when glove/sterile technique matters.
 Use exploration event categories only: instrumentation, instrumentation_change, physical, sensation, comfort, setup, or other.
-Draft event examples for this mode: "Fresh gloves/glove change visible during prep", "Draping and field setup continue", "Swabbing/prep continues around the meatus", "Lubrication or dilation syringe is used near the meatus", "One hand stabilizes the penis while the other brings the catheter toward the meatus" only if a Foley is visibly in hand, "Catheter tip is visible at the meatus" when contact/engagement is visible without confirmed advancement, "Foley insertion begins at the meatus" when the tip first visibly enters, "Foley advancement is visible at the meatus" when frame-to-frame advancement or progressive external-length shortening is visible, "Foley/tubing is being handled after insertion" only after completion is established, "Urine appears in the tubing/bag", "Drape is removed while urine collects in the bag".` : ""}
+ Draft event examples for this mode: "Fresh gloves/glove change visible during prep", "Draping and field setup continue", "Swabbing/prep continues around the meatus", "Lubrication or dilation syringe is used near the meatus", "One hand stabilizes the penis while the other brings the catheter toward the meatus" only if a Foley is visibly in hand, "Catheter tip is visible at the meatus" when contact/engagement is visible without confirmed advancement, "Foley insertion begins at the meatus" when the tip first visibly enters, "Foley advancement is visible at the meatus" when frame-to-frame advancement or progressive external-length shortening is visible, "Foley/tubing is being handled after insertion" only after completion is established, "Urine appears in the tubing/bag", "Drape is removed while urine collects in the bag".`) : ""}
 
 You are Sarah, reviewing sampled frames from a linked local ${recordLabel} video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
 
@@ -2474,11 +2510,11 @@ ${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 
 ${MANUAL_NOTE_FOUNDATION_RULE}
 
-${isExploration ? "Exploration/procedure context grounding" : "Session context grounding"} has priority when it identifies known setup, devices, materials, or technique. Use the ${recordLabel} notes, methods, devices, and timestamped/manual notes below to interpret ambiguous visible objects and contact locations. ${isExploration ? "For example, if the exploration context says an 18 French Foley catheter or urethral sound is in use and the frames show a matching device at the meatus, identify it as that supported instrumentation rather than vague stimulation or generic object handling." : "For example, if the session context says a vibrator is held at the perineum during stimulation and the frames show a matching device/contact at that location, call it a perineal vibrator/contact rather than a vague \"blue device near the scrotum and genitals.\""} If context and visuals do not line up, state the uncertainty instead of forcing the label.
+${isExploration ? "Exploration/procedure context grounding" : "Session context grounding"} has priority when it identifies known setup, devices, materials, or technique. Use the ${recordLabel} notes, methods, devices, and timestamped/manual notes below to interpret ambiguous visible objects and contact locations. ${isExploration ? (deviceIdentityContext.enemaKnown && !deviceIdentityContext.urethralKnown ? "For this enema record, identify a visibly matching rectal nozzle, enema tube, bag/tubing, lubricant, towel, or fluid return from the supported context, while keeping anal contact/insertion/flow stages tied to current-frame or manual evidence. Do not reinterpret ambiguous equipment as Foley, Hegar, urethral sounding, or meatal instrumentation." : "For example, if the exploration context says an 18 French Foley catheter or urethral sound is in use and the frames show a matching device at the meatus, identify it as that supported instrumentation rather than vague stimulation or generic object handling.") : "For example, if the session context says a vibrator is held at the perineum during stimulation and the frames show a matching device/contact at that location, call it a perineal vibrator/contact rather than a vague \"blue device near the scrotum and genitals.\""} If context and visuals do not line up, state the uncertainty instead of forcing the label.
 
 ${isExploration ? "" : "Session-versus-procedure gate: this record is a masturbation/stimulation session, not a body-exploration or Foley-placement review, unless nearby manual notes explicitly document a Foley insertion, removal, adjustment, or other procedure step in this same window. A Foley being visible or in situ during stimulation is baseline device context, not proof of insertion/removal. Do not switch into procedure language such as placement, advancement, withdrawal, removal, securement, bladder entry, balloon inflation, or dwell interval unless the current sampled frames or nearby manual notes directly support that exact step."}
 
-${isExploration ? "Procedure chronology rule: manual/user timeline notes are stronger than prior AI video-pass cards for stage order and timing. Use the current sampled frames to describe what is visible now, but do not back-date iodine, lubricant, Foley-at-meatus contact, insertion, urine return, balloon fill, securement, or cleanup into a window unless either the current frames show it or a nearby manual note says it has happened. If the video appears to show something before the manual timeline allows it, label the visual as ambiguous or possible conflict instead of merging both claims." : ""}
+${isExploration ? (deviceIdentityContext.enemaKnown && !deviceIdentityContext.urethralKnown ? "Enema chronology rule: manual/user timeline notes are stronger than prior AI cards for stage order and timing. Do not back-date anal contact, insertion, instillation, retention, leakage/return, withdrawal, or expulsion unless the current frames show it or a nearby manual note establishes it. If the visuals and manual timeline conflict, flag the mismatch rather than merging both claims." : "Procedure chronology rule: manual/user timeline notes are stronger than prior AI video-pass cards for stage order and timing. Use the current sampled frames to describe what is visible now, but do not back-date iodine, lubricant, Foley-at-meatus contact, insertion, urine return, balloon fill, securement, or cleanup into a window unless either the current frames show it or a nearby manual note says it has happened. If the video appears to show something before the manual timeline allows it, label the visual as ambiguous or possible conflict instead of merging both claims.") : ""}
 
 Current-frame override rule: the sampled frames in this request are the primary evidence. Prior summaries, accepted cards, and continuity text can orient the sequence, but they must not override the current frames. If the prior window said "resting", "no stimulation", "no visible movement", or "HR rising without visible cause", actively re-check the current frames for hand/device contact, visible stroke or device motion, perineal contact, glans/shaft movement, sleeve/lubricant interaction, body/leg response, or procedure action before repeating that claim.
 
@@ -2489,6 +2525,7 @@ Visible evidence buckets for regular session review: penile shaft/base, glans/me
 Scrotal/testicular observation rule: in regular session reviews, give the scrotum/testes the same attention as shaft/glans state when they are visible. Track scrotal/testicular position, progressive lift/retraction, relaxation/descent, asymmetry, skin tightening/wrinkling, surface sheen, and visible tissue color shifts such as flushing, darker/redder tone, blanching, or return toward baseline. Compare sampled frames and nearby windows before calling a change progressive. Do not overcall color or tissue changes from lighting, camera exposure, shadow, compression artifacts, or app overlays; use "visible color/tension change" or "possible lighting-related change" when uncertain.
 
 Positive action tracking rule: describe visible contact or motion before describing absence. For regular session reviews, if any sampled frame shows hand contact with the penis, glans, shaft, scrotal-base/perineal region, sleeve/device, or visible stimulation-related motion, treat the window as active stimulation/contact or a stimulation transition unless the sequence clearly shows a pause. Do not claim sleeve-based stimulation, sleeve stroking, or sleeve placement until the sleeve is visibly placed on/over the shaft or visibly used around the penis; if the sleeve is only nearby, in hand, or outside the frame, describe hand contact/prep instead. For body exploration reviews, if any sampled frame shows glove change, swab/wipe/applicator/tool/catheter/tubing contact, or setup movement, describe that procedural action rather than saying nothing is happening. For Foley reviews, prefer the exact visible action: table positioning, glove change/prep, drape/setup, swabbing, lubrication/dilation, penis stabilization, catheter not visible, catheter approach, catheter tip at the meatus, insertion beginning, active advancement from visible motion or shortening external catheter length, visible catheter/Foley-at-meatus state, tubing handling, balloon inflation, drape removal, or urine collection. Do not use already-in-place unless completion evidence is visible or manually logged.
+${deviceIdentityContext.enemaKnown && !deviceIdentityContext.urethralKnown ? "Enema override for positive action tracking: in this exploration, prioritize visible rectal/nozzle/tubing action, anus/perianal tissue, genital state, abdominal/pelvic response, breathing, and lower-body response. Ignore the Foley-specific examples above; unsupported catheter/meatal/Hegar/sounding findings are prohibited." : ""}
 
 Mixed-window priority rule: when a window contains both Foley/catheter evidence and obvious active hand-to-penis contact or stroking, describe the stimulation/contact first and the Foley state second. Foley presence does not erase visible masturbation/stroking mechanics. If your hand is visibly gripping or stroking your penis, do not summarize the window as pure Foley placement/removal/tubing handling unless those catheter actions are themselves clearly visible.
 
@@ -2511,7 +2548,7 @@ Timeline timing rule: sampled frames can lag the true transition. Do not assume 
 ${isExploration ? "" : "Stimulation lifecycle rule: there should usually be only one \"stimulation_started\" event for the initial obvious masturbation/contact and only one \"stimulation_stopped\" event for the true post-climax/end-of-session cessation. Use plain \"stimulation\" for cadence, grip, contact-location, technique, lubrication, device-handling, and post-climax milking/recovery changes while contact continues. Use \"stimulation_paused\" only for a sustained visible release/separation meeting the pause gate, and use \"stimulation_resumed\" only after such a confirmed pause. Do not create repeated start/stop or pause/resume events for adjacent windows that are really cadence or method changes."}
 
 Camera/view focus:
-${videoFocusInstruction(selectedVideo, selectedVideoRole, isExploration)}
+${videoFocusInstruction(selectedVideo, selectedVideoRole, isExploration, deviceIdentityContext)}
 
 Source-lane rule: treat the selected camera as its own evidence lane. Main/composite owns genital, stimulation, hand contact, device, lubricant, and technique observations. Feet/lower-body owns feet, toes, heels, soles, ankles, legs, planting, bracing, tremor, shudder, and lower-body tension/relaxation observations. Lateral/full-body owns posture, pelvic lift/drop, breathing cues, whole-body tension, and major body transitions. For a feet/lower-body pass, do not draft timeline events about right/left hand movement, genital contact, control objects, lube/device handling, erection/genital state, or stimulation pause/resume unless a visible foot/leg change is the main event.
 
@@ -2536,9 +2573,9 @@ Output style: write the summary as a flowing chronological observation with the 
 Language variety rule: do not make "consistent with", "consistent", or "consistently" your default evidence phrase. Avoid this word family unless it is clearly the best wording; if it appears once, rewrite any later use in this window with "fits with", "aligns with", "matches", "supports", "stable", "repeated", "holds steady", or direct observation language.
 Use direct, personal language: "you", "your glans", "your lower body", "your hand", or "your hands". Do not use detached research wording such as "subject", "the subject", "patient", "participant", "operator", "the person", "the user", "the user's", "a gloved hand", or "the gloved hand". Use "your gloved hand" only when glove/sterile technique matters. Assume the hand is yours unless another person is clearly visible or explicitly logged.
 
-Draft event style: write events like concise manual timeline notes, not analysis paragraphs. Prefer observations such as ${isExploration ? "\"Drape/setup position is visible\", \"Antiseptic prep continues around the meatus\", \"Lubrication/tool handling begins\", \"Catheter is not visible in this window\", \"Catheter tip is visible at the meatus\" only when the actual tip is visible there, \"Visible Foley advancement continues\" only when frame-to-frame advancement is visible, or \"Tubing/field handling continues\"" : "\"Left foot plants further while legs tense\", \"Pelvis lifts briefly then drops\", \"Lubrication applied to glans\", \"Perineal contact resumes below scrotum\", \"Scrotum lifts progressively during stimulation\", \"Scrotal skin appears tighter/redder than prior frames\", \"Stimulation resumes with mid-shaft to glans strokes\", \"Glans remains engorged with visible sheen\", \"Sleeve use becomes visible\" only after visible placement/use, \"Deep exhale visible through abdominal drop\", or \"Whitish ejaculate clearly visible after confirmed climax marker\""} only when strongly supported by context plus visible sequence. Do not include HR/BPM/overlay/timer language in event notes unless no visible body/${isExploration ? "procedure" : "stimulation"} change exists. Do not begin event notes with "this window opens", "window opens", "this window closes", or "window closes"; write the actual observed change directly.
+Draft event style: write events like concise manual timeline notes, not analysis paragraphs. Prefer observations such as ${isExploration ? (deviceIdentityContext.enemaKnown && !deviceIdentityContext.urethralKnown ? "\"Rectal nozzle approaches the anus\", \"Visible anal contact begins\", \"Visible rectal insertion begins\", \"Enema tubing position changes\", \"Abdomen braces during the procedure\", \"Visible leakage/fluid return begins\", \"Nozzle withdrawal is visible\", \"Penile state becomes more erect\", or \"Scrotum retracts with lower-body tension\"" : "\"Drape/setup position is visible\", \"Antiseptic prep continues around the meatus\", \"Lubrication/tool handling begins\", \"Catheter is not visible in this window\", \"Catheter tip is visible at the meatus\" only when the actual tip is visible there, \"Visible Foley advancement continues\" only when frame-to-frame advancement is visible, or \"Tubing/field handling continues\"") : "\"Left foot plants further while legs tense\", \"Pelvis lifts briefly then drops\", \"Lubrication applied to glans\", \"Perineal contact resumes below scrotum\", \"Scrotum lifts progressively during stimulation\", \"Scrotal skin appears tighter/redder than prior frames\", \"Stimulation resumes with mid-shaft to glans strokes\", \"Glans remains engorged with visible sheen\", \"Sleeve use becomes visible\" only after visible placement/use, \"Deep exhale visible through abdominal drop\", or \"Whitish ejaculate clearly visible after confirmed climax marker\""} only when strongly supported by context plus visible sequence. Do not include HR/BPM/overlay/timer language in event notes unless no visible body/${isExploration ? "procedure" : "stimulation"} change exists. Do not begin event notes with "this window opens", "window opens", "this window closes", or "window closes"; write the actual observed change directly.
 
-Visible tools and materials matter when supported: identify lubrication bottles or lubricant application only when a bottle, gel/fluid, hand motion, shine, or user/session context makes that reasonably clear. ${isExploration ? "For body exploration, avoid generic \"object\" wording when the visible material is more likely swab, gauze, wipe, drape, towel, applicator, tubing, catheter shaft, lubricant, or syringe. Use the session context to name procedure-relevant materials when the sequence and visuals make that reasonable, but do not make every frame about the final device. Do not name securement hardware, StatLock, balloon, urine return, or bag collection unless visible in current sampled frames or explicitly stated in nearby manual notes." : "Identify devices such as a silicone sleeve, Foley catheter, e-stim/TENS leads, pump, towel, table, Coyote-E/Howl overlay, stim-control display, or camera/monitor setup when visible or strongly supported by session context. When readable, preserve frequency, intensity, power, mode, waveform, channel, play/pause, and active/ramp state as concrete timeline evidence."} If uncertain, say "possible" and mark confidence low or moderate. Write findings in direct second person using "you" and "your".
+Visible tools and materials matter when supported: identify lubrication bottles or lubricant application only when a bottle, gel/fluid, hand motion, shine, or user/session context makes that reasonably clear. ${isExploration ? (deviceIdentityContext.enemaKnown && !deviceIdentityContext.urethralKnown ? "For this enema exploration, distinguish visible enema bag/tubing/nozzle/applicator, lubricant, towel/pad, and fluid return from generic objects when context and frames support the identity. Do not rename ambiguous tubing as urinary/Foley material, and do not infer anal insertion or flow from equipment presence alone." : "For body exploration, avoid generic \"object\" wording when the visible material is more likely swab, gauze, wipe, drape, towel, applicator, tubing, catheter shaft, lubricant, or syringe. Use the session context to name procedure-relevant materials when the sequence and visuals make that reasonable, but do not make every frame about the final device. Do not name securement hardware, StatLock, balloon, urine return, or bag collection unless visible in current sampled frames or explicitly stated in nearby manual notes.") : "Identify devices such as a silicone sleeve, Foley catheter, e-stim/TENS leads, pump, towel, table, Coyote-E/Howl overlay, stim-control display, or camera/monitor setup when visible or strongly supported by session context. When readable, preserve frequency, intensity, power, mode, waveform, channel, play/pause, and active/ramp state as concrete timeline evidence."} If uncertain, say "possible" and mark confidence low or moderate. Write findings in direct second person using "you" and "your".
 
 Foot and body tracking dots rule: circular dots or bright reflective spots on the feet/body are tracking markers by default, not electrodes. Call them "tracking markers", "reflective markers", or "visible dots" unless e-stim, TENS, electrode pads, electrode leads, or an electrode setup is explicitly mentioned in the session context, nearby events, or the user's caption. Never write "foot electrode markers" from appearance alone.
 
@@ -2583,7 +2620,7 @@ Nearby ${recordLabel} events: ${(workingSession?.event_timeline || [])
   .map((event) => `[${fmtMmSs(event.time_s)}] ${event.note}`)
   .join(" | ") || "None nearby."}
 
-Return concise visual findings and 1-3 proposed timeline events only when the window contains useful non-repetitive evidence. Good targets are ${isExploration ? "procedural stage changes, glove change/prep, draping/setup, meatal or glans prep, swab/applicator action, lubrication or instillation, visible catheter/Foley/tool tip contact at the meatus, meatal engagement only when visible, instrument advancement/withdrawal/adjustment only when visible, resistance/rotation in sequence, urine return/bladder entry, balloon/seating when visible, catheter already-in-place state, tubing/field handling away from the meatus, dwell comfort, post-procedure tissue state, anatomy/tissue changes, comfort/tolerance cues, breathing/body settling, leg/feet tension or relaxation, and telemetry-supported procedural physiology" : "genital state changes, stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, scrotal/perineal observations, cautious moisture/sheen observations, pelvic lift/drop, breathing/body cues, body/feet bracing, leg tensing/relaxing, toe curl/downward planting, tremble/shudder, device/position changes, and important setup context only when it changes interpretation"}. Use low confidence or omit the finding when the evidence is ambiguous. Keep the full JSON response compact so it can finish cleanly.`,
+Return concise visual findings and 1-3 proposed timeline events only when the window contains useful non-repetitive evidence. Good targets are ${isExploration ? (deviceIdentityContext.enemaKnown && !deviceIdentityContext.urethralKnown ? "visible anal/perianal state and change, rectal nozzle/tube approach or contact, visible insertion/adjustment/withdrawal, instillation only when supported, leakage/fluid return/expulsion when visible, buttock/pelvic positioning, abdominal bracing/release, assessable breathing, penile erection/flaccidity or engorgement change, glans/shaft appearance, scrotal retraction/descent or skin tension/color, leg/feet tension or relaxation, tremor, whole-body settling, comfort/tolerance cues, and telemetry-supported autonomic response" : "procedural stage changes, glove change/prep, draping/setup, meatal or glans prep, swab/applicator action, lubrication or instillation, visible catheter/Foley/tool tip contact at the meatus, meatal engagement only when visible, instrument advancement/withdrawal/adjustment only when visible, resistance/rotation in sequence, urine return/bladder entry, balloon/seating when visible, catheter already-in-place state, tubing/field handling away from the meatus, dwell comfort, post-procedure tissue state, anatomy/tissue changes, comfort/tolerance cues, breathing/body settling, leg/feet tension or relaxation, and telemetry-supported procedural physiology") : "genital state changes, stimulation technique shifts, lubrication or device-use moments, pauses/resumes, erection or physical-state changes, scrotal/perineal observations, cautious moisture/sheen observations, pelvic lift/drop, breathing/body cues, body/feet bracing, leg tensing/relaxing, toe curl/downward planting, tremble/shudder, device/position changes, and important setup context only when it changes interpretation"}. Use low confidence or omit the finding when the evidence is ambiguous. Keep the full JSON response compact so it can finish cleanly.`,
           };
           const cardMeta = {
             label,
@@ -2681,7 +2718,7 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
       for (let index = 0; index < cards.length; index += 1) {
         const card = revisedCards[index];
         if (!card || isCardAccepted(card, session, acceptedIds, isExploration)) continue;
-        setStatus(`Reassessing Foley sequence ${index + 1}/${cards.length}: ${fmtMmSs(card.window.start)}-${fmtMmSs(card.window.end)}`);
+        setStatus(`Reassessing ${enemaOnlyExploration ? "enema" : "Foley"} sequence ${index + 1}/${cards.length}: ${fmtMmSs(card.window.start)}-${fmtMmSs(card.window.end)}`);
         const images = await sampledFrameImagePayload(card.sampledFrames || []);
         const aiPayload = {
           max_tokens: 1800,
@@ -2722,7 +2759,30 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
             },
             required: ["summary", "findings", "events"],
           },
-          prompt: `You are Sarah doing a second-pass BODY EXPLORATION / Foley sequence audit for one already-generated video card.
+          prompt: enemaOnlyExploration ? `You are Sarah doing a second-pass ENEMA BODY EXPLORATION audit for one already-generated video card.
+
+Only correct the current card. The sampled frames are primary evidence; the sequence list and manual notes preserve chronology.
+
+Full generated sequence before reassessment:
+${sequenceText}
+
+Current card:
+Window: ${fmtMmSs(card.window.start)}-${fmtMmSs(card.window.end)}
+Original summary: ${removeUnsupportedUrethralSentences(sanitizeExplorationFoleyText(card.summary), deviceIdentityContext)}
+Original findings: ${(card.findings || []).filter((finding) => !isUnsupportedUrethralClaimForMode(`${finding.title} ${finding.text}`, deviceIdentityContext)).map((finding) => `${sanitizeExplorationFoleyText(finding.title)}: ${sanitizeExplorationFoleyText(finding.text)}`).join(" | ") || "None"}
+Original events: ${(card.events || []).filter((event) => !isUnsupportedUrethralClaimForMode(event.note, deviceIdentityContext)).map((event) => `[${fmtMmSs(event.time_s)}] ${sanitizeExplorationFoleyText(event.note)}`).join(" | ") || "None"}
+Telemetry: ${compactTelemetryLabel(card.telemetry) || "None"}
+
+Enema correction rules:
+- Prioritize anus/perianal tissue, visible rectal nozzle/tube/applicator action, buttock/pelvic positioning, abdominal and respiratory response, legs/feet/whole-body response, and visible genital state.
+- Preserve penile erection/flaccidity or engorgement changes, glans/shaft appearance, scrotal retraction/descent, skin tension/color, and incidental genital contact when visible.
+- Equipment presence does not prove anal contact, insertion, instillation, retention, withdrawal, leakage, return, or expulsion. Require current-frame evidence or a nearby manual note for the exact stage.
+- Do not infer internal depth, volume, pressure, pain, pleasure, cramping, or sphincter state from external appearance.
+- Do not mention Foley, urinary catheter, Hegar, urethral sounding/dilation, meatus, bladder entry, balloon inflation, or urinary drainage. This record does not establish a urethral procedure.
+- Use direct "you/your" language and conservative anatomical laterality.
+- Keep events only for meaningful visible changes; avoid repeating static anatomy or unchanged equipment.
+
+Return a corrected compact card for this same window.` : `You are Sarah doing a second-pass BODY EXPLORATION / Foley sequence audit for one already-generated video card.
 
 Only correct the current card. Use the sampled frames in this request as primary evidence, and use the sequence list below only to avoid repeated or impossible Foley stage claims.
 
@@ -2775,7 +2835,7 @@ Return a corrected compact card for this same window. Keep timeline events only 
           },
           session,
           recordType,
-          label: `${card.label} Foley reassessment`,
+          label: `${card.label} ${enemaOnlyExploration ? "enema" : "Foley"} reassessment`,
           onProgress: (job) => {
             const progress = job?.progress || {};
             if (progress.message) setStatus(progress.message);
@@ -2789,9 +2849,9 @@ Return a corrected compact card for this same window. Keep timeline events only 
         ));
         setCards(revisedCards);
       }
-      setStatus("Foley sequence reassessment complete. Review corrected cards before accepting.");
+      setStatus(`${enemaOnlyExploration ? "Enema" : "Foley"} sequence reassessment complete. Review corrected cards before accepting.`);
     } catch (err) {
-      setError(err?.data?.error || err?.message || "Foley sequence reassessment failed.");
+      setError(err?.data?.error || err?.message || `${enemaOnlyExploration ? "Enema" : "Foley"} sequence reassessment failed.`);
       setStatus("");
     } finally {
       setReassessing(false);
@@ -3087,8 +3147,9 @@ Evidence discipline:
 - Prefer specific buckets like glans/meatus, shaft, scrotum/testes, scrotal-base/perineal region, lubrication/moisture, hand/device contact mechanics, and lower-body response over vague phrases.
 - Do not call orgasm/climax unless the sampled frames show a direct peak marker such as visible emission/spurt, unmistakable climax-level body response, or a nearby confirmed marker that matches the same sampled sequence.
 
-${isExploration ? `Body exploration / procedure mode:
-Use clinical procedure language. For Foley or urethral/procedure review, distinguish setup, prep, swabbing, lubrication/dilation, visible meatal contact, visible advancement, visible catheter/Foley-at-meatus state, tubing/field handling, urine return, balloon/securement, and cleanup. Do not claim advancement, insertion, urine return, balloon inflation, or securement unless that exact action/item is visible or explicitly logged. Do not claim already-in-place/dwell/post-placement merely because Foley/catheter material is first visible at the glans or meatus; first visibility at the meatus should be treated as meatal engagement or early insertion/advancement when motion supports it unless an earlier manual/corrected reviewed event confirms completed placement.` : `Session mode:
+${isExploration ? (deviceIdentityContext.enemaKnown && !deviceIdentityContext.urethralKnown ? `Enema body exploration / procedure mode:
+Use clinical, visible-first enema language. Prioritize the anus/perianal tissue, visible rectal nozzle/tube approach/contact/insertion/adjustment/withdrawal, leakage/fluid return/expulsion, buttock and pelvic positioning, abdominal/chest bracing or breathing, lower-body response, and visible genital state including penile erection/flaccidity or engorgement and scrotal position/tension/color. Do not infer internal depth, volume, flow, retention, pressure, sensation, or sphincter state without direct visual or nearby manual evidence. Do not search for or mention Foley, urinary catheter, Hegar, urethral sounding/dilation, meatal engagement, bladder entry, or balloon inflation because this record does not establish a urethral procedure.` : `Body exploration / procedure mode:
+Use clinical procedure language. For Foley or urethral/procedure review, distinguish setup, prep, swabbing, lubrication/dilation, visible meatal contact, visible advancement, visible catheter/Foley-at-meatus state, tubing/field handling, urine return, balloon/securement, and cleanup. Do not claim advancement, insertion, urine return, balloon inflation, or securement unless that exact action/item is visible or explicitly logged. Do not claim already-in-place/dwell/post-placement merely because Foley/catheter material is first visible at the glans or meatus; first visibility at the meatus should be treated as meatal engagement or early insertion/advancement when motion supports it unless an earlier manual/corrected reviewed event confirms completed placement.`) : `Session mode:
 Use clinical session language. Track visible hand/body/device contact, stimulation changes, pauses/resumptions, lubrication/device handling, posture/lower-body movement, visible genital/body state, and limitations. Do not label edging unless explicitly logged or unmistakably shown by repeated intended near-climax approach-and-withdraw cycles. If contact is below or behind the scrotum and the penile shaft base is not clearly visible, call it scrotal-base/perineal contact rather than penile-base contact.`}
 
 Local selector packet for this window:
@@ -3769,10 +3830,10 @@ Return only the structured JSON matching the requested schema.`,
               onClick={reassessExplorationSequence}
               disabled={!cards.length || running || reassessing}
               className="h-8 w-full sm:w-auto"
-              title={!cards.length ? "Run a video pass first; reassessment appears once draft cards are loaded." : "Recheck the visible Foley sequence across the loaded draft cards."}
+              title={!cards.length ? "Run a video pass first; reassessment appears once draft cards are loaded." : `Recheck the visible ${enemaOnlyExploration ? "enema" : "Foley"} sequence across the loaded draft cards.`}
             >
               {reassessing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
-              {cards.length ? "Reassess Foley Sequence" : "Reassess after cards load"}
+              {cards.length ? `Reassess ${enemaOnlyExploration ? "Enema" : "Foley"} Sequence` : "Reassess after cards load"}
             </Button>
           )}
           <Button type="button" onClick={runPass} disabled={running || reassessing || !selectedVideo || !plannedWindows.length} className="h-8 w-full sm:w-auto">
@@ -5499,7 +5560,7 @@ Return only the structured JSON matching the requested schema.`,
                 {isExploration && (
                   <Button type="button" size="sm" variant="outline" onClick={reassessExplorationSequence} disabled={running || reassessing} className="h-9 w-full justify-center sm:h-8 sm:w-auto">
                     {reassessing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
-                    Reassess Foley Sequence
+                    Reassess {enemaOnlyExploration ? "Enema" : "Foley"} Sequence
                   </Button>
                 )}
                 <Button type="button" size="sm" onClick={acceptAllDraftCards} className="h-9 w-full justify-center sm:h-8 sm:w-auto">
