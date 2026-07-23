@@ -62,7 +62,12 @@ import {
 } from "@/lib/videoPassTextGuards";
 import { reduceConsistencyPhraseRepetition } from "@/utils/aiTextRepair";
 import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
-import { buildAiCorrectionMemoryPrompt, rememberAiCorrection } from "@/lib/aiCorrectionMemory";
+import {
+  buildAiCorrectionMemoryPrompt,
+  readAiCorrectionMemory,
+  rememberAiCorrection,
+  syncAiCorrectionMemory,
+} from "@/lib/aiCorrectionMemory";
 
 function fmtMmSs(totalSeconds) {
   const v = Math.max(0, Math.round(Number(totalSeconds) || 0));
@@ -1998,11 +2003,23 @@ export default function AIVideoPassPanel({
   const [localVisionResult, setLocalVisionResult] = useState(null);
   const [localVisionQuestion, setLocalVisionQuestion] = useState("");
   const [localVisionQaResult, setLocalVisionQaResult] = useState(null);
+  const [correctionMemory, setCorrectionMemory] = useState(readAiCorrectionMemory);
   const freshRunStartedAtRef = useRef(ignoreCompletedJobsBefore || 0);
 
   useEffect(() => {
     setLocalAnalysisType(inferLocalAnalysisType(recordType, session));
   }, [recordType, session?.id]);
+
+  useEffect(() => {
+    let active = true;
+    syncAiCorrectionMemory({ recordType: isExploration ? "body_exploration" : "session" })
+      .then((items) => {
+        if (active) setCorrectionMemory(items);
+      });
+    return () => {
+      active = false;
+    };
+  }, [isExploration]);
 
   const addLocalVisionRoi = (presetKey) => {
     const preset = LOCAL_VISION_ROI_PRESETS[presetKey] || LOCAL_VISION_ROI_PRESETS.full_body_roi;
@@ -2525,7 +2542,10 @@ ${isExploration ? (deviceIdentityContext.enemaKnown && !deviceIdentityContext.ur
 
 Current-frame override rule: the sampled frames in this request are the primary evidence. Prior summaries, accepted cards, and continuity text can orient the sequence, but they must not override the current frames. If the prior window said "resting", "no stimulation", "no visible movement", or "HR rising without visible cause", actively re-check the current frames for hand/device contact, visible stroke or device motion, perineal contact, glans/shaft movement, sleeve/lubricant interaction, body/leg response, or procedure action before repeating that claim.
 
-${buildAiCorrectionMemoryPrompt({ recordType: isExploration ? "body_exploration" : "session" })}
+${buildAiCorrectionMemoryPrompt({
+  recordType: isExploration ? "body_exploration" : "session",
+  corrections: correctionMemory,
+})}
 
 Visible-first anatomy rule: in regular session reviews, build each finding in this order: 1. exact visible body area or contact zone, 2. exact visible motion or state, 3. cautious interpretation only if the first two support it. Prefer concrete wording like "your glans remains exposed with visible sheen", "your hand shifts from mid-shaft toward the glans", "contact sits below the scrotum at the scrotal-base/perineal region", or "your scrotum appears more lifted/tight than the prior window." Do not skip straight to summary labels like climax, orgasm, edging, intense stimulation, or recovery if the visible mechanics are not clearly shown first.
 
@@ -3663,12 +3683,13 @@ Return only the structured JSON matching the requested schema.`,
       events: cleanedEvents,
     };
     cleanedEvents.forEach((event) => {
-      rememberAiCorrection({
+      const nextMemory = rememberAiCorrection({
         before: event._original_note,
         after: event.note,
         context: `${card.label || "Video pass"} · ${fmtMmSs(card.window?.start)}-${fmtMmSs(card.window?.end)}`,
         recordType: isExploration ? "body_exploration" : "session",
       });
+      setCorrectionMemory(nextMemory);
     });
     if (!hasPersistableVideoPassCard(cardToPersist)) {
       setStatus("Nothing new to save from this card yet.");
@@ -3736,12 +3757,13 @@ Return only the structured JSON matching the requested schema.`,
     }
     cardsToPersist.forEach((card) => {
       card.events.forEach((event) => {
-        rememberAiCorrection({
+        const nextMemory = rememberAiCorrection({
           before: event._original_note,
           after: event.note,
           context: `${card.label || "Video pass"} · ${fmtMmSs(card.window?.start)}-${fmtMmSs(card.window?.end)}`,
           recordType: isExploration ? "body_exploration" : "session",
         });
+        setCorrectionMemory(nextMemory);
       });
     });
 

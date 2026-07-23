@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { base44 } from "@/api/base44Client";
 import { Activity, Crosshair, Gauge, HeartPulse, Radio, ShieldCheck, Sparkles, Wind } from "lucide-react";
 import {
   CartesianGrid,
@@ -123,8 +124,28 @@ function TimelineChart({ rows, lines, inspectionTime, onInspectionTimeChange, ri
   );
 }
 
-export default function PhysiologyTimelineCharts({ timelineRows = [], inspectionTime, onInspectionTimeChange }) {
+export default function PhysiologyTimelineCharts({ session = {}, timelineRows = [], inspectionTime, onInspectionTimeChange }) {
   const [localReplayTime, setLocalReplayTime] = useState(0);
+  const [historicalSessions, setHistoricalSessions] = useState([]);
+  const isBodyExploration = session?.capture_kind === "body_exploration" || session?.standalone_body_exploration;
+  const capturePreflight = session?.capture_preflight || null;
+
+  useEffect(() => {
+    let active = true;
+    const entity = isBodyExploration ? base44.entities.BodyExploration : base44.entities.Session;
+    entity.listFields(
+      ["id", "date", "avg_hr", "max_hr", "duration_minutes", "capture_kind", "standalone_body_exploration"],
+      "-date",
+      24,
+    ).then((rows) => {
+      if (active) setHistoricalSessions((rows || []).filter((row) => row.id !== session?.id));
+    }).catch(() => {
+      if (active) setHistoricalSessions([]);
+    });
+    return () => {
+      active = false;
+    };
+  }, [isBodyExploration, session?.id]);
   const chartRows = useMemo(() => {
     const stride = Math.max(1, Math.ceil(timelineRows.length / 900));
     return timelineRows.filter((_row, index) => index % stride === 0).map((row) => ({
@@ -177,6 +198,17 @@ export default function PhysiologyTimelineCharts({ timelineRows = [], inspection
   const hrvSuppression = earlyHrv != null && lowHrv != null && earlyHrv > 0
     ? Math.max(0, Math.min(100, ((earlyHrv - lowHrv) / earlyHrv) * 100))
     : null;
+  const historicalResponseRows = historicalSessions
+    .map((row) => {
+      const avgHr = validPositive(row.avg_hr);
+      const maxHr = validPositive(row.max_hr);
+      return avgHr != null && maxHr != null ? { avgHr, maxHr, load: Math.max(0, maxHr - avgHr) } : null;
+    })
+    .filter(Boolean);
+  const historicalTypicalAvg = average(historicalResponseRows.map((row) => row.avgHr));
+  const historicalTypicalPeak = average(historicalResponseRows.map((row) => row.maxHr));
+  const currentAverageHr = average(hrValues);
+  const peakVsHistory = peakHr != null && historicalTypicalPeak != null ? peakHr - historicalTypicalPeak : null;
   const setReplayTime = (seconds) => {
     const next = Math.max(0, Math.min(maxTime, Number(seconds) || 0));
     setLocalReplayTime(next);
@@ -220,6 +252,33 @@ export default function PhysiologyTimelineCharts({ timelineRows = [], inspection
             <Metric icon={ShieldCheck} label="Evidence Reliability" value={`${inspectedReliability.core}% core`} detail={`${inspectedReliability.multimodal}% multimodal · zero means unavailable, not absent physiology`} tone="text-emerald-500" />
           </div>
         )}
+        {capturePreflight && (
+          <div className="mt-3 rounded-lg border border-border bg-background/70 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Capture-start preflight</p>
+              <span className="font-mono text-[10px] text-muted-foreground">
+                {capturePreflight.capturedAt ? new Date(capturePreflight.capturedAt).toLocaleTimeString() : "time unavailable"}
+              </span>
+            </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                ["HR", capturePreflight.hr?.available ? "measured" : "unavailable", capturePreflight.hr?.source],
+                ["RR / HRV", capturePreflight.rrHrv?.available ? "measured" : "unavailable", capturePreflight.rrHrv?.quality],
+                ["Raw ECG / motion", capturePreflight.rawH10?.available ? "measured" : "unavailable", capturePreflight.rawH10?.message],
+                ["Respiration", capturePreflight.respiration?.available ? "estimated" : "unavailable", capturePreflight.respiration?.source || capturePreflight.respiration?.reason],
+              ].map(([label, value, detail]) => (
+                <div key={label} className="rounded-md border border-border bg-muted/20 px-2 py-1.5">
+                  <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
+                  <p className="mt-0.5 text-xs font-semibold text-foreground">{value}</p>
+                  {detail && <p className="mt-0.5 line-clamp-2 text-[9px] text-muted-foreground">{String(detail).replaceAll("_", " ")}</p>}
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              Saved at session start. “Unavailable” means Sarah did not receive that channel; it never means zero breathing or zero movement.
+            </p>
+          </div>
+        )}
       </details>
 
       <details className="rounded-xl border border-border bg-muted/10 p-3">
@@ -242,12 +301,12 @@ export default function PhysiologyTimelineCharts({ timelineRows = [], inspection
 
       <details className="rounded-xl border border-border bg-muted/10 p-3">
         <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Personal Response Model</summary>
-        <p className="mt-1 text-[10px] text-muted-foreground">A transparent session-specific response profile. It summarizes saved evidence; it does not invent missing sensor channels.</p>
+        <p className="mt-1 text-[10px] text-muted-foreground">A transparent response profile compared with prior same-type recordings. It summarizes saved evidence; it does not invent missing sensor channels.</p>
         <div className="mt-3 grid gap-2 grid-cols-2 lg:grid-cols-4">
           <Metric icon={Gauge} label="Cardiac Load" value={responseLoad != null ? `+${responseLoad.toFixed(0)} bpm` : "--"} detail={baselineHr != null && peakHr != null ? `Approx. baseline ${baselineHr.toFixed(0)} · peak ${peakHr.toFixed(0)}` : "Insufficient HR evidence"} tone="text-rose-500" />
           <Metric icon={Sparkles} label="HRV Compression" value={hrvSuppression != null ? `${hrvSuppression.toFixed(0)}%` : "--"} detail={hrvSuppression != null ? "Early RMSSD compared with the session's lower-RMSSD windows" : "Insufficient RR-derived HRV"} tone="text-violet-500" />
-          <Metric icon={Crosshair} label="Recovery Capacity" value={recoveryPeak != null ? `${recoveryPeak.toFixed(0)} bpm` : "--"} detail="Largest observed 30/60/90-second post-peak drop" tone="text-amber-500" />
-          <Metric icon={ShieldCheck} label="Model Basis" value={`${coreCoverage}%`} detail={`${timelineRows.length.toLocaleString()} rows · ${multimodalCoverage}% with additional sensor evidence`} tone="text-emerald-500" />
+          <Metric icon={Crosshair} label="Personal Baseline" value={historicalTypicalPeak != null ? `${historicalTypicalPeak.toFixed(0)} peak` : "--"} detail={historicalResponseRows.length ? `${historicalResponseRows.length} prior ${isBodyExploration ? "exploration" : "session"} records · typical avg ${historicalTypicalAvg.toFixed(0)} bpm` : "No prior same-type records with summary HR"} tone="text-amber-500" />
+          <Metric icon={ShieldCheck} label="Current vs Typical" value={peakVsHistory != null ? `${peakVsHistory >= 0 ? "+" : ""}${peakVsHistory.toFixed(0)} bpm` : `${coreCoverage}%`} detail={peakVsHistory != null ? `Current avg ${currentAverageHr?.toFixed(0) || "--"} · current peak ${peakHr?.toFixed(0) || "--"} · ${coreCoverage}% core coverage` : `${timelineRows.length.toLocaleString()} rows · ${multimodalCoverage}% with additional sensor evidence`} tone="text-emerald-500" />
         </div>
       </details>
 

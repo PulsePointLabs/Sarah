@@ -31,7 +31,7 @@ import {
   summarizeLaunchProfile,
 } from "@/lib/liveCaptureLaunchProfile";
 import { DEFAULT_LIVE_CUE_SETTINGS, LIVE_CUE_PRESETS, resolveLiveCuePhraseBank } from "@/lib/liveCuePhrases";
-import { readLiveCueCustomization } from "@/lib/liveCueCustomization";
+import { loadSyncedLiveCueCustomization, readLiveCueCustomization } from "@/lib/liveCueCustomization";
 import { useLiveCueAudio } from "@/hooks/useLiveCueAudio";
 import { useLiveCueEngine } from "@/hooks/useLiveCueEngine";
 import { toLiveTelemetryNotice } from "@/lib/liveCueDisplay";
@@ -2469,6 +2469,21 @@ export default function LiveCapture() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    loadSyncedLiveCueCustomization().then((customization) => {
+      if (!active) return;
+      setLiveCueSettings((previous) => ({
+        ...previous,
+        customPhrases: customization.phrases,
+        customInstructions: customization.instructions,
+      }));
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!restoredLaunchProfileRef.current) return;
     const saved = saveLiveCaptureLaunchProfile({
       ...readLiveCaptureLaunchProfile(),
@@ -4096,10 +4111,51 @@ export default function LiveCapture() {
   };
 
   const ensureSession = async () => {
+    const capturePreflight = {
+      capturedAt: new Date().toISOString(),
+      guidanceMode: liveGuidanceMode.label,
+      hr: {
+        available: Boolean(healthRecentHrPacket),
+        connected: Boolean(healthHrConnected),
+        source: serverHrLabel,
+      },
+      rrHrv: {
+        available: Boolean(healthRrUsable),
+        quality: String(hrvQuality || "unavailable").toLowerCase(),
+        sampleCount: Number(rrCount || 0),
+      },
+      rawH10: {
+        available: Boolean(h10RawStreamsActive),
+        failed: Boolean(h10RawStreamFailure),
+        ecgSamples: Number(effectiveH10Multimodal?.streams?.ecg?.sampleCount || 0),
+        accelerometerSamples: Number(effectiveH10Multimodal?.streams?.accelerometer?.sampleCount || 0),
+        message: directH10Status.pmdMessage || "",
+      },
+      respiration: {
+        available: Boolean(h10Respiration.available),
+        source: h10Respiration.source || "unavailable",
+        confidence: h10Respiration.confidence || "unavailable",
+        reason: h10Respiration.reason || "",
+      },
+      motion: {
+        available: Boolean(h10Motion.available),
+        source: h10Motion.source || "unavailable",
+        state: h10Motion.class || "unavailable",
+      },
+      emg: {
+        configured: Boolean(emgConfigured),
+        available: Boolean(healthTelemetryEmgLive),
+      },
+      obs: {
+        preferred: Boolean(obsPreferred),
+        ready: Boolean(obsReady),
+        recording: Boolean(recordingActive),
+      },
+    };
     const res = await fetch(apiUrl("/live-capture/ensure-session"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ recording, captureKind }),
+      body: JSON.stringify({ recording, captureKind, capturePreflight }),
     });
     if (res.ok) {
       const data = await res.json();

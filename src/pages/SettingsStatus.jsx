@@ -60,8 +60,9 @@ import {
 } from "@/utils/sarahPersonality";
 import {
   DEFAULT_LIVE_CUE_CUSTOMIZATION,
+  loadSyncedLiveCueCustomization,
   readLiveCueCustomization,
-  saveLiveCueCustomization,
+  saveSyncedLiveCueCustomization,
 } from "@/lib/liveCueCustomization";
 import {
   areBackgroundNotificationsEnabled,
@@ -624,6 +625,16 @@ export default function SettingsStatus() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    loadSyncedLiveCueCustomization().then((saved) => {
+      if (active && !liveCueCustomizationDirty) setLiveCueCustomization(saved);
+    });
+    return () => {
+      active = false;
+    };
+  }, [liveCueCustomizationDirty]);
+
+  useEffect(() => {
     const handleSttProviderChange = (event) => {
       setSttProviderPreference(String(event?.detail || readSttProviderPreference()));
     };
@@ -1113,11 +1124,11 @@ export default function SettingsStatus() {
     setLiveCueCustomizationStatus("");
   };
 
-  const saveCustomEncouragement = () => {
-    const saved = saveLiveCueCustomization(liveCueCustomization);
+  const saveCustomEncouragement = async () => {
+    const saved = await saveSyncedLiveCueCustomization(liveCueCustomization);
     setLiveCueCustomization(saved);
     setLiveCueCustomizationDirty(false);
-    setLiveCueCustomizationStatus("Custom encouragement saved. Choose Custom encouragement in Live Capture.");
+    setLiveCueCustomizationStatus("Custom encouragement saved and synchronized for EXE and APK.");
   };
 
   const generateCustomEncouragement = async () => {
@@ -1152,14 +1163,14 @@ Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, 
       });
       const parsed = typeof response === "string" ? JSON.parse(response) : response;
       const phrases = parsed?.response || parsed;
-      const saved = saveLiveCueCustomization({
+      const saved = await saveSyncedLiveCueCustomization({
         ...liveCueCustomization,
         enabled: true,
         phrases,
       });
       setLiveCueCustomization(saved);
       setLiveCueCustomizationDirty(false);
-      setLiveCueCustomizationStatus("Custom phrase bank generated and saved.");
+      setLiveCueCustomizationStatus("Custom phrase bank generated and synchronized for EXE and APK.");
     } catch (error) {
       setLiveCueCustomizationStatus(error?.message || "Custom encouragement generation failed.");
     } finally {
@@ -1537,7 +1548,7 @@ Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, 
               className="mt-3 min-h-36 resize-y bg-background text-sm"
             />
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              This text stays in Sarah's local settings. Generating phrases sends only these instructions to the configured AI provider; session video and telemetry are not included.
+              This text is stored in Sarah's private local backend so EXE and APK share it. Generating phrases sends only these instructions to the configured AI provider; session video and telemetry are not included.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button

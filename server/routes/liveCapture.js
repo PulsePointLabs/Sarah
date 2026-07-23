@@ -1255,7 +1255,13 @@ function markLiveSessionRecordingPaused(recording = {}) {
 }
 
 function ensureLiveSession(recording, options = {}) {
-  if (state.session.activeSessionId && state.session.active) return state.session.activeSessionId;
+  if (state.session.activeSessionId && state.session.active) {
+    if (options.capturePreflight) {
+      const existing = currentLiveSessionEntity(state.session.activeSessionId);
+      if (!existing?.capture_preflight) patchCurrentLiveSession({ capture_preflight: options.capturePreflight });
+    }
+    return state.session.activeSessionId;
+  }
   const captureKind = normalizeCaptureKind(options.captureKind || state.session.captureKind);
   const entity = entityForCaptureKind(captureKind);
   const id = crypto.randomUUID();
@@ -1282,6 +1288,7 @@ function ensureLiveSession(recording, options = {}) {
     capture_last_resumed_at: null,
     capture_pause_intervals: [],
     capture_segments: [],
+    capture_preflight: options.capturePreflight || null,
   });
   broadcast('live_session', state.session);
   return id;
@@ -2343,6 +2350,7 @@ liveCaptureRouter.post('/refresh-files', async (_req, res) => {
 liveCaptureRouter.post('/ensure-session', (req, res) => {
   const sessionId = ensureLiveSession(req.body?.recording || state.hr.recording || {}, {
     captureKind: req.body?.captureKind,
+    capturePreflight: req.body?.capturePreflight,
   });
   res.json({ ok: true, sessionId, session: state.session });
 });

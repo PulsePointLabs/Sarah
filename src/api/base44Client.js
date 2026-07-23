@@ -179,6 +179,7 @@ function entityApi(entity) {
 const entityNames = [
   'Session', 'BodyExploration', 'HeartRateTimeline', 'EMGTimeline', 'BloodPressureReading', 'HowlTelemetry', 'HowlControlCommand', 'HowlControlSettings', 'AudioExport', 'SessionReviewVideo', 'CompareAnalysisResult',
   'CascadeAnalysisResult', 'SessionClusterAnalysis', 'Journal', 'CustomMethod', 'SessionRecording', 'RecordingUpload', 'RenderedVideo', 'RenderPreset', 'User',
+  'AICorrectionMemory', 'AppSetting',
 ];
 
 export const base44 = {

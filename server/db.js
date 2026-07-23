@@ -33,6 +33,8 @@ export const ENTITY_NAMES = [
   'RenderPreset',
   'User',
   'SarahVsVitalsTransfer',
+  'AICorrectionMemory',
+  'AppSetting',
 ];
 
 export function initDb() {

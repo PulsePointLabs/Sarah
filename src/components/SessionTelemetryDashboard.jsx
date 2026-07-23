@@ -256,6 +256,7 @@ export default function SessionTelemetryDashboard({
             </div>
           </details>
           <PhysiologyTimelineCharts
+            session={session}
             timelineRows={timelineRows}
             inspectionTime={inspectionTime}
             onInspectionTimeChange={onInspectionTimeChange}
