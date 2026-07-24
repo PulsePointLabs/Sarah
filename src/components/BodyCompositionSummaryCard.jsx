@@ -20,7 +20,11 @@ const METRICS = [
 
 export default function BodyCompositionSummaryCard({ reading, title = "Body Composition", compact = false }) {
   if (!reading) return null;
-  const available = METRICS.filter(([, field]) => Number.isFinite(Number(reading[field])));
+  const available = METRICS.filter(([, field]) => (
+    reading[field] != null
+    && reading[field] !== ""
+    && Number.isFinite(Number(reading[field]))
+  ));
   return (
     <section className="rounded-xl border border-border bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">

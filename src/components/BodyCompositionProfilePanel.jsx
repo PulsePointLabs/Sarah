@@ -73,13 +73,21 @@ export default function BodyCompositionProfilePanel({ onLatestReading }) {
   };
 
   const chart = [...readings].reverse()
-    .filter((reading) => Number.isFinite(Number(reading.weight_kg)))
+    .filter((reading) => (
+      reading.weight_kg != null
+      && reading.weight_kg !== ""
+      && Number.isFinite(Number(reading.weight_kg))
+    ))
     .map((reading) => ({
       date: new Date(reading.measured_at).toLocaleDateString([], { month: "short", day: "numeric" }),
       weight: reading.weight_kg,
       bodyFat: reading.body_fat_percent,
     }));
-  const hasBodyFat = chart.some((row) => Number.isFinite(Number(row.bodyFat)));
+  const hasBodyFat = chart.some((row) => (
+    row.bodyFat != null
+    && row.bodyFat !== ""
+    && Number.isFinite(Number(row.bodyFat))
+  ));
 
   return (
     <div className="space-y-4 rounded-xl border border-border bg-card p-4">
