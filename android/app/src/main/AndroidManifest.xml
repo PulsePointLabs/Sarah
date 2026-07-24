@@ -121,4 +121,5 @@
     <uses-permission android:name="android.permission.health.READ_BODY_WATER_MASS" />
     <uses-permission android:name="android.permission.health.READ_BONE_MASS" />
     <uses-permission android:name="android.permission.health.READ_BASAL_METABOLIC_RATE" />
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_HISTORY" />
 </manifest>

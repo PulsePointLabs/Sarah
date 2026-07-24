@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Scale } from "lucide-react";
+import { ExternalLink, RefreshCw, Scale } from "lucide-react";
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
@@ -7,6 +7,7 @@ import { base44 } from "@/api/base44Client";
 import BodyCompositionSummaryCard from "@/components/BodyCompositionSummaryCard";
 import {
   listBodyCompositionReadings,
+  openBodyCompositionHealthConnectSettings,
   requestBodyCompositionPermission,
   syncBodyCompositionFromHealthConnect,
 } from "@/lib/bodyComposition";
@@ -16,6 +17,8 @@ export default function BodyCompositionProfilePanel({ onLatestReading }) {
   const { toast } = useToast();
   const [readings, setReadings] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("");
+  const [syncError, setSyncError] = useState(false);
 
   const reload = async () => {
     const rows = await listBodyCompositionReadings(180).catch(() => []);
@@ -30,6 +33,8 @@ export default function BodyCompositionProfilePanel({ onLatestReading }) {
 
   const sync = async () => {
     setBusy(true);
+    setSyncError(false);
+    setSyncMessage("Checking Health Connect permissions and weigh-ins...");
     try {
       let result;
       try {
@@ -49,9 +54,19 @@ export default function BodyCompositionProfilePanel({ onLatestReading }) {
           latest_body_composition: rows[0],
         });
       }
-      toast({ title: result.inserted ? `Imported ${result.inserted} body-composition reading${result.inserted === 1 ? "" : "s"}` : "No Health Connect weigh-ins found" });
+      const nativeCount = Number(result.native?.count || 0);
+      const message = result.inserted
+        ? `Imported ${result.inserted} body-composition reading${result.inserted === 1 ? "" : "s"}.`
+        : nativeCount
+          ? `Health Connect returned ${nativeCount} reading${nativeCount === 1 ? "" : "s"}, but none were new.`
+          : "Health Connect returned no weigh-ins. Grant Sarah all body-composition and history permissions, and confirm VeSync is sharing weight data.";
+      setSyncMessage(message);
+      toast({ title: message });
     } catch (error) {
-      toast({ title: error.message || "Health Connect sync failed", variant: "destructive" });
+      const message = error.message || "Health Connect sync failed";
+      setSyncError(true);
+      setSyncMessage(message);
+      toast({ title: message, variant: "destructive" });
     } finally {
       setBusy(false);
     }
@@ -76,12 +91,31 @@ export default function BodyCompositionProfilePanel({ onLatestReading }) {
           <p className="mt-1 text-xs text-muted-foreground">VeSync measurements imported through Android Health Connect.</p>
         </div>
         {isSarahNativeShell() && (
-          <Button type="button" size="sm" onClick={sync} disabled={busy} className="gap-2">
-            <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
-            {busy ? "Syncing…" : "Sync Health Connect"}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" onClick={sync} disabled={busy} className="gap-2">
+              <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
+              {busy ? "Syncing…" : "Sync Health Connect"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="gap-2"
+              onClick={() => openBodyCompositionHealthConnectSettings().catch((error) => {
+                setSyncError(true);
+                setSyncMessage(error.message || "Could not open Health Connect settings.");
+              })}
+            >
+              <ExternalLink className="h-4 w-4" /> Permissions
+            </Button>
+          </div>
         )}
       </div>
+      {syncMessage && (
+        <div className={`rounded-lg border px-3 py-2 text-sm ${syncError ? "border-destructive/40 bg-destructive/10 text-destructive" : "border-primary/25 bg-primary/5 text-foreground"}`}>
+          {syncMessage}
+        </div>
+      )}
       {readings[0] ? <BodyCompositionSummaryCard reading={readings[0]} compact title="Latest Weigh-In" /> : (
         <div className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
           No weigh-ins saved yet. Open this page in the APK and tap Sync Health Connect.

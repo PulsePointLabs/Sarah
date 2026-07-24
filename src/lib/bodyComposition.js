@@ -85,6 +85,11 @@ export async function requestBodyCompositionPermission() {
   return NativeBodyComposition.requestPermission();
 }
 
+export async function openBodyCompositionHealthConnectSettings() {
+  if (!isSarahNativeShell()) throw new Error("Open Sarah's Android APK to open Health Connect.");
+  return NativeBodyComposition.openHealthConnectSettings();
+}
+
 export async function syncBodyCompositionFromHealthConnect({ days = 30, limit = 100 } = {}) {
   if (!isSarahNativeShell()) throw new Error("Open Sarah's Android APK to sync Health Connect.");
   const native = await NativeBodyComposition.readRecent({ days, limit });

@@ -1,5 +1,8 @@
 package com.pulsepointlabs.sarah
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.result.ActivityResultLauncher
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
@@ -39,7 +42,8 @@ class BodyCompositionHealthPlugin : Plugin() {
         BoneMassRecord::class,
         BasalMetabolicRateRecord::class,
     )
-    private val permissions = recordTypes.map { HealthPermission.getReadPermission(it) }.toSet()
+    private val recordPermissions = recordTypes.map { HealthPermission.getReadPermission(it) }.toSet()
+    private val permissions = recordPermissions + HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY
     private var permissionLauncher: ActivityResultLauncher<Set<String>>? = null
     private var pendingPermissionCall: PluginCall? = null
 
@@ -97,6 +101,30 @@ class BodyCompositionHealthPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun openHealthConnectSettings(call: PluginCall) {
+        val intents = listOf(
+            Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS),
+            Intent("android.health.connect.action.HEALTH_CONNECT_SETTINGS"),
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(Uri.parse("package:com.google.android.apps.healthdata")),
+            context.packageManager.getLaunchIntentForPackage("com.google.android.apps.healthdata"),
+            Intent(Settings.ACTION_SETTINGS),
+        ).filterNotNull()
+
+        for (intent in intents) {
+            try {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                activity.startActivity(intent)
+                call.resolve(JSObject().put("ok", true))
+                return
+            } catch (_: Exception) {
+                // Try the next settings route.
+            }
+        }
+        call.reject("Could not open Health Connect settings. Open Android Settings and search for Health Connect.")
+    }
+
+    @PluginMethod
     fun readRecent(call: PluginCall) {
         val days = (call.getInt("days") ?: 30).coerceIn(1, 730)
         val limit = (call.getInt("limit") ?: 100).coerceIn(1, 500)
@@ -111,7 +139,7 @@ class BodyCompositionHealthPlugin : Plugin() {
                 }
                 val client = HealthConnectClient.getOrCreate(context)
                 val granted = client.permissionController.getGrantedPermissions()
-                if (permissions.none { granted.contains(it) }) {
+                if (recordPermissions.none { granted.contains(it) }) {
                     withContext(Dispatchers.Main) {
                         call.reject("Health Connect body-composition permission is not granted.")
                     }
@@ -205,19 +233,22 @@ class BodyCompositionHealthPlugin : Plugin() {
         recordTypes.forEach { type ->
             permissionMap.put(type.simpleName ?: "unknown", granted.contains(HealthPermission.getReadPermission(type)))
         }
-        val grantedCount = permissions.count { granted.contains(it) }
+        val grantedCount = recordPermissions.count { granted.contains(it) }
+        val historyGranted = granted.contains(HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY)
         return JSObject()
             .put("native", true)
             .put("available", sdkStatus == HealthConnectClient.SDK_AVAILABLE)
             .put("sdkStatus", sdkStatus)
             .put("permissionGranted", grantedCount > 0)
-            .put("allPermissionsGranted", grantedCount == permissions.size)
+            .put("allPermissionsGranted", grantedCount == recordPermissions.size)
+            .put("historyPermissionGranted", historyGranted)
             .put("grantedCount", grantedCount)
-            .put("permissionCount", permissions.size)
+            .put("permissionCount", recordPermissions.size)
             .put("permissions", permissionMap)
             .put("message", when (sdkStatus) {
                 HealthConnectClient.SDK_AVAILABLE -> when {
-                    grantedCount == permissions.size -> "Health Connect body-composition access is ready."
+                    grantedCount == recordPermissions.size && historyGranted -> "Health Connect body-composition access and extended history are ready."
+                    grantedCount == recordPermissions.size -> "Body-composition access is ready, but older history is not enabled."
                     grantedCount > 0 -> "Health Connect body-composition access is partially enabled."
                     else -> "Health Connect is available. Body-composition permission is not granted yet."
                 }
