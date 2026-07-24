@@ -1,4 +1,4 @@
-function parseCsvLine(line) {
+function parseCsvLine(line, delimiter = ",") {
   const cols = [];
   let current = "";
   let quoted = false;
@@ -10,7 +10,7 @@ function parseCsvLine(line) {
       i += 1;
     } else if (char === '"') {
       quoted = !quoted;
-    } else if (char === "," && !quoted) {
+    } else if (char === delimiter && !quoted) {
       cols.push(current);
       current = "";
     } else {
@@ -23,6 +23,9 @@ function parseCsvLine(line) {
 
 function normalizeHeader(value = "") {
   return String(value)
+    .replace(/^\uFEFF/, "")
+    .replace(/[₂₂]/g, "2")
+    .replace(/[₀⁰]/g, "0")
     .trim()
     .toLowerCase()
     .replace(/[%()/_-]+/g, " ")
@@ -32,6 +35,20 @@ function normalizeHeader(value = "") {
 function findHeaderIndex(headers, aliases) {
   const normalized = headers.map(normalizeHeader);
   return normalized.findIndex((header) => aliases.some((alias) => header === alias || header.includes(alias)));
+}
+
+function delimiterScore(lines, delimiter) {
+  return lines.slice(0, 30).reduce((best, line) => {
+    const columns = parseCsvLine(line, delimiter);
+    return Math.max(best, columns.length);
+  }, 0);
+}
+
+function detectDelimiter(lines) {
+  return [",", "\t", ";", "|"].reduce((best, delimiter) => {
+    const score = delimiterScore(lines, delimiter);
+    return score > best.score ? { delimiter, score } : best;
+  }, { delimiter: ",", score: 0 }).delimiter;
 }
 
 function cleanNumber(value) {
@@ -48,7 +65,8 @@ function parseTimestamp(value) {
   const parsed = new Date(raw);
   if (!Number.isNaN(parsed.getTime())) return parsed;
 
-  const match = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  const normalized = raw.replace(/\s+/g, " ").replace(/(\d)\.(\d)/g, "$1:$2");
+  const match = normalized.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
   if (!match) return null;
   const [, month, day, yearRaw, hourRaw, minute, second = "0", ampm] = match;
   let year = Number(yearRaw);
@@ -60,6 +78,12 @@ function parseTimestamp(value) {
   return Number.isNaN(candidate.getTime()) ? null : candidate;
 }
 
+function combineDateAndTime(dateValue, timeValue) {
+  const date = String(dateValue || "").trim();
+  const time = String(timeValue || "").trim();
+  return parseTimestamp(`${date} ${time}`) || parseTimestamp(`${time} ${date}`);
+}
+
 function pickFirstNumeric(cols, indexes) {
   for (const index of indexes) {
     if (index < 0) continue;
@@ -67,6 +91,38 @@ function pickFirstNumeric(cols, indexes) {
     if (value != null) return value;
   }
   return null;
+}
+
+function findHeaderRow(lines, delimiter) {
+  const candidates = lines.slice(0, 40);
+  for (let index = 0; index < candidates.length; index += 1) {
+    const headers = parseCsvLine(candidates[index], delimiter);
+    const timeIdx = findHeaderIndex(headers, ["time", "timestamp", "date time", "datetime", "record time", "measurement time", "measured at"]);
+    const dateIdx = findHeaderIndex(headers, ["date", "record date", "measurement date"]);
+    const spo2Idx = findHeaderIndex(headers, ["spo2", "sp02", "sp o2", "sp 02", "oxygen", "blood oxygen", "oxygen saturation", "o2"]);
+    if ((timeIdx !== -1 || dateIdx !== -1) && spo2Idx !== -1) {
+      return { index, headers };
+    }
+  }
+  return { index: 0, headers: parseCsvLine(lines[0], delimiter) };
+}
+
+export function decodePulseOxCsvBytes(value) {
+  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value || []);
+  if (!bytes.length) return "";
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return new TextDecoder("utf-16le").decode(bytes.subarray(2));
+  }
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    const swapped = new Uint8Array(bytes.length - 2);
+    for (let index = 2; index + 1 < bytes.length; index += 2) {
+      swapped[index - 2] = bytes[index + 1];
+      swapped[index - 1] = bytes[index];
+    }
+    return new TextDecoder("utf-16le").decode(swapped);
+  }
+  const zeroBytes = bytes.slice(0, Math.min(bytes.length, 200)).filter((byte) => byte === 0).length;
+  return new TextDecoder(zeroBytes > 10 ? "utf-16le" : "utf-8").decode(bytes);
 }
 
 export function parsePulseOxCsv(text, options = {}) {
@@ -78,9 +134,12 @@ export function parsePulseOxCsv(text, options = {}) {
     return { error: "CSV appears empty or has no data rows.", rows: [], skipped: 0, total: 0 };
   }
 
-  const headers = parseCsvLine(lines[0]);
+  const delimiter = detectDelimiter(lines);
+  const headerRow = findHeaderRow(lines, delimiter);
+  const headers = headerRow.headers;
   const timeIdx = findHeaderIndex(headers, ["time", "timestamp", "date time", "datetime", "record time"]);
-  const spo2Idx = findHeaderIndex(headers, ["spo2", "sp o2", "oxygen", "blood oxygen", "oxygen saturation"]);
+  const dateIdx = findHeaderIndex(headers, ["date", "record date", "measurement date"]);
+  const spo2Idx = findHeaderIndex(headers, ["spo2", "sp02", "sp o2", "sp 02", "oxygen", "blood oxygen", "oxygen saturation", "o2"]);
   const pulseIdx = findHeaderIndex(headers, ["pulse rate", "pulse", "pr", "bpm", "heart rate", "hr"]);
   const piIdx = findHeaderIndex(headers, ["pi", "perfusion", "perfusion index"]);
 
@@ -88,7 +147,7 @@ export function parsePulseOxCsv(text, options = {}) {
   const resolvedSpo2Idx = spo2Idx !== -1 ? spo2Idx : (fallbackLikelyEmay ? 1 : -1);
   const resolvedPulseIdx = pulseIdx !== -1 ? pulseIdx : (fallbackLikelyEmay ? 2 : -1);
 
-  if (timeIdx === -1) {
+  if (timeIdx === -1 && dateIdx === -1) {
     return { error: "Could not find a time/timestamp column in the pulse-ox CSV.", rows: [], skipped: lines.length - 1, total: lines.length - 1 };
   }
   if (resolvedSpo2Idx === -1) {
@@ -97,12 +156,14 @@ export function parsePulseOxCsv(text, options = {}) {
 
   const rawRows = [];
   const skipReasons = [];
-  const dataLines = lines.slice(1);
+  const dataLines = lines.slice(headerRow.index + 1);
 
   dataLines.forEach((line, index) => {
     const rowNum = index + 2;
-    const cols = parseCsvLine(line);
-    const measuredAtDate = parseTimestamp(cols[timeIdx]);
+    const cols = parseCsvLine(line, delimiter);
+    const measuredAtDate = dateIdx !== -1 && timeIdx !== -1 && dateIdx !== timeIdx
+      ? combineDateAndTime(cols[dateIdx], cols[timeIdx])
+      : parseTimestamp(cols[timeIdx !== -1 ? timeIdx : dateIdx]);
     const spo2 = cleanNumber(cols[resolvedSpo2Idx]);
     const pulse = pickFirstNumeric(cols, [resolvedPulseIdx]);
     const perfusionIndex = cleanNumber(cols[piIdx]);
@@ -131,7 +192,15 @@ export function parsePulseOxCsv(text, options = {}) {
   });
 
   if (!rawRows.length) {
-    return { error: "No valid pulse-ox rows found.", rows: [], skipped: dataLines.length, total: dataLines.length, skipReasons };
+    return {
+      error: `No valid pulse-ox rows found. Detected columns: ${headers.filter(Boolean).join(", ") || "none"}.`,
+      rows: [],
+      skipped: dataLines.length,
+      total: dataLines.length,
+      skipReasons,
+      detectedHeaders: headers,
+      delimiter,
+    };
   }
 
   rawRows.sort((a, b) => new Date(a.measured_at).getTime() - new Date(b.measured_at).getTime());
@@ -188,5 +257,7 @@ export function parsePulseOxCsv(text, options = {}) {
     sessionEndAt: hasSessionEnd ? new Date(sessionEndMs).toISOString() : null,
     firstTimestamp: rows[0]?.measured_at || null,
     lastTimestamp: rows[rows.length - 1]?.measured_at || null,
+    detectedHeaders: headers,
+    delimiter,
   };
 }

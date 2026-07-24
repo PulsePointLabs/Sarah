@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Activity, AlertCircle, CheckCircle, Upload } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 import { Label } from "@/components/ui/label";
-import { parsePulseOxCsv } from "@/utils/parsePulseOxCsv";
+import { decodePulseOxCsvBytes, parsePulseOxCsv } from "@/utils/parsePulseOxCsv";
 
 function summarizeRows(rows) {
   if (!rows.length) return null;
@@ -88,7 +88,7 @@ export default function PulseOxSection({ data, onChange }) {
         setImportResult({ error: sessionWindow.error });
         return;
       }
-      const text = await file.text();
+      const text = decodePulseOxCsvBytes(await file.arrayBuffer());
       const parsed = parsePulseOxCsv(text, {
         sessionStartAt: sessionWindow.startAt,
         sessionEndAt: sessionWindow.endAt,
@@ -174,7 +174,10 @@ export default function PulseOxSection({ data, onChange }) {
       {importResult?.error && (
         <div className="flex items-start gap-1.5 rounded-lg bg-destructive/10 p-2.5 text-xs text-destructive">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span>{importResult.error}</span>
+          <span>
+            {importResult.error}
+            {importResult.skipReasons?.slice(0, 2).map((reason) => <span key={reason} className="mt-1 block opacity-80">{reason}</span>)}
+          </span>
         </div>
       )}
 
