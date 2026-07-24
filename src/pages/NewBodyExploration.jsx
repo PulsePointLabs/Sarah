@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import SessionInfoSection from "@/components/session-form/SessionInfoSection";
 import HeartRateSection from "@/components/session-form/HeartRateSection";
+import PulseOxSection from "@/components/session-form/PulseOxSection";
 import EMGSection from "@/components/session-form/EMGSection";
 import EventTimelineSection from "@/components/session-form/EventTimelineSection";
 import NotesMediaSection from "@/components/session-form/NotesMediaSection";
@@ -20,6 +21,7 @@ const SECTIONS = [
   { id: "overview", label: "Exploration Details" },
   { id: "info", label: "Timing" },
   { id: "hr", label: "Heart Rate" },
+  { id: "pulse-ox", label: "Pulse Oximetry" },
   { id: "emg", label: "EMG (Optional)" },
   { id: "events", label: "Timestamped Notes" },
   { id: "notes", label: "Notes & Media" },
@@ -46,7 +48,7 @@ export default function NewBodyExploration() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [saving, setSaving] = useState(false);
-  const [expanded, setExpanded] = useState(new Set(["overview", "info", "hr"]));
+  const [expanded, setExpanded] = useState(new Set(["overview", "info", "hr", "pulse-ox"]));
   const [data, setData] = useState({
     date: new Date().toISOString(),
     title: "",
@@ -94,7 +96,7 @@ export default function NewBodyExploration() {
     setSaving(true);
     try {
       const duration = calcDuration(data.start_time, data.end_time);
-      const { _csv_rows, _emg_rows, _emg_channel_mode, ...record } = data;
+      const { _csv_rows, _pulse_ox_rows, _emg_rows, _emg_channel_mode, ...record } = data;
       const exploration = id
         ? await base44.entities.BodyExploration.update(id, { ...record, duration_minutes: duration || data.duration_minutes })
         : await base44.entities.BodyExploration.create({ ...record, duration_minutes: duration || data.duration_minutes });
@@ -150,6 +152,7 @@ export default function NewBodyExploration() {
     if (id === "overview") return detailSection;
     if (id === "info") return <SessionInfoSection {...props} />;
     if (id === "hr") return <HeartRateSection {...props} />;
+    if (id === "pulse-ox") return <PulseOxSection {...props} />;
     if (id === "emg") return <EMGSection {...props} />;
     if (id === "events") return <EventTimelineSection {...props} />;
     if (id === "notes") return <NotesMediaSection {...props} />;
@@ -165,8 +168,8 @@ export default function NewBodyExploration() {
         action={id ? <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="gap-1.5"><ArrowLeft className="h-4 w-4" /> Back</Button> : null}
       />
       <div className="space-y-2 px-4 pb-8">
-        <div className="rounded-xl border border-primary/25 bg-primary/10 p-4 text-sm text-foreground">This workflow is separate from climax-oriented sessions. Heart-rate telemetry is supported, EMG is optional, and AI feedback focuses on exploration, instrumentation, comfort, and observed findings.</div>
-        {SECTIONS.map((section) => <div key={section.id} className="overflow-hidden rounded-xl border border-border bg-card">
+        <div className="rounded-xl border border-primary/25 bg-primary/10 p-4 text-sm text-foreground">This workflow is separate from climax-oriented sessions. Heart-rate telemetry and pulse-ox CSV imports are supported, EMG is optional, and AI feedback focuses on exploration, instrumentation, comfort, and observed findings.</div>
+        {SECTIONS.map((section) => <div id={section.id} key={section.id} className="scroll-mt-24 overflow-hidden rounded-xl border border-border bg-card">
           <button type="button" onClick={() => toggle(section.id)} className="flex w-full items-center justify-between px-4 py-3 text-sm font-semibold">{section.label}{expanded.has(section.id) ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</button>
           {expanded.has(section.id) && <div className="border-t border-border px-4 pb-4 pt-3">{renderSection(section.id)}</div>}
         </div>)}

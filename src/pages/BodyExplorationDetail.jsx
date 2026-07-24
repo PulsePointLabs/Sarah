@@ -196,6 +196,23 @@ export default function BodyExplorationDetail() {
         {pulseOxReadings.length > 0 && (
           <PulseOxSessionChart session={exploration} sectionId="body-exploration-pulse-ox" />
         )}
+        {pulseOxReadings.length === 0 && (
+          <section id="body-exploration-pulse-ox" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
+                  <Activity className="h-3.5 w-3.5" /> Pulse Oximetry
+                </h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  No SpO2 readings are saved for this exploration. Import the EMAY pulse-ox CSV from the Pulse Oximetry section in Edit.
+                </p>
+              </div>
+              <Button asChild size="sm" variant="outline" className="shrink-0">
+                <Link to={`/exploration/${exploration.id}/edit#pulse-ox`}>Import SpO2</Link>
+              </Button>
+            </div>
+          </section>
+        )}
 
         <section className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
