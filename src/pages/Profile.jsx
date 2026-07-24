@@ -336,11 +336,14 @@ export default function Profile() {
       const qaFindingsWithBackfills = imageReviewBackfills.length
         ? normalizeProfileQaFindings([...imageReviewBackfills, ...importedQaFindings])
         : importedQaFindings;
+      const savedHeight = heightParts(u.height_cm);
       setUser(u);
       setForm({
         first_name: u.first_name ?? "",
         age: u.age ?? null,
         height_cm: u.height_cm ?? null,
+        height_feet: savedHeight.feet,
+        height_inches: savedHeight.inches,
         biological_sex: u.biological_sex ?? null,
         weight_kg: u.weight_kg ?? null,
         resting_hr: u.resting_hr ?? null,
@@ -408,7 +411,10 @@ export default function Profile() {
       profile_qa_findings: normalizeProfileQaFindings(form.profile_qa_findings),
       anatomical_mechanical_profile: normalizeMechanicalProfile(form.anatomical_mechanical_profile),
     };
-    await base44.auth.updateMe(canonicalForm);
+    const profilePayload = { ...canonicalForm };
+    delete profilePayload.height_feet;
+    delete profilePayload.height_inches;
+    await base44.auth.updateMe(profilePayload);
     setForm(canonicalForm);
     setSaving(false);
     setSaved(true);
@@ -428,7 +434,6 @@ export default function Profile() {
   const effectiveMaxHR = form.max_hr || estimatedMaxHR;
   const profileQaFindings = normalizeProfileQaFindings(form.profile_qa_findings);
   const profileQaFindingCards = buildProfileQaFindingCards(profileQaFindings, form.first_name);
-  const height = heightParts(form.height_cm);
 
   if (!user) return (
     <div className="flex min-h-64 items-center justify-center px-4 py-10">
@@ -490,10 +495,11 @@ export default function Profile() {
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <NumInput
-                      value={height.feet}
+                      value={form.height_feet}
                       onChange={(value) => setForm((current) => ({
                         ...current,
-                        height_cm: heightCmFromParts(value, heightParts(current.height_cm).inches),
+                        height_feet: value,
+                        height_cm: heightCmFromParts(value, current.height_inches),
                       }))}
                       placeholder="Feet"
                       min={3}
@@ -503,10 +509,11 @@ export default function Profile() {
                   </div>
                   <div>
                     <NumInput
-                      value={height.inches}
+                      value={form.height_inches}
                       onChange={(value) => setForm((current) => ({
                         ...current,
-                        height_cm: heightCmFromParts(heightParts(current.height_cm).feet, value),
+                        height_inches: value,
+                        height_cm: heightCmFromParts(current.height_feet, value),
                       }))}
                       placeholder="Inches"
                       min={0}
