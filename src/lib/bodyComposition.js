@@ -20,6 +20,7 @@ const NUMERIC_FIELDS = [
   "muscle_mass_kg",
   "protein_percent",
   "metabolic_age",
+  "impedance_ohms",
 ];
 
 function finiteOrNull(value) {
@@ -119,6 +120,23 @@ export async function saveManualBodyComposition(input = {}) {
   return base44.entities.BodyCompositionReading.create({
     ...reading,
     id: input.id || bodyCompositionId(reading),
+  });
+}
+
+export async function saveDirectBodyComposition(input = {}) {
+  const reading = normalizeBodyCompositionReading({
+    ...input,
+    source_app: input.source_app || "Etekcity ESF-551 direct BLE",
+    source_package: input.source_package || "direct_ble",
+    import_source: "direct_ble_esf551",
+  });
+  if (reading.weight_kg == null || reading.impedance_ohms == null) {
+    throw new Error("The scale reading did not include both stable weight and impedance.");
+  }
+  return base44.entities.BodyCompositionReading.create({
+    ...reading,
+    id: input.id || bodyCompositionId(reading),
+    imported_at: new Date().toISOString(),
   });
 }
 

@@ -322,6 +322,8 @@ export default function Profile() {
       setForm({
         first_name: u.first_name ?? "",
         age: u.age ?? null,
+        height_cm: u.height_cm ?? null,
+        biological_sex: u.biological_sex ?? null,
         weight_kg: u.weight_kg ?? null,
         resting_hr: u.resting_hr ?? null,
         max_hr: u.max_hr ?? null,
@@ -462,6 +464,19 @@ export default function Profile() {
               <Field label="Weight (kg)">
                 <NumInput value={form.weight_kg} onChange={(v) => setForm((f) => ({ ...f, weight_kg: v }))} placeholder="e.g. 80" min={30} max={250} />
               </Field>
+              <Field label="Height (cm)" hint="Required for direct smart-scale composition estimates.">
+                <NumInput value={form.height_cm} onChange={(v) => setForm((f) => ({ ...f, height_cm: v }))} placeholder="e.g. 178" min={100} max={250} />
+              </Field>
+              <Field label="Biological sex" hint="Used only by the scale's bioimpedance equations.">
+                <SelectInput
+                  value={form.biological_sex}
+                  onChange={(v) => setForm((f) => ({ ...f, biological_sex: v }))}
+                  options={[
+                    { value: "male", label: "Male" },
+                    { value: "female", label: "Female" },
+                  ]}
+                />
+              </Field>
             </div>
             <Field label="Fitness Level">
               <div className="flex flex-wrap gap-2 mt-1">
@@ -483,6 +498,7 @@ export default function Profile() {
           </div>
 
           <BodyCompositionProfilePanel
+            profile={form}
             onLatestReading={(reading) => setForm((current) => ({
               ...current,
               weight_kg: reading.weight_kg ?? current.weight_kg,

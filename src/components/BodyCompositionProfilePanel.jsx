@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ExternalLink, RefreshCw, Scale } from "lucide-react";
+import { Bluetooth, ExternalLink, RefreshCw, Scale } from "lucide-react";
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
@@ -9,11 +9,13 @@ import {
   listBodyCompositionReadings,
   openBodyCompositionHealthConnectSettings,
   requestBodyCompositionPermission,
+  saveDirectBodyComposition,
   syncBodyCompositionFromHealthConnect,
 } from "@/lib/bodyComposition";
+import { readEsf551Scale } from "@/lib/etekcityEsf551Ble";
 import { isSarahNativeShell } from "@/lib/mobileApiBase";
 
-export default function BodyCompositionProfilePanel({ onLatestReading }) {
+export default function BodyCompositionProfilePanel({ profile, onLatestReading }) {
   const { toast } = useToast();
   const [readings, setReadings] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -90,6 +92,41 @@ export default function BodyCompositionProfilePanel({ onLatestReading }) {
     }
   };
 
+  const readScaleDirectly = async () => {
+    setBusy(true);
+    setSyncError(false);
+    setSyncMessage("Preparing direct ESF-551 Bluetooth capture...");
+    try {
+      const reading = await readEsf551Scale({
+        age: profile?.age,
+        heightCm: profile?.height_cm,
+        biologicalSex: profile?.biological_sex,
+        onStatus: setSyncMessage,
+      });
+      const saved = await saveDirectBodyComposition(reading);
+      const rows = await reload();
+      await base44.auth.updateMe({
+        age: Number(profile.age),
+        height_cm: Number(profile.height_cm),
+        biological_sex: profile.biological_sex,
+        weight_kg: saved.weight_kg,
+        latest_body_composition: saved,
+      });
+      onLatestReading?.(saved);
+      const message = `Direct ESF-551 reading saved: ${Number(saved.weight_kg).toFixed(1)} kg, ${Number(saved.body_fat_percent).toFixed(1)}% body fat, impedance ${Math.round(saved.impedance_ohms)} Ω.`;
+      setSyncMessage(message);
+      toast({ title: message });
+      if (!rows.length) await reload();
+    } catch (error) {
+      const message = error.message || "Direct ESF-551 capture failed";
+      setSyncError(true);
+      setSyncMessage(message);
+      toast({ title: message, variant: "destructive" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const chart = [...readings].reverse()
     .filter((reading) => (
       reading.weight_kg != null
@@ -114,13 +151,17 @@ export default function BodyCompositionProfilePanel({ onLatestReading }) {
           <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
             <Scale className="h-4 w-4" /> Body Composition History
           </h2>
-          <p className="mt-1 text-xs text-muted-foreground">VeSync measurements imported through Android Health Connect.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Read the ESF-551 directly over Bluetooth, or use Health Connect as a fallback.</p>
         </div>
         {isSarahNativeShell() && (
           <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" onClick={readScaleDirectly} disabled={busy} className="gap-2">
+              <Bluetooth className="h-4 w-4" />
+              {busy ? "Working…" : "Read ESF-551 Scale"}
+            </Button>
             <Button type="button" size="sm" onClick={sync} disabled={busy} className="gap-2">
               <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
-              {busy ? "Syncing…" : "Sync Health Connect"}
+              Sync Health Connect
             </Button>
             <Button
               type="button"
@@ -137,6 +178,11 @@ export default function BodyCompositionProfilePanel({ onLatestReading }) {
           </div>
         )}
       </div>
+      {isSarahNativeShell() && (
+        <p className="rounded-lg border border-cyan-400/20 bg-cyan-400/5 px-3 py-2 text-xs text-muted-foreground">
+          Direct capture: close VeSync, wake the scale, tap Read ESF-551 Scale, then stand barefoot and still on all four electrodes. Weight and impedance are measured; the remaining composition values are calculated locally from those signals and your saved profile.
+        </p>
+      )}
       {syncMessage && (
         <div className={`rounded-lg border px-3 py-2 text-sm ${syncError ? "border-destructive/40 bg-destructive/10 text-destructive" : "border-primary/25 bg-primary/5 text-foreground"}`}>
           {syncMessage}

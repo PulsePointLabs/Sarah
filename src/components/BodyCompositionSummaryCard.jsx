@@ -3,6 +3,7 @@ import { formatCompositionTime, formatWeightKg } from "@/lib/bodyComposition";
 
 const METRICS = [
   ["Body fat", "body_fat_percent", "%", 1],
+  ["Impedance", "impedance_ohms", " Ω", 0],
   ["BMI", "bmi", "", 1],
   ["Lean mass", "lean_body_mass_kg", " kg", 1],
   ["Fat-free weight", "fat_free_body_weight_kg", " kg", 1],
