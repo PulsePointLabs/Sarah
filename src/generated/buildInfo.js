@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
   "version": "0.1.157",
-  "commit": "6582e6f",
-  "commitMessage": "Record body composition API desktop build",
-  "builtAt": "2026-07-24T02:20:20.987Z"
+  "commit": "652dfa2",
+  "commitMessage": "Hide unavailable body composition metrics",
+  "builtAt": "2026-07-24T02:21:41.315Z"
 };

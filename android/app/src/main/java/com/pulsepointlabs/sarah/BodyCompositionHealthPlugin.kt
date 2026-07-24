@@ -29,10 +29,17 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
+import kotlin.math.abs
 import kotlin.reflect.KClass
 
 @CapacitorPlugin(name = "BodyCompositionHealth")
 class BodyCompositionHealthPlugin : Plugin() {
+    private data class CompositionBucket(
+        val time: Instant,
+        val sourcePackage: String,
+        val data: JSObject,
+    )
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val recordTypes = listOf<KClass<out Record>>(
         WeightRecord::class,
@@ -148,11 +155,13 @@ class BodyCompositionHealthPlugin : Plugin() {
 
                 val end = Instant.now()
                 val start = end.minusSeconds(days.toLong() * 24L * 60L * 60L)
-                val buckets = sortedMapOf<Long, JSObject>()
+                val buckets = mutableListOf<CompositionBucket>()
+                val typeCounts = JSObject()
 
                 suspend fun <T : Record> read(
                     type: KClass<T>,
                     permission: String,
+                    field: String,
                     apply: (JSObject, T) -> Unit,
                 ) {
                     if (!granted.contains(permission)) return
@@ -164,46 +173,58 @@ class BodyCompositionHealthPlugin : Plugin() {
                             pageSize = limit,
                         )
                     )
+                    typeCounts.put(type.simpleName ?: field, response.records.size)
                     response.records.take(limit).forEach { record ->
                         val time = recordTime(record)
-                        val key = time.epochSecond
-                        val target = buckets.getOrPut(key) {
-                            JSObject()
+                        val sourcePackage = record.metadata.dataOrigin.packageName
+                        val bucket = buckets
+                            .filter {
+                                it.sourcePackage == sourcePackage
+                                    && !it.data.has(field)
+                                    && abs(it.time.epochSecond - time.epochSecond) <= 120L
+                            }
+                            .minByOrNull { abs(it.time.epochSecond - time.epochSecond) }
+                            ?: CompositionBucket(
+                                time = time,
+                                sourcePackage = sourcePackage,
+                                data = JSObject()
                                 .put("measured_at", time.toString())
-                                .put("source_app", record.metadata.dataOrigin.packageName.ifBlank { "Health Connect" })
-                                .put("source_package", record.metadata.dataOrigin.packageName)
+                                .put("source_app", sourcePackage.ifBlank { "Health Connect" })
+                                .put("source_package", sourcePackage)
                                 .put("source_device", deviceLabel(record.metadata.device))
-                                .put("health_connect_ids", JSArray())
-                        }
+                                .put("health_connect_ids", JSArray()),
+                            ).also { buckets.add(it) }
+                        val target = bucket.data
                         target.getJSONArray("health_connect_ids").put(record.metadata.id)
                         apply(target, record)
                     }
                 }
 
-                read(WeightRecord::class, HealthPermission.getReadPermission(WeightRecord::class)) { out, row ->
+                read(WeightRecord::class, HealthPermission.getReadPermission(WeightRecord::class), "weight_kg") { out, row ->
                     out.put("weight_kg", row.weight.inKilograms)
                 }
-                read(BodyFatRecord::class, HealthPermission.getReadPermission(BodyFatRecord::class)) { out, row ->
+                read(BodyFatRecord::class, HealthPermission.getReadPermission(BodyFatRecord::class), "body_fat_percent") { out, row ->
                     out.put("body_fat_percent", row.percentage.value)
                 }
-                read(LeanBodyMassRecord::class, HealthPermission.getReadPermission(LeanBodyMassRecord::class)) { out, row ->
+                read(LeanBodyMassRecord::class, HealthPermission.getReadPermission(LeanBodyMassRecord::class), "lean_body_mass_kg") { out, row ->
                     out.put("lean_body_mass_kg", row.mass.inKilograms)
                 }
-                read(BodyWaterMassRecord::class, HealthPermission.getReadPermission(BodyWaterMassRecord::class)) { out, row ->
+                read(BodyWaterMassRecord::class, HealthPermission.getReadPermission(BodyWaterMassRecord::class), "body_water_mass_kg") { out, row ->
                     out.put("body_water_mass_kg", row.mass.inKilograms)
                 }
-                read(BoneMassRecord::class, HealthPermission.getReadPermission(BoneMassRecord::class)) { out, row ->
+                read(BoneMassRecord::class, HealthPermission.getReadPermission(BoneMassRecord::class), "bone_mass_kg") { out, row ->
                     out.put("bone_mass_kg", row.mass.inKilograms)
                 }
-                read(BasalMetabolicRateRecord::class, HealthPermission.getReadPermission(BasalMetabolicRateRecord::class)) { out, row ->
+                read(BasalMetabolicRateRecord::class, HealthPermission.getReadPermission(BasalMetabolicRateRecord::class), "basal_metabolic_rate_kcal_day") { out, row ->
                     out.put("basal_metabolic_rate_kcal_day", row.basalMetabolicRate.inKilocaloriesPerDay)
                 }
 
                 val readings = JSArray()
-                buckets.values.reversed().take(limit).forEach { readings.put(it) }
+                buckets.sortedByDescending { it.time }.take(limit).forEach { readings.put(it.data) }
                 val result = statusObjectSync(granted, sdkStatus)
                     .put("readings", readings)
                     .put("count", readings.length())
+                    .put("recordTypeCounts", typeCounts)
                 withContext(Dispatchers.Main) { call.resolve(result) }
             } catch (error: Exception) {
                 withContext(Dispatchers.Main) {

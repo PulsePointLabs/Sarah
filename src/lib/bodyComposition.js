@@ -96,7 +96,7 @@ export async function syncBodyCompositionFromHealthConnect({ days = 30, limit = 
   const native = await NativeBodyComposition.readRecent({ days, limit });
   const readings = (Array.isArray(native?.readings) ? native.readings : [])
     .map(normalizeBodyCompositionReading)
-    .filter((reading) => reading.weight_kg != null || reading.body_fat_percent != null);
+    .filter((reading) => NUMERIC_FIELDS.some((field) => reading[field] != null));
   const saved = [];
   for (const reading of readings) {
     saved.push(await base44.entities.BodyCompositionReading.create({

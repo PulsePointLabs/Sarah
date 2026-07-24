@@ -20,11 +20,11 @@ const METRICS = [
 
 export default function BodyCompositionSummaryCard({ reading, title = "Body Composition", compact = false }) {
   if (!reading) return null;
-  const available = METRICS.filter(([, field]) => (
+  const hasValue = (field) => (
     reading[field] != null
     && reading[field] !== ""
     && Number.isFinite(Number(reading[field]))
-  ));
+  );
   return (
     <section className="rounded-xl border border-border bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -42,13 +42,13 @@ export default function BodyCompositionSummaryCard({ reading, title = "Body Comp
           {reading.measurement_relation && <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{reading.measurement_relation}</p>}
         </div>
       </div>
-      {available.length > 0 && (
+      {METRICS.length > 0 && (
         <div className={`mt-4 grid gap-2 ${compact ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
-          {available.map(([label, field, suffix, precision]) => (
+          {METRICS.map(([label, field, suffix, precision]) => (
             <div key={field} className="rounded-lg border border-border bg-muted/20 px-3 py-2">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
-              <p className="mt-1 font-mono text-base font-semibold text-foreground">
-                {Number(reading[field]).toFixed(precision)}{suffix}
+              <p className={`mt-1 font-mono text-base font-semibold ${hasValue(field) ? "text-foreground" : "text-muted-foreground"}`}>
+                {hasValue(field) ? `${Number(reading[field]).toFixed(precision)}${suffix}` : "Not shared"}
               </p>
             </div>
           ))}

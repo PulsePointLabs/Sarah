@@ -55,8 +55,26 @@ export default function BodyCompositionProfilePanel({ onLatestReading }) {
         });
       }
       const nativeCount = Number(result.native?.count || 0);
+      const typeLabels = {
+        WeightRecord: "weight",
+        BodyFatRecord: "body fat",
+        LeanBodyMassRecord: "lean mass",
+        BodyWaterMassRecord: "body water",
+        BoneMassRecord: "bone mass",
+        BasalMetabolicRateRecord: "BMR",
+      };
+      const typeCounts = result.native?.recordTypeCounts || {};
+      const suppliedTypes = Object.entries(typeLabels)
+        .filter(([type]) => Number(typeCounts[type] || 0) > 0)
+        .map(([, label]) => label);
+      const missingTypes = Object.entries(typeLabels)
+        .filter(([type]) => Number(typeCounts[type] || 0) === 0)
+        .map(([, label]) => label);
+      const sourceDetail = suppliedTypes.length
+        ? ` Health Connect supplied ${suppliedTypes.join(", ")}.${missingTypes.length ? ` Not supplied: ${missingTypes.join(", ")}.` : ""}`
+        : "";
       const message = result.inserted
-        ? `Imported ${result.inserted} body-composition reading${result.inserted === 1 ? "" : "s"}.`
+        ? `Imported ${result.inserted} body-composition reading${result.inserted === 1 ? "" : "s"}.${sourceDetail}`
         : nativeCount
           ? `Health Connect returned ${nativeCount} reading${nativeCount === 1 ? "" : "s"}, but none were new.`
           : "Health Connect returned no weigh-ins. Grant Sarah all body-composition and history permissions, and confirm VeSync is sharing weight data.";
