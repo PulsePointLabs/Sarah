@@ -13,13 +13,32 @@ export const H10_ACCELEROMETER_START_COMMAND = Uint8Array.from([
   0x00, 0x01, 0x19, 0x00,
   0x01, 0x01, 0x10, 0x00,
   0x02, 0x01, 0x02, 0x00,
-  0x04, 0x01, 0x03,
 ]);
 
 export const H10_ECG_STOP_COMMAND = Uint8Array.from([0x03, 0x00]);
 export const H10_ACCELEROMETER_STOP_COMMAND = Uint8Array.from([0x03, 0x02]);
 
 export const H10_PMD_ALREADY_ACTIVE_STATUS = 6;
+
+const H10_PMD_STATUS_LABELS = Object.freeze({
+  1: "invalid operation",
+  2: "invalid measurement type",
+  3: "not supported",
+  4: "invalid command length",
+  5: "invalid parameter",
+  6: "already active",
+  7: "invalid resolution",
+  8: "invalid sample rate",
+  9: "invalid range",
+  10: "invalid MTU",
+  11: "invalid channel count",
+  12: "invalid state",
+});
+
+export function describeH10PmdStatus(status) {
+  const numeric = Number(status);
+  return H10_PMD_STATUS_LABELS[numeric] || `status ${numeric}`;
+}
 
 export function isH10PmdStreamActiveResponse(response) {
   return Boolean(

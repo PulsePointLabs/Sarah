@@ -51,6 +51,7 @@ import {
   appendBoundedSamples,
   commandDataView,
   createH10PmdParserState,
+  describeH10PmdStatus,
   deriveH10MultimodalSnapshot,
   detectH10TapGesture,
   isH10PmdStreamActiveResponse,
@@ -2558,13 +2559,13 @@ export default function LiveCapture() {
       BleClient.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ECG_START_COMMAND), { timeout: 12000 }),
       ecgResponsePromise,
     ]);
-    if (!isH10PmdStreamActiveResponse(ecgResponse)) throw new Error(`H10 rejected ECG stream (status ${ecgResponse.status})`);
+    if (!isH10PmdStreamActiveResponse(ecgResponse)) throw new Error(`H10 rejected ECG stream: ${describeH10PmdStatus(ecgResponse.status)} (status ${ecgResponse.status})`);
     const accelerometerResponsePromise = waitForH10PmdControlResponse(2, 2);
     const [, accelerometerResponse] = await Promise.all([
       BleClient.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ACCELEROMETER_START_COMMAND), { timeout: 12000 }),
       accelerometerResponsePromise,
     ]);
-    if (!isH10PmdStreamActiveResponse(accelerometerResponse)) throw new Error(`H10 rejected accelerometer stream (status ${accelerometerResponse.status})`);
+    if (!isH10PmdStreamActiveResponse(accelerometerResponse)) throw new Error(`H10 rejected accelerometer stream: ${describeH10PmdStatus(accelerometerResponse.status)} (status ${accelerometerResponse.status})`);
     directH10PmdNativeActiveRef.current = true;
     setDirectH10Status((previous) => ({ ...previous, pmdActive: false, pmdMessage: "Confirming ECG + chest motion samples" }));
     await waitForH10PmdSamples();
@@ -2611,13 +2612,13 @@ export default function LiveCapture() {
       control.writeValueWithResponse(H10_ECG_START_COMMAND),
       ecgResponsePromise,
     ]);
-    if (!isH10PmdStreamActiveResponse(ecgResponse)) throw new Error(`H10 rejected ECG stream (status ${ecgResponse.status})`);
+    if (!isH10PmdStreamActiveResponse(ecgResponse)) throw new Error(`H10 rejected ECG stream: ${describeH10PmdStatus(ecgResponse.status)} (status ${ecgResponse.status})`);
     const accelerometerResponsePromise = waitForH10PmdControlResponse(2, 2);
     const [, accelerometerResponse] = await Promise.all([
       control.writeValueWithResponse(H10_ACCELEROMETER_START_COMMAND),
       accelerometerResponsePromise,
     ]);
-    if (!isH10PmdStreamActiveResponse(accelerometerResponse)) throw new Error(`H10 rejected accelerometer stream (status ${accelerometerResponse.status})`);
+    if (!isH10PmdStreamActiveResponse(accelerometerResponse)) throw new Error(`H10 rejected accelerometer stream: ${describeH10PmdStatus(accelerometerResponse.status)} (status ${accelerometerResponse.status})`);
     setDirectH10Status((previous) => ({ ...previous, pmdActive: false, pmdMessage: "Confirming ECG + chest motion samples" }));
     await waitForH10PmdSamples();
     setDirectH10Status((previous) => ({ ...previous, pmdActive: true, pmdMessage: "ECG + chest motion verified" }));

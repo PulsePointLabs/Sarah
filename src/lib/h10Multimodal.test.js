@@ -1,14 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  H10_ACCELEROMETER_START_COMMAND,
   appendBoundedSamples,
   createH10PmdParserState,
+  describeH10PmdStatus,
   deriveH10MultimodalSnapshot,
   detectH10TapGesture,
   fuseRespiration,
   isH10PmdStreamActiveResponse,
   parseH10PmdFrame,
 } from "./h10Multimodal.js";
+
+test("uses only H10-supported accelerometer settings", () => {
+  assert.deepEqual([...H10_ACCELEROMETER_START_COMMAND], [
+    0x02, 0x02,
+    0x00, 0x01, 0x19, 0x00,
+    0x01, 0x01, 0x10, 0x00,
+    0x02, 0x01, 0x02, 0x00,
+  ]);
+  assert.equal(describeH10PmdStatus(5), "invalid parameter");
+});
 
 function writeSigned24(target, offset, value) {
   const normalized = value < 0 ? value + 0x1000000 : value;
