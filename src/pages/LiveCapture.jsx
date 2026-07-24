@@ -4961,6 +4961,7 @@ export default function LiveCapture() {
     if (launchInFlightRef.current) return launchInFlightRef.current;
     const transaction = (async () => {
       setLaunchState({ phase: "starting", message: "Starting session...", steps: [], busy: true, error: "" });
+      let rawSensorWarning = "";
       try {
         setLaunchStep("Restoring setup");
         writeHrSourceSettings(hrSourceSettings);
@@ -5009,11 +5010,31 @@ export default function LiveCapture() {
         if (directH10Launch && !allowWithoutRawSensors) {
           setLaunchStep("Verifying raw sensors");
           try {
-            await waitForH10PmdSamples(7000);
-          } catch {
-            await verifyDirectH10Pmd();
+            const currentPmd = directH10StatusRef.current || {};
+            const knownUnavailable = !currentPmd.pmdActive
+              && /unavailable|rejected|timed out|delivered no complete sensor stream|failed/i.test(currentPmd.pmdMessage || "");
+            if (knownUnavailable) {
+              throw new Error(currentPmd.pmdMessage);
+            }
+            try {
+              await waitForH10PmdSamples(7000);
+            } catch {
+              await verifyDirectH10Pmd();
+            }
+            await wait(1200);
+          } catch (error) {
+            rawSensorWarning = error?.message || String(error);
+            const message = /^HR\/RR live;/i.test(rawSensorWarning)
+              ? rawSensorWarning
+              : `HR/RR live; raw ECG/motion unavailable: ${rawSensorWarning}`;
+            const nextStatus = {
+              ...(directH10StatusRef.current || {}),
+              pmdActive: false,
+              pmdMessage: message,
+            };
+            directH10StatusRef.current = nextStatus;
+            setDirectH10Status(nextStatus);
           }
-          await wait(1200);
         }
 
         setLaunchStep("Checking OBS");
@@ -5032,7 +5053,11 @@ export default function LiveCapture() {
           phase: "live",
           busy: false,
           error: "",
-          message: voiceReadyForLaunch || !liveCueSettings.enabled ? "Session live." : "Session live without voice cues.",
+          message: rawSensorWarning
+            ? "Session live with HR/RR/HRV. Raw ECG, motion, and respiration are unavailable."
+            : voiceReadyForLaunch || !liveCueSettings.enabled
+              ? "Session live."
+              : "Session live without voice cues.",
         }));
         return sessionState;
       } catch (error) {
