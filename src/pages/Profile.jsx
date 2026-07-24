@@ -70,6 +70,24 @@ function SelectInput({ value, onChange, options, placeholder = "Not set" }) {
   );
 }
 
+function heightParts(heightCm) {
+  const centimeters = Number(heightCm);
+  if (!Number.isFinite(centimeters) || centimeters <= 0) return { feet: null, inches: null };
+  const totalInches = centimeters / 2.54;
+  const feet = Math.floor(totalInches / 12);
+  return {
+    feet,
+    inches: Math.round((totalInches - feet * 12) * 10) / 10,
+  };
+}
+
+function heightCmFromParts(feet, inches) {
+  const feetValue = Number(feet);
+  const inchesValue = Number(inches);
+  if (!Number.isFinite(feetValue) || feetValue <= 0) return null;
+  return Math.round((feetValue * 12 + (Number.isFinite(inchesValue) ? inchesValue : 0)) * 2.54 * 10) / 10;
+}
+
 const LENGTH_UNITS = ["inches", "cm"];
 const DIAMETER_UNITS = ["mm", "inches"];
 const DEFAULT_MECHANICAL_PROFILE = {
@@ -410,6 +428,7 @@ export default function Profile() {
   const effectiveMaxHR = form.max_hr || estimatedMaxHR;
   const profileQaFindings = normalizeProfileQaFindings(form.profile_qa_findings);
   const profileQaFindingCards = buildProfileQaFindingCards(profileQaFindings, form.first_name);
+  const height = heightParts(form.height_cm);
 
   if (!user) return (
     <div className="flex min-h-64 items-center justify-center px-4 py-10">
@@ -464,8 +483,38 @@ export default function Profile() {
               <Field label="Weight (kg)">
                 <NumInput value={form.weight_kg} onChange={(v) => setForm((f) => ({ ...f, weight_kg: v }))} placeholder="e.g. 80" min={30} max={250} />
               </Field>
-              <Field label="Height (cm)" hint="Required for direct smart-scale composition estimates.">
-                <NumInput value={form.height_cm} onChange={(v) => setForm((f) => ({ ...f, height_cm: v }))} placeholder="e.g. 178" min={100} max={250} />
+              <Field
+                label="Height"
+                hint={`Required for direct smart-scale composition estimates.${form.height_cm ? ` Sarah stores this as ${Number(form.height_cm).toFixed(1)} cm internally.` : ""}`}
+              >
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <NumInput
+                      value={height.feet}
+                      onChange={(value) => setForm((current) => ({
+                        ...current,
+                        height_cm: heightCmFromParts(value, heightParts(current.height_cm).inches),
+                      }))}
+                      placeholder="Feet"
+                      min={3}
+                      max={8}
+                    />
+                    <p className="mt-1 text-[10px] text-muted-foreground">feet</p>
+                  </div>
+                  <div>
+                    <NumInput
+                      value={height.inches}
+                      onChange={(value) => setForm((current) => ({
+                        ...current,
+                        height_cm: heightCmFromParts(heightParts(current.height_cm).feet, value),
+                      }))}
+                      placeholder="Inches"
+                      min={0}
+                      max={11.9}
+                    />
+                    <p className="mt-1 text-[10px] text-muted-foreground">inches</p>
+                  </div>
+                </div>
               </Field>
               <Field label="Biological sex" hint="Used only by the scale's bioimpedance equations.">
                 <SelectInput
