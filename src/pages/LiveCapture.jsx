@@ -23,6 +23,7 @@ import { base44 } from "@/api/base44Client";
 import { useToast } from "@/components/ui/use-toast";
 import { HR_SOURCE_OPTIONS, PULSOID_MODE_OPTIONS, computeHrvFromRr, maskPulsoidToken, readHrSourceSettings, writeHrSourceSettings } from "@/lib/hrSources";
 import { apiUrl, isSarahNativeShell } from "@/lib/mobileApiBase";
+import { setLiveCaptureKeepAwake } from "@/lib/liveCaptureKeepAwake";
 import { readSttProviderPreference } from "@/lib/sttSettings";
 import {
   buildLaunchProfileFromRuntime,
@@ -3428,10 +3429,10 @@ export default function LiveCapture() {
     };
 
     const requestWakeLock = async () => {
-      if (!recordingActive || document.hidden || liveCaptureWakeLockRef.current || !("wakeLock" in navigator)) return;
+      if (!recordingTransportActive || document.hidden || liveCaptureWakeLockRef.current || !("wakeLock" in navigator)) return;
       try {
         const wakeLock = await navigator.wakeLock.request("screen");
-        if (cancelled || !recordingActive) {
+        if (cancelled || !recordingTransportActive) {
           await wakeLock.release();
           return;
         }
@@ -3452,7 +3453,10 @@ export default function LiveCapture() {
       }
     };
 
-    if (recordingActive) requestWakeLock();
+    setLiveCaptureKeepAwake(recordingTransportActive).catch(() => {
+      // The browser wake lock remains available when the native bridge is absent.
+    });
+    if (recordingTransportActive) requestWakeLock();
     else releaseWakeLock();
     document.addEventListener("visibilitychange", onVisibilityChange);
 
@@ -3460,8 +3464,9 @@ export default function LiveCapture() {
       cancelled = true;
       document.removeEventListener("visibilitychange", onVisibilityChange);
       releaseWakeLock();
+      setLiveCaptureKeepAwake(false).catch(() => {});
     };
-  }, [recordingActive]);
+  }, [recordingTransportActive]);
 
   const recentHrPacket = hasRecentHrPacket();
   const hrConnected = Boolean(recentHrPacket || status?.hr?.sourceStatus?.connected || status?.hr?.connected);

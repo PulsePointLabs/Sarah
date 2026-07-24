@@ -1,6 +1,7 @@
 package com.pulsepointlabs.sarah;
 
 import android.os.Bundle;
+import android.view.WindowManager;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -14,6 +15,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(SarahFileSaverPlugin.class);
         registerPlugin(SarahBackgroundJobsPlugin.class);
         registerPlugin(SarahMediaPlugin.class);
+        registerPlugin(SarahKeepAwakePlugin.class);
         super.onCreate(savedInstanceState);
         if (getBridge() != null && getBridge().getWebView() != null) {
             sarahWebChromeClient = new SarahWebChromeClient(this, getBridge());
@@ -30,6 +32,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onDestroy() {
         if (sarahWebChromeClient != null) sarahWebChromeClient.hideCustomView();
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         super.onDestroy();
     }
 }
