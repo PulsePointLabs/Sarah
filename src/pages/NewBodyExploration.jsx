@@ -14,6 +14,7 @@ import PulseOxSection from "@/components/session-form/PulseOxSection";
 import EMGSection from "@/components/session-form/EMGSection";
 import EventTimelineSection from "@/components/session-form/EventTimelineSection";
 import NotesMediaSection from "@/components/session-form/NotesMediaSection";
+import BodyCompositionSection from "@/components/session-form/BodyCompositionSection";
 
 const TYPE_OPTIONS = ["Body exploration", "Foley insertion", "Urethral sounding", "Device fit trial", "Non-masturbatory experimentation", "Other"];
 const METHOD_OPTIONS = ["Foley Catheter", "Urethral Sound", "Manual Observation", "Device Fit Trial", "MyoWare EMG", "Other"];
@@ -22,6 +23,7 @@ const SECTIONS = [
   { id: "info", label: "Timing" },
   { id: "hr", label: "Heart Rate" },
   { id: "pulse-ox", label: "Pulse Oximetry" },
+  { id: "body-composition", label: "Body Composition Weigh-In" },
   { id: "emg", label: "EMG (Optional)" },
   { id: "events", label: "Timestamped Notes" },
   { id: "notes", label: "Notes & Media" },
@@ -153,6 +155,7 @@ export default function NewBodyExploration() {
     if (id === "info") return <SessionInfoSection {...props} />;
     if (id === "hr") return <HeartRateSection {...props} />;
     if (id === "pulse-ox") return <PulseOxSection {...props} />;
+    if (id === "body-composition") return <BodyCompositionSection {...props} />;
     if (id === "emg") return <EMGSection {...props} />;
     if (id === "events") return <EventTimelineSection {...props} />;
     if (id === "notes") return <NotesMediaSection {...props} />;

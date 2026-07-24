@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import SessionTelemetryDashboard from "@/components/SessionTelemetryDashboard";
 import PulseOxSessionChart from "@/components/PulseOxSessionChart";
+import BodyCompositionSummaryCard from "@/components/BodyCompositionSummaryCard";
 import BodyExplorationAIPanel from "@/components/BodyExplorationAIPanel";
 import AIChat from "@/components/AIChat";
 import LinkedLocalVideoManager from "@/components/LinkedLocalVideoManager";
@@ -90,6 +91,9 @@ function buildExplorationChatContext(exploration, timelineRows, emgRows) {
     `Type: ${exploration.exploration_type || "body exploration"}`,
     exploration.title ? `Title: ${exploration.title}` : null,
     exploration.duration_minutes ? `Duration: ${exploration.duration_minutes} minutes` : null,
+    exploration.body_composition
+      ? `Attached weigh-in (${exploration.body_composition.measured_at || "time unknown"}): weight ${exploration.body_composition.weight_kg ?? "unknown"} kg, body fat ${exploration.body_composition.body_fat_percent ?? "unavailable"}%, lean mass ${exploration.body_composition.lean_body_mass_kg ?? "unavailable"} kg. Treat smart-scale composition as contextual trend estimates, not an acute effect of this exploration.`
+      : null,
     (exploration.methods || []).length ? `Methods: ${exploration.methods.join(", ")}` : null,
     exploration.focus_areas ? `Focus areas: ${exploration.focus_areas}` : null,
     exploration.purpose ? `Purpose / question: ${exploration.purpose}` : null,
@@ -193,6 +197,9 @@ export default function BodyExplorationDetail() {
           }}
           recordType="body_exploration"
         />
+        {exploration.body_composition && (
+          <BodyCompositionSummaryCard reading={exploration.body_composition} title="Exploration Weigh-In" />
+        )}
         {pulseOxReadings.length > 0 && (
           <PulseOxSessionChart session={exploration} sectionId="body-exploration-pulse-ox" />
         )}

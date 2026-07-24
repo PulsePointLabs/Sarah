@@ -23,6 +23,7 @@ import SessionExecutiveSummary from "../components/SessionExecutiveSummary";
 import SessionSnapshotHero from "../components/SessionSnapshotHero";
 import SessionTelemetryDashboard from "../components/SessionTelemetryDashboard";
 import PulseOxSessionChart from "../components/PulseOxSessionChart";
+import BodyCompositionSummaryCard from "../components/BodyCompositionSummaryCard";
 import SessionSectionNavigator from "../components/SessionSectionNavigator";
 import LinkedLocalVideoManager from "../components/LinkedLocalVideoManager";
 import VideoSyncPlayer from "../components/VideoSyncPlayer";
@@ -1894,6 +1895,11 @@ export default function SessionDetail() {
           onMarkersChange={savePhaseMarkers}
           onOpenReview={() => navigate(`/review-player?session=${encodeURIComponent(s.id)}`)}
         />
+        {s.body_composition && (
+          <div id="session-body-composition" className="scroll-mt-24">
+            <BodyCompositionSummaryCard reading={s.body_composition} title="Session Weigh-In" />
+          </div>
+        )}
         {rawSessionEndSec > 0 && (
           <section id="session-analysis-trim" className="scroll-mt-24 rounded-xl border border-border bg-card p-4 space-y-3">
             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">

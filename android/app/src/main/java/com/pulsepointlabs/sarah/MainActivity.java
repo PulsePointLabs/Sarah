@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(BloodPressureHealthPlugin.class);
+        registerPlugin(BodyCompositionHealthPlugin.class);
         registerPlugin(OmronBloodPressurePlugin.class);
         registerPlugin(SarahFileSaverPlugin.class);
         registerPlugin(SarahBackgroundJobsPlugin.class);

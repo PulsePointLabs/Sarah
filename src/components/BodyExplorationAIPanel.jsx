@@ -322,6 +322,12 @@ ${JSON.stringify({
   notes: exploration.notes,
   unusual_sensations: exploration.unusual_sensations,
   tags: exploration.tags,
+  body_composition: exploration.body_composition
+    ? {
+      ...exploration.body_composition,
+      interpretation_rule: "Contextual smart-scale trend estimate only; do not claim an acute exploration effect.",
+    }
+    : null,
   heart_rate: telemetrySummary(timelineRows, exploration),
   pulse_oximetry: pulseOxSummary(exploration),
   emg_rows: emgRows.length,

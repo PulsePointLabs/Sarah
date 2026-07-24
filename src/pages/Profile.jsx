@@ -4,6 +4,7 @@ import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { User, Heart, Scan, RefreshCw, CheckCircle, ChevronDown, ChevronUp, Flame, Ruler, MessageCircle } from "lucide-react";
 import RichTextEditor from "../components/RichTextEditor";
+import BodyCompositionProfilePanel from "@/components/BodyCompositionProfilePanel";
 import { richTextToCanonicalText } from "@/lib/richText";
 import {
   backfillImageReviewFindingsFromChat,
@@ -480,6 +481,14 @@ export default function Profile() {
               </div>
             </Field>
           </div>
+
+          <BodyCompositionProfilePanel
+            onLatestReading={(reading) => setForm((current) => ({
+              ...current,
+              weight_kg: reading.weight_kg ?? current.weight_kg,
+              latest_body_composition: reading,
+            }))}
+          />
 
           {/* Heart Rate */}
           <div className="bg-card rounded-xl border border-border p-4 space-y-4">

@@ -15,12 +15,14 @@ import NotesMediaSection from "../components/session-form/NotesMediaSection";
 import EventTimelineSection from "../components/session-form/EventTimelineSection";
 import EMGSection from "../components/session-form/EMGSection";
 import PulseOxSection from "../components/session-form/PulseOxSection";
+import BodyCompositionSection from "../components/session-form/BodyCompositionSection";
 import { Save, ChevronDown, ChevronUp, ArrowLeft, XCircle, ScanSearch } from "lucide-react";
 
 const SECTIONS = [
   { id: "info", label: "Session Info" },
   { id: "hr", label: "Heart Rate" },
   { id: "pulse-ox", label: "Pulse Oximetry" },
+  { id: "body-composition", label: "Body Composition Weigh-In" },
   { id: "emg", label: "EMG (MyoWare)" },
   { id: "methods", label: "Methods & Devices" },
   { id: "subjective", label: "Subjective Metrics" },
@@ -186,6 +188,7 @@ export default function EditSession() {
       case "info": return <SessionInfoSection {...props} />;
       case "hr": return <HeartRateSection {...props} />;
       case "pulse-ox": return <PulseOxSection {...props} />;
+      case "body-composition": return <BodyCompositionSection {...props} />;
       case "methods": return <MethodsSection {...props} />;
       case "subjective": return data.no_climax ? <NoClimaxSubjectiveSection {...props} /> : <SubjectiveSection {...props} />;
       case "physio": return <PhysiologicalSection {...props} />;

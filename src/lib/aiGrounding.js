@@ -280,6 +280,15 @@ export function buildGlobalProfileContext(userProfile) {
   addLine(lines, "Fitness level", userProfile.fitness_level);
   addLine(lines, "Resting heart rate", userProfile.resting_hr ? `${userProfile.resting_hr} beats per minute` : "");
   addLine(lines, "Maximum heart rate", userProfile.max_hr ? `${userProfile.max_hr} beats per minute` : "");
+  const latestComposition = userProfile.latest_body_composition;
+  if (latestComposition) {
+    addLine(lines, "Latest measured weight", latestComposition.weight_kg != null ? `${Number(latestComposition.weight_kg).toFixed(1)} kilograms` : "");
+    addLine(lines, "Latest body fat estimate", latestComposition.body_fat_percent != null ? `${Number(latestComposition.body_fat_percent).toFixed(1)} percent` : "");
+    addLine(lines, "Latest lean body mass estimate", latestComposition.lean_body_mass_kg != null ? `${Number(latestComposition.lean_body_mass_kg).toFixed(1)} kilograms` : "");
+    addLine(lines, "Latest body-composition measurement time", latestComposition.measured_at);
+  } else {
+    addLine(lines, "Profile weight", userProfile.weight_kg ? `${userProfile.weight_kg} kilograms` : "");
+  }
   addLine(lines, "Typical sixty-second recovery", userProfile.recovery_hr_60s ? `${userProfile.recovery_hr_60s} beats per minute` : "");
   addLine(lines, "Medications or conditions", userProfile.medications, 700);
   addLine(lines, "Arousal response style", userProfile.arousal_response_style, 700);

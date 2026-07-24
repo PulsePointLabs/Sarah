@@ -1396,6 +1396,9 @@ function buildSessionContext(session, timelineRows) {
     `Session date: ${session.date?.slice(0, 10)}`,
     `Duration: ${session.duration_minutes ?? "?"}min`,
     `Methods: ${(session.methods || []).join(", ")}`,
+    session.body_composition
+      ? `Attached weigh-in (${session.body_composition.measured_at || "time unknown"}): weight ${session.body_composition.weight_kg ?? "unknown"} kg, body fat ${session.body_composition.body_fat_percent ?? "unavailable"}%, lean mass ${session.body_composition.lean_body_mass_kg ?? "unavailable"} kg. Treat smart-scale composition as contextual trend estimates, not an acute effect of this session.`
+      : null,
     session.foley_size ? `Foley: ${session.foley_size}Fr ${session.foley_type || ""}` : null,
     session.estim_notes ? `E-Stim notes: ${session.estim_notes}` : null,
     `Intensity: ${session.intensity}/10, Build quality: ${session.build_quality}/10, Satisfaction: ${session.satisfaction}/10`,
