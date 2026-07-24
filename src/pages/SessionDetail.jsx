@@ -18,6 +18,7 @@ import HRPhysiologicalAnalysis from "../components/HRPhysiologicalAnalysis";
 import NearClimaxEvents, { detectNearClimaxEvents } from "../components/NearClimaxEvents";
 import NearClimaxSessionOverview from "../components/NearClimaxSessionOverview";
 import SessionAIPanel, { buildSessionAnalysisReaderData, SessionReviewVideoExportButton } from "../components/SessionAIPanel";
+import SessionIntimateReflection from "../components/SessionIntimateReflection";
 import SessionEvidencePatternPanel from "../components/SessionEvidencePatternPanel";
 import SessionExecutiveSummary from "../components/SessionExecutiveSummary";
 import SessionSnapshotHero from "../components/SessionSnapshotHero";
@@ -1188,6 +1189,22 @@ export default function SessionDetail() {
     });
   }, []);
 
+  const handleIntimateReflectionSaved = useCallback(async (value) => {
+    const currentSession = sessionRef.current;
+    if (!currentSession?.id) return;
+    const aiAnalysis = {
+      ...(currentSession.ai_analysis || {}),
+      _intimate_reflection: value || null,
+    };
+    const nextSession = { ...currentSession, ai_analysis: aiAnalysis };
+    sessionRef.current = nextSession;
+    setSession(nextSession);
+    aiAnalysisSaveQueueRef.current = aiAnalysisSaveQueueRef.current
+      .catch(() => {})
+      .then(() => base44.entities.Session.update(currentSession.id, { ai_analysis: aiAnalysis }));
+    await aiAnalysisSaveQueueRef.current;
+  }, []);
+
   const savePhaseMarkers = useCallback(async (markers) => {
     if (!id) return;
     const nextMarkers = {
@@ -1692,10 +1709,14 @@ export default function SessionDetail() {
     { id: "session-mobile-video-render", label: "Mobile Video Render", group: "Session Story" },
     ...(!s.no_climax ? [
       { id: "session-ai-companion", label: "Companion Analysis", group: "Session Story" },
+      { id: "session-intimate-reflection", label: "Intimate Reflection", group: "Session Story" },
       { id: "session-ai-technical", label: "Technical Deep Dive", group: "Session Story" },
       { id: "session-ai-support", label: "Supporting AI Views", group: "Session Story" },
     ] : []),
-    ...(s.no_climax ? [{ id: "session-ai-companion", label: "No-Climax Analysis", group: "Session Story" }] : []),
+    ...(s.no_climax ? [
+      { id: "session-ai-companion", label: "No-Climax Analysis", group: "Session Story" },
+      { id: "session-intimate-reflection", label: "Intimate Reflection", group: "Session Story" },
+    ] : []),
     ...((emgRows.length > 0 || s.emg_enabled || perinealEmgSummary.hasPerinealEvents || perinealEmgSummary.hasPerinealSetup) ? [{ id: "session-emg", label: "EMG", group: "Physiology" }] : []),
     ...(hasTimelineSection ? [
       { id: "session-timeline", label: "Timeline Player", group: "Timeline & Events" },
@@ -2017,6 +2038,11 @@ export default function SessionDetail() {
         )}
 
         {sessionStorySection}
+        <SessionIntimateReflection
+          session={s}
+          timelineRows={timelineRows}
+          onSave={handleIntimateReflectionSaved}
+        />
         <MobileSessionVideoRenderPanel session={s} />
 
         {/* Executive Summary */}
