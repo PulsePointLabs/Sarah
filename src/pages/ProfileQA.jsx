@@ -15,6 +15,10 @@ import {
   parseProfileQaFindingsFromText,
   toSecondPersonFinding,
 } from "@/lib/profileQa";
+import {
+  buildRecentSessionActivityContext,
+  RECENT_SESSION_ACTIVITY_FIELDS,
+} from "@/lib/recentSessionActivity";
 
 function formatMechanicalProfile(profile) {
   return Object.entries(profile || {})
@@ -27,7 +31,7 @@ function formatMechanicalProfile(profile) {
     .join("; ");
 }
 
-function buildProfileContext(profile, findingCards) {
+function buildProfileContext(profile, findingCards, recentActivityContext = "") {
   return [
     `First name: ${profile.first_name?.trim() || "not set"}`,
     `Age: ${profile.age ?? "not set"}, Weight: ${profile.weight_kg ?? "not set"}kg, Fitness: ${profile.fitness_level ?? "not set"}`,
@@ -41,6 +45,7 @@ function buildProfileContext(profile, findingCards) {
     `Arousal notes: ${richTextToPlainText(profile.arousal_notes) || "none"}`,
     `User-verified interview findings (Profile Q&A): ${findingCards.slice(0, 24).map((entry) => `[${entry.date}] ${entry.finding}`).join("\n") || "none"}`,
     `Functional mechanical profile: ${formatMechanicalProfile(profile.anatomical_mechanical_profile) || "not set"}`,
+    recentActivityContext,
   ].join("\n");
 }
 
@@ -48,12 +53,14 @@ const PROFILE_QA_LOAD_STEPS = [
   "Connecting to Sarah desktop API",
   "Loading profile and saved Q&A",
   "Checking latest Profiler results",
+  "Loading recent session activity",
   "Preparing Sarah chat context",
 ];
 
 export default function ProfileQA() {
   const [profile, setProfile] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
+  const [recentActivityContext, setRecentActivityContext] = useState("");
   const [qaFindingsOpen, setQaFindingsOpen] = useState(true);
   const [loadState, setLoadState] = useState({
     step: 0,
@@ -79,6 +86,14 @@ export default function ProfileQA() {
         if (cancelled) return;
 
         setLoadState({ step: 3, message: PROFILE_QA_LOAD_STEPS[3], error: "" });
+        const [recentSessions, recentExplorations] = await Promise.all([
+          base44.entities.Session.listFields(RECENT_SESSION_ACTIVITY_FIELDS, "-date", 8).catch(() => []),
+          base44.entities.BodyExploration.listFields(RECENT_SESSION_ACTIVITY_FIELDS, "-date", 8).catch(() => []),
+        ]);
+        if (cancelled) return;
+        setRecentActivityContext(buildRecentSessionActivityContext(recentSessions, recentExplorations));
+
+        setLoadState({ step: 4, message: PROFILE_QA_LOAD_STEPS[4], error: "" });
         const u = mergeProfilerResultsIntoProfile(profileResponse, latestProfilerAnalysis) || profileResponse;
         const savedQaFindings = normalizeProfileQaFindings(u.profile_qa_findings);
         const importedQaFindings = savedQaFindings.length ? savedQaFindings : parseProfileQaFindingsFromText(u.arousal_notes);
@@ -189,7 +204,7 @@ export default function ProfileQA() {
         mode="profile"
         userProfile={profile}
         scopeId={profile.id || "profile"}
-        context={buildProfileContext(profile, profileQaFindingCards)}
+        context={buildProfileContext(profile, profileQaFindingCards, recentActivityContext)}
         savedMessages={chatMessages}
         savedNotes={profile.arousal_notes}
         latestSavedFinding={latestQaFinding}

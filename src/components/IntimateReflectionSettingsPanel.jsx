@@ -67,7 +67,7 @@ export default function IntimateReflectionSettingsPanel() {
             <h2 className="text-sm font-bold uppercase tracking-wider">Intimate Reflection</h2>
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Set Sarah&apos;s default trusted-lover voice once. New and regenerated reflections retell the supported session from beginning to end with this voice across the EXE, browser, and APK.
+            Set Sarah&apos;s default trusted-lover voice once. It now controls new and regenerated reflections plus conversational Chat with Sarah replies across the EXE, browser, and APK.
           </p>
         </div>
         <span className="rounded-full border border-rose-300/30 bg-background/70 px-3 py-1 text-xs font-semibold text-rose-500">
