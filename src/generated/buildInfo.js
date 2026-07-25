@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.162",
-  "commit": "a681fe6",
-  "commitMessage": "Add opt-in intimate session reflections",
-  "builtAt": "2026-07-24T16:58:17.051Z"
+  "version": "0.1.163",
+  "commit": "f9dda5b",
+  "commitMessage": "Strengthen erotic reflection voice",
+  "builtAt": "2026-07-25T01:18:52.765Z"
 };
