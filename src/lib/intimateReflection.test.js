@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildIntimateReflectionEvidence,
   buildIntimateReflectionPrompt,
+  formatReflectionTimeForSpeech,
   intimateReflectionEvidenceFingerprint,
   intimateReflectionFingerprint,
   intimateReflectionNeedsRefresh,
@@ -46,7 +47,13 @@ test("normalizes a structured result and builds readable paragraphs", () => {
   });
   const reader = intimateReflectionReaderData(result);
   assert.equal(reader.paragraphs.length, 4);
-  assert.match(reader.paragraphs[2], /^1:05 Build\./);
+  assert.match(reader.paragraphs[2], /^one minute and five seconds\. Build\./);
+});
+
+test("formats reflection timestamps as narration-friendly words", () => {
+  assert.equal(formatReflectionTimeForSpeech(0), "the session opening");
+  assert.equal(formatReflectionTimeForSpeech(45), "forty-five seconds");
+  assert.equal(formatReflectionTimeForSpeech(948), "fifteen minutes and forty-eight seconds");
 });
 
 test("detects settings or evidence changes without marking a matching result stale", () => {
@@ -79,4 +86,6 @@ test("erotic prompt makes lover-observer voice outrank clinical personality with
   assert.match(prompt, /must not claim physical presence/i);
   assert.match(prompt, /not erotic enough/i);
   assert.match(prompt, /Never merely paste or lightly paraphrase/i);
+  assert.match(prompt, /complete intimate retelling, not a highlight reel/i);
+  assert.match(prompt, /beginning through its actual ending/i);
 });

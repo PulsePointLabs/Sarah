@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Brain, ChevronDown, ChevronUp, Heart, Loader2, LockKeyhole, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import AIOutputReader from "./AIOutputReader";
@@ -14,13 +15,22 @@ import {
   normalizeIntimateReflectionResult,
   normalizeIntimateReflectionSettings,
 } from "@/lib/intimateReflection";
+import {
+  INTIMATE_REFLECTION_SETTINGS_EVENT,
+  loadSyncedIntimateReflectionSettings,
+  readIntimateReflectionSettings,
+} from "@/lib/intimateReflectionSettings";
 import { buildSarahPersonalityPrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
 
 const RESPONSE_SCHEMA = {
   type: "object",
   properties: {
     summary: { type: "string" },
-    reflection: { type: "array", items: { type: "string" } },
+    reflection: {
+      type: "array",
+      description: "Six to twelve substantial chronological paragraphs covering the supported session from beginning to end in the selected voice, with all numbers written as words.",
+      items: { type: "string" },
+    },
     moments: {
       type: "array",
       items: {
@@ -34,7 +44,7 @@ const RESPONSE_SCHEMA = {
         required: ["label", "reflection", "evidence"],
       },
     },
-    closing: { type: "string" },
+    closing: { type: "string", description: "A developed closing paragraph in the selected voice with all numbers written as words." },
   },
   required: ["summary", "reflection", "moments", "closing"],
 };
@@ -66,7 +76,7 @@ export default function SessionIntimateReflection({
   const [expanded, setExpanded] = useState(false);
   const [enabled, setEnabled] = useState(Boolean(storedResult));
   const [result, setResult] = useState(storedResult);
-  const [settings, setSettings] = useState(() => normalizeIntimateReflectionSettings(storedResult?.settings));
+  const [settings, setSettings] = useState(readIntimateReflectionSettings);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -75,9 +85,23 @@ export default function SessionIntimateReflection({
     setResult(next);
     if (next) {
       setEnabled(true);
-      setSettings(normalizeIntimateReflectionSettings(next.settings));
     }
   }, [session?.ai_analysis?._intimate_reflection]);
+
+  useEffect(() => {
+    let active = true;
+    loadSyncedIntimateReflectionSettings().then((saved) => {
+      if (active) setSettings(saved);
+    });
+    const handleSettingsChange = (event) => {
+      if (event?.detail) setSettings(event.detail);
+    };
+    window.addEventListener(INTIMATE_REFLECTION_SETTINGS_EVENT, handleSettingsChange);
+    return () => {
+      active = false;
+      window.removeEventListener(INTIMATE_REFLECTION_SETTINGS_EVENT, handleSettingsChange);
+    };
+  }, []);
 
   const evidence = useMemo(
     () => buildIntimateReflectionEvidence(session, timelineRows),
@@ -89,16 +113,8 @@ export default function SessionIntimateReflection({
     && !loading
     && (settings.level !== "custom" || Boolean(settings.customInstructions.trim()));
 
-  const updateSettings = (patch) => {
-    setSettings((current) => ({
-      ...current,
-      ...patch,
-      ...(Object.prototype.hasOwnProperty.call(patch, "customInstructions")
-        ? { customInstructions: String(patch.customInstructions || "").slice(0, 1200) }
-        : {}),
-    }));
-    setError("");
-  };
+  const selectedLevel = INTIMATE_REFLECTION_LEVELS.find((level) => level.id === settings.level)
+    || INTIMATE_REFLECTION_LEVELS[1];
 
   const generate = async () => {
     if (!canGenerate) return;
@@ -201,40 +217,19 @@ export default function SessionIntimateReflection({
 
           {enabled && (
             <>
-              <div className="space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background/70 p-3">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-rose-500">Sensuality</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Controls this reflection only. Clinical and annotation output remains evidence-first and unchanged.</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-rose-500">Global reflection voice</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">{selectedLevel.label}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{selectedLevel.helper}</p>
                 </div>
-                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                  {INTIMATE_REFLECTION_LEVELS.map((level) => (
-                    <button
-                      key={level.id}
-                      type="button"
-                      onClick={() => updateSettings({ level: level.id })}
-                      className={`rounded-xl border p-3 text-left transition-colors ${settings.level === level.id ? "border-rose-400/60 bg-rose-500/10" : "border-border bg-background/60 hover:border-rose-300/40"}`}
-                    >
-                      <span className="block text-sm font-semibold text-foreground">{level.label}</span>
-                      <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{level.helper}</span>
-                    </button>
-                  ))}
-                </div>
+                <Link
+                  to="/settings#intimate-reflection-settings"
+                  className="rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground hover:border-rose-300/50"
+                >
+                  Change in Settings
+                </Link>
               </div>
-
-              {settings.level === "custom" && (
-                <label className="block space-y-2">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-rose-500">Private custom instruction</span>
-                  <textarea
-                    value={settings.customInstructions}
-                    onChange={(event) => updateSettings({ customInstructions: event.target.value })}
-                    rows={4}
-                    maxLength={1200}
-                    placeholder="Describe Sarah's tone, preferred vocabulary, boundaries, emphasis, and phrases to avoid..."
-                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-rose-400/60"
-                  />
-                  <span className="block text-right text-[10px] text-muted-foreground">{settings.customInstructions.length}/1200</span>
-                </label>
-              )}
 
               {stale && result && (
                 <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-700">
@@ -256,7 +251,7 @@ export default function SessionIntimateReflection({
                   </Button>
                 )}
                 {settings.level === "custom" && !settings.customInstructions.trim() && (
-                  <span className="text-xs text-amber-700">Add a custom instruction before generating.</span>
+                  <span className="text-xs text-amber-700">Add and save the Custom instruction in Settings before generating.</span>
                 )}
               </div>
 

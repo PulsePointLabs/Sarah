@@ -24,6 +24,7 @@ import {
   Volume2,
 } from "lucide-react";
 import TTSSettingsPanel from "@/components/TTSSettingsPanel";
+import IntimateReflectionSettingsPanel from "@/components/IntimateReflectionSettingsPanel";
 import AppVersionBadge from "@/components/AppVersionBadge";
 import { BUILD_INFO } from "@/generated/buildInfo";
 import { Textarea } from "@/components/ui/textarea";
@@ -1609,6 +1610,8 @@ Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, 
           <span>Standard Claude and OpenAI API keys still power analysis and TTS. Optional admin reporting keys only add cost visibility here.</span>
         </div>
       </section>
+
+      <IntimateReflectionSettingsPanel />
 
       <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">

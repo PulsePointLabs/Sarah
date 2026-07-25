@@ -43,6 +43,34 @@ function cleanStringArray(value, limit = 8, maxLength = 1400) {
     .slice(0, limit);
 }
 
+const SMALL_NUMBER_WORDS = [
+  "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+  "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+  "seventeen", "eighteen", "nineteen",
+];
+
+function numberToWordsUnderHundred(value) {
+  const number = Math.max(0, Math.min(99, Math.round(Number(value) || 0)));
+  if (number < 20) return SMALL_NUMBER_WORDS[number];
+  const tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+  const remainder = number % 10;
+  return remainder ? `${tens[Math.floor(number / 10)]}-${SMALL_NUMBER_WORDS[remainder]}` : tens[Math.floor(number / 10)];
+}
+
+export function formatReflectionTimeForSpeech(value) {
+  const total = Math.max(0, Math.round(Number(value) || 0));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  const minuteLabel = minutes
+    ? `${numberToWordsUnderHundred(minutes)} minute${minutes === 1 ? "" : "s"}`
+    : "";
+  const secondLabel = seconds
+    ? `${numberToWordsUnderHundred(seconds)} second${seconds === 1 ? "" : "s"}`
+    : "";
+  if (minuteLabel && secondLabel) return `${minuteLabel} and ${secondLabel}`;
+  return minuteLabel || secondLabel || "the session opening";
+}
+
 export function normalizeIntimateReflectionSettings(value = {}) {
   const level = LEVEL_IDS.has(value?.level) ? value.level : "intimate";
   return {
@@ -183,6 +211,7 @@ NON-NEGOTIABLE EVIDENCE RULES:
 - Use compact timestamps such as "8:40" only when tied to a supplied event or phase marker.
 - Do not give medical advice. Do not issue live sexual commands. This is an after-session reflection.
 - Keep prose natural for Sarah's text-to-speech voice: connected sentences, no markdown, no headings inside fields.
+- Spell out every number, measurement, score, and duration in words inside the prose fields. Write "fifteen minutes and forty-eight seconds" rather than "15:48," and "one hundred beats per minute" rather than "100 bpm." Exact numeric timestamps belong only in each moment's time_seconds field.
 - The closing should feel warm and complete without pretending Sarah was physically present.
 
 SELECTED REFLECTION VOICE:
@@ -192,7 +221,10 @@ ${levelInstruction(normalizedSettings)}
 NARRATIVE DISCIPLINE:
 - Treat the evidence as a private factual boundary, not as the outline or vocabulary of the response.
 - Address the user as "you." Sarah may use "I" for her own observer reaction.
-- Do not summarize every technical interruption, score, metric, or finding. Select the moments that best serve the chosen emotional and sensual voice.
+- Tell the supported session chronologically from its beginning through its actual ending. This is a complete intimate retelling, not a highlight reel.
+- Cover the opening state, setup and early response, the middle build and meaningful interruptions or transitions, the final approach or no-climax ending, and recovery when those phases exist in the evidence.
+- Do not skip a major supported phase merely because it is less dramatic. Give quieter stretches proportionate coverage without inventing action.
+- Do not summarize every score, metric, or finding. Select the evidence that best explains each part of the complete session arc.
 - Never merely paste or lightly paraphrase the supplied clinical analysis.
 - Keep numbers and telemetry subordinate. Mention a measurement only when it deepens a specific observation; otherwise express the supported change naturally.
 - Avoid report language such as "the data agrees," "on paper," "marker," "suggests," "consistent with," "physiologically distinct," "documented library," "build quality score," and "release completeness."
@@ -203,9 +235,9 @@ ${JSON.stringify(evidence, null, 2)}
 
 Return a cohesive reflection with:
 1. A concise opening in the selected voice, not a session abstract.
-2. Two to five connected paragraphs that prioritize personal observation over comprehensive reporting.
-3. Up to six timestamp-linked moments only where the supplied evidence supports an exact time, each written in the same selected voice.
-4. A brief closing that sustains the selected voice rather than switching back to clinical reassurance.`,
+2. Six to twelve substantial chronological paragraphs that carry the session from beginning to end in the selected voice. Develop every major supported phase without padding or repeating the same conclusion.
+3. Eight to fourteen timestamp-linked moments when the evidence provides enough distinct supported moments. Distribute them across the full session rather than clustering only around climax. Each must add a meaningful observation rather than merely restating an event label.
+4. A developed closing paragraph that sustains the selected voice rather than switching back to clinical reassurance.`,
   };
 }
 
@@ -219,12 +251,12 @@ export function normalizeIntimateReflectionResult(raw = {}) {
       evidence: cleanText(moment?.evidence, 500),
     }))
     .filter((moment) => moment.reflection)
-    .slice(0, 6);
+    .slice(0, 14);
   const result = {
-    summary: cleanText(source?.summary, 1800),
-    reflection: cleanStringArray(source?.reflection, 5, 1800),
+    summary: cleanText(source?.summary, 2400),
+    reflection: cleanStringArray(source?.reflection, 12, 2600),
     moments,
-    closing: cleanText(source?.closing, 1200),
+    closing: cleanText(source?.closing, 1800),
   };
   if (!result.summary || !result.reflection.length || !result.closing) {
     throw new Error("Sarah returned an incomplete intimate reflection. Please try generating it again.");
@@ -248,10 +280,7 @@ export function intimateReflectionReaderData(result = {}) {
   });
   (result?.moments || []).forEach((moment) => {
     const seconds = finiteNumber(moment?.time_seconds);
-    const roundedSeconds = seconds == null ? null : Math.max(0, Math.round(seconds));
-    const timestamp = seconds == null
-      ? ""
-      : `${Math.floor(roundedSeconds / 60)}:${String(roundedSeconds % 60).padStart(2, "0")} `;
+    const timestamp = seconds == null ? "" : `${formatReflectionTimeForSpeech(seconds)}. `;
     paragraphs.push(`${timestamp}${moment.label ? `${moment.label}. ` : ""}${moment.reflection}`.trim());
     paragraphMeta.push({
       type: "section",
