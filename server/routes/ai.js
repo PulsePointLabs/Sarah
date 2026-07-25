@@ -2,6 +2,7 @@ import express from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 import { isAIForensicsEnabled, saveAIForensicFinal } from '../services/aiForensics.js';
 import { classifyProviderError, shouldRetryProviderError } from '../../src/lib/providerErrorClassifier.js';
+import { completePlainTextResponse } from '../services/completePlainTextResponse.js';
 
 export const aiRouter = express.Router();
 
@@ -84,7 +85,16 @@ aiRouter.post('/invoke', async (req, res) => {
       apiKey: process.env.ANTHROPIC_API_KEY,
       timeout: anthropicTimeoutMs(),
     });
-    const { prompt, response_json_schema, model, add_context_from_internet, images = [], ...rest } = req.body || {};
+    const {
+      prompt,
+      response_json_schema,
+      model,
+      add_context_from_internet,
+      images = [],
+      continue_on_max_tokens: continueOnMaxTokens = false,
+      max_continuations: maxContinuations = 2,
+      ...rest
+    } = req.body || {};
     if (!prompt) return res.status(400).json({ error: 'Missing prompt' });
 
     const wantsJson = !!response_json_schema;
@@ -113,15 +123,32 @@ aiRouter.post('/invoke', async (req, res) => {
       ? [{ type: 'text', text: `${prompt}${jsonInstruction}` }, ...imageBlocks]
       : `${prompt}${jsonInstruction}`;
 
-    const msg = await createMessageWithRetries(anthropic, {
+    const messagePayload = {
       model: modelName,
       max_tokens: rest.max_tokens || Number(process.env.ANTHROPIC_MAX_TOKENS || 8192),
       temperature: rest.temperature ?? 0.3,
       messages: [{ role: 'user', content }],
-    }, rest.attempts || Number(process.env.ANTHROPIC_ATTEMPTS || 3));
+    };
+    const attempts = rest.attempts || Number(process.env.ANTHROPIC_ATTEMPTS || 3);
+    const msg = await createMessageWithRetries(anthropic, messagePayload, attempts);
 
     const text = msg.content?.map((p) => p.type === 'text' ? p.text : '').join('\n').trim() || '';
-    if (!wantsJson) return res.json(text);
+    if (!wantsJson) {
+      if (msg.stop_reason !== 'max_tokens') return res.json(text);
+      if (!continueOnMaxTokens) {
+        return res.status(502).json({
+          error: 'AI response was cut off before it finished.',
+          stop_reason: msg.stop_reason,
+        });
+      }
+      const completed = await completePlainTextResponse({
+        createMessage: (nextPayload) => createMessageWithRetries(anthropic, nextPayload, attempts),
+        initialMessage: msg,
+        payload: messagePayload,
+        maxContinuations: Math.min(Math.max(Number(maxContinuations) || 1, 1), 3),
+      });
+      return res.json(completed.text);
+    }
 
     if (msg.stop_reason === 'max_tokens') {
       return res.status(502).json({

@@ -2181,7 +2181,11 @@ Return a conversational answer plus structured findings for review/persistence.`
 
     const aiRequestPayload = {
       prompt: `${imageReviewPrompt || `${systemPrompt}\n\n${sarahPersonalityPrompt}\n\n${intimateChatTonePrompt}`}\n\n${TIME_FORMAT_RULE}\n\n${localTimeContext}${profileMechanicalContext}\n\n${groundingContext}${sarahVsVitalsContext ? `\n\n${sarahVsVitalsContext}` : ""}\n\nSession/profile data:\n${combinedContext}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
-      ...(!isVisualReviewRequest ? { max_tokens: 800 } : {}),
+      ...(!isVisualReviewRequest ? {
+        max_tokens: 3200,
+        continue_on_max_tokens: true,
+        max_continuations: 2,
+      } : {}),
       ...(isVisualReviewRequest ? { images: imagePayload.aiImages, response_json_schema: imageSchema, max_tokens: 5000 } : {}),
       source: "ai_chat_interactive",
       foreground: true,
