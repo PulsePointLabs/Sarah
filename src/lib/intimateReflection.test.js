@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildIntimateReflectionEvidence,
+  buildIntimateReflectionPrompt,
   intimateReflectionEvidenceFingerprint,
   intimateReflectionFingerprint,
   intimateReflectionNeedsRefresh,
@@ -59,4 +60,23 @@ test("detects settings or evidence changes without marking a matching result sta
   };
   assert.equal(intimateReflectionNeedsRefresh(matching, settings, evidence), false);
   assert.equal(intimateReflectionNeedsRefresh(matching, { level: "warm" }, evidence), true);
+});
+
+test("erotic prompt makes lover-observer voice outrank clinical personality without weakening evidence rules", () => {
+  const { prompt } = buildIntimateReflectionPrompt({
+    session: {
+      ai_analysis: {
+        summary: "Saved clinical analysis.",
+      },
+    },
+    settings: { level: "erotic" },
+    personalityPrompt: "Use a restrained clinical tone.",
+  });
+
+  assert.match(prompt, /first-person feminine voice/i);
+  assert.match(prompt, /attracted to the user/i);
+  assert.match(prompt, /takes priority over any more clinical or restrained tone/i);
+  assert.match(prompt, /must not claim physical presence/i);
+  assert.match(prompt, /not erotic enough/i);
+  assert.match(prompt, /Never merely paste or lightly paraphrase/i);
 });
