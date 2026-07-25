@@ -21,6 +21,10 @@ import {
   readIntimateReflectionSettings,
 } from "@/lib/intimateReflectionSettings";
 import { buildIntimateChatTonePrompt } from "@/lib/intimateChatTone";
+import {
+  AI_CHAT_FOREGROUND_TIMEOUT_MS,
+  isLongFormChatRequest,
+} from "@/lib/chatRequestMode";
 
 const PROFILE_CATEGORIES = [
   { key: "physical", label: "Physical Baseline", emoji: "🫀", hint: "Body metrics, fitness, resting HR, medications" },
@@ -2179,12 +2183,14 @@ Return a conversational answer plus structured findings for review/persistence.`
       startedAt: requestStartedAt,
     }));
 
+    const longFormRequested = !isVisualReviewRequest && isLongFormChatRequest(text);
     const aiRequestPayload = {
       prompt: `${imageReviewPrompt || `${systemPrompt}\n\n${sarahPersonalityPrompt}\n\n${intimateChatTonePrompt}`}\n\n${TIME_FORMAT_RULE}\n\n${localTimeContext}${profileMechanicalContext}\n\n${groundingContext}${sarahVsVitalsContext ? `\n\n${sarahVsVitalsContext}` : ""}\n\nSession/profile data:\n${combinedContext}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
       ...(!isVisualReviewRequest ? {
         max_tokens: 3200,
         continue_on_max_tokens: true,
         max_continuations: 2,
+        timeoutMs: AI_CHAT_FOREGROUND_TIMEOUT_MS,
       } : {}),
       ...(isVisualReviewRequest ? { images: imagePayload.aiImages, response_json_schema: imageSchema, max_tokens: 5000 } : {}),
       source: "ai_chat_interactive",
@@ -2192,7 +2198,7 @@ Return a conversational answer plus structured findings for review/persistence.`
       interactive: true,
       priority: 100,
     };
-    const shouldRunInBackground = imagePayload.metadata.some((item) => item?.sourceVideo);
+    const shouldRunInBackground = imagePayload.metadata.some((item) => item?.sourceVideo) || longFormRequested;
 
     try {
       if (shouldRunInBackground) {
@@ -2202,20 +2208,24 @@ Return a conversational answer plus structured findings for review/persistence.`
           detail: `Submitting ${imagePayload.aiImages.length} frame${imagePayload.aiImages.length === 1 ? "" : "s"} to the local desktop worker. This step should usually finish within a few seconds, then the job tray will keep tracking it.`,
           startedAt: requestStartedAt,
         }));
+        const backgroundLabel = longFormRequested ? "Sarah long-form response" : "Ask Sarah moment review";
+        const backgroundSource = longFormRequested ? "ai_chat_long_form" : "ai_chat_session_moment_review";
         const startedJob = await startBackgroundJob("ai_invoke", {
           ...aiRequestPayload,
-          source: "ai_chat_session_moment_review",
+          source: backgroundSource,
           foreground: false,
           interactive: false,
           quietInTray: false,
           priority: 90,
-          label: "Ask Sarah moment review",
+          label: backgroundLabel,
         }, {
           sessionId: scopeId,
-          title: "Ask Sarah moment review",
-          label: "Ask Sarah moment review",
-          source: "ai_chat_session_moment_review",
-          route: scopeId ? `/sessions/${encodeURIComponent(scopeId)}#session-interview` : "/sessions",
+          title: backgroundLabel,
+          label: backgroundLabel,
+          source: backgroundSource,
+          route: mode === "profile"
+            ? "/profile-qa"
+            : scopeId ? `/sessions/${encodeURIComponent(scopeId)}#session-interview` : "/sessions",
           quietInTray: false,
         });
         setActiveReplyJobId(startedJob.id);

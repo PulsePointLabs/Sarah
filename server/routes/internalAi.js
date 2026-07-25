@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { writeAIForensicArtifact } from '../services/aiForensics.js';
 import { classifyProviderError, shouldRetryProviderError } from '../../src/lib/providerErrorClassifier.js';
+import { completePlainTextResponse } from '../services/completePlainTextResponse.js';
 
 const MODEL_MAP = {
   claude_sonnet_4_6: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
@@ -108,6 +109,8 @@ export async function aiInvokeInternal({
   response_json_schema,
   model,
   max_tokens = Number(process.env.ANTHROPIC_MAX_TOKENS || 8192),
+  continue_on_max_tokens = false,
+  max_continuations = 2,
   temperature = 0.3,
   schema_mode = 'strict',
   images = [],
@@ -144,7 +147,7 @@ export async function aiInvokeInternal({
     provider_content_shape: imageBlocks.length ? 'text-plus-images' : 'text-only',
     configured_transport_attempts: Number(process.env.ANTHROPIC_ATTEMPTS || 3),
   });
-  const { message: msg, attemptsUsed } = await createMessageWithRetries(anthropic, {
+  const providerPayload = {
     model: resolvedModel,
     max_tokens,
     temperature,
@@ -152,7 +155,14 @@ export async function aiInvokeInternal({
       role: 'user',
       content,
     }],
-  }, Number(process.env.ANTHROPIC_ATTEMPTS || 3), signal);
+  };
+  const transportAttempts = Number(process.env.ANTHROPIC_ATTEMPTS || 3);
+  const { message: msg, attemptsUsed } = await createMessageWithRetries(
+    anthropic,
+    providerPayload,
+    transportAttempts,
+    signal,
+  );
   const text = msg.content?.map((p) => p.type === 'text' ? p.text : '').join('\n').trim() || '';
   writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-provider-metadata.json`, {
     resolved_model_id: resolvedModel,
@@ -161,7 +171,28 @@ export async function aiInvokeInternal({
     usage: msg.usage,
   });
   writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-raw-provider-response.txt`, text);
-  if (!wantsJson) return text;
+  if (!wantsJson) {
+    if (msg.stop_reason !== 'max_tokens') return text;
+    if (!continue_on_max_tokens) {
+      throw new Error('AI response was cut off before it finished.');
+    }
+    const completed = await completePlainTextResponse({
+      createMessage: async (nextPayload) => {
+        const next = await createMessageWithRetries(
+          anthropic,
+          nextPayload,
+          transportAttempts,
+          signal,
+        );
+        return next.message;
+      },
+      initialMessage: msg,
+      payload: providerPayload,
+      maxContinuations: Math.min(Math.max(Number(max_continuations) || 1, 1), 3),
+    });
+    writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-completed-provider-response.txt`, completed.text);
+    return completed.text;
+  }
   if (msg.stop_reason === 'max_tokens') {
     throw new Error('AI response was cut off before it finished. Try again, or use a smaller/batched analysis request.');
   }
