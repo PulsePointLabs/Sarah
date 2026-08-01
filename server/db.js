@@ -16,6 +16,7 @@ export const ENTITY_NAMES = [
   'HeartRateTimeline',
   'EMGTimeline',
   'BloodPressureReading',
+  'BloodGlucoseReading',
   'BodyCompositionReading',
   'HowlTelemetry',
   'HowlControlCommand',
@@ -34,6 +35,9 @@ export const ENTITY_NAMES = [
   'RenderPreset',
   'User',
   'SarahVsVitalsTransfer',
+  'SarahMemory',
+  'SarahConversationState',
+  'SarahLanguageProfile',
   'AICorrectionMemory',
   'AppSetting',
 ];

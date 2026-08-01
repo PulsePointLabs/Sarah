@@ -8,6 +8,10 @@ import {
 } from '../services/ttsCore.js';
 import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
 import { transcribeAudioWithProvider } from '../services/sttProvider.js';
+import {
+  buildProcedurePhysiologyContext,
+  isProcedurePhysiologyRecord,
+} from '../../src/lib/procedurePhysiologyContext.js';
 
 export const functionsRouter = express.Router();
 const ttsRenderJobs = new Map();
@@ -96,6 +100,30 @@ functionsRouter.post('/saveTimelineData', (req, res) => {
     : rows;
   bulkCreate(entity, finalRows.map((r) => ({ ...r, session: session_id })));
   res.json({ ok: true, inserted: finalRows.length, original: rows.length });
+});
+
+functionsRouter.post('/profileProcedurePhysiologyContext', (_req, res) => {
+  const records = [
+    ...listEntities('Session'),
+    ...listEntities('BodyExploration'),
+  ]
+    .filter(isProcedurePhysiologyRecord)
+    .sort((a, b) => new Date(b.date || b.created_date || 0) - new Date(a.date || a.created_date || 0))
+    .slice(0, 8);
+  const recordIds = new Set(records.map((record) => record.id));
+  const timelineRowsBySession = {};
+  for (const row of listEntities('HeartRateTimeline')) {
+    if (!recordIds.has(row.session)) continue;
+    if (!timelineRowsBySession[row.session]) timelineRowsBySession[row.session] = [];
+    timelineRowsBySession[row.session].push(row);
+  }
+  for (const rows of Object.values(timelineRowsBySession)) {
+    rows.sort((a, b) => Number(a.time_offset_s || 0) - Number(b.time_offset_s || 0));
+  }
+  res.json(buildProcedurePhysiologyContext(records, timelineRowsBySession, {
+    recordLimit: 6,
+    milestoneLimit: 6,
+  }));
 });
 
 functionsRouter.post('/purgeEMGData', (req, res) => {
