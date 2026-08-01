@@ -25,6 +25,7 @@ import {
   AI_CHAT_FOREGROUND_TIMEOUT_MS,
   isLongFormChatRequest,
 } from "@/lib/chatRequestMode";
+import { loadSarahConversationContext } from "@/lib/sarahConversationContext";
 
 const PROFILE_CATEGORIES = [
   { key: "physical", label: "Physical Baseline", emoji: "🫀", hint: "Body metrics, fitness, resting HR, medications" },
@@ -2030,7 +2031,18 @@ export default function AIChat({
         ].filter(Boolean).join("\n")
       : "";
 
-    const shouldPivot = messages.length > 4 && Math.random() < 0.4;
+    const intelligence = await loadSarahConversationContext({
+      scopeId: scopeId || (mode === "profile" ? "profile" : "session"),
+      mode,
+      message: text || "Please review the attached media.",
+      history: updated.slice(-12).map((message) => ({
+        role: message.role,
+        text: message.text,
+        createdAt: message.createdAt,
+      })),
+      hasVisualEvidence: isVisualReviewRequest,
+    });
+    const shouldPivot = Boolean(intelligence?.plan?.exploreNewThread);
 
     const groundingContext = isVisualReviewRequest
       ? clipPromptText(buildAIGroundingContext(userProfile), CHAT_VISUAL_REVIEW_CONTEXT_MAX_CHARS)
@@ -2098,10 +2110,11 @@ BANNED QUESTION TYPES — never ask these:
 If nothing specific stands out, ask what surprised them most or what they'd most want to remember from this session.`;
 
     const SARAH_QA_STYLE_RULE = `EMOJI STYLE RULE: In conversational Q&A replies, Sarah may use an occasional emoji when the user uses emojis or when one naturally fits the tone. Keep it light and human, not decorative or spammy. Do not put emojis in structured saved findings.`;
+    const CURRENT_TOPIC_RULE = `CURRENT TOPIC RULE: The user's newest message controls the subject of this reply. Treat earlier conversation as background context, not as an agenda. If the newest message changes subjects, follow that change immediately and do not return to the prior topic unless the user explicitly connects it or asks to resume it. Answer the newest request directly before asking any follow-up question. Never keep steering back to a procedure, examination, device, or body topic merely because it appeared repeatedly in earlier turns.`;
 
     const systemPrompt = messages.length === 1
       ? mode === "profile"
-        ? `You're having a genuine, immersive conversation with someone about their physiology and arousal — like a knowledgeable friend who has studied their data closely. They've just shared something. Respond naturally, ask ONE follow-up question that goes deeper. Curious, specific, engaged. 2–3 sentences. No bullets, no clinical jargon. ${ANATOMY_RULE} ${SARAH_QA_STYLE_RULE}`
+        ? `You're having a genuine, immersive conversation with someone about their physiology and arousal — like a knowledgeable friend who has studied their data closely. They've just shared something. Respond naturally, ask ONE follow-up question that goes deeper. Curious, specific, engaged. 2–3 sentences. No bullets, no clinical jargon. ${CURRENT_TOPIC_RULE} ${ANATOMY_RULE} ${SARAH_QA_STYLE_RULE}`
         : `You're a curious, knowledgeable friend helping someone unpack a specific ${conversationSubject}. They just shared something. React briefly and naturally, then ask ONE question grounded in a real detail from this ${conversationSubject} — a method used, a logged event or note, a subjective metric gap, or something about the body response. Sound like you actually read the record, not like you're scanning a graph. Keep it casual and conversational.
 
 ${SESSION_SCOPE_RULE}
@@ -2111,7 +2124,7 @@ ${SARAH_QA_STYLE_RULE}
 2–3 sentences total. No affirmations, no "great!", no formal phrasing.`
       : shouldPivot
         ? mode === "profile"
-          ? `You're having a warm conversation about someone's physiology. They just responded. Pivot to a DIFFERENT aspect of their profile not yet covered. ONE curious, specific question. No affirmations. 2–3 sentences. ${ANATOMY_RULE} ${SARAH_QA_STYLE_RULE}`
+          ? `You're having a warm conversation about someone's physiology. Respond to the newest message first. Only pivot to a different aspect if the newest message leaves the subject open. ONE curious, specific question at most. No affirmations. 2–3 sentences. ${CURRENT_TOPIC_RULE} ${ANATOMY_RULE} ${SARAH_QA_STYLE_RULE}`
           : `You're digging into THIS session with someone. They just responded. Switch to a fresh angle — pick something not yet discussed (a different stimulation method, a metric gap, a logged event, something about how the session ended or how they felt afterward) and ask ONE casual, pointed question. Sound like you spotted something worth exploring, not like you're following a checklist.
 
 ${SESSION_SCOPE_RULE}
@@ -2120,7 +2133,7 @@ ${ANATOMY_RULE}
 ${SARAH_QA_STYLE_RULE}
 No affirmations. 2–3 sentences.`
         : mode === "profile"
-          ? `Warm, immersive conversation about physiology. They just responded. Continue naturally — ONE follow-up that goes deeper on what they said. Curious, specific. No affirmations. 2–3 sentences. ${ANATOMY_RULE} ${SARAH_QA_STYLE_RULE}`
+          ? `Warm, immersive conversation about physiology. They just responded. Continue naturally — ONE follow-up that goes deeper on what they said. Curious, specific. No affirmations. 2–3 sentences. ${CURRENT_TOPIC_RULE} ${ANATOMY_RULE} ${SARAH_QA_STYLE_RULE}`
           : `You're digging into THIS session with someone. They just answered. Pick up the thread and ask ONE casual follow-up that goes deeper — reference something specific from the session (a method, a sensation they mentioned, a logged event, a metric gap, or how things unfolded) and invite them to expand. Make it feel like a genuine back-and-forth, not a checklist.
 
 ${SESSION_SCOPE_RULE}
@@ -2185,11 +2198,12 @@ Return a conversational answer plus structured findings for review/persistence.`
 
     const longFormRequested = !isVisualReviewRequest && isLongFormChatRequest(text);
     const aiRequestPayload = {
-      prompt: `${imageReviewPrompt || `${systemPrompt}\n\n${sarahPersonalityPrompt}\n\n${intimateChatTonePrompt}`}\n\n${TIME_FORMAT_RULE}\n\n${localTimeContext}${profileMechanicalContext}\n\n${groundingContext}${sarahVsVitalsContext ? `\n\n${sarahVsVitalsContext}` : ""}\n\nSession/profile data:\n${combinedContext}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
+      prompt: `${imageReviewPrompt || `${systemPrompt}\n\n${intelligence?.promptContext || ""}\n\n${sarahPersonalityPrompt}\n\n${intimateChatTonePrompt}`}\n\n${TIME_FORMAT_RULE}\n\n${localTimeContext}${profileMechanicalContext}\n\n${groundingContext}${sarahVsVitalsContext ? `\n\n${sarahVsVitalsContext}` : ""}\n\nSession/profile data:\n${combinedContext}\n\nConversation:\n${history}${videoContext ? `\n\nLocal video clip context represented by timestamped sampled still frames:\n${videoContext}` : ""}${motionContext ? `\n\nLocal video motion evidence:\n${motionContext}\n\nUse this motion evidence to discuss visible timing, continuity, speed shifts, and pause candidates. Treat it as an observational proxy only; do not claim confirmed technique, intent, pressure, or force unless the visual frames and user caption directly support it.` : ""}\n\nUser's current text with the attached image(s):\n${text || "(No extra text provided.)"}\n\nRespond now as Sarah:`,
       ...(!isVisualReviewRequest ? {
-        max_tokens: 3200,
+        model: intelligence?.plan?.routeTier === "deep" ? "sarah_deep" : "sarah_fast",
+        max_tokens: intelligence?.plan?.maxTokens || 3200,
         continue_on_max_tokens: true,
-        max_continuations: 2,
+        max_continuations: intelligence?.plan?.responseLength === "long" ? 3 : 2,
         timeoutMs: AI_CHAT_FOREGROUND_TIMEOUT_MS,
       } : {}),
       ...(isVisualReviewRequest ? { images: imagePayload.aiImages, response_json_schema: imageSchema, max_tokens: 5000 } : {}),

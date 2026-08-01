@@ -21,6 +21,7 @@ import { bloodPressureRouter } from './routes/bloodPressure.js';
 import { sarahVsRouter } from './routes/sarahVs.js';
 import { sessionVideoRouter } from './routes/sessionVideo.js';
 import { profileAnatomyIndexRouter } from './routes/profileAnatomyIndex.js';
+import { sarahConversationRouter } from './routes/sarahConversation.js';
 import { startTelemetryEngine, telemetryEngine } from './localEngine/index.js';
 import { startHeartRateRelay } from './services/hrRelay.js';
 import { restorePersistedJobs } from './services/jobQueue.js';
@@ -81,6 +82,7 @@ app.use('/api/blood-pressure', bloodPressureRouter);
 app.use('/api/sarahvs', sarahVsRouter);
 app.use('/api/session-video', sessionVideoRouter);
 app.use('/api/profile-anatomy-index', profileAnatomyIndexRouter);
+app.use('/api/sarah-conversation', sarahConversationRouter);
 app.use('/api/auth', authRouter);
 
 if (process.env.SARAH_SERVE_STATIC === '1') {
