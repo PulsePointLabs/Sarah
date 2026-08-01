@@ -38,6 +38,7 @@ import { useLiveCueEngine } from "@/hooks/useLiveCueEngine";
 import { toLiveTelemetryNotice } from "@/lib/liveCueDisplay";
 import { computeLiveClimaxPrediction } from "@/utils/liveClimaxPrediction";
 import {
+  computeHowlPatternAction,
   computeHowlPhysiologyAction,
   createHowlPhysiologyControllerState,
 } from "@/lib/howlPhysiologyController";
@@ -403,12 +404,47 @@ const HOWL_DEFAULT_CONTROL_FORM = {
   buildStep: 1,
   finalApproachStep: 1,
   reduceStep: 2,
-  maxRecoveryRetreat: 3,
   nearClimaxThreshold: 72,
   plateauThreshold: 60,
   buildThreshold: 32,
   recoveryThreshold: 55,
+  buildExitThreshold: 27,
+  plateauExitThreshold: 54,
+  finalApproachExitThreshold: 66,
+  recoveryExitThreshold: 61,
+  buildConfirmationSeconds: 12,
+  plateauConfirmationSeconds: 15,
+  finalApproachConfirmationSeconds: 10,
+  recoveryConfirmationSeconds: 15,
+  confidenceFullThreshold: 75,
+  confidenceConservativeThreshold: 65,
+  confidenceHoldThreshold: 55,
+  lowConfidenceHoldSeconds: 10,
+  telemetryReduceIntervalSeconds: 10,
+  telemetryMuteTimeoutSeconds: 45,
+  telemetryFreshnessMs: 5000,
+  breathHoldAmbiguitySeconds: 12,
+  recoveryObservationSeconds: 20,
+  responseObservationSeconds: 10,
+  buildUpwardPointsPerMinute: 4,
+  finalApproachUpwardPointsPerMinute: 6,
   autoCooldownSeconds: 8,
+  patternDirectorEnabled: false,
+  patternMinimumHoldSeconds: 45,
+  patternWeights: {
+    initial_contact: { SINETIME: 35, VIBRATOR: 40, SIMPLEX: 25 },
+    build: { VIBRATOR: 35, SIMPLEX: 30, RELENTLESS: 25, OVERFLOWING: 10 },
+    plateau: { SIMPLEX: 35, VIBRATOR: 30, RELENTLESS: 25, OVERFLOWING: 10 },
+    final_approach: { VIBRATOR: 40, RELENTLESS: 25, SIMPLEX: 20, OVERFLOWING: 10, MILKMASTER: 5 },
+    recovery: { SINETIME: 40, VIBRATOR: 35, SIMPLEX: 25 },
+  },
+  patternIntervals: {
+    initial_contact: { minSeconds: 60, maxSeconds: 120 },
+    build: { minSeconds: 75, maxSeconds: 150 },
+    plateau: { minSeconds: 120, maxSeconds: 240 },
+    final_approach: { minSeconds: 90, maxSeconds: 180 },
+    recovery: { minSeconds: 45, maxSeconds: 90 },
+  },
 };
 const HOWL_DEFAULT_COMMAND_FORM = {
   channel: "a",
@@ -1632,6 +1668,8 @@ export default function LiveCapture() {
   const [howlControlStatus, setHowlControlStatus] = useState("");
   const [howlCommandHistory, setHowlCommandHistory] = useState([]);
   const [howlAutoStatus, setHowlAutoStatus] = useState("Sarah auto-control is off.");
+  const [howlControllerTick, setHowlControllerTick] = useState(0);
+  const [howlControllerDiagnostics, setHowlControllerDiagnostics] = useState(null);
   const [howlSettingsDirty, setHowlSettingsDirty] = useState(false);
   const [howlConnectionTest, setHowlConnectionTest] = useState({ status: "idle", message: "" });
   const [howlAdvancedOpen, setHowlAdvancedOpen] = useState(false);
@@ -1722,8 +1760,8 @@ export default function LiveCapture() {
   const directH10ConnectRef = useRef(null);
   const directH10AutoConnectStartedRef = useRef(false);
   const howlAutoLastActionRef = useRef({ at: 0, intensity: null, reason: "" });
-  const howlAutoCandidateRef = useRef({ key: "", since: 0, target: null });
   const howlPhysiologyControllerRef = useRef(createHowlPhysiologyControllerState());
+  const howlActivityExposureRef = useRef(null);
   const appendLiveSessionEventsRef = useRef(null);
   const bpSyncInFlightRef = useRef(false);
   const bpOmronActionInFlightRef = useRef(false);
@@ -1737,6 +1775,7 @@ export default function LiveCapture() {
   const liveRecordEntity = liveSession?.entity || (captureKind === "body_exploration" ? "BodyExploration" : "Session");
   const liveRecordApi = base44.entities[liveRecordEntity] || base44.entities.Session;
   const captureIsBodyExploration = liveRecordEntity === "BodyExploration" || captureKind === "body_exploration";
+  const liveCueCaptureKind = captureIsBodyExploration ? "body_exploration" : "session";
 
   useEffect(() => {
     directH10StatusRef.current = directH10Status;
@@ -2290,6 +2329,62 @@ export default function LiveCapture() {
     return Math.max(0, Math.round((Date.now() - startMs) / 1000));
   }, [liveSession?.startedAt, recording?.startedAtMs]);
 
+  const recordHowlActivityExposure = useCallback(async ({
+    activityName,
+    previousActivity = "",
+    manual = false,
+    controller = {},
+  } = {}) => {
+    const sessionId = liveSession?.activeSessionId || activeSessionDoc?.id || null;
+    if (!sessionId || !activityName) return;
+    const nowIso = new Date().toISOString();
+    const previousExposure = howlActivityExposureRef.current;
+    if (previousExposure?.id) {
+      fetch(apiUrl(`/howl/control/exposures/${previousExposure.id}`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          end_time: nowIso,
+          approach_score_after: controller.nearClimax,
+          hr_slope: controller.hrSlope,
+          rr_slope: controller.rrSlope,
+          hrv_change: controller.hrvChange,
+          recovery_followed: controller.phase === "recovery",
+          final_approach_followed: controller.phase === "final_approach",
+        }),
+      }).catch(() => {});
+    }
+    try {
+      const response = await fetch(apiUrl("/howl/control/exposures"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          timestamp: nowIso,
+          physiological_phase: controller.phase || "initial_contact",
+          activity_name: activityName,
+          activity_variant: controller.variant || null,
+          channel_a_power: controller.channelAPower,
+          channel_b_power: controller.channelBPower,
+          frequency_range: controller.frequencyRange || null,
+          start_time: nowIso,
+          approach_score_before: controller.nearClimax,
+          hr_slope: controller.hrSlope,
+          rr_slope: controller.rrSlope,
+          hrv_change: controller.hrvChange,
+          controller_confidence: controller.controllerConfidence,
+          signal_quality_score: controller.signalQualityScore,
+          previous_activity: previousActivity || null,
+          manual_activity_change: manual,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.exposure) howlActivityExposureRef.current = data.exposure;
+    } catch {
+      // Exposure history is diagnostic groundwork and must never block device control.
+    }
+  }, [activeSessionDoc?.id, liveSession?.activeSessionId]);
+
   const sendHowlControlCommand = useCallback(async (action = "set_state", extra = {}) => {
     setHowlControlBusy(action);
     setHowlError("");
@@ -2306,15 +2401,26 @@ export default function LiveCapture() {
         body: JSON.stringify(payload),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Howl command was rejected.");
+      if (data.dispatch?.safetyAction === "mute_disarm") {
+        setHowlControlForm((prev) => ({ ...prev, sarahAutoEnabled: false }));
+        howlPhysiologyControllerRef.current = {
+          ...howlPhysiologyControllerRef.current,
+          faulted: true,
+          lastReason: data.dispatch.error || "Howl safety reconciliation disarmed auto-control.",
+        };
+      }
+      if (!response.ok) throw new Error(data.error || data.dispatch?.error || "Howl command was rejected.");
       setHowlControlStatus(data.dispatch?.message || "Howl command queued.");
+      if (data.dispatch?.reconciliation?.result === "mismatch") {
+        throw new Error("Howl status did not match the requested command. Sarah is holding further automation.");
+      }
       await refreshHowlTelemetry({ quiet: true });
       const eventSource = String(extra.reason || "").startsWith("voice_")
         ? "howl_voice_control"
         : String(extra.reason || "").startsWith("sarah_auto_")
           ? "howl_auto_control"
           : "howl_manual_control";
-      const sessionEvent = eventSource === "howl_auto_control"
+      const sessionEvent = eventSource === "howl_auto_control" && action !== "load_activity"
         ? null
         : buildHowlSessionEvent({
           action,
@@ -2332,6 +2438,27 @@ export default function LiveCapture() {
       if (sessionEvent) {
         appendLiveSessionEventsRef.current?.(sessionEvent)?.catch?.(() => {});
       }
+      if (action === "load_activity") {
+        recordHowlActivityExposure({
+          activityName: extra.activityName,
+          previousActivity: extra.previousActivity,
+          manual: eventSource !== "howl_auto_control",
+          controller: extra.controller || {},
+        });
+      } else if (howlActivityExposureRef.current?.id && eventSource === "howl_manual_control") {
+        const manualIncrease = action === "increment_power"
+          || (["set_intensity", "set_power"].includes(action) && Number(extra.intensity) > Number(howlCommandForm.intensity));
+        const manualDecrease = action === "decrement_power"
+          || (["set_intensity", "set_power"].includes(action) && Number(extra.intensity) < Number(howlCommandForm.intensity));
+        fetch(apiUrl(`/howl/control/exposures/${howlActivityExposureRef.current.id}`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            manual_increase: manualIncrease || howlActivityExposureRef.current.manual_increase,
+            manual_decrease: manualDecrease || howlActivityExposureRef.current.manual_decrease,
+          }),
+        }).catch(() => {});
+      }
       return data;
     } catch (error) {
       setHowlError(error?.message || "Unable to send Howl command.");
@@ -2344,6 +2471,7 @@ export default function LiveCapture() {
     getCurrentSessionTime,
     howlCommandForm,
     liveSession?.activeSessionId,
+    recordHowlActivityExposure,
     refreshHowlTelemetry,
   ]);
 
@@ -2363,6 +2491,19 @@ export default function LiveCapture() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Emergency stop was rejected.");
       setHowlCommandForm((prev) => ({ ...prev, intensity: 0, enabled: false }));
+      setHowlControlForm((prev) => ({ ...prev, sarahAutoEnabled: false }));
+      howlPhysiologyControllerRef.current = createHowlPhysiologyControllerState(0);
+      if (howlActivityExposureRef.current?.id) {
+        fetch(apiUrl(`/howl/control/exposures/${howlActivityExposureRef.current.id}`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            end_time: new Date().toISOString(),
+            manual_mute_or_emergency_stop: true,
+            ended_early: true,
+          }),
+        }).catch(() => {});
+      }
       setHowlControlStatus(data.dispatch?.message || "Emergency stop queued.");
       await refreshHowlTelemetry({ quiet: true });
       return data;
@@ -3502,6 +3643,11 @@ export default function LiveCapture() {
   const h10Position = effectiveH10Multimodal?.position || {};
   const h10Latency = effectiveH10Multimodal?.responseLatency || {};
   const h10State = effectiveH10Multimodal?.state || { label: "WAITING", tone: "neutral" };
+  const h10RawStreamsActive = Boolean(
+    directH10Source
+    && effectiveH10Multimodal?.streams?.ecg?.sampleCount > 0
+    && effectiveH10Multimodal?.streams?.accelerometer?.sampleCount > 0
+  );
   const rawRrUsable = Boolean(
     directH10Source
     && Number(rrCount) >= 10
@@ -3800,87 +3946,180 @@ export default function LiveCapture() {
   const visibleHeartbeatPulseId = heartbeatAudioEnabled ? heartbeatPulseId : 0;
 
   useEffect(() => {
+    if (!howlSarahAutoEnabled) return undefined;
+    const timer = window.setInterval(() => setHowlControllerTick((value) => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [howlSarahAutoEnabled]);
+
+  useEffect(() => {
     if (!howlManualControlsUnlocked || !howlSarahAutoEnabled) {
-      howlAutoCandidateRef.current = { key: "", since: 0, target: null };
       howlPhysiologyControllerRef.current = createHowlPhysiologyControllerState(howlCommandForm.intensity);
+      setHowlControllerDiagnostics(null);
       setHowlAutoStatus(howlManualControlsUnlocked ? "Sarah auto-control is off." : "Manual Howl control must be enabled and tested first.");
       return;
     }
-    if (!hrTelemetry || !hrConnected) {
-      howlAutoCandidateRef.current = { key: "", since: 0, target: null };
-      setHowlAutoStatus("Sarah is armed, waiting for live HR/HRV.");
-      return;
-    }
-    if (howlControlBusy) return;
 
-    const now = Date.now();
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     const cooldownMs = Math.max(2000, (readNumber(howlControlForm.autoCooldownSeconds) ?? 8) * 1000);
     const last = howlAutoLastActionRef.current || { at: 0, intensity: null };
-    if (now - last.at < cooldownMs) {
-      const remaining = Math.ceil((cooldownMs - (now - last.at)) / 1000);
-      setHowlAutoStatus(`Sarah holding for ${remaining}s after last adjustment.`);
-      return;
-    }
+    const cooldownActive = now - last.at < cooldownMs;
 
     const channel = howlCommandForm.channel || "a";
     const observedIntensity = readHowlChannelIntensity(howlTelemetry, channel);
-    const currentIntensity = readNumber(observedIntensity, last.intensity, howlCommandForm.intensity, 0) ?? 0;
+    const powerStatusFresh = howlLive && observedIntensity != null;
+    const currentIntensity = powerStatusFresh ? Number(observedIntensity) : null;
     const floor = Math.max(0, howlControlFloor);
     const ceiling = Math.max(floor, howlControlCeiling);
+    const hrSample = latestHrRef.current || hrTelemetry;
+    const hrStamp = hrSample?.engineReceivedAt || hrSample?.receivedAt || hrSample?.lastMessageAt || hrSample?.measuredAt || hrSample?.source_at;
+    const configuredFreshnessMs = Math.max(1000, readNumber(howlControlForm.telemetryFreshnessMs) ?? 5000);
+    const hrAgeMs = hrStamp ? Date.now() - timestampMs(hrStamp) : 0;
+    const telemetryFresh = Boolean(
+      hrSample
+      && hrConnected
+      && hasRecentHrPacket()
+      && (!hrStamp || (Number.isFinite(hrAgeMs) && hrAgeMs >= -5000 && hrAgeMs <= configuredFreshnessMs)),
+    );
+    const commandPending = Boolean(howlControlBusy) || cooldownActive;
+    if (!powerStatusFresh) {
+      setHowlControllerDiagnostics({
+        phase: howlPhysiologyControllerRef.current?.phase || "initial_contact",
+        candidatePhase: "",
+        candidateElapsedMs: 0,
+        approachScore: prediction.nearClimax,
+        hrTrend: readNumber(prediction.recentSlope),
+        rrTrend: readNumber(prediction.rrSlope),
+        hrvTrend: prediction.hrvSignal || "unavailable",
+        confidence: prediction.controllerConfidence,
+        permissionBand: "hold",
+        activity: readHowlChannelText(howlTelemetry, channel, "mode") || howlCommandForm.mode || "Not reported",
+        intensity: null,
+        retainedPeak: howlPhysiologyControllerRef.current?.peakIntensity ?? null,
+        nextPatternEligibleAt: 0,
+        lastReason: "Waiting for a fresh, confirmed Coyote power reading. No automatic command was sent.",
+        telemetryFresh,
+        powerStatusFresh: false,
+        armed: true,
+        breathHoldAmbiguous: false,
+      });
+      setHowlAutoStatus("Sarah is holding automation until Coyote reports its current power. Existing output was not changed.");
+      return;
+    }
     const decision = computeHowlPhysiologyAction({
-      prediction,
+      prediction: {
+        ...prediction,
+        currentHr: readNumber(hrTelemetry?.currentHr, hrTelemetry?.hr, hrTelemetry?.heartRate),
+        localPeakHr: readNumber(hrTelemetry?.recentPeakHr, hrTelemetry?.maxHr, status?.hr?.maxHr),
+        rrAvailable: prediction.rrCount >= 8,
+      },
       multimodal: hrTelemetry?.multimodal || {},
       currentIntensity,
       floor,
       ceiling,
       settings: howlControlForm,
       state: howlPhysiologyControllerRef.current,
+      now,
+      telemetryFresh,
+      commandPending,
     });
     howlPhysiologyControllerRef.current = decision.state;
+    const currentActivity = readHowlChannelText(howlTelemetry, channel, "mode")
+      || howlTelemetry?.player?.filename
+      || howlTelemetry?.player?.title
+      || howlCommandForm.mode;
+    const patternDecision = computeHowlPatternAction({
+      decision,
+      currentActivity,
+      settings: howlControlForm,
+      state: howlPhysiologyControllerRef.current,
+      now,
+      commandPending,
+    });
+    howlPhysiologyControllerRef.current = patternDecision.state;
+    setHowlControllerDiagnostics({
+      phase: decision.phase,
+      candidatePhase: decision.candidatePhase,
+      candidateElapsedMs: decision.candidatePhaseElapsedMs,
+      approachScore: decision.approachScore,
+      hrTrend: readNumber(decision.recoverySignals?.hrSlope),
+      rrTrend: readNumber(prediction.rrSlope),
+      hrvTrend: prediction.hrvSignal || "unavailable",
+      confidence: prediction.controllerConfidence,
+      permissionBand: decision.permissionBand,
+      activity: currentActivity || patternDecision.state.patternActivity || "Not reported",
+      intensity: currentIntensity,
+      retainedPeak: decision.state.peakIntensity,
+      nextPatternEligibleAt: patternDecision.state.nextPatternEligibleAt,
+      lastReason: patternDecision.action === "load_activity" ? patternDecision.explanation : decision.explanation,
+      telemetryFresh,
+      powerStatusFresh: true,
+      armed: true,
+      breathHoldAmbiguous: decision.breathHoldAmbiguous,
+    });
+
+    if (decision.action === "mute_disarm") {
+      setHowlAutoStatus(decision.explanation);
+      setHowlControlForm((prev) => ({ ...prev, sarahAutoEnabled: false }));
+      sendHowlEmergencyStop();
+      return;
+    }
+    if (commandPending) {
+      const remaining = cooldownActive ? Math.ceil((cooldownMs - (now - last.at)) / 1000) : null;
+      setHowlAutoStatus(remaining
+        ? `Sarah holding ${remaining}s for command cooldown. ${decision.explanation}`
+        : decision.explanation);
+      return;
+    }
+    if (patternDecision.action === "load_activity") {
+      const activity = HOWL_ACTIVITY_MODES.find((mode) => mode.name === patternDecision.activityName);
+      setHowlCommandForm((prev) => ({ ...prev, mode: patternDecision.activityName }));
+      setHowlAutoStatus(`${patternDecision.explanation} Intensity remains bounded at ${Math.round(currentIntensity)}.`);
+      sendHowlControlCommand("load_activity", {
+        activityName: patternDecision.activityName,
+        activityDisplayName: activity?.displayName || patternDecision.activityName,
+        previousActivity: currentActivity,
+        play: true,
+        reason: `sarah_auto_pattern_${patternDecision.phase}`,
+        controller: {
+          source: "sarah_live_pattern_director",
+          phase: patternDecision.phase,
+          currentHr: readNumber(hrTelemetry?.currentHr, hrTelemetry?.hr, hrTelemetry?.heartRate),
+          nearClimax: prediction.nearClimax,
+          plateauScore: prediction.plateauScore,
+          recovery: prediction.recovery,
+          controllerConfidence: prediction.controllerConfidence,
+          intensity: currentIntensity,
+          channelAPower: howlChannelAIntensity,
+          channelBPower: howlChannelBIntensity,
+          hrSlope: decision.recoverySignals?.hrSlope,
+          rrSlope: prediction.rrSlope,
+          hrvChange: prediction.hrvChange,
+          signalQualityScore: hrTelemetry?.multimodal?.signalConfidence?.score,
+        },
+      }).then((result) => {
+        if (!result) {
+          howlPhysiologyControllerRef.current = {
+            ...howlPhysiologyControllerRef.current,
+            faulted: true,
+            lastReason: "Pattern command failed reconciliation.",
+          };
+          saveHowlControlSettings({ sarahAutoEnabled: false });
+        }
+      });
+      return;
+    }
     const target = decision.target;
     const desiredAction = decision.action;
-    const dwellMs = decision.dwellMs;
     const reason = `sarah_auto_${desiredAction} near=${prediction.nearClimax} plateau=${prediction.plateauScore} recovery=${prediction.recovery} confidence=${prediction.controllerConfidence}`;
 
     if (target === Math.round(currentIntensity)) {
-      howlAutoCandidateRef.current = { key: "", since: 0, target: null };
       setHowlAutoStatus(`${decision.explanation} ${prediction.reason || prediction.label}`);
       return;
     }
 
-    const candidateKey = `${desiredAction}:${target}`;
-    const candidate = howlAutoCandidateRef.current || { key: "", since: 0, target: null };
-    if (candidate.key !== candidateKey) {
-      howlAutoCandidateRef.current = { key: candidateKey, since: now, target };
-      const waitSeconds = Math.max(1, Math.ceil(dwellMs / 1000));
-      setHowlAutoStatus(
-        desiredAction === "build_ramp"
-          ? `Sarah is watching a sustained build before nudging intensity to ${target}. Holding about ${waitSeconds}s to confirm it is not just noise.`
-          : desiredAction === "final_approach" || desiredAction === "reapproach"
-            ? `Sarah is confirming ${desiredAction === "reapproach" ? "recovery clearance" : "threshold stability"} for about ${waitSeconds}s before advancing to ${target}.`
-            : `Sarah is confirming a genuine recovery window for about ${waitSeconds}s before the shallow retreat to ${target}.`
-      );
-      return;
-    }
-
-    if (now - candidate.since < dwellMs) {
-      const remaining = Math.max(1, Math.ceil((dwellMs - (now - candidate.since)) / 1000));
-      setHowlAutoStatus(
-        desiredAction === "build_ramp"
-          ? `Sarah build watch holding ${remaining}s more before stepping up. ${prediction.reason || prediction.label}`
-          : desiredAction === "final_approach" || desiredAction === "reapproach"
-            ? `Sarah final-approach watch holding ${remaining}s more before stepping up. ${prediction.reason || prediction.label}`
-            : `Sarah recovery watch holding ${remaining}s more before the bounded retreat. ${prediction.reason || prediction.label}`
-      );
-      return;
-    }
-
     howlAutoLastActionRef.current = { at: now, intensity: target, reason };
-    howlAutoCandidateRef.current = { key: "", since: 0, target: null };
     setHowlCommandForm((prev) => ({ ...prev, intensity: target }));
-    setHowlAutoStatus(
-      `Sarah ${target > currentIntensity ? "increased" : "reduced"} Howl intensity to ${target} after ${Math.round(dwellMs / 1000)}s of stable ${decision.state.mode.replaceAll("_", " ")} evidence.`
-    );
+    setHowlAutoStatus(`Sarah ${target > currentIntensity ? "increased" : "reduced"} Howl intensity to ${target}. ${decision.explanation}`);
     sendHowlControlCommand("set_intensity", {
       channel,
       intensity: target,
@@ -3899,7 +4138,7 @@ export default function LiveCapture() {
         previousIntensity: currentIntensity,
         targetIntensity: target,
         desiredAction,
-        dwellMs,
+        dwellMs: 0,
         confirmationCount: prediction.confirmationCount,
         buildEligibleForNearClimax: prediction.buildEligibleForNearClimax,
         plateauScore: prediction.plateauScore,
@@ -3910,8 +4149,17 @@ export default function LiveCapture() {
         possibleBreathHold: prediction.possibleBreathHold,
         motionClass: prediction.motionClass,
         retainedPeakIntensity: decision.state.peakIntensity,
-        recoveryFloor: decision.state.recoveryFloor,
+        recoveryFloor: floor,
       },
+    }).then((result) => {
+      if (!result) {
+        howlPhysiologyControllerRef.current = {
+          ...howlPhysiologyControllerRef.current,
+          faulted: true,
+          lastReason: "Intensity command failed reconciliation.",
+        };
+        saveHowlControlSettings({ sarahAutoEnabled: false });
+      }
     });
   }, [
     howlCommandForm.channel,
@@ -3925,20 +4173,51 @@ export default function LiveCapture() {
     howlControlForm.buildThreshold,
     howlControlForm.finalApproachEnabled,
     howlControlForm.finalApproachStep,
-    howlControlForm.maxRecoveryRetreat,
+    howlControlForm.finalApproachExitThreshold,
+    howlControlForm.finalApproachConfirmationSeconds,
+    howlControlForm.buildExitThreshold,
+    howlControlForm.plateauExitThreshold,
+    howlControlForm.recoveryExitThreshold,
+    howlControlForm.buildConfirmationSeconds,
+    howlControlForm.plateauConfirmationSeconds,
+    howlControlForm.recoveryConfirmationSeconds,
+    howlControlForm.confidenceFullThreshold,
+    howlControlForm.confidenceConservativeThreshold,
+    howlControlForm.confidenceHoldThreshold,
+    howlControlForm.lowConfidenceHoldSeconds,
+    howlControlForm.telemetryReduceIntervalSeconds,
+    howlControlForm.telemetryMuteTimeoutSeconds,
+    howlControlForm.telemetryFreshnessMs,
+    howlControlForm.breathHoldAmbiguitySeconds,
+    howlControlForm.recoveryObservationSeconds,
+    howlControlForm.responseObservationSeconds,
+    howlControlForm.buildUpwardPointsPerMinute,
+    howlControlForm.finalApproachUpwardPointsPerMinute,
     howlControlForm.nearClimaxReductionEnabled,
     howlControlForm.nearClimaxThreshold,
+    howlControlForm.patternDirectorEnabled,
+    howlControlForm.patternMinimumHoldSeconds,
+    howlControlForm.patternWeights,
+    howlControlForm.patternIntervals,
     howlControlForm.plateauThreshold,
     howlControlForm.recoveryReductionEnabled,
     howlControlForm.recoveryThreshold,
     howlControlForm.reduceStep,
     howlManualControlsUnlocked,
     howlSarahAutoEnabled,
+    howlControllerTick,
+    howlChannelAIntensity,
+    howlChannelBIntensity,
+    howlLive,
     howlTelemetry,
+    hasRecentHrPacket,
     hrConnected,
     hrTelemetry,
     prediction,
+    saveHowlControlSettings,
     sendHowlControlCommand,
+    sendHowlEmergencyStop,
+    status?.hr?.maxHr,
   ]);
   const emgCalibrationSteps = useMemo(() => {
     if (!usingPerinealEmgConfig) return EMG_CALIBRATION_STEPS;
@@ -4295,7 +4574,9 @@ export default function LiveCapture() {
   const desktopVoiceWakeAvailable = typeof window !== "undefined" && Boolean(window.sarahDesktop?.startVoiceWake && window.sarahDesktop?.onVoiceWakeEvent);
   const voiceWakeSupported = speechRecognitionSupported || desktopVoiceWakeAvailable;
   const desktopWakeUnsupported = isSarahDesktopRuntime() && voiceRecordingSupported && !voiceWakeSupported;
-  const desktopWakeFallbackActive = isSarahDesktopRuntime() && desktopVoiceWakeAvailable && !speechRecognitionSupported;
+  // Electron may expose Chromium speech recognition even when its remote service
+  // is unreachable. Prefer the bundled, local Windows listener in the EXE.
+  const desktopWakeFallbackActive = isSarahDesktopRuntime() && desktopVoiceWakeAvailable;
   const voiceReady = voiceWakeSupported && voiceRecordingSupported;
   const embeddedObsStatus = status?.hr?.relay?.obs || null;
   const obsReady = Boolean(recordingActive || embeddedObsStatus?.identified);
@@ -4553,39 +4834,32 @@ export default function LiveCapture() {
       message: `Received OMRON reading ${formatBloodPressure(reading)}. Saving...`,
     }));
 
-    const saved = await ingestBloodPressureReadings([reading]);
-    const savedReadings = Array.isArray(saved?.readings) && saved.readings.length ? saved.readings : [reading];
-    const latestReading = savedReadings[0] || reading;
+    try {
+      const saved = await ingestBloodPressureReadings([reading]);
+      const savedReadings = Array.isArray(saved?.readings) && saved.readings.length ? saved.readings : [reading];
+      const latestReading = savedReadings[0] || reading;
+      const stamped = await stampBloodPressureReadings(savedReadings, { source: "omron_direct_ble_listener" });
 
-    setBpCapture((prev) => ({
-      ...prev,
-      native: true,
-      permissionGranted: prev.permissionGranted,
-      syncing: false,
-      status: "ready",
-      message: `OMRON captured ${formatBloodPressure(latestReading)} and saved it to PulsePoint.`,
-    }));
-
-    stampBloodPressureReadings(savedReadings, { source: "omron_direct_ble_listener" })
-      .then((stamped) => {
-        if (!stamped?.stamped) return;
-        setBpCapture((prev) => ({
-          ...prev,
-          sessionId: liveSession?.activeSessionId || null,
-          status: "captured",
-          lastReading: stamped.latest || latestReading,
-          lastCapturedAt: new Date().toISOString(),
-          capturedCount: prev.capturedCount + stamped.stamped,
-          message: `OMRON captured ${formatBloodPressure(stamped.latest || latestReading)} and stamped it into this session.`,
-        }));
-      })
-      .catch((error) => {
-        setBpCapture((prev) => ({
-          ...prev,
-          error: error?.message || "Saved BP, but could not stamp it into the live session.",
-          message: `OMRON captured ${formatBloodPressure(latestReading)} and saved it to PulsePoint. Session stamp failed.`,
-        }));
-      });
+      setBpCapture((prev) => ({
+        ...prev,
+        native: true,
+        permissionGranted: prev.permissionGranted,
+        syncing: false,
+        sessionId: stamped?.stamped ? liveSession?.activeSessionId || null : prev.sessionId,
+        status: stamped?.stamped ? "captured" : "ready",
+        lastReading: stamped?.latest || latestReading,
+        lastCapturedAt: new Date().toISOString(),
+        capturedCount: prev.capturedCount + Number(stamped?.stamped || 0),
+        error: "",
+        message: stamped?.stamped
+          ? `OMRON captured ${formatBloodPressure(stamped.latest || latestReading)} and stamped it into this session.`
+          : `OMRON captured ${formatBloodPressure(latestReading)} and saved it to PulsePoint.`,
+      }));
+    } catch (error) {
+      // A failed write must remain retryable if the cuff retransmits the same stable packet.
+      bpOmronSeenRef.current.delete(readingKey);
+      throw error;
+    }
   }, [liveSession?.activeSessionId, stampBloodPressureReadings]);
 
   const startOmronBloodPressureListenerForLiveSession = useCallback(async ({ auto = false, forceDevicePicker = false } = {}) => {
@@ -4858,22 +5132,23 @@ export default function LiveCapture() {
   ]);
 
   const liveCuePhraseBank = useMemo(
-    () => resolveLiveCuePhraseBank(liveCueSettings, { captureKind }),
-    [captureKind, liveCueSettings],
+    () => resolveLiveCuePhraseBank(liveCueSettings, { captureKind: liveCueCaptureKind }),
+    [liveCueCaptureKind, liveCueSettings],
   );
   const liveCueAudio = useLiveCueAudio({
     phrases: liveCuePhraseBank.phrases,
     settings: liveCuePhraseBank.settings,
-    enabled: liveCueSettings.enabled,
+    enabled: liveCueSettings.enabled && !captureIsBodyExploration,
   });
   const liveCueEngine = useLiveCueEngine({
-    captureKind,
+    captureKind: liveCueCaptureKind,
     cueSettings: liveCueSettings,
     audio: liveCueAudio,
     sessionId: liveSession?.activeSessionId,
     getSessionTime: getCurrentSessionTime,
     microphoneActive: annotationRecording,
     onTimelineEvent: (event) => {
+      if (captureIsBodyExploration) return;
       const finalEvent = {
         id: `live-cue-${event.type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         source: "sarah_live_cue",
@@ -4907,7 +5182,7 @@ export default function LiveCapture() {
   }, [liveCueAudio, liveCueEngine, liveCueSettings.enabled, toast]);
 
   useEffect(() => {
-    if (!recordingActive || !liveCueSettings.enabled || liveCueAudio.ready || liveCueAudio.status.phase === "preparing") return;
+    if (captureIsBodyExploration || !recordingActive || !liveCueSettings.enabled || liveCueAudio.ready || liveCueAudio.status.phase === "preparing") return;
     liveCueAudio.prepare().catch((error) => {
       toast({
         title: "Sarah encouragement is unavailable",
@@ -4915,7 +5190,7 @@ export default function LiveCapture() {
         variant: "destructive",
       });
     });
-  }, [liveCueAudio, liveCueSettings.enabled, recordingActive, toast]);
+  }, [captureIsBodyExploration, liveCueAudio, liveCueSettings.enabled, recordingActive, toast]);
 
   const waitForRecentHrPacket = useCallback((timeoutMs = 25000) => new Promise((resolve) => {
     const started = Date.now();
@@ -5372,7 +5647,7 @@ export default function LiveCapture() {
   }, [buildLevel, captureIsBodyExploration, getCurrentSessionTime, prediction, recordingActive, telemetryHistory]);
 
   useEffect(() => {
-    if (!recordingActive || !telemetryHistory.length || !hrTelemetry) return;
+    if (captureIsBodyExploration || !recordingActive || !telemetryHistory.length || !hrTelemetry) return;
     liveCueEngine.step(prediction, {
       hr: readNumber(hrTelemetry?.currentHr, hrTelemetry?.hr, hrTelemetry?.heartRate),
       baselineHr: readNumber(hrTelemetry?.baselineHr, hrTelemetry?.baseline_hr),
@@ -5381,7 +5656,14 @@ export default function LiveCapture() {
       hasMultipleSignalFamilies: Boolean(prediction.hrvUsable || emgTelemetry),
       sessionTimeSec: getCurrentSessionTime(),
     });
-  }, [emgTelemetry, getCurrentSessionTime, hrTelemetry, liveCueEngine, prediction, recordingActive, telemetryHistory.length]);
+  }, [captureIsBodyExploration, emgTelemetry, getCurrentSessionTime, hrTelemetry, liveCueEngine, prediction, recordingActive, telemetryHistory.length]);
+
+  useEffect(() => {
+    if (!captureIsBodyExploration) return;
+    liveCueAudio.stop();
+    liveCueEngine.reset();
+    setLatestTelemetryNotice(null);
+  }, [captureIsBodyExploration, liveCueAudio.stop, liveCueEngine.reset]);
 
   useEffect(() => {
     const cue = liveCueEngine.latestCue;
@@ -6408,11 +6690,35 @@ export default function LiveCapture() {
         </div>
 
         {!mediaFullscreen && (
-          <div className={`grid content-start gap-3 ${focusView ? "min-h-0 overflow-y-auto pr-1" : "xl:sticky xl:top-4 xl:max-h-[calc(100vh-9rem)] xl:overflow-hidden"}`}>
+          <div className={`grid content-start gap-3 ${focusView ? "min-h-0 overflow-y-auto pr-1" : "xl:sticky xl:top-4 xl:max-h-[calc(100vh-9rem)] xl:overflow-y-auto xl:pr-1"}`}>
             <div className="grid auto-rows-fr grid-cols-2 items-stretch gap-2">
               <CompactStat label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="bpm" level={currentHrLevel} emphasis beatPulse={visibleHeartbeatPulseId} />
               <CompactStat label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} emphasis />
               <CompactStat label="Max HR" value={fmtNumber(maxHr, 0)} helper="session peak" level={hrLevelPercent(maxHr, hrTelemetry?.baselineHr)} emphasis />
+              {directH10Source && (
+                <>
+                  <CompactStat label="RR Samples" value={fmtNumber(rrCount, 0)} helper="rolling H10 window" level={Math.min(100, (Number(rrCount) || 0) * 1.25)} />
+                  <CompactStat label="RMSSD" value={hrvRmssd != null ? `${fmtNumber(hrvRmssd, 1)} ms` : "--"} helper={hrvQuality ? `HRV ${hrvQuality}` : "waiting for RR"} level={hrvQuality === "high" ? 90 : hrvQuality === "moderate" ? 65 : hrvQuality === "low" ? 35 : 0} />
+                  <CompactStat
+                    label="Respiration"
+                    value={h10Respiration.possibleBreathHold ? "HOLD?" : h10Respiration.available ? `${fmtNumber(h10Respiration.bpm, 1)}/min` : h10RawStreamsActive ? "WARMING" : "NO PMD"}
+                    helper={h10Respiration.available ? `${h10Respiration.confidence || "estimated"} confidence` : h10RawStreamsActive ? String(h10Respiration.reason || "collecting").replaceAll("_", " ") : "raw stream unavailable"}
+                    level={h10Respiration.available ? (h10Respiration.confidence === "high" ? 90 : 65) : 0}
+                  />
+                  <CompactStat
+                    label="Chest Motion"
+                    value={h10Motion.dynamicRmsMilliG != null ? `${fmtNumber(h10Motion.dynamicRmsMilliG, 0)} mg` : h10RawStreamsActive ? "WARMING" : "NO PMD"}
+                    helper={h10Motion.available ? String(h10Motion.class || "motion").replaceAll("_", " ") : h10RawStreamsActive ? "collecting window" : "raw stream unavailable"}
+                    level={h10Motion.available ? Math.min(100, Number(h10Motion.dynamicRmsMilliG || 0) / 3.6) : 0}
+                  />
+                  <CompactStat
+                    label="Recovery"
+                    value={h10Recovery.available ? `-${fmtNumber(h10Recovery.currentDropBpm, 0)} bpm` : "LEARNING"}
+                    helper={h10Recovery.available ? `${fmtNumber(h10Recovery.secondsSincePeak, 0)} s from peak` : "waiting for sustained peak"}
+                    level={h10Recovery.available ? Math.min(100, Number(h10Recovery.currentDropBpm || 0) * 5) : 0}
+                  />
+                </>
+              )}
               {!captureIsBodyExploration && (
                 <>
                   <CompactStat label="Build" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "phase"} level={buildLevel} />
@@ -6448,14 +6754,16 @@ export default function LiveCapture() {
               </div>
             )}
 
-            <TrendPanel title="HR Trend" subtitle="Compact live view" empty={!hasHrTrend} heightClass="h-48" distanceView>
+            <TrendPanel title="Cardiac & Autonomic Trend" subtitle="HR, baseline, RMSSD, SDNN, and approach load" empty={!hasHrTrend} heightClass="h-64" distanceView>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={telemetryHistory} margin={{ top: 8, right: 8, bottom: 0, left: -22 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.35} />
                   <XAxis dataKey="time" hide />
                   <YAxis yAxisId="hr" hide domain={["dataMin - 4", "dataMax + 4"]} />
+                  <YAxis yAxisId="hrv" hide orientation="right" domain={[0, "auto"]} />
                   <YAxis yAxisId="watch" hide orientation="right" domain={[0, 100]} />
                   <Tooltip content={<ChartTooltip />} />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
                   {visiblePhaseMarkers.map((marker, index) => (
                     <ReferenceLine
                       key={`${marker.label}-${marker.chartTime}-media-${index}`}
@@ -6469,10 +6777,37 @@ export default function LiveCapture() {
                   <Line yAxisId="hr" type="monotone" dataKey="baseline" name="Baseline" stroke="hsl(var(--muted-foreground))" strokeDasharray="5 5" strokeWidth={1.25} dot={false} connectNulls />
                   <Line yAxisId="hr" type="monotone" dataKey="hrSmoothed" name="Smoothed" stroke="hsl(var(--chart-2))" strokeWidth={1.75} dot={false} connectNulls />
                   <Line yAxisId="hr" type="monotone" dataKey="hr" name="HR" stroke="hsl(var(--primary))" strokeWidth={2.25} dot={false} connectNulls />
+                  <Line yAxisId="hrv" type="monotone" dataKey="hrvRmssd" name="RMSSD" stroke="#22d3ee" strokeWidth={2} dot={false} connectNulls />
+                  <Line yAxisId="hrv" type="monotone" dataKey="hrvSdnn" name="SDNN" stroke="#a78bfa" strokeWidth={1.5} dot={false} connectNulls />
                   {!captureIsBodyExploration && <Line yAxisId="watch" type="monotone" dataKey="nearClimax" name="Approach" stroke="hsl(var(--destructive))" strokeWidth={1.75} dot={false} connectNulls />}
                 </LineChart>
               </ResponsiveContainer>
             </TrendPanel>
+
+            {directH10Source && (
+              <TrendPanel
+                title="Respiratory & Somatic Response"
+                subtitle="Quality-gated respiration, chest motion, possible holds, and signal confidence"
+                empty={!hasThresholdPhysiologyTrend}
+                heightClass="h-64"
+                distanceView
+              >
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={physiologyChartData} margin={{ top: 8, right: 8, bottom: 0, left: -22 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.35} />
+                    <XAxis dataKey="time" hide />
+                    <YAxis yAxisId="resp" hide domain={[0, "auto"]} />
+                    <YAxis yAxisId="load" hide orientation="right" domain={[0, 100]} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Legend wrapperStyle={{ fontSize: 10 }} />
+                    <Area yAxisId="load" type="monotone" dataKey="motionLoad" name="Chest motion" stroke="#38bdf8" fill="#38bdf8" fillOpacity={0.14} strokeWidth={2} dot={false} connectNulls />
+                    <Line yAxisId="resp" type="monotone" dataKey="respirationBpm" name="Respiration/min" stroke="#14b8a6" strokeWidth={2.25} dot={false} connectNulls />
+                    <Line yAxisId="load" type="stepAfter" dataKey="breathHoldBand" name="Possible hold" stroke="#f97316" strokeWidth={2.5} dot={false} connectNulls />
+                    <Line yAxisId="load" type="monotone" dataKey="signalConfidence" name="Signal confidence" stroke="#a3e635" strokeWidth={1.5} dot={false} connectNulls />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </TrendPanel>
+            )}
 
             {!captureIsBodyExploration && (
               <div className="rounded-xl border border-border bg-muted/20 p-3">
@@ -6587,11 +6922,6 @@ export default function LiveCapture() {
         : "Start Session";
   const showAdvancedSetupConsole = advancedSetupOpen;
   const obsPreferred = Boolean(launchProfile.obsEnabled && !launchProfile.telemetryOnlyFallback);
-  const h10RawStreamsActive = Boolean(
-    directH10Source
-    && effectiveH10Multimodal?.streams?.ecg?.sampleCount > 0
-    && effectiveH10Multimodal?.streams?.accelerometer?.sampleCount > 0
-  );
   const h10RawStreamFailure = Boolean(
     directH10Source
     && healthHrConnected
@@ -6924,7 +7254,7 @@ export default function LiveCapture() {
               )}
               {bpCapture.error && <p className="mt-1 text-xs text-destructive">{bpCapture.error}</p>}
               <p className="mt-2 text-[11px] text-muted-foreground">
-                Phone APK can sync the OMRON BP7000 directly over Bluetooth. Desktop reads the same local PulsePoint BP database and refreshes the active session.
+                Sarah can capture the OMRON BP7000 directly over Bluetooth in the EXE or APK. The active listener saves and stamps each reading into the current session immediately.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -7889,7 +8219,7 @@ export default function LiveCapture() {
                   <button
                     type="button"
                     onClick={() => saveHowlControlSettings({ sarahAutoEnabled: !howlSarahAutoEnabled })}
-                    disabled={!howlManualControlsUnlocked || howlControlBusy === "settings"}
+                    disabled={!howlManualControlsUnlocked || howlControlBusy === "settings" || (!howlSarahAutoEnabled && howlSettingsDirty)}
                     className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
                       howlSarahAutoEnabled ? "bg-primary/15 text-primary hover:bg-primary/25" : "bg-primary text-primary-foreground hover:bg-primary/90"
                     }`}
@@ -7898,7 +8228,57 @@ export default function LiveCapture() {
                   </button>
                 </div>
 
-                <div className="mt-3 grid gap-2 md:grid-cols-5">
+                <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-lg border border-border bg-card px-3 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Current phase</p>
+                    <p className="mt-1 text-lg font-semibold capitalize text-foreground">
+                      {(howlControllerDiagnostics?.phase || howlPhysiologyControllerRef.current?.phase || "initial contact").replaceAll("_", " ")}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {howlControllerDiagnostics?.candidatePhase
+                        ? `Checking ${howlControllerDiagnostics.candidatePhase.replaceAll("_", " ")} for ${Math.round((howlControllerDiagnostics.candidateElapsedMs || 0) / 1000)}s`
+                        : "No phase change pending"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-card px-3 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Coyote output</p>
+                    <p className="mt-1 text-lg font-semibold text-foreground">
+                      {howlControllerDiagnostics?.intensity == null ? "Awaiting status" : `${Math.round(howlControllerDiagnostics.intensity)} / ${Math.round(howlControlCeiling)}`}
+                    </p>
+                    <p className="mt-1 truncate text-xs text-muted-foreground">
+                      {readHowlActivityDisplayName(howlControllerDiagnostics?.activity || selectedHowlActivity?.name || "Not reported")}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-card px-3 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Sarah permission</p>
+                    <p className="mt-1 text-lg font-semibold capitalize text-foreground">
+                      {howlControllerDiagnostics?.permissionBand === "full"
+                        ? "May adjust"
+                        : howlControllerDiagnostics?.permissionBand === "conservative"
+                          ? "Careful changes"
+                          : "Hold only"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {Math.round(howlControllerDiagnostics?.confidence || prediction.controllerConfidence || 0)}% confidence
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-card px-3 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">What Sarah is doing</p>
+                    <p className="mt-1 text-sm font-semibold text-foreground">
+                      {howlSarahAutoEnabled ? "Automation armed" : "Manual control"}
+                    </p>
+                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                      {howlControllerDiagnostics?.lastReason || howlAutoStatus}
+                    </p>
+                  </div>
+                </div>
+
+                <details className="mt-3 rounded-lg border border-border bg-background/70 p-3">
+                  <summary className="cursor-pointer text-xs font-semibold text-foreground">
+                    Advanced controller tuning
+                    <span className="ml-2 font-normal text-muted-foreground">Thresholds, timing, safety fallback, and pattern weights</span>
+                  </summary>
+                  <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-5">
                   <label className="space-y-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Build starts</span>
                     <input
@@ -7984,16 +8364,16 @@ export default function LiveCapture() {
                     <span className="block text-[11px] text-muted-foreground">Size of each temporary retreat when recovery is physiologically corroborated.</span>
                   </label>
                   <label className="space-y-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Max retreat</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Response wait</span>
                     <input
                       className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
                       type="number"
-                      min="0"
-                      max="25"
-                      value={howlControlForm.maxRecoveryRetreat}
-                      onChange={(event) => updateHowlControlForm({ maxRecoveryRetreat: event.target.value }, { resetConnection: false })}
+                      min="10"
+                      max="120"
+                      value={howlControlForm.responseObservationSeconds}
+                      onChange={(event) => updateHowlControlForm({ responseObservationSeconds: event.target.value }, { resetConnection: false })}
                     />
-                    <span className="block text-[11px] text-muted-foreground">Hard limit below the highest intensity reached in the current build cycle.</span>
+                    <span className="block text-[11px] text-muted-foreground">Minimum time after an intensity change before its physiological response can justify another increase.</span>
                   </label>
                   <label className="space-y-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Cooldown sec</span>
@@ -8006,6 +8386,43 @@ export default function LiveCapture() {
                       onChange={(event) => updateHowlControlForm({ autoCooldownSeconds: event.target.value }, { resetConnection: false })}
                     />
                     <span className="block text-[11px] text-muted-foreground">Minimum wait between Sarah auto-actions so intensity does not thrash up and down every telemetry refresh.</span>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Pattern hold sec</span>
+                    <input
+                      className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                      type="number"
+                      min="15"
+                      max="300"
+                      value={howlControlForm.patternMinimumHoldSeconds}
+                      onChange={(event) => updateHowlControlForm({ patternMinimumHoldSeconds: event.target.value }, { resetConnection: false })}
+                    />
+                    <span className="block text-[11px] text-muted-foreground">Minimum time Sarah keeps a selected Howl activity before considering another pattern.</span>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Fault mute sec</span>
+                    <input
+                      className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                      type="number"
+                      min="10"
+                      max="600"
+                      value={howlControlForm.telemetryMuteTimeoutSeconds}
+                      onChange={(event) => updateHowlControlForm({ telemetryMuteTimeoutSeconds: event.target.value }, { resetConnection: false })}
+                    />
+                    <span className="block text-[11px] text-muted-foreground">Persistent stale or invalid telemetry mutes and disarms automation after this timeout.</span>
+                  </label>
+                  <label className="flex items-center gap-2 rounded-lg border border-cyan-400/30 bg-cyan-400/5 px-3 py-2 text-xs font-semibold text-muted-foreground md:col-span-5">
+                    <input
+                      type="checkbox"
+                      checked={howlControlForm.patternDirectorEnabled === true}
+                      onChange={(event) => updateHowlControlForm({ patternDirectorEnabled: event.target.checked }, { resetConnection: false })}
+                    />
+                    <span>
+                      Physiology-driven pattern director
+                      <span className="block text-[11px] font-normal text-muted-foreground">
+                        Randomizes only among verified Howl activities. Initial contact stays smooth; build and plateau favor sustained modes; final approach favors VIBRATOR, SIMPLEX, and RELENTLESS with occasional MILKMASTER accents. Low-confidence physiology freezes pattern changes.
+                      </span>
+                    </span>
                   </label>
                   <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground md:col-span-2">
                     <input
@@ -8029,17 +8446,6 @@ export default function LiveCapture() {
                       <span className="block text-[11px] font-normal text-muted-foreground">Lets Sarah use the build threshold plus Step up to gently ramp intensity during sustained loading.</span>
                     </span>
                   </label>
-                  <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground md:col-span-2">
-                    <input
-                      type="checkbox"
-                      checked={howlControlForm.nearClimaxReductionEnabled !== false}
-                      onChange={(event) => updateHowlControlForm({ nearClimaxReductionEnabled: event.target.checked }, { resetConnection: false })}
-                    />
-                    <span>
-                      Protect retained cycle intensity
-                      <span className="block text-[11px] font-normal text-muted-foreground">Prevents repeated recovery actions from walking intensity below the configured Max retreat from the cycle peak.</span>
-                    </span>
-                  </label>
                   <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-muted-foreground">
                     <input
                       type="checkbox"
@@ -8048,10 +8454,143 @@ export default function LiveCapture() {
                     />
                     <span>
                       Allow verified recovery retreat
-                      <span className="block text-[11px] font-normal text-muted-foreground">Allows a shallow temporary reduction only when multiple physiological signals support recovery.</span>
+                      <span className="block text-[11px] font-normal text-muted-foreground">Keeps the activity, reduces two points, observes for twenty seconds, then permits deeper bounded retreat when recovery persists.</span>
                     </span>
                   </label>
-                </div>
+                  </div>
+
+                <details className="mt-3 rounded-lg border border-border bg-background/70 p-3">
+                  <summary className="cursor-pointer text-xs font-semibold text-foreground">Pattern Director thresholds, timing, and weights</summary>
+                  <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                    <div className="rounded-lg border border-border bg-card p-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Confidence permissions</p>
+                      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                        {[
+                          ["confidenceFullThreshold", "Full"],
+                          ["confidenceConservativeThreshold", "Conservative"],
+                          ["confidenceHoldThreshold", "Hold"],
+                        ].map(([key, label]) => (
+                          <label key={key} className="text-[10px] text-muted-foreground">
+                            {label}
+                            <input className="mt-1 h-9 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground" type="number" min="0" max="100" value={howlControlForm[key]} onChange={(event) => updateHowlControlForm({ [key]: event.target.value }, { resetConnection: false })} />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-border bg-card p-3 lg:col-span-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Phase confirmation / exit</p>
+                      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                        {[
+                          ["buildConfirmationSeconds", "buildExitThreshold", "Build"],
+                          ["plateauConfirmationSeconds", "plateauExitThreshold", "Plateau"],
+                          ["finalApproachConfirmationSeconds", "finalApproachExitThreshold", "Final"],
+                          ["recoveryConfirmationSeconds", "recoveryExitThreshold", "Recovery"],
+                        ].map(([dwellKey, exitKey, label]) => (
+                          <div key={label} className="grid grid-cols-2 gap-2 rounded-md border border-border/70 p-2">
+                            <label className="min-w-0 text-[10px] text-muted-foreground">{label} confirmation
+                              <input className="mt-1 h-9 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground" type="number" min="1" max="120" value={howlControlForm[dwellKey]} onChange={(event) => updateHowlControlForm({ [dwellKey]: event.target.value }, { resetConnection: false })} />
+                              <span className="mt-1 block">seconds</span>
+                            </label>
+                            <label className="min-w-0 text-[10px] text-muted-foreground">Exit threshold
+                              <input className="mt-1 h-9 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground" type="number" min="0" max="100" value={howlControlForm[exitKey]} onChange={(event) => updateHowlControlForm({ [exitKey]: event.target.value }, { resetConnection: false })} />
+                              <span className="mt-1 block">score</span>
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid gap-2 md:grid-cols-5">
+                    {Object.entries(howlControlForm.patternIntervals || {}).map(([phase, interval]) => (
+                      <div key={phase} className="rounded-lg border border-border bg-card p-2">
+                        <p className="text-[10px] font-semibold uppercase text-muted-foreground">{phase.replaceAll("_", " ")}</p>
+                        <div className="mt-1 grid grid-cols-2 gap-1">
+                          {["minSeconds", "maxSeconds"].map((key) => (
+                            <label key={key} className="text-[9px] text-muted-foreground">{key === "minSeconds" ? "Min sec" : "Max sec"}
+                              <input
+                                className="mt-1 h-8 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground"
+                                type="number"
+                                min="15"
+                                max="3600"
+                                value={interval?.[key] ?? ""}
+                                onChange={(event) => updateHowlControlForm({
+                                  patternIntervals: {
+                                    ...(howlControlForm.patternIntervals || {}),
+                                    [phase]: { ...(interval || {}), [key]: event.target.value },
+                                  },
+                                }, { resetConnection: false })}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    {Object.entries(howlControlForm.patternWeights || {}).map(([phase, weights]) => (
+                      <div key={phase} className="rounded-lg border border-border bg-card p-2">
+                        <p className="text-[10px] font-semibold uppercase text-muted-foreground">{phase.replaceAll("_", " ")} weights</p>
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          {Object.entries(weights || {}).map(([activity, weight]) => (
+                            <label key={activity} className="w-28 text-[9px] text-muted-foreground">{activity}
+                              <input
+                                className="mt-1 h-8 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground"
+                                type="number"
+                                min="0"
+                                max="1000"
+                                value={weight}
+                                onChange={(event) => updateHowlControlForm({
+                                  patternWeights: {
+                                    ...(howlControlForm.patternWeights || {}),
+                                    [phase]: { ...(weights || {}), [activity]: event.target.value },
+                                  },
+                                }, { resetConnection: false })}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+                </details>
+
+                {howlControllerDiagnostics && (
+                  <div className="mt-3 rounded-lg border border-cyan-400/25 bg-cyan-400/5 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-foreground">Pattern Director diagnostics</p>
+                      <span className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase ${howlControllerDiagnostics.armed ? "bg-emerald-500/15 text-emerald-700" : "bg-muted text-muted-foreground"}`}>
+                        {howlControllerDiagnostics.armed ? "Armed" : "Disarmed"}
+                      </span>
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+                      {[
+                        ["Phase", howlControllerDiagnostics.phase?.replaceAll("_", " ")],
+                        ["Candidate", howlControllerDiagnostics.candidatePhase ? `${howlControllerDiagnostics.candidatePhase.replaceAll("_", " ")} · ${Math.round(howlControllerDiagnostics.candidateElapsedMs / 1000)}s` : "None"],
+                        ["Approach", `${Math.round(howlControllerDiagnostics.approachScore || 0)}%`],
+                        ["Permission", howlControllerDiagnostics.permissionBand],
+                        ["HR trend", howlControllerDiagnostics.hrTrend == null ? "Unavailable" : `${howlControllerDiagnostics.hrTrend.toFixed(1)} bpm/min`],
+                        ["RR / HRV", `${howlControllerDiagnostics.rrTrend == null ? "RR unavailable" : `RR ${howlControllerDiagnostics.rrTrend.toFixed(1)}`} · ${howlControllerDiagnostics.hrvTrend}`],
+                        ["Activity / intensity", howlControllerDiagnostics.intensity == null
+                          ? `${readHowlActivityDisplayName(howlControllerDiagnostics.activity)} · awaiting power`
+                          : `${readHowlActivityDisplayName(howlControllerDiagnostics.activity)} · ${Math.round(howlControllerDiagnostics.intensity)}`],
+                        ["Retained peak", Math.round(howlControllerDiagnostics.retainedPeak)],
+                        ["Confidence", `${Math.round(howlControllerDiagnostics.confidence || 0)}%`],
+                        ["Telemetry", howlControllerDiagnostics.telemetryFresh ? "Fresh" : "Stale / invalid"],
+                        ["Next selection", howlControllerDiagnostics.nextPatternEligibleAt > 0 ? `${Math.max(0, Math.ceil((howlControllerDiagnostics.nextPatternEligibleAt - (typeof performance !== "undefined" ? performance.now() : Date.now())) / 1000))}s` : "On first eligible cycle"],
+                        ["Breath hold", howlControllerDiagnostics.breathHoldAmbiguous ? "Ambiguous hold" : "Clear"],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-md border border-border bg-card px-2 py-1.5">
+                          <span className="block text-[9px] font-semibold uppercase text-muted-foreground">{label}</span>
+                          <span className="font-medium text-foreground">{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground"><span className="font-semibold text-foreground">Last decision:</span> {howlControllerDiagnostics.lastReason}</p>
+                  </div>
+                )}
 
                 <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground">

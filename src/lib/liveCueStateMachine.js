@@ -27,6 +27,7 @@ export const DEFAULT_LIVE_CUE_MACHINE_OPTIONS = Object.freeze({
   },
   maxCuesPerMinute: 4,
   cueFreshnessMs: 2_500,
+  phraseRepeatCooldownMs: 8 * 60_000,
 });
 
 export function createLiveCueStateMachineState() {
@@ -36,6 +37,7 @@ export function createLiveCueStateMachineState() {
     lastCueAt: {},
     lastCueType: "",
     lastCuePhraseIndex: {},
+    phraseUsedAt: {},
     lastAnyCueAt: 0,
     cueTimes: [],
     recoveryEpisodeActive: false,
@@ -98,10 +100,29 @@ function selectCue(candidates) {
     .sort((a, b) => (LIVE_CUE_PRIORITY[b.type] || 0) - (LIVE_CUE_PRIORITY[a.type] || 0))[0] || null;
 }
 
-function acceptCue(state, cue, phrases, at, prediction, sample) {
+function acceptCue(state, cue, phrases, at, prediction, sample, options) {
   const nextIndex = state.lastCuePhraseIndex[cue.type] || 0;
-  const phrase = pickCuePhrase(phrases, cue.type, nextIndex, { prediction, sample });
+  const available = phrases?.[cue.type] || [];
+  const phraseRepeatCooldownMs = Number(
+    options?.phraseRepeatCooldownMs
+      ?? DEFAULT_LIVE_CUE_MACHINE_OPTIONS.phraseRepeatCooldownMs,
+  );
+  const recentPhrases = available.length > 1
+    ? Object.entries(state.phraseUsedAt || {})
+      .filter(([, usedAt]) => at - Number(usedAt || 0) < phraseRepeatCooldownMs)
+      .map(([phrase]) => phrase)
+    : [];
+  const phrase = pickCuePhrase(phrases, cue.type, nextIndex, {
+    prediction,
+    sample,
+    recentPhrases,
+  });
+  if (!phrase) return null;
   state.lastCuePhraseIndex[cue.type] = nextIndex + 1;
+  state.phraseUsedAt = {
+    ...(state.phraseUsedAt || {}),
+    [phrase]: at,
+  };
   state.lastCueAt[cue.type] = at;
   state.lastAnyCueAt = at;
   state.lastCueType = cue.type;
@@ -162,7 +183,7 @@ export function stepLiveCueStateMachine(previousState, prediction = {}, sample =
   const suppressed = [];
 
   if (!options.enabled) return { state, cue: null, suppressed: [{ type: "all", reason: "disabled" }], edgingCandidate: null };
-  if (options.captureKind === "body_exploration" && !options.allowSessionStyleCues) {
+  if (options.captureKind === "body_exploration") {
     return { state, cue: null, suppressed: [{ type: "all", reason: "body_exploration_suppressed" }], edgingCandidate: null };
   }
 
@@ -269,9 +290,19 @@ export function stepLiveCueStateMachine(previousState, prediction = {}, sample =
     return { state, cue: null, suppressed: [{ type: selected.type, reason: gate.reason }], edgingCandidate };
   }
 
+  const acceptedCue = acceptCue(state, selected, phrases, at, prediction, sample, options);
+  if (!acceptedCue) {
+    return {
+      state,
+      cue: null,
+      suppressed: [{ type: selected.type, reason: "phrase_repeat_guard" }],
+      edgingCandidate,
+    };
+  }
+
   return {
     state,
-    cue: acceptCue(state, selected, phrases, at, prediction, sample),
+    cue: acceptedCue,
     suppressed,
     edgingCandidate,
   };

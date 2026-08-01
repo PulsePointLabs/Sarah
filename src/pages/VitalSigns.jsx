@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Activity, ChevronRight, HeartPulse, RefreshCw, TriangleAlert } from "lucide-react";
+import { base44 } from "@/api/base44Client";
+import BodyCompositionProfilePanel from "@/components/BodyCompositionProfilePanel";
+import BloodGlucoseImportPanel from "@/components/BloodGlucoseImportPanel";
+import PulseOxImportPanel from "@/components/PulseOxImportPanel";
 import { apiUrl } from "@/lib/mobileApiBase";
 import { formatDurationWords, formatVitalSignsSpeech } from "@/lib/vitalSignsSpeech";
 
@@ -173,6 +177,7 @@ function TransferDetails({ transfer }) {
 
 export default function VitalSigns() {
   const [transfers, setTransfers] = useState([]);
+  const [profile, setProfile] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -194,6 +199,12 @@ export default function VitalSigns() {
   useEffect(() => {
     loadTransfers();
   }, [loadTransfers]);
+
+  useEffect(() => {
+    base44.auth.me()
+      .then((user) => setProfile(user || {}))
+      .catch(() => setProfile({}));
+  }, []);
 
   const fullSessionCount = transfers.filter((transfer) => transfer.payload?.scope === "full_session_vitals_context").length;
 
@@ -222,6 +233,23 @@ export default function VitalSigns() {
           </button>
         </div>
       </header>
+
+      <section className="mt-5">
+        <BodyCompositionProfilePanel
+          profile={profile}
+          onLatestReading={(reading) => setProfile((current) => ({
+            ...current,
+            weight_kg: reading.weight_kg ?? current.weight_kg,
+            latest_body_composition: reading,
+          }))}
+        />
+      </section>
+      <section className="mt-5 rounded-xl border border-border bg-card p-4">
+        <BloodGlucoseImportPanel />
+      </section>
+      <section className="mt-5 rounded-xl border border-border bg-card p-4">
+        <PulseOxImportPanel />
+      </section>
 
       <section className="mt-5 border-y border-border py-4">
         <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">

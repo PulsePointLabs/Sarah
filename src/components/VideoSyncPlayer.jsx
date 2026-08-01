@@ -135,7 +135,13 @@ function inferLinkedVideoFeedKey(video) {
 function assignLinkedVideosToFeeds(videos = []) {
   const fallbackSlots = ["composite", "lower_body", "main", "lateral"];
   const usedSlots = new Set();
-  return videos.slice(0, VIDEO_FEED_SLOTS.length).map((video) => {
+  const priority = { composite: 0, main: 1, lower_body: 2, lateral: 3 };
+  const orderedVideos = [...videos].sort((left, right) => {
+    const leftPriority = priority[inferLinkedVideoFeedKey(left)] ?? 1;
+    const rightPriority = priority[inferLinkedVideoFeedKey(right)] ?? 1;
+    return leftPriority - rightPriority;
+  });
+  return orderedVideos.slice(0, VIDEO_FEED_SLOTS.length).map((video) => {
     const preferred = inferLinkedVideoFeedKey(video);
     const slotKey = preferred && !usedSlots.has(preferred)
       ? preferred
@@ -1152,10 +1158,8 @@ export default function VideoSyncPlayer({
       const activeLinkedVideo = linkedLocalVideos.find((video) => video.path === activePath);
       if (activeLinkedVideo) setVideoOffset(Number(activeLinkedVideo.timelineOffsetSeconds) || 0);
     }
-    if (assignments.length > 1) {
-      setVideoLayout("multi");
-      setFeedsExpanded(false);
-    }
+    setVideoLayout("single");
+    if (assignments.length > 1) setFeedsExpanded(false);
   }, [activeFeedKey, linkedLocalVideos, prepareLinkedVideoForPlayback, videoFeeds, videoSrc]);
 
   const renameFeed = (feedKey, label) => {

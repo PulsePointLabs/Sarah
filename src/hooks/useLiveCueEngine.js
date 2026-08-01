@@ -32,6 +32,11 @@ export function useLiveCueEngine({
   const step = useCallback((prediction, sample = {}) => {
     const now = Date.now();
     const sessionTimeSec = typeof getSessionTime === "function" ? getSessionTime() : sample.sessionTimeSec;
+    if (captureKind === "body_exploration") {
+      audio?.stop?.();
+      setLastSuppression({ type: "all", reason: "body_exploration_suppressed", atMs: now });
+      return null;
+    }
     const intimateCadence = cueSettings?.style === "intimate_lovers_voice";
     const warmCadence = intimateCadence || cueSettings?.style === "intimate_coaching" || cueSettings?.style === "sarah_soft";
     const result = stepLiveCueStateMachine(
@@ -41,7 +46,7 @@ export function useLiveCueEngine({
       {
         enabled: cueSettings?.enabled !== false,
         captureKind,
-        allowSessionStyleCues: Boolean(cueSettings?.allowSessionStyleCues),
+        allowSessionStyleCues: false,
         ...(warmCadence ? {
           globalCooldownMs: intimateCadence ? 9_000 : 11_000,
           cooldowns: {

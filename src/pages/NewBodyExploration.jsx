@@ -15,6 +15,7 @@ import EMGSection from "@/components/session-form/EMGSection";
 import EventTimelineSection from "@/components/session-form/EventTimelineSection";
 import NotesMediaSection from "@/components/session-form/NotesMediaSection";
 import BodyCompositionSection from "@/components/session-form/BodyCompositionSection";
+import BloodGlucoseImportPanel from "@/components/BloodGlucoseImportPanel";
 
 const TYPE_OPTIONS = ["Body exploration", "Foley insertion", "Urethral sounding", "Device fit trial", "Non-masturbatory experimentation", "Other"];
 const METHOD_OPTIONS = ["Foley Catheter", "Urethral Sound", "Manual Observation", "Device Fit Trial", "MyoWare EMG", "Other"];
@@ -23,6 +24,7 @@ const SECTIONS = [
   { id: "info", label: "Timing" },
   { id: "hr", label: "Heart Rate" },
   { id: "pulse-ox", label: "Pulse Oximetry" },
+  { id: "blood-glucose", label: "Blood Glucose" },
   { id: "body-composition", label: "Body Composition Weigh-In" },
   { id: "emg", label: "EMG (Optional)" },
   { id: "events", label: "Timestamped Notes" },
@@ -98,7 +100,7 @@ export default function NewBodyExploration() {
     setSaving(true);
     try {
       const duration = calcDuration(data.start_time, data.end_time);
-      const { _csv_rows, _pulse_ox_rows, _emg_rows, _emg_channel_mode, ...record } = data;
+      const { _csv_rows, _pulse_ox_rows, _blood_glucose_rows, _emg_rows, _emg_channel_mode, ...record } = data;
       const exploration = id
         ? await base44.entities.BodyExploration.update(id, { ...record, duration_minutes: duration || data.duration_minutes })
         : await base44.entities.BodyExploration.create({ ...record, duration_minutes: duration || data.duration_minutes });
@@ -155,6 +157,7 @@ export default function NewBodyExploration() {
     if (id === "info") return <SessionInfoSection {...props} />;
     if (id === "hr") return <HeartRateSection {...props} />;
     if (id === "pulse-ox") return <PulseOxSection {...props} />;
+    if (id === "blood-glucose") return <BloodGlucoseImportPanel record={data} onChange={setData} />;
     if (id === "body-composition") return <BodyCompositionSection {...props} />;
     if (id === "emg") return <EMGSection {...props} />;
     if (id === "events") return <EventTimelineSection {...props} />;

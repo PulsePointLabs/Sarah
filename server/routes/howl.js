@@ -1,11 +1,17 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { getEntity, listEntities, upsertEntity } from '../db.js';
+import { createHowlActivityExposure } from '../services/howlActivityExposure.js';
+import { isRuntimeAutoArmValid } from '../services/howlAutoArm.js';
+import { executeReconciledHowlCommand } from '../services/howlCommandReconciler.js';
 import { HOWL_CONTROL_DEFAULT_LIMITS, normalizeHowlTelemetrySample } from '../services/howlTelemetry.js';
 
 export const howlRouter = express.Router();
 
 const SETTINGS_ID = 'default';
+const SERVER_ARM_TOKEN = randomUUID();
+const pendingDirectCommands = new Set();
+let testedConnectionFingerprint = '';
 const DEFAULT_SETTINGS = Object.freeze({
   id: SETTINGS_ID,
   controlEnabled: false,
@@ -23,12 +29,47 @@ const DEFAULT_SETTINGS = Object.freeze({
   buildStep: 1,
   finalApproachStep: 1,
   reduceStep: 2,
-  maxRecoveryRetreat: 3,
   nearClimaxThreshold: 72,
   plateauThreshold: 60,
   buildThreshold: 32,
   recoveryThreshold: 55,
+  buildExitThreshold: 27,
+  plateauExitThreshold: 54,
+  finalApproachExitThreshold: 66,
+  recoveryExitThreshold: 61,
+  buildConfirmationSeconds: 12,
+  plateauConfirmationSeconds: 15,
+  finalApproachConfirmationSeconds: 10,
+  recoveryConfirmationSeconds: 15,
+  confidenceFullThreshold: 75,
+  confidenceConservativeThreshold: 65,
+  confidenceHoldThreshold: 55,
+  lowConfidenceHoldSeconds: 10,
+  telemetryReduceIntervalSeconds: 10,
+  telemetryMuteTimeoutSeconds: 45,
+  telemetryFreshnessMs: 5000,
+  breathHoldAmbiguitySeconds: 12,
+  recoveryObservationSeconds: 20,
+  responseObservationSeconds: 10,
+  buildUpwardPointsPerMinute: 4,
+  finalApproachUpwardPointsPerMinute: 6,
   autoCooldownSeconds: 8,
+  patternDirectorEnabled: false,
+  patternMinimumHoldSeconds: 45,
+  patternWeights: {
+    initial_contact: { SINETIME: 35, VIBRATOR: 40, SIMPLEX: 25 },
+    build: { VIBRATOR: 35, SIMPLEX: 30, RELENTLESS: 25, OVERFLOWING: 10 },
+    plateau: { SIMPLEX: 35, VIBRATOR: 30, RELENTLESS: 25, OVERFLOWING: 10 },
+    final_approach: { VIBRATOR: 40, RELENTLESS: 25, SIMPLEX: 20, OVERFLOWING: 10, MILKMASTER: 5 },
+    recovery: { SINETIME: 40, VIBRATOR: 35, SIMPLEX: 25 },
+  },
+  patternIntervals: {
+    initial_contact: { minSeconds: 60, maxSeconds: 120 },
+    build: { minSeconds: 75, maxSeconds: 150 },
+    plateau: { minSeconds: 120, maxSeconds: 240 },
+    final_approach: { minSeconds: 90, maxSeconds: 180 },
+    recovery: { minSeconds: 45, maxSeconds: 90 },
+  },
   requireManualConfirm: true,
 });
 
@@ -40,6 +81,29 @@ function clampNumber(value, min, max, fallback = null) {
 
 function cleanText(value, max = 500) {
   return String(value ?? '').trim().slice(0, max);
+}
+
+function normalizePatternWeights(input, previous) {
+  const output = {};
+  for (const [phase, defaults] of Object.entries(DEFAULT_SETTINGS.patternWeights)) {
+    const source = input?.[phase] && typeof input[phase] === 'object' ? input[phase] : previous?.[phase];
+    output[phase] = {};
+    for (const [activity, fallback] of Object.entries(defaults)) {
+      output[phase][activity] = clampNumber(source?.[activity], 0, 1000, fallback);
+    }
+  }
+  return output;
+}
+
+function normalizePatternIntervals(input, previous) {
+  const output = {};
+  for (const [phase, defaults] of Object.entries(DEFAULT_SETTINGS.patternIntervals)) {
+    const source = input?.[phase] && typeof input[phase] === 'object' ? input[phase] : previous?.[phase];
+    const minSeconds = clampNumber(source?.minSeconds, 15, 1800, defaults.minSeconds);
+    const maxSeconds = clampNumber(source?.maxSeconds, minSeconds, 3600, defaults.maxSeconds);
+    output[phase] = { minSeconds, maxSeconds };
+  }
+  return output;
 }
 
 function normalizeHowlBaseUrl(value = '') {
@@ -179,14 +243,21 @@ function getSettings() {
   return {
     ...DEFAULT_SETTINGS,
     ...saved,
+    runtimeArmToken: undefined,
     controlUrl: String(saved.controlUrl || envUrl || '').trim(),
     remoteAccessKey: String(saved.remoteAccessKey || envKey || '').trim(),
     controlEnabled: Boolean(saved.controlEnabled),
-    sarahAutoEnabled: Boolean(saved.sarahAutoEnabled),
+    sarahAutoEnabled: isRuntimeAutoArmValid(saved, SERVER_ARM_TOKEN),
     intensityFloor: clampNumber(saved.intensityFloor, 0, 100, DEFAULT_SETTINGS.intensityFloor),
     intensityCeiling: clampNumber(saved.intensityCeiling, 0, 100, DEFAULT_SETTINGS.intensityCeiling),
     rampRateLimitPerSecond: clampNumber(saved.rampRateLimitPerSecond, 0, 100, DEFAULT_SETTINGS.rampRateLimitPerSecond),
+    patternWeights: normalizePatternWeights(saved.patternWeights, DEFAULT_SETTINGS.patternWeights),
+    patternIntervals: normalizePatternIntervals(saved.patternIntervals, DEFAULT_SETTINGS.patternIntervals),
   };
+}
+
+function connectionFingerprint(settings) {
+  return `${normalizeHowlBaseUrl(settings.controlUrl)}|${cleanText(settings.remoteAccessKey, 300)}`;
 }
 
 function saveSettings(input = {}) {
@@ -195,6 +266,7 @@ function saveSettings(input = {}) {
     ...previous,
     controlEnabled: Boolean(input.controlEnabled),
     sarahAutoEnabled: Boolean(input.sarahAutoEnabled),
+    runtimeArmToken: input.sarahAutoEnabled ? SERVER_ARM_TOKEN : null,
     dispatchMode: ['queue', 'direct_http', 'queue_and_direct'].includes(input.dispatchMode) ? input.dispatchMode : previous.dispatchMode,
     controlUrl: normalizeHowlBaseUrl(input.controlUrl ?? previous.controlUrl ?? ''),
     remoteAccessKey: cleanText(input.remoteAccessKey ?? previous.remoteAccessKey ?? '', 300),
@@ -208,16 +280,54 @@ function saveSettings(input = {}) {
     buildStep: clampNumber(input.buildStep, 0, 10, previous.buildStep),
     finalApproachStep: clampNumber(input.finalApproachStep, 0, 10, previous.finalApproachStep),
     reduceStep: clampNumber(input.reduceStep, 0, 25, previous.reduceStep),
-    maxRecoveryRetreat: clampNumber(input.maxRecoveryRetreat, 0, 25, previous.maxRecoveryRetreat),
     nearClimaxThreshold: clampNumber(input.nearClimaxThreshold, 0, 100, previous.nearClimaxThreshold),
     plateauThreshold: clampNumber(input.plateauThreshold, 0, 100, previous.plateauThreshold),
     buildThreshold: clampNumber(input.buildThreshold, 0, 100, previous.buildThreshold),
     recoveryThreshold: clampNumber(input.recoveryThreshold, 0, 100, previous.recoveryThreshold),
-    autoCooldownSeconds: clampNumber(input.autoCooldownSeconds, 2, 120, previous.autoCooldownSeconds),
+    buildExitThreshold: clampNumber(input.buildExitThreshold, 0, 100, previous.buildExitThreshold),
+    plateauExitThreshold: clampNumber(input.plateauExitThreshold, 0, 100, previous.plateauExitThreshold),
+    finalApproachExitThreshold: clampNumber(input.finalApproachExitThreshold, 0, 100, previous.finalApproachExitThreshold),
+    recoveryExitThreshold: clampNumber(input.recoveryExitThreshold, 0, 100, previous.recoveryExitThreshold),
+    buildConfirmationSeconds: clampNumber(input.buildConfirmationSeconds, 1, 120, previous.buildConfirmationSeconds),
+    plateauConfirmationSeconds: clampNumber(input.plateauConfirmationSeconds, 1, 120, previous.plateauConfirmationSeconds),
+    finalApproachConfirmationSeconds: clampNumber(input.finalApproachConfirmationSeconds, 1, 120, previous.finalApproachConfirmationSeconds),
+    recoveryConfirmationSeconds: clampNumber(input.recoveryConfirmationSeconds, 1, 120, previous.recoveryConfirmationSeconds),
+    confidenceFullThreshold: clampNumber(input.confidenceFullThreshold, 0, 100, previous.confidenceFullThreshold),
+    confidenceConservativeThreshold: clampNumber(input.confidenceConservativeThreshold, 0, 100, previous.confidenceConservativeThreshold),
+    confidenceHoldThreshold: clampNumber(input.confidenceHoldThreshold, 0, 100, previous.confidenceHoldThreshold),
+    lowConfidenceHoldSeconds: clampNumber(input.lowConfidenceHoldSeconds, 0, 120, previous.lowConfidenceHoldSeconds),
+    telemetryReduceIntervalSeconds: clampNumber(input.telemetryReduceIntervalSeconds, 2, 120, previous.telemetryReduceIntervalSeconds),
+    telemetryMuteTimeoutSeconds: clampNumber(input.telemetryMuteTimeoutSeconds, 10, 600, previous.telemetryMuteTimeoutSeconds),
+    telemetryFreshnessMs: clampNumber(input.telemetryFreshnessMs, 1000, 30000, previous.telemetryFreshnessMs),
+    breathHoldAmbiguitySeconds: clampNumber(input.breathHoldAmbiguitySeconds, 1, 60, previous.breathHoldAmbiguitySeconds),
+    recoveryObservationSeconds: clampNumber(input.recoveryObservationSeconds, 5, 120, previous.recoveryObservationSeconds),
+    responseObservationSeconds: clampNumber(input.responseObservationSeconds, 5, 120, previous.responseObservationSeconds),
+    buildUpwardPointsPerMinute: clampNumber(input.buildUpwardPointsPerMinute, 0, 25, previous.buildUpwardPointsPerMinute),
+    finalApproachUpwardPointsPerMinute: clampNumber(input.finalApproachUpwardPointsPerMinute, 0, 25, previous.finalApproachUpwardPointsPerMinute),
+    autoCooldownSeconds: clampNumber(input.autoCooldownSeconds, 8, 120, previous.autoCooldownSeconds),
+    patternDirectorEnabled: input.patternDirectorEnabled === true,
+    patternMinimumHoldSeconds: clampNumber(input.patternMinimumHoldSeconds, 15, 300, previous.patternMinimumHoldSeconds),
+    patternWeights: normalizePatternWeights(input.patternWeights, previous.patternWeights),
+    patternIntervals: normalizePatternIntervals(input.patternIntervals, previous.patternIntervals),
     requireManualConfirm: input.requireManualConfirm !== false,
   };
+  next.confidenceConservativeThreshold = Math.min(next.confidenceFullThreshold, next.confidenceConservativeThreshold);
+  next.confidenceHoldThreshold = Math.min(next.confidenceConservativeThreshold, next.confidenceHoldThreshold);
   if (next.intensityCeiling < next.intensityFloor) {
     next.intensityCeiling = next.intensityFloor;
+  }
+  if (next.sarahAutoEnabled) {
+    if (!next.controlEnabled) throw new Error('Enable manual Howl control before arming Sarah auto-control.');
+    if (!next.controlUrl || !next.remoteAccessKey) throw new Error('Configure the Howl URL and access key before arming.');
+    if (testedConnectionFingerprint !== connectionFingerprint(next)) {
+      throw new Error('Test the current Howl connection before arming Sarah auto-control.');
+    }
+    if (!['direct_http', 'queue_and_direct'].includes(next.dispatchMode)) {
+      throw new Error('Sarah auto-control requires direct Howl status reconciliation.');
+    }
+    if (!Number.isFinite(next.intensityFloor) || !Number.isFinite(next.intensityCeiling)) {
+      throw new Error('Save a valid Howl intensity floor and ceiling before arming.');
+    }
   }
   return upsertEntity('HowlControlSettings', SETTINGS_ID, next);
 }
@@ -247,6 +357,9 @@ function normalizeControlCommand(body = {}, settings = getSettings()) {
   const intensity = body.intensity == null
     ? null
     : clampNumber(body.intensity, settings.intensityFloor, settings.intensityCeiling, null);
+  if (['set_state', 'set_intensity', 'set_power'].includes(action) && intensity == null) {
+    throw new Error('Howl intensity is required for an absolute power command.');
+  }
   const frequency_hz = body.frequency_hz == null && body.frequencyHz == null && body.frequency == null
     ? null
     : clampNumber(body.frequency_hz ?? body.frequencyHz ?? body.frequency, 0, 300, null);
@@ -271,7 +384,7 @@ function normalizeControlCommand(body = {}, settings = getSettings()) {
     playback_status: body.playback_status == null && body.playbackStatus == null ? null : String(body.playback_status ?? body.playbackStatus).trim(),
     session: body.session || body.session_id || body.sessionId || null,
     reason: String(body.reason || 'manual_live_capture').slice(0, 200),
-    manual: true,
+    manual: body.manual === true || !String(body.reason || '').startsWith('sarah_auto_'),
     limits: {
       intensityFloor: settings.intensityFloor,
       intensityCeiling: settings.intensityCeiling,
@@ -324,7 +437,10 @@ function directHowlRequestForCommand(command) {
     return { endpoint: '/set_mute', body: command.value == null ? {} : { value: command.value } };
   }
   if (command.action === 'set_power' || command.action === 'set_intensity' || command.action === 'set_state') {
-    const power = command.intensity == null ? 0 : command.intensity;
+    if (!Number.isFinite(Number(command.intensity))) {
+      throw new Error('Howl intensity is required for an absolute power command.');
+    }
+    const power = Number(command.intensity);
     if (command.channel === 'all') return { endpoint: '/set_power', body: { power_a: power, power_b: power } };
     return { endpoint: '/set_power', body: channel === 1 ? { power_b: power } : { power_a: power } };
   }
@@ -386,7 +502,32 @@ async function dispatchCommand(command, settings) {
         };
       } else {
         const request = directHowlRequestForCommand(command);
-        result = await requestHowl(settings, request.endpoint, request.body);
+        const reconciled = await executeReconciledHowlCommand({
+          command,
+          settings,
+          request: requestHowl,
+          commandRequest: request,
+        });
+        return {
+          mode: 'direct_http',
+          sent: reconciled.sent,
+          status: reconciled.sent ? 200 : null,
+          response: '',
+          howl: summarizeHowlResponse(reconciled.statusData),
+          reconciliation: reconciled.reconciliation,
+          commandTimedOut: reconciled.commandTimedOut,
+          commandLatencyMs: reconciled.latencyMs,
+          structuredLogs: reconciled.logs,
+          safetyAction: reconciled.safetyAction,
+          error: reconciled.error,
+          message: reconciled.safetyAction === 'mute_disarm'
+            ? 'Safety mute sent; Sarah auto-control was disarmed.'
+            : reconciled.reconciliation.result === 'applied'
+              ? 'Command applied and verified against Howl status.'
+              : reconciled.reconciliation.result === 'unverified'
+                ? 'Command sent; Howl status did not expose enough detail to verify it.'
+                : 'Howl status did not match the requested command.',
+        };
       }
     }
     return {
@@ -466,7 +607,31 @@ howlRouter.get('/control-capabilities', (_req, res) => {
       buildThreshold: settings.buildThreshold,
       recoveryThreshold: settings.recoveryThreshold,
       autoCooldownSeconds: settings.autoCooldownSeconds,
+      patternDirectorEnabled: settings.patternDirectorEnabled,
+      patternMinimumHoldSeconds: settings.patternMinimumHoldSeconds,
+      patternWeights: settings.patternWeights,
+      patternIntervals: settings.patternIntervals,
       requireManualConfirm: settings.requireManualConfirm,
+      buildExitThreshold: settings.buildExitThreshold,
+      plateauExitThreshold: settings.plateauExitThreshold,
+      finalApproachExitThreshold: settings.finalApproachExitThreshold,
+      recoveryExitThreshold: settings.recoveryExitThreshold,
+      buildConfirmationSeconds: settings.buildConfirmationSeconds,
+      plateauConfirmationSeconds: settings.plateauConfirmationSeconds,
+      finalApproachConfirmationSeconds: settings.finalApproachConfirmationSeconds,
+      recoveryConfirmationSeconds: settings.recoveryConfirmationSeconds,
+      confidenceFullThreshold: settings.confidenceFullThreshold,
+      confidenceConservativeThreshold: settings.confidenceConservativeThreshold,
+      confidenceHoldThreshold: settings.confidenceHoldThreshold,
+      lowConfidenceHoldSeconds: settings.lowConfidenceHoldSeconds,
+      telemetryReduceIntervalSeconds: settings.telemetryReduceIntervalSeconds,
+      telemetryMuteTimeoutSeconds: settings.telemetryMuteTimeoutSeconds,
+      telemetryFreshnessMs: settings.telemetryFreshnessMs,
+      breathHoldAmbiguitySeconds: settings.breathHoldAmbiguitySeconds,
+      recoveryObservationSeconds: settings.recoveryObservationSeconds,
+      responseObservationSeconds: settings.responseObservationSeconds,
+      buildUpwardPointsPerMinute: settings.buildUpwardPointsPerMinute,
+      finalApproachUpwardPointsPerMinute: settings.finalApproachUpwardPointsPerMinute,
     },
   });
 });
@@ -513,6 +678,9 @@ howlRouter.post('/control/settings', (req, res) => {
 howlRouter.post('/control/test', async (req, res) => {
   try {
     const result = await testHowlConnection(req.body || {});
+    if (result.ok) {
+      testedConnectionFingerprint = connectionFingerprint({ ...getSettings(), ...(req.body || {}) });
+    }
     res.status(result.ok ? 200 : result.status || 502).json(result);
   } catch (error) {
     res.status(error?.status || 400).json({ ok: false, message: error?.message || String(error), raw: '' });
@@ -569,23 +737,85 @@ howlRouter.post('/control', async (req, res) => {
   }
   try {
     const command = normalizeControlCommand(req.body || {}, settings);
+    const pendingKey = `${command.session || 'global'}:${command.channel || 'a'}`;
+    if (pendingDirectCommands.has(pendingKey)) {
+      return res.status(409).json({ ok: false, error: 'A Howl command is already pending reconciliation.' });
+    }
+    pendingDirectCommands.add(pendingKey);
     let saved = upsertEntity('HowlControlCommand', command.id, command);
-    const dispatch = await dispatchCommand(saved, settings);
-    const nextStatus = dispatch.sent ? 'sent' : saved.status;
-    saved = upsertEntity('HowlControlCommand', saved.id, {
-      ...saved,
-      status: nextStatus,
-      dispatch,
-      dispatched_at: new Date().toISOString(),
-    });
-    return res.json({ ok: true, command: saved, dispatch });
+    try {
+      const dispatch = await dispatchCommand(saved, settings);
+      const nextStatus = dispatch.reconciliation?.result === 'applied'
+        ? 'applied'
+        : dispatch.sent
+          ? 'sent'
+          : saved.status;
+      saved = upsertEntity('HowlControlCommand', saved.id, {
+        ...saved,
+        status: nextStatus,
+        dispatch,
+        dispatched_at: new Date().toISOString(),
+      });
+      if (dispatch.safetyAction === 'mute_disarm') {
+        saveSettings({ ...settings, sarahAutoEnabled: false });
+      }
+      const automaticReconciliationFault = saved.manual === false
+        && dispatch.reconciliation?.result !== 'applied';
+      if (automaticReconciliationFault) {
+        saveSettings({ ...settings, sarahAutoEnabled: false });
+      }
+      return res.status(dispatch.safetyAction || automaticReconciliationFault ? 409 : 200).json({
+        ok: !dispatch.safetyAction && !automaticReconciliationFault,
+        command: saved,
+        dispatch,
+        error: dispatch.safetyAction
+          ? dispatch.error
+          : automaticReconciliationFault
+            ? 'Automatic Howl command was not verified; Sarah auto-control was disarmed.'
+            : null,
+      });
+    } finally {
+      pendingDirectCommands.delete(pendingKey);
+    }
   } catch (error) {
     return res.status(400).json({ ok: false, error: error?.message || String(error) });
   }
 });
 
+howlRouter.get('/control/exposures', (req, res) => {
+  const sessionId = req.query.session ? String(req.query.session) : null;
+  const limit = Math.max(1, Math.min(1000, Number(req.query.limit) || 200));
+  const exposures = listEntities('HowlActivityExposure')
+    .filter((row) => !sessionId || row.session_id === sessionId)
+    .sort((a, b) => String(b.start_time || '').localeCompare(String(a.start_time || '')))
+    .slice(0, limit);
+  res.json({ ok: true, exposures });
+});
+
+howlRouter.post('/control/exposures', (req, res) => {
+  const exposure = createHowlActivityExposure(req.body || {});
+  if (!exposure.session_id || !exposure.activity_name) {
+    return res.status(400).json({ ok: false, error: 'Session ID and activity name are required.' });
+  }
+  const saved = upsertEntity('HowlActivityExposure', exposure.id, exposure);
+  return res.json({ ok: true, exposure: saved });
+});
+
+howlRouter.post('/control/exposures/:id', (req, res) => {
+  const existing = getEntity('HowlActivityExposure', String(req.params.id || ''));
+  if (!existing) return res.status(404).json({ ok: false, error: 'Howl activity exposure not found.' });
+  const saved = upsertEntity('HowlActivityExposure', existing.id, {
+    ...existing,
+    ...(req.body || {}),
+    id: existing.id,
+    updated_at: new Date().toISOString(),
+  });
+  return res.json({ ok: true, exposure: saved });
+});
+
 howlRouter.post('/control/emergency-stop', async (req, res) => {
-  const settings = { ...getSettings(), controlEnabled: true };
+  const currentSettings = getSettings();
+  const settings = { ...currentSettings, controlEnabled: true };
   const command = normalizeControlCommand({
     ...(req.body || {}),
     action: 'emergency_stop',
@@ -603,5 +833,6 @@ howlRouter.post('/control/emergency-stop', async (req, res) => {
     dispatch,
     dispatched_at: new Date().toISOString(),
   });
+  saveSettings({ ...currentSettings, sarahAutoEnabled: false });
   res.json({ ok: true, command: saved, dispatch });
 });

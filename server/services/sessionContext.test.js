@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pulseOxReadingsFromSession, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from '../../src/lib/sessionContext.js';
+import { bloodGlucoseReadingsFromSession, pulseOxReadingsFromSession, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from '../../src/lib/sessionContext.js';
 
 const session = {
   session_context: {
@@ -83,4 +83,20 @@ test('session context includes pulse oximetry as AI evidence', () => {
   assert.equal(context.pulse_ox_summary.samples, 3);
   assert.equal(context.pulse_ox_summary.min_spo2_percent, 93);
   assert.match(text, /Pulse oximetry: 3 samples, average SpO2 94%, minimum SpO2 93%, average pulse 89 bpm/i);
+});
+
+test('session-window glucose remains available without a session_context object', () => {
+  const glucoseSession = {
+    blood_glucose_readings: [
+      { measured_at: '2026-07-29T20:10:00-04:00', glucose_mg_dl: 108, source_app: 'OneTouch Reveal CSV' },
+      { measured_at: '2026-07-29T20:20:00-04:00', glucose_mg_dl: 116, source_app: 'OneTouch Reveal CSV' },
+    ],
+  };
+  const readings = bloodGlucoseReadingsFromSession(glucoseSession);
+  const context = structuredSessionContextForAI(glucoseSession);
+  const text = sessionContextEvidenceText(glucoseSession);
+
+  assert.equal(readings.length, 2);
+  assert.equal(context.blood_glucose_summary.average_mg_dl, 112);
+  assert.match(text, /Blood glucose: 2 session-window readings, average 112 mg\/dL, range 108-116 mg\/dL/i);
 });

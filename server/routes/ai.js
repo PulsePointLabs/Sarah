@@ -3,12 +3,15 @@ import Anthropic from '@anthropic-ai/sdk';
 import { isAIForensicsEnabled, saveAIForensicFinal } from '../services/aiForensics.js';
 import { classifyProviderError, shouldRetryProviderError } from '../../src/lib/providerErrorClassifier.js';
 import { completePlainTextResponse } from '../services/completePlainTextResponse.js';
+import { sanitizeProviderPayload } from '../services/sanitizeProviderPayload.js';
 
 export const aiRouter = express.Router();
 
 const MODEL_MAP = {
   claude_sonnet_4_6: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
   claude_sonnet_4_5: 'claude-sonnet-4-5-20250929',
+  sarah_fast: process.env.ANTHROPIC_FAST_MODEL || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
+  sarah_deep: process.env.ANTHROPIC_DEEP_MODEL || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
 };
 
 function anthropicTimeoutMs() {
@@ -57,9 +60,10 @@ function sleep(ms) {
 
 async function createMessageWithRetries(anthropic, payload, attempts = 3) {
   let lastError;
+  const providerSafePayload = sanitizeProviderPayload(payload);
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      return await anthropic.messages.create(payload);
+      return await anthropic.messages.create(providerSafePayload);
     } catch (error) {
       lastError = error;
       const classified = classifyProviderError(error, { provider: 'anthropic', requestStage: 'invoke' });

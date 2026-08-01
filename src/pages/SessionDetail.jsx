@@ -24,7 +24,8 @@ import SessionExecutiveSummary from "../components/SessionExecutiveSummary";
 import SessionSnapshotHero from "../components/SessionSnapshotHero";
 import SessionTelemetryDashboard from "../components/SessionTelemetryDashboard";
 import PulseOxSessionChart from "../components/PulseOxSessionChart";
-import BodyCompositionSummaryCard from "../components/BodyCompositionSummaryCard";
+import BloodGlucoseSessionCard from "@/components/BloodGlucoseSessionCard";
+import PreSessionPhysiologicalBaseline from "@/components/PreSessionPhysiologicalBaseline";
 import SessionSectionNavigator from "../components/SessionSectionNavigator";
 import LinkedLocalVideoManager from "../components/LinkedLocalVideoManager";
 import VideoSyncPlayer from "../components/VideoSyncPlayer";
@@ -1699,9 +1700,11 @@ export default function SessionDetail() {
   const sectionLinks = [
     { id: "session-snapshot", label: "Session Snapshot", group: "Overview" },
     { id: "session-telemetry", label: "Evidence Dashboard", group: "Overview" },
+    { id: "session-pre-baseline", label: "Pre-Session Baseline", group: "Overview" },
     ...(rawSessionEndSec > 0 ? [{ id: "session-analysis-trim", label: "Analysis Trim", group: "Overview" }] : []),
     ...((bloodPressureReadings.length || attachableBloodPressureReadings.length) ? [{ id: "session-blood-pressure", label: "Blood Pressure", group: "Overview" }] : []),
     ...(pulseOxReadings.length ? [{ id: "session-pulse-ox", label: "Pulse Oximetry", group: "Overview" }] : []),
+    ...(s.blood_glucose_readings?.length ? [{ id: "session-blood-glucose", label: "Blood Glucose", group: "Overview" }] : []),
     { id: "session-summary", label: "Executive Summary", group: "Overview" },
     { id: "session-review", label: "Review Checklist", group: "Overview" },
     { id: "session-metrics-context", label: "Metrics & Context", group: "Overview" },
@@ -1916,11 +1919,11 @@ export default function SessionDetail() {
           onMarkersChange={savePhaseMarkers}
           onOpenReview={() => navigate(`/review-player?session=${encodeURIComponent(s.id)}`)}
         />
-        {s.body_composition && (
-          <div id="session-body-composition" className="scroll-mt-24">
-            <BodyCompositionSummaryCard reading={s.body_composition} title="Session Weigh-In" />
-          </div>
-        )}
+        <PreSessionPhysiologicalBaseline
+          record={s}
+          timelineRows={timelineRows}
+          sectionId="session-pre-baseline"
+        />
         {rawSessionEndSec > 0 && (
           <section id="session-analysis-trim" className="scroll-mt-24 rounded-xl border border-border bg-card p-4 space-y-3">
             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
@@ -1989,6 +1992,7 @@ export default function SessionDetail() {
           </div>
         )}
         {pulseOxReadings.length > 0 && <PulseOxSessionChart session={s} />}
+        <BloodGlucoseSessionCard record={s} />
         {timelineRows.length > 0 && (
           <details className="rounded-xl border border-border bg-card p-4">
             <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">

@@ -74,6 +74,31 @@ test("weak multimodal evidence cannot trigger stronger plateau encouragement", (
   assert.equal(second.cue, null);
 });
 
+test("body exploration suppresses encouragement and edging events even with stale opt-in settings", () => {
+  const start = Date.now();
+  const result = stepLiveCueStateMachine(
+    createLiveCueStateMachineState(),
+    plateauPrediction({
+      nearClimax: 92,
+      recovery: 85,
+      plateauScore: 90,
+      plateauDwell: true,
+    }),
+    { atMs: start, hr: 122 },
+    {
+      enabled: true,
+      captureKind: "body_exploration",
+      allowSessionStyleCues: true,
+      plateauMs: 0,
+    },
+    plateauPhrases,
+  );
+
+  assert.equal(result.cue, null);
+  assert.equal(result.edgingCandidate, null);
+  assert.equal(result.suppressed[0]?.reason, "body_exploration_suppressed");
+});
+
 test("plateau encouragement respects its anti-chatter cooldown", () => {
   const start = Date.now();
   const first = stepLiveCueStateMachine(
@@ -94,6 +119,36 @@ test("plateau encouragement respects its anti-chatter cooldown", () => {
   );
   assert.equal(repeated.cue, null);
   assert.equal(repeated.suppressed[0]?.reason, "cue_cooldown");
+});
+
+test("multi-phrase encouragement does not repeat a recently spoken line", () => {
+  const phrases = {
+    ...plateauPhrases,
+    plateau_encouragement: ["First plateau phrase.", "Second plateau phrase."],
+  };
+  const sample = plateauPrediction({
+    nearClimax: 68,
+    plateauScore: 75,
+    plateauDwell: true,
+  });
+  let result = stepLiveCueStateMachine(
+    createLiveCueStateMachineState(),
+    sample,
+    { atMs: 1_000, hr: 110 },
+    { plateauMs: 0, globalCooldownMs: 0, cooldowns: { plateau_encouragement: 0 } },
+    phrases,
+  );
+  const first = result.cue?.phrase;
+  result = stepLiveCueStateMachine(
+    result.state,
+    sample,
+    { atMs: 2_000, hr: 111 },
+    { plateauMs: 0, globalCooldownMs: 0, cooldowns: { plateau_encouragement: 0 } },
+    phrases,
+  );
+  assert.ok(first);
+  assert.ok(result.cue?.phrase);
+  assert.notEqual(result.cue.phrase, first);
 });
 
 test("adaptive phrase selection follows current physiology and alternates within its pair", () => {

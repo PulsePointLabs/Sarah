@@ -6,6 +6,7 @@ import { normalizeNumericBandsForSpeech } from "@/utils/ttsTextNormalization";
 import { buildSarahTTSVoicePrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
 
 const TTS_SETTINGS_KEY = "pulsepoint_tts_settings_v1";
+export const TTS_SETTINGS_EVENT = "pulsepoint:tts-settings";
 const TTS_REQUEST_TAIL = "\u200B";
 
 export const DEFAULT_TTS_SETTINGS = {
@@ -151,7 +152,7 @@ export function loadTTSSettings() {
 export function saveTTSSettings(settings) {
   const normalized = normalizeTTSSettings(settings);
   localStorage.setItem(TTS_SETTINGS_KEY, JSON.stringify(normalized));
-  window.dispatchEvent(new CustomEvent("pulsepoint:tts-settings", { detail: normalized }));
+  window.dispatchEvent(new CustomEvent(TTS_SETTINGS_EVENT, { detail: normalized }));
   return normalized;
 }
 

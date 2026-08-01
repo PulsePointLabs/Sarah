@@ -1,3 +1,5 @@
+import { parseDeviceLocalTimestamp } from "./localRecordTime.js";
+
 function parseCsvLine(line, delimiter = ",") {
   const cols = [];
   let current = "";
@@ -60,22 +62,7 @@ function cleanNumber(value) {
 }
 
 function parseTimestamp(value) {
-  if (!value) return null;
-  const raw = String(value).trim();
-  const parsed = new Date(raw);
-  if (!Number.isNaN(parsed.getTime())) return parsed;
-
-  const normalized = raw.replace(/\s+/g, " ").replace(/(\d)\.(\d)/g, "$1:$2");
-  const match = normalized.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
-  if (!match) return null;
-  const [, month, day, yearRaw, hourRaw, minute, second = "0", ampm] = match;
-  let year = Number(yearRaw);
-  if (year < 100) year += 2000;
-  let hour = Number(hourRaw);
-  if (/pm/i.test(ampm || "") && hour < 12) hour += 12;
-  if (/am/i.test(ampm || "") && hour === 12) hour = 0;
-  const candidate = new Date(year, Number(month) - 1, Number(day), hour, Number(minute), Number(second));
-  return Number.isNaN(candidate.getTime()) ? null : candidate;
+  return parseDeviceLocalTimestamp(value);
 }
 
 function combineDateAndTime(dateValue, timeValue) {
@@ -227,7 +214,7 @@ export function parsePulseOxCsv(text, options = {}) {
   if (!alignedRows.length) {
     return {
       error: hasSessionStart
-        ? "No pulse-ox rows fall inside this session start/end window."
+        ? `No pulse-ox rows fall inside this local session window. CSV range: ${new Date(rawRows[0].measured_at).toLocaleString()} to ${new Date(rawRows[rawRows.length - 1].measured_at).toLocaleString()}. Session: ${new Date(sessionStartMs).toLocaleString()}${hasSessionEnd ? ` to ${new Date(sessionEndMs).toLocaleString()}` : ""}.`
         : "No valid pulse-ox rows found.",
       rows: [],
       skipped: dataLines.length,
@@ -235,6 +222,7 @@ export function parsePulseOxCsv(text, options = {}) {
       skipReasons,
       filteredBefore,
       filteredAfter,
+      timestampInterpretation: "CSV clock values interpreted as local device time",
     };
   }
 
@@ -259,5 +247,6 @@ export function parsePulseOxCsv(text, options = {}) {
     lastTimestamp: rows[rows.length - 1]?.measured_at || null,
     detectedHeaders: headers,
     delimiter,
+    timestampInterpretation: "CSV clock values interpreted as local device time",
   };
 }

@@ -9,6 +9,8 @@ test("erotic chat mode allows opted-in adult language without weakening groundin
   assert.match(prompt, /do not refuse/i);
   assert.match(prompt, /do not invent physical presence/i);
   assert.match(prompt, /still active now/i);
+  assert.match(prompt, /adult woman who is genuinely sexually interested/i);
+  assert.match(prompt, /avoid recycling/i);
 });
 
 test("custom chat mode carries the saved instruction into conversation", () => {

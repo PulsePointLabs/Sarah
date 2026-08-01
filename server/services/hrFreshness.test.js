@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  SHARED_HR_PACKET_HARD_LOSS_MS,
   SHARED_HR_PACKET_STALE_MS,
   isSharedHrPacketFresh,
   parseHrTimestamp,
@@ -9,6 +10,7 @@ import {
 test('shared Android HR remains connected across short background delivery gaps', () => {
   const now = Date.parse('2026-06-28T12:00:30.000Z');
   assert.equal(SHARED_HR_PACKET_STALE_MS, 30000);
+  assert.equal(SHARED_HR_PACKET_HARD_LOSS_MS, 120000);
   assert.equal(isSharedHrPacketFresh('2026-06-28T12:00:10.000Z', { now }), true);
   assert.equal(isSharedHrPacketFresh('2026-06-28T11:59:59.999Z', { now }), false);
 });

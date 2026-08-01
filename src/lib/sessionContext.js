@@ -190,9 +190,30 @@ export function pulseOxReadingsFromSession(session) {
   });
 }
 
+export function bloodGlucoseReadingsFromSession(session) {
+  const readings = [];
+  const add = (value) => {
+    const glucose = Number(value?.glucose_mg_dl);
+    if (!Number.isFinite(glucose)) return;
+    const reading = {
+      measured_at: value.measured_at || value.timestamp || "",
+      time_offset_s: Number.isFinite(Number(value.time_offset_s)) ? Number(value.time_offset_s) : null,
+      glucose_mg_dl: Math.round(glucose),
+      glucose_mmol_l: Number(value.glucose_mmol_l) || Number((glucose / 18.0182).toFixed(1)),
+      meal_tag: value.meal_tag || "",
+      notes: value.notes || "",
+      source_app: value.source_app || "",
+    };
+    const key = `${reading.measured_at}-${reading.glucose_mg_dl}`;
+    if (!readings.some((item) => `${item.measured_at}-${item.glucose_mg_dl}` === key)) readings.push(reading);
+  };
+  add(session?.latest_blood_glucose_reading);
+  (session?.blood_glucose_readings || []).forEach(add);
+  return readings.sort((a, b) => new Date(a.measured_at) - new Date(b.measured_at));
+}
+
 export function structuredSessionContextForAI(session) {
   const context = session?.session_context || {};
-  if (!context || typeof context !== "object") return undefined;
   const cleaned = {};
   if (context.alcohol && typeof context.alcohol.used === "boolean") cleaned.alcohol = context.alcohol;
   if (context.cannabis && typeof context.cannabis.used === "boolean") cleaned.cannabis = context.cannabis;
@@ -225,6 +246,18 @@ export function structuredSessionContextForAI(session) {
       source_app: pulseOxReadings.find((reading) => reading.source_app)?.source_app || session?.pulse_ox_source || "",
     };
   }
+  const glucoseReadings = bloodGlucoseReadingsFromSession(session);
+  if (glucoseReadings.length) {
+    const values = glucoseReadings.map((reading) => reading.glucose_mg_dl);
+    cleaned.blood_glucose_readings = glucoseReadings;
+    cleaned.blood_glucose_summary = {
+      samples: values.length,
+      average_mg_dl: Math.round(values.reduce((sum, value) => sum + value, 0) / values.length),
+      min_mg_dl: Math.min(...values),
+      max_mg_dl: Math.max(...values),
+      source_app: glucoseReadings.find((reading) => reading.source_app)?.source_app || "OneTouch Reveal CSV",
+    };
+  }
   return Object.keys(cleaned).length ? cleaned : undefined;
 }
 
@@ -234,6 +267,7 @@ export function sessionContextEvidenceItems(session) {
   const bp = context.blood_pressure;
   const bpReadings = context.blood_pressure_readings || [];
   const pulseOxSummary = context.pulse_ox_summary;
+  const glucoseSummary = context.blood_glucose_summary;
   const bpText = bp?.systolic_mm_hg && bp?.diastolic_mm_hg
     ? `Blood pressure: ${bp.systolic_mm_hg}/${bp.diastolic_mm_hg} mmHg${bp.pulse_bpm ? `, pulse ${bp.pulse_bpm} bpm` : ""}${bp.measured_at ? ` at ${new Date(bp.measured_at).toLocaleString()}` : ""}${bp.source_app ? ` (${bp.source_app})` : ""}`
     : null;
@@ -247,6 +281,9 @@ export function sessionContextEvidenceItems(session) {
     bpSeriesText,
     pulseOxSummary?.samples
       ? `Pulse oximetry: ${pulseOxSummary.samples} samples, average SpO2 ${pulseOxSummary.avg_spo2_percent}%, minimum SpO2 ${pulseOxSummary.min_spo2_percent}%${pulseOxSummary.avg_pulse_bpm ? `, average pulse ${pulseOxSummary.avg_pulse_bpm} bpm` : ""}${pulseOxSummary.source_app ? ` (${pulseOxSummary.source_app})` : ""}`
+      : null,
+    glucoseSummary?.samples
+      ? `Blood glucose: ${glucoseSummary.samples} session-window reading${glucoseSummary.samples === 1 ? "" : "s"}, average ${glucoseSummary.average_mg_dl} mg/dL, range ${glucoseSummary.min_mg_dl}-${glucoseSummary.max_mg_dl} mg/dL (${glucoseSummary.source_app})`
       : null,
     recordedValue(context.fatigue) ? `Fatigue: ${labelFor(FATIGUE_OPTIONS, context.fatigue)}` : null,
     recordedValue(context.hydration_state) ? `Hydration: ${labelFor(HYDRATION_OPTIONS, context.hydration_state)}` : null,
@@ -271,6 +308,7 @@ export function sessionContextDisplayRows(session) {
   const context = structuredSessionContextForAI(session);
   const bpReadings = bloodPressureReadingsFromSession(session);
   const pulseOxReadings = pulseOxReadingsFromSession(session);
+  const glucoseReadings = bloodGlucoseReadingsFromSession(session);
   const rows = [];
   if (context?.fatigue) rows.push({ label: "Fatigue", value: labelFor(FATIGUE_OPTIONS, context.fatigue) });
   if (context?.hydration_state) rows.push({ label: "Hydration", value: labelFor(HYDRATION_OPTIONS, context.hydration_state) });
@@ -297,6 +335,13 @@ export function sessionContextDisplayRows(session) {
       value: summary
         ? `${summary.samples} samples · avg ${summary.avg_spo2_percent}% · min ${summary.min_spo2_percent}%${summary.avg_pulse_bpm ? ` · pulse ${summary.avg_pulse_bpm} bpm` : ""}`
         : `${pulseOxReadings.length} samples`,
+    });
+  }
+  if (glucoseReadings.length) {
+    const latest = glucoseReadings[glucoseReadings.length - 1];
+    rows.push({
+      label: "Blood Glucose",
+      value: `${glucoseReadings.length} reading${glucoseReadings.length === 1 ? "" : "s"} · latest ${latest.glucose_mg_dl} mg/dL`,
     });
   }
   const alcohol = substanceText("Alcohol", context?.alcohol);

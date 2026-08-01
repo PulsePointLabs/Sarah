@@ -13,6 +13,7 @@ export const filesRouter = express.Router();
 fs.mkdirSync(uploadDir, { recursive: true });
 const execFileAsync = promisify(execFile);
 const localPlaybackJobs = new Map();
+const uploadedPlaybackJobs = new Map();
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
@@ -499,6 +500,113 @@ filesRouter.post('/video-playback-preview', upload.single('file'), async (req, r
     res.status(500).json({ error: error?.message || 'Could not convert video for browser playback' });
   } finally {
     fsp.unlink(sourcePath).catch(() => {});
+  }
+});
+
+filesRouter.post('/uploaded-video/playback-preview', async (req, res) => {
+  try {
+    const rawUrl = String(req.body?.url || '').trim();
+    if (!rawUrl.startsWith('/uploads/')) {
+      return res.status(400).json({ error: 'Only Sarah upload videos can be optimized for streaming.' });
+    }
+
+    const rawFilename = decodeURIComponent(rawUrl.replace(/^\/uploads\//, '').split(/[?#]/, 1)[0]);
+    if (!rawFilename || path.basename(rawFilename) !== rawFilename) {
+      return res.status(400).json({ error: 'Invalid uploaded video URL.' });
+    }
+
+    const sourcePath = resolveUploadPath(rawFilename);
+    const sourceStat = await fsp.stat(sourcePath);
+    if (!sourceStat.isFile()) return res.status(404).json({ error: 'Review video was not found.' });
+
+    const sourceExt = path.extname(rawFilename).toLowerCase();
+    if (!LOCAL_VIDEO_EXTENSIONS.has(sourceExt)) {
+      return res.status(400).json({ error: 'The requested upload is not a supported video.' });
+    }
+
+    const sourceStem = slugifyFilePart(path.basename(rawFilename, sourceExt)).slice(0, 48);
+    const fingerprint = slugifyFilePart(`${sourceStat.size}-${Math.round(sourceStat.mtimeMs)}`);
+    const cacheKey = `${sourceStem}-${fingerprint}-mobile-v1`;
+    const filename = `stream-playback-${cacheKey}.mp4`;
+    const outputPath = path.join(uploadDir, filename);
+    const partialPath = `${outputPath}.partial`;
+
+    try {
+      const existing = await fsp.stat(outputPath);
+      if (existing.isFile() && existing.size > 0) {
+        return res.json({
+          ok: true,
+          cached: true,
+          url: `/uploads/${filename}`,
+          file_url: `/uploads/${filename}`,
+          filename,
+          mimeType: 'video/mp4',
+          size: existing.size,
+          source_filename: rawFilename,
+        });
+      }
+    } catch {
+      // Cache miss, create the mobile streaming rendition below.
+    }
+
+    const existingJob = uploadedPlaybackJobs.get(cacheKey);
+    if (existingJob?.status === 'failed') {
+      uploadedPlaybackJobs.delete(cacheKey);
+      return res.status(500).json({
+        error: existingJob.error || 'Could not optimize this review video for streaming.',
+      });
+    }
+    if (existingJob) {
+      return res.status(202).json({
+        ok: true,
+        processing: true,
+        retry_after_ms: 2000,
+        source_filename: rawFilename,
+      });
+    }
+
+    const job = { status: 'processing', error: '' };
+    uploadedPlaybackJobs.set(cacheKey, job);
+    fsp.unlink(partialPath).catch(() => {}).then(async () => {
+      await runProcess('ffmpeg', [
+        '-hide_banner',
+        '-y',
+        '-i', sourcePath,
+        '-map', '0:v:0',
+        '-map', '0:a?',
+        '-vf', 'scale=min(960\\,iw):-2',
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '27',
+        '-maxrate', '1100k',
+        '-bufsize', '2200k',
+        '-g', '60',
+        '-keyint_min', '60',
+        '-sc_threshold', '0',
+        '-c:a', 'aac',
+        '-b:a', '96k',
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        '-f', 'mp4',
+        partialPath,
+      ]);
+      await fsp.rename(partialPath, outputPath);
+      uploadedPlaybackJobs.delete(cacheKey);
+    }).catch((error) => {
+      job.status = 'failed';
+      job.error = error?.message || 'Could not optimize this review video for streaming.';
+      fsp.unlink(partialPath).catch(() => {});
+    });
+
+    return res.status(202).json({
+      ok: true,
+      processing: true,
+      retry_after_ms: 2000,
+      source_filename: rawFilename,
+    });
+  } catch (error) {
+    const status = error?.code === 'ENOENT' ? 404 : 500;
+    res.status(status).json({ error: error?.message || 'Could not optimize this review video for streaming.' });
   }
 });
 

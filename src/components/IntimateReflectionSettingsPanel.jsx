@@ -8,12 +8,30 @@ import {
   readIntimateReflectionSettings,
   saveSyncedIntimateReflectionSettings,
 } from "@/lib/intimateReflectionSettings";
+import {
+  loadSarahLanguageProfile,
+  saveSarahLanguageProfile,
+} from "@/lib/sarahConversationContext";
+
+const DEFAULT_LANGUAGE_PROFILE = {
+  likedPhrases: [],
+  dislikedPhrases: [],
+  styleNotes: "",
+  warmth: 70,
+  questionFrequency: 35,
+};
+
+function linesToList(value = "") {
+  return String(value || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+}
 
 export default function IntimateReflectionSettingsPanel() {
   const [settings, setSettings] = useState(readIntimateReflectionSettings);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
+  const [languageProfile, setLanguageProfile] = useState(DEFAULT_LANGUAGE_PROFILE);
+  const [languageDirty, setLanguageDirty] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -22,6 +40,11 @@ export default function IntimateReflectionSettingsPanel() {
       setSettings(saved);
       setDirty(false);
     });
+    loadSarahLanguageProfile().then((saved) => {
+      if (!active) return;
+      setLanguageProfile({ ...DEFAULT_LANGUAGE_PROFILE, ...saved });
+      setLanguageDirty(false);
+    }).catch(() => {});
     return () => {
       active = false;
     };
@@ -43,13 +66,23 @@ export default function IntimateReflectionSettingsPanel() {
     setSaving(true);
     setStatus("");
     try {
-      const saved = await saveSyncedIntimateReflectionSettings(settings);
+      const [saved] = await Promise.all([
+        saveSyncedIntimateReflectionSettings(settings),
+        saveSarahLanguageProfile(languageProfile),
+      ]);
       setSettings(saved);
       setDirty(false);
+      setLanguageDirty(false);
       setStatus("Saved and synchronized for EXE, browser, and APK.");
     } finally {
       setSaving(false);
     }
+  };
+
+  const updateLanguage = (patch) => {
+    setLanguageProfile((current) => ({ ...current, ...patch }));
+    setLanguageDirty(true);
+    setStatus("");
   };
 
   const reset = () => {
@@ -103,11 +136,73 @@ export default function IntimateReflectionSettingsPanel() {
         </label>
       )}
 
+      <div className="mt-4 rounded-xl border border-rose-300/20 bg-background/70 p-3">
+        <div>
+          <h3 className="text-sm font-bold text-foreground">Personal language profile</h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            Sarah uses this across foreground chat and the floating microphone. Put one phrase or habit per line; these are preferences, not a rigid phrase bank.
+          </p>
+        </div>
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Language that feels natural</span>
+            <Textarea
+              value={(languageProfile.likedPhrases || []).join("\n")}
+              onChange={(event) => updateLanguage({ likedPhrases: linesToList(event.target.value).slice(0, 16) })}
+              placeholder={"Direct observations\nWarm first-person reactions\nSpecific physiological details"}
+              className="mt-2 min-h-28 resize-y bg-card text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Phrases or habits to avoid</span>
+            <Textarea
+              value={(languageProfile.dislikedPhrases || []).join("\n")}
+              onChange={(event) => updateLanguage({ dislikedPhrases: linesToList(event.target.value).slice(0, 16) })}
+              placeholder={"Generic therapy language\nRepeated pet names\nEnding every reply with a question"}
+              className="mt-2 min-h-28 resize-y bg-card text-sm"
+            />
+          </label>
+        </div>
+        <label className="mt-3 block">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Persistent style notes</span>
+          <Textarea
+            value={languageProfile.styleNotes || ""}
+            onChange={(event) => updateLanguage({ styleNotes: event.target.value.slice(0, 1400) })}
+            placeholder="Describe the cadence, vocabulary, flirtation style, humor, or conversational habits that make Sarah sound most natural to you."
+            className="mt-2 min-h-24 resize-y bg-card text-sm"
+          />
+        </label>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <label className="rounded-lg border border-border bg-card p-3">
+            <span className="flex justify-between text-xs font-semibold text-foreground"><span>Warmth</span><span>{languageProfile.warmth}%</span></span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={languageProfile.warmth}
+              onChange={(event) => updateLanguage({ warmth: Number(event.target.value) })}
+              className="mt-3 w-full accent-rose-500"
+            />
+          </label>
+          <label className="rounded-lg border border-border bg-card p-3">
+            <span className="flex justify-between text-xs font-semibold text-foreground"><span>Follow-up question frequency</span><span>{languageProfile.questionFrequency}%</span></span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={languageProfile.questionFrequency}
+              onChange={(event) => updateLanguage({ questionFrequency: Number(event.target.value) })}
+              className="mt-3 w-full accent-rose-500"
+            />
+          </label>
+        </div>
+      </div>
+
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={save}
-          disabled={saving || !dirty || (settings.level === "custom" && !settings.customInstructions.trim())}
+          disabled={saving || (!dirty && !languageDirty) || (settings.level === "custom" && !settings.customInstructions.trim())}
           className="inline-flex items-center gap-2 rounded-lg bg-rose-500 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-600 disabled:opacity-50"
         >
           <Save className="h-4 w-4" />
@@ -121,7 +216,7 @@ export default function IntimateReflectionSettingsPanel() {
           <RotateCcw className="h-4 w-4" /> Reset
         </button>
         <span className={`text-xs ${dirty ? "text-amber-700" : status ? "text-emerald-700" : "text-muted-foreground"}`}>
-          {dirty ? "Unsaved changes" : status || "Saved settings are used for future reflection generation."}
+          {dirty || languageDirty ? "Unsaved changes" : status || "Saved settings are used for future reflection generation."}
         </span>
       </div>
     </section>

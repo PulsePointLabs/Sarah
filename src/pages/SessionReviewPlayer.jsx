@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Activity, Clapperboard, HeartPulse, Maximize2, ScanSearch, Video, X } from "lucide-react";
+import { Activity, Clapperboard, Maximize2, ScanSearch, Video, X } from "lucide-react";
 import moment from "moment";
 import { base44 } from "@/api/base44Client";
 import PageHeader from "../components/PageHeader";
 import HRTimelineChart from "../components/HRTimelineChart";
 import InteractiveTimelinePlayer, { TimelineWaypointDetail } from "../components/InteractiveTimelinePlayer";
 import SavedMotionSummaryCard from "../components/SavedMotionSummaryCard";
+import VideoSyncPhysiologySidebar from "../components/VideoSyncPhysiologySidebar";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "../components/session-form/EventTimelineSection";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -23,6 +24,53 @@ function reviewLabel(session) {
   const duration = session?.duration_minutes ? ` · ${session.duration_minutes}m` : "";
   const events = (session?.event_timeline || []).length ? ` · ${session.event_timeline.length} events` : "";
   return `${date}${time}${duration}${events}`;
+}
+
+function linkedVideoDescriptor(video = {}) {
+  return [
+    video.role,
+    video.feed,
+    video.feedKey,
+    video.camera_role,
+    video.cameraRole,
+    video.label,
+    video.filename,
+    video.path,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .replace(/[_./\\-]+/g, " ");
+}
+
+function inferReviewVideoRole(video = {}) {
+  const text = linkedVideoDescriptor(video);
+  if (/\b(composite|pip|picture in picture|obs)\b/.test(text)) return "composite";
+  if (/\b(main|focus|primary|close|genital|penis|shaft|glans|meatus)\b/.test(text)) return "main";
+  if (/\b(side|lateral|angle)\b/.test(text)) return "lateral";
+  if (/\b(feet|foot|toe|toes|heel|heels|lower body|leg|legs|pelvis)\b/.test(text)) return "lower_body";
+  // Unlabelled OBS recordings are the historical main/composite source.
+  return "main";
+}
+
+function reviewVideoPriority(video) {
+  return {
+    composite: 0,
+    main: 1,
+    lateral: 8,
+    lower_body: 9,
+  }[inferReviewVideoRole(video)] ?? 5;
+}
+
+function reviewVideoOptionLabel(video) {
+  const roleLabel = {
+    composite: "Composite",
+    main: "Main / composite",
+    lateral: "Side / lateral",
+    lower_body: "Feet / lower body",
+  }[inferReviewVideoRole(video)] || "Linked angle";
+  const sourceLabel = video?.label || video?.filename || String(video?.path || "").split(/[\\/]/).pop() || "Recording";
+  return `${roleLabel} · ${sourceLabel}`;
 }
 
 function getCategoryMeta(value) {
@@ -210,6 +258,8 @@ export default function SessionReviewPlayer() {
   const fileInputRef = useRef(null);
   const videoUrlRef = useRef(null);
   const timelineSeekRef = useRef(false);
+  const autoLoadedVideoRef = useRef("");
+  const linkedVideoLoadRef = useRef(0);
 
   const [sessions, setSessions] = useState([]);
   const [selectedId, setSelectedId] = useState("");
@@ -222,6 +272,11 @@ export default function SessionReviewPlayer() {
   const [videoTime, setVideoTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
   const [videoPlaying, setVideoPlaying] = useState(false);
+  const [remoteVideoLoading, setRemoteVideoLoading] = useState(false);
+  const [remoteVideoError, setRemoteVideoError] = useState("");
+  const [activeLinkedVideoKey, setActiveLinkedVideoKey] = useState("");
+  const [physiologyZoomWindow, setPhysiologyZoomWindow] = useState(60);
+  const [motionDetailsOpen, setMotionDetailsOpen] = useState(false);
   const [timelineSyncTime, setTimelineSyncTime] = useState(null);
   const [selectedEventIdx, setSelectedEventIdx] = useState(null);
   const [timelineWaypointDetail, setTimelineWaypointDetail] = useState(null);
@@ -274,6 +329,25 @@ export default function SessionReviewPlayer() {
   const savedMotion = selectedSession?.motion_analysis_summary;
   const playbackMotion = useMemo(() => nearestMotionSample(savedMotion, reviewTime), [reviewTime, savedMotion]);
   const playbackCadence = useMemo(() => nearestCadenceSample(savedMotion, reviewTime), [reviewTime, savedMotion]);
+  const linkedLocalVideos = useMemo(
+    () => (selectedSession?.linked_local_videos || [])
+      .filter((video) => video?.path && video.exists !== false)
+      .map((video, originalIndex) => ({ video, originalIndex }))
+      .sort((a, b) => reviewVideoPriority(a.video) - reviewVideoPriority(b.video) || a.originalIndex - b.originalIndex)
+      .map(({ video }) => video),
+    [selectedSession?.linked_local_videos],
+  );
+  const physiologyMaxTime = useMemo(() => Math.max(
+    1,
+    Number(videoDuration) || 0,
+    Number(selectedSession?.duration_minutes || 0) * 60,
+    ...timelineRows.map((row) => Number(row.time_offset_s) || 0),
+  ), [selectedSession?.duration_minutes, timelineRows, videoDuration]);
+  const physiologyDomain = useMemo(() => {
+    const half = physiologyZoomWindow / 2;
+    const low = Math.max(0, Math.min(physiologyMaxTime - physiologyZoomWindow, reviewTime - half));
+    return [low, Math.min(physiologyMaxTime, low + physiologyZoomWindow)];
+  }, [physiologyMaxTime, physiologyZoomWindow, reviewTime]);
 
   useEffect(() => {
     base44.entities.Session.list("-date", 250)
@@ -286,29 +360,93 @@ export default function SessionReviewPlayer() {
     if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current);
   }, []);
 
-  const releaseVideoUrl = () => {
+  const releaseVideoUrl = useCallback(() => {
     if (!videoUrlRef.current) return;
     URL.revokeObjectURL(videoUrlRef.current);
     videoUrlRef.current = null;
-  };
+  }, []);
 
   const loadVideoFile = (file) => {
     if (!file) return;
+    linkedVideoLoadRef.current += 1;
     releaseVideoUrl();
     const nextUrl = URL.createObjectURL(file);
     videoUrlRef.current = nextUrl;
     setVideoSrc(nextUrl);
     setVideoName(file.name);
+    setActiveLinkedVideoKey("");
     setVideoTime(0);
     setVideoDuration(0);
     setVideoPlaying(false);
     setTimelineSyncTime(0);
+    setRemoteVideoLoading(false);
+    setRemoteVideoError("");
   };
 
   const handleVideoChange = (event) => {
     loadVideoFile(event.target.files?.[0]);
     event.target.value = "";
   };
+
+  const loadLinkedVideo = useCallback(async (video) => {
+    if (!video?.path) return;
+    const requestId = linkedVideoLoadRef.current + 1;
+    linkedVideoLoadRef.current = requestId;
+    const videoKey = video.id || video.path;
+    releaseVideoUrl();
+    setVideoSrc("");
+    setVideoName(reviewVideoOptionLabel(video));
+    setActiveLinkedVideoKey(videoKey);
+    setVideoTime(0);
+    setVideoDuration(0);
+    setVideoPlaying(false);
+    setTimelineSyncTime(0);
+    setRemoteVideoLoading(true);
+    setRemoteVideoError("");
+    try {
+      const result = await base44.integrations.Core.ConvertLocalVideoForPlayback({
+        path: video.path,
+        label: video.label || video.filename || "session-review",
+      });
+      const rawPlaybackUrl = result?.url || result?.file_url;
+      if (!rawPlaybackUrl) throw new Error("Playback preparation did not return a video URL.");
+      if (linkedVideoLoadRef.current !== requestId) return;
+      setVideoSrc(base44.integrations.Core.localVisionAssetUrl(rawPlaybackUrl));
+    } catch (error) {
+      if (linkedVideoLoadRef.current !== requestId) return;
+      setRemoteVideoError(error?.data?.error || error?.message || "Could not prepare this linked recording for playback.");
+    } finally {
+      if (linkedVideoLoadRef.current === requestId) setRemoteVideoLoading(false);
+    }
+  }, [releaseVideoUrl]);
+
+  useEffect(() => {
+    linkedVideoLoadRef.current += 1;
+    releaseVideoUrl();
+    setVideoSrc("");
+    setVideoName("");
+    setVideoTime(0);
+    setVideoDuration(0);
+    setVideoPlaying(false);
+    setTimelineSyncTime(0);
+    setRemoteVideoError("");
+    setRemoteVideoLoading(false);
+    setActiveLinkedVideoKey("");
+    autoLoadedVideoRef.current = "";
+  }, [releaseVideoUrl, selectedId]);
+
+  useEffect(() => {
+    setMotionDetailsOpen(Boolean(savedMotion));
+  }, [savedMotion, selectedId]);
+
+  useEffect(() => {
+    const firstLinkedVideo = linkedLocalVideos[0];
+    if (!selectedSession?.id || !firstLinkedVideo?.path) return;
+    const signature = `${selectedSession.id}:${firstLinkedVideo.path}`;
+    if (autoLoadedVideoRef.current === signature) return;
+    autoLoadedVideoRef.current = signature;
+    loadLinkedVideo(firstLinkedVideo);
+  }, [linkedLocalVideos, loadLinkedVideo, selectedSession?.id]);
 
   const handleSelectSession = useCallback(async (id) => {
     setSelectedId(id);
@@ -480,6 +618,25 @@ export default function SessionReviewPlayer() {
               <p className="truncate text-sm text-foreground">{reviewLabel(selectedSession)}{videoName ? ` · ${videoName}` : ""}</p>
             </div>
             <div className="flex items-center gap-2">
+              {linkedLocalVideos.length > 0 && (
+                <select
+                  value={activeLinkedVideoKey}
+                  onChange={(event) => {
+                    const linked = linkedLocalVideos.find((video) => (video.id || video.path) === event.target.value);
+                    if (linked) loadLinkedVideo(linked);
+                  }}
+                  disabled={remoteVideoLoading}
+                  className="h-9 max-w-56 rounded-lg border border-primary/30 bg-primary/10 px-3 text-xs font-medium text-primary disabled:opacity-60"
+                  aria-label="Load a session recording from the Sarah server"
+                >
+                  <option value="">{remoteVideoLoading ? "Preparing recording..." : "Session recordings..."}</option>
+                  {linkedLocalVideos.map((video) => (
+                    <option key={video.id || video.path} value={video.id || video.path}>
+                      {reviewVideoOptionLabel(video)}
+                    </option>
+                  ))}
+                </select>
+              )}
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -500,55 +657,8 @@ export default function SessionReviewPlayer() {
             </div>
           </header>
 
-          <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(0,1fr)_22rem]">
-            <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
-              <div className="grid gap-3 2xl:grid-cols-2">
-                <div className="rounded-xl border border-border bg-card p-3">
-                  <div className="mb-2 flex items-center gap-2">
-                    <HeartPulse className="h-4 w-4 text-primary" />
-                    <p className="text-xs font-semibold uppercase tracking-wider text-primary">Heart Rate Trace</p>
-                  </div>
-                  {timelineRows.length > 0 ? (
-                    <HRTimelineChart
-                      rows={timelineRows}
-                      savedMarkers={{
-                        pre_climax_offset_s: selectedSession.pre_climax_offset_s,
-                        climax_offset_s: selectedSession.climax_offset_s,
-                        recovery_offset_s: selectedSession.recovery_offset_s,
-                      }}
-                      noClimax={!!selectedSession.no_climax}
-                      nearClimaxEvents={selectedSession.ai_near_climax_events || []}
-                      events={selectedSession.event_timeline || []}
-                      selectedEventIndex={selectedEventIdx}
-                      onSelectEventIndex={handleSelectEventIndex}
-                      initialWindow="full"
-                      compact
-                      playbackTime={videoTime}
-                    />
-                  ) : (
-                    <p className="px-3 py-8 text-sm text-muted-foreground">No heart-rate trace available for this session.</p>
-                  )}
-                </div>
-                {motion ? (
-                  <SavedMotionSummaryCard
-                    summary={motion}
-                    onSeek={videoSrc ? (timeS) => seekVideoTo(timeS, false, true) : undefined}
-                    playbackTime={videoTime}
-                    chartOnly
-                    focus
-                  />
-                ) : (
-                  <div className="rounded-xl border border-border bg-card p-3">
-                    <div className="mb-2 flex items-center gap-2">
-                      <Activity className="h-4 w-4 text-primary" />
-                      <p className="text-xs font-semibold uppercase tracking-wider text-primary">Motion Trace</p>
-                    </div>
-                    <p className="px-3 py-8 text-sm text-muted-foreground">Save a local motion summary to show movement telemetry here.</p>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
+          <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(0,1fr)_24rem]">
+            <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
                 {currentReviewEvent && (
                   <button
                     type="button"
@@ -587,17 +697,42 @@ export default function SessionReviewPlayer() {
                       onSeeked={handleVideoSeeked}
                       onLoadedMetadata={(event) => setVideoDuration(event.currentTarget.duration || 0)}
                     />
+                  ) : remoteVideoLoading ? (
+                    <div className="flex flex-col items-center gap-3 text-primary">
+                      <span className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                      <span className="text-sm font-semibold">Preparing a mobile-friendly playback copy</span>
+                      <span className="max-w-md text-center text-xs text-white/60">{videoName}</span>
+                    </div>
+                  ) : remoteVideoError ? (
+                    <div className="flex max-w-lg flex-col items-center gap-3 px-6 text-center">
+                      <p className="text-sm font-semibold text-destructive">Linked recording could not be prepared</p>
+                      <p className="text-xs text-white/65">{remoteVideoError}</p>
+                      <button type="button" onClick={() => fileInputRef.current?.click()} className="rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold text-white">
+                        Load a local fallback
+                      </button>
+                    </div>
                   ) : (
                     <button type="button" onClick={() => fileInputRef.current?.click()} className="flex flex-col items-center gap-3 text-muted-foreground hover:text-primary">
                       <Video className="h-10 w-10" />
-                      <span className="text-sm font-semibold">Load the full session video</span>
+                      <span className="text-sm font-semibold">
+                        {linkedLocalVideos.length ? "Choose a session recording" : "Load the full session video"}
+                      </span>
                     </button>
                   )}
                 </div>
-              </div>
             </section>
 
             <aside className="min-h-0 space-y-3 overflow-y-auto pr-1">
+              <VideoSyncPhysiologySidebar
+                timelineRows={timelineRows}
+                playheadS={reviewTime}
+                xDomain={physiologyDomain}
+                zoomWindow={physiologyZoomWindow}
+                onZoomWindowChange={setPhysiologyZoomWindow}
+                onSeek={(timeS) => seekVideoTo(timeS, false, true)}
+                collapseUnavailableMotion
+              />
+
               <div className="rounded-xl border border-border bg-card p-3 space-y-3">
                 <p className="text-xs font-semibold uppercase tracking-wider text-primary">Current Telemetry</p>
                 <div className="grid grid-cols-2 gap-2">
@@ -610,10 +745,24 @@ export default function SessionReviewPlayer() {
                 </label>
               </div>
 
-              <div className="rounded-xl border border-border bg-card p-3 space-y-3">
-                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Movement At Playback Position</p>
-                {motion ? (
+              <details
+                className="rounded-xl border border-border bg-card p-3"
+                open={motionDetailsOpen}
+                onToggle={(event) => setMotionDetailsOpen(event.currentTarget.open)}
+              >
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">
+                  {motion ? "Saved Motion Trace" : "Motion Trace Unavailable"}
+                </summary>
+                <div className="mt-3 space-y-3">
+                  {motion ? (
                   <>
+                    <SavedMotionSummaryCard
+                      summary={motion}
+                      onSeek={videoSrc ? (timeS) => seekVideoTo(timeS, false, true) : undefined}
+                      playbackTime={videoTime}
+                      chartOnly
+                      focus
+                    />
                     <div className="grid grid-cols-2 gap-2">
                       <FocusMetric label="Left Foot / Leg Now" value={currentLeft ?? "--"} accent="text-primary" />
                       <FocusMetric label="Right Foot / Leg Now" value={currentRight ?? "--"} accent="text-amber-400" />
@@ -643,9 +792,10 @@ export default function SessionReviewPlayer() {
                     )}
                   </>
                 ) : (
-                  <p className="text-xs text-muted-foreground">No saved motion summary yet.</p>
+                  <p className="text-xs text-muted-foreground">No saved motion summary is available for this session.</p>
                 )}
-              </div>
+                </div>
+              </details>
 
               {lowerBodyPatterns && (
                 <div className="rounded-xl border border-primary/20 bg-primary/[0.04] p-3 space-y-3">
@@ -763,9 +913,28 @@ export default function SessionReviewPlayer() {
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-primary">Review Source</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Choose the session first, then load the full local recording for timeline-guided review.
+                Choose a session to use its linked server recording from any device, or load a local fallback.
               </p>
             </div>
+            {linkedLocalVideos.length > 0 && (
+              <select
+                value={activeLinkedVideoKey}
+                onChange={(event) => {
+                  const linked = linkedLocalVideos.find((video) => (video.id || video.path) === event.target.value);
+                  if (linked) loadLinkedVideo(linked);
+                }}
+                disabled={remoteVideoLoading}
+                className="h-10 max-w-xs rounded-lg border border-primary/30 bg-primary/10 px-3 text-sm font-semibold text-primary disabled:opacity-60"
+                aria-label="Load a session recording from the Sarah server"
+              >
+                <option value="">{remoteVideoLoading ? "Preparing recording..." : "Load linked session recording..."}</option>
+                {linkedLocalVideos.map((video) => (
+                  <option key={video.id || video.path} value={video.id || video.path}>
+                    {reviewVideoOptionLabel(video)}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -802,6 +971,18 @@ export default function SessionReviewPlayer() {
                 ))}
               </SelectContent>
             </Select>
+          )}
+
+          {remoteVideoLoading && (
+            <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/[0.06] px-3 py-2 text-xs text-primary">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              Preparing {videoName || "linked recording"} for browser and APK playback...
+            </div>
+          )}
+          {remoteVideoError && (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/[0.07] px-3 py-2 text-xs text-destructive">
+              {remoteVideoError}
+            </div>
           )}
         </div>
 
@@ -976,6 +1157,12 @@ export default function SessionReviewPlayer() {
                       </span>
                     </div>
                   </div>
+                ) : remoteVideoLoading ? (
+                  <div className="flex min-h-[360px] w-full flex-col items-center justify-center gap-3 px-6 text-primary">
+                    <span className="h-9 w-9 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                    <span className="text-sm font-semibold">Preparing linked session video</span>
+                    <span className="max-w-md truncate text-center text-xs text-muted-foreground">{videoName}</span>
+                  </div>
                 ) : (
                   <button
                     type="button"
@@ -983,9 +1170,11 @@ export default function SessionReviewPlayer() {
                     className="flex min-h-[360px] w-full flex-col items-center justify-center gap-3 px-6 text-muted-foreground transition-colors hover:text-primary"
                   >
                     <Video className="h-10 w-10" />
-                    <span className="text-sm font-semibold">Load the full session video</span>
+                    <span className="text-sm font-semibold">
+                      {linkedLocalVideos.length ? "Choose a linked recording above" : "Load the full session video"}
+                    </span>
                     <span className="max-w-md text-center text-xs">
-                      Load the recording, then let the video carry the telemetry and nearby event notes with it.
+                      Linked recordings are prepared by Sarah's desktop server so Chrome and the APK can play them without possessing the original file.
                     </span>
                   </button>
                 )}

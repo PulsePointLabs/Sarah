@@ -2,10 +2,13 @@ import Anthropic from '@anthropic-ai/sdk';
 import { writeAIForensicArtifact } from '../services/aiForensics.js';
 import { classifyProviderError, shouldRetryProviderError } from '../../src/lib/providerErrorClassifier.js';
 import { completePlainTextResponse } from '../services/completePlainTextResponse.js';
+import { sanitizeProviderPayload } from '../services/sanitizeProviderPayload.js';
 
 const MODEL_MAP = {
   claude_sonnet_4_6: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
   claude_sonnet_4_5: 'claude-sonnet-4-5-20250929',
+  sarah_fast: process.env.ANTHROPIC_FAST_MODEL || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
+  sarah_deep: process.env.ANTHROPIC_DEEP_MODEL || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
 };
 
 function anthropicTimeoutMs() {
@@ -45,10 +48,11 @@ function sleep(ms) {
 
 async function createMessageWithRetries(anthropic, payload, attempts = 3, signal) {
   let lastError;
+  const providerSafePayload = sanitizeProviderPayload(payload);
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (signal?.aborted) throw new Error('Cancelled');
     try {
-      const message = await anthropic.messages.create(payload, signal ? { signal } : undefined);
+      const message = await anthropic.messages.create(providerSafePayload, signal ? { signal } : undefined);
       return { message, attemptsUsed: attempt + 1 };
     } catch (error) {
       lastError = error;

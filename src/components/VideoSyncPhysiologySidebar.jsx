@@ -161,6 +161,7 @@ export default function VideoSyncPhysiologySidebar({
   zoomWindow,
   onZoomWindowChange,
   onSeek,
+  collapseUnavailableMotion = false,
 }) {
   const normalizedRows = useMemo(() => timelineRows
     .map((row) => ({
@@ -367,6 +368,15 @@ export default function VideoSyncPhysiologySidebar({
             rightAxis
           />
         </div>
+      ) : collapseUnavailableMotion ? (
+        <details className="rounded-xl border border-dashed border-border bg-muted/15 p-3">
+          <summary className="cursor-pointer text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Motion and respiration unavailable
+          </summary>
+          <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+            This recording contains no saved H10 accelerometer or respiratory estimate. Sarah leaves these channels blank rather than inventing movement or breathing.
+          </p>
+        </details>
       ) : (
         <div className="rounded-xl border border-dashed border-border bg-muted/15 p-3">
           <p className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">

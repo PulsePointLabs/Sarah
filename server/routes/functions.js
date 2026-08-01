@@ -8,6 +8,11 @@ import {
 } from '../services/ttsCore.js';
 import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
 import { transcribeAudioWithProvider } from '../services/sttProvider.js';
+import { normalizeSttAudio } from '../services/sttAudio.js';
+import {
+  buildProcedurePhysiologyContext,
+  isProcedurePhysiologyRecord,
+} from '../../src/lib/procedurePhysiologyContext.js';
 
 export const functionsRouter = express.Router();
 const ttsRenderJobs = new Map();
@@ -96,6 +101,30 @@ functionsRouter.post('/saveTimelineData', (req, res) => {
     : rows;
   bulkCreate(entity, finalRows.map((r) => ({ ...r, session: session_id })));
   res.json({ ok: true, inserted: finalRows.length, original: rows.length });
+});
+
+functionsRouter.post('/profileProcedurePhysiologyContext', (_req, res) => {
+  const records = [
+    ...listEntities('Session'),
+    ...listEntities('BodyExploration'),
+  ]
+    .filter(isProcedurePhysiologyRecord)
+    .sort((a, b) => new Date(b.date || b.created_date || 0) - new Date(a.date || a.created_date || 0))
+    .slice(0, 8);
+  const recordIds = new Set(records.map((record) => record.id));
+  const timelineRowsBySession = {};
+  for (const row of listEntities('HeartRateTimeline')) {
+    if (!recordIds.has(row.session)) continue;
+    if (!timelineRowsBySession[row.session]) timelineRowsBySession[row.session] = [];
+    timelineRowsBySession[row.session].push(row);
+  }
+  for (const rows of Object.values(timelineRowsBySession)) {
+    rows.sort((a, b) => Number(a.time_offset_s || 0) - Number(b.time_offset_s || 0));
+  }
+  res.json(buildProcedurePhysiologyContext(records, timelineRowsBySession, {
+    recordLimit: 6,
+    milestoneLimit: 6,
+  }));
 });
 
 functionsRouter.post('/purgeEMGData', (req, res) => {
@@ -192,11 +221,12 @@ functionsRouter.post('/whisperSTT', async (req, res) => {
     const audioBytes = Math.floor(String(audio_base64).replace(/^data:.*?;base64,/, '').length * 0.75);
     const maxAudioBytes = Number(process.env.OPENAI_WHISPER_MAX_AUDIO_BYTES || 25 * 1024 * 1024);
     if (audioBytes > maxAudioBytes) return res.status(413).json({ error: `Audio is too large (${audioBytes} bytes; maximum ${maxAudioBytes}).` });
-    const { mimeType, extension } = normalizeAudioMimeType(mime_type);
+    const declared = normalizeAudioMimeType(mime_type);
+    const normalized = await normalizeSttAudio(b64ToBuffer(audio_base64), declared.mimeType);
     const result = await transcribeAudioWithProvider({
-      audioBuffer: b64ToBuffer(audio_base64),
-      mimeType,
-      filename: `audio.${extension}`,
+      audioBuffer: normalized.audioBuffer,
+      mimeType: normalized.mimeType,
+      filename: `audio.${normalized.extension}`,
       prompt,
       language: 'en',
       requestedProvider: provider,

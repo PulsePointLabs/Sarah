@@ -4,6 +4,9 @@ import { LayoutDashboard, List, PlusCircle, GitCompare, TrendingUp, Waves, ScanS
 import pkg from "../../package.json";
 import InstallAppButton from "./InstallAppButton";
 import BackgroundJobStatusTray from "./BackgroundJobStatusTray";
+import VoiceOverlayCoordinator from "./VoiceOverlayCoordinator";
+import NativeVoiceOverlayDock from "./NativeVoiceOverlayDock";
+import IncomingCsvImportCoordinator from "./IncomingCsvImportCoordinator";
 import { SarahAvatar, SarahLogoMark, SarahPortrait } from "./SarahBrand";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -426,6 +429,9 @@ export default function Layout() {
       <main ref={mainRef} className={`min-w-0 flex-1 ${isDisplayView ? "overflow-hidden" : "pt-14 overflow-y-auto overflow-x-hidden"}`}>
         <Outlet />
       </main>
+      <IncomingCsvImportCoordinator />
+      <VoiceOverlayCoordinator />
+      {!isDisplayView && <NativeVoiceOverlayDock />}
       {!isDisplayView && <BackgroundJobStatusTray />}
     </div>);
 

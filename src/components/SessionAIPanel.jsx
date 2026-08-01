@@ -24,8 +24,9 @@ import { buildSarahPersonalityPrompt, readSarahPersonalitySettings } from "@/uti
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
 import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "./TTSButton";
+import { REVIEW_VIDEO_RENDER_VERSION } from "@/lib/reviewVideoVersion";
 
-export const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v16_semantic_bounded_motion";
+export { REVIEW_VIDEO_RENDER_VERSION };
 
 function friendlyReviewVideoRenderErrorMessage(error) {
   const message = String(error?.message || error || "Review video render failed.");
@@ -667,8 +668,12 @@ export function SessionReviewVideoExportButton({
   const [chatMessages, setChatMessages] = useState([]);
   const [reviewStatus, setReviewStatus] = useState({ type: "idle", message: "" });
   const [qaSaveStatus, setQaSaveStatus] = useState("");
+  const [streamingVideoUrl, setStreamingVideoUrl] = useState("");
+  const [streamingVideoStatus, setStreamingVideoStatus] = useState("");
   const chatStorageLoadedRef = useRef("");
   const qaAutosaveTimerRef = useRef(null);
+  const reviewVideoRef = useRef(null);
+  const playbackSwitchRef = useRef({ time: 0, resume: false });
   const activeVideo = rendered?.file_url ? rendered : existingVideo;
   const displayTitle = reviewVideoTitleWithDate(analysisTitle || "Session Review Video", session);
   const reviewType = reviewIdentityForTitle(analysisTitle || displayTitle, recordType);
@@ -688,6 +693,7 @@ export function SessionReviewVideoExportButton({
       activeVideo.watermark_enabled ? "wm" : "nowm",
     ].filter(Boolean).join("-"))
     : "";
+  const playbackVideoUrl = streamingVideoUrl || activeVideoUrl;
   const activeVideoCreatedLabel = formatVideoCreatedAt(activeVideo?.created_at || activeVideo?.exported_at || activeVideo?.source_generated_at);
   const activeVideoPoster = videoPosterDataUrl({
     title: displayTitle,
@@ -716,6 +722,49 @@ export function SessionReviewVideoExportButton({
     typeof session.review_video_qa_threads === "object" &&
     !Array.isArray(session.review_video_qa_threads)
   ) ? session.review_video_qa_threads : {};
+
+  useEffect(() => {
+    let cancelled = false;
+    let retryTimer = null;
+    setStreamingVideoUrl("");
+    setStreamingVideoStatus("");
+    if (!activeVideo?.file_url) return undefined;
+
+    const prepareStreamingVideo = async () => {
+      try {
+        const response = await fetch(serverUrl("/api/files/uploaded-video/playback-preview"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: activeVideo.file_url }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result?.error || `Streaming optimization failed (${response.status}).`);
+        if (cancelled) return;
+        if (result?.file_url) {
+          const currentVideo = reviewVideoRef.current;
+          playbackSwitchRef.current = {
+            time: Number(currentVideo?.currentTime) || 0,
+            resume: Boolean(currentVideo && !currentVideo.paused),
+          };
+          setStreamingVideoUrl(cacheBustedMediaUrl(result.file_url, result.size || result.filename || "stream"));
+          setStreamingVideoStatus("Smooth-play copy ready");
+          return;
+        }
+        setStreamingVideoStatus("Preparing smooth playback copy...");
+        retryTimer = window.setTimeout(prepareStreamingVideo, Number(result?.retry_after_ms) || 2000);
+      } catch (error) {
+        if (cancelled) return;
+        console.warn("Could not prepare smooth review-video playback:", error);
+        setStreamingVideoStatus("Playing original quality");
+      }
+    };
+
+    prepareStreamingVideo();
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
+  }, [activeVideo?.file_url]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1209,23 +1258,35 @@ Describe only what is visible in the sampled frames, plus cautious interpretatio
 
   return (
     <div className="max-w-full min-w-0 space-y-3 overflow-hidden rounded-xl border border-primary/20 bg-card p-3 shadow-sm sm:p-4">
-      {activeVideoUrl && (
+      {playbackVideoUrl && (
         <div className="relative max-w-full overflow-hidden rounded-lg border border-border bg-black">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background px-3 py-2 text-xs">
             <span className="font-semibold text-foreground">Review video</span>
             <span className="text-muted-foreground">
-              {activeVideoCreatedLabel ? `Created ${activeVideoCreatedLabel}` : "Created time unavailable"}
+              {streamingVideoStatus || (activeVideoCreatedLabel ? `Created ${activeVideoCreatedLabel}` : "Created time unavailable")}
             </span>
           </div>
           <video
-            key={activeVideoUrl}
-            src={activeVideoUrl}
+            ref={reviewVideoRef}
+            key={playbackVideoUrl}
+            src={playbackVideoUrl}
             poster={activeVideoPoster}
             controls
-            preload="metadata"
+            preload="auto"
             playsInline
             className="aspect-video w-full bg-black object-contain"
-            onLoadedMetadata={(event) => setPreviewTime(event.currentTarget.currentTime || 0)}
+            onLoadedMetadata={(event) => {
+              const resumeAt = Math.min(
+                Math.max(0, Number(playbackSwitchRef.current.time) || 0),
+                Math.max(0, Number(event.currentTarget.duration) || 0),
+              );
+              if (resumeAt > 0.25) event.currentTarget.currentTime = resumeAt;
+              setPreviewTime(resumeAt || event.currentTarget.currentTime || 0);
+              if (playbackSwitchRef.current.resume) {
+                event.currentTarget.play().catch(() => {});
+              }
+              playbackSwitchRef.current = { time: 0, resume: false };
+            }}
             onTimeUpdate={(event) => setPreviewTime(event.currentTarget.currentTime || 0)}
             onSeeked={(event) => setPreviewTime(event.currentTarget.currentTime || 0)}
           />
@@ -1255,7 +1316,7 @@ Describe only what is visible in the sampled frames, plus cautious interpretatio
           </Button>
         )}
       </div>
-      {activeVideoUrl && (
+      {playbackVideoUrl && (
         <div className="max-w-full min-w-0 space-y-3 overflow-hidden rounded-lg border border-border bg-muted/20 p-3">
           <div className="flex flex-col gap-2 sm:flex-row">
             <input

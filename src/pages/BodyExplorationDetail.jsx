@@ -8,12 +8,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import SessionTelemetryDashboard from "@/components/SessionTelemetryDashboard";
 import PulseOxSessionChart from "@/components/PulseOxSessionChart";
-import BodyCompositionSummaryCard from "@/components/BodyCompositionSummaryCard";
+import BloodGlucoseSessionCard from "@/components/BloodGlucoseSessionCard";
+import PreSessionPhysiologicalBaseline from "@/components/PreSessionPhysiologicalBaseline";
 import BodyExplorationAIPanel from "@/components/BodyExplorationAIPanel";
 import AIChat from "@/components/AIChat";
 import LinkedLocalVideoManager from "@/components/LinkedLocalVideoManager";
 import VideoSyncPlayer from "@/components/VideoSyncPlayer";
-import { pulseOxReadingsFromSession } from "@/lib/sessionContext";
+import { pulseOxReadingsFromSession, sessionContextEvidenceText } from "@/lib/sessionContext";
 import {
   buildBodyExplorationVisualEvidenceDigest,
   buildBodyExplorationVideoPassDigest,
@@ -104,6 +105,9 @@ function buildExplorationChatContext(exploration, timelineRows, emgRows) {
     exploration.sounding_notes ? `Instrumentation notes: ${exploration.sounding_notes}` : null,
     exploration.unusual_sensations ? `Unusual sensations: ${exploration.unusual_sensations}` : null,
     exploration.notes ? `Exploration notes: ${exploration.notes}` : null,
+    sessionContextEvidenceText(exploration)
+      ? `Measured vitals and logged starting context: ${sessionContextEvidenceText(exploration)}`
+      : null,
     timelineRows.length ? `Heart-rate rows available: ${timelineRows.length}; avg ${exploration.avg_hr || "unknown"} bpm; max ${exploration.max_hr || "unknown"} bpm.` : null,
     spo2Values.length
       ? `Pulse oximetry: ${pulseOxReadings.length} samples; average SpO2 ${Math.round(spo2Values.reduce((sum, value) => sum + value, 0) / spo2Values.length)}%; minimum SpO2 ${Math.min(...spo2Values)}%${pulseValues.length ? `; average pulse ${Math.round(pulseValues.reduce((sum, value) => sum + value, 0) / pulseValues.length)} bpm` : ""}.`
@@ -197,12 +201,15 @@ export default function BodyExplorationDetail() {
           }}
           recordType="body_exploration"
         />
-        {exploration.body_composition && (
-          <BodyCompositionSummaryCard reading={exploration.body_composition} title="Exploration Weigh-In" />
-        )}
+        <PreSessionPhysiologicalBaseline
+          record={exploration}
+          timelineRows={timelineRows}
+          sectionId="body-exploration-pre-baseline"
+        />
         {pulseOxReadings.length > 0 && (
           <PulseOxSessionChart session={exploration} sectionId="body-exploration-pulse-ox" />
         )}
+        <BloodGlucoseSessionCard record={exploration} sectionId="body-exploration-blood-glucose" />
         {pulseOxReadings.length === 0 && (
           <section id="body-exploration-pulse-ox" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

@@ -31,7 +31,7 @@ function formatMechanicalProfile(profile) {
     .join("; ");
 }
 
-function buildProfileContext(profile, findingCards, recentActivityContext = "") {
+function buildProfileContext(profile, findingCards, recentActivityContext = "", procedurePhysiologyContext = "") {
   return [
     `First name: ${profile.first_name?.trim() || "not set"}`,
     `Age: ${profile.age ?? "not set"}, Weight: ${profile.weight_kg ?? "not set"}kg, Fitness: ${profile.fitness_level ?? "not set"}`,
@@ -46,6 +46,7 @@ function buildProfileContext(profile, findingCards, recentActivityContext = "") 
     `User-verified interview findings (Profile Q&A): ${findingCards.slice(0, 24).map((entry) => `[${entry.date}] ${entry.finding}`).join("\n") || "none"}`,
     `Functional mechanical profile: ${formatMechanicalProfile(profile.anatomical_mechanical_profile) || "not set"}`,
     recentActivityContext,
+    procedurePhysiologyContext,
   ].join("\n");
 }
 
@@ -54,6 +55,7 @@ const PROFILE_QA_LOAD_STEPS = [
   "Loading profile and saved Q&A",
   "Checking latest Profiler results",
   "Loading recent session activity",
+  "Aligning procedure events with saved physiology",
   "Preparing Sarah chat context",
 ];
 
@@ -61,6 +63,7 @@ export default function ProfileQA() {
   const [profile, setProfile] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [recentActivityContext, setRecentActivityContext] = useState("");
+  const [procedurePhysiologyContext, setProcedurePhysiologyContext] = useState("");
   const [qaFindingsOpen, setQaFindingsOpen] = useState(true);
   const [loadState, setLoadState] = useState({
     step: 0,
@@ -94,6 +97,15 @@ export default function ProfileQA() {
         setRecentActivityContext(buildRecentSessionActivityContext(recentSessions, recentExplorations));
 
         setLoadState({ step: 4, message: PROFILE_QA_LOAD_STEPS[4], error: "" });
+        const procedurePhysiology = await base44.functions
+          .invoke("profileProcedurePhysiologyContext", {})
+          .catch(() => ({
+            context: "PROCEDURE-ALIGNED PHYSIOLOGY: unavailable because the saved timeline digest could not be loaded.",
+          }));
+        if (cancelled) return;
+        setProcedurePhysiologyContext(procedurePhysiology?.context || "");
+
+        setLoadState({ step: 5, message: PROFILE_QA_LOAD_STEPS[5], error: "" });
         const u = mergeProfilerResultsIntoProfile(profileResponse, latestProfilerAnalysis) || profileResponse;
         const savedQaFindings = normalizeProfileQaFindings(u.profile_qa_findings);
         const importedQaFindings = savedQaFindings.length ? savedQaFindings : parseProfileQaFindingsFromText(u.arousal_notes);
@@ -202,9 +214,10 @@ export default function ProfileQA() {
     <div className="mx-auto max-w-6xl space-y-4 px-3 py-3 pb-24 sm:px-6 sm:py-5 lg:px-8">
       <AIChat
         mode="profile"
+        autoStartVoiceToken={typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("voiceOverlay") || "" : ""}
         userProfile={profile}
         scopeId={profile.id || "profile"}
-        context={buildProfileContext(profile, profileQaFindingCards, recentActivityContext)}
+        context={buildProfileContext(profile, profileQaFindingCards, recentActivityContext, procedurePhysiologyContext)}
         savedMessages={chatMessages}
         savedNotes={profile.arousal_notes}
         latestSavedFinding={latestQaFinding}

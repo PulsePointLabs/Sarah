@@ -6,6 +6,7 @@ import {
   BellRing,
   Brain,
   CircleDollarSign,
+  ChevronDown,
   Cpu,
   FolderOpen,
   HardDrive,
@@ -25,6 +26,7 @@ import {
 } from "lucide-react";
 import TTSSettingsPanel from "@/components/TTSSettingsPanel";
 import IntimateReflectionSettingsPanel from "@/components/IntimateReflectionSettingsPanel";
+import VoiceOverlaySettingsPanel from "@/components/VoiceOverlaySettingsPanel";
 import AppVersionBadge from "@/components/AppVersionBadge";
 import { BUILD_INFO } from "@/generated/buildInfo";
 import { Textarea } from "@/components/ui/textarea";
@@ -482,6 +484,28 @@ function ToggleControl({ checked, disabled, onChange, label }) {
       />
       <span className={`h-5 w-5 rounded-full bg-background shadow-sm transition-transform ${checked ? "translate-x-5" : "translate-x-0"}`} />
     </label>
+  );
+}
+
+function SettingsCategory({ icon: Icon = Settings2, title, description, children }) {
+  return (
+    <details className="group overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+      <summary className="flex min-h-20 cursor-pointer list-none items-center justify-between gap-4 px-4 py-4 text-left marker:hidden sm:px-5 [&::-webkit-details-marker]:hidden">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="mt-0.5 rounded-xl bg-primary/10 p-2 text-primary">
+            <Icon className="h-5 w-5" />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-base font-bold text-foreground">{title}</span>
+            <span className="mt-1 block text-sm leading-relaxed text-muted-foreground">{description}</span>
+          </span>
+        </div>
+        <ChevronDown className="h-5 w-5 shrink-0 text-muted-foreground transition-transform duration-200 group-open:rotate-180" />
+      </summary>
+      <div className="space-y-4 border-t border-border bg-muted/[0.08] p-3 sm:p-4">
+        {children}
+      </div>
+    </details>
   );
 }
 
@@ -1493,6 +1517,11 @@ Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, 
         <AppVersionBadge />
       </header>
 
+      <SettingsCategory
+        icon={Cpu}
+        title="System & API"
+        description="Desktop health, provider access, speech-to-text routing, and current API visibility."
+      >
       <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -1610,8 +1639,16 @@ Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, 
           <span>Standard Claude and OpenAI API keys still power analysis and TTS. Optional admin reporting keys only add cost visibility here.</span>
         </div>
       </section>
+      </SettingsCategory>
 
+      <SettingsCategory
+        icon={Sparkles}
+        title="Sarah AI & Live Voice"
+        description="Intimate reflection, floating chat microphone, and live encouragement behavior."
+      >
       <IntimateReflectionSettingsPanel />
+
+      <VoiceOverlaySettingsPanel />
 
       <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1719,7 +1756,13 @@ Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, 
           </div>
         </div>
       </section>
+      </SettingsCategory>
 
+      <SettingsCategory
+        icon={HardDrive}
+        title="Storage & Devices"
+        description="Media locations, blood-pressure sync, and the OBS heart-rate overlay."
+      >
       <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -1953,7 +1996,13 @@ Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, 
         {overlayMessage && <p className="mt-2 text-xs font-semibold text-foreground">{overlayMessage}</p>}
         {overlayDiagnostics?.error && <p className="mt-2 text-xs font-semibold text-destructive">{overlayDiagnostics.error}</p>}
       </section>
+      </SettingsCategory>
 
+      <SettingsCategory
+        icon={Brain}
+        title="Voice, Identity & Personality"
+        description="Text-to-speech, Sarah's portrait, produced-video watermark, and conversational style."
+      >
       <TTSSettingsPanel />
 
       <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
@@ -2087,7 +2136,13 @@ Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, 
           </div>
         </div>
       </section>
+      </SettingsCategory>
 
+      <SettingsCategory
+        icon={Palette}
+        title="App, Display & Diagnostics"
+        description="Theme, readability, app lifecycle, notifications, and background task controls."
+      >
       <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -2637,6 +2692,7 @@ Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, 
           <span>Clear All stops active jobs and removes tasks from the status surfaces. Use it when a render or analysis should not keep spending API time.</span>
         </div>
       </section>
+      </SettingsCategory>
     </div>
   );
 }

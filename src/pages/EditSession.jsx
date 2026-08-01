@@ -16,12 +16,14 @@ import EventTimelineSection from "../components/session-form/EventTimelineSectio
 import EMGSection from "../components/session-form/EMGSection";
 import PulseOxSection from "../components/session-form/PulseOxSection";
 import BodyCompositionSection from "../components/session-form/BodyCompositionSection";
+import BloodGlucoseImportPanel from "@/components/BloodGlucoseImportPanel";
 import { Save, ChevronDown, ChevronUp, ArrowLeft, XCircle, ScanSearch } from "lucide-react";
 
 const SECTIONS = [
   { id: "info", label: "Session Info" },
   { id: "hr", label: "Heart Rate" },
   { id: "pulse-ox", label: "Pulse Oximetry" },
+  { id: "blood-glucose", label: "Blood Glucose" },
   { id: "body-composition", label: "Body Composition Weigh-In" },
   { id: "emg", label: "EMG (MyoWare)" },
   { id: "methods", label: "Methods & Devices" },
@@ -97,7 +99,7 @@ export default function EditSession() {
 
       const duration = calcDuration(data.start_time, data.end_time);
       // Exclude internal/computed fields that shouldn't be re-saved
-      const { _csv_rows, _emg_rows, _emg_channel_mode, _pulse_ox_rows, ai_analysis, ai_cascade, ...sessionData } = data;
+      const { _csv_rows, _emg_rows, _emg_channel_mode, _pulse_ox_rows, _blood_glucose_rows, ai_analysis, ai_cascade, ...sessionData } = data;
       // _emg_rows is only used for in-memory preview; emg_data_file URL is already in sessionData
 
       // Sanitize event_timeline: ensure category is always a clean array of strings
@@ -188,6 +190,7 @@ export default function EditSession() {
       case "info": return <SessionInfoSection {...props} />;
       case "hr": return <HeartRateSection {...props} />;
       case "pulse-ox": return <PulseOxSection {...props} />;
+      case "blood-glucose": return <BloodGlucoseImportPanel record={data} onChange={setData} />;
       case "body-composition": return <BodyCompositionSection {...props} />;
       case "methods": return <MethodsSection {...props} />;
       case "subjective": return data.no_climax ? <NoClimaxSubjectiveSection {...props} /> : <SubjectiveSection {...props} />;

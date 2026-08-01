@@ -228,9 +228,16 @@ function bluetoothDeviceLabel(device) {
   return String(device?.deviceName || device?.name || '').trim();
 }
 
-function isPreferredHeartRateDevice(device) {
+function isPreferredBluetoothDevice(device) {
   const label = bluetoothDeviceLabel(device);
-  return /polar\s+h10/i.test(label) || /\bh10\b/i.test(label) || /heart.?rate/i.test(label);
+  return /polar\s+h10/i.test(label)
+    || /\bh10\b/i.test(label)
+    || /heart.?rate/i.test(label)
+    || /omron/i.test(label)
+    || /blesmart/i.test(label)
+    || /\bbp7000\b/i.test(label)
+    || /\bevolv\b/i.test(label)
+    || /\bhem[-\s]?\d+/i.test(label);
 }
 
 function resetBluetoothSelection() {
@@ -243,19 +250,20 @@ function finishBluetoothSelection(deviceId = '') {
   bluetoothSelection.done = true;
   const callback = bluetoothSelection.callback;
   resetBluetoothSelection();
-  desktopLog(deviceId ? `Selected Bluetooth device ${deviceId}` : 'Bluetooth scan ended without a selected H10 device');
+  desktopLog(deviceId ? `Selected Bluetooth device ${deviceId}` : 'Bluetooth scan ended without a selected supported device');
   callback(deviceId);
 }
 
 function configureDesktopPermissions() {
   const ses = session.defaultSession;
   ses.setPermissionCheckHandler((_webContents, permission) => {
-    if (['fullscreen', 'media', 'notifications', 'clipboard-read', 'clipboard-sanitized-write'].includes(permission)) return true;
+    if (['bluetooth', 'fullscreen', 'media', 'notifications', 'clipboard-read', 'clipboard-sanitized-write'].includes(permission)) return true;
     return false;
   });
   ses.setPermissionRequestHandler((_webContents, permission, callback) => {
-    callback(['fullscreen', 'media', 'notifications', 'clipboard-read', 'clipboard-sanitized-write'].includes(permission));
+    callback(['bluetooth', 'fullscreen', 'media', 'notifications', 'clipboard-read', 'clipboard-sanitized-write'].includes(permission));
   });
+  ses.setDevicePermissionHandler?.((details) => details.deviceType === 'bluetooth');
   ses.setBluetoothPairingHandler((details, callback) => {
     if (details.pairingKind === 'confirm' || details.pairingKind === 'confirmPin') {
       callback({ confirmed: true });
@@ -379,7 +387,7 @@ function configureBluetoothSelection(win) {
       };
     }
 
-    const preferred = devices.find(isPreferredHeartRateDevice);
+    const preferred = devices.find(isPreferredBluetoothDevice);
     if (preferred?.deviceId) {
       finishBluetoothSelection(preferred.deviceId);
     }

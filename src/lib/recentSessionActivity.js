@@ -10,6 +10,10 @@ const RECENT_ACTIVITY_FIELDS = [
   "foley_type",
   "notes",
   "event_timeline",
+  "pulse_ox_readings",
+  "pulse_ox_source",
+  "blood_glucose_readings",
+  "latest_blood_glucose_reading",
 ];
 
 export const RECENT_SESSION_ACTIVITY_FIELDS = Object.freeze(RECENT_ACTIVITY_FIELDS);
@@ -42,6 +46,27 @@ function relevantEvents(record = {}) {
   return [...new Set([...deviceSpecific, ...manual, ...normalized].map((event) => event.text))].slice(0, 5);
 }
 
+function measuredVitals(record = {}) {
+  const lines = [];
+  const glucose = (Array.isArray(record.blood_glucose_readings) ? record.blood_glucose_readings : [])
+    .map((reading) => Number(reading?.glucose_mg_dl))
+    .filter(Number.isFinite);
+  const latestGlucose = Number(record.latest_blood_glucose_reading?.glucose_mg_dl);
+  if (!glucose.length && Number.isFinite(latestGlucose)) glucose.push(latestGlucose);
+  if (glucose.length) {
+    lines.push(`blood glucose ${glucose.length === 1 ? `${glucose[0]} mg/dL` : `${Math.min(...glucose)}-${Math.max(...glucose)} mg/dL across ${glucose.length} readings`}`);
+  }
+
+  const pulseOx = (Array.isArray(record.pulse_ox_readings) ? record.pulse_ox_readings : [])
+    .map((reading) => Number(reading?.spo2_percent ?? reading?.spo2))
+    .filter(Number.isFinite);
+  if (pulseOx.length) {
+    const average = Math.round(pulseOx.reduce((sum, value) => sum + value, 0) / pulseOx.length);
+    lines.push(`SpO2 average ${average}%, minimum ${Math.min(...pulseOx)}% across ${pulseOx.length} samples`);
+  }
+  return lines;
+}
+
 function activityRecord(record = {}, type = "session") {
   const date = String(record.date || record.created_date || "").slice(0, 10) || "date unavailable";
   const time = String(record.start_time || "").trim();
@@ -58,6 +83,7 @@ function activityRecord(record = {}, type = "session") {
     : "";
   const notes = cleanText(record.notes, 620);
   const events = relevantEvents(record);
+  const vitals = measuredVitals(record);
 
   return {
     timestamp: activityTimestamp(record),
@@ -66,6 +92,7 @@ function activityRecord(record = {}, type = "session") {
       methods.length ? `Methods: ${methods.join(", ")}` : null,
       foley ? `Recorded catheter: ${foley}` : null,
       notes ? `Saved notes: ${notes}` : null,
+      vitals.length ? `Measured session-window vitals: ${vitals.join("; ")}` : null,
       events.length ? `Saved timeline activity: ${events.join(" | ")}` : null,
     ].filter(Boolean),
   };

@@ -202,6 +202,61 @@ html,body{
   font-size:10px;
 }
 
+#physiologyStrip{
+  display:grid;
+  grid-template-columns:minmax(105px,1.35fr) repeat(4,minmax(72px,1fr)) minmax(82px,.9fr);
+  gap:5px;
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+}
+
+.physiologyMetric{
+  min-width:0;
+  padding:4px 7px;
+  border:1px solid rgba(148,163,184,.18);
+  border-radius:8px;
+  background:rgba(15,20,25,.52);
+}
+
+.physiologyLabel{
+  display:block;
+  color:var(--muted);
+  font-size:8px;
+  font-weight:750;
+  letter-spacing:.8px;
+  line-height:1;
+  text-transform:uppercase;
+}
+
+.physiologyValue{
+  display:block;
+  margin-top:3px;
+  overflow:hidden;
+  color:var(--text);
+  font-size:12px;
+  font-weight:750;
+  font-variant-numeric:tabular-nums;
+  line-height:1;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.physiologyMetric.available{
+  border-color:rgba(45,212,191,.25);
+}
+
+.physiologyMetric.available .physiologyValue{
+  color:var(--teal);
+}
+
+.physiologyMetric.alert{
+  border-color:rgba(251,191,36,.44);
+  background:rgba(120,74,10,.18);
+}
+
+.physiologyMetric.alert .physiologyValue{
+  color:rgb(251,191,36);
+}
+
 #legend{
   display:flex;
   align-items:center;
@@ -298,6 +353,8 @@ canvas{
   .value{font-size:27px;}
   #chartSubtitle{display:none;}
   #chartWrap{min-width:260px;}
+  #physiologyStrip{grid-template-columns:repeat(4,minmax(68px,1fr));}
+  .physiologyMetric.state,.physiologyMetric.recovery{display:none;}
 }
 </style>
 
@@ -340,6 +397,33 @@ canvas{
       </div>
     </div>
 
+    <div id="physiologyStrip" aria-label="Live physiological evidence">
+      <div class="physiologyMetric state" id="physStateMetric">
+        <span class="physiologyLabel">Autonomic state</span>
+        <span class="physiologyValue" id="physState">WAITING</span>
+      </div>
+      <div class="physiologyMetric" id="physHrvMetric">
+        <span class="physiologyLabel">RMSSD</span>
+        <span class="physiologyValue" id="physHrv">--</span>
+      </div>
+      <div class="physiologyMetric" id="physRespMetric">
+        <span class="physiologyLabel">Respiration</span>
+        <span class="physiologyValue" id="physResp">--</span>
+      </div>
+      <div class="physiologyMetric" id="physMotionMetric">
+        <span class="physiologyLabel">Chest motion</span>
+        <span class="physiologyValue" id="physMotion">--</span>
+      </div>
+      <div class="physiologyMetric recovery" id="physRecoveryMetric">
+        <span class="physiologyLabel">Recovery drop</span>
+        <span class="physiologyValue" id="physRecovery">--</span>
+      </div>
+      <div class="physiologyMetric" id="physSignalMetric">
+        <span class="physiologyLabel">Signal</span>
+        <span class="physiologyValue" id="physSignal">--</span>
+      </div>
+    </div>
+
     <div id="chartBox">
       <canvas id="chart"></canvas>
     </div>
@@ -360,7 +444,7 @@ const LIVE_CAPTURE_STREAM_URL = "http://127.0.0.1:8787/api/live-capture/stream";
 const LIVE_CAPTURE_STATUS_URL = "http://127.0.0.1:8787/api/live-capture/status";
 const OVERLAY_HR_STREAM_URL = "http://127.0.0.1:8787/api/live-capture/overlay-heart-rate/stream";
 const OVERLAY_HR_STATUS_URL = "http://127.0.0.1:8787/api/live-capture/overlay-heart-rate";
-const OVERLAY_BUILD_ID = "sarah-overlay-authoritative-hr-v1";
+const OVERLAY_BUILD_ID = "sarah-overlay-multimodal-v2";
 
 /*** POLLING / DISPLAY ***/
 const POLL_MS = 1000;
@@ -393,7 +477,7 @@ let liveCaptureConnected = false;
 let lastLiveCaptureHrAtMs = 0;
 let overlayHrEvents = null;
 let overlayHrConnected = false;
-let overlayHrSequence = 0;
+let overlayHrSequence = -1;
 
 /*** BASELINE ANCHOR ***/
 const BASELINE_SMOOTHING = 0.03;
@@ -426,6 +510,22 @@ const heartEl = document.getElementById("heart");
 const statusLabel = document.getElementById("statusLabel");
 const statusTimer = document.getElementById("statusTimer");
 const statusBadge = document.getElementById("statusBadge");
+const physiologyEls = {
+  state: document.getElementById("physState"),
+  hrv: document.getElementById("physHrv"),
+  respiration: document.getElementById("physResp"),
+  motion: document.getElementById("physMotion"),
+  recovery: document.getElementById("physRecovery"),
+  signal: document.getElementById("physSignal"),
+};
+const physiologyMetrics = {
+  state: document.getElementById("physStateMetric"),
+  hrv: document.getElementById("physHrvMetric"),
+  respiration: document.getElementById("physRespMetric"),
+  motion: document.getElementById("physMotionMetric"),
+  recovery: document.getElementById("physRecoveryMetric"),
+  signal: document.getElementById("physSignalMetric"),
+};
 
 /*** HELPERS ***/
 function mean(nums){ return nums.length ? nums.reduce((a,b)=>a+b,0)/nums.length : 0; }
@@ -434,6 +534,67 @@ function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
 function formatTimer(sec){
   sec = Math.max(0, Math.floor(sec));
   return `${String(Math.floor(sec/60)).padStart(2,"0")}:${String(sec%60).padStart(2,"0")}`;
+}
+
+function finiteNumber(value){
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function displayMotionClass(value){
+  const text = String(value || "").replaceAll("_", " ").trim();
+  return text ? text.toUpperCase() : null;
+}
+
+function setPhysiologyMetric(key, value, { available = false, alert = false } = {}){
+  physiologyEls[key].textContent = value || "--";
+  physiologyMetrics[key].classList.toggle("available", Boolean(available));
+  physiologyMetrics[key].classList.toggle("alert", Boolean(alert));
+}
+
+function updatePhysiology(data){
+  const physiology = data?.physiology || {};
+  const stale = Boolean(data?.stale || physiology?.stale);
+  const hrv = physiology?.hrv || data?.hrv || {};
+  const multimodal = data?.multimodal || {};
+  const respiration = physiology?.respiration || multimodal?.respiration || {};
+  const motion = physiology?.motion || multimodal?.motion || {};
+  const recovery = physiology?.recovery || multimodal?.recovery || {};
+  const state = physiology?.state || multimodal?.state || {};
+  const signalConfidence = finiteNumber(
+    physiology?.signalConfidence ?? multimodal?.signalConfidence?.score
+  );
+  const rmssd = finiteNumber(hrv?.rmssdMs ?? data?.hrv_rmssd_ms);
+  const respirationBpm = respiration?.available === true ? finiteNumber(respiration?.bpm) : null;
+  const motionRms = motion?.available === true ? finiteNumber(motion?.dynamicRmsMilliG) : null;
+  const recoveryDrop = recovery?.available === true ? finiteNumber(recovery?.currentDropBpm) : null;
+  const breathHold = !stale && Boolean(respiration?.possibleBreathHold);
+
+  setPhysiologyMetric("state", stale ? "STALE" : String(state?.label || state?.key || "MONITORING").toUpperCase(), {
+    available: !stale && Boolean(state?.label || state?.key),
+    alert: !stale && ["warn", "alert"].includes(String(state?.tone || "").toLowerCase()),
+  });
+  setPhysiologyMetric("hrv", !stale && rmssd > 0 ? `${rmssd.toFixed(1)} ms` : "--", {
+    available: !stale && rmssd > 0,
+  });
+  setPhysiologyMetric("respiration", breathHold
+    ? "POSSIBLE HOLD"
+    : (!stale && respirationBpm > 0 ? `${respirationBpm.toFixed(1)}/min` : "--"), {
+    available: !stale && respirationBpm > 0,
+    alert: breathHold,
+  });
+  setPhysiologyMetric("motion", !stale && motion?.available === true
+    ? (displayMotionClass(motion?.class) || (motionRms != null ? `${Math.round(motionRms)} mg` : "--"))
+    : "--", {
+    available: !stale && motion?.available === true && (Boolean(motion?.class) || motionRms != null),
+  });
+  setPhysiologyMetric("recovery", !stale && recoveryDrop != null ? `${Math.round(recoveryDrop)} bpm` : "--", {
+    available: !stale && recoveryDrop != null,
+  });
+  setPhysiologyMetric("signal", !stale && signalConfidence != null ? `${Math.round(signalConfidence)}%` : "--", {
+    available: !stale && signalConfidence >= 55,
+    alert: !stale && signalConfidence != null && signalConfidence < 55,
+  });
 }
 
 function setStatus(mode, elapsedSec){
@@ -618,6 +779,7 @@ function liveTelemetryAgeMs(data) {
 
 function ingestLiveTelemetry(data) {
   if (data?.origin === "obs_overlay" || data?.raw?.origin === "obs_overlay") return;
+  updatePhysiology(data);
   if (data?.sequence != null && Number(data.sequence) <= overlayHrSequence) return;
   if (data?.sequence != null) overlayHrSequence = Number(data.sequence);
   if (data?.stale || data?.connected === false) {
@@ -884,6 +1046,7 @@ function markTelemetryStale(){
   currentEl.textContent = "--";
   heartEl.classList.remove("beating");
   heartEl.style.removeProperty("--beat-duration");
+  updatePhysiology({ stale: true, physiology: { stale: true } });
 }
 
 function updateBaseline(currentSmoothedHr){

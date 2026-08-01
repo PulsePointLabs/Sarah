@@ -1,5 +1,6 @@
 package com.pulsepointlabs.sarah;
 
+import android.content.Intent;
 import android.os.Bundle;
 import android.view.WindowManager;
 import com.getcapacitor.BridgeActivity;
@@ -16,11 +17,21 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(SarahBackgroundJobsPlugin.class);
         registerPlugin(SarahMediaPlugin.class);
         registerPlugin(SarahKeepAwakePlugin.class);
+        registerPlugin(SarahVoiceOverlayPlugin.class);
+        registerPlugin(SarahIncomingCsvPlugin.class);
         super.onCreate(savedInstanceState);
+        SarahIncomingCsvPlugin.captureIntent(this, getIntent());
         if (getBridge() != null && getBridge().getWebView() != null) {
             sarahWebChromeClient = new SarahWebChromeClient(this, getBridge());
             getBridge().getWebView().setWebChromeClient(sarahWebChromeClient);
         }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        SarahIncomingCsvPlugin.captureIntent(this, intent);
     }
 
     @Override

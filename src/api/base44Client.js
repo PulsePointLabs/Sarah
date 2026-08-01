@@ -21,9 +21,6 @@ async function request(path, options = {}) {
   try {
     response = await fetch(targetUrl, fetchOptions);
   } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s: ${targetUrl}`);
-    }
     if (
       isSarahNativeShell()
       && !options.skipApiDiscovery
@@ -31,6 +28,9 @@ async function request(path, options = {}) {
     ) {
       await discoverSarahApiBase({ timeoutMs: 2200 });
       return request(path, { ...options, skipApiDiscovery: true });
+    }
+    if (error?.name === "AbortError") {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s: ${targetUrl}`);
     }
     throw error;
   } finally {
@@ -71,18 +71,18 @@ async function invokeFunction(name, payload, options = {}) {
       signal: options.signal || controller?.signal,
     });
   } catch (error) {
-    if (error?.name === "AbortError" && controller) {
-      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s: ${apiUrl(`/functions/${name}`)}`);
-    }
-    if (error?.name === "AbortError") {
-      throw error;
-    }
     if (
       isSarahNativeShell()
       && !options.skipApiDiscovery
     ) {
       await discoverSarahApiBase({ timeoutMs: 2200 });
       return invokeFunction(name, payload, { ...options, skipApiDiscovery: true });
+    }
+    if (error?.name === "AbortError" && controller) {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s: ${apiUrl(`/functions/${name}`)}`);
+    }
+    if (error?.name === "AbortError") {
+      throw error;
     }
     throw error;
   } finally {
@@ -177,9 +177,9 @@ function entityApi(entity) {
 }
 
 const entityNames = [
-  'Session', 'BodyExploration', 'HeartRateTimeline', 'EMGTimeline', 'BloodPressureReading', 'BodyCompositionReading', 'HowlTelemetry', 'HowlControlCommand', 'HowlControlSettings', 'AudioExport', 'SessionReviewVideo', 'CompareAnalysisResult',
+  'Session', 'BodyExploration', 'HeartRateTimeline', 'EMGTimeline', 'BloodPressureReading', 'BloodGlucoseReading', 'PulseOxReading', 'BodyCompositionReading', 'HowlTelemetry', 'HowlControlCommand', 'HowlControlSettings', 'AudioExport', 'SessionReviewVideo', 'CompareAnalysisResult',
   'CascadeAnalysisResult', 'SessionClusterAnalysis', 'Journal', 'CustomMethod', 'SessionRecording', 'RecordingUpload', 'RenderedVideo', 'RenderPreset', 'User',
-  'AICorrectionMemory', 'AppSetting',
+  'AICorrectionMemory', 'SarahMemory', 'SarahConversationState', 'SarahLanguageProfile', 'AppSetting',
 ];
 
 export const base44 = {

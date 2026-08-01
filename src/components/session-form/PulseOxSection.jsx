@@ -3,6 +3,7 @@ import { Activity, AlertCircle, CheckCircle, Upload } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 import { Label } from "@/components/ui/label";
 import { decodePulseOxCsvBytes, parsePulseOxCsv } from "@/utils/parsePulseOxCsv";
+import { getRecordWindow } from "@/utils/localRecordTime";
 
 function summarizeRows(rows) {
   if (!rows.length) return null;
@@ -21,51 +22,10 @@ function formatTime(value) {
   return new Date(value).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-function datePartsFromSessionDate(value) {
-  if (!value) return null;
-  const raw = String(value);
-  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (match) {
-    return { year: Number(match[1]), month: Number(match[2]) - 1, day: Number(match[3]) };
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return { year: date.getFullYear(), month: date.getMonth(), day: date.getDate() };
-}
-
-function parseClock(value) {
-  if (!value) return null;
-  const match = String(value).trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
-  if (!match) return null;
-  let hour = Number(match[1]);
-  const minute = Number(match[2]);
-  const second = Number(match[3] || 0);
-  const ampm = match[4];
-  if (/pm/i.test(ampm || "") && hour < 12) hour += 12;
-  if (/am/i.test(ampm || "") && hour === 12) hour = 0;
-  if (hour > 23 || minute > 59 || second > 59) return null;
-  return { hour, minute, second };
-}
-
 function buildSessionWindow(data) {
-  const parts = datePartsFromSessionDate(data.date);
-  const startClock = parseClock(data.start_time);
-  if (!parts || !startClock) return { error: "Set the session date and start time before importing pulse-ox CSV so Sarah can align samples to the session timeline." };
-
-  const start = new Date(parts.year, parts.month, parts.day, startClock.hour, startClock.minute, startClock.second || 0);
-  let end = null;
-  const endClock = parseClock(data.end_time);
-  if (endClock) {
-    end = new Date(parts.year, parts.month, parts.day, endClock.hour, endClock.minute, endClock.second || 0);
-    if (end < start) end.setDate(end.getDate() + 1);
-  } else if (Number(data.duration_minutes) > 0) {
-    end = new Date(start.getTime() + Number(data.duration_minutes) * 60_000);
-  }
-
-  return {
-    startAt: start.toISOString(),
-    endAt: end?.toISOString() || null,
-  };
+  const window = getRecordWindow(data);
+  if (!window) return { error: "Set the local session date, start time, and end time (or duration) before importing pulse-ox CSV." };
+  return { startAt: window.start.toISOString(), endAt: window.end.toISOString() };
 }
 
 export default function PulseOxSection({ data, onChange }) {
@@ -159,6 +119,7 @@ export default function PulseOxSection({ data, onChange }) {
             {importResult.alignedToSession ? "Aligned to session " : ""}
             {formatTime(importResult.firstTimestamp)} to {formatTime(importResult.lastTimestamp)}
           </p>
+          <p className="pl-5 text-muted-foreground">{importResult.timestampInterpretation}.</p>
           {(importResult.filteredBefore > 0 || importResult.filteredAfter > 0) && (
             <p className="pl-5 text-muted-foreground">
               Ignored {importResult.filteredBefore || 0} pre-session row{importResult.filteredBefore === 1 ? "" : "s"}

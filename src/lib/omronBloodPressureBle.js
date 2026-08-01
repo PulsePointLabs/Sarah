@@ -20,6 +20,14 @@ function canUseNativeOmronListener() {
   return Boolean(window.Capacitor?.isNativePlatform?.());
 }
 
+function canUseWebBluetoothOmronListener() {
+  return Boolean(
+    window.sarahDesktop?.isDesktop
+    && typeof navigator !== "undefined"
+    && navigator.bluetooth?.requestDevice
+  );
+}
+
 async function stopNativeOmronListener() {
   const listener = nativeOmronListener;
   nativeOmronListener = null;
@@ -192,7 +200,7 @@ function summarizeServices(services = []) {
 
 function isRecoverableOmronConnectionError(error) {
   const message = String(error?.message || error || "");
-  return /connection\s+timeout|connect\s+timeout|timed?\s*out|gatt\s+133|disconnected|not\s+connected/i.test(message);
+  return /connection\s+(?:timeout|failed)|connect\s+timeout|timed?\s*out|gatt\s+133|gatt.*(?:failed|disconnected)|disconnected|not\s+connected|networkerror/i.test(message);
 }
 
 async function initializeAndroidBle(onStatus) {
@@ -242,6 +250,36 @@ async function requestOmronDevice(onStatus) {
     }
     throw lastError;
   }
+}
+
+async function requestWebOmronDevice(onStatus, { forceDevicePicker = false } = {}) {
+  const remembered = !forceDevicePicker ? getRememberedOmronDevice() : null;
+  if (remembered?.deviceId && typeof navigator.bluetooth.getDevices === "function") {
+    const permitted = await navigator.bluetooth.getDevices().catch(() => []);
+    const saved = permitted.find((device) => device.id === remembered.deviceId);
+    if (saved) {
+      onStatus?.(`Using saved OMRON BP7000 Bluetooth permission (${saved.name || remembered.name || "OMRON BP7000"}).`);
+      return saved;
+    }
+  }
+
+  onStatus?.("Wake or start the OMRON cuff. Sarah is opening the Windows Bluetooth picker.");
+  return navigator.bluetooth.requestDevice({
+    filters: [
+      { services: [BLOOD_PRESSURE_SERVICE_UUID] },
+      { namePrefix: "BLEsmart" },
+      { namePrefix: "OMRON" },
+      { namePrefix: "BP7000" },
+      { namePrefix: "Evolv" },
+      { namePrefix: "HEM" },
+    ],
+    optionalServices: [
+      BLOOD_PRESSURE_SERVICE_UUID,
+      CURRENT_TIME_SERVICE_UUID,
+      BATTERY_SERVICE_UUID,
+      DEVICE_INFORMATION_SERVICE_UUID,
+    ],
+  });
 }
 
 export function parseBloodPressureMeasurement(value, device = {}) {
@@ -344,6 +382,54 @@ function handleOmronDisconnected(listener) {
   scheduleOmronReconnect(listener);
 }
 
+async function connectAndSubscribeWebOmron(listener, { initial = false } = {}) {
+  if (!listener || listener.stopping || activeOmronListener !== listener) return null;
+  clearReconnectTimer(listener);
+  listener.reconnecting = !initial;
+
+  try {
+    listener.onStatus?.(initial ? "Connecting directly to OMRON BP7000 from Sarah desktop..." : "Waiting for the OMRON cuff to wake...");
+    const server = listener.webDevice.gatt.connected
+      ? listener.webDevice.gatt
+      : await listener.webDevice.gatt.connect();
+    const service = await server.getPrimaryService(BLOOD_PRESSURE_SERVICE_UUID);
+    const characteristic = await service.getCharacteristic(BLOOD_PRESSURE_MEASUREMENT_UUID);
+    const handler = (event) => {
+      try {
+        const parsed = parseBloodPressureMeasurement(event.target.value, listener.device);
+        listener.onStatus?.(`Received OMRON reading ${parsed.systolic_mm_hg}/${parsed.diastolic_mm_hg} mmHg.`);
+        listener.onReading?.(parsed, { device: listener.device, services: listener.services || [] });
+      } catch (error) {
+        listener.onError?.(error);
+      }
+    };
+
+    if (listener.characteristic && listener.notificationHandler) {
+      listener.characteristic.removeEventListener("characteristicvaluechanged", listener.notificationHandler);
+    }
+    listener.characteristic = characteristic;
+    listener.notificationHandler = handler;
+    characteristic.addEventListener("characteristicvaluechanged", handler);
+    await characteristic.startNotifications();
+
+    listener.connected = true;
+    listener.reconnecting = false;
+    listener.reconnectAttempt = 0;
+    listener.lastConnectedAt = new Date().toISOString();
+    listener.onStatus?.("OMRON desktop listener is armed. Readings will be saved directly into the active session.");
+    return [];
+  } catch (error) {
+    listener.connected = false;
+    listener.reconnecting = false;
+    if (!listener.stopping && activeOmronListener === listener && isRecoverableOmronConnectionError(error)) {
+      listener.onStatus?.("OMRON is still armed. Sarah will connect as soon as the cuff wakes or transmits.");
+      scheduleOmronReconnect(listener);
+      return null;
+    }
+    throw error;
+  }
+}
+
 async function connectAndSubscribeOmron(listener, { initial = false } = {}) {
   if (!listener || listener.stopping || activeOmronListener !== listener) return null;
   clearReconnectTimer(listener);
@@ -414,7 +500,10 @@ function scheduleOmronReconnect(listener) {
   listener.reconnectAttempt = attempt + 1;
   listener.reconnectTimer = window.setTimeout(() => {
     if (!listener || listener.stopping || activeOmronListener !== listener) return;
-    connectAndSubscribeOmron(listener, { initial: false }).catch((error) => {
+    const connect = listener.transport === "web_bluetooth"
+      ? connectAndSubscribeWebOmron
+      : connectAndSubscribeOmron;
+    connect(listener, { initial: false }).catch((error) => {
       if (listener.stopping || activeOmronListener !== listener) return;
       listener.onStatus?.(`Still armed; OMRON reconnect is waiting for the cuff to wake. ${error?.message || ""}`.trim());
       scheduleOmronReconnect(listener);
@@ -432,6 +521,49 @@ export async function startOmronBloodPressureListener({
 } = {}) {
   if (canUseNativeOmronListener()) {
     return startNativeOmronListener({ onStatus, onReading, onDisconnect, onError, forceDevicePicker, rememberDevice });
+  }
+  if (canUseWebBluetoothOmronListener()) {
+    await stopOmronBloodPressureListener().catch(() => {});
+    const webDevice = await requestWebOmronDevice(onStatus, { forceDevicePicker });
+    const device = {
+      deviceId: webDevice.id,
+      id: webDevice.id,
+      name: webDevice.name || "OMRON BP7000",
+      displayName: webDevice.name || "OMRON BP7000",
+    };
+    if (rememberDevice) rememberOmronDevice(device);
+
+    const listener = {
+      transport: "web_bluetooth",
+      deviceId: webDevice.id,
+      device,
+      webDevice,
+      startedAt: new Date().toISOString(),
+      services: [],
+      characteristic: null,
+      notificationHandler: null,
+      connected: false,
+      reconnecting: false,
+      reconnectTimer: null,
+      reconnectAttempt: 0,
+      stopping: false,
+      onStatus,
+      onReading,
+      onDisconnect,
+      onError,
+    };
+    const handleDisconnected = () => handleOmronDisconnected(listener);
+    listener.disconnectHandler = handleDisconnected;
+    webDevice.addEventListener("gattserverdisconnected", handleDisconnected);
+    activeOmronListener = listener;
+    try {
+      await connectAndSubscribeWebOmron(listener, { initial: true });
+      return { ok: true, device, services: [], desktop: true };
+    } catch (error) {
+      activeOmronListener = null;
+      webDevice.removeEventListener("gattserverdisconnected", handleDisconnected);
+      throw error;
+    }
   }
   await stopOmronBloodPressureListener().catch(() => {});
   await initializeAndroidBle(onStatus);
@@ -487,6 +619,17 @@ export async function stopOmronBloodPressureListener() {
   if (!listener?.deviceId) return { ok: true, stopped: false };
   listener.stopping = true;
   clearReconnectTimer(listener);
+  if (listener.transport === "web_bluetooth") {
+    if (listener.characteristic && listener.notificationHandler) {
+      listener.characteristic.removeEventListener("characteristicvaluechanged", listener.notificationHandler);
+      await listener.characteristic.stopNotifications().catch(() => {});
+    }
+    if (listener.disconnectHandler) {
+      listener.webDevice?.removeEventListener("gattserverdisconnected", listener.disconnectHandler);
+    }
+    listener.webDevice?.gatt?.disconnect();
+    return { ok: true, stopped: true, device: listener.device };
+  }
   await BleClient.stopNotifications(listener.deviceId, BLOOD_PRESSURE_SERVICE_UUID, BLOOD_PRESSURE_MEASUREMENT_UUID).catch(() => {});
   await BleClient.disconnect(listener.deviceId).catch(() => {});
   return { ok: true, stopped: true, device: listener.device };

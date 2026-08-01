@@ -1,4 +1,5 @@
 export const SHARED_HR_PACKET_STALE_MS = 30000;
+export const SHARED_HR_PACKET_HARD_LOSS_MS = 120000;
 
 export function parseHrTimestamp(value) {
   const numeric = Number(value);

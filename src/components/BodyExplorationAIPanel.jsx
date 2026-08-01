@@ -3,7 +3,11 @@ import { Activity, AlertCircle, Brain, Lightbulb, ScanSearch, ShieldCheck } from
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
-import { pulseOxReadingsFromSession } from "@/lib/sessionContext";
+import {
+  pulseOxReadingsFromSession,
+  sessionContextEvidenceText,
+  structuredSessionContextForAI,
+} from "@/lib/sessionContext";
 import { buildBodyExplorationVideoPassDigest, buildBodyExplorationVisualEvidenceDigest } from "@/lib/visualEvidence";
 import AIOutputReader from "./AIOutputReader";
 import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
@@ -289,6 +293,11 @@ ${groundingContext}
 ${focusedProfileContext}
 ${visualEvidenceContext}
 ${videoPassEvidenceContext}
+MEASURED VITALS AND SESSION CONTEXT:
+${sessionContextEvidenceText(exploration) || "No additional imported session-window vitals were saved."}
+- Treat imported blood glucose, pulse oximetry, blood pressure, and other measured values as timestamped context.
+- Distinguish measured values from user-reported context and from AI inference.
+- Do not claim that a vital caused a response unless the saved evidence supports that conclusion.
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${ANATOMICAL_LATERALITY_RULE}
 ${PRODUCTION_BODY_EXPLORATION_STYLE}
@@ -330,6 +339,7 @@ ${JSON.stringify({
     : null,
   heart_rate: telemetrySummary(timelineRows, exploration),
   pulse_oximetry: pulseOxSummary(exploration),
+  structured_session_context: structuredSessionContextForAI(exploration),
   emg_rows: emgRows.length,
   reviewed_visual_evidence: visualEvidenceContext || null,
   reviewed_video_pass_evidence: videoPassEvidenceContext || null,

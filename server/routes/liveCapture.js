@@ -17,7 +17,11 @@ import {
   normalizePulsoidTelemetry,
   parsePulsoidMessage,
 } from '../services/hrSources.js';
-import { SHARED_HR_PACKET_STALE_MS, isSharedHrPacketFresh } from '../services/hrFreshness.js';
+import {
+  SHARED_HR_PACKET_HARD_LOSS_MS,
+  SHARED_HR_PACKET_STALE_MS,
+  isSharedHrPacketFresh,
+} from '../services/hrFreshness.js';
 import { normalizeOverlayHeartRateSnapshot } from '../services/overlayHeartRate.js';
 import { summarizeCapturePauseIntervals } from '../services/capturePauseIntervals.js';
 import { coalesceDuplicateHrRows } from '../services/hrCaptureMerge.js';
@@ -347,21 +351,42 @@ function markSelectedHrStaleIfNeeded() {
   const source = state.hr.selectedSource;
   if (source === HR_SOURCE_IDS.DIRECT_H10) {
     const last = Date.parse(state.hr.directH10.lastMessageAt || '');
-    if (state.hr.directH10.connected && !isSharedHrPacketFresh(state.hr.directH10.lastMessageAt)) {
+    const ageMs = Number.isFinite(last) ? Date.now() - last : null;
+    const hardLoss = ageMs != null && ageMs > SHARED_HR_PACKET_HARD_LOSS_MS;
+    const stale = !isSharedHrPacketFresh(state.hr.directH10.lastMessageAt);
+    if (state.hr.directH10.connected && hardLoss) {
       state.hr.directH10 = {
         ...state.hr.directH10,
         connected: false,
-        error: 'Direct H10 signal lost - no HR packets received recently.',
+        degraded: false,
+        error: 'Direct H10 has not delivered HR packets for two minutes.',
       };
       state.hr.latestTelemetry = state.hr.latestTelemetry ? {
         ...state.hr.latestTelemetry,
         quality: {
           ...(state.hr.latestTelemetry.quality || {}),
           stale: true,
-          ageMs: Number.isFinite(last) ? Date.now() - last : null,
+          ageMs,
         },
       } : null;
-      refreshHrSourceStatus('Direct H10 signal lost - reconnect from Live Capture');
+      refreshHrSourceStatus('Direct H10 acquisition stopped - reconnect from Live Capture');
+      return true;
+    }
+    if (state.hr.directH10.connected && stale && !state.hr.directH10.degraded) {
+      state.hr.directH10 = {
+        ...state.hr.directH10,
+        degraded: true,
+        error: null,
+      };
+      state.hr.latestTelemetry = state.hr.latestTelemetry ? {
+        ...state.hr.latestTelemetry,
+        quality: {
+          ...(state.hr.latestTelemetry.quality || {}),
+          stale: true,
+          ageMs,
+        },
+      } : null;
+      refreshHrSourceStatus('H10 packet delivery is delayed; acquisition remains armed');
       return true;
     }
   }
@@ -1768,6 +1793,7 @@ function refreshDirectH10TelemetryState(telemetry, fallbackDeviceName = '') {
       || ''
     ),
     error: null,
+    degraded: false,
     lastMessageAt: receivedIso,
     lastMeasuredAt: telemetry?.measuredAt ? new Date(telemetry.measuredAt).toISOString() : null,
   };
@@ -2333,6 +2359,14 @@ liveCaptureRouter.post('/overlay-heart-rate/test-pulse', (req, res) => {
     measuredAt: now,
     receivedAt: now,
     quality: { stale: false, ageMs: 0 },
+    hrv: { rmssdMs: 24.6, quality: 'high', sampleCount: 180 },
+    multimodal: {
+      signalConfidence: { score: 86 },
+      state: { key: 'tracked', label: 'MULTIMODAL TRACKING', tone: 'good' },
+      respiration: { available: true, bpm: 14.2, confidence: 'high', source: 'overlay_test' },
+      motion: { available: true, class: 'low_motion', dynamicRmsMilliG: 42 },
+      recovery: { available: true, currentDropBpm: 4 },
+    },
   };
   const overlay = overlayTestTelemetry
     ? broadcastOverlayHeartRate(overlayTestTelemetry)

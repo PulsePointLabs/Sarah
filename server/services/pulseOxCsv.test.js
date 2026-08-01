@@ -20,6 +20,25 @@ test('parsePulseOxCsv accepts EMAY-style timestamp, SpO2, and PR columns', () =>
   assert.equal(result.rows[2].source_device, 'EMAY pulse oximeter');
 });
 
+test('parsePulseOxCsv treats timezone-less device timestamps as local session time', () => {
+  const csv = [
+    'Timestamp,SpO2,PR',
+    '2026-07-29 20:15:00,97,91',
+    '2026-07-29 20:15:30,98,90',
+  ].join('\n');
+  const start = new Date(2026, 6, 29, 20, 14, 0);
+  const end = new Date(2026, 6, 29, 20, 16, 0);
+  const result = parsePulseOxCsv(csv, {
+    sessionStartAt: start.toISOString(),
+    sessionEndAt: end.toISOString(),
+  });
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.imported, 2);
+  assert.equal(new Date(result.rows[0].measured_at).getHours(), 20);
+  assert.match(result.timestampInterpretation, /local device time/);
+});
+
 test('parsePulseOxCsv falls back to second and third columns when EMAY headers are vague', () => {
   const csv = [
     'Time,Value1,Value2',

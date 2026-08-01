@@ -32,3 +32,15 @@ test("tells Sarah not to assume a prior device remains active", () => {
 
   assert.match(context, /not as proof of the user's current physical state/i);
 });
+
+test("includes concise measured glucose and pulse-ox context for profile chat continuity", () => {
+  const context = buildRecentSessionActivityContext([{
+    date: "2026-07-29",
+    blood_glucose_readings: [{ glucose_mg_dl: 108 }, { glucose_mg_dl: 116 }],
+    pulse_ox_readings: [{ spo2_percent: 94 }, { spo2_percent: 96 }],
+  }], []);
+
+  assert.match(context, /Measured session-window vitals/);
+  assert.match(context, /blood glucose 108-116 mg\/dL across 2 readings/);
+  assert.match(context, /SpO2 average 95%, minimum 94% across 2 samples/);
+});
