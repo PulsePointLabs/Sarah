@@ -18,6 +18,7 @@ export const ENTITY_NAMES = [
   'BloodPressureReading',
   'BloodGlucoseReading',
   'BodyCompositionReading',
+  'PulseOxReading',
   'HowlTelemetry',
   'HowlControlCommand',
   'HowlControlSettings',

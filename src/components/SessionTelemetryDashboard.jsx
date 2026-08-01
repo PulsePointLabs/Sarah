@@ -29,6 +29,35 @@ function nearest(rows, time, key) {
   ), rows[0]);
 }
 
+function nearestPhysiologyRow(rows, time) {
+  if (!rows?.length || !Number.isFinite(Number(time))) return null;
+  const distance = (row) => Math.abs(Number(row.time_offset_s) - Number(time));
+  const closest = Math.min(...rows.map(distance));
+  const candidates = rows.filter((row) => distance(row) <= closest + 0.75);
+  const score = (row) => (
+    (Number(row.hr) >= 30 ? 2 : 0)
+    + (Number(row.hr_smoothed) >= 30 ? 2 : 0)
+    + (Number(row.baseline_hr) >= 30 ? 2 : 0)
+    + (["moderate", "high"].includes(String(row.hrv_quality || "").toLowerCase()) ? 4 : 0)
+    + (row.signal_confidence_level && row.signal_confidence_level !== "unavailable" ? 2 : 0)
+    + (!row.respiration_unavailable_reason && Number(row.respiration_bpm) > 0 ? 2 : 0)
+    + (row.motion_class && row.motion_class !== "unavailable" ? 2 : 0)
+  );
+  return candidates.reduce((best, row) => {
+    const difference = score(row) - score(best);
+    if (difference !== 0) return difference > 0 ? row : best;
+    return distance(row) < distance(best) ? row : best;
+  }, candidates[0]);
+}
+
+function firstFinite(...values) {
+  for (const value of values) {
+    const number = Number(value);
+    if (value !== null && value !== "" && Number.isFinite(number)) return number;
+  }
+  return null;
+}
+
 function Metric({ label, value, tone = "text-foreground" }) {
   return (
     <div className="rounded-lg border border-border bg-muted/20 px-3 py-2">
@@ -69,7 +98,8 @@ export default function SessionTelemetryDashboard({
       .sort((a, b) => a.timeS - b.timeS),
     [events],
   );
-  const hrPoint = useMemo(() => nearest(timelineRows, inspectionTime, "time_offset_s"), [inspectionTime, timelineRows]);
+  const hrPoint = useMemo(() => nearestPhysiologyRow(timelineRows, inspectionTime), [inspectionTime, timelineRows]);
+  const emgPoint = useMemo(() => nearest(emgRows, inspectionTime, "time_s"), [emgRows, inspectionTime]);
   const pulseOxPoint = useMemo(() => nearest(pulseOxRows, inspectionTime, "time_offset_s"), [inspectionTime, pulseOxRows]);
   const motionPoint = useMemo(
     () => nearest(session.motion_analysis_summary?.derived_timeline || [], inspectionTime, "time_s"),
@@ -80,8 +110,12 @@ export default function SessionTelemetryDashboard({
     [inspectionTime, session.motion_analysis_summary],
   );
   const nearestEvent = useMemo(() => nearest(events, inspectionTime, "time_s"), [events, inspectionTime]);
-  const baseline = Number(hrPoint?.baseline_hr);
+  const baselineValue = firstFinite(hrPoint?.baseline_hr);
+  const baseline = baselineValue != null && baselineValue >= 30 ? baselineValue : null;
   const currentHR = Number(hrPoint?.hr);
+  const emgLevel = firstFinite(emgPoint?.level_pct, emgPoint?.left_pct, emgPoint?.right_pct, emgPoint?.env_smooth, emgPoint?.raw_env);
+  const usableHrv = ["moderate", "high"].includes(String(hrPoint?.hrv_quality || "").toLowerCase());
+  const usableRespiration = !hrPoint?.respiration_unavailable_reason && firstFinite(hrPoint?.respiration_bpm) > 0;
   const balanceTotal = Number(motionPoint?.left_lower_body_activity || 0) + Number(motionPoint?.right_lower_body_activity || 0);
   const balance = balanceTotal > 0
     ? (Number(motionPoint?.left_lower_body_activity || 0) - Number(motionPoint?.right_lower_body_activity || 0)) / balanceTotal
@@ -201,12 +235,22 @@ export default function SessionTelemetryDashboard({
             aria-label="Inspect session timestamp"
           />
         )}
-        <div className="grid gap-2 grid-cols-2 md:grid-cols-4 xl:grid-cols-10">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8">
           <Metric label="HR" value={Number.isFinite(currentHR) ? `${Math.round(currentHR)} bpm` : "--"} tone="text-rose-400" />
+          <Metric label="RMSSD" value={usableHrv && firstFinite(hrPoint?.hrv_rmssd_ms) > 0 ? `${firstFinite(hrPoint.hrv_rmssd_ms).toFixed(1)} ms` : "--"} tone="text-emerald-400" />
+          <Metric label="SDNN" value={usableHrv && firstFinite(hrPoint?.hrv_sdnn_ms) > 0 ? `${firstFinite(hrPoint.hrv_sdnn_ms).toFixed(1)} ms` : "--"} tone="text-emerald-400" />
+          <Metric label="HRV Quality" value={hrPoint?.hrv_quality || "--"} />
+          <Metric label="Respiration" value={usableRespiration ? `${firstFinite(hrPoint.respiration_bpm).toFixed(1)}/min` : "--"} tone="text-cyan-400" />
           <Metric label="SpO2" value={pulseOxPoint?.spo2_percent != null ? `${pulseOxPoint.spo2_percent}%` : "--"} tone="text-primary" />
           <Metric label="O2 Pulse" value={pulseOxPoint?.pulse_bpm != null ? `${pulseOxPoint.pulse_bpm} bpm` : "--"} />
-          <Metric label="Smoothed" value={Number.isFinite(Number(hrPoint?.hr_smoothed)) ? `${Math.round(Number(hrPoint.hr_smoothed))} bpm` : "--"} />
+          <Metric label="Smoothed" value={Number(hrPoint?.hr_smoothed) >= 30 ? `${Math.round(Number(hrPoint.hr_smoothed))} bpm` : "--"} />
           <Metric label="Baseline Delta" value={Number.isFinite(currentHR) && Number.isFinite(baseline) ? `${currentHR - baseline >= 0 ? "+" : ""}${Math.round(currentHR - baseline)}` : "--"} />
+          <Metric label="Body State" value={hrPoint?.signal_confidence_level !== "unavailable" ? (hrPoint?.multimodal_state || "--") : "--"} tone="text-violet-400" />
+          <Metric label="Signal" value={hrPoint?.signal_confidence_level || "--"} />
+          <Metric label="H10 Motion" value={firstFinite(hrPoint?.motion_dynamic_rms_mg) != null && hrPoint?.motion_class && hrPoint.motion_class !== "unavailable" ? `${firstFinite(hrPoint.motion_dynamic_rms_mg).toFixed(1)} mg` : "--"} />
+          <Metric label="Recovery 30s" value={firstFinite(hrPoint?.recovery_drop_30_bpm) != null ? `${firstFinite(hrPoint.recovery_drop_30_bpm).toFixed(0)} bpm` : "--"} />
+          <Metric label="Recovery 60s" value={firstFinite(hrPoint?.recovery_drop_60_bpm) != null ? `${firstFinite(hrPoint.recovery_drop_60_bpm).toFixed(0)} bpm` : "--"} />
+          <Metric label="EMG" value={emgLevel != null ? `${emgLevel.toFixed(1)}${emgPoint?.level_pct != null || emgPoint?.left_pct != null || emgPoint?.right_pct != null ? "%" : ""}` : "--"} tone="text-amber-400" />
           <Metric label="Left Lower Body" value={motionPoint?.left_lower_body_activity ?? "--"} tone="text-primary" />
           <Metric label="Right Lower Body" value={motionPoint?.right_lower_body_activity ?? "--"} tone="text-amber-400" />
           <Metric label="Hands" value={motionPoint?.hand_activity ?? "--"} tone="text-violet-400" />

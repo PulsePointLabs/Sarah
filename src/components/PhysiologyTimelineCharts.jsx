@@ -162,11 +162,11 @@ export default function PhysiologyTimelineCharts({ session = {}, timelineRows = 
     return timelineRows.filter((_row, index) => index % stride === 0).map((row) => ({
       ...row,
       time_offset_s: numberOrNull(row.time_offset_s),
-      respiration_bpm: numberOrNull(row.respiration_bpm),
-      motion_dynamic_rms_mg: numberOrNull(row.motion_dynamic_rms_mg),
-      motion_peak_dynamic_mg: numberOrNull(row.motion_peak_dynamic_mg),
-      signal_confidence_score: numberOrNull(row.signal_confidence_score),
-      orientation_change_degrees: numberOrNull(row.orientation_change_degrees),
+      respiration_bpm: !row.respiration_unavailable_reason ? validPositive(row.respiration_bpm) : null,
+      motion_dynamic_rms_mg: row.motion_class && row.motion_class !== "unavailable" ? numberOrNull(row.motion_dynamic_rms_mg) : null,
+      motion_peak_dynamic_mg: row.motion_class && row.motion_class !== "unavailable" ? numberOrNull(row.motion_peak_dynamic_mg) : null,
+      signal_confidence_score: row.signal_confidence_level !== "unavailable" ? numberOrNull(row.signal_confidence_score) : null,
+      orientation_change_degrees: row.position_state && row.position_state !== "unavailable" ? numberOrNull(row.orientation_change_degrees) : null,
       recovery_drop_30_bpm: numberOrNull(row.recovery_drop_30_bpm),
       recovery_drop_60_bpm: numberOrNull(row.recovery_drop_60_bpm),
       recovery_drop_90_bpm: numberOrNull(row.recovery_drop_90_bpm),
@@ -182,7 +182,8 @@ export default function PhysiologyTimelineCharts({ session = {}, timelineRows = 
   const hasResponseLatency = chartRows.some((row) => row.response_latency_seconds != null);
   const hasSignal = chartRows.some((row) => row.signal_confidence_score != null && row.signal_confidence_level !== "unavailable");
   const hasPosition = chartRows.some((row) => row.orientation_change_degrees != null);
-  const hrvMedian = median(timelineRows.map((row) => row.hrv_rmssd_ms));
+  const usableHrvRows = timelineRows.filter((row) => ["moderate", "high"].includes(String(row.hrv_quality || "").toLowerCase()));
+  const hrvMedian = median(usableHrvRows.map((row) => row.hrv_rmssd_ms));
   const respirationAverage = average(timelineRows.map((row) => Number(row.respiration_bpm) > 0 ? row.respiration_bpm : null));
   const motionPeak = maximum(timelineRows.map((row) => Number(row.motion_peak_dynamic_mg) > 0 ? row.motion_peak_dynamic_mg : null));
   const recoveryPeak = maximum(timelineRows.flatMap((row) => [row.recovery_drop_30_bpm, row.recovery_drop_60_bpm, row.recovery_drop_90_bpm]));
@@ -203,8 +204,8 @@ export default function PhysiologyTimelineCharts({ session = {}, timelineRows = 
   const hrValues = timelineRows.map((row) => validPositive(row.hr)).filter(Number.isFinite);
   const baselineHr = median(hrValues.slice(0, Math.max(10, Math.round(hrValues.length * 0.12))));
   const peakHr = maximum(hrValues);
-  const earlyHrv = median(timelineRows.slice(0, Math.max(10, Math.round(timelineRows.length * 0.2))).map((row) => row.hrv_rmssd_ms));
-  const lowHrv = median(timelineRows.map((row) => row.hrv_rmssd_ms).filter((value) => validPositive(value) != null).sort((a, b) => a - b).slice(0, Math.max(5, Math.round(timelineRows.length * 0.15))));
+  const earlyHrv = median(usableHrvRows.slice(0, Math.max(10, Math.round(usableHrvRows.length * 0.2))).map((row) => row.hrv_rmssd_ms));
+  const lowHrv = median(usableHrvRows.map((row) => row.hrv_rmssd_ms).filter((value) => validPositive(value) != null).sort((a, b) => a - b).slice(0, Math.max(5, Math.round(usableHrvRows.length * 0.15))));
   const responseLoad = baselineHr != null && peakHr != null ? peakHr - baselineHr : null;
   const hrvSuppression = earlyHrv != null && lowHrv != null && earlyHrv > 0
     ? Math.max(0, Math.min(100, ((earlyHrv - lowHrv) / earlyHrv) * 100))

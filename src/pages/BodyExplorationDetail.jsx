@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Activity, ArrowLeft, Brain, Clapperboard, MessageCircle, Pencil, ScanSearch } from "lucide-react";
 import moment from "moment";
@@ -9,11 +9,14 @@ import { Button } from "@/components/ui/button";
 import SessionTelemetryDashboard from "@/components/SessionTelemetryDashboard";
 import PulseOxSessionChart from "@/components/PulseOxSessionChart";
 import BodyCompositionSummaryCard from "@/components/BodyCompositionSummaryCard";
+import BodyExplorationNearbyVitalsPanel from "@/components/BodyExplorationNearbyVitalsPanel";
 import BodyExplorationAIPanel from "@/components/BodyExplorationAIPanel";
 import AIChat from "@/components/AIChat";
 import LinkedLocalVideoManager from "@/components/LinkedLocalVideoManager";
 import VideoSyncPlayer from "@/components/VideoSyncPlayer";
 import { pulseOxReadingsFromSession } from "@/lib/sessionContext";
+import { buildBodyExplorationPhysiologyEvidence } from "@/lib/bodyExplorationPhysiology";
+import { selectNearbyVitalReadings } from "@/lib/nearbyVitals";
 import {
   buildBodyExplorationVisualEvidenceDigest,
   buildBodyExplorationVideoPassDigest,
@@ -73,10 +76,12 @@ function TimestampedNotes({ events }) {
   );
 }
 
-function buildExplorationChatContext(exploration, timelineRows, emgRows) {
+function buildExplorationChatContext(exploration, timelineRows, emgRows, nearbyVitals) {
   const pulseOxReadings = pulseOxReadingsFromSession(exploration);
   const spo2Values = pulseOxReadings.map((reading) => Number(reading.spo2_percent)).filter(Number.isFinite);
   const pulseValues = pulseOxReadings.map((reading) => Number(reading.pulse_bpm)).filter(Number.isFinite);
+  const physiologyEvidence = buildBodyExplorationPhysiologyEvidence({ exploration, timelineRows, emgRows, nearbyVitals });
+  const { high_resolution_trajectory: _trajectory, ...chatPhysiologyEvidence } = physiologyEvidence;
   const events = (exploration.event_timeline || []).map((event) => {
     const m = Math.floor(Number(event.time_s || 0) / 60);
     const sec = Math.round(Number(event.time_s || 0) % 60);
@@ -109,6 +114,7 @@ function buildExplorationChatContext(exploration, timelineRows, emgRows) {
       ? `Pulse oximetry: ${pulseOxReadings.length} samples; average SpO2 ${Math.round(spo2Values.reduce((sum, value) => sum + value, 0) / spo2Values.length)}%; minimum SpO2 ${Math.min(...spo2Values)}%${pulseValues.length ? `; average pulse ${Math.round(pulseValues.reduce((sum, value) => sum + value, 0) / pulseValues.length)} bpm` : ""}.`
       : null,
     emgRows.length ? `EMG rows available: ${emgRows.length}.` : null,
+    `Measured physiology evidence and nearby imported vitals:\n${JSON.stringify(chatPhysiologyEvidence, null, 2)}`,
     events.length ? `Timestamped notes:\n${events.join("\n")}` : null,
     buildBodyExplorationVisualEvidenceDigest(exploration),
     buildBodyExplorationVideoPassDigest(exploration),
@@ -120,6 +126,12 @@ export default function BodyExplorationDetail() {
   const [exploration, setExploration] = useState(null);
   const [timelineRows, setTimelineRows] = useState([]);
   const [emgRows, setEmgRows] = useState([]);
+  const [nearbyVitalImports, setNearbyVitalImports] = useState({
+    bloodPressure: [],
+    bloodGlucose: [],
+    bodyComposition: [],
+    pulseOx: [],
+  });
   const [userProfile, setUserProfile] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [explorationNotes, setExplorationNotes] = useState("");
@@ -133,22 +145,46 @@ export default function BodyExplorationDetail() {
       base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000),
       base44.entities.EMGTimeline.filter({ session: id }, "time_s", 10000),
       base44.auth.me(),
-    ]).then(([items, hr, emg, profile]) => {
+      base44.entities.BloodPressureReading.list("-measured_at", 250).catch(() => []),
+      base44.entities.BloodGlucoseReading.list("-measured_at", 250).catch(() => []),
+      base44.entities.BodyCompositionReading.list("-measured_at", 250).catch(() => []),
+      base44.entities.PulseOxReading.list("-measured_at", 5000).catch(() => []),
+    ]).then(([items, hr, emg, profile, bloodPressure, bloodGlucose, bodyComposition, pulseOx]) => {
       const loadedExploration = items[0] || null;
       setExploration(loadedExploration);
       setTimelineRows(hr || []);
       setEmgRows(emg || []);
       setUserProfile(profile);
+      setNearbyVitalImports({ bloodPressure, bloodGlucose, bodyComposition, pulseOx });
       setChatMessages(loadedExploration?.ai_body_exploration?._chat_messages || []);
       setExplorationNotes(loadedExploration?.notes || "");
     }).finally(() => setLoading(false));
   }, [id]);
 
+  const nearbyVitals = useMemo(
+    () => selectNearbyVitalReadings(exploration || {}, nearbyVitalImports),
+    [exploration, nearbyVitalImports],
+  );
+
+  const explorationForTelemetry = useMemo(() => {
+    if (!exploration) return null;
+    const attached = pulseOxReadingsFromSession(exploration);
+    const during = (nearbyVitals.pulseOx || [])
+      .filter((reading) => reading.relationship === "during exploration")
+      .map((reading) => ({ ...reading, time_offset_s: Number(reading.delta_minutes) * 60 }));
+    if (!during.length) return exploration;
+    return { ...exploration, pulse_ox_readings: [...attached, ...during] };
+  }, [exploration, nearbyVitals]);
+
   if (loading) return <div className="flex h-64 items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" /></div>;
   if (!exploration) return <div className="p-6 text-center text-muted-foreground">Body exploration record not found.</div>;
   const reviewedMediaClips = getReviewedVisualClips(exploration.ai_body_exploration?._visual_findings || []);
   const linkedLocalVideos = exploration.linked_local_videos || [];
-  const pulseOxReadings = pulseOxReadingsFromSession(exploration);
+  const pulseOxReadings = pulseOxReadingsFromSession(explorationForTelemetry || exploration);
+  const nearbyVitalCount = nearbyVitals.bloodPressure.length
+    + nearbyVitals.bloodGlucose.length
+    + nearbyVitals.bodyComposition.length
+    + nearbyVitals.pulseOx.length;
 
   return (
     <div>
@@ -165,6 +201,7 @@ export default function BodyExplorationDetail() {
             {timelineRows.length > 0 && <Badge variant="outline" className="gap-1"><Activity className="h-3 w-3" /> HR</Badge>}
             {emgRows.length > 0 && <Badge variant="outline">EMG</Badge>}
             {pulseOxReadings.length > 0 && <Badge variant="outline">SpO2</Badge>}
+            {nearbyVitalCount > 0 && <Badge variant="outline">Nearby vitals {nearbyVitalCount.toLocaleString()}</Badge>}
           </div>
           <div className="mt-3 grid gap-4 lg:grid-cols-2">
             <div>
@@ -184,7 +221,7 @@ export default function BodyExplorationDetail() {
         </div>
 
         <SessionTelemetryDashboard
-          session={exploration}
+          session={explorationForTelemetry || exploration}
           timelineRows={timelineRows}
           emgRows={emgRows}
           inspectionTime={inspectionTime}
@@ -197,11 +234,12 @@ export default function BodyExplorationDetail() {
           }}
           recordType="body_exploration"
         />
+        <BodyExplorationNearbyVitalsPanel nearbyVitals={nearbyVitals} />
         {exploration.body_composition && (
           <BodyCompositionSummaryCard reading={exploration.body_composition} title="Exploration Weigh-In" />
         )}
         {pulseOxReadings.length > 0 && (
-          <PulseOxSessionChart session={exploration} sectionId="body-exploration-pulse-ox" />
+          <PulseOxSessionChart session={explorationForTelemetry || exploration} sectionId="body-exploration-pulse-ox" />
         )}
         {pulseOxReadings.length === 0 && (
           <section id="body-exploration-pulse-ox" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
@@ -233,7 +271,7 @@ export default function BodyExplorationDetail() {
               </Link>
             </Button>
           </div>
-          <BodyExplorationAIPanel exploration={exploration} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} />
+          <BodyExplorationAIPanel exploration={exploration} timelineRows={timelineRows} emgRows={emgRows} nearbyVitals={nearbyVitals} userProfile={userProfile} />
         </section>
 
         <div className="space-y-3 rounded-xl border border-border bg-card p-4">
@@ -251,7 +289,7 @@ export default function BodyExplorationDetail() {
             subjectLabel="body exploration"
             userProfile={userProfile}
             scopeId={id}
-            context={buildExplorationChatContext(exploration, timelineRows, emgRows)}
+            context={buildExplorationChatContext(exploration, timelineRows, emgRows, nearbyVitals)}
             savedMessages={chatMessages}
             savedNotes={explorationNotes}
             defaultOpen

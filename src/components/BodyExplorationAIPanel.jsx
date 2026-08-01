@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
 import { pulseOxReadingsFromSession } from "@/lib/sessionContext";
+import { buildBodyExplorationPhysiologyEvidence } from "@/lib/bodyExplorationPhysiology";
 import { buildBodyExplorationVideoPassDigest, buildBodyExplorationVisualEvidenceDigest } from "@/lib/visualEvidence";
 import AIOutputReader from "./AIOutputReader";
 import { EVENT_CATEGORIES, EXPLORATION_EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
@@ -126,39 +127,7 @@ function cleanupProductionAnalysis(analysis) {
   };
 }
 
-function telemetrySummary(rows, exploration) {
-  if (!rows.length) return null;
-  const hrs = rows.map((row) => Number(row.hr)).filter(Number.isFinite);
-  const duration = Math.max(...rows.map((row) => Number(row.time_offset_s) || 0));
-  return {
-    total_points: rows.length,
-    duration_s: Math.round(duration),
-    hr_min: hrs.length ? Math.round(Math.min(...hrs)) : null,
-    hr_max: hrs.length ? Math.round(Math.max(...hrs)) : exploration.max_hr || null,
-    hr_avg: exploration.avg_hr || null,
-  };
-}
-
-function pulseOxSummary(exploration) {
-  const readings = pulseOxReadingsFromSession(exploration);
-  if (!readings.length) return null;
-  const spo2Values = readings.map((reading) => Number(reading.spo2_percent)).filter(Number.isFinite);
-  const pulseValues = readings.map((reading) => Number(reading.pulse_bpm)).filter(Number.isFinite);
-  return {
-    total_points: readings.length,
-    spo2_latest_percent: readings[readings.length - 1]?.spo2_percent ?? null,
-    spo2_average_percent: Math.round(spo2Values.reduce((sum, value) => sum + value, 0) / spo2Values.length),
-    spo2_minimum_percent: Math.min(...spo2Values),
-    pulse_average_bpm: pulseValues.length
-      ? Math.round(pulseValues.reduce((sum, value) => sum + value, 0) / pulseValues.length)
-      : null,
-    source: readings.find((reading) => reading.source_app || reading.source_device)?.source_app
-      || readings.find((reading) => reading.source_device)?.source_device
-      || null,
-  };
-}
-
-export default function BodyExplorationAIPanel({ exploration, timelineRows, emgRows, userProfile }) {
+export default function BodyExplorationAIPanel({ exploration, timelineRows, emgRows, nearbyVitals, userProfile }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(exploration.ai_body_exploration || null);
   const [error, setError] = useState("");
@@ -175,6 +144,8 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
         source_event_count: Array.isArray(exploration.event_timeline) ? exploration.event_timeline.length : 0,
         source_hr_row_count: Array.isArray(timelineRows) ? timelineRows.length : 0,
         source_emg_row_count: Array.isArray(emgRows) ? emgRows.length : 0,
+        source_nearby_vital_count: ["bloodPressure", "bloodGlucose", "bodyComposition", "pulseOx"]
+          .reduce((sum, key) => sum + (Array.isArray(nearbyVitals?.[key]) ? nearbyVitals[key].length : 0), 0),
       }),
     };
   };
@@ -240,6 +211,7 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
       const focusedProfileContext = focusedFoley ? buildFocusedFoleyProfileContext(userProfile) : "";
       const visualEvidenceContext = buildBodyExplorationVisualEvidenceDigest(exploration);
       const videoPassEvidenceContext = buildBodyExplorationVideoPassDigest(exploration);
+      const physiologyEvidence = buildBodyExplorationPhysiologyEvidence({ exploration, timelineRows, emgRows, nearbyVitals });
       const responseSchema = focusedFoley ? focusedFoleyResponseSchema() : {
         type: "object",
         properties: {
@@ -276,6 +248,10 @@ PROCEDURAL TRACKING RULE:
 - Prefer concrete observations like catheter type/size, orientation, insertion depth progression, rotation maneuver, resistance point, urine bypass/return, balloon volume/seat, securement slack, meatal tension, tissue color, lubricant leakage, scrotal/foreskin state, leg/foot/body response, and comfort/tolerance cues.
 - If a landmark is not visually reviewed or not timestamped, say that limitation instead of smoothing over it. Do not invent a complete procedural sequence from profile history alone.
 - When telemetry is available, compare heart-rate changes around landmarks rather than only giving session min/avg/max. Explain whether a visible/logged step produced a rise, plateau, dip, or no measurable response. If only whole-session telemetry exists, say it cannot be tied to landmarks.
+- Use the full measured physiology evidence provided below: heart rate, RR intervals, quality-gated HRV, respiration when usable, motion/position when usable, multimodal state, recovery drops, response latency, EMG channels, attached or nearby pulse oximetry, blood pressure, blood glucose, and body composition/weight.
+- The adaptive trajectory preserves up to roughly two hundred forty time bins across the complete record. Use it to identify sustained changes, transitions, and recovery instead of relying only on min/average/max.
+- Nearby vital imports are contextual measurements with exact time distance and source. Include them when they help interpret the body state, but never imply the exploration caused a reading merely because it was nearby.
+- Respect provenance and quality gates. Do not interpret unavailable respiration/motion, zero placeholder values, or low/unavailable HRV as physiology. Smart-scale composition values are trends, while weight is a measured contextual value.
 - When prior comparison context is relevant, keep it secondary and specific: use it to explain how this insertion differs in size, lubrication, substance context, resistance, comfort, urine return, securement, or dwell tolerance. Do not turn the review into a broad longitudinal Foley biography.
 - The best output should resemble a procedural evidence review: timeline-aware, landmark-specific, visibly grounded, mechanically precise, and cautious about uncertainty.
 
@@ -328,9 +304,8 @@ ${JSON.stringify({
       interpretation_rule: "Contextual smart-scale trend estimate only; do not claim an acute exploration effect.",
     }
     : null,
-  heart_rate: telemetrySummary(timelineRows, exploration),
-  pulse_oximetry: pulseOxSummary(exploration),
-  emg_rows: emgRows.length,
+  attached_pulse_oximetry_samples: pulseOxReadingsFromSession(exploration).length,
+  high_definition_physiology: physiologyEvidence,
   reviewed_visual_evidence: visualEvidenceContext || null,
   reviewed_video_pass_evidence: videoPassEvidenceContext || null,
 }, null, 2)}
