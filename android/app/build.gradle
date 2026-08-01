@@ -8,7 +8,7 @@ android {
         applicationId "com.pulsepointlabs.sarah"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 163
+        versionCode 186
         versionName "0.1.191"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
