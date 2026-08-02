@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Activity, ChevronRight, HeartPulse, RefreshCw, TriangleAlert } from "lucide-react";
 import { apiUrl } from "@/lib/mobileApiBase";
 import { formatDurationWords, formatVitalSignsSpeech } from "@/lib/vitalSignsSpeech";
+import VitalDataImportPanel from "@/components/VitalDataImportPanel";
 
 function fmtDateTime(value) {
   if (!value) return "";
@@ -222,6 +223,8 @@ export default function VitalSigns() {
           </button>
         </div>
       </header>
+
+      <VitalDataImportPanel />
 
       <section className="mt-5 border-y border-border py-4">
         <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">

@@ -39,6 +39,7 @@ import BodyExploration from './pages/BodyExploration';
 import BodyExplorationDetail from './pages/BodyExplorationDetail';
 import NewBodyExploration from './pages/NewBodyExploration';
 import { incrementLifecycleMountCount, recordPwaLifecycleEvent } from '@/lib/pwaLifecycleDiagnostics';
+import { startSharedVitalImportBridge } from '@/lib/sharedVitalImport';
 
 const AuthenticatedApp = () => {
   const location = useLocation();
@@ -55,6 +56,21 @@ const AuthenticatedApp = () => {
   useEffect(() => {
     incrementLifecycleMountCount('router_tree');
   }, []);
+
+  useEffect(() => {
+    let stop = null;
+    let active = true;
+    startSharedVitalImportBridge(() => navigate('/vitals?sharedImport=1'))
+      .then((cleanup) => {
+        if (!active) cleanup?.();
+        else stop = cleanup;
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+      stop?.();
+    };
+  }, [navigate]);
 
   useEffect(() => {
     let listener = null;
