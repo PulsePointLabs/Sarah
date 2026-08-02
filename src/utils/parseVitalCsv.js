@@ -66,7 +66,17 @@ function linesAndHeaders(text, kind) {
 }
 
 function indexOf(headers, aliases) {
-  return headers.findIndex((header) => aliases.some((alias) => header === alias || header.includes(alias)));
+  for (const alias of aliases) {
+    const exact = headers.findIndex((header) => header === alias);
+    if (exact >= 0) return exact;
+  }
+  for (const alias of aliases) {
+    const words = alias.split(" ").filter(Boolean).map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const boundaryMatch = new RegExp(`(?:^|\\s)${words.join("\\s+")}(?:$|\\s)`);
+    const included = headers.findIndex((header) => boundaryMatch.test(header));
+    if (included >= 0) return included;
+  }
+  return -1;
 }
 
 function number(value) {
@@ -143,9 +153,11 @@ function parseDeviceLocalTimestamp(value) {
 }
 
 function timestampText(columns, headers) {
-  const dateIndex = indexOf(headers, ["date", "measurement date", "record date", "device date"]);
-  const timeIndex = indexOf(headers, ["device timestamp", "timestamp", "date time", "datetime", "measured at", "measurement time", "record time", "device time", "time"]);
-  return dateIndex >= 0 && timeIndex >= 0 && dateIndex !== timeIndex
+  const combinedIndex = indexOf(headers, ["device timestamp", "date and time", "date time", "datetime", "time stamp", "timestamp", "measured at", "event time"]);
+  if (combinedIndex >= 0) return columns[combinedIndex];
+  const dateIndex = indexOf(headers, ["reading date", "measurement date", "record date", "event date", "device date", "date"]);
+  const timeIndex = indexOf(headers, ["reading time", "measurement time", "record time", "device time", "time"]);
+  return dateIndex >= 0 && timeIndex >= 0
     ? `${columns[dateIndex]} ${columns[timeIndex]}`
     : columns[timeIndex >= 0 ? timeIndex : dateIndex];
 }

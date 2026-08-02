@@ -108,6 +108,29 @@ test("repairs an unquoted comma in a month-name date column", () => {
   assert.equal(new Date(parsed.rows[0].measured_at).getHours(), 20);
 });
 
+test("does not mistake a Time Zone column for the device timestamp", () => {
+  const text = [
+    "Time Zone,Device Timestamp,Glucose Value,Glucose Units",
+    "America/New_York,07/29/2026 8:15 PM,112,mg/dL",
+    "EDT,07/29/2026 8:45 PM,104,mg/dL",
+  ].join("\n");
+  const parsed = parseBloodGlucoseCsv(text);
+  assert.equal(parsed.rows.length, 2);
+  assert.deepEqual(parsed.rows.map((row) => row.glucose_mg_dl), [112, 104]);
+  assert.equal(new Date(parsed.rows[0].measured_at).getHours(), 20);
+});
+
+test("does not mistake Timezone for a separate Reading Time column", () => {
+  const text = [
+    "Timezone,Reading Date,Reading Time,Result,Units",
+    "-04:00,07/29/2026,8:15 PM,112,mg/dL",
+  ].join("\n");
+  const parsed = parseBloodGlucoseCsv(text);
+  assert.equal(parsed.rows.length, 1);
+  assert.equal(parsed.rows[0].glucose_mg_dl, 112);
+  assert.equal(new Date(parsed.rows[0].measured_at).getHours(), 20);
+});
+
 test("classifies body composition and converts pounds", () => {
   const text = "Date,Time,Weight (lb),Body Fat %,BMI\n2026-08-01,07:30,180,18.2,24.4";
   assert.equal(classifyVitalCsv(text).type, "body_composition");
