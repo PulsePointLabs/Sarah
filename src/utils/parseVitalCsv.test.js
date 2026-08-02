@@ -72,6 +72,42 @@ test("accepts and filters a OneTouch mixed-event table", () => {
   assert.equal(parsed.rows[1].glucose_mg_dl, 111.7);
 });
 
+test("parses Android-hostile month-name timestamps and timezone labels", () => {
+  const text = [
+    "Date and Time,Glucose Reading (mg/dL)",
+    '"Jul 29, 2026 8:15 PM EDT",112',
+    '"29-Jul-2026 8:45 PM",104',
+  ].join("\n");
+  const parsed = parseBloodGlucoseCsv(text);
+  assert.equal(parsed.rows.length, 2);
+  assert.equal(new Date(parsed.rows[0].measured_at).getHours(), 20);
+  assert.equal(parsed.rows[1].glucose_mg_dl, 104);
+});
+
+test("parses compact, epoch, and Excel serial device timestamps", () => {
+  const epochSeconds = Math.floor(new Date(2026, 6, 29, 20, 15).getTime() / 1000);
+  const text = [
+    "Timestamp,Glucose",
+    "20260729201500,112",
+    `${epochSeconds},104`,
+    "46232.84375,99",
+  ].join("\n");
+  const parsed = parseBloodGlucoseCsv(text);
+  assert.equal(parsed.rows.length, 3);
+  assert.deepEqual(parsed.rows.map((row) => row.glucose_mg_dl), [112, 104, 99]);
+});
+
+test("repairs an unquoted comma in a month-name date column", () => {
+  const text = [
+    "Date,Time,Result,Units",
+    "Jul 29, 2026,8:15 PM,112,mg/dL",
+  ].join("\n");
+  const parsed = parseBloodGlucoseCsv(text);
+  assert.equal(parsed.rows.length, 1);
+  assert.equal(parsed.rows[0].glucose_mg_dl, 112);
+  assert.equal(new Date(parsed.rows[0].measured_at).getHours(), 20);
+});
+
 test("classifies body composition and converts pounds", () => {
   const text = "Date,Time,Weight (lb),Body Fat %,BMI\n2026-08-01,07:30,180,18.2,24.4";
   assert.equal(classifyVitalCsv(text).type, "body_composition");

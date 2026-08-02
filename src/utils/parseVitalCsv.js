@@ -79,36 +79,92 @@ function number(value) {
 function parseDeviceLocalTimestamp(value) {
   if (!value) return null;
   const raw = String(value).trim().replace(/\s+/g, " ");
-  const match = raw.match(
-    /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?(?:\s*(?:Z|[+-]\d{2}:?\d{2}))?$/i,
-  ) || raw.match(
-    /^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?(?:\s*(?:Z|[+-]\d{2}:?\d{2}))?$/i,
+  const withoutZoneName = raw.replace(/\s+(?:EST|EDT|CST|CDT|MST|MDT|PST|PDT|UTC|GMT)(?:[+-]\d{1,2})?$/i, "").trim();
+
+  if (/^\d{10,13}$/.test(withoutZoneName)) {
+    const numeric = Number(withoutZoneName);
+    const epochMs = withoutZoneName.length === 10 ? numeric * 1000 : numeric;
+    const epochDate = new Date(epochMs);
+    if (!Number.isNaN(epochDate.getTime()) && epochDate.getFullYear() >= 2000 && epochDate.getFullYear() <= 2100) return epochDate;
+  }
+
+  if (/^\d{5}(?:\.\d+)?$/.test(withoutZoneName)) {
+    const serial = Number(withoutZoneName);
+    if (serial >= 36_526 && serial <= 73_050) {
+      const utc = new Date(Date.UTC(1899, 11, 30) + serial * 86_400_000);
+      return new Date(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate(), utc.getUTCHours(), utc.getUTCMinutes(), utc.getUTCSeconds());
+    }
+  }
+
+  const compact = withoutZoneName.match(/^(\d{4})(\d{2})(\d{2})[ T_-]?(\d{2})(\d{2})(\d{2})?$/);
+  if (compact) {
+    const local = new Date(Number(compact[1]), Number(compact[2]) - 1, Number(compact[3]), Number(compact[4]), Number(compact[5]), Number(compact[6] || 0));
+    return Number.isNaN(local.getTime()) ? null : local;
+  }
+
+  const match = withoutZoneName.match(
+    /^(\d{4})[./-](\d{1,2})[./-](\d{1,2})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?(?:\s*(?:Z|[+-]\d{2}:?\d{2}))?$/i,
+  ) || withoutZoneName.match(
+    /^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?(?:\s*(?:Z|[+-]\d{2}:?\d{2}))?$/i,
   );
   if (match) {
     const yearFirst = match[1].length === 4;
     let year = Number(yearFirst ? match[1] : match[3]);
     if (year < 100) year += 2000;
-    const month = Number(yearFirst ? match[2] : match[1]);
-    const day = Number(yearFirst ? match[3] : match[2]);
+    const first = Number(match[1]);
+    const second = Number(match[2]);
+    const month = Number(yearFirst ? match[2] : first > 12 ? second : first);
+    const day = Number(yearFirst ? match[3] : first > 12 ? first : second);
     let hour = Number(match[4]);
     if (/pm/i.test(match[7] || "") && hour < 12) hour += 12;
     if (/am/i.test(match[7] || "") && hour === 12) hour = 0;
     const local = new Date(year, month - 1, day, hour, Number(match[5]), Number(match[6] || 0));
-    return Number.isNaN(local.getTime()) ? null : local;
+    if (!Number.isNaN(local.getTime()) && local.getFullYear() === year && local.getMonth() === month - 1 && local.getDate() === day) return local;
   }
-  const parsed = new Date(raw);
+
+  const monthNames = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+  const named = withoutZoneName.match(/^([A-Za-z]{3,9})[ .-]+(\d{1,2}),?[ .-]+(\d{4})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i)
+    || withoutZoneName.match(/^(\d{1,2})[ .-]+([A-Za-z]{3,9})[ .,-]+(\d{4})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  if (named) {
+    const monthFirst = /^[A-Za-z]/.test(named[1]);
+    const monthToken = String(monthFirst ? named[1] : named[2]).slice(0, 3).toLowerCase();
+    const month = monthNames[monthToken];
+    const day = Number(monthFirst ? named[2] : named[1]);
+    const year = Number(named[3]);
+    let hour = Number(named[4]);
+    if (/pm/i.test(named[7] || "") && hour < 12) hour += 12;
+    if (/am/i.test(named[7] || "") && hour === 12) hour = 0;
+    const local = new Date(year, month, day, hour, Number(named[5]), Number(named[6] || 0));
+    if (month != null && !Number.isNaN(local.getTime())) return local;
+  }
+
+  const parsed = new Date(withoutZoneName);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function timestamp(columns, headers) {
+function timestampText(columns, headers) {
   const dateIndex = indexOf(headers, ["date", "measurement date", "record date", "device date"]);
   const timeIndex = indexOf(headers, ["device timestamp", "timestamp", "date time", "datetime", "measured at", "measurement time", "record time", "device time", "time"]);
-  const raw = dateIndex >= 0 && timeIndex >= 0 && dateIndex !== timeIndex
+  return dateIndex >= 0 && timeIndex >= 0 && dateIndex !== timeIndex
     ? `${columns[dateIndex]} ${columns[timeIndex]}`
     : columns[timeIndex >= 0 ? timeIndex : dateIndex];
+}
+
+function timestamp(columns, headers) {
+  const raw = timestampText(columns, headers);
   if (!raw) return null;
   const parsed = parseDeviceLocalTimestamp(raw);
   return parsed ? parsed.toISOString() : null;
+}
+
+function repairUnquotedMonthDate(columns, headers) {
+  if (columns.length !== headers.length + 1) return columns;
+  const dateIndex = indexOf(headers, ["date", "measurement date", "record date", "device date"]);
+  if (dateIndex < 0) return columns;
+  const first = String(columns[dateIndex] || "").trim();
+  const second = String(columns[dateIndex + 1] || "").trim();
+  if (!/^[A-Za-z]{3,9}\s+\d{1,2}$/.test(first) || !/^\d{4}$/.test(second)) return columns;
+  return [...columns.slice(0, dateIndex), `${first}, ${second}`, ...columns.slice(dateIndex + 2)];
 }
 
 function isGlucoseEvent(value) {
@@ -146,14 +202,16 @@ export function parseBloodGlucoseCsv(text, options = {}) {
   const rows = [];
   const skipReasons = [];
   parsed.dataLines.forEach((line, index) => {
-    const columns = parseLine(line, parsed.delimiter);
+    const columns = repairUnquotedMonthDate(parseLine(line, parsed.delimiter), parsed.normalized);
     if (eventTypeIndex >= 0 && !isGlucoseEvent(columns[eventTypeIndex])) return;
+    const rawTimestamp = timestampText(columns, parsed.normalized);
     const measuredAt = timestamp(columns, parsed.normalized);
     let glucose = number(columns[glucoseIndex]);
     const unit = `${columns[unitIndex] || ""} ${parsed.headers[glucoseIndex] || ""}`.toLowerCase();
     if (glucose != null && /mmol/.test(unit)) glucose *= 18.0182;
     if (!measuredAt || glucose == null || glucose < 20 || glucose > 700) {
-      skipReasons.push(`Row ${parsed.headerIndex + index + 2}: invalid ${!measuredAt ? "timestamp" : "glucose value"}`);
+      const timestampHint = !measuredAt ? ` ${JSON.stringify(String(rawTimestamp || "").slice(0, 80))}` : "";
+      skipReasons.push(`Row ${parsed.headerIndex + index + 2}: invalid ${!measuredAt ? "timestamp" : "glucose value"}${timestampHint}`);
       return;
     }
     rows.push({
