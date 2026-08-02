@@ -17,12 +17,13 @@ function formatTime(value) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-function reviewLabel(session) {
-  const date = session?.date ? moment(session.date).format("MMM D, YYYY") : "Undated session";
-  const time = session?.start_time ? ` · ${session.start_time}` : "";
-  const duration = session?.duration_minutes ? ` · ${session.duration_minutes}m` : "";
-  const events = (session?.event_timeline || []).length ? ` · ${session.event_timeline.length} events` : "";
-  return `${date}${time}${duration}${events}`;
+function reviewLabel(record, isExploration = false) {
+  const title = isExploration ? `${record?.title || record?.exploration_type || "Body Exploration"} · ` : "";
+  const date = record?.date ? moment(record.date).format("MMM D, YYYY") : `Undated ${isExploration ? "exploration" : "session"}`;
+  const time = record?.start_time ? ` · ${record.start_time}` : "";
+  const duration = record?.duration_minutes ? ` · ${record.duration_minutes}m` : "";
+  const events = (record?.event_timeline || []).length ? ` · ${record.event_timeline.length} events` : "";
+  return `${title}${date}${time}${duration}${events}`;
 }
 
 function getCategoryMeta(value) {
@@ -204,7 +205,10 @@ function activePostureCandidate(summary, timeS) {
 
 export default function SessionReviewPlayer() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const requestedSessionId = searchParams.get("session") || "";
+  const requestedType = searchParams.get("type") === "body_exploration" || searchParams.has("exploration")
+    ? "body_exploration"
+    : "session";
+  const requestedRecordId = searchParams.get("exploration") || searchParams.get("session") || "";
   const focusView = searchParams.get("display") === "focus";
   const videoRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -212,6 +216,8 @@ export default function SessionReviewPlayer() {
   const timelineSeekRef = useRef(false);
 
   const [sessions, setSessions] = useState([]);
+  const [explorations, setExplorations] = useState([]);
+  const [recordType, setRecordType] = useState(requestedType);
   const [selectedId, setSelectedId] = useState("");
   const [selectedSession, setSelectedSession] = useState(null);
   const [timelineRows, setTimelineRows] = useState([]);
@@ -276,9 +282,14 @@ export default function SessionReviewPlayer() {
   const playbackCadence = useMemo(() => nearestCadenceSample(savedMotion, reviewTime), [reviewTime, savedMotion]);
 
   useEffect(() => {
-    base44.entities.Session.list("-date", 250)
-      .then((rows) => setSessions(rows))
-      .catch(() => setSessions([]))
+    Promise.all([
+      base44.entities.Session.list("-date", 250).catch(() => []),
+      base44.entities.BodyExploration.list("-date", 250).catch(() => []),
+    ])
+      .then(([sessionRows, explorationRows]) => {
+        setSessions(sessionRows);
+        setExplorations(explorationRows);
+      })
       .finally(() => setLoadingSessions(false));
   }, []);
 
@@ -310,7 +321,7 @@ export default function SessionReviewPlayer() {
     event.target.value = "";
   };
 
-  const handleSelectSession = useCallback(async (id) => {
+  const handleSelectSession = useCallback(async (id, typeOverride = recordType) => {
     setSelectedId(id);
     setSelectedSession(null);
     setTimelineRows([]);
@@ -320,8 +331,9 @@ export default function SessionReviewPlayer() {
 
     setLoadingReview(true);
     try {
+      const entity = typeOverride === "body_exploration" ? base44.entities.BodyExploration : base44.entities.Session;
       const [sessionRows, rows] = await Promise.all([
-        base44.entities.Session.filter({ id }),
+        entity.filter({ id }),
         base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000),
       ]);
       setSelectedSession(sessionRows[0] || null);
@@ -329,12 +341,32 @@ export default function SessionReviewPlayer() {
     } finally {
       setLoadingReview(false);
     }
-  }, []);
+  }, [recordType]);
 
   useEffect(() => {
-    if (!requestedSessionId || loadingSessions || selectedId || !sessions.some((session) => session.id === requestedSessionId)) return;
-    handleSelectSession(requestedSessionId);
-  }, [handleSelectSession, loadingSessions, requestedSessionId, selectedId, sessions]);
+    const requestedRecords = requestedType === "body_exploration" ? explorations : sessions;
+    if (!requestedRecordId || loadingSessions || selectedId || !requestedRecords.some((record) => record.id === requestedRecordId)) return;
+    setRecordType(requestedType);
+    handleSelectSession(requestedRecordId, requestedType);
+  }, [explorations, handleSelectSession, loadingSessions, requestedRecordId, requestedType, selectedId, sessions]);
+
+  const handleRecordTypeChange = (type) => {
+    setRecordType(type);
+    setSelectedId("");
+    setSelectedSession(null);
+    setTimelineRows([]);
+    setSelectedEventIdx(null);
+    setTimelineWaypointDetail(null);
+    const next = new URLSearchParams(searchParams);
+    next.delete("session");
+    next.delete("exploration");
+    if (type === "body_exploration") next.set("type", "body_exploration");
+    else next.delete("type");
+    setSearchParams(next, { replace: true });
+  };
+
+  const records = recordType === "body_exploration" ? explorations : sessions;
+  const isExploration = recordType === "body_exploration";
 
   const seekVideoTo = useCallback((timeS, shouldPlay = false, waitForSeek = false) => {
     const video = videoRef.current;
@@ -447,7 +479,15 @@ export default function SessionReviewPlayer() {
     const next = new URLSearchParams(searchParams);
     if (enabled) {
       next.set("display", "focus");
-      if (selectedId) next.set("session", selectedId);
+      if (selectedId && isExploration) {
+        next.set("type", "body_exploration");
+        next.set("exploration", selectedId);
+        next.delete("session");
+      } else if (selectedId) {
+        next.set("session", selectedId);
+        next.delete("exploration");
+        next.delete("type");
+      }
     }
     else next.delete("display");
     setSearchParams(next);
@@ -477,7 +517,7 @@ export default function SessionReviewPlayer() {
           <header className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
             <div className="min-w-0">
               <p className="text-xs font-semibold uppercase tracking-wider text-primary">Evidence Review Display</p>
-              <p className="truncate text-sm text-foreground">{reviewLabel(selectedSession)}{videoName ? ` · ${videoName}` : ""}</p>
+              <p className="truncate text-sm text-foreground">{reviewLabel(selectedSession, isExploration)}{videoName ? ` · ${videoName}` : ""}</p>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -526,7 +566,7 @@ export default function SessionReviewPlayer() {
                       playbackTime={videoTime}
                     />
                   ) : (
-                    <p className="px-3 py-8 text-sm text-muted-foreground">No heart-rate trace available for this session.</p>
+                    <p className="px-3 py-8 text-sm text-muted-foreground">No heart-rate trace available for this {isExploration ? "body exploration" : "session"}.</p>
                   )}
                 </div>
                 {motion ? (
@@ -590,7 +630,7 @@ export default function SessionReviewPlayer() {
                   ) : (
                     <button type="button" onClick={() => fileInputRef.current?.click()} className="flex flex-col items-center gap-3 text-muted-foreground hover:text-primary">
                       <Video className="h-10 w-10" />
-                      <span className="text-sm font-semibold">Load the full session video</span>
+                      <span className="text-sm font-semibold">Load the full {isExploration ? "body exploration" : "session"} video</span>
                     </button>
                   )}
                 </div>
@@ -625,7 +665,7 @@ export default function SessionReviewPlayer() {
                       <ActivityBar label="Right foot / leg activity now" value={currentRight} color="#f59e0b" />
                     </div>
                     <p className="text-[11px] leading-relaxed text-muted-foreground">
-                      Playback-time value from the saved motion trace. Session averages: left {motion.left_lower_body_average_activity ?? "-"} / right {motion.right_lower_body_average_activity ?? "-"}. Side comparison is observational and reflects the saved region assignments.
+                      Playback-time value from the saved motion trace. Record averages: left {motion.left_lower_body_average_activity ?? "-"} / right {motion.right_lower_body_average_activity ?? "-"}. Side comparison is observational and reflects the saved region assignments.
                     </p>
                     {currentPattern && (
                       <div className="rounded-lg border border-primary/25 bg-primary/[0.08] px-2.5 py-2">
@@ -715,8 +755,8 @@ export default function SessionReviewPlayer() {
                       suffix={playbackCadence?.movement_cycles_per_minute_estimate != null ? " cycles/min" : ""}
                       accent="text-[#a78bfa]"
                     />
-                    <FocusMetric label="Session Cadence Proxy" value={rhythm?.movement_cycles_per_minute_estimate ?? "--"} suffix={rhythm?.movement_cycles_per_minute_estimate != null ? " cycles/min" : ""} />
-                    <FocusMetric label="Pauses 2s+ (Session)" value={rhythm?.pause_count ?? "--"} />
+                    <FocusMetric label="Record Cadence Proxy" value={rhythm?.movement_cycles_per_minute_estimate ?? "--"} suffix={rhythm?.movement_cycles_per_minute_estimate != null ? " cycles/min" : ""} />
+                    <FocusMetric label="Pauses 2s+ (Record)" value={rhythm?.pause_count ?? "--"} />
                   </div>
                   {!Array.isArray(motion.hand_cadence_timeline) && (
                     <p className="rounded-lg border border-[#a78bfa]/20 bg-background/25 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
@@ -753,8 +793,8 @@ export default function SessionReviewPlayer() {
   return (
     <div>
       <PageHeader
-        title="Session Review Player"
-        subtitle="Review a full video with the heart-rate trace, event markers, and nearby observations moving with playback."
+        title="Review Player"
+        subtitle="Review a session or body exploration video with its heart-rate trace, event markers, and nearby observations moving with playback."
       />
 
       <div className="px-4 pb-8 space-y-4">
@@ -763,41 +803,47 @@ export default function SessionReviewPlayer() {
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-primary">Review Source</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Choose the session first, then load the full local recording for timeline-guided review.
+                Choose a session or body exploration first, then load the full local recording for timeline-guided review.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
-            >
-              <Video className="h-4 w-4" />
-              {videoSrc ? "Change Video" : "Load Full Video"}
-            </button>
-            {selectedSession && (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex rounded-lg border border-border bg-background p-1">
+                <button type="button" onClick={() => handleRecordTypeChange("session")} className={`rounded-md px-3 py-1.5 text-xs font-medium ${!isExploration ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Sessions</button>
+                <button type="button" onClick={() => handleRecordTypeChange("body_exploration")} className={`rounded-md px-3 py-1.5 text-xs font-medium ${isExploration ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Body Exploration</button>
+              </div>
               <button
                 type="button"
-                onClick={() => setFocusView(true)}
-                className="inline-flex h-10 items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/15"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
               >
-                <Maximize2 className="h-4 w-4" />
-                Display View
+                <Video className="h-4 w-4" />
+                {videoSrc ? "Change Video" : "Load Full Video"}
               </button>
-            )}
+              {selectedSession && (
+                <button
+                  type="button"
+                  onClick={() => setFocusView(true)}
+                  className="inline-flex h-10 items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/15"
+                >
+                  <Maximize2 className="h-4 w-4" />
+                  Display View
+                </button>
+              )}
+            </div>
             <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={handleVideoChange} />
           </div>
 
           {loadingSessions ? (
-            <div className="flex h-11 items-center text-sm text-muted-foreground">Loading sessions...</div>
+            <div className="flex h-11 items-center text-sm text-muted-foreground">Loading review records...</div>
           ) : (
             <Select value={selectedId} onValueChange={handleSelectSession}>
               <SelectTrigger className="h-11">
-                <SelectValue placeholder="Choose a session to review..." />
+                <SelectValue placeholder={isExploration ? "Choose a body exploration to review..." : "Choose a session to review..."} />
               </SelectTrigger>
               <SelectContent>
-                {sessions.map((session) => (
-                  <SelectItem key={session.id} value={session.id}>
-                    {reviewLabel(session)}
+                {records.map((record) => (
+                  <SelectItem key={record.id} value={record.id}>
+                    {reviewLabel(record, isExploration)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -827,7 +873,7 @@ export default function SessionReviewPlayer() {
                 />
               </div>
               <p className="rounded-lg bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
-                This local preview supports motion analysis without attaching the recording to a stored session.
+                This local preview supports motion analysis without attaching the recording to a stored record.
               </p>
             </div>
           </div>
@@ -844,12 +890,21 @@ export default function SessionReviewPlayer() {
                 </p>
               </div>
             </div>
-            <Link
-              to={`/motion-lab${selectedSession?.id ? `?session=${encodeURIComponent(selectedSession.id)}` : ""}`}
-              className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
-            >
-              Open Motion Lab
-            </Link>
+            {isExploration && selectedSession?.id ? (
+              <Link
+                to={`/exploration/${encodeURIComponent(selectedSession.id)}`}
+                className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+              >
+                Open Exploration
+              </Link>
+            ) : (
+              <Link
+                to={`/motion-lab${selectedSession?.id ? `?session=${encodeURIComponent(selectedSession.id)}` : ""}`}
+                className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+              >
+                Open Motion Lab
+              </Link>
+            )}
           </div>
         </div>
 
@@ -869,7 +924,7 @@ export default function SessionReviewPlayer() {
 
         {!selectedId && !loadingSessions && (
           <div className="rounded-xl border border-border bg-card px-4 py-14 text-center text-sm text-muted-foreground">
-            Select a session to open its timeline review.
+            Select a {isExploration ? "body exploration" : "session"} to open its timeline review.
           </div>
         )}
 
@@ -983,7 +1038,7 @@ export default function SessionReviewPlayer() {
                     className="flex min-h-[360px] w-full flex-col items-center justify-center gap-3 px-6 text-muted-foreground transition-colors hover:text-primary"
                   >
                     <Video className="h-10 w-10" />
-                    <span className="text-sm font-semibold">Load the full session video</span>
+                    <span className="text-sm font-semibold">Load the full {isExploration ? "body exploration" : "session"} video</span>
                     <span className="max-w-md text-center text-xs">
                       Load the recording, then let the video carry the telemetry and nearby event notes with it.
                     </span>
@@ -1065,7 +1120,7 @@ export default function SessionReviewPlayer() {
                     <div>
                       <h2 className="text-xs font-semibold uppercase tracking-wider text-primary">Timeline Heart Rate Trace</h2>
                       <p className="mt-1 text-sm text-muted-foreground">
-                        The active event stays highlighted while the review player moves through the session.
+                        The active event stays highlighted while the review player moves through the {isExploration ? "body exploration" : "session"}.
                       </p>
                     </div>
                     {timelineRows.length > 0 ? (
@@ -1085,7 +1140,7 @@ export default function SessionReviewPlayer() {
                       />
                     ) : (
                       <p className="rounded-lg border border-border bg-muted/25 px-3 py-3 text-sm text-muted-foreground">
-                        No imported heart-rate timeline is available for this session yet. Event review still works below.
+                        No imported heart-rate timeline is available for this {isExploration ? "body exploration" : "session"} yet. Event review still works below.
                       </p>
                     )}
                     <SavedMotionSummaryCard
@@ -1172,7 +1227,7 @@ export default function SessionReviewPlayer() {
                 </>
               ) : (
                 <div className="rounded-xl border border-border bg-card px-4 py-10 text-sm text-muted-foreground">
-                  This session does not have event notes, markers, or timeline rows to review yet.
+                  This {isExploration ? "body exploration" : "session"} does not have event notes, markers, or timeline rows to review yet.
                 </div>
               )}
             </section>

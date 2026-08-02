@@ -192,7 +192,7 @@ export default function BodyExplorationDetail() {
         title={exploration.title || exploration.exploration_type || "Body Exploration"}
         subtitle={`${exploration.date ? moment(exploration.date).format("MMM D, YYYY") : "Undated"}${exploration.duration_minutes ? ` · ${exploration.duration_minutes} minutes` : ""}`}
         icon={ScanSearch}
-        action={<div className="flex gap-2"><Link to="/exploration"><Button size="sm" variant="outline" className="gap-1.5"><ArrowLeft className="h-4 w-4" /> All</Button></Link><Link to={`/exploration/${exploration.id}/edit`}><Button size="sm" className="gap-1.5"><Pencil className="h-4 w-4" /> Edit</Button></Link></div>}
+        action={<div className="flex flex-wrap gap-2"><Link to="/exploration"><Button size="sm" variant="outline" className="gap-1.5"><ArrowLeft className="h-4 w-4" /> All</Button></Link><Link to={`/review-player?type=body_exploration&exploration=${encodeURIComponent(exploration.id)}`}><Button size="sm" variant="outline" className="gap-1.5"><Clapperboard className="h-4 w-4" /> Review</Button></Link><Link to={`/exploration/${exploration.id}/edit`}><Button size="sm" className="gap-1.5"><Pencil className="h-4 w-4" /> Edit</Button></Link></div>}
       />
       <div className="space-y-4 px-4 pb-8">
         <div className="rounded-xl border border-border bg-card p-4">

@@ -75,7 +75,10 @@ export default function VitalDataImportPanel() {
         parsed = parseBodyCompositionCsv(genericText, { sourceApp: `Shared CSV · ${fileName}` });
         entity = base44.entities.BodyCompositionReading;
       }
-      if (parsed.error) throw new Error(parsed.error);
+      if (parsed.error) {
+        const details = parsed.skipReasons?.slice(0, 3).join(" · ");
+        throw new Error(`${parsed.error}${details ? ` ${details}` : ""}`);
+      }
       const importedAt = new Date().toISOString();
       const rows = parsed.rows.map((row) => ({ ...row, imported_at: importedAt, source_file: fileName }));
       await entity.bulkCreate(rows);

@@ -1,8 +1,9 @@
-export const LIVE_CUE_PROFILE_VERSION = "live-cue-v4";
+export const LIVE_CUE_PROFILE_VERSION = "live-cue-v5";
 
 export const LIVE_CUE_ADAPTIVE_VARIANTS_PER_STATE = 8;
 
 export const LIVE_CUE_TYPES = Object.freeze({
+  body_relaxation: "body_relaxation",
   sustained_build: "sustained_build",
   plateau_encouragement: "plateau_encouragement",
   climax_possible: "climax_possible",
@@ -12,6 +13,7 @@ export const LIVE_CUE_TYPES = Object.freeze({
 });
 
 export const LIVE_CUE_PRIORITY = Object.freeze({
+  body_relaxation: 6,
   climax_imminent: 5,
   climax_possible: 4,
   plateau_encouragement: 3.5,
@@ -146,7 +148,12 @@ export function resolveLiveCuePhraseBank(settings = {}, { captureKind = "session
     return {
       settings: normalized,
       phrases: {
-        recovery: LIVE_CUE_PRESETS.clinical_minimal.phrases.recovery,
+        body_relaxation: [
+          "Your physiology is showing some strain. Unclench your jaw and pelvic floor, then take one slow breath.",
+          "Ease your shoulders and abdomen. Slow inhale, longer exhale, and let the table carry your weight.",
+          "Soften your legs and pelvic floor. Breathe low and slow, and let the tension come down.",
+          "Take a small pause if you need it. Relax your belly and make the next exhale longer than the inhale.",
+        ],
       },
       suppressed: true,
     };

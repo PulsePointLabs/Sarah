@@ -16,8 +16,10 @@ export const DEFAULT_LIVE_CUE_MACHINE_OPTIONS = Object.freeze({
   recoveryMs: 4_000,
   buildResumedThreshold: 42,
   buildResumedMs: 6_000,
+  bodyStressMs: 12_000,
   globalCooldownMs: 14_000,
   cooldowns: {
+    body_relaxation: 75_000,
     sustained_build: 45_000,
     plateau_encouragement: 55_000,
     climax_possible: 30_000,
@@ -127,6 +129,10 @@ function acceptCue(state, cue, phrases, at, prediction, sample) {
       confidenceBand: prediction.confidenceBand || "",
       controllerConfidence: prediction.controllerConfidence ?? null,
       physiologicalIntensity: prediction.physiologicalIntensity || "",
+      bodyStressScore: cue.bodyStressScore ?? null,
+      hrDelta: cue.hrDelta ?? null,
+      respiratoryStrain: Boolean(prediction.respiratoryStrain),
+      possibleBreathHold: Boolean(prediction.possibleBreathHold),
     },
     sample: {
       hr: sample.hr ?? sample.currentHr ?? null,
@@ -163,7 +169,44 @@ export function stepLiveCueStateMachine(previousState, prediction = {}, sample =
 
   if (!options.enabled) return { state, cue: null, suppressed: [{ type: "all", reason: "disabled" }], edgingCandidate: null };
   if (options.captureKind === "body_exploration" && !options.allowSessionStyleCues) {
-    return { state, cue: null, suppressed: [{ type: "all", reason: "body_exploration_suppressed" }], edgingCandidate: null };
+    const hr = Number(sample.hr ?? sample.currentHr);
+    const baselineHr = Number(sample.baselineHr);
+    const hrDelta = Number.isFinite(hr) && Number.isFinite(baselineHr) ? hr - baselineHr : 0;
+    const hrvStrain = Boolean(prediction.hrvUsable && ["compressed", "tightening"].includes(String(prediction.hrvSignal || "").toLowerCase()));
+    const respiratoryStrain = Boolean(prediction.respiratoryStrain || prediction.possibleBreathHold);
+    const markedHrLoad = hrDelta >= 15 && Number(prediction.recentSlope ?? sample.recentSlope ?? 0) >= -0.5;
+    const bodyStressScore = Math.min(100, Math.round(
+      Math.max(0, hrDelta - 6) * 4
+      + (hrvStrain ? 30 : 0)
+      + (respiratoryStrain ? 25 : 0),
+    ));
+    const relaxationReady = setCandidate(
+      state,
+      LIVE_CUE_TYPES.body_relaxation,
+      (hrDelta >= 10 && (hrvStrain || respiratoryStrain)) || markedHrLoad,
+      at,
+      options.bodyStressMs,
+    );
+    if (!relaxationReady || !hasPhrase(phrases, LIVE_CUE_TYPES.body_relaxation)) {
+      return { state, cue: null, suppressed: [], edgingCandidate: null };
+    }
+    const gate = canSpeak(state, LIVE_CUE_TYPES.body_relaxation, at, {
+      ...options,
+      globalCooldownMs: Math.max(20_000, options.globalCooldownMs),
+      maxCuesPerMinute: Math.min(2, options.maxCuesPerMinute),
+    });
+    if (!gate.ok) return { state, cue: null, suppressed: [{ type: LIVE_CUE_TYPES.body_relaxation, reason: gate.reason }], edgingCandidate: null };
+    return {
+      state,
+      cue: acceptCue(state, {
+        type: LIVE_CUE_TYPES.body_relaxation,
+        state: "body_relaxation",
+        bodyStressScore,
+        hrDelta: Math.round(hrDelta),
+      }, phrases, at, prediction, sample),
+      suppressed: [],
+      edgingCandidate: null,
+    };
   }
 
   const near = Number(prediction.nearClimax || 0);

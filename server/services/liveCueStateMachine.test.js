@@ -136,3 +136,43 @@ test("physiology routing identifies recovery and steady states without inventing
     plateauScore: 70,
   }, {}), "steady");
 });
+
+test("body exploration gives a relaxation cue after sustained relative physiological strain", () => {
+  const start = Date.now();
+  const phrases = { body_relaxation: ["Slow your breathing and soften your pelvic floor."] };
+  const prediction = {
+    hrvUsable: true,
+    hrvSignal: "compressed",
+    recentSlope: 0.8,
+  };
+  const options = { captureKind: "body_exploration" };
+  const first = stepLiveCueStateMachine(
+    createLiveCueStateMachineState(),
+    prediction,
+    { atMs: start, hr: 116, baselineHr: 103 },
+    options,
+    phrases,
+  );
+  assert.equal(first.cue, null);
+  const sustained = stepLiveCueStateMachine(
+    first.state,
+    prediction,
+    { atMs: start + 12_500, hr: 118, baselineHr: 103 },
+    options,
+    phrases,
+  );
+  assert.equal(sustained.cue?.type, "body_relaxation");
+  assert.equal(sustained.cue?.phrase, "Slow your breathing and soften your pelvic floor.");
+  assert.equal(sustained.cue?.detector.hrvSignal, "compressed");
+});
+
+test("body exploration does not cue from a brief or baseline-level sample", () => {
+  const result = stepLiveCueStateMachine(
+    createLiveCueStateMachineState(),
+    { hrvUsable: true, hrvSignal: "steady", recentSlope: 0 },
+    { atMs: Date.now(), hr: 106, baselineHr: 103 },
+    { captureKind: "body_exploration", bodyStressMs: 0 },
+    { body_relaxation: ["Breathe slowly."] },
+  );
+  assert.equal(result.cue, null);
+});

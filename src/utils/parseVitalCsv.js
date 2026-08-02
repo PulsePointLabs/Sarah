@@ -25,7 +25,7 @@ function normalize(value = "") {
 
 const HEADER_TERMS = {
   pulse_ox: ["spo2", "sp02", "oxygen saturation", "blood oxygen", "pulse rate", "perfusion"],
-  blood_glucose: ["blood glucose", "blood sugar", "glucose", "glucose value", "result", "mg dl", "mmol"],
+  blood_glucose: ["blood glucose", "blood sugar", "glucose", "glucose value", "glucose reading", "bg value", "bg reading", "result", "mg dl", "mmol"],
   body_composition: ["body fat", "lean body", "weight", "visceral fat", "muscle mass", "body water", "bmi"],
 };
 
@@ -36,7 +36,10 @@ function headerScore(headers, kind) {
   const terms = kind ? HEADER_TERMS[kind] : Object.values(HEADER_TERMS).flat();
   const vitalHits = normalized.filter((header) => terms.some((term) => header === term || header.includes(term))).length;
   const timeHits = normalized.filter((header) => TIME_TERMS.some((term) => header === term || header.includes(term))).length;
-  return vitalHits * 20 + timeHits * 5 + Math.min(headers.length, 12);
+  const mixedGlucoseTable = normalized.some((header) => ["event type", "record type", "reading type", "measurement type"].some((term) => header.includes(term)))
+    && normalized.some((header) => ["event value", "reading value", "measurement value", "value"].some((term) => header === term || header.includes(term)));
+  const mixedGlucoseScore = mixedGlucoseTable && (!kind || kind === "blood_glucose") ? 40 : 0;
+  return vitalHits * 20 + timeHits * 5 + mixedGlucoseScore + Math.min(headers.length, 12);
 }
 
 function linesAndHeaders(text, kind) {
@@ -73,6 +76,30 @@ function number(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function parseDeviceLocalTimestamp(value) {
+  if (!value) return null;
+  const raw = String(value).trim().replace(/\s+/g, " ");
+  const match = raw.match(
+    /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?(?:\s*(?:Z|[+-]\d{2}:?\d{2}))?$/i,
+  ) || raw.match(
+    /^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?(?:\s*(?:Z|[+-]\d{2}:?\d{2}))?$/i,
+  );
+  if (match) {
+    const yearFirst = match[1].length === 4;
+    let year = Number(yearFirst ? match[1] : match[3]);
+    if (year < 100) year += 2000;
+    const month = Number(yearFirst ? match[2] : match[1]);
+    const day = Number(yearFirst ? match[3] : match[2]);
+    let hour = Number(match[4]);
+    if (/pm/i.test(match[7] || "") && hour < 12) hour += 12;
+    if (/am/i.test(match[7] || "") && hour === 12) hour = 0;
+    const local = new Date(year, month - 1, day, hour, Number(match[5]), Number(match[6] || 0));
+    return Number.isNaN(local.getTime()) ? null : local;
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function timestamp(columns, headers) {
   const dateIndex = indexOf(headers, ["date", "measurement date", "record date", "device date"]);
   const timeIndex = indexOf(headers, ["device timestamp", "timestamp", "date time", "datetime", "measured at", "measurement time", "record time", "device time", "time"]);
@@ -80,8 +107,13 @@ function timestamp(columns, headers) {
     ? `${columns[dateIndex]} ${columns[timeIndex]}`
     : columns[timeIndex >= 0 ? timeIndex : dateIndex];
   if (!raw) return null;
-  const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  const parsed = parseDeviceLocalTimestamp(raw);
+  return parsed ? parsed.toISOString() : null;
+}
+
+function isGlucoseEvent(value) {
+  const type = normalize(value);
+  return type === "bg" || type.includes("blood glucose") || type.includes("blood sugar") || type.includes("glucose");
 }
 
 export function decodeVitalCsvBytes(value) {
@@ -97,6 +129,7 @@ export function classifyVitalCsv(text) {
   const joined = parsed.normalized.join(" | ");
   if (/spo2|sp02|oxygen saturation|blood oxygen|pulse rate|perfusion/.test(joined)) return { type: "pulse_ox", headers: parsed.headers };
   if (/blood glucose|blood sugar|glucose|mmol|mg dl/.test(joined)) return { type: "blood_glucose", headers: parsed.headers };
+  if (/event type|record type|reading type|measurement type/.test(joined) && /event value|reading value|measurement value|\bvalue\b/.test(joined)) return { type: "blood_glucose", headers: parsed.headers };
   if (/body fat|lean body|weight|visceral fat|muscle mass|body water|bmi/.test(joined)) return { type: "body_composition", headers: parsed.headers };
   return { type: null, headers: parsed.headers, error: "Sarah could not identify this CSV from its headers. Choose the import type manually." };
 }
@@ -104,17 +137,25 @@ export function classifyVitalCsv(text) {
 export function parseBloodGlucoseCsv(text, options = {}) {
   const parsed = linesAndHeaders(text, "blood_glucose");
   if (parsed.error) return { ...parsed, rows: [] };
-  const glucoseIndex = indexOf(parsed.normalized, ["blood glucose", "blood sugar", "glucose value", "blood glucose result", "glucose", "result", "reading", "value"]);
+  const specificGlucoseIndex = indexOf(parsed.normalized, ["blood glucose", "blood sugar", "glucose value", "glucose reading", "blood glucose result", "bg value", "bg reading", "glucose", "result"]);
+  const eventTypeIndex = indexOf(parsed.normalized, ["event type", "record type", "reading type", "measurement type", "type"]);
+  const genericValueIndex = indexOf(parsed.normalized, ["event value", "reading value", "measurement value", "value"]);
+  const glucoseIndex = specificGlucoseIndex >= 0 ? specificGlucoseIndex : genericValueIndex;
   const unitIndex = indexOf(parsed.normalized, ["glucose units", "glucose unit", "unit", "units"]);
-  if (glucoseIndex < 0) return { error: "Could not find a blood-glucose column.", rows: [], headers: parsed.headers };
+  if (glucoseIndex < 0 || (specificGlucoseIndex < 0 && eventTypeIndex < 0)) return { error: "Could not find OneTouch date/time and glucose columns.", rows: [], headers: parsed.headers };
   const rows = [];
+  const skipReasons = [];
   parsed.dataLines.forEach((line, index) => {
     const columns = parseLine(line, parsed.delimiter);
+    if (eventTypeIndex >= 0 && !isGlucoseEvent(columns[eventTypeIndex])) return;
     const measuredAt = timestamp(columns, parsed.normalized);
     let glucose = number(columns[glucoseIndex]);
     const unit = `${columns[unitIndex] || ""} ${parsed.headers[glucoseIndex] || ""}`.toLowerCase();
     if (glucose != null && /mmol/.test(unit)) glucose *= 18.0182;
-    if (!measuredAt || glucose == null || glucose < 20 || glucose > 700) return;
+    if (!measuredAt || glucose == null || glucose < 20 || glucose > 700) {
+      skipReasons.push(`Row ${parsed.headerIndex + index + 2}: invalid ${!measuredAt ? "timestamp" : "glucose value"}`);
+      return;
+    }
     rows.push({
       id: `blood-glucose-${measuredAt}-${index}`,
       measured_at: measuredAt,
@@ -124,7 +165,9 @@ export function parseBloodGlucoseCsv(text, options = {}) {
       import_source: "csv",
     });
   });
-  return rows.length ? { rows, imported: rows.length, total: parsed.dataLines.length, headerRow: parsed.headerIndex + 1, headers: parsed.headers } : { error: "No valid blood-glucose rows were found after the detected header row.", rows: [], headers: parsed.headers };
+  return rows.length
+    ? { rows, imported: rows.length, total: parsed.dataLines.length, skipped: parsed.dataLines.length - rows.length, skipReasons, headerRow: parsed.headerIndex + 1, headers: parsed.headers }
+    : { error: "No valid blood-glucose rows were found after the detected header row.", rows: [], skipReasons, headers: parsed.headers };
 }
 
 export function parseBodyCompositionCsv(text, options = {}) {

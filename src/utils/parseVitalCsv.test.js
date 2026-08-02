@@ -43,6 +43,35 @@ test("imports separate OneTouch date and time columns after a preamble", () => {
   assert.equal(parsed.rows[0].glucose_mg_dl, 109.9);
 });
 
+test("accepts OneTouch Reading Date and Reading Time columns", () => {
+  const text = [
+    "Reading Date,Reading Time,Result,Units,Meal Tag,Notes",
+    "07/29/2026,8:15 PM,112,mg/dL,After Meal,session context",
+    "07/29/2026,8:45 PM,6.2,mmol/L,Before Meal,",
+  ].join("\n");
+  const parsed = parseBloodGlucoseCsv(text);
+  assert.equal(parsed.rows.length, 2);
+  assert.equal(parsed.rows[0].glucose_mg_dl, 112);
+  assert.equal(parsed.rows[1].glucose_mg_dl, 111.7);
+  assert.equal(new Date(parsed.rows[0].measured_at).getHours(), 20);
+});
+
+test("accepts and filters a OneTouch mixed-event table", () => {
+  const text = [
+    "OneTouch Reveal Data Export",
+    "Generated,07/29/2026",
+    "Date and Time,Event Type,Value,Unit,Manually Entered,Meal Tag,Notes",
+    "07/29/2026 8:15 PM,Blood Glucose,112,mg/dL,No,After Meal,session context",
+    "07/29/2026 8:20 PM,Carbs,30,g,Yes,,dinner",
+    "07/29/2026 8:45 PM,Glucose,6.2,mmol/L,No,Before Meal,",
+  ].join("\n");
+  assert.equal(classifyVitalCsv(text).type, "blood_glucose");
+  const parsed = parseBloodGlucoseCsv(text);
+  assert.equal(parsed.rows.length, 2);
+  assert.equal(parsed.rows[0].glucose_mg_dl, 112);
+  assert.equal(parsed.rows[1].glucose_mg_dl, 111.7);
+});
+
 test("classifies body composition and converts pounds", () => {
   const text = "Date,Time,Weight (lb),Body Fat %,BMI\n2026-08-01,07:30,180,18.2,24.4";
   assert.equal(classifyVitalCsv(text).type, "body_composition");

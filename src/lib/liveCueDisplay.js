@@ -1,4 +1,5 @@
 export const LIVE_CUE_DISPLAY_LABELS = Object.freeze({
+  body_relaxation: "Physiological strain observed",
   sustained_build: "Sustained build observed",
   plateau_encouragement: "Sustained plateau observed",
   climax_possible: "Climax approach detected",
@@ -13,7 +14,9 @@ export function toLiveTelemetryNotice(cue) {
     id: cue.id,
     label: LIVE_CUE_DISPLAY_LABELS[cue.type] || String(cue.type || "Live telemetry update").replace(/_/g, " "),
     message: cue.phrase || "Meaningful live telemetry pattern detected.",
-    confidence: cue.type === "recovery" ? cue.detector?.recovery : cue.detector?.nearClimax,
+    confidence: cue.type === "body_relaxation"
+      ? cue.detector?.bodyStressScore
+      : cue.type === "recovery" ? cue.detector?.recovery : cue.detector?.nearClimax,
     sessionTimeSec: cue.sessionTimeSec,
     spoken: Boolean(cue.playback?.ok),
   };
