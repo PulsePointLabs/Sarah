@@ -14,6 +14,35 @@ test("classifies and converts blood glucose CSV values", () => {
   assert.equal(parsed.rows[0].glucose_mg_dl, 109.9);
 });
 
+test("finds a OneTouch glucose header after report metadata", () => {
+  const text = [
+    "OneTouch Reveal Data Report",
+    "Patient Name,Ben",
+    "Report Generated,08/01/2026",
+    "Meter,Serial Number,Device Timestamp,Record Type,Glucose Value,Glucose Units",
+    'OneTouch Verio,ABC123,"08/01/2026 06:46 PM",BG,108,mg/dL',
+  ].join("\n");
+  assert.equal(classifyVitalCsv(text).type, "blood_glucose");
+  const parsed = parseBloodGlucoseCsv(text);
+  assert.equal(parsed.headerRow, 4);
+  assert.equal(parsed.rows.length, 1);
+  assert.equal(parsed.rows[0].glucose_mg_dl, 108);
+  assert.equal(parsed.rows[0].measured_at, "2026-08-01T22:46:00.000Z");
+});
+
+test("imports separate OneTouch date and time columns after a preamble", () => {
+  const text = [
+    "OneTouch Reveal",
+    "Generated for personal use",
+    "Date,Time,Result,Units",
+    "2026-08-01,07:30,6.1,mmol/L",
+  ].join("\n");
+  const parsed = parseBloodGlucoseCsv(text);
+  assert.equal(parsed.headerRow, 3);
+  assert.equal(parsed.rows.length, 1);
+  assert.equal(parsed.rows[0].glucose_mg_dl, 109.9);
+});
+
 test("classifies body composition and converts pounds", () => {
   const text = "Date,Time,Weight (lb),Body Fat %,BMI\n2026-08-01,07:30,180,18.2,24.4";
   assert.equal(classifyVitalCsv(text).type, "body_composition");

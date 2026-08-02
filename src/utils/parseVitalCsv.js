@@ -23,15 +23,43 @@ function normalize(value = "") {
   return String(value).replace(/^\uFEFF/, "").toLowerCase().replace(/[%()/_-]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function linesAndHeaders(text) {
+const HEADER_TERMS = {
+  pulse_ox: ["spo2", "sp02", "oxygen saturation", "blood oxygen", "pulse rate", "perfusion"],
+  blood_glucose: ["blood glucose", "blood sugar", "glucose", "glucose value", "result", "mg dl", "mmol"],
+  body_composition: ["body fat", "lean body", "weight", "visceral fat", "muscle mass", "body water", "bmi"],
+};
+
+const TIME_TERMS = ["date", "time", "timestamp", "measured at", "measurement date", "measurement time", "device timestamp"];
+
+function headerScore(headers, kind) {
+  const normalized = headers.map(normalize);
+  const terms = kind ? HEADER_TERMS[kind] : Object.values(HEADER_TERMS).flat();
+  const vitalHits = normalized.filter((header) => terms.some((term) => header === term || header.includes(term))).length;
+  const timeHits = normalized.filter((header) => TIME_TERMS.some((term) => header === term || header.includes(term))).length;
+  return vitalHits * 20 + timeHits * 5 + Math.min(headers.length, 12);
+}
+
+function linesAndHeaders(text, kind) {
   const lines = String(text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   if (lines.length < 2) return { error: "CSV appears empty or has no data rows." };
   const delimiter = [",", "\t", ";", "|"].map((candidate) => ({
     candidate,
-    score: Math.max(...lines.slice(0, 20).map((line) => parseLine(line, candidate).length)),
+    score: Math.max(...lines.slice(0, 60).map((line) => parseLine(line, candidate).length)),
   })).sort((a, b) => b.score - a.score)[0].candidate;
-  const headers = parseLine(lines[0], delimiter);
-  return { lines, delimiter, headers, normalized: headers.map(normalize) };
+  const candidates = lines.slice(0, 60).map((line, index) => {
+    const headers = parseLine(line, delimiter);
+    return { index, headers, score: headerScore(headers, kind) };
+  }).sort((a, b) => b.score - a.score || a.index - b.index);
+  const selected = candidates[0];
+  if (!selected || selected.score < 20) return { error: "Could not find a recognized vital-sign header row." };
+  return {
+    lines,
+    delimiter,
+    headerIndex: selected.index,
+    headers: selected.headers,
+    normalized: selected.headers.map(normalize),
+    dataLines: lines.slice(selected.index + 1),
+  };
 }
 
 function indexOf(headers, aliases) {
@@ -39,13 +67,15 @@ function indexOf(headers, aliases) {
 }
 
 function number(value) {
-  const parsed = Number(String(value ?? "").replace(/[^\d.+-]/g, ""));
+  const cleaned = String(value ?? "").replace(/[^\d.+-]/g, "");
+  if (!cleaned) return null;
+  const parsed = Number(cleaned);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
 function timestamp(columns, headers) {
-  const dateIndex = indexOf(headers, ["date", "measurement date", "record date"]);
-  const timeIndex = indexOf(headers, ["timestamp", "date time", "datetime", "measured at", "measurement time", "record time", "time"]);
+  const dateIndex = indexOf(headers, ["date", "measurement date", "record date", "device date"]);
+  const timeIndex = indexOf(headers, ["device timestamp", "timestamp", "date time", "datetime", "measured at", "measurement time", "record time", "device time", "time"]);
   const raw = dateIndex >= 0 && timeIndex >= 0 && dateIndex !== timeIndex
     ? `${columns[dateIndex]} ${columns[timeIndex]}`
     : columns[timeIndex >= 0 ? timeIndex : dateIndex];
@@ -72,13 +102,13 @@ export function classifyVitalCsv(text) {
 }
 
 export function parseBloodGlucoseCsv(text, options = {}) {
-  const parsed = linesAndHeaders(text);
+  const parsed = linesAndHeaders(text, "blood_glucose");
   if (parsed.error) return { ...parsed, rows: [] };
-  const glucoseIndex = indexOf(parsed.normalized, ["blood glucose", "blood sugar", "glucose", "result", "value"]);
-  const unitIndex = indexOf(parsed.normalized, ["unit", "units"]);
+  const glucoseIndex = indexOf(parsed.normalized, ["blood glucose", "blood sugar", "glucose value", "blood glucose result", "glucose", "result", "reading", "value"]);
+  const unitIndex = indexOf(parsed.normalized, ["glucose units", "glucose unit", "unit", "units"]);
   if (glucoseIndex < 0) return { error: "Could not find a blood-glucose column.", rows: [], headers: parsed.headers };
   const rows = [];
-  parsed.lines.slice(1).forEach((line, index) => {
+  parsed.dataLines.forEach((line, index) => {
     const columns = parseLine(line, parsed.delimiter);
     const measuredAt = timestamp(columns, parsed.normalized);
     let glucose = number(columns[glucoseIndex]);
@@ -94,11 +124,11 @@ export function parseBloodGlucoseCsv(text, options = {}) {
       import_source: "csv",
     });
   });
-  return rows.length ? { rows, imported: rows.length, total: parsed.lines.length - 1, headers: parsed.headers } : { error: "No valid blood-glucose rows were found.", rows: [], headers: parsed.headers };
+  return rows.length ? { rows, imported: rows.length, total: parsed.dataLines.length, headerRow: parsed.headerIndex + 1, headers: parsed.headers } : { error: "No valid blood-glucose rows were found after the detected header row.", rows: [], headers: parsed.headers };
 }
 
 export function parseBodyCompositionCsv(text, options = {}) {
-  const parsed = linesAndHeaders(text);
+  const parsed = linesAndHeaders(text, "body_composition");
   if (parsed.error) return { ...parsed, rows: [] };
   const weightIndex = indexOf(parsed.normalized, ["weight", "body weight", "mass"]);
   const fatIndex = indexOf(parsed.normalized, ["body fat", "fat percent", "fat percentage"]);
@@ -107,7 +137,7 @@ export function parseBodyCompositionCsv(text, options = {}) {
   const unitIndex = indexOf(parsed.normalized, ["unit", "units"]);
   if (weightIndex < 0) return { error: "Could not find a body-weight column.", rows: [], headers: parsed.headers };
   const rows = [];
-  parsed.lines.slice(1).forEach((line, index) => {
+  parsed.dataLines.forEach((line, index) => {
     const columns = parseLine(line, parsed.delimiter);
     const measuredAt = timestamp(columns, parsed.normalized);
     let weightKg = number(columns[weightIndex]);
@@ -126,5 +156,5 @@ export function parseBodyCompositionCsv(text, options = {}) {
       import_source: "csv",
     });
   });
-  return rows.length ? { rows, imported: rows.length, total: parsed.lines.length - 1, headers: parsed.headers } : { error: "No valid body-composition rows were found.", rows: [], headers: parsed.headers };
+  return rows.length ? { rows, imported: rows.length, total: parsed.dataLines.length, headerRow: parsed.headerIndex + 1, headers: parsed.headers } : { error: "No valid body-composition rows were found after the detected header row.", rows: [], headers: parsed.headers };
 }

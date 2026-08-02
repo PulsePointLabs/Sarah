@@ -2,6 +2,7 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 
 const SharedVitalImport = registerPlugin("SharedVitalImport");
 let pendingImport = null;
+const pendingListeners = new Set();
 
 function bytesFromBase64(value = "") {
   const binary = atob(value);
@@ -19,6 +20,7 @@ async function consume(onImport) {
     size: Number(result.size || 0),
     bytes: bytesFromBase64(result.base64),
   };
+  pendingListeners.forEach((listener) => listener());
   onImport?.(pendingImport);
   return true;
 }
@@ -27,6 +29,11 @@ export function takePendingSharedVitalImport() {
   const value = pendingImport;
   pendingImport = null;
   return value;
+}
+
+export function subscribePendingSharedVitalImport(listener) {
+  pendingListeners.add(listener);
+  return () => pendingListeners.delete(listener);
 }
 
 export async function startSharedVitalImportBridge(onImport) {

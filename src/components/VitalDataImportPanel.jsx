@@ -3,7 +3,7 @@ import { Activity, CheckCircle2, Droplets, FileUp, RefreshCw, Scale, TriangleAle
 import { base44 } from "@/api/base44Client";
 import { useToast } from "@/components/ui/use-toast";
 import { syncBodyCompositionFromHealthConnect } from "@/lib/bodyComposition";
-import { takePendingSharedVitalImport } from "@/lib/sharedVitalImport";
+import { subscribePendingSharedVitalImport, takePendingSharedVitalImport } from "@/lib/sharedVitalImport";
 import { decodePulseOxCsvBytes, parsePulseOxCsv } from "@/utils/parsePulseOxCsv";
 import { classifyVitalCsv, decodeVitalCsvBytes, parseBloodGlucoseCsv, parseBodyCompositionCsv } from "@/utils/parseVitalCsv";
 
@@ -55,7 +55,11 @@ export default function VitalDataImportPanel() {
     try {
       const genericText = decodeVitalCsvBytes(bytes);
       const detected = classifyVitalCsv(genericText);
-      const filenameType = /(?:emay|spo2|sp02|pulse.?ox|oximeter|oxygen)/i.test(fileName) ? "pulse_ox" : null;
+      const filenameType = /(?:emay|spo2|sp02|pulse.?ox|oximeter|oxygen)/i.test(fileName)
+        ? "pulse_ox"
+        : /(?:onetouch|glucose|blood.?sugar)/i.test(fileName)
+          ? "blood_glucose"
+          : /(?:weight|scale|body.?composition)/i.test(fileName) ? "body_composition" : null;
       const type = forcedType === "auto" ? (detected.type || filenameType) : forcedType;
       if (!type) throw new Error(detected.error || "Choose whether this file contains SpO2, blood glucose, or body composition.");
 
@@ -73,8 +77,11 @@ export default function VitalDataImportPanel() {
       }
       if (parsed.error) throw new Error(parsed.error);
       const importedAt = new Date().toISOString();
-      await entity.bulkCreate(parsed.rows.map((row) => ({ ...row, imported_at: importedAt, source_file: fileName })));
-      const next = { type, count: parsed.rows.length, fileName, first: parsed.rows[0]?.measured_at, last: parsed.rows.at(-1)?.measured_at };
+      const rows = parsed.rows.map((row) => ({ ...row, imported_at: importedAt, source_file: fileName }));
+      await entity.bulkCreate(rows);
+      const persisted = await entity.filter({ id: { $in: rows.map((row) => row.id) } }, "-updated_date", rows.length);
+      if (persisted.length !== rows.length) throw new Error(`Sarah parsed ${rows.length} reading${rows.length === 1 ? "" : "s"}, but only ${persisted.length} persisted. Nothing is being reported as imported until storage agrees.`);
+      const next = { type, count: persisted.length, fileName, first: parsed.rows[0]?.measured_at, last: parsed.rows.at(-1)?.measured_at, headerRow: parsed.headerRow };
       setResult(next);
       await loadRecent();
       toast({ title: `Imported ${next.count} ${TYPE_OPTIONS.find((item) => item.value === type)?.label || "vital-sign"} reading${next.count === 1 ? "" : "s"}` });
@@ -88,8 +95,12 @@ export default function VitalDataImportPanel() {
   useEffect(() => { loadRecent(); }, [loadRecent]);
 
   useEffect(() => {
-    const shared = takePendingSharedVitalImport();
-    if (shared?.bytes) importBytes(shared.bytes, shared.name, "auto");
+    const consumeShared = () => {
+      const shared = takePendingSharedVitalImport();
+      if (shared?.bytes) importBytes(shared.bytes, shared.name, "auto");
+    };
+    consumeShared();
+    return subscribePendingSharedVitalImport(consumeShared);
   }, [importBytes]);
 
   const total = useMemo(() => recent.pulseOx.length + recent.glucose.length + recent.composition.length, [recent]);
@@ -138,7 +149,7 @@ export default function VitalDataImportPanel() {
       </div>
 
       {result?.error && <div className="mt-4 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"><TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" /><span><strong>{result.fileName}:</strong> {result.error}</span></div>}
-      {result && !result.error && <div className="mt-4 flex items-start gap-2 rounded-md border border-primary/25 bg-primary/10 p-3 text-sm text-primary"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /><span>Imported {result.count} reading{result.count === 1 ? "" : "s"} from {result.fileName}{result.first ? ` · ${fmtTime(result.first)} through ${fmtTime(result.last)}` : ""}.</span></div>}
+      {result && !result.error && <div className="mt-4 flex items-start gap-2 rounded-md border border-primary/25 bg-primary/10 p-3 text-sm text-primary"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /><span>Saved and verified {result.count} reading{result.count === 1 ? "" : "s"} from {result.fileName}{result.first ? ` · ${fmtTime(result.first)} through ${fmtTime(result.last)}` : ""}{result.headerRow > 1 ? ` · CSV header found on row ${result.headerRow}` : ""}.</span></div>}
 
       <div className="mt-4 grid gap-3 lg:grid-cols-3">
         <RecentList title="SpO2 / pulse" icon={<Activity className="h-4 w-4 text-primary" />} rows={recent.pulseOx} render={(row) => `${row.spo2_percent ?? row.spo2}%${row.pulse_bpm ? ` · ${row.pulse_bpm} bpm` : ""}`} />
