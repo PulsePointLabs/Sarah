@@ -131,6 +131,20 @@ test("does not mistake Timezone for a separate Reading Time column", () => {
   assert.equal(new Date(parsed.rows[0].measured_at).getHours(), 20);
 });
 
+test("imports the photographed Item Type and Date and Time export", () => {
+  const text = [
+    "Item Type,Date and Time,Value,Recommended Range,Unit,Manual,Additional Notes,Data Source",
+    'Blood Glucose,"Aug 1, 2026, 9:04 PM",90,,mg/dL,No,Before Meal,',
+    'Blood Glucose,"Aug 1, 2026 at 8:41 PM",89,,mg/dL,No,Before Meal,',
+    'Blood Glucose,"Jul 29, 2026, 6:46 PM",158,,mg/dL,No,Before Meal,',
+  ].join("\n");
+  assert.equal(classifyVitalCsv(text).type, "blood_glucose");
+  const parsed = parseBloodGlucoseCsv(text);
+  assert.equal(parsed.rows.length, 3);
+  assert.deepEqual(parsed.rows.map((row) => row.glucose_mg_dl), [90, 89, 158]);
+  assert.equal(new Date(parsed.rows[0].measured_at).getHours(), 21);
+});
+
 test("classifies body composition and converts pounds", () => {
   const text = "Date,Time,Weight (lb),Body Fat %,BMI\n2026-08-01,07:30,180,18.2,24.4";
   assert.equal(classifyVitalCsv(text).type, "body_composition");

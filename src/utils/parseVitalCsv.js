@@ -36,7 +36,7 @@ function headerScore(headers, kind) {
   const terms = kind ? HEADER_TERMS[kind] : Object.values(HEADER_TERMS).flat();
   const vitalHits = normalized.filter((header) => terms.some((term) => header === term || header.includes(term))).length;
   const timeHits = normalized.filter((header) => TIME_TERMS.some((term) => header === term || header.includes(term))).length;
-  const mixedGlucoseTable = normalized.some((header) => ["event type", "record type", "reading type", "measurement type"].some((term) => header.includes(term)))
+  const mixedGlucoseTable = normalized.some((header) => ["item type", "event type", "record type", "reading type", "measurement type"].some((term) => header.includes(term)))
     && normalized.some((header) => ["event value", "reading value", "measurement value", "value"].some((term) => header === term || header.includes(term)));
   const mixedGlucoseScore = mixedGlucoseTable && (!kind || kind === "blood_glucose") ? 40 : 0;
   return vitalHits * 20 + timeHits * 5 + mixedGlucoseScore + Math.min(headers.length, 12);
@@ -133,8 +133,8 @@ function parseDeviceLocalTimestamp(value) {
   }
 
   const monthNames = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
-  const named = withoutZoneName.match(/^([A-Za-z]{3,9})[ .-]+(\d{1,2}),?[ .-]+(\d{4})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i)
-    || withoutZoneName.match(/^(\d{1,2})[ .-]+([A-Za-z]{3,9})[ .,-]+(\d{4})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  const named = withoutZoneName.match(/^([A-Za-z]{3,9})[ .-]+(\d{1,2}),?[ .-]+(\d{4})(?:\s+at\s+|[ ,T]+)(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i)
+    || withoutZoneName.match(/^(\d{1,2})[ .-]+([A-Za-z]{3,9})[ .,-]+(\d{4})(?:\s+at\s+|[ ,T]+)(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
   if (named) {
     const monthFirst = /^[A-Za-z]/.test(named[1]);
     const monthToken = String(monthFirst ? named[1] : named[2]).slice(0, 3).toLowerCase();
@@ -197,7 +197,7 @@ export function classifyVitalCsv(text) {
   const joined = parsed.normalized.join(" | ");
   if (/spo2|sp02|oxygen saturation|blood oxygen|pulse rate|perfusion/.test(joined)) return { type: "pulse_ox", headers: parsed.headers };
   if (/blood glucose|blood sugar|glucose|mmol|mg dl/.test(joined)) return { type: "blood_glucose", headers: parsed.headers };
-  if (/event type|record type|reading type|measurement type/.test(joined) && /event value|reading value|measurement value|\bvalue\b/.test(joined)) return { type: "blood_glucose", headers: parsed.headers };
+  if (/item type|event type|record type|reading type|measurement type/.test(joined) && /event value|reading value|measurement value|\bvalue\b/.test(joined)) return { type: "blood_glucose", headers: parsed.headers };
   if (/body fat|lean body|weight|visceral fat|muscle mass|body water|bmi/.test(joined)) return { type: "body_composition", headers: parsed.headers };
   return { type: null, headers: parsed.headers, error: "Sarah could not identify this CSV from its headers. Choose the import type manually." };
 }
@@ -206,7 +206,7 @@ export function parseBloodGlucoseCsv(text, options = {}) {
   const parsed = linesAndHeaders(text, "blood_glucose");
   if (parsed.error) return { ...parsed, rows: [] };
   const specificGlucoseIndex = indexOf(parsed.normalized, ["blood glucose", "blood sugar", "glucose value", "glucose reading", "blood glucose result", "bg value", "bg reading", "glucose", "result"]);
-  const eventTypeIndex = indexOf(parsed.normalized, ["event type", "record type", "reading type", "measurement type", "type"]);
+  const eventTypeIndex = indexOf(parsed.normalized, ["item type", "event type", "record type", "reading type", "measurement type", "type"]);
   const genericValueIndex = indexOf(parsed.normalized, ["event value", "reading value", "measurement value", "value"]);
   const glucoseIndex = specificGlucoseIndex >= 0 ? specificGlucoseIndex : genericValueIndex;
   const unitIndex = indexOf(parsed.normalized, ["glucose units", "glucose unit", "unit", "units"]);
