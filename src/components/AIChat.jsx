@@ -1178,6 +1178,7 @@ export default function AIChat({
       const slots = MAX_IMAGE_COUNT - selectedImages.length;
       if (slots <= 0) {
         setImageError(`Attach up to ${MAX_IMAGE_COUNT} images per message.`);
+        setChatProcessingStatus(null);
         return;
       }
       setProcessingVideoClip(true);
@@ -1187,19 +1188,23 @@ export default function AIChat({
           setSelectedImages((prev) => [...prev, ...derivedFrames].slice(0, MAX_IMAGE_COUNT));
           setImageError("");
           setInput((current) => current.trim() ? current : clipPrompt);
+          setChatProcessingStatus(null);
           return;
         }
       } catch (error) {
         setImageError(error?.message || "Could not pull frames for this saved moment.");
+        setChatProcessingStatus(null);
       } finally {
         setProcessingVideoClip(false);
       }
       setInput((current) => current.trim() ? current : clipPrompt);
+      setChatProcessingStatus(null);
       return;
     }
     const slots = MAX_IMAGE_COUNT - selectedImages.length;
     if (slots <= 0) {
       setImageError(`Attach up to ${MAX_IMAGE_COUNT} images per message.`);
+      setChatProcessingStatus(null);
       return;
     }
     const usableFrames = frames.filter((frame) => frame?.data || frame?.file_url || frame?.url).slice(0, slots);
@@ -1252,17 +1257,20 @@ export default function AIChat({
       }
     } catch (error) {
       setImageError(error?.message || "Could not attach saved clip frames.");
+      setChatProcessingStatus(null);
       return;
     } finally {
       setProcessingVideoClip(false);
     }
     if (!accepted.length) {
       setImageError("This saved clip did not expose usable sampled frames.");
+      setChatProcessingStatus(null);
       return;
     }
     setSelectedImages((prev) => [...prev, ...accepted].slice(0, MAX_IMAGE_COUNT));
     setImageError("");
     setInput((current) => current.trim() ? current : clipPrompt);
+    setChatProcessingStatus(null);
   }, [buildSavedMomentVideoFrames, selectedImages.length]);
 
   useEffect(() => {
