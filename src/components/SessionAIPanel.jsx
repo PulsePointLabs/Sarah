@@ -42,7 +42,7 @@ function trailingContext(text, maxChars = 320) {
 function buildReviewVideoChunks(paragraphs = []) {
   const chunks = [];
   let previousText = "";
-  paragraphs.forEach((paragraph) => {
+  paragraphs.forEach((paragraph, paragraphIndex) => {
     const cleaned = cleanTextForSpeech(paragraph);
     if (!cleaned) return;
     splitIntoChunks(cleaned, TTS_CHUNK_TARGET_CHARS).forEach((part) => {
@@ -50,6 +50,7 @@ function buildReviewVideoChunks(paragraphs = []) {
       if (!text) return;
       chunks.push({
         text,
+        paragraphIndex,
         previousContext: trailingContext(previousText),
       });
       previousText = previousText ? `${previousText} ${part}` : part;

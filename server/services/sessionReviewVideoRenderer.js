@@ -1493,31 +1493,55 @@ function isMomentSentence(text = '') {
   return extractCitedTimesFromText(text).length > 0 || /\b(climax|ejaculat|orgasm|recovery|pre[-\s]?climax|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|\d{1,2}:\d{2})\b/i.test(text);
 }
 
-function buildReviewNarrationSegments(paragraphs = []) {
+function buildReviewNarrationSegmentsForText(text = '', paragraphIndex = 0, metadata = {}) {
   const output = [];
-  for (const [paragraphIndex, paragraph] of paragraphs.entries()) {
-    const sentences = splitSentences(paragraph);
-    if (!sentences.length) continue;
-    let buffer = [];
-    const flush = () => {
-      const text = buffer.join(' ').replace(/\s+/g, ' ').trim();
-      if (text) output.push({ paragraphIndex, text });
-      buffer = [];
-    };
-    for (const sentence of sentences) {
-      const moment = isMomentSentence(sentence);
-      const bufferedLength = buffer.join(' ').length;
-      if (moment) flush();
-      if (!moment && bufferedLength + sentence.length <= 520) {
-        buffer.push(sentence);
-        continue;
-      }
-      if (!moment) flush();
-      output.push({ paragraphIndex, text: sentence });
+  const sentences = splitSentences(text);
+  if (!sentences.length) return output;
+  let buffer = [];
+  const push = (segmentText) => {
+    const cleaned = String(segmentText || '').replace(/\s+/g, ' ').trim();
+    if (cleaned) output.push({ paragraphIndex, text: cleaned, ...metadata });
+  };
+  const flush = () => {
+    push(buffer.join(' '));
+    buffer = [];
+  };
+  for (const sentence of sentences) {
+    const moment = isMomentSentence(sentence);
+    const bufferedLength = buffer.join(' ').length;
+    if (moment) flush();
+    if (!moment && bufferedLength + sentence.length <= 520) {
+      buffer.push(sentence);
+      continue;
     }
-    flush();
+    if (!moment) flush();
+    push(sentence);
   }
+  flush();
   return output;
+}
+
+export function buildReviewNarrationSegments(paragraphs = [], sourceChunks = []) {
+  const timedChunks = Array.isArray(sourceChunks)
+    ? sourceChunks.filter((chunk) => Number.isInteger(Number(chunk?.paragraphIndex)) && narrationChunkText(chunk))
+    : [];
+  if (timedChunks.length === sourceChunks.length && timedChunks.length > 0) {
+    return timedChunks.flatMap((chunk, chunkIndex) => {
+      const segments = buildReviewNarrationSegmentsForText(
+        narrationChunkText(chunk),
+        Number(chunk.paragraphIndex),
+        { chunkIndex },
+      );
+      return segments.map((segment, chunkSegmentIndex) => ({
+        ...segment,
+        chunkSegmentIndex,
+        chunkSegmentCount: segments.length,
+      }));
+    });
+  }
+  return paragraphs.flatMap((paragraph, paragraphIndex) => (
+    buildReviewNarrationSegmentsForText(paragraph, paragraphIndex)
+  ));
 }
 
 function narrationChunkText(chunk) {
@@ -1553,6 +1577,42 @@ export function buildReusedNarrationSegmentPlan({
   const sourceDurations = hasExactChunkTiming
     ? trims.map((chunk) => Number(chunk.trimmed_duration_seconds || 0))
     : [totalDuration];
+
+  const hasChunkLocalTiming = hasExactChunkTiming && segments.every((segment) => (
+    Number.isInteger(Number(segment.chunkIndex))
+    && Number(segment.chunkIndex) >= 0
+    && Number(segment.chunkIndex) < sourceDurations.length
+  ));
+  if (hasChunkLocalTiming) {
+    const chunkStarts = [];
+    sourceDurations.reduce((elapsed, duration, index) => {
+      chunkStarts[index] = elapsed;
+      return elapsed + duration;
+    }, 0);
+    const chunkTotals = new Map();
+    segments.forEach((segment) => {
+      const chunkIndex = Number(segment.chunkIndex);
+      chunkTotals.set(chunkIndex, (chunkTotals.get(chunkIndex) || 0) + Math.max(1, segment.text.length));
+    });
+    const chunkConsumed = new Map();
+    return segments.map((segment) => {
+      const chunkIndex = Number(segment.chunkIndex);
+      const duration = sourceDurations[chunkIndex];
+      const totalCharacters = chunkTotals.get(chunkIndex) || 1;
+      const consumed = chunkConsumed.get(chunkIndex) || 0;
+      const nextConsumed = consumed + Math.max(1, segment.text.length);
+      chunkConsumed.set(chunkIndex, nextConsumed);
+      const startSeconds = chunkStarts[chunkIndex] + (consumed / totalCharacters) * duration;
+      const endSeconds = chunkStarts[chunkIndex] + (nextConsumed / totalCharacters) * duration;
+      return {
+        ...segment,
+        startSeconds,
+        durationSeconds: Math.max(0.05, endSeconds - startSeconds),
+        timingSource: 'saved_export_chunk_local_timing',
+      };
+    });
+  }
+
   const sourceTotalCharacters = sourceLengths.reduce((sum, length) => sum + length, 0);
   const segmentTotalCharacters = segments.reduce((sum, segment) => sum + segment.text.length, 0);
 
@@ -2218,7 +2278,7 @@ async function renderSegmentedSourceReviewVideo({
     clipByParagraph.get(key).push(clip);
   });
 
-  const narrationSegments = buildReviewNarrationSegments(paragraphs);
+  const narrationSegments = buildReviewNarrationSegments(paragraphs, payload.chunks || []);
   if (!narration?.audioPath || !(await fileExists(narration.audioPath))) {
     throw new Error('Narration audio file is unavailable.');
   }

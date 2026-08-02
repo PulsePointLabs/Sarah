@@ -611,7 +611,8 @@ export default function AIChat({
       ? normalizedSessionVideoSource
       : normalizedSessionVideoSource?.url || normalizedSessionVideoSource?.src || "";
     const sourceUrl = clip?.sourceUrl || directClipUrl || fallbackSessionVideoUrl;
-    if (!sourceUrl) return [];
+    const localSourcePath = clip?.sourcePath || normalizedSessionVideoSource?.path || "";
+    if (!sourceUrl && !localSourcePath) return [];
 
     setChatProcessingStatus(nextChatStatus({
       phase: "processing",
@@ -624,13 +625,20 @@ export default function AIChat({
       ?? normalizedSessionVideoSource?.timelineOffsetSeconds
       ?? 0
     ) || 0;
-    const sourceFile = await fetchUrlAsFile(sourceUrl, clip?.filename || clip?.label || "saved-session-moment.mp4");
     setChatProcessingStatus(nextChatStatus({
       phase: "processing",
       message: "Mapping the review window",
       detail: "Reading video metadata and aligning the requested moment to the session timeline.",
     }));
-    const loadedDuration = await loadVideoMetadata(sourceFile);
+    const localMetadata = localSourcePath
+      ? await base44.integrations.Core.GetLocalVideoMetadata({ path: localSourcePath })
+      : null;
+    const sourceFile = localSourcePath
+      ? null
+      : await fetchUrlAsFile(sourceUrl, clip?.filename || clip?.label || "saved-session-moment.mp4");
+    const loadedDuration = localMetadata
+      ? Number(localMetadata.durationSeconds) || 0
+      : await loadVideoMetadata(sourceFile);
     const hasDirectClipSource = Boolean(directClipUrl);
     const timelineRangeStart = Number.isFinite(Number(clip?.startSeconds))
       ? Number(clip.startSeconds)
@@ -657,19 +665,68 @@ export default function AIChat({
       ? Number(clip.endSeconds)
       : timelineStartSeconds + (sampleEnd - sampleStart);
     const label = clip?.label?.trim() || "saved session moment";
+    const maxFrames = Math.min(VIDEO_FRAME_SAMPLE_COUNT, MAX_IMAGE_COUNT - selectedImages.length);
 
     setChatProcessingStatus(nextChatStatus({
       phase: "sampling",
       message: "Pulling saved moment frames",
-      detail: `Sampling ${Math.min(VIDEO_FRAME_SAMPLE_COUNT, MAX_IMAGE_COUNT - selectedImages.length)} stills from ${formatTimePhrase(timelineStartSeconds)} to ${formatTimePhrase(timelineEndSeconds)} for Sarah's review.`,
+      detail: `Sampling ${maxFrames} stills from ${formatTimePhrase(timelineStartSeconds)} to ${formatTimePhrase(timelineEndSeconds)} for Sarah's review.`,
     }));
+
+    if (localSourcePath) {
+      const processed = await base44.integrations.Core.ProcessLocalVideoClip({
+        path: localSourcePath,
+        startSeconds: sampleStart,
+        endSeconds: sampleEnd,
+        label,
+        frameCount: maxFrames,
+        maxDurationSeconds: 30,
+      });
+      return (processed?.frames || []).slice(0, maxFrames).map((frame, index) => {
+        const mimeType = frame.mimeType || "image/jpeg";
+        const dataUrl = frame.data
+          ? `data:${mimeType};base64,${frame.data}`
+          : serverUrl(frame.file_url || frame.url || "");
+        const filename = frame.filename || `${label}-frame-${index + 1}.jpg`;
+        const file = frame.data ? dataUrlToFile(dataUrl, filename, mimeType) : null;
+        const sourceFrameSeconds = Number(frame.frameTimeSeconds);
+        const frameTimelineSeconds = Number.isFinite(sourceFrameSeconds)
+          ? sourceFrameSeconds + timelineOffset
+          : timelineStartSeconds;
+        return {
+          id: makeId("saved-moment-frame"),
+          file,
+          filename,
+          mimeType,
+          sizeBytes: file?.size || 0,
+          previewUrl: dataUrl,
+          base64Data: frame.data || "",
+          storagePath: frame.file_url || frame.url || "",
+          createdAt: new Date().toISOString(),
+          sourceVideo: {
+            filename: localMetadata?.filename || clip?.filename || "linked local video",
+            label,
+            startSeconds: sampleStart,
+            endSeconds: sampleEnd,
+            frameTimeSeconds: Number.isFinite(sourceFrameSeconds) ? sourceFrameSeconds : null,
+            timelineStartSeconds,
+            timelineEndSeconds,
+            frameTimelineSeconds: Number(frameTimelineSeconds.toFixed(2)),
+            timelineLabel: clip?.timelineLabel || (evidenceScope === "body_exploration" ? "body exploration timeline" : "session timeline"),
+            frameIndex: frame.frameIndex || index + 1,
+            processedClipUrl: serverUrl(processed.clip_url || processed.url || processed.file_url || ""),
+            motionSummary: index === 0 ? processed.motion_summary || null : null,
+          },
+        };
+      });
+    }
 
     const frames = await sampleVideoFrames({
       file: sourceFile,
       startSeconds: sampleStart,
       endSeconds: sampleEnd,
       label,
-      maxFrames: Math.min(VIDEO_FRAME_SAMPLE_COUNT, MAX_IMAGE_COUNT - selectedImages.length),
+      maxFrames,
     });
 
     return frames.map((frame, index) => ({
@@ -695,7 +752,7 @@ export default function AIChat({
         motionSummary: null,
       },
     }));
-  }, [fetchUrlAsFile, nextChatStatus, selectedImages.length, sessionVideoSources]);
+  }, [evidenceScope, fetchUrlAsFile, nextChatStatus, selectedImages.length, sessionVideoSources]);
 
   useEffect(() => {
     const incoming = Array.isArray(savedMessages) ? savedMessages : [];
@@ -1214,7 +1271,8 @@ export default function AIChat({
     lastTimestampReviewRequestRef.current = requestId;
 
     const sessionSeconds = Math.max(0, Number(pendingTimestampReview?.timeSeconds) || 0);
-    const promptText = `Please review the current session video moment at ${formatTimePhrase(sessionSeconds)}. Focus on visible technique, body mechanics, telemetry overlays, and what this moment likely represents in the session.`;
+    const timelineSubject = evidenceScope === "body_exploration" ? "body exploration" : "session";
+    const promptText = `Please review the current ${timelineSubject} video moment at ${formatTimePhrase(sessionSeconds)}. Focus on visible technique, body mechanics, telemetry overlays, and what this moment likely represents in the ${timelineSubject}.`;
     setOpen(true);
     setImageError("");
     setChatProcessingStatus({
@@ -1228,14 +1286,15 @@ export default function AIChat({
       startSeconds: Math.max(0, sessionSeconds - 4),
       endSeconds: sessionSeconds + 4,
       sourceUrl: pendingTimestampReview?.sourceUrl || "",
+      sourcePath: pendingTimestampReview?.sourcePath || "",
       timelineOffsetSeconds: Number(pendingTimestampReview?.timelineOffsetSeconds) || 0,
-      timelineLabel: "session timeline",
+      timelineLabel: evidenceScope === "body_exploration" ? "body exploration timeline" : "session timeline",
       promptText,
     }).catch((error) => {
       setImageError(error?.message || "Could not pull frames for this session moment.");
       setInput((current) => current.trim() ? current : promptText);
     });
-  }, [attachSavedVideoClipFrames, pendingTimestampReview]);
+  }, [attachSavedVideoClipFrames, evidenceScope, pendingTimestampReview]);
 
   const seekVideoPreview = (seconds) => {
     const next = Math.max(0, Number(seconds) || 0);

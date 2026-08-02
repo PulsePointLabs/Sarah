@@ -13,6 +13,7 @@ import BodyExplorationNearbyVitalsPanel from "@/components/BodyExplorationNearby
 import BodyExplorationAIPanel from "@/components/BodyExplorationAIPanel";
 import AIChat from "@/components/AIChat";
 import LinkedLocalVideoManager from "@/components/LinkedLocalVideoManager";
+import RecordStoryVideoPlayer, { buildRecordStoryVideoSources } from "@/components/RecordStoryVideoPlayer";
 import VideoSyncPlayer from "@/components/VideoSyncPlayer";
 import { pulseOxReadingsFromSession } from "@/lib/sessionContext";
 import { buildBodyExplorationPhysiologyEvidence } from "@/lib/bodyExplorationPhysiology";
@@ -24,6 +25,7 @@ import {
   isVisualReviewSource,
   makeBodyExplorationVisualEvidenceEntry,
   normalizeBodyExplorationVisualEvidence,
+  normalizeSessionKeyVideoClips,
 } from "@/lib/visualEvidence";
 
 function Info({ label, value }) {
@@ -137,6 +139,7 @@ export default function BodyExplorationDetail() {
   const [explorationNotes, setExplorationNotes] = useState("");
   const [inspectionTime, setInspectionTime] = useState(0);
   const [selectedEventIndex, setSelectedEventIndex] = useState(null);
+  const [pendingTimestampReview, setPendingTimestampReview] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -176,15 +179,53 @@ export default function BodyExplorationDetail() {
     return { ...exploration, pulse_ox_readings: [...attached, ...during] };
   }, [exploration, nearbyVitals]);
 
+  const linkedLocalVideos = useMemo(
+    () => exploration?.linked_local_videos || [],
+    [exploration?.linked_local_videos],
+  );
+  const uploadedExplorationVideos = useMemo(
+    () => (Array.isArray(exploration?.media_videos) ? exploration.media_videos.filter(Boolean) : []),
+    [exploration?.media_videos],
+  );
+  const explorationVideoSources = useMemo(
+    () => buildRecordStoryVideoSources({
+      linkedVideos: linkedLocalVideos,
+      uploadedVideos: uploadedExplorationVideos,
+      recordLabel: "body exploration",
+    }),
+    [linkedLocalVideos, uploadedExplorationVideos],
+  );
+
   if (loading) return <div className="flex h-64 items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" /></div>;
   if (!exploration) return <div className="p-6 text-center text-muted-foreground">Body exploration record not found.</div>;
   const reviewedMediaClips = getReviewedVisualClips(exploration.ai_body_exploration?._visual_findings || []);
-  const linkedLocalVideos = exploration.linked_local_videos || [];
   const pulseOxReadings = pulseOxReadingsFromSession(explorationForTelemetry || exploration);
   const nearbyVitalCount = nearbyVitals.bloodPressure.length
     + nearbyVitals.bloodGlucose.length
     + nearbyVitals.bodyComposition.length
     + nearbyVitals.pulseOx.length;
+  const handleAskSarahAtTimestamp = ({
+    timeSeconds,
+    sourceUrl,
+    sourcePath = "",
+    timelineOffsetSeconds = 0,
+    sourceLabel = "Body exploration video",
+    sourceKind = "body_exploration_video",
+  }) => {
+    if (!sourceUrl && !sourcePath) return;
+    setPendingTimestampReview({
+      requestId: `body-exploration-video-review-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      timeSeconds: Math.max(0, Number(timeSeconds) || 0),
+      sourceUrl,
+      sourcePath,
+      timelineOffsetSeconds: Number(timelineOffsetSeconds) || 0,
+      sourceLabel,
+      sourceKind,
+    });
+    window.requestAnimationFrame(() => {
+      document.getElementById("body-exploration-sarah-chat")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
 
   return (
     <div>
@@ -259,6 +300,16 @@ export default function BodyExplorationDetail() {
           </section>
         )}
 
+        {explorationVideoSources.length > 0 && (
+          <RecordStoryVideoPlayer
+            linkedVideos={linkedLocalVideos}
+            uploadedVideos={uploadedExplorationVideos}
+            recordLabel="body exploration"
+            sectionId="body-exploration-story-video"
+            onAskSarahAtTimestamp={handleAskSarahAtTimestamp}
+          />
+        )}
+
         <section className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -274,7 +325,7 @@ export default function BodyExplorationDetail() {
           <BodyExplorationAIPanel exploration={exploration} timelineRows={timelineRows} emgRows={emgRows} nearbyVitals={nearbyVitals} userProfile={userProfile} />
         </section>
 
-        <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <div id="body-exploration-sarah-chat" className="scroll-mt-24 space-y-3 rounded-xl border border-border bg-card p-4">
           <div>
             <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
               <MessageCircle className="h-4 w-4" /> Sarah Review Chat
@@ -290,6 +341,9 @@ export default function BodyExplorationDetail() {
             userProfile={userProfile}
             scopeId={id}
             context={buildExplorationChatContext(exploration, timelineRows, emgRows, nearbyVitals)}
+            savedVideoClips={normalizeSessionKeyVideoClips(exploration)}
+            sessionVideoSources={explorationVideoSources}
+            pendingTimestampReview={pendingTimestampReview}
             savedMessages={chatMessages}
             savedNotes={explorationNotes}
             defaultOpen

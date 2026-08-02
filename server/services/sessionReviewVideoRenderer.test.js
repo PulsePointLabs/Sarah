@@ -4,6 +4,7 @@ import { buildReviewVideoPlan } from './sessionReviewVideoPlanner.js';
 import {
   buildActiveStimulationFallbackEvent,
   buildParagraphTimelineEvent,
+  buildReviewNarrationSegments,
   buildReusedNarrationSegmentPlan,
   inferReviewVisualFocus,
   losslessConcatAvArgs,
@@ -185,6 +186,29 @@ test('matching saved narration is split locally using persisted export timing', 
   assert.equal(plan[0].startSeconds, 0);
   assert.equal(plan[0].timingSource, 'saved_export_chunk_durations');
   assert.ok(Math.abs(plan.reduce((sum, item) => sum + item.durationSeconds, 0) - 4) < 0.001);
+});
+
+test('review narration stays inside its exact saved TTS chunk instead of accumulating global drift', () => {
+  const sourceChunks = [
+    { paragraphIndex: 0, text: 'Short first sentence. Another first sentence.' },
+    { paragraphIndex: 1, text: 'Second chunk sentence.' },
+  ];
+  const narrationSegments = buildReviewNarrationSegments([], sourceChunks);
+  const plan = buildReusedNarrationSegmentPlan({
+    narrationSegments,
+    sourceChunks,
+    trimChunks: [
+      { trimmed_duration_seconds: 10 },
+      { trimmed_duration_seconds: 2 },
+    ],
+    durationSeconds: 12,
+  });
+
+  const secondChunkSegment = plan.find((segment) => segment.chunkIndex === 1);
+  assert.ok(secondChunkSegment);
+  assert.equal(secondChunkSegment.startSeconds, 10);
+  assert.equal(secondChunkSegment.durationSeconds, 2);
+  assert.equal(secondChunkSegment.timingSource, 'saved_export_chunk_local_timing');
 });
 
 test('untimed narration continues from the current paragraph timeline', () => {

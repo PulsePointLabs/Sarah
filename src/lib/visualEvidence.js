@@ -602,6 +602,7 @@ export function normalizeSessionKeyVideoClips(sessionOrClips) {
       ...(sessionOrClips?.ai_analysis?._meta?.key_video_clips || []),
       ...(sessionOrClips?.ai_session_deep_dive?._meta?.key_video_clips || []),
       ...(sessionOrClips?.ai_cascade?._meta?.key_video_clips || []),
+      ...(sessionOrClips?.ai_body_exploration?._meta?.key_video_clips || []),
     ];
   const sourceClips = hasSessionContext
     ? [
