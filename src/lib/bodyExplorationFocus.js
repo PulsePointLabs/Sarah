@@ -1,5 +1,9 @@
+import { repairNumericElapsedTimeReferences } from "../utils/aiTextRepair.js";
+
 const PROCEDURE_RE = /\b(foley|catheter|urethral|urethra|meatus|meatal|bladder|balloon|statlock|leg\s*bag|drainage|dwell|insertion|sounding|dilat(?:e|ion)|instrumentation)\b/i;
 const FOLEY_RE = /\b(foley|catheter|20\s*fr|18\s*fr|french|balloon|statlock|leg\s*bag|drainage|urine return|urethral|meatus|meatal)\b/i;
+const PRIMARY_FOLEY_RE = /\b(foley|urethral (?:catheter|insertion|instrumentation|sounding|dilat(?:ion|ion))|catheter insertion|bladder catheter|meatal prep|urine return|balloon inflation|statlock)\b/i;
+const ENEMA_RE = /\b(enema|rectal|colon(?:ic)?|anal nozzle|enema bag|rectal tube|instill(?:ed|ation)?|retention|defecat(?:e|ion)|sigmoid)\b/i;
 const PROCEDURE_ALLOWED_RE = /\b(sterile|field|prep|preparation|drape|swab|iodine|glans|foreskin|meatus|meatal|urethra|urethral|lubricat|catheter|foley|french|fr\b|advanc|insert|passage|sphincter|resistance|relax|breath|angle|pressure|discomfort|pain|pinch|sensation|bracing|heart[-\s]?rate|telemetry|bladder|urine|return|balloon|seat|traction|drainage|secure|statlock|tubing|bag|dwell|ambulatory|blood|bleeding|bypass|leak|spasm|urgency|tolerance|comfort|prior|previous|18\s*fr|20\s*fr|kegel|pelvic|erection|tugging|subjective|annotation|visible|video|frame)\b/i;
 const PERIPHERAL_RE = /\b(ankle|foot|feet|edema|beer|alcohol|hydration coaching|daily hydration|respiratory|cough|head-to-toe|dog bite|skin finding|follicular|striae|bruise|wound|leg swelling|vascular history|venous history|urine color|leg-bag urine image|later leg bag|systemic context)\b/i;
 const PERIPHERAL_ALLOWED_WITH_PROCEDURE_RE = /\b(leg\s*bag|drainage|tubing|secure|statlock|ambulat|urine return|urine concentration|patency|flow|dwell|traction|placement|procedure|catheter|foley)\b/i;
@@ -41,8 +45,19 @@ function flattenExplorationText(exploration = {}) {
 }
 
 export function isFocusedFoleyExploration(exploration = {}) {
-  const text = flattenExplorationText(exploration);
-  return FOLEY_RE.test(text) && PROCEDURE_RE.test(text);
+  const primaryText = [
+    exploration.title,
+    exploration.exploration_type,
+    exploration.purpose,
+    exploration.methods,
+    exploration.foley_size,
+    exploration.foley_type,
+    exploration.sounding_notes,
+  ].filter(Boolean).join(" ");
+  const fullText = flattenExplorationText(exploration);
+  const explicitlyConfiguredFoley = Boolean(exploration.foley_size || exploration.foley_type || exploration.sounding_notes);
+  if (ENEMA_RE.test(primaryText) && !/\bfoley insertion|urethral (?:catheter|insertion|instrumentation)|bladder catheter\b/i.test(primaryText)) return false;
+  return (explicitlyConfiguredFoley || PRIMARY_FOLEY_RE.test(primaryText)) && FOLEY_RE.test(fullText) && PROCEDURE_RE.test(fullText);
 }
 
 function shouldKeepProfileEntry(key, value) {
@@ -151,7 +166,7 @@ function normalizeArray(value) {
 }
 
 function splitLongSentences(text, maxLength = 360) {
-  return compactText(text, 2200)
+  return compactText(repairNumericElapsedTimeReferences(text), 2200)
     .split(/(?<=[.!?])\s+/)
     .flatMap((sentence) => {
       if (sentence.length <= maxLength) return [sentence];

@@ -5,6 +5,7 @@ import {
   repairCharacterSplitParagraph,
   reduceConsistencyPhraseRepetition,
   repairRawSecondTimeReferences,
+  repairNumericElapsedTimeReferences,
   repairSpokenClockTimeReferences,
 } from '../../src/utils/aiTextRepair.js';
 
@@ -27,6 +28,13 @@ test('spoken clock-style timestamps are repaired to explicit minutes and seconds
   assert.match(repaired, /to five minutes and ten seconds/i);
   assert.doesNotMatch(repaired, /\bat nine twenty two\b/i);
   assert.doesNotMatch(repaired, /\baround one oh five\b/i);
+});
+
+test('numeric session offsets become elapsed minutes while real clock times remain clock times', () => {
+  const repaired = repairNumericElapsedTimeReferences('At 12:26 the response changed; the session began around 4:50 AM. From 33:20 to 35:02, contractions built.');
+  assert.match(repaired, /At 12 minutes and 26 seconds/i);
+  assert.match(repaired, /4:50 AM/);
+  assert.match(repaired, /From 33 minutes and 20 seconds to 35 minutes and 2 seconds/i);
 });
 
 test('repeated consistency wording is varied after the first allowed use', () => {

@@ -95,9 +95,18 @@ export function repairSpokenClockTimeReferences(text) {
   });
 }
 
+export function repairNumericElapsedTimeReferences(text) {
+  if (typeof text !== "string") return text;
+  return text.replace(/\b(\d{1,2}):([0-5]\d)\b/g, (match, minuteText, secondText, offset, source) => {
+    const suffix = source.slice(offset + match.length, offset + match.length + 12);
+    if (/^\s*(?:a\.?m\.?|p\.?m\.?)/i.test(suffix)) return match;
+    return formatSecondsAsWords((Number(minuteText) * 60) + Number(secondText));
+  });
+}
+
 export function repairRawSecondTimeReferences(text) {
   if (typeof text !== "string") return text;
-  return repairSpokenClockTimeReferences(text)
+  return repairNumericElapsedTimeReferences(repairSpokenClockTimeReferences(text))
     .replace(/\b(at|around|near|by|before|after|from|until|through|to)\s+(\d{2,5})\s*seconds?\b/gi, (match, prefix, seconds) => {
       const value = Number(seconds);
       if (!Number.isFinite(value) || value < 60) return match;

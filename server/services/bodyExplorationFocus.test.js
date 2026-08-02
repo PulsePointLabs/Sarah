@@ -27,6 +27,20 @@ test('detects focused Foley insertion records without changing generic body expl
   assert.equal(isFocusedFoleyExploration({ exploration_type: 'standing posture review', notes: 'ankle mobility and foot posture' }), false);
 });
 
+test('does not misclassify an enema as Foley because a condom catheter collected urine', () => {
+  assert.equal(isFocusedFoleyExploration({
+    title: 'First large-volume enema',
+    exploration_type: 'Enema / rectal body exploration',
+    methods: ['gravity-fed enema bag', 'rectal nozzle'],
+    devices: ['enema bag', 'condom catheter'],
+    notes: 'A condom catheter collected urine during defecation.',
+    event_timeline: [
+      { time_s: 127, note: 'Applied condom catheter before the enema.' },
+      { time_s: 794, note: 'Opened the enema clamp and began rectal filling.' },
+    ],
+  }), false);
+});
+
 test('focused Foley profile context keeps procedure history and filters unrelated profile material', () => {
   const context = buildFocusedFoleyProfileContext({
     foley: {

@@ -12,6 +12,7 @@ import { buildGenericAIContentMeta, formatGeneratedAt, getAIContentGeneratedAt }
 import { SessionReviewVideoExportButton, reviewVideoTitleWithDate } from "./SessionAIPanel";
 import { recoverCompletedAIJob, startRecoverableAIJob, waitForRecoverableAIJob } from "@/lib/recoverableAIJobs";
 import { friendlyJobErrorMessage } from "@/lib/jobErrorMessages";
+import { formatSecondsAsWords, repairNumericElapsedTimeReferences } from "@/utils/aiTextRepair";
 import {
   FOCUSED_FOLEY_SECTION_DEFS,
   buildFocusedFoleyProfileContext,
@@ -26,6 +27,14 @@ const SECTION_DEFS = [
   { key: "mechanical_findings", label: "Mechanical Findings", icon: <ScanSearch className="h-3.5 w-3.5" />, color: "hsl(var(--primary))" },
   { key: "comfort_safety_findings", label: "Comfort & Safety", icon: <ShieldCheck className="h-3.5 w-3.5" />, color: "hsl(var(--chart-3))" },
   { key: "recommendations", label: "Review Notes", icon: <Lightbulb className="h-3.5 w-3.5" />, color: "hsl(var(--chart-4))" },
+];
+
+const DEEP_SECTION_DEFS = [
+  { key: "integrated_physiology", label: "Integrated Physiology", icon: <Activity className="h-3.5 w-3.5" />, color: "hsl(var(--chart-2))" },
+  { key: "mechanical_sensory_synthesis", label: "Mechanical & Sensory Synthesis", icon: <ScanSearch className="h-3.5 w-3.5" />, color: "hsl(var(--primary))" },
+  { key: "user_sarah_findings", label: "Your Findings & Sarah's Findings", icon: <Brain className="h-3.5 w-3.5" />, color: "hsl(var(--chart-3))" },
+  { key: "outcome_comparison", label: "Outcome & Comparison", icon: <ShieldCheck className="h-3.5 w-3.5" />, color: "hsl(var(--chart-4))" },
+  { key: "recommendations", label: "Focused Follow-Up", icon: <Lightbulb className="h-3.5 w-3.5" />, color: "hsl(var(--chart-4))" },
 ];
 
 const FOCUSED_SECTION_ICONS = {
@@ -45,6 +54,7 @@ function sectionDefsForResult(result) {
       color: "hsl(var(--primary))",
     }));
   }
+  if (Array.isArray(result?.integrated_physiology)) return DEEP_SECTION_DEFS;
   return SECTION_DEFS;
 }
 
@@ -78,6 +88,27 @@ SARAH LANGUAGE VARIETY RULE:
 - Before returning final output, scan for repeated phrasing and rewrite any extra "consistent" constructions into natural viewer-facing language.
 `;
 
+const DEEP_BODY_EXPLORATION_SYNTHESIS_RULE = `
+DEEP BODY EXPLORATION SYNTHESIS - HIGH PRIORITY:
+- Treat this exploration as a rich physiological record, not a list of timestamped actions. Select four to eight meaningful physiological windows or transitions; do not narrate every event.
+- Every substantive paragraph should integrate at least two evidence streams when available: the person's first-person notes or interview findings, reviewed visual findings, heart rate, quality-gated RR/HRV, respiration, motion/position, EMG, blood pressure, blood glucose, pulse oximetry, body composition/weight, or procedural mechanics.
+- Explain what changed, the evidence supporting it, the most plausible physiological or mechanical interpretation, what remains uncertain, and why the pattern matters in this person's record.
+- Give the person's observations and Sarah's reviewed findings real analytical weight. Identify where they converge, where one adds information the other could not supply, and where subjective intensity differs from measured load. Do not create a repetitive two-column recap.
+- Use the full trajectory. Discuss sustained phases, transitions, repeated responses, recovery, and relationships across streams. Do not elevate a single extreme sample into the main conclusion.
+- HRV discipline: a sustained quality-gated RR pattern may support discussion of parasympathetic modulation. A single very high RMSSD value or abrupt one-bin jump may be artifact, ectopy, movement, or transient irregularity; describe it as a candidate signal unless surrounding RR quality and adjacent windows support it. Do not call one RMSSD spike proof of a vagal reflex.
+- Separate observation from mechanism. Use language such as "supports", "may reflect", or "is physiologically compatible with" when causation is not established.
+- Prefer synthesis over repetition. A timestamp belongs only when it anchors a major transition or a cross-stream relationship.
+- Do not recommend escalating insertion depth, pressure, retention hardware, catheterization, or other invasive technique. Keep follow-up focused on measurement quality, safer workflow, equipment integrity, comfort, and what would clarify the physiology next time.
+`;
+
+const ELAPSED_TIME_OUTPUT_RULE = `
+ELAPSED SESSION TIME - MANDATORY:
+- All event offsets are elapsed session time, never times of day.
+- Write offsets explicitly as "twelve minutes and twenty-six seconds elapsed" or "from thirty-three minutes and twenty seconds through thirty-five minutes and two seconds elapsed".
+- Never output session offsets as 12:26, 33:20, "twelve twenty-six", or similar clock-style wording.
+- A true clock time may be written as a time of day only when it includes AM or PM and clearly refers to when the session began.
+`;
+
 function categoryLabel(value) {
   return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((item) => item.value === value)?.label || String(value || "Other");
 }
@@ -89,14 +120,19 @@ function aiErrorMessage(error) {
 function normalizeAnalysis(raw, { focusedFoley = false } = {}) {
   if (focusedFoley) return normalizeFocusedFoleyAnalysis(raw);
   const parsed = raw?.response ?? raw;
-  if (!parsed?.summary || !parsed?.telemetry_findings?.length || !parsed?.mechanical_findings?.length) {
+  const hasDeepStructure = parsed?.summary
+    && parsed?.integrated_physiology?.length
+    && parsed?.mechanical_sensory_synthesis?.length
+    && parsed?.user_sarah_findings?.length;
+  const hasLegacyStructure = parsed?.summary && parsed?.telemetry_findings?.length && parsed?.mechanical_findings?.length;
+  if (!hasDeepStructure && !hasLegacyStructure) {
     throw new Error("AI returned an incomplete body exploration analysis. Please try again.");
   }
   return cleanupProductionAnalysis(parsed);
 }
 
 function cleanupProductionText(value) {
-  return String(value || "")
+  return repairNumericElapsedTimeReferences(String(value || ""))
     .replace(/\b(?:a|the)\s+gloved\s+hand\b/gi, "your hand")
     .replace(/\b(?:a|the)\s+gloved\s+hands\b/gi, "your hands")
     .replace(/\bone\s+gloved\s+hand\b/gi, "one hand")
@@ -119,6 +155,10 @@ function cleanupProductionAnalysis(analysis) {
   return {
     ...analysis,
     summary: cleanupProductionText(analysis.summary),
+    integrated_physiology: cleanArray(analysis.integrated_physiology),
+    mechanical_sensory_synthesis: cleanArray(analysis.mechanical_sensory_synthesis),
+    user_sarah_findings: cleanArray(analysis.user_sarah_findings),
+    outcome_comparison: cleanArray(analysis.outcome_comparison),
     telemetry_findings: cleanArray(analysis.telemetry_findings),
     mechanical_findings: cleanArray(analysis.mechanical_findings),
     comfort_safety_findings: cleanArray(analysis.comfort_safety_findings),
@@ -205,7 +245,7 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
           .map(categoryLabel)
           .join("+");
         const hr = nearestHr(event.time_s);
-        return `[${Math.floor(Number(event.time_s || 0) / 60)}:${String(Math.round(Number(event.time_s || 0) % 60)).padStart(2, "0")}] ${labels || "Observation"} - ${event.note}${hr != null ? ` [heart rate ${Math.round(Number(hr))} beats per minute]` : ""}`;
+        return `[elapsed ${formatSecondsAsWords(event.time_s)}] ${labels || "Observation"} - ${event.note}${hr != null ? ` [heart rate ${Math.round(Number(hr))} beats per minute]` : ""}`;
       });
       const groundingContext = buildAIGroundingContext(userProfile, { includeProfile: !focusedFoley });
       const focusedProfileContext = focusedFoley ? buildFocusedFoleyProfileContext(userProfile) : "";
@@ -216,12 +256,13 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
         type: "object",
         properties: {
           summary: { type: "string" },
-          telemetry_findings: { type: "array", items: { type: "string" }, description: "Landmark/window-specific HR or EMG interpretation where possible; do not merely list min/avg/max." },
-          mechanical_findings: { type: "array", items: { type: "string" }, description: "Procedure mechanics by visible/logged landmark: prep, lubrication, meatal engagement, urethral passage, sphincters, bladder entry/urine return, balloon, securement, dwell/removal when supported." },
-          comfort_safety_findings: { type: "array", items: { type: "string" }, description: "Comfort, sterile/safety controls, tissue state, irritation/lack of irritation, tension, dwell tolerance, uncertainty, and risk-control observations." },
-          recommendations: { type: "array", items: { type: "string" }, description: "Focused review notes or future documentation gaps grounded in the procedure evidence, phrased without pressure." },
+          integrated_physiology: { type: "array", items: { type: "string" }, description: "Three to six substantive synthesis paragraphs integrating full-trajectory heart rate, quality-gated RR/HRV, respiration, motion, EMG, blood pressure, glucose, SpO2, and recovery where available. Explain relationships and uncertainty; do not list metrics." },
+          mechanical_sensory_synthesis: { type: "array", items: { type: "string" }, description: "Two to five substantive paragraphs connecting procedural mechanics, position, pressure or distension, visible responses, comfort, and first-person sensation across meaningful windows rather than narrating events." },
+          user_sarah_findings: { type: "array", items: { type: "string" }, description: "Two to four paragraphs synthesizing the person's observations/interview findings with Sarah's reviewed visual and physiological findings, including convergence, added information, and meaningful mismatch." },
+          outcome_comparison: { type: "array", items: { type: "string" }, description: "One to three paragraphs explaining immediate outcome and cautious comparison with prior explorations when supported." },
+          recommendations: { type: "array", items: { type: "string" }, description: "Two to four focused, evidence-grounded follow-up points emphasizing measurement quality, workflow, equipment integrity, comfort, and questions for future comparison without escalating invasive technique." },
         },
-        required: ["summary", "telemetry_findings", "mechanical_findings", "comfort_safety_findings", "recommendations"],
+        required: ["summary", "integrated_physiology", "mechanical_sensory_synthesis", "user_sarah_findings", "outcome_comparison", "recommendations"],
       };
       const aiPayload = {
         model: "claude_sonnet_4_6",
@@ -231,29 +272,33 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
 This record is not a climax-oriented masturbation session. Do not force pre-climax, climax, ejaculation, recovery, arousal-score, or orgasm framing onto it unless the person explicitly logged relevant language in the exploration record.
 
 PRIMARY ANALYSIS GOAL:
-Reconstruct the procedural arc from the best available evidence. This should feel like a careful Foley/instrumentation review, not a generic session summary. When reviewed video-pass evidence exists, use it as the highest-priority evidence for visible timing, device/tool handling, body position, tissue state, and procedure mechanics. Use notes/profile context to explain what the visual evidence and telemetry mean, but do not let broad history replace the procedural tracking.
+${focusedFoley
+  ? "Reconstruct this Foley/instrumentation procedure by meaningful anatomical and mechanical landmarks, then explain the body response and placement evidence."
+  : "Develop an integrated, in-depth account of what this exploration revealed about your physiology, mechanics, sensation, and immediate outcome. Use the event sequence as supporting structure, not as the product."}
 
 EVIDENCE PRECEDENCE AND CONFLICT RULES:
 - Timestamped manual/user event notes are the procedural timeline of record for stage order and timing.
-- Video-pass evidence is visual evidence. Use it to support, refine, or flag uncertainty around the manual timeline; do not let a shaky video-pass label silently move a procedure step earlier or later.
-- If video-pass evidence appears to conflict with a manual note, explicitly describe it as a possible visual/timeline mismatch and anchor the procedural sequence to the manual note unless current-frame evidence directly proves otherwise.
-- Do not describe povidone-iodine, lubricant, Foley-at-meatus contact, insertion, urine return, balloon fill, securement, or cleanup before the first manual note or current-frame evidence that supports that specific item/action.
+- Video-pass evidence is visual evidence. Use it to support or refine the manual timeline; do not let a shaky visual label silently move a step earlier or later.
+- If visual evidence conflicts with a manual note, resolve the sequence internally and anchor timing to the manual note unless current-frame evidence directly establishes otherwise.
+- Do not describe a preparation, insertion, fill, removal, bodily response, or outcome before the first manual note or reviewed evidence supporting it.
 - Resolve evidence conflicts internally. The final answer should not contain process language such as "video-pass labels", "possible visual/timeline mismatch", "timeline of record anchors", "not directly documented", or "correction"; it should present the corrected procedural story cleanly.
 - Assume visible hands are your hands unless another participant is clearly visible or explicitly logged as assisting. Do not introduce another person, helper, clinician, operator, or assistant from hands alone. Prefer "your hand" or "your hands"; use "your gloved hand" only when glove/sterile technique is the relevant point.
 
-PROCEDURAL TRACKING RULE:
-- For Foley insertion, urethral sounding, dilation, or similar instrumentation, track the session by landmark/window when evidence supports it: setup and sterile field, foreskin/glans/meatal prep, lubrication or urethral instillation, meatal engagement, spongy urethral passage, external sphincter resistance or relaxation, prostatic/internal sphincter passage, bladder entry or urine return, balloon inflation/seating, securement/alignment, dwell comfort, removal or post-procedure state.
-- Treat prep/swabbing as its own meaningful procedural stage. If video-pass evidence describes circular swabbing, applicator contact, surface wiping, antiseptic painting, glans/meatal prep, or cleaning/mapping around the meatus, preserve that as prep. Do not merge it into catheter advancement or insertion unless the reviewed evidence separately shows a catheter/sound entering or moving through the meatus.
-- In each relevant landmark, identify what was directly visible, what was logged by timestamped note, what telemetry did, and what remains uncertain.
-- Prefer concrete observations like catheter type/size, orientation, insertion depth progression, rotation maneuver, resistance point, urine bypass/return, balloon volume/seat, securement slack, meatal tension, tissue color, lubricant leakage, scrotal/foreskin state, leg/foot/body response, and comfort/tolerance cues.
-- If a landmark is not visually reviewed or not timestamped, say that limitation instead of smoothing over it. Do not invent a complete procedural sequence from profile history alone.
+${focusedFoley ? `FOLEY PROCEDURAL TRACKING RULE:
+- Track meaningful landmarks when supported: setup and sterile field, foreskin/glans/meatal prep, lubrication or urethral instillation, meatal engagement, urethral passage, sphincter resistance or relaxation, bladder entry or urine return, balloon inflation/seating, securement/alignment, dwell comfort, removal, and post-procedure state.
+- Treat prep/swabbing as its own stage. Do not merge it into advancement unless reviewed evidence separately shows a catheter or sound entering the meatus.
+- Prefer concrete observations such as catheter type/size, orientation, depth progression, resistance point, urine return, balloon seat, securement slack, meatal tension, leakage, tissue state, body response, and tolerance.` : `BODY EXPLORATION TRACKING RULE:
+- Organize the record into a small number of meaningful physiological windows: entry/baseline state, major mechanical or sensory transitions, peak-load windows, release or resolution, and immediate recovery when present.
+- For enema or rectal exploration, distinguish filling/distension, clamp or flow changes, position, leakage or expulsion, retention effort, cramping/contractions, defecation/release, urinary response, and recovery only when supported. Synthesize repeated cycles instead of narrating every clamp movement.
+- For other exploration types, choose equivalent windows based on the actual method and the person's stated purpose.
+- In each selected window, connect first-person sensation, visible/logged mechanics, and the measured physiology. State meaningful disagreement or uncertainty without turning the report into an evidence audit.`}
 - When telemetry is available, compare heart-rate changes around landmarks rather than only giving session min/avg/max. Explain whether a visible/logged step produced a rise, plateau, dip, or no measurable response. If only whole-session telemetry exists, say it cannot be tied to landmarks.
 - Use the full measured physiology evidence provided below: heart rate, RR intervals, quality-gated HRV, respiration when usable, motion/position when usable, multimodal state, recovery drops, response latency, EMG channels, attached or nearby pulse oximetry, blood pressure, blood glucose, and body composition/weight.
 - The adaptive trajectory preserves up to roughly two hundred forty time bins across the complete record. Use it to identify sustained changes, transitions, and recovery instead of relying only on min/average/max.
 - Nearby vital imports are contextual measurements with exact time distance and source. Include them when they help interpret the body state, but never imply the exploration caused a reading merely because it was nearby.
 - Respect provenance and quality gates. Do not interpret unavailable respiration/motion, zero placeholder values, or low/unavailable HRV as physiology. Smart-scale composition values are trends, while weight is a measured contextual value.
-- When prior comparison context is relevant, keep it secondary and specific: use it to explain how this insertion differs in size, lubrication, substance context, resistance, comfort, urine return, securement, or dwell tolerance. Do not turn the review into a broad longitudinal Foley biography.
-- The best output should resemble a procedural evidence review: timeline-aware, landmark-specific, visibly grounded, mechanically precise, and cautious about uncertainty.
+- When prior comparison context is relevant, keep it secondary and specific to the current exploration's method, body response, comfort, and outcome.
+- The best output should be evidence-dense but readable: integrated, physiologically substantive, mechanically precise, personal, and cautious about uncertainty.
 
 Focus on:
 - what the body and telemetry did during exploration or instrumentation
@@ -269,6 +314,8 @@ ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${ANATOMICAL_LATERALITY_RULE}
 ${PRODUCTION_BODY_EXPLORATION_STYLE}
 ${SARAH_LANGUAGE_VARIETY_RULE}
+${ELAPSED_TIME_OUTPUT_RULE}
+${focusedFoley ? "" : DEEP_BODY_EXPLORATION_SYNTHESIS_RULE}
 ${focusedFoley ? focusedFoleyPromptBlock() : ""}
 
 STYLE:
