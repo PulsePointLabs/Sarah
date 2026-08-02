@@ -1352,7 +1352,9 @@ Describe only what is visible in the sampled frames, plus cautious interpretatio
           className="h-8 max-w-full shrink-0 gap-1.5 text-xs"
         >
           {status.type === "working" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Video className="h-3.5 w-3.5" />}
-          Build review video
+          {status.type === "working"
+            ? activeVideo?.file_url ? "Rebuilding review video..." : "Building review video..."
+            : activeVideo?.file_url ? "Rebuild review video" : "Build review video"}
         </Button>
         {activeVideo?.file_url && (
           <Button
@@ -1363,7 +1365,7 @@ Describe only what is visible in the sampled frames, plus cautious interpretatio
             className="h-8 max-w-full shrink-0 gap-1.5 text-xs"
           >
             <Download className="h-3.5 w-3.5" />
-            {rendered?.file_url ? "Download MP4" : "Download Existing"}
+            Download MP4
           </Button>
         )}
         {existingVideo?._source === "completed_review_video_job" && (
