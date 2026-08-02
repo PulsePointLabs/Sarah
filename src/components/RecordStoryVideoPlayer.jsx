@@ -10,7 +10,7 @@ function sourcePriority(video = {}) {
   if (/\b(composite|pip|picture[-_\s]?in[-_\s]?picture|obs)\b/.test(text)) return 0;
   if (/\b(main|focus|primary|close|genital|shaft|glans)\b/.test(text)) return 1;
   if (/\b(side|lateral|angle)\b/.test(text)) return 8;
-  if (/\b(feet|foot|toe|toes|heel|heels|lower[-_\s]?body|legs?|pelvis)\b/.test(text)) return 9;
+  if (/(?:^|[^a-z])(feet|foot|toe|toes|heel|heels|lower[-_\s]?body|legs?|pelvis)(?:[^a-z]|$)/.test(text)) return 9;
   return 3;
 }
 
