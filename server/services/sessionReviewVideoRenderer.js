@@ -7,8 +7,8 @@ import { renderTTSExport } from './ttsRenderer.js';
 import { q, runProcess, slugifyFilePart } from './ttsCore.js';
 import { buildLoggedEventAnchors, buildReviewVideoPlan, extractCitedTimesFromText } from './sessionReviewVideoPlanner.js';
 import { normalizeWatermarkSettings, replaceVideoWithWatermarkedExport } from './watermark.js';
+import { REVIEW_VIDEO_RENDER_VERSION as REVIEW_RENDER_VERSION } from '../../src/lib/reviewVideoRenderVersion.js';
 
-const REVIEW_RENDER_VERSION = 'session_review_video_v17_paragraph_timeline_lock';
 const REVIEW_VIDEO_WIDTH = Number(process.env.REVIEW_VIDEO_WIDTH || 1920);
 const REVIEW_VIDEO_HEIGHT = Number(process.env.REVIEW_VIDEO_HEIGHT || 1080);
 const REVIEW_VIDEO_PRESET = process.env.REVIEW_VIDEO_PRESET || 'slow';

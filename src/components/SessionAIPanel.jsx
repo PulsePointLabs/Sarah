@@ -20,12 +20,11 @@ import { buildSessionAIContentMeta, buildSessionPhaseMarkerFreshnessKey, formatG
 import { formatSecondsAsWords, repairAITextBlocks, repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
 import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
 import { REVIEW_WINDOW_RESPONSE_STYLE } from "@/lib/reviewWindowResponseStyle";
+import { REVIEW_VIDEO_RENDER_VERSION } from "@/lib/reviewVideoRenderVersion";
 import { buildSarahPersonalityPrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
 import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "./TTSButton";
-
-export const REVIEW_VIDEO_RENDER_VERSION = "session_review_video_v16_semantic_bounded_motion";
 
 function friendlyReviewVideoRenderErrorMessage(error) {
   const message = String(error?.message || error || "Review video render failed.");
