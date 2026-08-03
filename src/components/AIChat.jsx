@@ -1,4 +1,12 @@
-import { useCallback, useState, useRef, useEffect } from "react";
+import {
+  forwardRef,
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import { ArrowLeft, Send, ChevronDown, ChevronUp, Save, RefreshCw, Mic, MicOff, Volume2, VolumeX, Copy, Check, Maximize2, Paperclip, X, Image as ImageIcon, Film } from "lucide-react";
 import { mergeDatedChatFindings } from "@/lib/chatFindings";
@@ -492,24 +500,82 @@ function reviewCandidateBullets(findings = []) {
     .join("\n");
 }
 
-function MessageMarkdown({ text }) {
+const MESSAGE_MARKDOWN_COMPONENTS = {
+  p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
+  strong: ({ children }) => <strong className="font-semibold text-inherit">{children}</strong>,
+  em: ({ children }) => <em className="italic text-inherit">{children}</em>,
+  ul: ({ children }) => <ul className="my-2 list-disc space-y-1.5 pl-5">{children}</ul>,
+  ol: ({ children }) => <ol className="my-2 list-decimal space-y-1.5 pl-5">{children}</ol>,
+  li: ({ children }) => <li className="pl-0.5">{children}</li>,
+  code: ({ children }) => <code className="rounded bg-black/15 px-1 py-0.5 text-[0.92em]">{children}</code>,
+};
+
+const MessageMarkdown = memo(function MessageMarkdown(/** @type {any} */ { text }) {
   return (
     <ReactMarkdown
       className="space-y-2 text-[0.95rem] leading-7"
-      components={{
-        p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
-        strong: ({ children }) => <strong className="font-semibold text-inherit">{children}</strong>,
-        em: ({ children }) => <em className="italic text-inherit">{children}</em>,
-        ul: ({ children }) => <ul className="my-2 list-disc space-y-1.5 pl-5">{children}</ul>,
-        ol: ({ children }) => <ol className="my-2 list-decimal space-y-1.5 pl-5">{children}</ol>,
-        li: ({ children }) => <li className="pl-0.5">{children}</li>,
-        code: ({ children }) => <code className="rounded bg-black/15 px-1 py-0.5 text-[0.92em]">{children}</code>,
-      }}
+      components={MESSAGE_MARKDOWN_COMPONENTS}
     >
       {String(text || "")}
     </ReactMarkdown>
   );
-}
+});
+
+const ChatDraftTextarea = memo(forwardRef(function ChatDraftTextarea(/** @type {any} */ props, ref) {
+  const {
+    initialValue = "",
+    onDraftValueChange,
+    onHasTextChange,
+    onSubmit,
+    ...textareaProps
+  } = props;
+  const textareaRef = useRef(null);
+  const initialText = String(initialValue || "");
+  const [value, setValue] = useState(initialText);
+  const valueRef = useRef(initialText);
+  const hasTextRef = useRef(Boolean(initialText.trim()));
+
+  const applyValue = useCallback((valueOrUpdater) => {
+    const current = valueRef.current;
+    const next = String(
+      typeof valueOrUpdater === "function"
+        ? valueOrUpdater(current)
+        : valueOrUpdater ?? "",
+    );
+    valueRef.current = next;
+    setValue(next);
+    onDraftValueChange?.(next);
+
+    const hasText = Boolean(next.trim());
+    if (hasText !== hasTextRef.current) {
+      hasTextRef.current = hasText;
+      onHasTextChange?.(hasText);
+    }
+  }, [onDraftValueChange, onHasTextChange]);
+
+  useImperativeHandle(ref, () => ({
+    blur: () => textareaRef.current?.blur(),
+    clear: () => applyValue(""),
+    focus: () => textareaRef.current?.focus(),
+    getValue: () => valueRef.current,
+    setValue: applyValue,
+  }), [applyValue]);
+
+  return (
+    <textarea
+      {...textareaProps}
+      ref={textareaRef}
+      value={value}
+      onChange={(event) => applyValue(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          onSubmit?.();
+        }
+      }}
+    />
+  );
+}));
 
 export default function AIChat({
   mode = "session",
@@ -536,7 +602,6 @@ export default function AIChat({
   const [open, setOpen] = useState(defaultOpen);
   const [fullScreen, setFullScreen] = useState(false);
   const [messages, setMessages] = useState(savedMessages || []);
-  const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [savingFindings, setSavingFindings] = useState(false);
   const [savedFeedback, setSavedFeedback] = useState(false);
@@ -564,6 +629,8 @@ export default function AIChat({
   const bottomRef = useRef(null);
   const messageRefs = useRef(new Map());
   const inputRef = useRef(null);
+  const draftValueRef = useRef("");
+  const [hasDraftText, setHasDraftText] = useState(false);
   const imageInputRef = useRef(null);
   const videoInputRef = useRef(null);
   const videoPreviewRef = useRef(null);
@@ -583,6 +650,26 @@ export default function AIChat({
   const lastAssistantScrollKeyRef = useRef("");
   const initialAutoScrollSuppressedRef = useRef(false);
   const lastTimestampReviewRequestRef = useRef("");
+
+  const handleDraftValueChange = useCallback((value) => {
+    draftValueRef.current = String(value || "");
+  }, []);
+
+  const handleDraftHasTextChange = useCallback((hasText) => {
+    setHasDraftText(Boolean(hasText));
+  }, []);
+
+  const setInput = useCallback((valueOrUpdater) => {
+    const current = draftValueRef.current;
+    const next = String(
+      typeof valueOrUpdater === "function"
+        ? valueOrUpdater(current)
+        : valueOrUpdater ?? "",
+    );
+    draftValueRef.current = next;
+    setHasDraftText(Boolean(next.trim()));
+    inputRef.current?.setValue(next);
+  }, []);
 
   const categories = mode === "profile" ? PROFILE_CATEGORIES : SESSION_CATEGORIES;
   const evidenceScope = ["profile", "session", "body_exploration"].includes(visualEvidenceScope) ? visualEvidenceScope : mode;
@@ -1422,7 +1509,7 @@ export default function AIChat({
     const fallback = caption
       ? `Please review this video clip: ${caption}`
       : "Please review this video clip.";
-    sendMessage(input.trim() || fallback);
+    sendMessage(draftValueRef.current.trim() || fallback);
   };
 
   const resetVideoClipForNextRange = () => {
@@ -2025,7 +2112,7 @@ export default function AIChat({
   }, [persistChatMessages, persistFindings, persistStructuredImageFindings, ttsEnabled]);
 
   const sendMessage = async (overrideText = null) => {
-    const requestedText = typeof overrideText === "string" ? overrideText : input;
+    const requestedText = typeof overrideText === "string" ? overrideText : draftValueRef.current;
     if ((!requestedText.trim() && !selectedImages.length && !selectedVideoClip) || loading || uploadingImages || processingVideoClip || activeReplyJobId) return;
     const text = requestedText.trim();
     const requestStartedAt = Date.now();
@@ -2398,7 +2485,7 @@ Return a conversational answer plus structured findings for review/persistence.`
   const textareaClass = fullScreen
     ? "min-h-[5.75rem] max-h-40 w-full resize-none rounded-xl border border-border bg-background px-4 py-3 text-sm leading-5 shadow-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 sm:text-base"
     : "w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50";
-  const effectiveSendDisabled = (!input.trim() && !selectedImages.length && !selectedVideoClip) || loading || uploadingImages || processingVideoClip || Boolean(activeReplyJobId);
+  const effectiveSendDisabled = (!hasDraftText && !selectedImages.length && !selectedVideoClip) || loading || uploadingImages || processingVideoClip || Boolean(activeReplyJobId);
 
   const renderSelectedImages = () => selectedImages.length ? (
     <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
@@ -2924,11 +3011,12 @@ Return a conversational answer plus structured findings for review/persistence.`
 
   const renderComposer = (placeholder, compactRows = 5) => (
     <div className={composerClass}>
-      <textarea
+      <ChatDraftTextarea
         ref={inputRef}
-        value={input}
-        onChange={(event) => setInput(event.target.value)}
-        onKeyDown={(event) => event.key === "Enter" && !event.shiftKey && (event.preventDefault(), sendMessage())}
+        initialValue={draftValueRef.current}
+        onDraftValueChange={handleDraftValueChange}
+        onHasTextChange={handleDraftHasTextChange}
+        onSubmit={sendMessage}
         placeholder={transcribing ? "Transcribing…" : recording ? "Recording… tap mic to stop" : placeholder}
         disabled={loading || transcribing || uploadingImages || activeReplyJobId}
         rows={fullScreen ? 3 : compactRows}
