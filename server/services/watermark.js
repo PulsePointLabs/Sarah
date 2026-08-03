@@ -388,7 +388,25 @@ export async function replaceVideoWithWatermarkedExport(filePath, settings = {},
   }
   const parsed = path.parse(filePath);
   const tempPath = path.join(parsed.dir, `${parsed.name}.watermarked-${crypto.randomUUID().slice(0, 8)}${parsed.ext || '.mp4'}`);
-  const debug = await applyWatermarkToVideo(filePath, tempPath, normalized, options);
-  await fs.rename(tempPath, filePath);
-  return debug;
+  try {
+    const debug = await applyWatermarkToVideo(filePath, tempPath, normalized, options);
+    await fs.rename(tempPath, filePath);
+    return debug;
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    if (!isRecoverableWatermarkFailure(error)) throw error;
+    return {
+      watermark_enabled: false,
+      watermark_requested: Boolean(normalized.enabled),
+      metadata_scrub_enabled: false,
+      success: false,
+      skipped: true,
+      retained_unwatermarked_master: true,
+      fallback_reason: String(error?.message || error || 'Watermark render failed').slice(0, 500),
+    };
+  }
+}
+
+export function isRecoverableWatermarkFailure(error) {
+  return /cannot allocate memory|out of memory|no space left on device/i.test(String(error?.message || error || ''));
 }

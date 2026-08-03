@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  isRecoverableWatermarkFailure,
   buildSarahBrandFilterComplex,
   buildWatermarkFilter,
   DEFAULT_WATERMARK_SETTINGS,
@@ -12,6 +13,12 @@ import {
   watermarkPositionPlan,
   watermarkText,
 } from './watermark.js';
+
+test('watermark fallback only treats resource exhaustion as recoverable', () => {
+  assert.equal(isRecoverableWatermarkFailure(new Error('Cannot allocate memory')), true);
+  assert.equal(isRecoverableWatermarkFailure(new Error('No space left on device')), true);
+  assert.equal(isRecoverableWatermarkFailure(new Error('Invalid filter graph')), false);
+});
 
 test('packaged watermark assets resolve from the app root instead of the launch directory', () => {
   assert.equal(WATERMARK_ASSET_DIRS.some((directory) => fs.existsSync(path.join(directory, 'brand', 'sarah-lab.jpg'))), true);
