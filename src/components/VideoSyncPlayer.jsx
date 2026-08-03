@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, Sparkles, Maximize2, Minimize2, Heart } from "lucide-react";
+import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, Sparkles, Maximize2, Minimize2, Heart, Activity, Wind, Move } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
   Dialog,
@@ -155,6 +155,136 @@ function nearestHR(chartData, time_s) {
     if (d < bestDist) { bestDist = d; best = pt; }
   }
   return Math.round(best.hr);
+}
+
+function numberOrNull(value) {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function positiveOrNull(value) {
+  const parsed = numberOrNull(value);
+  return parsed != null && parsed > 0 ? parsed : null;
+}
+
+function nearestTelemetryRow(rows, timeS) {
+  if (!rows.length) return null;
+  return rows.reduce((best, row) => (
+    Math.abs(Number(row.time_offset_s) - timeS) < Math.abs(Number(best.time_offset_s) - timeS)
+      ? row
+      : best
+  ), rows[0]);
+}
+
+function humanizeTelemetryValue(value, fallback = "--") {
+  const text = String(value || "").trim();
+  if (!text || text === "unavailable") return fallback;
+  return text.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function playbackPhaseAt(session, row, playheadS, isExploration) {
+  if (isExploration) {
+    return {
+      label: humanizeTelemetryValue(row?.multimodal_state, "Body exploration"),
+      tone: "border-cyan-300/30 bg-cyan-400/15 text-cyan-100",
+    };
+  }
+
+  const preClimax = numberOrNull(session?.pre_climax_offset_s);
+  const climax = numberOrNull(session?.climax_offset_s);
+  const recovery = numberOrNull(session?.recovery_offset_s);
+  const delta = numberOrNull(row?.elevated_delta);
+  const hasSavedPhaseMarkers = preClimax != null || climax != null || recovery != null;
+  if (recovery != null && playheadS >= recovery) {
+    return { label: "Recovery", tone: "border-sky-300/30 bg-sky-400/15 text-sky-100" };
+  }
+  if (climax != null && Math.abs(playheadS - climax) <= 12) {
+    return { label: "Climax window", tone: "border-rose-300/35 bg-rose-500/20 text-rose-100" };
+  }
+  if (climax != null && playheadS > climax) {
+    return { label: "Post-climax", tone: "border-violet-300/30 bg-violet-400/15 text-violet-100" };
+  }
+  if (preClimax != null && playheadS >= preClimax) {
+    return { label: "Near climax", tone: "border-fuchsia-300/35 bg-fuchsia-500/20 text-fuchsia-100" };
+  }
+  if (delta != null && delta >= 8) {
+    return { label: "Strong build", tone: "border-amber-300/35 bg-amber-400/20 text-amber-100" };
+  }
+  if (delta != null && delta >= 3) {
+    return { label: "Building", tone: "border-amber-300/30 bg-amber-400/15 text-amber-100" };
+  }
+  if (!hasSavedPhaseMarkers && delta == null) {
+    return { label: "Phase unavailable", tone: "border-white/20 bg-white/10 text-white/70" };
+  }
+  return { label: "Baseline / early build", tone: "border-emerald-300/30 bg-emerald-400/15 text-emerald-100" };
+}
+
+function FullscreenTelemetryBar({ row, playheadS, session, isExploration, position, barRef, onPointerDown, onPointerMove, onPointerUp, onReset }) {
+  const hr = positiveOrNull(row?.hr_smoothed) || positiveOrNull(row?.hr);
+  const baseline = positiveOrNull(row?.baseline_hr);
+  const delta = numberOrNull(row?.elevated_delta) ?? (hr != null && baseline != null ? hr - baseline : null);
+  const rmssd = positiveOrNull(row?.hrv_rmssd_ms);
+  const respiration = positiveOrNull(row?.respiration_bpm);
+  const motion = humanizeTelemetryValue(row?.motion_class);
+  const sampleTime = numberOrNull(row?.time_offset_s);
+  const sampleDistance = sampleTime == null ? null : Math.abs(sampleTime - playheadS);
+  const phase = playbackPhaseAt(session, row, playheadS, isExploration);
+
+  const metrics = [
+    { icon: Heart, label: "Heart rate", value: hr != null ? Math.round(hr) : "--", unit: "bpm", tone: "text-rose-200", fill: true },
+    { icon: Activity, label: "From baseline", value: delta != null ? `${delta >= 0 ? "+" : ""}${Math.round(delta)}` : "--", unit: "bpm", tone: "text-amber-200" },
+    { icon: Activity, label: "RMSSD", value: rmssd != null ? rmssd.toFixed(1) : "--", unit: "ms", tone: "text-teal-200" },
+    { icon: Wind, label: "Respiration", value: respiration != null ? respiration.toFixed(1) : "--", unit: "/min", tone: "text-sky-200" },
+    { icon: Move, label: "Motion", value: motion, unit: "", tone: "text-violet-200" },
+  ];
+
+  return (
+    <div
+      ref={barRef}
+      className="absolute z-[55] w-[min(42rem,calc(100%-2rem))] select-none overflow-hidden rounded-2xl border border-white/20 bg-[rgba(7,12,18,0.82)] text-white shadow-[0_18px_50px_rgba(0,0,0,0.48)] backdrop-blur-xl"
+      style={{ left: position.x, top: position.y, touchAction: "none" }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onDoubleClick={onReset}
+      role="group"
+      aria-label="Movable fullscreen physiology telemetry"
+      title="Drag to move · double-click to reset"
+    >
+      <div className="flex cursor-grab items-center justify-between gap-3 border-b border-white/10 px-3 py-2 active:cursor-grabbing">
+        <div className="flex min-w-0 items-center gap-2">
+          <Move className="h-3.5 w-3.5 shrink-0 text-white/55" />
+          <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/60">Physiology</span>
+          <span className="font-mono text-[10px] text-white/75">{fmtMmSs(playheadS)}</span>
+          {sampleDistance != null && sampleDistance >= 2 && (
+            <span className="truncate text-[9px] text-white/45">sample {sampleDistance.toFixed(1)}s away</span>
+          )}
+        </div>
+        <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em] ${phase.tone}`}>
+          {phase.label}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 divide-x divide-y divide-white/10 sm:grid-cols-5 sm:divide-y-0">
+        {metrics.map((metric) => {
+          const Icon = metric.icon;
+          return (
+            <div key={metric.label} className="min-w-0 px-3 py-2.5">
+              <div className="flex items-center gap-1.5 text-[8px] font-semibold uppercase tracking-[0.12em] text-white/50">
+                <Icon className={`h-3 w-3 ${metric.tone} ${metric.fill ? "fill-current" : ""}`} />
+                <span className="truncate">{metric.label}</span>
+              </div>
+              <p className={`mt-1 truncate font-mono text-lg font-bold leading-none ${metric.tone}`}>
+                {metric.value}
+                {metric.unit && metric.value !== "--" && <span className="ml-1 text-[9px] font-semibold text-white/55">{metric.unit}</span>}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // Events within ±windowSec of a playhead position
@@ -468,6 +598,9 @@ export default function VideoSyncPlayer({
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
   const [mobileEventSheetOpen, setMobileEventSheetOpen] = useState(false);
   const fullscreenControlsTimerRef = useRef(null);
+  const fullscreenTelemetryBarRef = useRef(null);
+  const fullscreenTelemetryDragRef = useRef(null);
+  const [fullscreenTelemetryPosition, setFullscreenTelemetryPosition] = useState({ x: 16, y: 64 });
   const resumeAfterShellFullscreenToggleRef = useRef(false);
   const suppressNextFullscreenVideoToggleRef = useRef(false);
   const nativeShell = isSarahNativeShell();
@@ -1321,6 +1454,54 @@ export default function VideoSyncPlayer({
     }
   }, [clearFullscreenControlsTimer, fullscreenActive, isPlaying]);
 
+  const resetFullscreenTelemetryPosition = useCallback(() => {
+    setFullscreenTelemetryPosition({ x: 16, y: 64 });
+  }, []);
+
+  const handleFullscreenTelemetryPointerDown = useCallback((event) => {
+    if (event.button != null && event.button !== 0) return;
+    const bar = fullscreenTelemetryBarRef.current;
+    const surface = fullscreenSurfaceRef.current;
+    if (!bar || !surface) return;
+    event.preventDefault();
+    event.stopPropagation();
+    bar.setPointerCapture?.(event.pointerId);
+    fullscreenTelemetryDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: fullscreenTelemetryPosition.x,
+      originY: fullscreenTelemetryPosition.y,
+    };
+    showFullscreenControls(2200);
+  }, [fullscreenTelemetryPosition.x, fullscreenTelemetryPosition.y, showFullscreenControls]);
+
+  const handleFullscreenTelemetryPointerMove = useCallback((event) => {
+    const drag = fullscreenTelemetryDragRef.current;
+    const bar = fullscreenTelemetryBarRef.current;
+    const surface = fullscreenSurfaceRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !bar || !surface) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const surfaceRect = surface.getBoundingClientRect();
+    const barRect = bar.getBoundingClientRect();
+    const nextX = drag.originX + event.clientX - drag.startX;
+    const nextY = drag.originY + event.clientY - drag.startY;
+    setFullscreenTelemetryPosition({
+      x: Math.max(8, Math.min(nextX, Math.max(8, surfaceRect.width - barRect.width - 8))),
+      y: Math.max(8, Math.min(nextY, Math.max(8, surfaceRect.height - barRect.height - 8))),
+    });
+  }, []);
+
+  const handleFullscreenTelemetryPointerUp = useCallback((event) => {
+    const drag = fullscreenTelemetryDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    fullscreenTelemetryBarRef.current?.releasePointerCapture?.(event.pointerId);
+    fullscreenTelemetryDragRef.current = null;
+  }, []);
+
   useEffect(() => {
     if (!fullscreenActive || !isPlaying) {
       clearFullscreenControlsTimer();
@@ -1415,6 +1596,12 @@ export default function VideoSyncPlayer({
         setSynchronizedVideoTime(Math.max(0, Math.min(videoDuration || Infinity, videoRef.current.currentTime + (direction * jumpS))));
       }
 
+      // M: toggle timestamped voice annotation. Playback resumes only after transcription + save.
+      if (e.code === "KeyM" && !inInput && !addingNew && !e.repeat) {
+        e.preventDefault();
+        void toggleQuickDictation();
+      }
+
       // S: pause video + open event form at current playhead (if not already open)
       if (e.code === "KeyS" && !inInput) {
         e.preventDefault();
@@ -1431,7 +1618,7 @@ export default function VideoSyncPlayer({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [addingNew, playheadS, lastUsedCat, setSynchronizedVideoTime, videoDuration]);
+  }, [addingNew, playheadS, lastUsedCat, setSynchronizedVideoTime, toggleQuickDictation, videoDuration]);
 
   // Click on chart → seek video
   const handleChartClick = useCallback((data) => {
@@ -1539,6 +1726,10 @@ export default function VideoSyncPlayer({
   }, []);
 
   const currentHR = useMemo(() => nearestHR(chartData, playheadS), [chartData, playheadS]);
+  const currentTelemetryRow = useMemo(
+    () => nearestTelemetryRow(timelineRows, playheadS),
+    [playheadS, timelineRows],
+  );
   const displayedVideoTime = sessionTimeToMediaTime(playheadS, videoOffset, videoDuration);
 
   const savedMotionSummary = !isExploration ? session.motion_analysis_summary : null;
@@ -2128,13 +2319,27 @@ export default function VideoSyncPlayer({
                   </div>
                 </div>
               )}
-              {telemetryDisplayMode === "overlay" && currentHR != null && (!savedMotionSummary || fullscreenActive) && (
-                <div className={`pointer-events-none absolute z-20 rounded-full border border-rose-200/20 bg-black/58 px-2.5 py-1.5 text-white shadow-lg backdrop-blur-md max-[950px]:px-2 max-[950px]:py-1 ${closestVisibleEvent && fullscreenActive ? "left-3 top-14 max-[950px]:left-auto max-[950px]:right-2 max-[950px]:top-2" : "right-3 top-3 max-[950px]:right-2 max-[950px]:top-2"}`}>
+              {telemetryDisplayMode === "overlay" && currentHR != null && !savedMotionSummary && !fullscreenActive && (
+                <div className="pointer-events-none absolute right-3 top-3 z-20 rounded-full border border-rose-200/20 bg-black/58 px-2.5 py-1.5 text-white shadow-lg backdrop-blur-md max-[950px]:right-2 max-[950px]:top-2 max-[950px]:px-2 max-[950px]:py-1">
                   <div className="flex items-center gap-1.5">
                     <Heart className="h-3.5 w-3.5 fill-rose-400 text-rose-400 max-[950px]:h-3 max-[950px]:w-3" />
                     <span className="font-mono text-sm font-bold text-rose-200 max-[950px]:text-xs">{currentHR}</span>
                   </div>
                 </div>
+              )}
+              {fullscreenActive && (
+                <FullscreenTelemetryBar
+                  row={currentTelemetryRow}
+                  playheadS={playheadS}
+                  session={session}
+                  isExploration={isExploration}
+                  position={fullscreenTelemetryPosition}
+                  barRef={fullscreenTelemetryBarRef}
+                  onPointerDown={handleFullscreenTelemetryPointerDown}
+                  onPointerMove={handleFullscreenTelemetryPointerMove}
+                  onPointerUp={handleFullscreenTelemetryPointerUp}
+                  onReset={resetFullscreenTelemetryPosition}
+                />
               )}
               {fullscreenActive && (
                 <div className="absolute left-3 top-3 z-30 flex items-center gap-2 max-[950px]:left-2 max-[950px]:top-2">
@@ -2147,7 +2352,7 @@ export default function VideoSyncPlayer({
                     <span className="max-[950px]:sr-only">Exit Fullscreen</span>
                   </button>
                   <span className="hidden rounded-lg border border-white/10 bg-black/55 px-2.5 py-2 text-[10px] text-white/70 backdrop-blur-sm lg:inline">
-                    Space play/pause | arrows seek | S add event
+                    Space play/pause | arrows seek | M voice note | S add event
                   </span>
                 </div>
               )}
