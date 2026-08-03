@@ -7,6 +7,7 @@ import {
   buildParagraphTimelineEvent,
   buildReviewNarrationSegments,
   buildReusedNarrationSegmentPlan,
+  coalesceReviewNarrationChunks,
   inferReviewVisualFocus,
   losslessConcatVideoArgs,
   matchAudioExport,
@@ -188,6 +189,22 @@ test('matching saved narration is split locally using persisted export timing', 
   assert.equal(plan[0].startSeconds, 0);
   assert.equal(plan[0].timingSource, 'saved_export_chunk_durations');
   assert.ok(Math.abs(plan.reduce((sum, item) => sum + item.durationSeconds, 0) - 4) < 0.001);
+});
+
+test('review narration reconstructs the same merged chunks used by the TTS export', () => {
+  const chunks = [
+    { paragraphIndex: 0, text: 'A'.repeat(520) },
+    { paragraphIndex: 1, text: 'B'.repeat(430) },
+    { paragraphIndex: 2, text: 'C'.repeat(700) },
+  ];
+  const merged = coalesceReviewNarrationChunks(chunks, 1000);
+
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].sourceChunkCount, 2);
+  assert.equal(merged[0].paragraphIndex, 0);
+  assert.match(merged[0].text, /^A+/);
+  assert.match(merged[0].text, /B+$/);
+  assert.equal(merged[1].sourceChunkCount, 1);
 });
 
 test('review narration stays inside its exact saved TTS chunk instead of accumulating global drift', () => {

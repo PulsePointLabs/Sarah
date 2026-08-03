@@ -1539,6 +1539,28 @@ function narrationChunkText(chunk) {
   return cleanParagraph(chunk?.text || chunk?.content || chunk?.input || '');
 }
 
+export function coalesceReviewNarrationChunks(chunks = [], targetCharacters = Number(process.env.TTS_EXPORT_MERGED_TARGET_CHARACTERS || 1000)) {
+  const target = Math.max(360, Math.min(2400, Number(targetCharacters) || 1000));
+  const merged = [];
+  for (const rawChunk of Array.isArray(chunks) ? chunks : []) {
+    const text = narrationChunkText(rawChunk);
+    if (!text) continue;
+    const current = merged[merged.length - 1];
+    const combinedLength = current ? current.text.length + 1 + text.length : text.length;
+    if (current && combinedLength <= target) {
+      current.text = `${current.text} ${text}`;
+      current.sourceChunkCount += 1;
+      continue;
+    }
+    merged.push({
+      ...(typeof rawChunk === 'object' && rawChunk ? rawChunk : {}),
+      text,
+      sourceChunkCount: 1,
+    });
+  }
+  return merged;
+}
+
 export function buildReusedNarrationSegmentPlan({
   narrationSegments = [],
   sourceChunks = [],
@@ -2324,7 +2346,8 @@ async function renderSegmentedSourceReviewVideo({
     clipByParagraph.get(key).push(clip);
   });
 
-  const narrationSegments = buildReviewNarrationSegments(paragraphs, payload.chunks || []);
+  const narrationSourceChunks = coalesceReviewNarrationChunks(payload.chunks || []);
+  const narrationSegments = buildReviewNarrationSegments(paragraphs, narrationSourceChunks);
   if (!narration?.audioPath || !(await fileExists(narration.audioPath))) {
     throw new Error('Narration audio file is unavailable.');
   }
@@ -2334,7 +2357,7 @@ async function renderSegmentedSourceReviewVideo({
   );
   const reusedSegmentPlan = buildReusedNarrationSegmentPlan({
     narrationSegments,
-    sourceChunks: payload.chunks || [],
+    sourceChunks: narrationSourceChunks,
     trimChunks: narration.audioExport?.silence_trim?.chunks || narration.rendered?.silence_trim?.chunks || [],
     durationSeconds: narrationDuration,
   });
