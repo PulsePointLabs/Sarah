@@ -18,6 +18,7 @@ import {
   selectDistinctReviewSourceStart,
   selectReviewVideoEventForSegment,
   telemetryAtSessionTime,
+  timestampRequirementForSegment,
 } from './sessionReviewVideoRenderer.js';
 
 test('final video assembly joins video-only segments before the one-time audio mux', () => {
@@ -246,6 +247,24 @@ test('untimed narration continues from the current paragraph timeline', () => {
   assert.equal(event.source, 'paragraph_timeline_continuity');
   assert.equal(event.lock_timeline, true);
   assert.match(event.reason, /instead of jumping/i);
+});
+
+test('clock times with AM or PM are not treated as elapsed review timestamps', () => {
+  const clockTime = timestampRequirementForSegment({
+    paragraphIndex: 0,
+    maxSessionSeconds: 3000,
+    text: 'The session began at approximately 4:50 AM on August 1st.',
+  });
+  const elapsedTime = timestampRequirementForSegment({
+    paragraphIndex: 0,
+    maxSessionSeconds: 3000,
+    text: 'Nozzle contact occurred at 12:26 elapsed.',
+  });
+
+  assert.equal(clockTime.required, false);
+  assert.equal(clockTime.times.length, 0);
+  assert.equal(elapsedTime.required, true);
+  assert.equal(elapsedTime.primary.seconds, 746);
 });
 
 test('Body Exploration narration splits distinct actions inside one compound sentence', () => {

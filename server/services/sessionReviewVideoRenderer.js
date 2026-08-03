@@ -359,10 +359,18 @@ function roundedSeconds(value) {
   return Number.isFinite(number) ? Math.round(number * 10) / 10 : null;
 }
 
-function timestampRequirementForSegment(segment = {}) {
+function isClockTimeOfDayReference(text = '', time = {}) {
+  const charIndex = Number(time?.charIndex);
+  if (!Number.isFinite(charIndex)) return false;
+  const neighborhood = String(text || '').slice(Math.max(0, charIndex - 4), charIndex + String(time?.text || '').length + 12);
+  return /\b(?:a\.?m\.?|p\.?m\.?)\b/i.test(neighborhood);
+}
+
+export function timestampRequirementForSegment(segment = {}) {
   const maxSessionSeconds = Number(segment?.maxSessionSeconds);
   const times = extractCitedTimesFromText(segment?.text || '', segment?.paragraphIndex)
     .filter((time) => Number.isFinite(Number(time.seconds)))
+    .filter((time) => !isClockTimeOfDayReference(segment?.text, time))
     .filter((time) => !Number.isFinite(maxSessionSeconds) || Number(time.seconds) <= maxSessionSeconds + REVIEW_VIDEO_TIME_TOLERANCE_SECONDS)
     .sort((a, b) => Number(a.charIndex ?? 0) - Number(b.charIndex ?? 0));
   return {
