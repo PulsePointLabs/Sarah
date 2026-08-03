@@ -4186,7 +4186,7 @@ export default function LiveCapture() {
     if (res.ok) setFiles(await res.json());
   };
 
-  const ensureSession = async () => {
+  const ensureSession = async (recordingOverride = recording) => {
     const currentPmdStore = directH10PmdStoreRef.current;
     const currentMultimodal = h10MultimodalRef.current || {};
     const currentPmdMessage = directH10StatusRef.current?.pmdMessage || directH10Status.pmdMessage || "";
@@ -4247,7 +4247,7 @@ export default function LiveCapture() {
     const res = await fetch(apiUrl("/live-capture/ensure-session"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ recording, captureKind, capturePreflight }),
+      body: JSON.stringify({ recording: recordingOverride, captureKind, capturePreflight }),
     });
     if (res.ok) {
       const data = await res.json();
@@ -4276,6 +4276,67 @@ export default function LiveCapture() {
   const obsReady = Boolean(recordingActive || embeddedObsStatus?.identified);
   const emgRecent = isRecent(emgSourceAt);
   const liveSessionPaused = Boolean(liveSession?.activeSessionId && liveSession?.active && !recordingActive);
+
+  const startObsRecording = useCallback(async () => {
+    if (recordingActive) return recording;
+    if (!embeddedObsStatus?.identified) {
+      throw new Error(embeddedObsStatus?.error || "OBS is not connected to Sarah.");
+    }
+    if (typeof WebSocket === "undefined") {
+      throw new Error("This Sarah runtime cannot send the OBS recording command.");
+    }
+
+    let relayUrl;
+    try {
+      const base = new URL(apiUrl("/live-capture/status"), window.location.href);
+      base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
+      base.port = "8765";
+      base.pathname = "/";
+      base.search = "";
+      base.hash = "";
+      relayUrl = base.toString();
+    } catch {
+      throw new Error("Sarah could not resolve the local OBS relay address.");
+    }
+
+    let socket = directH10RelaySocketRef.current;
+    if (!socket || [WebSocket.CLOSING, WebSocket.CLOSED].includes(socket.readyState)) {
+      socket = new WebSocket(relayUrl);
+      directH10RelaySocketRef.current = socket;
+    }
+    if (socket.readyState === WebSocket.CONNECTING) {
+      await new Promise((resolve, reject) => {
+        const timeout = window.setTimeout(() => reject(new Error("Sarah timed out connecting to the local OBS relay.")), 5000);
+        socket.addEventListener("open", () => {
+          window.clearTimeout(timeout);
+          resolve();
+        }, { once: true });
+        socket.addEventListener("error", () => {
+          window.clearTimeout(timeout);
+          reject(new Error("Sarah could not connect to the local OBS relay."));
+        }, { once: true });
+      });
+    }
+    if (socket.readyState !== WebSocket.OPEN) {
+      throw new Error("The local OBS relay is not ready.");
+    }
+    socket.send(JSON.stringify({ type: "obs_start_record" }));
+
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      await wait(250);
+      const response = await fetch(apiUrl("/live-capture/status"), { cache: "no-store" });
+      if (!response.ok) continue;
+      const nextStatus = await response.json();
+      setStatus(nextStatus);
+      if (nextStatus?.hr?.recording?.active) return nextStatus.hr.recording;
+      const nextObs = nextStatus?.hr?.relay?.obs;
+      if (nextObs?.error && !nextObs?.identified) {
+        throw new Error(nextObs.error);
+      }
+    }
+    throw new Error("OBS did not confirm that recording started within 15 seconds.");
+  }, [embeddedObsStatus?.error, embeddedObsStatus?.identified, recording, recordingActive]);
 
   useEffect(() => {
     perinealProtocolRef.current = perinealProtocol;
@@ -5023,8 +5084,13 @@ export default function LiveCapture() {
           throw new Error("OBS is unavailable. Reconnect OBS or enable telemetry-only fallback.");
         }
 
+        let activeRecording = recording;
+        if (launchProfile.obsEnabled && !recordingActive) {
+          activeRecording = await startObsRecording();
+        }
+
         setLaunchStep("Starting session");
-        const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();
+        const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession(activeRecording);
         if (!sessionState?.activeSessionId) throw new Error("Sarah could not create or reuse the live session shell.");
 
         saveSuccessfulLaunchProfile(sessionState);
@@ -5069,6 +5135,7 @@ export default function LiveCapture() {
     obsReady,
     saveSuccessfulLaunchProfile,
     setLaunchStep,
+    startObsRecording,
     verifyDirectH10Pmd,
     waitForH10PmdSamples,
     waitForRecentHrPacket,
@@ -8835,7 +8902,6 @@ export default function LiveCapture() {
               </span>
               <button type="button" onClick={() => sendHowlControlCommand("decrement_power", { channel: howlCommandForm.channel || "a", step: 1 })} disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy)} className="h-11 rounded-lg border border-border bg-card px-4 text-lg font-bold text-foreground disabled:opacity-40">-</button>
               <button type="button" onClick={() => sendHowlControlCommand("increment_power", { channel: howlCommandForm.channel || "a", step: 1 })} disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy)} className="h-11 rounded-lg bg-primary px-4 text-lg font-bold text-primary-foreground disabled:opacity-40">+</button>
-              <button type="button" onClick={sendHowlEmergencyStop} disabled={howlControlBusy === "emergency_stop"} className="h-11 rounded-lg bg-red-600 px-4 text-sm font-black text-white shadow-lg hover:bg-red-700 disabled:opacity-60">STOP HOWL NOW</button>
               <button type="button" onClick={() => setHowlQuickModalOpen(true)} className="h-11 rounded-lg border border-border bg-muted px-4 text-sm font-bold text-foreground">Details</button>
             </div>
           </div>
