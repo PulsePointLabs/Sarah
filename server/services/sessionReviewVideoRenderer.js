@@ -1371,8 +1371,12 @@ async function concatSegments(segmentPaths, outputPath, workDir) {
   ]);
 }
 
-async function muxAudioVideo(videoPath, audioPath, outputPath) {
-  await runProcess('ffmpeg', [
+export function muxAudioVideoArgs(videoPath, audioPath, outputPath, audioDurationSeconds = 0) {
+  const duration = Number(audioDurationSeconds);
+  const trimArgs = Number.isFinite(duration) && duration > 0
+    ? ['-t', duration.toFixed(6)]
+    : [];
+  return [
     '-hide_banner',
     '-y',
     '-i', videoPath,
@@ -1382,10 +1386,16 @@ async function muxAudioVideo(videoPath, audioPath, outputPath) {
     '-c:v', 'copy',
     '-c:a', 'aac',
     '-b:a', '320k',
+    ...trimArgs,
     '-shortest',
     '-movflags', '+faststart',
     outputPath,
-  ]);
+  ];
+}
+
+async function muxAudioVideo(videoPath, audioPath, outputPath) {
+  const audioDurationSeconds = await mediaDurationSeconds(audioPath).catch(() => 0);
+  await runProcess('ffmpeg', muxAudioVideoArgs(videoPath, audioPath, outputPath, audioDurationSeconds));
 }
 
 async function concatWavSegments(audioPaths, outputPath, workDir) {

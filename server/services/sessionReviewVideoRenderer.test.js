@@ -11,6 +11,7 @@ import {
   inferReviewVisualFocus,
   losslessConcatVideoArgs,
   matchAudioExport,
+  muxAudioVideoArgs,
   canonicalPhaseAnchorForNarration,
   reviewVisualFocusForClip,
   resolveReviewSegmentPhaseCarryover,
@@ -27,6 +28,12 @@ test('final video assembly joins video-only segments before the one-time audio m
   assert.equal(args.includes('-an'), true);
   assert.equal(args.includes('libx264'), false);
   assert.equal(args.includes('aac'), false);
+});
+
+test('final mux is explicitly capped to the concatenated narration duration', () => {
+  const args = muxAudioVideoArgs('video.mp4', 'audio.wav', 'output.mp4', 1865.3);
+  assert.deepEqual(args.slice(args.indexOf('-t'), args.indexOf('-t') + 2), ['-t', '1865.300000']);
+  assert.equal(args.includes('-shortest'), true);
 });
 
 test('review video focus targets named glans findings with a restrained push-in', () => {
