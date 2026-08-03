@@ -2,12 +2,24 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { getEntity, listEntities, upsertEntity } from '../db.js';
 import { HOWL_CONTROL_DEFAULT_LIMITS, normalizeHowlTelemetrySample } from '../services/howlTelemetry.js';
+import {
+  ABSOLUTE_HOWL_INTENSITY_CEILING,
+  MAXIMUM_HOWL_UPWARD_STEP,
+  validateAutomaticHowlIncrease,
+} from '../services/howlSafety.js';
+import { isLiveCaptureObsActivelyRecording, onLiveCaptureObsStateChange } from '../services/liveCaptureObsState.js';
 
 export const howlRouter = express.Router();
 
 const SETTINGS_ID = 'default';
+const HOWL_SAFETY_SETTINGS_VERSION = 2;
+const ABSOLUTE_INTENSITY_CEILING = ABSOLUTE_HOWL_INTENSITY_CEILING;
+const MAXIMUM_UPWARD_STEP = MAXIMUM_HOWL_UPWARD_STEP;
+let automaticControlArmed = false;
+let emergencyStopSequence = 0;
 const DEFAULT_SETTINGS = Object.freeze({
   id: SETTINGS_ID,
+  safetySettingsVersion: HOWL_SAFETY_SETTINGS_VERSION,
   controlEnabled: false,
   sarahAutoEnabled: false,
   dispatchMode: 'direct_http',
@@ -30,6 +42,13 @@ const DEFAULT_SETTINGS = Object.freeze({
   recoveryThreshold: 55,
   autoCooldownSeconds: 8,
   requireManualConfirm: true,
+});
+
+onLiveCaptureObsStateChange((activelyRecording) => {
+  if (activelyRecording || !automaticControlArmed) return;
+  automaticControlArmed = false;
+  const saved = getEntity('HowlControlSettings', SETTINGS_ID) || {};
+  upsertEntity('HowlControlSettings', SETTINGS_ID, { ...saved, sarahAutoEnabled: false });
 });
 
 function clampNumber(value, min, max, fallback = null) {
@@ -176,16 +195,21 @@ function getSettings() {
   const envUrl = String(process.env.HOWL_CONTROL_URL || '').trim();
   const envKey = String(process.env.HOWL_REMOTE_ACCESS_KEY || '').trim();
   const saved = getEntity('HowlControlSettings', SETTINGS_ID) || {};
+  const savedSafetyVersion = Number(saved.safetySettingsVersion || 0);
+  const savedCeiling = savedSafetyVersion >= HOWL_SAFETY_SETTINGS_VERSION
+    ? saved.intensityCeiling
+    : Math.min(Number(saved.intensityCeiling) || DEFAULT_SETTINGS.intensityCeiling, DEFAULT_SETTINGS.intensityCeiling);
   return {
     ...DEFAULT_SETTINGS,
     ...saved,
     controlUrl: String(saved.controlUrl || envUrl || '').trim(),
     remoteAccessKey: String(saved.remoteAccessKey || envKey || '').trim(),
     controlEnabled: Boolean(saved.controlEnabled),
-    sarahAutoEnabled: Boolean(saved.sarahAutoEnabled),
-    intensityFloor: clampNumber(saved.intensityFloor, 0, 100, DEFAULT_SETTINGS.intensityFloor),
-    intensityCeiling: clampNumber(saved.intensityCeiling, 0, 100, DEFAULT_SETTINGS.intensityCeiling),
-    rampRateLimitPerSecond: clampNumber(saved.rampRateLimitPerSecond, 0, 100, DEFAULT_SETTINGS.rampRateLimitPerSecond),
+    sarahAutoEnabled: automaticControlArmed,
+    intensityFloor: clampNumber(saved.intensityFloor, 0, ABSOLUTE_INTENSITY_CEILING, DEFAULT_SETTINGS.intensityFloor),
+    safetySettingsVersion: HOWL_SAFETY_SETTINGS_VERSION,
+    intensityCeiling: clampNumber(savedCeiling, 0, ABSOLUTE_INTENSITY_CEILING, DEFAULT_SETTINGS.intensityCeiling),
+    rampRateLimitPerSecond: clampNumber(saved.rampRateLimitPerSecond, 0, MAXIMUM_UPWARD_STEP, DEFAULT_SETTINGS.rampRateLimitPerSecond),
   };
 }
 
@@ -193,20 +217,21 @@ function saveSettings(input = {}) {
   const previous = getSettings();
   const next = {
     ...previous,
+    safetySettingsVersion: HOWL_SAFETY_SETTINGS_VERSION,
     controlEnabled: Boolean(input.controlEnabled),
-    sarahAutoEnabled: Boolean(input.sarahAutoEnabled),
+    sarahAutoEnabled: Boolean(input.sarahAutoEnabled && input.controlEnabled),
     dispatchMode: ['queue', 'direct_http', 'queue_and_direct'].includes(input.dispatchMode) ? input.dispatchMode : previous.dispatchMode,
     controlUrl: normalizeHowlBaseUrl(input.controlUrl ?? previous.controlUrl ?? ''),
     remoteAccessKey: cleanText(input.remoteAccessKey ?? previous.remoteAccessKey ?? '', 300),
-    intensityFloor: clampNumber(input.intensityFloor, 0, 100, previous.intensityFloor),
-    intensityCeiling: clampNumber(input.intensityCeiling, 0, 100, previous.intensityCeiling),
-    rampRateLimitPerSecond: clampNumber(input.rampRateLimitPerSecond, 0, 100, previous.rampRateLimitPerSecond),
+    intensityFloor: clampNumber(input.intensityFloor, 0, ABSOLUTE_INTENSITY_CEILING, previous.intensityFloor),
+    intensityCeiling: clampNumber(input.intensityCeiling, 0, ABSOLUTE_INTENSITY_CEILING, previous.intensityCeiling),
+    rampRateLimitPerSecond: clampNumber(input.rampRateLimitPerSecond, 0, MAXIMUM_UPWARD_STEP, previous.rampRateLimitPerSecond),
     buildRampEnabled: input.buildRampEnabled !== false,
     nearClimaxReductionEnabled: input.nearClimaxReductionEnabled !== false,
     recoveryReductionEnabled: input.recoveryReductionEnabled !== false,
     finalApproachEnabled: input.finalApproachEnabled !== false,
-    buildStep: clampNumber(input.buildStep, 0, 10, previous.buildStep),
-    finalApproachStep: clampNumber(input.finalApproachStep, 0, 10, previous.finalApproachStep),
+    buildStep: clampNumber(input.buildStep, 0, MAXIMUM_UPWARD_STEP, previous.buildStep),
+    finalApproachStep: clampNumber(input.finalApproachStep, 0, MAXIMUM_UPWARD_STEP, previous.finalApproachStep),
     reduceStep: clampNumber(input.reduceStep, 0, 25, previous.reduceStep),
     maxRecoveryRetreat: clampNumber(input.maxRecoveryRetreat, 0, 25, previous.maxRecoveryRetreat),
     nearClimaxThreshold: clampNumber(input.nearClimaxThreshold, 0, 100, previous.nearClimaxThreshold),
@@ -219,7 +244,12 @@ function saveSettings(input = {}) {
   if (next.intensityCeiling < next.intensityFloor) {
     next.intensityCeiling = next.intensityFloor;
   }
+  automaticControlArmed = next.sarahAutoEnabled;
   return upsertEntity('HowlControlSettings', SETTINGS_ID, next);
+}
+
+function isAutomaticCommand(body = {}) {
+  return Boolean(body.controller) || String(body.reason || '').startsWith('sarah_auto_');
 }
 
 function normalizeControlCommand(body = {}, settings = getSettings()) {
@@ -244,9 +274,14 @@ function normalizeControlCommand(body = {}, settings = getSettings()) {
   }
 
   const channel = String(body.channel || body.channel_id || body.channelId || 'a').trim().toLowerCase();
-  const intensity = body.intensity == null
+  const automatic = isAutomaticCommand(body);
+  const requestedIntensity = body.intensity == null
     ? null
-    : clampNumber(body.intensity, settings.intensityFloor, settings.intensityCeiling, null);
+    : clampNumber(body.intensity, settings.intensityFloor, Math.min(settings.intensityCeiling, ABSOLUTE_INTENSITY_CEILING), null);
+  const previousIntensity = clampNumber(body.controller?.previousIntensity ?? body.previousIntensity, 0, ABSOLUTE_INTENSITY_CEILING, null);
+  const intensity = requestedIntensity == null || previousIntensity == null
+    ? requestedIntensity
+    : Math.min(requestedIntensity, previousIntensity + MAXIMUM_UPWARD_STEP);
   const frequency_hz = body.frequency_hz == null && body.frequencyHz == null && body.frequency == null
     ? null
     : clampNumber(body.frequency_hz ?? body.frequencyHz ?? body.frequency, 0, 300, null);
@@ -254,11 +289,11 @@ function normalizeControlCommand(body = {}, settings = getSettings()) {
 
   return {
     id: body.id || randomUUID(),
-    source: 'pulsepoint',
+    source: automatic ? 'sarah_auto' : 'pulsepoint',
     action,
     channel,
     intensity,
-    intensity_delta: body.intensity_delta == null && body.intensityDelta == null ? null : clampNumber(body.intensity_delta ?? body.intensityDelta, -25, 25, null),
+    intensity_delta: body.intensity_delta == null && body.intensityDelta == null ? null : clampNumber(body.intensity_delta ?? body.intensityDelta, -25, MAXIMUM_UPWARD_STEP, null),
     frequency_hz,
     mode: body.mode == null ? null : String(body.mode).trim(),
     activity_name: activityName == null ? null : String(activityName).trim().toUpperCase(),
@@ -267,15 +302,18 @@ function normalizeControlCommand(body = {}, settings = getSettings()) {
     waveform: body.waveform == null ? null : String(body.waveform).trim(),
     enabled: body.enabled == null ? null : Boolean(body.enabled),
     value: body.value == null ? null : Boolean(body.value),
-    step: clampNumber(body.step, 0, 50, 1),
+    step: clampNumber(body.step, 0, MAXIMUM_UPWARD_STEP, 1),
     playback_status: body.playback_status == null && body.playbackStatus == null ? null : String(body.playback_status ?? body.playbackStatus).trim(),
     session: body.session || body.session_id || body.sessionId || null,
     reason: String(body.reason || 'manual_live_capture').slice(0, 200),
-    manual: true,
+    manual: !automatic,
+    emergency_stop_sequence: automatic ? emergencyStopSequence : null,
     limits: {
       intensityFloor: settings.intensityFloor,
       intensityCeiling: settings.intensityCeiling,
       rampRateLimitPerSecond: settings.rampRateLimitPerSecond,
+      absoluteIntensityCeiling: ABSOLUTE_INTENSITY_CEILING,
+      maximumUpwardStep: MAXIMUM_UPWARD_STEP,
     },
     created_at: new Date().toISOString(),
     status: 'queued',
@@ -354,15 +392,25 @@ async function dispatchCommand(command, settings) {
   try {
     let result;
     if (command.action === 'emergency_stop') {
-      const mute = await requestHowl(settings, '/set_mute', { value: true });
-      const zero = await requestHowl(settings, '/set_power', { power_a: 0, power_b: 0 });
+      const [muteResult, zeroResult, stopResult] = await Promise.allSettled([
+        requestHowl(settings, '/set_mute', { value: true }),
+        requestHowl(settings, '/set_power', { power_a: 0, power_b: 0 }),
+        requestHowl(settings, '/stop', {}),
+      ]);
+      const mute = muteResult.status === 'fulfilled' ? muteResult.value : null;
+      const zero = zeroResult.status === 'fulfilled' ? zeroResult.value : null;
+      const stop = stopResult.status === 'fulfilled' ? stopResult.value : null;
+      if (!mute || !zero) {
+        throw muteResult.status === 'rejected' ? muteResult.reason : zeroResult.reason;
+      }
       result = {
-        status: zero.status,
-        text: zero.text,
-        data: zero.data,
+        status: zero?.status || mute?.status || stop?.status,
+        text: zero?.text || mute?.text || stop?.text,
+        data: zero?.data || mute?.data || stop?.data,
         emergency: [
-          { endpoint: '/set_mute', status: mute.status },
-          { endpoint: '/set_power', status: zero.status },
+          { endpoint: '/set_mute', status: mute?.status || null, sent: Boolean(mute) },
+          { endpoint: '/set_power', status: zero?.status || null, sent: Boolean(zero) },
+          { endpoint: '/stop', status: stop?.status || null, sent: Boolean(stop) },
         ],
       };
     } else {
@@ -383,6 +431,35 @@ async function dispatchCommand(command, settings) {
           ceiling: settings.intensityCeiling,
           previousPower: currentPower,
           targetPower,
+        };
+      } else if (['set_power', 'set_intensity', 'set_state'].includes(command.action)) {
+        const status = await requestHowl(settings, '/status', {});
+        const requested = clampNumber(command.intensity, settings.intensityFloor, Math.min(settings.intensityCeiling, ABSOLUTE_INTENSITY_CEILING), 0);
+        const currentA = powerFromStatus(status.data, 0);
+        const currentB = powerFromStatus(status.data, 1);
+        const targetA = Math.min(requested, currentA + MAXIMUM_UPWARD_STEP);
+        const targetB = Math.min(requested, currentB + MAXIMUM_UPWARD_STEP);
+        const body = command.channel === 'all'
+          ? { power_a: targetA, power_b: targetB }
+          : setPowerBody(channelIndex(command.channel), command.channel === 'b' ? targetB : targetA);
+        if (command.source === 'sarah_auto' && command.emergency_stop_sequence !== emergencyStopSequence) {
+          throw new Error('Automatic command cancelled by emergency stop.');
+        }
+        const powerResult = await requestHowl(settings, '/set_power', body);
+        if (command.source === 'sarah_auto' && command.emergency_stop_sequence !== emergencyStopSequence) {
+          await Promise.allSettled([
+            requestHowl(settings, '/set_mute', { value: true }),
+            requestHowl(settings, '/set_power', { power_a: 0, power_b: 0 }),
+            requestHowl(settings, '/stop', {}),
+          ]);
+          throw new Error('Automatic command superseded by emergency stop; stop state reasserted.');
+        }
+        result = {
+          ...powerResult,
+          ceiling: settings.intensityCeiling,
+          maximumUpwardStep: MAXIMUM_UPWARD_STEP,
+          previousPower: command.channel === 'b' ? currentB : currentA,
+          targetPower: command.channel === 'all' ? { a: targetA, b: targetB } : command.channel === 'b' ? targetB : targetA,
         };
       } else {
         const request = directHowlRequestForCommand(command);
@@ -533,6 +610,7 @@ howlRouter.get('/control/next', (req, res) => {
   const now = new Date().toISOString();
   const pending = listEntities('HowlControlCommand')
     .filter((cmd) => ['queued', 'dispatch_failed'].includes(cmd.status))
+    .filter((cmd) => cmd.action === 'emergency_stop' || !cmd.cancelled_by_emergency_stop)
     .sort((a, b) => String(a.created_at || a.created_date || '').localeCompare(String(b.created_at || b.created_date || '')))
     .slice(0, limit);
   const commands = pending.map((cmd) => {
@@ -568,9 +646,29 @@ howlRouter.post('/control', async (req, res) => {
     return res.status(409).json({ ok: false, error: 'Howl control is disabled. Enable manual control first.' });
   }
   try {
+    if (isAutomaticCommand(req.body || {})) {
+      if (!settings.sarahAutoEnabled) {
+        return res.status(409).json({ ok: false, error: 'Automatic Howl control is not armed.' });
+      }
+      if (!isLiveCaptureObsActivelyRecording()) {
+        return res.status(409).json({ ok: false, error: 'Automatic Howl control only operates while OBS is actively recording.' });
+      }
+      const validation = validateAutomaticHowlIncrease(req.body || {}, settings);
+      if (!validation.ok) return res.status(409).json({ ok: false, error: validation.error });
+    }
     const command = normalizeControlCommand(req.body || {}, settings);
     let saved = upsertEntity('HowlControlCommand', command.id, command);
     const dispatch = await dispatchCommand(saved, settings);
+    if (saved.source === 'sarah_auto' && saved.emergency_stop_sequence !== emergencyStopSequence) {
+      saved = upsertEntity('HowlControlCommand', saved.id, {
+        ...saved,
+        status: 'cancelled',
+        cancelled_at: new Date().toISOString(),
+        cancelled_by_emergency_stop: true,
+        dispatch,
+      });
+      return res.status(409).json({ ok: false, error: 'Automatic command cancelled by emergency stop.', command: saved });
+    }
     const nextStatus = dispatch.sent ? 'sent' : saved.status;
     saved = upsertEntity('HowlControlCommand', saved.id, {
       ...saved,
@@ -585,7 +683,22 @@ howlRouter.post('/control', async (req, res) => {
 });
 
 howlRouter.post('/control/emergency-stop', async (req, res) => {
-  const settings = { ...getSettings(), controlEnabled: true };
+  emergencyStopSequence += 1;
+  automaticControlArmed = false;
+  const currentSettings = getSettings();
+  const settings = { ...currentSettings, controlEnabled: true, sarahAutoEnabled: false };
+  upsertEntity('HowlControlSettings', SETTINGS_ID, { ...currentSettings, sarahAutoEnabled: false });
+  const cancelledAt = new Date().toISOString();
+  for (const pending of listEntities('HowlControlCommand').filter((item) => (
+    item.source === 'sarah_auto' && ['queued', 'dispatch_failed', 'delivered'].includes(item.status)
+  ))) {
+    upsertEntity('HowlControlCommand', pending.id, {
+      ...pending,
+      status: 'cancelled',
+      cancelled_at: cancelledAt,
+      cancelled_by_emergency_stop: true,
+    });
+  }
   const command = normalizeControlCommand({
     ...(req.body || {}),
     action: 'emergency_stop',

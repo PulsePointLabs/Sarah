@@ -22,7 +22,7 @@ function loadedPrediction(overrides = {}) {
   };
 }
 
-test('final approach advances one bounded step instead of reducing near threshold', () => {
+test('near-climax and plateau protection hold instead of increasing', () => {
   const result = computeHowlPhysiologyAction({
     prediction: loadedPrediction(),
     currentIntensity: 12,
@@ -31,9 +31,9 @@ test('final approach advances one bounded step instead of reducing near threshol
     state: createHowlPhysiologyControllerState(12),
   });
 
-  assert.equal(result.action, 'final_approach');
-  assert.equal(result.target, 13);
-  assert.equal(result.state.mode, 'final_approach');
+  assert.equal(result.action, 'protected_hold');
+  assert.equal(result.target, 12);
+  assert.equal(result.state.mode, 'near_climax_hold');
 });
 
 test('recovery retreat cannot accumulate below the retained cycle floor', () => {
@@ -69,7 +69,7 @@ test('recovery retreat cannot accumulate below the retained cycle floor', () => 
   assert.equal(third.target, 12);
 });
 
-test('controller restores retained intensity after recovery clears', () => {
+test('controller does not restore intensity after recovery clears without a rising HR trend', () => {
   const result = computeHowlPhysiologyAction({
     prediction: loadedPrediction({ nearClimax: 55, plateauScore: 48, plateauDwell: false }),
     currentIntensity: 12,
@@ -78,8 +78,61 @@ test('controller restores retained intensity after recovery clears', () => {
     state: { mode: 'recovery_retreat', peakIntensity: 15, recoveryFloor: 12 },
   });
 
-  assert.equal(result.action, 'reapproach');
-  assert.equal(result.target, 13);
+  assert.equal(result.action, 'hold');
+  assert.equal(result.target, 12);
+});
+
+test('falling HR cannot trigger an automatic increase even when build score is high', () => {
+  const result = computeHowlPhysiologyAction({
+    prediction: loadedPrediction({
+      nearClimax: 50,
+      plateauScore: 40,
+      plateauDwell: false,
+      recentSlope: -2.5,
+    }),
+    currentIntensity: 8,
+    ceiling: 10,
+  });
+
+  assert.equal(result.action, 'hold');
+  assert.equal(result.target, 8);
+  assert.equal(result.risingHr, false);
+});
+
+test('reliable rising HR can advance only one configured build step', () => {
+  const result = computeHowlPhysiologyAction({
+    prediction: loadedPrediction({
+      nearClimax: 50,
+      plateauScore: 40,
+      plateauDwell: false,
+      recentSlope: 2.5,
+    }),
+    currentIntensity: 8,
+    ceiling: 10,
+  });
+
+  assert.equal(result.action, 'build_ramp');
+  assert.equal(result.target, 9);
+  assert.equal(result.risingHr, true);
+});
+
+test('HRV relaxation evidence holds even when the build score remains elevated', () => {
+  const result = computeHowlPhysiologyAction({
+    prediction: loadedPrediction({
+      nearClimax: 50,
+      plateauScore: 40,
+      plateauDwell: false,
+      recentSlope: 2.5,
+      hrvSignal: 'opening',
+      recovery: 40,
+    }),
+    currentIntensity: 8,
+    ceiling: 10,
+  });
+
+  assert.equal(result.action, 'protected_hold');
+  assert.equal(result.target, 8);
+  assert.equal(result.state.mode, 'relaxation_hold');
 });
 
 test('low-confidence multimodal input holds intensity', () => {

@@ -21,6 +21,8 @@ import { SHARED_HR_PACKET_STALE_MS, isSharedHrPacketFresh } from '../services/hr
 import { normalizeOverlayHeartRateSnapshot } from '../services/overlayHeartRate.js';
 import { summarizeCapturePauseIntervals } from '../services/capturePauseIntervals.js';
 import { coalesceDuplicateHrRows } from '../services/hrCaptureMerge.js';
+import { updateLiveCaptureObsState } from '../services/liveCaptureObsState.js';
+import { decideObsSessionLifecycleTransition } from '../services/liveCaptureSessionLifecycle.js';
 
 export const liveCaptureRouter = express.Router();
 
@@ -1181,7 +1183,7 @@ function mergeCaptureSegments(existingSegments = [], nextSegment = null) {
 
 function stageRecordingSegmentForSession(recording = {}, reason = 'obs_record_stop') {
   const sessionId = state.session.activeSessionId;
-  if (!sessionId) return null;
+  if (!sessionId || !state.session.active) return null;
   const segment = normalizeRecordingSegment(recording, reason);
   if (!segment) return null;
   const nextHrSegments = mergeCaptureSegments(state.session.pendingHrSegments, segment);
@@ -1982,6 +1984,7 @@ function connectHrBridge() {
 
       if (msg.type === 'recording_info') {
         state.hr.recording = msg.recording || null;
+        updateLiveCaptureObsState(state.hr.recording || {});
         if (state.hr.recording?.active) {
           ensureLiveSession(state.hr.recording);
           if (state.hr.recording.paused) markLiveSessionRecordingPaused(state.hr.recording);
@@ -2005,6 +2008,7 @@ function connectHrBridge() {
       }
 
       if (msg.type === 'obs_record_state') {
+        const wasActive = Boolean(state.hr.recording?.active);
         state.hr.recording = {
           ...(state.hr.recording || {}),
           active: !!msg.active,
@@ -2013,7 +2017,13 @@ function connectHrBridge() {
           stoppedAtMs: msg.stoppedAtMs || null,
           outputPath: msg.outputPath || null,
         };
-        if (state.hr.recording.active) {
+        updateLiveCaptureObsState(state.hr.recording);
+        const lifecycleTransition = decideObsSessionLifecycleTransition({
+          previousActive: wasActive,
+          nextActive: state.hr.recording.active,
+          hasActiveSession: Boolean(state.session.activeSessionId && state.session.active),
+        });
+        if (lifecycleTransition === 'start') {
           ensureLiveSession(state.hr.recording);
           markLiveSessionRecordingResumed(state.hr.recording);
           if (state.hr.selectedSource === HR_SOURCE_IDS.PULSOID && !pulsoidRecording) {
@@ -2033,9 +2043,22 @@ function connectHrBridge() {
         }
         broadcast('recording', state.hr.recording);
         refreshLatestFiles();
-        if (!state.hr.recording.active) {
+        if (lifecycleTransition === 'finalize') {
           resolveHrRecordingForImport(state.hr.recording).then((recordingForImport) => {
             stageRecordingSegmentForSession(recordingForImport, 'obs_record_stop');
+            return finalizeLiveSession(recordingForImport, {
+              includeCurrentRecording: false,
+              reason: 'obs_record_stop',
+            });
+          }).then((result) => {
+            if (result) broadcast('live_session_imported', result);
+          }).catch((error) => {
+            state.session = {
+              ...state.session,
+              lastImportError: error?.message || String(error),
+              importing: false,
+            };
+            broadcast('live_session', state.session);
           });
         }
       }
@@ -2048,6 +2071,7 @@ function connectHrBridge() {
           pausedAtMs: msg.pausedAtMs || null,
           resumedAtMs: msg.resumedAtMs || null,
         };
+        updateLiveCaptureObsState(state.hr.recording);
         ensureLiveSession(state.hr.recording);
         if (state.hr.recording.paused) markLiveSessionRecordingPaused(state.hr.recording);
         else markLiveSessionRecordingResumed(state.hr.recording);
@@ -2061,6 +2085,7 @@ function connectHrBridge() {
           active: false,
           paused: false,
         };
+        updateLiveCaptureObsState(state.hr.recording);
         broadcast('recording_finalized', state.hr.recording);
         refreshLatestFiles();
         resolveHrRecordingForImport(state.hr.recording).then((recordingForImport) => {
@@ -2424,6 +2449,13 @@ liveCaptureRouter.post('/refresh-files', async (_req, res) => {
 });
 
 liveCaptureRouter.post('/ensure-session', (req, res) => {
+  if (!state.hr.recording?.active) {
+    res.status(409).json({
+      error: 'A live record can only be created after OBS starts recording.',
+      session: state.session,
+    });
+    return;
+  }
   const sessionId = ensureLiveSession(req.body?.recording || state.hr.recording || {}, {
     captureKind: req.body?.captureKind,
     capturePreflight: req.body?.capturePreflight,
@@ -2432,6 +2464,10 @@ liveCaptureRouter.post('/ensure-session', (req, res) => {
 });
 
 liveCaptureRouter.post('/end-session', async (req, res) => {
+  if (state.hr.recording?.active) {
+    res.status(409).json({ error: 'Stop OBS recording to finalize the active live record.' });
+    return;
+  }
   if (!state.session.activeSessionId || !state.session.active) {
     await recoverPersistedLiveSession({ finalize: false });
   }

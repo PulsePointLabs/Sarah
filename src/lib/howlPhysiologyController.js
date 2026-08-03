@@ -22,6 +22,8 @@ export const DEFAULT_HOWL_PHYSIOLOGY_SETTINGS = Object.freeze({
   recoveryThreshold: 55,
 });
 
+const RISING_HR_SLOPE_BPM_30S = 1;
+
 export function createHowlPhysiologyControllerState(currentIntensity = 0) {
   const intensity = Math.max(0, finite(currentIntensity));
   return {
@@ -36,13 +38,13 @@ export function computeHowlPhysiologyAction({
   multimodal = {},
   currentIntensity = 0,
   floor = 0,
-  ceiling = 20,
+  ceiling = 10,
   settings = {},
   state = createHowlPhysiologyControllerState(currentIntensity),
 } = {}) {
   const config = { ...DEFAULT_HOWL_PHYSIOLOGY_SETTINGS, ...settings };
   const minimum = Math.max(0, finite(floor));
-  const maximum = Math.max(minimum, finite(ceiling, 20));
+  const maximum = Math.max(minimum, finite(ceiling, 10));
   const current = clamp(Math.round(finite(currentIntensity)), minimum, maximum);
   const peakIntensity = clamp(Math.max(finite(state?.peakIntensity), current), minimum, maximum);
   const maxRetreat = Math.max(0, finite(config.maxRecoveryRetreat, 3));
@@ -51,6 +53,8 @@ export function computeHowlPhysiologyAction({
     : minimum;
   const confidence = finite(prediction.controllerConfidence, prediction.confirmationCount >= 2 ? 60 : 35);
   const trusted = prediction.multimodalTrusted !== false && confidence >= 55;
+  const recentSlope = finite(prediction.recentSlope, finite(prediction.slopeBpm30s));
+  const risingHr = recentSlope >= RISING_HR_SLOPE_BPM_30S;
   const recoveryDrop = Math.max(
     finite(prediction.multimodalRecoveryDrop),
     finite(multimodal?.recovery?.currentDropBpm),
@@ -84,27 +88,15 @@ export function computeHowlPhysiologyAction({
     explanation = target < current
       ? `Shallow recovery retreat to ${target}; cycle floor remains ${recoveryFloor} from peak ${peakIntensity}.`
       : `Recovery remains active, but the retained cycle floor ${recoveryFloor} prevents another intensity drop.`;
-  } else if (state?.mode === "recovery_retreat" && current < peakIntensity && build) {
-    mode = "reapproach";
-    target = Math.min(peakIntensity, current + Math.max(0, finite(config.finalApproachStep, 1)));
-    action = target > current ? "reapproach" : "hold";
-    dwellMs = 5500;
-    explanation = `Recovery evidence cleared; restoring the retained approach dose toward ${peakIntensity}.`;
-  } else if ((threshold || plateau) && config.finalApproachEnabled !== false) {
-    mode = threshold ? "final_approach" : "plateau_hold";
-    const fallingFast = finite(prediction.approachVelocity) < -4;
-    if (!fallingFast && current < maximum) {
-      target = Math.min(maximum, current + Math.max(0, finite(config.finalApproachStep, 1)));
-      action = target > current ? "final_approach" : "threshold_hold";
-      dwellMs = 7000;
-      explanation = `Threshold physiology is sustained; advancing one bounded step toward ceiling ${maximum}.`;
-    } else {
-      action = "threshold_hold";
-      explanation = fallingFast
-        ? `Holding at ${current} while approach velocity settles; no intensity is surrendered.`
-        : `Holding the configured ceiling ${maximum} through the final approach.`;
-    }
-  } else if (build && config.buildRampEnabled !== false) {
+  } else if (hrvRelease || String(prediction.phase || '').toLowerCase().includes('recovery')) {
+    mode = "relaxation_hold";
+    action = "protected_hold";
+    explanation = `Holding at ${current}: relaxation or recovery evidence can never increase intensity.`;
+  } else if (threshold || plateau) {
+    mode = threshold ? "near_climax_hold" : "plateau_hold";
+    action = "protected_hold";
+    explanation = `Holding at ${current}: near-climax and plateau protection never increase intensity.`;
+  } else if (build && risingHr && config.buildRampEnabled !== false) {
     mode = "build";
     target = Math.min(maximum, current + Math.max(0, finite(config.buildStep, 1)));
     action = target > current ? "build_ramp" : "hold";
@@ -112,6 +104,9 @@ export function computeHowlPhysiologyAction({
     explanation = target > current
       ? `Sustained loading supports a gradual build step to ${target}.`
       : `Holding the configured ceiling ${maximum}.`;
+  } else if (build && !risingHr) {
+    mode = "trend_hold";
+    explanation = `Holding at ${current}: HR is not rising reliably (${recentSlope.toFixed(1)} bpm/30s).`;
   }
 
   target = clamp(Math.round(target), minimum, maximum);
@@ -122,6 +117,7 @@ export function computeHowlPhysiologyAction({
     explanation,
     trusted,
     recoveryEvidence,
+    risingHr,
     plateau,
     threshold,
     state: {
