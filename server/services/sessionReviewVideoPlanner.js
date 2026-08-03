@@ -39,7 +39,7 @@ function isRelativeDurationReference(source = '', offset = 0, matchLength = 0) {
   const after = String(source).slice(offset + matchLength, offset + matchLength + 48).toLowerCase();
   const explicitTimelineCue = /\b(?:at|around|near|by|from|between)\s+(?:(?:about|roughly|approximately)\s+)?$/.test(before);
   if (explicitTimelineCue && !/^\s*(?:before|ago|earlier|later)\b/.test(after)) return false;
-  return /\b(?:prior|previous|past|last|next|within|for|over|lasting|held for|at least)\s+(?:(?:the|about|roughly|approximately)\s+)*$/.test(before)
+  return /\b(?:prior|previous|past|last|next|within|for|over|lasting|lasted|ran for|held for|at least)\s+(?:(?:the|about|roughly|approximately)\s+)*$/.test(before)
     || /\bto\s+$/.test(before)
     || /^\s*(?:before|ago|earlier|later|long|in duration)\b/.test(after);
 }

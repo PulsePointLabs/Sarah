@@ -21,6 +21,13 @@ test('relative durations are not treated as session timeline anchors', () => {
   assert.deepEqual(times, []);
 });
 
+test('whole-session duration statements are not treated as elapsed event anchors', () => {
+  const times = extractCitedTimesFromText(
+    'The session lasted approximately 50 minutes from setup through post-defecation recovery.'
+  );
+  assert.deepEqual(times, []);
+});
+
 test('natural-language session positions remain timeline anchors', () => {
   const times = extractCitedTimesFromText(
     'The massager was placed between roughly two minutes and twenty-five seconds and two minutes and forty-nine seconds.'

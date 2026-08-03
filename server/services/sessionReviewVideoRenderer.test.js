@@ -267,6 +267,25 @@ test('clock times with AM or PM are not treated as elapsed review timestamps', (
   assert.equal(elapsedTime.primary.seconds, 746);
 });
 
+test('Body Exploration duration summaries do not jump to a semantically related event', () => {
+  const selected = selectReviewVideoEventForSegment({
+    segment: {
+      paragraphIndex: 0,
+      text: 'The session lasted approximately 50 minutes from setup through post-defecation recovery.',
+    },
+    plan: {},
+    session: {
+      record_type: 'body_exploration',
+      exploration_type: 'Large-volume enema',
+      event_timeline: [
+        { id: 'urgency', time_s: 892.5, note: 'Urgency to defecate noted as fluid enters the rectum.' },
+      ],
+    },
+  });
+
+  assert.equal(selected, null);
+});
+
 test('Body Exploration narration splits distinct actions inside one compound sentence', () => {
   const [catheter, voiding] = buildReviewNarrationSegments([
     'A condom catheter was applied prophylactically for urinary collection, and you voided approximately 400 cc into the collection bag during defecation.',

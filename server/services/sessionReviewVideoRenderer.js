@@ -1785,6 +1785,12 @@ function bodyExplorationActionCompatibilityScore(event = {}, segment = {}) {
   return score;
 }
 
+function isBodyExplorationDurationSummary(text = '') {
+  const source = String(text || '');
+  return /\b(?:session|procedure|recording)\s+(?:itself\s+)?(?:lasted|ran\s+for|had\s+(?:a\s+)?(?:total\s+)?duration\s+of)\b/i.test(source)
+    || /\b(?:total|overall)\s+(?:session|procedure|recording)\s+(?:time|duration)\b/i.test(source);
+}
+
 function collectSegmentEvents({ segment, plan, clipByParagraph, session = {} }) {
   const paragraphIndex = Number(segment.paragraphIndex);
   const maxSessionSeconds = Number(segment?.maxSessionSeconds);
@@ -1852,6 +1858,7 @@ function chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds, sess
   }
   const strictBodyExplorationVisuals = Boolean(segment?.strictBodyExplorationVisuals)
     || isBodyExplorationReview({}, session);
+  if (strictBodyExplorationVisuals && isBodyExplorationDurationSummary(segment?.text)) return null;
   const targetConcepts = bodyExplorationVisualConcepts(segment?.text);
   if (strictBodyExplorationVisuals && !targetConcepts.length) return null;
   let best = null;
