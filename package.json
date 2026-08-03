@@ -20,6 +20,8 @@
     "desktop:pack": "npm run build && npm run desktop:prepare-node && node desktop/package-win-unpacked.mjs",
     "desktop:dist": "npm run desktop:dist:win",
     "desktop:dist:win": "npm run desktop:pack",
+    "desktop:pack:linux:remote": "node desktop/package-linux-remote.mjs",
+    "desktop:dist:linux:cachyos": "npm run desktop:pack:linux:remote && node desktop/package-cachyos.mjs",
     "android:sync": "npm run build && cap sync android",
     "android:open": "npm run android:sync && cap open android",
     "android:apk:debug": "npm run android:sync && cd android && gradlew.bat assembleDebug",

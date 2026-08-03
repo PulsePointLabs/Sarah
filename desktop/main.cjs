@@ -2,8 +2,10 @@ const { app, BrowserWindow, dialog, ipcMain, shell, session } = require('electro
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
+const https = require('node:https');
 const net = require('node:net');
 const path = require('node:path');
+const { getRemoteBackendCandidates } = require('./remote-backend.cjs');
 
 const APP_NAME = 'Sarah';
 const STARTUP_TIMEOUT_MS = 45000;
@@ -25,9 +27,35 @@ let shutdownStarted = false;
 let bluetoothSelection = null;
 let desktopVoiceProcess = null;
 let desktopVoiceStopReason = '';
+let remoteClientMode = false;
+let remoteBackendCandidates = [];
 
 function desktopSettingsPath() {
   return path.join(app.getPath('userData'), 'desktop-settings.json');
+}
+
+function remoteBackendConfigPath() {
+  return path.join(app.getPath('userData'), 'remote-backend-url.txt');
+}
+
+function readRemoteBackendConfig() {
+  try {
+    return fs.readFileSync(remoteBackendConfigPath(), 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+function configureRemoteClientMode() {
+  remoteBackendCandidates = getRemoteBackendCandidates({
+    platform: process.platform,
+    env: process.env,
+    configText: readRemoteBackendConfig(),
+  });
+  remoteClientMode = remoteBackendCandidates.length > 0;
+  if (remoteClientMode) {
+    desktopLog(`Remote companion mode candidates: ${remoteBackendCandidates.join(', ')}`);
+  }
 }
 
 function readDesktopSettings() {
@@ -201,26 +229,37 @@ async function findPort(preferredPort, blockedPorts = new Set()) {
 
 function requestJson(url) {
   return new Promise((resolve, reject) => {
-    const req = http.get(url, (res) => {
+    const transport = String(url || '').startsWith('https:') ? https : http;
+    let settled = false;
+    let deadline = null;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      callback(value);
+    };
+    const req = transport.get(url, (res) => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => { body += chunk; });
       res.on('end', () => {
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          reject(new Error(`${url} returned ${res.statusCode}: ${body.slice(0, 200)}`));
+          finish(reject, new Error(`${url} returned ${res.statusCode}: ${body.slice(0, 200)}`));
           return;
         }
         try {
-          resolve(body ? JSON.parse(body) : {});
+          finish(resolve, body ? JSON.parse(body) : {});
         } catch {
-          resolve({ raw: body });
+          finish(resolve, { raw: body });
         }
       });
     });
-    req.on('error', reject);
-    req.setTimeout(2500, () => {
-      req.destroy(new Error(`Timed out waiting for ${url}`));
-    });
+    req.on('error', (error) => finish(reject, error));
+    deadline = setTimeout(() => {
+      const error = new Error(`Timed out waiting for ${url}`);
+      req.destroy(error);
+      finish(reject, error);
+    }, 2500);
   });
 }
 
@@ -401,6 +440,23 @@ async function waitForHealth(baseUrl) {
   throw new Error(lastError?.message || 'Sarah backend did not become ready in time.');
 }
 
+async function connectRemoteBackend(candidates = []) {
+  const failures = [];
+  for (const candidate of candidates) {
+    try {
+      const health = await requestJson(`${candidate}/api/health`);
+      if (!health?.ok) throw new Error('Health check did not return ok.');
+      backendUrl = candidate;
+      desktopLog(`Connected to shared Sarah backend at ${candidate}`);
+      return candidate;
+    } catch (error) {
+      failures.push(`${candidate}: ${error?.message || error}`);
+      desktopLog(`Shared Sarah backend unavailable at ${candidate}: ${error?.message || error}`);
+    }
+  }
+  throw new Error(`No shared Sarah backend is reachable. Tried: ${failures.join(' | ')}`);
+}
+
 function backendEnv(port, hrRelayPort) {
   const userData = app.getPath('userData');
   const projectRoot = findProjectDataRoot();
@@ -494,6 +550,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      additionalArguments: remoteClientMode ? ['--sarah-remote-client'] : [],
     },
   });
 
@@ -553,6 +610,7 @@ async function stopBackend() {
 
 app.whenReady().then(async () => {
   if (!singleInstanceLock) return;
+  configureRemoteClientMode();
   configureDesktopPermissions();
   const win = createWindow();
   win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`
@@ -560,18 +618,24 @@ app.whenReady().then(async () => {
       <main style="display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center">
         <img src="file://${path.join(app.getAppPath(), 'dist', 'icons', 'sarah-192.png').replace(/\\/g, '/')}" alt="Sarah" style="width:86px;height:86px;border-radius:24px;box-shadow:0 18px 42px rgba(124,58,237,.22)" />
         <div style="font-size:30px;font-weight:800;letter-spacing:-.03em">Sarah</div>
-        <div style="color:#6d5b78;font-size:14px;font-weight:600">Starting local engine...</div>
+        <div style="color:#6d5b78;font-size:14px;font-weight:600">${remoteClientMode ? 'Connecting to shared Sarah...' : 'Starting local engine...'}</div>
       </main>
     </body>
   `)}`);
 
   try {
-    const url = await startBackend();
+    const url = remoteClientMode
+      ? await connectRemoteBackend(remoteBackendCandidates)
+      : await startBackend();
     await win.loadURL(url);
   } catch (error) {
     const message = error?.message || String(error);
-    dialog.showErrorBox('Sarah backend failed to start', message);
-    await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`<body style="margin:0;background:#10161f;color:#f8f4ff;font:16px system-ui;padding:32px"><h1>Sarah could not start the local backend</h1><p>${message.replace(/[<>&]/g, '')}</p><p>Check the backend logs in ${app.getPath('userData')}\\logs.</p></body>`)}`);
+    const title = remoteClientMode ? 'Sarah shared backend is unavailable' : 'Sarah backend failed to start';
+    dialog.showErrorBox(title, message);
+    const recovery = remoteClientMode
+      ? `Start Sarah on the Windows host and verify Tailscale, or put a backend URL in ${remoteBackendConfigPath()}.`
+      : `Check the backend logs in ${app.getPath('userData')}\\logs.`;
+    await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`<body style="margin:0;background:#10161f;color:#f8f4ff;font:16px system-ui;padding:32px"><h1>${title}</h1><p>${message.replace(/[<>&]/g, '')}</p><p>${recovery.replace(/[<>&]/g, '')}</p></body>`)}`);
   }
 });
 

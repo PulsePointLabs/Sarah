@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('sarahDesktop', {
   isDesktop: true,
+  isRemoteClient: process.argv.includes('--sarah-remote-client'),
+  platform: process.platform,
   getStorageSettings() {
     return ipcRenderer.invoke('storage:get-settings');
   },
