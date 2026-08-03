@@ -1489,8 +1489,56 @@ function splitSentences(text = '') {
     .filter(Boolean) || [];
 }
 
+const BODY_EXPLORATION_VISUAL_CONCEPTS = [
+  ['pre_ejaculate', /\b(pre[-\s]?ejaculat(?:e|ory|ion)?|precum|pre-cum)\b/i],
+  ['condom_catheter_application', /\bcondom catheter\b[^.!?]{0,100}\b(appl(?:y|ied|ication)|plac(?:e|ed|ement)|prepar(?:e|ing)|advance(?:d|ment|ing)?|contact|roll(?:ed|ing)?|base of (?:the )?(?:penis|shaft))\b|\b(appl(?:y|ied|ication)|plac(?:e|ed|ement)|prepar(?:e|ing)|advance(?:d|ment|ing)?|contact|roll(?:ed|ing)?)\b[^.!?]{0,100}\bcondom catheter\b/i],
+  ['urinary_collection', /\b(void(?:ed|ing)?|urine|urinary (?:output|collection)|collection bag|drainage bag|bladder (?:response|hyperreactivity)|\d+\s*(?:cc|ml)\s+(?:urinary|urine))\b/i],
+  ['blood_glucose', /\b(blood (?:glucose|sugar)|fingerstick|glucometer|mg\/?dL)\b/i],
+  ['pulse_oximetry', /\b(pulse ox(?:imeter|imetry)?|SpO2|oxygen saturation)\b/i],
+  ['blood_pressure', /\b(blood pressure|\bBP\b|systolic|diastolic|\d{2,3}\s*(?:over|\/)\s*\d{2,3})\b/i],
+  ['anal_baseline', /\b(close[-\s]?up|baseline|view|inspect(?:ion)?)\b[^.!?]{0,70}\b(anus|anal opening)\b|\b(anus|anal opening)\b[^.!?]{0,70}\b(close[-\s]?up|baseline|view|inspect(?:ion)?)\b/i],
+  ['enema_lubrication', /\b(lubricat(?:e|ed|ing|ion)|lube)\b[^.!?]{0,80}\b(enema|nozzle|tip|tube|tubing)\b|\b(enema|nozzle|tip|tube|tubing)\b[^.!?]{0,80}\b(lubricat(?:e|ed|ing|ion)|lube)\b/i],
+  ['enema_insertion', /\b(enema|nozzle|tip|tube|tubing)\b[^.!?]{0,100}\b(insert(?:s|ed|ion|ing)?|enter(?:s|ed|ing)?|contact(?:s|ed|ing)?|part(?:s|ed|ing)? the anal|past the anus)\b|\b(insert(?:s|ed|ion|ing)?|enter(?:s|ed|ing)?|contact(?:s|ed|ing)?)\b[^.!?]{0,100}\b(enema|nozzle|tip|tube|tubing)\b/i],
+  ['enema_flow', /\b(fill(?:ed|ing)?|flow|instill(?:ed|ation|ing)?|clamp(?:ed|ing)?|water enter(?:ed|ing)?|bag squeez(?:e|ed|ing))\b/i],
+  ['tube_advancement', /\b(tube|tubing|nozzle|tip)\b[^.!?]{0,80}\b(advance(?:d|ment|ing)?|deeper|sigmoid|retract(?:ed|ion|ing)?)\b|\b(advance(?:d|ment|ing)?|retract(?:ed|ion|ing)?)\b[^.!?]{0,80}\b(tube|tubing|nozzle|tip)\b/i],
+  ['abdominal_palpation', /\b(abdom(?:en|inal)|left lower quadrant|LLQ)\b[^.!?]{0,80}\b(palpat(?:e|ed|ion|ing)?|massag(?:e|ed|ing)?)\b|\b(palpat(?:e|ed|ion|ing)?|massag(?:e|ed|ing)?)\b[^.!?]{0,80}\b(abdom(?:en|inal)|left lower quadrant|LLQ)\b/i],
+  ['tampon_retention', /\b(tampon|applicator)\b/i],
+  ['digital_rectal_exam', /\b(digital rectal|rectal exam|prostate palpat(?:e|ed|ion|ing)?|prostate (?:was )?not palpable|(?:finger|digit)[^.!?]{0,100}(?:assess(?:ing)? (?:rectal )?tone|palpat(?:e|ed|ing)? (?:the )?prostate))\b/i],
+  ['accessory_retrieval', /\b(blue (?:tip|piece)|accessory (?:piece|tip)|retained (?:piece|tip)|digital retrieval|retriev(?:e|ed|al|ing))\b/i],
+  ['defecation', /\b(defecat(?:e|ed|ion|ing)?|bowel movement|on the toilet|walk(?:ed|ing)? to the toilet|stool|fecal matter)\b/i],
+  ['leg_trembling', /\b(leg|lower body)\b[^.!?]{0,65}\b(trembl(?:e|ed|ing)?|shak(?:e|ing)|spasm(?:ed|ing)?|jerk(?:ed|ing)?)\b|\b(trembl(?:e|ed|ing)?|shak(?:e|ing)|spasm(?:ed|ing)?)\b[^.!?]{0,65}\b(leg|lower body)\b/i],
+  ['cramping_contractions', /\b(cramp(?:ed|ing)?|rectal contraction|involuntary contraction|urgency wave)\b/i],
+  ['pelvic_sensation', /\b(near[-\s]?orgasmic|neo[-\s]?orgasmic|pelvic sensation|gasp(?:ed|ing)?|moan(?:ed|ing)?)\b/i],
+];
+
+export function bodyExplorationVisualConcepts(text = '') {
+  return BODY_EXPLORATION_VISUAL_CONCEPTS
+    .filter(([, pattern]) => pattern.test(String(text || '')))
+    .map(([name]) => name);
+}
+
+export function isBodyExplorationReview(payload = {}, session = {}) {
+  const type = String(payload?.recordType || payload?.record_type || session?.record_type || session?.capture_kind || '').toLowerCase();
+  return type === 'body_exploration'
+    || type === 'body exploration'
+    || Boolean(session?.standalone_body_exploration)
+    || Boolean(String(session?.exploration_type || '').trim());
+}
+
+function splitDistinctBodyExplorationVisualClauses(sentence = '') {
+  const parts = String(sentence || '').split(/,\s+(?:and|then)\s+|;\s+(?:and\s+|then\s+)?/i).map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return [sentence];
+  const concepts = parts.map(bodyExplorationVisualConcepts);
+  if (concepts.some((items) => !items.length)) return [sentence];
+  const distinct = new Set(concepts.flat());
+  if (distinct.size < 2) return [sentence];
+  return parts.map((part) => /[.!?]$/.test(part) ? part : `${part}.`);
+}
+
 function isMomentSentence(text = '') {
-  return extractCitedTimesFromText(text).length > 0 || /\b(climax|ejaculat|orgasm|recovery|pre[-\s]?climax|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|\d{1,2}:\d{2})\b/i.test(text);
+  return extractCitedTimesFromText(text).length > 0
+    || bodyExplorationVisualConcepts(text).length > 0
+    || /\b(climax|ejaculat|orgasm|recovery|pre[-\s]?climax|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|\d{1,2}:\d{2})\b/i.test(text);
 }
 
 function buildReviewNarrationSegmentsForText(text = '', paragraphIndex = 0, metadata = {}) {
@@ -1506,7 +1554,9 @@ function buildReviewNarrationSegmentsForText(text = '', paragraphIndex = 0, meta
     push(buffer.join(' '));
     buffer = [];
   };
-  for (const sentence of sentences) {
+  for (const originalSentence of sentences) {
+    const sentenceParts = splitDistinctBodyExplorationVisualClauses(originalSentence);
+    for (const sentence of sentenceParts) {
     const moment = isMomentSentence(sentence);
     const bufferedLength = buffer.join(' ').length;
     if (moment) flush();
@@ -1516,6 +1566,7 @@ function buildReviewNarrationSegmentsForText(text = '', paragraphIndex = 0, meta
     }
     if (!moment) flush();
     push(sentence);
+    }
   }
   flush();
   return output;
@@ -1723,6 +1774,48 @@ function segmentEventCompatibilityScore(event = {}, segment = {}) {
   return score;
 }
 
+function bodyExplorationActionCompatibilityScore(event = {}, segment = {}) {
+  const source = eventText(event);
+  const target = String(segment?.text || '').toLowerCase();
+  let score = 0;
+  const sourceNegatesVisual = /\b(no|not|without|absent)\b[^.!?]{0,45}\b(visible|contact|insert|enter|advance|flow|retriev|remov)/i.test(source);
+  if (sourceNegatesVisual) score -= 1200;
+
+  const targetInsertion = /\b(insert(?:s|ed|ion|ing)?|enter(?:s|ed|ing)?|advance(?:s|d|ment|ing)?|contact(?:s|ed|ing)?)\b/i.test(target);
+  const sourceInsertion = /\b(insert(?:s|ed|ion|ing)?|enter(?:s|ed|ing)?|advance(?:s|d|ment|ing)?|contact(?:s|ed|ing)?)\b/i.test(source);
+  const targetPenetration = /\b(insert(?:s|ed|ion|ing)?|enter(?:s|ed|ing)?|advance(?:s|d|ment|ing)?)\b/i.test(target);
+  const sourcePenetration = /\b(insert(?:s|ed|ion|ing)?|enter(?:s|ed|ing)?|advance(?:s|d|ment|ing)?)\b/i.test(source);
+  const sourceContactOnly = /\bcontact(?:s|ed|ing)?\b/i.test(source) && !sourcePenetration;
+  const sourceRemoval = /\b(withdraw(?:n|al|ing)?|remov(?:e|ed|al|ing)|retract(?:ed|ion|ing)?)\b/i.test(source);
+  const sourceOnlyPreparesAction = /\b(prepar(?:e|ed|ing)|about to|time to begin|arrives?|planning)\b[^.!?]{0,80}\b(insert|enter|advance|contact|open|flow|retrieve|remove)/i.test(source)
+    || /\b(insert|enter|advance|contact|open|flow|retrieve|remove)\w*\b[^.!?]{0,80}\b(arrives?|next|soon)\b/i.test(source);
+  if (targetInsertion) score += sourceInsertion ? 260 : -120;
+  if (targetInsertion && sourceRemoval && !sourceInsertion) score -= 420;
+  if (targetInsertion && sourceOnlyPreparesAction) score -= 520;
+  if (targetPenetration) score += sourcePenetration ? 220 : -100;
+  if (targetPenetration && sourceContactOnly) score -= 180;
+
+  const targetRemoval = /\b(withdraw(?:n|al|ing)?|remov(?:e|ed|al|ing)|retract(?:ed|ion|ing)?)\b/i.test(target);
+  if (targetRemoval) score += sourceRemoval ? 260 : -120;
+  if (targetRemoval && sourceInsertion && !sourceRemoval) score -= 300;
+
+  const targetFlowStart = /\b(clamp (?:opens?|opened)|flow (?:begins?|began|started)|water (?:begins? )?(?:enter(?:s|ed|ing)?|flow(?:s|ed|ing)?))\b/i.test(target);
+  const sourceFlowStarted = /\b(clamp (?:opens?|opened)|flow (?:begins?|began|started)|water (?:begins? )?(?:enter(?:s|ed|ing)?|flow(?:s|ed|ing)?))\b/i.test(source);
+  const sourceOnlyAttempts = /\b(attempt(?:s|ed|ing)?|try(?:ing|ied)?)\b[^.!?]{0,80}\b(open|flow|insert|retrieve|locate|grasp|remove)/i.test(source);
+  if (targetFlowStart) score += sourceFlowStarted ? 300 : -100;
+  if (targetFlowStart && sourceOnlyAttempts && !sourceFlowStarted) score -= 260;
+
+  const targetCompletedRetrieval = /\b(successfully |was |piece |tip )?(retriev(?:e|ed|al)|remov(?:e|ed|al)|grasp(?:ed|ing)?)\b/i.test(target);
+  const sourceCompletedRetrieval = /\b(successfully |was |piece |tip )?(retriev(?:e|ed|al)|remov(?:e|ed|al)|grasp(?:ed|ing)?)\b/i.test(source);
+  if (targetCompletedRetrieval) score += sourceCompletedRetrieval ? 320 : -140;
+  if (targetCompletedRetrieval && sourceOnlyAttempts) score -= 600;
+  if (/\bsuccessfully\b/i.test(target)) {
+    score += /\bsuccessfully\b/i.test(source) ? 420 : -180;
+    if (/\b(removal|retrieval) begins?\b/i.test(source)) score -= 180;
+  }
+  return score;
+}
+
 function collectSegmentEvents({ segment, plan, clipByParagraph, session = {} }) {
   const paragraphIndex = Number(segment.paragraphIndex);
   const maxSessionSeconds = Number(segment?.maxSessionSeconds);
@@ -1788,14 +1881,27 @@ function chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds, sess
       return explicitCandidate.event;
     }
   }
+  const strictBodyExplorationVisuals = Boolean(segment?.strictBodyExplorationVisuals)
+    || isBodyExplorationReview({}, session);
+  const targetConcepts = bodyExplorationVisualConcepts(segment?.text);
+  if (strictBodyExplorationVisuals && !targetConcepts.length) return null;
   let best = null;
   for (const event of candidates) {
+    const eventConcepts = bodyExplorationVisualConcepts(eventText(event));
+    const conceptMatches = targetConcepts.filter((concept) => eventConcepts.includes(concept));
+    if (strictBodyExplorationVisuals && !conceptMatches.length) continue;
+    const bodyActionScore = strictBodyExplorationVisuals
+      ? bodyExplorationActionCompatibilityScore(event, segment)
+      : 0;
+    if (strictBodyExplorationVisuals && bodyActionScore <= -1000) continue;
     const id = String(event.id || `${event.label}:${event.session_time_s}`);
     const reusePenalty = usedEventIds.has(id) ? 140 : 0;
     const directTimeScore = explicitTimes.some((time) => Math.abs(Number(time.seconds) - Number(event.session_time_s)) <= 14)
       ? 220
       : 0;
     const score = directTimeScore
+      + (conceptMatches.length * 500)
+      + bodyActionScore
       + segmentKeywordScore(event, segment.text)
       + segmentEventCompatibilityScore(event, segment)
       - reusePenalty;
@@ -1808,6 +1914,11 @@ function chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds, sess
 
 export function selectReviewVideoEventForSegment({ segment, plan, clipByParagraph = new Map(), usedEventIds = new Set(), session = {} } = {}) {
   return chooseSegmentEvent({ segment, plan: plan || {}, clipByParagraph, usedEventIds, session });
+}
+
+export function shouldUseBodyExplorationMissingVisualCard({ payload = {}, session = {}, segment = {} } = {}) {
+  return isBodyExplorationReview(payload, session)
+    && timestampRequirementForSegment(segment).times.length === 0;
 }
 
 function clampClipStart(startSeconds, durationSeconds, sourceDuration) {
@@ -2305,6 +2416,7 @@ async function renderSegmentedSourceReviewVideo({
   let phaseAnchorEvent = null;
   let phaseAnchorParagraph = null;
   let paragraphTimelineCursor = null;
+  const strictBodyExplorationVisuals = isBodyExplorationReview(payload, session);
   const previewFrames = [];
   const publishPreview = async (preview) => {
     previewFrames.push(preview);
@@ -2324,6 +2436,7 @@ async function renderSegmentedSourceReviewVideo({
   for (const [index, segment] of narrationSegments.entries()) {
     if (signal?.aborted) throw new Error('Cancelled');
     segment.maxSessionSeconds = sessionTimeForSource(sourceDuration, primaryVideo);
+    segment.strictBodyExplorationVisuals = strictBodyExplorationVisuals;
     onProgress?.({
       phase: 'segmented_narration',
       current: 1,
@@ -2362,7 +2475,7 @@ async function renderSegmentedSourceReviewVideo({
     const nextNarrated = timestampRequirement.required
       ? null
       : nextNarratedTimestampInParagraph(narrationSegments, index);
-    const paragraphTimelineEvent = timestampRequirement.required
+    const paragraphTimelineEvent = timestampRequirement.required || strictBodyExplorationVisuals
       ? null
       : buildParagraphTimelineEvent({
         segment,
@@ -2375,13 +2488,13 @@ async function renderSegmentedSourceReviewVideo({
           nextSegmentIndex: nextNarrated?.segmentIndex,
         }),
       });
-    const canonicalPhaseAnchor = !paragraphTimelineEvent && !timestampRequirement.required
+    const canonicalPhaseAnchor = !strictBodyExplorationVisuals && !paragraphTimelineEvent && !timestampRequirement.required
       ? canonicalPhaseAnchorForNarration({
         session,
         narrationText: paragraphs[Number(segment.paragraphIndex)] || segment.text,
       })
       : null;
-    const matchedEvent = timestampRequirement.required || (!paragraphTimelineEvent && !canonicalPhaseAnchor)
+    const matchedEvent = timestampRequirement.required || strictBodyExplorationVisuals || (!paragraphTimelineEvent && !canonicalPhaseAnchor)
       ? chooseSegmentEvent({ segment, plan, clipByParagraph, usedEventIds, session })
       : null;
     const exactNarratedEvent = timestampRequirement.required && timestampRequirement.primary
@@ -2397,12 +2510,14 @@ async function renderSegmentedSourceReviewVideo({
       }
       : null;
     const directEvent = exactNarratedEvent || paragraphTimelineEvent || canonicalPhaseAnchor || matchedEvent;
-    const phaseResolution = resolveReviewSegmentPhaseCarryover({
-      segment,
-      directEvent,
-      phaseAnchorEvent,
-      paragraphText: paragraphs[Number(segment.paragraphIndex)] || segment.text,
-    });
+    const phaseResolution = strictBodyExplorationVisuals
+      ? { event: directEvent, nextPhaseAnchor: null, carried: false }
+      : resolveReviewSegmentPhaseCarryover({
+        segment,
+        directEvent,
+        phaseAnchorEvent,
+        paragraphText: paragraphs[Number(segment.paragraphIndex)] || segment.text,
+      });
     phaseAnchorEvent = phaseResolution.nextPhaseAnchor;
     const event = phaseResolution.event;
     const eventCarriedFromPhase = phaseResolution.carried;
@@ -2665,6 +2780,69 @@ async function renderSegmentedSourceReviewVideo({
     }
 
     if (!event) {
+      if (shouldUseBodyExplorationMissingVisualCard({ payload, session, segment })) {
+        onProgress?.({
+          phase: 'segments',
+          current: 3,
+          total: 5,
+          message: `No verified Body Exploration visual for spoken segment ${index + 1}; using an evidence card...`,
+        });
+        const card = await createTitleCard({
+          workDir,
+          index: index + 1,
+          title: 'Body Exploration analysis',
+          subtitle: 'No timestamped event matched this narration segment. Random footage was intentionally not substituted.',
+          durationSeconds: audio.durationSeconds,
+        });
+        const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
+        await muxAudioVideo(card.path, audio.audioPath, avPath);
+        avSegments.push(avPath);
+        videoSegments.push(card.path);
+        paragraphTimelineCursor = null;
+        generatedClips.push({
+          id: `body-exploration-unverified-${index + 1}`,
+          paragraphIndex: segment.paragraphIndex,
+          session_time_s: null,
+          visual_session_start_s: null,
+          source_start_s: null,
+          source_end_s: null,
+          spoken_segment_index: index + 1,
+          spoken_text: segment.text.slice(0, 240),
+          label: 'No verified matching footage',
+          reason: 'Body Exploration strict visual lock rejected unrelated source footage because no timestamped event matched the narration.',
+          source_video_path: null,
+          source_camera_role: null,
+          audio_duration_seconds: roundedSeconds(audio.durationSeconds),
+          playback_rate: 1,
+          slow_motion: false,
+          direct_spoken_time: false,
+          source_time_strategy: 'verified_visual_unavailable_card',
+          matched_event: false,
+          procedural_broll: false,
+          timeline_trace: {
+            narration_section: Number(segment.paragraphIndex) + 1,
+            spoken_segment_index: index + 1,
+            narrated_timestamp_s: null,
+            narrated_timestamp: null,
+            narrated_text: null,
+            selected_visual_timestamp_s: null,
+            selected_visual_timestamp: null,
+            delta_seconds: null,
+            selection_reason: 'No timestamped Body Exploration event matched this narration; unrelated footage was not used.',
+            fallback_used: true,
+            fallback_type: 'verified_visual_unavailable_card',
+            visual_source: 'title_card',
+            timestamp_required: false,
+            within_tolerance: null,
+            tolerance_seconds: REVIEW_VIDEO_TIME_TOLERANCE_SECONDS,
+            source_start_s: null,
+            source_end_s: null,
+            audio_duration_seconds: roundedSeconds(audio.durationSeconds),
+            violation: 'BODY_EXPLORATION_VISUAL_EVIDENCE_UNAVAILABLE',
+          },
+        });
+        continue;
+      }
       onProgress?.({
         phase: 'segments',
         current: 3,
@@ -2731,7 +2909,7 @@ async function renderSegmentedSourceReviewVideo({
       usedSourceWindows,
       activeCandidateStarts,
       alternateVideo: feetVideo,
-      lockTimestamp: timestampRequirement.required || Boolean(window.directSpokenTime) || Boolean(event?.lock_timeline),
+      lockTimestamp: strictBodyExplorationVisuals || timestampRequirement.required || Boolean(window.directSpokenTime) || Boolean(event?.lock_timeline),
       maxMotionDriftSeconds: eventCarriedFromPhase ? 8 : 12,
       telemetryData,
     });

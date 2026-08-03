@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildReviewVideoPlan } from './sessionReviewVideoPlanner.js';
 import {
+  bodyExplorationVisualConcepts,
   buildActiveStimulationFallbackEvent,
   buildParagraphTimelineEvent,
   buildReviewNarrationSegments,
@@ -15,6 +16,7 @@ import {
   resolveTimestampViolationVisualFallback,
   selectDistinctReviewSourceStart,
   selectReviewVideoEventForSegment,
+  shouldUseBodyExplorationMissingVisualCard,
   telemetryAtSessionTime,
 } from './sessionReviewVideoRenderer.js';
 
@@ -227,6 +229,144 @@ test('untimed narration continues from the current paragraph timeline', () => {
   assert.equal(event.source, 'paragraph_timeline_continuity');
   assert.equal(event.lock_timeline, true);
   assert.match(event.reason, /instead of jumping/i);
+});
+
+test('Body Exploration narration splits distinct actions inside one compound sentence', () => {
+  const [catheter, voiding] = buildReviewNarrationSegments([
+    'A condom catheter was applied prophylactically for urinary collection, and you voided approximately 400 cc into the collection bag during defecation.',
+  ]);
+
+  assert.match(catheter.text, /condom catheter was applied/i);
+  assert.doesNotMatch(catheter.text, /you voided/i);
+  assert.match(voiding.text, /you voided/i);
+  assert.deepEqual(bodyExplorationVisualConcepts(catheter.text).includes('condom_catheter_application'), true);
+  assert.deepEqual(bodyExplorationVisualConcepts(voiding.text).includes('urinary_collection'), true);
+});
+
+test('Body Exploration strict lock selects condom catheter application rather than later urinary collection', () => {
+  const session = {
+    record_type: 'body_exploration',
+    exploration_type: 'Large-volume enema',
+    event_timeline: [
+      {
+        id: 'pre-ejaculate',
+        time_s: 45,
+        note: 'Large amount of leaking pre-ejaculate at the meatus.',
+      },
+      {
+        id: 'condom-application',
+        time_s: 127.4,
+        note: 'Preparing to place a condom catheter over the penis before the enema.',
+      },
+      {
+        id: 'urinary-output',
+        time_s: 2286,
+        note: 'Voided 400 cc of urine into the collection bag during defecation.',
+      },
+    ],
+  };
+  const segment = {
+    paragraphIndex: 0,
+    maxSessionSeconds: 3000,
+    text: 'A condom catheter was applied prophylactically before the procedure.',
+  };
+  const selected = selectReviewVideoEventForSegment({
+    segment,
+    plan: buildReviewVideoPlan({ paragraphs: [segment.text], session }),
+    session,
+  });
+
+  assert.ok(selected);
+  assert.match(selected.id, /condom-application$/);
+  assert.equal(selected.session_time_s, 127.4);
+});
+
+test('Body Exploration strict lock keeps pre-ejaculate and catheter visuals on their own logged moments', () => {
+  const session = {
+    record_type: 'body_exploration',
+    exploration_type: 'Large-volume enema',
+    event_timeline: [
+      { id: 'pre', time_s: 45, note: 'Copious pre-ejaculate is visible at the meatus.' },
+      { id: 'catheter', time_s: 140, note: 'Initial contact while applying the condom catheter to the glans.' },
+    ],
+  };
+  const plan = buildReviewVideoPlan({ paragraphs: ['Body Exploration review'], session });
+  const pre = selectReviewVideoEventForSegment({
+    segment: { paragraphIndex: 0, maxSessionSeconds: 300, text: 'Copious pre-ejaculate was visible at the beginning.' },
+    plan,
+    session,
+  });
+  const catheter = selectReviewVideoEventForSegment({
+    segment: { paragraphIndex: 0, maxSessionSeconds: 300, text: 'The condom catheter was applied to the glans.' },
+    plan,
+    session,
+  });
+
+  assert.equal(pre.id, 'pre');
+  assert.equal(pre.session_time_s, 45);
+  assert.equal(catheter.id, 'catheter');
+  assert.equal(catheter.session_time_s, 140);
+});
+
+test('Body Exploration strict lock refuses random video for abstract narration', () => {
+  const session = {
+    record_type: 'body_exploration',
+    exploration_type: 'Enema',
+    event_timeline: [
+      { id: 'catheter', time_s: 140, note: 'Applying the condom catheter to the glans.' },
+    ],
+  };
+  const segment = {
+    paragraphIndex: 6,
+    maxSessionSeconds: 3000,
+    text: 'The post-session state was consistent with a successful and well-tolerated procedure.',
+  };
+  const selected = selectReviewVideoEventForSegment({ segment, plan: {}, session });
+
+  assert.equal(selected, null);
+  assert.equal(shouldUseBodyExplorationMissingVisualCard({ session, segment }), true);
+});
+
+test('Body Exploration enema insertion cannot be replaced with fill or defecation footage', () => {
+  const session = {
+    record_type: 'body_exploration',
+    exploration_type: 'Fleet enema',
+    event_timeline: [
+      { id: 'insert', time_s: 52, note: 'The lubricated enema nozzle contacts the anus and is inserted through the anal opening.' },
+      { id: 'fill', time_s: 70, note: 'The clamp opens and water flow begins the enema fill.' },
+      { id: 'toilet', time_s: 440, note: 'Walking to the toilet for defecation.' },
+    ],
+  };
+  const segment = {
+    paragraphIndex: 1,
+    maxSessionSeconds: 600,
+    text: 'The enema nozzle was inserted through the anal opening with mild pressure.',
+  };
+  const selected = selectReviewVideoEventForSegment({ segment, plan: {}, session });
+
+  assert.equal(selected.id, 'insert');
+  assert.equal(selected.session_time_s, 52);
+});
+
+test('Body Exploration completed accessory retrieval selects success rather than an attempt', () => {
+  const session = {
+    record_type: 'body_exploration',
+    exploration_type: 'Enema',
+    event_timeline: [
+      { id: 'attempt', time_s: 120, note: 'Attempting to grasp the blue piece between the fingers to remove it.' },
+      { id: 'begin', time_s: 130, note: 'The blue piece is grasped and removal begins.' },
+      { id: 'success', time_s: 132, note: 'Blue piece successfully removed from the rectum.' },
+    ],
+  };
+  const segment = {
+    paragraphIndex: 2,
+    maxSessionSeconds: 180,
+    text: 'The blue accessory tip was successfully retrieved and removed.',
+  };
+  const selected = selectReviewVideoEventForSegment({ segment, plan: {}, session });
+
+  assert.equal(selected.id, 'success');
+  assert.equal(selected.session_time_s, 132);
 });
 
 test('untimed paragraph introduction leads into its next spoken timestamp', () => {
