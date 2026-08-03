@@ -251,15 +251,36 @@ function motionSummary(samples) {
       confidence: 0,
     };
   }
-  const dynamic = samples.map((sample) => Math.abs(vectorMagnitude(sample) - 1000));
+  // Subtract a slowly adapting gravity vector per axis. Magnitude-only motion
+  // misses torso rotation whenever the vector stays close to one g.
+  const first = samples[0] || {};
+  const gravity = {
+    x: finite(first.xMilliG, 0),
+    y: finite(first.yMilliG, 0),
+    z: finite(first.zMilliG, 1000),
+  };
+  const gravityAlpha = 0.025;
+  const dynamic = samples.map((sample) => {
+    const x = finite(sample.xMilliG, 0);
+    const y = finite(sample.yMilliG, 0);
+    const z = finite(sample.zMilliG, 0);
+    gravity.x += (x - gravity.x) * gravityAlpha;
+    gravity.y += (y - gravity.y) * gravityAlpha;
+    gravity.z += (z - gravity.z) * gravityAlpha;
+    return Math.sqrt(
+      ((x - gravity.x) ** 2)
+      + ((y - gravity.y) ** 2)
+      + ((z - gravity.z) ** 2),
+    );
+  });
   const dynamicRmsMilliG = Math.sqrt(mean(dynamic.map((value) => value ** 2)) || 0);
   const peakDynamicMilliG = percentile(dynamic, 0.98) || 0;
-  const lowMotionPercent = dynamic.filter((value) => value < 90).length / dynamic.length * 100;
-  const klass = dynamicRmsMilliG < 90
+  const lowMotionPercent = dynamic.filter((value) => value < 75).length / dynamic.length * 100;
+  const klass = dynamicRmsMilliG < 55
     ? "low_motion"
-    : dynamicRmsMilliG < 180
+    : dynamicRmsMilliG < 120
       ? "mild_motion"
-      : dynamicRmsMilliG < 360
+      : dynamicRmsMilliG < 260
         ? "moderate_motion"
         : "high_motion";
   return {
@@ -356,15 +377,35 @@ function accelerometerRespiration(samples, motion) {
   if (coverage.coveragePercent < 82 || coverage.largestGapMs > 1500) {
     return { accepted: false, reason: coverage.largestGapMs > 1500 ? "stream_gap" : "insufficient_coverage", coveragePercent: round(coverage.coveragePercent, 0) };
   }
-  if (!["low_motion", "mild_motion"].includes(motion.class) || motion.lowMotionPercent < 80) {
+  if (!["low_motion", "mild_motion"].includes(motion.class) || motion.lowMotionPercent < 75) {
     return { accepted: false, reason: "motion_limited", coveragePercent: round(coverage.coveragePercent, 0) };
   }
   const candidates = ["xMilliG", "yMilliG", "zMilliG"].map((axis) => {
     const series = resampleAxis(samples, axis);
     const filtered = bandpass(series.map((item) => item.value), 5);
     return { axis, series, filtered, estimate: autocorrelationRate(filtered, 5) };
-  }).filter((candidate) => candidate.estimate);
-  const best = candidates.sort((a, b) => b.estimate.periodicity - a.estimate.periodicity)[0];
+  });
+  const alignedLength = Math.min(...candidates.map((candidate) => candidate.filtered.length));
+  if (alignedLength > 0) {
+    const vectors = Array.from({ length: alignedLength }, (_unused, index) => (
+      candidates.map((candidate) => candidate.filtered[index])
+    ));
+    const covariance = Array.from({ length: 3 }, (_unused, row) => (
+      Array.from({ length: 3 }, (_alsoUnused, column) => (
+        mean(vectors.map((vector) => vector[row] * vector[column])) || 0
+      ))
+    ));
+    let principal = [1, 1, 1];
+    for (let iteration = 0; iteration < 8; iteration += 1) {
+      const next = covariance.map((row) => row.reduce((sum, value, index) => sum + (value * principal[index]), 0));
+      const norm = Math.sqrt(next.reduce((sum, value) => sum + (value ** 2), 0)) || 1;
+      principal = next.map((value) => value / norm);
+    }
+    const filtered = vectors.map((vector) => vector.reduce((sum, value, index) => sum + (value * principal[index]), 0));
+    candidates.push({ axis: "principal", series: [], filtered, estimate: autocorrelationRate(filtered, 5) });
+  }
+  const acceptedCandidates = candidates.filter((candidate) => candidate.estimate);
+  const best = acceptedCandidates.sort((a, b) => b.estimate.periodicity - a.estimate.periodicity)[0];
   if (!best || best.estimate.periodicity < 0.56) {
     return { accepted: false, reason: "low_periodicity", coveragePercent: round(coverage.coveragePercent, 0) };
   }
@@ -385,7 +426,7 @@ function accelerometerRespiration(samples, motion) {
     periodicity: round(best.estimate.periodicity, 2),
     confidence: best.estimate.periodicity >= 0.72 ? "high" : "moderate",
     source: "chest_accelerometer",
-    axis: best.axis[0],
+    axis: best.axis === "principal" ? "principal" : best.axis[0],
     coveragePercent: round(coverage.coveragePercent, 0),
     possibleBreathHold,
     holdDurationSeconds: possibleBreathHold ? 4 : null,
@@ -491,6 +532,28 @@ export function fuseRespiration(accelerometer, ecg, rr = { accepted: false }) {
   if (accelerometer.accepted && ecg.accepted) {
     const difference = Math.abs(accelerometer.bpm - ecg.bpm);
     if (difference > 3.5) {
+      const accelStrength = finite(accelerometer.periodicity, 0);
+      const ecgStrength = finite(ecg.periodicity, 0);
+      const preferred = accelStrength >= 0.72 && accelStrength >= ecgStrength + 0.15
+        ? accelerometer
+        : ecgStrength >= 0.72 && ecgStrength >= accelStrength + 0.15
+          ? ecg
+          : null;
+      if (preferred) {
+        return {
+          available: true,
+          bpm: preferred.bpm,
+          confidence: "limited",
+          source: `${preferred.source}_preferred_after_disagreement`,
+          agreementBpm: round(difference),
+          caveat: "Accelerometer and ECG respiration estimates disagreed; the more periodic source was retained at limited confidence.",
+          accelerometer,
+          ecg,
+          rr,
+          possibleBreathHold: preferred === accelerometer && Boolean(accelerometer.possibleBreathHold),
+          holdDurationSeconds: preferred === accelerometer ? accelerometer.holdDurationSeconds || null : null,
+        };
+      }
       return { available: false, reason: "source_disagreement", accelerometer, ecg };
     }
     const bpm = (accelerometer.bpm + ecg.bpm) / 2;
@@ -655,7 +718,7 @@ export function deriveH10MultimodalSnapshot({
 } = {}) {
   const accelWindow = accelerometerSamples.filter((sample) => sample.timestampMs >= nowMs - RESPIRATION_WINDOW_MS);
   const ecgWindow = ecgSamples.filter((sample) => sample.timestampMs >= nowMs - RESPIRATION_WINDOW_MS);
-  const recentAccel = accelWindow.filter((sample) => sample.timestampMs >= nowMs - 4000);
+  const recentAccel = accelWindow.filter((sample) => sample.timestampMs >= nowMs - 8000);
   const motion = motionSummary(recentAccel);
   const currentOrientation = orientationVector(recentAccel.filter((sample) => Math.abs(vectorMagnitude(sample) - 1000) < 120));
   const orientationChangeDegrees = orientationAngleDegrees(baselineOrientation, currentOrientation);
@@ -670,7 +733,8 @@ export function deriveH10MultimodalSnapshot({
     orientationChangeDegrees: round(orientationChangeDegrees, 0),
     currentOrientation,
   };
-  const accelRespiration = accelerometerRespiration(accelWindow, motion);
+  const respirationWindowMotion = motionSummary(accelWindow);
+  const accelRespiration = accelerometerRespiration(accelWindow, respirationWindowMotion);
   const ecgRespiration = ecgDerivedRespiration(ecgWindow);
   const rrRespiration = rrDerivedRespiration(rrIntervalsMs);
   const respiration = fuseRespiration(accelRespiration, ecgRespiration, rrRespiration);

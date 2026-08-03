@@ -101,6 +101,33 @@ test("ECG-derived respiration remains available when ambulatory motion blocks ac
   assert.equal(result.confidence, "moderate");
 });
 
+test("gravity-compensated motion detects rotation that preserves one-g magnitude", () => {
+  const nowMs = 20_000;
+  const accelerometerSamples = Array.from({ length: 200 }, (_unused, index) => {
+    const angle = Math.sin(index / 8) * (Math.PI / 3);
+    return {
+      timestampMs: 12_000 + index * 40,
+      xMilliG: Math.round(1000 * Math.sin(angle)),
+      yMilliG: 0,
+      zMilliG: Math.round(1000 * Math.cos(angle)),
+    };
+  });
+  const result = deriveH10MultimodalSnapshot({ accelerometerSamples, nowMs });
+  assert.ok(["moderate_motion", "high_motion"].includes(result.motion.class));
+  assert.ok(result.motion.dynamicRmsMilliG > 120);
+});
+
+test("respiration disagreement can retain a clearly stronger source at limited confidence", () => {
+  const result = fuseRespiration(
+    { accepted: true, bpm: 14, periodicity: 0.82, confidence: "high", source: "chest_accelerometer" },
+    { accepted: true, bpm: 22, periodicity: 0.58, confidence: "moderate", source: "ecg_derived" },
+  );
+  assert.equal(result.available, true);
+  assert.equal(result.bpm, 14);
+  assert.equal(result.confidence, "limited");
+  assert.match(result.source, /preferred_after_disagreement/);
+});
+
 test("RR modulation provides an explicitly indirect fallback when PMD streams are unavailable", () => {
   const rrIntervalsMs = Array.from({ length: 120 }, (_unused, index) => (
     800 + (45 * Math.sin(2 * Math.PI * index / 5))

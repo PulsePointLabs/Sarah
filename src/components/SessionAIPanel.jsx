@@ -14,7 +14,7 @@ import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { loadSyncedWatermarkSettings } from "@/lib/watermarkSettings";
 import { videoPosterDataUrl } from "@/lib/videoPoster";
 import { BUILD_INFO } from "@/generated/buildInfo";
-import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from "@/lib/sessionContext";
+import { SESSION_CONTEXT_GROUNDING_RULE, bloodPressureReadingsFromSession, pulseOxReadingsFromSession, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from "@/lib/sessionContext";
 import { buildSessionKeyVideoClipDigest, buildSessionPhaseMarkerDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, normalizeSessionKeyVideoClips, normalizeSessionVideoPassFindings, sessionEventsForCurrentPhaseMarkers } from "@/lib/visualEvidence";
 import { getMotionEvidenceDigest, getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { buildSessionAIContentMeta, buildSessionPhaseMarkerFreshnessKey, formatGeneratedAt, isSessionAIContentStale } from "@/utils/aiContentMetadata";
@@ -24,6 +24,7 @@ import { REVIEW_WINDOW_RESPONSE_STYLE } from "@/lib/reviewWindowResponseStyle";
 import { REVIEW_VIDEO_RENDER_VERSION } from "@/lib/reviewVideoRenderVersion";
 import { buildSarahPersonalityPrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
+import { buildSessionPhysiologyEvidence } from "@/lib/bodyExplorationPhysiology";
 import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
 import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "./TTSButton";
 
@@ -550,6 +551,7 @@ export function buildSessionAnalysisReaderData({ result, session, timelineRows =
   }
 
   const arousalItems = toAnalysisTextArray(result.arousal_arc?.length ? result.arousal_arc : result.phase_analysis);
+  const baselineItems = toAnalysisTextArray(result.baseline_trends);
   const eventItems = toAnalysisTextArray(result.event_analysis?.length ? result.event_analysis : result.hr_analysis);
   const emgItems = toAnalysisTextArray(result.emg_analysis);
   const notableItems = toAnalysisTextArray(result.notable_findings);
@@ -557,6 +559,7 @@ export function buildSessionAnalysisReaderData({ result, session, timelineRows =
 
   const paragraphs = [
     result.summary,
+    ...baselineItems,
     ...arousalItems,
     ...eventItems,
     ...emgItems,
@@ -569,6 +572,7 @@ export function buildSessionAnalysisReaderData({ result, session, timelineRows =
   let idx = 0;
   const sections = [];
   if (result.summary) sections.push({ label: null, color: "primary", items: [result.summary], start: idx++ });
+  if (baselineItems.length) { sections.push({ label: "Baseline Physiology & Trends", color: "chart-3", icon: <Activity className="w-3.5 h-3.5" />, items: baselineItems, start: idx }); idx += baselineItems.length; }
   if (arousalItems.length) { sections.push({ label: isTechnical ? "Arousal Arc" : "Chronological Deep Dive", color: "chart-2", icon: <TrendingUp className="w-3.5 h-3.5" />, items: arousalItems, start: idx }); idx += arousalItems.length; }
   if (eventItems.length) { sections.push({ label: isTechnical ? "Event Analysis" : "Motion & Evidence Interpretation", color: "chart-1", icon: <Activity className="w-3.5 h-3.5" />, items: eventItems, start: idx }); idx += eventItems.length; }
   if (emgItems.length) { sections.push({ label: "EMG Analysis", color: "chart-3", icon: <Activity className="w-3.5 h-3.5" />, items: emgItems, start: idx }); idx += emgItems.length; }
@@ -1735,6 +1739,7 @@ function normalizeAnalysisShape(value) {
   return {
     ...value,
     summary: typeof value.summary === "string" ? repairCharacterSplitParagraph(value.summary) : value.summary,
+    baseline_trends: toAnalysisTextArray(value.baseline_trends),
     arousal_arc: toAnalysisTextArray(value.arousal_arc),
     phase_analysis: toAnalysisTextArray(value.phase_analysis),
     event_analysis: toAnalysisTextArray(value.event_analysis),
@@ -1807,6 +1812,7 @@ function sanitizeSessionAnalysisResultForEvidence(result, session = {}) {
   return {
     ...result,
     summary: removeUnsupportedSessionTangents(result.summary, corpus, directCorpus, "summary"),
+    baseline_trends: cleanArray(result.baseline_trends, "baseline_trends"),
     arousal_arc: cleanArray(result.arousal_arc, "arousal_arc"),
     phase_analysis: cleanArray(result.phase_analysis, "phase_analysis"),
     event_analysis: cleanArray(result.event_analysis, "event_analysis"),
@@ -1850,6 +1856,7 @@ function normalizeSessionAnalysis(res, session = {}) {
   const parsed = raw?.response ?? raw;
   const hasContent =
     parsed?.summary ||
+    parsed?.baseline_trends?.length ||
     parsed?.arousal_arc?.length ||
     parsed?.phase_analysis?.length ||
     parsed?.event_analysis?.length ||
@@ -2300,7 +2307,7 @@ function mergeAnalysisPersistenceState(session, analysisField, nextResult) {
   };
 }
 
-export default function SessionAIPanel({ session, timelineRows, emgRows = [], userProfile, sessionJournal, mode = "companion", onAnalysisSaved }) {
+export default function SessionAIPanel({ session, timelineRows, emgRows = [], nearbyVitals = {}, userProfile, sessionJournal, mode = "companion", onAnalysisSaved }) {
   const isTechnical = mode === "technical";
   const analysisField = isTechnical ? "ai_session_deep_dive" : "ai_analysis";
   const analysisLabel = isTechnical ? "AI Session Technical Deep Dive" : "AI Session Analysis";
@@ -2626,6 +2633,22 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], us
       hr_max: Math.round(Math.max(...timelineRows.map(r => Number(r.hr)))),
     } : null;
     const hrvEvidence = buildSessionHrvEvidence(timelineRows, session);
+    const mergeReadings = (...groups) => {
+      const seen = new Set();
+      return groups.flat().filter(Boolean).filter((reading) => {
+        const key = reading.id || reading.reading_id || `${reading.measured_at || reading.timestamp || ""}-${JSON.stringify(reading)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    };
+    const completeNearbyVitals = {
+      bloodPressure: mergeReadings(nearbyVitals.bloodPressure || [], bloodPressureReadingsFromSession(session).map((reading) => ({ relationship: "during session", delta_minutes: 0, ...reading }))),
+      bloodGlucose: mergeReadings(nearbyVitals.bloodGlucose || []),
+      bodyComposition: mergeReadings(nearbyVitals.bodyComposition || [], session.body_composition ? [{ relationship: "during session", delta_minutes: 0, ...session.body_composition }] : []),
+      pulseOx: mergeReadings(nearbyVitals.pulseOx || [], pulseOxReadingsFromSession(session).map((reading) => ({ relationship: "during session", delta_minutes: 0, ...reading }))),
+    };
+    const highDefinitionPhysiology = buildSessionPhysiologyEvidence({ session, timelineRows, emgRows, nearbyVitals: completeNearbyVitals });
 
     // Sample HR trajectory for the prompt (~1 point every 15s)
     const hrTrajectory = (() => {
@@ -2710,6 +2733,7 @@ RR-DERIVED HRV INTEGRATION RULE:
 - Sarah should use HRV values to understand what the body appeared to be doing, then explain that clearly. The user should not have to decode RMSSD, SDNN, or pNN50 to understand the point.
 - In companion/default analysis, translate HRV into body-state language first: focused, loaded, engaged, settled, flexible, releasing tension, backing away from intensity, reloading, recovering, mixed signal, or artifact/noisy signal. Only name RMSSD, SDNN, or pNN50 if the exact metric is necessary to support the claim.
 - In Technical Deep Dive, you may name exact metrics, but still lead with the body-state interpretation before the value.
+- Treat the first recorded physiology window as an entry-state reference, not proof of a true resting baseline. Compare entry, middle, peak, end, and recovery windows when coverage supports them.
 - Lead with what appears to be happening physiologically, then include the number only as supporting evidence. Bad: "RMSSD was five point two milliseconds." Better: "Your body looked highly focused here; the low rolling RMSSD supports that sustained-build read."
 - Every HRV value you mention must answer "why is this interesting?" Tie it to a transition, mismatch, recovery response, breath/position possibility, stimulation change, or artifact caution. If the value does not change interpretation, leave it out.
 - Compare HRV by meaningful windows: baseline or entry state, build/exploration, stimulation or body-state transitions, pre-climax, climax-to-recovery, and recovery/end-state when those windows exist.
@@ -2739,6 +2763,7 @@ TARGET SESSION ANALYSIS STYLE:
 - Begin with a substantial overview that synthesizes the session's outcome, heart-rate arc, stimulation context, notable physiology, and why the session behaved the way it did.
 - When usable RR-derived HRV is present, integrate meaningful HRV changes into the overview and relevant windows instead of treating heart rate as the only autonomic signal.
 - In Technical Deep Dive, HRV may include exact RMSSD, SDNN, pNN50, quality, and timing values, but never as a bare metric list. For each HRV detail you cite, explain the likely body-state meaning, why it is notable in that window, and what competing explanations remain. A good technical sentence should read like: "Your body looked highly focused during this window; the low rolling RMSSD supports that sustained-build interpretation because it occurred while HR was rising and contact intensity was changing." Not: "RMSSD was low."
+- Include a dedicated Baseline Physiology & Trends section. Compare the recorded entry reference with the middle, peak-load, end, and recovery states using all quality-gated signals available, not heart rate alone.
 - Technical does not mean number-heavy. It means mechanism-heavy, evidence-calibrated, and explicit about uncertainty. Use numbers as evidence anchors, then translate them into focus, load, release, reloading, recovery quality, sensor artifact, or mixed-signal interpretation.
 - Then explain the session through meaningful physiological windows based on session intent: baseline/entry state, exploration or stimulation phase, sensory/body-state transitions, plateaus or settling, pre-climax when supported, climax or intentionally non-climax outcome, and recovery or end-state.
 - A window may be chronological when chronology explains the physiology. The point is not to avoid time; the point is to make each time window explain arousal state, autonomic loading, sensory input, technique effectiveness, or recovery.
@@ -2855,6 +2880,11 @@ Use this evidence to compare rolling HRV across meaningful session windows and e
 
 Plain-language requirement: Sarah should use these values to improve the physiological read, but the final analysis should sound like a clear explanation of focus, load, release, reloading, recovery, mixed signals, or artifact. Avoid metric-first wording and avoid repeating "beat-to-beat variability", "compressed", or "autonomic" when more natural language would carry the same meaning.` : ""}
 
+HIGH-DEFINITION PHYSIOLOGY, RECORDED ENTRY REFERENCE, AND TRENDS:
+${JSON.stringify(highDefinitionPhysiology, null, 2)}
+
+Use this evidence across the full recording. Call the first window the recorded entry reference unless a separate true resting baseline is explicitly documented. Compare entry to middle, peak, end, and recovery using heart rate, elevation above the tracked baseline, usable HRV, usable respiration, motion/position, multimodal state, recovery drops, response latency, and EMG. Respect provenance and quality gates: unavailable fields are missing evidence, not normal physiology. In companion analysis explain the trend naturally; in Technical Deep Dive cite exact values and signal-quality limitations when they materially support the interpretation.
+
 Session data:
 ${JSON.stringify({
   date: session.date ? (() => {
@@ -2913,6 +2943,7 @@ ${JSON.stringify({
     ...(session.max_hr != null && Number(session.max_hr) !== hrSummary.hr_max ? { stored_summary_max: session.max_hr } : {}),
   } : undefined,
   rr_derived_hrv: hrvEvidence || undefined,
+  high_definition_physiology: highDefinitionPhysiology,
   phase_markers_s: {
     pre_climax: session.pre_climax_offset_s,
     climax: session.climax_offset_s,
@@ -2933,6 +2964,9 @@ Provide ${isTechnical
           summary: isTechnical
             ? { type: "string", description: "One cohesive overview emphasizing what the body appeared to be doing, arousal pattern, baseline anatomy/device setup when relevant, genital/stimulation context when supported, e-stim waveform/mode interpretation when available, stimulation effectiveness, HR/HRV-supported interpretation when available, and why the session behaved the way it did. Metrics support the story; they are not the story." }
             : { type: "string", description: "Executive Summary: a rich but concise overview of the session arc and defining findings, including supported baseline anatomy/device setup, erection quality/genital status/stimulation mechanics, and e-stim waveform/mode details when they materially shaped the session. Use HRV behind the scenes to explain focus, load, release, reloading, recovery, or mixed signals in plain language; avoid HRV metric lists." },
+          baseline_trends: isTechnical
+            ? { type: "array", items: { type: "string" }, description: "Three to six detailed paragraphs comparing the recorded entry reference with middle-session, peak-load, end-state, and recovery physiology. Integrate HR, tracked-baseline elevation, usable HRV, usable respiration, motion/position, multimodal state, recovery drops, response latency, EMG, and data quality. Do not call the entry window a true resting baseline unless separately documented." }
+            : { type: "array", items: { type: "string" }, description: "Two to four readable paragraphs explaining how physiology changed from the recorded entry state through the middle, peak, end, and recovery. Integrate all usable signals in plain language and identify missing/noisy evidence without metric dumping." },
           arousal_arc: isTechnical
             ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining HR and usable HRV as evidence for body-state transitions, beginning with a supported baseline physical setup read when available. Include exploration or stimulation links, supported anatomy, genital state, erection/response quality, grip/contact/stroke mechanics, e-stim waveform/mode or electrode-path details when available, pre-climax/climax/recovery shifts when present, and why the session progressed as it did. Preserve technical depth without becoming metric narration." }
             : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: group related events into meaningful body-state transitions and explain what the body appears to be doing. Start with supported baseline physical setup when available, including genital state, Foley/catheter or e-stim setup, and whether stimulation had begun. Include supported erection quality, grip/contact/stroke mechanics, e-stim settings/electrode path, and stimulation effectiveness where they explain the arousal arc. Weave in usable HRV as plain physiology when it clarifies a transition, not as raw values." },
@@ -2947,7 +2981,7 @@ Provide ${isTechnical
             ? { type: "array", items: { type: "string" } }
             : { type: "array", items: { type: "string" }, description: "Focused recommendations or experiments grounded in supported findings rather than repeated narrative." },
         },
-        required: ["summary", "arousal_arc", "event_analysis", "notable_findings", "recommendations"],
+        required: ["summary", "baseline_trends", "arousal_arc", "event_analysis", "notable_findings", "recommendations"],
       },
       label: analysisLabel,
     };

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildBodyExplorationPhysiologyEvidence } from "./bodyExplorationPhysiology.js";
+import { buildBodyExplorationPhysiologyEvidence, buildSessionPhysiologyEvidence } from "./bodyExplorationPhysiology.js";
 
 test("builds quality-gated high-resolution physiology across the full exploration", () => {
   const exploration = {
@@ -44,4 +44,29 @@ test("builds quality-gated high-resolution physiology across the full exploratio
   assert.ok(evidence.high_resolution_trajectory.bins.length >= 20);
   assert.match(evidence.procedure_aligned_windows, /Nozzle fully inserted/);
   assert.ok(evidence.signals.hrv.rmssd_ms.min > 0);
+  assert.equal(evidence.baseline_and_trends.reference_definition, "The first recorded window is an entry-state reference, not proof of a true resting baseline.");
+  assert.equal(evidence.baseline_and_trends.trends.peak_hr_bpm, 84);
+});
+
+test("builds the same baseline and trend evidence for sessions without procedure text", () => {
+  const timelineRows = Array.from({ length: 61 }, (_, time) => ({
+    time_offset_s: time,
+    hr: 80 + Math.floor(time / 20),
+    baseline_hr: 78,
+    elevated_delta: 2 + Math.floor(time / 20),
+    hrv_rmssd_ms: 30 - Math.floor(time / 30),
+    hrv_quality: "high",
+    respiration_bpm: 12 + Math.floor(time / 30),
+    respiration_confidence: "medium",
+    respiration_source: "accelerometer",
+    motion_class: "low",
+    motion_dynamic_rms_mg: 25,
+    signal_confidence_level: "medium",
+    multimodal_state: "steady",
+  }));
+  const evidence = buildSessionPhysiologyEvidence({ session: { id: "session-1" }, timelineRows });
+  assert.equal(evidence.baseline_and_trends.entry.label, "recorded_entry_reference");
+  assert.equal(evidence.signals.respiration.confidence_levels.medium, 61);
+  assert.equal(evidence.signals.respiration.sources.accelerometer, 61);
+  assert.equal("procedure_aligned_windows" in evidence, false);
 });

@@ -48,6 +48,7 @@ import { EVENT_CATEGORIES, normalizeCategoryArray } from "../components/session-
 import { hasMixedPauseResumeEvidence, isVerifiedMotionEvent } from "@/utils/sessionMotionEvidence";
 import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
 import { videoPosterDataUrl } from "@/lib/videoPoster";
+import { selectNearbyVitalReadings } from "@/lib/nearbyVitals";
 
 function _getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -1039,6 +1040,7 @@ export default function SessionDetail() {
   const [pendingTimestampReview, setPendingTimestampReview] = useState(null);
   const [inspectionTime, setInspectionTime] = useState(0);
   const [nearbyBloodPressure, setNearbyBloodPressure] = useState([]);
+  const [nearbyVitalImports, setNearbyVitalImports] = useState({ bloodPressure: [], bloodGlucose: [], bodyComposition: [], pulseOx: [] });
   const [bpAttachBusy, setBpAttachBusy] = useState(false);
   const [bpAttachStatus, setBpAttachStatus] = useState("");
   const [trimDraftStart, setTrimDraftStart] = useState("");
@@ -1060,6 +1062,10 @@ export default function SessionDetail() {
   const displaySession = trimmedView.session;
   const timelineRows = trimmedView.timelineRows;
   const emgRows = trimmedView.emgRows;
+  const nearbyVitals = useMemo(
+    () => selectNearbyVitalReadings(displaySession || {}, nearbyVitalImports, {}, "session"),
+    [displaySession, nearbyVitalImports],
+  );
   const rawSessionEndSec = useMemo(() => getSessionMaxOffset(rawTimelineRows, rawEmgRows), [rawTimelineRows, rawEmgRows]);
   const trimOffsetToRaw = useCallback((value) => {
     const numericValue = readNumericTime(value);
@@ -1436,15 +1442,20 @@ export default function SessionDetail() {
     (async () => {
       try {
         setLoading(true);
-        const [all, me] = await Promise.all([
+        const [all, me, bloodPressure, bloodGlucose, bodyComposition, pulseOx] = await Promise.all([
           base44.entities.Session.filter({ id }),
           loadUserProfileWithProfilerResults(),
+          base44.entities.BloodPressureReading.list("-measured_at", 250).catch(() => []),
+          base44.entities.BloodGlucoseReading.list("-measured_at", 250).catch(() => []),
+          base44.entities.BodyCompositionReading.list("-measured_at", 250).catch(() => []),
+          base44.entities.PulseOxReading.list("-measured_at", 5000).catch(() => []),
         ]);
         const s = all[0];
         sessionRef.current = s;
         setSession(s);
         setBpAttachStatus("");
         setUserProfile(me);
+        setNearbyVitalImports({ bloodPressure, bloodGlucose, bodyComposition, pulseOx });
         const savedChatMessages = sanitizeSessionChatMessages(s?.ai_analysis?._chat_messages || []);
         setChatMessages(savedChatMessages);
         setSessionNotes(s?.notes || "");
@@ -1805,7 +1816,7 @@ export default function SessionDetail() {
           analysisData: companionAnalysisData,
           routeHash: "session-ai-companion",
         })}
-        <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} onAnalysisSaved={handleAnalysisSaved} />
+        <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} nearbyVitals={nearbyVitals} userProfile={userProfile} sessionJournal={sessionJournal} onAnalysisSaved={handleAnalysisSaved} />
       </section>
       <section id="session-ai-technical" className="scroll-mt-24 space-y-3">
         {renderReviewVideoBuilder({
@@ -1816,7 +1827,7 @@ export default function SessionDetail() {
           analysisData: technicalAnalysisData,
           routeHash: "session-ai-technical",
         })}
-        <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" onAnalysisSaved={handleAnalysisSaved} />
+        <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} nearbyVitals={nearbyVitals} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" onAnalysisSaved={handleAnalysisSaved} />
       </section>
       <section id="session-ai-support" className="scroll-mt-24 rounded-xl border border-primary/20 bg-card p-4 space-y-3">
         <div>

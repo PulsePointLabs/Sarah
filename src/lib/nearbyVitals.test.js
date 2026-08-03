@@ -30,3 +30,14 @@ test("excludes readings outside the explicit nearby window", () => {
   );
   assert.deepEqual(nearby.bloodGlucose, []);
 });
+
+test("labels nearby imports as session context when requested", () => {
+  const selected = selectNearbyVitalReadings(
+    { date: "2026-08-01", start_time: "05:00", duration_minutes: 30 },
+    { bloodGlucose: [{ measured_at: "2026-08-01T05:10:00", glucose_mg_dl: 90 }] },
+    {},
+    "session",
+  );
+  assert.equal(selected.bloodGlucose[0].relationship, "during session");
+  assert.match(buildNearbyVitalsEvidence(selected).blood_glucose[0].relationship, /during session/);
+});

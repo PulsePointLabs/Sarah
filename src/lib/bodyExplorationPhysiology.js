@@ -112,17 +112,97 @@ function trajectory(rows = []) {
   });
 }
 
-export function buildBodyExplorationPhysiologyEvidence({ exploration = {}, timelineRows = [], emgRows = [], nearbyVitals = {} } = {}) {
+function summarizePhysiologyWindow(rows, label, startS, endS) {
+  const bucket = rows.filter((row) => {
+    const time = rowTime(row);
+    return time != null && time >= startS && time <= endS;
+  });
+  const usableHrv = bucket.filter((row) => USABLE_HRV_QUALITY.has(String(row.hrv_quality || "").toLowerCase()));
+  const usableRespiration = bucket.filter((row) => !row.respiration_unavailable_reason && finite(row.respiration_bpm) > 0);
+  const usableMotion = bucket.filter((row) => row.motion_class && String(row.motion_class).toLowerCase() !== "unavailable");
+  return {
+    label,
+    start_s: round(startS, 1),
+    end_s: round(endS, 1),
+    rows: bucket.length,
+    heart_rate_bpm: stats(bucket.map((row) => finite(row.hr_smoothed ?? row.hr)).filter((value) => value >= 30 && value <= 240)),
+    baseline_hr_bpm: stats(values(bucket, "baseline_hr", (value) => value >= 30 && value <= 240)),
+    elevation_above_baseline_bpm: stats(values(bucket, "elevated_delta")),
+    rmssd_ms: stats(values(usableHrv, "hrv_rmssd_ms", (value) => value > 0)),
+    respiration_bpm: stats(values(usableRespiration, "respiration_bpm", (value) => value > 0)),
+    respiration_sources: countValues(usableRespiration, "respiration_source"),
+    motion_classes: countValues(usableMotion, "motion_class"),
+    motion_dynamic_rms_mg: stats(values(usableMotion, "motion_dynamic_rms_mg", (value) => value >= 0)),
+    multimodal_states: countValues(bucket, "multimodal_state"),
+  };
+}
+
+function baselineAndTrendEvidence(rows = [], record = {}) {
+  const durationS = Math.max(0, ...rows.map((row) => rowTime(row) || 0));
+  if (!rows.length || durationS <= 0) return null;
+  const referenceSpanS = Math.min(durationS, Math.max(20, Math.min(90, durationS * 0.15)));
+  const entry = summarizePhysiologyWindow(rows, "recorded_entry_reference", 0, referenceSpanS);
+  const middleStart = Math.max(0, (durationS / 2) - (referenceSpanS / 2));
+  const middle = summarizePhysiologyWindow(rows, "middle_session", middleStart, Math.min(durationS, middleStart + referenceSpanS));
+  const ending = summarizePhysiologyWindow(rows, "recorded_end_state", Math.max(0, durationS - referenceSpanS), durationS);
+  const peakRow = rows.reduce((best, row) => {
+    const hr = finite(row.hr_smoothed ?? row.hr);
+    const bestHr = finite(best?.hr_smoothed ?? best?.hr);
+    return hr != null && (bestHr == null || hr > bestHr) ? row : best;
+  }, null);
+  const entryMean = entry.heart_rate_bpm?.mean;
+  const middleMean = middle.heart_rate_bpm?.mean;
+  const endingMean = ending.heart_rate_bpm?.mean;
+  const phaseMarkers = {
+    pre_climax: finite(record.pre_climax_offset_s),
+    climax: finite(record.climax_offset_s),
+    recovery: finite(record.recovery_offset_s),
+  };
+  const phaseWindows = [
+    phaseMarkers.pre_climax != null
+      ? summarizePhysiologyWindow(rows, "pre_climax_approach", Math.max(0, phaseMarkers.pre_climax - 45), Math.min(durationS, phaseMarkers.pre_climax + 15))
+      : null,
+    phaseMarkers.climax != null
+      ? summarizePhysiologyWindow(rows, "climax_transition", Math.max(0, phaseMarkers.climax - 20), Math.min(durationS, phaseMarkers.climax + 25))
+      : null,
+    phaseMarkers.recovery != null
+      ? summarizePhysiologyWindow(rows, "recovery", phaseMarkers.recovery, Math.min(durationS, phaseMarkers.recovery + 90))
+      : null,
+  ].filter(Boolean);
+  return {
+    reference_definition: "The first recorded window is an entry-state reference, not proof of a true resting baseline.",
+    reference_window_s: round(referenceSpanS, 1),
+    entry,
+    middle,
+    end: ending,
+    phase_aligned_windows: phaseWindows,
+    trends: {
+      entry_to_middle_hr_change_bpm: entryMean != null && middleMean != null ? round(middleMean - entryMean, 1) : null,
+      entry_to_end_hr_change_bpm: entryMean != null && endingMean != null ? round(endingMean - entryMean, 1) : null,
+      peak_hr_bpm: finite(peakRow?.hr_smoothed ?? peakRow?.hr),
+      peak_time_s: rowTime(peakRow),
+      entry_to_peak_hr_change_bpm: entryMean != null && finite(peakRow?.hr_smoothed ?? peakRow?.hr) != null
+        ? round(finite(peakRow.hr_smoothed ?? peakRow.hr) - entryMean, 1)
+        : null,
+      entry_to_end_rmssd_change_ms: entry.rmssd_ms?.median != null && ending.rmssd_ms?.median != null
+        ? round(ending.rmssd_ms.median - entry.rmssd_ms.median, 1)
+        : null,
+      entry_to_end_respiration_change_bpm: entry.respiration_bpm?.median != null && ending.respiration_bpm?.median != null
+        ? round(ending.respiration_bpm.median - entry.respiration_bpm.median, 1)
+        : null,
+    },
+  };
+}
+
+function buildPhysiologyEvidence({ record = {}, timelineRows = [], emgRows = [], nearbyVitals = {}, includeProcedure = false } = {}) {
   const sortedRows = [...timelineRows].sort((a, b) => (rowTime(a) || 0) - (rowTime(b) || 0));
   const usableHrv = sortedRows.filter((row) => USABLE_HRV_QUALITY.has(String(row.hrv_quality || "").toLowerCase()));
   const usableRespiration = sortedRows.filter((row) => !row.respiration_unavailable_reason && finite(row.respiration_bpm) > 0);
   const usableMotion = sortedRows.filter((row) => row.motion_class && String(row.motion_class).toLowerCase() !== "unavailable");
   const usableStateRows = sortedRows.filter((row) => row.signal_confidence_level !== "unavailable" && row.multimodal_state);
-  const procedure = buildProcedurePhysiologyContext(
-    [exploration],
-    { [exploration.id]: sortedRows },
-    { recordLimit: 1, milestoneLimit: 8 },
-  );
+  const procedure = includeProcedure
+    ? buildProcedurePhysiologyContext([record], { [record.id]: sortedRows }, { recordLimit: 1, milestoneLimit: 8 })
+    : null;
   const durationS = Math.max(0, ...sortedRows.map((row) => rowTime(row) || 0));
   const respirationUnavailableReasons = countValues(sortedRows, "respiration_unavailable_reason");
 
@@ -137,6 +217,7 @@ export function buildBodyExplorationPhysiologyEvidence({ exploration = {}, timel
       hrv_quality_levels: countValues(sortedRows, "hrv_quality"),
       interpretation_rule: "Only measured fields are summarized. Zero/unavailable respiration or motion and low-quality HRV are withheld rather than interpreted.",
     },
+    baseline_and_trends: baselineAndTrendEvidence(sortedRows, record),
     signals: {
       heart_rate_bpm: stats(sortedRows.map((row) => finite(row.hr_smoothed ?? row.hr)).filter((value) => value >= 30 && value <= 240)),
       baseline_hr_bpm: stats(values(sortedRows, "baseline_hr", (value) => value >= 30 && value <= 240)),
@@ -151,7 +232,8 @@ export function buildBodyExplorationPhysiologyEvidence({ exploration = {}, timel
       respiration: usableRespiration.length ? {
         usable_rows: usableRespiration.length,
         breaths_per_minute: stats(values(usableRespiration, "respiration_bpm", (value) => value > 0)),
-        confidence: stats(values(usableRespiration, "respiration_confidence", (value) => value > 0)),
+        confidence_levels: countValues(usableRespiration, "respiration_confidence"),
+        sources: countValues(usableRespiration, "respiration_source"),
         possible_breath_hold_rows: usableRespiration.filter((row) => row.possible_breath_hold === true).length,
       } : { usable_rows: 0, unavailable_reasons: respirationUnavailableReasons },
       motion: usableMotion.length ? {
@@ -174,7 +256,15 @@ export function buildBodyExplorationPhysiologyEvidence({ exploration = {}, timel
       adaptive_bin_seconds: Math.max(5, Math.ceil(durationS / 240)),
       bins: trajectory(sortedRows),
     },
-    procedure_aligned_windows: procedure.context,
+    ...(procedure ? { procedure_aligned_windows: procedure.context } : {}),
     nearby_vital_signs: buildNearbyVitalsEvidence(nearbyVitals),
   };
+}
+
+export function buildBodyExplorationPhysiologyEvidence({ exploration = {}, timelineRows = [], emgRows = [], nearbyVitals = {} } = {}) {
+  return buildPhysiologyEvidence({ record: exploration, timelineRows, emgRows, nearbyVitals, includeProcedure: true });
+}
+
+export function buildSessionPhysiologyEvidence({ session = {}, timelineRows = [], emgRows = [], nearbyVitals = {} } = {}) {
+  return buildPhysiologyEvidence({ record: session, timelineRows, emgRows, nearbyVitals, includeProcedure: false });
 }

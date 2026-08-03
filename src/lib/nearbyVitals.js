@@ -33,7 +33,7 @@ export function bodyExplorationTimeRange(exploration = {}) {
   };
 }
 
-function normalizeReading(reading = {}, kind, range) {
+function normalizeReading(reading = {}, kind, range, contextLabel = "exploration") {
   const measuredAt = reading.measured_at || reading.timestamp || reading.date || reading.created_date;
   const measuredMs = timestampMs(measuredAt);
   if (measuredMs == null || range.startMs == null) return null;
@@ -48,7 +48,7 @@ function normalizeReading(reading = {}, kind, range) {
     measured_at: new Date(measuredMs).toISOString(),
     delta_minutes: Math.round(deltaMinutes * 10) / 10,
     distance_minutes: Math.round(distanceMinutes * 10) / 10,
-    relationship: during ? "during exploration" : measuredMs < range.startMs ? "before exploration" : "after exploration",
+    relationship: during ? `during ${contextLabel}` : measuredMs < range.startMs ? `before ${contextLabel}` : `after ${contextLabel}`,
   };
 }
 
@@ -62,11 +62,11 @@ function validReading(reading, kind) {
   return finite(reading.spo2_percent ?? reading.spo2 ?? reading.oxygen_saturation) != null;
 }
 
-function selectKind(readings, kind, range, windowHours) {
+function selectKind(readings, kind, range, windowHours, contextLabel) {
   const windowMs = Math.max(1, Number(windowHours) || 24) * HOUR_MS;
   const selected = (Array.isArray(readings) ? readings : [])
     .filter((reading) => validReading(reading, kind))
-    .map((reading) => normalizeReading(reading, kind, range))
+    .map((reading) => normalizeReading(reading, kind, range, contextLabel))
     .filter(Boolean)
     .filter((reading) => reading.distance_minutes * 60000 <= windowMs)
     .sort((a, b) => new Date(a.measured_at) - new Date(b.measured_at));
@@ -80,7 +80,7 @@ function selectKind(readings, kind, range, windowHours) {
   });
 }
 
-export function selectNearbyVitalReadings(exploration, readings = {}, windowsHours = {}) {
+export function selectNearbyVitalReadings(exploration, readings = {}, windowsHours = {}, contextLabel = "exploration") {
   const range = bodyExplorationTimeRange(exploration);
   const windows = { ...DEFAULT_WINDOWS_HOURS, ...windowsHours };
   if (range.startMs == null) {
@@ -88,10 +88,10 @@ export function selectNearbyVitalReadings(exploration, readings = {}, windowsHou
   }
   return {
     range,
-    bloodPressure: selectKind(readings.bloodPressure, "bloodPressure", range, windows.bloodPressure),
-    bloodGlucose: selectKind(readings.bloodGlucose, "bloodGlucose", range, windows.bloodGlucose),
-    bodyComposition: selectKind(readings.bodyComposition, "bodyComposition", range, windows.bodyComposition),
-    pulseOx: selectKind(readings.pulseOx, "pulseOx", range, windows.pulseOx),
+    bloodPressure: selectKind(readings.bloodPressure, "bloodPressure", range, windows.bloodPressure, contextLabel),
+    bloodGlucose: selectKind(readings.bloodGlucose, "bloodGlucose", range, windows.bloodGlucose, contextLabel),
+    bodyComposition: selectKind(readings.bodyComposition, "bodyComposition", range, windows.bodyComposition, contextLabel),
+    pulseOx: selectKind(readings.pulseOx, "pulseOx", range, windows.pulseOx, contextLabel),
   };
 }
 
@@ -101,7 +101,7 @@ function source(reading = {}) {
 
 function relation(reading = {}) {
   const minutes = Math.abs(Number(reading.delta_minutes) || 0);
-  if (reading.relationship === "during exploration") return `during exploration at +${Math.round(minutes)} min`;
+  if (/^during\s+/i.test(String(reading.relationship || ""))) return `${reading.relationship} at +${Math.round(minutes)} min`;
   const amount = minutes >= 60 ? `${(minutes / 60).toFixed(1)} h` : `${Math.round(minutes)} min`;
   return `${amount} ${reading.relationship}`;
 }
@@ -133,7 +133,7 @@ export function buildNearbyVitalsEvidence(nearby = {}) {
     body_water_percent: finite(reading.body_water_percent),
     impedance_ohms: finite(reading.impedance_ohms),
     source: source(reading),
-    interpretation_rule: "Use pounds (lb) as the primary display and narrative unit. Kilograms are retained only as source provenance. Weight is measured context. Smart-scale composition fields are trend estimates, not acute effects of the exploration.",
+    interpretation_rule: "Use pounds (lb) as the primary display and narrative unit. Kilograms are retained only as source provenance. Weight is measured context. Smart-scale composition fields are trend estimates, not acute effects of the session or exploration.",
   }));
   const pulseOxRows = nearby.pulseOx || [];
   const spo2 = pulseOxRows.map((reading) => finite(reading.spo2_percent ?? reading.spo2 ?? reading.oxygen_saturation)).filter((value) => value != null);
