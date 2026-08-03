@@ -150,7 +150,7 @@ export default function BodyExplorationNearbyVitalsPanel({ nearbyVitals }) {
         <div className="mt-3 grid gap-4 lg:grid-cols-2">
           <ReadingList title="Blood pressure" readings={bloodPressure} renderValue={(reading) => `${reading.systolic_mm_hg ?? reading.systolic}/${reading.diastolic_mm_hg ?? reading.diastolic} mmHg${reading.pulse_bpm || reading.pulse ? ` · ${reading.pulse_bpm || reading.pulse} bpm` : ""}`} />
           <ReadingList title="Blood glucose" readings={bloodGlucose} renderValue={(reading) => `${reading.glucose_mg_dl ?? reading.glucose ?? reading.value} mg/dL`} />
-          <ReadingList title="Body composition / weight" readings={bodyComposition} renderValue={(reading) => `${Number(reading.weight_kg).toFixed(1)} kg / ${(Number(reading.weight_kg) * 2.2046226218).toFixed(1)} lb${reading.body_fat_percent != null ? ` · ${Number(reading.body_fat_percent).toFixed(1)}% fat` : ""}`} />
+          <ReadingList title="Body composition / weight" readings={bodyComposition} renderValue={(reading) => `${(Number(reading.weight_kg) * 2.2046226218).toFixed(1)} lb${reading.body_fat_percent != null ? ` · ${Number(reading.body_fat_percent).toFixed(1)}% fat` : ""}`} />
           <ReadingList title="Pulse oximetry" readings={pulseOx.slice(0, 24)} renderValue={(reading) => `${reading.spo2_percent ?? reading.spo2 ?? reading.oxygen_saturation}%${reading.pulse_bpm || reading.pulse ? ` · ${reading.pulse_bpm || reading.pulse} bpm` : ""}`} />
         </div>
         {pulseOx.length > 24 && <p className="mt-3 text-xs text-muted-foreground">Showing a twenty-four-reading preview; the chart and AI evidence use all {pulseOx.length.toLocaleString()} nearby pulse-ox samples.</p>}

@@ -3,6 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { isSarahNativeShell } from "@/lib/mobileApiBase";
 
 const NativeBodyComposition = registerPlugin("BodyCompositionHealth");
+const KG_TO_LB = 2.2046226218;
 
 const NUMERIC_FIELDS = [
   "weight_kg",
@@ -56,7 +57,22 @@ export function bodyCompositionId(reading = {}) {
 export function formatWeightKg(value) {
   const kg = finiteOrNull(value);
   if (kg == null) return "--";
-  return `${kg.toFixed(1)} kg / ${(kg * 2.2046226218).toFixed(1)} lb`;
+  return `${kilogramsToPounds(kg).toFixed(1)} lb`;
+}
+
+export function kilogramsToPounds(value) {
+  const kg = finiteOrNull(value);
+  return kg == null ? null : kg * KG_TO_LB;
+}
+
+export function poundsToKilograms(value) {
+  const pounds = finiteOrNull(value);
+  return pounds == null ? null : pounds / KG_TO_LB;
+}
+
+export function formatMassFromKg(value, digits = 1) {
+  const pounds = kilogramsToPounds(value);
+  return pounds == null ? "--" : `${pounds.toFixed(digits)} lb`;
 }
 
 export function formatCompositionTime(value) {

@@ -18,6 +18,7 @@ import VideoSyncPlayer from "@/components/VideoSyncPlayer";
 import { pulseOxReadingsFromSession } from "@/lib/sessionContext";
 import { buildBodyExplorationPhysiologyEvidence } from "@/lib/bodyExplorationPhysiology";
 import { selectNearbyVitalReadings } from "@/lib/nearbyVitals";
+import { kilogramsToPounds } from "@/lib/bodyComposition";
 import {
   buildBodyExplorationVisualEvidenceDigest,
   buildBodyExplorationVideoPassDigest,
@@ -99,7 +100,7 @@ function buildExplorationChatContext(exploration, timelineRows, emgRows, nearbyV
     exploration.title ? `Title: ${exploration.title}` : null,
     exploration.duration_minutes ? `Duration: ${exploration.duration_minutes} minutes` : null,
     exploration.body_composition
-      ? `Attached weigh-in (${exploration.body_composition.measured_at || "time unknown"}): weight ${exploration.body_composition.weight_kg ?? "unknown"} kg, body fat ${exploration.body_composition.body_fat_percent ?? "unavailable"}%, lean mass ${exploration.body_composition.lean_body_mass_kg ?? "unavailable"} kg. Treat smart-scale composition as contextual trend estimates, not an acute effect of this exploration.`
+      ? `Attached weigh-in (${exploration.body_composition.measured_at || "time unknown"}): weight ${kilogramsToPounds(exploration.body_composition.weight_kg)?.toFixed(1) ?? "unknown"} lb, body fat ${exploration.body_composition.body_fat_percent ?? "unavailable"}%, lean mass ${kilogramsToPounds(exploration.body_composition.lean_body_mass_kg)?.toFixed(1) ?? "unavailable"} lb. Use pounds as the primary unit. Treat smart-scale composition as contextual trend estimates, not an acute effect of this exploration.`
       : null,
     (exploration.methods || []).length ? `Methods: ${exploration.methods.join(", ")}` : null,
     exploration.focus_areas ? `Focus areas: ${exploration.focus_areas}` : null,

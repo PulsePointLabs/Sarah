@@ -1,16 +1,16 @@
 import { Activity, Scale } from "lucide-react";
-import { formatCompositionTime, formatWeightKg } from "@/lib/bodyComposition";
+import { formatCompositionTime, formatMassFromKg, formatWeightKg } from "@/lib/bodyComposition";
 
 const METRICS = [
   ["Body fat", "body_fat_percent", "%", 1],
   ["Impedance", "impedance_ohms", " Ω", 0],
   ["BMI", "bmi", "", 1],
-  ["Lean mass", "lean_body_mass_kg", " kg", 1],
-  ["Fat-free weight", "fat_free_body_weight_kg", " kg", 1],
-  ["Muscle mass", "muscle_mass_kg", " kg", 1],
+  ["Lean mass", "lean_body_mass_kg", "mass", 1],
+  ["Fat-free weight", "fat_free_body_weight_kg", "mass", 1],
+  ["Muscle mass", "muscle_mass_kg", "mass", 1],
   ["Body water", "body_water_percent", "%", 1],
-  ["Body water", "body_water_mass_kg", " kg", 1],
-  ["Bone mass", "bone_mass_kg", " kg", 1],
+  ["Body water", "body_water_mass_kg", "mass", 1],
+  ["Bone mass", "bone_mass_kg", "mass", 1],
   ["Skeletal muscle", "skeletal_muscle_percent", "%", 1],
   ["Visceral fat", "visceral_fat", "", 1],
   ["Subcutaneous fat", "subcutaneous_fat_percent", "%", 1],
@@ -49,7 +49,7 @@ export default function BodyCompositionSummaryCard({ reading, title = "Body Comp
             <div key={field} className="rounded-lg border border-border bg-muted/20 px-3 py-2">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
               <p className={`mt-1 font-mono text-base font-semibold ${hasValue(field) ? "text-foreground" : "text-muted-foreground"}`}>
-                {hasValue(field) ? `${Number(reading[field]).toFixed(precision)}${suffix}` : "Not shared"}
+                {hasValue(field) ? (suffix === "mass" ? formatMassFromKg(reading[field], precision) : `${Number(reading[field]).toFixed(precision)}${suffix}`) : "Not shared"}
               </p>
             </div>
           ))}

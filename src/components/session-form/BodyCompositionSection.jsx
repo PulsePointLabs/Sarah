@@ -8,7 +8,9 @@ import {
   compositionSnapshot,
   formatCompositionTime,
   formatWeightKg,
+  kilogramsToPounds,
   listBodyCompositionReadings,
+  poundsToKilograms,
   requestBodyCompositionPermission,
   saveManualBodyComposition,
   syncBodyCompositionFromHealthConnect,
@@ -21,13 +23,13 @@ const OPTIONAL_FIELDS = [
   ["Body fat %", "body_fat_percent"],
   ["Subcutaneous fat %", "subcutaneous_fat_percent"],
   ["Visceral fat", "visceral_fat"],
-  ["Lean mass kg", "lean_body_mass_kg"],
-  ["Fat-free weight kg", "fat_free_body_weight_kg"],
-  ["Muscle mass kg", "muscle_mass_kg"],
+  ["Lean mass (lb)", "lean_body_mass_kg", true],
+  ["Fat-free weight (lb)", "fat_free_body_weight_kg", true],
+  ["Muscle mass (lb)", "muscle_mass_kg", true],
   ["Skeletal muscle %", "skeletal_muscle_percent"],
   ["Body water %", "body_water_percent"],
-  ["Body water kg", "body_water_mass_kg"],
-  ["Bone mass kg", "bone_mass_kg"],
+  ["Body water (lb)", "body_water_mass_kg", true],
+  ["Bone mass (lb)", "bone_mass_kg", true],
   ["Protein %", "protein_percent"],
   ["BMR kcal/day", "basal_metabolic_rate_kcal_day"],
   ["Metabolic age", "metabolic_age"],
@@ -39,7 +41,7 @@ export default function BodyCompositionSection({ data, onChange }) {
   const [busy, setBusy] = useState(false);
   const [manual, setManual] = useState({
     measured_at: new Date().toISOString().slice(0, 16),
-    weight_kg: "",
+    weight_lb: "",
   });
   const attached = data?.body_composition || null;
 
@@ -93,6 +95,8 @@ export default function BodyCompositionSection({ data, onChange }) {
     try {
       const saved = await saveManualBodyComposition({
         ...manual,
+        weight_lb: undefined,
+        weight_kg: poundsToKilograms(manual.weight_lb),
         measured_at: new Date(manual.measured_at).toISOString(),
         source_app: "Manual / VeSync",
       });
@@ -155,13 +159,19 @@ export default function BodyCompositionSection({ data, onChange }) {
             <Input type="datetime-local" value={manual.measured_at} onChange={(event) => setManual((current) => ({ ...current, measured_at: event.target.value }))} className="mt-1" />
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">Weight kg</Label>
-            <Input type="number" step="0.1" value={manual.weight_kg} onChange={(event) => setManual((current) => ({ ...current, weight_kg: event.target.value }))} className="mt-1" />
+            <Label className="text-xs text-muted-foreground">Weight (lb)</Label>
+            <Input type="number" step="0.1" value={manual.weight_lb} onChange={(event) => setManual((current) => ({ ...current, weight_lb: event.target.value }))} className="mt-1" />
           </div>
-          {OPTIONAL_FIELDS.map(([label, field]) => (
+          {OPTIONAL_FIELDS.map(([label, field, isMass]) => (
             <div key={field}>
               <Label className="text-xs text-muted-foreground">{label}</Label>
-              <Input type="number" step="0.1" value={manual[field] || ""} onChange={(event) => setManual((current) => ({ ...current, [field]: event.target.value }))} className="mt-1" />
+              <Input
+                type="number"
+                step="0.1"
+                value={isMass ? (kilogramsToPounds(manual[field])?.toFixed(1) ?? "") : (manual[field] || "")}
+                onChange={(event) => setManual((current) => ({ ...current, [field]: isMass ? poundsToKilograms(event.target.value) : event.target.value }))}
+                className="mt-1"
+              />
             </div>
           ))}
         </div>

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { User, Heart, Scan, RefreshCw, CheckCircle, ChevronDown, ChevronUp, Flame, Ruler, MessageCircle } from "lucide-react";
 import RichTextEditor from "../components/RichTextEditor";
 import BodyCompositionProfilePanel from "@/components/BodyCompositionProfilePanel";
+import { kilogramsToPounds, poundsToKilograms } from "@/lib/bodyComposition";
 import { richTextToCanonicalText } from "@/lib/richText";
 import {
   backfillImageReviewFindingsFromChat,
@@ -485,8 +486,8 @@ export default function Profile() {
               <Field label="Age (years)">
                 <NumInput value={form.age} onChange={(v) => setForm((f) => ({ ...f, age: v }))} placeholder="e.g. 35" min={10} max={100} />
               </Field>
-              <Field label="Weight (kg)">
-                <NumInput value={form.weight_kg} onChange={(v) => setForm((f) => ({ ...f, weight_kg: v }))} placeholder="e.g. 80" min={30} max={250} />
+              <Field label="Weight (lb)" hint="Sarah stores the source-compatible kilogram value internally, but displays and discusses weight in pounds.">
+                <NumInput value={kilogramsToPounds(form.weight_kg)?.toFixed(1) ?? null} onChange={(v) => setForm((f) => ({ ...f, weight_kg: poundsToKilograms(v) }))} placeholder="e.g. 180" min={66} max={551} />
               </Field>
               <Field
                 label="Height"

@@ -4,6 +4,7 @@ import { Activity, ChevronRight, HeartPulse, RefreshCw, TriangleAlert } from "lu
 import { apiUrl } from "@/lib/mobileApiBase";
 import { formatDurationWords, formatVitalSignsSpeech } from "@/lib/vitalSignsSpeech";
 import VitalDataImportPanel from "@/components/VitalDataImportPanel";
+import VitalTrendsDashboard from "@/components/VitalTrendsDashboard";
 
 function fmtDateTime(value) {
   if (!value) return "";
@@ -176,6 +177,8 @@ export default function VitalSigns() {
   const [transfers, setTransfers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [vitalDataRevision, setVitalDataRevision] = useState(0);
+  const handleVitalDataChanged = useCallback(() => setVitalDataRevision((current) => current + 1), []);
 
   const loadTransfers = useCallback(async () => {
     setLoading(true);
@@ -206,9 +209,9 @@ export default function VitalSigns() {
             <HeartPulse className="h-5 w-5" />
             <p className="text-sm font-bold uppercase tracking-wider">Vital Signs</p>
           </div>
-          <h1 className="mt-2 text-3xl font-bold text-foreground">SarahVS session physiology</h1>
+          <h1 className="mt-2 text-3xl font-bold text-foreground">Vital signs & physiology</h1>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-            Imported heart rate, HRV, blood pressure, event notes, trend context, and capture coverage from SarahVS.
+            Longitudinal blood pressure, oxygen saturation, glucose, weight, body composition, and detailed SarahVS recordings in one organized view.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -224,7 +227,9 @@ export default function VitalSigns() {
         </div>
       </header>
 
-      <VitalDataImportPanel />
+      <VitalTrendsDashboard refreshToken={vitalDataRevision} />
+
+      <VitalDataImportPanel onDataChanged={handleVitalDataChanged} />
 
       <section className="mt-5 border-y border-border py-4">
         <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">
@@ -242,6 +247,11 @@ export default function VitalSigns() {
           <span>{error}</span>
         </div>
       )}
+
+      <div className="mt-8 border-t border-border pt-6">
+        <p className="text-xs font-bold uppercase tracking-wider text-primary">SarahVS recordings</p>
+        <h2 className="mt-1 text-2xl font-bold text-foreground">Session physiology</h2>
+      </div>
 
       {loading && !transfers.length ? (
         <div className="mt-8 flex items-center gap-3 text-sm text-muted-foreground">

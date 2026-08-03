@@ -9,6 +9,7 @@ import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgr
 import { buildAudioChapterBundle } from "@/lib/audioChapters";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
+import { kilogramsToPounds } from "@/lib/bodyComposition";
 import { downloadOrSaveUrl } from "@/lib/nativeFileSaver";
 import { loadSyncedWatermarkSettings } from "@/lib/watermarkSettings";
 import { videoPosterDataUrl } from "@/lib/videoPoster";
@@ -1399,7 +1400,7 @@ function buildSessionContext(session, timelineRows) {
     `Duration: ${session.duration_minutes ?? "?"}min`,
     `Methods: ${(session.methods || []).join(", ")}`,
     session.body_composition
-      ? `Attached weigh-in (${session.body_composition.measured_at || "time unknown"}): weight ${session.body_composition.weight_kg ?? "unknown"} kg, body fat ${session.body_composition.body_fat_percent ?? "unavailable"}%, lean mass ${session.body_composition.lean_body_mass_kg ?? "unavailable"} kg. Treat smart-scale composition as contextual trend estimates, not an acute effect of this session.`
+      ? `Attached weigh-in (${session.body_composition.measured_at || "time unknown"}): weight ${kilogramsToPounds(session.body_composition.weight_kg)?.toFixed(1) ?? "unknown"} lb, body fat ${session.body_composition.body_fat_percent ?? "unavailable"}%, lean mass ${kilogramsToPounds(session.body_composition.lean_body_mass_kg)?.toFixed(1) ?? "unavailable"} lb. Use pounds as the primary unit. Treat smart-scale composition as contextual trend estimates, not an acute effect of this session.`
       : null,
     session.foley_size ? `Foley: ${session.foley_size}Fr ${session.foley_type || ""}` : null,
     session.estim_notes ? `E-Stim notes: ${session.estim_notes}` : null,

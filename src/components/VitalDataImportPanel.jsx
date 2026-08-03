@@ -33,7 +33,7 @@ function RecentList({ title, icon, rows, render }) {
   );
 }
 
-export default function VitalDataImportPanel() {
+export default function VitalDataImportPanel({ onDataChanged }) {
   const { toast } = useToast();
   const [importType, setImportType] = useState("auto");
   const [busy, setBusy] = useState(false);
@@ -87,13 +87,14 @@ export default function VitalDataImportPanel() {
       const next = { type, count: persisted.length, fileName, first: parsed.rows[0]?.measured_at, last: parsed.rows.at(-1)?.measured_at, headerRow: parsed.headerRow };
       setResult(next);
       await loadRecent();
+      onDataChanged?.();
       toast({ title: `Imported ${next.count} ${TYPE_OPTIONS.find((item) => item.value === type)?.label || "vital-sign"} reading${next.count === 1 ? "" : "s"}` });
     } catch (error) {
       setResult({ error: error.message || String(error), fileName });
     } finally {
       setBusy(false);
     }
-  }, [loadRecent, toast]);
+  }, [loadRecent, onDataChanged, toast]);
 
   useEffect(() => { loadRecent(); }, [loadRecent]);
 
@@ -121,6 +122,7 @@ export default function VitalDataImportPanel() {
       const synced = await syncBodyCompositionFromHealthConnect({ days: 365, limit: 300 });
       setResult({ type: "body_composition", count: synced.inserted, fileName: "Health Connect" });
       await loadRecent();
+      onDataChanged?.();
     } catch (error) {
       setResult({ error: error.message || String(error), fileName: "Health Connect" });
     } finally {
@@ -157,7 +159,7 @@ export default function VitalDataImportPanel() {
       <div className="mt-4 grid gap-3 lg:grid-cols-3">
         <RecentList title="SpO2 / pulse" icon={<Activity className="h-4 w-4 text-primary" />} rows={recent.pulseOx} render={(row) => `${row.spo2_percent ?? row.spo2}%${row.pulse_bpm ? ` · ${row.pulse_bpm} bpm` : ""}`} />
         <RecentList title="Blood glucose" icon={<Droplets className="h-4 w-4 text-primary" />} rows={recent.glucose} render={(row) => `${row.glucose_mg_dl ?? row.glucose ?? row.value} mg/dL`} />
-        <RecentList title="Body composition / weight" icon={<Scale className="h-4 w-4 text-primary" />} rows={recent.composition} render={(row) => `${Number(row.weight_kg).toFixed(1)} kg / ${(Number(row.weight_kg) * 2.2046226218).toFixed(1)} lb${row.body_fat_percent != null ? ` · ${Number(row.body_fat_percent).toFixed(1)}% fat` : ""}`} />
+        <RecentList title="Body composition / weight" icon={<Scale className="h-4 w-4 text-primary" />} rows={recent.composition} render={(row) => `${(Number(row.weight_kg) * 2.2046226218).toFixed(1)} lb${row.body_fat_percent != null ? ` · ${Number(row.body_fat_percent).toFixed(1)}% fat` : ""}`} />
       </div>
     </section>
   );

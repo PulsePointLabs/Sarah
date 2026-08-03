@@ -129,10 +129,11 @@ export function buildNearbyVitalsEvidence(nearby = {}) {
     weight_lb: finite(reading.weight_kg) == null ? null : Math.round(finite(reading.weight_kg) * 2.2046226218 * 10) / 10,
     body_fat_percent: finite(reading.body_fat_percent),
     muscle_mass_kg: finite(reading.muscle_mass_kg),
+    muscle_mass_lb: finite(reading.muscle_mass_kg) == null ? null : Math.round(finite(reading.muscle_mass_kg) * 2.2046226218 * 10) / 10,
     body_water_percent: finite(reading.body_water_percent),
     impedance_ohms: finite(reading.impedance_ohms),
     source: source(reading),
-    interpretation_rule: "Weight is measured context. Smart-scale composition fields are trend estimates, not acute effects of the exploration.",
+    interpretation_rule: "Use pounds (lb) as the primary display and narrative unit. Kilograms are retained only as source provenance. Weight is measured context. Smart-scale composition fields are trend estimates, not acute effects of the exploration.",
   }));
   const pulseOxRows = nearby.pulseOx || [];
   const spo2 = pulseOxRows.map((reading) => finite(reading.spo2_percent ?? reading.spo2 ?? reading.oxygen_saturation)).filter((value) => value != null);

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import AIChat from "@/components/AIChat";
 import { loadLatestProfilerAnalysis, mergeProfilerResultsIntoProfile } from "@/lib/profileContext";
 import { richTextToPlainText } from "@/lib/richText";
+import { kilogramsToPounds } from "@/lib/bodyComposition";
 import {
   backfillImageReviewFindingsFromChat,
   buildProfileQaFindingCards,
@@ -34,7 +35,7 @@ function formatMechanicalProfile(profile) {
 function buildProfileContext(profile, findingCards, recentActivityContext = "", procedurePhysiologyContext = "") {
   return [
     `First name: ${profile.first_name?.trim() || "not set"}`,
-    `Age: ${profile.age ?? "not set"}, Weight: ${profile.weight_kg ?? "not set"}kg, Fitness: ${profile.fitness_level ?? "not set"}`,
+    `Age: ${profile.age ?? "not set"}, Weight: ${profile.weight_kg != null ? `${kilogramsToPounds(profile.weight_kg).toFixed(1)} lb` : "not set"}, Fitness: ${profile.fitness_level ?? "not set"}. Use pounds as the primary weight unit.`,
     `Resting HR: ${profile.resting_hr ?? "not set"} bpm, Max HR: ${profile.max_hr ?? "not set"} bpm, Recovery HR drop 60s: ${profile.recovery_hr_60s ?? "not set"} bpm`,
     `Physical & anatomical context: ${richTextToPlainText(profile.medications) || "none"}`,
     `Arousal response style: ${profile.arousal_response_style ?? "not set"}`,

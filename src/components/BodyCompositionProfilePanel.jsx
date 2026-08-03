@@ -6,6 +6,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { base44 } from "@/api/base44Client";
 import BodyCompositionSummaryCard from "@/components/BodyCompositionSummaryCard";
 import {
+  formatMassFromKg,
   listBodyCompositionReadings,
   openBodyCompositionHealthConnectSettings,
   requestBodyCompositionPermission,
@@ -113,7 +114,7 @@ export default function BodyCompositionProfilePanel({ profile, onLatestReading }
         latest_body_composition: saved,
       });
       onLatestReading?.(saved);
-      const message = `Direct ESF-551 reading saved: ${Number(saved.weight_kg).toFixed(1)} kg, ${Number(saved.body_fat_percent).toFixed(1)}% body fat, impedance ${Math.round(saved.impedance_ohms)} Ω.`;
+      const message = `Direct ESF-551 reading saved: ${formatMassFromKg(saved.weight_kg)}, ${Number(saved.body_fat_percent).toFixed(1)}% body fat, impedance ${Math.round(saved.impedance_ohms)} Ω.`;
       setSyncMessage(message);
       toast({ title: message });
       if (!rows.length) await reload();
@@ -135,7 +136,7 @@ export default function BodyCompositionProfilePanel({ profile, onLatestReading }
     ))
     .map((reading) => ({
       date: new Date(reading.measured_at).toLocaleDateString([], { month: "short", day: "numeric" }),
-      weight: reading.weight_kg,
+      weight: Number(reading.weight_kg) * 2.2046226218,
       bodyFat: reading.body_fat_percent,
     }));
   const hasBodyFat = chart.some((row) => (
@@ -201,7 +202,7 @@ export default function BodyCompositionProfilePanel({ profile, onLatestReading }
               <YAxis yAxisId="weight" domain={["dataMin - 2", "dataMax + 2"]} tick={{ fontSize: 10 }} />
               {hasBodyFat && <YAxis yAxisId="fat" orientation="right" domain={["dataMin - 2", "dataMax + 2"]} tick={{ fontSize: 10 }} />}
               <Tooltip />
-              <Line yAxisId="weight" type="monotone" dataKey="weight" name="Weight kg" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} connectNulls />
+              <Line yAxisId="weight" type="monotone" dataKey="weight" name="Weight lb" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} connectNulls />
               {hasBodyFat && <Line yAxisId="fat" type="monotone" dataKey="bodyFat" name="Body fat %" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} connectNulls />}
             </LineChart>
           </ResponsiveContainer>

@@ -69,7 +69,7 @@ export async function readEsf551Scale({
           const parsed = parseEsf551Measurement(value);
           if (!parsed) return;
           if (parsed.impedance_ohms == null) {
-            onStatus?.(`Stable weight ${parsed.weight_kg.toFixed(1)} kg received. Keep bare feet on all four electrodes for composition.`);
+            onStatus?.(`Stable weight ${(parsed.weight_kg * 2.2046226218).toFixed(1)} lb received. Keep bare feet on all four electrodes for composition.`);
             return;
           }
           window.clearTimeout(timeoutId);
