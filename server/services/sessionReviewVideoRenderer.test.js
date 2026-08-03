@@ -8,7 +8,7 @@ import {
   buildReviewNarrationSegments,
   buildReusedNarrationSegmentPlan,
   inferReviewVisualFocus,
-  losslessConcatAvArgs,
+  losslessConcatVideoArgs,
   matchAudioExport,
   canonicalPhaseAnchorForNarration,
   reviewVisualFocusForClip,
@@ -16,13 +16,13 @@ import {
   resolveTimestampViolationVisualFallback,
   selectDistinctReviewSourceStart,
   selectReviewVideoEventForSegment,
-  shouldUseBodyExplorationMissingVisualCard,
   telemetryAtSessionTime,
 } from './sessionReviewVideoRenderer.js';
 
-test('final narration segment assembly is lossless stream copy', () => {
-  const args = losslessConcatAvArgs('segments.txt', 'output.mp4');
-  assert.deepEqual(args.slice(args.indexOf('-c'), args.indexOf('-c') + 2), ['-c', 'copy']);
+test('final video assembly joins video-only segments before the one-time audio mux', () => {
+  const args = losslessConcatVideoArgs('segments.txt', 'output.mp4');
+  assert.deepEqual(args.slice(args.indexOf('-c:v'), args.indexOf('-c:v') + 2), ['-c:v', 'copy']);
+  assert.equal(args.includes('-an'), true);
   assert.equal(args.includes('libx264'), false);
   assert.equal(args.includes('aac'), false);
 });
@@ -308,7 +308,7 @@ test('Body Exploration strict lock keeps pre-ejaculate and catheter visuals on t
   assert.equal(catheter.session_time_s, 140);
 });
 
-test('Body Exploration strict lock refuses random video for abstract narration', () => {
+test('Body Exploration strict lock leaves abstract narration unmatched for chronological source context', () => {
   const session = {
     record_type: 'body_exploration',
     exploration_type: 'Enema',
@@ -324,7 +324,6 @@ test('Body Exploration strict lock refuses random video for abstract narration',
   const selected = selectReviewVideoEventForSegment({ segment, plan: {}, session });
 
   assert.equal(selected, null);
-  assert.equal(shouldUseBodyExplorationMissingVisualCard({ session, segment }), true);
 });
 
 test('Body Exploration enema insertion cannot be replaced with fill or defecation footage', () => {

@@ -14,8 +14,6 @@ const REVIEW_VIDEO_HEIGHT = Number(process.env.REVIEW_VIDEO_HEIGHT || 1080);
 const REVIEW_VIDEO_PRESET = process.env.REVIEW_VIDEO_PRESET || 'slow';
 const REVIEW_VIDEO_INTERMEDIATE_CRF = String(process.env.REVIEW_VIDEO_INTERMEDIATE_CRF || 14);
 const REVIEW_VIDEO_FINAL_CRF = String(process.env.REVIEW_VIDEO_FINAL_CRF || 17);
-const REVIEW_VIDEO_CARD_CRF = String(process.env.REVIEW_VIDEO_CARD_CRF || 17);
-const REVIEW_VIDEO_TRANSITION_SECONDS = Math.max(0, Math.min(0.6, Number(process.env.REVIEW_VIDEO_TRANSITION_SECONDS || 0.22)));
 const REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS = Math.max(0, Math.min(1.5, Number(process.env.REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS || 0.25)));
 const REVIEW_VIDEO_TIME_TOLERANCE_SECONDS = Math.max(0, Math.min(30, Number(process.env.REVIEW_VIDEO_TIME_TOLERANCE_SECONDS || 8)));
 const REVIEW_VIDEO_MIN_GENERIC_BROLL_GAP_SECONDS = Math.max(6, Number(process.env.REVIEW_VIDEO_MIN_GENERIC_BROLL_GAP_SECONDS || 18));
@@ -35,16 +33,6 @@ function reviewVideoFitFilter() {
     `scale=${REVIEW_VIDEO_WIDTH}:${REVIEW_VIDEO_HEIGHT}:force_original_aspect_ratio=decrease:flags=lanczos`,
     `pad=${REVIEW_VIDEO_WIDTH}:${REVIEW_VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2`,
   ].join(',');
-}
-
-function segmentFadeFilters(durationSeconds = 0, { fadeIn = true, fadeOut = true } = {}) {
-  const duration = Number(durationSeconds || 0);
-  const fade = Math.min(REVIEW_VIDEO_TRANSITION_SECONDS, Math.max(0, (duration - 0.35) / 2));
-  if (!fade) return [];
-  return [
-    fadeIn ? `fade=t=in:st=0:d=${fade.toFixed(3)}` : null,
-    fadeOut ? `fade=t=out:st=${Math.max(0, duration - fade).toFixed(3)}:d=${fade.toFixed(3)}` : null,
-  ].filter(Boolean);
 }
 
 function cleanParagraph(value) {
@@ -803,7 +791,7 @@ function telemetryOverlayFilters(telemetry) {
   ];
 }
 
-function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playbackRate = 1, outputDurationSeconds = 0, visualFocus = null, telemetry = null } = {}) {
+function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playbackRate = 1, visualFocus = null, telemetry = null } = {}) {
   const fontPath = process.env.REVIEW_VIDEO_FONT || 'C\\:/Windows/Fonts/arial.ttf';
   const rate = Number(playbackRate);
   const slowMoLabel = Number.isFinite(rate) && rate > 0 && rate < 0.99 ? `${Math.round(rate * 100)}% speed` : '';
@@ -823,7 +811,9 @@ function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playb
     reviewVideoFitFilter(),
     reviewVisualFocusFilter(visualFocus),
     'format=yuv420p',
-    Number.isFinite(rate) && rate > 0 && rate < 0.99 ? `setpts=${(1 / rate).toFixed(4)}*PTS` : null,
+    Number.isFinite(rate) && rate > 0 && rate < 0.99
+      ? `setpts=${(1 / rate).toFixed(4)}*(PTS-STARTPTS)`
+      : 'setpts=PTS-STARTPTS',
     `drawbox=x=${badgeX}:y=${badgeY}:w=${badgeWidth}:h=${badgeHeight}:color=0x04060b@0.72:t=fill`,
     `drawbox=x=${badgeX}:y=${badgeY}:w=${badgeWidth}:h=${badgeHeight}:color=0xffffff@0.08:t=2`,
     `drawbox=x=${badgeX + 12}:y=h-82:w=4:h=14:color=0xa855f7@0.96:t=fill`,
@@ -832,7 +822,6 @@ function timestampOverlayFilter({ startSeconds = 0, sessionSeconds = null, playb
       ? `drawtext=fontfile='${fontPath}':text='${slowMoText}':x=${badgeX + 150}:y=h-61:fontsize=17:fontcolor=0xf5d0fe@0.95:box=1:boxcolor=0x7e22ce@0.30:boxborderw=6:shadowcolor=0x000000@0.75:shadowx=1:shadowy=1`
       : null,
     ...telemetryOverlayFilters(telemetry),
-    ...segmentFadeFilters(outputDurationSeconds),
   ].filter(Boolean).join(',');
 }
 
@@ -876,7 +865,6 @@ export async function cutReviewClip({ sourcePath, startSeconds, endSeconds, labe
       startSeconds: effectiveStartSeconds,
       sessionSeconds: effectiveSessionSeconds,
       playbackRate,
-      outputDurationSeconds: outputDuration,
       visualFocus,
       telemetry,
     }),
@@ -1265,15 +1253,7 @@ async function buildNarrationAlignedSegments({
       continue;
     }
 
-    const card = await createTitleCard({
-      workDir,
-      index: segmentIndex++,
-      title: slotTitle(paragraphIndex, payloadTitle),
-      subtitle: paragraphs[paragraphIndex],
-      durationSeconds: slot.durationSeconds,
-    });
-    segments.push(card.path);
-    visualDuration += Number(card.durationSeconds || slot.durationSeconds);
+    throw new Error(`No usable source video or saved clip was available for narration section ${paragraphIndex + 1}. Review media was not produced because production slates are disabled.`);
   }
 
   return {
@@ -1292,49 +1272,8 @@ function safeDrawText(value, limit = 70) {
     .slice(0, limit);
 }
 
-async function createTitleCard({ workDir, index, title, subtitle, durationSeconds }) {
-  const output = path.join(workDir, `title-card-${String(index).padStart(3, '0')}.mp4`);
-  const fontPath = process.env.REVIEW_VIDEO_FONT || 'C\\:/Windows/Fonts/arial.ttf';
-  const heading = safeDrawText(title || 'Session Review', 48);
-  const body = safeDrawText(subtitle || 'No source media was available for this section.', 96);
-  const duration = Math.max(2, Number(durationSeconds || 3));
-  const draw = [
-    `drawbox=x=0:y=0:w=iw:h=ih:color=0x090b10@1:t=fill`,
-    `drawbox=x=110:y=100:w=1700:h=880:color=0x0f1117@0.94:t=fill`,
-    `drawbox=x=110:y=100:w=1700:h=880:color=0xff2d55@0.82:t=4`,
-    `drawbox=x=154:y=146:w=84:h=84:color=0xff2d55@0.95:t=8`,
-    `drawtext=fontfile='${fontPath}':text='SARAH':fontcolor=white@0.96:fontsize=30:x=270:y=148`,
-    `drawtext=fontfile='${fontPath}':text='PulsePoint Production Review':fontcolor=white@0.62:fontsize=24:x=270:y=192`,
-    `drawtext=fontfile='${fontPath}':text='${heading}':fontcolor=white:fontsize=54:x=154:y=430`,
-    body ? `drawtext=fontfile='${fontPath}':text='${body}':fontcolor=white@0.76:fontsize=26:x=154:y=520` : null,
-    `drawtext=fontfile='${fontPath}':text='No verified source visual available for this segment':fontcolor=white@0.48:fontsize=22:x=154:y=870`,
-    ...segmentFadeFilters(duration),
-  ].filter(Boolean).join(',');
-  await runProcess('ffmpeg', [
-    '-hide_banner',
-    '-y',
-    '-f', 'lavfi',
-    '-i', `color=c=#101418:s=${REVIEW_VIDEO_WIDTH}x${REVIEW_VIDEO_HEIGHT}:d=${duration}`,
-    '-vf', draw,
-    '-c:v', 'libx264',
-    '-preset', REVIEW_VIDEO_PRESET,
-    '-crf', REVIEW_VIDEO_CARD_CRF,
-    '-profile:v', 'high',
-    '-pix_fmt', 'yuv420p',
-    '-movflags', '+faststart',
-    output,
-  ]);
-  return {
-    path: output,
-    label: title,
-    durationSeconds: await mediaDurationSeconds(output).catch(() => Math.max(2, Number(durationSeconds || 3))),
-  };
-}
-
 async function normalizeVideoSegment({ inputPath, outputPath, durationSeconds = null }) {
   const durationArgs = durationSeconds ? ['-t', String(Math.max(0.5, Number(durationSeconds)))] : [];
-  const sourceDuration = Number(durationSeconds || await mediaDurationSeconds(inputPath).catch(() => 0));
-  const fadeFilters = segmentFadeFilters(sourceDuration);
   await runProcess('ffmpeg', [
     '-hide_banner',
     '-y',
@@ -1342,7 +1281,7 @@ async function normalizeVideoSegment({ inputPath, outputPath, durationSeconds = 
     ...durationArgs,
     '-map', '0:v:0',
     '-an',
-    '-vf', [reviewVideoFitFilter(), 'format=yuv420p', ...fadeFilters].join(','),
+    '-vf', [reviewVideoFitFilter(), 'format=yuv420p', 'setpts=PTS-STARTPTS'].join(','),
     '-c:v', 'libx264',
     '-preset', REVIEW_VIDEO_PRESET,
     '-crf', REVIEW_VIDEO_INTERMEDIATE_CRF,
@@ -1441,29 +1380,6 @@ async function muxAudioVideo(videoPath, audioPath, outputPath) {
   ]);
 }
 
-export function losslessConcatAvArgs(concatPath, outputPath) {
-  return [
-    '-hide_banner',
-    '-y',
-    '-fflags', '+genpts',
-    '-f', 'concat',
-    '-safe', '0',
-    '-i', concatPath,
-    '-map', '0:v:0',
-    '-map', '0:a:0',
-    '-c', 'copy',
-    '-avoid_negative_ts', 'make_zero',
-    '-movflags', '+faststart',
-    outputPath,
-  ];
-}
-
-async function concatAvSegments(segmentPaths, outputPath, workDir) {
-  const concatPath = path.join(workDir, 'av-segments.txt');
-  await fs.writeFile(concatPath, segmentPaths.map((file) => `file ${q(file.replace(/\\/g, '/'))}`).join('\n'), 'utf8');
-  await runProcess('ffmpeg', losslessConcatAvArgs(concatPath, outputPath));
-}
-
 async function concatWavSegments(audioPaths, outputPath, workDir) {
   const concatPath = path.join(workDir, 'audio-wav-segments.txt');
   await fs.writeFile(concatPath, audioPaths.map((file) => `file ${q(file.replace(/\\/g, '/'))}`).join('\n'), 'utf8');
@@ -1487,6 +1403,29 @@ function splitSentences(text = '') {
     .match(/[^.!?]+[.!?]+(?:["')\]]+)?|[^.!?]+$/g)
     ?.map((sentence) => sentence.trim())
     .filter(Boolean) || [];
+}
+
+export function losslessConcatVideoArgs(concatPath, outputPath) {
+  return [
+    '-hide_banner',
+    '-y',
+    '-fflags', '+genpts',
+    '-f', 'concat',
+    '-safe', '0',
+    '-i', concatPath,
+    '-map', '0:v:0',
+    '-an',
+    '-c:v', 'copy',
+    '-avoid_negative_ts', 'make_zero',
+    '-movflags', '+faststart',
+    outputPath,
+  ];
+}
+
+async function concatVideoSegments(segmentPaths, outputPath, workDir) {
+  const concatPath = path.join(workDir, 'video-segments.txt');
+  await fs.writeFile(concatPath, segmentPaths.map((file) => `file ${q(file.replace(/\\/g, '/'))}`).join('\n'), 'utf8');
+  await runProcess('ffmpeg', losslessConcatVideoArgs(concatPath, outputPath));
 }
 
 const BODY_EXPLORATION_VISUAL_CONCEPTS = [
@@ -1916,11 +1855,6 @@ export function selectReviewVideoEventForSegment({ segment, plan, clipByParagrap
   return chooseSegmentEvent({ segment, plan: plan || {}, clipByParagraph, usedEventIds, session });
 }
 
-export function shouldUseBodyExplorationMissingVisualCard({ payload = {}, session = {}, segment = {} } = {}) {
-  return isBodyExplorationReview(payload, session)
-    && timestampRequirementForSegment(segment).times.length === 0;
-}
-
 function clampClipStart(startSeconds, durationSeconds, sourceDuration) {
   const duration = Math.max(0.5, Number(durationSeconds || 0.5));
   const maxStart = Math.max(0, Number(sourceDuration || 0) - duration);
@@ -2163,16 +2097,17 @@ async function renderSourceContextSegment({
   activeCandidateStarts = [],
   alternateVideo = null,
   telemetryData = null,
+  allowActiveFallback = true,
 }) {
   const duration = Number(audio?.durationSeconds || 1);
-  const activeFallbackEvent = buildActiveStimulationFallbackEvent({
+  const activeFallbackEvent = allowActiveFallback ? buildActiveStimulationFallbackEvent({
     session,
     segment,
     primaryVideo,
     sourceDuration,
     fallbackCursor,
     usedSourceWindows,
-  });
+  }) : null;
   if (activeFallbackEvent) {
     const window = sourceWindowForSegment({
       event: activeFallbackEvent,
@@ -2404,7 +2339,6 @@ async function renderSegmentedSourceReviewVideo({
     durationSeconds: narrationDuration,
   });
   const usedEventIds = new Set();
-  const avSegments = [];
   const videoSegments = [];
   const audioSegments = [];
   const segmentDurations = [];
@@ -2584,9 +2518,6 @@ async function renderSegmentedSourceReviewVideo({
         });
         syncWindowToRenderedClip(window, videoClip);
         paragraphTimelineCursor = sessionTimeForSource(window.end, primaryVideo);
-        const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
-        await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
-        avSegments.push(avPath);
         videoSegments.push(videoClip.path);
         rememberSourceWindow(usedSourceWindows, window);
         fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
@@ -2675,9 +2606,6 @@ async function renderSegmentedSourceReviewVideo({
         syncWindowToRenderedClip(window, videoClip);
         paragraphTimelineCursor = sessionTimeForSource(window.end, primaryVideo);
         videoSegments.push(videoClip.path);
-        const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
-        await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
-        avSegments.push(avPath);
         rememberSourceWindow(usedSourceWindows, window);
         fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
         const trace = buildTimelineTrace({
@@ -2736,9 +2664,6 @@ async function renderSegmentedSourceReviewVideo({
       syncWindowToRenderedClip(window, videoClip);
       paragraphTimelineCursor = sessionTimeForSource(window.end, primaryVideo);
       videoSegments.push(videoClip.path);
-      const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
-      await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
-      avSegments.push(avPath);
       rememberSourceWindow(usedSourceWindows, window);
       fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
       const trace = buildTimelineTrace({
@@ -2780,74 +2705,13 @@ async function renderSegmentedSourceReviewVideo({
     }
 
     if (!event) {
-      if (shouldUseBodyExplorationMissingVisualCard({ payload, session, segment })) {
-        onProgress?.({
-          phase: 'segments',
-          current: 3,
-          total: 5,
-          message: `No verified Body Exploration visual for spoken segment ${index + 1}; using an evidence card...`,
-        });
-        const card = await createTitleCard({
-          workDir,
-          index: index + 1,
-          title: 'Body Exploration analysis',
-          subtitle: 'No timestamped event matched this narration segment. Random footage was intentionally not substituted.',
-          durationSeconds: audio.durationSeconds,
-        });
-        const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
-        await muxAudioVideo(card.path, audio.audioPath, avPath);
-        avSegments.push(avPath);
-        videoSegments.push(card.path);
-        paragraphTimelineCursor = null;
-        generatedClips.push({
-          id: `body-exploration-unverified-${index + 1}`,
-          paragraphIndex: segment.paragraphIndex,
-          session_time_s: null,
-          visual_session_start_s: null,
-          source_start_s: null,
-          source_end_s: null,
-          spoken_segment_index: index + 1,
-          spoken_text: segment.text.slice(0, 240),
-          label: 'No verified matching footage',
-          reason: 'Body Exploration strict visual lock rejected unrelated source footage because no timestamped event matched the narration.',
-          source_video_path: null,
-          source_camera_role: null,
-          audio_duration_seconds: roundedSeconds(audio.durationSeconds),
-          playback_rate: 1,
-          slow_motion: false,
-          direct_spoken_time: false,
-          source_time_strategy: 'verified_visual_unavailable_card',
-          matched_event: false,
-          procedural_broll: false,
-          timeline_trace: {
-            narration_section: Number(segment.paragraphIndex) + 1,
-            spoken_segment_index: index + 1,
-            narrated_timestamp_s: null,
-            narrated_timestamp: null,
-            narrated_text: null,
-            selected_visual_timestamp_s: null,
-            selected_visual_timestamp: null,
-            delta_seconds: null,
-            selection_reason: 'No timestamped Body Exploration event matched this narration; unrelated footage was not used.',
-            fallback_used: true,
-            fallback_type: 'verified_visual_unavailable_card',
-            visual_source: 'title_card',
-            timestamp_required: false,
-            within_tolerance: null,
-            tolerance_seconds: REVIEW_VIDEO_TIME_TOLERANCE_SECONDS,
-            source_start_s: null,
-            source_end_s: null,
-            audio_duration_seconds: roundedSeconds(audio.durationSeconds),
-            violation: 'BODY_EXPLORATION_VISUAL_EVIDENCE_UNAVAILABLE',
-          },
-        });
-        continue;
-      }
       onProgress?.({
         phase: 'segments',
         current: 3,
         total: 5,
-        message: `No exact visual for spoken segment ${index + 1}; using source video context instead of a title card...`,
+        message: strictBodyExplorationVisuals
+          ? `No exact Body Exploration action match for spoken segment ${index + 1}; continuing chronological session footage...`
+          : `No exact visual for spoken segment ${index + 1}; using source video context instead of a title card...`,
       });
       const sourceContext = await renderSourceContextSegment({
         session,
@@ -2859,10 +2723,17 @@ async function renderSegmentedSourceReviewVideo({
         audio,
         fallbackCursor,
         usedSourceWindows,
-        label: 'Active stimulation context',
-        selectionReason: 'No exact event matched this untimed spoken segment; using active stimulation context instead of empty-room or off-table filler.',
-        fallbackType: 'active_stimulation_context_for_untimed_narration',
-        visualSource: 'active_stimulation_context',
+        label: strictBodyExplorationVisuals ? 'Body Exploration session context' : 'Active stimulation context',
+        selectionReason: strictBodyExplorationVisuals
+          ? 'No exact logged action matched this untimed Body Exploration narration; continuing chronological source footage without inserting a production slate.'
+          : 'No exact event matched this untimed spoken segment; using active stimulation context instead of empty-room or off-table filler.',
+        fallbackType: strictBodyExplorationVisuals
+          ? 'chronological_body_exploration_context'
+          : 'active_stimulation_context_for_untimed_narration',
+        visualSource: strictBodyExplorationVisuals
+          ? 'chronological_body_exploration_context'
+          : 'active_stimulation_context',
+        allowActiveFallback: !strictBodyExplorationVisuals,
         onPreview: publishPreview,
         activeCandidateStarts,
         alternateVideo: feetVideo,
@@ -2871,9 +2742,6 @@ async function renderSegmentedSourceReviewVideo({
       const { videoClip, window } = sourceContext;
       paragraphTimelineCursor = sessionTimeForSource(window.end, primaryVideo);
       videoSegments.push(videoClip.path);
-      const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
-      await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
-      avSegments.push(avPath);
       rememberSourceWindow(usedSourceWindows, window);
       fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
       generatedClips.push(sourceContext.generatedClip);
@@ -2916,9 +2784,6 @@ async function renderSegmentedSourceReviewVideo({
     syncWindowToRenderedClip(window, videoClip);
     paragraphTimelineCursor = sessionTimeForSource(window.end, primaryVideo);
     videoSegments.push(videoClip.path);
-    const avPath = path.join(workDir, `segment-av-${String(index + 1).padStart(3, '0')}.mp4`);
-    await muxAudioVideo(videoClip.path, audio.audioPath, avPath);
-    avSegments.push(avPath);
     rememberSourceWindow(usedSourceWindows, window);
     fallbackCursor = clampClipStart(window.start + Number(audio.durationSeconds || 1), Number(audio.durationSeconds || 1), sourceDuration);
     const selectionReason = event?.reason || (!event
@@ -2984,13 +2849,15 @@ async function renderSegmentedSourceReviewVideo({
   const audioOutputPath = path.join(uploadDir, audioFilename);
   const continuousWavPath = path.join(workDir, 'review-video-continuous-audio.wav');
 
-  if (!avSegments.length || avSegments.length !== narrationSegments.length) {
-    throw new Error(`Review video segment assembly failed: ${avSegments.length} A/V segments for ${narrationSegments.length} spoken segments.`);
+  if (!videoSegments.length || videoSegments.length !== narrationSegments.length) {
+    throw new Error(`Review video segment assembly failed: ${videoSegments.length} video segments for ${narrationSegments.length} spoken segments.`);
   }
 
-  onProgress({ phase: 'muxing', current: 4, total: 5, message: 'Losslessly joining narration-locked audio/video segments...' });
+  const silentVideoPath = path.join(workDir, 'review-video-continuous.mp4');
+  onProgress({ phase: 'muxing', current: 4, total: 5, message: 'Joining timestamp-reset video and narration tracks...' });
   await concatWavSegments(audioSegments, continuousWavPath, workDir);
-  await concatAvSegments(avSegments, outputPath, workDir);
+  await concatVideoSegments(videoSegments, silentVideoPath, workDir);
+  await muxAudioVideo(silentVideoPath, continuousWavPath, outputPath);
   if (!narration.reused) await fs.copyFile(narration.audioPath, audioOutputPath);
 
   let finalDuration = await mediaDurationSeconds(outputPath).catch(() => totalAudioDuration);
@@ -3198,9 +3065,16 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
       clipByParagraph.get(key).push(clip);
     });
 
-    onProgress({ phase: 'segments', current: 3, total: 5, message: primaryVideo?.path ? 'Building narration-aligned cited moment video...' : 'Building review video from saved clips/title cards...' });
+    if (!existingSegmentSources.length) {
+      throw new Error('No source video or saved review clips are available. Review media was not produced because production slates are disabled.');
+    }
+    for (let paragraphIndex = 0; paragraphIndex < paragraphs.length; paragraphIndex += 1) {
+      if (!clipByParagraph.has(paragraphIndex)) clipByParagraph.set(paragraphIndex, existingSegmentSources);
+    }
+
+    onProgress({ phase: 'segments', current: 3, total: 5, message: 'Building review video from saved source clips...' });
     let visualDuration = 0;
-    let visualMode = primaryVideo?.path ? 'narration_aligned_cited_moments' : 'narration_aligned_saved_clips_and_cards';
+    let visualMode = 'narration_aligned_saved_clips';
     const paragraphSlots = estimateParagraphSlots(paragraphs, audioDuration);
     const primaryVideoDuration = primaryVideo?.path ? await mediaDurationSeconds(primaryVideo.path).catch(() => 0) : 0;
     const aligned = await buildNarrationAlignedSegments({
@@ -3220,57 +3094,17 @@ export async function renderSessionReviewVideo(payload = {}, options = {}) {
     clipOutputs.push(...aligned.generatedClips);
     visualDuration = aligned.visualDuration;
 
-    if (!segments.length) {
-      if (primaryVideo?.path) {
-        const clip = await cutReviewClip({
-          sourcePath: primaryVideo.path,
-          startSeconds: 0,
-          endSeconds: Math.max(6, Math.min(primaryVideoDuration || 20, audioDuration || 8)),
-          label: payload.title || 'Session Review',
-          workDir,
-          index: 0,
-          sessionSeconds: sessionTimeForSource(0, primaryVideo),
-        });
-        segments.push(clip.path);
-        visualDuration += Number(clip.durationSeconds || 0);
-      } else {
-        const card = await createTitleCard({
-          workDir,
-          index: 0,
-          title: payload.title || 'Session Review',
-          subtitle: 'No cited video clips were available; narration is included.',
-          durationSeconds: Math.max(6, Math.min(20, audioDuration || 8)),
-        });
-        segments.push(card.path);
-        visualDuration += Number(card.durationSeconds || 0);
-      }
-    }
+    if (!segments.length) throw new Error('No usable source clips were available. Review media was not produced because production slates are disabled.');
 
     if (audioDuration && visualDuration < audioDuration - 0.5) {
-      const padDuration = Math.max(2, audioDuration - visualDuration + 0.5);
-      if (primaryVideo?.path) {
-        const sourceStart = Math.max(0, Math.min(Math.max(0, primaryVideoDuration - padDuration), visualDuration % Math.max(1, primaryVideoDuration || visualDuration || 1)));
-        const pad = await cutReviewClip({
-          sourcePath: primaryVideo.path,
-          startSeconds: sourceStart,
-          endSeconds: sourceStart + padDuration,
-          label: payload.title || 'Session Review',
-          workDir,
-          index: segments.length + 1,
-          sessionSeconds: sessionTimeForSource(sourceStart, primaryVideo),
-        });
-        segments.push(pad.path);
-        visualDuration += Number(pad.durationSeconds || 0);
-      } else {
-        const pad = await createTitleCard({
-          workDir,
-          index: segments.length + 1,
-          title: payload.title || 'Session Review',
-          subtitle: 'Narration continues.',
-          durationSeconds: padDuration,
-        });
-        segments.push(pad.path);
-        visualDuration += Number(pad.durationSeconds || 0);
+      let repeatIndex = 0;
+      while (visualDuration < audioDuration + 0.5) {
+        const repeated = existingSegmentSources[repeatIndex % existingSegmentSources.length];
+        const repeatedDuration = Math.max(0.25, Number(repeated.durationSeconds || await mediaDurationSeconds(repeated.path).catch(() => 0)));
+        if (!(repeatedDuration > 0)) break;
+        segments.push(repeated.path);
+        visualDuration += repeatedDuration;
+        repeatIndex += 1;
       }
     }
 
