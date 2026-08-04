@@ -1605,6 +1605,7 @@ export default function LiveCapture() {
   const [telemetryDashboardOpen, setTelemetryDashboardOpen] = useState(false);
   const [telemetryDashboard, setTelemetryDashboard] = useState(() => readTelemetryDashboard());
   const [telemetryLayoutEditing, setTelemetryLayoutEditing] = useState(false);
+  const [detailedTelemetryOpen, setDetailedTelemetryOpen] = useState(false);
   const [draggedTelemetryPanelId, setDraggedTelemetryPanelId] = useState("");
   const [calibrationOpen, setCalibrationOpen] = useState(false);
   const [calibrationSaving, setCalibrationSaving] = useState("");
@@ -1651,6 +1652,7 @@ export default function LiveCapture() {
   const [launchProfile, setLaunchProfile] = useState(() => readLiveCaptureLaunchProfile());
   const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
   const [launchState, setLaunchState] = useState({ phase: "idle", message: "", steps: [], busy: false, error: "" });
+  const [endingSession, setEndingSession] = useState(false);
   const [liveCueSettings, setLiveCueSettings] = useState(() => ({
     ...DEFAULT_LIVE_CUE_SETTINGS,
     customPhrases: readLiveCueCustomization().phrases,
@@ -1677,6 +1679,7 @@ export default function LiveCapture() {
   const mediaRecorderRef = useRef(null);
   const voiceChunksRef = useRef([]);
   const voiceNoteTimeRef = useRef(0);
+  const voiceNotePhysiologyRef = useRef(null);
   const voiceNoteTimeoutRef = useRef(null);
   const voiceSilenceRafRef = useRef(null);
   const voiceAudioSourceRef = useRef(null);
@@ -4338,6 +4341,66 @@ export default function LiveCapture() {
     throw new Error("OBS did not confirm that recording started within 15 seconds.");
   }, [embeddedObsStatus?.error, embeddedObsStatus?.identified, recording, recordingActive]);
 
+  const stopObsRecording = useCallback(async () => {
+    if (!recordingTransportActive || endingSession) return;
+    setEndingSession(true);
+    try {
+      let relayUrl;
+      const base = new URL(apiUrl("/live-capture/status"), window.location.href);
+      base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
+      base.port = "8765";
+      base.pathname = "/";
+      base.search = "";
+      base.hash = "";
+      relayUrl = base.toString();
+
+      let socket = directH10RelaySocketRef.current;
+      if (!socket || [WebSocket.CLOSING, WebSocket.CLOSED].includes(socket.readyState)) {
+        socket = new WebSocket(relayUrl);
+        directH10RelaySocketRef.current = socket;
+      }
+      if (socket.readyState === WebSocket.CONNECTING) {
+        await new Promise((resolve, reject) => {
+          const timeout = window.setTimeout(() => reject(new Error("Sarah timed out connecting to the OBS relay.")), 5000);
+          socket.addEventListener("open", () => {
+            window.clearTimeout(timeout);
+            resolve();
+          }, { once: true });
+          socket.addEventListener("error", () => {
+            window.clearTimeout(timeout);
+            reject(new Error("Sarah could not connect to the OBS relay."));
+          }, { once: true });
+        });
+      }
+      if (socket.readyState !== WebSocket.OPEN) throw new Error("The local OBS relay is not ready.");
+      socket.send(JSON.stringify({ type: "obs_stop_record" }));
+
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        await wait(300);
+        const response = await fetch(apiUrl("/live-capture/status"), { cache: "no-store" });
+        if (!response.ok) continue;
+        const nextStatus = await response.json();
+        setStatus(nextStatus);
+        setRecording(nextStatus?.hr?.recording || null);
+        if (!nextStatus?.hr?.recording?.active) {
+          setLaunchState({ phase: "recovery", message: "Recording stopped. Sarah is finalizing the session.", steps: [], busy: false, error: "" });
+          toast({ title: "Session recording stopped", description: "Sarah is attaching telemetry and preparing the record for review." });
+          return;
+        }
+      }
+      throw new Error("OBS did not confirm that recording stopped within 20 seconds.");
+    } catch (error) {
+      toast({
+        title: "Session could not be stopped",
+        description: error?.message || "Stop recording in OBS, then Sarah will finalize the same session.",
+        variant: "destructive",
+      });
+    } finally {
+      setEndingSession(false);
+    }
+  }, [endingSession, recordingTransportActive, toast]);
+
   useEffect(() => {
     perinealProtocolRef.current = perinealProtocol;
   }, [perinealProtocol]);
@@ -5460,7 +5523,26 @@ export default function LiveCapture() {
     } catch {}
   }, [getAudioContext]);
 
-  const appendVoiceAnnotation = useCallback(async (text, timeS) => {
+  const buildLivePhysiologySnapshot = useCallback(() => ({
+    hr_bpm: readNumber(latestHrRef.current?.currentHr, latestHrRef.current?.hr),
+    baseline_hr_bpm: readNumber(latestHrRef.current?.baselineHr, latestHrRef.current?.baseline_hr),
+    rmssd_ms: hrvRmssd ?? null,
+    hrv_quality: hrvQuality || "unavailable",
+    respiration_bpm: h10Respiration.available ? readNumber(h10Respiration.bpm) : null,
+    respiration_confidence: h10Respiration.confidence || "unavailable",
+    possible_breath_hold: Boolean(h10Respiration.possibleBreathHold),
+    chest_motion_mg_rms: h10Motion.available ? readNumber(h10Motion.dynamicRmsMilliG) : null,
+    chest_motion_state: h10Motion.class || "unavailable",
+    emg_left_pct: readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct),
+    emg_right_pct: readNumber(emgTelemetry?.right_pct),
+    howl_channel_a: readNumber(howlTelemetry?.channel_a_intensity, howlTelemetry?.channelAIntensity),
+    howl_channel_b: readNumber(howlTelemetry?.channel_b_intensity, howlTelemetry?.channelBIntensity),
+    capture_kind: captureKind,
+    interpretation: captureIsBodyExploration ? "body_exploration" : prediction.label,
+    interpretation_confidence: captureIsBodyExploration ? null : prediction.controllerConfidence,
+  }), [captureIsBodyExploration, captureKind, emgTelemetry, h10Motion, h10Respiration, howlTelemetry, hrvQuality, hrvRmssd, prediction.controllerConfidence, prediction.label]);
+
+  const appendVoiceAnnotation = useCallback(async (text, timeS, physiologySnapshot = null) => {
     const clean = normalizeVoiceAnnotationText(text);
     if (!clean) return;
     const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();
@@ -5479,14 +5561,16 @@ export default function LiveCapture() {
       },
       source: "live_voice_annotation",
       created_at: new Date().toISOString(),
-      hr_bpm: readNumber(latestHrRef.current?.currentHr, latestHrRef.current?.hr),
+      hr_bpm: physiologySnapshot?.hr_bpm ?? readNumber(latestHrRef.current?.currentHr, latestHrRef.current?.hr),
+      context_window: { before_seconds: 10, after_seconds: 20 },
+      physiology_snapshot: physiologySnapshot || buildLivePhysiologySnapshot(),
     };
     const updated = [...(session.event_timeline || []), nextEvent].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0));
     await liveRecordApi.update(sessionId, { event_timeline: updated });
     setLiveEvents(updated);
     setActiveSessionDoc((prev) => (prev ? { ...prev, event_timeline: updated } : prev));
     setLastVoiceNote(`[${Math.floor(nextEvent.time_s / 60)}:${String(nextEvent.time_s % 60).padStart(2, "0")}] ${clean}`);
-  }, [ensureSession, liveRecordApi, liveSession]);
+  }, [buildLivePhysiologySnapshot, ensureSession, liveRecordApi, liveSession]);
 
   const updateActiveSession = useCallback(async (patch) => {
     const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();
@@ -5627,7 +5711,8 @@ export default function LiveCapture() {
     chartTime: telemetryHistory[telemetryHistory.length - 1]?.time,
     createdAt: new Date().toISOString(),
     hrBpm: readNumber(latestHrRef.current?.currentHr, latestHrRef.current?.hr),
-  }), [getCurrentSessionTime, telemetryHistory]);
+    physiologySnapshot: buildLivePhysiologySnapshot(),
+  }), [buildLivePhysiologySnapshot, getCurrentSessionTime, telemetryHistory]);
 
   const recordQuickLiveEvent = useCallback(async (command) => {
     if (!command) return false;
@@ -5642,6 +5727,8 @@ export default function LiveCapture() {
       source: command.source || "live_quick_pad",
       created_at: moment.createdAt,
       hr_bpm: moment.hrBpm ?? null,
+      context_window: { before_seconds: 10, after_seconds: 20 },
+      physiology_snapshot: moment.physiologySnapshot,
     };
     await appendLiveSessionEvents(event);
     if (command.phaseKey && !captureIsBodyExploration) {
@@ -5906,6 +5993,7 @@ export default function LiveCapture() {
       const recorder = new MediaRecorder(stream, { mimeType });
       voiceChunksRef.current = [];
       voiceNoteTimeRef.current = getCurrentSessionTime();
+      voiceNotePhysiologyRef.current = buildLivePhysiologySnapshot();
       const startedAt = Date.now();
       recorder.ondataavailable = (event) => {
         if (event.data?.size > 0) voiceChunksRef.current.push(event.data);
@@ -5934,7 +6022,7 @@ export default function LiveCapture() {
           });
           const text = normalizeVoiceAnnotationText(res.data?.text);
           if (text) {
-            await appendVoiceAnnotation(text, voiceNoteTimeRef.current);
+            await appendVoiceAnnotation(text, voiceNoteTimeRef.current, voiceNotePhysiologyRef.current);
             setVoiceStatus("Annotation saved. Listening for “Sarah”… say “end” to stop.");
           } else {
             setVoiceStatus("No speech detected. Listening for “Sarah”… say “end” to stop.");
@@ -5995,7 +6083,7 @@ export default function LiveCapture() {
       setAnnotationRecording(false);
       if (voiceWakeEnabledRef.current) window.setTimeout(startWakeListening, 600);
     }
-  }, [appendVoiceAnnotation, getAudioContext, getCurrentSessionTime, startWakeListening, stopVoiceAnnotation, stopWakeListening, voiceRecordingSupported]);
+  }, [appendVoiceAnnotation, buildLivePhysiologySnapshot, getAudioContext, getCurrentSessionTime, startWakeListening, stopVoiceAnnotation, stopWakeListening, voiceRecordingSupported]);
 
   useEffect(() => {
     startVoiceAnnotationRef.current = startVoiceAnnotation;
@@ -6190,7 +6278,7 @@ export default function LiveCapture() {
         </label>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-2 sm:grid-cols-3">
         <button
           type="button"
           onClick={() => sendHowlControlCommand("load_activity", { activityName: selectedHowlActivity?.name, activityDisplayName: selectedHowlActivity?.displayName, play: false })}
@@ -6214,14 +6302,6 @@ export default function LiveCapture() {
           className="rounded-lg bg-primary/10 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-45"
         >
           Power down
-        </button>
-        <button
-          type="button"
-          onClick={sendHowlEmergencyStop}
-          disabled={howlControlBusy === "emergency_stop"}
-          className="rounded-lg bg-destructive px-3 py-2 text-xs font-semibold text-destructive-foreground hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          STOP HOWL NOW
         </button>
       </div>
 
@@ -6297,14 +6377,6 @@ export default function LiveCapture() {
           >
             <Zap className="h-4 w-4 text-primary" />
             Howl {fmtNumber(howlSelectedChannelIntensity, 0)}
-          </button>
-          <button
-            type="button"
-            onClick={sendHowlEmergencyStop}
-            disabled={howlControlBusy === "emergency_stop"}
-            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg border-2 border-red-200 bg-red-600 px-5 py-2 text-base font-black tracking-wide text-white shadow-lg hover:bg-red-700 disabled:opacity-60"
-          >
-            <AlertTriangle className="h-5 w-5" /> STOP HOWL NOW
           </button>
           <button
             type="button"
@@ -6412,14 +6484,6 @@ export default function LiveCapture() {
                   <span className="text-[11px] text-white/75">{mediaVideo.name}</span>
                 </div>
               )}
-              <button
-                type="button"
-                onClick={sendHowlEmergencyStop}
-                disabled={howlControlBusy === "emergency_stop"}
-                className="absolute bottom-3 right-3 z-20 inline-flex min-h-14 items-center gap-2 rounded-xl border-2 border-white bg-red-600 px-5 py-3 text-base font-black tracking-wide text-white shadow-2xl hover:bg-red-700 disabled:opacity-60"
-              >
-                <AlertTriangle className="h-6 w-6" /> STOP HOWL NOW
-              </button>
             </>
           ) : mediaProcessing ? (
             <div className="flex h-full min-h-[22rem] w-full flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
@@ -6586,7 +6650,9 @@ export default function LiveCapture() {
     && serverHrSource
     && (serverHrSource !== hrSourceSettings.source || !directH10Status.connected)
   );
-  const launchActive = recordingActive || Boolean(liveSession?.activeSessionId);
+  const launchActive = recordingTransportActive || Boolean(liveSession?.activeSessionId && (liveSession?.active || liveSession?.importing));
+  const completedLiveSession = Boolean(liveSession?.activeSessionId && !liveSession?.active && !liveSession?.importing);
+  const captureKindLabel = CAPTURE_KINDS.find((kind) => kind.value === captureKind)?.label || "Session";
   const launchReadiness = {
     h10: {
       label: sharedServerHr ? "Shared HR" : hrSourceSettings.source === "direct_h10" ? "H10" : "HR Source",
@@ -6645,6 +6711,7 @@ export default function LiveCapture() {
       : liveCueSettings.enabled && !liveCueAudio.ready
         ? "Prepare Sarah and Start Session"
         : "Start Session";
+  const showLiveControlBar = launchActive || howlControlEnabled || howlLive || endingSession;
   const showAdvancedSetupConsole = advancedSetupOpen;
   const obsPreferred = Boolean(launchProfile.obsEnabled && !launchProfile.telemetryOnlyFallback);
   const h10RawStreamsActive = Boolean(
@@ -6882,7 +6949,94 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {!focusView && (<section className={`rounded-2xl border p-4 shadow-sm ${liveHealthToneClasses(liveGuidanceMode.tone)}`} aria-live="polite">
+      {showLiveControlBar && (
+        <section className={`${focusView ? "fixed left-3 right-3 top-3 z-[80]" : "sticky top-2 z-50"} rounded-2xl border border-primary/35 bg-card/95 p-3 shadow-xl backdrop-blur`} aria-label="Live session controls">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className={`h-3 w-3 shrink-0 rounded-full ${recordingActive ? "animate-pulse bg-red-500" : recordingPaused ? "bg-amber-400" : "bg-muted-foreground/45"}`} />
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-primary">
+                  {recordingTransportActive ? "Step 2 · Live cockpit" : endingSession || liveSession?.importing ? "Step 3 · Finalizing" : "Safety controls"}
+                </p>
+                <p className="truncate text-base font-bold text-foreground">
+                  {recordingPaused
+                    ? `Paused at ${fmtMmSs(getCurrentSessionTime())}`
+                    : recordingActive
+                      ? `${captureKindLabel} recording · ${fmtMmSs(getCurrentSessionTime())}`
+                      : endingSession || liveSession?.importing
+                        ? "Preserving telemetry and preparing review"
+                        : "Howl controls available before launch"}
+                </p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {recording?.filename || (recordingActive ? "OBS recording confirmed" : liveGuidanceMode.helper)}
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {recordingTransportActive && (
+                <button
+                  type="button"
+                  onClick={annotationRecording ? stopVoiceAnnotation : startManualVoiceNote}
+                  disabled={!voiceRecordingSupported}
+                  className={`inline-flex min-h-11 items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold disabled:opacity-45 ${annotationRecording ? "bg-primary text-primary-foreground" : "border border-border bg-muted/50 text-foreground hover:bg-muted"}`}
+                >
+                  {annotationRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                  {annotationRecording ? "Save note" : "Voice note"}
+                </button>
+              )}
+              {recordingTransportActive && !focusView && (
+                <button
+                  type="button"
+                  onClick={() => setDetailedTelemetryOpen((open) => !open)}
+                  className={`inline-flex min-h-11 items-center gap-2 rounded-xl border px-4 py-2 text-sm font-bold ${detailedTelemetryOpen ? "border-primary bg-primary/10 text-primary" : "border-border bg-muted/50 text-foreground hover:bg-muted"}`}
+                >
+                  <Activity className="h-4 w-4" /> {detailedTelemetryOpen ? "Hide charts" : "Detailed telemetry"}
+                </button>
+              )}
+              {(howlControlEnabled || howlLive || howlConnectionSucceeded) && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setHowlQuickModalOpen(true)}
+                    className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border bg-muted/50 px-4 py-2 text-sm font-bold text-foreground hover:bg-muted"
+                  >
+                    <Zap className="h-4 w-4 text-primary" /> Howl {fmtNumber(howlSelectedChannelIntensity, 0)}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={sendHowlEmergencyStop}
+                    disabled={howlControlBusy === "emergency_stop"}
+                    className="inline-flex min-h-12 items-center gap-2 rounded-xl bg-red-600 px-5 py-2 text-sm font-black tracking-wide text-white shadow-lg hover:bg-red-700 disabled:opacity-55"
+                  >
+                    <AlertTriangle className="h-5 w-5" /> STOP HOWL NOW
+                  </button>
+                </>
+              )}
+              {recordingTransportActive && (
+                <button
+                  type="button"
+                  onClick={stopObsRecording}
+                  disabled={endingSession}
+                  className="inline-flex min-h-12 items-center gap-2 rounded-xl border-2 border-destructive/50 bg-destructive/10 px-5 py-2 text-sm font-black text-destructive hover:bg-destructive/20 disabled:opacity-55"
+                >
+                  <Video className="h-5 w-5" /> {endingSession ? "Ending safely…" : "End Session"}
+                </button>
+              )}
+              {!focusView && (
+                <button
+                  type="button"
+                  onClick={() => setAdvancedSetupOpen((open) => !open)}
+                  className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-sm font-bold text-foreground hover:bg-muted"
+                >
+                  <SlidersHorizontal className="h-4 w-4" /> {advancedSetupOpen ? "Hide setup" : "Setup"}
+                </button>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {!focusView && launchActive && (<section className={`rounded-2xl border p-4 shadow-sm ${liveHealthToneClasses(liveGuidanceMode.tone)}`} aria-live="polite">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
@@ -6909,7 +7063,7 @@ export default function LiveCapture() {
             />
           ))}
         </div>
-        <div className="mt-4 rounded-xl border border-current/15 bg-black/10 p-3">
+        {recordingActive && <div className="mt-4 rounded-xl border border-current/15 bg-black/10 p-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider">
@@ -6936,10 +7090,34 @@ export default function LiveCapture() {
               </button>
             ))}
           </div>
-        </div>
+        </div>}
       </section>)}
 
-      {!focusView && !mainTelemetryView && !launchActive && (
+      {!focusView && completedLiveSession && (
+        <section className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 shadow-sm">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">
+                <CheckCircle2 className="h-4 w-4" /> Step 3 · Capture complete
+              </p>
+              <p className="mt-1 text-lg font-bold text-foreground">The recording and telemetry are ready for review.</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {liveSession?.lastImportResult
+                  ? `Saved ${liveSession.lastImportResult.hr_rows || 0} heart-rate rows${liveSession.lastImportResult.emg_attached ? " with EMG attached" : ""}.`
+                  : "Sarah preserved the completed live record."}
+              </p>
+            </div>
+            <Link
+              to={`/${captureIsBodyExploration ? "exploration" : "sessions"}/${liveSession.activeSessionId}`}
+              className="inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-black text-white hover:bg-emerald-700"
+            >
+              <ExternalLink className="h-4 w-4" /> Review capture
+            </Link>
+          </div>
+        </section>
+      )}
+
+      {!focusView && !launchActive && (
         <LiveCaptureLaunchpad
           setupSummary={launchSetupSummary}
           readiness={launchReadiness}
@@ -6948,6 +7126,12 @@ export default function LiveCapture() {
           primaryDisabled={launchActive}
           progress={launchState.steps}
           active={launchActive}
+          captureLabel={captureKindLabel}
+          captureKind={captureKind}
+          captureKinds={CAPTURE_KINDS}
+          obsRequired={obsPreferred}
+          onOpenSetup={() => setAdvancedSetupOpen(true)}
+          onCaptureKindChange={setCaptureKind}
           onStart={() => startFromLaunchpad().catch((error) => {
             toast({
               title: "Live Capture launch paused",
@@ -7073,7 +7257,7 @@ export default function LiveCapture() {
         />
       )}
 
-      {!focusView && !mainTelemetryView && launchState.error && (
+      {!focusView && launchState.error && (
         <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
           <p className="font-semibold">Launch stopped at: {launchState.message}</p>
           <p className="mt-1">{launchState.error}</p>
@@ -7119,19 +7303,6 @@ export default function LiveCapture() {
           icon={Radio}
         />
         <div className="flex flex-wrap items-center gap-2 md:mt-1">
-          <div className="inline-flex rounded-lg border border-border bg-card p-1 shadow-sm" aria-label="Live capture record type">
-            {CAPTURE_KINDS.map((kind) => (
-              <button
-                key={kind.value}
-                type="button"
-                disabled={recordingTransportActive}
-                onClick={() => setCaptureKind(kind.value)}
-                className={`rounded-md px-3 py-1.5 text-sm font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${captureKind === kind.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
-              >
-                {kind.label}
-              </button>
-            ))}
-          </div>
           <button
             type="button"
             onClick={() => setFocusView(true)}
@@ -7443,14 +7614,6 @@ export default function LiveCapture() {
               </button>
               <button
                 type="button"
-                onClick={sendHowlEmergencyStop}
-                disabled={howlControlBusy === "emergency_stop"}
-                className="rounded-md bg-red-600 px-2.5 py-1.5 text-xs font-black text-white hover:bg-red-700 disabled:opacity-50"
-              >
-                STOP HOWL NOW
-              </button>
-              <button
-                type="button"
                 onClick={() => refreshHowlTelemetry({ forceSettings: true })}
                 disabled={howlRefreshing}
                 className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
@@ -7491,16 +7654,19 @@ export default function LiveCapture() {
               </button>
             </SetupTile>
 
-            {!captureIsBodyExploration && (
-              <SetupTile
-                icon={<Volume2 className="h-3.5 w-3.5 text-primary" />}
-                label="Sarah Encouragement"
-                value={liveCueSettings.enabled ? "On" : "Off"}
-                helper={liveCueSettings.enabled
-                  ? `${LIVE_CUE_PRESETS[liveCueSettings.style]?.label || "Sarah"} · ${liveCueAudio.ready ? "voice ready" : liveCueAudio.status.message || "prepares at session start"}`
-                  : "Opt-in calming encouragement during build, plateau, final approach, and recovery."}
-                active={liveCueSettings.enabled}
-              >
+            <SetupTile
+              icon={<Volume2 className="h-3.5 w-3.5 text-primary" />}
+              label={captureIsBodyExploration ? "Relaxation Coaching" : "Sarah Encouragement"}
+              value={liveCueSettings.enabled ? "On" : "Off"}
+              helper={liveCueSettings.enabled
+                ? captureIsBodyExploration
+                  ? `Stress-aware relaxation prompts · ${liveCueAudio.ready ? "voice ready" : liveCueAudio.status.message || "prepares at session start"}`
+                  : `${LIVE_CUE_PRESETS[liveCueSettings.style]?.label || "Sarah"} · ${liveCueAudio.ready ? "voice ready" : liveCueAudio.status.message || "prepares at session start"}`
+                : captureIsBodyExploration
+                  ? "Optional, rate-limited breathing and muscle-relaxation prompts when sustained physiological strain is detected."
+                  : "Optional encouragement during build, plateau, final approach, and recovery."}
+              active={liveCueSettings.enabled}
+            >
                 <button
                   type="button"
                   onClick={toggleLiveEncouragement}
@@ -7508,7 +7674,7 @@ export default function LiveCapture() {
                 >
                   {liveCueSettings.enabled ? "Encouragement On" : "Turn On"}
                 </button>
-                <select
+                {!captureIsBodyExploration && <select
                   value={liveCueSettings.style}
                   onChange={(event) => setLiveCueSettings((previous) => ({ ...previous, style: event.target.value }))}
                   className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground"
@@ -7519,9 +7685,8 @@ export default function LiveCapture() {
                   <option value="intimate_coaching">Direct encouragement</option>
                   <option value="intimate_lovers_voice">Intimate lover</option>
                   <option value="custom">Custom encouragement</option>
-                </select>
-              </SetupTile>
-            )}
+                </select>}
+            </SetupTile>
 
             {!captureIsBodyExploration && (
               <SetupTile
@@ -7912,14 +8077,6 @@ export default function LiveCapture() {
                       className="rounded-lg bg-primary/10 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-45"
                     >
                       Power down B
-                    </button>
-                    <button
-                      type="button"
-                      onClick={sendHowlEmergencyStop}
-                      disabled={howlControlBusy === "emergency_stop"}
-                      className="rounded-lg bg-destructive px-3 py-2 text-xs font-semibold text-destructive-foreground hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-45"
-                    >
-                      STOP HOWL NOW
                     </button>
                   </div>
                   {!howlManualControlsUnlocked && (
@@ -8624,7 +8781,7 @@ export default function LiveCapture() {
         </CollapsibleControlSection>
       )}
 
-      <div
+      {(focusView || mainTelemetryView || (launchActive && detailedTelemetryOpen)) && <div
         className={focusView
           ? "fixed inset-0 z-[60] flex h-[100dvh] flex-col overflow-hidden bg-card p-3"
           : `rounded-xl border border-border bg-card ${distanceTelemetryView ? "space-y-6 p-5 md:p-6" : "space-y-4 p-4"}`}
@@ -9218,7 +9375,7 @@ export default function LiveCapture() {
         )}
         </div>
         </div>
-      </div>
+      </div>}
 
       {!focusView && showAdvancedSetupConsole && <CollapsibleControlSection
         icon={FileText}
