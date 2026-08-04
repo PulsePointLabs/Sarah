@@ -49,8 +49,22 @@ test('vitals questions retrieve measured session-window glucose and session evid
 
   assert.ok(evidence.length >= 2);
   assert.ok(evidence.every((item) => item.evidenceClass === 'measured'));
-  assert.match(evidence.map((item) => item.text).join(' '), /Recent imported blood glucose history/i);
+  assert.match(evidence.map((item) => item.text).join(' '), /Imported blood glucose history/i);
   assert.match(evidence.map((item) => item.text).join(' '), /108 mg\/dL/i);
+});
+
+test('vitals retrieval includes glucose, blood pressure, pulse ox, and body composition stores together', () => {
+  const evidence = findRelevantVitalEvidence([], 'Can you see all my blood sugar, BP, SpO2, weight, and body composition?', {
+    bloodGlucose: [{ measured_at: '2026-08-01T05:00:00-04:00', glucose_mg_dl: 90, source_app: 'OneTouch' }],
+    bloodPressure: [{ measured_at: '2026-08-01T05:05:00-04:00', systolic_mm_hg: 125, diastolic_mm_hg: 88, pulse_bpm: 100 }],
+    pulseOx: [{ measured_at: '2026-08-01T05:10:00-04:00', spo2_percent: 98, pulse_bpm: 96 }],
+    bodyComposition: [{ measured_at: '2026-08-01T04:30:00-04:00', weight_kg: 81.48, body_fat_percent: 18.2 }],
+  });
+  const text = evidence.map((item) => item.text).join(' ');
+  assert.match(text, /90 mg\/dL/);
+  assert.match(text, /125\/88 mmHg/);
+  assert.match(text, /SpO2 98%/);
+  assert.match(text, /179\.6 lb/);
 });
 
 test('last night around midnight retrieves body exploration records by local time without keyword overlap', () => {

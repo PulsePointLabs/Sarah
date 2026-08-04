@@ -23,7 +23,7 @@ function clean(value, max = 900) {
 }
 
 function dateValue(record = {}) {
-  const exact = record.capture_started_at || record.created_date || record.updated_date;
+  const exact = record.measured_at || record.capture_started_at || record.created_date || record.updated_date;
   if (exact) {
     const exactValue = new Date(exact).getTime();
     if (Number.isFinite(exactValue)) return exactValue;
@@ -234,9 +234,12 @@ function medicationEvidence(user = {}, records = [], message = '') {
   }] : [];
 }
 
-export function findRelevantVitalEvidence(records = [], message = '', glucoseReadings = [], options = {}) {
+export function findRelevantVitalEvidence(records = [], message = '', vitalReadings = {}, options = {}) {
   if (!VITALS_QUERY.test(message)) return [];
-  const limit = Math.max(1, Math.min(10, Number(options.limit) || 6));
+  const limit = Math.max(1, Math.min(12, Number(options.limit) || 8));
+  const stores = Array.isArray(vitalReadings)
+    ? { bloodGlucose: vitalReadings }
+    : (vitalReadings || {});
   const sessionEvidence = records
     .map((record) => ({
       record,
@@ -252,29 +255,48 @@ export function findRelevantVitalEvidence(records = [], message = '', glucoseRea
       relevance: 1.75,
       text: `${clean(record.date || record.created_date, 40).slice(0, 10) || 'undated'} measured session-window context: ${clean(text, 1100)}`,
     }));
-
-  const asksForGlucose = /\b(?:blood glucose|glucose|blood sugar|glyc)\b/i.test(message);
-  if (!asksForGlucose) return sessionEvidence;
-  const recentGlucose = (Array.isArray(glucoseReadings) ? glucoseReadings : [])
-    .filter((reading) => Number.isFinite(Number(reading?.glucose_mg_dl)))
+  const recent = (rows, valid, rowLimit = 16) => (Array.isArray(rows) ? rows : [])
+    .filter(valid)
     .sort((a, b) => dateValue(b) - dateValue(a))
-    .slice(0, 12);
-  if (!recentGlucose.length) return sessionEvidence;
-  const history = recentGlucose.map((reading) => {
-    const measuredAt = clean(reading.measured_at || reading.date || reading.created_date, 40);
-    const meal = clean(reading.meal_tag, 80);
-    return `${measuredAt || 'time unavailable'}: ${Math.round(Number(reading.glucose_mg_dl))} mg/dL${meal ? ` (${meal})` : ''}`;
-  });
-  return [
-    ...sessionEvidence,
-    {
+    .slice(0, rowLimit);
+  const measuredAt = (reading) => clean(reading.measured_at || reading.date || reading.created_date, 40) || 'time unavailable';
+  const globalEvidence = [];
+  const addHistory = (sourceType, sourceId, label, allRows, rows, formatter) => {
+    if (!rows.length) return;
+    globalEvidence.push({
       evidenceClass: 'measured',
-      sourceType: 'blood_glucose_history',
-      sourceId: 'recent-blood-glucose',
-      relevance: 1.9,
-      text: `Recent imported blood glucose history: ${history.join('; ')}`,
-    },
-  ].slice(0, limit + 1);
+      sourceType,
+      sourceId,
+      relevance: 2.1,
+      text: `${label} (${rows.length} most recent of ${Array.isArray(allRows) ? allRows.length : rows.length} stored): ${rows.map(formatter).join('; ')}`,
+    });
+  };
+  const glucose = recent(stores.bloodGlucose, (reading) => Number.isFinite(Number(reading?.glucose_mg_dl)));
+  addHistory('blood_glucose_history', 'recent-blood-glucose', 'Imported blood glucose history', stores.bloodGlucose, glucose, (reading) => {
+    const meal = clean(reading.meal_tag, 80);
+    const source = clean(reading.source_app || reading.source_device, 100);
+    return `${measuredAt(reading)}: ${Math.round(Number(reading.glucose_mg_dl))} mg/dL${meal ? ` (${meal})` : ''}${source ? ` [${source}]` : ''}`;
+  });
+  const pressure = recent(stores.bloodPressure, (reading) => Number.isFinite(Number(reading?.systolic_mm_hg ?? reading?.systolic)) && Number.isFinite(Number(reading?.diastolic_mm_hg ?? reading?.diastolic)));
+  addHistory('blood_pressure_history', 'recent-blood-pressure', 'Imported blood pressure history', stores.bloodPressure, pressure, (reading) => {
+    const systolic = Math.round(Number(reading.systolic_mm_hg ?? reading.systolic));
+    const diastolic = Math.round(Number(reading.diastolic_mm_hg ?? reading.diastolic));
+    const pulse = Number(reading.pulse_bpm ?? reading.pulse);
+    return `${measuredAt(reading)}: ${systolic}/${diastolic} mmHg${Number.isFinite(pulse) ? `, pulse ${Math.round(pulse)} bpm` : ''}`;
+  });
+  const pulseOx = recent(stores.pulseOx, (reading) => Number.isFinite(Number(reading?.spo2_percent ?? reading?.spo2 ?? reading?.oxygen_saturation)), 24);
+  addHistory('pulse_ox_history', 'recent-pulse-ox', 'Imported pulse oximetry history', stores.pulseOx, pulseOx, (reading) => {
+    const spo2 = Math.round(Number(reading.spo2_percent ?? reading.spo2 ?? reading.oxygen_saturation));
+    const pulse = Number(reading.pulse_bpm ?? reading.pulse);
+    return `${measuredAt(reading)}: SpO2 ${spo2}%${Number.isFinite(pulse) ? `, pulse ${Math.round(pulse)} bpm` : ''}`;
+  });
+  const composition = recent(stores.bodyComposition, (reading) => Number.isFinite(Number(reading?.weight_kg)));
+  addHistory('body_composition_history', 'recent-body-composition', 'Imported weight and body-composition history', stores.bodyComposition, composition, (reading) => {
+    const weightLb = Number(reading.weight_kg) * 2.2046226218;
+    const bodyFat = Number(reading.body_fat_percent);
+    return `${measuredAt(reading)}: ${weightLb.toFixed(1)} lb${Number.isFinite(bodyFat) ? `, body fat ${bodyFat}%` : ''}`;
+  });
+  return [...globalEvidence, ...sessionEvidence].slice(0, limit);
 }
 
 function persistExplicitCorrection(correction, scopeId, message, now) {
@@ -353,7 +375,12 @@ export function prepareSarahConversationContext({
     ...findRelevantSessionEvidence(records, message, { limit: 5 }),
     ...procedureEvidence(message),
     ...medicationEvidence(user, records, message),
-    ...findRelevantVitalEvidence(records, message, listEntities('BloodGlucoseReading'), { limit: 6 }),
+    ...findRelevantVitalEvidence(records, message, {
+      bloodPressure: listEntities('BloodPressureReading'),
+      bloodGlucose: listEntities('BloodGlucoseReading'),
+      bodyComposition: listEntities('BodyCompositionReading'),
+      pulseOx: listEntities('PulseOxReading'),
+    }, { limit: 8 }),
   ].slice(0, 12);
   const languageProfile = getEntity('SarahLanguageProfile', 'default') || {};
   const plan = buildResponsePlan({

@@ -34,6 +34,7 @@ import {
   isLongFormChatRequest,
 } from "@/lib/chatRequestMode";
 import { loadSarahConversationContext } from "@/lib/sarahConversationContext";
+import { MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
 
 const PROFILE_CATEGORIES = [
   { key: "physical", label: "Physical Baseline", emoji: "🫀", hint: "Body metrics, fitness, resting HR, medications" },
@@ -73,8 +74,8 @@ const REVIEW_BACKGROUND_SLOW_HINT_MS = 45000;
 const CHAT_PROVIDER_HISTORY_LIMIT = 10;
 const CHAT_INTERACTIVE_HISTORY_LIMIT = 6;
 const CHAT_HISTORY_MESSAGE_MAX_CHARS = 520;
-const CHAT_INTERACTIVE_CONTEXT_MAX_CHARS = 9000;
-const CHAT_VISUAL_REVIEW_CONTEXT_MAX_CHARS = 9000;
+const CHAT_INTERACTIVE_CONTEXT_MAX_CHARS = 14000;
+const CHAT_VISUAL_REVIEW_CONTEXT_MAX_CHARS = 18000;
 
 function getSpeechRecognitionConstructor() {
   if (typeof window === "undefined") return null;
@@ -803,6 +804,8 @@ export default function AIChat({
             frameIndex: frame.frameIndex || index + 1,
             processedClipUrl: serverUrl(processed.clip_url || processed.url || processed.file_url || ""),
             motionSummary: index === 0 ? processed.motion_summary || null : null,
+            momentTelemetry: clip?.momentTelemetry || null,
+            sessionPhysiologyEvidence: clip?.sessionPhysiologyEvidence || null,
           },
         };
       });
@@ -837,6 +840,8 @@ export default function AIChat({
         frameIndex: index + 1,
         processedClipUrl: hasDirectClipSource ? serverUrl(sourceUrl) : "",
         motionSummary: null,
+        momentTelemetry: clip?.momentTelemetry || null,
+        sessionPhysiologyEvidence: clip?.sessionPhysiologyEvidence || null,
       },
     }));
   }, [evidenceScope, fetchUrlAsFile, nextChatStatus, selectedImages.length, sessionVideoSources]);
@@ -1339,6 +1344,8 @@ export default function AIChat({
             frameIndex: frame.frameIndex || index + 1,
             processedClipUrl: serverUrl(clip.clip_url || clip.url || clip.file_url || ""),
             motionSummary: clip.motion_summary || null,
+            momentTelemetry: clip?.momentTelemetry || null,
+            sessionPhysiologyEvidence: clip?.sessionPhysiologyEvidence || null,
           },
         });
       }
@@ -1385,6 +1392,8 @@ export default function AIChat({
       timelineOffsetSeconds: Number(pendingTimestampReview?.timelineOffsetSeconds) || 0,
       timelineLabel: evidenceScope === "body_exploration" ? "body exploration timeline" : "session timeline",
       promptText,
+      momentTelemetry: pendingTimestampReview?.momentTelemetry || null,
+      sessionPhysiologyEvidence: pendingTimestampReview?.sessionPhysiologyEvidence || null,
     }).catch((error) => {
       setImageError(error?.message || "Could not pull frames for this session moment.");
       setInput((current) => current.trim() ? current : promptText);
@@ -2184,7 +2193,29 @@ export default function AIChat({
           motionSummary.note || null,
         ].filter(Boolean).join("\n")
       : "";
+    const exactMomentTelemetry = imagePayload.metadata
+      .map((item) => item.sourceVideo?.momentTelemetry)
+      .find(Boolean);
+    const sessionPhysiologyEvidence = imagePayload.metadata
+      .map((item) => item.sourceVideo?.sessionPhysiologyEvidence)
+      .find(Boolean);
+    const alignedPhysiologyContext = exactMomentTelemetry ? `
+EXACT ALIGNED MOMENT TELEMETRY:
+${JSON.stringify(exactMomentTelemetry, null, 2)}
 
+${MOMENT_TELEMETRY_INTERPRETATION_RULES}
+
+SESSION ENTRY, TREND, AND NEARBY-VITAL CONTEXT:
+${JSON.stringify(sessionPhysiologyEvidence || {}, null, 2)}
+
+SYNC AND BASELINE RULES:
+- The exact aligned moment packet is authoritative for claims about this video window. Never say exact telemetry is unavailable when exact-window rows are present.
+- Never borrow an HRV, heart-rate, respiration, motion, or EMG value from another window and describe it as entering, preceding, or occurring during this moment.
+- Keep recorded-entry physiology, whole-session trends, and nearby vital signs explicitly separate from exact-moment telemetry.
+- The first recorded window is an entry-state reference, not proof of a true resting baseline.
+- When asked about baseline, discuss available entry HR, HRV, respiration, and motion plus nearby blood pressure, blood glucose, SpO2/pulse, weight, and body composition. State whether each was measured before, during, or after the session; proximity does not prove causation.
+- Use pounds as the primary narrative unit for weight and body-composition context.
+` : "";
     const intelligence = await loadSarahConversationContext({
       scopeId: scopeId || (mode === "profile" ? "profile" : "session"),
       mode,
@@ -2198,9 +2229,12 @@ export default function AIChat({
     });
     const shouldPivot = Boolean(intelligence?.plan?.exploreNewThread);
 
-    const groundingContext = isVisualReviewRequest
+    const profileGroundingContext = isVisualReviewRequest
       ? clipPromptText(buildAIGroundingContext(userProfile), CHAT_VISUAL_REVIEW_CONTEXT_MAX_CHARS)
       : "";
+    const groundingContext = [profileGroundingContext, alignedPhysiologyContext]
+      .filter(Boolean)
+      .join("\n\n");
     let sarahVsVitalsContext = "";
     const shouldLoadSarahVsVitalsContext = mode === "session" && isVisualReviewRequest;
     if (shouldLoadSarahVsVitalsContext) {

@@ -33,6 +33,10 @@ function rowHr(row) {
   return numberOrNull(row?.hr_smoothed ?? row?.hr ?? row?.heart_rate ?? row?.bpm);
 }
 
+export function mapVideoTimeToSessionTime(sourceTimeSeconds = 0, timelineOffsetSeconds = 0) {
+  return Math.max(0, (Number(sourceTimeSeconds) || 0) + (Number(timelineOffsetSeconds) || 0));
+}
+
 function rowRr(row) {
   return numberOrNull(row?.rr_ms ?? row?.rr_interval_ms ?? row?.rrIntervalMs);
 }
@@ -98,6 +102,44 @@ function summarizeHr(rows = []) {
     bpm_start: summary.start,
     bpm_end: summary.end,
     bpm_delta: summary.delta,
+  };
+}
+
+function counts(rows = [], key) {
+  return rows.reduce((result, row) => {
+    const value = String(row?.[key] || "").trim();
+    if (value) result[value] = (result[value] || 0) + 1;
+    return result;
+  }, {});
+}
+
+function summarizeMultimodal(rows = []) {
+  if (!rows.length) return null;
+  const usableRespiration = rows.filter((row) => (
+    !row.respiration_unavailable_reason
+    && Number.isFinite(numberOrNull(row.respiration_bpm))
+    && numberOrNull(row.respiration_bpm) > 0
+  ));
+  const usableMotion = rows.filter((row) => String(row.motion_class || "").toLowerCase() !== "unavailable");
+  return {
+    baseline_hr_bpm: summarizeValues(rows.map((row) => numberOrNull(row.baseline_hr)), 1),
+    elevation_above_baseline_bpm: summarizeValues(rows.map((row) => numberOrNull(row.elevated_delta)), 1),
+    respiration: usableRespiration.length ? {
+      breaths_per_minute: summarizeValues(usableRespiration.map((row) => numberOrNull(row.respiration_bpm)), 1),
+      confidence_levels: counts(usableRespiration, "respiration_confidence"),
+      sources: counts(usableRespiration, "respiration_source"),
+      possible_breath_hold_rows: usableRespiration.filter((row) => row.possible_breath_hold === true).length,
+    } : {
+      usable_rows: 0,
+      unavailable_reasons: counts(rows, "respiration_unavailable_reason"),
+    },
+    motion: usableMotion.length ? {
+      classes: counts(usableMotion, "motion_class"),
+      dynamic_rms_mg: summarizeValues(usableMotion.map((row) => numberOrNull(row.motion_dynamic_rms_mg)), 1),
+      position_labels: counts(usableMotion, "position_label"),
+    } : { usable_rows: 0 },
+    multimodal_states: counts(rows, "multimodal_state"),
+    signal_confidence_levels: counts(rows, "signal_confidence_level"),
   };
 }
 
@@ -193,6 +235,17 @@ export function buildSessionMomentTelemetry({
       hrv_sdnn_ms: numberOrNull(nearest.hrv_sdnn_ms),
       hrv_pnn50: numberOrNull(nearest.hrv_pnn50),
       hrv_quality: nearest.hrv_quality || null,
+      baseline_hr_bpm: numberOrNull(nearest.baseline_hr),
+      elevation_above_baseline_bpm: numberOrNull(nearest.elevated_delta),
+      respiration_bpm: numberOrNull(nearest.respiration_bpm),
+      respiration_confidence: nearest.respiration_confidence || null,
+      respiration_source: nearest.respiration_source || null,
+      respiration_unavailable_reason: nearest.respiration_unavailable_reason || null,
+      motion_class: nearest.motion_class || null,
+      motion_dynamic_rms_mg: numberOrNull(nearest.motion_dynamic_rms_mg),
+      position_label: nearest.position_label || null,
+      multimodal_state: nearest.multimodal_state || null,
+      signal_confidence_level: nearest.signal_confidence_level || null,
     } : null,
     heart_rate: {
       exact_window: summarizeHr(exactRows),
@@ -201,6 +254,10 @@ export function buildSessionMomentTelemetry({
     rr_hrv: {
       exact_window: summarizeHrv(exactRows),
       context_window: summarizeHrv(contextRows),
+    },
+    multimodal: {
+      exact_window: summarizeMultimodal(exactRows),
+      context_window: summarizeMultimodal(contextRows),
     },
     emg: {
       exact_window: summarizeEmgRows(exactEmgRows),

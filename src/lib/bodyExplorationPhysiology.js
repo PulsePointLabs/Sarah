@@ -268,3 +268,14 @@ export function buildBodyExplorationPhysiologyEvidence({ exploration = {}, timel
 export function buildSessionPhysiologyEvidence({ session = {}, timelineRows = [], emgRows = [], nearbyVitals = {} } = {}) {
   return buildPhysiologyEvidence({ record: session, timelineRows, emgRows, nearbyVitals, includeProcedure: false });
 }
+
+export function buildSessionChatPhysiologyEvidence(args = {}) {
+  const evidence = buildSessionPhysiologyEvidence(args);
+  return {
+    interpretation_rule: "Session-level entry/trend context must not be substituted for missing exact-moment telemetry.",
+    provenance: evidence.provenance,
+    baseline_and_trends: evidence.baseline_and_trends,
+    signals: evidence.signals,
+    nearby_vital_signs: evidence.nearby_vital_signs,
+  };
+}

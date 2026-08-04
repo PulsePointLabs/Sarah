@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildBodyExplorationPhysiologyEvidence, buildSessionPhysiologyEvidence } from "./bodyExplorationPhysiology.js";
+import { buildBodyExplorationPhysiologyEvidence, buildSessionChatPhysiologyEvidence, buildSessionPhysiologyEvidence } from "./bodyExplorationPhysiology.js";
 
 test("builds quality-gated high-resolution physiology across the full exploration", () => {
   const exploration = {
@@ -69,4 +69,9 @@ test("builds the same baseline and trend evidence for sessions without procedure
   assert.equal(evidence.signals.respiration.confidence_levels.medium, 61);
   assert.equal(evidence.signals.respiration.sources.accelerometer, 61);
   assert.equal("procedure_aligned_windows" in evidence, false);
+
+  const chatEvidence = buildSessionChatPhysiologyEvidence({ session: { id: "session-1" }, timelineRows });
+  assert.ok(chatEvidence.baseline_and_trends);
+  assert.ok(chatEvidence.signals.respiration);
+  assert.equal("high_resolution_trajectory" in chatEvidence, false);
 });

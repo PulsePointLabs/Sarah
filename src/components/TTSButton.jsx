@@ -4,6 +4,7 @@ import { base44 } from "@/api/base44Client";
 import { repairDecimalSpacing, splitSentencesPreservingDecimals } from "@/utils/aiTextRepair";
 import { normalizeNumericBandsForSpeech } from "@/utils/ttsTextNormalization";
 import { buildSarahTTSVoicePrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
+import { normalizeClinicalUnitsForSpeech } from "@/lib/ttsClinicalSpeech";
 
 const TTS_SETTINGS_KEY = "pulsepoint_tts_settings_v1";
 const TTS_REQUEST_TAIL = "\u200B";
@@ -400,7 +401,7 @@ function applyTTSPronunciationHints(text) {
 
 // Clean text for natural speech
 export function cleanTextForSpeech(text) {
-  return applyTTSPronunciationHints(normalizeNumericBandsForSpeech(repairDecimalSpacing(text)))
+  return applyTTSPronunciationHints(normalizeClinicalUnitsForSpeech(normalizeNumericBandsForSpeech(repairDecimalSpacing(text))))
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/\*([^*]+)\*/g, "$1")
     .replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g, (_, time) => formatTimeAsWords(time))

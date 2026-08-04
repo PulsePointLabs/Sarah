@@ -49,6 +49,8 @@ import { hasMixedPauseResumeEvidence, isVerifiedMotionEvent } from "@/utils/sess
 import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
 import { videoPosterDataUrl } from "@/lib/videoPoster";
 import { selectNearbyVitalReadings } from "@/lib/nearbyVitals";
+import { buildSessionChatPhysiologyEvidence } from "@/lib/bodyExplorationPhysiology";
+import { buildSessionMomentTelemetry, mapVideoTimeToSessionTime } from "@/utils/sessionMomentTelemetry";
 
 function _getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -1313,7 +1315,14 @@ export default function SessionDetail() {
 
   const sessionChatContext = useMemo(() => {
     if (!displaySession) return "";
+    const physiologyEvidence = buildSessionChatPhysiologyEvidence({
+      session: displaySession,
+      timelineRows,
+      emgRows,
+      nearbyVitals,
+    });
     return [
+    `AUTHORITATIVE SESSION PHYSIOLOGY, RECORDED ENTRY/TRENDS, AND NEARBY VITALS:\n${JSON.stringify(physiologyEvidence, null, 2)}\nThe recorded entry window is not automatically a true resting baseline. Do not substitute session-level values for missing exact-moment telemetry.`,
     `Session date: ${displaySession.date?.slice(0, 10)}`,
     `Duration: ${displaySession.duration_minutes ?? "?"}min`,
     `Methods: ${(displaySession.methods || []).join(", ")}`,
@@ -1355,7 +1364,17 @@ export default function SessionDetail() {
       buildSessionVideoPassDigest(displaySession),
       buildSessionKeyVideoClipDigest(displaySession),
     ].filter(Boolean).join("\n\n");
-  }, [displaySession]);
+  }, [displaySession, emgRows, nearbyVitals, timelineRows]);
+
+  const sessionChatPhysiologyEvidence = useMemo(() => {
+    if (!displaySession) return null;
+    return buildSessionChatPhysiologyEvidence({
+      session: displaySession,
+      timelineRows,
+      emgRows,
+      nearbyVitals,
+    });
+  }, [displaySession, emgRows, nearbyVitals, timelineRows]);
 
   useEffect(() => {
     const events = displaySession?.event_timeline || [];
@@ -1757,14 +1776,27 @@ export default function SessionDetail() {
   };
   const handleAskSarahAtTimestamp = ({ timeSeconds, sourceUrl, timelineOffsetSeconds = 0, sourceLabel = "Session video", sourceKind = "session_video" }) => {
     if (!sourceUrl) return;
+    const sourceTimeSeconds = Math.max(0, Number(timeSeconds) || 0);
+    const offsetSeconds = Number(timelineOffsetSeconds) || 0;
+    const sessionTimeSeconds = mapVideoTimeToSessionTime(sourceTimeSeconds, offsetSeconds);
     setPendingSectionId("session-interview");
     setPendingTimestampReview({
       requestId: `session-video-review-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      timeSeconds: Math.max(0, Number(timeSeconds) || 0),
+      timeSeconds: sessionTimeSeconds,
+      sourceTimeSeconds,
       sourceUrl,
-      timelineOffsetSeconds: Number(timelineOffsetSeconds) || 0,
+      timelineOffsetSeconds: offsetSeconds,
       sourceLabel,
       sourceKind,
+      momentTelemetry: buildSessionMomentTelemetry({
+        session: displaySession,
+        timelineRows,
+        emgRows,
+        startSeconds: Math.max(0, sessionTimeSeconds - 4),
+        endSeconds: sessionTimeSeconds + 4,
+        contextPadSeconds: 20,
+      }),
+      sessionPhysiologyEvidence: sessionChatPhysiologyEvidence,
     });
   };
   const renderReviewVideoBuilder = ({
