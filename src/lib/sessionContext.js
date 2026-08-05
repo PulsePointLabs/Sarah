@@ -1,3 +1,5 @@
+import { enemaInstilledAmountFromEvent, sumEnemaInstilledVolume } from "./enemaVolume.js";
+
 export const SESSION_CONTEXT_GROUNDING_RULE = `SESSION CONTEXT GROUNDING:
 - Prefer explicitly logged structured session context over inference.
 - Treat absent or unknown context as unknown.
@@ -225,6 +227,27 @@ export function structuredSessionContextForAI(session) {
       source_app: pulseOxReadings.find((reading) => reading.source_app)?.source_app || session?.pulse_ox_source || "",
     };
   }
+  const enemaInstillations = (session?.event_timeline || [])
+    .map((event) => ({
+      time_s: Number(event?.time_s),
+      amount_ml: enemaInstilledAmountFromEvent(event),
+      cumulative_ml: Number(event?.procedure_measurement?.cumulative_ml ?? event?.cumulative_instilled_volume_ml),
+      source: event?.procedure_measurement?.source || event?.source || "event_timeline",
+    }))
+    .filter((entry) => Number.isFinite(entry.time_s) && entry.amount_ml > 0)
+    .map((entry) => ({
+      ...entry,
+      cumulative_ml: Number.isFinite(entry.cumulative_ml) ? entry.cumulative_ml : null,
+    }));
+  const enemaTotal = sumEnemaInstilledVolume(session?.event_timeline || []);
+  if (enemaInstillations.length || Number(session?.enema_instilled_total_ml) > 0) {
+    cleaned.enema_instillation = {
+      total_instilled_ml: enemaTotal > 0 ? enemaTotal : Number(session.enema_instilled_total_ml),
+      entry_count: enemaInstillations.length || Number(session?.enema_instillation_count) || null,
+      entries: enemaInstillations,
+      measurement_meaning: "Cumulative water introduced rectally; not retained volume after leakage, return, or expulsion.",
+    };
+  }
   return Object.keys(cleaned).length ? cleaned : undefined;
 }
 
@@ -247,6 +270,9 @@ export function sessionContextEvidenceItems(session) {
     bpSeriesText,
     pulseOxSummary?.samples
       ? `Pulse oximetry: ${pulseOxSummary.samples} samples, average SpO2 ${pulseOxSummary.avg_spo2_percent}%, minimum SpO2 ${pulseOxSummary.min_spo2_percent}%${pulseOxSummary.avg_pulse_bpm ? `, average pulse ${pulseOxSummary.avg_pulse_bpm} bpm` : ""}${pulseOxSummary.source_app ? ` (${pulseOxSummary.source_app})` : ""}`
+      : null,
+    context.enema_instillation?.total_instilled_ml
+      ? `Enema water instilled: ${context.enema_instillation.total_instilled_ml} mL across ${context.enema_instillation.entry_count || context.enema_instillation.entries.length} measured voice-timeline entries; this is cumulative instilled volume, not retained volume`
       : null,
     recordedValue(context.fatigue) ? `Fatigue: ${labelFor(FATIGUE_OPTIONS, context.fatigue)}` : null,
     recordedValue(context.hydration_state) ? `Hydration: ${labelFor(HYDRATION_OPTIONS, context.hydration_state)}` : null,
@@ -297,6 +323,12 @@ export function sessionContextDisplayRows(session) {
       value: summary
         ? `${summary.samples} samples · avg ${summary.avg_spo2_percent}% · min ${summary.min_spo2_percent}%${summary.avg_pulse_bpm ? ` · pulse ${summary.avg_pulse_bpm} bpm` : ""}`
         : `${pulseOxReadings.length} samples`,
+    });
+  }
+  if (context?.enema_instillation?.total_instilled_ml) {
+    rows.push({
+      label: "Enema Water Instilled",
+      value: `${context.enema_instillation.total_instilled_ml} mL · ${context.enema_instillation.entry_count || context.enema_instillation.entries.length} measured entr${(context.enema_instillation.entry_count || context.enema_instillation.entries.length) === 1 ? "y" : "ies"}`,
     });
   }
   const alcohol = substanceText("Alcohol", context?.alcohol);

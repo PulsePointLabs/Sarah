@@ -36,6 +36,8 @@ import { loadSyncedLiveCueCustomization, readLiveCueCustomization } from "@/lib/
 import { useLiveCueAudio } from "@/hooks/useLiveCueAudio";
 import { useLiveCueEngine } from "@/hooks/useLiveCueEngine";
 import { toLiveTelemetryNotice } from "@/lib/liveCueDisplay";
+import { enemaInstilledAmountFromEvent, formatMilliliters, parseEnemaVolumeEntry, sumEnemaInstilledVolume } from "@/lib/enemaVolume";
+import { getTTSMime, getTTSRuntime, prepareTTSInput } from "@/components/TTSButton";
 import { computeLiveClimaxPrediction } from "@/utils/liveClimaxPrediction";
 import {
   computeHowlPhysiologyAction,
@@ -155,7 +157,8 @@ const TERMINAL_WAKE_LISTENER_ERRORS = new Set([
 const WHISPER_PROMPT =
   "Sarah live session annotation. Timestamped observation during physiological recording. " +
   "Heart rate, arousal, stimulation, physical finding, legs tense, feet planted, toe curl, tremor, breathing, " +
-  "stroke speed, grip pressure, repositioning, comfort adjustment, nearing climax, ejaculation, climax, recovery.";
+  "stroke speed, grip pressure, repositioning, comfort adjustment, nearing climax, ejaculation, climax, recovery. " +
+  "Enema, rectal instillation, milliliters, mL, cc, fluid instilled, retained volume, leakage, cramping, contractions, expulsion.";
 
 function wakeListenerErrorMessage(errorCode) {
   if (errorCode === "network") {
@@ -1188,6 +1191,9 @@ function categorizeVoiceNote(note) {
   if (/\b(feel|felt|sensation|pleasure|pressure|tingle|urge|near|climax|release|recovery|sensitive|discomfort|pain)\b/.test(text)) {
     categories.add("sensation");
   }
+  if (/\b(enema|rectal|anal|anus|nozzle|tube|instill|infus|millilit|\bml\b|\bcc\b|leak|cramp|contract|expel|expulsion|retention)\b/.test(text)) {
+    categories.add("instrumentation");
+  }
   return categories.size ? [...categories] : ["other"];
 }
 
@@ -1200,6 +1206,7 @@ function tagVoiceNote(note) {
   if (/\b(increase|increasing|decrease|decreasing|faster|slower|firmer|lighter|pause|resume|stop|start|switch|adjust)\b/.test(text)) tags.add("stimulation_change");
   if (/\b(feel|felt|sensation|pleasure|pressure|tingle|urge|near|sensitive|discomfort|pain)\b/.test(text)) tags.add("sensation_report");
   if (/\b(position|reposition|moved|shifted|table|comfort|pillow|supine|lithotomy)\b/.test(text)) tags.add("position_or_comfort");
+  if (/\b(enema|rectal|anal|anus|nozzle|tube|instill|infus|millilit|\bml\b|\bcc\b|leak|cramp|contract|expel|expulsion|retention)\b/.test(text)) tags.add("enema_procedure");
   return tags.size ? [...tags] : ["other_context"];
 }
 
@@ -5540,6 +5547,37 @@ export default function LiveCapture() {
     } catch {}
   }, [getAudioContext]);
 
+  const speakLiveAcknowledgement = useCallback(async (text) => {
+    const phrase = String(text || "").trim();
+    if (!phrase) return false;
+    try {
+      liveCueAudio.stop();
+      const runtime = getTTSRuntime();
+      const response = await base44.functions.invoke("openaiTTS", {
+        text: prepareTTSInput(phrase),
+        voice: liveCueSettings.voice || "nova",
+        model: runtime.model,
+        speed: runtime.speed,
+        instructions: runtime.supportsInstructions ? runtime.instructions : "",
+        format: runtime.format,
+      });
+      const audioBase64 = response?.data?.audio;
+      if (!audioBase64) return false;
+      const audio = new Audio(`data:${getTTSMime(response?.data?.format || runtime.format)};base64,${audioBase64}`);
+      audio.volume = Math.max(0, Math.min(1, Number(liveCueSettings.volume ?? 0.28)));
+      await new Promise((resolve, reject) => {
+        const timeout = window.setTimeout(() => reject(new Error("Live acknowledgement audio timed out.")), 20000);
+        audio.onended = () => { window.clearTimeout(timeout); resolve(); };
+        audio.onerror = () => { window.clearTimeout(timeout); reject(new Error("Live acknowledgement audio failed.")); };
+        audio.play().catch(reject);
+      });
+      return true;
+    } catch (error) {
+      console.warn("Unable to play live volume acknowledgement", error);
+      return false;
+    }
+  }, [liveCueAudio, liveCueSettings.voice, liveCueSettings.volume]);
+
   const buildLivePhysiologySnapshot = useCallback(() => ({
     hr_bpm: readNumber(latestHrRef.current?.currentHr, latestHrRef.current?.hr),
     baseline_hr_bpm: readNumber(latestHrRef.current?.baselineHr, latestHrRef.current?.baseline_hr),
@@ -5567,11 +5605,27 @@ export default function LiveCapture() {
     if (!sessionId) throw new Error("No active live session is available for the annotation.");
     const rows = await liveRecordApi.filter({ id: sessionId });
     const session = rows[0] || {};
+    const existingEvents = session.event_timeline || [];
+    const volumeEntry = parseEnemaVolumeEntry(clean);
+    const timelineTotal = sumEnemaInstilledVolume(existingEvents);
+    const hasStructuredVolumeEvents = existingEvents.some((event) => enemaInstilledAmountFromEvent(event) > 0);
+    const legacyBaseMl = Math.max(0, Number(session.enema_instilled_legacy_base_ml) || (
+      hasStructuredVolumeEvents ? 0 : Number(session.enema_instilled_total_ml) || 0
+    ));
+    const priorTotal = legacyBaseMl + timelineTotal;
+    const cumulativeVolumeMl = volumeEntry ? Math.round((priorTotal + volumeEntry.amountMl) * 10) / 10 : null;
+    const categories = categorizeVoiceNote(clean);
+    const tags = tagVoiceNote(clean);
+    if (volumeEntry && !categories.includes("instrumentation")) categories.push("instrumentation");
+    if (volumeEntry) tags.push("enema_instilled_volume", "measured_volume");
     const nextEvent = {
       time_s: Math.max(0, Math.round(Number(timeS) || 0)),
-      note: clean,
-      category: categorizeVoiceNote(clean),
-      annotation_tags: tagVoiceNote(clean),
+      note: volumeEntry
+        ? `Enema instillation: ${formatMilliliters(volumeEntry.amountMl)}. Running total instilled: ${formatMilliliters(cumulativeVolumeMl)}.`
+        : clean,
+      voice_transcript: clean,
+      category: [...new Set(categories)],
+      annotation_tags: [...new Set(tags)],
       ai_annotation: {
         source: "live-voice-local",
         rationale: "Live voice annotation tagged locally for immediate review.",
@@ -5581,12 +5635,34 @@ export default function LiveCapture() {
       hr_bpm: physiologySnapshot?.hr_bpm ?? readNumber(latestHrRef.current?.currentHr, latestHrRef.current?.hr),
       context_window: { before_seconds: 10, after_seconds: 20 },
       physiology_snapshot: physiologySnapshot || buildLivePhysiologySnapshot(),
+      ...(volumeEntry ? {
+        instilled_volume_ml: volumeEntry.amountMl,
+        cumulative_instilled_volume_ml: cumulativeVolumeMl,
+        procedure_measurement: {
+          type: "enema_instilled_volume",
+          route: "rectal",
+          amount_ml: volumeEntry.amountMl,
+          cumulative_ml: cumulativeVolumeMl,
+          unit: "mL",
+          source: "live_voice_annotation",
+        },
+      } : {}),
     };
-    const updated = [...(session.event_timeline || []), nextEvent].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0));
-    await liveRecordApi.update(sessionId, { event_timeline: updated });
+    const updated = [...existingEvents, nextEvent].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0));
+    const patch = {
+      event_timeline: updated,
+      ...(volumeEntry ? {
+        enema_instilled_total_ml: cumulativeVolumeMl,
+        enema_instillation_count: updated.filter((event) => Number(event?.procedure_measurement?.amount_ml ?? event?.instilled_volume_ml) > 0).length,
+        enema_instilled_legacy_base_ml: legacyBaseMl,
+        enema_volume_updated_at: nextEvent.created_at,
+      } : {}),
+    };
+    await liveRecordApi.update(sessionId, patch);
     setLiveEvents(updated);
-    setActiveSessionDoc((prev) => (prev ? { ...prev, event_timeline: updated } : prev));
-    setLastVoiceNote(`[${Math.floor(nextEvent.time_s / 60)}:${String(nextEvent.time_s % 60).padStart(2, "0")}] ${clean}`);
+    setActiveSessionDoc((prev) => (prev ? { ...prev, ...patch } : prev));
+    setLastVoiceNote(`[${Math.floor(nextEvent.time_s / 60)}:${String(nextEvent.time_s % 60).padStart(2, "0")}] ${nextEvent.note}`);
+    return { event: nextEvent, volumeEntry, cumulativeVolumeMl };
   }, [buildLivePhysiologySnapshot, ensureSession, liveRecordApi, liveSession]);
 
   const updateActiveSession = useCallback(async (patch) => {
@@ -5717,10 +5793,21 @@ export default function LiveCapture() {
     const removeIndex = events.length - 1 - idx;
     const removed = events[removeIndex];
     const updated = events.filter((_event, index) => index !== removeIndex);
-    await liveRecordApi.update(sessionId, { event_timeline: updated });
+    const remainingVolumeMl = Math.max(0, Number(session.enema_instilled_legacy_base_ml) || 0) + sumEnemaInstilledVolume(updated);
+    const patch = {
+      event_timeline: updated,
+      ...(Number(removed?.procedure_measurement?.amount_ml ?? removed?.instilled_volume_ml) > 0 ? {
+        enema_instilled_total_ml: remainingVolumeMl,
+        enema_instillation_count: updated.filter((event) => Number(event?.procedure_measurement?.amount_ml ?? event?.instilled_volume_ml) > 0).length,
+        enema_volume_updated_at: new Date().toISOString(),
+      } : {}),
+    };
+    await liveRecordApi.update(sessionId, patch);
     setLiveEvents(updated);
-    setActiveSessionDoc((prev) => (prev ? { ...prev, event_timeline: updated } : prev));
-    setVoiceStatus(`Removed last voice note at ${fmtMmSs(removed.time_s)}.`);
+    setActiveSessionDoc((prev) => (prev ? { ...prev, ...patch } : prev));
+    setVoiceStatus(Number(removed?.procedure_measurement?.amount_ml ?? removed?.instilled_volume_ml) > 0
+      ? `Removed volume note at ${fmtMmSs(removed.time_s)}. Running total: ${formatMilliliters(remainingVolumeMl)}.`
+      : `Removed last voice note at ${fmtMmSs(removed.time_s)}.`);
   }, [liveRecordApi, liveSession?.activeSessionId]);
 
   const captureLiveMoment = useCallback(() => ({
@@ -6039,8 +6126,15 @@ export default function LiveCapture() {
           });
           const text = normalizeVoiceAnnotationText(res.data?.text);
           if (text) {
-            await appendVoiceAnnotation(text, voiceNoteTimeRef.current, voiceNotePhysiologyRef.current);
-            setVoiceStatus("Annotation saved. Listening for “Sarah”… say “end” to stop.");
+            const saved = await appendVoiceAnnotation(text, voiceNoteTimeRef.current, voiceNotePhysiologyRef.current);
+            if (saved?.volumeEntry) {
+              const acknowledgement = `Logged ${saved.volumeEntry.amountMl} milliliters. Total volume instilled is ${saved.cumulativeVolumeMl} milliliters.`;
+              setVoiceStatus(`${formatMilliliters(saved.volumeEntry.amountMl)} saved. Running total: ${formatMilliliters(saved.cumulativeVolumeMl)}. Sarah is confirming aloud…`);
+              await speakLiveAcknowledgement(acknowledgement);
+              setVoiceStatus(`Volume saved. Total instilled: ${formatMilliliters(saved.cumulativeVolumeMl)}. Listening for “Sarah”… say “end” to stop.`);
+            } else {
+              setVoiceStatus("Annotation saved. Listening for “Sarah”… say “end” to stop.");
+            }
           } else {
             setVoiceStatus("No speech detected. Listening for “Sarah”… say “end” to stop.");
           }
@@ -6100,7 +6194,7 @@ export default function LiveCapture() {
       setAnnotationRecording(false);
       if (voiceWakeEnabledRef.current) window.setTimeout(startWakeListening, 600);
     }
-  }, [appendVoiceAnnotation, buildLivePhysiologySnapshot, getAudioContext, getCurrentSessionTime, startWakeListening, stopVoiceAnnotation, stopWakeListening, voiceRecordingSupported]);
+  }, [appendVoiceAnnotation, buildLivePhysiologySnapshot, getAudioContext, getCurrentSessionTime, speakLiveAcknowledgement, startWakeListening, stopVoiceAnnotation, stopWakeListening, voiceRecordingSupported]);
 
   useEffect(() => {
     startVoiceAnnotationRef.current = startVoiceAnnotation;
@@ -6153,6 +6247,14 @@ export default function LiveCapture() {
           )}
           {voiceError && <p className="mt-1 text-xs text-destructive">{voiceError}</p>}
           {lastVoiceNote && <p className="mt-1 text-xs text-muted-foreground">Last saved: {lastVoiceNote}</p>}
+          {Number(activeSessionDoc?.enema_instilled_total_ml) > 0 && (
+            <p className="mt-2 inline-flex rounded-full border border-primary/25 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+              Enema instilled: {formatMilliliters(activeSessionDoc.enema_instilled_total_ml)}
+              {Number(activeSessionDoc?.enema_instillation_count) > 0
+                ? ` across ${activeSessionDoc.enema_instillation_count} entr${Number(activeSessionDoc.enema_instillation_count) === 1 ? "y" : "ies"}`
+                : ""}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <button

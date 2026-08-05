@@ -69,6 +69,13 @@ import {
   syncAiCorrectionMemory,
 } from "@/lib/aiCorrectionMemory";
 
+const ENEMA_VISUAL_REVIEW_RULE = `ENEMA-SPECIFIC VISUAL EXAM:
+- Treat the ordered frames as a procedure sequence. When the anus/perianal region is visible, actively compare adjacent frames for new seepage, droplets, a stream, bypass around a nozzle/tube, fluid return, fecal material, or visible expulsion. State what becomes visible and when; do not equate surface shine, lubricant, shadow, or a static wet area with active leakage.
+- Look for externally visible rhythmic response: repeated anal/perianal puckering or closure, pelvic movement, buttock tightening, abdominal bracing/release, leg tension, tremor, or expulsion synchronized across consecutive frames. Call these visible contraction cues or a possible contraction pattern; do not claim an internal rectal/colonic contraction from one still image or body motion alone.
+- When the abdomen is continuously visible, compare its contour across similar camera angles and body positions. Report only visible generalized or focal contour increase, rounding, asymmetry, bracing, or release. Distinguish possible distension from inhalation, posture, lens perspective, hand pressure, and camera movement. Firmness, retained internal volume, bowel segment, and internal pressure are not visually measurable.
+- Timestamped voice/manual volume entries are the authority for measured instillation amounts and running total. Use them to correlate visible responses, but never estimate milliliters from the video.
+- In a combined enema-and-masturbation session, preserve both evidence lanes: procedure state and visible stimulation/body response. Do not erase the enema procedure because stimulation is present, and do not relabel all genital contact as procedure handling.`;
+
 function fmtMmSs(totalSeconds) {
   const v = Math.max(0, Math.round(Number(totalSeconds) || 0));
   const m = Math.floor(v / 60);
@@ -2529,6 +2536,8 @@ Personal language rule: write about Ben directly as "you" and "your". Never call
 Use exploration event categories only: instrumentation, instrumentation_change, physical, sensation, comfort, setup, or other.
  Draft event examples for this mode: "Fresh gloves/glove change visible during prep", "Draping and field setup continue", "Swabbing/prep continues around the meatus", "Lubrication or dilation syringe is used near the meatus", "One hand stabilizes the penis while the other brings the catheter toward the meatus" only if a Foley is visibly in hand, "Catheter tip is visible at the meatus" when contact/engagement is visible without confirmed advancement, "Foley insertion begins at the meatus" when the tip first visibly enters, "Foley advancement is visible at the meatus" when frame-to-frame advancement or progressive external-length shortening is visible, "Foley/tubing is being handled after insertion" only after completion is established, "Urine appears in the tubing/bag", "Drape is removed while urine collects in the bag".`) : ""}
 
+${deviceIdentityContext.enemaKnown ? ENEMA_VISUAL_REVIEW_RULE : ""}
+
 You are Sarah, reviewing an ordered temporal burst sampled across one continuous segment of a linked local ${recordLabel} video. Compare adjacent frames in their listed order and reason about visible changes across the segment; do not treat them as unrelated still images. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
 
 ${SARAH_APP_OVERLAY_TELEMETRY_RULE}
@@ -2791,6 +2800,8 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
             required: ["summary", "findings", "events"],
           },
           prompt: enemaOnlyExploration ? `You are Sarah doing a second-pass ENEMA BODY EXPLORATION audit for one already-generated video card.
+
+${ENEMA_VISUAL_REVIEW_RULE}
 
 Only correct the current card. The sampled frames are primary evidence; the sequence list and manual notes preserve chronology.
 
@@ -3160,6 +3171,8 @@ Return a corrected compact card for this same window. Keep timeline events only 
           },
           images,
           prompt: `You are Sarah verifying a local GPU-selected video window for Sarah. The images are an ordered temporal burst from one continuous clip: compare adjacent frames in listed order and interpret visible change across the sequence rather than treating them as unrelated stills.
+
+${deviceIdentityContext.enemaKnown ? ENEMA_VISUAL_REVIEW_RULE : ""}
 
 This is a hybrid local-first review: local CV/Qwen selected this window as worth looking at, but the local result is only a selector. The sampled frames in this request are the visual evidence. Do not promote the local candidate into a fact unless the current sampled frames visibly support it.
 

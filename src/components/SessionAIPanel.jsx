@@ -2784,6 +2784,10 @@ LOGGED SESSION CONTEXT / INFLUENCES (user-entered context, not telemetry or visu
 ${structuredSessionContextText}
 
 Use these fields as logged contextual influences. Keep alcohol and cannabis wording neutral and clinical. Use blood pressure and pulse oximetry as cardiovascular/oxygenation context when they add a supported interpretation, especially alongside HR/HRV timing. If logged alcohol or cannabis occurred near the session, say it may have influenced heart rate, arousal timing, sensory state, or autonomic tone; do not overclaim causality.` : ""}
+ENEMA MEASUREMENT GROUNDING:
+- A structured enema_instillation entry or timeline procedure_measurement is a measured, voice-logged amount introduced rectally at that timestamp.
+- The running total is cumulative instilled water. Never relabel it as retained volume, current colonic volume, bag capacity, or net volume after leakage, return, or expulsion.
+- Keep instillation, visible leakage or return, expulsion, and estimated retention as separate quantities. Never estimate any of them from video alone.
 ${currentPhaseMarkerDigest ? `
 MANUAL PHASE MARKER OVERRIDE:
 ${currentPhaseMarkerDigest}
