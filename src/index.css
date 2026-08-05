@@ -477,3 +477,25 @@
     }
   }
 }
+/* Fullscreen telemetry uses six layout tracks so partial final rows always
+   expand to the full width without making neighboring metrics jump. */
+.telemetry-vitals-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+
+.telemetry-vitals-grid > .telemetry-metric-card {
+  grid-column: span 2;
+  height: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.telemetry-vitals-grid > .telemetry-metric-card:last-child:nth-child(3n + 1) {
+  grid-column: span 6;
+}
+
+.telemetry-vitals-grid > .telemetry-metric-card:nth-last-child(2):nth-child(3n + 1),
+.telemetry-vitals-grid > .telemetry-metric-card:last-child:nth-child(3n + 2) {
+  grid-column: span 3;
+}
