@@ -460,7 +460,7 @@ test('legacy saved MP3 with exact source identity matches despite title formatti
   };
   const legacyExport = {
     file_url: '/uploads/july-1-2026-ai-session-analysis.mp3',
-    render_version: 'tts_export_leading_trim_v2',
+    render_version: 'tts_export_clinical_units_v3',
     tts_session_key: 'session-july-1',
     source_generated_at: '2026-07-03T18:31:39.069Z',
     title: 'July 1 2026 – AI Session Analysis',

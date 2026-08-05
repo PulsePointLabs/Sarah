@@ -202,11 +202,11 @@ export default function HeartRateSection({ data, onChange }) {
         )}
       </div>
 
-      {/* Climax suggestion */}
+      {/* The server derives the exact sample at the saved climax marker. */}
       {derived?.peakHr && !hideClimaxFields && !data.hr_at_climax && (
         <div className="flex items-center gap-2 text-xs bg-chart-4/10 text-chart-4 rounded-lg p-2.5">
           <Info className="w-3.5 h-3.5 shrink-0" />
-          <span>Peak HR detected: <strong>{derived.peakHr} bpm</strong> — suggested value for "At Climax" (not auto-filled).</span>
+          <span>Save a climax marker and Sarah will fill “At Climax” from the nearest timeline sample automatically. Session peak: <strong>{derived.peakHr} bpm</strong>.</span>
         </div>
       )}
 

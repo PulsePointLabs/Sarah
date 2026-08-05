@@ -401,7 +401,7 @@ export async function renderTTSExport(payload = {}, options = {}) {
       size: stat.size,
       format: outputFormat,
       mime: ttsExportMime(outputFormat),
-      render_version: 'tts_export_leading_trim_v2',
+      render_version: 'tts_export_clinical_units_v3',
       duration_seconds: durationSeconds,
       model,
       voice,

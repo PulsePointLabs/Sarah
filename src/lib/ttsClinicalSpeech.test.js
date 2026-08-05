@@ -19,3 +19,14 @@ test("expands standalone pressure and glucose units", () => {
     "Pressure rose 18 millimeters of mercury and glucose was 90 milligrams per deciliter.",
   );
 });
+
+test("speaks motion mg as milli-g without corrupting glucose units", () => {
+  assert.equal(
+    normalizeClinicalUnitsForSpeech("Dynamic RMS climbed to fifty-five point six milligrams."),
+    "Dynamic RMS climbed to fifty-five point six milli-g.",
+  );
+  assert.equal(
+    normalizeClinicalUnitsForSpeech("Motion dynamic RMS was 55 mg while glucose was 90 mg/dL."),
+    "Motion dynamic RMS was 55 milli-g while glucose was 90 milligrams per deciliter.",
+  );
+});

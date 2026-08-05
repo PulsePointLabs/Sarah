@@ -2392,7 +2392,7 @@ export default function AIVideoPassPanel({
             startSeconds: sourceStart,
             endSeconds: sourceEnd,
             label,
-            frameCount: selectedVideoRole === "feet" ? 10 : 18,
+            frameCount: selectedVideoRole === "feet" ? 10 : 12,
           });
           const reviewWindow = {
             start: sessionTimeForSource(preview.startSeconds ?? sourceStart, selectedVideo),
@@ -2422,6 +2422,7 @@ export default function AIVideoPassPanel({
           }));
           const aiPayload = {
             max_tokens: 2400,
+            max_images: 12,
             response_json_schema: {
               type: "object",
               properties: {
@@ -2528,7 +2529,7 @@ Personal language rule: write about Ben directly as "you" and "your". Never call
 Use exploration event categories only: instrumentation, instrumentation_change, physical, sensation, comfort, setup, or other.
  Draft event examples for this mode: "Fresh gloves/glove change visible during prep", "Draping and field setup continue", "Swabbing/prep continues around the meatus", "Lubrication or dilation syringe is used near the meatus", "One hand stabilizes the penis while the other brings the catheter toward the meatus" only if a Foley is visibly in hand, "Catheter tip is visible at the meatus" when contact/engagement is visible without confirmed advancement, "Foley insertion begins at the meatus" when the tip first visibly enters, "Foley advancement is visible at the meatus" when frame-to-frame advancement or progressive external-length shortening is visible, "Foley/tubing is being handled after insertion" only after completion is established, "Urine appears in the tubing/bag", "Drape is removed while urine collects in the bag".`) : ""}
 
-You are Sarah, reviewing sampled frames from a linked local ${recordLabel} video. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
+You are Sarah, reviewing an ordered temporal burst sampled across one continuous segment of a linked local ${recordLabel} video. Compare adjacent frames in their listed order and reason about visible changes across the segment; do not treat them as unrelated still images. Analyze only what is visible or supported by telemetry/context. Do not infer intent, pressure, force, coverings, gloves, lubricant, device fit, sensation, electrodes, or cause beyond visible evidence. If a hand or object is partially blurred, occluded, bright, or low-detail, describe it neutrally as visible contact/hand position rather than naming gloves or materials.
 
 ${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 
@@ -2751,6 +2752,7 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
         const images = await sampledFrameImagePayload(card.sampledFrames || []);
         const aiPayload = {
           max_tokens: 1800,
+          max_images: 12,
           images,
           response_json_schema: {
             type: "object",
@@ -3113,6 +3115,7 @@ Return a corrected compact card for this same window. Keep timeline events only 
         }));
         const aiPayload = {
           max_tokens: 2200,
+          max_images: 10,
           response_json_schema: {
             type: "object",
             properties: {
@@ -3156,7 +3159,7 @@ Return a corrected compact card for this same window. Keep timeline events only 
             required: ["summary", "findings", "events"],
           },
           images,
-          prompt: `You are Sarah verifying a local GPU-selected video window for Sarah.
+          prompt: `You are Sarah verifying a local GPU-selected video window for Sarah. The images are an ordered temporal burst from one continuous clip: compare adjacent frames in listed order and interpret visible change across the sequence rather than treating them as unrelated stills.
 
 This is a hybrid local-first review: local CV/Qwen selected this window as worth looking at, but the local result is only a selector. The sampled frames in this request are the visual evidence. Do not promote the local candidate into a fact unless the current sampled frames visibly support it.
 

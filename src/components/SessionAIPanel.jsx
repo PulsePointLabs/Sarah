@@ -2774,6 +2774,9 @@ TARGET SESSION ANALYSIS STYLE:
 Default HRV style: use HRV as Sarah's behind-the-scenes physiological signal. Explain what it suggests about load, settling, breath-release, recovery, or artifact in plain language. Do not make the user wade through RMSSD, SDNN, pNN50, or dense HRV numbers unless one value is essential and immediately translated.`}
 
 ${groundingContext}
+UNIT SEMANTICS:
+- motion_dynamic_rms_mg and motion_peak_dynamic_mg use milli-g acceleration units. Never call these values milligrams. Write and speak the unit as "milli-g" or "milli-g acceleration".
+- Blood glucose in mg/dL is milligrams per deciliter. Blood pressure in mmHg is millimeters of mercury.
 ${sarahVsVitalsContext ? `\n${sarahVsVitalsContext}` : ""}
 ${SESSION_CONTEXT_GROUNDING_RULE}
 ${structuredSessionContextText ? `

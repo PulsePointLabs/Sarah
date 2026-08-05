@@ -77,9 +77,14 @@ function jsonInstruction(responseJsonSchema, schemaMode) {
   return `\n\nReturn ONLY valid JSON matching this JSON schema. Do not wrap in markdown.\n${JSON.stringify(responseJsonSchema, null, 2)}`;
 }
 
-function imageBlocksFromPayload(images = []) {
+function resolveMaxImageCount(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(12, Math.floor(parsed))) : 5;
+}
+
+function imageBlocksFromPayload(images = [], maxImages = 5) {
   if (!Array.isArray(images)) return [];
-  return images.slice(0, 5).map((image) => {
+  return images.slice(0, resolveMaxImageCount(maxImages)).map((image) => {
     const mediaType = image?.media_type || image?.mimeType || image?.mime_type;
     const rawData = String(image?.data || image?.base64 || '').replace(/^data:[^;]+;base64,/, '');
     if (!mediaType || !rawData) return null;
@@ -94,9 +99,9 @@ function imageBlocksFromPayload(images = []) {
   }).filter(Boolean);
 }
 
-function imageMetadata(images = []) {
+function imageMetadata(images = [], maxImages = 5) {
   if (!Array.isArray(images)) return [];
-  return images.slice(0, 5).map((image, index) => ({
+  return images.slice(0, resolveMaxImageCount(maxImages)).map((image, index) => ({
     index,
     filename: image?.filename || '',
     media_type: image?.media_type || image?.mimeType || image?.mime_type || '',
@@ -114,6 +119,7 @@ export async function aiInvokeInternal({
   temperature = 0.3,
   schema_mode = 'strict',
   images = [],
+  max_images = 5,
   forensicCaptureId,
   invocationAttempt = 1,
   signal,
@@ -126,7 +132,7 @@ export async function aiInvokeInternal({
   const wantsJson = !!response_json_schema;
   const resolvedModel = MODEL_MAP[model] || process.env.ANTHROPIC_MODEL || model || 'claude-sonnet-4-6';
   const providerMessage = `${prompt}${jsonInstruction(response_json_schema, schema_mode)}`;
-  const imageBlocks = imageBlocksFromPayload(images);
+  const imageBlocks = imageBlocksFromPayload(images, max_images);
   const content = imageBlocks.length
     ? [{ type: 'text', text: providerMessage }, ...imageBlocks]
     : providerMessage;
@@ -134,7 +140,7 @@ export async function aiInvokeInternal({
   writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-prompt.txt`, prompt);
   writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-schema.json`, response_json_schema || null);
   writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-provider-message.txt`, providerMessage);
-  writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-image-metadata.json`, imageMetadata(images));
+  writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-image-metadata.json`, imageMetadata(images, max_images));
   writeAIForensicArtifact(forensicCaptureId, `${attemptPrefix}-request-config.json`, {
     requested_model_alias: model,
     resolved_model_id: resolvedModel,
@@ -144,6 +150,7 @@ export async function aiInvokeInternal({
     structured_response_requested: wantsJson,
     image_count: Array.isArray(images) ? images.length : 0,
     image_block_count: imageBlocks.length,
+    requested_max_images: resolveMaxImageCount(max_images),
     provider_content_shape: imageBlocks.length ? 'text-plus-images' : 'text-only',
     configured_transport_attempts: Number(process.env.ANTHROPIC_ATTEMPTS || 3),
   });

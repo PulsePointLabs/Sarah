@@ -539,6 +539,7 @@ registerJobHandler('ai_invoke', async (payload, context) => {
     temperature,
     schema_mode,
     images = [],
+    max_images,
     forensic_capture,
     forensic_session_id,
     experiment,
@@ -582,6 +583,7 @@ registerJobHandler('ai_invoke', async (payload, context) => {
       temperature,
       schema_mode,
       images,
+      max_images,
       forensicCaptureId,
       invocationAttempt: 1,
       signal: context.signal,
@@ -609,6 +611,7 @@ registerJobHandler('ai_invoke', async (payload, context) => {
       temperature,
       schema_mode,
       images,
+      max_images,
       forensicCaptureId,
       invocationAttempt: 2,
       signal: context.signal,
@@ -634,6 +637,7 @@ async function runInternalAIRequest(request = {}, context, label = 'AI analysis'
     temperature,
     schema_mode,
     images = [],
+    max_images,
   } = request || {};
   if (!prompt) throw new Error(`${label} is missing a prompt`);
   if (context.signal?.aborted) throw new Error('Cancelled');
@@ -656,6 +660,7 @@ async function runInternalAIRequest(request = {}, context, label = 'AI analysis'
       temperature,
       schema_mode,
       images,
+      max_images,
       invocationAttempt: 1,
       signal: context.signal,
     });
@@ -685,6 +690,7 @@ async function runInternalAIRequest(request = {}, context, label = 'AI analysis'
         temperature,
         schema_mode,
         images: refusalShapedResponse ? [] : images,
+        max_images,
         invocationAttempt: 2,
         signal: context.signal,
       });

@@ -39,7 +39,7 @@ const ttsDownloadRecordKey = (sessionId, title = "") =>
   `pulsepoint.ttsDownload.${String(`${sessionId || "global"}-${title || "analysis"}`).replace(/[^a-z0-9]+/gi, "_").slice(0, 120)}`;
 const TTS_AUTO_SCROLL_STORAGE_KEY = "pulsepoint.tts.autoScroll";
 const TTS_SIDE_TAB_BOTTOM_KEY = "pulsepoint.tts.sideTabBottom";
-const TTS_EXPORT_RENDER_VERSION = "tts_export_leading_trim_v2";
+const TTS_EXPORT_RENDER_VERSION = "tts_export_clinical_units_v3";
 const TTS_SIDE_TAB_DEFAULT_BOTTOM = 300;
 const SIDE_TAB_DRAG_THRESHOLD_PX = 6;
 

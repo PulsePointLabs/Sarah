@@ -295,6 +295,48 @@ export function getEntity(entity, id) {
   return row ? safeJsonParse(row.data) : null;
 }
 
+const MAX_CLIMAX_SAMPLE_DELTA_SECONDS = 5;
+
+function syncSessionClimaxHeartRate(sessionId) {
+  const session = getEntity('Session', sessionId);
+  const climaxOffset = Number(session?.climax_offset_s);
+  if (!session || session.no_climax || session.telemetry_only || !Number.isFinite(climaxOffset) || climaxOffset < 0) {
+    return session;
+  }
+
+  const row = db.prepare(`
+    SELECT data,
+      ABS(CAST(json_extract(data, '$.time_offset_s') AS REAL) - ?) AS sample_delta_s
+    FROM entities
+    WHERE entity = 'HeartRateTimeline'
+      AND json_extract(data, '$.session') = ?
+      AND json_type(data, '$.time_offset_s') IN ('integer', 'real')
+      AND json_type(data, '$.hr') IN ('integer', 'real')
+    ORDER BY sample_delta_s ASC
+    LIMIT 1
+  `).get(climaxOffset, sessionId);
+  if (!row || Number(row.sample_delta_s) > MAX_CLIMAX_SAMPLE_DELTA_SECONDS) return session;
+
+  const sample = safeJsonParse(row.data);
+  const heartRate = Number(sample?.hr);
+  const sampleOffset = Number(sample?.time_offset_s);
+  if (!Number.isFinite(heartRate) || heartRate < 20 || heartRate > 260 || !Number.isFinite(sampleOffset)) return session;
+
+  const updated = {
+    ...session,
+    hr_at_climax: Math.round(heartRate),
+    hr_at_climax_source: 'timeline_marker_sample',
+    hr_at_climax_sample_offset_s: sampleOffset,
+    hr_at_climax_sample_delta_s: Number(Number(row.sample_delta_s).toFixed(3)),
+    updated_date: nowIso(),
+  };
+  db.prepare(`
+    UPDATE entities SET updated_date = ?, data = ?
+    WHERE entity = 'Session' AND id = ?
+  `).run(updated.updated_date, JSON.stringify(updated), sessionId);
+  return updated;
+}
+
 export function upsertEntity(entity, id, data) {
   const existing = getEntity(entity, id);
   const now = nowIso();
@@ -313,7 +355,7 @@ export function upsertEntity(entity, id, data) {
       updated_date = excluded.updated_date,
       data = excluded.data
   `).run(entity, id, doc.created_date, doc.updated_date, JSON.stringify(doc));
-  return doc;
+  return entity === 'Session' ? syncSessionClimaxHeartRate(id) : doc;
 }
 
 export function deleteEntity(entity, id) {
@@ -340,4 +382,8 @@ export function bulkCreate(entity, docs) {
     }
   });
   tx(docs || []);
+  if (entity === 'HeartRateTimeline') {
+    const sessionIds = new Set((docs || []).map((item) => item?.session).filter(Boolean));
+    for (const sessionId of sessionIds) syncSessionClimaxHeartRate(sessionId);
+  }
 }

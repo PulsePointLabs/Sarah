@@ -1565,7 +1565,7 @@ async function mediaDurationSeconds(filePath) {
 
 function matchAudioExport(record, request) {
   if (!record?.file_url) return false;
-  if (record.render_version !== 'tts_export_leading_trim_v2') return false;
+  if (record.render_version !== 'tts_export_clinical_units_v3') return false;
   if (String(record.tts_session_key || '') !== String(request.sessionId || '')) return false;
   if (String(record.source_generated_at || '') !== String(request.sourceGeneratedAt || '')) return false;
   if (String(record.voice || 'nova') !== String(request.voice || 'nova')) return false;
@@ -1635,7 +1635,7 @@ async function resolveNarration(payload, { jobId, signal, onProgress }) {
     speed: rendered.speed || request.speed,
     model: rendered.model || request.model,
     format: rendered.format || request.outputFormat,
-    render_version: rendered.render_version || 'tts_export_leading_trim_v2',
+    render_version: rendered.render_version || 'tts_export_clinical_units_v3',
     silence_trim: rendered.silence_trim || null,
     size: rendered.size,
     filename: rendered.filename,

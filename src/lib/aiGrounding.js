@@ -248,6 +248,9 @@ function buildMechanicalProfileContext(profile) {
   addLine(lines, "Erect urethral accommodation notes", profile.erect_urethral_accommodation_notes, 1200);
   addLine(lines, "Comfortable inserted diameter", profile.comfortable_inserted_diameter_mm != null ? `${profile.comfortable_inserted_diameter_mm} mm` : "");
   addLine(lines, "Maximum tolerated diameter", profile.maximum_tolerated_diameter_mm != null ? `${profile.maximum_tolerated_diameter_mm} mm` : "");
+  addLine(lines, "Maximum documented urethral diameter", profile.maximum_documented_urethral_diameter_mm != null ? `${profile.maximum_documented_urethral_diameter_mm} mm` : "");
+  addLine(lines, "Maximum documented rectal dilator diameter", profile.maximum_documented_rectal_dilator_mm != null ? `${profile.maximum_documented_rectal_dilator_mm} mm` : "");
+  addLine(lines, "Rectal instrumentation notes", profile.rectal_instrumentation_notes, 1200);
   addLine(lines, "Preferred Foley size", profile.preferred_foley_size_fr != null ? `${profile.preferred_foley_size_fr} French` : "");
   addLine(lines, "Stable Foley range", profile.stable_foley_range);
   addLine(lines, "Foley discomfort factors", profile.foley_discomfort_factors);
@@ -333,6 +336,8 @@ ${profileContext || "- No saved profile context was available. Rely only on the 
 
 GLOBAL EVIDENCE AND INTERPRETATION RULES:
 - Treat the profile as background context, not as a replacement for the current session facts.
+- Keep anatomical routes strictly separate. Never transfer a size, device, sensation, or tolerance finding between rectal and urethral use. A 16 mm dilator documented in this profile was rectal, not urethral; the largest documented urethral dilator is 13 mm unless a later route-specific record explicitly supersedes it.
+- Keep plans separate from completed events. Words such as planned, intended, considering, future, or next-session intention are not evidence that an activity occurred. In particular, masturbation while retaining enema fluid is a planned procedure and must not be described as completed unless a later session record explicitly documents it.
 - Treat User-verified interview findings (Profile Q&A) as structured first-person interview evidence. They are stronger than loose profile notes because they were distilled from direct Q&A, but they remain below current-session telemetry, event notes, journal text, and direct session facts when those sources conflict.
 - Treat Reviewed Sarah visual evidence as a distinct high-priority observational layer for visible claims. It is stronger than older profile fields and freeform notes when it directly describes visible anatomy, technique, fit, contact, body state, marker placement, movement, or frame-sequence context.
 - Use repeated or convergent Profile Q&A findings to support higher-confidence longitudinal interpretation, especially when they align with telemetry, behavior, journals, or saved profile fields.
