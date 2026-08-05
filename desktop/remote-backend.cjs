@@ -37,11 +37,23 @@ function isTailscaleIpv4(hostname) {
     && octets[1] <= 127;
 }
 
+function isPrivateIpv4(hostname) {
+  const octets = String(hostname || '').split('.').map(Number);
+  if (
+    octets.length !== 4
+    || !octets.every((value) => Number.isInteger(value) && value >= 0 && value <= 255)
+  ) return false;
+  return octets[0] === 10
+    || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+    || (octets[0] === 192 && octets[1] === 168)
+    || isTailscaleIpv4(hostname);
+}
+
 function getWebBluetoothSecureContextOverrides(values = []) {
   return unique(values.map((value) => {
     try {
       const parsed = new URL(normalizeBackendUrl(value));
-      if (parsed.protocol !== 'http:' || !isTailscaleIpv4(parsed.hostname)) return '';
+      if (parsed.protocol !== 'http:' || !isPrivateIpv4(parsed.hostname)) return '';
       return parsed.origin;
     } catch {
       return '';
@@ -73,6 +85,7 @@ module.exports = {
   DEFAULT_LINUX_REMOTE_BACKENDS,
   getRemoteBackendCandidates,
   getWebBluetoothSecureContextOverrides,
+  isPrivateIpv4,
   isTailscaleIpv4,
   normalizeBackendUrl,
   splitBackendUrls,

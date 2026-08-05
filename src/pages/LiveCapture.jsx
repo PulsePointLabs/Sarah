@@ -2897,9 +2897,14 @@ export default function LiveCapture() {
       return;
     }
     if (!navigator.bluetooth) {
+      const origin = typeof window !== "undefined" ? window.location.origin : "unknown origin";
+      const secureContext = typeof window !== "undefined" ? window.isSecureContext : false;
+      const desktopPlatform = window?.sarahDesktop?.platform;
       setDirectH10Status((prev) => ({
         ...prev,
-        error: "This browser does not expose Web Bluetooth. Use Chrome/Edge on localhost, or use Pulsoid in the installed Android app.",
+        error: desktopPlatform
+          ? `Sarah ${desktopPlatform} does not expose Web Bluetooth at ${origin} (secure context: ${secureContext ? "yes" : "no"}). Install the latest desktop package and restart Sarah completely.`
+          : "This browser does not expose Web Bluetooth. Use Chrome/Edge on localhost, or use Pulsoid in the installed Android app.",
       }));
       return;
     }

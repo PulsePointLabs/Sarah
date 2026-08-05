@@ -4,6 +4,7 @@ const {
   DEFAULT_LINUX_REMOTE_BACKENDS,
   getRemoteBackendCandidates,
   getWebBluetoothSecureContextOverrides,
+  isPrivateIpv4,
   isTailscaleIpv4,
   normalizeBackendUrl,
 } = require('./remote-backend.cjs');
@@ -57,12 +58,25 @@ test('recognizes only the CGNAT range reserved for Tailscale addresses', () => {
   assert.equal(isTailscaleIpv4('192.168.0.33'), false);
 });
 
-test('limits Web Bluetooth secure-context overrides to exact Tailscale HTTP origins', () => {
+test('recognizes only private and Tailscale IPv4 backend addresses', () => {
+  assert.equal(isPrivateIpv4('10.0.0.2'), true);
+  assert.equal(isPrivateIpv4('172.16.0.2'), true);
+  assert.equal(isPrivateIpv4('172.31.255.254'), true);
+  assert.equal(isPrivateIpv4('192.168.0.33'), true);
+  assert.equal(isPrivateIpv4('100.65.16.104'), true);
+  assert.equal(isPrivateIpv4('172.32.0.2'), false);
+  assert.equal(isPrivateIpv4('8.8.8.8'), false);
+});
+
+test('limits Web Bluetooth secure-context overrides to private HTTP backend origins', () => {
   assert.deepEqual(getWebBluetoothSecureContextOverrides([
     'https://benm-desktop.tail980777.ts.net',
     'http://100.65.16.104:8787/api',
     'http://100.65.16.104:8787/',
     'http://192.168.0.33:8787',
     'https://100.65.16.104:8787',
-  ]), ['http://100.65.16.104:8787']);
+  ]), [
+    'http://100.65.16.104:8787',
+    'http://192.168.0.33:8787',
+  ]);
 });

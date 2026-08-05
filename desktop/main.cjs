@@ -17,6 +17,11 @@ const PREFERRED_HR_RELAY_PORT = 8765;
 
 app.setName(APP_NAME);
 app.commandLine.appendSwitch('enable-web-bluetooth');
+if (process.platform === 'linux') {
+  // Chromium still gates Web Bluetooth on Linux behind Experimental Web Platform Features.
+  // Keep this Linux-only; Windows exposes the stable API without the broader feature gate.
+  app.commandLine.appendSwitch('enable-experimental-web-platform-features');
+}
 const webBluetoothSecureContextOverrides = getWebBluetoothSecureContextOverrides(
   getRemoteBackendCandidates({
     platform: process.platform,
