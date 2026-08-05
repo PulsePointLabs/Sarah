@@ -14,7 +14,12 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install build tools
-        run: pacman -Syu --noconfirm --needed base-devel git nodejs npm
+        run: >-
+          pacman -Syu --noconfirm --needed
+          base-devel git nodejs npm
+          alsa-lib at-spi2-core cairo libcups dbus expat glib2 gtk3 libdrm
+          libx11 libxcb libxcomposite libxdamage libxext libxfixes
+          libxkbcommon libxrandr mesa nspr nss pango
 
       - name: Check out requested ref
         uses: actions/checkout@v4
