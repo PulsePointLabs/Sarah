@@ -93,16 +93,16 @@ import {
 } from "@/lib/omronBloodPressureBle";
 
 const MAX_TELEMETRY_POINTS = 240;
-const TELEMETRY_DASHBOARD_STORAGE_KEY = "pulsepoint.telemetryDashboard.v3";
+const TELEMETRY_DASHBOARD_STORAGE_KEY = "pulsepoint.telemetryDashboard.v4";
 const TELEMETRY_DASHBOARD_PANELS = [
   { id: "notices", label: "Sarah live cue", helper: "Current physiological cue and confidence", cols: 12, rows: 2 },
   { id: "engine", label: "Acquisition health", helper: "Engine, sample rates, buffer, and storage", cols: 12, rows: 1, enabled: false },
   { id: "howl", label: "Howl control", helper: "Current intensity and direct controls", cols: 12, rows: 2 },
-  { id: "vitals", label: "Vital cards", helper: "HR, BP, HRV, respiration, motion, and EMG", cols: 12, rows: 4 },
-  { id: "phase", label: "Phase watch", helper: "Approach, plateau, recovery, and markers", cols: 6, rows: 4 },
-  { id: "multimodal", label: "Multimodal timelines", helper: "Threshold, respiration, motion, and Howl dose", cols: 6, rows: 4 },
-  { id: "cardiac", label: "Cardiac timeline", helper: "HR, baseline, HRV, and approach", cols: 6, rows: 4 },
-  { id: "emg", label: "EMG timeline", helper: "Perineal or dual-channel muscle activity", cols: 6, rows: 4, enabled: false },
+  { id: "vitals", label: "Vital cards", helper: "HR, BP, HRV, respiration, motion, and EMG", cols: 12, rows: 5 },
+  { id: "phase", label: "Phase watch", helper: "Approach, plateau, recovery, and markers", cols: 6, rows: 6 },
+  { id: "multimodal", label: "Multimodal timelines", helper: "Threshold, respiration, motion, and Howl dose", cols: 6, rows: 6 },
+  { id: "cardiac", label: "Cardiac timeline", helper: "HR, baseline, HRV, and approach", cols: 6, rows: 6 },
+  { id: "emg", label: "EMG timeline", helper: "Perineal or dual-channel muscle activity", cols: 6, rows: 6, enabled: false },
 ];
 
 function defaultTelemetryDashboard() {
@@ -5086,11 +5086,12 @@ export default function LiveCapture() {
     setLaunchProfile(next);
   }, [captureKind, captureMode, emgSensorConfig, heartbeatAudioEnabled, howlControlForm, hrSourceSettings, liveCueSettings, liveSession, mediaVideo, telemetryNoticesEnabled]);
 
-  const startFromLaunchpad = useCallback(async ({ allowWithoutVoice = false, allowWithoutRawSensors = false } = {}) => {
+  const startFromLaunchpad = useCallback(async ({ allowWithoutRawSensors = false } = {}) => {
     if (launchInFlightRef.current) return launchInFlightRef.current;
     const transaction = (async () => {
       setLaunchState({ phase: "starting", message: "Starting session...", steps: [], busy: true, error: "" });
       let rawSensorWarning = "";
+      let voiceWarning = "";
       try {
         setLaunchStep("Restoring setup");
         writeHrSourceSettings(hrSourceSettings);
@@ -5104,9 +5105,7 @@ export default function LiveCapture() {
             const prepared = await liveCueAudio.prepare();
             voiceReadyForLaunch = Boolean(prepared?.ok);
           } catch (error) {
-            if (!allowWithoutVoice) {
-              throw new Error(`${error?.message || "Sarah voice cues could not be prepared."} You can start without voice cues from advanced setup.`);
-            }
+            voiceWarning = error?.message || "Sarah voice cues could not be prepared.";
           }
         }
 
@@ -5189,6 +5188,8 @@ export default function LiveCapture() {
           error: "",
           message: rawSensorWarning
             ? "Session live with HR/RR/HRV. Raw ECG, motion, and respiration are unavailable."
+            : voiceWarning
+              ? `Session live. Sarah voice is temporarily unavailable: ${voiceWarning}`
             : voiceReadyForLaunch || !liveCueSettings.enabled
               ? "Session live."
               : "Session live without voice cues.",
@@ -9115,9 +9116,9 @@ export default function LiveCapture() {
 
         <div
           className={focusView
-            ? "grid min-h-0 flex-1 grid-cols-12 grid-rows-[repeat(17,minmax(0,1fr))] gap-2 overflow-hidden"
+            ? "grid min-h-0 flex-1 content-start grid-cols-12 gap-2 overflow-y-auto overflow-x-hidden pb-20"
             : "flex flex-col gap-6"}
-          style={focusView ? { gridAutoFlow: "dense" } : undefined}
+          style={focusView ? { gridAutoFlow: "dense", gridAutoRows: "3rem" } : undefined}
         >
 
         {telemetryPanelEnabled("notices") && telemetryNoticesEnabled && latestTelemetryNotice && renderTelemetryDashboardPanel("notices", (
@@ -9217,7 +9218,7 @@ export default function LiveCapture() {
           </div>
         </div>)}
 
-        {telemetryPanelEnabled("vitals") && renderTelemetryDashboardPanel("vitals", <div className={`grid h-full min-h-0 auto-rows-fr gap-2 overflow-hidden sm:grid-cols-2 ${focusView ? "grid-cols-5 sm:grid-cols-5" : telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`} style={{ order: telemetryPanelOrder("vitals") }}>
+        {telemetryPanelEnabled("vitals") && renderTelemetryDashboardPanel("vitals", <div className={`grid h-full min-h-0 auto-rows-fr grid-cols-2 gap-2 overflow-hidden sm:grid-cols-3 ${focusView ? "lg:grid-cols-5" : telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`} style={{ order: telemetryPanelOrder("vitals") }}>
           <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large display={focusView} beatPulse={visibleHeartbeatPulseId} />
           <MetricCard icon={<Activity className="w-4 h-4" />} label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} active={Boolean(latestBpReading)} valueClassName={focusView ? "!text-[clamp(1.75rem,2.8vw,4rem)]" : "!text-[clamp(2rem,8vw,3rem)]"} large display={focusView} />
           {!captureIsBodyExploration && (
@@ -9283,7 +9284,7 @@ export default function LiveCapture() {
         </div>)}
 
         {telemetryPanelEnabled("phase") && !captureIsBodyExploration && (
-          renderTelemetryDashboardPanel("phase", <div className="h-full overflow-hidden rounded-xl border border-border bg-muted/20 p-3" style={{ order: telemetryPanelOrder("phase") }}>
+          renderTelemetryDashboardPanel("phase", <div className="h-full overflow-y-auto overflow-x-hidden rounded-xl border border-border bg-muted/20 p-3" style={{ order: telemetryPanelOrder("phase") }}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">

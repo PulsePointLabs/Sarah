@@ -7,27 +7,36 @@ export const liveCuesRouter = express.Router();
 
 async function prepareInBatches(clips, settings, concurrency = 3) {
   const prepared = new Array(clips.length);
+  const failures = [];
   let cursor = 0;
   async function worker() {
     while (cursor < clips.length) {
       const index = cursor;
       cursor += 1;
       const clip = clips[index];
-      prepared[index] = await prepareLiveCueAudioClip({
-        text: clip.text,
-        voice: clip.voice || settings.voice,
-        model: clip.model || settings.model,
-        speed: clip.speed || settings.speed,
-        format: clip.format || settings.format,
-        profileVersion: settings.profileVersion,
-      });
+      try {
+        prepared[index] = await prepareLiveCueAudioClip({
+          text: clip.text,
+          voice: clip.voice || settings.voice,
+          model: clip.model || settings.model,
+          speed: clip.speed || settings.speed,
+          format: clip.format || settings.format,
+          profileVersion: settings.profileVersion,
+        });
+      } catch (error) {
+        failures.push({
+          index,
+          text: clip.text,
+          error: error?.message || String(error),
+        });
+      }
     }
   }
   await Promise.all(Array.from(
     { length: Math.min(concurrency, clips.length) },
     () => worker()
   ));
-  return prepared;
+  return { prepared: prepared.filter(Boolean), failures };
 }
 
 liveCuesRouter.post('/prepare', async (req, res) => {
@@ -44,14 +53,24 @@ liveCuesRouter.post('/prepare', async (req, res) => {
   }
   try {
     const requested = clips.slice(0, 48);
-    const prepared = await prepareInBatches(requested, {
+    const { prepared, failures } = await prepareInBatches(requested, {
       voice,
       model,
       speed,
       format,
       profileVersion,
     });
-    res.json({ ok: true, clips: prepared });
+    if (!prepared.length) {
+      const error = new Error(failures[0]?.error || 'No live cue audio could be prepared');
+      error.status = 502;
+      throw error;
+    }
+    res.json({
+      ok: true,
+      partial: failures.length > 0,
+      clips: prepared,
+      failures,
+    });
   } catch (error) {
     const classified = classifyProviderError(error, {
       provider: 'openai',

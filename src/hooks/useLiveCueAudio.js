@@ -94,15 +94,29 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
       throw new Error(payload.error || "Sarah voice cues could not be prepared.");
     }
     const decoded = new Map();
+    const decodeFailures = [];
     for (const prepared of payload.clips || []) {
       const source = requested.find((clip) => clip.text === prepared.text);
-      const clip = await decodeClip(ctx, { ...source, ...prepared });
-      decoded.set(`${clip.type}:${clip.text}`, clip);
+      try {
+        const clip = await decodeClip(ctx, { ...source, ...prepared });
+        decoded.set(`${clip.type}:${clip.text}`, clip);
+      } catch (error) {
+        decodeFailures.push({ text: prepared.text, error: error?.message || String(error) });
+      }
       setStatus({ phase: "preparing", message: "Decoding Sarah voice cues...", decoded: decoded.size, total: requested.length });
     }
+    if (!decoded.size) {
+      throw new Error(decodeFailures[0]?.error || "Sarah voice cues could not be decoded on this device.");
+    }
     decodedRef.current = decoded;
-    setStatus({ phase: "ready", message: "Sarah voice cues preloaded.", decoded: decoded.size, total: requested.length });
-    return { ok: true, decoded: decoded.size, total: requested.length };
+    const skipped = Number(payload.failures?.length || 0) + decodeFailures.length;
+    setStatus({
+      phase: "ready",
+      message: skipped ? `Sarah voice ready (${decoded.size} clips; ${skipped} unavailable).` : "Sarah voice cues preloaded.",
+      decoded: decoded.size,
+      total: requested.length,
+    });
+    return { ok: true, partial: skipped > 0, decoded: decoded.size, total: requested.length, skipped };
   }, [enabled, getAudioContext, phrases, settings?.format, settings?.model, settings?.speed, settings?.voice]);
 
   const playCue = useCallback((cue, { freshnessMs = 2500 } = {}) => {

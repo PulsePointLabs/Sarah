@@ -51,6 +51,7 @@ import { videoPosterDataUrl } from "@/lib/videoPoster";
 import { selectNearbyVitalReadings } from "@/lib/nearbyVitals";
 import { buildSessionChatPhysiologyEvidence } from "@/lib/bodyExplorationPhysiology";
 import { buildSessionMomentTelemetry, mapVideoTimeToSessionTime } from "@/utils/sessionMomentTelemetry";
+import { sortSessionVideosPrimaryFirst } from "@/lib/sessionVideoPriority";
 
 function _getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -68,20 +69,10 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
 } from "@/components/ui/alert-dialog";
 
-function inferStoryVideoPriority(video = {}) {
-  const text = `${video?.label || ""} ${video?.filename || ""} ${video?.path || ""}`.toLowerCase();
-  if (/\b(composite|pip|picture[-_\s]?in[-_\s]?picture|obs)\b/.test(text)) return 0;
-  if (/\b(main|focus|primary|close|genital|shaft|glans)\b/.test(text)) return 1;
-  if (/\b(side|lateral|angle)\b/.test(text)) return 8;
-  if (/\b(feet|foot|toe|toes|heel|heels|lower[-_\s]?body|legs?|pelvis)\b/.test(text)) return 9;
-  return 3;
-}
-
 function buildSessionStoryVideoSources({ linkedVideos = [], uploadedVideos = [] }) {
   const linkedSources = Array.isArray(linkedVideos)
-    ? linkedVideos
+    ? sortSessionVideosPrimaryFirst(linkedVideos)
         .filter((video) => video?.path && video.exists !== false)
-        .sort((a, b) => inferStoryVideoPriority(a) - inferStoryVideoPriority(b))
         .map((video, index) => ({
           id: video.id || video.path || `linked-${index}`,
           label: video.label || video.filename || (index === 0 ? "Session composite" : `Linked video ${index + 1}`),
@@ -609,7 +600,7 @@ function SessionStoryVideoPlayer({ linkedVideos = [], uploadedVideos = [], onAsk
 
   return (
     <section id="session-story-video" className="scroll-mt-24">
-      <div className="ml-auto w-full max-w-2xl rounded-xl border border-primary/20 bg-card p-3 shadow-sm">
+      <div className="w-full rounded-2xl border border-primary/20 bg-card p-4 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
