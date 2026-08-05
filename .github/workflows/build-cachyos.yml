@@ -1,0 +1,37 @@
+name: Build CachyOS package
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to package
+        required: true
+        default: main
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install build tools
+        run: pacman -Syu --noconfirm --needed base-devel git nodejs npm
+
+      - name: Check out requested ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Build as an unprivileged user
+        shell: bash
+        run: |
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          runuser -u builder -- bash -lc "cd '$GITHUB_WORKSPACE' && npm ci && npm run desktop:dist:linux:cachyos"
+
+      - name: Upload CachyOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarah-cachyos
+          path: desktop-release/Sarah-CachyOS-*.pkg.tar.zst
+          if-no-files-found: error
+          retention-days: 7
