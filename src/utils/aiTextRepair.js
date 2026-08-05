@@ -98,8 +98,15 @@ export function repairSpokenClockTimeReferences(text) {
 export function repairNumericElapsedTimeReferences(text) {
   if (typeof text !== "string") return text;
   return text.replace(/\b(\d{1,2}):([0-5]\d)\b/g, (match, minuteText, secondText, offset, source) => {
+    const prefix = source.slice(Math.max(0, offset - 72), offset);
     const suffix = source.slice(offset + match.length, offset + match.length + 12);
     if (/^\s*(?:a\.?m\.?|p\.?m\.?)/i.test(suffix)) return match;
+    // Claude occasionally rewrites a slash-form pressure such as 125/88 as
+    // 1:25 over 88. Do not turn that into an elapsed-time phrase.
+    if (/\b(?:blood pressure|BP|pressure|systolic|reading)\b[^.!?]{0,64}$/i.test(prefix)
+      && /^\s*(?:over|\/)\s*\d{2,3}\b/i.test(suffix)) {
+      return `${minuteText}${secondText}`;
+    }
     return formatSecondsAsWords((Number(minuteText) * 60) + Number(secondText));
   });
 }

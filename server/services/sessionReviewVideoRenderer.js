@@ -2398,6 +2398,7 @@ async function renderSegmentedSourceReviewVideo({
   let phaseAnchorEvent = null;
   let phaseAnchorParagraph = null;
   let paragraphTimelineCursor = null;
+  let bodyEvidenceAnchorEvent = null;
   const strictBodyExplorationVisuals = isBodyExplorationReview(payload, session);
   const previewFrames = [];
   const publishPreview = async (preview) => {
@@ -2453,6 +2454,7 @@ async function renderSegmentedSourceReviewVideo({
       phaseAnchorEvent = null;
       phaseAnchorParagraph = Number(segment.paragraphIndex);
       paragraphTimelineCursor = null;
+      bodyEvidenceAnchorEvent = null;
     }
     const nextNarrated = timestampRequirement.required
       ? null
@@ -2491,7 +2493,24 @@ async function renderSegmentedSourceReviewVideo({
         spoken_char_index: Number(timestampRequirement.primary.charIndex || 0),
       }
       : null;
-    const directEvent = exactNarratedEvent || paragraphTimelineEvent || canonicalPhaseAnchor || matchedEvent;
+    const matchedBodyEvidenceEvent = exactNarratedEvent || matchedEvent;
+    if (strictBodyExplorationVisuals && matchedBodyEvidenceEvent) {
+      bodyEvidenceAnchorEvent = matchedBodyEvidenceEvent;
+    }
+    const bodyEvidenceContinuationEvent = strictBodyExplorationVisuals
+      && !matchedBodyEvidenceEvent
+      && bodyEvidenceAnchorEvent
+      && bodyExplorationVisualConcepts(segment.text).length === 0
+      ? buildParagraphTimelineEvent({
+        segment,
+        cursorSeconds: paragraphTimelineCursor ?? bodyEvidenceAnchorEvent.session_time_s,
+      })
+      : null;
+    const directEvent = exactNarratedEvent
+      || paragraphTimelineEvent
+      || canonicalPhaseAnchor
+      || matchedEvent
+      || bodyEvidenceContinuationEvent;
     const phaseResolution = strictBodyExplorationVisuals
       ? { event: directEvent, nextPhaseAnchor: null, carried: false }
       : resolveReviewSegmentPhaseCarryover({
@@ -2753,6 +2772,14 @@ async function renderSegmentedSourceReviewVideo({
     }
 
     if (!event) {
+      const unmatchedBodyConcepts = strictBodyExplorationVisuals
+        ? bodyExplorationVisualConcepts(segment.text)
+        : [];
+      if (unmatchedBodyConcepts.length) {
+        throw new Error(
+          `Body Exploration review stopped because spoken segment ${index + 1} describes ${unmatchedBodyConcepts.join(', ')} without a matching timestamped source window. Re-analyze the record so the visual claim includes a verified elapsed-time anchor.`
+        );
+      }
       onProgress?.({
         phase: 'segments',
         current: 3,

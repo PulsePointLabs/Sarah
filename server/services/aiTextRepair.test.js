@@ -37,6 +37,16 @@ test('numeric session offsets become elapsed minutes while real clock times rema
   assert.match(repaired, /From 33 minutes and 20 seconds to 35 minutes and 2 seconds/i);
 });
 
+test('blood pressure accidentally formatted like clock time is restored before elapsed-time repair', () => {
+  const repaired = repairNumericElapsedTimeReferences(
+    'Blood pressure rose from 1:25 over 88 to 1:46 over 101, then returned toward 1:36 over 96.'
+  );
+  assert.equal(
+    repaired,
+    'Blood pressure rose from 125 over 88 to 146 over 101, then returned toward 136 over 96.'
+  );
+});
+
 test('repeated consistency wording is varied after the first allowed use', () => {
   const repaired = reduceConsistencyPhraseRepetition(
     [

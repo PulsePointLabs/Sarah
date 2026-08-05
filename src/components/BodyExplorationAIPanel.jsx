@@ -90,7 +90,10 @@ SARAH LANGUAGE VARIETY RULE:
 
 const DEEP_BODY_EXPLORATION_SYNTHESIS_RULE = `
 DEEP BODY EXPLORATION SYNTHESIS - HIGH PRIORITY:
-- Treat this exploration as a rich physiological record, not a list of timestamped actions. Select four to eight meaningful physiological windows or transitions; do not narrate every event.
+- Treat this exploration as a rich physiological record, not a list of timestamped actions. Chronology is an evidence index, not the report structure.
+- At least sixty percent of the analysis should explain physiological response, cross-signal relationships, visible body response, sensory-mechanical interpretation, and recovery. Routine procedural chronology should occupy no more than twenty percent.
+- Compress repeated fill, clamp, reposition, retention, leakage, contraction, and release cycles into three to five response phases. Do not reproduce the event log with prose wrapped around every timestamp.
+- Select no more than six major elapsed-time anchors across the entire report unless an additional time is essential to distinguish conflicting evidence. A paragraph may discuss a sustained window without reciting every event inside it.
 - Every substantive paragraph should integrate at least two evidence streams when available: the person's first-person notes or interview findings, reviewed visual findings, heart rate, quality-gated RR/HRV, respiration, motion/position, EMG, blood pressure, blood glucose, pulse oximetry, body composition/weight, or procedural mechanics.
 - Explain what changed, the evidence supporting it, the most plausible physiological or mechanical interpretation, what remains uncertain, and why the pattern matters in this person's record.
 - Give the person's observations and Sarah's reviewed findings real analytical weight. Identify where they converge, where one adds information the other could not supply, and where subjective intensity differs from measured load. Do not create a repetitive two-column recap.
@@ -98,7 +101,22 @@ DEEP BODY EXPLORATION SYNTHESIS - HIGH PRIORITY:
 - HRV discipline: a sustained quality-gated RR pattern may support discussion of parasympathetic modulation. A single very high RMSSD value or abrupt one-bin jump may be artifact, ectopy, movement, or transient irregularity; describe it as a candidate signal unless surrounding RR quality and adjacent windows support it. Do not call one RMSSD spike proof of a vagal reflex.
 - Separate observation from mechanism. Use language such as "supports", "may reflect", or "is physiologically compatible with" when causation is not established.
 - Prefer synthesis over repetition. A timestamp belongs only when it anchors a major transition or a cross-stream relationship.
+- Visual evidence is not decoration. Use it only for something the reviewed frames or clips actually establish: visible leakage or expulsion, abdominal contour change, contraction/bracing, breathing, leg or foot response, positioning, equipment contact, visible genital state, or recovery behavior. Do not describe internal depth, sigmoid entry, retained volume, intraluminal pressure, sphincter tone, bladder causation, or autonomic mechanism as visually confirmed.
+- When a paragraph makes a substantive visual or procedural claim, put the supporting elapsed window in that same sentence. This is a production requirement: the review-video editor uses that exact citation to select source footage.
+- If no reviewed visual window supports a claim, keep it explicitly as a user report, telemetry interpretation, or cautious inference and do not imply Sarah saw it.
+- A single extreme RMSSD bin must not be called a vagal reflex or a parasympathetic opening. First inspect adjacent RR quality and sustained behavior; otherwise label it a candidate transient or artifact-sensitive observation.
+- Do not call an elevated heart-rate or blood-pressure response benign, non-pathological, expected, or free of cardiovascular strain unless the available record genuinely supports that conclusion. Describe the measured load and uncertainty instead.
 - Do not recommend escalating insertion depth, pressure, retention hardware, catheterization, or other invasive technique. Keep follow-up focused on measurement quality, safer workflow, equipment integrity, comfort, and what would clarify the physiology next time.
+`;
+
+const BODY_EXPLORATION_VIDEO_ALIGNMENT_RULE = `
+BODY EXPLORATION REVIEW-VIDEO EVIDENCE CONTRACT - MANDATORY:
+- Write each visually demonstrable action or body response as a self-contained sentence with its exact elapsed time or short elapsed window.
+- Keep the words describing the action next to the time citation. Do not place a timestamp in one paragraph and the corresponding visual claim several paragraphs later.
+- One sentence should describe one visual concept or one tightly linked response window. Do not combine condom-catheter placement, enema insertion, leakage, leg trembling, accessory retrieval, and defecation in one sentence.
+- Never use a visually unrelated moment merely because it is dramatic. The editor must show the cited source interval for the action being described.
+- Untimed whole-session physiology may be narrated over continuous footage from the most recently matched evidence window. It must not trigger a jump to an unrelated event.
+- If a visual claim cannot be tied to a reviewed or logged source interval, omit the visual claim from narration rather than inviting substitute footage.
 `;
 
 const ELAPSED_TIME_OUTPUT_RULE = `
@@ -256,9 +274,9 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
         type: "object",
         properties: {
           summary: { type: "string" },
-          integrated_physiology: { type: "array", items: { type: "string" }, description: "Three to six substantive synthesis paragraphs integrating full-trajectory heart rate, quality-gated RR/HRV, respiration, motion, EMG, blood pressure, glucose, SpO2, and recovery where available. Explain relationships and uncertainty; do not list metrics." },
-          mechanical_sensory_synthesis: { type: "array", items: { type: "string" }, description: "Two to five substantive paragraphs connecting procedural mechanics, position, pressure or distension, visible responses, comfort, and first-person sensation across meaningful windows rather than narrating events." },
-          user_sarah_findings: { type: "array", items: { type: "string" }, description: "Two to four paragraphs synthesizing the person's observations/interview findings with Sarah's reviewed visual and physiological findings, including convergence, added information, and meaningful mismatch." },
+          integrated_physiology: { type: "array", items: { type: "string" }, description: "Four to six substantive synthesis paragraphs. This is the majority of the report. Integrate full-trajectory heart rate, quality-gated RR/HRV, respiration, motion, EMG, blood pressure, glucose, SpO2, baseline context, load, and recovery where available. Explain relationships, provenance, and uncertainty; do not list metrics or events." },
+          mechanical_sensory_synthesis: { type: "array", items: { type: "string" }, description: "Two to four substantive paragraphs organized into three to five response phases, connecting mechanics, position, distension or pressure as reported, verified visible responses, comfort, and first-person sensation. Compress repeated cycles instead of narrating each action." },
+          user_sarah_findings: { type: "array", items: { type: "string" }, description: "Two to four paragraphs synthesizing the person's observations/interview findings with Sarah's reviewed visual and physiological findings. Each direct visual claim must include its matching elapsed time or short elapsed window in the same sentence." },
           outcome_comparison: { type: "array", items: { type: "string" }, description: "One to three paragraphs explaining immediate outcome and cautious comparison with prior explorations when supported." },
           recommendations: { type: "array", items: { type: "string" }, description: "Two to four focused, evidence-grounded follow-up points emphasizing measurement quality, workflow, equipment integrity, comfort, and questions for future comparison without escalating invasive technique." },
         },
@@ -317,6 +335,7 @@ ${PRODUCTION_BODY_EXPLORATION_STYLE}
 ${SARAH_LANGUAGE_VARIETY_RULE}
 ${ELAPSED_TIME_OUTPUT_RULE}
 ${focusedFoley ? "" : DEEP_BODY_EXPLORATION_SYNTHESIS_RULE}
+${focusedFoley ? "" : BODY_EXPLORATION_VIDEO_ALIGNMENT_RULE}
 ${focusedFoley ? focusedFoleyPromptBlock() : ""}
 
 STYLE:
@@ -358,7 +377,7 @@ ${JSON.stringify({
   reviewed_video_pass_evidence: videoPassEvidenceContext || null,
 }, null, 2)}
 
-${events.length ? `TIMESTAMPED NOTES:\n${events.join("\n")}` : "No timestamped notes were recorded."}`,
+${events.length ? `RAW TIMESTAMPED NOTES - EVIDENCE INDEX ONLY; DO NOT USE THIS LIST AS THE REPORT OUTLINE:\n${events.join("\n")}` : "No timestamped notes were recorded."}`,
         response_json_schema: responseSchema,
       };
       const job = await startRecoverableAIJob(jobKey, aiPayload, {
