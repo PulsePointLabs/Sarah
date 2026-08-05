@@ -645,7 +645,17 @@ function createWindow() {
     void logRendererCapabilities(mainWindow);
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  const revealWindow = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  };
+  mainWindow.once('ready-to-show', revealWindow);
+  // A renderer or GPU hiccup can prevent ready-to-show from firing even though
+  // the backend and renderer are healthy. Never leave a live, invisible Sarah
+  // process holding the single-instance lock.
+  setTimeout(revealWindow, 1500);
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
@@ -713,7 +723,13 @@ app.whenReady().then(async () => {
 });
 
 app.on('second-instance', () => {
-  if (!mainWindow) return;
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (backendUrl) {
+      const win = createWindow();
+      void win.loadURL(backendUrl);
+    }
+    return;
+  }
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
