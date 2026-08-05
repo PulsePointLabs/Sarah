@@ -60,7 +60,7 @@ const PROFILE_QA_LOAD_STEPS = [
   "Preparing Sarah chat context",
 ];
 
-export default function ProfileQA() {
+export default function ProfileQA({ standalone = false }) {
   const [profile, setProfile] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [recentActivityContext, setRecentActivityContext] = useState("");
@@ -150,7 +150,7 @@ export default function ProfileQA() {
       ? 100
       : Math.max(12, Math.min(92, Math.round(((loadState.step + 1) / PROFILE_QA_LOAD_STEPS.length) * 100)));
     return (
-      <div className="mx-auto flex min-h-[50vh] max-w-xl items-center justify-center px-4 py-10">
+      <div className={standalone ? "flex min-h-[100dvh] items-center justify-center bg-background px-4 py-10" : "mx-auto flex min-h-[50vh] max-w-xl items-center justify-center px-4 py-10"}>
         <div className="w-full rounded-xl border border-border bg-card p-5 shadow-sm">
           <div className="flex items-start gap-3">
             <div className={`mt-0.5 rounded-full border p-2 ${loadState.error ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-primary/30 bg-primary/10 text-primary"}`}>
@@ -187,9 +187,11 @@ export default function ProfileQA() {
                 <RefreshCw className="h-4 w-4" />
                 Retry
               </Button>
-              <Button asChild type="button" variant="outline">
-                <Link to="/profile">Back to Profile</Link>
-              </Button>
+              {!standalone && (
+                <Button asChild type="button" variant="outline">
+                  <Link to="/profile">Back to Profile</Link>
+                </Button>
+              )}
             </div>
           )}
         </div>
@@ -212,7 +214,7 @@ export default function ProfileQA() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4 px-3 py-3 pb-24 sm:px-6 sm:py-5 lg:px-8">
+    <div className={standalone ? "h-[100dvh] overflow-hidden bg-background" : "mx-auto max-w-6xl space-y-4 px-3 py-3 pb-24 sm:px-6 sm:py-5 lg:px-8"}>
       <AIChat
         mode="profile"
         userProfile={profile}
@@ -223,6 +225,7 @@ export default function ProfileQA() {
         latestSavedFinding={latestQaFinding}
         recentSavedFindings={recentProfileQaFindings}
         defaultOpen
+        standalone={standalone}
         onSaveMessages={async (msgs) => {
           setChatMessages(msgs);
           await base44.auth.updateMe({ profile_chat_messages: msgs });
@@ -232,7 +235,7 @@ export default function ProfileQA() {
         }}
       />
 
-      <div className="rounded-xl border border-border bg-card">
+      {!standalone && <div className="rounded-xl border border-border bg-card">
         <button
           type="button"
           onClick={() => setQaFindingsOpen((open) => !open)}
@@ -289,7 +292,7 @@ export default function ProfileQA() {
             )}
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

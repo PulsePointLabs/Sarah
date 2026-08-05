@@ -598,10 +598,11 @@ export default function AIChat({
   onSaveMessages,
   onSaveNotes,
   autoScrollOnMount = true,
+  standalone = false,
 }) {
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [open, setOpen] = useState(defaultOpen);
-  const [fullScreen, setFullScreen] = useState(false);
+  const [fullScreen, setFullScreen] = useState(Boolean(standalone));
   const [messages, setMessages] = useState(savedMessages || []);
   const [loading, setLoading] = useState(false);
   const [savingFindings, setSavingFindings] = useState(false);
@@ -651,6 +652,12 @@ export default function AIChat({
   const lastAssistantScrollKeyRef = useRef("");
   const initialAutoScrollSuppressedRef = useRef(false);
   const lastTimestampReviewRequestRef = useRef("");
+
+  useEffect(() => {
+    if (!standalone) return;
+    setOpen(true);
+    setFullScreen(true);
+  }, [standalone]);
 
   const handleDraftValueChange = useCallback((value) => {
     draftValueRef.current = String(value || "");
@@ -3077,7 +3084,7 @@ Return a conversational answer plus structured findings for review/persistence.`
     <div className={panelClass}>
       {/* Header */}
       <div className={`flex items-center gap-2 text-left ${fullScreen ? "shrink-0 border-b border-border/80 bg-card/95 px-3 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] shadow-sm backdrop-blur-xl sm:px-6" : "bg-muted/40 px-4 py-3"}`}>
-        {fullScreen && (
+        {fullScreen && !standalone && (
           <button
             type="button"
             onClick={() => setFullScreen(false)}
@@ -3100,7 +3107,7 @@ Return a conversational answer plus structured findings for review/persistence.`
             <span className={`block truncate font-semibold text-foreground ${fullScreen ? "text-base" : "text-xs"}`}>
               {fullScreen ? "Sarah" : mode === "profile" ? "Chat with Sarah" : "Sarah Session Chat"}
             </span>
-            {fullScreen && <span className="block truncate text-[11px] text-muted-foreground">{mode === "profile" ? "Profile chat · autosaved" : "Session chat · autosaved"}</span>}
+            {fullScreen && <span className="block truncate text-[11px] text-muted-foreground">{standalone ? "Private companion · synced with Sarah" : mode === "profile" ? "Profile chat · autosaved" : "Session chat · autosaved"}</span>}
           </span>
           {hasMessages && !fullScreen && (
             <span className="shrink-0 text-[10px] text-muted-foreground">{messages.length} msg{messages.length !== 1 ? "s" : ""}</span>
@@ -3155,6 +3162,20 @@ Return a conversational answer plus structured findings for review/persistence.`
           {/* Message thread or input prompt */}
           {messages.length === 0 ? (
             <div className={fullScreen ? threadClass : "space-y-2"}>
+              {standalone && (
+                <div className="m-auto flex max-w-sm flex-col items-center px-6 py-10 text-center">
+                  <SarahAvatar className="h-20 w-20 shadow-lg" />
+                  <h1 className="mt-4 text-xl font-semibold text-foreground">Chat with Sarah</h1>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                    Your private Sarah conversation, with the same profile, physiology, recent sessions, voice, and saved chat context as the full app.
+                  </p>
+                  <div className="mt-4 flex flex-wrap justify-center gap-2 text-[11px] font-medium text-muted-foreground">
+                    <span className="rounded-full border border-border bg-card px-3 py-1.5">Voice &amp; TTS</span>
+                    <span className="rounded-full border border-border bg-card px-3 py-1.5">Photos &amp; video</span>
+                    <span className="rounded-full border border-border bg-card px-3 py-1.5">Autosaved history</span>
+                  </div>
+                </div>
+              )}
               {renderSavedVideoClips()}
               {renderSelectedImages()}
               {imageError && <p className="text-xs text-destructive">{imageError}</p>}

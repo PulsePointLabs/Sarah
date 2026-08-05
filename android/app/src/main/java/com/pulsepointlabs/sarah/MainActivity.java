@@ -22,6 +22,13 @@ public class MainActivity extends BridgeActivity {
         if (getBridge() != null && getBridge().getWebView() != null) {
             sarahWebChromeClient = new SarahWebChromeClient(this, getBridge());
             getBridge().getWebView().setWebChromeClient(sarahWebChromeClient);
+            if (BuildConfig.SARAH_CHAT_ONLY) {
+                getBridge().getWebView().postDelayed(() -> {
+                    String appUrl = getBridge().getAppUrl();
+                    String separator = appUrl.endsWith("/") ? "" : "/";
+                    getBridge().getWebView().loadUrl(appUrl + separator + "chat?standalone=1");
+                }, 250);
+            }
         }
     }
 

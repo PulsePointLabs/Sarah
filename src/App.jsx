@@ -97,6 +97,11 @@ const AuthenticatedApp = () => {
             return;
           }
 
+          if (location.pathname === '/chat' && new URLSearchParams(location.search).get('standalone') === '1') {
+            CapacitorApp.exitApp?.();
+            return;
+          }
+
           if (canGoBack || window.history.length > 1) {
             navigate(-1);
             return;
@@ -114,7 +119,7 @@ const AuthenticatedApp = () => {
       active = false;
       listener?.remove?.();
     };
-  }, [location.pathname, navigate]);
+  }, [location.pathname, location.search, navigate]);
 
   const bootScreenVisible = Boolean(isLoadingPublicSettings || isLoadingAuth);
 
@@ -159,6 +164,7 @@ const AuthenticatedApp = () => {
   // Render the main app
   return (
     <Routes>
+      <Route path="/chat" element={<ProfileQA standalone />} />
       <Route element={<Layout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/sessions" element={<Sessions />} />
