@@ -91,22 +91,22 @@ import {
 } from "@/lib/omronBloodPressureBle";
 
 const MAX_TELEMETRY_POINTS = 240;
-const TELEMETRY_DASHBOARD_STORAGE_KEY = "pulsepoint.telemetryDashboard.v2";
+const TELEMETRY_DASHBOARD_STORAGE_KEY = "pulsepoint.telemetryDashboard.v3";
 const TELEMETRY_DASHBOARD_PANELS = [
   { id: "notices", label: "Sarah live cue", helper: "Current physiological cue and confidence", cols: 12, rows: 2 },
-  { id: "engine", label: "Acquisition health", helper: "Engine, sample rates, buffer, and storage", cols: 12, rows: 1 },
+  { id: "engine", label: "Acquisition health", helper: "Engine, sample rates, buffer, and storage", cols: 12, rows: 1, enabled: false },
   { id: "howl", label: "Howl control", helper: "Current intensity and direct controls", cols: 12, rows: 2 },
   { id: "vitals", label: "Vital cards", helper: "HR, BP, HRV, respiration, motion, and EMG", cols: 12, rows: 4 },
   { id: "phase", label: "Phase watch", helper: "Approach, plateau, recovery, and markers", cols: 6, rows: 4 },
   { id: "multimodal", label: "Multimodal timelines", helper: "Threshold, respiration, motion, and Howl dose", cols: 6, rows: 4 },
   { id: "cardiac", label: "Cardiac timeline", helper: "HR, baseline, HRV, and approach", cols: 6, rows: 4 },
-  { id: "emg", label: "EMG timeline", helper: "Perineal or dual-channel muscle activity", cols: 6, rows: 4 },
+  { id: "emg", label: "EMG timeline", helper: "Perineal or dual-channel muscle activity", cols: 6, rows: 4, enabled: false },
 ];
 
 function defaultTelemetryDashboard() {
   return TELEMETRY_DASHBOARD_PANELS.map((panel) => ({
     id: panel.id,
-    enabled: true,
+    enabled: panel.enabled !== false,
     cols: panel.cols,
     rows: panel.rows,
   }));
@@ -130,7 +130,7 @@ function readTelemetryDashboard() {
       });
     TELEMETRY_DASHBOARD_PANELS.forEach((panel) => {
       if (!known.has(panel.id)) {
-        ordered.push({ id: panel.id, enabled: true, cols: panel.cols, rows: panel.rows });
+        ordered.push({ id: panel.id, enabled: panel.enabled !== false, cols: panel.cols, rows: panel.rows });
       }
     });
     return ordered;
@@ -1342,7 +1342,7 @@ function MetricCard({ icon, label, value, helper, active, level, large = false, 
   const color = hasLevel ? levelColor(level) : null;
   return (
     <div
-      className={`telemetry-metric-card relative min-w-0 overflow-hidden rounded-xl border transition-shadow ${display ? "min-h-0 p-3" : large ? "min-h-[10.5rem] p-5" : "min-h-[8rem] p-4"} ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"} ${beatPulse ? "shadow-[0_0_30px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
+      className={`telemetry-metric-card relative min-w-0 overflow-hidden rounded-xl border transition-shadow ${display ? "min-h-0 p-2.5" : large ? "min-h-[10.5rem] p-5" : "min-h-[8rem] p-4"} ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"} ${beatPulse ? "shadow-[0_0_30px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
       style={hasLevel ? { borderColor: `${color}9a`, background: `linear-gradient(135deg, ${color}38, ${color}10 55%, hsl(var(--card)) 100%)` } : undefined}
     >
       {beatPulse ? <span key={`metric-beat-${label}-${beatPulse}`} className="pointer-events-none absolute right-4 top-4 h-5 w-5 rounded-full bg-rose-400/45 animate-ping" /> : null}
@@ -1359,8 +1359,8 @@ function MetricCard({ icon, label, value, helper, active, level, large = false, 
         </div>
         <StatusDot active={active || hasLevel} />
       </div>
-      <p className={`mt-2 min-w-0 whitespace-nowrap font-bold leading-none tracking-normal text-foreground tabular-nums ${display ? "text-[clamp(2rem,3.8vw,5.5rem)]" : large ? "text-5xl" : "text-3xl"} ${valueClassName}`}>{value}</p>
-      {helper && <p className={`mt-1 text-muted-foreground ${display ? "line-clamp-1 text-sm" : large ? "min-h-[2.5rem] text-sm" : "min-h-[2.5rem] text-xs"}`}>{helper}</p>}
+      <p className={`mt-1.5 min-w-0 whitespace-nowrap font-bold leading-none tracking-normal text-foreground tabular-nums ${display ? "text-[clamp(1.75rem,2.8vw,4rem)]" : large ? "text-5xl" : "text-3xl"} ${valueClassName}`}>{value}</p>
+      {helper && <p className={`mt-1 text-muted-foreground ${display ? "line-clamp-1 text-xs" : large ? "min-h-[2.5rem] text-sm" : "min-h-[2.5rem] text-xs"}`}>{helper}</p>}
     </div>
   );
 }
@@ -3790,6 +3790,10 @@ export default function LiveCapture() {
     || howlTelemetry?.waveform
     || howlTelemetry?.mode,
   );
+  // Keep the emergency control visible only while Howl is actually delivering
+  // output. A configured/tested controller at zero intensity must not obscure
+  // the preflight or distance display.
+  const howlSafetyActive = Boolean(howlLive && Number(howlSelectedChannelIntensity) > 0);
   const howlDisplayStatus = howlSarahAutoEnabled
     ? howlAutoStatus
     : howlManualControlsUnlocked
@@ -4009,13 +4013,21 @@ export default function LiveCapture() {
     if (!focusView) return undefined;
     const previousBodyOverflow = document.body.style.overflow;
     const previousDocumentOverflow = document.documentElement.style.overflow;
+    const handleFocusViewKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setTelemetryLayoutEditing(false);
+      setFocusView(false);
+    };
     document.body.style.overflow = "hidden";
     document.documentElement.style.overflow = "hidden";
+    window.addEventListener("keydown", handleFocusViewKeyDown, { capture: true });
     return () => {
+      window.removeEventListener("keydown", handleFocusViewKeyDown, { capture: true });
       document.body.style.overflow = previousBodyOverflow;
       document.documentElement.style.overflow = previousDocumentOverflow;
     };
-  }, [focusView]);
+  }, [focusView, setFocusView]);
 
   useEffect(() => {
     localStorage.setItem(TELEMETRY_DASHBOARD_STORAGE_KEY, JSON.stringify(telemetryDashboard));
@@ -6716,7 +6728,7 @@ export default function LiveCapture() {
       : liveCueSettings.enabled && !liveCueAudio.ready
         ? "Prepare Sarah and Start Session"
         : "Start Session";
-  const showLiveControlBar = launchActive || howlControlEnabled || howlLive || endingSession;
+  const showLiveControlBar = !focusView && (launchActive || endingSession);
   const showAdvancedSetupConsole = advancedSetupOpen;
   const obsPreferred = Boolean(launchProfile.obsEnabled && !launchProfile.telemetryOnlyFallback);
   const h10RawStreamsActive = Boolean(
@@ -6998,7 +7010,7 @@ export default function LiveCapture() {
                   <Activity className="h-4 w-4" /> {detailedTelemetryOpen ? "Hide charts" : "Detailed telemetry"}
                 </button>
               )}
-              {(howlControlEnabled || howlLive || howlConnectionSucceeded) && (
+              {howlSafetyActive && (
                 <>
                   <button
                     type="button"
@@ -8800,6 +8812,19 @@ export default function LiveCapture() {
           "--border": "199 28% 25%",
         } : undefined}
       >
+        {focusView && (
+          <button
+            type="button"
+            onClick={() => {
+              setTelemetryLayoutEditing(false);
+              setFocusView(false);
+            }}
+            className="fixed bottom-3 left-3 z-[95] inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/20 bg-black/85 px-4 py-2 text-sm font-bold text-white shadow-2xl backdrop-blur hover:bg-black"
+            title="Exit telemetry Display View (Esc)"
+          >
+            <X className="h-4 w-4" /> Exit Display View <span className="text-xs font-medium text-white/60">Esc</span>
+          </button>
+        )}
         <div className={`flex items-center justify-between gap-3 ${focusView ? "shrink-0 pb-2" : ""}`}>
           <h3 className={`${focusView ? "text-2xl md:text-3xl" : distanceTelemetryView ? "text-lg" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex items-center gap-2`}>
             <CircleDot className={distanceTelemetryView ? "w-6 h-6" : "w-4 h-4"} /> Live Telemetry
@@ -8827,6 +8852,27 @@ export default function LiveCapture() {
             </label>
             {focusView && (
               <>
+                {howlSafetyActive && (
+                  <button
+                    type="button"
+                    onClick={sendHowlEmergencyStop}
+                    disabled={howlControlBusy === "emergency_stop"}
+                    className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-sm font-black text-white shadow-lg hover:bg-red-700 disabled:opacity-55"
+                    title="Immediately stop active Howl output"
+                  >
+                    <AlertTriangle className="h-4 w-4" /> Stop Howl
+                  </button>
+                )}
+                {recordingTransportActive && (
+                  <button
+                    type="button"
+                    onClick={stopObsRecording}
+                    disabled={endingSession}
+                    className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm font-bold text-destructive hover:bg-destructive/20 disabled:opacity-55"
+                  >
+                    <Video className="h-4 w-4" /> {endingSession ? "Ending…" : "End Session"}
+                  </button>
+                )}
                 <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm font-semibold text-foreground">
                   <input
                     type="checkbox"
@@ -9035,7 +9081,7 @@ export default function LiveCapture() {
           </div>
         </div>)}
 
-        {telemetryPanelEnabled("howl") && renderTelemetryDashboardPanel("howl", <div className="h-full overflow-hidden rounded-xl border border-cyan-400/25 bg-cyan-500/[0.06] p-3 shadow-sm" style={{ order: telemetryPanelOrder("howl") }}>
+        {telemetryPanelEnabled("howl") && howlSafetyActive && renderTelemetryDashboardPanel("howl", <div className="h-full overflow-hidden rounded-xl border border-cyan-400/25 bg-cyan-500/[0.06] p-3 shadow-sm" style={{ order: telemetryPanelOrder("howl") }}>
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -9071,7 +9117,7 @@ export default function LiveCapture() {
 
         {telemetryPanelEnabled("vitals") && renderTelemetryDashboardPanel("vitals", <div className={`grid h-full min-h-0 auto-rows-fr gap-2 overflow-hidden sm:grid-cols-2 ${focusView ? "grid-cols-5 sm:grid-cols-5" : telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`} style={{ order: telemetryPanelOrder("vitals") }}>
           <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large display={focusView} beatPulse={visibleHeartbeatPulseId} />
-          <MetricCard icon={<Activity className="w-4 h-4" />} label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} active={Boolean(latestBpReading)} valueClassName={focusView ? "!text-[clamp(3rem,5vw,6rem)]" : "!text-[clamp(2rem,8vw,3rem)]"} large display={focusView} />
+          <MetricCard icon={<Activity className="w-4 h-4" />} label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} active={Boolean(latestBpReading)} valueClassName={focusView ? "!text-[clamp(1.75rem,2.8vw,4rem)]" : "!text-[clamp(2rem,8vw,3rem)]"} large display={focusView} />
           {!captureIsBodyExploration && (
             <>
               <MetricCard icon={<Zap className="w-4 h-4" />} label="Build Confidence" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "No HR phase"} active={Number(hrTelemetry?.buildConfidence) > 40} level={buildLevel} large display={focusView} />
@@ -9100,7 +9146,7 @@ export default function LiveCapture() {
                 level={h10Respiration.available ? (h10Respiration.confidence === "high" ? 90 : 65) : 0}
                 large
                 display={focusView}
-                valueClassName={!h10Respiration.available && focusView ? "!text-[clamp(2.5rem,4vw,4.5rem)]" : ""}
+                valueClassName={!h10Respiration.available && focusView ? "!text-[clamp(1.6rem,2.4vw,3.25rem)]" : ""}
               />
               <MetricCard
                 icon={<Radio className="w-4 h-4" />}
@@ -9111,7 +9157,7 @@ export default function LiveCapture() {
                 level={h10Motion.available ? Math.min(100, Number(h10Motion.dynamicRmsMilliG || 0) / 3.6) : 0}
                 large
                 display={focusView}
-                valueClassName={!h10Motion.available && focusView ? "!text-[clamp(2.5rem,4vw,4.5rem)]" : ""}
+                valueClassName={!h10Motion.available && focusView ? "!text-[clamp(1.6rem,2.4vw,3.25rem)]" : ""}
               />
               <MetricCard
                 icon={<RefreshCw className="w-4 h-4" />}
@@ -9122,7 +9168,7 @@ export default function LiveCapture() {
                 level={h10Recovery.available ? Math.min(100, Number(h10Recovery.currentDropBpm || 0) * 5) : 0}
                 large
                 display={focusView}
-                valueClassName={!h10Recovery.available && focusView ? "!text-[clamp(2.5rem,4vw,4.5rem)]" : ""}
+                valueClassName={!h10Recovery.available && focusView ? "!text-[clamp(1.6rem,2.4vw,3.25rem)]" : ""}
               />
             </>
           )}
