@@ -5,7 +5,10 @@ const http = require('node:http');
 const https = require('node:https');
 const net = require('node:net');
 const path = require('node:path');
-const { getRemoteBackendCandidates } = require('./remote-backend.cjs');
+const {
+  getRemoteBackendCandidates,
+  getWebBluetoothSecureContextOverrides,
+} = require('./remote-backend.cjs');
 
 const APP_NAME = 'Sarah';
 const STARTUP_TIMEOUT_MS = 45000;
@@ -14,6 +17,19 @@ const PREFERRED_HR_RELAY_PORT = 8765;
 
 app.setName(APP_NAME);
 app.commandLine.appendSwitch('enable-web-bluetooth');
+const webBluetoothSecureContextOverrides = getWebBluetoothSecureContextOverrides(
+  getRemoteBackendCandidates({
+    platform: process.platform,
+    env: process.env,
+    configText: '',
+  }),
+);
+if (webBluetoothSecureContextOverrides.length > 0) {
+  app.commandLine.appendSwitch(
+    'unsafely-treat-insecure-origin-as-secure',
+    webBluetoothSecureContextOverrides.join(','),
+  );
+}
 
 const singleInstanceLock = app.requestSingleInstanceLock();
 if (!singleInstanceLock) {
@@ -425,6 +441,20 @@ function configureBluetoothSelection(win) {
   });
 }
 
+async function logRendererCapabilities(win) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    const capabilities = await win.webContents.executeJavaScript(`({
+      origin: window.location.origin,
+      secureContext: window.isSecureContext,
+      webBluetooth: Boolean(navigator.bluetooth),
+    })`);
+    desktopLog(`Renderer capabilities origin=${capabilities.origin} secureContext=${Boolean(capabilities.secureContext)} webBluetooth=${Boolean(capabilities.webBluetooth)}`);
+  } catch (error) {
+    desktopLog(`Could not inspect renderer capabilities: ${error.message}`);
+  }
+}
+
 async function waitForHealth(baseUrl) {
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   let lastError = null;
@@ -570,6 +600,9 @@ function createWindow() {
   });
   mainWindow.webContents.on('unresponsive', () => {
     desktopLog('Renderer became unresponsive');
+  });
+  mainWindow.webContents.on('did-finish-load', () => {
+    void logRendererCapabilities(mainWindow);
   });
 
   mainWindow.once('ready-to-show', () => mainWindow.show());

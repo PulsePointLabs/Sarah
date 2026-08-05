@@ -28,6 +28,27 @@ function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function isTailscaleIpv4(hostname) {
+  const octets = String(hostname || '').split('.').map(Number);
+  return octets.length === 4
+    && octets.every((value) => Number.isInteger(value) && value >= 0 && value <= 255)
+    && octets[0] === 100
+    && octets[1] >= 64
+    && octets[1] <= 127;
+}
+
+function getWebBluetoothSecureContextOverrides(values = []) {
+  return unique(values.map((value) => {
+    try {
+      const parsed = new URL(normalizeBackendUrl(value));
+      if (parsed.protocol !== 'http:' || !isTailscaleIpv4(parsed.hostname)) return '';
+      return parsed.origin;
+    } catch {
+      return '';
+    }
+  }));
+}
+
 function getRemoteBackendCandidates({
   platform = process.platform,
   env = process.env,
@@ -51,6 +72,8 @@ function getRemoteBackendCandidates({
 module.exports = {
   DEFAULT_LINUX_REMOTE_BACKENDS,
   getRemoteBackendCandidates,
+  getWebBluetoothSecureContextOverrides,
+  isTailscaleIpv4,
   normalizeBackendUrl,
   splitBackendUrls,
 };
