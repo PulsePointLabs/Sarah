@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell, session } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, shell, session } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -585,8 +585,43 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      spellcheck: true,
       additionalArguments: remoteClientMode ? ['--sarah-remote-client'] : [],
     },
+  });
+
+  const availableSpellCheckerLanguages = session.defaultSession.availableSpellCheckerLanguages || [];
+  const spellCheckerLanguage = ['en-US', 'en-GB', 'en']
+    .find((language) => availableSpellCheckerLanguages.includes(language));
+  if (spellCheckerLanguage) {
+    session.defaultSession.setSpellCheckerLanguages([spellCheckerLanguage]);
+    desktopLog(`Spell checker language: ${spellCheckerLanguage}`);
+  } else {
+    desktopLog('Spell checker dictionary unavailable; editable fields still request browser spell checking.');
+  }
+
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    if (!params.isEditable) return;
+    const suggestions = (params.dictionarySuggestions || []).slice(0, 5).map((suggestion) => ({
+      label: suggestion,
+      click: () => mainWindow?.webContents.replaceMisspelling(suggestion),
+    }));
+    const template = [
+      ...suggestions,
+      ...(suggestions.length ? [{ type: 'separator' }] : []),
+      ...(params.misspelledWord ? [{
+        label: 'Add to dictionary',
+        click: () => session.defaultSession.addWordToSpellCheckerDictionary(params.misspelledWord),
+      }, { type: 'separator' }] : []),
+      { role: 'undo' },
+      { role: 'redo' },
+      { type: 'separator' },
+      { role: 'cut' },
+      { role: 'copy' },
+      { role: 'paste' },
+      { role: 'selectAll' },
+    ];
+    Menu.buildFromTemplate(template).popup({ window: mainWindow || undefined });
   });
 
   mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {

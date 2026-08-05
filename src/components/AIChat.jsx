@@ -3047,6 +3047,8 @@ Return a conversational answer plus structured findings for review/persistence.`
     <div className={composerClass}>
       <ChatDraftTextarea
         ref={inputRef}
+        spellCheck
+        lang="en-US"
         initialValue={draftValueRef.current}
         onDraftValueChange={handleDraftValueChange}
         onHasTextChange={handleDraftHasTextChange}
