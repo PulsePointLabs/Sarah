@@ -117,6 +117,7 @@ BODY EXPLORATION REVIEW-VIDEO EVIDENCE CONTRACT - MANDATORY:
 - One sentence should describe one visual concept or one tightly linked response window. Do not combine condom-catheter placement, enema insertion, leakage, leg trembling, accessory retrieval, and defecation in one sentence.
 - Never use a visually unrelated moment merely because it is dramatic. The editor must show the cited source interval for the action being described.
 - Untimed whole-session physiology may be narrated over continuous footage from the most recently matched evidence window. It must not trigger a jump to an unrelated event.
+- Oxygen saturation, blood pressure, blood glucose, body composition, and similar measurements are telemetry unless the sentence explicitly describes a visible measurement action or device readout. A telemetry-only statement does not require matching device footage and may be omitted when it does not add useful physiological context.
 - If a visual claim cannot be tied to a reviewed or logged source interval, omit the visual claim from narration rather than inviting substitute footage.
 `;
 

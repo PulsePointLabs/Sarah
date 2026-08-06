@@ -1451,7 +1451,7 @@ const BODY_EXPLORATION_VISUAL_CONCEPTS = [
   ['condom_catheter_application', /\bcondom catheter\b[^.!?]{0,100}\b(appl(?:y|ied|ication)|plac(?:e|ed|ement)|prepar(?:e|ing)|advance(?:d|ment|ing)?|contact|roll(?:ed|ing)?|base of (?:the )?(?:penis|shaft))\b|\b(appl(?:y|ied|ication)|plac(?:e|ed|ement)|prepar(?:e|ing)|advance(?:d|ment|ing)?|contact|roll(?:ed|ing)?)\b[^.!?]{0,100}\bcondom catheter\b/i],
   ['urinary_collection', /\b(void(?:ed|ing)?|urine|urinary (?:output|collection)|collection bag|drainage bag|bladder (?:response|hyperreactivity)|\d+\s*(?:cc|ml)\s+(?:urinary|urine))\b/i],
   ['blood_glucose', /\b(blood (?:glucose|sugar)|fingerstick|glucometer|mg\/?dL)\b/i],
-  ['pulse_oximetry', /\b(pulse ox(?:imeter|imetry)?|SpO2|oxygen saturation)\b/i],
+  ['pulse_oximetry', /\b(pulse ox(?:imeter|imetry)?|SpO2|oxygen saturation)\b[^.!?]{0,100}\b(?:attach(?:ed|ing)?|clip(?:ped|ping)?|plac(?:e|ed|ement|ing)|appl(?:y|ied|ication|ying)|remov(?:e|ed|al|ing)|display(?:ed|ing)?|readout|screen|visib(?:le|ly)|shown?|shows?)\b|\b(?:attach(?:ed|ing)?|clip(?:ped|ping)?|plac(?:e|ed|ement|ing)|appl(?:y|ied|ication|ying)|remov(?:e|ed|al|ing)|display(?:ed|ing)?|readout|screen|visib(?:le|ly)|shown?|shows?)\b[^.!?]{0,100}\b(pulse ox(?:imeter|imetry)?|SpO2|oxygen saturation)\b/i],
   ['blood_pressure', /\b(blood pressure|\bBP\b|systolic|diastolic|\d{2,3}\s*(?:over|\/)\s*\d{2,3})\b/i],
   ['anal_baseline', /\b(close[-\s]?up|baseline|view|inspect(?:ion)?)\b[^.!?]{0,70}\b(anus|anal opening)\b|\b(anus|anal opening)\b[^.!?]{0,70}\b(close[-\s]?up|baseline|view|inspect(?:ion)?)\b/i],
   ['enema_lubrication', /\b(lubricat(?:e|ed|ing|ion)|lube)\b[^.!?]{0,80}\b(enema|nozzle|tip|tube|tubing)\b|\b(enema|nozzle|tip|tube|tubing)\b[^.!?]{0,80}\b(lubricat(?:e|ed|ing|ion)|lube)\b/i],

@@ -34,6 +34,17 @@ test('Body Exploration narration headings do not demand unrelated visual footage
   );
 });
 
+test('Body Exploration oxygen-saturation telemetry does not require pulse-ox footage', () => {
+  assert.deepEqual(
+    bodyExplorationVisualConcepts('Oxygen saturation remained stable at an average of ninety-eight point six percent.'),
+    [],
+  );
+  assert.deepEqual(
+    bodyExplorationVisualConcepts('At nine minutes and fifty-nine seconds elapsed, the pulse oximeter was placed on your toe.'),
+    ['pulse_oximetry'],
+  );
+});
+
 test('final video assembly joins video-only segments before the one-time audio mux', () => {
   const args = losslessConcatVideoArgs('segments.txt', 'output.mp4');
   assert.deepEqual(args.slice(args.indexOf('-c:v'), args.indexOf('-c:v') + 2), ['-c:v', 'copy']);
