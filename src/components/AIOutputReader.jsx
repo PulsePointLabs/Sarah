@@ -204,16 +204,29 @@ export default function AIOutputReader({
         renderParagraph={(text, idx, isActive, isBuffering, activeSentenceIdx, startFromSentence) => {
           const meta = paragraphMeta[idx] || {};
           const section = meta.sec || meta.section || meta;
+          const isHeading = meta.type === "heading" || meta.type === "subheading";
           const isSummary = meta.type === "summary" || meta.type === "overview" || meta.type === "title" || idx === 0 && !section?.label;
           const color = section?.color || (isSummary ? summaryColor : "hsl(var(--primary))");
           const sectionKey = section?.key || section?.label || section?.title || `section-${idx}`;
           const firstSectionIndex = paragraphMeta.findIndex((item) => {
             const itemSection = item?.sec || item?.section || item;
             const itemKey = itemSection?.key || itemSection?.label || itemSection?.title;
-            return (item.type === "section" || item.type === "phase" || item.type === "quality")
+            return (item.type === "section" || item.type === "phase" || item.type === "quality" || item.type === "heading" || item.type === "subheading")
               && itemKey === sectionKey;
           });
           const isFirstInSection = !isSummary && firstSectionIndex === idx;
+
+          if (isHeading) {
+            const HeadingTag = meta.type === "heading" ? "h4" : "h5";
+            return (
+              <HeadingTag
+                className={`${meta.type === "heading" ? "mt-5 border-t border-border pt-4 text-sm" : "mt-3 text-xs"} flex w-full items-center gap-1.5 font-semibold uppercase tracking-wider`}
+                style={{ color }}
+              >
+                {section?.icon}{text.replace(/[.\s]+$/, "")}
+              </HeadingTag>
+            );
+          }
 
           if (isSummary) {
             return (

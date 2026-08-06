@@ -1474,6 +1474,11 @@ export function bodyExplorationVisualConcepts(text = '') {
     .map(([name]) => name);
 }
 
+export function bodyExplorationVisualConceptsRequiringAnchor(text = '', paragraphMeta = {}) {
+  if (paragraphMeta?.type === 'heading' || paragraphMeta?.type === 'subheading') return [];
+  return bodyExplorationVisualConcepts(text);
+}
+
 export function isBodyExplorationReview(payload = {}, session = {}) {
   const type = String(payload?.recordType || payload?.record_type || session?.record_type || session?.capture_kind || '').toLowerCase();
   return type === 'body_exploration'
@@ -2773,7 +2778,10 @@ async function renderSegmentedSourceReviewVideo({
 
     if (!event) {
       const unmatchedBodyConcepts = strictBodyExplorationVisuals
-        ? bodyExplorationVisualConcepts(segment.text)
+        ? bodyExplorationVisualConceptsRequiringAnchor(
+          segment.text,
+          payload.paragraphMeta?.[segment.paragraphIndex] || {},
+        )
         : [];
       if (unmatchedBodyConcepts.length) {
         throw new Error(

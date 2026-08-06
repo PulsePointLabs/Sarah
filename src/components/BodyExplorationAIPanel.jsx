@@ -13,6 +13,7 @@ import { SessionReviewVideoExportButton, reviewVideoTitleWithDate } from "./Sess
 import { recoverCompletedAIJob, startRecoverableAIJob, waitForRecoverableAIJob } from "@/lib/recoverableAIJobs";
 import { friendlyJobErrorMessage } from "@/lib/jobErrorMessages";
 import { formatSecondsAsWords, repairNumericElapsedTimeReferences } from "@/utils/aiTextRepair";
+import { buildBodyExplorationReaderContent } from "@/lib/bodyExplorationNarrative";
 import {
   FOCUSED_FOLEY_SECTION_DEFS,
   buildFocusedFoleyProfileContext,
@@ -127,6 +128,16 @@ ELAPSED SESSION TIME - MANDATORY:
 - A true clock time may be written as a time of day only when it includes AM or PM and clearly refers to when the session began.
 `;
 
+const TTS_FRIENDLY_STRUCTURE_RULE = `
+TTS-FRIENDLY BODY EXPLORATION STRUCTURE - MANDATORY:
+- Every schema field already maps to a visible and spoken section heading. Return only complete prose paragraphs inside schema fields.
+- Never embed a heading, caption, phase label, time-range label, markdown heading, bullet, numbered list, or label followed by a colon inside a paragraph.
+- Use medium-length sentences with natural transitions and punctuation. Break apart dense multi-clause sentences before returning them.
+- Write units in natural spoken form: milliliters, milligrams per deciliter, millimeters of mercury, milliseconds, beats per minute, and percent. Do not use cc, mL, mg/dL, mmHg, bpm, slash-form blood pressure, or symbol-heavy shorthand in the returned prose.
+- Keep elapsed anchors readable aloud. Use a small number of exact anchors such as "at twelve minutes and twenty-six seconds elapsed"; do not put long start-to-end ranges in parentheses.
+- Do not repeat the section heading in the first sentence. The interface presents and speaks the heading separately.
+`;
+
 function categoryLabel(value) {
   return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((item) => item.value === value)?.label || String(value || "Other");
 }
@@ -164,6 +175,11 @@ function cleanupProductionText(value) {
     .replace(/\btimestamped notes clearly place\b/gi, "your notes place")
     .replace(/\bnot directly documented in this record\b/gi, "handled outside the reviewed camera view")
     .replace(/\bFor future video reviews,[^.]*\.\s*/gi, "")
+    .replace(/\b(\d+(?:\.\d+)?)\s*(?:mL|ml|cc)\b/g, "$1 milliliters")
+    .replace(/\b(\d+(?:\.\d+)?)\s*bpm\b/gi, "$1 beats per minute")
+    .replace(/\b(\d{2,3})\s*\/\s*(\d{2,3})\s*(?:mm\s*hg|mmhg)?\b/gi, "$1 over $2 millimeters of mercury")
+    .replace(/\bmg\s*\/\s*d[lL]\b/g, "milligrams per deciliter")
+    .replace(/\bmm\s*hg\b/gi, "millimeters of mercury")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -334,6 +350,7 @@ ${ANATOMICAL_LATERALITY_RULE}
 ${PRODUCTION_BODY_EXPLORATION_STYLE}
 ${SARAH_LANGUAGE_VARIETY_RULE}
 ${ELAPSED_TIME_OUTPUT_RULE}
+${TTS_FRIENDLY_STRUCTURE_RULE}
 ${focusedFoley ? "" : DEEP_BODY_EXPLORATION_SYNTHESIS_RULE}
 ${focusedFoley ? "" : BODY_EXPLORATION_VIDEO_ALIGNMENT_RULE}
 ${focusedFoley ? focusedFoleyPromptBlock() : ""}
@@ -399,13 +416,9 @@ ${events.length ? `RAW TIMESTAMPED NOTES - EVIDENCE INDEX ONLY; DO NOT USE THIS 
     }
   };
 
-  const activeSectionDefs = sectionDefsForResult(result);
-  const paragraphs = result
-    ? [result.summary, ...activeSectionDefs.flatMap((section) => result[section.key] || [])].filter(Boolean)
-    : [];
-  const paragraphMeta = result
-    ? [{ type: "summary" }, ...activeSectionDefs.flatMap((section) => (result[section.key] || []).map(() => ({ type: "section", section })))]
-    : [];
+  const displayResult = result ? cleanupProductionAnalysis(result) : null;
+  const activeSectionDefs = sectionDefsForResult(displayResult);
+  const { paragraphs, paragraphMeta } = buildBodyExplorationReaderContent(displayResult, activeSectionDefs);
   const reviewVideoTitle = reviewVideoTitleWithDate("AI Body Exploration Analysis", exploration);
 
   return (

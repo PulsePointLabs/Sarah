@@ -3,6 +3,7 @@ import test from 'node:test';
 import { buildReviewVideoPlan } from './sessionReviewVideoPlanner.js';
 import {
   bodyExplorationVisualConcepts,
+  bodyExplorationVisualConceptsRequiringAnchor,
   buildActiveStimulationFallbackEvent,
   buildParagraphTimelineEvent,
   buildReviewNarrationSegments,
@@ -21,6 +22,17 @@ import {
   telemetryAtSessionTime,
   timestampRequirementForSegment,
 } from './sessionReviewVideoRenderer.js';
+
+test('Body Exploration narration headings do not demand unrelated visual footage', () => {
+  assert.deepEqual(
+    bodyExplorationVisualConceptsRequiringAnchor('Peak fill and involuntary contractions.', { type: 'subheading' }),
+    [],
+  );
+  assert.deepEqual(
+    bodyExplorationVisualConceptsRequiringAnchor('Your leg was trembling during an involuntary contraction.', { type: 'section' }),
+    ['leg_trembling', 'cramping_contractions'],
+  );
+});
 
 test('final video assembly joins video-only segments before the one-time audio mux', () => {
   const args = losslessConcatVideoArgs('segments.txt', 'output.mp4');

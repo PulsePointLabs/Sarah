@@ -888,7 +888,10 @@ export function SessionReviewVideoExportButton({
       }).chapters;
       const reviewParagraphMeta = paragraphMeta.map((meta = {}) => ({
         type: meta.type || "section",
-        sec: meta.sec ? { label: meta.sec.label || "", color: meta.sec.color || "" } : null,
+        sec: (meta.sec || meta.section) ? {
+          label: (meta.sec || meta.section).label || "",
+          color: (meta.sec || meta.section).color || "",
+        } : null,
         clips: Array.isArray(meta.clips) ? meta.clips.map(sanitizeReviewClip) : [],
       }));
       const payload = {

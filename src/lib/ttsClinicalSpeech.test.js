@@ -30,3 +30,10 @@ test("speaks motion mg as milli-g without corrupting glucose units", () => {
     "Motion dynamic RMS was 55 milli-g while glucose was 90 milligrams per deciliter.",
   );
 });
+
+test("expands body exploration physiology and volume shorthand", () => {
+  assert.equal(
+    normalizeClinicalUnitsForSpeech("SpO2 was 99% with RMSSD 7 ms, HRV available, and 500 mL instilled at 104 bpm."),
+    "oxygen saturation was 99% with R M S S D 7 ms, H R V available, and 500 milliliters instilled at 104 beats per minute.",
+  );
+});
