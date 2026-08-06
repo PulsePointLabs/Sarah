@@ -47,8 +47,8 @@ const FOCUSED_SECTION_ICONS = {
   focused_follow_up: <Lightbulb className="h-3.5 w-3.5" />,
 };
 
-function sectionDefsForResult(result) {
-  if (result?._focus?.mode === "foley_insertion") {
+function sectionDefsForResult(result, { focusedFoley = false } = {}) {
+  if (focusedFoley) {
     return FOCUSED_FOLEY_SECTION_DEFS.map((section) => ({
       ...section,
       icon: FOCUSED_SECTION_ICONS[section.key] || <ScanSearch className="h-3.5 w-3.5" />,
@@ -210,7 +210,7 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
   const focusedFoley = isFocusedFoleyExploration(exploration);
 
   const attachAnalysisMeta = (analysis, previousAnalysis) => {
-    return {
+    const next = {
       ...(previousAnalysis || {}),
       ...analysis,
       _meta: buildGenericAIContentMeta(previousAnalysis?._meta, null, {
@@ -222,6 +222,11 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
           .reduce((sum, key) => sum + (Array.isArray(nearbyVitals?.[key]) ? nearbyVitals[key].length : 0), 0),
       }),
     };
+    if (!focusedFoley && next?._focus?.mode === "foley_insertion") {
+      delete next._focus;
+      delete next._debug_provenance;
+    }
+    return next;
   };
 
   const persistAnalysisResult = async (raw) => {
@@ -417,7 +422,7 @@ ${events.length ? `RAW TIMESTAMPED NOTES - EVIDENCE INDEX ONLY; DO NOT USE THIS 
   };
 
   const displayResult = result ? cleanupProductionAnalysis(result) : null;
-  const activeSectionDefs = sectionDefsForResult(displayResult);
+  const activeSectionDefs = sectionDefsForResult(displayResult, { focusedFoley });
   const { paragraphs, paragraphMeta } = buildBodyExplorationReaderContent(displayResult, activeSectionDefs);
   const reviewVideoTitle = reviewVideoTitleWithDate("AI Body Exploration Analysis", exploration);
 
