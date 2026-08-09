@@ -142,27 +142,55 @@ export default function BodyExplorationDetail() {
   const [selectedEventIndex, setSelectedEventIndex] = useState(null);
   const [pendingTimestampReview, setPendingTimestampReview] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
-    Promise.all([
-      base44.entities.BodyExploration.filter({ id }),
-      base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000),
-      base44.entities.EMGTimeline.filter({ session: id }, "time_s", 10000),
-      base44.auth.me(),
-      base44.entities.BloodPressureReading.list("-measured_at", 250).catch(() => []),
-      base44.entities.BloodGlucoseReading.list("-measured_at", 250).catch(() => []),
-      base44.entities.BodyCompositionReading.list("-measured_at", 250).catch(() => []),
-      base44.entities.PulseOxReading.list("-measured_at", 5000).catch(() => []),
-    ]).then(([items, hr, emg, profile, bloodPressure, bloodGlucose, bodyComposition, pulseOx]) => {
-      const loadedExploration = items[0] || null;
-      setExploration(loadedExploration);
-      setTimelineRows(hr || []);
-      setEmgRows(emg || []);
-      setUserProfile(profile);
-      setNearbyVitalImports({ bloodPressure, bloodGlucose, bodyComposition, pulseOx });
-      setChatMessages(loadedExploration?.ai_body_exploration?._chat_messages || []);
-      setExplorationNotes(loadedExploration?.notes || "");
-    }).finally(() => setLoading(false));
+    let cancelled = false;
+    setLoading(true);
+    setLoadError("");
+
+    (async () => {
+      try {
+        const items = await base44.entities.BodyExploration.filter(
+          { id },
+          undefined,
+          1,
+          undefined,
+          { timeoutMs: 15000 },
+        );
+        if (cancelled) return;
+        const loadedExploration = items[0] || null;
+        setExploration(loadedExploration);
+        setChatMessages(loadedExploration?.ai_body_exploration?._chat_messages || []);
+        setExplorationNotes(loadedExploration?.notes || "");
+        setLoading(false);
+        if (!loadedExploration) return;
+
+        const [hr, emg, profile, bloodPressure, bloodGlucose, bodyComposition, pulseOx] = await Promise.all([
+          base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000, undefined, { timeoutMs: 30000 }).catch(() => []),
+          base44.entities.EMGTimeline.filter({ session: id }, "time_s", 10000, undefined, { timeoutMs: 30000 }).catch(() => []),
+          base44.auth.me().catch(() => null),
+          base44.entities.BloodPressureReading.list("-measured_at", 250).catch(() => []),
+          base44.entities.BloodGlucoseReading.list("-measured_at", 250).catch(() => []),
+          base44.entities.BodyCompositionReading.list("-measured_at", 250).catch(() => []),
+          base44.entities.PulseOxReading.list("-measured_at", 5000).catch(() => []),
+        ]);
+        if (cancelled) return;
+        setTimelineRows(hr || []);
+        setEmgRows(emg || []);
+        setUserProfile(profile);
+        setNearbyVitalImports({ bloodPressure, bloodGlucose, bodyComposition, pulseOx });
+      } catch (error) {
+        if (cancelled) return;
+        setExploration(null);
+        setLoadError(error?.message || "Could not load this body exploration record.");
+        setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   const nearbyVitals = useMemo(
@@ -198,6 +226,7 @@ export default function BodyExplorationDetail() {
   );
 
   if (loading) return <div className="flex h-64 items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" /></div>;
+  if (loadError) return <div className="p-6 text-center text-destructive">Could not load this body exploration record: {loadError}</div>;
   if (!exploration) return <div className="p-6 text-center text-muted-foreground">Body exploration record not found.</div>;
   const reviewedMediaClips = getReviewedVisualClips(exploration.ai_body_exploration?._visual_findings || []);
   const pulseOxReadings = pulseOxReadingsFromSession(explorationForTelemetry || exploration);

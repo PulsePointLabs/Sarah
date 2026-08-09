@@ -1,5 +1,5 @@
 import express from 'express';
-import { bulkCreate, deleteEntity, getEntity, listEntities, normalizeEntityName, upsertEntity } from '../db.js';
+import { bulkCreate, deleteEntity, getEntity, listEntities, listEntitiesByExactCriteria, normalizeEntityName, upsertEntity } from '../db.js';
 
 export const entitiesRouter = express.Router();
 
@@ -102,7 +102,8 @@ entitiesRouter.post('/:entity/filter', (req, res) => {
   const entity = normalizeEntityName(req.params.entity);
   const { criteria = {}, sort, limit, skip, fields: rawFields } = req.body || {};
   const fields = parseFields(rawFields);
-  const rows = sortRows(listEntities(entity).filter((r) => matches(r, criteria)), sort);
+  const indexedCandidates = listEntitiesByExactCriteria(entity, criteria);
+  const rows = sortRows((indexedCandidates || listEntities(entity)).filter((r) => matches(r, criteria)), sort);
   res.json(limitRows(rows, limit, skip).map((row) => projectEntity(publicEntity(entity, row), fields)));
 });
 

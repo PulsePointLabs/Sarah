@@ -1452,25 +1452,40 @@ export default function SessionDetail() {
     (async () => {
       try {
         setLoading(true);
-        const [all, me, bloodPressure, bloodGlucose, bodyComposition, pulseOx] = await Promise.all([
-          base44.entities.Session.filter({ id }),
+        const all = await base44.entities.Session.filter(
+          { id },
+          undefined,
+          1,
+          undefined,
+          { timeoutMs: 15000 },
+        );
+        const s = all[0];
+        sessionRef.current = s;
+        setSession(s);
+        setBpAttachStatus("");
+        const savedChatMessages = sanitizeSessionChatMessages(s?.ai_analysis?._chat_messages || []);
+        setChatMessages(savedChatMessages);
+        setSessionNotes(s?.notes || "");
+        setLoading(false);
+        if (!s) return;
+
+        const [me, bloodPressure, bloodGlucose, bodyComposition, pulseOx] = await Promise.all([
           loadUserProfileWithProfilerResults(),
           base44.entities.BloodPressureReading.list("-measured_at", 250).catch(() => []),
           base44.entities.BloodGlucoseReading.list("-measured_at", 250).catch(() => []),
           base44.entities.BodyCompositionReading.list("-measured_at", 250).catch(() => []),
           base44.entities.PulseOxReading.list("-measured_at", 5000).catch(() => []),
         ]);
-        const s = all[0];
-        sessionRef.current = s;
-        setSession(s);
-        setBpAttachStatus("");
         setUserProfile(me);
         setNearbyVitalImports({ bloodPressure, bloodGlucose, bodyComposition, pulseOx });
-        const savedChatMessages = sanitizeSessionChatMessages(s?.ai_analysis?._chat_messages || []);
-        setChatMessages(savedChatMessages);
-        setSessionNotes(s?.notes || "");
         await refreshNearbyBloodPressure(id);
-        const rows = await base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000);
+        const rows = await base44.entities.HeartRateTimeline.filter(
+          { session: id },
+          "time_offset_s",
+          10000,
+          undefined,
+          { timeoutMs: 30000 },
+        );
 
         // Load journal for this session so it can be factored into AI analyses
         base44.entities.Journal.filter({ session_id: id }, "-created_date", 10).then((rows) => {

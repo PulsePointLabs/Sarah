@@ -55,6 +55,9 @@ export function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_entities_entity_created ON entities(entity, created_date);
     CREATE INDEX IF NOT EXISTS idx_entities_entity_updated ON entities(entity, updated_date);
+    CREATE INDEX IF NOT EXISTS idx_entities_entity_session
+      ON entities(entity, json_extract(data, '$.session'))
+      WHERE json_extract(data, '$.session') IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_entities_processing_job_status_updated
       ON entities(entity, json_extract(data, '$.status'), updated_date)
       WHERE entity = 'ProcessingJob';
@@ -139,6 +142,35 @@ export function normalizeEntityName(name) {
 
 export function listEntities(entity) {
   return db.prepare('SELECT data FROM entities WHERE entity = ?').all(entity).map((r) => safeJsonParse(r.data)).filter(Boolean);
+}
+
+export function listEntitiesByExactCriteria(entity, criteria = {}) {
+  const entries = Object.entries(criteria || {});
+  if (!entries.length) return null;
+  if (entries.some(([key, value]) => (
+    !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)
+    || value === null
+    || (typeof value === 'object' && value !== null)
+    || !['string', 'number', 'boolean'].includes(typeof value)
+  ))) return null;
+
+  const clauses = ['entity = ?'];
+  const params = [entity];
+  for (const [key, rawValue] of entries) {
+    const value = typeof rawValue === 'boolean' ? Number(rawValue) : rawValue;
+    if (key === 'id') {
+      clauses.push('id = ?');
+      params.push(String(value));
+    } else {
+      clauses.push("json_extract(data, ?) = ?");
+      params.push(`$.${key}`, value);
+    }
+  }
+
+  return db.prepare(`SELECT data FROM entities WHERE ${clauses.join(' AND ')}`)
+    .all(...params)
+    .map((row) => safeJsonParse(row.data))
+    .filter(Boolean);
 }
 
 export function getProfileAnatomyImageClassification(fileHash, classificationVersion) {
