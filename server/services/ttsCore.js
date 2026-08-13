@@ -37,6 +37,18 @@ export function clampSpeed(value) {
   return Number.isFinite(parsed) && parsed >= 0.25 && parsed <= 4 ? parsed : 1.0;
 }
 
+// Pulls the raw TTS slider values out of the instructions string built by getTTSRuntime()
+// in the frontend (TTSButton.jsx). OpenAI ignores this tail silently; the local XTTS server uses it.
+export function extractSarahTTSParams(instructions) {
+  const match = String(instructions || '').match(/<<SARAH_TTS_PARAMS>>([\s\S]*?)<<END_SARAH_TTS_PARAMS>>/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
+}
+
 export function normalizeTTSFormat(value) {
   const format = String(value || process.env.OPENAI_TTS_FORMAT || 'mp3').toLowerCase();
   return TTS_CONTENT_TYPES[format] ? format : 'mp3';
@@ -299,6 +311,36 @@ export async function synthesizeTTSChunk({
     error.status = 400;
     throw error;
   }
+
+  // --- Surgical local-TTS branch. Fully reversible: unset TTS_PROVIDER in .env to restore stock OpenAI behavior below. ---
+  // Per-request toggle (Settings page "Voice Engine") lets the user pick OpenAI even while
+  // TTS_PROVIDER=xtts is the server-wide default; explicit "openai" always wins.
+  const requestedProvider = extractSarahTTSParams(instructions)?.ttsProvider;
+  if (String(process.env.TTS_PROVIDER || '').trim().toLowerCase() === 'xtts' && requestedProvider !== 'openai') {
+    const xttsStartedAt = Date.now();
+    const xttsResponse = await fetchWithTimeout('http://localhost:8881/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: input, speed: clampSpeed(speed), params: extractSarahTTSParams(instructions) }),
+    }, Number(process.env.XTTS_TIMEOUT_MS || 60000));
+    if (!xttsResponse.ok) {
+      const error = new Error(`Local XTTS server error: ${xttsResponse.status} ${await xttsResponse.text()}`);
+      error.status = 502;
+      error.retryable = true;
+      throw error;
+    }
+    const xttsBuffer = Buffer.from(await xttsResponse.arrayBuffer());
+    return {
+      buffer: xttsBuffer,
+      model: 'xtts-v2-local',
+      voice: 'sarah-cloned',
+      speed: clampSpeed(speed),
+      format: 'wav',
+      latencyMs: Date.now() - xttsStartedAt,
+      retries: 0,
+    };
+  }
+  // --- End local-TTS branch ---
 
   const maxChars = Number(process.env.OPENAI_TTS_MAX_CHARS || 2500);
   if (input.length > maxChars) {

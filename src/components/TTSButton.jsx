@@ -10,6 +10,7 @@ const TTS_SETTINGS_KEY = "pulsepoint_tts_settings_v1";
 const TTS_REQUEST_TAIL = "\u200B";
 
 export const DEFAULT_TTS_SETTINGS = {
+  ttsProvider: "local",
   speed: 0.96,
   engine: "expressive",
   audioFormat: "mp3",
@@ -162,6 +163,7 @@ export function normalizeTTSSettings(settings = {}) {
     return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
   };
   return {
+    ttsProvider: settings.ttsProvider === "openai" ? "openai" : "local",
     speed: Number(clamp(settings.speed, 0.94, 1.04, DEFAULT_TTS_SETTINGS.speed).toFixed(2)),
     engine: TTS_ENGINES[settings.engine] ? settings.engine : DEFAULT_TTS_SETTINGS.engine,
     audioFormat: TTS_AUDIO_FORMATS[settings.audioFormat] ? settings.audioFormat : DEFAULT_TTS_SETTINGS.audioFormat,
@@ -280,6 +282,10 @@ ${sarahVoiceInstructions}
 
 Priority: the TTS slider settings define the base voice. The Sarah voice delivery settings should meaningfully shape inflection, emphasis, and tone on top of those sliders.`
     : baseInstructions;
+  // Machine-readable slider values for the local voice engine. OpenAI ignores this tail silently.
+  const instructionsWithParams = `${instructions}
+
+<<SARAH_TTS_PARAMS>>${JSON.stringify(normalized)}<<END_SARAH_TTS_PARAMS>>`;
   const sarahVoiceProfile = sarahVoiceInstructions
     ? `-sarah-${compactInstructionHash(sarahVoiceInstructions)}`
     : "-sarah-off";
@@ -290,7 +296,7 @@ Priority: the TTS slider settings define the base voice. The Sarah voice deliver
     model: TTS_ENGINES[normalized.engine].model,
     format: normalized.audioFormat,
     supportsInstructions: TTS_ENGINES[normalized.engine].supportsInstructions,
-    instructions,
+    instructions: instructionsWithParams,
     sarahVoiceInstructions,
     cacheProfile: `settings-v7-${normalized.engine}-${normalized.audioFormat}-speed-${normalized.speed}-w${normalized.warmth}-e${normalized.enthusiasm}-s${normalized.soothing}-l${normalized.lightness}-f${normalized.femininity}-c${normalized.continuity}-n${normalized.naturalness}-p${normalized.pauses}-ss${normalized.softStart}${sarahVoiceProfile}`,
   };
