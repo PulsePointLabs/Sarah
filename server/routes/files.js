@@ -421,6 +421,21 @@ filesRouter.post('/upload', upload.single('file'), (req, res) => {
   res.json({ file_url: fileUrl, url: fileUrl, filename: req.file.originalname, size: req.file.size });
 });
 
+filesRouter.post('/local-video/link-upload', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No video file was selected.' });
+  try {
+    const meta = await localVideoMetadata(req.file.path);
+    res.json({
+      ...meta,
+      sourceFilename: req.file.originalname,
+      copiedToSarahStorage: true,
+    });
+  } catch (error) {
+    await fsp.unlink(req.file.path).catch(() => {});
+    await handleLocalVideoError(res, error);
+  }
+});
+
 filesRouter.post('/local-video/metadata', async (req, res) => {
   try {
     const requestedPath = normalizeLocalVideoPath(req.body?.path);

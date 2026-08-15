@@ -322,6 +322,14 @@ export const base44 = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename, sizeBytes, modifiedAtMs }),
       }),
+      UploadLocalVideo: async (file) => {
+        const form = new FormData();
+        form.append('file', file);
+        return request('/files/local-video/link-upload', {
+          method: 'POST',
+          body: form,
+        });
+      },
       BrowseLocalVideo: async () => request('/files/local-video/browse', { method: 'POST' }),
       localVideoStreamUrl: (path) => serverUrl(`/api/files/local-video/stream?path=${encodeURIComponent(path)}`),
       localVisionAssetUrl: (path) => serverUrl(path),

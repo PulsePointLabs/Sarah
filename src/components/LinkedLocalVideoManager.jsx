@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { CheckCircle2, ExternalLink, FileVideo, FolderOpen, RefreshCw, Trash2, Upload, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
@@ -89,6 +89,7 @@ export default function LinkedLocalVideoManager({
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [dragActive, setDragActive] = useState(false);
+  const fileInputRef = useRef(null);
 
   const saveVideos = async (nextVideos) => {
     await onChange?.(nextVideos.map(normalizeVideoRecord));
@@ -128,19 +129,39 @@ export default function LinkedLocalVideoManager({
     }
   };
 
-  const browseVideo = async () => {
+  const handlePickedVideo = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
     setBusy("browse");
     setError("");
     try {
-      const meta = await base44.integrations.Core.BrowseLocalVideo();
-      if (meta?.cancelled) return;
-      setPathInput(meta.path || "");
-      if (!labelInput.trim()) setLabelInput(meta.filename || "");
+      let meta = null;
+      const exposedPath = file.path || "";
+      if (exposedPath) {
+        meta = await base44.integrations.Core.GetLocalVideoMetadata({ path: exposedPath }).catch(() => null);
+      }
+      if (!meta) {
+        meta = await base44.integrations.Core.ResolveDroppedLocalVideo({
+          filename: file.name,
+          sizeBytes: file.size || 0,
+          modifiedAtMs: file.lastModified || 0,
+        }).catch(() => null);
+      }
+      if (!meta) {
+        meta = await base44.integrations.Core.UploadLocalVideo(file);
+      }
+      applyResolvedVideo(meta, file);
     } catch (err) {
-      setError(errorMessage(err, "Could not open the local video picker."));
+      setError(errorMessage(err, "Sarah could not attach that video."));
     } finally {
       setBusy("");
     }
+  };
+
+  const browseVideo = () => {
+    setError("");
+    fileInputRef.current?.click();
   };
 
   const applyDroppedPath = (path, file, allowFileOnly = true) => {
@@ -282,6 +303,13 @@ export default function LinkedLocalVideoManager({
             Browse
           </Button>
           <input
+            ref={fileInputRef}
+            type="file"
+            accept=".mp4,.webm,.mov,.mkv,.m4v,.avi,.wmv,video/*"
+            className="hidden"
+            onChange={handlePickedVideo}
+          />
+          <input
             value={pathInput}
             onChange={(event) => setPathInput(event.target.value)}
             placeholder="Paste or drop full video path, e.g. D:\OBS\Sessions\2026-05-31.mkv"
@@ -304,7 +332,7 @@ export default function LinkedLocalVideoManager({
         </div>
       </div>
       <p className="mt-1 text-[10px] text-muted-foreground">
-        Browse opens a local Windows picker from the app server. You can still paste a path from File Explorer or OBS recording settings.
+        Browse opens this device&apos;s file picker. Sarah reuses a matching server recording when available; otherwise it copies the selected video into Sarah&apos;s private local storage.
       </p>
 
       {error && (
