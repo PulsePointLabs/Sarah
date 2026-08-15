@@ -56,6 +56,7 @@ let emgPollTimer = null;
 let lastEmgSignature = '';
 let pulsoidRecording = null;
 let directH10Recording = null;
+let directH10RecordingStartPromise = null;
 // The Android source may batch network delivery while its BLE recording remains healthy.
 // Explicit disconnect events still propagate immediately; this only governs packet silence.
 const HR_SOURCE_STALE_MS = SHARED_HR_PACKET_STALE_MS;
@@ -537,7 +538,7 @@ async function finalizePulsoidRecording(recording = {}) {
   return state.hr.pulsoidRecording;
 }
 
-async function createDirectH10Recording(recording = {}, reason = 'obs_record_start') {
+async function createDirectH10RecordingInternal(recording = {}, reason = 'obs_record_start') {
   await fs.mkdir(HR_RECORDINGS_DIR, { recursive: true });
   const filename = `hr_timeline_direct_h10_${formatFilenameDate()}.csv`;
   const filepath = path.join(HR_RECORDINGS_DIR, filename);
@@ -619,6 +620,17 @@ async function createDirectH10Recording(recording = {}, reason = 'obs_record_sta
     });
   }
   return directH10Recording;
+}
+
+async function createDirectH10Recording(recording = {}, reason = 'obs_record_start') {
+  if (directH10Recording) return directH10Recording;
+  if (directH10RecordingStartPromise) return directH10RecordingStartPromise;
+  directH10RecordingStartPromise = createDirectH10RecordingInternal(recording, reason);
+  try {
+    return await directH10RecordingStartPromise;
+  } finally {
+    directH10RecordingStartPromise = null;
+  }
 }
 
 async function appendDirectH10TelemetryRow(telemetry) {
@@ -1098,7 +1110,23 @@ function hydratePersistedLiveSession(candidate) {
 }
 
 async function recoverPersistedLiveSession({ finalize = false } = {}) {
-  if (state.session.activeSessionId && state.session.active) return state.session;
+  if (state.session.activeSessionId && state.session.active) {
+    const activeRecord = currentLiveSessionEntity(state.session.activeSessionId);
+    const alreadyImported = Boolean(activeRecord?.live_capture_import?.imported_at)
+      || activeRecord?.capture_status === 'ready_for_review';
+    if (!alreadyImported) return state.session;
+    state.session = {
+      ...state.session,
+      activeSessionId: null,
+      active: false,
+      importing: false,
+      finalizedAt: activeRecord?.capture_finalized_at || state.session.finalizedAt,
+      lastImportedAt: activeRecord?.live_capture_import?.imported_at || state.session.lastImportedAt,
+      pendingHrSegments: [],
+      pendingObsSegments: [],
+    };
+    telemetryEngine.setActiveSession(null);
+  }
   if (persistedLiveSessionRecoveryPromise) return persistedLiveSessionRecoveryPromise;
   persistedLiveSessionRecoveryPromise = (async () => {
     const candidate = listRecoverableLiveSessions()[0] || null;
@@ -1313,6 +1341,32 @@ function ensureLiveSession(recording, options = {}) {
   }
   const captureKind = normalizeCaptureKind(options.captureKind || state.session.captureKind);
   const entity = entityForCaptureKind(captureKind);
+  const recordingStartMs = Number(recording?.startedAtMs || 0);
+  const reusable = [
+    ...listEntities(entity),
+  ].filter((record) => {
+    if (!record?.live_capture || !['recording', 'recording_paused'].includes(record?.capture_status)) return false;
+    if (inferCaptureKind(record, entity) !== captureKind) return false;
+    const existingStartMs = Date.parse(record?.capture_started_at || '');
+    return Number.isFinite(recordingStartMs) && recordingStartMs > 0
+      && Number.isFinite(existingStartMs)
+      && Math.abs(existingStartMs - recordingStartMs) <= 5000;
+  }).sort((left, right) => parseSessionSortTime(right) - parseSessionSortTime(left))[0];
+  if (reusable) {
+    hydratePersistedLiveSession({
+      id: reusable.id,
+      entity,
+      captureKind,
+      record: reusable,
+      segments: mergedPersistedSegments([reusable]),
+    });
+    telemetryEngine.setActiveSession(reusable.id);
+    if (options.capturePreflight && !reusable.capture_preflight) {
+      patchCurrentLiveSession({ capture_preflight: options.capturePreflight });
+    }
+    broadcast('live_session', state.session);
+    return reusable.id;
+  }
   const id = crypto.randomUUID();
   upsertEntity(entity, id, captureKind === 'body_exploration' ? buildBodyExplorationSeed(recording) : buildSessionSeed(recording));
   telemetryEngine.setActiveSession(id);
@@ -1525,6 +1579,25 @@ function inferImportedHrSource(rows = [], segments = [], fallback = HR_SOURCE_ID
 async function finalizeLiveSession(recording, options = {}) {
   const sessionId = state.session.activeSessionId;
   if (!sessionId) return null;
+  const existingRecord = currentLiveSessionEntity(sessionId);
+  if (existingRecord?.live_capture_import?.imported_at || existingRecord?.capture_status === 'ready_for_review') {
+    state.session = {
+      ...state.session,
+      active: false,
+      importing: false,
+      finalizedAt: existingRecord?.capture_finalized_at || state.session.finalizedAt,
+      lastImportedAt: existingRecord?.live_capture_import?.imported_at || state.session.lastImportedAt,
+      pendingHrSegments: [],
+      pendingObsSegments: [],
+    };
+    telemetryEngine.setActiveSession(null);
+    broadcast('live_session', state.session);
+    return {
+      sessionId,
+      ...(existingRecord.live_capture_import || {}),
+      alreadyFinalized: true,
+    };
+  }
   const recordingKey = recording?.filepath || recording?.filename || recording?.obsOutputPath || recording?.outputPath || sessionId;
   if (state.session.importing) return null;
   if (state.session.lastImportedAt && state.session.finalizedRecordingKey === recordingKey) return null;
@@ -2088,8 +2161,21 @@ function connectHrBridge() {
         updateLiveCaptureObsState(state.hr.recording);
         broadcast('recording_finalized', state.hr.recording);
         refreshLatestFiles();
-        resolveHrRecordingForImport(state.hr.recording).then((recordingForImport) => {
+        resolveHrRecordingForImport(state.hr.recording).then(async (recordingForImport) => {
           stageRecordingSegmentForSession(recordingForImport, 'recording_finalized');
+          const result = await finalizeLiveSession(recordingForImport, {
+            includeCurrentRecording: false,
+            reason: 'recording_finalized',
+          });
+          if (result) broadcast('live_session_imported', result);
+          return result;
+        }).catch((error) => {
+          state.session = {
+            ...state.session,
+            lastImportError: error?.message || String(error),
+            importing: false,
+          };
+          broadcast('live_session', state.session);
         });
       }
     });
