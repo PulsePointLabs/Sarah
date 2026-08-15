@@ -13,6 +13,64 @@ export const filesRouter = express.Router();
 fs.mkdirSync(uploadDir, { recursive: true });
 const execFileAsync = promisify(execFile);
 const localPlaybackJobs = new Map();
+let localPlaybackQueue = Promise.resolve();
+
+function queueLocalPlaybackConversion(task) {
+  const queued = localPlaybackQueue.then(task, task);
+  localPlaybackQueue = queued.catch(() => {});
+  return queued;
+}
+
+async function convertLocalVideoPreview(sourcePath, partialPath) {
+  const commonArgs = [
+    '-hide_banner',
+    '-loglevel', 'error',
+    '-nostats',
+    '-nostdin',
+    '-y',
+    '-threads', '2',
+    '-i', sourcePath,
+    '-map', '0:v:0',
+    '-map', '0:a?',
+    '-vf', 'scale=min(1280\\,iw):-2',
+  ];
+  const outputArgs = [
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
+    '-f', 'mp4',
+    partialPath,
+  ];
+
+  try {
+    await runProcess('ffmpeg', [
+      ...commonArgs,
+      '-c:v', 'h264_nvenc',
+      '-preset', 'p4',
+      '-cq', '25',
+      '-b:v', '0',
+      ...outputArgs,
+    ], { captureOutput: false });
+  } catch (hardwareError) {
+    await fsp.unlink(partialPath).catch(() => {});
+    try {
+      await runProcess('ffmpeg', [
+        ...commonArgs,
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '24',
+        '-threads', '2',
+        ...outputArgs,
+      ], { captureOutput: false });
+    } catch (softwareError) {
+      throw new Error(
+        `Hardware preview conversion failed: ${hardwareError?.message || hardwareError}. `
+        + `Software fallback failed: ${softwareError?.message || softwareError}`,
+      );
+    }
+  }
+}
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
@@ -172,7 +230,7 @@ function assertLocalVideoPath(filePath) {
   return { resolved, ext };
 }
 
-async function localVideoMetadata(filePath) {
+async function localVideoMetadata(filePath, { includeDuration = true } = {}) {
   const { resolved, ext } = assertLocalVideoPath(filePath);
   const stat = await fsp.stat(resolved);
   if (!stat.isFile()) {
@@ -180,7 +238,9 @@ async function localVideoMetadata(filePath) {
     error.status = 400;
     throw error;
   }
-  const durationSeconds = await getMediaDurationSeconds(resolved).catch(() => 0);
+  const durationSeconds = includeDuration
+    ? await getMediaDurationSeconds(resolved).catch(() => 0)
+    : 0;
   return {
     path: resolved,
     filename: path.basename(resolved),
@@ -521,7 +581,9 @@ filesRouter.post('/local-video/playback-preview', async (req, res) => {
   try {
     const requestedPath = normalizeLocalVideoPath(req.body?.path);
     if (!requestedPath) return res.status(400).json({ error: 'Missing local video path.' });
-    const meta = await localVideoMetadata(requestedPath);
+    // This route is polled while conversion runs. Avoid launching ffprobe on the
+    // multi-gigabyte source every two seconds; stat data is enough for its cache key.
+    const meta = await localVideoMetadata(requestedPath, { includeDuration: false });
     const label = slugifyFilePart(req.body?.label || meta.filename || 'local-video-preview');
     const cacheKey = slugifyFilePart(`${meta.fingerprint}-${label}`);
     const filename = `local-playback-${cacheKey}.mp4`;
@@ -565,24 +627,10 @@ filesRouter.post('/local-video/playback-preview', async (req, res) => {
 
     const job = { status: 'processing', error: '' };
     localPlaybackJobs.set(cacheKey, job);
-    fsp.unlink(partialPath).catch(() => {}).then(async () => {
-      await runProcess('ffmpeg', [
-        '-hide_banner',
-        '-y',
-        '-i', meta.path,
-        '-map', '0:v:0',
-        '-map', '0:a?',
-        '-vf', 'scale=min(1280\\,iw):-2',
-        '-c:v', 'libx264',
-        '-preset', 'veryfast',
-        '-crf', '24',
-        '-c:a', 'aac',
-        '-b:a', '128k',
-        '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',
-        '-f', 'mp4',
-        partialPath,
-      ]);
+    queueLocalPlaybackConversion(async () => {
+      job.status = 'processing';
+      await fsp.unlink(partialPath).catch(() => {});
+      await convertLocalVideoPreview(meta.path, partialPath);
       await fsp.rename(partialPath, outputPath);
       localPlaybackJobs.delete(cacheKey);
     }).catch((error) => {

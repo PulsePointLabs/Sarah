@@ -90,8 +90,17 @@ export function q(str) {
 
 export function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const { timeoutMs = 0, ...spawnOptions } = options;
-    const child = spawn(command, args, { windowsHide: true, ...spawnOptions });
+    const {
+      timeoutMs = 0,
+      maxOutputBytes = 1024 * 1024,
+      captureOutput = true,
+      ...spawnOptions
+    } = options;
+    const child = spawn(command, args, {
+      windowsHide: true,
+      ...(captureOutput ? {} : { stdio: 'ignore' }),
+      ...spawnOptions,
+    });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -108,8 +117,16 @@ export function runProcess(command, args, options = {}) {
       if (timeout) clearTimeout(timeout);
       callback();
     };
-    child.stdout?.on('data', (data) => { stdout += data.toString(); });
-    child.stderr?.on('data', (data) => { stderr += data.toString(); });
+    const appendBounded = (current, data) => {
+      const combined = current + data.toString();
+      return combined.length > maxOutputBytes
+        ? combined.slice(combined.length - maxOutputBytes)
+        : combined;
+    };
+    if (captureOutput) {
+      child.stdout?.on('data', (data) => { stdout = appendBounded(stdout, data); });
+      child.stderr?.on('data', (data) => { stderr = appendBounded(stderr, data); });
+    }
     child.on('error', (error) => finish(() => reject(error)));
     child.on('close', (code) => {
       finish(() => {
