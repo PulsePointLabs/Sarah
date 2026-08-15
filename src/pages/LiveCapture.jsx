@@ -5561,6 +5561,7 @@ export default function LiveCapture() {
         speed: runtime.speed,
         instructions: runtime.supportsInstructions ? runtime.instructions : "",
         format: runtime.format,
+        ttsProvider: runtime.ttsProvider,
       });
       const audioBase64 = response?.data?.audio;
       if (!audioBase64) return false;

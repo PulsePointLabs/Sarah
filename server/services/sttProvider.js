@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import {
   estimateAudioInputTokens,
   estimateWhisperCostUsd,
@@ -79,7 +80,78 @@ function createTranscriptionForm({ audioBuffer, mimeType, filename, prompt, lang
   form.append('model', model);
   if (language) form.append('language', language);
   if (prompt) form.append('prompt', prompt);
+  form.append('response_format', 'verbose_json');
+  form.append('temperature', '0');
   return form;
+}
+
+function runFfmpegForStt(args, input, { maxBytes = 30 * 1024 * 1024 } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('ffmpeg', args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const stdout = [];
+    const stderr = [];
+    let outputBytes = 0;
+    child.stdout.on('data', (chunk) => {
+      outputBytes += chunk.length;
+      if (outputBytes > maxBytes) {
+        child.kill();
+        reject(new Error('Normalized transcription audio exceeded the safe size limit.'));
+        return;
+      }
+      stdout.push(chunk);
+    });
+    child.stderr.on('data', (chunk) => stderr.push(chunk));
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) resolve(Buffer.concat(stdout));
+      else reject(new Error(`ffmpeg could not normalize transcription audio (exit ${code}): ${Buffer.concat(stderr).toString('utf8').slice(-800)}`));
+    });
+    child.stdin.end(input);
+  });
+}
+
+async function prepareAudioForTranscription(audioBuffer, mimeType, filename) {
+  if (!envFlag('STT_TRIM_BOUNDARY_SILENCE', true)) return { audioBuffer, mimeType, filename };
+  try {
+    const normalized = await runFfmpegForStt([
+      '-hide_banner', '-loglevel', 'error',
+      '-i', 'pipe:0',
+      '-af', 'silenceremove=start_periods=1:start_duration=0.06:start_threshold=-48dB,areverse,silenceremove=start_periods=1:start_duration=0.35:start_threshold=-48dB,areverse',
+      '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', '-f', 'wav', 'pipe:1',
+    ], audioBuffer);
+    const pcmBytes = Math.max(0, normalized.length - 44);
+    const durationSeconds = pcmBytes / 32000;
+    if (durationSeconds < 0.22) {
+      const error = new Error('No clear speech was detected in the recording.');
+      error.status = 422;
+      error.code = 'no_speech';
+      throw error;
+    }
+    return { audioBuffer: normalized, mimeType: 'audio/wav', filename: 'audio-trimmed.wav', durationSeconds };
+  } catch (error) {
+    if (error?.code === 'no_speech') throw error;
+    console.warn('[stt] boundary-silence trim failed; using original audio', { message: error?.message || String(error), mimeType, filename });
+    return { audioBuffer, mimeType, filename };
+  }
+}
+
+export function reliableTranscriptText(data) {
+  const segments = Array.isArray(data?.segments) ? data.segments : [];
+  if (!segments.length) return String(data?.text || '');
+  const accepted = segments.filter((segment) => {
+    const text = String(segment?.text || '').trim();
+    if (!text) return false;
+    const noSpeech = Number(segment?.no_speech_prob);
+    const averageLogProbability = Number(segment?.avg_logprob);
+    const compressionRatio = Number(segment?.compression_ratio);
+    const likelySilenceHallucination = Number.isFinite(noSpeech)
+      && Number.isFinite(averageLogProbability)
+      && noSpeech >= 0.45
+      && averageLogProbability <= -0.75;
+    const likelyRepetitionHallucination = Number.isFinite(compressionRatio) && compressionRatio >= 2.8;
+    return !likelySilenceHallucination && !likelyRepetitionHallucination;
+  });
+  return accepted.map((segment) => String(segment.text || '').trim()).filter(Boolean).join(' ');
 }
 
 const LEGITIMATE_GLAND_CONTEXT = /\b(?:adrenal|salivary|sweat|sebaceous|endocrine|pituitary|thyroid|parathyroid|lymph|mammary|prostate|bartholin|cowper'?s?)\s+glands?\b/i;
@@ -130,7 +202,11 @@ export async function transcribeAudioWithProvider({
 } = {}) {
   const provider = resolveSttProvider(requestedProvider);
   const config = sttProviderConfig(provider);
-  const estimatedDurationSeconds = Math.max(1, Buffer.byteLength(audioBuffer) / 32_000);
+  const prepared = await prepareAudioForTranscription(audioBuffer, mimeType, filename);
+  audioBuffer = prepared.audioBuffer;
+  mimeType = prepared.mimeType;
+  filename = prepared.filename;
+  const estimatedDurationSeconds = Math.max(1, prepared.durationSeconds || Buffer.byteLength(audioBuffer) / 32_000);
 
   if (provider === 'openai') {
     const result = await guardedOpenAIRequest({
@@ -169,7 +245,7 @@ export async function transcribeAudioWithProvider({
       model: config.model,
       providerRequestId: result.providerRequestId || null,
       data: result.data,
-      text: normalizeSttTranscript(result.data?.text).trim(),
+      text: normalizeSttTranscript(reliableTranscriptText(result.data)).trim(),
     };
   }
 
@@ -198,6 +274,6 @@ export async function transcribeAudioWithProvider({
     model: config.model,
     providerRequestId: response.headers.get('x-request-id') || null,
     data,
-    text: normalizeSttTranscript(data?.text).trim(),
+    text: normalizeSttTranscript(reliableTranscriptText(data)).trim(),
   };
 }

@@ -161,6 +161,7 @@ export function createReportChatTtsPlayback({
       speed: runtime.speed,
       instructions: runtime.supportsInstructions ? runtime.instructions : "",
       format: runtime.format,
+      ttsProvider: runtime.ttsProvider,
     }, { signal: controller.signal });
     if (!currentRun(id) || controller.signal.aborted) throw abortError();
 

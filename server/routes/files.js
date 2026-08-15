@@ -103,10 +103,9 @@ const LOCAL_VIDEO_SEARCH_SKIP_DIRS = new Set([
 ]);
 
 const AUDIO_PASS_WHISPER_PROMPT = [
-  'Sarah session audio note.',
-  'Common phrases include: near climax event passed, Foley near the internal sphincter, stimulation paused, stimulation resumed, perineum pressure, internal sphincter, glans, foreskin, sleeve, vibrator, TENS, e-stim, catheter, ejaculation, recovery.',
-  'Transcribe short spoken session notes accurately. Preserve anatomical terms.',
-].join(' ');
+  'glans', 'foreskin', 'perineum', 'pelvic floor', 'Foley', 'catheter', 'internal sphincter',
+  'stimulation', 'sleeve', 'vibrator', 'TENS', 'e-stim', 'ejaculation', 'climax', 'recovery',
+].join('; ');
 
 function normalizeLocalVideoPath(value) {
   const raw = String(value || '').trim().replace(/^file:\/+/, '');

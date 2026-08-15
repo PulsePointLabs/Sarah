@@ -1123,6 +1123,7 @@ export default function AIChat({
             speed: runtime.speed,
             instructions: runtime.supportsInstructions ? runtime.instructions : "",
             format: runtime.format,
+            ttsProvider: runtime.ttsProvider,
           });
           const audio = res.data?.audio;
           if (!audio) throw new Error(res.data?.error || "TTS returned no audio");
@@ -1702,12 +1703,7 @@ export default function AIChat({
   };
 
   const WHISPER_PROMPT =
-    "Transcribe only words actually spoken. Do not add greetings, sign-offs, thank-yous, or commentary. " +
-    "Session log note. Gentle strokes on the glans penis. Foreskin partially retracted. " +
-    "Stimulation paused. Perineum pressure applied. Pelvic floor contraction. " +
-    "E-stim via TENS unit. Foley catheter in place. Urethral stimulation. " +
-    "Edging — arousal near climax. Frenulum contact. Prostate stimulation. " +
-    "Ejaculation. Refractory period. Buildup plateau. Involuntary spasm. Discomfort noted.";
+    "glans; glans penis; foreskin; perineum; pelvic floor; e-stim; TENS; Foley; catheter; urethral; edging; climax; frenulum; prostate; ejaculation; refractory period; buildup; plateau; involuntary spasm";
 
   const stopVad = () => {
     if (vadFrameRef.current) cancelAnimationFrame(vadFrameRef.current);

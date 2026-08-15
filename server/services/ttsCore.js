@@ -49,6 +49,69 @@ export function extractSarahTTSParams(instructions) {
   }
 }
 
+export function stripSarahTTSParams(instructions) {
+  return String(instructions || '')
+    .replace(/\s*<<SARAH_TTS_PARAMS>>[\s\S]*?<<END_SARAH_TTS_PARAMS>>\s*/g, '\n')
+    .trim();
+}
+
+export function normalizeTTSProvider(value, instructions = '') {
+  const explicit = String(value || extractSarahTTSParams(instructions)?.ttsProvider || '').trim().toLowerCase();
+  if (['local', 'xtts'].includes(explicit)) return 'local';
+  if (explicit === 'openai') return 'openai';
+  return String(process.env.TTS_PROVIDER || '').trim().toLowerCase() === 'xtts' ? 'local' : 'openai';
+}
+
+function envEnabled(name, fallback = true) {
+  const raw = process.env[name];
+  if (raw == null || raw === '') return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(String(raw).trim().toLowerCase());
+}
+
+export async function getLocalTTSHealth({ timeoutMs = 2500 } = {}) {
+  const url = String(process.env.XTTS_URL || 'http://127.0.0.1:8881').replace(/\/$/, '');
+  try {
+    const response = await fetchWithTimeout(`${url}/health`, { cache: 'no-store' }, timeoutMs);
+    const data = await response.json().catch(() => ({}));
+    return { available: response.ok && data?.ok !== false && data?.ready !== false, status: response.status, ...data };
+  } catch (error) {
+    return { available: false, status: 0, error: error?.name === 'AbortError' ? 'Local voice health check timed out.' : (error?.message || String(error)) };
+  }
+}
+
+async function callLocalXTTS({ input, speed, instructions, meta }) {
+  const startedAt = Date.now();
+  const url = String(process.env.XTTS_URL || 'http://127.0.0.1:8881').replace(/\/$/, '');
+  let response;
+  try {
+    response = await fetchWithTimeout(`${url}/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: input, speed: clampSpeed(speed), params: extractSarahTTSParams(instructions) }),
+    }, Number(process.env.XTTS_TIMEOUT_MS || 30000));
+  } catch (error) {
+    const localError = new Error(error?.name === 'AbortError' ? 'Local XTTS request timed out.' : `Local XTTS is unavailable: ${error?.message || error}`);
+    localError.status = error?.name === 'AbortError' ? 408 : 503;
+    localError.retryable = true;
+    localError.provider = 'xtts';
+    throw localError;
+  }
+  if (!response.ok) {
+    const error = new Error(`Local XTTS server error: ${response.status} ${await response.text()}`);
+    error.status = response.status === 429 ? 429 : 502;
+    error.retryable = true;
+    error.provider = 'xtts';
+    throw error;
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  await validateAudioBuffer(buffer, {
+    format: 'wav',
+    label: `Local XTTS chunk ${meta?.chunkIndex != null ? Number(meta.chunkIndex) + 1 : ''}`.trim(),
+    expectedDurationSeconds: meta?.estimatedDurationSec || estimateTtsDurationSeconds(input),
+  });
+  return { buffer, latencyMs: Date.now() - startedAt };
+}
+
 export function normalizeTTSFormat(value) {
   const format = String(value || process.env.OPENAI_TTS_FORMAT || 'mp3').toLowerCase();
   return TTS_CONTENT_TYPES[format] ? format : 'mp3';
@@ -320,6 +383,7 @@ export async function synthesizeTTSChunk({
   instructions = '',
   format,
   previousContext = '',
+  ttsProvider,
   meta = {},
 } = {}) {
   const input = String(text || '').trim();
@@ -329,35 +393,27 @@ export async function synthesizeTTSChunk({
     throw error;
   }
 
-  // --- Surgical local-TTS branch. Fully reversible: unset TTS_PROVIDER in .env to restore stock OpenAI behavior below. ---
-  // Per-request toggle (Settings page "Voice Engine") lets the user pick OpenAI even while
-  // TTS_PROVIDER=xtts is the server-wide default; explicit "openai" always wins.
-  const requestedProvider = extractSarahTTSParams(instructions)?.ttsProvider;
-  if (String(process.env.TTS_PROVIDER || '').trim().toLowerCase() === 'xtts' && requestedProvider !== 'openai') {
-    const xttsStartedAt = Date.now();
-    const xttsResponse = await fetchWithTimeout('http://localhost:8881/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: input, speed: clampSpeed(speed), params: extractSarahTTSParams(instructions) }),
-    }, Number(process.env.XTTS_TIMEOUT_MS || 60000));
-    if (!xttsResponse.ok) {
-      const error = new Error(`Local XTTS server error: ${xttsResponse.status} ${await xttsResponse.text()}`);
-      error.status = 502;
-      error.retryable = true;
-      throw error;
+  const requestedProvider = normalizeTTSProvider(ttsProvider, instructions);
+  if (requestedProvider === 'local') {
+    try {
+      const local = await callLocalXTTS({ input, speed, instructions, meta });
+      return {
+        ...local,
+        model: 'xtts-v2-local',
+        voice: 'sarah-cloned',
+        provider: 'local',
+        speed: clampSpeed(speed),
+        format: 'wav',
+        retries: 0,
+      };
+    } catch (error) {
+      if (!envEnabled('TTS_LOCAL_FALLBACK_TO_OPENAI', true)) throw error;
+      console.warn('[localTTS] falling back to OpenAI Nova', {
+        ...meta,
+        message: error?.message || String(error),
+      });
     }
-    const xttsBuffer = Buffer.from(await xttsResponse.arrayBuffer());
-    return {
-      buffer: xttsBuffer,
-      model: 'xtts-v2-local',
-      voice: 'sarah-cloned',
-      speed: clampSpeed(speed),
-      format: 'wav',
-      latencyMs: Date.now() - xttsStartedAt,
-      retries: 0,
-    };
   }
-  // --- End local-TTS branch ---
 
   const maxChars = Number(process.env.OPENAI_TTS_MAX_CHARS || 2500);
   if (input.length > maxChars) {
@@ -380,7 +436,7 @@ export async function synthesizeTTSChunk({
     speed: finalSpeed,
   };
   const chunkInstructions = buildChunkInstructions(
-    String(instructions || process.env.OPENAI_TTS_INSTRUCTIONS || '').trim(),
+    stripSarahTTSParams(String(instructions || process.env.OPENAI_TTS_INSTRUCTIONS || '').trim()),
     previousContext,
     supportsInstructionsForModel
   );
@@ -397,5 +453,15 @@ export async function synthesizeTTSChunk({
     ...meta,
   };
   const { buffer, latencyMs, retries } = await callOpenAITTS(body, requestMeta);
-  return { buffer, model, voice, speed: finalSpeed, format: responseFormat, latencyMs, retries };
+  return {
+    buffer,
+    model,
+    voice,
+    provider: 'openai',
+    fallbackFrom: requestedProvider === 'local' ? 'local' : null,
+    speed: finalSpeed,
+    format: responseFormat,
+    latencyMs,
+    retries,
+  };
 }

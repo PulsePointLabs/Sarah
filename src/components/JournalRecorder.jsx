@@ -9,7 +9,7 @@ import { cleanWhisperTranscript } from "@/utils/whisperTranscript";
 import { readSttProviderPreference } from "@/lib/sttSettings";
 
 const WHISPER_PROMPT =
-  "Post-session reflection. Physiological sensations. Arousal buildup. Climax experience. Heart rate. Muscle tension. Pelvic floor. E-stim. Foley catheter. Refractory period. Emotional state. What worked well. What to try next time.";
+  "physiological sensations; arousal; climax; heart rate; muscle tension; pelvic floor; e-stim; Foley; catheter; refractory period; emotional state";
 
 const SECTION_COLORS = {
   emotional_reflection:       "hsl(var(--chart-3))",

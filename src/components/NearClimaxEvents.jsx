@@ -242,6 +242,7 @@ async function fetchTTSBase64(text) {
     speed: runtime.speed,
     instructions: runtime.supportsInstructions ? runtime.instructions : "",
     format,
+    ttsProvider: runtime.ttsProvider,
   });
   return {
     audio: res?.data?.audio || "",

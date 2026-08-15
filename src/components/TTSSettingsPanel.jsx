@@ -11,6 +11,8 @@ import {
   prepareTTSInput,
   saveTTSSettings,
   TTS_AUDIO_FORMATS,
+  TTS_ENGINES,
+  TTS_PRESETS,
 } from "./TTSButton";
 
 const TTS_SAMPLE_TEXT = "Your build phase begins quietly, with stimulation becoming more focused while your body starts to organize around arousal. As climax approaches, the shift is meaningful: sensation, muscle tone, and heart rate begin telling the same story, then recovery arrives as stimulation stops and the body settles.";
@@ -66,7 +68,21 @@ export default function TTSSettingsPanel() {
   const [draftSettings, setDraftSettings] = useState(() => loadTTSSettings());
   const [sampleState, setSampleState] = useState("idle");
   const [message, setMessage] = useState(null);
+  const [localHealth, setLocalHealth] = useState({ state: "checking", detail: "Checking local voice…" });
   const sampleAudioRef = useRef(null);
+
+  const refreshLocalHealth = async () => {
+    setLocalHealth({ state: "checking", detail: "Checking local voice…" });
+    try {
+      const response = await base44.functions.invoke("ttsHealth", {});
+      const health = response?.data?.local || response?.data || {};
+      setLocalHealth(health.available
+        ? { state: health.busy ? "busy" : "ready", detail: health.busy ? "Local voice is finishing another request." : `XTTS ready on ${health.device || "local hardware"}.` }
+        : { state: "offline", detail: health.error || "Local voice is offline; Nova fallback remains available." });
+    } catch (error) {
+      setLocalHealth({ state: "offline", detail: error?.data?.local?.error || error?.message || "Local voice is offline; Nova fallback remains available." });
+    }
+  };
 
   const stopSample = () => {
     const sample = sampleAudioRef.current;
@@ -80,6 +96,7 @@ export default function TTSSettingsPanel() {
   };
 
   useEffect(() => {
+    refreshLocalHealth();
     const sync = (event) => {
       const next = normalizeTTSSettings(event?.detail || loadTTSSettings());
       setSavedSettings(next);
@@ -109,6 +126,7 @@ export default function TTSSettingsPanel() {
         speed: runtime.speed,
         instructions: runtime.supportsInstructions ? runtime.instructions : "",
         format: runtime.format,
+        ttsProvider: runtime.ttsProvider,
       });
       const bytes = binaryAudio(response.data.audio);
       const url = URL.createObjectURL(new Blob([bytes.buffer], { type: getTTSMime(response.data?.format || runtime.format) }));
@@ -146,11 +164,12 @@ export default function TTSSettingsPanel() {
             <h2 className="text-sm font-bold uppercase tracking-wider">TTS Settings</h2>
           </div>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Voice calibration for reads, samples, and premium downloads across Sarah, running on your local cloned voice. These sliders shape the local engine directly.
+            Voice calibration for reads, samples, and premium downloads across Sarah. Expressive mode also follows saved Sarah Personality instructions for inflection and tone. When the Voice Engine below is set to Local, these sliders shape the local cloned engine directly.
           </p>
         </div>
         <div className="flex flex-wrap gap-1.5 text-[11px]">
-          <span className="rounded-full bg-primary/10 px-2 py-1 font-semibold text-primary">Local Voice</span>
+          <span className="rounded-full bg-primary/10 px-2 py-1 font-semibold text-primary">{draftSettings.ttsProvider === "openai" ? "OpenAI" : "Local Voice"}</span>
+          <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">{TTS_ENGINES[draftSettings.engine]?.label}</span>
           <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">{TTS_AUDIO_FORMATS[draftSettings.audioFormat]?.label}</span>
         </div>
       </div>
@@ -163,7 +182,10 @@ export default function TTSSettingsPanel() {
               <div className="mt-2 flex flex-wrap gap-1.5">
                 <button
                   type="button"
-                  onClick={() => updateDraft({ ttsProvider: "local" })}
+                  onClick={() => {
+                    updateDraft({ ttsProvider: "local" });
+                    refreshLocalHealth();
+                  }}
                   className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors ${draftSettings.ttsProvider !== "openai" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"}`}
                 >
                   Local (Cloned Voice)
@@ -176,22 +198,46 @@ export default function TTSSettingsPanel() {
                   OpenAI (Original Nova)
                 </button>
               </div>
-              <p className="mt-2 text-xs text-muted-foreground">Applies everywhere: Chat with Sarah, Read, and downloads. Voice calibration sliders below only affect the local engine.</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                <span className={`inline-block h-2 w-2 rounded-full ${localHealth.state === "ready" ? "bg-emerald-500" : localHealth.state === "busy" || localHealth.state === "checking" ? "bg-amber-500" : "bg-rose-500"}`} />
+                <span className="text-muted-foreground">{localHealth.detail}</span>
+                <button type="button" onClick={refreshLocalHealth} className="font-semibold text-primary hover:underline">Recheck</button>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">Applies everywhere: Chat with Sarah, Read, and downloads. If the local worker is unavailable, Sarah uses Nova for that request instead of hanging.</p>
             </div>
 
-            <div className="rounded-lg border border-border bg-muted/20 p-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Audio Format</p>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {Object.entries(TTS_AUDIO_FORMATS).map(([key, format]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => updateDraft({ audioFormat: key })}
-                    className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors ${draftSettings.audioFormat === key ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"}`}
-                  >
-                    {format.label}
-                  </button>
-                ))}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-lg border border-border bg-muted/20 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Audio Engine</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {Object.entries(TTS_ENGINES).map(([key, engine]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => updateDraft({ engine: key })}
+                      className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors ${draftSettings.engine === key ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"}`}
+                    >
+                      {engine.label}
+                    </button>
+                  ))}
+                </div>
+                {draftSettings.engine === "hd" && <p className="mt-2 text-xs text-muted-foreground">HD Crisp prioritizes fidelity; tone controls and Sarah Personality instructions have less influence.</p>}
+              </div>
+
+              <div className="rounded-lg border border-border bg-muted/20 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Audio Format</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {Object.entries(TTS_AUDIO_FORMATS).map(([key, format]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => updateDraft({ audioFormat: key })}
+                      className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors ${draftSettings.audioFormat === key ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"}`}
+                    >
+                      {format.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
@@ -205,6 +251,21 @@ export default function TTSSettingsPanel() {
             <span className="mt-0.5 block text-xs opacity-80">Applies once during premium server download rendering only.</span>
           </button>
 
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Presets</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {Object.entries(TTS_PRESETS).map(([name, preset]) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => setDraftSettings(normalizeTTSSettings({ ...preset, ttsProvider: draftSettings.ttsProvider }))}
+                  className="rounded-lg bg-muted px-2.5 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         <div className="rounded-lg border border-border bg-muted/20 p-3">
@@ -245,7 +306,7 @@ export default function TTSSettingsPanel() {
           <RotateCcw className="h-4 w-4" />
           Reset Draft
         </button>
-        <span className="text-xs text-muted-foreground">Saved format: {TTS_AUDIO_FORMATS[savedSettings.audioFormat]?.label}, speed {savedSettings.speed}.</span>
+        <span className="text-xs text-muted-foreground">Saved engine: {TTS_ENGINES[savedSettings.engine]?.label}, {TTS_AUDIO_FORMATS[savedSettings.audioFormat]?.label}, speed {savedSettings.speed}.</span>
       </div>
 
       {message && (

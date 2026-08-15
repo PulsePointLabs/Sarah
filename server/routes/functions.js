@@ -5,6 +5,7 @@ import { renderTTSExport } from '../services/ttsRenderer.js';
 import {
   TTS_CONTENT_TYPES,
   synthesizeTTSChunk,
+  getLocalTTSHealth,
 } from '../services/ttsCore.js';
 import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
 import { transcribeAudioWithProvider } from '../services/sttProvider.js';
@@ -142,6 +143,7 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
       speed = 1.0,
       instructions: requestedInstructions,
       format: requestedFormat,
+      ttsProvider,
     } = req.body || {};
     const result = await synthesizeTTSChunk({
       text,
@@ -150,6 +152,7 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
       speed,
       instructions: requestedInstructions,
       format: requestedFormat,
+      ttsProvider,
       meta: {
         chunkIndex: req.body?.chunkIndex,
         source: req.body?.feature || 'tts_live',
@@ -160,6 +163,8 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-TTS-Model', result.model);
     res.setHeader('X-TTS-Voice', result.voice);
+    res.setHeader('X-TTS-Provider', result.provider || 'openai');
+    if (result.fallbackFrom) res.setHeader('X-TTS-Fallback-From', result.fallbackFrom);
     res.setHeader('X-TTS-Speed', String(result.speed));
     res.setHeader('X-TTS-Format', result.format);
     res.setHeader('X-TTS-Latency-Ms', String(result.latencyMs));
@@ -168,8 +173,8 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
     res.send(result.buffer);
   } catch (error) {
     const providerError = classifyProviderError(error, {
-      provider: 'openai',
-      requestStage: 'openai_tts',
+      provider: error?.provider || 'openai',
+      requestStage: error?.provider === 'xtts' ? 'local_tts' : 'openai_tts',
     });
     res.status(error.status || 502).json({
       error: providerError.user_message || error.message || String(error),
@@ -179,6 +184,14 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
       retryable: providerError.retryable,
     });
   }
+});
+
+functionsRouter.post('/ttsHealth', async (_req, res) => {
+  const health = await getLocalTTSHealth();
+  res.status(health.available ? 200 : 503).json({
+    local: health,
+    fallbackAvailable: Boolean(process.env.OPENAI_API_KEY),
+  });
 });
 
 functionsRouter.get('/ttsRenderProgress/:jobId', (req, res) => {
@@ -241,7 +254,8 @@ functionsRouter.post('/whisperSTT', async (req, res) => {
     });
   } catch (error) {
     const message = error.message || String(error);
-    res.status(500).json({
+    res.status(error.status || 500).json({
+      code: error.code || null,
       error: /Invalid URL\s+\(POST\s+\/v1\/audio\/transcriptions\)/i.test(message)
         ? 'Whisper reached the transcription layer, but the OpenAI client received a relative transcription URL. Restart the local API so Sarah uses the direct OpenAI Whisper route.'
         : message,

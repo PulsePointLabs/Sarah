@@ -291,6 +291,7 @@ Priority: the TTS slider settings define the base voice. The Sarah voice deliver
     : "-sarah-off";
   return {
     settings: normalized,
+    ttsProvider: normalized.ttsProvider,
     speed: normalized.speed,
     engine: normalized.engine,
     model: TTS_ENGINES[normalized.engine].model,
@@ -298,7 +299,7 @@ Priority: the TTS slider settings define the base voice. The Sarah voice deliver
     supportsInstructions: TTS_ENGINES[normalized.engine].supportsInstructions,
     instructions: instructionsWithParams,
     sarahVoiceInstructions,
-    cacheProfile: `settings-v7-${normalized.engine}-${normalized.audioFormat}-speed-${normalized.speed}-w${normalized.warmth}-e${normalized.enthusiasm}-s${normalized.soothing}-l${normalized.lightness}-f${normalized.femininity}-c${normalized.continuity}-n${normalized.naturalness}-p${normalized.pauses}-ss${normalized.softStart}${sarahVoiceProfile}`,
+    cacheProfile: `settings-v8-${normalized.ttsProvider}-${normalized.engine}-${normalized.audioFormat}-speed-${normalized.speed}-w${normalized.warmth}-e${normalized.enthusiasm}-s${normalized.soothing}-l${normalized.lightness}-f${normalized.femininity}-c${normalized.continuity}-n${normalized.naturalness}-p${normalized.pauses}-ss${normalized.softStart}${sarahVoiceProfile}`,
   };
 }
 
@@ -513,6 +514,7 @@ export default function TTSButton({ getText }) {
         speed: runtime.speed,
         instructions: runtime.supportsInstructions ? buildTTSInstructions(runtime.instructions, previousChunkRef.current) : "",
         format: runtime.format,
+        ttsProvider: runtime.ttsProvider,
       });
     } catch (err) {
       console.error("TTS fetch failed:", err);

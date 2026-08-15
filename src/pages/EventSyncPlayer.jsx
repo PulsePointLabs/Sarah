@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { base44 } from "@/api/base44Client";
 import { readSttProviderPreference } from "@/lib/sttSettings";
+import { finalizeWhisperTranscript } from "@/utils/whisperTranscript";
 import { Play, Pause, Square, Upload, Volume2, VolumeX, ChevronDown, ChevronLeft, ChevronRight, ZoomOut, Mic, MicOff, Plus, ArrowUp } from "lucide-react";
 import { EVENT_CATEGORIES } from "@/components/session-form/EventTimelineSection";
 import { getTTSMime, getTTSRuntime, prepareTTSInput, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
@@ -76,6 +77,7 @@ async function fetchTTSBase64(text, voice) {
     speed: runtime.speed,
     instructions: runtime.supportsInstructions ? runtime.instructions : "",
     format,
+    ttsProvider: runtime.ttsProvider,
   });
   const b64 = res.data.audio;
   try { sessionStorage.setItem(cacheKey, b64); } catch (_) {}
@@ -429,16 +431,21 @@ export default function EventSyncPlayer() {
       const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
       const reader = new FileReader();
       reader.onloadend = async () => {
-        const base64 = reader.result.split(",")[1];
-        const res = await base44.functions.invoke("whisperSTT", {
-          audio_base64: base64,
-          mime_type: "audio/webm",
-          prompt: "Sexual health session log. Terms may include: glans, glans penis, perineum, frenulum, prostate, scrotum, foreskin, erection, ejaculation, edging, e-stim, TENS, foley, catheter, urethral, lubrication, climax, arousal, pelvic floor.",
-          provider: readSttProviderPreference(),
-        });
-        const text = res.data?.text || "";
-        if (text) setNewEventNote((prev) => (prev ? prev + " " + text : text));
-        setIsTranscribing(false);
+        try {
+          const base64 = reader.result.split(",")[1];
+          const res = await base44.functions.invoke("whisperSTT", {
+            audio_base64: base64,
+            mime_type: "audio/webm",
+            prompt: "glans; glans penis; perineum; frenulum; prostate; scrotum; foreskin; erection; ejaculation; edging; e-stim; TENS; Foley; catheter; urethral; lubrication; climax; arousal; pelvic floor",
+            provider: readSttProviderPreference(),
+          });
+          const text = finalizeWhisperTranscript(res.data?.text || "");
+          if (text) setNewEventNote((prev) => (prev ? `${prev} ${text}` : text));
+        } catch (error) {
+          console.error("Session annotation transcription failed", error);
+        } finally {
+          setIsTranscribing(false);
+        }
       };
       reader.readAsDataURL(blob);
     };

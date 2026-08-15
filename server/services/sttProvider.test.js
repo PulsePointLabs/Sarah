@@ -1,49 +1,24 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
+import test from 'node:test';
+import { reliableTranscriptText } from './sttProvider.js';
 
-import { normalizeSttTranscript } from './sttProvider.js';
-
-test('normalizes glands to glans when grammar and anatomy make the intended term clear', () => {
-  assert.equal(
-    normalizeSttTranscript('The glands is fully exposed.'),
-    'The glans is fully exposed.',
-  );
-  assert.equal(
-    normalizeSttTranscript('Lubricant applied to the glands and foreskin.'),
-    'Lubricant applied to the glans and foreskin.',
-  );
-  assert.equal(
-    normalizeSttTranscript('Glands visible after retracting the foreskin.'),
-    'Glans visible after retracting the foreskin.',
-  );
+test('drops a low-confidence no-speech tail without losing spoken segments', () => {
+  const text = reliableTranscriptText({
+    text: "Both feet begin to tremble left to right. There's a lot of pressure.",
+    segments: [
+      { text: 'Both feet begin to tremble left to right.', no_speech_prob: 0.02, avg_logprob: -0.12, compression_ratio: 1.1 },
+      { text: "There's a lot of pressure.", no_speech_prob: 0.78, avg_logprob: -1.2, compression_ratio: 1.0 },
+    ],
+  });
+  assert.equal(text, 'Both feet begin to tremble left to right.');
 });
 
-test('preserves legitimate plural gland references', () => {
-  assert.equal(
-    normalizeSttTranscript('The sweat glands are irritated.'),
-    'The sweat glands are irritated.',
-  );
-  assert.equal(
-    normalizeSttTranscript('The glands in my neck are swollen.'),
-    'The glands in my neck are swollen.',
-  );
-  assert.equal(
-    normalizeSttTranscript('The prostate glands were discussed.'),
-    'The prostate glands were discussed.',
-  );
-});
-
-test('normalizes squirt and to scrotum only in anatomical grammar', () => {
-  assert.equal(
-    normalizeSttTranscript('My squirt and is elevated and tense.'),
-    'My scrotum is elevated and tense.',
-  );
-  assert.equal(
-    normalizeSttTranscript('The sensor is positioned under the squirt and near the perineum.'),
-    'The sensor is positioned under the scrotum near the perineum.',
-  );
-  assert.equal(
-    normalizeSttTranscript('It may squirt and leak when the clamp opens.'),
-    'It may squirt and leak when the clamp opens.',
-  );
+test('keeps a confident final sentence even when it follows a pause', () => {
+  const text = reliableTranscriptText({
+    segments: [
+      { text: 'Both feet begin to tremble left to right.', no_speech_prob: 0.02, avg_logprob: -0.12, compression_ratio: 1.1 },
+      { text: 'There is pressure now.', no_speech_prob: 0.08, avg_logprob: -0.2, compression_ratio: 1.0 },
+    ],
+  });
+  assert.equal(text, 'Both feet begin to tremble left to right. There is pressure now.');
 });

@@ -2,11 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { uploadDir, ttsRenderDir } from '../config.js';
 import {
-  buildChunkInstructions,
-  callOpenAITTS,
   clampSpeed,
   extractSarahTTSParams,
-  fetchWithTimeout,
   estimateTtsDurationSeconds,
   normalizeTTSExportFormat,
   normalizeTTSModel,
@@ -14,7 +11,7 @@ import {
   q,
   runProcess,
   slugifyFilePart,
-  supportsTTSInstructions,
+  synthesizeTTSChunk,
   ttsExportMime,
   validateAudioFile,
 } from './ttsCore.js';
@@ -189,7 +186,6 @@ export async function renderTTSExport(payload = {}, options = {}) {
     const model = normalizeTTSModel(requestedModel);
     const finalSpeed = clampSpeed(speed);
     const outputFormat = normalizeTTSExportFormat(requestedOutputFormat);
-    const supportsInstructionsForModel = supportsTTSInstructions(model);
     const normalizedChunks = coalesceTTSExportChunks((Array.isArray(chunks) ? chunks : [])
       .map((chunk) => ({
         text: String(chunk?.text || '').trim(),
@@ -228,15 +224,6 @@ export async function renderTTSExport(payload = {}, options = {}) {
         total: normalizedChunks.length,
         message: `Generating chunk ${i + 1} of ${normalizedChunks.length}...`,
       });
-      const body = {
-        model,
-        input: chunk.text,
-        voice,
-        response_format: 'wav',
-        speed: finalSpeed,
-      };
-      const chunkInstructions = buildChunkInstructions(instructions, chunk.previousContext, supportsInstructionsForModel);
-      if (chunkInstructions) body.instructions = chunkInstructions;
       const meta = {
         chunkIndex: i,
         charCount: chunk.text.length,
@@ -250,28 +237,18 @@ export async function renderTTSExport(payload = {}, options = {}) {
         source: String(payload?.feature || payload?.source || 'tts_export'),
         idempotencyKey: `${jobId}:${i}`,
       };
-      // --- Surgical local-TTS branch. Fully reversible: unset TTS_PROVIDER in .env to restore stock OpenAI behavior below. ---
-      // Per-request toggle (Settings page "Voice Engine") lets the user pick OpenAI even while
-      // TTS_PROVIDER=xtts is the server-wide default; explicit "openai" always wins.
-      let buffer;
-      const exportRequestedProvider = extractSarahTTSParams(instructions)?.ttsProvider;
-      if (String(process.env.TTS_PROVIDER || '').trim().toLowerCase() === 'xtts' && exportRequestedProvider !== 'openai') {
-        const xttsResponse = await fetchWithTimeout('http://localhost:8881/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: chunk.text, speed: finalSpeed, params: extractSarahTTSParams(instructions) }),
-        }, Number(process.env.XTTS_TIMEOUT_MS || 60000));
-        if (!xttsResponse.ok) {
-          const error = new Error(`Local XTTS server error: ${xttsResponse.status} ${await xttsResponse.text()}`);
-          error.status = 502;
-          error.retryable = true;
-          throw error;
-        }
-        buffer = Buffer.from(await xttsResponse.arrayBuffer());
-      } else {
-        ({ buffer } = await callOpenAITTS(body, meta));
-      }
-      // --- End local-TTS branch ---
+      const rendered = await synthesizeTTSChunk({
+        text: chunk.text,
+        voice,
+        model,
+        speed: finalSpeed,
+        instructions,
+        format: 'wav',
+        previousContext: chunk.previousContext,
+        ttsProvider: payload?.ttsProvider || extractSarahTTSParams(instructions)?.ttsProvider,
+        meta,
+      });
+      const { buffer } = rendered;
       const chunkPath = path.join(workDir, `chunk-${String(i).padStart(4, '0')}.wav`);
       await fs.writeFile(chunkPath, buffer);
       const expectedDurationSeconds = estimateTtsDurationSeconds(chunk.text);
