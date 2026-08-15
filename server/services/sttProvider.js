@@ -82,6 +82,25 @@ function createTranscriptionForm({ audioBuffer, mimeType, filename, prompt, lang
   return form;
 }
 
+const LEGITIMATE_GLAND_CONTEXT = /\b(?:adrenal|salivary|sweat|sebaceous|endocrine|pituitary|thyroid|parathyroid|lymph|mammary|prostate|bartholin|cowper'?s?)\s+glands?\b/i;
+const GLANS_ANATOMY_CONTEXT = /\b(?:penis|penile|foreskin|meatus|meatal|urethra|urethral|shaft|frenulum|corona|erect|erection|catheter|condom|genital|stimulation)\b/i;
+const GLANS_SINGULAR_DESCRIPTION = /\bglands\s+(?:is|was|has|looks|appears|feels|seems|becomes|became|remains|gets|got|visible|exposed|engorged|flushed|dry|moist|sensitive|irritated)\b/i;
+const GLANS_CONTACT_CONTEXT = /\b(?:at|on|onto|to|from|of|around|over|under|against|near|touching|stroking|rubbing|covering|exposing|retracting|applying|contacting)\s+(?:(?:my|the|your|his|their)\s+)?glands\b/i;
+
+export function normalizeSttTranscript(value) {
+  return String(value || '').replace(/[^.!?]+[.!?]*/g, (sentence) => {
+    if (!/\bglands\b/i.test(sentence) || LEGITIMATE_GLAND_CONTEXT.test(sentence)) return sentence;
+    if (
+      !GLANS_ANATOMY_CONTEXT.test(sentence)
+      && !GLANS_SINGULAR_DESCRIPTION.test(sentence)
+      && !GLANS_CONTACT_CONTEXT.test(sentence)
+    ) {
+      return sentence;
+    }
+    return sentence.replace(/\bglands\b/gi, (word) => (word[0] === 'G' ? 'Glans' : 'glans'));
+  });
+}
+
 export async function transcribeAudioWithProvider({
   audioBuffer,
   mimeType,
@@ -134,7 +153,7 @@ export async function transcribeAudioWithProvider({
       model: config.model,
       providerRequestId: result.providerRequestId || null,
       data: result.data,
-      text: String(result.data?.text || '').trim(),
+      text: normalizeSttTranscript(result.data?.text).trim(),
     };
   }
 
@@ -163,6 +182,6 @@ export async function transcribeAudioWithProvider({
     model: config.model,
     providerRequestId: response.headers.get('x-request-id') || null,
     data,
-    text: String(data?.text || '').trim(),
+    text: normalizeSttTranscript(data?.text).trim(),
   };
 }
