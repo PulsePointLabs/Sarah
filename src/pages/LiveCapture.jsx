@@ -156,7 +156,7 @@ const TERMINAL_WAKE_LISTENER_ERRORS = new Set([
 ]);
 const WHISPER_PROMPT =
   "Sarah live session annotation. Timestamped observation during physiological recording. " +
-  "Heart rate, arousal, stimulation, physical finding, penis, glans, meatus, foreskin, shaft, perineum, legs tense, feet planted, toe curl, tremor, breathing, " +
+  "Heart rate, arousal, stimulation, physical finding, penis, glans, meatus, foreskin, shaft, scrotum, testes, perineum, legs tense, feet planted, toe curl, tremor, breathing, " +
   "stroke speed, grip pressure, repositioning, comfort adjustment, nearing climax, ejaculation, climax, recovery. " +
   "Enema, rectal instillation, milliliters, mL, cc, fluid instilled, retained volume, leakage, cramping, contractions, expulsion.";
 

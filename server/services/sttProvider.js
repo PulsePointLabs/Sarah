@@ -86,18 +86,34 @@ const LEGITIMATE_GLAND_CONTEXT = /\b(?:adrenal|salivary|sweat|sebaceous|endocrin
 const GLANS_ANATOMY_CONTEXT = /\b(?:penis|penile|foreskin|meatus|meatal|urethra|urethral|shaft|frenulum|corona|erect|erection|catheter|condom|genital|stimulation)\b/i;
 const GLANS_SINGULAR_DESCRIPTION = /\bglands\s+(?:is|was|has|looks|appears|feels|seems|becomes|became|remains|gets|got|visible|exposed|engorged|flushed|dry|moist|sensitive|irritated)\b/i;
 const GLANS_CONTACT_CONTEXT = /\b(?:at|on|onto|to|from|of|around|over|under|against|near|touching|stroking|rubbing|covering|exposing|retracting|applying|contacting)\s+(?:(?:my|the|your|his|their)\s+)?glands\b/i;
+const SCROTUM_MISRECOGNITION = /\bsquirt\s+and\b/i;
+const SCROTUM_ANATOMY_CONTEXT = /\b(?:penis|penile|testes|testicles?|perineum|perineal|scrotal|foreskin|glans|meatus|catheter|genital|pelvic)\b/i;
+const SCROTUM_SINGULAR_DESCRIPTION = /\b(?:(?:my|the|your|his|their)\s+)?squirt\s+and\s+(?:is|was|has|looks|appears|feels|seems|becomes|became|remains|gets|got|visible|elevated|tight|tense|relaxed|contracting|sensitive|irritated)\b/i;
+const SCROTUM_CONTACT_CONTEXT = /\b(?:at|on|onto|to|from|of|around|over|under|below|beneath|against|near|touching|holding|lifting|supporting|contacting)\s+(?:(?:my|the|your|his|their)\s+)?squirt\s+and\b/i;
 
 export function normalizeSttTranscript(value) {
   return String(value || '').replace(/[^.!?]+[.!?]*/g, (sentence) => {
-    if (!/\bglands\b/i.test(sentence) || LEGITIMATE_GLAND_CONTEXT.test(sentence)) return sentence;
-    if (
-      !GLANS_ANATOMY_CONTEXT.test(sentence)
-      && !GLANS_SINGULAR_DESCRIPTION.test(sentence)
-      && !GLANS_CONTACT_CONTEXT.test(sentence)
-    ) {
-      return sentence;
+    let normalized = sentence;
+    if (/\bglands\b/i.test(normalized) && !LEGITIMATE_GLAND_CONTEXT.test(normalized)) {
+      if (
+        GLANS_ANATOMY_CONTEXT.test(normalized)
+        || GLANS_SINGULAR_DESCRIPTION.test(normalized)
+        || GLANS_CONTACT_CONTEXT.test(normalized)
+      ) {
+        normalized = normalized.replace(/\bglands\b/gi, (word) => (word[0] === 'G' ? 'Glans' : 'glans'));
+      }
     }
-    return sentence.replace(/\bglands\b/gi, (word) => (word[0] === 'G' ? 'Glans' : 'glans'));
+    if (
+      SCROTUM_MISRECOGNITION.test(normalized)
+      && (
+        SCROTUM_ANATOMY_CONTEXT.test(normalized)
+        || SCROTUM_SINGULAR_DESCRIPTION.test(normalized)
+        || SCROTUM_CONTACT_CONTEXT.test(normalized)
+      )
+    ) {
+      normalized = normalized.replace(/\bsquirt\s+and\b/gi, (words) => (words[0] === 'S' ? 'Scrotum' : 'scrotum'));
+    }
+    return normalized;
   });
 }
 

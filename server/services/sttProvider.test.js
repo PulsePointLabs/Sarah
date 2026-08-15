@@ -32,3 +32,18 @@ test('preserves legitimate plural gland references', () => {
     'The prostate glands were discussed.',
   );
 });
+
+test('normalizes squirt and to scrotum only in anatomical grammar', () => {
+  assert.equal(
+    normalizeSttTranscript('My squirt and is elevated and tense.'),
+    'My scrotum is elevated and tense.',
+  );
+  assert.equal(
+    normalizeSttTranscript('The sensor is positioned under the squirt and near the perineum.'),
+    'The sensor is positioned under the scrotum near the perineum.',
+  );
+  assert.equal(
+    normalizeSttTranscript('It may squirt and leak when the clamp opens.'),
+    'It may squirt and leak when the clamp opens.',
+  );
+});
