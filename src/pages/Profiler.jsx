@@ -9336,6 +9336,7 @@ export default function Profiler() {
   const [journals, setJournals] = useState([]);
   const [sessionEvidenceLoading, setSessionEvidenceLoading] = useState(true);
   const [timelineLoading, setTimelineLoading] = useState(true);
+  const [timelineLoadError, setTimelineLoadError] = useState("");
   const [profileContextLoading, setProfileContextLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [refreshingEvidence, setRefreshingEvidence] = useState(false);
@@ -9386,6 +9387,7 @@ export default function Profiler() {
     let cancelled = false;
     setSessionEvidenceLoading(true);
     setTimelineLoading(true);
+    setTimelineLoadError("");
     setLoadError("");
     setAllTimelines({});
 
@@ -9407,15 +9409,22 @@ export default function Profiler() {
         const BATCH = 5;
         for (let i = 0; i < withData.length; i += BATCH) {
           const chunk = withData.slice(i, i + BATCH);
-          const results = await Promise.all(
+          const results = await Promise.allSettled(
             chunk.map((session) =>
               base44.entities.HeartRateTimeline.filter({ session: session.id }, "time_offset_s", 5000).then((rows) => [session.id, rows])
             )
           );
           if (cancelled) return;
+          const successful = results
+            .filter((result) => result.status === "fulfilled")
+            .map((result) => result.value);
+          const failedCount = results.length - successful.length;
+          if (failedCount > 0) {
+            setTimelineLoadError("Some optional heart-rate timelines could not be refreshed. Saved session evidence is still available, and Comprehensive Profile can still run.");
+          }
           setAllTimelines((current) => {
             const next = { ...current };
-            results.forEach(([sessionId, rows]) => {
+            successful.forEach(([sessionId, rows]) => {
               if (rows.length > 0) next[sessionId] = rows;
             });
             return next;
@@ -9480,7 +9489,7 @@ export default function Profiler() {
         setLoadError(`Profiler evidence loaded in fallback mode (${evidence.sessionLimit} recent sessions) because the full request was too slow.`);
       }
     } catch (error) {
-      setLoadError(error?.message || "Could not refresh current profiler evidence.");
+      setLoadError(`Showing the previously loaded evidence. Refresh failed: ${error?.message || "Could not reach the profiler evidence service."}`);
     } finally {
       setRefreshingEvidence(false);
     }
@@ -9515,6 +9524,12 @@ export default function Profiler() {
           <Button size="sm" variant="outline" onClick={() => setLoadAttempt((attempt) => attempt + 1)} className="h-8 text-xs">
             Retry loading evidence
           </Button>
+        </div>
+      )}
+
+      {timelineLoadError && (
+        <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-200">
+          {timelineLoadError}
         </div>
       )}
 

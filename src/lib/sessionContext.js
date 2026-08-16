@@ -112,6 +112,7 @@ function substanceText(label, value) {
 }
 
 function cleanBloodPressureReading(value = {}) {
+  if (!value || typeof value !== "object") return null;
   const systolic = Number(value.systolic_mm_hg ?? value.systolic);
   const diastolic = Number(value.diastolic_mm_hg ?? value.diastolic);
   if (!Number.isFinite(systolic) || !Number.isFinite(diastolic)) return null;
@@ -129,6 +130,7 @@ function cleanBloodPressureReading(value = {}) {
 }
 
 function cleanPulseOxReading(value = {}) {
+  if (!value || typeof value !== "object") return null;
   const spo2 = Number(value.spo2_percent ?? value.spo2 ?? value.oxygen_saturation ?? value.oxygen_saturation_percent);
   if (!Number.isFinite(spo2)) return null;
   const pulse = Number(value.pulse_bpm ?? value.pulse ?? value.pr_bpm ?? value.heart_rate_bpm ?? value.hr);
