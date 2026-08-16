@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { base44 } from "@/api/base44Client";
-import { serverUrl } from "@/lib/mobileApiBase";
+import { apiUrl, serverUrl } from "@/lib/mobileApiBase";
 import { profilerReviewHandoffState } from "@/lib/profilerReviewHandoff";
 import { handOffVideoPlayToAndroid } from "@/lib/nativeMedia";
 import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
@@ -9350,14 +9350,25 @@ export default function Profiler() {
     let lastError = null;
     for (const attempt of attempts) {
       try {
-        const [all, explorations] = await Promise.all([
-          base44.entities.Session.list("-date", attempt.sessionLimit, undefined, {
-            timeoutMs: PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
-          }),
-          base44.entities.BodyExploration.list("-date", attempt.explorationLimit, undefined, {
-            timeoutMs: PROFILER_IMAGE_RELOAD_TIMEOUT_MS,
-          }).catch(() => []),
-        ]);
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), PROFILER_IMAGE_RELOAD_TIMEOUT_MS);
+        let response;
+        try {
+          const query = new URLSearchParams({
+            sessionLimit: String(attempt.sessionLimit),
+            explorationLimit: String(attempt.explorationLimit),
+          });
+          response = await fetch(apiUrl(`/profiler/evidence?${query}`), {
+            cache: "no-store",
+            signal: controller.signal,
+          });
+        } finally {
+          window.clearTimeout(timeoutId);
+        }
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `Profiler evidence request failed: HTTP ${response.status}`);
+        const all = Array.isArray(data.sessions) ? data.sessions : [];
+        const explorations = Array.isArray(data.bodyExplorations) ? data.bodyExplorations : [];
         return {
           sessions: all,
           bodyExplorations: explorations || [],
