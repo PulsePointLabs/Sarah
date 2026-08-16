@@ -21,6 +21,18 @@ import TrendsSection from "../components/dashboard/TrendsSection";
 import { useDashboardWidgets } from "@/hooks/useDashboardWidgets";
 import MotionClimaxOverview from "../components/MotionClimaxOverview";
 
+const DASHBOARD_SESSION_FIELDS = [
+  "id", "created_date", "updated_date", "date", "start_time", "end_time",
+  "duration_minutes", "satisfaction", "intensity", "avg_hr", "max_hr",
+  "hr_at_climax", "hr_avg_at_climax_window", "hr_avg_pre_to_climax",
+  "is_favorite", "mood", "no_climax", "build_type", "build_quality",
+  "buildup_quality", "climax_duration", "pre_climax_offset_s",
+  "climax_offset_s", "recovery_offset_s", "methods",
+];
+const DASHBOARD_DETAIL_FIELDS = [
+  "id", "date", "climax_offset_s", "event_timeline", "motion_analysis_summary",
+];
+
 function StatCard({ label, value, sub, icon: Icon, color = "primary" }) {
   return (
     <div className="bg-card rounded-xl border border-border p-4 flex items-center gap-3">
@@ -133,14 +145,37 @@ const CustomTooltip = ({ active, payload, label }) => {
 export default function Dashboard() {
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const { config, toggleWidget, moveWidget, isVisible } = useDashboardWidgets();
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      const data = await base44.entities.Session.list("-date", 100);
-      setSessions(data);
-      setLoading(false);
+      try {
+        const data = await base44.entities.Session.listFields(DASHBOARD_SESSION_FIELDS, "-date", 100, undefined, { timeoutMs: 10000 });
+        if (cancelled) return;
+        setSessions(data);
+        setLoadError("");
+        setLoading(false);
+
+        // Event and motion timelines are optional dashboard enrichment. Load a
+        // recent window only after the compact dashboard is already visible.
+        base44.entities.Session.listFields(DASHBOARD_DETAIL_FIELDS, "-date", 20, undefined, { timeoutMs: 15000 })
+          .then((details) => {
+            if (cancelled) return;
+            const byId = new Map(details.map((session) => [session.id, session]));
+            setSessions((current) => current.map((session) => ({ ...session, ...(byId.get(session.id) || {}) })));
+          })
+          .catch(() => {});
+      } catch (error) {
+        if (cancelled) return;
+        setLoadError(error?.message || "Could not load dashboard data.");
+        setLoading(false);
+      }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const stats = useMemo(() => {
@@ -555,8 +590,10 @@ export default function Dashboard() {
   if (!sessions.length) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-2 text-center px-6">
-        <BarChart2 className="w-10 h-10 text-muted-foreground" />
-        <p className="text-muted-foreground text-sm">No sessions yet. Log your first session to see your dashboard.</p>
+        {loadError ? <AlertCircle className="w-10 h-10 text-destructive" /> : <BarChart2 className="w-10 h-10 text-muted-foreground" />}
+        <p className={loadError ? "text-destructive text-sm" : "text-muted-foreground text-sm"}>
+          {loadError || "No sessions yet. Log your first session to see your dashboard."}
+        </p>
       </div>
     );
   }

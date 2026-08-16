@@ -84,7 +84,6 @@ const SESSION_LIST_FIELDS = [
   "no_climax",
   "is_quick_entry",
   "is_favorite",
-  "ai_analysis",
   "emg_enabled",
   "emg_general_notes",
   "emg_left_placement_notes",
@@ -101,14 +100,12 @@ const SESSION_LIST_FIELDS = [
   "sensory_immersion",
   "recovery_quality",
   "control",
-  "live_foot_tracking",
-  "live_foot_tracking_updated_at",
-  "motion_analysis",
-  "motion_telemetry",
 ];
 const SESSION_HYDRATE_FIELDS = [
   ...SESSION_LIST_FIELDS,
+  "ai_analysis",
   "event_timeline",
+  "motion_analysis_summary",
   "media_videos",
   "emg_placement_photos",
   "foley_size",
@@ -252,7 +249,7 @@ export default function Sessions() {
   const loadSessions = async () => {
     setHydrateError("");
     try {
-      const firstPass = await base44.entities.Session.listFields(SESSION_LIST_FIELDS, "-date", 200);
+      const firstPass = await base44.entities.Session.listFields(SESSION_LIST_FIELDS, "-date", 200, undefined, { timeoutMs: 10000 });
       setSessions(firstPass);
       setLoading(false);
     } catch (error) {
@@ -263,7 +260,7 @@ export default function Sessions() {
 
     setHydrating(true);
     Promise.allSettled([
-      base44.entities.Session.listFields(SESSION_HYDRATE_FIELDS, "-date", 200),
+      base44.entities.Session.listFields(SESSION_HYDRATE_FIELDS, "-date", 200, undefined, { timeoutMs: 20000 }),
       base44.auth.meFields(USER_PROFILE_FIELDS).catch(() => null),
     ]).then(([fullRows, profile]) => {
       if (fullRows.status === "fulfilled") {
