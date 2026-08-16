@@ -1,5 +1,5 @@
 import express from 'express';
-import { listEntities } from '../db.js';
+import { listEntityPage } from '../db.js';
 
 export const profilerRouter = express.Router();
 
@@ -146,13 +146,6 @@ export function compactProfilerBodyExploration(exploration) {
   return result;
 }
 
-function sortNewest(rows) {
-  return [...rows].sort((a, b) => (
-    new Date(b?.date || b?.created_date || 0).getTime()
-    - new Date(a?.date || a?.created_date || 0).getTime()
-  ));
-}
-
 function safeLimit(value, fallback, maximum) {
   const parsed = Math.round(Number(value));
   return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, maximum) : fallback;
@@ -162,11 +155,17 @@ profilerRouter.get('/evidence', (req, res) => {
   try {
     const sessionLimit = safeLimit(req.query.sessionLimit, 300, 500);
     const explorationLimit = safeLimit(req.query.explorationLimit, 150, 300);
-    const sessions = sortNewest(listEntities('Session'))
-      .slice(0, sessionLimit)
+    const sessions = listEntityPage('Session', {
+      fields: [...SESSION_FIELDS, 'event_timeline', 'motion_analysis_summary', 'ai_analysis'],
+      sort: '-date',
+      limit: sessionLimit,
+    })
       .map(compactProfilerSession);
-    const bodyExplorations = sortNewest(listEntities('BodyExploration'))
-      .slice(0, explorationLimit)
+    const bodyExplorations = listEntityPage('BodyExploration', {
+      fields: [...EXPLORATION_FIELDS, 'ai_body_exploration'],
+      sort: '-date',
+      limit: explorationLimit,
+    })
       .map(compactProfilerBodyExploration);
     res.setHeader('Cache-Control', 'no-store');
     res.json({

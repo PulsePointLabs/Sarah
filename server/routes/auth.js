@@ -1,5 +1,5 @@
 import express from 'express';
-import { getEntity, upsertEntity } from '../db.js';
+import { getEntityFields, upsertEntity } from '../db.js';
 
 export const authRouter = express.Router();
 
@@ -23,7 +23,8 @@ function projectUser(user, fields) {
 }
 
 authRouter.get('/me', (req, res) => {
-  res.json(projectUser(getEntity('User', 'local-user'), parseFields(req.query.fields)));
+  const fields = parseFields(req.query.fields);
+  res.json(projectUser(getEntityFields('User', 'local-user', fields), fields));
 });
 
 authRouter.patch('/me', (req, res) => {

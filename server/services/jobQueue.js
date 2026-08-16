@@ -112,7 +112,7 @@ function publicJob(job, { includeResult = true } = {}) {
   const { payload: _payload, abortController: _abortController, ...rest } = safeJob;
   if (!includeResult) {
     const { result: _result, ...summary } = rest;
-    const resultSummary = summarizeJobResult(rest.result);
+    const resultSummary = summarizeJobResult(rest.result) || rest.result_summary || null;
     const progress = summary.progress ? { ...summary.progress } : summary.progress;
     if (progress && Array.isArray(progress.completed_batch_results)) {
       progress.completed_batch_results = undefined;
@@ -191,14 +191,29 @@ function isCleared(job) {
 function persistedJob(job) {
   if (!job) return null;
   const { abortController: _abortController, ...rest } = job;
-  if (rest.type === 'profile_anatomy_video' && rest.result) {
-    return {
-      ...rest,
-      result: summarizeJobResult(rest.result),
-      result_compacted: true,
-    };
+  const persisted = { ...rest };
+  if (['complete', 'cancelled'].includes(persisted.status)) {
+    if (Array.isArray(persisted.progress?.completed_batch_results)) {
+      persisted.progress = {
+        ...persisted.progress,
+        completed_batch_result_count: persisted.progress.completed_batch_results.length,
+        completed_batch_results: undefined,
+        completed_batch_results_omitted: true,
+      };
+    }
+    if (Array.isArray(persisted.meta?.reviewed_images)) {
+      persisted.meta = {
+        ...persisted.meta,
+        reviewed_image_count: persisted.meta.reviewed_images.length,
+        reviewed_images: undefined,
+      };
+    }
   }
-  return rest;
+  if (persisted.type === 'profile_anatomy_video' && persisted.result) {
+    persisted.result = summarizeJobResult(persisted.result);
+    persisted.result_compacted = true;
+  }
+  return persisted;
 }
 
 function saveJob(job) {
@@ -597,27 +612,10 @@ export function listJobs({ type, status, limit = 20, meta = {}, includeCleared =
     .map((item) => item.trim())
     .filter(Boolean);
   const metaEntries = Object.entries(meta || {}).filter(([, value]) => value !== undefined && value !== null && value !== '');
-  const queryLimit = Math.max(50, Math.min(500, Number(limit || 20) * 4));
+  const queryLimit = Math.max(1, Math.min(100, Number(limit) || 20));
 
   for (const job of listProcessingJobSummaries({ type, statuses, meta, includeCleared, limit: queryLimit })) {
-    let pub = publicJob(job, { includeResult: false });
-    if (pub?.hasResult && !pub.result_summary && pub.id) {
-      const hydrated = publicJob(getEntity('ProcessingJob', pub.id), { includeResult: false });
-      if (hydrated?.result_summary) {
-        pub = {
-          ...pub,
-          result_summary: hydrated.result_summary,
-          progress: {
-            ...(pub.progress || {}),
-            ...(hydrated.progress?.result_file_url ? { result_file_url: hydrated.progress.result_file_url } : {}),
-            ...(hydrated.progress?.result_filename ? { result_filename: hydrated.progress.result_filename } : {}),
-            ...(hydrated.progress?.result_duration_seconds ? { result_duration_seconds: hydrated.progress.result_duration_seconds } : {}),
-            ...(hydrated.progress?.result_size ? { result_size: hydrated.progress.result_size } : {}),
-            ...(hydrated.progress?.result_created_at ? { result_created_at: hydrated.progress.result_created_at } : {}),
-          },
-        };
-      }
-    }
+    const pub = publicJob(job, { includeResult: false });
     if (pub?.id) merged.set(pub.id, pub);
   }
   for (const job of jobs.values()) {

@@ -144,6 +144,71 @@ export function listEntities(entity) {
   return db.prepare('SELECT data FROM entities WHERE entity = ?').all(entity).map((r) => safeJsonParse(r.data)).filter(Boolean);
 }
 
+const ENTITY_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function normalizedEntityFields(fields = []) {
+  const requested = Array.isArray(fields) ? fields : [];
+  return [...new Set([
+    ...requested,
+    'id',
+    'created_date',
+    'updated_date',
+  ].map((field) => String(field || '').trim()).filter((field) => ENTITY_FIELD_NAME.test(field)))];
+}
+
+function projectedEntityJsonSql(fields = []) {
+  const safeFields = normalizedEntityFields(fields);
+  if (!safeFields.length) return null;
+  const args = safeFields.flatMap((field) => [
+    `'${field}'`,
+    `json_extract(data, '$.${field}')`,
+  ]);
+  return `json_object(${args.join(', ')})`;
+}
+
+export function listEntityPage(entity, { sort = '', limit, skip = 0, fields = [] } = {}) {
+  const selectedJson = fields?.length ? projectedEntityJsonSql(fields) : 'data';
+  const params = [entity];
+  const clauses = ['entity = ?'];
+  let orderSql = '';
+  const sortValue = String(sort || '').trim();
+  if (sortValue) {
+    const descending = sortValue.startsWith('-');
+    const sortField = descending ? sortValue.slice(1) : sortValue;
+    if (ENTITY_FIELD_NAME.test(sortField)) {
+      const indexedColumn = ['id', 'created_date', 'updated_date'].includes(sortField)
+        ? sortField
+        : null;
+      orderSql = indexedColumn
+        ? ` ORDER BY ${indexedColumn} ${descending ? 'DESC' : 'ASC'}`
+        : ` ORDER BY json_extract(data, ?) ${descending ? 'DESC' : 'ASC'}`;
+      if (!indexedColumn) params.push(`$.${sortField}`);
+    }
+  }
+
+  let pageSql = '';
+  if (limit != null && Number.isFinite(Number(limit))) {
+    pageSql = ' LIMIT ? OFFSET ?';
+    params.push(Math.max(0, Math.min(10000, Math.trunc(Number(limit)))));
+    params.push(Math.max(0, Math.trunc(Number(skip) || 0)));
+  } else if (Number(skip) > 0) {
+    pageSql = ' LIMIT -1 OFFSET ?';
+    params.push(Math.max(0, Math.trunc(Number(skip))));
+  }
+
+  return db.prepare(`SELECT ${selectedJson} AS data FROM entities WHERE ${clauses.join(' AND')}${orderSql}${pageSql}`)
+    .all(...params)
+    .map((row) => safeJsonParse(row.data))
+    .filter(Boolean);
+}
+
+export function getEntityFields(entity, id, fields = []) {
+  if (!fields?.length) return getEntity(entity, id);
+  const selectedJson = projectedEntityJsonSql(fields);
+  const row = db.prepare(`SELECT ${selectedJson} AS data FROM entities WHERE entity = ? AND id = ?`).get(entity, id);
+  return row ? safeJsonParse(row.data) : null;
+}
+
 export function listEntitiesByExactCriteria(entity, criteria = {}) {
   const entries = Object.entries(criteria || {});
   if (!entries.length) return null;
@@ -269,57 +334,60 @@ export function listLatestProfileReviewEvidenceSlices(resultKey, archiveKey, arc
 }
 
 export function listProcessingJobSummaries({ type = '', statuses = [], meta = {}, limit = 100, includeCleared = false } = {}) {
-  try {
-    const clauses = ["entity = 'ProcessingJob'"];
-    const params = [];
-    if (type) {
-      clauses.push("json_extract(data, '$.type') = ?");
-      params.push(type);
-    }
-    if (Array.isArray(statuses) && statuses.length) {
-      clauses.push(`json_extract(data, '$.status') IN (${statuses.map(() => '?').join(', ')})`);
-      params.push(...statuses);
-    }
-    if (!includeCleared) {
-      clauses.push("json_extract(data, '$.meta.clearedAt') IS NULL");
-    }
-    for (const [key, value] of Object.entries(meta || {})) {
-      if (value === undefined || value === null || value === '') continue;
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
-      clauses.push(`json_extract(data, '$.meta.${key}') = ?`);
-      params.push(String(value));
-    }
-    params.push(Math.max(1, Math.min(500, Number(limit) || 100)));
-    return db.prepare(`
-      SELECT json_set(
-        json_remove(data, '$.result', '$.payload', '$.progress.completed_batch_results', '$.meta.reviewed_images'),
-        '$.hasResult',
-        CASE
-          WHEN json_type(data, '$.result') IS NOT NULL THEN 1
-          ELSE 0
-        END
-      ) AS data
-      FROM entities
-      WHERE ${clauses.join(' AND ')}
-      ORDER BY COALESCE(updated_date, created_date) DESC
-      LIMIT ?
-    `).all(...params).map((r) => safeJsonParse(r.data)).filter(Boolean);
-  } catch {
-    return listEntities('ProcessingJob').map(({ result: _result, payload: _payload, ...job }) => job);
+  const clauses = ["entity = 'ProcessingJob'"];
+  const params = [];
+  if (type) {
+    clauses.push("json_extract(data, '$.type') = ?");
+    params.push(type);
   }
+  if (Array.isArray(statuses) && statuses.length) {
+    clauses.push(`json_extract(data, '$.status') IN (${statuses.map(() => '?').join(', ')})`);
+    params.push(...statuses);
+  }
+  if (!includeCleared) {
+    clauses.push("json_extract(data, '$.meta.clearedAt') IS NULL");
+  }
+  for (const [key, value] of Object.entries(meta || {})) {
+    if (value === undefined || value === null || value === '') continue;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    clauses.push(`json_extract(data, '$.meta.${key}') = ?`);
+    params.push(String(value));
+  }
+  params.push(Math.max(1, Math.min(500, Number(limit) || 100)));
+  return db.prepare(`
+    SELECT json_set(
+      json_remove(data, '$.result', '$.payload', '$.progress.completed_batch_results', '$.meta.reviewed_images'),
+      '$.hasResult',
+      CASE WHEN json_type(data, '$.result') IS NOT NULL THEN 1 ELSE 0 END,
+      '$.result_summary',
+      CASE
+        WHEN json_type(data, '$.result') IS NULL THEN NULL
+        ELSE json_object(
+          'file_url', COALESCE(json_extract(data, '$.result.file_url'), json_extract(data, '$.result.record.file_url')),
+          'stream_url', COALESCE(json_extract(data, '$.result.stream_url'), json_extract(data, '$.result.record.stream_url')),
+          'download_url', COALESCE(json_extract(data, '$.result.download_url'), json_extract(data, '$.result.record.download_url')),
+          'manifest_url', COALESCE(json_extract(data, '$.result.manifest_url'), json_extract(data, '$.result.record.manifest_url')),
+          'filename', COALESCE(json_extract(data, '$.result.filename'), json_extract(data, '$.result.record.filename')),
+          'size', COALESCE(json_extract(data, '$.result.size'), json_extract(data, '$.result.size_bytes'), json_extract(data, '$.result.record.size'), json_extract(data, '$.result.record.size_bytes')),
+          'duration_seconds', COALESCE(json_extract(data, '$.result.duration_seconds'), json_extract(data, '$.result.record.duration_seconds')),
+          'mime_type', COALESCE(json_extract(data, '$.result.mime_type'), json_extract(data, '$.result.content_type'), json_extract(data, '$.result.record.mime_type'), json_extract(data, '$.result.record.content_type'))
+        )
+      END
+    ) AS data
+    FROM entities
+    WHERE ${clauses.join(' AND ')}
+    ORDER BY updated_date DESC
+    LIMIT ?
+  `).all(...params).map((r) => safeJsonParse(r.data)).filter(Boolean);
 }
 
 export function listRecoverableProcessingJobs() {
-  try {
-    return db.prepare(`
-      SELECT data
-      FROM entities
-      WHERE entity = 'ProcessingJob'
-        AND json_extract(data, '$.status') IN ('queued', 'running')
-    `).all().map((r) => safeJsonParse(r.data)).filter(Boolean);
-  } catch {
-    return listEntities('ProcessingJob').filter((record) => ['queued', 'running'].includes(record?.status));
-  }
+  return db.prepare(`
+    SELECT data
+    FROM entities
+    WHERE entity = 'ProcessingJob'
+      AND json_extract(data, '$.status') IN ('queued', 'running')
+  `).all().map((r) => safeJsonParse(r.data)).filter(Boolean);
 }
 
 export function getEntity(entity, id) {

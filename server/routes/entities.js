@@ -1,5 +1,5 @@
 import express from 'express';
-import { bulkCreate, deleteEntity, getEntity, listEntities, listEntitiesByExactCriteria, normalizeEntityName, upsertEntity } from '../db.js';
+import { bulkCreate, deleteEntity, getEntity, listEntities, listEntitiesByExactCriteria, listEntityPage, normalizeEntityName, upsertEntity } from '../db.js';
 
 export const entitiesRouter = express.Router();
 
@@ -94,8 +94,13 @@ function projectEntity(doc, fields) {
 entitiesRouter.get('/:entity', (req, res) => {
   const entity = normalizeEntityName(req.params.entity);
   const fields = parseFields(req.query.fields);
-  const rows = sortRows(listEntities(entity), req.query.sort);
-  res.json(limitRows(rows, req.query.limit, req.query.skip).map((row) => projectEntity(publicEntity(entity, row), fields)));
+  const rows = listEntityPage(entity, {
+    fields,
+    sort: req.query.sort,
+    limit: req.query.limit,
+    skip: req.query.skip,
+  });
+  res.json(rows.map((row) => projectEntity(publicEntity(entity, row), fields)));
 });
 
 entitiesRouter.post('/:entity/filter', (req, res) => {
