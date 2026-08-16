@@ -133,7 +133,7 @@ export class HeartRateRelay {
   start() {
     fs.mkdirSync(liveCaptureConfig.hrRecordingsDir, { recursive: true });
     this.appWss = new this.WebSocketServer({ port: liveCaptureConfig.hrRelayPort });
-    this.appWss.on('connection', (socket) => this.handleAppConnection(socket));
+    this.appWss.on('connection', (socket, request) => this.handleAppConnection(socket, request));
     this.appWss.on('listening', () => {
       console.log(`Sarah HR relay running on ws://127.0.0.1:${liveCaptureConfig.hrRelayPort}`);
       this.connectObs();
@@ -500,8 +500,10 @@ export class HeartRateRelay {
     });
   }
 
-  async handleAppConnection(socket) {
-    console.log('Sarah HR relay app client connected');
+  async handleAppConnection(socket, request = null) {
+    const remoteAddress = request?.socket?.remoteAddress || socket?._socket?.remoteAddress || 'unknown';
+    const clientId = Math.random().toString(16).slice(2, 10);
+    console.log(`Sarah HR relay app client connected id=${clientId} remote=${remoteAddress}`);
     socket.send(JSON.stringify({ type: 'config', config: this.latestConfig }));
     socket.send(JSON.stringify({ type: 'relay_status', relay: this.relayStatus() }));
     socket.send(JSON.stringify({
@@ -544,6 +546,7 @@ export class HeartRateRelay {
         return;
       }
       if (message.type === 'obs_start_record') {
+        console.log(`Sarah HR relay OBS command=StartRecord client=${clientId} source=${message.source || 'unknown'} request=${message.requestId || 'none'} requestedAt=${message.requestedAt || 'unknown'}`);
         try {
           await this.obsRequest('StartRecord');
         } catch (error) {
@@ -552,6 +555,7 @@ export class HeartRateRelay {
         return;
       }
       if (message.type === 'obs_stop_record') {
+        console.warn(`Sarah HR relay OBS command=StopRecord client=${clientId} source=${message.source || 'unknown'} request=${message.requestId || 'none'} requestedAt=${message.requestedAt || 'unknown'}`);
         try {
           const result = await this.obsRequest('StopRecord');
           socket.send(JSON.stringify({ type: 'obs_stop_result', outputPath: result?.outputPath || null }));
@@ -560,7 +564,7 @@ export class HeartRateRelay {
         }
       }
     });
-    socket.on('close', () => console.log('Sarah HR relay app client disconnected'));
+    socket.on('close', () => console.log(`Sarah HR relay app client disconnected id=${clientId} remote=${remoteAddress}`));
   }
 }
 

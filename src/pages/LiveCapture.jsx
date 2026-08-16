@@ -1776,7 +1776,7 @@ export default function LiveCapture() {
     restoredLaunchProfileRef.current = true;
     const profile = readLiveCaptureLaunchProfile();
     setLaunchProfile(profile);
-    setCaptureKind("session");
+    setCaptureKind(profile.captureKind || "session");
     setCaptureMode(profile.captureMode || "full");
     setEmgSensorConfig(profile.emgSensorConfig || "generic");
     setTelemetryNoticesEnabled(profile.telemetryNoticesEnabled !== false);
@@ -4347,7 +4347,12 @@ export default function LiveCapture() {
     if (socket.readyState !== WebSocket.OPEN) {
       throw new Error("The local OBS relay is not ready.");
     }
-    socket.send(JSON.stringify({ type: "obs_start_record" }));
+    socket.send(JSON.stringify({
+      type: "obs_start_record",
+      source: "live_capture_ui",
+      requestId: crypto.randomUUID(),
+      requestedAt: new Date().toISOString(),
+    }));
 
     const deadline = Date.now() + 15000;
     while (Date.now() < deadline) {
@@ -4397,7 +4402,12 @@ export default function LiveCapture() {
         });
       }
       if (socket.readyState !== WebSocket.OPEN) throw new Error("The local OBS relay is not ready.");
-      socket.send(JSON.stringify({ type: "obs_stop_record" }));
+      socket.send(JSON.stringify({
+        type: "obs_stop_record",
+        source: "live_capture_ui",
+        requestId: crypto.randomUUID(),
+        requestedAt: new Date().toISOString(),
+      }));
 
       const deadline = Date.now() + 20_000;
       while (Date.now() < deadline) {
@@ -4424,6 +4434,53 @@ export default function LiveCapture() {
       setEndingSession(false);
     }
   }, [endingSession, recordingTransportActive, toast]);
+
+  const endActiveSession = useCallback(async () => {
+    if (endingSession) return;
+    const confirmed = window.confirm(
+      recordingTransportActive
+        ? "End this active capture? Sarah will tell OBS to stop recording and will finalize the record."
+        : "Finalize this active capture now? No OBS recording is currently running."
+    );
+    if (!confirmed) return;
+    if (recordingTransportActive) {
+      await stopObsRecording();
+      return;
+    }
+    if (!liveSession?.activeSessionId || !liveSession?.active || liveSession?.importing) return;
+
+    setEndingSession(true);
+    try {
+      const response = await fetch(apiUrl("/live-capture/end-session"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recording: recording || {} }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || "Sarah could not end the active session.");
+
+      setLiveSession(data.session || null);
+      setLaunchState({
+        phase: "recovery",
+        message: "Session ended. Sarah is preparing the record for review.",
+        steps: [],
+        busy: false,
+        error: "",
+      });
+      toast({
+        title: "Active session ended",
+        description: "Telemetry was preserved and the record is ready for final processing.",
+      });
+    } catch (error) {
+      toast({
+        title: "Session could not be ended",
+        description: error?.message || "Sarah could not finalize the active record.",
+        variant: "destructive",
+      });
+    } finally {
+      setEndingSession(false);
+    }
+  }, [endingSession, liveSession?.active, liveSession?.activeSessionId, liveSession?.importing, recording, recordingTransportActive, stopObsRecording, toast]);
 
   useEffect(() => {
     perinealProtocolRef.current = perinealProtocol;
@@ -7074,6 +7131,19 @@ export default function LiveCapture() {
         </div>
       )}
 
+      {launchActive && !focusView && !liveSession?.importing && (
+        <button
+          type="button"
+          onClick={endActiveSession}
+          disabled={endingSession}
+          className="fixed bottom-5 left-5 z-[70] inline-flex min-h-14 items-center gap-3 rounded-2xl border-2 border-red-300 bg-red-600 px-6 py-3 text-base font-black text-white shadow-2xl shadow-red-950/30 hover:bg-red-700 disabled:opacity-60"
+          aria-label="End the active session and preserve its data"
+        >
+          <Video className="h-5 w-5" />
+          {endingSession ? "ENDING SESSION…" : "END ACTIVE SESSION"}
+        </button>
+      )}
+
       {showLiveControlBar && (
         <section className={`${focusView ? "fixed left-3 right-3 top-3 z-[80]" : "sticky top-2 z-50"} rounded-2xl border border-primary/35 bg-card/95 p-3 shadow-xl backdrop-blur`} aria-label="Live session controls">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -7137,14 +7207,14 @@ export default function LiveCapture() {
                   </button>
                 </>
               )}
-              {recordingTransportActive && (
+              {launchActive && !liveSession?.importing && (
                 <button
                   type="button"
-                  onClick={stopObsRecording}
+                  onClick={endActiveSession}
                   disabled={endingSession}
                   className="inline-flex min-h-12 items-center gap-2 rounded-xl border-2 border-destructive/50 bg-destructive/10 px-5 py-2 text-sm font-black text-destructive hover:bg-destructive/20 disabled:opacity-55"
                 >
-                  <Video className="h-5 w-5" /> {endingSession ? "Ending safely…" : "End Session"}
+                  <Video className="h-5 w-5" /> {endingSession ? "Ending safely…" : "End Active Session"}
                 </button>
               )}
               {!focusView && (
@@ -8958,14 +9028,14 @@ export default function LiveCapture() {
                     <AlertTriangle className="h-4 w-4" /> Stop Howl
                   </button>
                 )}
-                {recordingTransportActive && (
+                {launchActive && !liveSession?.importing && (
                   <button
                     type="button"
-                    onClick={stopObsRecording}
+                    onClick={endActiveSession}
                     disabled={endingSession}
                     className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm font-bold text-destructive hover:bg-destructive/20 disabled:opacity-55"
                   >
-                    <Video className="h-4 w-4" /> {endingSession ? "Ending…" : "End Session"}
+                    <Video className="h-4 w-4" /> {endingSession ? "Ending…" : "End Active Session"}
                   </button>
                 )}
                 <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm font-semibold text-foreground">

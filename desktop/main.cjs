@@ -545,6 +545,22 @@ function nodeRuntimePath() {
 }
 
 async function startBackend() {
+  // Do not start a second Sarah backend against the same project database when
+  // the source/dev backend is already running. Two backends each create their
+  // own OBS relay and can independently turn one OBS recording boundary into
+  // duplicate Session/BodyExploration records.
+  const preferredBackendUrl = `http://127.0.0.1:${PREFERRED_BACKEND_PORT}`;
+  try {
+    const health = await requestJson(`${preferredBackendUrl}/api/health`);
+    if (health?.ok && health?.app === 'Sarah Local API') {
+      backendUrl = preferredBackendUrl;
+      desktopLog(`Connected to existing local Sarah backend at ${preferredBackendUrl}; no duplicate backend was started.`);
+      return backendUrl;
+    }
+  } catch {
+    // No compatible Sarah backend is already listening; start the packaged one.
+  }
+
   const port = await findPort(PREFERRED_BACKEND_PORT);
   const hrRelayPort = await findPort(PREFERRED_HR_RELAY_PORT, new Set([port]));
   backendUrl = `http://127.0.0.1:${port}`;
