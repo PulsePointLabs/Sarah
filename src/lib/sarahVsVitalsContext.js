@@ -16,13 +16,20 @@ function compactNumber(value, digits = 0) {
 }
 
 export async function loadRecentSarahVsTransfers(limit = 6) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 5000);
   try {
-    const response = await fetch(apiUrl(`/sarahvs/vitals/recent?limit=${encodeURIComponent(limit)}`), { cache: "no-store" });
+    const response = await fetch(apiUrl(`/sarahvs/vitals/recent?limit=${encodeURIComponent(limit)}`), {
+      cache: "no-store",
+      signal: controller.signal,
+    });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) return [];
     return Array.isArray(data.transfers) ? data.transfers : [];
   } catch {
     return [];
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 }
 

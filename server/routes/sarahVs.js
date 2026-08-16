@@ -1,5 +1,5 @@
 import express from 'express';
-import { deleteEntity, getEntity, listEntities, upsertEntity } from '../db.js';
+import { deleteEntity, getEntity, listEntityPage, upsertEntity } from '../db.js';
 import { aiInvokeInternal } from './internalAi.js';
 import {
   buildVitalsAnalysisPrompt,
@@ -103,9 +103,10 @@ sarahVsRouter.post('/vitals/import', requireToken, (req, res) => {
 
 sarahVsRouter.get('/vitals/recent', (req, res) => {
   const limit = Math.max(1, Math.min(100, Number(req.query.limit || 20)));
-  const transfers = listEntities('SarahVsVitalsTransfer')
-    .sort((a, b) => new Date(b.imported_at || b.created_date || 0) - new Date(a.imported_at || a.created_date || 0))
-    .slice(0, limit)
+  const transfers = listEntityPage('SarahVsVitalsTransfer', {
+    sort: '-created_date',
+    limit,
+  })
     .map(publicTransfer);
   res.json({ ok: true, transfers, count: transfers.length });
 });

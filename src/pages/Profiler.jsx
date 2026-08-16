@@ -9335,7 +9335,9 @@ export default function Profiler() {
   const [userProfile, setUserProfile] = useState(null);
   const [journals, setJournals] = useState([]);
   const [sessionEvidenceLoading, setSessionEvidenceLoading] = useState(true);
-  const [timelineLoading, setTimelineLoading] = useState(true);
+  // Full heart-rate timelines can contain tens of thousands of rows per session.
+  // They are optional enrichment and must never compete with profile generation.
+  const [timelineLoading, setTimelineLoading] = useState(false);
   const [timelineLoadError, setTimelineLoadError] = useState("");
   const [profileContextLoading, setProfileContextLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -9386,7 +9388,7 @@ export default function Profiler() {
   useEffect(() => {
     let cancelled = false;
     setSessionEvidenceLoading(true);
-    setTimelineLoading(true);
+    setTimelineLoading(false);
     setTimelineLoadError("");
     setLoadError("");
     setAllTimelines({});
@@ -9404,32 +9406,12 @@ export default function Profiler() {
         }
         setSessionEvidenceLoading(false);
 
-        // HR timelines are useful for secondary analysis, but should never block the saved profile UI.
-        const withData = all.filter((session) => session.climax_offset_s != null || session.avg_hr != null);
-        const BATCH = 5;
-        for (let i = 0; i < withData.length; i += BATCH) {
-          const chunk = withData.slice(i, i + BATCH);
-          const results = await Promise.allSettled(
-            chunk.map((session) =>
-              base44.entities.HeartRateTimeline.filter({ session: session.id }, "time_offset_s", 5000).then((rows) => [session.id, rows])
-            )
-          );
-          if (cancelled) return;
-          const successful = results
-            .filter((result) => result.status === "fulfilled")
-            .map((result) => result.value);
-          const failedCount = results.length - successful.length;
-          if (failedCount > 0) {
-            setTimelineLoadError("Some optional heart-rate timelines could not be refreshed. Saved session evidence is still available, and Comprehensive Profile can still run.");
-          }
-          setAllTimelines((current) => {
-            const next = { ...current };
-            successful.forEach(([sessionId, rows]) => {
-              if (rows.length > 0) next[sessionId] = rows;
-            });
-            return next;
-          });
-        }
+        // Do not eagerly download raw HR samples here. On Android, a handful of
+        // 5,000-row requests was enough to saturate the local API and leave every
+        // analysis button waiting behind optional telemetry. The compact session
+        // evidence already contains avg/max/climax HR and is sufficient to start
+        // every A&P report. Detailed timeline analysis remains available in the
+        // dedicated session views where one timeline is requested at a time.
       } catch (error) {
         if (!cancelled) {
           setLoadError(error?.message || "Could not load current profiler evidence.");
@@ -9509,7 +9491,7 @@ export default function Profiler() {
           <p className="text-sm text-muted-foreground mt-0.5">
             {sessionEvidenceLoading
               ? "Loading saved session evidence..."
-              : `${sessions.length} sessions · ${bodyExplorations.length} explorations · ${timelineLoading ? "loading HR timelines" : `${Object.keys(allTimelines).length} with HR data`} · ${summarizeMotionEvidenceCoverage(sessions).any} with motion evidence`}
+              : `${sessions.length} sessions · ${bodyExplorations.length} explorations · ${sessions.filter((session) => session.avg_hr != null || session.max_hr != null || session.hr_at_climax != null).length} with HR summaries · ${summarizeMotionEvidenceCoverage(sessions).any} with motion evidence`}
           </p>
         </div>
         <Button size="sm" variant="outline" onClick={refreshEvidence} disabled={refreshingEvidence} className="gap-1.5 text-xs">
