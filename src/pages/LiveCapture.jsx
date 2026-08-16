@@ -812,6 +812,23 @@ function isSarahDesktopRuntime() {
   return typeof window !== "undefined" && Boolean(window.sarahDesktop?.isDesktop);
 }
 
+function getLiveCaptureRelayUrl() {
+  const base = new URL(apiUrl("/live-capture/status"), window.location.href);
+  const apiUsesTls = base.protocol === "https:";
+  base.protocol = apiUsesTls ? "wss:" : "ws:";
+  if (apiUsesTls) {
+    // Tailscale Serve exposes the local 8765 relay at this path on the same
+    // trusted HTTPS origin. Port 8765 itself is intentionally not public.
+    base.pathname = "/hr-relay";
+  } else {
+    base.port = "8765";
+    base.pathname = "/";
+  }
+  base.search = "";
+  base.hash = "";
+  return base.toString();
+}
+
 async function getDirectH10Device({ preferSaved = false, silent = false } = {}) {
   const bluetooth = typeof navigator !== "undefined" ? navigator.bluetooth : undefined;
   if (!bluetooth) {
@@ -1724,6 +1741,7 @@ export default function LiveCapture() {
   const liveEventsRef = useRef(liveEvents);
   const directH10StatusRef = useRef(directH10Status);
   const directH10RelaySocketRef = useRef(null);
+  const directH10RelayPendingPayloadRef = useRef("");
   const directH10IntentionalDisconnectRef = useRef(false);
   const directH10ReconnectAttemptRef = useRef(0);
   const directH10ReconnectTimerRef = useRef(null);
@@ -2096,13 +2114,7 @@ export default function LiveCapture() {
       if (typeof WebSocket === "undefined") return;
       let relayUrl = "";
       try {
-        const base = new URL(apiUrl("/live-capture/status"), window.location.href);
-        base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
-        base.port = "8765";
-        base.pathname = "/";
-        base.search = "";
-        base.hash = "";
-        relayUrl = base.toString();
+        relayUrl = getLiveCaptureRelayUrl();
       } catch {
         return;
       }
@@ -2112,11 +2124,17 @@ export default function LiveCapture() {
       if (!socket || [WebSocket.CLOSING, WebSocket.CLOSED].includes(socket.readyState)) {
         socket = new WebSocket(relayUrl);
         directH10RelaySocketRef.current = socket;
+        socket.addEventListener("open", () => {
+          const pendingPayload = directH10RelayPendingPayloadRef.current;
+          directH10RelayPendingPayloadRef.current = "";
+          if (pendingPayload && socket.readyState === WebSocket.OPEN) socket.send(pendingPayload);
+        }, { once: true });
       }
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(payload);
-      } else if (socket.readyState === WebSocket.CONNECTING) {
-        socket.addEventListener("open", () => socket.send(payload), { once: true });
+      } else {
+        // Keep only the newest measurement while the phone's relay socket opens.
+        directH10RelayPendingPayloadRef.current = payload;
       }
     };
 
@@ -4315,13 +4333,7 @@ export default function LiveCapture() {
 
     let relayUrl;
     try {
-      const base = new URL(apiUrl("/live-capture/status"), window.location.href);
-      base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
-      base.port = "8765";
-      base.pathname = "/";
-      base.search = "";
-      base.hash = "";
-      relayUrl = base.toString();
+      relayUrl = getLiveCaptureRelayUrl();
     } catch {
       throw new Error("Sarah could not resolve the local OBS relay address.");
     }
@@ -4375,13 +4387,7 @@ export default function LiveCapture() {
     setEndingSession(true);
     try {
       let relayUrl;
-      const base = new URL(apiUrl("/live-capture/status"), window.location.href);
-      base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
-      base.port = "8765";
-      base.pathname = "/";
-      base.search = "";
-      base.hash = "";
-      relayUrl = base.toString();
+      relayUrl = getLiveCaptureRelayUrl();
 
       let socket = directH10RelaySocketRef.current;
       if (!socket || [WebSocket.CLOSING, WebSocket.CLOSED].includes(socket.readyState)) {
@@ -7928,7 +7934,7 @@ export default function LiveCapture() {
             directStatus={directH10Status}
             onChange={updateHrSourceSettings}
             onApply={() => applyHrSourceSettings()}
-            onConnectDirectH10={connectDirectH10}
+            onConnectDirectH10={() => connectDirectH10({ forcePicker: true })}
             onDisconnectDirectH10={disconnectDirectH10}
             onForgetDirectH10={forgetDirectH10}
           />
