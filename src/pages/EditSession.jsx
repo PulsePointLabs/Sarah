@@ -49,35 +49,70 @@ export default function EditSession() {
   const [converting, setConverting] = useState(false);
 
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState("");
   const [expanded, setExpanded] = useState(new Set(["info", "hr", "subjective", "methods"]));
   const [data, setData] = useState(null);
 
   useEffect(() => {
-    (async () => {
-      const [results, timelineRows] = await Promise.all([
-        base44.entities.Session.filter({ id }),
-        base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000),
-      ]);
-      if (results[0]) {
-        const session = results[0];
+    let cancelled = false;
+
+    const loadSession = async () => {
+      setLoading(true);
+      setLoadError("");
+      setTimelineError("");
+      let results = [];
+      try {
+        results = await base44.entities.Session.filter({ id }, undefined, undefined, undefined, { timeoutMs: 15000 });
+        if (cancelled) return;
+        if (results[0]) {
+          const session = { ...results[0] };
         // Auto-derive start_time from the session date if not already stored
-        if (!session.start_time && session.date) {
-          const etTime = new Date(session.date).toLocaleTimeString("en-US", {
-            timeZone: "America/New_York",
-            hour: "2-digit",
-            minute: "2-digit",
-            hour12: false,
-          });
-          session.start_time = etTime === "24:00" ? "00:00" : etTime;
+          if (!session.start_time && session.date) {
+            const etTime = new Date(session.date).toLocaleTimeString("en-US", {
+              timeZone: "America/New_York",
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: false,
+            });
+            session.start_time = etTime === "24:00" ? "00:00" : etTime;
+          }
+          setData(session);
         }
-        // Pre-populate _csv_rows from stored timeline so chart + marker UI shows on edit
-        if (timelineRows.length > 0) {
-          session._csv_rows = timelineRows;
-        }
-        setData(session);
+      } catch (error) {
+        if (!cancelled) setLoadError(error?.message || "Could not load this session.");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setLoading(false);
-    })();
+
+      if (cancelled || !results?.[0]) return;
+      setTimelineLoading(true);
+      try {
+        const timelineRows = await base44.entities.HeartRateTimeline.filter(
+          { session: id },
+          "time_offset_s",
+          10000,
+          undefined,
+          { timeoutMs: 30000 },
+        );
+        if (cancelled) return;
+        if (timelineRows.length > 0) {
+          setData((current) => current ? { ...current, _csv_rows: timelineRows } : current);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setTimelineError(error?.message || "Heart-rate telemetry could not be loaded. You can still edit and save the session details.");
+        }
+      } finally {
+        if (!cancelled) setTimelineLoading(false);
+      }
+    };
+
+    loadSession();
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   const toggleSection = (sectionId) => {
@@ -208,6 +243,10 @@ export default function EditSession() {
     );
   }
 
+  if (loadError) {
+    return <div className="p-6 text-center text-destructive">Could not load session: {loadError}</div>;
+  }
+
   if (!data) {
     return <div className="p-6 text-center text-muted-foreground">Session not found</div>;
   }
@@ -225,6 +264,16 @@ export default function EditSession() {
       />
 
       <div className="px-4 space-y-2 pb-6">
+        {timelineLoading && (
+          <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
+            Session details are ready. Heart-rate telemetry is loading in the background…
+          </div>
+        )}
+        {timelineError && (
+          <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-200">
+            {timelineError}
+          </div>
+        )}
         {!data.standalone_body_exploration && (
           <div className="rounded-xl border border-primary/30 bg-primary/10 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
