@@ -33,6 +33,8 @@ import { repairCharacterSplitParagraph, repairDecimalSpacing, reduceConsistencyP
 
 const TTS_EXPORT_FIRST_UNIT_MAX_CHARS = 140;
 const TTS_EXPORT_UNIT_MAX_CHARS = Math.min(TTS_CHUNK_TARGET_CHARS, 360);
+const TTS_LOCAL_PLAYBACK_FIRST_CHARS = 140;
+const TTS_LOCAL_PLAYBACK_CHARS = 280;
 const ttsExportStorageKey = (sessionId, title = "") =>
   `pulsepoint.ttsExport.${sessionId || String(title || "global").replace(/[^a-z0-9]+/gi, "_").slice(0, 80)}`;
 const ttsDownloadRecordKey = (sessionId, title = "") =>
@@ -124,6 +126,23 @@ function splitForExportProgressiveStart(text, isFirstSegment) {
   if (firstOffset < 0) return initialParts;
   const remainder = text.slice(firstOffset + first.length).trim();
   return [first, ...splitForExport(remainder)];
+}
+
+function splitForPlayback(text, maxChars) {
+  return splitIntoChunks(text, maxChars).flatMap((part) => (
+    part.length > maxChars ? splitLongExportPart(part, maxChars) : [part]
+  ));
+}
+
+function splitForPlaybackProgressiveStart(text, firstMaxChars, maxChars) {
+  if (firstMaxChars >= maxChars) return splitForPlayback(text, maxChars);
+  const initialParts = splitForPlayback(text, firstMaxChars);
+  const first = initialParts[0];
+  if (!first || initialParts.length === 1) return initialParts;
+  const firstOffset = text.indexOf(first);
+  if (firstOffset < 0) return initialParts;
+  const remainder = text.slice(firstOffset + first.length).trim();
+  return [first, ...splitForPlayback(remainder, maxChars)];
 }
 
 function countWords(text) {
@@ -235,7 +254,7 @@ function buildExportSpeechChunks(paragraphs, startIdx = 0, startSentenceIdx = 0)
   return chunks;
 }
 
-function buildReportPlaybackChunks(paragraphs, startIdx = 0, startSentenceIdx = 0) {
+export function buildReportPlaybackChunks(paragraphs, startIdx = 0, startSentenceIdx = 0, options = {}) {
   const sourceParagraphs = [];
   let globalWordCursor = 0;
   for (let paraIdx = startIdx; paraIdx < paragraphs.length; paraIdx += 1) {
@@ -253,9 +272,11 @@ function buildReportPlaybackChunks(paragraphs, startIdx = 0, startSentenceIdx = 
   if (!sourceParagraphs.length) return [];
 
   const reportText = sourceParagraphs.map((paragraph) => paragraph.text).join(" ");
+  const maxChars = Math.max(80, Number(options.maxChars) || TTS_CHUNK_TARGET_CHARS);
+  const firstMaxChars = Math.max(80, Math.min(maxChars, Number(options.firstMaxChars) || maxChars));
   const chunks = [];
   let chunkWordCursor = 0;
-  for (const text of splitIntoChunks(reportText, TTS_CHUNK_TARGET_CHARS).filter((part) => part.trim())) {
+  for (const text of splitForPlaybackProgressiveStart(reportText, firstMaxChars, maxChars).filter((part) => part.trim())) {
     const wordCount = countWords(text);
     const chunkWordEnd = chunkWordCursor + wordCount - 1;
     const parts = sourceParagraphs
@@ -869,7 +890,12 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     playbackEngineRef.current?.stop();
     sourceRef.current = null;
     currentChunkRef.current = null;
-    const speechChunks = buildReportPlaybackChunks(readableParagraphs, paraIdx, sentenceIdx);
+    const runtime = runtimeRef.current;
+    const localPlayback = runtime.ttsProvider === "local";
+    const speechChunks = buildReportPlaybackChunks(readableParagraphs, paraIdx, sentenceIdx, localPlayback ? {
+      firstMaxChars: TTS_LOCAL_PLAYBACK_FIRST_CHARS,
+      maxChars: TTS_LOCAL_PLAYBACK_CHARS,
+    } : undefined);
     if (!speechChunks.length) {
       setRequestStatus({ type: "error", msg: "No readable text was available for TTS on this section." });
       setBufferingPara(-1);
@@ -893,7 +919,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     saveReadingCheckpoint("playback_start", { force: true });
     setBufferingPara(paraIdx);
     if (!playbackEngineRef.current) playbackEngineRef.current = createPlaybackEngine();
-    playbackEngineRef.current.start(speechChunks, runtimeRef.current);
+    playbackEngineRef.current.start(speechChunks, runtime);
   };
 
   const handlePlayPause = async () => {

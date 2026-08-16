@@ -154,15 +154,31 @@ export function createReportChatTtsPlayback({
       return { src, fromCache: true, cacheKey };
     }
 
-    const response = await invokeTts({
-      text: prepareText(text),
-      voice: "nova",
-      model: runtime.model,
-      speed: runtime.speed,
-      instructions: runtime.supportsInstructions ? runtime.instructions : "",
-      format: runtime.format,
-      ttsProvider: runtime.ttsProvider,
-    }, { signal: controller.signal });
+    const requestTimeoutMs = runtime.ttsProvider === "local" ? 45000 : 90000;
+    let requestTimedOut = false;
+    const timeoutId = globalThis.setTimeout(() => {
+      requestTimedOut = true;
+      controller.abort();
+    }, requestTimeoutMs);
+    let response;
+    try {
+      response = await invokeTts({
+        text: prepareText(text),
+        voice: "nova",
+        model: runtime.model,
+        speed: runtime.speed,
+        instructions: runtime.supportsInstructions ? runtime.instructions : "",
+        format: runtime.format,
+        ttsProvider: runtime.ttsProvider,
+      }, { signal: controller.signal });
+    } catch (error) {
+      if (requestTimedOut) {
+        throw new Error(`Sarah audio timed out after ${Math.round(requestTimeoutMs / 1000)} seconds. The voice engine may be busy; tap Play to retry.`);
+      }
+      throw error;
+    } finally {
+      globalThis.clearTimeout(timeoutId);
+    }
     if (!currentRun(id) || controller.signal.aborted) throw abortError();
 
     const audio = response?.data?.audio;
