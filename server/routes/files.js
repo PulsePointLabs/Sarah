@@ -714,7 +714,7 @@ $owner.Dispose()
   try {
     const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-Command', script], {
       timeout: 120000,
-      windowsHide: false,
+      windowsHide: true,
     });
     const selectedPath = normalizeLocalVideoPath(stdout);
     if (!selectedPath) return res.json({ cancelled: true });

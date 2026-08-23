@@ -463,7 +463,10 @@ function timeStringToSeconds(value = '') {
 
 async function runFfmpegWithProgress(args, { durationSeconds, signal, onProgress }) {
   return new Promise((resolve, reject) => {
-    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('ffmpeg', args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     let stdout = '';
     let stderr = '';
     const progress = {};
