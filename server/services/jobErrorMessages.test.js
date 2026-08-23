@@ -48,6 +48,14 @@ test('friendlyJobErrorMessage maps provider overload to a retryable user-facing 
   );
 });
 
+test('friendlyJobErrorMessage collapses repeated fetch failures into a useful network message', () => {
+  const raw = 'fetch failed Generating chunk 1 of 48... fetch failed fetch failed';
+  assert.equal(
+    friendlyJobErrorMessage(new TypeError(raw), { defaultProvider: 'openai' }),
+    'The AI provider connection failed. Sarah kept any completed work; check the connection, then retry the failed stage.',
+  );
+});
+
 test('friendlyJobStatusMessage hides provider overload JSON in background task tray', () => {
   const job = {
     status: 'error',

@@ -194,6 +194,40 @@ export function pulseOxReadingsFromSession(session) {
   });
 }
 
+export function connectDuringPulseOxReadings(record, nearbyVitals = {}, contextLabel = "session") {
+  if (!record) return record;
+  const relationship = `during ${contextLabel}`;
+  const during = (nearbyVitals?.pulseOx || [])
+    .filter((reading) => reading?.relationship === relationship)
+    .map((reading) => ({
+      ...reading,
+      time_offset_s: Number.isFinite(Number(reading.time_offset_s))
+        ? Number(reading.time_offset_s)
+        : Number(reading.delta_minutes) * 60,
+    }));
+  if (!during.length) return record;
+
+  const readings = pulseOxReadingsFromSession({
+    pulse_ox_readings: [
+      ...pulseOxReadingsFromSession(record),
+      ...during,
+    ],
+  });
+  const spo2 = readings.map((reading) => Number(reading.spo2_percent)).filter(Number.isFinite);
+  const pulse = readings.map((reading) => Number(reading.pulse_bpm)).filter(Number.isFinite);
+  return {
+    ...record,
+    pulse_ox_enabled: true,
+    pulse_ox_source: readings.find((reading) => reading.source_app)?.source_app || record.pulse_ox_source || "",
+    pulse_ox_readings: readings,
+    latest_pulse_ox_reading: readings.at(-1) || null,
+    min_spo2_percent: spo2.length ? Math.min(...spo2) : null,
+    avg_spo2_percent: spo2.length ? Math.round(spo2.reduce((sum, value) => sum + value, 0) / spo2.length) : null,
+    avg_pulse_ox_pulse_bpm: pulse.length ? Math.round(pulse.reduce((sum, value) => sum + value, 0) / pulse.length) : null,
+    max_pulse_ox_pulse_bpm: pulse.length ? Math.max(...pulse) : null,
+  };
+}
+
 export function structuredSessionContextForAI(session) {
   const context = session?.session_context || {};
   if (!context || typeof context !== "object") return undefined;

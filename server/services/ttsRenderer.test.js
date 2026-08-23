@@ -57,7 +57,7 @@ test('silent chunk integrity failures are propagated and retried', () => {
   assert.equal(isRetryableTTSChunkFailure(error), true);
 });
 
-test('transient TTS fetch failures receive one bounded chunk retry', () => {
+test('transient TTS fetch failures are eligible for bounded chunk retries', () => {
   assert.equal(isRetryableTTSChunkFailure(new TypeError('fetch failed')), true);
   assert.equal(isRetryableTTSChunkFailure(new Error('HTTP 401 authentication failed')), false);
 });

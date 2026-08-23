@@ -15,7 +15,7 @@ import { normalizeJournalEntry } from "@/lib/journalEntry";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext, buildOptionalFirstNameToneCue, PERSONALIZED_ANATOMY_OUTPUT_RULE, SARAH_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
-import { loadLatestProfilerAnalysis, loadUserProfileWithProfilerResults, mergeProfilerResultsIntoProfile } from "@/lib/profileContext";
+import { loadLatestProfilerAnalysis, loadProfilerCoreUserProfile, loadUserProfileWithProfilerResults, mergeProfilerResultsIntoProfile } from "@/lib/profileContext";
 import { getBackgroundJob, listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { friendlyJobErrorMessage, providerErrorCategory } from "@/lib/jobErrorMessages";
 import { SESSION_CONTEXT_GROUNDING_RULE, sessionContextEvidenceText, sessionContextFactorLabels } from "@/lib/sessionContext";
@@ -1143,7 +1143,7 @@ function aiErrorMessage(error) {
 }
 
 async function saveClusterAnalysisPatch(patch, sessionCount) {
-  const existing = await base44.entities.SessionClusterAnalysis.list("-updated_date", 1);
+  const existing = await base44.entities.SessionClusterAnalysis.listFields(["id"], "-updated_date", 1);
   if (existing[0]) {
     await base44.entities.SessionClusterAnalysis.update(existing[0].id, {
       ...patch,
@@ -1391,7 +1391,7 @@ async function saveProfileResultWithArchive({
   result,
   sessionCount,
 }) {
-  const existing = await base44.entities.SessionClusterAnalysis.list("-updated_date", 1);
+  const existing = await base44.entities.SessionClusterAnalysis.listFields(["id", archiveKey], "-updated_date", 1);
   const storedResult = compactProfileReviewResultForStorage(result);
   const entry = buildProfileArchiveEntry(kind, label, storedResult);
   const archive = compactProfileArchiveForStorage(mergeProfileArchive(existing[0]?.[archiveKey], entry));
@@ -1782,13 +1782,17 @@ function detectNearClimaxEvents(rows, climaxOffsetS, preClimaxOffsetS, sessionEv
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
-function SectionCard({ icon, title, color, children, defaultCollapsed = false }) {
+function SectionCard({ icon, title, color, children, defaultCollapsed = false, onExpanded }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   return (
     <div className="bg-card rounded-xl border border-border p-4 space-y-3">
       <button
         className="w-full flex items-center justify-between gap-1.5 text-left"
-        onClick={() => setCollapsed(v => !v)}
+        onClick={() => setCollapsed((current) => {
+          const next = !current;
+          if (!next) onExpanded?.();
+          return next;
+        })}
       >
         <h3 className="text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5" style={{ color }}>
           {icon}{title}
@@ -4735,6 +4739,7 @@ function ProfileImageReviewPanel({
   const [jobStatus, setJobStatus] = useState(null);
   const [result, setResult] = useState(null);
   const [archive, setArchive] = useState([]);
+  const [savedReviewLoading, setSavedReviewLoading] = useState(false);
   const [error, setError] = useState("");
   const [recoverableBatchSet, setRecoverableBatchSet] = useState(null);
   const [latestAttemptStatus, setLatestAttemptStatus] = useState(null);
@@ -4757,6 +4762,7 @@ function ProfileImageReviewPanel({
     }
   });
   const autoRecoveredBatchSetRef = useRef("");
+  const savedReviewLoadStartedRef = useRef(false);
   const anatomyVideoJobStorageKey = `sarah_profiler_anatomy_video_job_${config.kind}`;
   const anatomyIndexReviewType = /pelvic|genital/i.test(config.kind) ? "pelvic_genital" : "head_to_toe";
 
@@ -4849,33 +4855,33 @@ function ProfileImageReviewPanel({
     persistProfilerUploadQueue(config.kind, images);
   }, [config.kind, images]);
 
-  useEffect(() => {
-    let cancelled = false;
-    loadLatestProfileReviewResultField(config.resultKey).then((resultRow) => {
-      if (cancelled) return;
+  const loadSavedReview = useCallback(async () => {
+    if (savedReviewLoadStartedRef.current) return;
+    savedReviewLoadStartedRef.current = true;
+    setSavedReviewLoading(true);
+    try {
+      const [resultRow, archiveRow] = await Promise.all([
+        loadLatestProfileReviewResultField(config.resultKey),
+        loadLatestProfileReviewResultField(config.archiveKey),
+      ]);
       if (resultRow?.[config.resultKey]) {
         const loadedResult = normalizeImageReviewResult(resultRow[config.resultKey], config) || resultRow[config.resultKey];
         setResult(loadedResult);
         if (loadedResult?._meta?.latest_attempt_status) setLatestAttemptStatus(loadedResult._meta.latest_attempt_status);
       }
-    }).catch((err) => {
-      console.warn(`${config.title} saved result load skipped:`, err);
-    });
-    loadLatestProfileReviewResultField(config.archiveKey).then((archiveRow) => {
-      if (cancelled) return;
       if (Array.isArray(archiveRow?.[config.archiveKey])) {
         setArchive(archiveRow[config.archiveKey].map((entry) => ({
           ...entry,
           result: normalizeImageReviewResult(entry.result, config) || entry.result,
         })));
       }
-    }).catch((err) => {
+    } catch (err) {
+      savedReviewLoadStartedRef.current = false;
       console.warn(`${config.title} saved result load skipped:`, err);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [config.archiveKey, config.resultKey]);
+    } finally {
+      setSavedReviewLoading(false);
+    }
+  }, [config]);
 
   useEffect(() => {
     const profileResult = userProfile?.[config.resultKey];
@@ -7357,6 +7363,7 @@ ANNOTATED IMAGE OUTPUT RULES:
         voice: "nova",
         model: runtime.model,
         speed: runtime.speed,
+        ttsProvider: runtime.ttsProvider,
         instructions: runtime.instructions,
         outputFormat: runtime.format,
         normalize: runtime.settings.normalizeExport,
@@ -7442,8 +7449,13 @@ ANNOTATED IMAGE OUTPUT RULES:
 
   return (
     <div id={panelId} className="scroll-mt-24">
-    <SectionCard icon={config.icon} title={config.title} color={config.color} defaultCollapsed={true}>
+    <SectionCard icon={config.icon} title={config.title} color={config.color} defaultCollapsed={true} onExpanded={loadSavedReview}>
       <div className="space-y-3">
+        {savedReviewLoading && (
+          <p className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+            Loading the saved review and run archive...
+          </p>
+        )}
         <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
           <p className="max-w-3xl text-xs leading-relaxed text-muted-foreground">{config.helper}</p>
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:shrink-0 sm:flex-wrap">
@@ -8060,7 +8072,7 @@ function AIProfilePanel({ sessions, userProfile, journals, evidenceLoading = fal
   const profileStale = isProfileAIContentStale(result, sessions);
 
   useEffect(() => {
-    base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
+    base44.entities.SessionClusterAnalysis.listFields(["result", "profile_result_archive"], "-updated_date", 1).then((rows) => {
       if (rows[0]?.result) setResult(rows[0].result);
       if (Array.isArray(rows[0]?.profile_result_archive)) setArchive(rows[0].profile_result_archive);
     });
@@ -8496,7 +8508,7 @@ function AnatomicalPhysiologicalProfilePanel({
   const profileStale = isProfileAIContentStale(result, sessions);
 
   useEffect(() => {
-    base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
+    base44.entities.SessionClusterAnalysis.listFields(["anatomical_physiological_profile_result", "anatomical_physiological_profile_archive"], "-updated_date", 1).then((rows) => {
       if (rows[0]?.anatomical_physiological_profile_result) {
         setResult(rows[0].anatomical_physiological_profile_result);
       }
@@ -8858,7 +8870,7 @@ function NearClimaxPanel({ sessions, allTimelines, userProfile, timelineLoading 
   const [error, setError] = useState("");
 
   useEffect(() => {
-    base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
+    base44.entities.SessionClusterAnalysis.listFields(["near_climax_result"], "-updated_date", 1).then((rows) => {
       if (rows[0]?.near_climax_result) {
         setResult(rows[0].near_climax_result);
       }
@@ -8964,7 +8976,7 @@ Be interpretive, insightful, and speak directly to the person. Reference specifi
     setResult(parsed);
 
     // Save to entity
-    const existing = await base44.entities.SessionClusterAnalysis.list("-updated_date", 1);
+    const existing = await base44.entities.SessionClusterAnalysis.listFields(["id"], "-updated_date", 1);
     if (existing[0]) {
       await base44.entities.SessionClusterAnalysis.update(existing[0].id, { near_climax_result: { ...parsed, _stats: stats, _session_events: sessionEvents } });
     } else {
@@ -9094,7 +9106,7 @@ function StimulationMethodsPanel({ sessions, userProfile, evidenceLoading = fals
   const [error, setError] = useState("");
 
   useEffect(() => {
-    base44.entities.SessionClusterAnalysis.list("-updated_date", 1).then((rows) => {
+    base44.entities.SessionClusterAnalysis.listFields(["stimulation_methods_result"], "-updated_date", 1).then((rows) => {
       if (rows[0]?.stimulation_methods_result) setResult(rows[0].stimulation_methods_result);
     });
   }, []);
@@ -9206,7 +9218,7 @@ Each section should be 2-4 sentences of flowing, TTS-ready prose.`,
     const parsed = { ...raw?.response ?? raw, _method_stats: methodStats.map(m => ({ method: m.method, session_count: m.session_count, climax_rate_pct: m.climax_rate_pct, avg_satisfaction: m.avg_satisfaction, avg_intensity: m.avg_intensity, discomfort_rate_pct: m.discomfort_rate_pct })) };
     setResult(parsed);
 
-    const existing = await base44.entities.SessionClusterAnalysis.list("-updated_date", 1);
+    const existing = await base44.entities.SessionClusterAnalysis.listFields(["id"], "-updated_date", 1);
     if (existing[0]) {
       await base44.entities.SessionClusterAnalysis.update(existing[0].id, { stimulation_methods_result: parsed });
     } else {
@@ -9431,19 +9443,28 @@ export default function Profiler() {
   useEffect(() => {
     let cancelled = false;
     setProfileContextLoading(true);
-    base44.auth.me()
+    loadProfilerCoreUserProfile()
       .then((profile) => {
-        if (cancelled) return null;
+        if (cancelled) return;
+        if (!profile) throw new Error("Saved profile context was unavailable.");
         setUserProfile(profile);
         setProfileContextLoading(false);
-        return loadLatestProfilerAnalysis().then((latestProfilerAnalysis) => {
-          if (!cancelled && latestProfilerAnalysis) {
-            setUserProfile((current) => mergeProfilerResultsIntoProfile(current || profile, latestProfilerAnalysis));
-          }
+        Promise.all([
+          base44.auth.meFields(["profile_chat_messages", "profile_qa_findings"]).catch(() => null),
+          loadLatestProfilerAnalysis(),
+        ]).then(([richProfile, latestProfilerAnalysis]) => {
+          if (cancelled) return;
+          setUserProfile((current) => mergeProfilerResultsIntoProfile({
+            ...(current || profile),
+            ...(richProfile || {}),
+          }, latestProfilerAnalysis));
         });
       })
-      .catch(() => {
-        if (!cancelled) setUserProfile(null);
+      .catch((error) => {
+        if (!cancelled) {
+          setUserProfile(null);
+          setLoadError((current) => current || `Saved profile context failed to load: ${error?.message || "Unknown error"}`);
+        }
       })
       .finally(() => {
         if (!cancelled) setProfileContextLoading(false);

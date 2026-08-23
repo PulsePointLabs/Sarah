@@ -52,6 +52,16 @@ function limitRows(rows, limit, skip = 0) {
   return rows.slice(start, start + lim);
 }
 
+function sampleRowsEvenly(rows, sampleLimit) {
+  const max = Math.max(0, Math.trunc(Number(sampleLimit) || 0));
+  if (!max || rows.length <= max) return rows;
+  if (max === 1) return [rows[0]];
+  const lastIndex = rows.length - 1;
+  return Array.from({ length: max }, (_, index) => (
+    rows[Math.round((index * lastIndex) / (max - 1))]
+  ));
+}
+
 function parseFields(value) {
   if (!value) return null;
   const fields = Array.isArray(value) ? value : String(value).split(',');
@@ -105,11 +115,12 @@ entitiesRouter.get('/:entity', (req, res) => {
 
 entitiesRouter.post('/:entity/filter', (req, res) => {
   const entity = normalizeEntityName(req.params.entity);
-  const { criteria = {}, sort, limit, skip, fields: rawFields } = req.body || {};
+  const { criteria = {}, sort, limit, skip, fields: rawFields, sampleLimit } = req.body || {};
   const fields = parseFields(rawFields);
   const indexedCandidates = listEntitiesByExactCriteria(entity, criteria);
   const rows = sortRows((indexedCandidates || listEntities(entity)).filter((r) => matches(r, criteria)), sort);
-  res.json(limitRows(rows, limit, skip).map((row) => projectEntity(publicEntity(entity, row), fields)));
+  const sampledRows = sampleRowsEvenly(rows, sampleLimit);
+  res.json(limitRows(sampledRows, limit, skip).map((row) => projectEntity(publicEntity(entity, row), fields)));
 });
 
 entitiesRouter.post('/:entity', (req, res) => {

@@ -46,6 +46,7 @@ function normalizeReading(reading = {}, kind, range, contextLabel = "exploration
     ...reading,
     kind,
     measured_at: new Date(measuredMs).toISOString(),
+    time_offset_s: Math.round(deltaMinutes * 60000) / 1000,
     delta_minutes: Math.round(deltaMinutes * 10) / 10,
     distance_minutes: Math.round(distanceMinutes * 10) / 10,
     relationship: during ? `during ${contextLabel}` : measuredMs < range.startMs ? `before ${contextLabel}` : `after ${contextLabel}`,

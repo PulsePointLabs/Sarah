@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiUrl, serverUrl } from "@/lib/mobileApiBase";
 import { LIVE_CUE_PROFILE_VERSION } from "@/lib/liveCuePhrases";
+import { loadTTSSettings } from "@/components/TTSButton";
 
 function flattenCueClips(phrases = {}) {
   const clips = [];
@@ -77,6 +78,7 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
     }
     setStatus({ phase: "preparing", message: "Preparing Sarah voice cues...", decoded: 0, total: requested.length });
     const ctx = await getAudioContext();
+    const ttsProvider = settings?.ttsProvider || loadTTSSettings().ttsProvider;
     const response = await fetch(apiUrl("/live-cues/prepare"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -86,6 +88,7 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
         model: settings?.model || "tts-1-hd",
         speed: settings?.speed || 1,
         format: settings?.format || "mp3",
+        ttsProvider,
         profileVersion: LIVE_CUE_PROFILE_VERSION,
       }),
     });

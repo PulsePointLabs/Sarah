@@ -1,11 +1,54 @@
-import { useCallback, useState, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import PageHeader from "../components/PageHeader";
 import VideoSyncPlayer from "../components/VideoSyncPlayer";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Activity, ArrowLeft, RefreshCw } from "lucide-react";
+import { Activity, AlertCircle, ArrowLeft, RefreshCw } from "lucide-react";
 import moment from "moment";
+
+const RECORD_PICKER_FIELDS = [
+  "date",
+  "start_time",
+  "duration_minutes",
+  "no_climax",
+  "title",
+  "exploration_type",
+];
+
+const VIDEO_SYNC_RECORD_FIELDS = [
+  ...RECORD_PICKER_FIELDS,
+  "event_timeline",
+  "linked_local_videos",
+  "motion_analysis_summary",
+  "pre_climax_offset_s",
+  "climax_offset_s",
+  "recovery_offset_s",
+];
+
+const VIDEO_SYNC_TIMELINE_FIELDS = [
+  "session",
+  "time_offset_s",
+  "hr",
+  "hr_smoothed",
+  "baseline_hr",
+  "elevated_delta",
+  "hr_source",
+  "rr_intervals_ms",
+  "hrv_rmssd_ms",
+  "hrv_sdnn_ms",
+  "hrv_quality",
+  "respiration_bpm",
+  "respiration_source",
+  "respiration_confidence",
+  "respiration_unavailable_reason",
+  "motion_class",
+  "motion_dynamic_rms_mg",
+  "motion_peak_dynamic_mg",
+  "multimodal_state",
+  "signal_confidence_level",
+  "signal_confidence_score",
+];
 
 export default function VideoPlayer() {
   const [searchParams] = useSearchParams();
@@ -17,31 +60,84 @@ export default function VideoPlayer() {
   const [timelineRows, setTimelineRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingSession, setLoadingSession] = useState(false);
+  const [recordListError, setRecordListError] = useState("");
+  const [recordLoadError, setRecordLoadError] = useState("");
+  const recordTypeRef = useRef(recordType);
 
-  const handleSelectRecord = useCallback(async (id, typeOverride = recordType) => {
+  useEffect(() => {
+    recordTypeRef.current = recordType;
+  }, [recordType]);
+
+  const handleSelectRecord = useCallback(async (id, typeOverride) => {
+    const selectedType = typeOverride || recordTypeRef.current;
     setSelectedId(id);
     setSelectedRecord(null);
     setTimelineRows([]);
+    setRecordLoadError("");
     if (!id) return;
     setLoadingSession(true);
-    const entity = typeOverride === "body_exploration" ? base44.entities.BodyExploration : base44.entities.Session;
-    const [recordList, rows] = await Promise.all([
-      entity.filter({ id }),
-      base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000),
-    ]);
-    setSelectedRecord(recordList[0] || null);
-    setTimelineRows(rows);
-    setLoadingSession(false);
-  }, [recordType]);
+    const entity = selectedType === "body_exploration" ? base44.entities.BodyExploration : base44.entities.Session;
+    try {
+      const [recordList, rows] = await Promise.all([
+        entity.filterFields(
+          { id },
+          VIDEO_SYNC_RECORD_FIELDS,
+          undefined,
+          1,
+          undefined,
+          { timeoutMs: 20000 },
+        ),
+        base44.entities.HeartRateTimeline.filterFieldsSampled(
+          { session: id },
+          VIDEO_SYNC_TIMELINE_FIELDS,
+          "time_offset_s",
+          3000,
+          10000,
+          undefined,
+          { timeoutMs: 30000 },
+        ).catch(() => []),
+      ]);
+      const record = recordList[0] || null;
+      setSelectedRecord(record);
+      setTimelineRows(rows);
+      if (!record) setRecordLoadError("That record is no longer available.");
+    } catch (error) {
+      console.error("Could not load the selected Video Sync record:", error);
+      setRecordLoadError(error?.message || "Could not load the selected record.");
+    } finally {
+      setLoadingSession(false);
+    }
+  }, []);
 
-  useEffect(() => {
-    Promise.all([
-      base44.entities.Session.list("-date", 200).catch(() => []),
-      base44.entities.BodyExploration.list("-date", 200).catch(() => []),
-    ]).then(([sessionRows, explorationRows]) => {
+  const loadRecordOptions = useCallback(async () => {
+    setLoading(true);
+    setRecordListError("");
+    try {
+      const [sessionResult, explorationResult] = await Promise.allSettled([
+        base44.entities.Session.listFields(RECORD_PICKER_FIELDS, "-date", 200, undefined, { timeoutMs: 15000 }),
+        base44.entities.BodyExploration.listFields(RECORD_PICKER_FIELDS, "-date", 200, undefined, { timeoutMs: 15000 }),
+      ]);
+      const sessionRows = sessionResult.status === "fulfilled" ? sessionResult.value : [];
+      const explorationRows = explorationResult.status === "fulfilled" ? explorationResult.value : [];
       setSessions(sessionRows);
       setExplorations(explorationRows);
+
+      const failures = [sessionResult, explorationResult].filter((result) => result.status === "rejected");
+      if (failures.length) {
+        console.error("Could not load one or more Video Sync record lists:", failures.map((result) => result.reason));
+        setRecordListError(
+          failures.length === 2
+            ? "Sarah could not load the Video Sync record list."
+            : "Sarah could not load one of the Video Sync record lists.",
+        );
+      }
+    } finally {
       setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadRecordOptions().then(() => {
       const requestedType = searchParams.get("type") === "body_exploration" || searchParams.get("exploration")
         ? "body_exploration"
         : "session";
@@ -51,7 +147,7 @@ export default function VideoPlayer() {
         handleSelectRecord(requestedId, requestedType);
       }
     });
-  }, [handleSelectRecord, searchParams]);
+  }, [handleSelectRecord, loadRecordOptions, searchParams]);
 
   const handleRecordTypeChange = (type) => {
     setRecordType(type);
@@ -134,12 +230,35 @@ export default function VideoPlayer() {
               </SelectContent>
             </Select>
           )}
+          {recordListError && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+              <span className="inline-flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                {recordListError}
+              </span>
+              <button
+                type="button"
+                onClick={loadRecordOptions}
+                disabled={loading}
+                className="rounded-md border border-amber-400/30 px-2.5 py-1 text-xs font-semibold hover:bg-amber-400/10 disabled:opacity-50"
+              >
+                Retry
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Loading state */}
         {loadingSession && (
           <div className="flex items-center justify-center h-32">
             <div className="w-6 h-6 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+          </div>
+        )}
+
+        {recordLoadError && !loadingSession && (
+          <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            {recordLoadError}
           </div>
         )}
 

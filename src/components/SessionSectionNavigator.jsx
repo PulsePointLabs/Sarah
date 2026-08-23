@@ -52,7 +52,13 @@ function SectionButtons({ sections, onSelect, activeSectionId = "" }) {
   );
 }
 
-export default function SessionSectionNavigator({ sections, onSelect, activeSectionId = "" }) {
+export default function SessionSectionNavigator({
+  sections,
+  onSelect,
+  activeSectionId = "",
+  title = "Session Sections",
+  description = "Move through this session without losing the thread.",
+}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -60,7 +66,7 @@ export default function SessionSectionNavigator({ sections, onSelect, activeSect
       <aside className="fixed right-4 top-28 z-30 hidden w-52 rounded-xl border border-border bg-card/95 p-3 shadow-xl backdrop-blur xl:block">
         <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary">
           <Bookmark className="h-3.5 w-3.5" />
-          Session Sections
+          {title}
         </div>
         <SectionButtons sections={sections} onSelect={onSelect} activeSectionId={activeSectionId} />
       </aside>
@@ -76,7 +82,7 @@ export default function SessionSectionNavigator({ sections, onSelect, activeSect
           <SheetContent side="bottom" className="max-h-[78vh] overflow-y-auto rounded-t-2xl px-4 pb-6 pt-5">
             <SheetHeader className="pr-8 text-left">
               <SheetTitle>Jump to section</SheetTitle>
-              <SheetDescription>Move through this session without losing the thread.</SheetDescription>
+              <SheetDescription>{description}</SheetDescription>
             </SheetHeader>
             <div className="mt-4">
               <SectionButtons sections={sections} onSelect={(section) => {

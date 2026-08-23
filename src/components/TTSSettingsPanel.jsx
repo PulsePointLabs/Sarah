@@ -113,6 +113,18 @@ export default function TTSSettingsPanel() {
     setDraftSettings((previous) => normalizeTTSSettings({ ...previous, ...patch }));
   };
 
+  const selectProvider = (ttsProvider) => {
+    stopSample();
+    const next = saveTTSSettings({ ...draftSettings, ttsProvider });
+    setSavedSettings(next);
+    setDraftSettings(next);
+    setMessage({
+      type: "ok",
+      text: `${ttsProvider === "openai" ? "OpenAI Nova" : "Local Sarah voice"} selected and applied everywhere.`,
+    });
+    if (ttsProvider === "local") refreshLocalHealth();
+  };
+
   const playSample = async () => {
     stopSample();
     setMessage(null);
@@ -182,17 +194,14 @@ export default function TTSSettingsPanel() {
               <div className="mt-2 flex flex-wrap gap-1.5">
                 <button
                   type="button"
-                  onClick={() => {
-                    updateDraft({ ttsProvider: "local" });
-                    refreshLocalHealth();
-                  }}
+                  onClick={() => selectProvider("local")}
                   className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors ${draftSettings.ttsProvider !== "openai" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"}`}
                 >
                   Local (Cloned Voice)
                 </button>
                 <button
                   type="button"
-                  onClick={() => updateDraft({ ttsProvider: "openai" })}
+                  onClick={() => selectProvider("openai")}
                   className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors ${draftSettings.ttsProvider === "openai" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"}`}
                 >
                   OpenAI (Original Nova)
@@ -203,7 +212,7 @@ export default function TTSSettingsPanel() {
                 <span className="text-muted-foreground">{localHealth.detail}</span>
                 <button type="button" onClick={refreshLocalHealth} className="font-semibold text-primary hover:underline">Recheck</button>
               </div>
-              <p className="mt-2 text-xs text-muted-foreground">Applies everywhere: Chat with Sarah, Read, and downloads. If the local worker is unavailable, Sarah uses Nova for that request instead of hanging.</p>
+              <p className="mt-2 text-xs text-muted-foreground">Voice-engine changes apply immediately everywhere: Chat with Sarah, Read, downloads, review videos, and Live Capture cues. Other calibration controls apply when Save is pressed. If the local worker is unavailable, Sarah uses Nova for that request instead of hanging.</p>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">

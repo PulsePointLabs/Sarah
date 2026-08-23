@@ -1571,6 +1571,7 @@ function matchAudioExport(record, request) {
   if (String(record.voice || 'nova') !== String(request.voice || 'nova')) return false;
   if (String(record.model || '') !== String(request.model || '')) return false;
   if (String(record.format || 'mp3') !== String(request.outputFormat || 'mp3')) return false;
+  if (String(record.tts_provider || 'openai') !== String(request.ttsProvider === 'openai' ? 'openai' : 'local')) return false;
   return Math.abs(Number(record.speed || 1) - Number(request.speed || 1)) < 0.005;
 }
 
@@ -1582,6 +1583,7 @@ async function resolveNarration(payload, { jobId, signal, onProgress }) {
     voice: payload.voice || 'nova',
     model: payload.model,
     speed: payload.speed,
+    ttsProvider: payload.ttsProvider,
     outputFormat: payload.outputFormat || 'mp3',
   };
 
@@ -1614,6 +1616,7 @@ async function resolveNarration(payload, { jobId, signal, onProgress }) {
     voice: request.voice,
     model: request.model,
     speed: request.speed,
+    ttsProvider: request.ttsProvider,
     instructions: payload.instructions || '',
     outputFormat: request.outputFormat,
     normalize: Boolean(payload.normalize),
@@ -1634,6 +1637,7 @@ async function resolveNarration(payload, { jobId, signal, onProgress }) {
     voice: rendered.voice || request.voice,
     speed: rendered.speed || request.speed,
     model: rendered.model || request.model,
+    tts_provider: request.ttsProvider === 'openai' ? 'openai' : 'local',
     format: rendered.format || request.outputFormat,
     render_version: rendered.render_version || 'tts_export_clinical_units_v3',
     silence_trim: rendered.silence_trim || null,
@@ -1757,6 +1761,7 @@ async function resolveManifestNarration(payload, manifest, { jobId, signal, onPr
       voice: payload.voice || 'nova',
       model: payload.model,
       speed: payload.speed,
+      ttsProvider: payload.ttsProvider,
       instructions: payload.instructions || '',
       outputFormat: sectionOutputFormat,
       normalize: Boolean(payload.normalize),
@@ -1809,6 +1814,7 @@ async function resolveManifestNarration(payload, manifest, { jobId, signal, onPr
     voice: payload.voice || 'nova',
     speed: payload.speed || null,
     model: payload.model || null,
+    tts_provider: payload.ttsProvider === 'openai' ? 'openai' : 'local',
     format: outputFormat,
     render_version: 'profile_anatomy_measured_sections_v1',
     size: stat.size,

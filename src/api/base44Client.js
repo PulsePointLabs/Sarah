@@ -163,6 +163,11 @@ function entityApi(entity) {
       body: JSON.stringify({ criteria, fields, sort, limit, skip }),
       ...options,
     }),
+    filterFieldsSampled: (criteria = {}, fields = [], sort, sampleLimit, limit, skip, options = {}) => request(`/entities/${entity}/filter`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ criteria, fields, sort, sampleLimit, limit, skip }),
+      ...options,
+    }),
     create: (data) => request(`/entities/${entity}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data || {}),
     }),
@@ -293,22 +298,32 @@ export const base44 = {
       },
       ConvertLocalVideoForPlayback: async ({ path, label = '', signal }) => {
         const startedAt = Date.now();
+        const waitForRetry = (delayMs) => new Promise((resolve, reject) => {
+          const timeoutId = window.setTimeout(resolve, delayMs);
+          signal?.addEventListener('abort', () => {
+            window.clearTimeout(timeoutId);
+            reject(new DOMException('Playback preparation cancelled.', 'AbortError'));
+          }, { once: true });
+        });
         while (Date.now() - startedAt < 2 * 60 * 60 * 1000) {
-          const result = await request('/files/local-video/playback-preview', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path, label }),
-            signal,
-          });
+          let result;
+          try {
+            result = await request('/files/local-video/playback-preview', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path, label }),
+              signal,
+              timeoutMs: 15000,
+            });
+          } catch (error) {
+            if (signal?.aborted || error?.name === 'AbortError') throw error;
+            if (Number(error?.status || 0) > 0 && Number(error.status) < 500) throw error;
+            await waitForRetry(1500);
+            continue;
+          }
           if (!result?.processing) return result;
           const delayMs = Math.max(500, Number(result.retry_after_ms) || 2000);
-          await new Promise((resolve, reject) => {
-            const timeoutId = window.setTimeout(resolve, delayMs);
-            signal?.addEventListener('abort', () => {
-              window.clearTimeout(timeoutId);
-              reject(new DOMException('Playback preparation cancelled.', 'AbortError'));
-            }, { once: true });
-          });
+          await waitForRetry(delayMs);
         }
         throw new Error('Timed out preparing the local video for browser playback.');
       },

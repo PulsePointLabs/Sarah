@@ -14,6 +14,9 @@ fs.mkdirSync(uploadDir, { recursive: true });
 const execFileAsync = promisify(execFile);
 const localPlaybackJobs = new Map();
 let localPlaybackQueue = Promise.resolve();
+// Bump when the preview encoding contract changes so stale previews are not reused.
+const LOCAL_PLAYBACK_PREVIEW_VERSION = 'seek-v2';
+const LOCAL_PLAYBACK_GOP_ARGS = ['-g', '30'];
 
 function queueLocalPlaybackConversion(task) {
   const queued = localPlaybackQueue.then(task, task);
@@ -50,6 +53,8 @@ async function convertLocalVideoPreview(sourcePath, partialPath) {
       '-preset', 'p4',
       '-cq', '25',
       '-b:v', '0',
+      ...LOCAL_PLAYBACK_GOP_ARGS,
+      '-forced-idr', '1',
       ...outputArgs,
     ], { captureOutput: false });
   } catch (hardwareError) {
@@ -61,6 +66,9 @@ async function convertLocalVideoPreview(sourcePath, partialPath) {
         '-preset', 'veryfast',
         '-crf', '24',
         '-threads', '2',
+        ...LOCAL_PLAYBACK_GOP_ARGS,
+        '-keyint_min', '30',
+        '-sc_threshold', '0',
         ...outputArgs,
       ], { captureOutput: false });
     } catch (softwareError) {
@@ -584,10 +592,26 @@ filesRouter.post('/local-video/playback-preview', async (req, res) => {
     // multi-gigabyte source every two seconds; stat data is enough for its cache key.
     const meta = await localVideoMetadata(requestedPath, { includeDuration: false });
     const label = slugifyFilePart(req.body?.label || meta.filename || 'local-video-preview');
-    const cacheKey = slugifyFilePart(`${meta.fingerprint}-${label}`);
+    const cacheKey = slugifyFilePart(`${LOCAL_PLAYBACK_PREVIEW_VERSION}-${meta.fingerprint}-${label}`);
     const filename = `local-playback-${cacheKey}.mp4`;
     const outputPath = path.join(uploadDir, filename);
     const partialPath = `${outputPath}.partial`;
+    const startConversion = () => {
+      const job = { status: 'processing', error: '' };
+      localPlaybackJobs.set(cacheKey, job);
+      queueLocalPlaybackConversion(async () => {
+        job.status = 'processing';
+        await fsp.unlink(partialPath).catch(() => {});
+        await convertLocalVideoPreview(meta.path, partialPath);
+        await fsp.rename(partialPath, outputPath);
+        localPlaybackJobs.delete(cacheKey);
+      }).catch((error) => {
+        job.status = 'failed';
+        job.error = error?.message || 'Could not convert local video for browser playback';
+        fsp.unlink(partialPath).catch(() => {});
+      });
+      return job;
+    };
 
     try {
       const existing = await fsp.stat(outputPath);
@@ -609,6 +633,31 @@ filesRouter.post('/local-video/playback-preview', async (req, res) => {
     }
 
     const existingJob = localPlaybackJobs.get(cacheKey);
+    const legacyCacheKey = slugifyFilePart(`${meta.fingerprint}-${label}`);
+    const legacyFilename = `local-playback-${legacyCacheKey}.mp4`;
+    const legacyOutputPath = path.join(uploadDir, legacyFilename);
+    try {
+      const legacy = await fsp.stat(legacyOutputPath);
+      if (legacy.isFile() && legacy.size > 0) {
+        if (!existingJob) startConversion();
+        return res.json({
+          ok: true,
+          cached: true,
+          fallback: true,
+          upgrading: !existingJob || existingJob.status === 'processing',
+          url: `/uploads/${legacyFilename}`,
+          file_url: `/uploads/${legacyFilename}`,
+          filename: legacyFilename,
+          mimeType: 'video/mp4',
+          size: legacy.size,
+          source_filename: meta.filename,
+          source_fingerprint: meta.fingerprint,
+        });
+      }
+    } catch {
+      // No older preview is available, so the client must wait for conversion.
+    }
+
     if (existingJob?.status === 'failed') {
       localPlaybackJobs.delete(cacheKey);
       return res.status(500).json({
@@ -624,19 +673,7 @@ filesRouter.post('/local-video/playback-preview', async (req, res) => {
       });
     }
 
-    const job = { status: 'processing', error: '' };
-    localPlaybackJobs.set(cacheKey, job);
-    queueLocalPlaybackConversion(async () => {
-      job.status = 'processing';
-      await fsp.unlink(partialPath).catch(() => {});
-      await convertLocalVideoPreview(meta.path, partialPath);
-      await fsp.rename(partialPath, outputPath);
-      localPlaybackJobs.delete(cacheKey);
-    }).catch((error) => {
-      job.status = 'failed';
-      job.error = error?.message || 'Could not convert local video for browser playback';
-      fsp.unlink(partialPath).catch(() => {});
-    });
+    startConversion();
 
     return res.status(202).json({
       ok: true,

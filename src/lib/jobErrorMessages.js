@@ -24,6 +24,11 @@ export function friendlyJobErrorMessage(error, { preserveContext = true, default
     return "Provider authentication failed. Check the configured API key before retrying.";
   }
   if (classified.category === "timeout") return "The AI provider timed out. Sarah preserved completed checkpoints.";
+  if (classified.category === "network_failure") {
+    return preserveContext
+      ? "The AI provider connection failed. Sarah kept any completed work; check the connection, then retry the failed stage."
+      : "The AI provider connection failed. Check the connection, then try again.";
+  }
   if (classified.category === "context_too_large") return "The AI request was too large. Reuse completed evidence and retry final synthesis with a smaller packet.";
   if (classified.category === "output_truncation") return "The AI response was cut off before it finished. Sarah preserved completed checkpoints.";
   if (classified.category === "malformed_structured_response") return "The AI response was not valid structured output. Sarah preserved completed checkpoints.";

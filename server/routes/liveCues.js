@@ -21,6 +21,7 @@ async function prepareInBatches(clips, settings, concurrency = 3) {
           model: clip.model || settings.model,
           speed: clip.speed || settings.speed,
           format: clip.format || settings.format,
+          ttsProvider: clip.ttsProvider || settings.ttsProvider,
           profileVersion: settings.profileVersion,
         });
       } catch (error) {
@@ -46,6 +47,7 @@ liveCuesRouter.post('/prepare', async (req, res) => {
     model = 'tts-1-hd',
     speed = 1,
     format = 'mp3',
+    ttsProvider = 'local',
     profileVersion,
   } = req.body || {};
   if (!Array.isArray(clips) || !clips.length) {
@@ -58,6 +60,7 @@ liveCuesRouter.post('/prepare', async (req, res) => {
       model,
       speed,
       format,
+      ttsProvider,
       profileVersion,
     });
     if (!prepared.length) {
@@ -73,7 +76,7 @@ liveCuesRouter.post('/prepare', async (req, res) => {
     });
   } catch (error) {
     const classified = classifyProviderError(error, {
-      provider: 'openai',
+      provider: ttsProvider === 'openai' ? 'openai' : 'local',
       requestStage: 'live_cue_audio_prepare',
     });
     res.status(error.status || 502).json({

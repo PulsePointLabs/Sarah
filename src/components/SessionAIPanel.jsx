@@ -933,6 +933,7 @@ export function SessionReviewVideoExportButton({
         voice: "nova",
         model: runtime.model,
         speed: runtime.speed,
+        ttsProvider: runtime.ttsProvider,
         instructions: runtime.instructions,
         outputFormat: runtime.format,
         normalize: runtime.settings.normalizeExport,

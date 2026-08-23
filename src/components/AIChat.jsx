@@ -248,6 +248,16 @@ function audioBase64ToObjectUrl(audio, mimeType) {
   return URL.createObjectURL(new Blob([bytes.buffer], { type: mimeType }));
 }
 
+function ttsPlaybackErrorMessage(error, ttsProvider) {
+  const raw = String(error?.data?.error || error?.message || "TTS request failed");
+  if (/rate.?limit|too many requests|\b429\b/i.test(raw)) {
+    return ttsProvider === "openai"
+      ? "OpenAI voice playback was rate-limited. Sarah's written response is already saved; retry the voice after the cooldown."
+      : "Local voice playback fell through to its OpenAI fallback, which was rate-limited. Recheck Local Voice, then retry. Sarah's written response is already saved.";
+  }
+  return `${ttsProvider === "openai" ? "OpenAI" : "Local"} voice playback failed: ${raw}`;
+}
+
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1060,6 +1070,7 @@ export default function AIChat({
     ttsRequestIdRef.current = requestId;
     setSpeakingIdx(null);
     setTtsStatus({ idx, phase: "preparing", message: "Preparing TTS request", startedAt: Date.now() });
+    let runtime = null;
     try {
       const cleanedText = cleanTextForSpeech(text);
       const chunks = splitIntoChunks(cleanedText, TTS_CHUNK_TARGET_CHARS).filter((chunk) => chunk.trim());
@@ -1067,7 +1078,7 @@ export default function AIChat({
         setCurrentTtsStatus(requestId, { idx, phase: "error", message: "Nothing to read", startedAt: Date.now() });
         return;
       }
-      const runtime = getTTSRuntime();
+      runtime = getTTSRuntime();
       const fetchPromises = new Map();
       const runtimeSignature = [
         runtime.cacheProfile,
@@ -1178,7 +1189,7 @@ export default function AIChat({
       setCurrentTtsStatus(requestId, {
         idx,
         phase: "error",
-        message: error?.data?.error || error?.message || "TTS request failed",
+        message: ttsPlaybackErrorMessage(error, runtime?.ttsProvider || getTTSRuntime().ttsProvider),
         startedAt: Date.now(),
       });
     }

@@ -24,6 +24,7 @@ telemetry-exports/
 /logs
 logs/
 .codex-runtime/
+.codex-backups/
 .codex-*.log
 dev-server.log
 *.log
@@ -38,10 +39,13 @@ node_modules
 dist
 dist-ssr
 desktop-release/
+release-artifacts/
 release/
 desktop/node-runtime/
 tmp/
 *.apk
+*.backup-*
+/patch_ttssettings.py
 *.local
 local-vision/.venv/
 local-vision/.venv-qwen/

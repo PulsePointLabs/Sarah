@@ -334,8 +334,11 @@ export function listLatestProfileReviewEvidenceSlices(resultKey, archiveKey, arc
 }
 
 export function listProcessingJobSummaries({ type = '', statuses = [], meta = {}, limit = 100, includeCleared = false } = {}) {
-  const clauses = ["entity = 'ProcessingJob'"];
-  const params = [];
+  const clauses = [];
+  const requestedLimit = Math.max(1, Math.min(500, Number(limit) || 100));
+  const params = includeCleared
+    ? []
+    : [Math.max(500, requestedLimit * 5)];
   if (type) {
     clauses.push("json_extract(data, '$.type') = ?");
     params.push(type);
@@ -353,8 +356,20 @@ export function listProcessingJobSummaries({ type = '', statuses = [], meta = {}
     clauses.push(`json_extract(data, '$.meta.${key}') = ?`);
     params.push(String(value));
   }
-  params.push(Math.max(1, Math.min(500, Number(limit) || 100)));
+  params.push(requestedLimit);
+  const recentJobsCte = includeCleared ? '' : `
+    WITH recent_jobs AS (
+      SELECT data, updated_date
+      FROM entities
+      WHERE entity = 'ProcessingJob'
+      ORDER BY updated_date DESC
+      LIMIT ?
+    )
+  `;
+  const source = includeCleared ? 'entities' : 'recent_jobs';
+  if (includeCleared) clauses.unshift("entity = 'ProcessingJob'");
   return db.prepare(`
+    ${recentJobsCte}
     SELECT json_set(
       json_remove(data, '$.result', '$.payload', '$.progress.completed_batch_results', '$.meta.reviewed_images'),
       '$.hasResult',
@@ -374,8 +389,8 @@ export function listProcessingJobSummaries({ type = '', statuses = [], meta = {}
         )
       END
     ) AS data
-    FROM entities
-    WHERE ${clauses.join(' AND ')}
+    FROM ${source}
+    ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
     ORDER BY updated_date DESC
     LIMIT ?
   `).all(...params).map((r) => safeJsonParse(r.data)).filter(Boolean);

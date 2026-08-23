@@ -1477,6 +1477,7 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
         voice: voiceRef.current,
         model: runtime.model,
         speed: runtime.speed,
+        ttsProvider: runtime.ttsProvider,
         instructions: runtime.instructions,
         outputFormat: exportFormat,
         normalize: runtime.settings.normalizeExport,

@@ -41,7 +41,7 @@ import SavedMotionSummaryCard from "../components/SavedMotionSummaryCard";
 import JournalRecorder from "../components/JournalRecorder";
 import MobileSessionVideoRenderPanel from "../components/MobileSessionVideoRenderPanel";
 import { journalHasStoryline, normalizeJournalEntry } from "@/lib/journalEntry";
-import { bloodPressureReadingsFromSession, pulseOxReadingsFromSession, sessionContextDisplayRows } from "@/lib/sessionContext";
+import { bloodPressureReadingsFromSession, connectDuringPulseOxReadings, pulseOxReadingsFromSession, sessionContextDisplayRows } from "@/lib/sessionContext";
 import { buildSessionKeyVideoClipDigest, buildSessionPhaseMarkerDigest, buildSessionVideoPassDigest, buildSessionVisualEvidenceDigest, getReviewedVisualClips, isVisualReviewSource, makeSessionVisualEvidenceEntry, normalizeSessionKeyVideoClips, normalizeSessionVisualEvidence, sessionEventsForCurrentPhaseMarkers } from "@/lib/visualEvidence";
 import { sanitizeSessionChatMessages } from "@/lib/chatFindings";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "../components/session-form/EventTimelineSection";
@@ -1059,6 +1059,10 @@ export default function SessionDetail() {
     () => selectNearbyVitalReadings(displaySession || {}, nearbyVitalImports, {}, "session"),
     [displaySession, nearbyVitalImports],
   );
+  const displaySessionWithNearbyPulseOx = useMemo(
+    () => connectDuringPulseOxReadings(displaySession, nearbyVitals, "session"),
+    [displaySession, nearbyVitals],
+  );
   const rawSessionEndSec = useMemo(() => getSessionMaxOffset(rawTimelineRows, rawEmgRows), [rawTimelineRows, rawEmgRows]);
   const trimOffsetToRaw = useCallback((value) => {
     const numericValue = readNumericTime(value);
@@ -1307,7 +1311,7 @@ export default function SessionDetail() {
   const sessionChatContext = useMemo(() => {
     if (!displaySession) return "";
     const physiologyEvidence = buildSessionChatPhysiologyEvidence({
-      session: displaySession,
+      session: displaySessionWithNearbyPulseOx,
       timelineRows,
       emgRows,
       nearbyVitals,
@@ -1346,7 +1350,7 @@ export default function SessionDetail() {
       : null,
     displaySession.notes ? `Session notes: ${displaySession.notes}` : null,
   ].filter(Boolean).join("\n");
-  }, [displaySession]);
+  }, [displaySession, displaySessionWithNearbyPulseOx, emgRows, nearbyVitals, timelineRows]);
 
   const sessionChatReviewContext = useMemo(() => {
     if (!displaySession) return "";
@@ -1360,12 +1364,12 @@ export default function SessionDetail() {
   const sessionChatPhysiologyEvidence = useMemo(() => {
     if (!displaySession) return null;
     return buildSessionChatPhysiologyEvidence({
-      session: displaySession,
+      session: displaySessionWithNearbyPulseOx,
       timelineRows,
       emgRows,
       nearbyVitals,
     });
-  }, [displaySession, emgRows, nearbyVitals, timelineRows]);
+  }, [displaySession, displaySessionWithNearbyPulseOx, emgRows, nearbyVitals, timelineRows]);
 
   useEffect(() => {
     const events = displaySession?.event_timeline || [];
@@ -1679,7 +1683,7 @@ export default function SessionDetail() {
     return <div className="p-6 text-center text-muted-foreground">Session not found</div>;
   }
 
-  const s = displaySession;
+  const s = displaySessionWithNearbyPulseOx;
   const cap = (str) => str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
   const contextRows = sessionContextDisplayRows(s);
   const bloodPressureReadings = bloodPressureReadingsFromSession(s);

@@ -86,6 +86,12 @@ function ttsExportConcurrency() {
   return Math.max(1, Math.min(4, Math.round(configured)));
 }
 
+function ttsExportChunkAttempts() {
+  const configured = Number(process.env.TTS_EXPORT_CHUNK_ATTEMPTS || 3);
+  if (!Number.isFinite(configured)) return 3;
+  return Math.max(1, Math.min(4, Math.round(configured)));
+}
+
 export function isRetryableTTSChunkFailure(error) {
   const message = String(error?.message || error || '');
   return /failed audio integrity check|too short for the requested text|fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(message);
@@ -214,7 +220,8 @@ export async function renderTTSExport(payload = {}, options = {}) {
     const chunkSilenceTrim = [];
     let completedChunks = 0;
     let nextChunkIndex = 0;
-    const renderChunk = async (i, integrityAttempt = 0) => {
+    const chunkAttempts = ttsExportChunkAttempts();
+    const renderChunk = async (i, attempt = 1) => {
       try {
       if (options.signal?.aborted) throw new Error('Cancelled');
       const chunk = normalizedChunks[i];
@@ -306,15 +313,15 @@ export async function renderTTSExport(payload = {}, options = {}) {
       });
       } catch (error) {
         const retryableFailure = isRetryableTTSChunkFailure(error);
-        if (retryableFailure && integrityAttempt < 1 && !options.signal?.aborted) {
+        if (retryableFailure && attempt < chunkAttempts && !options.signal?.aborted) {
           onProgress({
             phase: 'generating',
             current: completedChunks,
             total: normalizedChunks.length,
-            message: `Retrying chunk ${i + 1} of ${normalizedChunks.length}...`,
+            message: `Retrying chunk ${i + 1} of ${normalizedChunks.length} (attempt ${attempt + 1}/${chunkAttempts})...`,
           });
-          await wait(750);
-          return renderChunk(i, integrityAttempt + 1);
+          await wait(Math.min(750 * (2 ** (attempt - 1)), 3000));
+          return renderChunk(i, attempt + 1);
         }
         throw error;
       }

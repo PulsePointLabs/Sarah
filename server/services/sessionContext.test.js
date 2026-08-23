@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pulseOxReadingsFromSession, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from '../../src/lib/sessionContext.js';
+import { connectDuringPulseOxReadings, pulseOxReadingsFromSession, sessionContextEvidenceItems, sessionContextEvidenceText, structuredSessionContextForAI } from '../../src/lib/sessionContext.js';
 
 const session = {
   session_context: {
@@ -83,4 +83,20 @@ test('session context includes pulse oximetry as AI evidence', () => {
   assert.equal(context.pulse_ox_summary.samples, 3);
   assert.equal(context.pulse_ox_summary.min_spo2_percent, 93);
   assert.match(text, /Pulse oximetry: 3 samples, average SpO2 94%, minimum SpO2 93%, average pulse 89 bpm/i);
+});
+
+test('overlapping imported pulse oximetry connects to the session without persisting duplicate rows', () => {
+  const connected = connectDuringPulseOxReadings({ id: 'session-1' }, {
+    pulseOx: [
+      { id: 'before', relationship: 'before session', measured_at: '2026-08-15T09:48:59.000Z', time_offset_s: -1, spo2_percent: 97, pulse_bpm: 90 },
+      { id: 'during-1', relationship: 'during session', measured_at: '2026-08-15T09:49:00.000Z', time_offset_s: 0, spo2_percent: 96, pulse_bpm: 94, source_app: 'EMAY/shared CSV' },
+      { id: 'during-2', relationship: 'during session', measured_at: '2026-08-15T09:49:01.000Z', time_offset_s: 1, spo2_percent: 98, pulse_bpm: 96, source_app: 'EMAY/shared CSV' },
+    ],
+  });
+
+  assert.equal(connected.pulse_ox_readings.length, 2);
+  assert.equal(connected.latest_pulse_ox_reading.id, 'during-2');
+  assert.equal(connected.min_spo2_percent, 96);
+  assert.equal(connected.avg_spo2_percent, 97);
+  assert.equal(connected.avg_pulse_ox_pulse_bpm, 95);
 });

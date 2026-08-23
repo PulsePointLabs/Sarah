@@ -4,7 +4,7 @@ import path from 'node:path';
 import { liveCueAudioDir } from '../config.js';
 import { synthesizeTTSChunk } from './ttsCore.js';
 
-const CACHE_VERSION = 'live-cue-audio-v1';
+const CACHE_VERSION = 'live-cue-audio-v2';
 const SAFE_FORMATS = new Set(['mp3', 'wav', 'aac', 'opus', 'flac']);
 
 function sha(value) {
@@ -16,7 +16,7 @@ function safeFormat(value) {
   return SAFE_FORMATS.has(format) ? format : 'mp3';
 }
 
-export function liveCueAudioCacheKey({ text, voice = 'nova', model = 'tts-1-hd', speed = 1, format = 'mp3', profileVersion = CACHE_VERSION } = {}) {
+export function liveCueAudioCacheKey({ text, voice = 'nova', model = 'tts-1-hd', speed = 1, format = 'mp3', ttsProvider = 'local', profileVersion = CACHE_VERSION } = {}) {
   return sha(JSON.stringify({
     profileVersion,
     text: String(text || '').trim(),
@@ -24,6 +24,7 @@ export function liveCueAudioCacheKey({ text, voice = 'nova', model = 'tts-1-hd',
     model,
     speed: Number(speed || 1),
     format: safeFormat(format),
+    ttsProvider: ttsProvider === 'openai' ? 'openai' : 'local',
   })).slice(0, 32);
 }
 
@@ -65,6 +66,7 @@ export async function prepareLiveCueAudioClip(settings = {}) {
       model: settings.model || 'tts-1-hd',
       speed: settings.speed || 1,
       format: resolved.format,
+      ttsProvider: settings.ttsProvider === 'openai' ? 'openai' : 'local',
       instructions: '',
       meta: {
         kind: 'live_cue',
@@ -80,6 +82,7 @@ export async function prepareLiveCueAudioClip(settings = {}) {
       model: rendered.model,
       speed: rendered.speed,
       format: rendered.format,
+      provider: rendered.provider,
       renderedAt: new Date().toISOString(),
       latencyMs: rendered.latencyMs,
       retries: rendered.retries,

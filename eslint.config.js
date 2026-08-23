@@ -11,6 +11,8 @@ export default [
       "dist/**",
       "desktop-release/**",
       "release/**",
+      "release-artifacts/**",
+      "tmp/**",
       "node_modules/**",
     ],
   },

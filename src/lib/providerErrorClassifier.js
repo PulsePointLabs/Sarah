@@ -116,7 +116,7 @@ export function classifyProviderError(error, options = {}) {
   let nextAction = "review_error";
   let userMessage = "The AI provider failed. Sarah preserved any completed checkpoints.";
 
-  if (/insufficient_quota|credit balance is too low|insufficient credits?|no available credits?|billing balance|billing limit|spending limit|usage limit|quota exceeded|exceeded your current quota|purchase credits|plans\s*&\s*billing|account has no available credits/.test(haystack)) {
+  if (/insufficient_quota|credit balance is too low|insufficient credits?|no available credits?|no credits remaining|credit_balance_exhausted|billing balance|billing limit|spending limit|usage limit|quota exceeded|exceeded your current quota|purchase credits|plans\s*&\s*billing|account has no available credits/.test(haystack)) {
     category = "insufficient_credits";
     nextAction = "add_provider_credits_then_retry_final_only";
     userMessage = `${providerLabel(provider)} credits or quota are unavailable. Completed checkpoints were preserved; add credits or update billing, then retry only the failed stage.`;

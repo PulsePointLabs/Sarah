@@ -1,13 +1,18 @@
 import { base44 } from "@/api/base44Client";
 
 const PROFILER_RESULT_KEYS = [
-  "head_to_toe_image_review_result",
-  "head_to_toe_image_review_archive",
-  "pelvic_genital_image_review_result",
-  "pelvic_genital_image_review_archive",
   "anatomical_physiological_profile_result",
-  "anatomical_physiological_profile_archive",
 ];
+
+export const PROFILER_CORE_USER_FIELDS = [
+  "age", "anatomical_mechanical_profile", "arousal_notes", "arousal_response_style",
+  "biological_sex", "climax_sensitivity", "email", "first_name", "fitness_level",
+  "full_name", "height_cm", "latest_body_composition", "max_hr", "medications",
+  "preferred_stimulation", "recovery_hr_60s", "refractory_pattern", "resting_hr",
+  "typical_build_duration", "weight_kg",
+];
+
+const PROFILER_RICH_USER_FIELDS = ["profile_chat_messages", "profile_qa_findings"];
 
 const PROFILE_CONTEXT_TIMEOUT_MS = 6000;
 
@@ -45,11 +50,19 @@ export async function loadLatestProfilerAnalysis() {
   }
 }
 
+export async function loadProfilerCoreUserProfile() {
+  return timeoutToNull(base44.auth.meFields(PROFILER_CORE_USER_FIELDS));
+}
+
 export async function loadUserProfileWithProfilerResults() {
-  const [profile, latestProfilerAnalysis] = await Promise.all([
-    timeoutToNull(base44.auth.me()),
+  const [profile, richProfile, latestProfilerAnalysis] = await Promise.all([
+    loadProfilerCoreUserProfile(),
+    timeoutToNull(base44.auth.meFields(PROFILER_RICH_USER_FIELDS)),
     loadLatestProfilerAnalysis(),
   ]);
-  if (!profile && latestProfilerAnalysis) return { id: "local-user", ...latestProfilerAnalysis };
-  return mergeProfilerResultsIntoProfile(profile, latestProfilerAnalysis);
+  const mergedProfile = profile || richProfile
+    ? { ...(profile || { id: "local-user" }), ...(richProfile || {}) }
+    : null;
+  if (!mergedProfile && latestProfilerAnalysis) return { id: "local-user", ...latestProfilerAnalysis };
+  return mergeProfilerResultsIntoProfile(mergedProfile, latestProfilerAnalysis);
 }
