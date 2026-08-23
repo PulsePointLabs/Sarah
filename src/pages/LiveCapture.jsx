@@ -6993,7 +6993,7 @@ export default function LiveCapture() {
       label: "Recovery / Response",
       value: h10Recovery.available ? `-${fmtNumber(h10Recovery.currentDropBpm, 0)} bpm` : "Learning",
       helper: h10Recovery.available
-        ? `30 s ${h10Recovery.drop30Bpm != null ? `-${h10Recovery.drop30Bpm}` : "--"} · 60 s ${h10Recovery.drop60Bpm != null ? `-${h10Recovery.drop60Bpm}` : "--"} · latency ${h10Latency.available ? `${h10Latency.medianSeconds}s` : "learning"}`
+        ? `30 s ${h10Recovery.drop30Bpm != null ? `-${h10Recovery.drop30Bpm}` : "--"} · 60 s ${h10Recovery.drop60Bpm != null ? `-${h10Recovery.drop60Bpm}` : "--"} · latency ${h10Latency.available ? `${h10Latency.medianSeconds}s (${h10Latency.sampleCount}/${h10Latency.evaluatedCount || h10Latency.sampleCount} marks)` : "learning"}`
         : `Response latency ${h10Latency.available ? `${h10Latency.medianSeconds}s median` : `needs ${Math.max(0, 2 - Number(h10Latency.sampleCount || 0))} more marked response${Math.max(0, 2 - Number(h10Latency.sampleCount || 0)) === 1 ? "" : "s"}`}`,
       tone: h10Recovery.available ? "good" : "neutral",
     },

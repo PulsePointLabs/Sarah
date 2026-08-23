@@ -169,3 +169,20 @@ test("stable periodic chest acceleration can produce a conservative rate", () =>
   assert.equal(result.respiration.available, true);
   assert.ok(result.respiration.bpm >= 13 && result.respiration.bpm <= 17);
 });
+
+test("marked-response latency reports qualifying and evaluated event counts", () => {
+  const hrHistory = Array.from({ length: 101 }, (_unused, second) => ({
+    ts: second * 1000,
+    hr: second === 25 || second === 70 ? 85 : 80,
+  }));
+  const result = deriveH10MultimodalSnapshot({
+    hrHistory,
+    eventHistory: [{ timestampMs: 20_000 }, { timestampMs: 60_000 }],
+    currentHr: 80,
+    nowMs: 100_000,
+  });
+  assert.equal(result.responseLatency.available, true);
+  assert.equal(result.responseLatency.sampleCount, 2);
+  assert.equal(result.responseLatency.evaluatedCount, 2);
+  assert.equal(result.responseLatency.medianSeconds, 10);
+});

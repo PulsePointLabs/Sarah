@@ -677,16 +677,23 @@ function responseLatency(hrHistory = [], eventHistory = []) {
   const points = (hrHistory || []).filter((point) => Number.isFinite(finite(point?.ts)) && Number.isFinite(finite(point?.hr)));
   if (!events.length || points.length < 10) return { available: false, sampleCount: 0 };
   const lags = [];
+  let evaluatedCount = 0;
   events.slice(-12).forEach((event) => {
     const before = points.filter((point) => point.ts >= event.timestampMs - 15_000 && point.ts <= event.timestampMs);
     const after = points.filter((point) => point.ts > event.timestampMs && point.ts <= event.timestampMs + 45_000);
     const baseline = mean(before.map((point) => point.hr));
     if (baseline == null || after.length < 3) return;
+    evaluatedCount += 1;
     const crossing = after.find((point) => point.hr >= baseline + 4);
     if (crossing) lags.push((crossing.ts - event.timestampMs) / 1000);
   });
-  if (lags.length < 2) return { available: false, sampleCount: lags.length };
-  return { available: true, medianSeconds: round(percentile(lags, 0.5), 0), sampleCount: lags.length };
+  if (lags.length < 2) return { available: false, sampleCount: lags.length, evaluatedCount };
+  return {
+    available: true,
+    medianSeconds: round(percentile(lags, 0.5), 0),
+    sampleCount: lags.length,
+    evaluatedCount,
+  };
 }
 
 function autonomicState({ motion, respiration, recovery, currentHr, baselineHr, hrvQuality }) {

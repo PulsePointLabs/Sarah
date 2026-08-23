@@ -580,6 +580,8 @@ async function createDirectH10RecordingInternal(recording = {}, reason = 'obs_re
     'recovery_drop_60_bpm',
     'recovery_drop_90_bpm',
     'response_latency_seconds',
+    'response_latency_sample_count',
+    'response_latency_evaluated_count',
   ].join(',') + '\n';
   await fs.writeFile(filepath, header, 'utf8');
   directH10Recording = {
@@ -691,6 +693,8 @@ async function appendDirectH10TelemetryRow(telemetry) {
     csvEscape(recovery.drop60Bpm ?? ''),
     csvEscape(recovery.drop90Bpm ?? ''),
     csvEscape(latency.medianSeconds ?? ''),
+    csvEscape(latency.sampleCount ?? ''),
+    csvEscape(latency.evaluatedCount ?? ''),
   ].join(',') + '\n';
   await fs.appendFile(directH10Recording.filepath, row, 'utf8');
   directH10Recording.lastEpochMs = epochMs;
@@ -806,6 +810,8 @@ function parseHrRows(text) {
       recovery_drop_60_bpm: cleanNumber(row.recovery_drop_60_bpm),
       recovery_drop_90_bpm: cleanNumber(row.recovery_drop_90_bpm),
       response_latency_seconds: cleanNumber(row.response_latency_seconds),
+      response_latency_sample_count: cleanNumber(row.response_latency_sample_count),
+      response_latency_evaluated_count: cleanNumber(row.response_latency_evaluated_count),
     }))
     .filter((row) => row.hr != null);
 }
@@ -1494,6 +1500,8 @@ function hrCsvTextFromRows(rows = []) {
     'recovery_drop_60_bpm',
     'recovery_drop_90_bpm',
     'response_latency_seconds',
+    'response_latency_sample_count',
+    'response_latency_evaluated_count',
   ].join(',');
   const body = rows.map((row) => ([
     csvEscape(row.timestamp),
@@ -1533,6 +1541,8 @@ function hrCsvTextFromRows(rows = []) {
     csvEscape(row.recovery_drop_60_bpm),
     csvEscape(row.recovery_drop_90_bpm),
     csvEscape(row.response_latency_seconds),
+    csvEscape(row.response_latency_sample_count),
+    csvEscape(row.response_latency_evaluated_count),
   ].join(','))).join('\n');
   return `${header}\n${body}${body ? '\n' : ''}`;
 }

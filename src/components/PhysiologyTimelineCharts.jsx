@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { Activity, Crosshair, Gauge, HeartPulse, Radio, ShieldCheck, Sparkles, Wind } from "lucide-react";
+import { summarizeRecoveryResponse } from "@/lib/recoveryResponse";
 import {
   CartesianGrid,
   Line,
@@ -90,6 +91,14 @@ function Metric({ icon: Icon, label, value, detail, tone = "text-primary" }) {
 function formatTime(seconds) {
   const total = Math.max(0, Math.round(Number(seconds) || 0));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function formatRecoveryDrop(value) {
+  const parsed = numberOrNull(value);
+  if (parsed == null) return "--";
+  if (parsed > 0) return `↓ ${parsed.toFixed(0)} bpm`;
+  if (parsed < 0) return `↑ ${Math.abs(parsed).toFixed(0)} bpm`;
+  return "0 bpm";
 }
 
 function TimelineChart({ rows, lines, inspectionTime, onInspectionTimeChange, rightAxis = false }) {
@@ -182,11 +191,20 @@ export default function PhysiologyTimelineCharts({ session = {}, timelineRows = 
   const hasResponseLatency = chartRows.some((row) => row.response_latency_seconds != null);
   const hasSignal = chartRows.some((row) => row.signal_confidence_score != null && row.signal_confidence_level !== "unavailable");
   const hasPosition = chartRows.some((row) => row.orientation_change_degrees != null);
+  const recoveryResponse = useMemo(
+    () => summarizeRecoveryResponse(timelineRows, session),
+    [session, timelineRows],
+  );
   const usableHrvRows = timelineRows.filter((row) => ["moderate", "high"].includes(String(row.hrv_quality || "").toLowerCase()));
   const hrvMedian = median(usableHrvRows.map((row) => row.hrv_rmssd_ms));
   const respirationAverage = average(timelineRows.map((row) => Number(row.respiration_bpm) > 0 ? row.respiration_bpm : null));
   const motionPeak = maximum(timelineRows.map((row) => Number(row.motion_peak_dynamic_mg) > 0 ? row.motion_peak_dynamic_mg : null));
-  const recoveryPeak = maximum(timelineRows.flatMap((row) => [row.recovery_drop_30_bpm, row.recovery_drop_60_bpm, row.recovery_drop_90_bpm]));
+  const coherentRecovery = recoveryResponse.recovery;
+  const markedResponse = recoveryResponse.response;
+  const recoveryHeadlineEntry = coherentRecovery
+    ? [[90, coherentRecovery.drops.seconds90], [60, coherentRecovery.drops.seconds60], [30, coherentRecovery.drops.seconds30]]
+      .find(([, value]) => Number.isFinite(value))
+    : null;
   const unavailableReason = !hasMotion && !hasRespiration
     ? "No H10 PMD sensor samples were saved"
     : [...timelineRows].reverse().find((row) => row.respiration_unavailable_reason)?.respiration_unavailable_reason;
@@ -235,7 +253,7 @@ export default function PhysiologyTimelineCharts({ session = {}, timelineRows = 
         <Metric icon={HeartPulse} label="Median RMSSD" value={hrvMedian != null ? `${hrvMedian.toFixed(1)} ms` : "--"} detail={hrvMedian != null ? "RR-derived autonomic variability" : "No usable RR-derived HRV saved"} tone="text-teal-500" />
         <Metric icon={Wind} label="Respiration" value={respirationAverage != null ? `${respirationAverage.toFixed(1)}/min` : "--"} detail={hasRespiration ? `${breathHolds} possible hold samples` : unavailableReason || "Chest sensor stream was not recorded"} tone="text-sky-500" />
         <Metric icon={Activity} label="Chest Motion" value={motionPeak != null ? `${motionPeak.toFixed(0)} mg` : "--"} detail={hasMotion ? "Peak dynamic H10 acceleration" : "H10 accelerometer was unavailable"} tone="text-amber-500" />
-        <Metric icon={Gauge} label="Recovery Drop" value={recoveryPeak != null ? `${recoveryPeak.toFixed(0)} bpm` : "--"} detail={hasRecovery ? "Largest saved 30/60/90-second drop" : "No sustained recovery window saved"} tone="text-rose-500" />
+        <Metric icon={Gauge} label={recoveryHeadlineEntry ? `Recovery at ${recoveryHeadlineEntry[0]}s` : "Recovery Drop"} value={recoveryHeadlineEntry ? formatRecoveryDrop(recoveryHeadlineEntry[1]) : "--"} detail={coherentRecovery ? `From one saved rolling peak at ${formatTime(coherentRecovery.peakTimeS)}` : "No sustained recovery window saved"} tone="text-rose-500" />
       </div>
 
       <details className="rounded-xl border border-primary/20 bg-primary/5 p-3">
@@ -343,9 +361,92 @@ export default function PhysiologyTimelineCharts({ session = {}, timelineRows = 
       )}
 
       {(hasRecovery || hasResponseLatency) && (
-        <details className="rounded-xl border border-border bg-muted/10 p-3">
+        <details open className="rounded-xl border border-border bg-muted/10 p-3">
           <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Recovery & Response</summary>
-          <p className="mt-1 text-[10px] text-muted-foreground">Saved post-peak heart-rate drops and marked-response latency.</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            Two related but different measurements: how HR moved after a local rolling peak, and how quickly HR rises followed your manually marked events.
+          </p>
+
+          <div className="mt-3 grid gap-2 grid-cols-2 lg:grid-cols-4">
+            <Metric
+              icon={Gauge}
+              label="30-second drop"
+              value={formatRecoveryDrop(coherentRecovery?.drops?.seconds30)}
+              detail="Peak HR minus HR near 30 seconds; a down arrow means HR was lower."
+              tone="text-rose-500"
+            />
+            <Metric
+              icon={Gauge}
+              label="60-second drop"
+              value={formatRecoveryDrop(coherentRecovery?.drops?.seconds60)}
+              detail="Same rolling-peak episode, measured near 60 seconds."
+              tone="text-violet-500"
+            />
+            <Metric
+              icon={Gauge}
+              label="90-second drop"
+              value={formatRecoveryDrop(coherentRecovery?.drops?.seconds90)}
+              detail="Shows whether the fall continued, leveled off, or rebounded later."
+              tone="text-teal-500"
+            />
+            <Metric
+              icon={Activity}
+              label="Marked-response latency"
+              value={markedResponse ? `${markedResponse.medianSeconds.toFixed(0)} sec` : "--"}
+              detail={markedResponse
+                ? markedResponse.qualifyingCount != null
+                  ? `${markedResponse.qualifyingCount.toFixed(0)} detectable HR rises${markedResponse.evaluatedCount != null ? ` among ${markedResponse.evaluatedCount.toFixed(0)} evaluated marks` : ""}`
+                  : "Median saved by an older capture; event counts were not recorded"
+                : "Needs at least two marked events followed by a detectable HR rise"}
+              tone="text-amber-500"
+            />
+          </div>
+
+          {coherentRecovery && (
+            <div className="mt-3 rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-foreground">{coherentRecovery.trajectory?.label || "Saved recovery episode"}</p>
+                <span className="rounded-full border border-border bg-background/70 px-2 py-1 font-mono text-[10px] text-muted-foreground">
+                  peak {coherentRecovery.peakHr != null ? `${coherentRecovery.peakHr.toFixed(0)} bpm` : "HR unavailable"} at {formatTime(coherentRecovery.peakTimeS)}
+                </span>
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{coherentRecovery.trajectory?.detail}</p>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
+                <span>Snapshot saved at {formatTime(coherentRecovery.timeS)}</span>
+                <span>{coherentRecovery.sampleCount.toLocaleString()} HR samples in the evaluated peak-to-snapshot window</span>
+                <span>{coherentRecovery.signalConfidenceMedian != null ? `${coherentRecovery.signalConfidenceMedian.toFixed(0)}% median multimodal signal confidence` : "No saved multimodal confidence score"}</span>
+                {coherentRecovery.phaseAnchor && (
+                  <span>
+                    Peak was {Math.abs(coherentRecovery.phaseAnchor.deltaSeconds).toFixed(0)} sec {coherentRecovery.phaseAnchor.deltaSeconds >= 0 ? "after" : "before"} the {coherentRecovery.phaseAnchor.label}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            <div className="rounded-lg border border-border bg-background/60 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-rose-500">What “recovery” means here</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Sarah looks back three minutes from each saved moment, finds the highest HR, then compares HR near 30, 60, and 90 seconds after that peak. This is a within-recording trend—not a graded exercise-test score and not, by itself, a cardiovascular diagnosis.
+              </p>
+              <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+                {isBodyExploration
+                  ? "For Body Exploration, the anchor is simply a local cardiovascular high point; Sarah does not assume climax or arousal caused it."
+                  : "For Session Details, a nearby phase marker is shown when available, but temporal proximity does not prove the marker caused the HR change."}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border bg-background/60 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-500">What “response latency” means here</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                For each manual mark, Sarah averages HR during the prior 15 seconds and looks up to 45 seconds afterward for the first rise of at least 4 bpm. The displayed value is the median of at least two detectable rises.
+              </p>
+              <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+                It measures an HR association after marked events—not conscious reaction time. Marks without a qualifying HR rise are not included in the median; future captures now save both qualifying and evaluated event counts.
+              </p>
+            </div>
+          </div>
+
           <TimelineChart
             rows={chartRows}
             inspectionTime={inspectionTime}
@@ -360,6 +461,9 @@ export default function PhysiologyTimelineCharts({ session = {}, timelineRows = 
               ...(hasResponseLatency ? [{ key: "response_latency_seconds", label: "Response latency sec", color: "#f59e0b", axis: hasRecovery ? "right" : "left", dash: "4 2" }] : []),
             ]}
           />
+          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+            The lines are saved rolling calculations over time. The cards above deliberately use one most-complete recent episode so 30/60/90-second values are not cherry-picked from unrelated peaks.
+          </p>
         </details>
       )}
 

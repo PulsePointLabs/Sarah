@@ -250,6 +250,8 @@ function buildPhysiologyEvidence({ record = {}, timelineRows = [], emgRows = [],
         at_90_seconds: stats(values(sortedRows, "recovery_drop_90_bpm")),
       },
       response_latency_seconds: stats(values(sortedRows, "response_latency_seconds", (value) => value >= 0)),
+      response_latency_qualifying_events: stats(values(sortedRows, "response_latency_sample_count", (value) => value >= 0)),
+      response_latency_evaluated_events: stats(values(sortedRows, "response_latency_evaluated_count", (value) => value >= 0)),
       emg: summarizeEmg(emgRows),
     },
     high_resolution_trajectory: {
