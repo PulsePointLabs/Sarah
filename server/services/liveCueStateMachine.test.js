@@ -7,6 +7,7 @@ import {
 import {
   pickCuePhrase,
   resolveCuePhysiologyBucket,
+  resolveLiveCuePhraseBank,
 } from "../../src/lib/liveCuePhrases.js";
 
 const plateauPhrases = {
@@ -96,7 +97,7 @@ test("plateau encouragement respects its anti-chatter cooldown", () => {
   assert.equal(repeated.suppressed[0]?.reason, "cue_cooldown");
 });
 
-test("adaptive phrase selection follows current physiology and alternates within its pair", () => {
+test("adaptive phrase selection follows current physiology and rotates through the full bank", () => {
   const phrases = {
     climax_possible: [
       "rising one", "rising two",
@@ -121,6 +122,22 @@ test("adaptive phrase selection follows current physiology and alternates within
   assert.equal(pickCuePhrase(phrases, "climax_possible", 1, rising), "rising two");
   assert.equal(pickCuePhrase(phrases, "climax_possible", 0, intense), "intense one");
   assert.equal(pickCuePhrase(phrases, "climax_possible", 0, autonomic), "autonomic one");
+  const steady = { prediction: { nearClimax: 50, recentSlope: 0 }, sample: {} };
+  const fullRotation = Array.from({ length: 8 }, (_, sequence) => pickCuePhrase(phrases, "climax_possible", sequence, steady));
+  assert.equal(new Set(fullRotation).size, 8);
+  assert.equal(pickCuePhrase(phrases, "climax_possible", 8, steady), fullRotation[0]);
+});
+
+test("every Sarah cue state resolves at least eight unique variations", () => {
+  const resolved = resolveLiveCuePhraseBank({ style: "sarah_soft" });
+  for (const [cueType, phrases] of Object.entries(resolved.phrases)) {
+    if (cueType === "body_relaxation") continue;
+    assert.equal(phrases.length, 8, `${cueType} should have eight phrases`);
+    assert.equal(new Set(phrases).size, 8, `${cueType} phrases should be unique`);
+  }
+  const body = resolveLiveCuePhraseBank({}, { captureKind: "body_exploration" });
+  assert.equal(body.phrases.body_relaxation.length, 8);
+  assert.equal(new Set(body.phrases.body_relaxation).size, 8);
 });
 
 test("physiology routing identifies recovery and steady states without inventing evidence", () => {

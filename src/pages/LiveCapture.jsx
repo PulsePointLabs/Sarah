@@ -514,16 +514,16 @@ function readHowlChannelIntensity(telemetry, channel) {
   const channelState = telemetry?.channel_state || telemetry?.channelState || telemetry?.channels || null;
   if (channelState && typeof channelState === "object") {
     const direct = channelState[normalized] || channelState[normalized.toUpperCase()];
-    const value = readNumber(direct?.intensity, direct?.level, direct?.power);
+    const value = [direct?.intensity, direct?.level, direct?.power].map(finiteTelemetryNumber).find((candidate) => candidate != null);
     if (value != null) return value;
   }
   if (normalized === "b" || normalized === "1") {
-    const value = readNumber(telemetry?.power_b, telemetry?.raw?.options?.power_b);
+    const value = [telemetry?.power_b, telemetry?.raw?.options?.power_b].map(finiteTelemetryNumber).find((candidate) => candidate != null);
     if (value != null) return value;
   }
-  const channelAValue = readNumber(telemetry?.power_a, telemetry?.raw?.options?.power_a);
+  const channelAValue = [telemetry?.power_a, telemetry?.raw?.options?.power_a].map(finiteTelemetryNumber).find((candidate) => candidate != null);
   if (channelAValue != null) return channelAValue;
-  return readNumber(telemetry?.intensity, telemetry?.power_level);
+  return [telemetry?.intensity, telemetry?.power_level].map(finiteTelemetryNumber).find((candidate) => candidate != null) ?? null;
 }
 
 function readHowlChannelText(telemetry, channel, field) {
@@ -550,32 +550,46 @@ function readHowlActivityDisplayName(activityName) {
 }
 
 function buildHowlSessionEvent({
-  action,
-  timeS,
+  action = "",
+  timeS = 0,
   channel = "a",
   intensity = null,
   requestedIntensity = null,
+  intensityA = null,
+  intensityB = null,
   activityName = "",
   activityDisplayName = "",
   waveform = "",
   frequencyHz = null,
   source = "howl_manual_control",
   reason = "",
+  controller = null,
 } = {}) {
   const normalizedAction = String(action || "").trim().toLowerCase();
   const normalizedChannel = String(channel || "a").trim().toLowerCase() || "a";
   const modeLabel = String(activityDisplayName || readHowlActivityDisplayName(activityName) || activityName || waveform || "").trim();
-  const roundedIntensity = Number.isFinite(Number(intensity)) ? Math.round(Number(intensity)) : null;
-  const roundedRequested = Number.isFinite(Number(requestedIntensity)) ? Math.round(Number(requestedIntensity)) : null;
-  const roundedFrequency = Number.isFinite(Number(frequencyHz)) ? Math.round(Number(frequencyHz)) : null;
+  const intensityValue = finiteTelemetryNumber(intensity);
+  const requestedValue = finiteTelemetryNumber(requestedIntensity);
+  const intensityAValue = finiteTelemetryNumber(intensityA);
+  const intensityBValue = finiteTelemetryNumber(intensityB);
+  const frequencyValue = finiteTelemetryNumber(frequencyHz);
+  const roundedIntensity = intensityValue == null ? null : Math.round(intensityValue);
+  const roundedRequested = requestedValue == null ? null : Math.round(requestedValue);
+  const roundedIntensityA = intensityAValue == null ? null : Math.round(intensityAValue);
+  const roundedIntensityB = intensityBValue == null ? null : Math.round(intensityBValue);
+  const roundedFrequency = frequencyValue == null ? null : Number(frequencyValue.toFixed(2));
 
   let note = "";
   let label = "Howl command";
   let tags = ["howl", "device_control"];
-  if (normalizedAction === "load_activity") {
+  if (["load_activity", "set_mode"].includes(normalizedAction)) {
     note = `Howl mode changed to ${modeLabel || "new activity"}${roundedFrequency != null ? ` at ${roundedFrequency} Hz` : ""}.`;
     label = "Howl mode changed";
     tags = [...tags, "mode_change"];
+  } else if (normalizedAction === "set_frequency") {
+    note = `Howl frequency changed${roundedFrequency != null ? ` to ${roundedFrequency} Hz` : ""} on ${normalizedChannel === "all" ? "all channels" : `channel ${normalizedChannel.toUpperCase()}`}.`;
+    label = "Howl frequency changed";
+    tags = [...tags, "frequency_change"];
   } else if (["set_power", "set_intensity", "increment_power", "decrement_power"].includes(normalizedAction)) {
     const channelLabel = normalizedChannel === "all" ? "all channels" : `channel ${normalizedChannel.toUpperCase()}`;
     if (roundedIntensity != null && roundedRequested != null && roundedRequested !== roundedIntensity) {
@@ -588,6 +602,10 @@ function buildHowlSessionEvent({
     if (modeLabel) note = `${note.slice(0, -1)} while ${modeLabel} was loaded.`;
     label = "Howl intensity adjusted";
     tags = [...tags, "intensity_change"];
+  } else if (["emergency_stop", "stop", "mute"].includes(normalizedAction)) {
+    note = "Howl output stopped and intensity set to 0 on all channels.";
+    label = "Howl stopped";
+    tags = [...tags, "intensity_change", "emergency_stop"];
   } else {
     return null;
   }
@@ -605,14 +623,73 @@ function buildHowlSessionEvent({
       action: normalizedAction,
       channel: normalizedChannel,
       intensity: roundedIntensity,
+      intensity_a: roundedIntensityA,
+      intensity_b: roundedIntensityB,
       requested_intensity: roundedRequested,
       activity_name: activityName || null,
       activity_display_name: modeLabel || null,
       waveform: waveform || null,
       frequency_hz: roundedFrequency,
       reason: reason || null,
+      controller: controller || null,
     },
   };
+}
+
+function readHowlChannelNumber(telemetry, channel, field) {
+  const normalized = String(channel || "a").toLowerCase();
+  const channelState = telemetry?.channel_state || telemetry?.channelState || telemetry?.channels || null;
+  if (channelState && typeof channelState === "object") {
+    const direct = channelState[normalized] || channelState[normalized.toUpperCase()];
+    const value = finiteTelemetryNumber(direct?.[field]);
+    if (value != null) return value;
+  }
+  return finiteTelemetryNumber(telemetry?.[field]);
+}
+
+function finiteTelemetryNumber(value) {
+  if (value == null || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function heldTelemetryValue(history = [], key, current = null) {
+  const currentValue = finiteTelemetryNumber(current);
+  if (currentValue != null) return currentValue;
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const value = finiteTelemetryNumber(history[index]?.[key]);
+    if (value != null) return value;
+  }
+  return null;
+}
+
+function telemetryTrendValues(history = [], key, current = null, limit = 42) {
+  const values = history.slice(-limit).map((point) => finiteTelemetryNumber(point?.[key])).filter((value) => value != null);
+  const currentValue = finiteTelemetryNumber(current);
+  if (currentValue != null && values[values.length - 1] !== currentValue) values.push(currentValue);
+  return values.slice(-limit);
+}
+
+function appliedHowlIntensity(data, channel, fallback = null) {
+  const normalizedChannel = String(channel || "a").toLowerCase();
+  const commandChannel = String(data?.command?.channel || "a").toLowerCase();
+  const target = data?.dispatch?.targetPower;
+  if (target && typeof target === "object") {
+    if (normalizedChannel === "all") {
+      const levels = [finiteTelemetryNumber(target.a), finiteTelemetryNumber(target.b)].filter((value) => value != null);
+      return levels.length ? Math.max(...levels) : finiteTelemetryNumber(fallback);
+    }
+    return [target[normalizedChannel], target[normalizedChannel.toUpperCase()], fallback]
+      .map(finiteTelemetryNumber)
+      .find((value) => value != null) ?? null;
+  }
+  const channelTarget = commandChannel === "all" || commandChannel === normalizedChannel ? target : null;
+  return [
+    channelTarget,
+    normalizedChannel === "b" ? data?.dispatch?.howl?.power_b : data?.dispatch?.howl?.power_a,
+    data?.command?.intensity,
+    fallback,
+  ].map(finiteTelemetryNumber).find((value) => value != null) ?? null;
 }
 
 function buildHowlWavePoints(type = "", amplitude = 50) {
@@ -1339,6 +1416,7 @@ function makeTelemetryPoint(hrTelemetry, emgTelemetry, options = {}) {
     hrvSdnn: readNumber(hrv.sdnnMs, hrTelemetry?.hrv_sdnn_ms),
     hrvPnn50: readNumber(hrv.pnn50, hrTelemetry?.hrv_pnn50),
     hrvQuality: hrv.quality || hrTelemetry?.hrv_quality || null,
+    rrCount: readNumber(hrTelemetry?.quality?.rrCount, hrv.sampleCount),
     motionClass: multimodal.motion?.class || null,
     motionRms: readNumber(multimodal.motion?.dynamicRmsMilliG),
     respirationBpm: readNumber(multimodal.respiration?.bpm),
@@ -1361,12 +1439,31 @@ function StatusDot({ active }) {
   );
 }
 
-function MetricCard({ icon, label, value, helper, active, level, large = false, display = false, beatPulse = 0, valueClassName = "" }) {
+function MetricSparkline({ values = [], color = "hsl(var(--primary))" }) {
+  const clean = values.map(finiteTelemetryNumber).filter((value) => value != null);
+  if (clean.length < 2) return null;
+  const min = Math.min(...clean);
+  const max = Math.max(...clean);
+  const spread = Math.max(1, max - min);
+  const points = clean.map((value, index) => {
+    const x = (index / Math.max(1, clean.length - 1)) * 100;
+    const y = 31 - ((value - min) / spread) * 27;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return (
+    <svg viewBox="0 0 100 34" preserveAspectRatio="none" className="h-9 w-24 shrink-0 opacity-90" aria-hidden="true">
+      <line x1="0" y1="31" x2="100" y2="31" stroke="hsl(var(--border))" strokeWidth="1" />
+      <polyline points={points} fill="none" stroke={color} strokeWidth="2.5" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function MetricCard({ icon, label, value, helper, active, level, trendValues = [], large = false, display = false, beatPulse = 0, valueClassName = "" }) {
   const hasLevel = Number.isFinite(Number(level));
   const color = hasLevel ? levelColor(level) : null;
   return (
     <div
-      className={`telemetry-metric-card relative min-w-0 overflow-hidden rounded-xl border transition-shadow ${display ? "min-h-0 p-2.5" : large ? "min-h-[10.5rem] p-5" : "min-h-[8rem] p-4"} ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"} ${beatPulse ? "shadow-[0_0_30px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
+      className={`telemetry-metric-card relative min-w-0 overflow-hidden rounded-xl border transition-shadow ${display ? "min-h-0 p-2.5 pb-4" : large ? "min-h-[10.5rem] p-5 pb-6" : "min-h-[8rem] p-4 pb-5"} ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"} ${beatPulse ? "shadow-[0_0_30px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
       style={hasLevel ? { borderColor: `${color}9a`, background: `linear-gradient(135deg, ${color}38, ${color}10 55%, hsl(var(--card)) 100%)` } : undefined}
     >
       {beatPulse ? <span key={`metric-beat-${label}-${beatPulse}`} className="pointer-events-none absolute right-4 top-4 h-5 w-5 rounded-full bg-rose-400/45 animate-ping" /> : null}
@@ -1383,7 +1480,10 @@ function MetricCard({ icon, label, value, helper, active, level, large = false, 
         </div>
         <StatusDot active={active || hasLevel} />
       </div>
-      <p className={`mt-1.5 min-h-[1em] min-w-0 whitespace-nowrap font-bold leading-none tracking-normal text-foreground tabular-nums ${display ? "text-[clamp(2rem,2.7vw,3.5rem)]" : large ? "text-5xl" : "text-3xl"} ${valueClassName}`}>{value}</p>
+      <div className="mt-1.5 flex min-w-0 items-end justify-between gap-3">
+        <p className={`min-h-[1em] min-w-0 whitespace-nowrap font-bold leading-none tracking-normal text-foreground tabular-nums ${display ? "text-[clamp(2rem,2.7vw,3.5rem)]" : large ? "text-5xl" : "text-3xl"} ${valueClassName}`}>{value}</p>
+        {display && <MetricSparkline values={trendValues} color={color || "hsl(var(--primary))"} />}
+      </div>
       {helper && <p className={`mt-1 text-muted-foreground ${display ? "line-clamp-1 text-xs" : large ? "min-h-[2.5rem] text-sm" : "min-h-[2.5rem] text-xs"}`}>{helper}</p>}
     </div>
   );
@@ -1574,7 +1674,10 @@ function LiveHealthPill({ label, value, helper, tone = "neutral" }) {
 
 export default function LiveCapture() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const focusView = searchParams.get("display") === "focus";
+  const displayViewMode = searchParams.get("display");
+  const mediaFocusView = displayViewMode === "media";
+  const telemetryFocusView = displayViewMode === "focus" || displayViewMode === "telemetry";
+  const focusView = mediaFocusView || telemetryFocusView;
   const { toast } = useToast();
   const liveCaptureWakeLockRef = useRef(null);
   const [status, setStatus] = useState(null);
@@ -1588,6 +1691,7 @@ export default function LiveCapture() {
   const [telemetryHistory, setTelemetryHistory] = useState([]);
   const [liveEvents, setLiveEvents] = useState([]);
   const [phaseMarkers, setPhaseMarkers] = useState([]);
+  const [nearClimaxEpisodeCount, setNearClimaxEpisodeCount] = useState(0);
   const [hrSourceSettings, setHrSourceSettings] = useState(() => readHrSourceSettings());
   const [hrSourceSaving, setHrSourceSaving] = useState(false);
   const [hrSourceError, setHrSourceError] = useState("");
@@ -1718,6 +1822,7 @@ export default function LiveCapture() {
   const lastHeartbeatIntervalMsRef = useRef(0);
   const heartbeatPredictionTimerRef = useRef(null);
   const lastPhaseMarkerRef = useRef({ label: "", ts: 0 });
+  const nearClimaxEpisodeRef = useRef({ active: false, candidateSince: 0, belowSince: 0, count: 0 });
   const mediaVideoRef = useRef(null);
   const mediaPlayerRef = useRef(null);
   const mediaInputRef = useRef(null);
@@ -1739,6 +1844,7 @@ export default function LiveCapture() {
   const telemetryHistoryRef = useRef(telemetryHistory);
   const appendTelemetryPointRef = useRef(() => {});
   const liveEventsRef = useRef(liveEvents);
+  const liveEventSaveQueueRef = useRef(Promise.resolve());
   const directH10StatusRef = useRef(directH10Status);
   const directH10RelaySocketRef = useRef(null);
   const directH10RelayPendingPayloadRef = useRef("");
@@ -1970,7 +2076,8 @@ export default function LiveCapture() {
         mode: liveStatus.howl?.player?.filename || liveStatus.howl?.player?.title || null,
         raw: liveStatus.raw || null,
       } : null;
-      setHowlTelemetry(liveHowlTelemetry || recent?.samples?.[0] || null);
+      const resolvedTelemetry = liveHowlTelemetry || recent?.samples?.[0] || null;
+      setHowlTelemetry(resolvedTelemetry);
       setHowlCapabilities(capabilities);
       if (liveStatus?.ok) {
         setHowlConnectionTest({ status: "ok", message: "Howl /status is live. Sarah is synced to the current Howl state." });
@@ -1991,8 +2098,10 @@ export default function LiveCapture() {
         setHowlCommandHistory(commandsPayload.commands);
       }
       setHowlError("");
+      return resolvedTelemetry;
     } catch (error) {
       setHowlError(error?.message || "Howl telemetry is unavailable.");
+      return null;
     } finally {
       if (!quiet) setHowlRefreshing(false);
     }
@@ -2336,26 +2445,34 @@ export default function LiveCapture() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Howl command was rejected.");
       setHowlControlStatus(data.dispatch?.message || "Howl command queued.");
-      await refreshHowlTelemetry({ quiet: true });
+      const refreshedHowlTelemetry = await refreshHowlTelemetry({ quiet: true });
       const eventSource = String(extra.reason || "").startsWith("voice_")
         ? "howl_voice_control"
         : String(extra.reason || "").startsWith("sarah_auto_")
           ? "howl_auto_control"
           : "howl_manual_control";
-      const sessionEvent = eventSource === "howl_auto_control"
-        ? null
-        : buildHowlSessionEvent({
+      const eventChannel = data?.command?.channel ?? extra.channel ?? howlCommandForm.channel;
+      const appliedIntensityA = appliedHowlIntensity(data, "a", readHowlChannelIntensity(refreshedHowlTelemetry, "a"));
+      const appliedIntensityB = appliedHowlIntensity(data, "b", readHowlChannelIntensity(refreshedHowlTelemetry, "b"));
+      const sessionEvent = buildHowlSessionEvent({
           action,
           timeS: getCurrentSessionTime(),
-          channel: extra.channel ?? howlCommandForm.channel,
-          intensity: extra.intensity,
-          requestedIntensity: extra.requestedIntensity,
-          activityName: extra.activityName ?? howlCommandForm.mode,
-          activityDisplayName: extra.activityDisplayName,
-          waveform: extra.waveform,
-          frequencyHz: extra.frequency_hz,
+          channel: eventChannel,
+          intensity: appliedHowlIntensity(
+            data,
+            eventChannel,
+            readHowlChannelIntensity(refreshedHowlTelemetry, eventChannel) ?? extra.intensity,
+          ),
+          intensityA: appliedIntensityA,
+          intensityB: appliedIntensityB,
+          requestedIntensity: data?.command?.intensity ?? extra.requestedIntensity ?? extra.intensity,
+          activityName: data?.command?.activity_name ?? data?.command?.mode ?? extra.activityName ?? extra.mode ?? howlCommandForm.mode,
+          activityDisplayName: data?.command?.activity_display_name ?? extra.activityDisplayName,
+          waveform: data?.command?.waveform ?? extra.waveform ?? readHowlChannelText(refreshedHowlTelemetry, eventChannel, "waveform"),
+          frequencyHz: data?.command?.frequency_hz ?? extra.frequency_hz ?? extra.frequencyHz ?? readHowlChannelNumber(refreshedHowlTelemetry, eventChannel, "frequency_hz"),
           source: eventSource,
           reason: extra.reason,
+          controller: extra.controller,
         });
       if (sessionEvent) {
         appendLiveSessionEventsRef.current?.(sessionEvent)?.catch?.(() => {});
@@ -2397,6 +2514,18 @@ export default function LiveCapture() {
       setHowlAutoStatus("Emergency stop sent. Automatic control is disarmed.");
       setHowlControlStatus(data.dispatch?.message || "Emergency stop queued.");
       await refreshHowlTelemetry({ quiet: true });
+      const sessionEvent = buildHowlSessionEvent({
+        action: "emergency_stop",
+        timeS: getCurrentSessionTime(),
+        channel: "all",
+        intensity: 0,
+        requestedIntensity: 0,
+        intensityA: 0,
+        intensityB: 0,
+        source: "howl_emergency_stop",
+        reason: "manual_live_capture_emergency_stop",
+      });
+      if (sessionEvent) appendLiveSessionEventsRef.current?.(sessionEvent)?.catch?.(() => {});
       return data;
     } catch (error) {
       setHowlError(error?.message || "Unable to send emergency stop.");
@@ -2404,7 +2533,7 @@ export default function LiveCapture() {
     } finally {
       setHowlControlBusy("");
     }
-  }, [activeSessionDoc?.id, liveSession?.activeSessionId, refreshHowlTelemetry]);
+  }, [activeSessionDoc?.id, getCurrentSessionTime, liveSession?.activeSessionId, refreshHowlTelemetry]);
 
   const runHowlVoiceCommand = useCallback(async (voiceCommand) => {
     if (!voiceCommand) return false;
@@ -3448,6 +3577,60 @@ export default function LiveCapture() {
   const recordingActive = Boolean(recordingTransportActive && !recordingPaused);
 
   useEffect(() => {
+    const tracker = nearClimaxEpisodeRef.current;
+    if (!recordingTransportActive) {
+      if (tracker.count) setNearClimaxEpisodeCount(0);
+      nearClimaxEpisodeRef.current = { active: false, candidateSince: 0, belowSince: 0, count: 0 };
+      return;
+    }
+    if (recordingPaused) return;
+
+    const now = Date.now();
+    const highProbability = Boolean(
+      prediction.nearClimax >= 68
+      && prediction.buildEligibleForNearClimax
+      && prediction.confirmationCount >= 2
+      && prediction.controllerConfidence >= 50
+      && prediction.multimodalTrusted
+    );
+    if (highProbability) {
+      tracker.belowSince = 0;
+      if (tracker.active) return;
+      if (!tracker.candidateSince) tracker.candidateSince = now;
+      if (now - tracker.candidateSince < 5000) return;
+      tracker.active = true;
+      tracker.candidateSince = 0;
+      tracker.count += 1;
+      setNearClimaxEpisodeCount(tracker.count);
+      appendLiveSessionEventsRef.current?.({
+        id: `near_climax_episode_${tracker.count}_${Math.round(getCurrentSessionTime())}`,
+        time_s: getCurrentSessionTime(),
+        label: `High-probability near-climax episode ${tracker.count}`,
+        note: `Sustained near-climax watch reached ${prediction.nearClimax}% with ${prediction.confirmationCount} confirming signal families.`,
+        category: ["physiology", "phase_detection"],
+        annotation_tags: ["near_climax", "high_probability", "trend_detected"],
+        source: "live_climax_prediction",
+        created_at: new Date().toISOString(),
+        prediction: {
+          near_climax: prediction.nearClimax,
+          controller_confidence: prediction.controllerConfidence,
+          confirmation_count: prediction.confirmationCount,
+          reason: prediction.reason,
+        },
+      })?.catch?.(() => {});
+      return;
+    }
+
+    tracker.candidateSince = 0;
+    if (!tracker.active || prediction.nearClimax >= 52) return;
+    if (!tracker.belowSince) tracker.belowSince = now;
+    if (now - tracker.belowSince >= 8000) {
+      tracker.active = false;
+      tracker.belowSince = 0;
+    }
+  }, [getCurrentSessionTime, prediction, recordingPaused, recordingTransportActive]);
+
+  useEffect(() => {
     let cancelled = false;
 
     const releaseWakeLock = async () => {
@@ -3517,7 +3700,9 @@ export default function LiveCapture() {
     () => phaseMarkers.filter((marker) => marker.chartTime && visiblePhaseMarkerTimes.has(marker.chartTime)),
     [phaseMarkers, visiblePhaseMarkerTimes],
   );
-  const currentHrLevel = hrLevelPercent(hrTelemetry?.currentHr, hrTelemetry?.baselineHr);
+  const heldCurrentHr = heldTelemetryValue(telemetryHistory, "hr", hrTelemetry?.currentHr);
+  const heldBaselineHr = heldTelemetryValue(telemetryHistory, "baseline", hrTelemetry?.baselineHr);
+  const currentHrLevel = hrLevelPercent(heldCurrentHr, heldBaselineHr);
   const buildLevel = readNumber(hrTelemetry?.buildConfidence, hrTelemetry?.build_confidence);
   const hrv = hrTelemetry?.hrv || {};
   const rrCount = readNumber(hrTelemetry?.quality?.rrCount, hrv.sampleCount);
@@ -3600,6 +3785,15 @@ export default function LiveCapture() {
     : "waiting for OMRON";
   const leftEmgLevel = readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct);
   const rightEmgLevel = readNumber(emgTelemetry?.right_pct);
+  const displayedHr = heldCurrentHr;
+  const displayedNearClimax = heldTelemetryValue(telemetryHistory, "nearClimax", recentHrPacket ? prediction.nearClimax : null);
+  const displayedRrCount = heldTelemetryValue(telemetryHistory, "rrCount", rrCount);
+  const displayedRmssd = heldTelemetryValue(telemetryHistory, "hrvRmssd", hrvRmssd);
+  const displayedRespiration = heldTelemetryValue(telemetryHistory, "respirationBpm", h10Respiration.available ? h10Respiration.bpm : null);
+  const displayedMotion = heldTelemetryValue(telemetryHistory, "motionRms", h10Motion.available ? h10Motion.dynamicRmsMilliG : null);
+  const displayedRecoveryDrop = heldTelemetryValue(telemetryHistory, "recoveryDropBpm", h10Recovery.available ? h10Recovery.currentDropBpm : null);
+  const displayedLeftEmg = heldTelemetryValue(telemetryHistory, "left", emgTelemetry?.left_pct ?? emgTelemetry?.level_pct);
+  const displayedRightEmg = heldTelemetryValue(telemetryHistory, "right", emgTelemetry?.right_pct);
   const engineStatus = status?.engine || null;
   const engineRunning = Boolean(engineStatus?.running);
   const engineStorageOk = engineStatus?.storage?.ok !== false && Number(engineStatus?.queue?.droppedStored || 0) === 0;
@@ -4024,10 +4218,10 @@ export default function LiveCapture() {
     return values.length ? Math.max(...values) : null;
   }, [hrTelemetry, telemetryHistory]);
 
-  const setFocusView = useCallback((enabled) => {
+  const setFocusView = useCallback((enabled, mode = "media") => {
     const nextParams = new URLSearchParams(searchParams);
     if (enabled) {
-      nextParams.set("display", "focus");
+      nextParams.set("display", mode === "telemetry" ? "telemetry" : "media");
     } else {
       nextParams.delete("display");
     }
@@ -4507,26 +4701,30 @@ export default function LiveCapture() {
   const appendLiveSessionEvents = useCallback(async (eventsToAdd, extraPatch = {}) => {
     const additions = Array.isArray(eventsToAdd) ? eventsToAdd.filter(Boolean) : [eventsToAdd].filter(Boolean);
     if (!additions.length && !Object.keys(extraPatch).length) return;
-    const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();
-    const sessionId = sessionState?.activeSessionId;
-    if (!sessionId) throw new Error("No active live session is available.");
-    const rows = await liveRecordApi.filter({ id: sessionId });
-    const session = rows[0] || activeSessionDoc || {};
-    const existing = Array.isArray(session.event_timeline) ? session.event_timeline : [];
-    const seen = new Set(existing.map((event) => event.id).filter(Boolean));
-    const merged = [...existing];
-    for (const event of additions) {
-      if (event.id && seen.has(event.id)) continue;
-      if (event.id) seen.add(event.id);
-      merged.push(event);
-    }
-    const patch = {
-      ...extraPatch,
-      event_timeline: merged.sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0)),
+    const save = async () => {
+      const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();
+      const sessionId = sessionState?.activeSessionId;
+      if (!sessionId) throw new Error("No active live session is available.");
+      const rows = await liveRecordApi.filter({ id: sessionId });
+      const session = rows[0] || activeSessionDoc || {};
+      const existing = Array.isArray(session.event_timeline) ? session.event_timeline : [];
+      const seen = new Set(existing.map((event) => event.id).filter(Boolean));
+      const merged = [...existing];
+      for (const event of additions) {
+        if (event.id && seen.has(event.id)) continue;
+        if (event.id) seen.add(event.id);
+        merged.push(event);
+      }
+      const patch = {
+        ...extraPatch,
+        event_timeline: merged.sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0)),
+      };
+      await liveRecordApi.update(sessionId, patch);
+      setLiveEvents(patch.event_timeline);
+      setActiveSessionDoc((prev) => ({ ...(prev || session), ...patch }));
     };
-    await liveRecordApi.update(sessionId, patch);
-    setLiveEvents(patch.event_timeline);
-    setActiveSessionDoc((prev) => ({ ...(prev || session), ...patch }));
+    liveEventSaveQueueRef.current = liveEventSaveQueueRef.current.catch(() => {}).then(save);
+    return liveEventSaveQueueRef.current;
   }, [activeSessionDoc, ensureSession, liveRecordApi, liveSession]);
 
   useEffect(() => {
@@ -6517,7 +6715,7 @@ export default function LiveCapture() {
     </div>
   );
 
-  const mediaPanel = captureMode === "media" ? (
+  const mediaPanel = (captureMode === "media" || mediaFocusView) ? (
     <div className={focusView ? "flex h-full flex-col bg-background p-3" : "rounded-xl border border-border bg-card p-3 md:p-4"}>
       <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
@@ -6564,12 +6762,21 @@ export default function LiveCapture() {
           </button>
           <button
             type="button"
-            onClick={() => setFocusView(!focusView)}
+            onClick={() => setFocusView(!mediaFocusView, "media")}
             className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
           >
-            {focusView ? <X className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-            {focusView ? "Exit Display View" : "Display View"}
+            {mediaFocusView ? <X className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            {mediaFocusView ? "Exit Display View" : "Display View"}
           </button>
+          {mediaFocusView && (
+            <button
+              type="button"
+              onClick={() => setFocusView(true, "telemetry")}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary/35 bg-primary/10 px-3 py-2 text-sm font-semibold text-foreground hover:bg-primary/15"
+            >
+              <Activity className="h-4 w-4 text-primary" /> Full Telemetry
+            </button>
+          )}
           <input
             ref={mediaInputRef}
             type="file"
@@ -6718,17 +6925,16 @@ export default function LiveCapture() {
         {!mediaFullscreen && (
           <div className={`grid content-start gap-3 ${focusView ? "min-h-0 overflow-y-auto pr-1" : "xl:sticky xl:top-4 xl:max-h-[calc(100vh-9rem)] xl:overflow-hidden"}`}>
             <div className="grid auto-rows-fr grid-cols-2 items-stretch gap-2">
-              <CompactStat label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="bpm" level={currentHrLevel} emphasis beatPulse={visibleHeartbeatPulseId} />
+              <CompactStat label="Current HR" value={fmtNumber(displayedHr, 0)} helper="bpm" level={currentHrLevel} emphasis beatPulse={visibleHeartbeatPulseId} />
               <CompactStat label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} emphasis />
               <CompactStat label="Max HR" value={fmtNumber(maxHr, 0)} helper="session peak" level={hrLevelPercent(maxHr, hrTelemetry?.baselineHr)} emphasis />
               {!captureIsBodyExploration && (
                 <>
-                  <CompactStat label="Build" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "phase"} level={buildLevel} />
                   <CompactStat
-                    label="AI Magic"
-                    value={`${prediction.nearClimax}%`}
-                    helper={prediction.hrvUsable ? `${prediction.label} · HRV ${prediction.hrvSignal}` : prediction.label}
-                    level={prediction.nearClimax}
+                    label="Near-Climax Watch"
+                    value={`${fmtNumber(displayedNearClimax, 0)}%`}
+                    helper={`${nearClimaxEpisodeCount} high-prob episode${nearClimaxEpisodeCount === 1 ? "" : "s"}`}
+                    level={displayedNearClimax}
                   />
                 </>
               )}
@@ -6746,6 +6952,9 @@ export default function LiveCapture() {
                   </div>
                   <Brain className="h-5 w-5 text-primary" />
                 </div>
+                <p className="mt-2 text-xs font-semibold uppercase tracking-wider text-primary">
+                  {nearClimaxEpisodeCount} high-probability episode{nearClimaxEpisodeCount === 1 ? "" : "s"} this session
+                </p>
                 <div className="mt-3 h-3 overflow-hidden rounded-full bg-muted">
                   <div className="h-full rounded-full transition-all" style={{ width: `${prediction.nearClimax}%`, backgroundColor: levelColor(prediction.nearClimax) }} />
                 </div>
@@ -6919,7 +7128,7 @@ export default function LiveCapture() {
       ? {
         label: "HR-only watch",
         tone: "warn",
-        helper: "Heart rate is live, but RR/HRV quality is weak. Treat AI Magic as lower-confidence and lean on manual marks.",
+        helper: "Heart rate is live, but RR/HRV quality is weak. Treat Near-Climax Watch as lower-confidence and lean on manual marks.",
       }
       : emgConfigured && !healthTelemetryEmgLive
         ? {
@@ -8801,7 +9010,7 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {captureMode !== "media" && (
+      {(captureMode !== "media" || telemetryFocusView) && (
         <>
       {!focusView && !mainTelemetryView && showAdvancedSetupConsole && <CollapsibleControlSection
         icon={Radio}
@@ -8982,11 +9191,11 @@ export default function LiveCapture() {
         </CollapsibleControlSection>
       )}
 
-      {(focusView || mainTelemetryView || (launchActive && detailedTelemetryOpen)) && <div
-        className={focusView
+      {(telemetryFocusView || (!mediaFocusView && mainTelemetryView) || (!mediaFocusView && launchActive && detailedTelemetryOpen)) && <div
+        className={telemetryFocusView
           ? "fixed inset-0 z-[60] flex h-[100dvh] flex-col overflow-hidden bg-card p-3"
           : `rounded-xl border border-border bg-card ${distanceTelemetryView ? "space-y-6 p-5 md:p-6" : "space-y-4 p-4"}`}
-        style={focusView ? {
+        style={telemetryFocusView ? {
           "--background": "204 46% 7%",
           "--card": "204 38% 11%",
           "--popover": "204 38% 11%",
@@ -8996,10 +9205,10 @@ export default function LiveCapture() {
           "--border": "199 28% 25%",
         } : undefined}
       >
-        <div className={`flex items-center justify-between gap-3 ${focusView ? "shrink-0 pb-2" : ""}`}>
-          <h3 className={`${focusView ? "text-2xl md:text-3xl" : distanceTelemetryView ? "text-lg" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex items-center gap-2`}>
+        <div className={`flex items-center justify-between gap-3 ${telemetryFocusView ? "shrink-0 pb-2" : ""}`}>
+          <h3 className={`${telemetryFocusView ? "text-2xl md:text-3xl" : distanceTelemetryView ? "text-lg" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex items-center gap-2`}>
             <CircleDot className={distanceTelemetryView ? "w-6 h-6" : "w-4 h-4"} /> Live Telemetry
-            {focusView && <span className="ml-2 font-mono text-xl font-medium tracking-normal text-muted-foreground">{new Date(liveHealthNowMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}
+            {telemetryFocusView && <span className="ml-2 font-mono text-xl font-medium tracking-normal text-muted-foreground">{new Date(liveHealthNowMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}
           </h3>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <span className={`${distanceTelemetryView ? "text-sm" : "text-[10px]"} text-muted-foreground`}>
@@ -9021,8 +9230,18 @@ export default function LiveCapture() {
               />
               Beat beep
             </label>
-            {focusView && (
+            {telemetryFocusView && (
               <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTelemetryLayoutEditing(false);
+                    setFocusView(true, "media");
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-primary/35 bg-primary/10 px-3 py-2 text-sm font-semibold text-foreground hover:bg-primary/15"
+                >
+                  <Video className="h-4 w-4 text-primary" /> Media + Telemetry
+                </button>
                 {howlSafetyActive && (
                   <button
                     type="button"
@@ -9287,18 +9506,18 @@ export default function LiveCapture() {
         </div>)}
 
         {telemetryPanelEnabled("vitals") && renderTelemetryDashboardPanel("vitals", <div className={focusView ? "telemetry-vitals-grid h-full min-h-0 gap-2 overflow-hidden" : `grid h-full min-h-0 auto-rows-fr grid-cols-2 gap-2 overflow-hidden sm:grid-cols-3 ${telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`} style={{ order: telemetryPanelOrder("vitals") }}>
-          <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(hrTelemetry?.currentHr, 0)} helper="beats per minute" active={hrTelemetry?.currentHr != null} level={currentHrLevel} large display={focusView} beatPulse={visibleHeartbeatPulseId} />
+          <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(displayedHr, 0)} helper="beats per minute" active={displayedHr != null} level={currentHrLevel} trendValues={telemetryTrendValues(telemetryHistory, "hr", displayedHr)} large display={focusView} beatPulse={visibleHeartbeatPulseId} />
           <MetricCard icon={<Activity className="w-4 h-4" />} label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} active={Boolean(latestBpReading)} valueClassName={focusView ? "!text-[clamp(1.75rem,2.8vw,4rem)]" : "!text-[clamp(2rem,8vw,3rem)]"} large display={focusView} />
           {!captureIsBodyExploration && (
             <>
-              <MetricCard icon={<Zap className="w-4 h-4" />} label="Build Confidence" value={`${fmtNumber(hrTelemetry?.buildConfidence, 0)}%`} helper={hrTelemetry?.phase || "No HR phase"} active={Number(hrTelemetry?.buildConfidence) > 40} level={buildLevel} large display={focusView} />
               <MetricCard
                 icon={<Brain className="w-4 h-4" />}
-                label="AI Magic"
-                value={`${prediction.nearClimax}%`}
-                helper={prediction.confidenceBand}
-                active={prediction.nearClimax >= 42}
-                level={prediction.nearClimax}
+                label="Near-Climax Watch"
+                value={`${fmtNumber(displayedNearClimax, 0)}%`}
+                helper={`${nearClimaxEpisodeCount} high-probability episode${nearClimaxEpisodeCount === 1 ? "" : "s"} · ${prediction.confidenceBand}`}
+                active={displayedNearClimax >= 42}
+                level={displayedNearClimax}
+                trendValues={telemetryTrendValues(telemetryHistory, "nearClimax", displayedNearClimax)}
                 large
                 display={focusView}
               />
@@ -9306,15 +9525,16 @@ export default function LiveCapture() {
           )}
           {hrTelemetry?.source === "direct_h10" && (
             <>
-              <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="RR Samples" value={fmtNumber(rrCount, 0)} helper="rolling H10 interval window" active={Number(rrCount) > 0} level={Math.min(100, (Number(rrCount) || 0) * 1.25)} large display={focusView} />
-              <MetricCard icon={<Activity className="w-4 h-4" />} label="RMSSD" value={fmtNumber(hrvRmssd, 1)} helper={hrvQuality ? `HRV quality: ${hrvQuality}` : "waiting for RR window"} active={hrvRmssd != null} level={hrvQuality === "high" ? 90 : hrvQuality === "moderate" ? 65 : hrvQuality === "low" ? 35 : 0} large display={focusView} />
+              <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="RR Samples" value={fmtNumber(displayedRrCount, 0)} helper="rolling H10 interval window" active={Number(displayedRrCount) > 0} level={Math.min(100, (Number(displayedRrCount) || 0) * 1.25)} trendValues={telemetryTrendValues(telemetryHistory, "rrCount", displayedRrCount)} large display={focusView} />
+              <MetricCard icon={<Activity className="w-4 h-4" />} label="RMSSD" value={fmtNumber(displayedRmssd, 1)} helper={hrvQuality ? `HRV quality: ${hrvQuality}` : "holding last valid RR window"} active={displayedRmssd != null} level={hrvQuality === "high" ? 90 : hrvQuality === "moderate" ? 65 : hrvQuality === "low" ? 35 : 0} trendValues={telemetryTrendValues(telemetryHistory, "hrvRmssd", displayedRmssd)} large display={focusView} />
               <MetricCard
                 icon={<Activity className="w-4 h-4" />}
                 label="Respiration"
-                value={h10Respiration.possibleBreathHold ? "HOLD?" : h10Respiration.available ? fmtNumber(h10Respiration.bpm, 1) : h10RawStreamsActive ? "WARMING" : "NO PMD"}
+                value={h10Respiration.possibleBreathHold ? "HOLD?" : displayedRespiration != null ? fmtNumber(displayedRespiration, 1) : h10RawStreamsActive ? "WARMING" : "NO PMD"}
                 helper={h10Respiration.available ? `breaths/min · ${h10Respiration.confidence} confidence${h10Respiration.possibleBreathHold ? " · possible 4 s hold" : ""}` : h10RawStreamsActive ? `withheld · ${(h10Respiration.reason || "collecting sensor window").replaceAll?.("_", " ")}` : "ECG and accelerometer stream unavailable"}
                 active={h10Respiration.available}
                 level={h10Respiration.available ? (h10Respiration.confidence === "high" ? 90 : 65) : 0}
+                trendValues={telemetryTrendValues(telemetryHistory, "respirationBpm", displayedRespiration)}
                 large
                 display={focusView}
                 valueClassName={!h10Respiration.available && focusView ? "!text-[clamp(1.6rem,2.4vw,3.25rem)]" : ""}
@@ -9322,10 +9542,11 @@ export default function LiveCapture() {
               <MetricCard
                 icon={<Radio className="w-4 h-4" />}
                 label="Chest Motion"
-                value={h10Motion.dynamicRmsMilliG != null ? fmtNumber(h10Motion.dynamicRmsMilliG, 0) : h10RawStreamsActive ? "WARMING" : "NO PMD"}
+                value={displayedMotion != null ? fmtNumber(displayedMotion, 0) : h10RawStreamsActive ? "WARMING" : "NO PMD"}
                 helper={h10Motion.available ? `mg RMS · ${(h10Motion.class || "").replaceAll?.("_", " ")}` : h10RawStreamsActive ? "collecting H10 accelerometer window" : "H10 accelerometer stream unavailable"}
                 active={h10Motion.available}
                 level={h10Motion.available ? Math.min(100, Number(h10Motion.dynamicRmsMilliG || 0) / 3.6) : 0}
+                trendValues={telemetryTrendValues(telemetryHistory, "motionRms", displayedMotion)}
                 large
                 display={focusView}
                 valueClassName={!h10Motion.available && focusView ? "!text-[clamp(1.6rem,2.4vw,3.25rem)]" : ""}
@@ -9333,10 +9554,11 @@ export default function LiveCapture() {
               <MetricCard
                 icon={<RefreshCw className="w-4 h-4" />}
                 label="Recovery"
-                value={h10Recovery.available ? `-${fmtNumber(h10Recovery.currentDropBpm, 0)}` : "LEARNING"}
+                value={displayedRecoveryDrop != null ? `-${fmtNumber(displayedRecoveryDrop, 0)}` : "LEARNING"}
                 helper={h10Recovery.available ? `bpm from ${fmtNumber(h10Recovery.peakHr, 0)} peak · ${fmtNumber(h10Recovery.secondsSincePeak, 0)} s` : "learns after a sustained HR peak"}
                 active={h10Recovery.available}
                 level={h10Recovery.available ? Math.min(100, Number(h10Recovery.currentDropBpm || 0) * 5) : 0}
+                trendValues={telemetryTrendValues(telemetryHistory, "recoveryDropBpm", displayedRecoveryDrop)}
                 large
                 display={focusView}
                 valueClassName={!h10Recovery.available && focusView ? "!text-[clamp(1.6rem,2.4vw,3.25rem)]" : ""}
@@ -9345,8 +9567,8 @@ export default function LiveCapture() {
           )}
           {telemetryEmgLive && (
             <>
-              <MetricCard icon={<Activity className="w-4 h-4" />} label={selectedEmgConfig.leftLabel} value={`${fmtNumber(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct)}%`} helper={selectedEmgConfig.leftHelper} active={(emgTelemetry?.left_pct ?? emgTelemetry?.level_pct) != null} level={leftEmgLevel} large display={focusView} />
-              <MetricCard icon={<Activity className="w-4 h-4" />} label={selectedEmgConfig.rightLabel} value={`${fmtNumber(emgTelemetry?.right_pct)}%`} helper={emgTelemetry?.right_pct != null ? `diff ${fmtNumber(emgTelemetry?.diff_pct)}%` : selectedEmgConfig.rightHelper} active={emgTelemetry?.right_pct != null} level={rightEmgLevel} large display={focusView} />
+              <MetricCard icon={<Activity className="w-4 h-4" />} label={selectedEmgConfig.leftLabel} value={`${fmtNumber(displayedLeftEmg)}%`} helper={selectedEmgConfig.leftHelper} active={displayedLeftEmg != null} level={leftEmgLevel} trendValues={telemetryTrendValues(telemetryHistory, "left", displayedLeftEmg)} large display={focusView} />
+              <MetricCard icon={<Activity className="w-4 h-4" />} label={selectedEmgConfig.rightLabel} value={`${fmtNumber(displayedRightEmg)}%`} helper={emgTelemetry?.right_pct != null ? `diff ${fmtNumber(emgTelemetry?.diff_pct)}%` : selectedEmgConfig.rightHelper} active={displayedRightEmg != null} level={rightEmgLevel} trendValues={telemetryTrendValues(telemetryHistory, "right", displayedRightEmg)} large display={focusView} />
             </>
           )}
         </div>)}
@@ -9420,9 +9642,12 @@ export default function LiveCapture() {
               )}
             </div>
             <div className={`grid grid-cols-2 gap-2 text-right ${focusView ? "mt-auto" : "lg:grid-cols-4"}`}>
-              <div className="rounded-lg border px-4 py-3" style={{ borderColor: `${levelColor(prediction.nearClimax)}80`, backgroundColor: `${levelColor(prediction.nearClimax)}20` }}>
-                <p className="text-xs uppercase tracking-wider text-primary font-semibold">Near-Climax</p>
-                <p className="text-4xl font-bold text-foreground">{prediction.nearClimax}%</p>
+              <div className="rounded-lg border px-4 py-3" style={{ borderColor: `${levelColor(displayedNearClimax)}80`, backgroundColor: `${levelColor(displayedNearClimax)}20` }}>
+                <p className="text-xs uppercase tracking-wider text-primary font-semibold">Near-Climax Watch</p>
+                <div className="flex items-end justify-between gap-3">
+                  <p className="text-4xl font-bold text-foreground">{fmtNumber(displayedNearClimax, 0)}%</p>
+                  <p className="pb-1 text-xs font-semibold text-muted-foreground">{nearClimaxEpisodeCount} high-prob</p>
+                </div>
               </div>
               <div className="rounded-lg border border-amber-400/45 bg-amber-500/10 px-4 py-3">
                 <p className="text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-300">Plateau</p>
@@ -9439,7 +9664,7 @@ export default function LiveCapture() {
             </div>
           </div>
           <div className={`${focusView ? "mt-2" : "mt-3"} h-3 shrink-0 overflow-hidden rounded-full bg-muted`}>
-            <div className="h-full rounded-full transition-all" style={{ width: `${prediction.nearClimax}%`, backgroundColor: levelColor(prediction.nearClimax) }} />
+            <div className="h-full rounded-full transition-all" style={{ width: `${displayedNearClimax}%`, backgroundColor: levelColor(displayedNearClimax) }} />
           </div>
           {!focusView && <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-lg border border-border bg-card/70 px-3 py-2"><span className="text-muted-foreground">Respiratory load</span><p className="mt-1 font-semibold text-foreground">{prediction.possibleBreathHold ? `Possible ${fmtNumber(prediction.breathHoldDurationSeconds, 1)}s hold` : prediction.respirationBpm != null ? `${fmtNumber(prediction.respirationBpm, 1)} breaths/min` : "Withheld"}</p></div>

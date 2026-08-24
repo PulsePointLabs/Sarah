@@ -1,4 +1,4 @@
-export const LIVE_CUE_PROFILE_VERSION = "live-cue-v5";
+export const LIVE_CUE_PROFILE_VERSION = "live-cue-v6";
 
 export const LIVE_CUE_ADAPTIVE_VARIANTS_PER_STATE = 8;
 
@@ -21,6 +21,76 @@ export const LIVE_CUE_PRIORITY = Object.freeze({
   sustained_build: 2,
   recovery: 1,
 });
+
+const LIVE_CUE_FALLBACK_VARIANTS = Object.freeze({
+  sustained_build: [
+    "That build is steady. Keep the pace comfortable and consistent.",
+    "Your body is responding. Stay relaxed and continue what is working.",
+    "The upward trend is holding. Keep your breathing easy.",
+    "You are maintaining a useful rhythm. Let the build develop without rushing it.",
+    "The response is still climbing. Stay with the same calm pace.",
+    "Your physiology is staying engaged. Keep the pressure and breathing even.",
+    "This is a sustained build. Keep doing what brought you here.",
+    "The build remains stable. Stay loose and let it continue.",
+  ],
+  plateau_encouragement: [
+    "You are holding a strong plateau. Stay relaxed and keep the stimulation steady.",
+    "The plateau is holding. Do not rush it; let your body keep climbing.",
+    "You are maintaining the build. Stay with the pace that brought you here.",
+    "This level is staying consistent. Keep your breathing smooth and the rhythm even.",
+    "Your body is holding near the same level. Give it time and keep the pattern steady.",
+    "The response is sustained. Relax anything that does not need to tense.",
+    "You are staying in the build. Keep the input predictable and controlled.",
+    "That plateau is useful. Stay present and let the next rise happen naturally.",
+  ],
+  climax_possible: [
+    "You are getting closer. Keep your breathing easy and continue what is working.",
+    "Your body is moving closer. Stay with the same steady rhythm.",
+    "Climax looks possible now. Keep the pace even and let the build continue.",
+    "The signals are lining up. Stay relaxed and avoid changing too much.",
+    "You may be approaching threshold. Keep doing what is working.",
+    "The trend is getting stronger. Breathe and stay with the build.",
+    "You are in a higher-probability window. Keep the rhythm controlled.",
+    "Your physiology is moving toward threshold. Stay calm and consistent.",
+  ],
+  climax_imminent: [
+    "You are very close now. Stay with it and let your body cross the threshold.",
+    "Climax appears close. Keep going without rushing.",
+    "Your body looks ready. Stay calm and continue exactly like that.",
+    "This is a strong threshold window. Keep the rhythm steady.",
+    "The approach signal is high. Breathe and stay with what is working.",
+    "You are holding very near threshold. Keep your pace controlled.",
+    "The trend remains strong. Stay relaxed and let your body respond.",
+    "You are close enough that consistency matters most. Keep going steadily.",
+  ],
+  recovery: [
+    "Let your body settle for a moment, then allow the build to return.",
+    "Take the small recovery. Breathe and stay present.",
+    "Your system is easing briefly. Let it recover before you climb again.",
+    "This looks like a recovery window. Soften your breathing and tension.",
+    "The load is coming down. Give your body a moment without losing the connection.",
+    "Use this dip to reset your breathing and relax your shoulders.",
+    "A brief recovery is showing. Let the next rise come naturally.",
+    "Your physiology is settling. Stay comfortable and prepare for the next build.",
+  ],
+  build_resumed: [
+    "There it is. The build is returning. Stay with it.",
+    "You are rising again. Keep the pressure steady.",
+    "Your body is building again. Continue what is working.",
+    "The upward trend has returned. Keep the rhythm even.",
+    "Your response is climbing again. Stay relaxed and consistent.",
+    "The recovery window is ending and the build is back.",
+    "You have regained the build. Keep your breathing smooth.",
+    "The signal is rising again. Let it develop at the same steady pace.",
+  ],
+});
+
+function ensureCueVariantCount(cueType, values = []) {
+  const combined = [...values, ...(LIVE_CUE_FALLBACK_VARIANTS[cueType] || [])]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  return [...new Set(combined)].slice(0, LIVE_CUE_ADAPTIVE_VARIANTS_PER_STATE);
+}
 
 export const LIVE_CUE_PRESETS = Object.freeze({
   clinical_minimal: {
@@ -153,6 +223,10 @@ export function resolveLiveCuePhraseBank(settings = {}, { captureKind = "session
           "Ease your shoulders and abdomen. Slow inhale, longer exhale, and let the table carry your weight.",
           "Soften your legs and pelvic floor. Breathe low and slow, and let the tension come down.",
           "Take a small pause if you need it. Relax your belly and make the next exhale longer than the inhale.",
+          "Let your hands and shoulders soften. Take one quiet breath before continuing.",
+          "Release any unnecessary tension through your abdomen, thighs, and pelvic floor.",
+          "Slow the pace for one breath. Let the exhale carry some of the strain away.",
+          "Check your jaw and shoulders, then loosen both while keeping your breathing smooth.",
         ],
       },
       suppressed: true,
@@ -165,7 +239,7 @@ export function resolveLiveCuePhraseBank(settings = {}, { captureKind = "session
     const custom = Array.isArray(configuredPhrases[cueType])
       ? configuredPhrases[cueType].map((value) => String(value || "").trim()).filter(Boolean)
       : [];
-    phrases[cueType] = custom.length ? custom : [...(preset.phrases[cueType] || [])];
+    phrases[cueType] = ensureCueVariantCount(cueType, custom.length ? custom : preset.phrases[cueType]);
   }
   if (!normalized.strongThresholdLanguage && phrases.climax_imminent) {
     phrases.climax_imminent = phrases.climax_imminent.map((phrase) =>
@@ -206,22 +280,21 @@ export function resolveCuePhysiologyBucket(cueType, prediction = {}, sample = {}
   return "steady";
 }
 
-function physiologyPhrasePool(list, bucket) {
-  if (list.length < LIVE_CUE_ADAPTIVE_VARIANTS_PER_STATE) return list;
+function physiologyPhraseOffset(list, bucket) {
+  if (list.length < LIVE_CUE_ADAPTIVE_VARIANTS_PER_STATE) return 0;
   const offsets = {
     rising: 0,
     steady: 2,
     intense: 4,
     autonomic: 6,
   };
-  const start = offsets[bucket] ?? offsets.steady;
-  return list.slice(start, start + 2);
+  return offsets[bucket] ?? offsets.steady;
 }
 
 export function pickCuePhrase(phrases = {}, cueType, sequence = 0, context = {}) {
   const list = phrases[cueType] || [];
   if (!list.length) return "";
   const bucket = resolveCuePhysiologyBucket(cueType, context.prediction, context.sample);
-  const pool = physiologyPhrasePool(list, bucket);
-  return pool[Math.abs(Number(sequence) || 0) % pool.length];
+  const offset = physiologyPhraseOffset(list, bucket);
+  return list[(Math.abs(Number(sequence) || 0) + offset) % list.length];
 }

@@ -372,6 +372,12 @@ function directHowlRequestForCommand(command) {
     }
     return { endpoint: '/load_activity', body: { name: command.activity_name, play: command.play === true } };
   }
+  if (command.action === 'set_frequency') {
+    return { endpoint: '/set_frequency', body: { frequency_hz: command.frequency_hz, channel: command.channel } };
+  }
+  if (command.action === 'set_mode') {
+    return { endpoint: '/set_mode', body: { mode: command.mode, channel: command.channel } };
+  }
   return { endpoint: '/status', body: {} };
 }
 
@@ -473,6 +479,10 @@ async function dispatchCommand(command, settings) {
       response: result.text?.slice(0, 1000) || '',
       howl: summarizeHowlResponse(result.data),
       emergency: result.emergency || null,
+      previousPower: result.previousPower ?? null,
+      targetPower: result.targetPower ?? null,
+      ceiling: result.ceiling ?? null,
+      maximumUpwardStep: result.maximumUpwardStep ?? null,
       message: command.action === 'emergency_stop' ? 'Emergency stop sent to Howl.' : 'Command sent to Howl.',
     };
   } catch (error) {

@@ -10,6 +10,17 @@ const history = (values) => values.map((hr, index) => ({
   baseline: 82,
 }));
 
+const sustainedHistory = (values) => values.map((hr, index) => ({
+  ts: index * 30_000,
+  time: String(index),
+  sessionTimeSec: index * 30,
+  hr,
+  hrSmoothed: hr,
+  baseline: 82,
+  build: 65,
+  phase: "build",
+}));
+
 test("baseline fixture preserves HR-only baseline/build behavior", () => {
   const result = computeLiveClimaxPrediction(
     { currentHr: 82, baselineHr: 80, phase: "baseline", buildConfidence: 5 },
@@ -22,14 +33,16 @@ test("baseline fixture preserves HR-only baseline/build behavior", () => {
   assert.equal(result.confidenceBand, "HR-only watch");
 });
 
-test("gradual build fixture preserves near-climax watch range", () => {
+test("sustained gradual build reaches the gated near-climax watch range", () => {
   const result = computeLiveClimaxPrediction(
     { currentHr: 104, baselineHr: 84, phase: "build", buildConfidence: 62 },
     null,
-    history([84, 88, 92, 96, 100, 104]),
+    sustainedHistory([84, 88, 92, 96, 100, 104]),
+    { sessionTimeSec: 180, elapsedMinutes: 16, buildDurationSec: 180 },
   );
   assert.equal(result.label, "Near-climax watch");
-  assert.equal(result.nearClimax, 76);
+  assert.equal(result.nearClimax, 71);
+  assert.equal(result.buildEligibleForNearClimax, true);
   assert.equal(result.recovery, 10);
 });
 
@@ -40,7 +53,7 @@ test("recovery fixture preserves recovery behavior", () => {
     history([84, 96, 108, 106, 98, 92]),
   );
   assert.equal(result.label, "Recovery likely");
-  assert.equal(result.nearClimax, 22);
+  assert.equal(result.nearClimax, 12);
   assert.equal(result.recovery, 85);
   assert.equal(result.dropFromRecentPeak, 16);
 });
@@ -57,11 +70,12 @@ test("usable H10 RR/HRV contributes without being fabricated", () => {
   assert.equal(result.hrvSignal, "steady");
 });
 
-test("EMG remains optional but can raise high-watch confidence when present", () => {
+test("EMG remains optional but can raise sustained high-watch confidence when present", () => {
   const result = computeLiveClimaxPrediction(
     { currentHr: 105, baselineHr: 84, phase: "build", buildConfidence: 62, hrv: { rmssdMs: 16, quality: "high", sampleCount: 30 } },
     { left_pct: 72, right_pct: 61 },
-    history([84, 90, 96, 101, 105]),
+    sustainedHistory([84, 90, 96, 101, 105]),
+    { sessionTimeSec: 180, elapsedMinutes: 16, buildDurationSec: 180 },
   );
   assert.equal(result.label, "Climax approach watch");
   assert.equal(result.nearClimax, 90);
