@@ -140,7 +140,12 @@ entitiesRouter.patch('/:entity/:id', (req, res) => {
   const entity = normalizeEntityName(req.params.entity);
   const existing = getEntity(entity, req.params.id);
   if (!existing) return res.status(404).json({ error: 'Not found' });
-  res.json(publicEntity(entity, upsertEntity(entity, req.params.id, { ...existing, ...(req.body || {}) })));
+  // A PATCH is a new persisted revision. Never let an old timestamp copied from
+  // the current document suppress the revision time.
+  res.json(publicEntity(entity, upsertEntity(entity, req.params.id, {
+    ...(req.body || {}),
+    updated_date: new Date().toISOString(),
+  })));
 });
 
 entitiesRouter.delete('/:entity/:id', (req, res) => {

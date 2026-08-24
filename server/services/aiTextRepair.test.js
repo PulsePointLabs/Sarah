@@ -37,6 +37,21 @@ test('numeric session offsets become elapsed minutes while real clock times rema
   assert.match(repaired, /From 33 minutes and 20 seconds to 35 minutes and 2 seconds/i);
 });
 
+test('structured AI repair preserves machine timestamps and metadata', () => {
+  const input = {
+    summary: 'At 12:26 the response changed.',
+    source_generated_at: '2026-08-24T00:10:51.496Z',
+    _meta: {
+      created_at: '2026-08-24T00:10:51.496Z',
+      note: 'At 12:26 this metadata is intentionally opaque.',
+    },
+  };
+  const repaired = repairAITextBlocks(input);
+  assert.match(repaired.summary, /12 minutes and 26 seconds/);
+  assert.equal(repaired.source_generated_at, input.source_generated_at);
+  assert.deepEqual(repaired._meta, input._meta);
+});
+
 test('blood pressure accidentally formatted like clock time is restored before elapsed-time repair', () => {
   const repaired = repairNumericElapsedTimeReferences(
     'Blood pressure rose from 1:25 over 88 to 1:46 over 101, then returned toward 1:36 over 96.'

@@ -1124,12 +1124,29 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
     setLastDownloadRecord(record);
   };
 
+  const persistDownloadRecord = async (exportRecord, record) => {
+    saveDownloadRecord(record);
+    if (!exportRecord?.id) return exportRecord;
+    try {
+      const updated = await base44.entities.AudioExport.update(exportRecord.id, {
+        last_downloaded_at: record.downloaded_at,
+        download_count: Math.max(0, Number(exportRecord.download_count || 0)) + 1,
+      });
+      setSavedServerExport(updated);
+      return updated;
+    } catch {
+      // A browser download must not be reported as failed just because its
+      // cross-device history could not be saved.
+      return exportRecord;
+    }
+  };
+
   const triggerSavedExportDownload = async (exportRecord) => {
     const filename = getAudioDownloadFilename(exportRecord.format || runtimeRef.current.format);
     const result = await triggerDownloadOrOpen(serverUrl(exportRecord.file_url), filename, {
       mimeType: getTTSMime(exportRecord.format || runtimeRef.current.format),
     });
-    saveDownloadRecord({
+    const downloadRecord = {
       downloaded_at: new Date().toISOString(),
       source_generated_at: exportRecord.source_generated_at || sourceGeneratedAt || null,
       title: exportRecord.title || getDownloadDisplayTitle(),
@@ -1137,7 +1154,8 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       format: exportRecord.format || runtimeRef.current.format,
       has_chapters: Boolean(exportRecord.has_chapters || exportRecord.sidecar_chapters_available),
       chapter_count: Number(exportRecord.chapter_count || 0),
-    });
+    };
+    await persistDownloadRecord(exportRecord, downloadRecord);
     setRequestStatus({
       type: "ok",
       msg: result?.nativeDownload
@@ -1155,7 +1173,8 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       mimeType: getTTSMime(rendered.format || exportFormat),
     });
 
-    const createdExport = await base44.entities.AudioExport.create({
+    const downloadedAt = new Date().toISOString();
+    const exportPayload = {
       title: displayTitle,
       file_url: rendered.file_url,
       duration_seconds: Math.round(rendered.duration_seconds || 0),
@@ -1183,10 +1202,15 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
       chapter_cue_url: rendered.chapter_cue_url || null,
       chapter_txt_url: rendered.chapter_txt_url || null,
       audio_content_version: rendered.sourceGeneratedAt || sourceGeneratedAt || null,
-    });
+      last_downloaded_at: downloadedAt,
+      download_count: 1,
+    };
+    const createdExport = rendered.audio_export_id
+      ? await base44.entities.AudioExport.update(rendered.audio_export_id, exportPayload)
+      : await base44.entities.AudioExport.create(exportPayload);
 
     saveDownloadRecord({
-      downloaded_at: new Date().toISOString(),
+      downloaded_at: downloadedAt,
       source_generated_at: rendered.sourceGeneratedAt || sourceGeneratedAt || null,
       title: displayTitle,
       filename,
@@ -1370,6 +1394,18 @@ export default function TTSReader({ paragraphs, renderParagraph, sessionId, titl
           ))
           : null;
         setSavedServerExport(exact || compatibleLegacy || null);
+        const saved = exact || compatibleLegacy || null;
+        if (saved?.last_downloaded_at) {
+          saveDownloadRecord({
+            downloaded_at: saved.last_downloaded_at,
+            source_generated_at: saved.source_generated_at || null,
+            title: saved.title || displayTitle,
+            filename: saved.filename || "",
+            format: saved.format || runtimeRef.current.format,
+            has_chapters: Boolean(saved.has_chapters || saved.sidecar_chapters_available),
+            chapter_count: Number(saved.chapter_count || 0),
+          });
+        }
       } catch {
         if (!cancelled) setSavedServerExport(null);
       }

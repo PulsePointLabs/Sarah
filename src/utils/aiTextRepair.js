@@ -272,17 +272,28 @@ export function splitSentencesPreservingDecimals(text) {
   return sentences.length ? sentences : [repaired].filter(Boolean);
 }
 
-function repairAITextBlocksWithContext(value, consistencyContext) {
-  if (typeof value === "string") return repairCharacterSplitParagraph(value, consistencyContext);
+const ISO_DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const NON_PROSE_OBJECT_KEYS = new Set(["_meta", "metadata"]);
+
+function isMachineTimestamp(value) {
+  return typeof value === "string" && ISO_DATE_TIME_RE.test(value.trim());
+}
+
+function repairAITextBlocksWithContext(value, consistencyContext, parentKey = "") {
+  if (typeof value === "string") {
+    if (isMachineTimestamp(value)) return value;
+    return repairCharacterSplitParagraph(value, consistencyContext);
+  }
 
   if (Array.isArray(value)) {
-    return value.map((item) => repairAITextBlocksWithContext(item, consistencyContext));
+    return value.map((item) => repairAITextBlocksWithContext(item, consistencyContext, parentKey));
   }
 
   if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, repairAITextBlocksWithContext(item, consistencyContext)])
-    );
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+      if (NON_PROSE_OBJECT_KEYS.has(key)) return [key, item];
+      return [key, repairAITextBlocksWithContext(item, consistencyContext, key)];
+    }));
   }
 
   return value;

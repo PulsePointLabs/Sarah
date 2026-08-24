@@ -1,4 +1,14 @@
 export function getSessionLatestUpdateAt(session) {
+  const candidates = [session?.updated_date, session?.updated_at].filter(Boolean);
+  const latest = candidates
+    .map((candidate) => new Date(candidate).getTime())
+    .filter(Number.isFinite)
+    .reduce((max, candidate) => Math.max(max, candidate), 0);
+
+  return latest ? new Date(latest).toISOString() : null;
+}
+
+export function getSessionLatestActivityAt(session) {
   const eventTimestamps = (Array.isArray(session?.event_timeline) ? session.event_timeline : [])
     .flatMap((event) => [event?.updated_at, event?.created_at, event?.verified_at])
     .filter(Boolean);

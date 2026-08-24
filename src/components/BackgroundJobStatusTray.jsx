@@ -17,6 +17,12 @@ import {
   requestBackgroundNotificationPermission,
   setBackgroundNotificationsEnabled,
 } from "@/utils/backgroundJobNotifications";
+import {
+  clearClosedJobSnapshot,
+  hasUnseenJobState,
+  loadClosedJobSnapshot,
+  saveClosedJobSnapshot,
+} from "@/lib/backgroundJobTrayPersistence";
 
 const DISMISSED_RESULTS_KEY = "pulsepoint.backgroundJobs.dismissedTerminalIds";
 const COLLAPSED_DOCK_BOTTOM_KEY = "pulsepoint.backgroundJobs.collapsedDockBottom";
@@ -262,7 +268,8 @@ export default function BackgroundJobStatusTray() {
   const [dismissedTerminalIds, setDismissedTerminalIds] = useState(loadDismissedResults);
   const [cancellingIds, setCancellingIds] = useState(() => new Set());
   const [offline, setOffline] = useState(false);
-  const [closed, setClosed] = useState(false);
+  const initialClosedSnapshotRef = useRef(loadClosedJobSnapshot());
+  const [closed, setClosed] = useState(() => initialClosedSnapshotRef.current.size > 0);
   const [notificationPermission, setNotificationPermission] = useState(getNotificationPermission);
   const [notificationsEnabled, setNotificationsEnabled] = useState(areBackgroundNotificationsEnabled);
   const [notificationMessage, setNotificationMessage] = useState("");
@@ -400,13 +407,20 @@ export default function BackgroundJobStatusTray() {
         }
         wasHiddenSinceLastPollRef.current = document.hidden || document.visibilityState !== "visible" || !document.hasFocus();
         const activeIds = new Set(loadedJobs.filter((job) => ["queued", "running"].includes(job.status)).map((job) => job.id));
-        const newActiveJob = [...activeIds].some((id) => !previousActiveIdsRef.current.has(id));
-        const newVisibleResult = loadedJobs.some((job) => (
+        const newActiveJob = jobsInitializedRef.current
+          && [...activeIds].some((id) => !previousActiveIdsRef.current.has(id));
+        const newVisibleResult = jobsInitializedRef.current && loadedJobs.some((job) => (
           !previousJobIdsRef.current.has(job.id)
           && !["queued", "running"].includes(job.status)
           && !dismissedTerminalIdsRef.current.has(job.id)
         ));
-        if (newActiveJob || newVisibleResult) setClosed(false);
+        const unseenSinceClose = initialClosedSnapshotRef.current.size > 0
+          && hasUnseenJobState(loadedJobs, initialClosedSnapshotRef.current);
+        if (newActiveJob || newVisibleResult || unseenSinceClose) {
+          clearClosedJobSnapshot();
+          initialClosedSnapshotRef.current = new Set();
+          setClosed(false);
+        }
         previousActiveIdsRef.current = activeIds;
         previousJobIdsRef.current = new Set(loadedJobs.map((job) => job.id));
         previousJobStatusesRef.current = new Map(loadedJobs.map((job) => [job.id, job.status]));
@@ -603,6 +617,7 @@ export default function BackgroundJobStatusTray() {
           <button
             type="button"
             onClick={() => {
+              initialClosedSnapshotRef.current = saveClosedJobSnapshot(jobs);
               setClosed(true);
               setExpanded(false);
             }}
