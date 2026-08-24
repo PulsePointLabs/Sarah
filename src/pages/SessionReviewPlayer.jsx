@@ -12,6 +12,7 @@ import { EVENT_CATEGORIES, normalizeCategoryArray } from "../components/session-
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { bloodPressureReadingsFromSession, pulseOxReadingsFromSession } from "@/lib/sessionContext";
 import { nearestTimedReading, normalizeTimedReadings, readingSequenceAt } from "@/lib/telemetryTheater";
+import { selectNearbyVitalReadings } from "@/lib/nearbyVitals";
 
 function formatTime(value) {
   const total = Math.max(0, Math.round(Number(value) || 0));
@@ -27,6 +28,14 @@ function reviewLabel(record, isExploration = false) {
   const duration = record?.duration_minutes ? ` · ${record.duration_minutes}m` : "";
   const events = (record?.event_timeline || []).length ? ` · ${record.event_timeline.length} events` : "";
   return `${title}${date}${time}${duration}${events}`;
+}
+
+function linkedVideoAngle(video, index = 0) {
+  const name = `${video?.label || ""} ${video?.filename || ""} ${video?.path || ""}`.toLowerCase().replace(/[_-]+/g, " ");
+  if (/\bfeet?\b/.test(name)) return "Feet";
+  if (/\b(lateral|side)\b/.test(name)) return "Lateral";
+  if (/\b(wide|main|primary|front)\b/.test(name)) return "Wide";
+  return "Wide";
 }
 
 function getCategoryMeta(value) {
@@ -239,6 +248,7 @@ export default function SessionReviewPlayer() {
   const timelineSeekRef = useRef(false);
   const autoVideoPathRef = useRef("");
   const autoVideoAbortRef = useRef(null);
+  const pendingVideoSwitchRef = useRef(null);
 
   const [sessions, setSessions] = useState([]);
   const [explorations, setExplorations] = useState([]);
@@ -246,6 +256,7 @@ export default function SessionReviewPlayer() {
   const [selectedId, setSelectedId] = useState("");
   const [selectedSession, setSelectedSession] = useState(null);
   const [timelineRows, setTimelineRows] = useState([]);
+  const [pulseOxImports, setPulseOxImports] = useState([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingReview, setLoadingReview] = useState(false);
   const [videoSrc, setVideoSrc] = useState("");
@@ -255,6 +266,7 @@ export default function SessionReviewPlayer() {
   const [videoPlaying, setVideoPlaying] = useState(false);
   const [videoLoadStatus, setVideoLoadStatus] = useState("");
   const [videoLoadError, setVideoLoadError] = useState("");
+  const [activeLinkedVideoPath, setActiveLinkedVideoPath] = useState("");
   const [timelineSyncTime, setTimelineSyncTime] = useState(null);
   const [selectedEventIdx, setSelectedEventIdx] = useState(null);
   const [timelineWaypointDetail, setTimelineWaypointDetail] = useState(null);
@@ -307,13 +319,28 @@ export default function SessionReviewPlayer() {
   const savedMotion = selectedSession?.motion_analysis_summary;
   const playbackMotion = useMemo(() => nearestMotionSample(savedMotion, reviewTime), [reviewTime, savedMotion]);
   const playbackCadence = useMemo(() => nearestCadenceSample(savedMotion, reviewTime), [reviewTime, savedMotion]);
+  const selectedSessionWithPulseOx = useMemo(() => {
+    if (!selectedSession || !pulseOxImports.length) return selectedSession;
+    const nearby = selectNearbyVitalReadings(
+      selectedSession,
+      { pulseOx: pulseOxImports },
+      { pulseOx: 24 },
+      recordType === "body_exploration" ? "exploration" : "session",
+    );
+    const during = nearby.pulseOx.filter((reading) => /^during\s+/i.test(String(reading.relationship || "")));
+    if (!during.length) return selectedSession;
+    return {
+      ...selectedSession,
+      pulse_ox_readings: [...pulseOxReadingsFromSession(selectedSession), ...during],
+    };
+  }, [pulseOxImports, recordType, selectedSession]);
   const bloodPressureRows = useMemo(
-    () => normalizeTimedReadings(bloodPressureReadingsFromSession(selectedSession), selectedSession),
-    [selectedSession],
+    () => normalizeTimedReadings(bloodPressureReadingsFromSession(selectedSessionWithPulseOx), selectedSessionWithPulseOx),
+    [selectedSessionWithPulseOx],
   );
   const pulseOxRows = useMemo(
-    () => normalizeTimedReadings(pulseOxReadingsFromSession(selectedSession), selectedSession),
-    [selectedSession],
+    () => normalizeTimedReadings(pulseOxReadingsFromSession(selectedSessionWithPulseOx), selectedSessionWithPulseOx),
+    [selectedSessionWithPulseOx],
   );
   const bpSequence = useMemo(() => readingSequenceAt(bloodPressureRows, reviewTime), [bloodPressureRows, reviewTime]);
   const pulseOxNow = useMemo(() => nearestTimedReading(pulseOxRows, reviewTime, 90), [pulseOxRows, reviewTime]);
@@ -340,12 +367,22 @@ export default function SessionReviewPlayer() {
     if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current);
   }, []);
 
-  useEffect(() => {
-    const linked = (selectedSession?.linked_local_videos || []).find((video) => video?.path && video.exists !== false);
-    if (!linked?.path || autoVideoPathRef.current === linked.path) return undefined;
-    autoVideoPathRef.current = linked.path;
+  const releaseVideoUrl = useCallback(() => {
+    if (!videoUrlRef.current) return;
+    URL.revokeObjectURL(videoUrlRef.current);
+    videoUrlRef.current = null;
+  }, []);
+
+  const prepareLinkedVideo = useCallback((linked, { preservePosition = false } = {}) => {
+    if (!linked?.path || autoVideoPathRef.current === linked.path) return;
+    const previousTime = preservePosition ? Number(videoRef.current?.currentTime || 0) : 0;
+    const shouldPlay = preservePosition && !videoRef.current?.paused;
+    autoVideoAbortRef.current?.abort();
     const controller = new AbortController();
     autoVideoAbortRef.current = controller;
+    autoVideoPathRef.current = linked.path;
+    setActiveLinkedVideoPath(linked.path);
+    pendingVideoSwitchRef.current = { time: previousTime, shouldPlay };
     setVideoLoadStatus("Preparing linked video…");
     setVideoLoadError("");
     base44.integrations.Core.ConvertLocalVideoForPlayback({
@@ -358,8 +395,8 @@ export default function SessionReviewPlayer() {
       releaseVideoUrl();
       setVideoSrc(base44.integrations.Core.localVisionAssetUrl(rawUrl));
       setVideoName(linked.label || linked.filename || linked.path.split(/[\\/]/).pop());
-      setVideoTime(0);
-      setTimelineSyncTime(0);
+      setVideoTime(previousTime);
+      setTimelineSyncTime(previousTime);
       setVideoLoadStatus("");
       autoVideoAbortRef.current = null;
     }).catch((error) => {
@@ -367,24 +404,27 @@ export default function SessionReviewPlayer() {
       setVideoLoadStatus("");
       setVideoLoadError(error?.data?.error || error?.message || "Could not prepare the linked video.");
       autoVideoAbortRef.current = null;
-    });
-    return () => {
-      controller.abort();
       if (autoVideoPathRef.current === linked.path) autoVideoPathRef.current = "";
-      if (autoVideoAbortRef.current === controller) autoVideoAbortRef.current = null;
-    };
-  }, [selectedSession]);
+      pendingVideoSwitchRef.current = null;
+    });
+  }, [releaseVideoUrl]);
 
-  const releaseVideoUrl = () => {
-    if (!videoUrlRef.current) return;
-    URL.revokeObjectURL(videoUrlRef.current);
-    videoUrlRef.current = null;
-  };
+  useEffect(() => {
+    const linked = (selectedSession?.linked_local_videos || []).find((video) => video?.path && video.exists !== false);
+    if (!linked?.path || autoVideoPathRef.current === linked.path) return undefined;
+    prepareLinkedVideo(linked);
+    return () => {
+      autoVideoAbortRef.current?.abort();
+      autoVideoAbortRef.current = null;
+    };
+  }, [prepareLinkedVideo, selectedSession]);
 
   const loadVideoFile = (file) => {
     if (!file) return;
     autoVideoAbortRef.current?.abort();
     autoVideoAbortRef.current = null;
+    autoVideoPathRef.current = "";
+    setActiveLinkedVideoPath("");
     releaseVideoUrl();
     const nextUrl = URL.createObjectURL(file);
     videoUrlRef.current = nextUrl;
@@ -413,6 +453,8 @@ export default function SessionReviewPlayer() {
     setTimelineSyncTime(0);
     setVideoLoadStatus("");
     setVideoLoadError("");
+    setActiveLinkedVideoPath("");
+    setPulseOxImports([]);
     setSelectedId(id);
     setSelectedSession(null);
     setTimelineRows([]);
@@ -423,12 +465,14 @@ export default function SessionReviewPlayer() {
     setLoadingReview(true);
     try {
       const entity = typeOverride === "body_exploration" ? base44.entities.BodyExploration : base44.entities.Session;
-      const [sessionRows, rows] = await Promise.all([
+      const [sessionRows, rows, importedPulseOx] = await Promise.all([
         entity.filter({ id }),
         base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000),
+        base44.entities.PulseOxReading.list("-measured_at", 5000).catch(() => []),
       ]);
       setSelectedSession(sessionRows[0] || null);
       setTimelineRows(rows);
+      setPulseOxImports(importedPulseOx);
     } finally {
       setLoadingReview(false);
     }
@@ -451,6 +495,8 @@ export default function SessionReviewPlayer() {
     autoVideoPathRef.current = "";
     setVideoLoadStatus("");
     setVideoLoadError("");
+    setActiveLinkedVideoPath("");
+    setPulseOxImports([]);
     const next = new URLSearchParams(searchParams);
     next.delete("session");
     next.delete("exploration");
@@ -461,6 +507,28 @@ export default function SessionReviewPlayer() {
 
   const records = recordType === "body_exploration" ? explorations : sessions;
   const isExploration = recordType === "body_exploration";
+  const linkedVideos = useMemo(
+    () => (selectedSession?.linked_local_videos || []).filter((video) => video?.path && video.exists !== false),
+    [selectedSession?.linked_local_videos],
+  );
+
+  const handleLinkedVideoChange = (path) => {
+    const linked = linkedVideos.find((video) => video.path === path);
+    if (linked) prepareLinkedVideo(linked, { preservePosition: true });
+  };
+
+  const handleVideoMetadataLoaded = (event) => {
+    const duration = event.currentTarget.duration || 0;
+    setVideoDuration(duration);
+    const pending = pendingVideoSwitchRef.current;
+    if (!pending) return;
+    const nextTime = Math.max(0, Math.min(Number(pending.time) || 0, duration || Number(pending.time) || 0));
+    event.currentTarget.currentTime = nextTime;
+    setVideoTime(nextTime);
+    setTimelineSyncTime(nextTime);
+    if (pending.shouldPlay) event.currentTarget.play().catch(() => {});
+    pendingVideoSwitchRef.current = null;
+  };
 
   const seekVideoTo = useCallback((timeS, shouldPlay = false, waitForSeek = false) => {
     const video = videoRef.current;
@@ -625,13 +693,23 @@ export default function SessionReviewPlayer() {
               <p className="mt-0.5 truncate text-xs text-zinc-400">{reviewLabel(selectedSession, isExploration)}{videoName ? ` · ${videoName}` : ""}</p>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-zinc-200 hover:border-teal-300/40"
-              >
-                <Video className="h-4 w-4 text-teal-300" />
-                {videoSrc ? "Change Video" : "Load Video"}
+              {linkedVideos.length > 0 && (
+                <Select value={activeLinkedVideoPath || linkedVideos[0]?.path} onValueChange={handleLinkedVideoChange}>
+                  <SelectTrigger className="h-9 w-[12rem] border-white/10 bg-white/5 text-xs text-zinc-200">
+                    <Video className="mr-2 h-4 w-4 shrink-0 text-teal-300" />
+                    <SelectValue placeholder="Choose camera" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {linkedVideos.map((video, index) => (
+                      <SelectItem key={video.id || video.path} value={video.path}>
+                        {linkedVideoAngle(video, index)} · {video.label || video.filename || `Camera ${index + 1}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              <button type="button" onClick={() => fileInputRef.current?.click()} className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-zinc-200 hover:border-teal-300/40">
+                Browse…
               </button>
               <button
                 type="button"
@@ -683,7 +761,7 @@ export default function SessionReviewPlayer() {
                       onPlay={() => setVideoPlaying(true)}
                       onPause={() => setVideoPlaying(false)}
                       onSeeked={handleVideoSeeked}
-                      onLoadedMetadata={(event) => setVideoDuration(event.currentTarget.duration || 0)}
+                      onLoadedMetadata={handleVideoMetadataLoaded}
                     />
                   ) : videoLoadStatus ? (
                     <div className="flex flex-col items-center gap-3 text-teal-200">
@@ -712,18 +790,20 @@ export default function SessionReviewPlayer() {
                 </div>
             </section>
 
-            <aside className="min-h-0 overflow-y-auto rounded-2xl border border-white/10 bg-black/40 p-2.5 shadow-2xl backdrop-blur-xl">
-              <div className="mb-2.5 rounded-xl border border-white/10 bg-gradient-to-br from-amber-300/[0.08] to-sky-300/[0.04] p-2.5">
-                <div className="mb-2 flex items-center justify-between">
+            <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/40 p-2 shadow-2xl backdrop-blur-xl">
+              <div className="mb-1.5 shrink-0 rounded-xl border border-white/10 bg-gradient-to-br from-amber-300/[0.08] to-sky-300/[0.04] p-2">
+                <div className="mb-1.5 flex items-center justify-between">
                   <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-amber-300"><Gauge className="h-3.5 w-3.5" /> BP sequence</div>
                   <div className="flex items-center gap-1.5 text-[10px] text-sky-300"><Droplets className="h-3.5 w-3.5" /> {pulseOxRows.length} SpO₂</div>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-1.5">
                   <VitalReadingCard label="Previous BP" reading={bpSequence.previous} kind="bp" tone="text-amber-200" onSeek={(time) => seekVideoTo(time, false, true)} />
                   <VitalReadingCard label="Upcoming BP" reading={bpSequence.upcoming} kind="bp" tone="text-amber-200" onSeek={(time) => seekVideoTo(time, false, true)} />
                 </div>
               </div>
-              <TelemetryTheaterCharts
+              <div className="min-h-0 flex-1">
+                <TelemetryTheaterCharts
+                compact
                 timelineRows={timelineRows}
                 pulseOxRows={pulseOxRows}
                 bloodPressureRows={bloodPressureRows}
@@ -731,13 +811,10 @@ export default function SessionReviewPlayer() {
                 cursor={reviewTime}
                 durationS={durationS}
                 onSeek={(time) => seekVideoTo(time, false, true)}
-              />
-              <label className="mt-2.5 flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-[11px] font-medium text-zinc-300">
-                <input type="checkbox" checked={followTimeline} onChange={(event) => setFollowTimeline(event.target.checked)} className="h-3.5 w-3.5 accent-teal-300" />
-                Graph clicks and playback share one timeline cursor
-              </label>
+                />
+              </div>
               {(currentPattern || playbackCadence?.movement_cycles_per_minute_estimate != null) && (
-                <div className="mt-2.5 rounded-xl border border-violet-300/20 bg-violet-300/[0.06] p-2.5 text-[11px] text-zinc-400">
+                <div className="mt-1.5 shrink-0 truncate rounded-lg border border-violet-300/20 bg-violet-300/[0.06] px-2 py-1 text-[10px] text-zinc-400">
                   <span className="font-semibold text-violet-300">At this moment:</span>{currentPattern ? ` ${currentPattern.label}.` : ""}{playbackCadence?.movement_cycles_per_minute_estimate != null ? ` Cadence proxy ${playbackCadence.movement_cycles_per_minute_estimate} cycles/min.` : ""}
                 </div>
               )}
