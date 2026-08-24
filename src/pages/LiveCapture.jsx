@@ -6716,8 +6716,12 @@ export default function LiveCapture() {
   );
 
   const mediaPanel = (captureMode === "media" || mediaFocusView) ? (
-    <div className={focusView ? "flex h-full flex-col bg-background p-3" : "rounded-xl border border-border bg-card p-3 md:p-4"}>
-      <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+    <div className={mediaFocusView
+      ? "fixed inset-0 z-[60] flex h-[100dvh] flex-col overflow-hidden bg-background p-3"
+      : focusView
+        ? "flex h-full flex-col bg-background p-3"
+        : "rounded-xl border border-border bg-card p-3 md:p-4"}>
+      <div className="mb-3 flex shrink-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p className={`${focusView ? "text-sm" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5`}>
             <Video className="h-4 w-4" /> Media Review
