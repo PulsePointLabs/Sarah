@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Activity, Clapperboard, HeartPulse, Maximize2, ScanSearch, Video, X } from "lucide-react";
+import { Activity, Clapperboard, Droplets, Gauge, Loader2, Maximize2, ScanSearch, Video, X } from "lucide-react";
 import moment from "moment";
 import { base44 } from "@/api/base44Client";
 import PageHeader from "../components/PageHeader";
 import HRTimelineChart from "../components/HRTimelineChart";
 import InteractiveTimelinePlayer, { TimelineWaypointDetail } from "../components/InteractiveTimelinePlayer";
 import SavedMotionSummaryCard from "../components/SavedMotionSummaryCard";
+import TelemetryTheaterCharts from "../components/TelemetryTheaterCharts";
 import { EVENT_CATEGORIES, normalizeCategoryArray } from "../components/session-form/EventTimelineSection";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { bloodPressureReadingsFromSession, pulseOxReadingsFromSession } from "@/lib/sessionContext";
+import { nearestTimedReading, normalizeTimedReadings, readingSequenceAt } from "@/lib/telemetryTheater";
 
 function formatTime(value) {
   const total = Math.max(0, Math.round(Number(value) || 0));
@@ -129,6 +132,26 @@ function FocusMetric({ label, value, suffix = "", accent = "text-foreground" }) 
   );
 }
 
+function VitalReadingCard({ label, reading, kind, tone = "text-zinc-100", onSeek }) {
+  const value = kind === "bp"
+    ? (reading ? `${reading.systolic_mm_hg}/${reading.diastolic_mm_hg}` : "--/--")
+    : (reading ? `${reading.spo2_percent}%` : "--");
+  return (
+    <button
+      type="button"
+      disabled={!reading}
+      onClick={() => reading && onSeek?.(reading.time_offset_s)}
+      className="rounded-xl border border-white/10 bg-white/[0.045] px-3 py-2 text-left transition enabled:hover:border-teal-300/40 enabled:hover:bg-teal-300/[0.06] disabled:cursor-default"
+    >
+      <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-zinc-500">{label}</p>
+      <p className={`mt-1 font-mono text-lg font-black ${tone}`}>{value}</p>
+      <p className="mt-0.5 font-mono text-[9px] text-zinc-500">
+        {reading ? `${Number(reading.time_offset_s) < 0 ? "−" : "+"}${formatTime(Math.abs(reading.time_offset_s))}${kind === "bp" && reading.pulse_bpm ? ` · ${reading.pulse_bpm} bpm` : ""}` : "No reading"}
+      </p>
+    </button>
+  );
+}
+
 function ActivityBar({ label, value, color }) {
   if (value == null) return null;
   const width = Math.max(0, Math.min(100, Number(value) || 0));
@@ -214,6 +237,8 @@ export default function SessionReviewPlayer() {
   const fileInputRef = useRef(null);
   const videoUrlRef = useRef(null);
   const timelineSeekRef = useRef(false);
+  const autoVideoPathRef = useRef("");
+  const autoVideoAbortRef = useRef(null);
 
   const [sessions, setSessions] = useState([]);
   const [explorations, setExplorations] = useState([]);
@@ -228,6 +253,8 @@ export default function SessionReviewPlayer() {
   const [videoTime, setVideoTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
   const [videoPlaying, setVideoPlaying] = useState(false);
+  const [videoLoadStatus, setVideoLoadStatus] = useState("");
+  const [videoLoadError, setVideoLoadError] = useState("");
   const [timelineSyncTime, setTimelineSyncTime] = useState(null);
   const [selectedEventIdx, setSelectedEventIdx] = useState(null);
   const [timelineWaypointDetail, setTimelineWaypointDetail] = useState(null);
@@ -280,6 +307,22 @@ export default function SessionReviewPlayer() {
   const savedMotion = selectedSession?.motion_analysis_summary;
   const playbackMotion = useMemo(() => nearestMotionSample(savedMotion, reviewTime), [reviewTime, savedMotion]);
   const playbackCadence = useMemo(() => nearestCadenceSample(savedMotion, reviewTime), [reviewTime, savedMotion]);
+  const bloodPressureRows = useMemo(
+    () => normalizeTimedReadings(bloodPressureReadingsFromSession(selectedSession), selectedSession),
+    [selectedSession],
+  );
+  const pulseOxRows = useMemo(
+    () => normalizeTimedReadings(pulseOxReadingsFromSession(selectedSession), selectedSession),
+    [selectedSession],
+  );
+  const bpSequence = useMemo(() => readingSequenceAt(bloodPressureRows, reviewTime), [bloodPressureRows, reviewTime]);
+  const pulseOxNow = useMemo(() => nearestTimedReading(pulseOxRows, reviewTime, 90), [pulseOxRows, reviewTime]);
+  const physiologyNow = useMemo(() => {
+    if (!timelineRows.length) return null;
+    return timelineRows.reduce((best, row) => (
+      Math.abs(Number(row.time_offset_s) - reviewTime) < Math.abs(Number(best.time_offset_s) - reviewTime) ? row : best
+    ), timelineRows[0]);
+  }, [reviewTime, timelineRows]);
 
   useEffect(() => {
     Promise.all([
@@ -297,6 +340,41 @@ export default function SessionReviewPlayer() {
     if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current);
   }, []);
 
+  useEffect(() => {
+    const linked = (selectedSession?.linked_local_videos || []).find((video) => video?.path && video.exists !== false);
+    if (!linked?.path || autoVideoPathRef.current === linked.path) return undefined;
+    autoVideoPathRef.current = linked.path;
+    const controller = new AbortController();
+    autoVideoAbortRef.current = controller;
+    setVideoLoadStatus("Preparing linked video…");
+    setVideoLoadError("");
+    base44.integrations.Core.ConvertLocalVideoForPlayback({
+      path: linked.path,
+      label: linked.label || linked.filename || "telemetry-theater",
+      signal: controller.signal,
+    }).then((result) => {
+      const rawUrl = result?.url || result?.file_url;
+      if (!rawUrl) throw new Error("Playback preparation did not return a video URL.");
+      releaseVideoUrl();
+      setVideoSrc(base44.integrations.Core.localVisionAssetUrl(rawUrl));
+      setVideoName(linked.label || linked.filename || linked.path.split(/[\\/]/).pop());
+      setVideoTime(0);
+      setTimelineSyncTime(0);
+      setVideoLoadStatus("");
+      autoVideoAbortRef.current = null;
+    }).catch((error) => {
+      if (error?.name === "AbortError") return;
+      setVideoLoadStatus("");
+      setVideoLoadError(error?.data?.error || error?.message || "Could not prepare the linked video.");
+      autoVideoAbortRef.current = null;
+    });
+    return () => {
+      controller.abort();
+      if (autoVideoPathRef.current === linked.path) autoVideoPathRef.current = "";
+      if (autoVideoAbortRef.current === controller) autoVideoAbortRef.current = null;
+    };
+  }, [selectedSession]);
+
   const releaseVideoUrl = () => {
     if (!videoUrlRef.current) return;
     URL.revokeObjectURL(videoUrlRef.current);
@@ -305,6 +383,8 @@ export default function SessionReviewPlayer() {
 
   const loadVideoFile = (file) => {
     if (!file) return;
+    autoVideoAbortRef.current?.abort();
+    autoVideoAbortRef.current = null;
     releaseVideoUrl();
     const nextUrl = URL.createObjectURL(file);
     videoUrlRef.current = nextUrl;
@@ -322,6 +402,17 @@ export default function SessionReviewPlayer() {
   };
 
   const handleSelectSession = useCallback(async (id, typeOverride = recordType) => {
+    autoVideoAbortRef.current?.abort();
+    autoVideoAbortRef.current = null;
+    autoVideoPathRef.current = "";
+    releaseVideoUrl();
+    setVideoSrc("");
+    setVideoName("");
+    setVideoTime(0);
+    setVideoDuration(0);
+    setTimelineSyncTime(0);
+    setVideoLoadStatus("");
+    setVideoLoadError("");
     setSelectedId(id);
     setSelectedSession(null);
     setTimelineRows([]);
@@ -357,6 +448,9 @@ export default function SessionReviewPlayer() {
     setTimelineRows([]);
     setSelectedEventIdx(null);
     setTimelineWaypointDetail(null);
+    autoVideoPathRef.current = "";
+    setVideoLoadStatus("");
+    setVideoLoadError("");
     const next = new URLSearchParams(searchParams);
     next.delete("session");
     next.delete("exploration");
@@ -495,7 +589,6 @@ export default function SessionReviewPlayer() {
 
   if (focusView && selectedSession && !loadingReview) {
     const motion = savedMotion;
-    const rhythm = motion?.hand_movement_summary;
     const currentLeft = playbackMotion?.left_lower_body_activity;
     const currentRight = playbackMotion?.right_lower_body_activity;
     const currentTotal = Number(currentLeft || 0) + Number(currentRight || 0);
@@ -503,101 +596,66 @@ export default function SessionReviewPlayer() {
     const sideBalance = currentIndex != null
       ? (Math.abs(currentIndex) <= 0.1 ? "Similar now" : `${currentIndex > 0 ? "Left" : "Right"} now`)
       : null;
-    const lowerBodyPatterns = motion?.lower_body_pattern_summary;
-    const postureSummary = motion?.lower_body_posture_summary;
     const currentPattern = activeLowerBodyPattern(motion, reviewTime);
-    const currentPosture = activePostureCandidate(motion, reviewTime);
-    const reviewPatterns = lowerBodyPatternCandidates(motion)
-      .filter((candidate) => ["oscillatory_candidate", "left_right_divergence"].includes(candidate.type))
-      .slice(0, 6);
+    const durationS = Math.max(
+      Number(videoDuration) || 0,
+      Number(selectedSession.duration_minutes || 0) * 60,
+      ...timelineRows.map((row) => Number(row.time_offset_s) || 0),
+      ...(motion?.derived_timeline || []).map((row) => Number(row.time_s) || 0),
+      ...pulseOxRows.map((row) => Number(row.time_offset_s) || 0),
+      ...bloodPressureRows.map((row) => Number(row.time_offset_s) || 0),
+    );
+    const currentRmssd = ["moderate", "high"].includes(String(physiologyNow?.hrv_quality || "").toLowerCase())
+      ? Number(physiologyNow?.hrv_rmssd_ms) || null
+      : null;
+    const currentRespiration = !physiologyNow?.respiration_unavailable_reason && Number(physiologyNow?.respiration_bpm) > 0
+      ? Number(physiologyNow.respiration_bpm)
+      : null;
 
     return (
-      <div className="h-screen overflow-hidden bg-background p-3">
-        <div className="flex h-full min-h-0 flex-col gap-3">
-          <header className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
+      <div className="h-screen overflow-hidden bg-[#050608] text-zinc-100">
+        <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_18%_15%,rgba(20,184,166,0.12),transparent_35%),radial-gradient(circle_at_88%_5%,rgba(168,85,247,0.12),transparent_30%)]" />
+        <div className="relative flex h-full min-h-0 flex-col gap-2.5 p-2.5 md:p-3">
+          <header className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/45 px-4 py-2.5 shadow-2xl backdrop-blur-xl">
             <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-wider text-primary">Evidence Review Display</p>
-              <p className="truncate text-sm text-foreground">{reviewLabel(selectedSession, isExploration)}{videoName ? ` · ${videoName}` : ""}</p>
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-teal-300 shadow-[0_0_14px_rgba(45,212,191,0.8)]" />
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-teal-300">Session Telemetry Theater</p>
+              </div>
+              <p className="mt-0.5 truncate text-xs text-zinc-400">{reviewLabel(selectedSession, isExploration)}{videoName ? ` · ${videoName}` : ""}</p>
             </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs font-medium text-foreground hover:border-primary/40"
+                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-zinc-200 hover:border-teal-300/40"
               >
-                <Video className="h-4 w-4 text-primary" />
+                <Video className="h-4 w-4 text-teal-300" />
                 {videoSrc ? "Change Video" : "Load Video"}
               </button>
               <button
                 type="button"
                 onClick={() => setFocusView(false)}
-                className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary"
+                className="inline-flex items-center gap-2 rounded-xl border border-teal-300/25 bg-teal-300/10 px-3 py-2 text-xs font-semibold text-teal-200"
               >
                 <X className="h-4 w-4" />
-                Exit Display View
+                Exit Theater
               </button>
               <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={handleVideoChange} />
             </div>
           </header>
 
-          <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(0,1fr)_22rem]">
-            <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
-              <div className="grid gap-3 2xl:grid-cols-2">
-                <div className="rounded-xl border border-border bg-card p-3">
-                  <div className="mb-2 flex items-center gap-2">
-                    <HeartPulse className="h-4 w-4 text-primary" />
-                    <p className="text-xs font-semibold uppercase tracking-wider text-primary">Heart Rate Trace</p>
-                  </div>
-                  {timelineRows.length > 0 ? (
-                    <HRTimelineChart
-                      rows={timelineRows}
-                      savedMarkers={{
-                        pre_climax_offset_s: selectedSession.pre_climax_offset_s,
-                        climax_offset_s: selectedSession.climax_offset_s,
-                        recovery_offset_s: selectedSession.recovery_offset_s,
-                      }}
-                      noClimax={!!selectedSession.no_climax}
-                      nearClimaxEvents={selectedSession.ai_near_climax_events || []}
-                      events={selectedSession.event_timeline || []}
-                      selectedEventIndex={selectedEventIdx}
-                      onSelectEventIndex={handleSelectEventIndex}
-                      initialWindow="full"
-                      compact
-                      playbackTime={videoTime}
-                    />
-                  ) : (
-                    <p className="px-3 py-8 text-sm text-muted-foreground">No heart-rate trace available for this {isExploration ? "body exploration" : "session"}.</p>
-                  )}
-                </div>
-                {motion ? (
-                  <SavedMotionSummaryCard
-                    summary={motion}
-                    onSeek={videoSrc ? (timeS) => seekVideoTo(timeS, false, true) : undefined}
-                    playbackTime={videoTime}
-                    chartOnly
-                    focus
-                  />
-                ) : (
-                  <div className="rounded-xl border border-border bg-card p-3">
-                    <div className="mb-2 flex items-center gap-2">
-                      <Activity className="h-4 w-4 text-primary" />
-                      <p className="text-xs font-semibold uppercase tracking-wider text-primary">Motion Trace</p>
-                    </div>
-                    <p className="px-3 py-8 text-sm text-muted-foreground">Save a local motion summary to show movement telemetry here.</p>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
+          <div className="grid min-h-0 flex-1 grid-rows-[minmax(48vh,1.4fr)_minmax(0,1fr)] gap-2.5 xl:grid-cols-[minmax(0,1fr)_27rem] xl:grid-rows-1">
+            <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/60 shadow-[0_30px_80px_rgba(0,0,0,0.55)]">
                 {currentReviewEvent && (
                   <button
                     type="button"
                     onClick={() => handleSelectEventIndex(currentReviewEvent.index)}
-                    className="flex flex-wrap items-center justify-between gap-3 border-b border-primary/20 bg-primary/[0.07] px-4 py-2 text-left"
+                    className="flex flex-wrap items-center justify-between gap-3 border-b border-teal-300/15 bg-teal-300/[0.06] px-4 py-2 text-left"
                   >
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-[10px] font-semibold uppercase tracking-wider text-primary">Current Event</span>
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-teal-300">Closest Event</span>
                         {normalizeCategoryArray(currentReviewEvent.event.category).map((category) => {
                           const meta = getCategoryMeta(category);
                           return (
@@ -608,12 +666,12 @@ export default function SessionReviewPlayer() {
                         })}
                         {currentReviewEvent.event.source === "motion_derived" && <MotionDerivedBadge event={currentReviewEvent.event} />}
                       </div>
-                      <p className="truncate text-sm text-foreground">{currentReviewEvent.event.note || "Event note"}</p>
+                      <p className="truncate text-sm text-zinc-200">{currentReviewEvent.event.note || "Event note"}</p>
                     </div>
-                    <span className="font-mono text-sm font-semibold text-primary">{formatTime(currentReviewEvent.event.time_s)}</span>
+                    <span className="font-mono text-sm font-semibold text-teal-300">{formatTime(currentReviewEvent.event.time_s)}</span>
                   </button>
                 )}
-                <div className="flex min-h-0 flex-1 items-center justify-center bg-black">
+                <div className="relative flex min-h-0 flex-1 items-center justify-center bg-black">
                   {videoSrc ? (
                     <video
                       ref={videoRef}
@@ -627,160 +685,60 @@ export default function SessionReviewPlayer() {
                       onSeeked={handleVideoSeeked}
                       onLoadedMetadata={(event) => setVideoDuration(event.currentTarget.duration || 0)}
                     />
+                  ) : videoLoadStatus ? (
+                    <div className="flex flex-col items-center gap-3 text-teal-200">
+                      <Loader2 className="h-9 w-9 animate-spin" />
+                      <span className="text-sm font-semibold">{videoLoadStatus}</span>
+                      <span className="text-xs text-zinc-500">Telemetry is ready while the MP4 preview finishes.</span>
+                    </div>
                   ) : (
-                    <button type="button" onClick={() => fileInputRef.current?.click()} className="flex flex-col items-center gap-3 text-muted-foreground hover:text-primary">
+                    <button type="button" onClick={() => fileInputRef.current?.click()} className="flex flex-col items-center gap-3 text-zinc-500 hover:text-teal-300">
                       <Video className="h-10 w-10" />
                       <span className="text-sm font-semibold">Load the full {isExploration ? "body exploration" : "session"} video</span>
+                      {videoLoadError && <span className="max-w-md text-center text-xs text-rose-400">{videoLoadError}</span>}
                     </button>
                   )}
+                  <div className="pointer-events-none absolute bottom-3 left-3 rounded-xl border border-white/10 bg-black/60 px-3 py-1.5 font-mono text-sm font-black text-white backdrop-blur">
+                    {formatTime(reviewTime)} <span className="text-zinc-600">/</span> {formatTime(durationS)}
+                  </div>
                 </div>
-              </div>
+                <div className="grid grid-cols-3 gap-px border-t border-white/10 bg-white/10 sm:grid-cols-6">
+                  <FocusMetric label="Heart Rate" value={playbackHR ?? "--"} suffix={playbackHR != null ? " bpm" : ""} accent="text-rose-400" />
+                  <FocusMetric label="SpO₂" value={pulseOxNow?.spo2_percent ?? "--"} suffix={pulseOxNow ? "%" : ""} accent="text-sky-400" />
+                  <FocusMetric label="Blood Pressure" value={bpSequence.previous ? `${bpSequence.previous.systolic_mm_hg}/${bpSequence.previous.diastolic_mm_hg}` : "--/--"} accent="text-amber-300" />
+                  <FocusMetric label="RMSSD" value={currentRmssd != null ? currentRmssd.toFixed(1) : "--"} suffix={currentRmssd != null ? " ms" : ""} accent="text-teal-300" />
+                  <FocusMetric label="Respiration" value={currentRespiration != null ? currentRespiration.toFixed(1) : "--"} suffix={currentRespiration != null ? "/min" : ""} accent="text-blue-300" />
+                  <FocusMetric label="Motion Balance" value={sideBalance || "--"} accent="text-violet-300" />
+                </div>
             </section>
 
-            <aside className="min-h-0 space-y-3 overflow-y-auto pr-1">
-              <div className="rounded-xl border border-border bg-card p-3 space-y-3">
-                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Current Telemetry</p>
+            <aside className="min-h-0 overflow-y-auto rounded-2xl border border-white/10 bg-black/40 p-2.5 shadow-2xl backdrop-blur-xl">
+              <div className="mb-2.5 rounded-xl border border-white/10 bg-gradient-to-br from-amber-300/[0.08] to-sky-300/[0.04] p-2.5">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-amber-300"><Gauge className="h-3.5 w-3.5" /> BP sequence</div>
+                  <div className="flex items-center gap-1.5 text-[10px] text-sky-300"><Droplets className="h-3.5 w-3.5" /> {pulseOxRows.length} SpO₂</div>
+                </div>
                 <div className="grid grid-cols-2 gap-2">
-                  <FocusMetric label="Position" value={formatTime(reviewTime)} accent="text-primary" />
-                  <FocusMetric label="Heart Rate" value={playbackHR ?? "--"} suffix={playbackHR != null ? " bpm" : ""} accent="text-destructive" />
+                  <VitalReadingCard label="Previous BP" reading={bpSequence.previous} kind="bp" tone="text-amber-200" onSeek={(time) => seekVideoTo(time, false, true)} />
+                  <VitalReadingCard label="Upcoming BP" reading={bpSequence.upcoming} kind="bp" tone="text-amber-200" onSeek={(time) => seekVideoTo(time, false, true)} />
                 </div>
-                <label className="inline-flex items-center gap-2 text-xs font-medium text-foreground">
-                  <input type="checkbox" checked={followTimeline} onChange={(event) => setFollowTimeline(event.target.checked)} className="h-3.5 w-3.5 accent-primary" />
-                  Follow telemetry while the video plays
-                </label>
               </div>
-
-              <div className="rounded-xl border border-border bg-card p-3 space-y-3">
-                <p className="text-xs font-semibold uppercase tracking-wider text-primary">Movement At Playback Position</p>
-                {motion ? (
-                  <>
-                    <div className="grid grid-cols-2 gap-2">
-                      <FocusMetric label="Left Foot / Leg Now" value={currentLeft ?? "--"} accent="text-primary" />
-                      <FocusMetric label="Right Foot / Leg Now" value={currentRight ?? "--"} accent="text-amber-400" />
-                      <FocusMetric label="Balance Now" value={sideBalance ?? "--"} />
-                      <FocusMetric label="Index Now" value={currentIndex == null ? "--" : currentIndex.toFixed(2)} />
-                    </div>
-                    <div className="space-y-2 rounded-lg border border-border bg-muted/15 p-2.5">
-                      <ActivityBar label="Left foot / leg activity now" value={currentLeft} color="hsl(var(--primary))" />
-                      <ActivityBar label="Right foot / leg activity now" value={currentRight} color="#f59e0b" />
-                    </div>
-                    <p className="text-[11px] leading-relaxed text-muted-foreground">
-                      Playback-time value from the saved motion trace. Record averages: left {motion.left_lower_body_average_activity ?? "-"} / right {motion.right_lower_body_average_activity ?? "-"}. Side comparison is observational and reflects the saved region assignments.
-                    </p>
-                    {currentPattern && (
-                      <div className="rounded-lg border border-primary/25 bg-primary/[0.08] px-2.5 py-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Current Review Candidate</p>
-                        <p className="mt-1 text-xs font-medium text-foreground">{currentPattern.label}</p>
-                        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">Visual motion proxy only; review the video before describing this as a specific movement or spasm.</p>
-                      </div>
-                    )}
-                    {currentPosture && (
-                      <div className="rounded-lg border border-primary/25 bg-primary/[0.08] px-2.5 py-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Calibrated Posture Candidate</p>
-                        <p className="mt-1 text-xs font-medium text-foreground">{currentPosture.posture_phrase}</p>
-                        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">Matched against foot-region appearance at a reference moment you marked in the recording; this is a visual posture proxy only.</p>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <p className="text-xs text-muted-foreground">No saved motion summary yet.</p>
-                )}
-              </div>
-
-              {lowerBodyPatterns && (
-                <div className="rounded-xl border border-primary/20 bg-primary/[0.04] p-3 space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">Lower-Body Pattern Review</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <FocusMetric label="Movement Bursts" value={lowerBodyPatterns.movement_burst_count} />
-                    <FocusMetric label="Oscillatory / Shudder-Like" value={lowerBodyPatterns.oscillatory_candidate_count} />
-                    <FocusMetric label="Sustained Elevations" value={lowerBodyPatterns.sustained_activity_shift_count} />
-                    <FocusMetric label="Side Divergences" value={lowerBodyPatterns.left_right_divergence_count} />
-                  </div>
-                  {reviewPatterns.length > 0 && (
-                    <div className="space-y-1.5">
-                      {reviewPatterns.map((candidate) => (
-                        <button
-                          key={`${candidate.type}-${candidate.time_s}`}
-                          type="button"
-                          onClick={() => seekVideoTo(candidate.time_s, false, true)}
-                          disabled={!videoSrc}
-                          className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-card/60 px-2.5 py-2 text-left enabled:hover:border-primary/40 disabled:cursor-default"
-                        >
-                          <span className="line-clamp-1 text-[11px] text-foreground">{candidate.label}</span>
-                          <span className="shrink-0 font-mono text-[11px] font-semibold text-primary">{formatTime(candidate.time_s)}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <p className="text-[10px] leading-relaxed text-muted-foreground">
-                    These flags are activity-pattern proxies only. Directional posture changes such as feet moving outward are not measured in this version.
-                  </p>
-                </div>
-              )}
-
-              {postureSummary && postureCandidates(motion).length > 0 && (
-                <div className="rounded-xl border border-primary/20 bg-primary/[0.04] p-3 space-y-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-primary">Calibrated Foot Appearance Moments</p>
-                    <span className="text-[10px] text-muted-foreground">{postureSummary.coverage_pct}% coverage</span>
-                  </div>
-                  <div className="space-y-1.5">
-                    {postureCandidates(motion).slice(0, 8).map((candidate) => (
-                      <button
-                        key={`${candidate.posture}-${candidate.time_s}`}
-                        type="button"
-                        onClick={() => seekVideoTo(candidate.time_s, false, true)}
-                        disabled={!videoSrc}
-                        className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-card/60 px-2.5 py-2 text-left enabled:hover:border-primary/40 disabled:cursor-default"
-                      >
-                        <span className="line-clamp-1 text-[11px] text-foreground">{candidate.posture_phrase}</span>
-                        <span className="shrink-0 font-mono text-[11px] font-semibold text-primary">{formatTime(candidate.time_s)}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-[10px] leading-relaxed text-muted-foreground">
-                    These moments compare visible foot-region appearance to your marked examples. They do not measure pressure, force, or physiological cause.
-                  </p>
-                </div>
-              )}
-
-              {(rhythm?.reliability === "moderate" || playbackMotion?.hand_activity != null) && (
-                <div className="rounded-xl border border-[#a78bfa]/30 bg-[#a78bfa]/[0.07] p-3 space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-[#a78bfa]">Hand Movement At Playback Position</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <FocusMetric label="Hand Activity Now" value={playbackMotion?.hand_activity ?? "--"} accent="text-[#a78bfa]" />
-                    <FocusMetric
-                      label="Rolling Cadence Proxy"
-                      value={playbackCadence?.movement_cycles_per_minute_estimate ?? "--"}
-                      suffix={playbackCadence?.movement_cycles_per_minute_estimate != null ? " cycles/min" : ""}
-                      accent="text-[#a78bfa]"
-                    />
-                    <FocusMetric label="Record Cadence Proxy" value={rhythm?.movement_cycles_per_minute_estimate ?? "--"} suffix={rhythm?.movement_cycles_per_minute_estimate != null ? " cycles/min" : ""} />
-                    <FocusMetric label="Pauses 2s+ (Record)" value={rhythm?.pause_count ?? "--"} />
-                  </div>
-                  {!Array.isArray(motion.hand_cadence_timeline) && (
-                    <p className="rounded-lg border border-[#a78bfa]/20 bg-background/25 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
-                      This saved analysis predates rolling cadence storage. Re-run motion analysis and save the summary to show a playback-time cadence proxy here.
-                    </p>
-                  )}
-                  <p className="text-[11px] leading-relaxed text-muted-foreground">
-                    Playback-time hand activity is read from the saved motion trace. Rolling cadence is derived from visible hand-movement rhythm in a local time window; it is not confirmed stroke technique, force, or physiological state.
-                  </p>
-                </div>
-              )}
-
-              {nearbyEvents.length > 0 && (
-                <div className="rounded-xl border border-border bg-card p-3 space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">Nearby Events</p>
-                  {nearbyEvents.map(({ event, index }) => (
-                    <button key={`${event.time_s}-${index}`} type="button" onClick={() => handleSelectEventIndex(index)} className="block w-full rounded-lg border border-border bg-muted/15 px-2.5 py-2 text-left hover:border-primary/40">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-mono text-[11px] font-semibold text-primary">{formatTime(event.time_s)}</span>
-                        {event.source === "motion_derived" && <MotionDerivedBadge event={event} />}
-                      </div>
-                      <p className="mt-1 line-clamp-2 text-xs text-foreground">{event.note}</p>
-                    </button>
-                  ))}
+              <TelemetryTheaterCharts
+                timelineRows={timelineRows}
+                pulseOxRows={pulseOxRows}
+                bloodPressureRows={bloodPressureRows}
+                motionSummary={motion}
+                cursor={reviewTime}
+                durationS={durationS}
+                onSeek={(time) => seekVideoTo(time, false, true)}
+              />
+              <label className="mt-2.5 flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-[11px] font-medium text-zinc-300">
+                <input type="checkbox" checked={followTimeline} onChange={(event) => setFollowTimeline(event.target.checked)} className="h-3.5 w-3.5 accent-teal-300" />
+                Graph clicks and playback share one timeline cursor
+              </label>
+              {(currentPattern || playbackCadence?.movement_cycles_per_minute_estimate != null) && (
+                <div className="mt-2.5 rounded-xl border border-violet-300/20 bg-violet-300/[0.06] p-2.5 text-[11px] text-zinc-400">
+                  <span className="font-semibold text-violet-300">At this moment:</span>{currentPattern ? ` ${currentPattern.label}.` : ""}{playbackCadence?.movement_cycles_per_minute_estimate != null ? ` Cadence proxy ${playbackCadence.movement_cycles_per_minute_estimate} cycles/min.` : ""}
                 </div>
               )}
             </aside>
@@ -826,7 +784,7 @@ export default function SessionReviewPlayer() {
                   className="inline-flex h-10 items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/15"
                 >
                   <Maximize2 className="h-4 w-4" />
-                  Display View
+                  Telemetry Theater
                 </button>
               )}
             </div>

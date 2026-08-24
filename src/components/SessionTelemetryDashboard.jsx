@@ -189,7 +189,7 @@ export default function SessionTelemetryDashboard({
         {onOpenReview && (
           <Button type="button" variant="outline" size="sm" onClick={onOpenReview} className="gap-1.5">
             <Clapperboard className="h-3.5 w-3.5" />
-            Review against video
+            Open telemetry theater
           </Button>
         )}
       </div>

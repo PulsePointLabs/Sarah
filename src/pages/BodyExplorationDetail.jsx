@@ -369,8 +369,8 @@ export default function BodyExplorationDetail() {
         <Button variant="ghost" size="icon" onClick={() => navigate(`/exploration/${exploration.id}/edit`)} className="shrink-0" aria-label="Edit exploration">
           <Pencil className="h-5 w-5 text-muted-foreground" />
         </Button>
-        <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate(`/review-player?type=body_exploration&exploration=${encodeURIComponent(exploration.id)}`)}>
-          <Clapperboard className="h-3.5 w-3.5" /> Review
+        <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate(`/review-player?type=body_exploration&exploration=${encodeURIComponent(exploration.id)}&display=focus`)}>
+          <Clapperboard className="h-3.5 w-3.5" /> Telemetry Theater
         </Button>
         <Button variant="ghost" size="icon" onClick={toggleFavorite} className="shrink-0" aria-label={exploration.is_favorite ? "Remove favorite" : "Add favorite"}>
           <Star className={`h-5 w-5 ${exploration.is_favorite ? "fill-yellow-500 text-yellow-500" : "text-muted-foreground"}`} />

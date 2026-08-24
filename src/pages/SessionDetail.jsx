@@ -1967,7 +1967,7 @@ export default function SessionDetail() {
           inspectionTime={inspectionTime}
           onInspectionTimeChange={setInspectionTime}
           onMarkersChange={savePhaseMarkers}
-          onOpenReview={() => navigate(`/review-player?session=${encodeURIComponent(s.id)}`)}
+          onOpenReview={() => navigate(`/review-player?session=${encodeURIComponent(s.id)}&display=focus`)}
         />
         {s.body_composition && (
           <div id="session-body-composition" className="scroll-mt-24">
