@@ -809,17 +809,21 @@ export function telemetryAtSessionTime(telemetry = {}, sessionSeconds = 0) {
 export function telemetryOverlayFilters(telemetry) {
   if (!telemetry?.hr) return [];
   const fontPath = process.env.REVIEW_VIDEO_FONT || 'C\\:/Windows/Fonts/arial.ttf';
+  // Keep the compact telemetry card below the public-export brand lockup. The
+  // watermark is composited after these clip filters and reserves the first
+  // ~100 px in the upper-right corner at 1080p.
+  const top = 122;
   return [
-    'drawbox=x=iw-398:y=24:w=374:h=72:color=0x050a0d@0.82:t=fill',
-    'drawbox=x=iw-398:y=24:w=374:h=72:color=0x2dd4bf@0.34:t=2',
-    'drawbox=x=iw-398:y=24:w=5:h=72:color=0x2dd4bf@0.94:t=fill',
-    `drawtext=fontfile='${fontPath}':text='HR LIVE':x=w-378:y=32:fontsize=12:fontcolor=0x5eead4@0.98`,
-    `drawtext=fontfile='${fontPath}':text='♥':x=w-378:y=52:fontsize=29:fontcolor=0xfb7185@1.0`,
-    `drawtext=fontfile='${fontPath}':text='${telemetry.hr}':x=w-338:y=42:fontsize=39:fontcolor=0xf8fafc@1.0`,
-    `drawtext=fontfile='${fontPath}':text='BPM':x=w-266:y=66:fontsize=11:fontcolor=0x94a3b8@0.96`,
-    `drawtext=fontfile='${fontPath}':text='AVG ${telemetry.avg || '--'}':x=w-211:y=43:fontsize=15:fontcolor=0xcbd5e1@0.98`,
-    `drawtext=fontfile='${fontPath}':text='MAX ${telemetry.max || '--'}':x=w-211:y=66:fontsize=15:fontcolor=0xfb7185@0.98`,
-    `drawtext=fontfile='${fontPath}':text='LOAD ${telemetry.load}\\\\%':x=w-112:y=54:fontsize=14:fontcolor=0x86efac@0.98`,
+    `drawbox=x=iw-398:y=${top}:w=374:h=72:color=0x050a0d@0.82:t=fill`,
+    `drawbox=x=iw-398:y=${top}:w=374:h=72:color=0x2dd4bf@0.34:t=2`,
+    `drawbox=x=iw-398:y=${top}:w=5:h=72:color=0x2dd4bf@0.94:t=fill`,
+    `drawtext=fontfile='${fontPath}':text='HR LIVE':x=w-378:y=${top + 8}:fontsize=12:fontcolor=0x5eead4@0.98`,
+    `drawtext=fontfile='${fontPath}':text='♥':x=w-378:y=${top + 28}:fontsize=29:fontcolor=0xfb7185@1.0`,
+    `drawtext=fontfile='${fontPath}':text='${telemetry.hr}':x=w-338:y=${top + 18}:fontsize=39:fontcolor=0xf8fafc@1.0`,
+    `drawtext=fontfile='${fontPath}':text='BPM':x=w-266:y=${top + 42}:fontsize=11:fontcolor=0x94a3b8@0.96`,
+    `drawtext=fontfile='${fontPath}':text='AVG ${telemetry.avg || '--'}':x=w-211:y=${top + 19}:fontsize=15:fontcolor=0xcbd5e1@0.98`,
+    `drawtext=fontfile='${fontPath}':text='MAX ${telemetry.max || '--'}':x=w-211:y=${top + 42}:fontsize=15:fontcolor=0xfb7185@0.98`,
+    `drawtext=fontfile='${fontPath}':text='LOAD ${telemetry.load}\\\\%':x=w-112:y=${top + 30}:fontsize=14:fontcolor=0x86efac@0.98`,
   ];
 }
 

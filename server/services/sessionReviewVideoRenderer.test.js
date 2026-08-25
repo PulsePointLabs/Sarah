@@ -208,6 +208,7 @@ test('review video telemetry uses the nearest session-time HR sample', () => {
 test('published telemetry badge is compact and uses the glass teal treatment', () => {
   const filters = telemetryOverlayFilters({ hr: 109, avg: 106, max: 122, load: 13 }).join(',');
   assert.match(filters, /w=374:h=72/);
+  assert.match(filters, /y=122/);
   assert.match(filters, /0x2dd4bf/);
   assert.match(filters, /HR LIVE/);
   assert.doesNotMatch(filters, /w=490:h=92/);
