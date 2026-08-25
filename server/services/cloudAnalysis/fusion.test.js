@@ -45,6 +45,50 @@ test('cloud fusion aligns overlapping evidence and does not auto-promote candida
   assert.equal(result.visual_summary.pose_lost, 1);
   assert.equal(result.multimodal_windows[0].physiology.heart_rate_bpm.avg, 105);
   assert.equal(result.multimodal_windows[0].physiology.blood_pressure[0].systolic_mm_hg, 120);
+  assert.equal(result.multimodal_windows[0].label, 'cloud_visual_review_candidate');
+  assert.match(result.multimodal_windows[0].review_summary, /^You appear supine\. Visible activity: hand movement\./);
+  assert.deepEqual(result.multimodal_windows[0].visual_evidence.actions, ['hand movement']);
+  assert.doesNotMatch(result.multimodal_windows[0].basis, /\.\.\.$/);
+});
+
+test('cloud fusion keeps malformed raw model output without dumping it into the readable note', () => {
+  const result = fuseCloudMultimodalEvidence({
+    audioResult: { ok: true, job_id: 'audio-job', audio: { duration_seconds: 3 }, transcription: { segments: [] }, acoustic_events: [] },
+    visualResult: {
+      ok: true,
+      job_id: 'visual-job',
+      asset_id: 'visual',
+      video: { duration_seconds: 3 },
+      semantic_windows: [{
+        source_start_s: 0,
+        source_end_s: 2,
+        description: { raw_description: '{"actions":["incomplete response', parse_state: 'unstructured' },
+      }],
+    },
+  });
+  const window = result.multimodal_windows[0];
+  assert.match(window.review_summary, /response ended before every requested field was complete/);
+  assert.doesNotMatch(window.review_summary, /incomplete response/);
+  assert.equal(window.visual_evidence.raw_model_output, '{"actions":["incomplete response');
+  assert.equal(window.visual_evidence.parse_state, 'unstructured');
+});
+
+test('cloud fusion recovers complete fields from a token-truncated visual JSON response', () => {
+  const raw = '{"body_position":["The subject is supine"],"actions":["hand moves';
+  const result = fuseCloudMultimodalEvidence({
+    audioResult: { ok: true, job_id: 'audio-job', audio: { duration_seconds: 3 }, transcription: { segments: [] }, acoustic_events: [] },
+    visualResult: {
+      ok: true,
+      job_id: 'visual-job',
+      asset_id: 'visual',
+      video: { duration_seconds: 3 },
+      semantic_windows: [{ source_start_s: 0, source_end_s: 2, description: { raw_description: raw, parse_state: 'unstructured' } }],
+    },
+  });
+  const window = result.multimodal_windows[0];
+  assert.match(window.review_summary, /^You are supine\./);
+  assert.equal(window.visual_evidence.body_position[0], 'The subject is supine');
+  assert.equal(window.visual_evidence.raw_model_output, raw);
 });
 
 test('cloud persistence keeps existing analysis and stores path-free source metadata', () => {

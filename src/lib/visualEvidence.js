@@ -305,6 +305,28 @@ export function buildSessionVisualEvidenceDigest(session, { limit = 12 } = {}) {
   return lines.length ? `Reviewed Sarah visual evidence for this session:\n${lines.join("\n")}` : "";
 }
 
+function compactTelemetryText(value) {
+  if (!value) return "";
+  if (typeof value === "string") return cleanText(value, 500);
+  if (typeof value !== "object") return cleanText(value, 500);
+  const range = value.requested_session_window?.label;
+  const hr = value.heart_rate?.exact_window;
+  const hrv = value.rr_hrv?.exact_window;
+  const motion = value.multimodal?.exact_window?.motion;
+  const states = value.multimodal?.exact_window?.multimodal_states;
+  const motionClasses = motion?.classes ? Object.keys(motion.classes).map((key) => key.replace(/_/g, " ")) : [];
+  const stateLabels = states ? Object.keys(states).map((key) => key.replace(/_/g, " ")) : [];
+  return [
+    range ? `Window ${range}` : null,
+    hr?.samples ? `HR ${hr.bpm_start ?? "?"} to ${hr.bpm_end ?? "?"} bpm, peak ${hr.bpm_max ?? "?"} (${hr.samples} samples)` : null,
+    hrv?.rmssd_ms?.count ? `RMSSD ${hrv.rmssd_ms.avg} ms avg` : null,
+    hrv?.sdnn_ms?.count ? `SDNN ${hrv.sdnn_ms.avg} ms avg` : null,
+    motionClasses.length ? `motion ${motionClasses.join("/")}` : null,
+    stateLabels.length ? `body-state signals ${stateLabels.join("/")}` : null,
+    Array.isArray(value.nearby_events) && value.nearby_events.length ? `${value.nearby_events.length} nearby timeline events` : null,
+  ].filter(Boolean).join("; ");
+}
+
 function normalizeVideoPassFindingCard(card, index = 0) {
   if (!card) return null;
   const clip = card.clip || {};
@@ -341,7 +363,7 @@ function normalizeVideoPassFindingCard(card, index = 0) {
     summary: cleanText(card.summary, 900),
     findings,
     draft_events: events,
-    telemetry: cleanText(card.telemetry, 400),
+    telemetry: compactTelemetryText(card.telemetry),
     motion_summary: card.motion_summary || card.motionSummary || null,
   };
 }
@@ -404,12 +426,86 @@ function formatVideoPassRange(entry) {
   return "time range not specified";
 }
 
+function cloudArray(value) {
+  return Array.isArray(value) ? value.filter(Boolean) : [];
+}
+
+function compactCloudEvidenceText(value, maxLength = 560) {
+  const text = cleanText(value, Math.max(maxLength * 2, 1200))
+    .replace(/\s+([,.;:])/g, "$1")
+    .replace(/([,.;:])\1+/g, "$1");
+  if (text.length <= maxLength) return text;
+  const candidate = text.slice(0, maxLength);
+  const sentenceEnd = Math.max(candidate.lastIndexOf(". "), candidate.lastIndexOf("; "));
+  const wordEnd = candidate.lastIndexOf(" ");
+  const end = sentenceEnd >= Math.floor(maxLength * 0.58) ? sentenceEnd + 1 : wordEnd;
+  return `${candidate.slice(0, Math.max(1, end)).trim()}…`;
+}
+
+function cloudCandidatePhysiology(item = {}) {
+  const physiology = item.physiology || {};
+  const heartRate = physiology.heart_rate_bpm;
+  const rmssd = physiology.rmssd_ms;
+  const bloodPressure = cloudArray(physiology.blood_pressure)[0];
+  const pulseOx = cloudArray(physiology.pulse_ox)[0];
+  const parts = [
+    heartRate?.samples ? `HR ${heartRate.avg} avg (${heartRate.min}-${heartRate.max})` : null,
+    rmssd?.samples ? `RMSSD ${rmssd.avg} ms avg` : null,
+    bloodPressure?.systolic_mm_hg && bloodPressure?.diastolic_mm_hg
+      ? `BP ${bloodPressure.systolic_mm_hg}/${bloodPressure.diastolic_mm_hg}`
+      : null,
+    pulseOx?.spo2_percent ? `SpO2 ${pulseOx.spo2_percent}%` : null,
+    cloudArray(physiology.howl_changes).length ? `${physiology.howl_changes.length} Howl change${physiology.howl_changes.length === 1 ? "" : "s"}` : null,
+  ].filter(Boolean);
+  return parts.join(", ");
+}
+
+function selectCloudCandidates(result = {}, limit = 18) {
+  const candidates = cloudArray(result.strong_candidates)
+    .slice()
+    .sort((a, b) => Number(a?.start_ms || 0) - Number(b?.start_ms || 0));
+  if (candidates.length <= limit) return candidates;
+  const audio = candidates.filter((item) => String(item?.provenance?.modality || "").toLowerCase() === "audio");
+  const visual = candidates.filter((item) => String(item?.provenance?.modality || "").toLowerCase() !== "audio");
+  const visualSlots = Math.max(1, limit - Math.min(audio.length, Math.ceil(limit / 3)));
+  const selectedVisual = Array.from({ length: Math.min(visualSlots, visual.length) }, (_, index) => {
+    const position = visualSlots === 1 ? 0 : Math.round((index * (visual.length - 1)) / (visualSlots - 1));
+    return visual[position];
+  });
+  return [...selectedVisual, ...audio.slice(0, Math.max(0, limit - selectedVisual.length))]
+    .sort((a, b) => Number(a?.start_ms || 0) - Number(b?.start_ms || 0));
+}
+
+export function buildCloudMultimodalEvidenceDigest(record, { analysisField = "ai_analysis", limit = 18 } = {}) {
+  const passes = cloudArray(record?.[analysisField]?.cloud_multimodal_passes);
+  if (!passes.length) return "";
+  const pass = passes[0];
+  const result = pass?.result || {};
+  if (!result.ok) return "";
+  const offsetSeconds = Number(pass?.source_video?.source_zero_session_ms || 0) / 1000;
+  const sourceName = pass?.source_video?.filename || "linked session video";
+  const candidates = selectCloudCandidates(result, limit);
+  const lines = candidates.map((item) => {
+    const time = Math.max(0, Number(item.start_ms || 0) / 1000 + offsetSeconds);
+    const modality = String(item?.provenance?.modality || "visual").toLowerCase();
+    const label = modality === "audio"
+      ? String(item.label || "audio activity").replace(/^audio_/, "").replace(/_/g, " ")
+      : "visual review";
+    const evidence = compactCloudEvidenceText(item.review_summary || item.basis || item.summary || item.label, 560);
+    const physiology = cloudCandidatePhysiology(item);
+    return `- [${formatClockTime(time)}; ${modality} candidate; ${label}] ${evidence}${physiology ? ` Locally aligned physiology: ${physiology}.` : ""}`;
+  });
+  const omitted = Math.max(0, cloudArray(result.strong_candidates).length - candidates.length);
+  return [
+    `Saved cloud multimodal evidence from ${sourceName}: ${compactCloudEvidenceText(result.summary, 500)}`,
+    "Interpretation rule: these are timestamped supporting candidates, not accepted facts. Use them to choose relevant moments and cross-check manual notes, telemetry, and reviewed findings; preserve uncertainty in the final analysis.",
+    ...lines,
+    omitted ? `- ${omitted} additional lower-priority cloud candidates remain saved on the record and were omitted from this prompt digest.` : null,
+  ].filter(Boolean).join("\n");
+}
+
 export function buildSessionVideoPassDigest(session, { limit = 14, findingsPerCard = 4, eventsPerCard = 3 } = {}) {
   const entries = normalizeSessionVideoPassFindings(session).slice(0, limit);
-  if (!entries.length) {
-    const fallback = cleanText(session?.ai_analysis?._video_pass_digest || "", 6000);
-    return isStalePhaseMarkerReference({ text: fallback }, session) ? "" : fallback;
-  }
   const lines = entries.map((entry) => {
     const videoLabel = entry.source_video.label || entry.source_video.filename || "linked local video";
     const findings = entry.findings.slice(0, findingsPerCard);
@@ -424,7 +520,12 @@ export function buildSessionVideoPassDigest(session, { limit = 14, findingsPerCa
     if (entry.telemetry) parts.push(`Telemetry: ${entry.telemetry}`);
     return parts.filter(Boolean).join(" ");
   });
-  return lines.length ? `Sarah video-pass findings applied to this session:\n${lines.join("\n")}` : "";
+  const fallback = !lines.length ? cleanText(session?.ai_analysis?._video_pass_digest || "", 6000) : "";
+  const reviewed = lines.length
+    ? `Sarah video-pass findings applied to this session:\n${lines.join("\n")}`
+    : isStalePhaseMarkerReference({ text: fallback }, session) ? "" : fallback;
+  const cloud = buildCloudMultimodalEvidenceDigest(session, { analysisField: "ai_analysis" });
+  return [reviewed, cloud].filter(Boolean).join("\n\n");
 }
 
 const LOWER_BODY_CLIP_SOURCE_RE = /(?:^|[^a-z0-9])(feet|foot|toe|toes|heel|heels|sole|soles|lower[-_\s]?body|lower[-_\s]?cam|legs?)(?:$|[^a-z0-9])/i;
@@ -655,7 +756,6 @@ export function buildSessionKeyVideoClipDigest(session, { limit = 12 } = {}) {
 
 export function buildBodyExplorationVideoPassDigest(exploration, { limit = 28, findingsPerCard = 4, eventsPerCard = 3 } = {}) {
   const entries = normalizeBodyExplorationVideoPassFindings(exploration).slice(0, limit);
-  if (!entries.length) return cleanText(exploration?.ai_body_exploration?._video_pass_digest || "", 6000);
   const lines = entries.map((entry) => {
     const videoLabel = entry.source_video.label || entry.source_video.filename || "linked local video";
     const findings = entry.findings.slice(0, findingsPerCard);
@@ -670,7 +770,11 @@ export function buildBodyExplorationVideoPassDigest(exploration, { limit = 28, f
     if (entry.telemetry) parts.push(`Telemetry: ${entry.telemetry}`);
     return parts.filter(Boolean).join(" ");
   });
-  return lines.length ? `Sarah video-pass findings applied to this body exploration:\n${lines.join("\n")}` : "";
+  const reviewed = lines.length
+    ? `Sarah video-pass findings applied to this body exploration:\n${lines.join("\n")}`
+    : cleanText(exploration?.ai_body_exploration?._video_pass_digest || "", 6000);
+  const cloud = buildCloudMultimodalEvidenceDigest(exploration, { analysisField: "ai_body_exploration" });
+  return [reviewed, cloud].filter(Boolean).join("\n\n");
 }
 
 export function buildBodyExplorationVisualEvidenceDigest(exploration, { limit = 12 } = {}) {

@@ -16,6 +16,8 @@ const LABELS = {
   urine_confirmation: "Urine/fluid confirmation",
   balloon_inflation: "Balloon inflation",
   statlock_securement: "StatLock/securement",
+  cloud_visual_review_candidate: "Cloud visual review",
+  cloud_multimodal_visual_window: "Cloud visual review",
 };
 
 const NOT_CONFIRMED_LABELS = {
@@ -77,6 +79,7 @@ function confidenceLabel(value) {
 
 function basisText(item = {}, fallback = "") {
   const raw = String(
+    item.review_summary ||
     item.summary ||
     item.basis ||
     item.reason ||

@@ -6,31 +6,144 @@ function finite(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
-function compactText(value, limit = 420) {
+function compactText(value, limit = 900) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
-  return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
+  if (text.length <= limit) return text;
+  const candidate = text.slice(0, limit);
+  const sentenceEnd = Math.max(candidate.lastIndexOf('. '), candidate.lastIndexOf('; '));
+  const wordEnd = candidate.lastIndexOf(' ');
+  const end = sentenceEnd >= Math.floor(limit * 0.58) ? sentenceEnd + 1 : wordEnd;
+  return `${candidate.slice(0, Math.max(1, end)).trim()}…`;
+}
+
+function cleanDescriptionValue(value) {
+  const values = Array.isArray(value) ? value : [value];
+  const seen = new Set();
+  return values
+    .flatMap((entry) => String(entry ?? '').split(/\s*\n+\s*/))
+    .map((entry) => entry.replace(/\s+/g, ' ').replace(/\s+([,.;:])/g, '$1').replace(/([,.;:])\1+/g, '$1').trim())
+    .filter((entry) => entry && !/^(unknown|none|n\/a|null)$/i.test(entry))
+    .filter((entry) => {
+      const key = entry.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function sentenceList(value) {
+  return cleanDescriptionValue(value)
+    .map((entry) => entry.replace(/[.]+$/, ''))
+    .join('; ');
+}
+
+function secondPerson(value) {
+  return String(value || '')
+    .replace(/\bThe subject's\b/gi, 'Your')
+    .replace(/\bthe subject's\b/gi, 'your')
+    .replace(/\bThe subject is\b/gi, 'You are')
+    .replace(/\bthe subject is\b/gi, 'you are')
+    .replace(/\bThe subject\b/gi, 'You')
+    .replace(/\bthe subject\b/gi, 'you')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function naturalList(value) {
+  return secondPerson(sentenceList(value));
+}
+
+const VISUAL_DESCRIPTION_FIELDS = [
+  'subject_visibility',
+  'body_position',
+  'visible_body_regions',
+  'actions',
+  'devices',
+  'interactions',
+  'visible_physiological_cues',
+  'camera_quality',
+  'change_across_frames',
+  'uncertainty',
+];
+
+function recoverCompletedDescriptionFields(raw = '') {
+  const text = String(raw || '');
+  const recovered = {};
+  for (const field of VISUAL_DESCRIPTION_FIELDS) {
+    const keyIndex = text.indexOf(`"${field}"`);
+    if (keyIndex < 0) continue;
+    const colon = text.indexOf(':', keyIndex + field.length + 2);
+    if (colon < 0) continue;
+    let start = colon + 1;
+    while (/\s/.test(text[start] || '')) start += 1;
+    if (text[start] !== '[') continue;
+    let inString = false;
+    let escaped = false;
+    let end = -1;
+    for (let index = start + 1; index < text.length; index += 1) {
+      const char = text[index];
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = !inString;
+      else if (char === ']' && !inString) {
+        end = index + 1;
+        break;
+      }
+    }
+    if (end < 0) continue;
+    try {
+      const parsed = JSON.parse(text.slice(start, end));
+      if (Array.isArray(parsed)) recovered[field] = parsed;
+    } catch {
+      // Only fully parseable fields are recovered; the original raw output is retained below.
+    }
+  }
+  return recovered;
 }
 
 function descriptionText(description = {}) {
   if (!description || typeof description !== 'object') return compactText(description);
-  if (description.raw_description) return compactText(description.raw_description);
-  const fields = [
-    ['Position', description.body_position],
-    ['Visible regions', description.visible_body_regions],
-    ['Actions', description.actions],
-    ['Devices', description.devices],
-    ['Interactions', description.interactions],
-    ['Visible cues', description.visible_physiological_cues],
-    ['Change', description.change_across_frames],
-    ['Uncertainty', description.uncertainty],
-  ];
-  return compactText(fields
-    .map(([label, value]) => {
-      const rendered = Array.isArray(value) ? value.filter(Boolean).join(', ') : String(value ?? '').trim();
-      return rendered && !/^unknown$/i.test(rendered) ? `${label}: ${rendered}` : '';
-    })
-    .filter(Boolean)
-    .join('. '));
+  if (description.raw_description) {
+    const recovered = recoverCompletedDescriptionFields(description.raw_description);
+    const readable = Object.keys(recovered).length ? descriptionText(recovered) : '';
+    return `${readable ? `${readable} ` : ''}The model response ended before every requested field was complete; the full raw output remains preserved.`;
+  }
+  const position = naturalList(description.body_position);
+  const actions = naturalList(description.actions);
+  const change = naturalList(description.change_across_frames);
+  const visible = naturalList(description.visible_body_regions);
+  const devices = naturalList(description.devices);
+  const interactions = naturalList(description.interactions);
+  const cues = naturalList(description.visible_physiological_cues);
+  const uncertainty = naturalList(description.uncertainty);
+  return compactText([
+    position ? `${/^you\b/i.test(position) ? position : `You appear ${position}`.replace(/[.]+$/, '')}.` : '',
+    actions ? `Visible activity: ${actions.replace(/[.]+$/, '')}.` : '',
+    change ? `Across these frames, ${change.replace(/[.]+$/, '')}.` : '',
+    visible ? `Visible areas: ${visible.replace(/[.]+$/, '')}.` : '',
+    devices ? `Visible equipment: ${devices.replace(/[.]+$/, '')}.` : '',
+    interactions ? `Interaction: ${interactions.replace(/[.]+$/, '')}.` : '',
+    cues ? `Visible physiological cues: ${cues.replace(/[.]+$/, '')}.` : '',
+    uncertainty ? `Uncertainty: ${uncertainty.replace(/[.]+$/, '')}.` : '',
+  ].filter(Boolean).join(' '), 900);
+}
+
+function structuredVisualEvidence(description = {}) {
+  if (!description || typeof description !== 'object') return null;
+  if (description.raw_description) {
+    const recovered = recoverCompletedDescriptionFields(description.raw_description);
+    return {
+      ...Object.fromEntries(Object.entries(recovered).map(([field, value]) => [field, cleanDescriptionValue(value)])),
+      parse_state: description.parse_state || 'unstructured',
+      raw_model_output: String(description.raw_description),
+    };
+  }
+  const result = {};
+  for (const field of VISUAL_DESCRIPTION_FIELDS) {
+    const values = cleanDescriptionValue(description[field]);
+    if (values.length) result[field] = values;
+  }
+  return Object.keys(result).length ? result : null;
 }
 
 function overlaps(first, second) {
@@ -120,13 +233,16 @@ export function fuseCloudMultimodalEvidence({ audioResult = {}, visualResult = {
     const range = evidenceRange(window);
     const audio = acousticEvents.filter((event) => overlaps(window, event));
     const speech = reliableSpeech.filter((segment) => overlaps(window, segment));
+    const reviewSummary = descriptionText(window.description) || 'Visual model returned no usable description for this window.';
     return {
       id: `cloud-window-${String(index + 1).padStart(3, '0')}`,
       start_ms: Math.round(range.start * 1000),
       end_ms: Math.round(range.end * 1000),
       representative_time_ms: Math.round(finite(window.representative_time_s, range.start) * 1000),
-      label: 'cloud_multimodal_visual_window',
-      basis: descriptionText(window.description) || 'Cloud visual window returned without a structured description.',
+      label: 'cloud_visual_review_candidate',
+      review_summary: reviewSummary,
+      basis: reviewSummary,
+      visual_evidence: structuredVisualEvidence(window.description),
       confidence: window.description?.parse_state === 'unstructured' ? 0.45 : 0.62,
       review_state: 'candidate',
       claim_state: 'inferred',
@@ -183,7 +299,7 @@ export function fuseCloudMultimodalEvidence({ audioResult = {}, visualResult = {
     engine: 'modal_l4_qwen25vl_whisper_ast_yolo_pose',
     range: { startMs: 0, endMs: Math.round(durationSeconds * 1000) },
     summary: `Cloud deep analysis covered ${Math.round(durationSeconds)} seconds with ${frameMetrics.length} visual samples, ${poseSamples.length} pose checks, ${semanticWindows.length} semantic windows, and ${acousticEvents.length} reviewable audio candidates.`,
-    whole_video_story: 'Full-range encrypted cloud review completed. Findings remain candidates until reviewed and accepted in Sarah.',
+    whole_video_story: 'Encrypted full-range screening completed. Sarah can use these timestamped visual, audio, pose, and physiology candidates as supporting context, but they remain explicitly unconfirmed until reviewed.',
     actionable_findings: [],
     strong_candidates: [...multimodalWindows, ...audioCandidates]
       .sort((a, b) => finite(a.start_ms) - finite(b.start_ms)),

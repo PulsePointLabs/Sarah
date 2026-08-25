@@ -1496,13 +1496,13 @@ function localVisionFindingFromItem(item, prefix = "") {
 
 function localVisionDraftNote({ label, basis, refs = [], status = "confirmed" }) {
   const cleanLabel = humanizeLocalVisionLabel(label || "local visual finding");
-  const cleanBasis = compactText(basis || "", 260);
+  const cleanBasis = compactText(basis || "", 520);
   const evidenceRefs = compactFrameRefs(refs, 5);
   const evidence = evidenceRefs
     ? ` Evidence frames: ${evidenceRefs}.`
     : "";
   if (status === "candidate") {
-    return `Possible visual activity candidate, not visually confirmed: ${cleanLabel}.${cleanBasis ? ` ${cleanBasis}` : ""}${evidence}`;
+    return `${cleanLabel} (unconfirmed).${cleanBasis ? ` ${cleanBasis}` : ""}${evidence}`;
   }
   return `Local visual confirmed: ${cleanLabel}.${cleanBasis ? ` ${cleanBasis}` : ""}${evidence}`;
 }
@@ -1514,7 +1514,7 @@ function localVisionEventFromItem(item, selectedVideo, windowInfo, isExploration
   const eventMs = Number.isFinite(range.start) ? range.start : fallbackMs;
   const label = item.label || item.event_type || item.type || item.candidate_type || "local visual finding";
   const refs = arrayFromMaybe(item.frame_refs || item.evidence_refs || item.frame_ref);
-  const basis = item.basis || item.reason || (Array.isArray(item.reasons) ? item.reasons.join("; ") : "") || item.summary || "";
+  const basis = item.review_summary || item.basis || item.reason || (Array.isArray(item.reasons) ? item.reasons.join("; ") : "") || item.summary || "";
   return {
     time_s: sessionTimeForSource(eventMs / 1000, selectedVideo),
     note: localVisionDraftNote({ label, basis, refs, status }),

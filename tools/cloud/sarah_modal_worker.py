@@ -543,9 +543,11 @@ def analyze_encrypted_visual(job_id: str, asset_manifest: dict, key_b64: str) ->
         prompt = (
             "Analyze these three nearby frames from a private physiological session as clinical visual evidence. "
             "Use anatomically accurate, non-erotic language. Report only what is visibly supported and describe change across frames. "
-            "Do not infer identity, intent, sensation, diagnosis, arousal, or climax. Return one compact JSON object with keys "
+            "Do not infer identity, intent, sensation, diagnosis, arousal, or climax. Avoid repeating 'the subject' or restating the same fact. "
+            "Write short natural phrases suitable for a timestamped session note: at most two items per array and 220 words total. "
+            "Return only one complete compact JSON object with keys "
             "subject_visibility, body_position, visible_body_regions, actions, devices, interactions, visible_physiological_cues, "
-            "camera_quality, change_across_frames, uncertainty. Use unknown or empty arrays when evidence is insufficient."
+            "camera_quality, change_across_frames, uncertainty. Use strings or arrays of short strings; use unknown or empty arrays when evidence is insufficient."
         )
         semantic_windows = []
         for item in semantic_frames:
@@ -562,7 +564,7 @@ def analyze_encrypted_visual(job_id: str, asset_manifest: dict, key_b64: str) ->
                 return_tensors="pt",
             ).to(vision_model.device)
             with torch.inference_mode():
-                generated = vision_model.generate(**inputs, max_new_tokens=320, do_sample=False)
+                generated = vision_model.generate(**inputs, max_new_tokens=448, do_sample=False)
             trimmed = generated[:, inputs.input_ids.shape[1]:]
             response = processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
             semantic_windows.append({
