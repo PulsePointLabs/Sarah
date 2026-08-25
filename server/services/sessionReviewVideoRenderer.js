@@ -14,7 +14,14 @@ const REVIEW_VIDEO_HEIGHT = Number(process.env.REVIEW_VIDEO_HEIGHT || 1080);
 const REVIEW_VIDEO_PRESET = process.env.REVIEW_VIDEO_PRESET || 'slow';
 const REVIEW_VIDEO_INTERMEDIATE_CRF = String(process.env.REVIEW_VIDEO_INTERMEDIATE_CRF || 14);
 const REVIEW_VIDEO_FINAL_CRF = String(process.env.REVIEW_VIDEO_FINAL_CRF || 17);
-const REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS = Math.max(0, Math.min(1.5, Number(process.env.REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS || 0.25)));
+// Put the cited frame just before the spoken phrase so the viewer is already
+// looking at the right moment. Older builds added this value to preroll, which
+// inverted the intent and made the picture arrive late.
+const REVIEW_VIDEO_VISUAL_LEAD_SECONDS = Math.max(0, Math.min(1.5, Number(
+  process.env.REVIEW_VIDEO_VISUAL_LEAD_SECONDS
+  ?? process.env.REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS
+  ?? 0.2
+)));
 const REVIEW_VIDEO_TIME_TOLERANCE_SECONDS = Math.max(0, Math.min(30, Number(process.env.REVIEW_VIDEO_TIME_TOLERANCE_SECONDS || 8)));
 const REVIEW_VIDEO_MIN_GENERIC_BROLL_GAP_SECONDS = Math.max(6, Number(process.env.REVIEW_VIDEO_MIN_GENERIC_BROLL_GAP_SECONDS || 18));
 const REVIEW_VIDEO_GENERIC_BROLL_SEARCH_STEPS = Math.max(3, Number(process.env.REVIEW_VIDEO_GENERIC_BROLL_SEARCH_STEPS || 8));
@@ -691,6 +698,14 @@ function buildTimelineTrace({
   const hasNarrated = Number.isFinite(narratedSeconds);
   const hasSelected = Number.isFinite(selectedSessionSeconds);
   const delta = hasNarrated && hasSelected ? Math.abs(narratedSeconds - selectedSessionSeconds) : null;
+  const spokenAnchorOffset = Number(window?.spokenAnchorOffset);
+  const playbackRate = Number(window?.playbackRate || 1);
+  const visualAtPhrase = Number.isFinite(Number(window?.sessionStartSeconds)) && Number.isFinite(spokenAnchorOffset)
+    ? Number(window.sessionStartSeconds) + spokenAnchorOffset * playbackRate
+    : null;
+  const phraseDelta = hasNarrated && Number.isFinite(visualAtPhrase)
+    ? visualAtPhrase - narratedSeconds
+    : null;
   return {
     narration_section: Number.isFinite(Number(segment?.paragraphIndex)) ? Number(segment.paragraphIndex) : null,
     spoken_segment_index: null,
@@ -700,6 +715,9 @@ function buildTimelineTrace({
     selected_visual_timestamp_s: hasSelected ? roundedSeconds(selectedSessionSeconds) : null,
     selected_visual_timestamp: hasSelected ? formatTimestamp(selectedSessionSeconds) : null,
     delta_seconds: delta === null ? null : roundedSeconds(delta),
+    spoken_anchor_audio_offset_s: Number.isFinite(spokenAnchorOffset) ? roundedSeconds(spokenAnchorOffset) : null,
+    visual_timestamp_at_spoken_phrase_s: Number.isFinite(visualAtPhrase) ? roundedSeconds(visualAtPhrase) : null,
+    phrase_visual_delta_s: phraseDelta === null ? null : roundedSeconds(phraseDelta),
     selection_reason: selectionReason,
     fallback_used: Boolean(fallbackUsed),
     fallback_type: fallbackType,
@@ -788,18 +806,20 @@ export function telemetryAtSessionTime(telemetry = {}, sessionSeconds = 0) {
   return hr > 0 ? { hr, avg, max, load } : null;
 }
 
-function telemetryOverlayFilters(telemetry) {
+export function telemetryOverlayFilters(telemetry) {
   if (!telemetry?.hr) return [];
   const fontPath = process.env.REVIEW_VIDEO_FONT || 'C\\:/Windows/Fonts/arial.ttf';
   return [
-    'drawbox=x=iw-520:y=28:w=490:h=92:color=0x160f27@0.92:t=fill',
-    'drawbox=x=iw-520:y=28:w=490:h=92:color=0xec4899@0.45:t=2',
-    `drawtext=fontfile='${fontPath}':text='♥':x=w-494:y=43:fontsize=48:fontcolor=0xff176d@1.0`,
-    `drawtext=fontfile='${fontPath}':text='${telemetry.hr}':x=w-430:y=34:fontsize=56:fontcolor=white@1.0`,
-    `drawtext=fontfile='${fontPath}':text='BPM':x=w-320:y=82:fontsize=15:fontcolor=0xcbd5e1@0.95`,
-    `drawtext=fontfile='${fontPath}':text='AVG ${telemetry.avg || '--'}':x=w-245:y=43:fontsize=20:fontcolor=0xf9a8d4@1.0`,
-    `drawtext=fontfile='${fontPath}':text='MAX ${telemetry.max || '--'}':x=w-245:y=69:fontsize=20:fontcolor=0xf9a8d4@1.0`,
-    `drawtext=fontfile='${fontPath}':text='LOAD ${telemetry.load}':x=w-115:y=56:fontsize=18:fontcolor=0x86efac@1.0`,
+    'drawbox=x=iw-398:y=24:w=374:h=72:color=0x050a0d@0.82:t=fill',
+    'drawbox=x=iw-398:y=24:w=374:h=72:color=0x2dd4bf@0.34:t=2',
+    'drawbox=x=iw-398:y=24:w=5:h=72:color=0x2dd4bf@0.94:t=fill',
+    `drawtext=fontfile='${fontPath}':text='HR LIVE':x=w-378:y=32:fontsize=12:fontcolor=0x5eead4@0.98`,
+    `drawtext=fontfile='${fontPath}':text='♥':x=w-378:y=52:fontsize=29:fontcolor=0xfb7185@1.0`,
+    `drawtext=fontfile='${fontPath}':text='${telemetry.hr}':x=w-338:y=42:fontsize=39:fontcolor=0xf8fafc@1.0`,
+    `drawtext=fontfile='${fontPath}':text='BPM':x=w-266:y=66:fontsize=11:fontcolor=0x94a3b8@0.96`,
+    `drawtext=fontfile='${fontPath}':text='AVG ${telemetry.avg || '--'}':x=w-211:y=43:fontsize=15:fontcolor=0xcbd5e1@0.98`,
+    `drawtext=fontfile='${fontPath}':text='MAX ${telemetry.max || '--'}':x=w-211:y=66:fontsize=15:fontcolor=0xfb7185@0.98`,
+    `drawtext=fontfile='${fontPath}':text='LOAD ${telemetry.load}\\\\%':x=w-112:y=54:fontsize=14:fontcolor=0x86efac@0.98`,
   ];
 }
 
@@ -1611,8 +1631,8 @@ export function buildReusedNarrationSegmentPlan({
   if (!(totalDuration > 0)) throw new Error('Reusable narration duration is unavailable.');
 
   const sourceLengths = hasExactChunkTiming
-    ? source.map((text) => Math.max(1, text.length))
-    : [Math.max(1, segments.reduce((sum, segment) => sum + segment.text.length, 0))];
+    ? source.map((text) => Math.max(1, wordCount(text)))
+    : [Math.max(1, segments.reduce((sum, segment) => sum + wordCount(segment.text), 0))];
   const sourceDurations = hasExactChunkTiming
     ? trims.map((chunk) => Number(chunk.trimmed_duration_seconds || 0))
     : [totalDuration];
@@ -1631,29 +1651,29 @@ export function buildReusedNarrationSegmentPlan({
     const chunkTotals = new Map();
     segments.forEach((segment) => {
       const chunkIndex = Number(segment.chunkIndex);
-      chunkTotals.set(chunkIndex, (chunkTotals.get(chunkIndex) || 0) + Math.max(1, segment.text.length));
+      chunkTotals.set(chunkIndex, (chunkTotals.get(chunkIndex) || 0) + Math.max(1, wordCount(segment.text)));
     });
     const chunkConsumed = new Map();
     return segments.map((segment) => {
       const chunkIndex = Number(segment.chunkIndex);
       const duration = sourceDurations[chunkIndex];
-      const totalCharacters = chunkTotals.get(chunkIndex) || 1;
+      const totalWords = chunkTotals.get(chunkIndex) || 1;
       const consumed = chunkConsumed.get(chunkIndex) || 0;
-      const nextConsumed = consumed + Math.max(1, segment.text.length);
+      const nextConsumed = consumed + Math.max(1, wordCount(segment.text));
       chunkConsumed.set(chunkIndex, nextConsumed);
-      const startSeconds = chunkStarts[chunkIndex] + (consumed / totalCharacters) * duration;
-      const endSeconds = chunkStarts[chunkIndex] + (nextConsumed / totalCharacters) * duration;
+      const startSeconds = chunkStarts[chunkIndex] + (consumed / totalWords) * duration;
+      const endSeconds = chunkStarts[chunkIndex] + (nextConsumed / totalWords) * duration;
       return {
         ...segment,
         startSeconds,
         durationSeconds: Math.max(0.05, endSeconds - startSeconds),
-        timingSource: 'saved_export_chunk_local_timing',
+        timingSource: 'saved_export_chunk_local_word_timing',
       };
     });
   }
 
   const sourceTotalCharacters = sourceLengths.reduce((sum, length) => sum + length, 0);
-  const segmentTotalCharacters = segments.reduce((sum, segment) => sum + segment.text.length, 0);
+  const segmentTotalCharacters = segments.reduce((sum, segment) => sum + Math.max(1, wordCount(segment.text)), 0);
 
   const timeAtSourceCharacter = (sourceCharacter) => {
     let remaining = Math.max(0, Math.min(sourceTotalCharacters, sourceCharacter));
@@ -1671,7 +1691,7 @@ export function buildReusedNarrationSegmentPlan({
   let consumedCharacters = 0;
   return segments.map((segment, index) => {
     const startCharacter = consumedCharacters;
-    consumedCharacters += segment.text.length;
+    consumedCharacters += Math.max(1, wordCount(segment.text));
     const endCharacter = index === segments.length - 1 ? segmentTotalCharacters : consumedCharacters;
     const scaledStart = (startCharacter / segmentTotalCharacters) * sourceTotalCharacters;
     const scaledEnd = (endCharacter / segmentTotalCharacters) * sourceTotalCharacters;
@@ -1683,7 +1703,7 @@ export function buildReusedNarrationSegmentPlan({
       ...segment,
       startSeconds,
       durationSeconds: Math.max(0.05, endSeconds - startSeconds),
-      timingSource: hasExactChunkTiming ? 'saved_export_chunk_durations' : 'saved_export_character_ratio',
+      timingSource: hasExactChunkTiming ? 'saved_export_chunk_word_durations' : 'saved_export_word_ratio',
     };
   });
 }
@@ -2083,7 +2103,7 @@ function isClimaxReviewSegment(segment = {}, event = {}) {
   return /\b(climax|ejaculat|orgasm|semen|fluid release|release of semen|emission|expulsion)\b/i.test(`${segment.text || ''} ${eventText(event)}`);
 }
 
-function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, sourceDuration, fallbackCursor }) {
+export function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, sourceDuration, fallbackCursor }) {
   const duration = Math.max(1.25, Number(audioDuration || 1));
   if (event) {
     const sessionTime = Number(event.session_time_s);
@@ -2098,7 +2118,7 @@ function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, s
       ? estimateSpokenAnchorOffsetSeconds({ segment, event, audioDuration })
       : 0;
     const preroll = directSpokenTime
-      ? (spokenAnchorOffset + REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS) * playbackRate
+      ? Math.max(0, spokenAnchorOffset - REVIEW_VIDEO_VISUAL_LEAD_SECONDS) * playbackRate
       : wantsClimax
       ? Math.min(3, sourceSliceDuration * 0.4)
       : 2.5;
@@ -2120,7 +2140,7 @@ function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, s
       slowMotion: wantsClimax,
       directSpokenTime,
       spokenAnchorOffset,
-      spokenTimeLeadSeconds: REVIEW_VIDEO_SPOKEN_TIME_LEAD_SECONDS,
+      spokenTimeLeadSeconds: REVIEW_VIDEO_VISUAL_LEAD_SECONDS,
     };
   }
   const start = clampClipStart(fallbackCursor, duration, sourceDuration);
@@ -2133,6 +2153,21 @@ function sourceWindowForSegment({ event, segment, audioDuration, primaryVideo, s
     playbackRate: 1,
     slowMotion: false,
   };
+}
+
+export function validateNarratedTimestampAlignment(generatedClips = [], toleranceSeconds = 0.75) {
+  const failures = generatedClips
+    .map((clip) => clip?.timeline_trace)
+    .filter((trace) => trace?.timestamp_required && Number.isFinite(Number(trace?.phrase_visual_delta_s)))
+    .filter((trace) => Math.abs(Number(trace.phrase_visual_delta_s)) > toleranceSeconds);
+  if (failures.length) {
+    const first = failures[0];
+    throw new Error(
+      `Review video stopped before publishing because ${first.narrated_timestamp || 'a cited time'} `
+      + `would be ${Math.abs(Number(first.phrase_visual_delta_s)).toFixed(2)}s out of sync with its spoken phrase.`
+    );
+  }
+  return true;
 }
 
 async function renderSourceContextSegment({
@@ -2939,6 +2974,7 @@ async function renderSegmentedSourceReviewVideo({
   if (!videoSegments.length || videoSegments.length !== narrationSegments.length) {
     throw new Error(`Review video segment assembly failed: ${videoSegments.length} video segments for ${narrationSegments.length} spoken segments.`);
   }
+  validateNarratedTimestampAlignment(generatedClips);
 
   const silentVideoPath = path.join(workDir, 'review-video-continuous.mp4');
   onProgress({ phase: 'muxing', current: 4, total: 5, message: 'Joining timestamp-reset video and narration tracks...' });

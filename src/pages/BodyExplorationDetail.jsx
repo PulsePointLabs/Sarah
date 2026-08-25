@@ -193,15 +193,8 @@ export default function BodyExplorationDetail() {
 
     (async () => {
       try {
-        const items = await base44.entities.BodyExploration.filter(
-          { id },
-          undefined,
-          1,
-          undefined,
-          { timeoutMs: 15000 },
-        );
+        const loadedExploration = await base44.entities.BodyExploration.get(id, { timeoutMs: 15000 });
         if (cancelled) return;
-        const loadedExploration = items[0] || null;
         setExploration(loadedExploration);
         setChatMessages(loadedExploration?.ai_body_exploration?._chat_messages || []);
         setExplorationNotes(loadedExploration?.notes || "");

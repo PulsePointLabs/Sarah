@@ -113,6 +113,16 @@ entitiesRouter.get('/:entity', (req, res) => {
   res.json(rows.map((row) => projectEntity(publicEntity(entity, row), fields)));
 });
 
+// Detail screens should not need to POST a filter request just to retrieve one
+// known record. Apart from being cheaper, this also avoids reverse proxies that
+// occasionally turn a large BodyExploration filter response into a 502.
+entitiesRouter.get('/:entity/:id', (req, res) => {
+  const entity = normalizeEntityName(req.params.entity);
+  const doc = getEntity(entity, req.params.id);
+  if (!doc) return res.status(404).json({ error: 'Not found' });
+  res.json(publicEntity(entity, doc));
+});
+
 entitiesRouter.post('/:entity/filter', (req, res) => {
   const entity = normalizeEntityName(req.params.entity);
   const { criteria = {}, sort, limit, skip, fields: rawFields, sampleLimit } = req.body || {};

@@ -729,10 +729,10 @@ export default function SessionReviewPlayer() {
                   <button
                     type="button"
                     onClick={() => handleSelectEventIndex(currentReviewEvent.index)}
-                    className="flex flex-wrap items-center justify-between gap-3 border-b border-teal-300/15 bg-teal-300/[0.06] px-4 py-2 text-left"
+                    className="grid h-[4.25rem] shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 overflow-hidden border-b border-teal-300/15 bg-teal-300/[0.06] px-4 py-2 text-left"
                   >
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-1.5">
+                    <div className="min-w-0 overflow-hidden">
+                      <div className="flex items-center gap-1.5 overflow-hidden whitespace-nowrap">
                         <span className="text-[10px] font-semibold uppercase tracking-wider text-teal-300">Closest Event</span>
                         {normalizeCategoryArray(currentReviewEvent.event.category).map((category) => {
                           const meta = getCategoryMeta(category);
@@ -744,7 +744,7 @@ export default function SessionReviewPlayer() {
                         })}
                         {currentReviewEvent.event.source === "motion_derived" && <MotionDerivedBadge event={currentReviewEvent.event} />}
                       </div>
-                      <p className="truncate text-sm text-zinc-200">{currentReviewEvent.event.note || "Event note"}</p>
+                      <p className="line-clamp-2 text-sm leading-5 text-zinc-200" title={currentReviewEvent.event.note || "Event note"}>{currentReviewEvent.event.note || "Event note"}</p>
                     </div>
                     <span className="font-mono text-sm font-semibold text-teal-300">{formatTime(currentReviewEvent.event.time_s)}</span>
                   </button>

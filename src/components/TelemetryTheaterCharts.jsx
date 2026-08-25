@@ -1,8 +1,9 @@
-import { Activity, Droplets, Gauge, HeartPulse, Wind } from "lucide-react";
+import { Activity, Droplets, HeartPulse } from "lucide-react";
 import {
   CartesianGrid,
   Line,
   LineChart,
+  Legend,
   ReferenceDot,
   ReferenceLine,
   ResponsiveContainer,
@@ -22,7 +23,7 @@ function downsample(rows, limit = 700) {
   return rows.filter((_row, index) => index % stride === 0 || index === rows.length - 1);
 }
 
-function TimelinePanel({ title, icon: Icon, rows, lines, cursor, durationS, onSeek, empty, accent = "#2dd4bf", compact = false }) {
+function TimelinePanel({ title, subtitle, icon: Icon, rows, lines, cursor, durationS, onSeek, empty, accent = "#2dd4bf", compact = false }) {
   const chartRows = downsample(rows.filter((row) => Number.isFinite(Number(row.time_offset_s))));
   const active = chartRows.reduce((best, row) => {
     if (!best) return row;
@@ -30,10 +31,13 @@ function TimelinePanel({ title, icon: Icon, rows, lines, cursor, durationS, onSe
   }, null);
   return (
     <section className={`group flex min-h-0 flex-col rounded-xl border border-white/10 bg-white/[0.035] shadow-[0_12px_30px_rgba(0,0,0,0.22)] backdrop-blur ${compact ? "p-1.5" : "p-2.5"}`}>
-      <div className={`${compact ? "mb-0" : "mb-1"} flex shrink-0 items-center justify-between gap-2`}>
-        <div className="flex items-center gap-1.5">
-          <Icon className="h-3.5 w-3.5" style={{ color: accent }} />
-          <h3 className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-300">{title}</h3>
+      <div className={`${compact ? "mb-0.5" : "mb-1"} flex shrink-0 items-start justify-between gap-2`}>
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <Icon className="h-3.5 w-3.5" style={{ color: accent }} />
+            <h3 className="truncate text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-200">{title}</h3>
+          </div>
+          {subtitle && <p className="mt-0.5 truncate text-[9px] text-zinc-500">{subtitle}</p>}
         </div>
         <span className="font-mono text-[10px] text-rose-300">{formatTime(cursor)}</span>
       </div>
@@ -47,7 +51,7 @@ function TimelinePanel({ title, icon: Icon, rows, lines, cursor, durationS, onSe
                 if (Number.isFinite(Number(event?.activeLabel))) onSeek?.(Number(event.activeLabel));
               }}
             >
-              <CartesianGrid stroke="#ffffff" strokeOpacity={0.07} vertical={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#ffffff" strokeOpacity={0.08} />
               <XAxis dataKey="time_offset_s" type="number" domain={[0, Math.max(1, durationS)]} tickFormatter={formatTime} tick={{ fill: "#71717a", fontSize: 8 }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: "#71717a", fontSize: 8 }} axisLine={false} tickLine={false} domain={["auto", "auto"]} />
               <Tooltip
@@ -62,6 +66,7 @@ function TimelinePanel({ title, icon: Icon, rows, lines, cursor, durationS, onSe
               {lines.map((line) => (
                 <Line key={line.key} type="monotone" dataKey={line.key} stroke={line.color} strokeWidth={line.width || 2} dot={line.dots ? { r: 3 } : false} connectNulls isAnimationActive={false} />
               ))}
+              <Legend wrapperStyle={{ fontSize: 9, color: "#a1a1aa" }} iconSize={8} />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -84,13 +89,14 @@ export default function TelemetryTheaterCharts({ timelineRows = [], pulseOxRows 
     right: Number(row.right_lower_body_activity) || null,
     hand: Number(row.hand_activity) || null,
   }));
+  const oxygenPressureRows = [...pulseOxRows, ...bloodPressureRows]
+    .filter((row) => Number.isFinite(Number(row.time_offset_s)))
+    .sort((a, b) => Number(a.time_offset_s) - Number(b.time_offset_s));
   return (
-    <div className={compact ? "grid h-full min-h-0 grid-rows-5 gap-1.5" : "space-y-2.5"}>
-      <TimelinePanel compact={compact} title="Heart Rate" icon={HeartPulse} rows={physiologyRows} cursor={cursor} durationS={durationS} onSeek={onSeek} empty="No heart-rate samples" accent="#fb7185" lines={[{ key: "hr", label: "Heart rate", color: "#fb7185", width: 2.4 }]} />
-      <TimelinePanel compact={compact} title="SpO₂ / Pulse Ox" icon={Droplets} rows={pulseOxRows} cursor={cursor} durationS={durationS} onSeek={onSeek} empty="No timed pulse-ox readings" accent="#38bdf8" lines={[{ key: "spo2_percent", label: "SpO₂", color: "#38bdf8", dots: true }, { key: "pulse_bpm", label: "Pulse", color: "#a78bfa" }]} />
-      <TimelinePanel compact={compact} title="Blood Pressure" icon={Gauge} rows={bloodPressureRows} cursor={cursor} durationS={durationS} onSeek={onSeek} empty="No timed BP readings" accent="#fbbf24" lines={[{ key: "systolic_mm_hg", label: "Systolic", color: "#fbbf24", dots: true }, { key: "diastolic_mm_hg", label: "Diastolic", color: "#fb923c", dots: true }, { key: "pulse_bpm", label: "Cuff pulse", color: "#c084fc", dots: true }]} />
-      <TimelinePanel compact={compact} title="HRV / Respiration" icon={Wind} rows={physiologyRows} cursor={cursor} durationS={durationS} onSeek={onSeek} empty="No usable HRV or respiration samples" accent="#2dd4bf" lines={[{ key: "hrv_rmssd_ms", label: "RMSSD", color: "#2dd4bf" }, { key: "respiration_bpm", label: "Respiration", color: "#60a5fa" }]} />
-      <TimelinePanel compact={compact} title="Body Motion" icon={Activity} rows={motionRows} cursor={cursor} durationS={durationS} onSeek={onSeek} empty="No saved motion trace" accent="#a78bfa" lines={[{ key: "left", label: "Left lower body", color: "#2dd4bf" }, { key: "right", label: "Right lower body", color: "#f59e0b" }, { key: "hand", label: "Hand activity", color: "#a78bfa" }]} />
+    <div className={compact ? "grid h-full min-h-0 grid-rows-3 gap-1.5" : "space-y-2.5"}>
+      <TimelinePanel compact={compact} title="Cardiac & Autonomic Trend" subtitle="Heart rate, RMSSD, and respiration" icon={HeartPulse} rows={physiologyRows} cursor={cursor} durationS={durationS} onSeek={onSeek} empty="No cardiac or autonomic samples" accent="#fb7185" lines={[{ key: "hr", label: "HR", color: "#fb7185", width: 2.4 }, { key: "hrv_rmssd_ms", label: "RMSSD", color: "#2dd4bf" }, { key: "respiration_bpm", label: "Resp", color: "#60a5fa" }]} />
+      <TimelinePanel compact={compact} title="Oxygen & Pressure Trend" subtitle="SpO₂, cuff pulse, and blood pressure" icon={Droplets} rows={oxygenPressureRows} cursor={cursor} durationS={durationS} onSeek={onSeek} empty="No timed pulse-ox or blood-pressure readings" accent="#38bdf8" lines={[{ key: "spo2_percent", label: "SpO₂", color: "#38bdf8", dots: true }, { key: "systolic_mm_hg", label: "SYS", color: "#fbbf24", dots: true }, { key: "diastolic_mm_hg", label: "DIA", color: "#fb923c", dots: true }, { key: "pulse_bpm", label: "Pulse", color: "#c084fc", dots: true }]} />
+      <TimelinePanel compact={compact} title="Respiratory & Somatic Response" subtitle="Lower-body balance and hand activity" icon={Activity} rows={motionRows} cursor={cursor} durationS={durationS} onSeek={onSeek} empty="No saved motion trace" accent="#a78bfa" lines={[{ key: "left", label: "Left", color: "#2dd4bf" }, { key: "right", label: "Right", color: "#f59e0b" }, { key: "hand", label: "Hand", color: "#a78bfa" }]} />
     </div>
   );
 }

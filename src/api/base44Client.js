@@ -138,6 +138,7 @@ async function invokeFunction(name, payload, options = {}) {
 
 function entityApi(entity) {
   return {
+    get: (id, options = {}) => request(`/entities/${entity}/${encodeURIComponent(id)}`, options),
     list: (sort, limit, skip, options = {}) => {
       const params = new URLSearchParams();
       if (sort) params.set('sort', sort);

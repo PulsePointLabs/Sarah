@@ -20,7 +20,10 @@ import {
   selectDistinctReviewSourceStart,
   selectReviewVideoEventForSegment,
   telemetryAtSessionTime,
+  telemetryOverlayFilters,
   timestampRequirementForSegment,
+  sourceWindowForSegment,
+  validateNarratedTimestampAlignment,
 } from './sessionReviewVideoRenderer.js';
 
 test('Body Exploration narration headings do not demand unrelated visual footage', () => {
@@ -202,6 +205,46 @@ test('review video telemetry uses the nearest session-time HR sample', () => {
   assert.deepEqual(telemetry, { hr: 104, avg: 99, max: 119, load: 52 });
 });
 
+test('published telemetry badge is compact and uses the glass teal treatment', () => {
+  const filters = telemetryOverlayFilters({ hr: 109, avg: 106, max: 122, load: 13 }).join(',');
+  assert.match(filters, /w=374:h=72/);
+  assert.match(filters, /0x2dd4bf/);
+  assert.match(filters, /HR LIVE/);
+  assert.doesNotMatch(filters, /w=490:h=92/);
+});
+
+test('spoken 10:30 moment is already on screen when narration names it', () => {
+  const window = sourceWindowForSegment({
+    event: {
+      session_time_s: 630,
+      source: 'spoken_segment_time',
+      direct_spoken_time: true,
+      spoken_char_index: 3,
+    },
+    segment: { text: 'At ten minutes and 30 seconds, the visible change begins.' },
+    audioDuration: 10,
+    primaryVideo: { timelineOffsetSeconds: 0 },
+    sourceDuration: 2967,
+    fallbackCursor: 0,
+  });
+  const visualAtPhrase = window.sessionStartSeconds + window.spokenAnchorOffset * window.playbackRate;
+  assert.ok(visualAtPhrase >= 630);
+  assert.ok(visualAtPhrase - 630 <= 0.25);
+});
+
+test('renderer refuses to publish a cited-time segment with visible drift', () => {
+  assert.throws(() => validateNarratedTimestampAlignment([{
+    timeline_trace: {
+      timestamp_required: true,
+      narrated_timestamp: '10:30',
+      phrase_visual_delta_s: 2.4,
+    },
+  }]), /stopped before publishing/i);
+  assert.equal(validateNarratedTimestampAlignment([{
+    timeline_trace: { timestamp_required: true, phrase_visual_delta_s: 0.2 },
+  }]), true);
+});
+
 test('matching saved narration is split locally using persisted export timing', () => {
   const plan = buildReusedNarrationSegmentPlan({
     narrationSegments: [
@@ -218,7 +261,7 @@ test('matching saved narration is split locally using persisted export timing', 
 
   assert.equal(plan.length, 2);
   assert.equal(plan[0].startSeconds, 0);
-  assert.equal(plan[0].timingSource, 'saved_export_chunk_durations');
+  assert.equal(plan[0].timingSource, 'saved_export_chunk_word_durations');
   assert.ok(Math.abs(plan.reduce((sum, item) => sum + item.durationSeconds, 0) - 4) < 0.001);
 });
 
@@ -258,7 +301,7 @@ test('review narration stays inside its exact saved TTS chunk instead of accumul
   assert.ok(secondChunkSegment);
   assert.equal(secondChunkSegment.startSeconds, 10);
   assert.equal(secondChunkSegment.durationSeconds, 2);
-  assert.equal(secondChunkSegment.timingSource, 'saved_export_chunk_local_timing');
+  assert.equal(secondChunkSegment.timingSource, 'saved_export_chunk_local_word_timing');
 });
 
 test('untimed narration continues from the current paragraph timeline', () => {
