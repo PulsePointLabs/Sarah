@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prepareCloudAnalysisPreflight } from './preflight.js';
 import { fuseCloudMultimodalEvidence } from './fusion.js';
+import { persistCloudAnalysisResult } from './persistence.js';
 import { getEntity, listEntitiesByExactCriteria } from '../../db.js';
 
 const serviceDir = path.dirname(fileURLToPath(import.meta.url));
@@ -184,7 +185,22 @@ export async function runCloudMultimodalAnalysis(payload = {}, { signal, onProgr
     physiology,
   });
   const fusedPath = path.join(resultDir, `${fused.id}.json`);
-  await fsp.writeFile(fusedPath, JSON.stringify(fused, null, 2), 'utf8');
+  const sourceIndex = preflight.localAssets.findIndex((asset) => (
+    path.resolve(String(asset.local_path || '')).toLowerCase() === videoPath.toLowerCase()
+  ));
+  const sourceVideo = preflight.cloudJob.source_media[sourceIndex] || {};
+  const finalResult = {
+    ...fused,
+    saved_to_record: true,
+    saved_at: new Date().toISOString(),
+    result_files: {
+      audio: path.basename(audio.summary.result_path),
+      visual: path.basename(visual.summary.result_path),
+      fused: path.basename(fusedPath),
+    },
+  };
+  await fsp.writeFile(fusedPath, JSON.stringify(finalResult, null, 2), 'utf8');
+  persistCloudAnalysisResult({ sessionId, recordType, result: finalResult, sourceVideo });
 
   onProgress?.({
     phase: 'complete',
@@ -192,12 +208,5 @@ export async function runCloudMultimodalAnalysis(payload = {}, { signal, onProgr
     total: 4,
     message: 'Cloud multimodal evidence is ready for review.',
   });
-  return {
-    ...fused,
-    result_files: {
-      audio: path.basename(audio.summary.result_path),
-      visual: path.basename(visual.summary.result_path),
-      fused: path.basename(fusedPath),
-    },
-  };
+  return finalResult;
 }

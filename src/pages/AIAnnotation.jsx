@@ -48,6 +48,9 @@ function clearAIPassAnalysis(record, type) {
   delete retainedAnalysis._video_pass_detail_flow;
   delete retainedAnalysis._video_pass_digest;
   delete retainedAnalysis.ai_audio_passes;
+  delete retainedAnalysis.cloud_multimodal_passes;
+  delete retainedAnalysis.cloud_multimodal_latest_id;
+  delete retainedAnalysis.cloud_multimodal_updated_at;
   return { analysisField, retainedAnalysis };
 }
 
@@ -56,7 +59,8 @@ function storedAIPassFindingCount(record, type) {
   const analysis = record?.[analysisField] || {};
   const videoFindings = Array.isArray(analysis._video_pass_findings) ? analysis._video_pass_findings.length : 0;
   const audioPasses = Array.isArray(analysis.ai_audio_passes) ? analysis.ai_audio_passes.length : 0;
-  return videoFindings + audioPasses;
+  const cloudPasses = Array.isArray(analysis.cloud_multimodal_passes) ? analysis.cloud_multimodal_passes.length : 0;
+  return videoFindings + audioPasses + cloudPasses;
 }
 
 export default function AIAnnotation() {
@@ -198,6 +202,11 @@ export default function AIAnnotation() {
         source: "ai_video_pass",
         recordType: selectedType,
       },
+      mode: "delete",
+    }).catch(() => null);
+    await clearScopedBackgroundJobs({
+      type: "cloud_multimodal_analysis",
+      meta: { sessionId: record.id, source: "AIVideoPassPanel" },
       mode: "delete",
     }).catch(() => null);
     const updated = {

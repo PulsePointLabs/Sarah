@@ -273,6 +273,24 @@ function listText(values) {
   return String(values || "").trim();
 }
 
+function cloudMultimodalEvidenceText(analysis = {}) {
+  const pass = (Array.isArray(analysis.cloud_multimodal_passes) ? analysis.cloud_multimodal_passes : [])[0];
+  const result = pass?.result;
+  if (!result?.ok) return "";
+  const candidates = (result.strong_candidates || []).slice(0, 20).map((item) => {
+    const start = Number(item.start_ms || 0) / 1000;
+    const end = Number(item.end_ms ?? item.start_ms ?? 0) / 1000;
+    return `[${fmtMmSs(start)}-${fmtMmSs(end)}] ${compactText(item.basis || item.label, 240)}`;
+  });
+  return [
+    result.summary,
+    candidates.length ? `Cloud candidates requiring review, not accepted facts: ${candidates.join(" | ")}` : null,
+    result.physiology?.available_streams?.length
+      ? `Locally aligned physiology streams: ${result.physiology.available_streams.join(", ")}.`
+      : null,
+  ].filter(Boolean).join(" ");
+}
+
 function buildSessionVideoContext(session, selectedVideo, timelineRows = []) {
   const methods = listText(session?.methods);
   const tags = listText(session?.tags);
@@ -314,6 +332,7 @@ function buildSessionVideoContext(session, selectedVideo, timelineRows = []) {
   const telemetrySpan = timelineRows.length
     ? `Telemetry rows: ${timelineRows.length}; session span approximately ${fmtMmSs(estimateSessionEnd(session, timelineRows))}.`
     : "";
+  const cloudEvidence = cloudMultimodalEvidenceText(session?.ai_analysis);
 
   return [
     linkedLabel ? `Linked video selected: ${linkedLabel}` : null,
@@ -325,6 +344,7 @@ function buildSessionVideoContext(session, selectedVideo, timelineRows = []) {
     session?.notes ? `Full session notes: ${compactText(session.notes, 1800)}` : null,
     timelineEvents ? `Manual/timestamped session notes: ${timelineEvents}` : null,
     audioPasses ? `Accepted audio-pass evidence: ${audioPasses}` : null,
+    cloudEvidence ? `Saved cloud multimodal evidence: ${cloudEvidence}` : null,
   ].filter(Boolean).join("\n");
 }
 
@@ -366,6 +386,7 @@ function buildBodyExplorationVideoContext(exploration, selectedVideo, timelineRo
   const telemetrySpan = timelineRows.length
     ? `Telemetry rows: ${timelineRows.length}; exploration span approximately ${fmtMmSs(estimateSessionEnd(exploration, timelineRows))}.`
     : "";
+  const cloudEvidence = cloudMultimodalEvidenceText(exploration?.ai_body_exploration);
 
   return [
     linkedLabel ? `Linked video selected: ${linkedLabel}` : null,
@@ -375,6 +396,7 @@ function buildBodyExplorationVideoContext(exploration, selectedVideo, timelineRo
     exploration?.notes ? `Full exploration notes: ${compactText(exploration.notes, 1800)}` : null,
     timelineEvents ? `Manual/timestamped exploration notes: ${timelineEvents}` : null,
     audioPasses ? `Accepted audio-pass evidence: ${audioPasses}` : null,
+    cloudEvidence ? `Saved cloud multimodal evidence: ${cloudEvidence}` : null,
   ].filter(Boolean).join("\n");
 }
 
@@ -2162,6 +2184,9 @@ export default function AIVideoPassPanel({
     delete retainedAnalysis._video_pass_detail_flow;
     delete retainedAnalysis._video_pass_digest;
     delete retainedAnalysis.ai_audio_passes;
+    delete retainedAnalysis.cloud_multimodal_passes;
+    delete retainedAnalysis.cloud_multimodal_latest_id;
+    delete retainedAnalysis.cloud_multimodal_updated_at;
     await clearScopedBackgroundJobs({
       type: "ai_invoke",
       meta: {
@@ -2169,6 +2194,11 @@ export default function AIVideoPassPanel({
         source: "ai_video_pass",
         recordType,
       },
+      mode: "delete",
+    }).catch(() => null);
+    await clearScopedBackgroundJobs({
+      type: "cloud_multimodal_analysis",
+      meta: { sessionId: session.id, source: "AIVideoPassPanel" },
       mode: "delete",
     }).catch(() => null);
     const retainedEvents = (session?.event_timeline || []).filter((event) => !isAIGeneratedPassEvent(event));
@@ -2987,6 +3017,20 @@ Return a corrected compact card for this same window. Keep timeline events only 
   useEffect(() => {
     let cancelled = false;
     if (!session?.id || !selectedVideo?.path) return undefined;
+    const selectedFilename = String(selectedVideo.filename || selectedVideo.label || selectedVideo.path).split(/[\\/]/).pop();
+    const savedPass = (Array.isArray(session?.[analysisField]?.cloud_multimodal_passes)
+      ? session[analysisField].cloud_multimodal_passes
+      : [])
+      .find((entry) => !entry?.source_video?.filename || entry.source_video.filename === selectedFilename);
+    if (savedPass?.result?.ok) {
+      setLocalVisionResult(savedPass.result);
+      const savedCard = cardFromLocalVisionResult(savedPass.result, selectedVideo, isExploration);
+      if (savedCard) {
+        setCards((current) => [savedCard, ...current.filter((card) => !card.cloudMultimodal)]);
+        setExpanded((previous) => ({ ...previous, [savedCard.id]: true }));
+      }
+      setLocalVisionStatus(`Loaded saved cloud deep analysis from ${new Date(savedPass.saved_at || session[analysisField].cloud_multimodal_updated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`);
+    }
     listBackgroundJobs({
       type: "cloud_multimodal_analysis",
       status: "complete",
@@ -3015,7 +3059,7 @@ Return a corrected compact card for this same window. Keep timeline events only 
     return () => {
       cancelled = true;
     };
-  }, [isExploration, selectedVideo, session?.id]);
+  }, [analysisField, isExploration, selectedVideo, session]);
 
   const restoreLatestLocalVisionResult = async () => {
     if (!session?.id || !selectedVideo?.path) return;
@@ -3364,6 +3408,8 @@ Return only the structured JSON matching the requested schema.`,
         setCards([cloudCard]);
         setExpanded((previous) => ({ ...previous, [cloudCard.id]: true }));
       }
+      const refreshedRecord = await entity.get(session.id).catch(() => null);
+      if (refreshedRecord) onSessionUpdate?.(refreshedRecord);
       setLocalVisionStatus(`Cloud deep analysis complete: ${result.visual_summary?.frame_metrics || 0} visual samples, ${result.visual_summary?.semantic_windows || 0} semantic windows, and ${result.audio_summary?.reviewable_acoustic_candidates || 0} audio candidates ready for review.`);
     } catch (err) {
       setLocalVisionError(friendlyVideoWorkflowError(err, "Cloud deep analysis failed."));

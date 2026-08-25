@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fuseCloudMultimodalEvidence } from './fusion.js';
+import { buildCloudAnalysisRecordUpdate } from './persistence.js';
 
 test('cloud fusion aligns overlapping evidence and does not auto-promote candidates', () => {
   const result = fuseCloudMultimodalEvidence({
@@ -44,4 +45,16 @@ test('cloud fusion aligns overlapping evidence and does not auto-promote candida
   assert.equal(result.visual_summary.pose_lost, 1);
   assert.equal(result.multimodal_windows[0].physiology.heart_rate_bpm.avg, 105);
   assert.equal(result.multimodal_windows[0].physiology.blood_pressure[0].systolic_mm_hg, 120);
+});
+
+test('cloud persistence keeps existing analysis and stores path-free source metadata', () => {
+  const update = buildCloudAnalysisRecordUpdate({ ai_analysis: { narrative: 'keep me' } }, {
+    result: { ok: true, id: 'cloud-1', summary: 'ready' },
+    sourceVideo: { filename: 'wide.mkv', role: 'wide', fingerprint: 'abc', local_path: 'E:\\private.mkv' },
+    savedAt: '2026-08-25T20:00:00.000Z',
+  });
+  assert.equal(update.analysis.narrative, 'keep me');
+  assert.equal(update.analysis.cloud_multimodal_passes[0].result.id, 'cloud-1');
+  assert.equal(update.analysis.cloud_multimodal_passes[0].source_video.filename, 'wide.mkv');
+  assert.equal('local_path' in update.analysis.cloud_multimodal_passes[0].source_video, false);
 });
