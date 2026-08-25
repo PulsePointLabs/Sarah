@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.232",
-  "commit": "dab05d1",
-  "commitMessage": "Bump Sarah to v0.1.232",
-  "builtAt": "2026-08-24T20:29:50.526Z"
+  "version": "0.1.233",
+  "commit": "eb0c5ec",
+  "commitMessage": "Fix review video timing and telemetry theater",
+  "builtAt": "2026-08-25T00:21:09.986Z"
 };
