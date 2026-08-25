@@ -26,7 +26,7 @@ test('cloud fusion aligns overlapping evidence and does not auto-promote candida
         source_asset_id: 'visual',
         model_name: 'qwen',
         model_version: '7b',
-        description: { body_position: 'supine', actions: ['hand movement'], uncertainty: 'limited angle' },
+        description: { body_position: 'supine', actions: ['The subject is moving their hands'], uncertainty: 'limited angle' },
       }],
     },
     preflight: { cloudJob: { evidence_streams: [{ name: 'heart_rate', available: true }] } },
@@ -46,8 +46,10 @@ test('cloud fusion aligns overlapping evidence and does not auto-promote candida
   assert.equal(result.multimodal_windows[0].physiology.heart_rate_bpm.avg, 105);
   assert.equal(result.multimodal_windows[0].physiology.blood_pressure[0].systolic_mm_hg, 120);
   assert.equal(result.multimodal_windows[0].label, 'cloud_visual_review_candidate');
-  assert.match(result.multimodal_windows[0].review_summary, /^You appear supine\. Visible activity: hand movement\./);
-  assert.deepEqual(result.multimodal_windows[0].visual_evidence.actions, ['hand movement']);
+  assert.match(result.multimodal_windows[0].review_summary, /^You appear supine\. Visible activity: you are moving your hands\./);
+  assert.doesNotMatch(result.multimodal_windows[0].review_summary, /\b(their|they|them)\b/i);
+  assert.doesNotMatch(result.multimodal_windows[0].review_summary, /[,;]\s+(Your|You|The)\b/);
+  assert.deepEqual(result.multimodal_windows[0].visual_evidence.actions, ['The subject is moving their hands']);
   assert.doesNotMatch(result.multimodal_windows[0].basis, /\.\.\.$/);
 });
 

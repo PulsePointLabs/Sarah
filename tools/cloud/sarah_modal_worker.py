@@ -4,6 +4,7 @@ import base64
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -14,7 +15,7 @@ import modal
 
 
 APP_NAME = "sarah-cloud-analysis"
-WORKER_VERSION = "multimodal-pilot-v1"
+WORKER_VERSION = "multimodal-full-session-v2"
 INGEST_VOLUME_NAME = "sarah-analysis-encrypted-ingest"
 
 app = modal.App(APP_NAME)
@@ -188,34 +189,28 @@ def _extract_json_object(value: str):
     return {"raw_description": text, "parse_state": "unstructured"}
 
 
-def _select_visual_timestamps(frame_metrics: list[dict], duration_seconds: float, limit: int = 32) -> list[float]:
-    candidates = {0.0, max(0.0, duration_seconds - 1.0)}
-    anchor = 30.0
+def _select_visual_timestamps(frame_metrics: list[dict], duration_seconds: float, limit: int | None = None) -> list[float]:
+    # Chronological 24-second coverage is the foundation so a long session cannot
+    # collapse into a handful of early motion peaks. Extra motion/scene anchors add
+    # detail without replacing the full-range windows.
+    chronological = []
+    anchor = 12.0
     while anchor < duration_seconds:
-        candidates.add(anchor)
-        anchor += 60.0
+        chronological.append(anchor)
+        anchor += 24.0
+    if not chronological:
+        chronological = [max(0.0, duration_seconds / 2.0)]
+    max_windows = limit or min(96, max(32, math.ceil(duration_seconds / 24.0) + 12))
+    selected = list(chronological[:max_windows])
     ranked_motion = sorted(frame_metrics, key=lambda item: float(item.get("motion") or 0), reverse=True)
     ranked_scene = sorted(frame_metrics, key=lambda item: float(item.get("scene_score") or 0), reverse=True)
-    for item in ranked_motion[:16] + ranked_scene[:16]:
-        candidates.add(float(item.get("time_s") or 0))
-    selected = []
-    for timestamp in sorted(candidates):
-        if not selected or timestamp - selected[-1] >= 3.0:
+    for item in ranked_motion[:24] + ranked_scene[:24]:
+        timestamp = min(max(0.0, float(item.get("time_s") or 0)), max(0.0, duration_seconds - 0.5))
+        if len(selected) >= max_windows:
+            break
+        if all(abs(timestamp - existing) >= 6.0 for existing in selected):
             selected.append(timestamp)
-    if len(selected) <= limit:
-        return selected
-    keep = {selected[0], selected[-1]}
-    ranked = sorted(
-        selected[1:-1],
-        key=lambda timestamp: max(
-            (float(item.get("motion") or 0) + float(item.get("scene_score") or 0))
-            for item in frame_metrics
-            if abs(float(item.get("time_s") or 0) - timestamp) <= 0.3
-        ) if any(abs(float(item.get("time_s") or 0) - timestamp) <= 0.3 for item in frame_metrics) else 0,
-        reverse=True,
-    )
-    keep.update(ranked[:max(0, limit - len(keep))])
-    return sorted(keep)
+    return sorted(selected)
 
 
 @app.function(
@@ -522,12 +517,16 @@ def analyze_encrypted_visual(job_id: str, asset_manifest: dict, key_b64: str) ->
         for timestamp in selected_timestamps:
             images = []
             actual_times = []
-            for frame_time in (max(0.0, timestamp - 1.0), timestamp, min(duration_seconds, timestamp + 1.0)):
+            window_start = max(0.0, timestamp - 11.5)
+            window_end = min(duration_seconds, timestamp + 11.5)
+            for frame_time in np.linspace(window_start, window_end, num=8):
                 semantic_capture.set(cv2.CAP_PROP_POS_MSEC, frame_time * 1000)
                 ok, frame = semantic_capture.read()
                 if not ok:
                     continue
-                images.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+                image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                image.thumbnail((960, 960))
+                images.append(image)
                 actual_times.append(_clean_float(frame_time))
             if images:
                 semantic_frames.append({"time_s": timestamp, "frame_times_s": actual_times, "images": images})
@@ -541,7 +540,7 @@ def analyze_encrypted_visual(job_id: str, asset_manifest: dict, key_b64: str) ->
             device_map="auto",
         ).eval()
         prompt = (
-            "Analyze these three nearby frames from a private physiological session as clinical visual evidence. "
+            "Analyze these ordered frames spanning one roughly 24-second window from a private physiological session as clinical visual evidence. "
             "Use anatomically accurate, non-erotic language. Report only what is visibly supported and describe change across frames. "
             "Do not infer identity, intent, sensation, diagnosis, arousal, or climax. Avoid repeating 'the subject' or restating the same fact. "
             "Write short natural phrases suitable for a timestamped session note: at most two items per array and 220 words total. "

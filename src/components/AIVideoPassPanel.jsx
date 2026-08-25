@@ -277,14 +277,28 @@ function cloudMultimodalEvidenceText(analysis = {}) {
   const pass = (Array.isArray(analysis.cloud_multimodal_passes) ? analysis.cloud_multimodal_passes : [])[0];
   const result = pass?.result;
   if (!result?.ok) return "";
-  const candidates = (result.strong_candidates || []).slice(0, 20).map((item) => {
+  const all = arrayFromMaybe(result.strong_candidates)
+    .slice()
+    .sort((a, b) => Number(a?.start_ms || 0) - Number(b?.start_ms || 0));
+  const audio = all.filter((item) => String(item?.provenance?.modality || "").toLowerCase() === "audio");
+  const visual = all.filter((item) => String(item?.provenance?.modality || "").toLowerCase() !== "audio");
+  const visualSlots = Math.min(18, visual.length);
+  const sampledVisual = Array.from({ length: visualSlots }, (_, index) => {
+    const position = visualSlots <= 1 ? 0 : Math.round((index * (visual.length - 1)) / (visualSlots - 1));
+    return visual[position];
+  });
+  const selected = [...sampledVisual, ...audio.slice(0, 10)]
+    .sort((a, b) => Number(a?.start_ms || 0) - Number(b?.start_ms || 0));
+  const candidates = selected.map((item) => {
     const start = Number(item.start_ms || 0) / 1000;
     const end = Number(item.end_ms ?? item.start_ms ?? 0) / 1000;
-    return `[${fmtMmSs(start)}-${fmtMmSs(end)}] ${compactText(item.basis || item.label, 240)}`;
+    const modality = String(item?.provenance?.modality || "visual").toLowerCase();
+    return `[${fmtMmSs(start)}-${fmtMmSs(end)}; ${modality}] ${compactText(item.review_summary || item.basis || item.label, 320)}`;
   });
   return [
     result.summary,
-    candidates.length ? `Cloud candidates requiring review, not accepted facts: ${candidates.join(" | ")}` : null,
+    candidates.length ? `Timestamped selector evidence (candidate status applies to every item; do not treat it as an accepted fact): ${candidates.join(" | ")}` : null,
+    all.length > selected.length ? `${all.length - selected.length} additional candidates remain saved; this prompt uses an evenly distributed full-session subset plus audio candidates.` : null,
     result.physiology?.available_streams?.length
       ? `Locally aligned physiology streams: ${result.physiology.available_streams.join(", ")}.`
       : null,
@@ -1528,6 +1542,48 @@ function localVisionEventFromItem(item, selectedVideo, windowInfo, isExploration
   };
 }
 
+function cloudEvidenceOverviewFindings(result = {}) {
+  const range = result.range || {};
+  const endSeconds = Number(range.endMs ?? range.end_ms ?? 0) / 1000;
+  const visual = result.visual_summary || {};
+  const audio = result.audio_summary || {};
+  const streams = arrayFromMaybe(result.physiology?.available_streams);
+  const incomplete = arrayFromMaybe(result.multimodal_windows)
+    .filter((item) => item?.visual_evidence?.raw_model_output).length;
+  return [
+    {
+      title: "Full-session evidence coverage",
+      text: `The cloud pre-pass screened ${fmtMmSs(0)}-${fmtMmSs(endSeconds)} rather than stopping at the early timestamps shown first below. It measured ${visual.frame_metrics || 0} visual frames and selected ${visual.semantic_windows || 0} timestamped visual checkpoints for deeper review.`,
+      category: "cloud_coverage",
+      confidence: "high",
+    },
+    {
+      title: "Visual evidence layer",
+      text: `${visual.pose_samples || 0} pose checks and ${visual.semantic_windows || 0} model-reviewed checkpoints are preserved as selector evidence. They are inputs for Sarah-style annotation and cross-checking, not finished annotations by themselves.`,
+      category: "cloud_visual_evidence",
+      confidence: "moderate",
+    },
+    {
+      title: "Audio evidence layer",
+      text: `${audio.reviewable_acoustic_candidates || 0} moderate/strong acoustic candidates were retained${audio.reliable_speech_segments ? `, including ${audio.reliable_speech_segments} reliable speech segment${audio.reliable_speech_segments === 1 ? "" : "s"}` : "; no spoken words passed the reliability gate"}. Audio labels remain supporting evidence until Sarah aligns them with the visual timeline and session context.`,
+      category: "cloud_audio_evidence",
+      confidence: "moderate",
+    },
+    streams.length ? {
+      title: "Locally aligned physiology",
+      text: `Sarah can align this evidence with the saved ${streams.join(", ").replace(/_/g, " ")} stream${streams.length === 1 ? "" : "s"}.`,
+      category: "physiology",
+      confidence: "high",
+    } : null,
+    incomplete ? {
+      title: "Preserved incomplete model responses",
+      text: `${incomplete} visual checkpoint response${incomplete === 1 ? "" : "s"} reached the prior token ceiling. Every complete field was recovered for use, and the untouched raw response remains stored for provenance.`,
+      category: "cloud_provenance",
+      confidence: "high",
+    } : null,
+  ].filter(Boolean);
+}
+
 function cardFromLocalVisionResult(result, selectedVideo, isExploration = false) {
   if (!result?.ok) return null;
   const isCloudMultimodal = result.mode === "cloud_multimodal";
@@ -1551,8 +1607,9 @@ function cardFromLocalVisionResult(result, selectedVideo, isExploration = false)
     confidence: confidenceWord(candidate.confidence ?? candidate.score),
   }));
   const visibleFindings = [
-    ...actionableFindings,
-    ...strongCandidateFindings,
+    ...(isCloudMultimodal ? cloudEvidenceOverviewFindings(result) : []),
+    ...(!isCloudMultimodal ? actionableFindings : []),
+    ...(!isCloudMultimodal ? strongCandidateFindings : []),
     ...(result.visible_objects || []).map((item) => localVisionFindingFromItem(item)),
     ...(result.visible_actions || []).map((item) => localVisionFindingFromItem(item)),
     ...(result.stage_candidates || [])
@@ -1597,7 +1654,7 @@ function cardFromLocalVisionResult(result, selectedVideo, isExploration = false)
   const promotedEvents = arrayFromMaybe(result.actionable_findings)
     .map((item, index) => localVisionEventFromItem(item, selectedVideo, windowInfo, isExploration, "confirmed", index))
     .filter(Boolean);
-  const candidateEvents = arrayFromMaybe(result.strong_candidates)
+  const candidateEvents = (isCloudMultimodal ? [] : arrayFromMaybe(result.strong_candidates))
     .slice(0, 8)
     .map((item, index) => localVisionEventFromItem(item, selectedVideo, windowInfo, isExploration, "candidate", index))
     .filter(Boolean);
@@ -1622,7 +1679,7 @@ function cardFromLocalVisionResult(result, selectedVideo, isExploration = false)
     localVision: true,
     cloudMultimodal: isCloudMultimodal,
     localVisionResultId: result.id || null,
-    label: `${isCloudMultimodal ? "Sarah cloud deep read" : "Sarah local read"} ${fmtMmSs(start)}-${fmtMmSs(end)}`,
+    label: `${isCloudMultimodal ? "Cloud evidence layer" : "Sarah local read"} ${fmtMmSs(start)}-${fmtMmSs(end)}`,
     window: { start, end },
     sourceWindow: { start: startSource, end: endSource },
     sourceVideo: selectedVideo,
@@ -1634,7 +1691,9 @@ function cardFromLocalVisionResult(result, selectedVideo, isExploration = false)
     telemetry: isCloudMultimodal
       ? "Encrypted cloud multimodal evidence. Temporary cloud media was deleted after the job; candidates require review before acceptance."
       : "Local-only visual evidence. Frames stayed on this machine; no cloud frame upload.",
-    summary: result.summary || sarahLocalVisionSummary(result),
+    summary: isCloudMultimodal
+      ? `Cloud screening covered the complete ${fmtMmSs(start)}-${fmtMmSs(end)} source. The technical checkpoints are preserved below as an evidence audit; Sarah-style annotations remain the human-readable interpretation layer.`
+      : result.summary || sarahLocalVisionSummary(result),
     findings: visibleFindings.length ? visibleFindings : [fallbackFinding],
     events,
     confidence: confidenceWord(result.confidence?.overall),
@@ -3405,7 +3464,7 @@ Return only the structured JSON matching the requested schema.`,
       setLocalVisionResult(result);
       const cloudCard = cardFromLocalVisionResult(result, selectedVideo, isExploration);
       if (cloudCard) {
-        setCards([cloudCard]);
+        setCards((current) => [cloudCard, ...current.filter((card) => !card.cloudMultimodal)]);
         setExpanded((previous) => ({ ...previous, [cloudCard.id]: true }));
       }
       const refreshedRecord = await entity.get(session.id).catch(() => null);
@@ -4931,7 +4990,7 @@ Return only the structured JSON matching the requested schema.`,
               )}
             </div>
 
-            {localVisionResult.coverage_segments?.length > 0 && (
+            {localVisionResult.mode !== "cloud_multimodal" && localVisionResult.coverage_segments?.length > 0 && (
               <details open className="rounded-lg border border-border bg-background/70">
                 <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Whole-Range Coverage ({localVisionResult.coverage_segments.length})
@@ -4963,7 +5022,40 @@ Return only the structured JSON matching the requested schema.`,
               </details>
             )}
 
-            {localVisionResult.strong_candidates?.length > 0 && (
+            {localVisionResult.mode === "cloud_multimodal" && localVisionResult.strong_candidates?.length > 0 && (
+              <details className="rounded-lg border border-cyan-400/20 bg-cyan-400/5">
+                <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-cyan-200">
+                  Technical evidence audit ({localVisionResult.strong_candidates.length} checkpoints across {fmtMmSs((localVisionResult.range?.endMs || 0) / 1000)})
+                </summary>
+                <div className="space-y-2 border-t border-border p-3">
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    This is the retained selector evidence, not the finished annotation narrative. Candidate status applies to this entire list and is intentionally shown once here rather than repeated on every timestamp.
+                  </p>
+                  {localVisionTierRows(localVisionResult.strong_candidates, 200).map((candidate, index) => {
+                    const modality = String(candidate?.provenance?.modality || "visual").toLowerCase();
+                    const label = modality === "audio"
+                      ? humanizeLocalVisionLabel(candidate.label || "audio activity")
+                      : "Visual checkpoint";
+                    return (
+                      <button
+                        type="button"
+                        key={candidate.id || `${candidate.label}-${candidate.start_ms}-${index}`}
+                        onClick={() => seekPreviewVideo(sessionTimeForSource((candidate.start_ms || 0) / 1000, selectedVideo))}
+                        className="w-full rounded-md border border-border bg-background/70 px-2 py-2 text-left text-xs hover:border-cyan-300/50"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-semibold text-foreground">{formatLocalVisionMs(candidate.start_ms || 0)} · {label}</span>
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{modality}</span>
+                        </div>
+                        <p className="mt-1 leading-relaxed text-muted-foreground">{candidate.review_summary || candidate.basis || "Evidence checkpoint preserved for Sarah synthesis."}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </details>
+            )}
+
+            {localVisionResult.mode !== "cloud_multimodal" && localVisionResult.strong_candidates?.length > 0 && (
               <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Strong Candidates</p>
                 <p className="mt-1 text-xs text-muted-foreground">Likely windows worth review. These stay labeled as unconfirmed unless visual gates are met.</p>
@@ -4994,7 +5086,7 @@ Return only the structured JSON matching the requested schema.`,
               </div>
             )}
 
-            {localVisionResult.not_confirmed?.length > 0 && (
+            {localVisionResult.mode !== "cloud_multimodal" && localVisionResult.not_confirmed?.length > 0 && (
               <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-destructive">Not Visually Confirmed</p>
                 <p className="mt-1 text-xs text-muted-foreground">Important checks that did not have enough visible evidence. This does not mean the event did not happen; it only means local vision cannot support it as a visual fact.</p>
@@ -5018,7 +5110,7 @@ Return only the structured JSON matching the requested schema.`,
               </div>
             )}
 
-            {localVisionResult.not_confirmed?.length > 0 && (
+            {localVisionResult.mode !== "cloud_multimodal" && localVisionResult.not_confirmed?.length > 0 && (
               <details className="rounded-lg border border-amber-400/25 bg-amber-400/5">
                 <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-amber-200">
                   Why Confirmation Failed

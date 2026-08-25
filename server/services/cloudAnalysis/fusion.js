@@ -39,12 +39,25 @@ function sentenceList(value) {
 
 function secondPerson(value) {
   return String(value || '')
+    .replace(/\bthemselves\b/gi, 'yourself')
+    .replace(/\bthemself\b/gi, 'yourself')
     .replace(/\bThe subject's\b/gi, 'Your')
     .replace(/\bthe subject's\b/gi, 'your')
     .replace(/\bThe subject is\b/gi, 'You are')
     .replace(/\bthe subject is\b/gi, 'you are')
     .replace(/\bThe subject\b/gi, 'You')
     .replace(/\bthe subject\b/gi, 'you')
+    .replace(/\bTheir\b/g, 'Your')
+    .replace(/\btheir\b/g, 'your')
+    .replace(/\bThey are\b/gi, 'You are')
+    .replace(/\bThey\b/g, 'You')
+    .replace(/\bthey\b/g, 'you')
+    .replace(/\bThem\b/g, 'You')
+    .replace(/\bthem\b/g, 'you')
+    .replace(/([,;:])\s+Your\b/g, '$1 your')
+    .replace(/([,;:])\s+You\b/g, '$1 you')
+    .replace(/([,;:])\s+The\b/g, '$1 the')
+    .replace(/\b(to|with|near|on|around|behind|above|below|of|at)\s+Your\b/g, '$1 your')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -116,7 +129,7 @@ function descriptionText(description = {}) {
   const interactions = naturalList(description.interactions);
   const cues = naturalList(description.visible_physiological_cues);
   const uncertainty = naturalList(description.uncertainty);
-  return compactText([
+  return compactText(secondPerson([
     position ? `${/^you\b/i.test(position) ? position : `You appear ${position}`.replace(/[.]+$/, '')}.` : '',
     actions ? `Visible activity: ${actions.replace(/[.]+$/, '')}.` : '',
     change ? `Across these frames, ${change.replace(/[.]+$/, '')}.` : '',
@@ -125,7 +138,7 @@ function descriptionText(description = {}) {
     interactions ? `Interaction: ${interactions.replace(/[.]+$/, '')}.` : '',
     cues ? `Visible physiological cues: ${cues.replace(/[.]+$/, '')}.` : '',
     uncertainty ? `Uncertainty: ${uncertainty.replace(/[.]+$/, '')}.` : '',
-  ].filter(Boolean).join(' '), 900);
+  ].filter(Boolean).join(' ')), 900);
 }
 
 function structuredVisualEvidence(description = {}) {
