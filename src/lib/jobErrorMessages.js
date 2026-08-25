@@ -5,7 +5,7 @@ export { extractProviderErrorMessage };
 export function friendlyJobErrorMessage(error, { preserveContext = true, defaultProvider = "anthropic", provider } = {}) {
   const classified = classifyProviderError(error, { defaultProvider, provider });
   if (classified.category === "insufficient_credits") {
-    const provider = classified.provider === "openai" ? "OpenAI" : classified.provider === "anthropic" ? "Anthropic" : "AI provider";
+    const provider = classified.provider === "openai" ? "OpenAI" : classified.provider === "anthropic" ? "Anthropic" : classified.provider === "modal" ? "Modal" : "AI provider";
     return preserveContext
       ? `${provider} credits or quota are unavailable. Completed checkpoints were preserved; add credits or update billing, then retry only the failed stage.`
       : `${provider} credits or quota are unavailable. Add credits or update billing, then try again.`;

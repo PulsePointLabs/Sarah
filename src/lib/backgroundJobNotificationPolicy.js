@@ -1,6 +1,7 @@
 export const LONG_RUNNING_NOTIFICATION_THRESHOLD_MS = 2 * 60 * 1000;
 
 const ALWAYS_LONG_RUNNING_JOB_TYPES = new Set([
+  "cloud_multimodal_analysis",
   "local_vision_analyze_continuous",
   "local_vision_analyze_forward",
   "profile_anatomy_image_index",

@@ -29,6 +29,7 @@ function defaultJobPriority(type, meta = {}, payload = {}) {
   if (name === 'ai_invoke') return 55;
   if (name === 'profile_image_review_full') return 50;
   if (name.startsWith('local_vision_')) return 35;
+  if (name === 'cloud_multimodal_analysis') return 30;
   if (name === 'session_review_video' || name === 'profile_anatomy_video' || name === 'mobile_session_video_render') return 10;
   return 0;
 }
@@ -41,6 +42,7 @@ function jobLane(type, meta = {}, payload = {}) {
   const name = String(type || '');
   if (name === 'ai_invoke' && (meta.foreground || payload.foreground || payload.interactive)) return 'foreground_ai';
   if (name.startsWith('local_vision_')) return 'local_vision';
+  if (name === 'cloud_multimodal_analysis') return 'cloud_analysis';
   if (name === 'ai_invoke' || name === 'profile_image_review_full') return 'ai';
   if (name === 'tts_export') return 'tts';
   if (name === 'session_review_video' || name === 'profile_anatomy_video' || name === 'mobile_session_video_render') return 'video';
@@ -50,6 +52,7 @@ function jobLane(type, meta = {}, payload = {}) {
 function laneConcurrency(lane) {
   if (lane === 'foreground_ai') return foregroundConcurrency;
   if (lane === 'local_vision') return Math.max(1, Number(process.env.BACKGROUND_JOB_LOCAL_VISION_CONCURRENCY || 1));
+  if (lane === 'cloud_analysis') return 1;
   if (lane === 'ai') return Math.max(1, Number(process.env.BACKGROUND_JOB_AI_CONCURRENCY || 2));
   if (lane === 'tts') return Math.max(1, Number(process.env.BACKGROUND_JOB_TTS_CONCURRENCY || 1));
   if (lane === 'video') return Math.max(1, Number(process.env.BACKGROUND_JOB_VIDEO_CONCURRENCY || 1));
@@ -180,6 +183,7 @@ function shouldRetainPayloadForRetry(error) {
 
 function defaultProviderForJobType(type = '') {
   const name = String(type || '');
+  if (name === 'cloud_multimodal_analysis') return 'modal';
   if (name === 'tts_export' || name === 'profile_anatomy_video' || name === 'session_review_video') return 'openai';
   return 'anthropic';
 }

@@ -108,6 +108,7 @@ export function backgroundJobLabel(job) {
   if (job?.meta?.label) return appendJobSourceDate(job.meta.label, job);
   if (job?.type === "local_vision_analyze_continuous") return "Local vision annotation";
   if (job?.type === "local_vision_analyze_window") return "Diagnostic local vision";
+  if (job?.type === "cloud_multimodal_analysis") return "Cloud deep session analysis";
   if (job?.type === "local_vision_ask_video") return "Local video question";
   if (job?.type === "session_review_video") return appendJobSourceDate("Review video render", job);
   if (job?.type === "profile_anatomy_video") return "Anatomy video render";

@@ -79,6 +79,7 @@ function providerName(error, fallback = "unknown") {
   if (/anthropic|claude/.test(text)) return "anthropic";
   if (/groq/.test(text)) return "groq";
   if (/openai|whisper|nova|gpt|tts-1|insufficient_quota/.test(text)) return "openai";
+  if (/\bmodal\b/.test(text)) return "modal";
   return fallback;
 }
 
@@ -86,6 +87,7 @@ function providerLabel(provider = "unknown") {
   if (provider === "anthropic") return "Anthropic";
   if (provider === "groq") return "Groq";
   if (provider === "openai") return "OpenAI";
+  if (provider === "modal") return "Modal";
   return "The AI provider";
 }
 

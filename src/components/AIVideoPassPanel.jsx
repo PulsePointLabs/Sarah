@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronUp, Clapperboard, Copy, Eye, Loader2, Mic, Play, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Clapperboard, Cloud, Copy, Eye, Loader2, Mic, Play, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -1508,6 +1508,7 @@ function localVisionEventFromItem(item, selectedVideo, windowInfo, isExploration
 
 function cardFromLocalVisionResult(result, selectedVideo, isExploration = false) {
   if (!result?.ok) return null;
+  const isCloudMultimodal = result.mode === "cloud_multimodal";
   const windowInfo = result.window || result.range || {};
   const startSource = Number(windowInfo.startMs ?? windowInfo.start_ms ?? windowInfo.start_ms ?? 0) / 1000;
   const endSource = Number(windowInfo.endMs ?? windowInfo.end_ms ?? windowInfo.end_ms ?? startSource * 1000 + 1000) / 1000;
@@ -1595,10 +1596,11 @@ function cardFromLocalVisionResult(result, selectedVideo, isExploration = false)
     frameIndex: Number(String(frame.frame_id || "").replace(/\D/g, "")) || 0,
   })).filter((frame) => frame.url);
   return {
-    id: `local-vision-${result.id || Date.now()}`,
+    id: `${isCloudMultimodal ? "cloud-multimodal" : "local-vision"}-${result.id || Date.now()}`,
     localVision: true,
+    cloudMultimodal: isCloudMultimodal,
     localVisionResultId: result.id || null,
-    label: `Sarah local read ${fmtMmSs(start)}-${fmtMmSs(end)}`,
+    label: `${isCloudMultimodal ? "Sarah cloud deep read" : "Sarah local read"} ${fmtMmSs(start)}-${fmtMmSs(end)}`,
     window: { start, end },
     sourceWindow: { start: startSource, end: endSource },
     sourceVideo: selectedVideo,
@@ -1607,7 +1609,9 @@ function cardFromLocalVisionResult(result, selectedVideo, isExploration = false)
     thumbnailUrl: sampledFrames[0]?.url || "",
     sampledFrames,
     motionSummary: null,
-    telemetry: "Local-only visual evidence. Frames stayed on this machine; no cloud frame upload.",
+    telemetry: isCloudMultimodal
+      ? "Encrypted cloud multimodal evidence. Temporary cloud media was deleted after the job; candidates require review before acceptance."
+      : "Local-only visual evidence. Frames stayed on this machine; no cloud frame upload.",
     summary: result.summary || sarahLocalVisionSummary(result),
     findings: visibleFindings.length ? visibleFindings : [fallbackFinding],
     events,
@@ -2275,6 +2279,7 @@ export default function AIVideoPassPanel({
             || item?.type === "local_vision_analyze_continuous"
             || item?.type === "local_vision_analyze_window"
             || item?.type === "local_vision_ask_video"
+            || item?.type === "cloud_multimodal_analysis"
         ));
         if (!job) {
           setLocalVisionRunning(false);
@@ -2286,7 +2291,7 @@ export default function AIVideoPassPanel({
         setLocalVisionRunning(true);
         updateLocalVisionProgress(progress);
         setLocalVisionError("");
-        setLocalVisionStatus(`${progress.message || "Local Qwen job running..."}${count}`);
+        setLocalVisionStatus(`${progress.message || (job.type === "cloud_multimodal_analysis" ? "Cloud deep analysis running..." : "Local Qwen job running...")}${count}`);
       } catch {
         // The tray handles global job errors; keep this local attachment best-effort.
       }
@@ -2979,6 +2984,39 @@ Return a corrected compact card for this same window. Keep timeline events only 
     };
   }, [isExploration, selectedVideo?.path, session?.id]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!session?.id || !selectedVideo?.path) return undefined;
+    listBackgroundJobs({
+      type: "cloud_multimodal_analysis",
+      status: "complete",
+      limit: 12,
+      metaSessionId: session.id,
+      metaSource: "AIVideoPassPanel",
+    })
+      .then(async (payload) => {
+        const latest = (payload?.jobs || [])
+          .filter((job) => !job?.meta?.videoPath || job.meta.videoPath === selectedVideo.path)
+          .sort((a, b) => Date.parse(b.finishedAt || b.updatedAt || "") - Date.parse(a.finishedAt || a.updatedAt || ""))[0];
+        if (!latest?.id || cancelled) return;
+        const completed = latest.result ? latest : await getBackgroundJob(latest.id);
+        if (cancelled || !completed?.result?.ok) return;
+        setLocalVisionResult(completed.result);
+        const restoredCard = cardFromLocalVisionResult(completed.result, selectedVideo, isExploration);
+        if (restoredCard) {
+          setCards((current) => [restoredCard, ...current.filter((card) => !card.cloudMultimodal)]);
+          setExpanded((previous) => ({ ...previous, [restoredCard.id]: true }));
+        }
+        setLocalVisionStatus(`Loaded saved cloud deep analysis from ${new Date(completed.finishedAt || completed.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`);
+      })
+      .catch(() => {
+        // Cloud result restore is best-effort and never blocks a fresh run.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isExploration, selectedVideo, session?.id]);
+
   const restoreLatestLocalVisionResult = async () => {
     if (!session?.id || !selectedVideo?.path) return;
     setLocalVisionError("");
@@ -3283,6 +3321,55 @@ Return only the structured JSON matching the requested schema.`,
       return verifiedCards;
     } finally {
       setHybridSarahVerifying(false);
+    }
+  };
+
+  const runCloudDeepAnalysis = async () => {
+    if (!selectedVideo?.path || localVisionRunning) return;
+    setLocalVisionRunning(true);
+    setLocalVisionError("");
+    setLocalVisionLiveLog([]);
+    setLocalVisionResult(null);
+    setLocalVisionQaResult(null);
+    updateLocalVisionProgress({ phase: "starting", current: 0, total: 4, message: "Starting encrypted cloud deep analysis..." });
+    setLocalVisionStatus("Checking Modal and preparing encrypted audio/visual transport...");
+    try {
+      const startedJob = await startBackgroundJob("cloud_multimodal_analysis", {
+        sessionId: session.id,
+        recordType: isExploration ? "body_exploration" : "session",
+        videoPath: selectedVideo.path,
+      }, {
+        title: "Cloud deep session analysis",
+        label: "Sarah Cloud Multimodal Analysis",
+        sessionId: session.id,
+        source: "AIVideoPassPanel",
+        route: `${window.location.pathname}${window.location.search}#ai-video-pass`,
+        analysisType: localVisionRecordType(),
+        videoPath: selectedVideo.path,
+      });
+      setLocalVisionStatus(`Queued cloud deep-analysis job ${startedJob.id.slice(0, 8)}...`);
+      const completedJob = await waitForBackgroundJob(startedJob.id, {
+        intervalMs: 1800,
+        onProgress: (job) => {
+          const progress = job.progress || {};
+          const count = progress.total ? ` (${progress.current || 0}/${progress.total})` : "";
+          setLocalVisionStatus(`${progress.message || "Cloud multimodal analysis running..."}${count}`);
+          updateLocalVisionProgress(progress);
+        },
+      });
+      const result = completedJob.result;
+      setLocalVisionResult(result);
+      const cloudCard = cardFromLocalVisionResult(result, selectedVideo, isExploration);
+      if (cloudCard) {
+        setCards([cloudCard]);
+        setExpanded((previous) => ({ ...previous, [cloudCard.id]: true }));
+      }
+      setLocalVisionStatus(`Cloud deep analysis complete: ${result.visual_summary?.frame_metrics || 0} visual samples, ${result.visual_summary?.semantic_windows || 0} semantic windows, and ${result.audio_summary?.reviewable_acoustic_candidates || 0} audio candidates ready for review.`);
+    } catch (err) {
+      setLocalVisionError(friendlyVideoWorkflowError(err, "Cloud deep analysis failed."));
+      setLocalVisionStatus("");
+    } finally {
+      setLocalVisionRunning(false);
     }
   };
 
@@ -3901,6 +3988,17 @@ Return only the structured JSON matching the requested schema.`,
               {cards.length ? `Reassess ${enemaOnlyExploration ? "Enema" : "Foley"} Sequence` : "Reassess after cards load"}
             </Button>
           )}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={runCloudDeepAnalysis}
+            disabled={localVisionRunning || running || reassessing || !selectedVideo}
+            className="h-8 w-full border-cyan-400/40 bg-cyan-400/5 text-cyan-100 hover:bg-cyan-400/10 sm:w-auto"
+            title="Encrypt a reduced visual proxy and audio track, analyze them on a temporary Modal GPU worker, then delete the cloud media."
+          >
+            {localVisionRunning ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Cloud className="mr-2 h-3.5 w-3.5" />}
+            Run Cloud Deep Analysis
+          </Button>
           <Button type="button" onClick={runPass} disabled={running || reassessing || !selectedVideo || !plannedWindows.length} className="h-8 w-full sm:w-auto">
             {running ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="mr-2 h-3.5 w-3.5" />}
             {scanMode === "continue" ? (scanCursor > 0 ? "Run Next Claude Pass" : "Start Claude at 0:00") : "Run Claude Window Pass"}

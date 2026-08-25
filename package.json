@@ -30,7 +30,8 @@
     "capture:hr": "npm --prefix tools/capture/heart-rate start",
     "capture:emg:install": "py -m pip install -r tools/capture/emg/requirements.txt",
     "capture:emg:dual": "py tools/capture/emg/emg_dual_obs.py",
-    "capture:emg:single": "py tools/capture/emg/emg_single.py"
+    "capture:emg:single": "py tools/capture/emg/emg_single.py",
+    "cloud:preflight": "node scripts/cloud-analysis-preflight.mjs"
   },
   "build": {
     "appId": "com.pulsepointlabs.sarah",
@@ -48,6 +49,8 @@
       "server/**/*",
       "src/**/*",
       "tools/capture/heart-rate/**/*",
+      "tools/cloud/**/*",
+      "!tools/cloud/__pycache__/**/*",
       "local-vision/**/*",
       "package.json",
       "node_modules/**/*"

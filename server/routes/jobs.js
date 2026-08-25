@@ -36,6 +36,7 @@ import { friendlyJobErrorMessage } from '../../src/lib/jobErrorMessages.js';
 import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
 import { runProfileAnatomyImageIndex } from '../services/profileAnatomyImageIndex.js';
 import { materializeProfileReviewBatchRequest } from '../services/profileReviewBatchPayload.js';
+import { runCloudMultimodalAnalysis } from '../services/cloudAnalysis/runner.js';
 
 export const jobsRouter = express.Router();
 export const largeJobsRouter = express.Router();
@@ -1240,6 +1241,20 @@ jobsRouter.get('/', (req, res) => {
 
 jobsRouter.post('/clear', (_req, res) => {
   res.json(clearJobs());
+});
+
+registerJobHandler('cloud_multimodal_analysis', async (payload, context) => {
+  context.updateProgress({
+    phase: 'preparing',
+    current: 0,
+    total: 4,
+    message: 'Checking linked media and encrypted cloud-analysis readiness...',
+    privacy: { encryptedInTransit: true, cloudRetention: 'none_after_job' },
+  });
+  return runCloudMultimodalAnalysis(payload, {
+    signal: context.signal,
+    onProgress: context.updateProgress,
+  });
 });
 
 jobsRouter.post('/clear-scoped', (req, res) => {
