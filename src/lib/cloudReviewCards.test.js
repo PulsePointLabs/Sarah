@@ -39,4 +39,3 @@ test("saved cloud evidence becomes normal readable review cards without an AI ca
   assert.equal(cards[0].events[0].time_s, 18);
   assert.doesNotMatch(cards[0].summary, /unconfirmed|candidate|subject/i);
 });
-
