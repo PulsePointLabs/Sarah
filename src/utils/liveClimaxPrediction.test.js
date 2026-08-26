@@ -28,7 +28,8 @@ test("baseline fixture preserves HR-only baseline/build behavior", () => {
     history([80, 81, 82, 82]),
   );
   assert.equal(result.nearClimax, 23);
-  assert.equal(result.recovery, 45);
+  assert.equal(result.recovery, 0);
+  assert.equal(result.recoveryEligible, false);
   assert.equal(result.hrvUsable, false);
   assert.equal(result.confidenceBand, "HR-only watch");
 });
@@ -43,14 +44,17 @@ test("sustained gradual build reaches the gated near-climax watch range", () => 
   assert.equal(result.label, "Near-climax watch");
   assert.equal(result.nearClimax, 71);
   assert.equal(result.buildEligibleForNearClimax, true);
-  assert.equal(result.recovery, 10);
+  assert.equal(result.recovery, 0);
 });
 
 test("recovery fixture preserves recovery behavior", () => {
   const result = computeLiveClimaxPrediction(
     { currentHr: 92, baselineHr: 84, phase: "recovery", buildConfidence: 20 },
     null,
-    history([84, 96, 108, 106, 98, 92]),
+    history([84, 96, 108, 106, 98, 92]).map((point, index) => ({
+      ...point,
+      nearClimax: index === 2 ? 74 : 45,
+    })),
   );
   assert.equal(result.label, "Recovery likely");
   assert.equal(result.nearClimax, 12);

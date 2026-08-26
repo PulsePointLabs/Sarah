@@ -44,7 +44,7 @@ test("trusted sustained plateau produces one encouragement cue", () => {
   const second = stepLiveCueStateMachine(
     first.state,
     plateauPrediction(),
-    { atMs: start + 10_500, hr: 114 },
+    { atMs: start + 20_500, hr: 114 },
     {},
     plateauPhrases
   );
@@ -81,7 +81,7 @@ test("plateau encouragement respects its anti-chatter cooldown", () => {
     createLiveCueStateMachineState(),
     plateauPrediction(),
     { atMs: start, hr: 112 },
-    { plateauMs: 0 },
+    { plateauMs: 0, activityEvidenceMs: 0 },
     plateauPhrases
   );
   assert.equal(first.cue?.type, "plateau_encouragement");
@@ -192,4 +192,70 @@ test("body exploration does not cue from a brief or baseline-level sample", () =
     { body_relaxation: ["Breathe slowly."] },
   );
   assert.equal(result.cue, null);
+});
+
+test("setup-like recovery cannot speak before active stimulation is established", () => {
+  const start = Date.now();
+  let state = createLiveCueStateMachineState();
+  for (const offset of [0, 5_000, 15_000, 45_000]) {
+    const result = stepLiveCueStateMachine(
+      state,
+      { nearClimax: 8, recovery: 82, phase: "recovery", controllerConfidence: 70 },
+      { atMs: start + offset, hr: 96, baselineHr: 94 },
+      {},
+      { recovery: ["Recover now."] },
+    );
+    state = result.state;
+    assert.equal(result.cue, null);
+    assert.equal(result.state.activityEstablished, false);
+  }
+});
+
+test("recovery can speak only after a sustained supported build", () => {
+  const start = Date.now();
+  const phrases = {
+    sustained_build: ["Build established."],
+    recovery: ["Recovery established."],
+  };
+  const build = {
+    nearClimax: 58,
+    recovery: 0,
+    recentSlope: 0.7,
+    controllerConfidence: 75,
+    multimodalAvailable: true,
+    multimodalTrusted: true,
+  };
+  const first = stepLiveCueStateMachine(
+    createLiveCueStateMachineState(),
+    build,
+    { atMs: start, hr: 108, baselineHr: 96 },
+    { activityEvidenceMs: 10_000 },
+    phrases,
+  );
+  const established = stepLiveCueStateMachine(
+    first.state,
+    build,
+    { atMs: start + 11_000, hr: 112, baselineHr: 96 },
+    { activityEvidenceMs: 10_000 },
+    phrases,
+  );
+  assert.equal(established.state.activityEstablished, true);
+
+  const recoveryStart = stepLiveCueStateMachine(
+    established.state,
+    { ...build, nearClimax: 18, recovery: 78, phase: "recovery" },
+    { atMs: start + 20_000, hr: 101, baselineHr: 96 },
+    { recoveryMs: 4_000 },
+    phrases,
+  );
+  const recoveryReady = stepLiveCueStateMachine(
+    recoveryStart.state,
+    { ...build, nearClimax: 18, recovery: 78, phase: "recovery" },
+    { atMs: start + 25_000, hr: 99, baselineHr: 96 },
+    { recoveryMs: 4_000 },
+    phrases,
+  );
+  assert.equal(recoveryReady.cue?.type, "recovery");
+  assert.equal(recoveryReady.state.recoveryTransitions, 1);
+  assert.equal("edgingCandidates" in recoveryReady.state, false);
 });

@@ -81,6 +81,17 @@ class OmronBloodPressurePlugin : Plugin() {
         call.resolve(stateObject(if (!armed) "stopped" else if (subscribed) "waiting_for_reading" else "waiting_for_cuff"))
     }
 
+    @PluginMethod
+    fun acknowledgeReading(call: PluginCall) {
+        val expectedId = call.getString("externalId")?.trim().orEmpty()
+        val pending = pendingReading()
+        val pendingId = pending?.getString("external_id").orEmpty()
+        if (expectedId.isBlank() || pendingId == expectedId) {
+            prefs.edit().remove(KEY_PENDING_READING).apply()
+        }
+        call.resolve(JSObject().put("ok", true))
+    }
+
     override fun handleOnDestroy() {
         armed = false
         stopScan()
@@ -198,7 +209,9 @@ class OmronBloodPressurePlugin : Plugin() {
             emitError(it.message ?: "OMRON sent an unreadable blood-pressure packet.")
             return
         }
-        // Emit immediately; database persistence can happen after the UI updates.
+        // Persist before crossing into the WebView. If its renderer is restarted between
+        // this callback and the API save, arm() replays the packet using its stable id.
+        prefs.edit().putString(KEY_PENDING_READING, reading.toString()).apply()
         notifyListeners("reading", reading)
         notifyListeners("status", stateObject("reading_received").put("message", "OMRON reading received."))
     }
@@ -214,12 +227,16 @@ class OmronBloodPressurePlugin : Plugin() {
         }
     }
 
+    private fun pendingReading(): JSObject? = prefs.getString(KEY_PENDING_READING, null)
+        ?.let { encoded -> runCatching { JSObject(encoded) }.getOrNull() }
+
     private fun stateObject(state: String) = JSObject()
         .put("listening", armed)
         .put("connected", subscribed)
         .put("state", state)
         .put("deviceId", targetAddress ?: "")
         .put("deviceName", targetName)
+        .put("pendingReading", pendingReading())
 
     private fun emitError(message: String) {
         notifyListeners("error", stateObject("error").put("message", message))
@@ -277,6 +294,7 @@ class OmronBloodPressurePlugin : Plugin() {
         private const val PREFS = "sarah_omron_device"
         private const val KEY_ADDRESS = "address"
         private const val KEY_NAME = "name"
+        private const val KEY_PENDING_READING = "pending_reading"
         private const val SCAN_WINDOW_MS = 12_000L
         private const val SCAN_RESTART_DELAY_MS = 750L
         private val BP_SERVICE: UUID = UUID.fromString("00001810-0000-1000-8000-00805f9b34fb")

@@ -40,6 +40,13 @@ async function startNativeOmronListener({ onStatus, onReading, onDisconnect, onE
   }
   const listener = { device, handles: [], listening: true, connected: false, state: "starting", onDisconnect };
   nativeOmronListener = listener;
+  const deliverReading = (reading) => {
+    if (!reading || nativeOmronListener !== listener) return;
+    listener.connected = true;
+    Promise.resolve(onReading?.(reading, { device, native: true }))
+      .then(() => NativeOmronBloodPressure.acknowledgeReading({ externalId: reading.external_id || "" }))
+      .catch((error) => onError?.(error));
+  };
   listener.handles = await Promise.all([
     NativeOmronBloodPressure.addListener("status", (event) => {
       if (nativeOmronListener !== listener) return;
@@ -48,9 +55,7 @@ async function startNativeOmronListener({ onStatus, onReading, onDisconnect, onE
       onStatus?.(event?.message || "OMRON is armed and waiting for a reading.");
     }),
     NativeOmronBloodPressure.addListener("reading", (reading) => {
-      if (nativeOmronListener !== listener) return;
-      listener.connected = true;
-      onReading?.(reading, { device, native: true });
+      deliverReading(reading);
     }),
     NativeOmronBloodPressure.addListener("error", (event) => {
       if (nativeOmronListener !== listener) return;
@@ -61,6 +66,7 @@ async function startNativeOmronListener({ onStatus, onReading, onDisconnect, onE
     const result = await NativeOmronBloodPressure.arm({ deviceId: device.deviceId, name: device.name || device.displayName });
     listener.state = result?.state || "waiting_for_cuff";
     listener.connected = Boolean(result?.connected);
+    if (result?.pendingReading) deliverReading(result.pendingReading);
     onStatus?.("OMRON is armed. Sarah will connect as soon as the cuff wakes or transmits.");
     return { ok: true, device, services: [], native: true };
   } catch (error) {

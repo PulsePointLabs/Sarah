@@ -1780,6 +1780,7 @@ export default function LiveCapture() {
   const [launchProfile, setLaunchProfile] = useState(() => readLiveCaptureLaunchProfile());
   const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
   const [launchState, setLaunchState] = useState({ phase: "idle", message: "", steps: [], busy: false, error: "" });
+  const [captureArmed, setCaptureArmed] = useState(false);
   const [endingSession, setEndingSession] = useState(false);
   const [liveCueSettings, setLiveCueSettings] = useState(() => ({
     ...DEFAULT_LIVE_CUE_SETTINGS,
@@ -3644,10 +3645,10 @@ export default function LiveCapture() {
     };
 
     const requestWakeLock = async () => {
-      if (!recordingTransportActive || document.hidden || liveCaptureWakeLockRef.current || !("wakeLock" in navigator)) return;
+      if ((!recordingTransportActive && !captureArmed) || document.hidden || liveCaptureWakeLockRef.current || !("wakeLock" in navigator)) return;
       try {
         const wakeLock = await navigator.wakeLock.request("screen");
-        if (cancelled || !recordingTransportActive) {
+        if (cancelled || (!recordingTransportActive && !captureArmed)) {
           await wakeLock.release();
           return;
         }
@@ -3668,10 +3669,10 @@ export default function LiveCapture() {
       }
     };
 
-    setLiveCaptureKeepAwake(recordingTransportActive).catch(() => {
+    setLiveCaptureKeepAwake(recordingTransportActive || captureArmed).catch(() => {
       // The browser wake lock remains available when the native bridge is absent.
     });
-    if (recordingTransportActive) requestWakeLock();
+    if (recordingTransportActive || captureArmed) requestWakeLock();
     else releaseWakeLock();
     document.addEventListener("visibilitychange", onVisibilityChange);
 
@@ -3681,7 +3682,11 @@ export default function LiveCapture() {
       releaseWakeLock();
       setLiveCaptureKeepAwake(false).catch(() => {});
     };
-  }, [recordingTransportActive]);
+  }, [captureArmed, recordingTransportActive]);
+
+  useEffect(() => {
+    if (captureArmed && recordingTransportActive) setCaptureArmed(false);
+  }, [captureArmed, recordingTransportActive]);
 
   const recentHrPacket = hasRecentHrPacket();
   const hrConnected = Boolean(recentHrPacket || status?.hr?.sourceStatus?.connected || status?.hr?.connected);
@@ -3895,10 +3900,10 @@ export default function LiveCapture() {
           note: "Position or body mechanics changed.",
         },
         {
-          key: "edging_window",
-          label: "Edging",
-          category: ["sensation", "other"],
-          note: "Edging or threshold hold started.",
+          key: "near_climax",
+          label: "Near Climax",
+          category: ["sensation", "near_climax"],
+          note: "Near-climax state observed.",
         },
         {
           key: "climax",
@@ -4516,66 +4521,6 @@ export default function LiveCapture() {
   const emgRecent = isRecent(emgSourceAt);
   const liveSessionPaused = Boolean(liveSession?.activeSessionId && liveSession?.active && !recordingActive);
 
-  const startObsRecording = useCallback(async () => {
-    if (recordingActive) return recording;
-    if (!embeddedObsStatus?.identified) {
-      throw new Error(embeddedObsStatus?.error || "OBS is not connected to Sarah.");
-    }
-    if (typeof WebSocket === "undefined") {
-      throw new Error("This Sarah runtime cannot send the OBS recording command.");
-    }
-
-    let relayUrl;
-    try {
-      relayUrl = getLiveCaptureRelayUrl();
-    } catch {
-      throw new Error("Sarah could not resolve the local OBS relay address.");
-    }
-
-    let socket = directH10RelaySocketRef.current;
-    if (!socket || [WebSocket.CLOSING, WebSocket.CLOSED].includes(socket.readyState)) {
-      socket = new WebSocket(relayUrl);
-      directH10RelaySocketRef.current = socket;
-    }
-    if (socket.readyState === WebSocket.CONNECTING) {
-      await new Promise((resolve, reject) => {
-        const timeout = window.setTimeout(() => reject(new Error("Sarah timed out connecting to the local OBS relay.")), 5000);
-        socket.addEventListener("open", () => {
-          window.clearTimeout(timeout);
-          resolve();
-        }, { once: true });
-        socket.addEventListener("error", () => {
-          window.clearTimeout(timeout);
-          reject(new Error("Sarah could not connect to the local OBS relay."));
-        }, { once: true });
-      });
-    }
-    if (socket.readyState !== WebSocket.OPEN) {
-      throw new Error("The local OBS relay is not ready.");
-    }
-    socket.send(JSON.stringify({
-      type: "obs_start_record",
-      source: "live_capture_ui",
-      requestId: crypto.randomUUID(),
-      requestedAt: new Date().toISOString(),
-    }));
-
-    const deadline = Date.now() + 15000;
-    while (Date.now() < deadline) {
-      await wait(250);
-      const response = await fetch(apiUrl("/live-capture/status"), { cache: "no-store" });
-      if (!response.ok) continue;
-      const nextStatus = await response.json();
-      setStatus(nextStatus);
-      if (nextStatus?.hr?.recording?.active) return nextStatus.hr.recording;
-      const nextObs = nextStatus?.hr?.relay?.obs;
-      if (nextObs?.error && !nextObs?.identified) {
-        throw new Error(nextObs.error);
-      }
-    }
-    throw new Error("OBS did not confirm that recording started within 15 seconds.");
-  }, [embeddedObsStatus?.error, embeddedObsStatus?.identified, recording, recordingActive]);
-
   const stopObsRecording = useCallback(async () => {
     if (!recordingTransportActive || endingSession) return;
     setEndingSession(true);
@@ -5019,7 +4964,7 @@ export default function LiveCapture() {
             lastReading: reading,
             message: `Received OMRON reading ${formatBloodPressure(reading)}. Saving...`,
           }));
-          saveOmronBloodPressureForLiveSession(reading).catch((error) => {
+          return saveOmronBloodPressureForLiveSession(reading).catch((error) => {
             setBpCapture((prev) => ({
               ...prev,
               syncing: false,
@@ -5027,6 +4972,7 @@ export default function LiveCapture() {
               error: error?.message || "Could not save OMRON blood pressure.",
               message: error?.message || "Could not save OMRON blood pressure.",
             }));
+            throw error;
           });
         },
         onDisconnect: ({ stopped } = {}) => {
@@ -5431,29 +5377,23 @@ export default function LiveCapture() {
           throw new Error("OBS is unavailable. Reconnect OBS or enable telemetry-only fallback.");
         }
 
-        let activeRecording = recording;
-        if (launchProfile.obsEnabled && !recordingActive) {
-          activeRecording = await startObsRecording();
-        }
-
         setLaunchStep("Starting session");
-        const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession(activeRecording);
-        if (!sessionState?.activeSessionId) throw new Error("Sarah could not create or reuse the live session shell.");
-
+        setCaptureArmed(!recordingActive);
+        const sessionState = liveSession?.activeSessionId ? liveSession : null;
         saveSuccessfulLaunchProfile(sessionState);
         setLaunchStep("Live", "done");
         setLaunchState((prev) => ({
           ...prev,
-          phase: "live",
+          phase: recordingActive ? "live" : "armed",
           busy: false,
           error: "",
           message: rawSensorWarning
-            ? "Session live with HR/RR/HRV. Raw ECG, motion, and respiration are unavailable."
+            ? "Telemetry is armed with HR/RR/HRV; waiting for OBS to start recording. Raw ECG, motion, and respiration are unavailable."
             : voiceWarning
-              ? `Session live. Sarah voice is temporarily unavailable: ${voiceWarning}`
+              ? `Telemetry is armed; waiting for OBS. Sarah voice is temporarily unavailable: ${voiceWarning}`
             : voiceReadyForLaunch || !liveCueSettings.enabled
-              ? "Session live."
-              : "Session live without voice cues.",
+              ? recordingActive ? "Session live." : "Telemetry is live. Start recording in OBS when you are ready."
+              : recordingActive ? "Session live without voice cues." : "Telemetry is live and waiting for OBS; voice cues will stay quiet until recording starts.",
         }));
         return sessionState;
       } catch (error) {
@@ -5473,7 +5413,6 @@ export default function LiveCapture() {
   }, [
     applyHrSourceSettings,
     connectDirectH10,
-    ensureSession,
     hasRecentHrPacket,
     hrSourceSettings,
     launchProfile.obsEnabled,
@@ -5484,7 +5423,6 @@ export default function LiveCapture() {
     obsReady,
     saveSuccessfulLaunchProfile,
     setLaunchStep,
-    startObsRecording,
     verifyDirectH10Pmd,
     waitForH10PmdSamples,
     waitForRecentHrPacket,
@@ -7047,7 +6985,7 @@ export default function LiveCapture() {
     && serverHrSource
     && (serverHrSource !== hrSourceSettings.source || !directH10Status.connected)
   );
-  const launchActive = recordingTransportActive || Boolean(liveSession?.activeSessionId && (liveSession?.active || liveSession?.importing));
+  const launchActive = captureArmed || recordingTransportActive || Boolean(liveSession?.activeSessionId && (liveSession?.active || liveSession?.importing));
   const completedLiveSession = Boolean(liveSession?.activeSessionId && !liveSession?.active && !liveSession?.importing);
   const captureKindLabel = CAPTURE_KINDS.find((kind) => kind.value === captureKind)?.label || "Session";
   const launchReadiness = {
@@ -7102,7 +7040,7 @@ export default function LiveCapture() {
     },
   };
   const launchPrimaryLabel = launchActive
-    ? "Session Live"
+    ? captureArmed && !recordingTransportActive ? "Waiting for OBS" : "Session Live"
     : !h10Recent && hrSourceSettings.source === "direct_h10"
       ? "Connect H10 and Start Session"
       : liveCueSettings.enabled && !liveCueAudio.ready
@@ -7350,7 +7288,7 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {launchActive && !focusView && !liveSession?.importing && (
+      {(recordingTransportActive || liveSession?.activeSessionId) && !focusView && !liveSession?.importing && (
         <button
           type="button"
           onClick={endActiveSession}
@@ -7370,23 +7308,37 @@ export default function LiveCapture() {
               <span className={`h-3 w-3 shrink-0 rounded-full ${recordingActive ? "animate-pulse bg-red-500" : recordingPaused ? "bg-amber-400" : "bg-muted-foreground/45"}`} />
               <div className="min-w-0">
                 <p className="text-[10px] font-black uppercase tracking-[0.16em] text-primary">
-                  {recordingTransportActive ? "Step 2 · Live cockpit" : endingSession || liveSession?.importing ? "Step 3 · Finalizing" : "Safety controls"}
+                  {recordingTransportActive ? "Step 2 · Live cockpit" : captureArmed ? "Step 1 · Telemetry armed" : endingSession || liveSession?.importing ? "Step 3 · Finalizing" : "Safety controls"}
                 </p>
                 <p className="truncate text-base font-bold text-foreground">
                   {recordingPaused
                     ? `Paused at ${fmtMmSs(getCurrentSessionTime())}`
                     : recordingActive
                       ? `${captureKindLabel} recording · ${fmtMmSs(getCurrentSessionTime())}`
+                      : captureArmed
+                        ? "Telemetry live · waiting for OBS"
                       : endingSession || liveSession?.importing
                         ? "Preserving telemetry and preparing review"
                         : "Howl controls available before launch"}
                 </p>
                 <p className="truncate text-xs text-muted-foreground">
-                  {recording?.filename || (recordingActive ? "OBS recording confirmed" : liveGuidanceMode.helper)}
+                  {recording?.filename || (captureArmed ? "Start recording in OBS when prep is complete. Sarah will create the record from that exact start." : recordingActive ? "OBS recording confirmed" : liveGuidanceMode.helper)}
                 </p>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              {captureArmed && !recordingTransportActive && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCaptureArmed(false);
+                    setLaunchState({ phase: "idle", message: "Telemetry waiting cancelled.", steps: [], busy: false, error: "" });
+                  }}
+                  className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border bg-muted/50 px-4 py-2 text-sm font-bold text-foreground hover:bg-muted"
+                >
+                  <X className="h-4 w-4" /> Cancel waiting
+                </button>
+              )}
               {recordingTransportActive && (
                 <button
                   type="button"

@@ -14,7 +14,6 @@ export function useLiveCueEngine({
   const machineRef = useRef(createLiveCueStateMachineState());
   const [latestCue, setLatestCue] = useState(null);
   const [lastSuppression, setLastSuppression] = useState(null);
-  const [edgingCandidates, setEdgingCandidates] = useState([]);
 
   const phraseBank = useMemo(
     () => resolveLiveCuePhraseBank(cueSettings, { captureKind }),
@@ -25,7 +24,6 @@ export function useLiveCueEngine({
     machineRef.current = createLiveCueStateMachineState();
     setLatestCue(null);
     setLastSuppression(null);
-    setEdgingCandidates([]);
     audio?.stop?.();
   }, [audio]);
 
@@ -59,16 +57,6 @@ export function useLiveCueEngine({
     );
     machineRef.current = result.state;
 
-    if (result.edgingCandidate) {
-      setEdgingCandidates((prev) => [...prev.slice(-8), result.edgingCandidate]);
-      onTimelineEvent?.({
-        type: "live_cue_edging_candidate",
-        label: "edging pattern candidate",
-        time_s: sessionTimeSec,
-        metadata: result.edgingCandidate,
-      });
-    }
-
     if (result.suppressed?.length) {
       setLastSuppression({ ...result.suppressed[0], atMs: now });
     }
@@ -101,8 +89,7 @@ export function useLiveCueEngine({
     phraseBank,
     latestCue,
     lastSuppression,
-    edgingCandidates,
     step,
     reset,
-  }), [edgingCandidates, lastSuppression, latestCue, phraseBank, reset, step]);
+  }), [lastSuppression, latestCue, phraseBank, reset, step]);
 }

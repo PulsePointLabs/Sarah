@@ -6,6 +6,7 @@ export const DEFAULT_LIVE_CUE_MACHINE_OPTIONS = Object.freeze({
   allowSessionStyleCues: false,
   sustainedBuildThreshold: 42,
   sustainedBuildMs: 10_000,
+  activityEvidenceMs: 20_000,
   plateauThreshold: 62,
   plateauMs: 10_000,
   climaxPossibleThreshold: 68,
@@ -42,7 +43,9 @@ export function createLiveCueStateMachineState() {
     cueTimes: [],
     recoveryEpisodeActive: false,
     buildBeforeRecovery: null,
-    edgingCandidates: [],
+    recoveryTransitions: 0,
+    activityEstablished: false,
+    activityEstablishedAtMs: null,
     eventSequence: 0,
   };
 }
@@ -142,32 +145,13 @@ function acceptCue(state, cue, phrases, at, prediction, sample) {
   };
 }
 
-function maybeRecordEdgingCandidate(state, at, prediction, sample) {
-  if (!state.buildBeforeRecovery) return null;
-  const candidate = {
-    type: "edging_pattern_candidate",
-    startMs: state.buildBeforeRecovery.startMs,
-    recoveryMs: at,
-    peakApproachScore: state.buildBeforeRecovery.peakApproachScore,
-    highestHr: state.buildBeforeRecovery.highestHr,
-    hrvState: state.buildBeforeRecovery.hrvState,
-    emgState: state.buildBeforeRecovery.emgState,
-    resumedBuildMs: null,
-    manualClimaxFollowed: false,
-    confidence: Math.min(95, Math.max(35, Number(prediction.nearClimax || 0) + Number(prediction.recovery || 0) / 3)),
-    sessionTimeSec: sample.sessionTimeSec ?? null,
-  };
-  state.edgingCandidates.push(candidate);
-  return candidate;
-}
-
 export function stepLiveCueStateMachine(previousState, prediction = {}, sample = {}, optionsInput = {}, phrases = {}) {
   const options = { ...DEFAULT_LIVE_CUE_MACHINE_OPTIONS, ...(optionsInput || {}) };
   const state = previousState ? structuredClone(previousState) : createLiveCueStateMachineState();
   const at = nowMs(sample);
   const suppressed = [];
 
-  if (!options.enabled) return { state, cue: null, suppressed: [{ type: "all", reason: "disabled" }], edgingCandidate: null };
+  if (!options.enabled) return { state, cue: null, suppressed: [{ type: "all", reason: "disabled" }] };
   if (options.captureKind === "body_exploration" && !options.allowSessionStyleCues) {
     const hr = Number(sample.hr ?? sample.currentHr);
     const baselineHr = Number(sample.baselineHr);
@@ -188,14 +172,14 @@ export function stepLiveCueStateMachine(previousState, prediction = {}, sample =
       options.bodyStressMs,
     );
     if (!relaxationReady || !hasPhrase(phrases, LIVE_CUE_TYPES.body_relaxation)) {
-      return { state, cue: null, suppressed: [], edgingCandidate: null };
+      return { state, cue: null, suppressed: [] };
     }
     const gate = canSpeak(state, LIVE_CUE_TYPES.body_relaxation, at, {
       ...options,
       globalCooldownMs: Math.max(20_000, options.globalCooldownMs),
       maxCuesPerMinute: Math.min(2, options.maxCuesPerMinute),
     });
-    if (!gate.ok) return { state, cue: null, suppressed: [{ type: LIVE_CUE_TYPES.body_relaxation, reason: gate.reason }], edgingCandidate: null };
+    if (!gate.ok) return { state, cue: null, suppressed: [{ type: LIVE_CUE_TYPES.body_relaxation, reason: gate.reason }] };
     return {
       state,
       cue: acceptCue(state, {
@@ -205,19 +189,34 @@ export function stepLiveCueStateMachine(previousState, prediction = {}, sample =
         hrDelta: Math.round(hrDelta),
       }, phrases, at, prediction, sample),
       suppressed: [],
-      edgingCandidate: null,
     };
   }
 
   const near = Number(prediction.nearClimax || 0);
   const recovery = Number(prediction.recovery || 0);
   const plateau = Number(prediction.plateauScore || 0);
-  const recovering = isRecovery(prediction);
+  const rawRecovering = isRecovery(prediction);
   const multimodalTrusted = prediction.multimodalAvailable ? prediction.multimodalTrusted === true : true;
   const controllerTrusted = Number(prediction.controllerConfidence || 0) >= 50 || !prediction.multimodalAvailable;
   const families = supportFamilies(prediction, sample);
   const usefulFamilyCount = families.length;
   const hrvOnly = families.length === 1 && families[0] === "hrv";
+  const activityReady = setCandidate(
+    state,
+    "activity_evidence",
+    !rawRecovering
+      && near >= options.sustainedBuildThreshold
+      && usefulFamilyCount >= 1
+      && multimodalTrusted
+      && controllerTrusted,
+    at,
+    options.activityEvidenceMs,
+  );
+  if (activityReady && !state.activityEstablished) {
+    state.activityEstablished = true;
+    state.activityEstablishedAtMs = at;
+  }
+  const recovering = Boolean(state.activityEstablished && rawRecovering);
 
   if (near >= options.sustainedBuildThreshold && !recovering) {
     const currentBuild = state.buildBeforeRecovery || {
@@ -232,15 +231,12 @@ export function stepLiveCueStateMachine(previousState, prediction = {}, sample =
     state.buildBeforeRecovery = currentBuild;
   }
 
-  let edgingCandidate = null;
   if (recovering && !state.recoveryEpisodeActive) {
     state.recoveryEpisodeActive = true;
-    edgingCandidate = maybeRecordEdgingCandidate(state, at, prediction, sample);
+    state.recoveryTransitions += 1;
   }
   if (!recovering && state.recoveryEpisodeActive && near >= options.buildResumedThreshold) {
     state.recoveryEpisodeActive = false;
-    const last = state.edgingCandidates[state.edgingCandidates.length - 1];
-    if (last && !last.resumedBuildMs) last.resumedBuildMs = at;
   }
   if (!recovering && near < 25) {
     state.buildBeforeRecovery = null;
@@ -271,7 +267,7 @@ export function stepLiveCueStateMachine(previousState, prediction = {}, sample =
   const recoveryReady = setCandidate(
     state,
     LIVE_CUE_TYPES.recovery,
-    (recovering || recovery >= options.recoveryThreshold) && near < options.climaxImminentThreshold,
+    state.activityEstablished && (recovering || recovery >= options.recoveryThreshold) && near < options.climaxImminentThreshold,
     at,
     options.recoveryMs
   );
@@ -290,32 +286,31 @@ export function stepLiveCueStateMachine(previousState, prediction = {}, sample =
   const resumedReady = setCandidate(
     state,
     LIVE_CUE_TYPES.build_resumed,
-    !recovering && state.recoveryEpisodeActive === false && Boolean(state.edgingCandidates.length) && near >= options.buildResumedThreshold,
+    state.activityEstablished && !recovering && state.recoveryEpisodeActive === false && state.recoveryTransitions > 0 && near >= options.buildResumedThreshold,
     at,
     options.buildResumedMs
   );
 
   const candidates = [
-    imminentReady && hasPhrase(phrases, LIVE_CUE_TYPES.climax_imminent) ? { type: LIVE_CUE_TYPES.climax_imminent, state: "climax_imminent" } : null,
-    possibleReady && hasPhrase(phrases, LIVE_CUE_TYPES.climax_possible) ? { type: LIVE_CUE_TYPES.climax_possible, state: "climax_possible" } : null,
-    plateauReady && hasPhrase(phrases, LIVE_CUE_TYPES.plateau_encouragement) ? { type: LIVE_CUE_TYPES.plateau_encouragement, state: "plateau_encouragement" } : null,
-    resumedReady && hasPhrase(phrases, LIVE_CUE_TYPES.build_resumed) ? { type: LIVE_CUE_TYPES.build_resumed, state: "build_resumed" } : null,
-    sustainedReady && hasPhrase(phrases, LIVE_CUE_TYPES.sustained_build) ? { type: LIVE_CUE_TYPES.sustained_build, state: "sustained_build" } : null,
+    state.activityEstablished && imminentReady && hasPhrase(phrases, LIVE_CUE_TYPES.climax_imminent) ? { type: LIVE_CUE_TYPES.climax_imminent, state: "climax_imminent" } : null,
+    state.activityEstablished && possibleReady && hasPhrase(phrases, LIVE_CUE_TYPES.climax_possible) ? { type: LIVE_CUE_TYPES.climax_possible, state: "climax_possible" } : null,
+    state.activityEstablished && plateauReady && hasPhrase(phrases, LIVE_CUE_TYPES.plateau_encouragement) ? { type: LIVE_CUE_TYPES.plateau_encouragement, state: "plateau_encouragement" } : null,
+    state.activityEstablished && resumedReady && hasPhrase(phrases, LIVE_CUE_TYPES.build_resumed) ? { type: LIVE_CUE_TYPES.build_resumed, state: "build_resumed" } : null,
+    state.activityEstablished && sustainedReady && hasPhrase(phrases, LIVE_CUE_TYPES.sustained_build) ? { type: LIVE_CUE_TYPES.sustained_build, state: "sustained_build" } : null,
     recoveryReady && hasPhrase(phrases, LIVE_CUE_TYPES.recovery) ? { type: LIVE_CUE_TYPES.recovery, state: "recovery" } : null,
   ];
 
   const selected = selectCue(candidates);
-  if (!selected) return { state, cue: null, suppressed, edgingCandidate };
+  if (!selected) return { state, cue: null, suppressed };
 
   const gate = canSpeak(state, selected.type, at, options);
   if (!gate.ok) {
-    return { state, cue: null, suppressed: [{ type: selected.type, reason: gate.reason }], edgingCandidate };
+    return { state, cue: null, suppressed: [{ type: selected.type, reason: gate.reason }] };
   }
 
   return {
     state,
     cue: acceptCue(state, selected, phrases, at, prediction, sample),
     suppressed,
-    edgingCandidate,
   };
 }

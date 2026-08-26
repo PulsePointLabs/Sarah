@@ -141,6 +141,10 @@ export function computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, history =
   const approachVelocity = firstApproachPoint && lastApproachPoint && lastApproachPoint.ts !== firstApproachPoint.ts
     ? ((Number(lastApproachPoint.nearClimax) - Number(firstApproachPoint.nearClimax)) / ((lastApproachPoint.ts - firstApproachPoint.ts) / 1000)) * 30
     : 0;
+  const historicalNearPeak = longer.reduce(
+    (peak, point) => Math.max(peak, numberOrNull(point?.nearClimax, point?.near_climax) || 0),
+    0,
+  );
 
   let hrvContribution = 0;
   let hrvSignal = "waiting";
@@ -227,6 +231,11 @@ export function computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, history =
     || (elevatedDelta >= 8 && hrvCompressedOrTightening)
     || (elevatedDelta >= 8 && emgRise)
   );
+  const activityEvidenceEstablished = Boolean(
+    historicalNearPeak >= 68
+    || sustainedApproach
+    || (buildDurationSec >= 60 && confirmationCount >= 2 && elevatedDelta >= 8)
+  );
 
   let nearClimax = 0;
   nearClimax += clamp(buildConfidence, 0, 100) * 0.35;
@@ -270,13 +279,20 @@ export function computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, history =
   }
   const nearClimaxAfterCaps = Math.round(clamp(cappedNearClimax));
 
-  const baseRecovery = phase.includes("recovery")
+  const recoveryEligible = activityEvidenceEstablished && (
+    phase.includes("recovery")
+    || multimodalRecoveryDrop >= 4
+    || (["release", "opening"].includes(hrvSignal) && dropFromRecentPeak >= 4)
+  );
+  const baseRecovery = recoveryEligible && phase.includes("recovery")
     ? Math.max(65, Math.min(100, 65 + Math.max(0, 100 - buildConfidence) * 0.25))
-    : clamp(Math.round((buildConfidence < 25 && elevatedDelta < 6 ? 35 : 0) + (emgPeak < 10 ? 10 : 0) + (dropFromRecentPeak > 8 ? 20 : 0)));
+    : recoveryEligible
+      ? clamp(Math.round((dropFromRecentPeak > 8 ? 45 : 0) + (["release", "opening"].includes(hrvSignal) ? 20 : 0)))
+      : 0;
   const recovery = clamp(Math.max(
     baseRecovery,
-    multimodalRecoveryDrop >= 4 ? 42 + multimodalRecoveryDrop * 4 : 0,
-    ["release", "opening"].includes(hrvSignal) && dropFromRecentPeak >= 4 ? 58 : 0,
+    recoveryEligible && multimodalRecoveryDrop >= 4 ? 42 + multimodalRecoveryDrop * 4 : 0,
+    recoveryEligible && ["release", "opening"].includes(hrvSignal) && dropFromRecentPeak >= 4 ? 58 : 0,
   ));
 
   const physiologicalIntensity = recovery >= 60
@@ -306,7 +322,7 @@ export function computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, history =
     - (multimodalAvailable && !multimodalTrusted ? 18 : 0),
   ));
 
-  const label = phase.includes("recovery")
+  const label = recoveryEligible && phase.includes("recovery")
     ? "Recovery likely"
     : buildEligibleForNearClimax && nearClimaxAfterCaps >= 85
       ? "Climax approach watch"
@@ -358,6 +374,8 @@ export function computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, history =
     earlySessionCapApplied,
     earlySessionCapValue,
     buildEligibleForNearClimax,
+    activityEvidenceEstablished,
+    recoveryEligible,
     confirmationCount,
     hrvContributionType,
     hrvOpeningPenaltyApplied,
