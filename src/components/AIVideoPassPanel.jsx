@@ -33,6 +33,7 @@ import {
 } from "@/lib/visualEvidence";
 import { SARAH_APP_OVERLAY_TELEMETRY_RULE } from "@/lib/aiGrounding";
 import { serverUrl } from "@/lib/mobileApiBase";
+import { buildSavedCloudReviewCards } from "@/lib/cloudReviewCards";
 import {
   detectBodyExplorationAnnotationMode,
   isUnsupportedUrethralClaimForMode,
@@ -75,6 +76,8 @@ const ENEMA_VISUAL_REVIEW_RULE = `ENEMA-SPECIFIC VISUAL EXAM:
 - When the abdomen is continuously visible, compare its contour across similar camera angles and body positions. Report only visible generalized or focal contour increase, rounding, asymmetry, bracing, or release. Distinguish possible distension from inhalation, posture, lens perspective, hand pressure, and camera movement. Firmness, retained internal volume, bowel segment, and internal pressure are not visually measurable.
 - Timestamped voice/manual volume entries are the authority for measured instillation amounts and running total. Use them to correlate visible responses, but never estimate milliliters from the video.
 - In a combined enema-and-masturbation session, preserve both evidence lanes: procedure state and visible stimulation/body response. Do not erase the enema procedure because stimulation is present, and do not relabel all genital contact as procedure handling.`;
+
+const MAX_SAVED_VIDEO_PASS_CARDS = 240;
 
 function fmtMmSs(totalSeconds) {
   const v = Math.max(0, Math.round(Number(totalSeconds) || 0));
@@ -2072,6 +2075,7 @@ export default function AIVideoPassPanel({
   const [cloudRunning, setCloudRunning] = useState(false);
   const [cloudStatus, setCloudStatus] = useState("");
   const [cloudError, setCloudError] = useState("");
+  const [showingSavedCloudReview, setShowingSavedCloudReview] = useState(false);
   const [hybridSarahVerifying, setHybridSarahVerifying] = useState(false);
   const [localVisionStatus, setLocalVisionStatus] = useState("");
   const [localVisionError, setLocalVisionError] = useState("");
@@ -2188,6 +2192,12 @@ export default function AIVideoPassPanel({
     return arrayFromMaybe(session?.[analysisField]?.cloud_multimodal_passes)
       .find((entry) => !entry?.source_video?.filename || entry.source_video.filename === selectedFilename) || null;
   }, [analysisField, selectedVideo, session]);
+  const savedCloudReviewCards = useMemo(() => buildSavedCloudReviewCards({
+    pass: savedCloudPass,
+    selectedVideo,
+    streamUrl: rawSelectedVideoStreamUrl,
+    isExploration,
+  }), [isExploration, rawSelectedVideoStreamUrl, savedCloudPass, selectedVideo]);
   const estimatedSessionEnd = useMemo(() => estimateSessionEnd(session, timelineRows), [session, timelineRows]);
   const sessionEnd = useMemo(
     () => selectedVideoSessionEnd(selectedVideo, estimatedSessionEnd, metadataDurationSeconds),
@@ -2207,6 +2217,7 @@ export default function AIVideoPassPanel({
   );
 
   useEffect(() => {
+    if (showingSavedCloudReview) return;
     const restored = arrayFromMaybe(session?.[analysisField]?._video_pass_findings)
       .map((entry) => reviewCardFromPersisted(entry, availableVideos))
       .filter(Boolean);
@@ -2217,7 +2228,30 @@ export default function AIVideoPassPanel({
       const saved = restored.filter((card) => !draftKeys.has(`${card.sourceVideo?.fingerprint || card.sourceVideo?.filename || ""}:${card.window?.start}:${card.window?.end}`));
       return [...saved, ...drafts].sort((a, b) => Number(a.window?.start || 0) - Number(b.window?.start || 0));
     });
-  }, [analysisField, availableVideos, session?.id, session?.[analysisField]?._video_pass_findings_updated_at]);
+  }, [analysisField, availableVideos, session?.id, session?.[analysisField]?._video_pass_findings_updated_at, showingSavedCloudReview]);
+
+  useEffect(() => {
+    if (!showingSavedCloudReview) return;
+    setCards(savedCloudReviewCards);
+  }, [savedCloudReviewCards, showingSavedCloudReview]);
+
+  const toggleSavedCloudReview = () => {
+    if (showingSavedCloudReview) {
+      const restored = arrayFromMaybe(session?.[analysisField]?._video_pass_findings)
+        .map((entry) => reviewCardFromPersisted(entry, availableVideos))
+        .filter(Boolean);
+      setCards(restored.sort((a, b) => Number(a.window?.start || 0) - Number(b.window?.start || 0)));
+      setShowingSavedCloudReview(false);
+      setExpanded({});
+      setCloudStatus("Returned to all saved review cards. The paid cloud evidence remains stored.");
+      return;
+    }
+    setCards(savedCloudReviewCards);
+    setShowingSavedCloudReview(true);
+    setExpanded(savedCloudReviewCards[0] ? { [savedCloudReviewCards[0].id]: true } : {});
+    setCloudStatus(`Showing ${savedCloudReviewCards.length} readable card${savedCloudReviewCards.length === 1 ? "" : "s"} built directly from the saved paid cloud result. No cloud or Claude job was run.`);
+    setCloudError("");
+  };
 
   const updateLocalVisionProgress = useCallback((progress) => {
     setLocalVisionProgress(progress);
@@ -3901,7 +3935,7 @@ Return only the structured JSON matching the requested schema.`,
     const nextVideoPassFindings = [
       persistedCard,
       ...existingVideoPassFindings.filter((item) => item?.id !== persistedCard.id && !sameSavedCardClip(card, item)),
-    ].slice(0, 80);
+    ].slice(0, MAX_SAVED_VIDEO_PASS_CARDS);
     const nextAnalysisBase = {
       ...existingAnalysis,
       _video_pass_findings: nextVideoPassFindings,
@@ -3980,7 +4014,7 @@ Return only the structured JSON matching the requested schema.`,
           !persistedCards.some((persistedCard) => item?.id === persistedCard.id)
             && !cardsToPersist.some((card) => sameSavedCardClip(card, item))
         )),
-      ].slice(0, 80);
+      ].slice(0, MAX_SAVED_VIDEO_PASS_CARDS);
       const updatedAt = new Date().toISOString();
       const nextAnalysisBase = {
         ...existingAnalysis,
@@ -4080,6 +4114,19 @@ Return only the structured JSON matching the requested schema.`,
             {cloudRunning ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Cloud className="mr-2 h-3.5 w-3.5" />}
             {savedCloudPass?.result?.ok ? "Refresh Paid Cloud + Run Sarah" : "Add Cloud + Run Sarah"}
           </Button>
+          {savedCloudReviewCards.length > 0 && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={toggleSavedCloudReview}
+              disabled={cloudRunning || running || reassessing}
+              className="h-8 w-full border-primary/40 bg-primary/5 sm:w-auto"
+              title="Shows the already-paid cloud visual and audio output as normal review cards. This runs no cloud or AI job and costs nothing."
+            >
+              <Eye className="mr-2 h-3.5 w-3.5" />
+              {showingSavedCloudReview ? "Show All Saved Review Cards" : `Show Saved Cloud Review (${savedCloudReviewCards.length})`}
+            </Button>
+          )}
           <Button type="button" onClick={runPass} disabled={running || reassessing || !selectedVideo || !plannedWindows.length} className="h-8 w-full sm:w-auto">
             {running ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="mr-2 h-3.5 w-3.5" />}
             {scanMode === "continue"
@@ -5598,7 +5645,7 @@ Return only the structured JSON matching the requested schema.`,
             const isExpanded = expanded[card.id];
             const accepted = isCardAccepted(card, session, acceptedIds, isExploration);
             const compactAccepted = accepted && !isExpanded;
-            const showCardVideoPreview = Boolean(card.clipUrl) && !card.localVision;
+            const showCardVideoPreview = Boolean(card.clipUrl) && !card.localVision && (!card.cloudMultimodal || isExpanded);
             const cardClipPreviewUrl = showCardVideoPreview ? serverUrl(card.clipUrl) : "";
             const cardFramePreview = serverUrl(card.thumbnailUrl || card.sampledFrames?.[0]?.url || "");
             const deviceStatus = cardDeviceEvidenceStatus(card);
@@ -5657,7 +5704,9 @@ Return only the structured JSON matching the requested schema.`,
                       />
                     ) : (
                       <div className="flex aspect-video w-full items-center justify-center bg-black px-3 text-center text-xs text-muted-foreground">
-                        Preview unavailable. Open frame evidence below.
+                        {card.cloudMultimodal
+                          ? `Saved cloud window ${fmtMmSs(card.window.start)}-${fmtMmSs(card.window.end)} · expand to seek the source video`
+                          : "Preview unavailable. Open frame evidence below."}
                       </div>
                     )}
                     {!isExpanded && (
