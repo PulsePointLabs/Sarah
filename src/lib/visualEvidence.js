@@ -442,6 +442,73 @@ function compactCloudEvidenceText(value, maxLength = 560) {
   return `${candidate.slice(0, Math.max(1, end)).trim()}…`;
 }
 
+function humanizeCloudEvidenceSentence(value) {
+  const text = cleanText(value, 700)
+    .replace(/\b(?:the\s+)?subject\s+[a-z]'s\b/gi, "your")
+    .replace(/\b(?:the\s+)?subject\s+[a-z]\b/gi, "you")
+    .replace(/\b(?:the\s+)?subject's\b/gi, "your")
+    .replace(/\b(?:the\s+)?subject\s+is\b/gi, "you are")
+    .replace(/\b(?:the\s+)?subject\s+has\b/gi, "you have")
+    .replace(/\b(?:the\s+)?subject\b/gi, "you")
+    .replace(/\btheir\b/gi, "your")
+    .replace(/\bthey\s+are\b/gi, "you are")
+    .replace(/\bthey\b/gi, "you")
+    .replace(/\byou\s+interacts\b/gi, "you interact")
+    .replace(/\byou\s+continues\b/gi, "you continue")
+    .replace(/\byou\s+remains\b/gi, "you remain")
+    .replace(/\byou\s+holds\b/gi, "you hold")
+    .replace(/\byou\s+moves\b/gi, "you move")
+    .replace(/\byou\s+rests\b/gi, "you rest")
+    .replace(/\byou\s+uses\b/gi, "you use")
+    .replace(/\byou\s+adjusts\b/gi, "you adjust")
+    .replace(/\byou\s+engages\b/gi, "you engage")
+    .replace(/\byou\s+appears\b/gi, "you appear")
+    .replace(/\byou\s+appear\s+you\s+are\b/gi, "you appear to be")
+    .replace(/\s+([,.;:])/g, "$1")
+    .replace(/([,.;:])\1+/g, "$1")
+    .trim();
+  return text ? `${text.charAt(0).toUpperCase()}${text.slice(1)}` : "";
+}
+
+function usefulCloudEvidenceItems(values = [], { keepStable = false } = {}) {
+  const seen = new Set();
+  return cloudArray(values)
+    .filter((value) => !/\b(?:the\s+)?subject\s+[a-z](?:'s)?\b/i.test(String(value || "")))
+    .map(humanizeCloudEvidenceSentence)
+    .filter(Boolean)
+    .filter((text) => keepStable || !/\b(?:continue|continues|remain|remains|no significant (?:change|changes)|no other significant changes?|no other changes? observed)\b/i.test(text))
+    .filter((text) => !/\bheart rate\b/i.test(text))
+    .filter((text) => {
+      const key = text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((text) => /[.!?]$/.test(text) ? text : `${text}.`);
+}
+
+function cloudCandidateEvidenceText(item = {}) {
+  if (String(item?.provenance?.modality || "").toLowerCase() === "audio") {
+    return humanizeCloudEvidenceSentence(item.basis || item.summary || item.label);
+  }
+
+  const visual = item.visual_evidence || {};
+  const changes = usefulCloudEvidenceItems(visual.change_across_frames);
+  const actions = usefulCloudEvidenceItems(visual.actions);
+  const direct = [...changes, ...actions].slice(0, 4);
+  const audio = cloudArray(item.audio_candidates)
+    .filter((candidate) => candidate?.label)
+    .slice(0, 3)
+    .map((candidate) => `${candidate.label}${candidate.confidence_band ? ` (${candidate.confidence_band})` : ""}`);
+
+  const parts = [];
+  if (direct.length) parts.push(direct.join(" "));
+  else if (Object.keys(visual).length) parts.push("No reliable visual change was extracted for synthesis in this window.");
+  else parts.push(humanizeCloudEvidenceSentence(item.review_summary || item.basis || item.summary || item.label));
+  if (audio.length) parts.push(`Audio cues in this window: ${audio.join(", ")}.`);
+  return compactCloudEvidenceText(parts.filter(Boolean).join(" "), 620);
+}
+
 function cloudCandidatePhysiology(item = {}) {
   const physiology = item.physiology || {};
   const heartRate = physiology.heart_rate_bpm;
@@ -485,20 +552,24 @@ export function buildCloudMultimodalEvidenceDigest(record, { analysisField = "ai
   const offsetSeconds = Number(pass?.source_video?.source_zero_session_ms || 0) / 1000;
   const sourceName = pass?.source_video?.filename || "linked session video";
   const candidates = selectCloudCandidates(result, limit);
+  const seenEvidence = new Set();
   const lines = candidates.map((item) => {
     const time = Math.max(0, Number(item.start_ms || 0) / 1000 + offsetSeconds);
     const modality = String(item?.provenance?.modality || "visual").toLowerCase();
     const label = modality === "audio"
       ? String(item.label || "audio activity").replace(/^audio_/, "").replace(/_/g, " ")
       : "visual review";
-    const evidence = compactCloudEvidenceText(item.review_summary || item.basis || item.summary || item.label, 560);
+    const evidence = cloudCandidateEvidenceText(item);
+    const evidenceKey = `${modality}|${evidence.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()}`;
+    if (seenEvidence.has(evidenceKey)) return null;
+    seenEvidence.add(evidenceKey);
     const physiology = cloudCandidatePhysiology(item);
     return `- [${formatClockTime(time)}; ${modality} candidate; ${label}] ${evidence}${physiology ? ` Locally aligned physiology: ${physiology}.` : ""}`;
-  });
-  const omitted = Math.max(0, cloudArray(result.strong_candidates).length - candidates.length);
+  }).filter(Boolean);
+  const omitted = Math.max(0, cloudArray(result.strong_candidates).length - lines.length);
   return [
     `Saved cloud multimodal evidence from ${sourceName}: ${compactCloudEvidenceText(result.summary, 500)}`,
-    "Interpretation rule: these are timestamped supporting candidates, not accepted facts. Use them to choose relevant moments and cross-check manual notes, telemetry, and reviewed findings; preserve uncertainty in the final analysis.",
+    "Synthesis rule: these are supporting candidates, not accepted facts. Use them quietly to strengthen the normal Sarah interpretation. Do not quote this evidence block or copy its labels into the report. Prefer accepted Sarah cards and manual notes, cross-check against telemetry, preserve uncertainty, and write the final result in natural human language.",
     ...lines,
     omitted ? `- ${omitted} additional lower-priority cloud candidates remain saved on the record and were omitted from this prompt digest.` : null,
   ].filter(Boolean).join("\n");

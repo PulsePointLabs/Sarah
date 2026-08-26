@@ -209,6 +209,13 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
   const generatedAt = getAIContentGeneratedAt(result);
   const jobKey = `body-exploration-analysis:${exploration.id}`;
   const focusedFoley = isFocusedFoleyExploration(exploration);
+  const savedCloudPass = (Array.isArray(exploration?.ai_body_exploration?.cloud_multimodal_passes)
+    ? exploration.ai_body_exploration.cloud_multimodal_passes
+    : []).find((entry) => entry?.result?.ok);
+  const savedCloudVisualWindows = Array.isArray(savedCloudPass?.result?.multimodal_windows)
+    ? savedCloudPass.result.multimodal_windows.length
+    : Number(savedCloudPass?.result?.visual_summary?.semantic_windows || 0);
+  const savedCloudAudioCues = Number(savedCloudPass?.result?.audio_summary?.reviewable_acoustic_candidates || 0);
 
   const attachAnalysisMeta = (analysis, previousAnalysis) => {
     const next = {
@@ -438,6 +445,11 @@ ${events.length ? `RAW TIMESTAMPED NOTES - EVIDENCE INDEX ONLY; DO NOT USE THIS 
           {result && (
             <p className="mt-1 text-[11px] text-muted-foreground">
               {generatedAt ? `Generated ${formatGeneratedAt(generatedAt)}` : "Generated time unavailable"}
+            </p>
+          )}
+          {(savedCloudVisualWindows > 0 || savedCloudAudioCues > 0) && (
+            <p className="mt-1 text-[11px] text-cyan-200">
+              Enhanced evidence available: {savedCloudVisualWindows} cloud visual window{savedCloudVisualWindows === 1 ? "" : "s"} · {savedCloudAudioCues} audio cue{savedCloudAudioCues === 1 ? "" : "s"}
             </p>
           )}
         </div>

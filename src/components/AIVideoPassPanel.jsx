@@ -2475,7 +2475,7 @@ export default function AIVideoPassPanel({
     seekPreviewVideo(maxCursor);
   }, [onCursorChange, scanCursor, sessionEnd]);
 
-  const runPass = async () => {
+  const runPass = async (options = {}) => {
     if (!selectedVideo?.path || running) return;
     setRunning(true);
     setError("");
@@ -2483,7 +2483,7 @@ export default function AIVideoPassPanel({
     setAcceptedIds(new Set());
     freshRunStartedAtRef.current = Date.now();
     try {
-      const workingSession = session;
+      const workingSession = options?.sessionOverride || session;
       setStatus(`Starting ${recordLabel} Claude/Sarah video pass. Previously accepted evidence is preserved.`);
       const nextCards = [];
       const videoContext = isExploration
@@ -2797,7 +2797,7 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
           const completedJob = await runBackgroundAIVideoReview({
             aiPayload,
             cardMeta,
-            session,
+            session: workingSession,
             recordType,
             label,
             onProgress: (job) => {
@@ -2845,9 +2845,11 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
         setScanCursor(nextCards[nextCards.length - 1].window.end);
       }
       setStatus(`Review complete: ${nextCards.length} windows ready${autoContinue && scanMode === "continue" ? " through the current forward run" : ""}.`);
+      return nextCards;
     } catch (err) {
       setError(friendlyVideoWorkflowError(err, "AI video pass failed."));
       setStatus("");
+      return null;
     } finally {
       setRunning(false);
     }
@@ -3437,7 +3439,13 @@ Return only the structured JSON matching the requested schema.`,
       if (refreshedRecord) onSessionUpdate?.(refreshedRecord);
       const endSeconds = Number(result.range?.endMs ?? result.range?.end_ms ?? 0) / 1000;
       const audioCount = Number(result.audio_summary?.reviewable_acoustic_candidates || 0);
-      setCloudStatus(`Cloud ears + vision ready · ${fmtMmSs(endSeconds)} covered · ${audioCount} audio cue${audioCount === 1 ? "" : "s"} retained. Run Sarah Annotation to turn this evidence into the normal editable review cards.`);
+      setCloudStatus(`Cloud ears + vision ready · ${fmtMmSs(endSeconds)} covered · ${audioCount} audio cue${audioCount === 1 ? "" : "s"} retained. Sarah is now turning it into the normal editable review cards...`);
+      const generatedCards = await runPass({ sessionOverride: refreshedRecord || session });
+      if (generatedCards) {
+        setCloudStatus(`Enhanced Sarah review ready · ${generatedCards.length} normal editable card${generatedCards.length === 1 ? "" : "s"} generated with saved cloud audio/visual evidence.`);
+      } else {
+        setCloudStatus(`Cloud evidence is safely saved through ${fmtMmSs(endSeconds)}. Sarah card generation did not finish; retry "Run Sarah with Saved Cloud" without rerunning the paid cloud pass.`);
+      }
     } catch (err) {
       setCloudError(friendlyVideoWorkflowError(err, "Cloud ears + vision failed."));
       setCloudStatus("");
@@ -4067,14 +4075,16 @@ Return only the structured JSON matching the requested schema.`,
             onClick={runCloudDeepAnalysis}
             disabled={cloudRunning || running || reassessing || !selectedVideo}
             className="h-8 w-full border-cyan-400/40 bg-cyan-400/5 text-cyan-100 hover:bg-cyan-400/10 sm:w-auto"
-            title="Refresh the saved cloud visual and audio evidence used by the normal Sarah annotation workflow. This does not replace the review-card interface."
+            title="Starts a paid cloud visual/audio analysis, saves that evidence, then automatically runs the normal Sarah annotation workflow. Existing saved evidence is not removed."
           >
             {cloudRunning ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Cloud className="mr-2 h-3.5 w-3.5" />}
-            {savedCloudPass?.result?.ok ? "Refresh Cloud Ears + Vision" : "Add Cloud Ears + Vision"}
+            {savedCloudPass?.result?.ok ? "Refresh Paid Cloud + Run Sarah" : "Add Cloud + Run Sarah"}
           </Button>
           <Button type="button" onClick={runPass} disabled={running || reassessing || !selectedVideo || !plannedWindows.length} className="h-8 w-full sm:w-auto">
             {running ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="mr-2 h-3.5 w-3.5" />}
-            {scanMode === "continue" ? (scanCursor > 0 ? "Run Next Claude Pass" : "Start Claude at 0:00") : "Run Claude Window Pass"}
+            {scanMode === "continue"
+              ? (scanCursor > 0 ? "Run Next Sarah Pass" : (savedCloudPass?.result?.ok ? "Start Sarah with Saved Cloud" : "Start Sarah at 0:00"))
+              : (savedCloudPass?.result?.ok ? "Run Sarah with Saved Cloud" : "Run Sarah Window Pass")}
           </Button>
         </div>
       </div>

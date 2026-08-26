@@ -1834,6 +1834,13 @@ function sessionAIPreflight(session, timelineRows = []) {
   const aiEvents = events.filter((event) => event?.source === "ai_video_pass" || event?.ai_annotation?.source);
   const localCandidateEvents = events.filter((event) => /candidate,\s*not confirmed|candidate_not_confirmed/i.test(`${event?.note || ""} ${(event?.annotation_tags || []).join(" ")}`));
   const videoPasses = normalizeSessionVideoPassFindings(session);
+  const cloudPass = (Array.isArray(session?.ai_analysis?.cloud_multimodal_passes)
+    ? session.ai_analysis.cloud_multimodal_passes
+    : []).find((entry) => entry?.result?.ok);
+  const cloudVisualWindowCount = Array.isArray(cloudPass?.result?.multimodal_windows)
+    ? cloudPass.result.multimodal_windows.length
+    : Number(cloudPass?.result?.visual_summary?.semantic_windows || 0);
+  const cloudAudioCandidateCount = Number(cloudPass?.result?.audio_summary?.reviewable_acoustic_candidates || 0);
   const videoDraftEventCount = videoPasses.reduce((sum, entry) => sum + (entry.draft_events?.length || 0), 0);
   const videoFindingCount = videoPasses.reduce((sum, entry) => sum + (entry.findings?.length || 0), 0);
   const usefulEventNotes = events.filter((event) => String(event.note || "").replace(/\s+/g, " ").trim().length >= 35);
@@ -1848,6 +1855,8 @@ function sessionAIPreflight(session, timelineRows = []) {
     videoPassCount: videoPasses.length,
     videoDraftEventCount,
     videoFindingCount,
+    cloudVisualWindowCount,
+    cloudAudioCandidateCount,
     contextItems,
     contextEvidenceCount: contextItems.length,
     hasTelemetry: Array.isArray(timelineRows) && timelineRows.length > 5,
@@ -3096,6 +3105,12 @@ Provide ${isTechnical
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.usefulEventCount} useful event notes</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.videoPassCount} saved video cards</span>
               <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.videoDraftEventCount} video draft events</span>
+              {evidencePreflight.cloudVisualWindowCount > 0 && (
+                <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2 py-0.5 text-cyan-100">{evidencePreflight.cloudVisualWindowCount} cloud visual windows</span>
+              )}
+              {evidencePreflight.cloudAudioCandidateCount > 0 && (
+                <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2 py-0.5 text-cyan-100">{evidencePreflight.cloudAudioCandidateCount} cloud audio cues</span>
+              )}
               {evidencePreflight.localCandidateEventCount > 0 && (
                 <span className="rounded-full border border-border bg-background/70 px-2 py-0.5">{evidencePreflight.localCandidateEventCount} local candidates</span>
               )}

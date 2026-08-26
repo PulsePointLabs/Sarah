@@ -42,6 +42,23 @@ test('cloud evidence digest is readable, timestamped, and explicitly unconfirmed
   assert.doesNotMatch(digest, /Cloud Multimodal Visual Window/);
 });
 
+test('cloud evidence digest humanizes structured model language before downstream synthesis', () => {
+  const pass = cloudPass();
+  pass.result.strong_candidates[0].visual_evidence = {
+    actions: ["The subject is moving their hands.", "The subject is moving their hands."],
+    body_position: ["Subject's knees are bent."],
+    change_across_frames: ["No significant changes observed.", "The subject's grip shifts."],
+  };
+  pass.result.strong_candidates[0].audio_candidates = [{ label: "Sigh", confidence_band: "moderate" }];
+  const digest = buildCloudMultimodalEvidenceDigest({ ai_analysis: { cloud_multimodal_passes: [pass] } });
+  assert.match(digest, /Your grip shifts\./);
+  assert.match(digest, /You are moving your hands\./);
+  assert.match(digest, /Audio cues in this window: Sigh \(moderate\)\./);
+  assert.doesNotMatch(digest, /\bsubject\b/i);
+  assert.doesNotMatch(digest, /No significant changes observed/);
+  assert.match(digest, /Do not quote this evidence block/);
+});
+
 test('normal session and body exploration analysis digests include saved cloud evidence', () => {
   const sessionDigest = buildSessionVideoPassDigest({ ai_analysis: { cloud_multimodal_passes: [cloudPass()] } });
   const explorationDigest = buildBodyExplorationVideoPassDigest({ ai_body_exploration: { cloud_multimodal_passes: [cloudPass()] } });
