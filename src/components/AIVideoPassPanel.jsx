@@ -273,36 +273,22 @@ function listText(values) {
   return String(values || "").trim();
 }
 
-function cloudMultimodalEvidenceText(analysis = {}) {
-  const pass = (Array.isArray(analysis.cloud_multimodal_passes) ? analysis.cloud_multimodal_passes : [])[0];
+function cloudWindowEvidenceText(analysis = {}, startSeconds = 0, endSeconds = 0) {
+  const pass = arrayFromMaybe(analysis.cloud_multimodal_passes)[0];
   const result = pass?.result;
   if (!result?.ok) return "";
-  const all = arrayFromMaybe(result.strong_candidates)
-    .slice()
-    .sort((a, b) => Number(a?.start_ms || 0) - Number(b?.start_ms || 0));
-  const audio = all.filter((item) => String(item?.provenance?.modality || "").toLowerCase() === "audio");
-  const visual = all.filter((item) => String(item?.provenance?.modality || "").toLowerCase() !== "audio");
-  const visualSlots = Math.min(18, visual.length);
-  const sampledVisual = Array.from({ length: visualSlots }, (_, index) => {
-    const position = visualSlots <= 1 ? 0 : Math.round((index * (visual.length - 1)) / (visualSlots - 1));
-    return visual[position];
-  });
-  const selected = [...sampledVisual, ...audio.slice(0, 10)]
-    .sort((a, b) => Number(a?.start_ms || 0) - Number(b?.start_ms || 0));
-  const candidates = selected.map((item) => {
-    const start = Number(item.start_ms || 0) / 1000;
-    const end = Number(item.end_ms ?? item.start_ms ?? 0) / 1000;
-    const modality = String(item?.provenance?.modality || "visual").toLowerCase();
-    return `[${fmtMmSs(start)}-${fmtMmSs(end)}; ${modality}] ${compactText(item.review_summary || item.basis || item.label, 320)}`;
-  });
-  return [
-    result.summary,
-    candidates.length ? `Timestamped selector evidence (candidate status applies to every item; do not treat it as an accepted fact): ${candidates.join(" | ")}` : null,
-    all.length > selected.length ? `${all.length - selected.length} additional candidates remain saved; this prompt uses an evenly distributed full-session subset plus audio candidates.` : null,
-    result.physiology?.available_streams?.length
-      ? `Locally aligned physiology streams: ${result.physiology.available_streams.join(", ")}.`
-      : null,
-  ].filter(Boolean).join(" ");
+  const startMs = Math.max(0, Number(startSeconds || 0) * 1000 - 3000);
+  const endMs = Math.max(startMs, Number(endSeconds || 0) * 1000 + 3000);
+  const nearby = arrayFromMaybe(result.strong_candidates)
+    .filter((item) => Number(item?.end_ms ?? item?.start_ms ?? 0) >= startMs && Number(item?.start_ms || 0) <= endMs)
+    .sort((a, b) => Number(a?.start_ms || 0) - Number(b?.start_ms || 0))
+    .slice(0, 8)
+    .map((item) => {
+      const modality = String(item?.provenance?.modality || "visual").toLowerCase();
+      return `[${fmtMmSs(Number(item?.start_ms || 0) / 1000)}; ${modality}] ${compactText(item.review_summary || item.basis || item.label, 260)}`;
+    });
+  if (!nearby.length) return "";
+  return `Cloud visual/audio cues near this exact window (supporting selector evidence only; verify against the ordered local frames and do not repeat uncertainty boilerplate): ${nearby.join(" | ")}`;
 }
 
 function buildSessionVideoContext(session, selectedVideo, timelineRows = []) {
@@ -346,8 +332,6 @@ function buildSessionVideoContext(session, selectedVideo, timelineRows = []) {
   const telemetrySpan = timelineRows.length
     ? `Telemetry rows: ${timelineRows.length}; session span approximately ${fmtMmSs(estimateSessionEnd(session, timelineRows))}.`
     : "";
-  const cloudEvidence = cloudMultimodalEvidenceText(session?.ai_analysis);
-
   return [
     linkedLabel ? `Linked video selected: ${linkedLabel}` : null,
     selectedVideo ? `Linked video alignment: source video 0:00 = session ${fmtSignedMmSs(timelineOffsetSeconds(selectedVideo))}.` : null,
@@ -358,7 +342,6 @@ function buildSessionVideoContext(session, selectedVideo, timelineRows = []) {
     session?.notes ? `Full session notes: ${compactText(session.notes, 1800)}` : null,
     timelineEvents ? `Manual/timestamped session notes: ${timelineEvents}` : null,
     audioPasses ? `Accepted audio-pass evidence: ${audioPasses}` : null,
-    cloudEvidence ? `Saved cloud multimodal evidence: ${cloudEvidence}` : null,
   ].filter(Boolean).join("\n");
 }
 
@@ -400,8 +383,6 @@ function buildBodyExplorationVideoContext(exploration, selectedVideo, timelineRo
   const telemetrySpan = timelineRows.length
     ? `Telemetry rows: ${timelineRows.length}; exploration span approximately ${fmtMmSs(estimateSessionEnd(exploration, timelineRows))}.`
     : "";
-  const cloudEvidence = cloudMultimodalEvidenceText(exploration?.ai_body_exploration);
-
   return [
     linkedLabel ? `Linked video selected: ${linkedLabel}` : null,
     selectedVideo ? `Linked video alignment: source video 0:00 = exploration ${fmtSignedMmSs(timelineOffsetSeconds(selectedVideo))}.` : null,
@@ -410,7 +391,6 @@ function buildBodyExplorationVideoContext(exploration, selectedVideo, timelineRo
     exploration?.notes ? `Full exploration notes: ${compactText(exploration.notes, 1800)}` : null,
     timelineEvents ? `Manual/timestamped exploration notes: ${timelineEvents}` : null,
     audioPasses ? `Accepted audio-pass evidence: ${audioPasses}` : null,
-    cloudEvidence ? `Saved cloud multimodal evidence: ${cloudEvidence}` : null,
   ].filter(Boolean).join("\n");
 }
 
@@ -1065,6 +1045,57 @@ function persistedCardFrom(card) {
   };
 }
 
+function reviewCardFromPersisted(entry, availableVideos = []) {
+  if (!entry?.clip) return null;
+  const source = entry.source_video || {};
+  const linkedVideo = availableVideos.find((video) => {
+    if (source.fingerprint && video?.fingerprint) return source.fingerprint === video.fingerprint;
+    const filename = video?.filename || video?.label || "";
+    return Boolean(filename && filename === (source.filename || source.label));
+  });
+  const start = Number(entry.clip.start_s);
+  const end = Number(entry.clip.end_s);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const findings = arrayFromMaybe(entry.findings).map((finding, index) => {
+    if (finding && typeof finding === "object") {
+      return {
+        title: finding.title || `Finding ${index + 1}`,
+        text: finding.text || finding.summary || finding.detail || "",
+        confidence: confidenceWord(finding.confidence),
+        category: finding.category || "visual_evidence",
+        evidenceRefs: arrayFromMaybe(finding.evidenceRefs || finding.evidence_refs),
+      };
+    }
+    const text = String(finding || "").trim();
+    const divider = text.indexOf(":");
+    return {
+      title: divider > 0 && divider < 100 ? text.slice(0, divider).trim() : `Finding ${index + 1}`,
+      text: divider > 0 && divider < 100 ? text.slice(divider + 1).trim() : text,
+      confidence: confidenceWord((text.match(/\((low|moderate|high) confidence\)\s*$/i) || [])[1]),
+      category: "visual_evidence",
+    };
+  }).filter((finding) => finding.text);
+  return {
+    id: entry.id || `saved-video-pass-${start}-${end}`,
+    persistedReview: true,
+    label: entry.label || `AI video pass ${fmtMmSs(start)}-${fmtMmSs(end)}`,
+    window: { start, end },
+    sourceWindow: { start, end },
+    sourceVideo: { ...(linkedVideo || {}), ...source },
+    sourceVideoRole: entry.source_video_role || source.role || inferVideoRole(source),
+    clipUrl: entry.clip.url || "",
+    thumbnailUrl: entry.clip.thumbnail_url || entry.sampled_frames?.[0]?.url || "",
+    sampledFrames: arrayFromMaybe(entry.sampled_frames),
+    motionSummary: entry.motion_summary || null,
+    telemetry: entry.telemetry || "",
+    summary: entry.summary || "",
+    findings,
+    events: arrayFromMaybe(entry.draft_events).map((event) => ({ ...event })),
+    confidence: confidenceWord(entry.confidence),
+    respirationAssessment: entry.respiration_assessment || null,
+  };
+}
+
 function hasPersistableVideoPassCard(card) {
   if (!card) return false;
   const summary = String(card.summary || "").trim();
@@ -1542,51 +1573,8 @@ function localVisionEventFromItem(item, selectedVideo, windowInfo, isExploration
   };
 }
 
-function cloudEvidenceOverviewFindings(result = {}) {
-  const range = result.range || {};
-  const endSeconds = Number(range.endMs ?? range.end_ms ?? 0) / 1000;
-  const visual = result.visual_summary || {};
-  const audio = result.audio_summary || {};
-  const streams = arrayFromMaybe(result.physiology?.available_streams);
-  const incomplete = arrayFromMaybe(result.multimodal_windows)
-    .filter((item) => item?.visual_evidence?.raw_model_output).length;
-  return [
-    {
-      title: "Full-session evidence coverage",
-      text: `The cloud pre-pass screened ${fmtMmSs(0)}-${fmtMmSs(endSeconds)} rather than stopping at the early timestamps shown first below. It measured ${visual.frame_metrics || 0} visual frames and selected ${visual.semantic_windows || 0} timestamped visual checkpoints for deeper review.`,
-      category: "cloud_coverage",
-      confidence: "high",
-    },
-    {
-      title: "Visual evidence layer",
-      text: `${visual.pose_samples || 0} pose checks and ${visual.semantic_windows || 0} model-reviewed checkpoints are preserved as selector evidence. They are inputs for Sarah-style annotation and cross-checking, not finished annotations by themselves.`,
-      category: "cloud_visual_evidence",
-      confidence: "moderate",
-    },
-    {
-      title: "Audio evidence layer",
-      text: `${audio.reviewable_acoustic_candidates || 0} moderate/strong acoustic candidates were retained${audio.reliable_speech_segments ? `, including ${audio.reliable_speech_segments} reliable speech segment${audio.reliable_speech_segments === 1 ? "" : "s"}` : "; no spoken words passed the reliability gate"}. Audio labels remain supporting evidence until Sarah aligns them with the visual timeline and session context.`,
-      category: "cloud_audio_evidence",
-      confidence: "moderate",
-    },
-    streams.length ? {
-      title: "Locally aligned physiology",
-      text: `Sarah can align this evidence with the saved ${streams.join(", ").replace(/_/g, " ")} stream${streams.length === 1 ? "" : "s"}.`,
-      category: "physiology",
-      confidence: "high",
-    } : null,
-    incomplete ? {
-      title: "Preserved incomplete model responses",
-      text: `${incomplete} visual checkpoint response${incomplete === 1 ? "" : "s"} reached the prior token ceiling. Every complete field was recovered for use, and the untouched raw response remains stored for provenance.`,
-      category: "cloud_provenance",
-      confidence: "high",
-    } : null,
-  ].filter(Boolean);
-}
-
 function cardFromLocalVisionResult(result, selectedVideo, isExploration = false) {
   if (!result?.ok) return null;
-  const isCloudMultimodal = result.mode === "cloud_multimodal";
   const windowInfo = result.window || result.range || {};
   const startSource = Number(windowInfo.startMs ?? windowInfo.start_ms ?? windowInfo.start_ms ?? 0) / 1000;
   const endSource = Number(windowInfo.endMs ?? windowInfo.end_ms ?? windowInfo.end_ms ?? startSource * 1000 + 1000) / 1000;
@@ -1607,9 +1595,8 @@ function cardFromLocalVisionResult(result, selectedVideo, isExploration = false)
     confidence: confidenceWord(candidate.confidence ?? candidate.score),
   }));
   const visibleFindings = [
-    ...(isCloudMultimodal ? cloudEvidenceOverviewFindings(result) : []),
-    ...(!isCloudMultimodal ? actionableFindings : []),
-    ...(!isCloudMultimodal ? strongCandidateFindings : []),
+    ...actionableFindings,
+    ...strongCandidateFindings,
     ...(result.visible_objects || []).map((item) => localVisionFindingFromItem(item)),
     ...(result.visible_actions || []).map((item) => localVisionFindingFromItem(item)),
     ...(result.stage_candidates || [])
@@ -1654,7 +1641,7 @@ function cardFromLocalVisionResult(result, selectedVideo, isExploration = false)
   const promotedEvents = arrayFromMaybe(result.actionable_findings)
     .map((item, index) => localVisionEventFromItem(item, selectedVideo, windowInfo, isExploration, "confirmed", index))
     .filter(Boolean);
-  const candidateEvents = (isCloudMultimodal ? [] : arrayFromMaybe(result.strong_candidates))
+  const candidateEvents = arrayFromMaybe(result.strong_candidates)
     .slice(0, 8)
     .map((item, index) => localVisionEventFromItem(item, selectedVideo, windowInfo, isExploration, "candidate", index))
     .filter(Boolean);
@@ -1675,11 +1662,10 @@ function cardFromLocalVisionResult(result, selectedVideo, isExploration = false)
     frameIndex: Number(String(frame.frame_id || "").replace(/\D/g, "")) || 0,
   })).filter((frame) => frame.url);
   return {
-    id: `${isCloudMultimodal ? "cloud-multimodal" : "local-vision"}-${result.id || Date.now()}`,
+    id: `local-vision-${result.id || Date.now()}`,
     localVision: true,
-    cloudMultimodal: isCloudMultimodal,
     localVisionResultId: result.id || null,
-    label: `${isCloudMultimodal ? "Cloud evidence layer" : "Sarah local read"} ${fmtMmSs(start)}-${fmtMmSs(end)}`,
+    label: `Sarah local read ${fmtMmSs(start)}-${fmtMmSs(end)}`,
     window: { start, end },
     sourceWindow: { start: startSource, end: endSource },
     sourceVideo: selectedVideo,
@@ -1688,12 +1674,8 @@ function cardFromLocalVisionResult(result, selectedVideo, isExploration = false)
     thumbnailUrl: sampledFrames[0]?.url || "",
     sampledFrames,
     motionSummary: null,
-    telemetry: isCloudMultimodal
-      ? "Encrypted cloud multimodal evidence. Temporary cloud media was deleted after the job; candidates require review before acceptance."
-      : "Local-only visual evidence. Frames stayed on this machine; no cloud frame upload.",
-    summary: isCloudMultimodal
-      ? `Cloud screening covered the complete ${fmtMmSs(start)}-${fmtMmSs(end)} source. The technical checkpoints are preserved below as an evidence audit; Sarah-style annotations remain the human-readable interpretation layer.`
-      : result.summary || sarahLocalVisionSummary(result),
+    telemetry: "Local-only visual evidence. Frames stayed on this machine; no cloud frame upload.",
+    summary: result.summary || sarahLocalVisionSummary(result),
     findings: visibleFindings.length ? visibleFindings : [fallbackFinding],
     events,
     confidence: confidenceWord(result.confidence?.overall),
@@ -2087,6 +2069,9 @@ export default function AIVideoPassPanel({
   const [localVisionFocus, setLocalVisionFocus] = useState(isExploration ? "foley" : "body");
   const [localVisionHealth, setLocalVisionHealth] = useState(null);
   const [localVisionRunning, setLocalVisionRunning] = useState(false);
+  const [cloudRunning, setCloudRunning] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState("");
+  const [cloudError, setCloudError] = useState("");
   const [hybridSarahVerifying, setHybridSarahVerifying] = useState(false);
   const [localVisionStatus, setLocalVisionStatus] = useState("");
   const [localVisionError, setLocalVisionError] = useState("");
@@ -2198,6 +2183,11 @@ export default function AIVideoPassPanel({
   const selectedVideoStreamUrl = playbackPreviewUrl || rawSelectedVideoStreamUrl;
   const [selectedVideoRole, setSelectedVideoRole] = useState(inferVideoRole(selectedVideo));
   const selectedVideoRoleHelper = videoRoleHelper(selectedVideoRole, isExploration, deviceIdentityContext);
+  const savedCloudPass = useMemo(() => {
+    const selectedFilename = String(selectedVideo?.filename || selectedVideo?.label || selectedVideo?.path || "").split(/[\\/]/).pop();
+    return arrayFromMaybe(session?.[analysisField]?.cloud_multimodal_passes)
+      .find((entry) => !entry?.source_video?.filename || entry.source_video.filename === selectedFilename) || null;
+  }, [analysisField, selectedVideo, session]);
   const estimatedSessionEnd = useMemo(() => estimateSessionEnd(session, timelineRows), [session, timelineRows]);
   const sessionEnd = useMemo(
     () => selectedVideoSessionEnd(selectedVideo, estimatedSessionEnd, metadataDurationSeconds),
@@ -2215,6 +2205,19 @@ export default function AIVideoPassPanel({
     () => (session?.event_timeline || []).filter(isAIGeneratedPassEvent).length,
     [session?.event_timeline],
   );
+
+  useEffect(() => {
+    const restored = arrayFromMaybe(session?.[analysisField]?._video_pass_findings)
+      .map((entry) => reviewCardFromPersisted(entry, availableVideos))
+      .filter(Boolean);
+    if (!restored.length) return;
+    setCards((current) => {
+      const drafts = current.filter((card) => !card.persistedReview && !card.cloudMultimodal);
+      const draftKeys = new Set(drafts.map((card) => `${card.sourceVideo?.fingerprint || card.sourceVideo?.filename || ""}:${card.window?.start}:${card.window?.end}`));
+      const saved = restored.filter((card) => !draftKeys.has(`${card.sourceVideo?.fingerprint || card.sourceVideo?.filename || ""}:${card.window?.start}:${card.window?.end}`));
+      return [...saved, ...drafts].sort((a, b) => Number(a.window?.start || 0) - Number(b.window?.start || 0));
+    });
+  }, [analysisField, availableVideos, session?.id, session?.[analysisField]?._video_pass_findings_updated_at]);
 
   const updateLocalVisionProgress = useCallback((progress) => {
     setLocalVisionProgress(progress);
@@ -2362,13 +2365,23 @@ export default function AIVideoPassPanel({
           metaSource: "AIVideoPassPanel",
         });
         if (cancelled) return;
-        const job = (response.jobs || []).find((item) => (
+        const jobs = response.jobs || [];
+        const cloudJob = jobs.find((item) => item?.type === "cloud_multimodal_analysis");
+        if (cloudJob) {
+          const progress = cloudJob.progress || {};
+          const count = progress.total ? ` (${progress.current || 0}/${progress.total})` : "";
+          setCloudRunning(true);
+          setCloudError("");
+          setCloudStatus(`${progress.message || "Cloud ears + vision running..."}${count}`);
+        } else {
+          setCloudRunning(false);
+        }
+        const job = jobs.find((item) => (
           item?.type === "local_vision_analyze_forward"
             || item?.type === "local_vision_analyze_adaptive"
             || item?.type === "local_vision_analyze_continuous"
             || item?.type === "local_vision_analyze_window"
             || item?.type === "local_vision_ask_video"
-            || item?.type === "cloud_multimodal_analysis"
         ));
         if (!job) {
           setLocalVisionRunning(false);
@@ -2380,7 +2393,7 @@ export default function AIVideoPassPanel({
         setLocalVisionRunning(true);
         updateLocalVisionProgress(progress);
         setLocalVisionError("");
-        setLocalVisionStatus(`${progress.message || (job.type === "cloud_multimodal_analysis" ? "Cloud deep analysis running..." : "Local Qwen job running...")}${count}`);
+        setLocalVisionStatus(`${progress.message || "Local Qwen job running..."}${count}`);
       } catch {
         // The tray handles global job errors; keep this local attachment best-effort.
       }
@@ -2487,6 +2500,7 @@ export default function AIVideoPassPanel({
           const label = `AI video pass ${fmtMmSs(window.start)}-${fmtMmSs(window.end)}`;
           const sourceStart = sourceTimeForSession(window.start, selectedVideo);
           const sourceEnd = Math.max(sourceStart + 0.25, Number(window.end || 0) - selectedVideoOffset);
+          const cloudWindowEvidence = cloudWindowEvidenceText(workingSession?.[analysisField], window.start, window.end);
           setStatus(`Preparing ${label}${autoContinue && scanMode === "continue" ? ` · batch ${batchNumber}` : ""}`);
           const preview = await base44.integrations.Core.ProcessLocalVideoClip({
             path: selectedVideo.path,
@@ -2720,6 +2734,7 @@ ${continuityContext}
 
 Limited ${recordLabel} context for this visual pass:
 ${videoContext || `No additional ${recordLabel} context is available.`}
+${cloudWindowEvidence || "No additional cloud audio/visual cue falls inside this exact window."}
 
 ${isExploration ? "Exploration" : "Session"} window: ${fmtMmSs(reviewWindow.start)} to ${fmtMmSs(reviewWindow.end)} (${reviewWindow.start.toFixed(1)}s-${reviewWindow.end.toFixed(1)}s).
 Source video window: ${fmtMmSs(sourceStart)} to ${fmtMmSs(sourceEnd)}. Video 0:00 aligns to ${recordLabel} ${fmtSignedMmSs(selectedVideoOffset)}.
@@ -3074,51 +3089,13 @@ Return a corrected compact card for this same window. Keep timeline events only 
   }, [isExploration, selectedVideo?.path, session?.id]);
 
   useEffect(() => {
-    let cancelled = false;
-    if (!session?.id || !selectedVideo?.path) return undefined;
-    const selectedFilename = String(selectedVideo.filename || selectedVideo.label || selectedVideo.path).split(/[\\/]/).pop();
-    const savedPass = (Array.isArray(session?.[analysisField]?.cloud_multimodal_passes)
-      ? session[analysisField].cloud_multimodal_passes
-      : [])
-      .find((entry) => !entry?.source_video?.filename || entry.source_video.filename === selectedFilename);
-    if (savedPass?.result?.ok) {
-      setLocalVisionResult(savedPass.result);
-      const savedCard = cardFromLocalVisionResult(savedPass.result, selectedVideo, isExploration);
-      if (savedCard) {
-        setCards((current) => [savedCard, ...current.filter((card) => !card.cloudMultimodal)]);
-        setExpanded((previous) => ({ ...previous, [savedCard.id]: true }));
-      }
-      setLocalVisionStatus(`Loaded saved cloud deep analysis from ${new Date(savedPass.saved_at || session[analysisField].cloud_multimodal_updated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`);
-    }
-    listBackgroundJobs({
-      type: "cloud_multimodal_analysis",
-      status: "complete",
-      limit: 12,
-      metaSessionId: session.id,
-      metaSource: "AIVideoPassPanel",
-    })
-      .then(async (payload) => {
-        const latest = (payload?.jobs || [])
-          .filter((job) => !job?.meta?.videoPath || job.meta.videoPath === selectedVideo.path)
-          .sort((a, b) => Date.parse(b.finishedAt || b.updatedAt || "") - Date.parse(a.finishedAt || a.updatedAt || ""))[0];
-        if (!latest?.id || cancelled) return;
-        const completed = latest.result ? latest : await getBackgroundJob(latest.id);
-        if (cancelled || !completed?.result?.ok) return;
-        setLocalVisionResult(completed.result);
-        const restoredCard = cardFromLocalVisionResult(completed.result, selectedVideo, isExploration);
-        if (restoredCard) {
-          setCards((current) => [restoredCard, ...current.filter((card) => !card.cloudMultimodal)]);
-          setExpanded((previous) => ({ ...previous, [restoredCard.id]: true }));
-        }
-        setLocalVisionStatus(`Loaded saved cloud deep analysis from ${new Date(completed.finishedAt || completed.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`);
-      })
-      .catch(() => {
-        // Cloud result restore is best-effort and never blocks a fresh run.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [analysisField, isExploration, selectedVideo, session]);
+    const result = savedCloudPass?.result;
+    if (!result?.ok || cloudRunning) return;
+    const endSeconds = Number(result.range?.endMs ?? result.range?.end_ms ?? 0) / 1000;
+    const audioCount = Number(result.audio_summary?.reviewable_acoustic_candidates || 0);
+    setCloudStatus(`Cloud ears + vision ready for the next Sarah pass · ${fmtMmSs(endSeconds)} covered · ${audioCount} audio cue${audioCount === 1 ? "" : "s"} retained.`);
+    setCloudError("");
+  }, [cloudRunning, savedCloudPass]);
 
   const restoreLatestLocalVisionResult = async () => {
     if (!session?.id || !selectedVideo?.path) return;
@@ -3428,14 +3405,10 @@ Return only the structured JSON matching the requested schema.`,
   };
 
   const runCloudDeepAnalysis = async () => {
-    if (!selectedVideo?.path || localVisionRunning) return;
-    setLocalVisionRunning(true);
-    setLocalVisionError("");
-    setLocalVisionLiveLog([]);
-    setLocalVisionResult(null);
-    setLocalVisionQaResult(null);
-    updateLocalVisionProgress({ phase: "starting", current: 0, total: 4, message: "Starting encrypted cloud deep analysis..." });
-    setLocalVisionStatus("Checking Modal and preparing encrypted audio/visual transport...");
+    if (!selectedVideo?.path || cloudRunning) return;
+    setCloudRunning(true);
+    setCloudError("");
+    setCloudStatus("Checking Modal and preparing encrypted audio/visual evidence...");
     try {
       const startedJob = await startBackgroundJob("cloud_multimodal_analysis", {
         sessionId: session.id,
@@ -3450,31 +3423,26 @@ Return only the structured JSON matching the requested schema.`,
         analysisType: localVisionRecordType(),
         videoPath: selectedVideo.path,
       });
-      setLocalVisionStatus(`Queued cloud deep-analysis job ${startedJob.id.slice(0, 8)}...`);
+      setCloudStatus(`Queued cloud ears + vision job ${startedJob.id.slice(0, 8)}...`);
       const completedJob = await waitForBackgroundJob(startedJob.id, {
         intervalMs: 1800,
         onProgress: (job) => {
           const progress = job.progress || {};
           const count = progress.total ? ` (${progress.current || 0}/${progress.total})` : "";
-          setLocalVisionStatus(`${progress.message || "Cloud multimodal analysis running..."}${count}`);
-          updateLocalVisionProgress(progress);
+          setCloudStatus(`${progress.message || "Cloud ears + vision running..."}${count}`);
         },
       });
       const result = completedJob.result;
-      setLocalVisionResult(result);
-      const cloudCard = cardFromLocalVisionResult(result, selectedVideo, isExploration);
-      if (cloudCard) {
-        setCards((current) => [cloudCard, ...current.filter((card) => !card.cloudMultimodal)]);
-        setExpanded((previous) => ({ ...previous, [cloudCard.id]: true }));
-      }
       const refreshedRecord = await entity.get(session.id).catch(() => null);
       if (refreshedRecord) onSessionUpdate?.(refreshedRecord);
-      setLocalVisionStatus(`Cloud deep analysis complete: ${result.visual_summary?.frame_metrics || 0} visual samples, ${result.visual_summary?.semantic_windows || 0} semantic windows, and ${result.audio_summary?.reviewable_acoustic_candidates || 0} audio candidates ready for review.`);
+      const endSeconds = Number(result.range?.endMs ?? result.range?.end_ms ?? 0) / 1000;
+      const audioCount = Number(result.audio_summary?.reviewable_acoustic_candidates || 0);
+      setCloudStatus(`Cloud ears + vision ready · ${fmtMmSs(endSeconds)} covered · ${audioCount} audio cue${audioCount === 1 ? "" : "s"} retained. Run Sarah Annotation to turn this evidence into the normal editable review cards.`);
     } catch (err) {
-      setLocalVisionError(friendlyVideoWorkflowError(err, "Cloud deep analysis failed."));
-      setLocalVisionStatus("");
+      setCloudError(friendlyVideoWorkflowError(err, "Cloud ears + vision failed."));
+      setCloudStatus("");
     } finally {
-      setLocalVisionRunning(false);
+      setCloudRunning(false);
     }
   };
 
@@ -4097,12 +4065,12 @@ Return only the structured JSON matching the requested schema.`,
             type="button"
             variant="outline"
             onClick={runCloudDeepAnalysis}
-            disabled={localVisionRunning || running || reassessing || !selectedVideo}
+            disabled={cloudRunning || running || reassessing || !selectedVideo}
             className="h-8 w-full border-cyan-400/40 bg-cyan-400/5 text-cyan-100 hover:bg-cyan-400/10 sm:w-auto"
-            title="Encrypt a reduced visual proxy and audio track, analyze them on a temporary Modal GPU worker, then delete the cloud media."
+            title="Refresh the saved cloud visual and audio evidence used by the normal Sarah annotation workflow. This does not replace the review-card interface."
           >
-            {localVisionRunning ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Cloud className="mr-2 h-3.5 w-3.5" />}
-            Run Cloud Deep Analysis
+            {cloudRunning ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Cloud className="mr-2 h-3.5 w-3.5" />}
+            {savedCloudPass?.result?.ok ? "Refresh Cloud Ears + Vision" : "Add Cloud Ears + Vision"}
           </Button>
           <Button type="button" onClick={runPass} disabled={running || reassessing || !selectedVideo || !plannedWindows.length} className="h-8 w-full sm:w-auto">
             {running ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="mr-2 h-3.5 w-3.5" />}
@@ -4114,6 +4082,13 @@ Return only the structured JSON matching the requested schema.`,
       <div className="mt-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
         <span className="font-semibold text-foreground">Evidence-safe default:</span> starting a new Claude pass only clears the draft cards on this screen. Accepted timeline events and saved video-pass findings are preserved unless you explicitly use Clear AI Events.
       </div>
+
+      {(cloudStatus || cloudError) && (
+        <div className={`mt-2 rounded-lg border px-3 py-2 text-xs leading-relaxed ${cloudError ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-cyan-400/25 bg-cyan-400/5 text-cyan-100"}`}>
+          <span className="font-semibold">Cloud evidence:</span>{" "}{cloudError || cloudStatus}
+          {!cloudError && <span className="text-muted-foreground"> It stays behind the scenes; Sarah Annotation below produces the usual video previews, findings, and editable draft events.</span>}
+        </div>
+      )}
 
       <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(16rem,1fr)_auto]">
         <select
@@ -4990,7 +4965,7 @@ Return only the structured JSON matching the requested schema.`,
               )}
             </div>
 
-            {localVisionResult.mode !== "cloud_multimodal" && localVisionResult.coverage_segments?.length > 0 && (
+            {localVisionResult.coverage_segments?.length > 0 && (
               <details open className="rounded-lg border border-border bg-background/70">
                 <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Whole-Range Coverage ({localVisionResult.coverage_segments.length})
@@ -5022,40 +4997,7 @@ Return only the structured JSON matching the requested schema.`,
               </details>
             )}
 
-            {localVisionResult.mode === "cloud_multimodal" && localVisionResult.strong_candidates?.length > 0 && (
-              <details className="rounded-lg border border-cyan-400/20 bg-cyan-400/5">
-                <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-cyan-200">
-                  Technical evidence audit ({localVisionResult.strong_candidates.length} checkpoints across {fmtMmSs((localVisionResult.range?.endMs || 0) / 1000)})
-                </summary>
-                <div className="space-y-2 border-t border-border p-3">
-                  <p className="text-xs leading-relaxed text-muted-foreground">
-                    This is the retained selector evidence, not the finished annotation narrative. Candidate status applies to this entire list and is intentionally shown once here rather than repeated on every timestamp.
-                  </p>
-                  {localVisionTierRows(localVisionResult.strong_candidates, 200).map((candidate, index) => {
-                    const modality = String(candidate?.provenance?.modality || "visual").toLowerCase();
-                    const label = modality === "audio"
-                      ? humanizeLocalVisionLabel(candidate.label || "audio activity")
-                      : "Visual checkpoint";
-                    return (
-                      <button
-                        type="button"
-                        key={candidate.id || `${candidate.label}-${candidate.start_ms}-${index}`}
-                        onClick={() => seekPreviewVideo(sessionTimeForSource((candidate.start_ms || 0) / 1000, selectedVideo))}
-                        className="w-full rounded-md border border-border bg-background/70 px-2 py-2 text-left text-xs hover:border-cyan-300/50"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="font-semibold text-foreground">{formatLocalVisionMs(candidate.start_ms || 0)} · {label}</span>
-                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{modality}</span>
-                        </div>
-                        <p className="mt-1 leading-relaxed text-muted-foreground">{candidate.review_summary || candidate.basis || "Evidence checkpoint preserved for Sarah synthesis."}</p>
-                      </button>
-                    );
-                  })}
-                </div>
-              </details>
-            )}
-
-            {localVisionResult.mode !== "cloud_multimodal" && localVisionResult.strong_candidates?.length > 0 && (
+            {localVisionResult.strong_candidates?.length > 0 && (
               <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">Strong Candidates</p>
                 <p className="mt-1 text-xs text-muted-foreground">Likely windows worth review. These stay labeled as unconfirmed unless visual gates are met.</p>
@@ -5086,7 +5028,7 @@ Return only the structured JSON matching the requested schema.`,
               </div>
             )}
 
-            {localVisionResult.mode !== "cloud_multimodal" && localVisionResult.not_confirmed?.length > 0 && (
+            {localVisionResult.not_confirmed?.length > 0 && (
               <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-destructive">Not Visually Confirmed</p>
                 <p className="mt-1 text-xs text-muted-foreground">Important checks that did not have enough visible evidence. This does not mean the event did not happen; it only means local vision cannot support it as a visual fact.</p>
@@ -5110,7 +5052,7 @@ Return only the structured JSON matching the requested schema.`,
               </div>
             )}
 
-            {localVisionResult.mode !== "cloud_multimodal" && localVisionResult.not_confirmed?.length > 0 && (
+            {localVisionResult.not_confirmed?.length > 0 && (
               <details className="rounded-lg border border-amber-400/25 bg-amber-400/5">
                 <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-amber-200">
                   Why Confirmation Failed
