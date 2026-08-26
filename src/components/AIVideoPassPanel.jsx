@@ -2511,6 +2511,7 @@ export default function AIVideoPassPanel({
 
   const runPass = async (options = {}) => {
     if (!selectedVideo?.path || running) return;
+    const useCloudEvidence = options?.useCloudEvidence === true;
     setRunning(true);
     setError("");
     setCards([]);
@@ -2518,7 +2519,7 @@ export default function AIVideoPassPanel({
     freshRunStartedAtRef.current = Date.now();
     try {
       const workingSession = options?.sessionOverride || session;
-      setStatus(`Starting ${recordLabel} Claude/Sarah video pass. Previously accepted evidence is preserved.`);
+      setStatus(`Starting ${recordLabel} Claude/Sarah video pass${useCloudEvidence ? " with saved cloud cues" : " from the original Sarah evidence path"}. Previously accepted evidence is preserved.`);
       const nextCards = [];
       const videoContext = isExploration
         ? buildBodyExplorationVideoContext(workingSession, selectedVideo, timelineRows)
@@ -2534,7 +2535,9 @@ export default function AIVideoPassPanel({
           const label = `AI video pass ${fmtMmSs(window.start)}-${fmtMmSs(window.end)}`;
           const sourceStart = sourceTimeForSession(window.start, selectedVideo);
           const sourceEnd = Math.max(sourceStart + 0.25, Number(window.end || 0) - selectedVideoOffset);
-          const cloudWindowEvidence = cloudWindowEvidenceText(workingSession?.[analysisField], window.start, window.end);
+          const cloudWindowEvidence = useCloudEvidence
+            ? cloudWindowEvidenceText(workingSession?.[analysisField], window.start, window.end)
+            : "";
           setStatus(`Preparing ${label}${autoContinue && scanMode === "continue" ? ` · batch ${batchNumber}` : ""}`);
           const preview = await base44.integrations.Core.ProcessLocalVideoClip({
             path: selectedVideo.path,
@@ -3474,7 +3477,10 @@ Return only the structured JSON matching the requested schema.`,
       const endSeconds = Number(result.range?.endMs ?? result.range?.end_ms ?? 0) / 1000;
       const audioCount = Number(result.audio_summary?.reviewable_acoustic_candidates || 0);
       setCloudStatus(`Cloud ears + vision ready · ${fmtMmSs(endSeconds)} covered · ${audioCount} audio cue${audioCount === 1 ? "" : "s"} retained. Sarah is now turning it into the normal editable review cards...`);
-      const generatedCards = await runPass({ sessionOverride: refreshedRecord || session });
+      const generatedCards = await runPass({
+        sessionOverride: refreshedRecord || session,
+        useCloudEvidence: true,
+      });
       if (generatedCards) {
         setCloudStatus(`Enhanced Sarah review ready · ${generatedCards.length} normal editable card${generatedCards.length === 1 ? "" : "s"} generated with saved cloud audio/visual evidence.`);
       } else {
@@ -4127,17 +4133,17 @@ Return only the structured JSON matching the requested schema.`,
               {showingSavedCloudReview ? "Show All Saved Review Cards" : `Show Saved Cloud Review (${savedCloudReviewCards.length})`}
             </Button>
           )}
-          <Button type="button" onClick={runPass} disabled={running || reassessing || !selectedVideo || !plannedWindows.length} className="h-8 w-full sm:w-auto">
+          <Button type="button" onClick={() => runPass()} disabled={running || reassessing || !selectedVideo || !plannedWindows.length} className="h-8 w-full sm:w-auto" title="Runs the familiar Claude/Sarah frame review without feeding unaccepted cloud candidates into the prompt. Saved cloud evidence remains stored separately.">
             {running ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="mr-2 h-3.5 w-3.5" />}
             {scanMode === "continue"
-              ? (scanCursor > 0 ? "Run Next Sarah Pass" : (savedCloudPass?.result?.ok ? "Start Sarah with Saved Cloud" : "Start Sarah at 0:00"))
-              : (savedCloudPass?.result?.ok ? "Run Sarah with Saved Cloud" : "Run Sarah Window Pass")}
+              ? (scanCursor > 0 ? "Run Next Claude/Sarah Pass" : "Start Claude/Sarah at 0:00")
+              : "Run Claude/Sarah Window Pass"}
           </Button>
         </div>
       </div>
 
       <div className="mt-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-        <span className="font-semibold text-foreground">Evidence-safe default:</span> starting a new Claude pass only clears the draft cards on this screen. Accepted timeline events and saved video-pass findings are preserved unless you explicitly use Clear AI Events.
+        <span className="font-semibold text-foreground">Evidence-safe default:</span> the Claude/Sarah button uses the familiar direct frame-review path and does not consume unaccepted cloud candidates. Saved cloud evidence, accepted timeline events, and saved video-pass findings remain preserved unless you explicitly use Clear AI Events.
       </div>
 
       {(cloudStatus || cloudError) && (

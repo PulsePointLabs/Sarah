@@ -575,7 +575,12 @@ export function buildCloudMultimodalEvidenceDigest(record, { analysisField = "ai
   ].filter(Boolean).join("\n");
 }
 
-export function buildSessionVideoPassDigest(session, { limit = 14, findingsPerCard = 4, eventsPerCard = 3 } = {}) {
+export function buildSessionVideoPassDigest(session, {
+  limit = 14,
+  findingsPerCard = 4,
+  eventsPerCard = 3,
+  includeCloudEvidence = false,
+} = {}) {
   const entries = normalizeSessionVideoPassFindings(session).slice(0, limit);
   const lines = entries.map((entry) => {
     const videoLabel = entry.source_video.label || entry.source_video.filename || "linked local video";
@@ -595,7 +600,9 @@ export function buildSessionVideoPassDigest(session, { limit = 14, findingsPerCa
   const reviewed = lines.length
     ? `Sarah video-pass findings applied to this session:\n${lines.join("\n")}`
     : isStalePhaseMarkerReference({ text: fallback }, session) ? "" : fallback;
-  const cloud = buildCloudMultimodalEvidenceDigest(session, { analysisField: "ai_analysis" });
+  const cloud = includeCloudEvidence
+    ? buildCloudMultimodalEvidenceDigest(session, { analysisField: "ai_analysis" })
+    : "";
   return [reviewed, cloud].filter(Boolean).join("\n\n");
 }
 
@@ -825,7 +832,12 @@ export function buildSessionKeyVideoClipDigest(session, { limit = 12 } = {}) {
   return `Saved key video clips for this session:\n${lines.join("\n")}`;
 }
 
-export function buildBodyExplorationVideoPassDigest(exploration, { limit = 28, findingsPerCard = 4, eventsPerCard = 3 } = {}) {
+export function buildBodyExplorationVideoPassDigest(exploration, {
+  limit = 28,
+  findingsPerCard = 4,
+  eventsPerCard = 3,
+  includeCloudEvidence = false,
+} = {}) {
   const entries = normalizeBodyExplorationVideoPassFindings(exploration).slice(0, limit);
   const lines = entries.map((entry) => {
     const videoLabel = entry.source_video.label || entry.source_video.filename || "linked local video";
@@ -844,7 +856,9 @@ export function buildBodyExplorationVideoPassDigest(exploration, { limit = 28, f
   const reviewed = lines.length
     ? `Sarah video-pass findings applied to this body exploration:\n${lines.join("\n")}`
     : cleanText(exploration?.ai_body_exploration?._video_pass_digest || "", 6000);
-  const cloud = buildCloudMultimodalEvidenceDigest(exploration, { analysisField: "ai_body_exploration" });
+  const cloud = includeCloudEvidence
+    ? buildCloudMultimodalEvidenceDigest(exploration, { analysisField: "ai_body_exploration" })
+    : "";
   return [reviewed, cloud].filter(Boolean).join("\n\n");
 }
 

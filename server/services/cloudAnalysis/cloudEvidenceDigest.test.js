@@ -59,9 +59,19 @@ test('cloud evidence digest humanizes structured model language before downstrea
   assert.match(digest, /Do not quote this evidence block/);
 });
 
-test('normal session and body exploration analysis digests include saved cloud evidence', () => {
+test('normal analysis digests exclude unaccepted cloud evidence unless explicitly requested', () => {
   const sessionDigest = buildSessionVideoPassDigest({ ai_analysis: { cloud_multimodal_passes: [cloudPass()] } });
+  const enhancedSessionDigest = buildSessionVideoPassDigest(
+    { ai_analysis: { cloud_multimodal_passes: [cloudPass()] } },
+    { includeCloudEvidence: true },
+  );
   const explorationDigest = buildBodyExplorationVideoPassDigest({ ai_body_exploration: { cloud_multimodal_passes: [cloudPass()] } });
-  assert.match(sessionDigest, /Saved cloud multimodal evidence/);
-  assert.match(explorationDigest, /Saved cloud multimodal evidence/);
+  const enhancedExplorationDigest = buildBodyExplorationVideoPassDigest(
+    { ai_body_exploration: { cloud_multimodal_passes: [cloudPass()] } },
+    { includeCloudEvidence: true },
+  );
+  assert.doesNotMatch(sessionDigest, /Saved cloud multimodal evidence/);
+  assert.match(enhancedSessionDigest, /Saved cloud multimodal evidence/);
+  assert.doesNotMatch(explorationDigest, /Saved cloud multimodal evidence/);
+  assert.match(enhancedExplorationDigest, /Saved cloud multimodal evidence/);
 });
