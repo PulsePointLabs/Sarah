@@ -52,6 +52,7 @@ import { selectNearbyVitalReadings } from "@/lib/nearbyVitals";
 import { buildSessionChatPhysiologyEvidence } from "@/lib/bodyExplorationPhysiology";
 import { buildSessionMomentTelemetry, mapVideoTimeToSessionTime } from "@/utils/sessionMomentTelemetry";
 import { sortSessionVideosPrimaryFirst } from "@/lib/sessionVideoPriority";
+import { buildNearClimaxContextEvidence, filterContradictedNearClimaxEvents, getContextConfirmedNearClimaxEvents } from "@/utils/nearClimaxEvents";
 
 function _getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -1302,11 +1303,21 @@ export default function SessionDetail() {
     setSession((current) => (current ? { ...current, event_timeline: [] } : current));
   }, [session?.id]);
 
+  const nearClimaxContextEvidence = useMemo(
+    () => buildNearClimaxContextEvidence(displaySession || {}),
+    [displaySession]
+  );
   const nearClimaxEvents = useMemo(() => {
     if (!displaySession) return [];
-    if (displaySession.ai_near_climax_events?.length > 0) return displaySession.ai_near_climax_events;
-    return detectNearClimaxEvents(timelineRows, displaySession.climax_offset_s, displaySession.pre_climax_offset_s);
-  }, [displaySession, timelineRows]);
+    if (displaySession.ai_near_climax_events?.length > 0) {
+      return filterContradictedNearClimaxEvents(displaySession.ai_near_climax_events, nearClimaxContextEvidence);
+    }
+    return detectNearClimaxEvents(timelineRows, displaySession.climax_offset_s, displaySession.pre_climax_offset_s, nearClimaxContextEvidence);
+  }, [displaySession, nearClimaxContextEvidence, timelineRows]);
+  const confirmedNearClimaxEvents = useMemo(
+    () => getContextConfirmedNearClimaxEvents(nearClimaxEvents, nearClimaxContextEvidence),
+    [nearClimaxContextEvidence, nearClimaxEvents]
+  );
 
   const sessionChatContext = useMemo(() => {
     if (!displaySession) return "";
@@ -1961,6 +1972,7 @@ export default function SessionDetail() {
           timelineRows={timelineRows}
           emgRows={emgRows}
           nearClimaxEvents={nearClimaxEvents}
+          confirmedNearClimaxEvents={confirmedNearClimaxEvents}
           highlightRange={highlightRange}
           selectedEventIndex={selectedEventIdx}
           onSelectEventIndex={setSelectedEventIdx}
@@ -2066,8 +2078,8 @@ export default function SessionDetail() {
                   userProfile={userProfile}
                 />
               )}
-              {!s.no_climax && nearClimaxEvents.length > 0 && (
-                <NearClimaxSessionOverview session={s} nearClimaxEvents={nearClimaxEvents} userProfile={userProfile} />
+              {!s.no_climax && confirmedNearClimaxEvents.length > 0 && (
+                <NearClimaxSessionOverview session={s} nearClimaxEvents={confirmedNearClimaxEvents} userProfile={userProfile} />
               )}
               <HRZoneAnalysis rows={timelineRows} sessionMaxHR={s.max_hr} userProfile={userProfile} />
               <HRPhysiologicalAnalysis timelineRows={timelineRows} session={s} />
@@ -2201,7 +2213,7 @@ export default function SessionDetail() {
                     highlightRange={highlightRange}
                     noClimax={!!s.no_climax}
                     nearClimaxEvents={nearClimaxEvents}
-                    confirmedNearClimaxEvents={s.ai_near_climax_events || []}
+                    confirmedNearClimaxEvents={confirmedNearClimaxEvents}
                     events={s.event_timeline || []}
                     selectedEventIndex={selectedEventIdx}
                     onSelectEventIndex={setSelectedEventIdx}
@@ -2249,10 +2261,10 @@ export default function SessionDetail() {
                         userProfile={userProfile}
                       />
                     )}
-                    {!s.no_climax && nearClimaxEvents.length > 0 && (
+                    {!s.no_climax && confirmedNearClimaxEvents.length > 0 && (
                       <NearClimaxSessionOverview
                         session={s}
-                        nearClimaxEvents={nearClimaxEvents}
+                        nearClimaxEvents={confirmedNearClimaxEvents}
                         userProfile={userProfile}
                       />
                     )}
@@ -2554,7 +2566,7 @@ export default function SessionDetail() {
                   highlightRange={highlightRange}
                   noClimax={!!s.no_climax}
                   nearClimaxEvents={nearClimaxEvents}
-                  confirmedNearClimaxEvents={s.ai_near_climax_events || []}
+                  confirmedNearClimaxEvents={confirmedNearClimaxEvents}
                   events={s.event_timeline || []}
                   selectedEventIndex={selectedEventIdx}
                   onSelectEventIndex={setSelectedEventIdx}

@@ -1,4 +1,5 @@
 function numberOrNull(value) {
+  if (value == null || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -62,17 +63,229 @@ export const NCE_KEYWORDS = [
   "shiver", "shak", "tremble",
 ];
 
+const DIRECT_NEAR_CLIMAX_CUE_PATTERN = /\b(?:near[-\s]?climax|pre[-\s]?climax|climax\s+(?:approach|possible|imminent)|approach(?:ing)?\s+(?:climax|threshold)|at\s+threshold|almost\s+(?:there|climax)|orgasm(?:ic)?\s+(?:build|approach)|ejaculat(?:ion|ory)\s+(?:build|approach))\b/i;
+const ACTIVE_AROUSAL_CHANGE_PATTERN = /\b(?:active\s+(?:manual\s+)?stimulation|strok(?:e|es|ed|ing)|masturbat(?:e|es|ed|ing|ion)|hand\s+(?:speed|cadence)\s+(?:increase|increases|increased|quickens?|accelerat)|grip\s+(?:tightens?|shifts?|changes?)\s+(?:on|along|toward)\s+(?:the\s+)?(?:penis|shaft|glans)|erection\s+(?:increases?|deepens?|becomes?|holds?|is\s+fully)|glans\s+(?:engorg|flush|darken|swell|sheen)|scrot(?:um|al)\s+(?:lift|tighten|retract)|toe(?:s)?\s+curl|feet\s+(?:plant|brace)|leg(?:s)?\s+(?:brace|tense|clench|tremble|shak)|pelvic\s+(?:floor\s+)?(?:contract|pulse|spasm)|breath(?:ing)?\s+(?:hold|quickens?|deepens?)|gasp(?:s|ing)?|shudder(?:s|ing)?|trembl(?:e|es|ing)|pre[-\s]?ejaculat)\b/i;
+const NON_AROUSAL_EXERTION_PATTERN = /\b(?:walk(?:s|ed|ing)?|ambulatory|stand(?:s|ing|ing\s+up)?|stood|got\s+off\s+(?:the\s+)?(?:exam\s+)?table|get(?:ting)?\s+off\s+(?:the\s+)?(?:exam\s+)?table|off\s+(?:the\s+)?(?:exam\s+)?table|away\s+from\s+(?:the\s+)?table|left\s+(?:the\s+)?(?:room|table)|table\s+(?:is\s+)?vacant|empty\s+(?:exam\s+)?table|room\s+(?:is\s+)?empty|fighting\s+(?:the\s+)?(?:app|computer)|computer\s+(?:problem|issue|trouble)|technical\s+(?:problem|issue|trouble)|troubleshoot(?:s|ed|ing)?|restart(?:s|ed|ing)?\s+(?:the\s+)?(?:app|computer|obs)|adjust(?:s|ed|ing)?\s+(?:the\s+)?(?:camera|computer|obs|equipment)|room\s+(?:prep|setup)|prepar(?:e|es|ed|ing|ation)\s+(?:the\s+)?(?:room|camera|computer|equipment))\b/i;
+
+function evidenceText(event = {}) {
+  return [
+    event.note,
+    event.text,
+    event.summary,
+    event.label,
+    event.reason,
+    event.description,
+    Array.isArray(event.findings) ? event.findings.join(" ") : event.findings,
+  ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+}
+
+function evidenceBounds(event = {}) {
+  const time = numberOrNull(event.time_s ?? event.session_time_s ?? event.offset_s);
+  const start = numberOrNull(event.start_offset_s ?? event.start_s ?? event.timeline_start_s ?? event.time_s ?? event.session_time_s);
+  const end = numberOrNull(event.end_offset_s ?? event.end_s ?? event.timeline_end_s ?? event.time_s ?? event.session_time_s);
+  return {
+    start: start ?? time,
+    end: end ?? start ?? time,
+  };
+}
+
+function evidenceOverlaps(event, startS, endS, padS = 45) {
+  const bounds = evidenceBounds(event);
+  if (bounds.start == null || bounds.end == null) return false;
+  return bounds.end >= startS - padS && bounds.start <= endS + padS;
+}
+
+function eventCategories(event = {}) {
+  return (Array.isArray(event.category) ? event.category : [event.category])
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase());
+}
+
+function pushContextEvidence(target, value) {
+  const text = evidenceText(value);
+  const bounds = evidenceBounds(value);
+  if (!text || bounds.start == null) return;
+  target.push({
+    ...value,
+    note: text,
+    start_s: bounds.start,
+    end_s: bounds.end,
+  });
+}
+
+export function buildNearClimaxContextEvidence(session = {}) {
+  const evidence = [];
+  (Array.isArray(session.event_timeline) ? session.event_timeline : []).forEach((event) => {
+    pushContextEvidence(evidence, { ...event, evidence_source: event.evidence_source || event.source || "session_event" });
+  });
+
+  const analysis = session.ai_analysis || {};
+  const videoPasses = Array.isArray(analysis._video_pass_findings) ? analysis._video_pass_findings : [];
+  videoPasses.forEach((pass) => {
+    const clip = pass?.clip || {};
+    const start = numberOrNull(clip.start_s ?? pass?.window?.start);
+    const end = numberOrNull(clip.end_s ?? pass?.window?.end) ?? start;
+    const findings = Array.isArray(pass?.findings)
+      ? pass.findings.map((finding) => typeof finding === "string" ? finding : finding?.findingText || finding?.text || finding?.finding).filter(Boolean)
+      : [];
+    if (start != null) {
+      pushContextEvidence(evidence, {
+        start_s: start,
+        end_s: end,
+        note: [pass?.summary, ...findings].filter(Boolean).join(" "),
+        category: ["visual"],
+        evidence_source: "video_pass",
+      });
+    }
+    const draftEvents = Array.isArray(pass?.draft_events || pass?.events) ? (pass.draft_events || pass.events) : [];
+    draftEvents.forEach((event) => pushContextEvidence(evidence, {
+      ...event,
+      evidence_source: "video_pass_event",
+      category: [...eventCategories(event), "visual"],
+    }));
+  });
+
+  const visualEntries = Array.isArray(analysis._visual_findings) ? analysis._visual_findings : [];
+  visualEntries.forEach((entry) => {
+    const findings = Array.isArray(entry?.findings)
+      ? entry.findings.map((finding) => typeof finding === "string" ? finding : finding?.findingText || finding?.text || finding?.finding).filter(Boolean)
+      : [];
+    const videos = Array.isArray(entry?.media_context?.videos) ? entry.media_context.videos : [];
+    videos.forEach((video) => {
+      const start = numberOrNull(video.timelineStartSeconds ?? video.startSeconds);
+      const end = numberOrNull(video.timelineEndSeconds ?? video.endSeconds) ?? start;
+      if (start == null) return;
+      pushContextEvidence(evidence, {
+        start_s: start,
+        end_s: end,
+        note: findings.join(" "),
+        category: ["visual"],
+        evidence_source: "saved_visual_review",
+      });
+    });
+  });
+
+  const cloudPasses = Array.isArray(analysis.cloud_multimodal_passes) ? analysis.cloud_multimodal_passes : [];
+  cloudPasses.forEach((pass) => {
+    const result = pass?.result || {};
+    const candidates = Array.isArray(result.strong_candidates) ? result.strong_candidates : [];
+    const offsetS = Number(pass?.source_video?.source_zero_session_ms || 0) / 1000;
+    candidates.forEach((candidate) => {
+      const start = numberOrNull(candidate?.start_ms);
+      if (start == null) return;
+      const end = numberOrNull(candidate?.end_ms) ?? start;
+      const visual = candidate?.visual_evidence || {};
+      const details = [
+        candidate?.label,
+        candidate?.basis,
+        candidate?.summary,
+        candidate?.review_summary,
+        ...(Array.isArray(visual.actions) ? visual.actions : []),
+        ...(Array.isArray(visual.change_across_frames) ? visual.change_across_frames : []),
+      ].filter(Boolean);
+      pushContextEvidence(evidence, {
+        start_s: start / 1000 + offsetS,
+        end_s: end / 1000 + offsetS,
+        note: details.join(" "),
+        category: [String(candidate?.provenance?.modality || "visual").toLowerCase()],
+        evidence_source: "cloud_multimodal",
+      });
+    });
+  });
+
+  return evidence;
+}
+
+export function assessNearClimaxEventContext(event = {}, contextEvidence = []) {
+  const startS = numberOrNull(event.start_offset_s ?? event.start_s ?? event.time_s) ?? 0;
+  const endS = numberOrNull(event.end_offset_s ?? event.end_s ?? event.time_s) ?? startS;
+  const aligned = (Array.isArray(contextEvidence) ? contextEvidence : [])
+    .filter((item) => evidenceOverlaps(item, startS, endS));
+  let positiveScore = 0;
+  let negativeScore = 0;
+  const positiveSources = new Set();
+  const negativeSources = new Set();
+
+  aligned.forEach((item) => {
+    const text = evidenceText(item);
+    const categories = eventCategories(item);
+    const source = String(item.evidence_source || "context");
+    const direct = DIRECT_NEAR_CLIMAX_CUE_PATTERN.test(text);
+    const activeChange = ACTIVE_AROUSAL_CHANGE_PATTERN.test(text);
+    const circularTelemetryCue = source === "live_climax_prediction"
+      || categories.includes("phase_detection")
+      || (categories.includes("physiology") && /\bnear[-\s]?climax\s+watch\b/i.test(text));
+    const nonArousalExertion = NON_AROUSAL_EXERTION_PATTERN.test(text)
+      || categories.some((category) => ["setup", "technical", "equipment", "room_setup"].includes(category));
+
+    if (!circularTelemetryCue) {
+      if (direct) positiveScore += 5;
+      if (activeChange) positiveScore += 3;
+      if (categories.some((category) => ["near_climax", "pre_climax", "sensation"].includes(category))) positiveScore += 2;
+      else if (categories.includes("physical") && (direct || activeChange)) positiveScore += 1;
+      if (direct || activeChange) positiveSources.add(source);
+    }
+
+    if (nonArousalExertion) {
+      negativeScore += 6;
+      negativeSources.add(source);
+    }
+  });
+
+  const contradicted = negativeScore >= 6 && positiveScore < 5;
+  const confirmed = !contradicted && positiveScore >= 3;
+  const status = contradicted
+    ? "contradicted"
+    : confirmed
+      ? "context_confirmed"
+      : aligned.length
+        ? "context_unconfirmed"
+        : "physiology_only";
+
+  return {
+    status,
+    confirmed,
+    contradicted,
+    alignedEvidenceCount: aligned.length,
+    positiveScore,
+    negativeScore,
+    positiveSources: [...positiveSources],
+    negativeSources: [...negativeSources],
+  };
+}
+
+export function filterContradictedNearClimaxEvents(events = [], contextEvidence = []) {
+  return (Array.isArray(events) ? events : [])
+    .map((event) => ({ ...event, context_evidence: assessNearClimaxEventContext(event, contextEvidence) }))
+    .filter((event) => !event.context_evidence.contradicted);
+}
+
+export function getContextConfirmedNearClimaxEvents(events = [], contextEvidence = []) {
+  return filterContradictedNearClimaxEvents(events, contextEvidence)
+    .filter((event) => event.context_evidence.confirmed || event.context_confirmed === true || event.evidence_status === "context_confirmed");
+}
+
+export function confirmedNearClimaxEventsForSession(session = {}) {
+  return getContextConfirmedNearClimaxEvents(
+    session.ai_near_climax_events || [],
+    buildNearClimaxContextEvidence(session),
+  );
+}
+
 export function scoreEventNoteCorroboration(eventStartS, eventEndS, sessionEvents) {
   if (!sessionEvents || sessionEvents.length === 0) return 0;
   const windowS = 45;
   let score = 0;
   for (const ev of sessionEvents) {
-    const t = Number(ev.time_s);
-    if (t < eventStartS - windowS || t > eventEndS + windowS) continue;
+    const cats = eventCategories(ev);
+    const source = String(ev.evidence_source || ev.source || "");
+    if (source === "live_climax_prediction" || cats.includes("phase_detection")) continue;
+    const bounds = evidenceBounds(ev);
+    if (bounds.start == null || bounds.end == null || bounds.end < eventStartS - windowS || bounds.start > eventEndS + windowS) continue;
+    const t = Math.min(Math.max((bounds.start + bounds.end) / 2, eventStartS), eventEndS);
     const dist = Math.max(0, Math.min(Math.abs(t - eventStartS), Math.abs(t - eventEndS)));
     const proximityWeight = dist < 15 ? 2 : 1;
     const note = String(ev.note || "").toLowerCase();
-    const cats = Array.isArray(ev.category) ? ev.category : [ev.category].filter(Boolean);
     if (cats.some((c) => ["physical", "sensation"].includes(c))) score += 1 * proximityWeight;
     for (const kw of NCE_KEYWORDS) {
       if (note.includes(kw)) {
@@ -237,6 +450,11 @@ export function detectNearClimaxEvents(rows, climaxOffsetS, preClimaxOffsetS, se
     }
 
     const noteScore = scoreEventNoteCorroboration(t0, eventEndS, sessionEvents);
+    const contextAssessment = assessNearClimaxEventContext({ start_offset_s: t0, end_offset_s: eventEndS }, sessionEvents);
+    if (contextAssessment.contradicted) {
+      i = dropIdx + 1;
+      continue;
+    }
     const candidateRows = rowsBetween(preClimaxRows, t0, eventEndS);
     const hrvSummary = summarizeCandidateHrv(candidateRows, sessionMedianRmssd);
     const absolutePeakStrong = peakHr >= peakFloor;
@@ -271,6 +489,9 @@ export function detectNearClimaxEvents(rows, climaxOffsetS, preClimaxOffsetS, se
       duration_s: Math.round(eventDuration),
       confidence: Math.min(10, Math.max(1, totalConfidence)),
       note_corroborated: noteScore > 0,
+      evidence_status: contextAssessment.status,
+      context_confirmed: contextAssessment.confirmed,
+      context_evidence: contextAssessment,
     });
 
     lastEventEnd = eventEndS;

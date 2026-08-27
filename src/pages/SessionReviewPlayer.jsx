@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { bloodPressureReadingsFromSession, pulseOxReadingsFromSession } from "@/lib/sessionContext";
 import { nearestTimedReading, normalizeTimedReadings, readingSequenceAt } from "@/lib/telemetryTheater";
 import { selectNearbyVitalReadings } from "@/lib/nearbyVitals";
+import { buildNearClimaxContextEvidence, filterContradictedNearClimaxEvents, getContextConfirmedNearClimaxEvents } from "@/utils/nearClimaxEvents";
 
 function formatTime(value) {
   const total = Math.max(0, Math.round(Number(value) || 0));
@@ -334,6 +335,18 @@ export default function SessionReviewPlayer() {
       pulse_ox_readings: [...pulseOxReadingsFromSession(selectedSession), ...during],
     };
   }, [pulseOxImports, recordType, selectedSession]);
+  const nearClimaxContextEvidence = useMemo(
+    () => buildNearClimaxContextEvidence(selectedSession || {}),
+    [selectedSession]
+  );
+  const reviewNearClimaxEvents = useMemo(
+    () => filterContradictedNearClimaxEvents(selectedSession?.ai_near_climax_events || [], nearClimaxContextEvidence),
+    [nearClimaxContextEvidence, selectedSession?.ai_near_climax_events]
+  );
+  const confirmedNearClimaxEvents = useMemo(
+    () => getContextConfirmedNearClimaxEvents(reviewNearClimaxEvents, nearClimaxContextEvidence),
+    [nearClimaxContextEvidence, reviewNearClimaxEvents]
+  );
   const bloodPressureRows = useMemo(
     () => normalizeTimedReadings(bloodPressureReadingsFromSession(selectedSessionWithPulseOx), selectedSessionWithPulseOx),
     [selectedSessionWithPulseOx],
@@ -1167,8 +1180,8 @@ export default function SessionReviewPlayer() {
                           recovery_offset_s: selectedSession.recovery_offset_s,
                         }}
                         noClimax={!!selectedSession.no_climax}
-                        nearClimaxEvents={selectedSession.ai_near_climax_events || []}
-                        confirmedNearClimaxEvents={selectedSession.ai_near_climax_events || []}
+                        nearClimaxEvents={reviewNearClimaxEvents}
+                        confirmedNearClimaxEvents={confirmedNearClimaxEvents}
                         events={selectedSession.event_timeline || []}
                         selectedEventIndex={selectedEventIdx}
                         onSelectEventIndex={handleSelectEventIndex}

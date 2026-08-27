@@ -72,6 +72,7 @@ export default function SessionTelemetryDashboard({
   timelineRows = [],
   emgRows = [],
   nearClimaxEvents = [],
+  confirmedNearClimaxEvents = [],
   highlightRange,
   selectedEventIndex,
   onSelectEventIndex,
@@ -290,7 +291,7 @@ export default function SessionTelemetryDashboard({
                 highlightRange={highlightRange}
                 noClimax={isBodyExploration || !!session.no_climax}
                 nearClimaxEvents={isBodyExploration ? [] : nearClimaxEvents}
-                confirmedNearClimaxEvents={isBodyExploration ? [] : (session.ai_near_climax_events || [])}
+                confirmedNearClimaxEvents={isBodyExploration ? [] : confirmedNearClimaxEvents}
                 events={events}
                 selectedEventIndex={selectedEventIndex}
                 onSelectEventIndex={onSelectEventIndex}
@@ -390,7 +391,7 @@ export default function SessionTelemetryDashboard({
                     highlightRange={highlightRange}
                     noClimax={!!session.no_climax}
                     nearClimaxEvents={nearClimaxEvents}
-                    confirmedNearClimaxEvents={session.ai_near_climax_events || []}
+                    confirmedNearClimaxEvents={confirmedNearClimaxEvents}
                     events={events}
                     selectedEventIndex={selectedEventIndex}
                     onSelectEventIndex={onSelectEventIndex}

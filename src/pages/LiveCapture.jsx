@@ -3604,12 +3604,12 @@ export default function LiveCapture() {
       tracker.count += 1;
       setNearClimaxEpisodeCount(tracker.count);
       appendLiveSessionEventsRef.current?.({
-        id: `near_climax_episode_${tracker.count}_${Math.round(getCurrentSessionTime())}`,
+        id: `approach_candidate_${tracker.count}_${Math.round(getCurrentSessionTime())}`,
         time_s: getCurrentSessionTime(),
-        label: `High-probability near-climax episode ${tracker.count}`,
-        note: `Sustained near-climax watch reached ${prediction.nearClimax}% with ${prediction.confirmationCount} confirming signal families.`,
-        category: ["physiology", "phase_detection"],
-        annotation_tags: ["near_climax", "high_probability", "trend_detected"],
+        label: `High-probability physiology candidate ${tracker.count}`,
+        note: `Physiology-only approach candidate: near-climax watch reached ${prediction.nearClimax}% with ${prediction.confirmationCount} signal families. Post-session visual or event evidence is required before confirmation.`,
+        category: ["physiology", "phase_detection", "review_candidate"],
+        annotation_tags: ["approach_candidate", "high_probability", "trend_detected", "needs_context_confirmation"],
         source: "live_climax_prediction",
         created_at: new Date().toISOString(),
         prediction: {
@@ -3617,6 +3617,7 @@ export default function LiveCapture() {
           controller_confidence: prediction.controllerConfidence,
           confirmation_count: prediction.confirmationCount,
           reason: prediction.reason,
+          evidence_status: "physiology_only",
         },
       })?.catch?.(() => {});
       return;

@@ -6,7 +6,11 @@ import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { buildSessionVisualEvidenceDigest } from "@/lib/visualEvidence";
-import { detectNearClimaxEvents } from "@/utils/nearClimaxEvents";
+import {
+  buildNearClimaxContextEvidence,
+  detectNearClimaxEvents,
+  filterContradictedNearClimaxEvents,
+} from "@/utils/nearClimaxEvents";
 import { buildSessionMomentTelemetry } from "@/utils/sessionMomentTelemetry";
 import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput } from "@/components/TTSButton";
 
@@ -260,13 +264,20 @@ function sampleHRData(rows, targetPoints = 150) {
 }
 
 export default function NearClimaxEvents({ timelineRows, session, selectedIndex, onSelectIndex, onEventsRefined, userProfile }) {
+  const contextEvidence = useMemo(
+    () => buildNearClimaxContextEvidence(session),
+    [session]
+  );
   const algorithmicEvents = useMemo(
-    () => detectNearClimaxEvents(timelineRows, session?.climax_offset_s, session?.pre_climax_offset_s, session?.event_timeline || []),
-    [timelineRows, session]
+    () => detectNearClimaxEvents(timelineRows, session?.climax_offset_s, session?.pre_climax_offset_s, contextEvidence),
+    [contextEvidence, timelineRows, session?.climax_offset_s, session?.pre_climax_offset_s]
   );
 
   // Prefer AI-refined events if available
-  const aiEvents = session?.ai_near_climax_events;
+  const aiEvents = useMemo(
+    () => filterContradictedNearClimaxEvents(session?.ai_near_climax_events || [], contextEvidence),
+    [contextEvidence, session?.ai_near_climax_events]
+  );
   const hasAIEvents = aiEvents && aiEvents.length > 0;
   const events = hasAIEvents ? aiEvents : algorithmicEvents;
   const isAIRefined = hasAIEvents;
@@ -344,6 +355,13 @@ export default function NearClimaxEvents({ timelineRows, session, selectedIndex,
       : "";
     const groundingContext = buildAIGroundingContext(userProfile);
     const reviewedVisualEvidence = buildSessionVisualEvidenceDigest(session);
+    const alignedContext = contextEvidence.slice(0, 160).map((item) => ({
+      start_s: item.start_s,
+      end_s: item.end_s,
+      source: item.evidence_source,
+      category: item.category,
+      note: item.note,
+    }));
 
     const res = await base44.integrations.Core.InvokeLLM({
       model: "claude_sonnet_4_6",
@@ -359,6 +377,8 @@ CRITICAL LABELING RULES — STRICTLY ENFORCED:
 3. Labels must describe what the body is doing physiologically, not what the user intended. Examples of good labels: "Strong arousal surge", "Sustained arousal plateau", "Intensity response peak", "Rapid escalation phase", "Deep autonomic activation".
 4. Interpretations must be grounded in: the HR pattern itself, nearby user-logged events, the user's arousal profile above, and the session context. Do not invent behavioral intent.
 5. If the arousal profile describes a specific response style (e.g. rapid climber, plateau-heavy, involuntary spasms), use that to explain observed HR patterns instead of defaulting to behavioral assumptions.
+6. HR and HRV can nominate a candidate, but they cannot confirm near-climax by themselves. When timestamp-aligned visual evidence or event notes exist, require a direct near-threshold cue or a changing arousal/stimulation cue such as active stroking, rising erection/glans/scrotal state, toe curl/bracing, pelvic contraction, breath hold, gasp, or tremble.
+7. Reject any candidate aligned with walking, standing up, getting off the table, an empty table/room, setup/preparation, camera/OBS/computer adjustment, troubleshooting, or other non-arousal exertion unless stronger direct near-climax evidence exists at the same moment.
 
 SESSION CONTEXT:
 - Duration: ${session.duration_minutes || "?"} minutes
@@ -372,6 +392,9 @@ ${cascadeContext ? `CASCADE ANALYSIS:\n${cascadeContext.slice(0, 800)}` : ""}
 
 ${userEvents.length > 0 ? `USER-LOGGED EVENTS:\n${userEvents.map((e) => `[${fmtSec(e.t)}] ${e.category.join(",")} — ${e.note}`).join("\n")}` : ""}
 
+TIMESTAMP-ALIGNED VISUAL / EVENT / MULTIMODAL EVIDENCE:
+${alignedContext.length ? JSON.stringify(alignedContext, null, 2) : "No timestamp-aligned contextual evidence is saved. Keep any retained candidates labeled physiology_only rather than confirmed."}
+
 ALGORITHMICALLY DETECTED EVENTS (starting hints — refine or reject based on HR data and context):
 ${algoEvents.length > 0 ? JSON.stringify(algoEvents, null, 2) : "None detected algorithmically."}
 
@@ -380,11 +403,12 @@ ${hrSample.map((p) => `${p.t}:${p.hr}`).join("  ")}
 
 Instructions:
 1. Analyze the HR trace carefully. Identify rises of 8+ bpm that sustain for 20+ seconds before dropping.
-2. Confirm, adjust, or reject algorithmic hints based on the full context. Add any events the algorithm missed.
+2. Confirm, adjust, or reject algorithmic hints based on the full context. Add an event the algorithm missed only when timestamp-aligned context corroborates it.
 3. Exclude the climax window (${session.pre_climax_offset_s != null ? Math.round(session.pre_climax_offset_s) : session.climax_offset_s != null ? Math.round(session.climax_offset_s) - 90 : "N/A"}s onward).
 4. Be conservative — only include genuine arousal elevations, not noise or minor fluctuations.
 5. Never write raw second offsets such as "at 943 seconds" or "943s". Use minutes and seconds.
 6. For each event: provide a short label (3-5 words) describing the physiological response — never use "edging", "edge", or intent-based language. Then write a 1-2 sentence interpretation grounded in HR data, the user's arousal profile, and logged events. Use "you"/"your", spell out numbers as words, no abbreviations, no digits starting a sentence.
+7. Set evidence_status to context_confirmed only when aligned visual/event evidence supports active arousal change or near-threshold response. Otherwise use physiology_only. Never return a contradicted walking/setup/technical event.
 
 Return an array of near-climax events. If none exist, return an empty array.`,
       response_json_schema: {
@@ -405,6 +429,10 @@ Return an array of near-climax events. If none exist, return an empty array.`,
                 duration_s: { type: "number" },
                 confidence: { type: "number" },
                 note_corroborated: { type: "boolean" },
+                context_confirmed: { type: "boolean" },
+                evidence_status: { type: "string", enum: ["context_confirmed", "physiology_only"] },
+                evidence_reason: { type: "string" },
+                evidence_sources: { type: "array", items: { type: "string" } },
                 ai_label: { type: "string" },
                 ai_interpretation: { type: "string" }
               },
@@ -419,7 +447,12 @@ Return an array of near-climax events. If none exist, return an empty array.`,
 
     const raw = typeof res === "string" ? JSON.parse(res) : res;
     const parsed = raw?.response ?? raw;
-    const refined = parsed.events || [];
+    const refined = filterContradictedNearClimaxEvents(parsed.events || [], contextEvidence).map((event) => ({
+      ...event,
+      context_confirmed: event.context_evidence.confirmed,
+      evidence_status: event.context_evidence.confirmed ? "context_confirmed" : "physiology_only",
+      evidence_sources: event.context_evidence.positiveSources,
+    }));
 
     await base44.entities.Session.update(session.id, { ai_near_climax_events: refined });
     onEventsRefined?.(refined);
@@ -564,6 +597,9 @@ Return an array of near-climax events. If none exist, return an empty array.`,
                       <span className="text-[10px] text-muted-foreground"><strong className="text-foreground font-mono">{ev.base_hr}–{ev.peak_hr}</strong> bpm</span>
                       <span className="whitespace-nowrap text-[10px] font-semibold" style={{ color: "hsl(var(--chart-3))" }}>↑ +{ev.rise_bpm} bpm</span>
                       {ev.note_corroborated && <span className="whitespace-nowrap text-[9px] px-1.5 py-0.5 rounded-full font-semibold" style={{ background: "hsl(var(--chart-3) / 0.2)", color: "hsl(var(--chart-3))" }}>✓ corroborated</span>}
+                      <span className={`whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] font-semibold ${ev.context_evidence?.confirmed || ev.context_confirmed ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-amber-400/30 bg-amber-400/10 text-amber-300"}`}>
+                        {ev.context_evidence?.confirmed || ev.context_confirmed ? "visual/event confirmed" : "physiology candidate"}
+                      </span>
                     </div>
                   </div>
                   <button
@@ -645,6 +681,9 @@ Return an array of near-climax events. If none exist, return an empty array.`,
                         ✓ corroborated
                       </span>
                   }
+                    <span className={`whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] font-semibold ${ev.context_evidence?.confirmed || ev.context_confirmed ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-amber-400/30 bg-amber-400/10 text-amber-300"}`}>
+                      {ev.context_evidence?.confirmed || ev.context_confirmed ? "visual/event confirmed" : "physiology candidate"}
+                    </span>
                   </div>
                   {interpretation && (
                   <p className="leading-snug mt-1 italic text-foreground/90 text-sm">

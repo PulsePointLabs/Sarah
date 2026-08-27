@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Play, Pause, SkipBack, SkipForward, ChevronDown, ChevronUp, Zap, Activity, Flag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EVENT_CATEGORIES } from "./session-form/EventTimelineSection";
+import { confirmedNearClimaxEventsForSession } from "@/utils/nearClimaxEvents";
 
 function getCategoryMeta(value) {
   const cats = Array.isArray(value) ? value : [value].filter(Boolean);
@@ -40,7 +41,7 @@ function buildWaypoints(session) {
   });
 
   // Near-climax AI events
-  (session.ai_near_climax_events || []).forEach((nc, i) => {
+  confirmedNearClimaxEventsForSession(session).forEach((nc, i) => {
     waypoints.push({ time_s: nc.peak_offset_s, type: "near_climax", nc, id: `nc_${i}` });
   });
 
