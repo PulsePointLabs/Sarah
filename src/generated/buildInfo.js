@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.245",
-  "commit": "22545ed",
-  "commitMessage": "Record packaged v0.1.245 build provenance",
-  "builtAt": "2026-08-27T20:19:08.720Z"
+  "version": "0.1.246",
+  "commit": "9a79bc8",
+  "commitMessage": "Upgrade visual findings lightbox",
+  "builtAt": "2026-08-27T20:20:37.211Z"
 };
