@@ -487,7 +487,7 @@ export default function HRTimelineChart({
   if (!chartRows.length) return null;
 
   return (
-    <div>
+    <div className="min-w-0 w-full max-w-full overflow-x-hidden">
       {/* Controls row */}
       <div className="flex gap-1 mb-2 flex-wrap items-center">
         {windowOptions.map(({ label, value }) => (
@@ -537,8 +537,8 @@ export default function HRTimelineChart({
 
 
 
-      <div className={`${compact ? "h-40" : "h-64"} cursor-crosshair`} {...wrapperProps}>
-        <ResponsiveContainer width="100%" height="100%">
+      <div className={`${compact ? "h-40" : "h-64"} min-w-0 w-full max-w-full cursor-crosshair overflow-hidden`} {...wrapperProps}>
+        <ResponsiveContainer width="100%" height="100%" minWidth={1} initialDimension={{ width: 320, height: compact ? 160 : 256 }} debounce={50}>
           <LineChart
             data={displayRows}
             margin={{ top: 8, right: showHrvOverlay ? 0 : 4, bottom: 0, left: -20 }}
@@ -791,8 +791,8 @@ export default function HRTimelineChart({
 
           {showHrvGraph && (
             <>
-              <div className={`${compact ? "h-32" : "h-44"}`}>
-                <ResponsiveContainer width="100%" height="100%">
+              <div className={`${compact ? "h-32" : "h-44"} min-w-0 w-full max-w-full overflow-hidden`}>
+                <ResponsiveContainer width="100%" height="100%" minWidth={1} initialDimension={{ width: 320, height: compact ? 128 : 176 }} debounce={50}>
                   <LineChart
                     data={hrvDisplayRows}
                     margin={{ top: 8, right: 4, bottom: 0, left: -20 }}

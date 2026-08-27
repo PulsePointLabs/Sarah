@@ -27,6 +27,7 @@ import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hr
 import { buildSessionPhysiologyEvidence } from "@/lib/bodyExplorationPhysiology";
 import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
 import { cleanTextForSpeech, getTTSRuntime, loadTTSSettings, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS } from "./TTSButton";
+import { normalizeFootCameraLateralityText, sessionHasFootOfTableCamera } from "@/utils/anatomicalLaterality";
 
 function friendlyReviewVideoRenderErrorMessage(error) {
   const message = String(error?.message || error || "Review video render failed.");
@@ -557,6 +558,9 @@ export function buildSessionAnalysisReaderData({ result, session, timelineRows =
   const notableItems = toAnalysisTextArray(result.notable_findings);
   const recommendationItems = toAnalysisTextArray(result.recommendations);
 
+  const normalizeLaterality = sessionHasFootOfTableCamera(session)
+    ? normalizeFootCameraLateralityText
+    : (value) => value;
   const paragraphs = [
     result.summary,
     ...baselineItems,
@@ -567,7 +571,7 @@ export function buildSessionAnalysisReaderData({ result, session, timelineRows =
     ...recommendationItems,
   ]
     .filter(Boolean)
-    .map((paragraph) => repairCharacterSplitParagraph(paragraph));
+    .map((paragraph) => normalizeLaterality(repairCharacterSplitParagraph(paragraph)));
 
   let idx = 0;
   const sections = [];
@@ -1178,7 +1182,7 @@ Content handling:
 - Do not sexualize, embellish, or produce arousal-oriented prose.
 - If provider policy prevents visual review of these frames, say only: "Provider refused direct visual review for this window." Do not produce a long refusal paragraph.
 
-Anatomical laterality rule: "your left" and "your right" must mean Ben's anatomical left/right, not viewer screen-left/screen-right. If the view is facing Ben, his anatomical right appears on viewer-left. If the camera perspective, supine positioning, mirroring, rotation, crop, or composite layout makes laterality uncertain, say screen-left/screen-right, near/far, upper/lower, one hand/the other hand, or one leg/the other leg instead of anatomical left/right. Preserve anatomical identity across poses and camera angles: a bruise, mole, scar, catheter/tubing position, pelvic finding, genital finding, or skin mark on Ben's anatomical right remains right-sided when he moves from supine to standing, turns toward the camera, rotates, or appears in another crop/camera lane.
+Anatomical laterality rule: "your left" and "your right" always mean Ben's anatomical left/right, never viewer screen position. For the dedicated foot-of-table/soles-facing camera, screen-left is Ben's RIGHT foot and screen-right is Ben's LEFT foot. Convert that known view to "your right foot" or "your left foot" in final prose; never write screen-left foot, screen-right foot, or vague "one foot" when that camera establishes the side. For any genuinely uncalibrated view, omit the side instead of guessing. Preserve anatomical identity across poses and cameras.
 
 ${REVIEW_WINDOW_RESPONSE_STYLE}
 
@@ -1548,12 +1552,12 @@ BASELINE / ENTRY ANATOMY AND DEVICE SETUP - HIGH PRIORITY:
 
 const ANATOMICAL_LATERALITY_RULE_V1 = `
 ANATOMICAL LEFT/RIGHT DISCIPLINE - HIGH PRIORITY:
-- "Your left" and "your right" must mean Ben's anatomical left/right, not the viewer's screen-left/screen-right.
-- When you are facing the camera, your anatomical right appears on the viewer's left. In foot-of-table, overhead, supine, mirrored, rotated, composite, or cropped views, left/right can be ambiguous.
+- "Your left" and "your right" must mean Ben's anatomical left/right, not the viewer's screen-left/screen-right. In the dedicated foot-of-table/soles-facing camera, screen-left is your RIGHT foot and screen-right is your LEFT foot.
+- When you are facing the camera, your anatomical right appears on the viewer's left. The dedicated foot-of-table camera is calibrated as stated above; only other uncalibrated overhead, mirrored, rotated, composite, or cropped views remain ambiguous.
 - Preserve anatomical identity across poses and camera angles. A bruise, mole, scar, catheter/tubing position, pelvic finding, genital finding, or skin mark on your anatomical right remains right-sided when you move from supine to standing, turn toward the camera, rotate, or appear in another crop or camera lane.
 - Track stable landmarks such as your umbilicus, sternum, pubic mound, inguinal creases, thighs, known scars, moles, bruises, catheter exit angle, and manual side notes before assigning side.
 - Do not convert screen position into anatomical laterality unless the evidence clearly establishes camera orientation from body landmarks, tracking labels, manual notes, or source metadata.
-- If laterality is uncertain, say "screen-left", "screen-right", "near/far", "upper/lower", "one hand/the other hand", or "one leg/the other leg" instead of anatomical left/right.
+- For that calibrated feet camera, final prose must use only "your left foot" or "your right foot"; never "screen-left foot", "screen-right foot", or vague "one foot". For a genuinely uncalibrated camera, omit the side instead of guessing.
 - Apply this to masturbation/stimulation mechanics, body exploration, Foley/procedure review, head-to-toe assessments, lower-body/foot findings, hand grip/stroke descriptions, and posture/asymmetry comments.
 - If older video-pass evidence uses left/right but the camera perspective is unclear, treat the side label as uncertain and preserve the visible action without repeating the possibly flipped side.
 `;

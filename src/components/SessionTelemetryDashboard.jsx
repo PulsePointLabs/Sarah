@@ -176,7 +176,7 @@ export default function SessionTelemetryDashboard({
   }, [durationS, inspectorPlaying, inspectorSpeed, onInspectionTimeChange]);
 
   return (
-    <section id="session-telemetry" className="scroll-mt-24 rounded-2xl border border-primary/20 bg-card p-4 space-y-4">
+    <section id="session-telemetry" className="scroll-mt-24 min-w-0 max-w-full overflow-x-hidden rounded-2xl border border-primary/20 bg-card p-3 space-y-4 sm:p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary">
@@ -277,9 +277,9 @@ export default function SessionTelemetryDashboard({
 
       {timelineRows.length > 0 && (
         <>
-          <details open className="rounded-xl border border-border bg-muted/10 p-3">
+          <details open className="min-w-0 max-w-full overflow-x-hidden rounded-xl border border-border bg-muted/10 p-2 sm:p-3">
             <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-primary">Heart Rate & RR-Derived HRV</summary>
-            <div className="mt-3">
+            <div className="mt-3 min-w-0 w-full max-w-full overflow-hidden">
               <HRTimelineChart
                 rows={timelineRows}
                 savedMarkers={{

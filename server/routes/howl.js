@@ -12,6 +12,11 @@ import { isLiveCaptureObsActivelyRecording, onLiveCaptureObsStateChange } from '
 export const howlRouter = express.Router();
 
 const SETTINGS_ID = 'default';
+const HOWL_DIRECT_API_VERSION = '2.0.1';
+const HOWL_DIRECT_ENDPOINTS = Object.freeze([
+  'status', 'set_power', 'increment_power', 'decrement_power', 'set_mute',
+  'load_activity', 'available_activities', 'start_player', 'stop_player', 'seek',
+]);
 const HOWL_SAFETY_SETTINGS_VERSION = 2;
 const ABSOLUTE_INTENSITY_CEILING = ABSOLUTE_HOWL_INTENSITY_CEILING;
 const MAXIMUM_UPWARD_STEP = MAXIMUM_HOWL_UPWARD_STEP;
@@ -112,6 +117,7 @@ function summarizeHowlResponse(data) {
       position: data.player.position ?? null,
       duration: data.player.duration ?? null,
     } : null,
+    api_compatibility: HOWL_DIRECT_API_VERSION,
   };
 }
 
@@ -373,10 +379,10 @@ function directHowlRequestForCommand(command) {
     return { endpoint: '/load_activity', body: { name: command.activity_name, play: command.play === true } };
   }
   if (command.action === 'set_frequency') {
-    return { endpoint: '/set_frequency', body: { frequency_hz: command.frequency_hz, channel: command.channel } };
+    throw new Error('Howl 2.0.1 does not expose direct frequency control. Use a saved Howl activity or the queue helper.');
   }
   if (command.action === 'set_mode') {
-    return { endpoint: '/set_mode', body: { mode: command.mode, channel: command.channel } };
+    throw new Error('Howl 2.0.1 does not expose direct mode control. Load a named Howl activity instead.');
   }
   return { endpoint: '/status', body: {} };
 }
@@ -397,11 +403,11 @@ async function dispatchCommand(command, settings) {
 
   try {
     let result;
-    if (command.action === 'emergency_stop') {
+    if (command.action === 'emergency_stop' || command.action === 'stop') {
       const [muteResult, zeroResult, stopResult] = await Promise.allSettled([
         requestHowl(settings, '/set_mute', { value: true }),
         requestHowl(settings, '/set_power', { power_a: 0, power_b: 0 }),
-        requestHowl(settings, '/stop', {}),
+        requestHowl(settings, '/stop_player', {}),
       ]);
       const mute = muteResult.status === 'fulfilled' ? muteResult.value : null;
       const zero = zeroResult.status === 'fulfilled' ? zeroResult.value : null;
@@ -416,7 +422,7 @@ async function dispatchCommand(command, settings) {
         emergency: [
           { endpoint: '/set_mute', status: mute?.status || null, sent: Boolean(mute) },
           { endpoint: '/set_power', status: zero?.status || null, sent: Boolean(zero) },
-          { endpoint: '/stop', status: stop?.status || null, sent: Boolean(stop) },
+          { endpoint: '/stop_player', status: stop?.status || null, sent: Boolean(stop) },
         ],
       };
     } else {
@@ -456,7 +462,7 @@ async function dispatchCommand(command, settings) {
           await Promise.allSettled([
             requestHowl(settings, '/set_mute', { value: true }),
             requestHowl(settings, '/set_power', { power_a: 0, power_b: 0 }),
-            requestHowl(settings, '/stop', {}),
+            requestHowl(settings, '/stop_player', {}),
           ]);
           throw new Error('Automatic command superseded by emergency stop; stop state reasserted.');
         }
@@ -483,7 +489,11 @@ async function dispatchCommand(command, settings) {
       targetPower: result.targetPower ?? null,
       ceiling: result.ceiling ?? null,
       maximumUpwardStep: result.maximumUpwardStep ?? null,
-      message: command.action === 'emergency_stop' ? 'Emergency stop sent to Howl.' : 'Command sent to Howl.',
+      message: command.action === 'emergency_stop'
+        ? 'Emergency stop sent to Howl.'
+        : command.action === 'stop'
+          ? 'Howl output muted, power set to zero, and playback stopped.'
+          : 'Command sent to Howl.',
     };
   } catch (error) {
     return {
@@ -531,6 +541,11 @@ howlRouter.get('/control-capabilities', (_req, res) => {
       direct_http: true,
       emergency_stop: true,
       automatic_closed_loop: true,
+      howl_api_version: HOWL_DIRECT_API_VERSION,
+      direct_endpoints: HOWL_DIRECT_ENDPOINTS,
+      direct_frequency_control: false,
+      direct_mode_control: false,
+      named_activity_loading: true,
     },
     settings: {
       controlEnabled: settings.controlEnabled,

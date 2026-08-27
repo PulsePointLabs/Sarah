@@ -23,6 +23,7 @@ import SessionEvidencePatternPanel from "../components/SessionEvidencePatternPan
 import SessionExecutiveSummary from "../components/SessionExecutiveSummary";
 import SessionSnapshotHero from "../components/SessionSnapshotHero";
 import SessionTelemetryDashboard from "../components/SessionTelemetryDashboard";
+import SessionVisualChanges from "../components/SessionVisualChanges";
 import PulseOxSessionChart from "../components/PulseOxSessionChart";
 import BodyCompositionSummaryCard from "../components/BodyCompositionSummaryCard";
 import SessionSectionNavigator from "../components/SessionSectionNavigator";
@@ -1750,6 +1751,7 @@ export default function SessionDetail() {
   const sectionLinks = [
     { id: "session-snapshot", label: "Session Snapshot", group: "Overview" },
     { id: "session-telemetry", label: "Evidence Dashboard", group: "Overview" },
+    { id: "session-visual-changes", label: "Visual Changes", group: "Overview" },
     ...(rawSessionEndSec > 0 ? [{ id: "session-analysis-trim", label: "Analysis Trim", group: "Overview" }] : []),
     ...((bloodPressureReadings.length || attachableBloodPressureReadings.length) ? [{ id: "session-blood-pressure", label: "Blood Pressure", group: "Overview" }] : []),
     ...(pulseOxReadings.length ? [{ id: "session-pulse-ox", label: "Pulse Oximetry", group: "Overview" }] : []),
@@ -1981,6 +1983,7 @@ export default function SessionDetail() {
           onMarkersChange={savePhaseMarkers}
           onOpenReview={() => navigate(`/review-player?session=${encodeURIComponent(s.id)}&display=focus`)}
         />
+        <SessionVisualChanges session={s} timelineRows={timelineRows} />
         {s.body_composition && (
           <div id="session-body-composition" className="scroll-mt-24">
             <BodyCompositionSummaryCard reading={s.body_composition} title="Session Weigh-In" />
