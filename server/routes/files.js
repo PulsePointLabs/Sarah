@@ -186,6 +186,23 @@ async function findLocalVideoCandidates({ filename, sizeBytes, modifiedAtMs }) {
   const modified = Number(modifiedAtMs) || 0;
   let visited = 0;
 
+  // OBS recordings are sometimes saved directly at the root of Ben's media
+  // drives. Check those exact, cheap paths before doing a bounded recursive
+  // search; do not recursively walk an entire drive root.
+  if (process.platform === 'win32') {
+    for (const driveRoot of ['D:\\', 'E:\\']) {
+      const directPath = path.join(driveRoot, targetName);
+      try {
+        const stat = await fsp.stat(directPath);
+        const sizeMatches = !size || Math.abs(stat.size - size) <= 16;
+        const modifiedMatches = !modified || Math.abs(stat.mtimeMs - modified) < 5000;
+        if (stat.isFile() && sizeMatches && modifiedMatches) matches.push(directPath);
+      } catch {
+        // The drive or exact root-level recording does not exist.
+      }
+    }
+  }
+
   async function walk(dir, depth = 0) {
     if (matches.length >= 8 || visited >= maxDirs || Date.now() - startedAt > maxMs || depth > 5) return;
     visited += 1;
@@ -224,6 +241,12 @@ async function findLocalVideoCandidates({ filename, sizeBytes, modifiedAtMs }) {
   }
 
   return [...new Set(matches)];
+}
+
+function sourceFingerprintParts(value) {
+  const match = String(value || '').trim().match(/^(\d+)-(\d+)$/);
+  if (!match) return { sizeBytes: 0, modifiedAtMs: 0 };
+  return { sizeBytes: Number(match[1]) || 0, modifiedAtMs: Number(match[2]) || 0 };
 }
 
 function assertLocalVideoPath(filePath) {
@@ -758,6 +781,61 @@ filesRouter.get('/local-video/stream', async (req, res) => {
     fs.createReadStream(meta.path, { start, end }).pipe(res);
   } catch (error) {
     if (!res.headersSent) await handleLocalVideoError(res, error);
+  }
+});
+
+filesRouter.get('/local-video/still', async (req, res) => {
+  try {
+    const filename = String(req.query?.filename || '').trim();
+    if (!filename || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ error: 'Missing or invalid local video filename.' });
+    }
+    const requestedTime = Number(req.query?.time);
+    const timeSeconds = Number.isFinite(requestedTime) ? Math.max(0, requestedTime) : 0;
+    const fingerprint = String(req.query?.fingerprint || '').trim();
+    const fingerprintParts = sourceFingerprintParts(fingerprint);
+    const matches = await findLocalVideoCandidates({ filename, ...fingerprintParts });
+    if (!matches.length) {
+      return res.status(404).json({ error: `Could not find the original ${filename} recording for a high-resolution still.` });
+    }
+    if (matches.length > 1) {
+      return res.status(409).json({ error: `Found multiple recordings named ${filename}; link the exact source video to select one.` });
+    }
+
+    const sourcePath = matches[0];
+    const stat = await fsp.stat(sourcePath);
+    const sourceKey = fingerprint || `${stat.size}-${Math.round(stat.mtimeMs)}`;
+    const timeMs = Math.round(timeSeconds * 1000);
+    const cacheKey = slugifyFilePart(`visual-still-v1-${sourceKey}-${timeMs}`);
+    const outputFilename = `${cacheKey}.jpg`;
+    const outputPath = path.join(uploadDir, outputFilename);
+
+    try {
+      const existing = await fsp.stat(outputPath);
+      if (existing.isFile() && existing.size > 0) return res.redirect(302, `/uploads/${outputFilename}`);
+    } catch {
+      // Cache miss; extract the native-resolution source frame below.
+    }
+
+    await runProcess('ffmpeg', [
+      '-hide_banner',
+      '-loglevel', 'error',
+      '-nostdin',
+      '-y',
+      '-ss', String(timeSeconds),
+      '-i', sourcePath,
+      '-map', '0:v:0',
+      '-frames:v', '1',
+      '-q:v', '2',
+      outputPath,
+    ], { captureOutput: false });
+
+    const outputStat = await fsp.stat(outputPath);
+    if (!outputStat.isFile() || outputStat.size <= 0) throw new Error('FFmpeg did not produce a still image.');
+    return res.redirect(302, `/uploads/${outputFilename}`);
+  } catch (error) {
+    const status = error?.status || (error?.code === 'ENOENT' ? 404 : 500);
+    return res.status(status).json({ error: error?.message || 'Could not extract the high-resolution video still.' });
   }
 });
 

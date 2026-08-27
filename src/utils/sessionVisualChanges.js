@@ -13,7 +13,27 @@ function frameTime(frame = {}) {
 }
 
 function frameUrl(frame = {}) {
-  return frame.url || frame.file_url || "";
+  return frame.original_url || frame.full_url || frame.high_resolution_url || frame.url || frame.file_url || "";
+}
+
+function sourceFrameTime(frame = {}, pass = {}, fallbackTimeS = 0) {
+  const explicit = numberOrNull(frame.frameTimeSeconds ?? frame.sourceTimeSeconds ?? frame.source_time_s);
+  if (explicit != null) return explicit;
+  const sessionTime = frameTime(frame) ?? fallbackTimeS;
+  const sourceZeroSessionMs = numberOrNull(pass.source_video?.source_zero_session_ms ?? pass.source_zero_session_ms);
+  return sourceZeroSessionMs != null ? Math.max(0, sessionTime - (sourceZeroSessionMs / 1000)) : sessionTime;
+}
+
+function nativeStillUrl(pass = {}, frame = {}, fallbackTimeS = 0) {
+  const filename = String(pass.source_video?.filename || "").trim();
+  if (!filename) return "";
+  const params = new URLSearchParams({
+    filename,
+    time: String(sourceFrameTime(frame, pass, fallbackTimeS)),
+  });
+  const fingerprint = String(pass.source_video?.fingerprint || "").trim();
+  if (fingerprint) params.set("fingerprint", fingerprint);
+  return `/api/files/local-video/still?${params.toString()}`;
 }
 
 export function visualChangeFocus(text = "") {
@@ -139,7 +159,9 @@ export function buildHighConfidenceVisualChanges(session = {}, timelineRows = []
         category: candidate.category,
         camera: pass.source_video_role || pass.source_video?.label || pass.source_video?.filename || "",
         imageUrl: frameUrl(frame),
+        highResolutionImageUrl: nativeStillUrl(pass, frame, candidate.timeS),
         frameTimeS: frameTime(frame) ?? candidate.timeS,
+        sourceFrameTimeS: sourceFrameTime(frame, pass, candidate.timeS),
         focus,
         telemetry: telemetryForMoment(pass, timelineRows, candidate.timeS),
       });
