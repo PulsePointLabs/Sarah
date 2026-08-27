@@ -2201,6 +2201,7 @@ export default function SessionDetail() {
                     highlightRange={highlightRange}
                     noClimax={!!s.no_climax}
                     nearClimaxEvents={nearClimaxEvents}
+                    confirmedNearClimaxEvents={s.ai_near_climax_events || []}
                     events={s.event_timeline || []}
                     selectedEventIndex={selectedEventIdx}
                     onSelectEventIndex={setSelectedEventIdx}
@@ -2553,6 +2554,7 @@ export default function SessionDetail() {
                   highlightRange={highlightRange}
                   noClimax={!!s.no_climax}
                   nearClimaxEvents={nearClimaxEvents}
+                  confirmedNearClimaxEvents={s.ai_near_climax_events || []}
                   events={s.event_timeline || []}
                   selectedEventIndex={selectedEventIdx}
                   onSelectEventIndex={setSelectedEventIdx}

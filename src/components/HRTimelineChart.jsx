@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine,
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceArea, ReferenceLine,
 } from "recharts";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, Layers, SlidersHorizontal, ZoomIn, ZoomOut } from "lucide-react";
@@ -107,6 +107,7 @@ export default function HRTimelineChart({
   highlightRange = null,
   noClimax = false,
   nearClimaxEvents = [],
+  confirmedNearClimaxEvents = [],
   initialWindow,
   compact = false,
   playbackTime,
@@ -360,17 +361,23 @@ export default function HRTimelineChart({
   const nearClimaxEventsInView = useMemo(() => {
     if (!showNearClimax || noClimax) return [];
     const [min, max] = zoomDomain ? [zoomDomain.x1, zoomDomain.x2] : [visibleMin, visibleMax];
-    return nearClimaxEvents
-      .filter((event) => {
+    return confirmedNearClimaxEvents
+      .map((event, sourceIndex) => {
         const start = Number(event?.start_offset_s);
         const end = Number(event?.end_offset_s);
-        if (!Number.isFinite(start) && !Number.isFinite(end)) return false;
+        if (!Number.isFinite(start) && !Number.isFinite(end)) return null;
         const safeStart = Number.isFinite(start) ? start : end;
         const safeEnd = Number.isFinite(end) ? end : start;
-        return safeEnd >= min && safeStart <= max;
+        return {
+          ...event,
+          sourceIndex,
+          start_offset_s: Math.min(safeStart, safeEnd),
+          end_offset_s: Math.max(safeStart, safeEnd),
+        };
       })
+      .filter((event) => event && event.end_offset_s >= min && event.start_offset_s <= max)
       .slice(0, 24);
-  }, [nearClimaxEvents, noClimax, showNearClimax, visibleMax, visibleMin, zoomDomain]);
+  }, [confirmedNearClimaxEvents, noClimax, showNearClimax, visibleMax, visibleMin, zoomDomain]);
 
   const hrChangeBands = useMemo(() => {
     if (!noClimax || !rows || rows.length < 8) return [];
@@ -432,6 +439,51 @@ export default function HRTimelineChart({
     }
   };
 
+  const layerControls = [
+    ...(noClimax
+      ? [{
+        label: "HR shifts",
+        active: showNearClimax,
+        setter: setShowNearClimax,
+        disabled: false,
+        title: "Show sustained HR rise/drop bands.",
+      }]
+      : [{
+        label: "Phases",
+        active: showPhases,
+        setter: setShowPhases,
+        disabled: phaseBands.length === 0,
+        title: "Show the saved build, pre-climax, climax, and recovery phase ranges.",
+      }, {
+        label: `Near Climax${confirmedNearClimaxEvents.length ? ` (${confirmedNearClimaxEvents.length})` : ""}`,
+        active: showNearClimax,
+        setter: setShowNearClimax,
+        disabled: confirmedNearClimaxEvents.length === 0,
+        title: confirmedNearClimaxEvents.length
+          ? "Show AI-refined near-climax episodes with start/end boundaries."
+          : "No AI-refined near-climax episodes are saved for this session yet.",
+      }, {
+        label: "Build",
+        active: showBuild,
+        setter: setShowBuild,
+        disabled: false,
+        title: "Show saved build markers.",
+      }, {
+        label: "Recovery",
+        active: showRecovery,
+        setter: setShowRecovery,
+        disabled: false,
+        title: "Show saved recovery markers.",
+      }]),
+    ...(hasHrv ? [{
+      label: "HRV",
+      active: showHrvOverlay,
+      setter: setShowHrvOverlay,
+      disabled: false,
+      title: "Overlay HRV traces on the primary HR graph.",
+    }] : []),
+  ];
+
   if (!chartRows.length) return null;
 
   return (
@@ -468,22 +520,14 @@ export default function HRTimelineChart({
         )}
         <div className="w-px h-4 bg-border mx-1" />
         <span className="text-[10px] text-muted-foreground flex items-center gap-1"><Layers className="w-3 h-3" /> Layers</span>
-        {(noClimax
-          ? [
-            ["HR shifts", showNearClimax, setShowNearClimax],
-          ]
-          : [
-            ["Phases", showPhases, setShowPhases],
-            ["Surges", showNearClimax, setShowNearClimax],
-            ["Build", showBuild, setShowBuild],
-            ["Recovery", showRecovery, setShowRecovery],
-          ]
-        ).concat(hasHrv ? [["HRV", showHrvOverlay, setShowHrvOverlay]] : []).map(([label, active, setter]) => (
+        {layerControls.map(({ label, active, setter, disabled, title }) => (
           <Button
             key={label}
             size="sm"
             variant={active ? "default" : "outline"}
             className="h-6 text-[10px] px-2"
+            disabled={disabled}
+            title={title}
             onClick={() => setter((value) => !value)}
           >
             {label}
@@ -520,6 +564,20 @@ export default function HRTimelineChart({
                 width={28}
               />
             )}
+
+            {/* Saved phase ranges */}
+            {showPhases && phaseBands.map((band) => (
+              <ReferenceArea
+                key={`phase-band-${band.key}`}
+                yAxisId={0}
+                x1={band.x1}
+                x2={band.x2}
+                fill={band.color}
+                fillOpacity={band.opacity}
+                strokeOpacity={0}
+                ifOverflow="hidden"
+              />
+            ))}
             <Tooltip
               formatter={(val, name) => {
                 if (name === "hr") return [`${Math.round(val)} bpm`, "HR"];
@@ -578,28 +636,42 @@ export default function HRTimelineChart({
               ]);
             })}
 
-            {/* Near-climax event boundaries only */}
+            {/* AI-refined near-climax episode ranges */}
             {nearClimaxEventsInView.flatMap((ev, i) => {
               const active = hoveredEventIdx === i;
-              const color = "hsl(var(--chart-3))";
+              const color = "#ef4444";
               return ([
-                <ReferenceLine
-                  key={`nce-start-${i}`}
-                  x={ev.start_offset_s}
-                  stroke={color}
-                  strokeOpacity={active ? 0.85 : 0.3}
-                  strokeDasharray="3 3"
-                  strokeWidth={active ? 1.8 : 1}
+                <ReferenceArea
+                  key={`nce-area-${ev.sourceIndex}`}
+                  yAxisId={0}
+                  x1={ev.start_offset_s}
+                  x2={ev.end_offset_s}
+                  fill={color}
+                  fillOpacity={active ? 0.17 : 0.1}
+                  strokeOpacity={0}
+                  ifOverflow="hidden"
                   onMouseEnter={() => setHoveredEventIdx(i)}
                   onMouseLeave={() => setHoveredEventIdx(null)}
                 />,
                 <ReferenceLine
-                  key={`nce-end-${i}`}
+                  key={`nce-start-${ev.sourceIndex}`}
+                  x={ev.start_offset_s}
+                  stroke={color}
+                  strokeOpacity={active ? 0.95 : 0.72}
+                  strokeDasharray="4 3"
+                  strokeWidth={active ? 1.8 : 1.25}
+                  label={{ value: `NC ${ev.sourceIndex + 1} start`, fontSize: 7, fill: color, position: "insideTopLeft" }}
+                  onMouseEnter={() => setHoveredEventIdx(i)}
+                  onMouseLeave={() => setHoveredEventIdx(null)}
+                />,
+                <ReferenceLine
+                  key={`nce-end-${ev.sourceIndex}`}
                   x={ev.end_offset_s}
                   stroke={color}
-                  strokeOpacity={active ? 0.85 : 0.3}
-                  strokeDasharray="3 3"
-                  strokeWidth={active ? 1.8 : 1}
+                  strokeOpacity={active ? 0.95 : 0.72}
+                  strokeDasharray="4 3"
+                  strokeWidth={active ? 1.8 : 1.25}
+                  label={{ value: `NC ${ev.sourceIndex + 1} end`, fontSize: 7, fill: color, position: "insideBottomRight" }}
                   onMouseEnter={() => setHoveredEventIdx(i)}
                   onMouseLeave={() => setHoveredEventIdx(null)}
                 />,
@@ -770,6 +842,46 @@ export default function HRTimelineChart({
                       </>
                     )}
 
+                    {showPhases && phaseBands.map((band) => (
+                      <ReferenceArea
+                        key={`hrv-phase-band-${band.key}`}
+                        x1={band.x1}
+                        x2={band.x2}
+                        fill={band.color}
+                        fillOpacity={Math.min(0.07, band.opacity)}
+                        strokeOpacity={0}
+                        ifOverflow="hidden"
+                      />
+                    ))}
+
+                    {nearClimaxEventsInView.flatMap((event) => ([
+                      <ReferenceArea
+                        key={`hrv-nce-area-${event.sourceIndex}`}
+                        x1={event.start_offset_s}
+                        x2={event.end_offset_s}
+                        fill="#ef4444"
+                        fillOpacity={0.09}
+                        strokeOpacity={0}
+                        ifOverflow="hidden"
+                      />,
+                      <ReferenceLine
+                        key={`hrv-nce-start-${event.sourceIndex}`}
+                        x={event.start_offset_s}
+                        stroke="#ef4444"
+                        strokeOpacity={0.68}
+                        strokeDasharray="4 3"
+                        strokeWidth={1.1}
+                      />,
+                      <ReferenceLine
+                        key={`hrv-nce-end-${event.sourceIndex}`}
+                        x={event.end_offset_s}
+                        stroke="#ef4444"
+                        strokeOpacity={0.68}
+                        strokeDasharray="4 3"
+                        strokeWidth={1.1}
+                      />,
+                    ]))}
+
                     {!noClimax && MARKING_PHASES.map((phase) =>
                       localMarkers[phase] != null ? (
                         <ReferenceLine
@@ -858,8 +970,8 @@ export default function HRTimelineChart({
       )}
 
       {/* Near-climax event tooltip */}
-      {hoveredEventIdx != null && nearClimaxEvents[hoveredEventIdx] && (() => {
-        const ev = nearClimaxEvents[hoveredEventIdx];
+      {hoveredEventIdx != null && nearClimaxEventsInView[hoveredEventIdx] && (() => {
+        const ev = nearClimaxEventsInView[hoveredEventIdx];
         return (
           <div className="mt-3 rounded-lg border border-border bg-muted/60 p-3 space-y-1.5">
             <div className="flex items-center justify-between gap-2">
@@ -1044,6 +1156,12 @@ export default function HRTimelineChart({
             <span className="w-2 h-2 rounded-full inline-block" style={{ background: band.color }} />{band.label}
           </span>
         ))}
+        {showNearClimax && !noClimax && nearClimaxEventsInView.length > 0 && (
+          <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+            <span className="h-2 w-3 rounded-sm border border-red-500/60 bg-red-500/20" />
+            {nearClimaxEventsInView.length} AI-refined near-climax episode{nearClimaxEventsInView.length === 1 ? "" : "s"}
+          </span>
+        )}
         {showBuild && <span className="text-[10px] text-muted-foreground flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: MARKER_COLORS.build }} />build</span>}
         {!noClimax && MARKING_PHASES.map((k) => (
           <span key={k} className="text-[10px] text-muted-foreground flex items-center gap-1">

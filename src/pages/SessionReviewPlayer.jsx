@@ -1168,6 +1168,7 @@ export default function SessionReviewPlayer() {
                         }}
                         noClimax={!!selectedSession.no_climax}
                         nearClimaxEvents={selectedSession.ai_near_climax_events || []}
+                        confirmedNearClimaxEvents={selectedSession.ai_near_climax_events || []}
                         events={selectedSession.event_timeline || []}
                         selectedEventIndex={selectedEventIdx}
                         onSelectEventIndex={handleSelectEventIndex}
