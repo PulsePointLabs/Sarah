@@ -2682,6 +2682,7 @@ export default function SessionDetail() {
           context={sessionChatContext}
           extraReviewContext={sessionChatReviewContext}
           savedVideoClips={normalizeSessionKeyVideoClips(s)}
+          savedVisualEvidence={s.ai_analysis?._video_pass_findings || []}
           sessionVideoSources={storyVideoSources}
           pendingTimestampReview={pendingTimestampReview}
           savedMessages={chatMessages}

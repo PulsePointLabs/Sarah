@@ -418,6 +418,147 @@ export function normalizeBodyExplorationVideoPassFindings(explorationOrEntries) 
   return normalizeSessionVideoPassFindings(entries);
 }
 
+const VISUAL_QUESTION_RE = /\b(?:visual(?:ly)?|visible|see|seen|saw|show(?:s|ed|ing)?|look(?:s|ed|ing)?|appearance|image|photo|frame|video|camera|footage|notice(?:d)?|observe(?:d)?|what\s+changed|changes?\s+to)\b/i;
+const VISUAL_QUERY_STOP_WORDS = new Set([
+  "about", "after", "before", "change", "changed", "changes", "during", "from", "have", "image", "images",
+  "into", "look", "looking", "notice", "noticed", "perform", "procedure", "review", "show", "showed", "showing",
+  "specific", "terms", "that", "this", "video", "visual", "visually", "what", "were", "with", "your",
+]);
+const VISUAL_QUERY_GROUPS = [
+  {
+    trigger: /\b(?:genital|genitals|penis|shaft|glans|foreskin|meatus|scrot|testic|erection|erect|flaccid|engorg|flush|pre[-\s]?ejaculat|ejaculat)\b/i,
+    terms: ["genital", "penis", "shaft", "glans", "foreskin", "meatus", "scrot", "testic", "erect", "flaccid", "engorg", "flush", "ejaculat"],
+    preferredRoles: ["main", "wide", "lateral"],
+    discouragedRoles: ["feet", "foot", "lower_body"],
+  },
+  {
+    trigger: /\b(?:foot|feet|sole|soles|toe|toes|heel|ankle|lower[-\s]?body|leg|legs)\b/i,
+    terms: ["foot", "feet", "sole", "toe", "heel", "ankle", "lower body", "leg", "plant", "brace", "curl"],
+    preferredRoles: ["feet", "foot", "lower_body"],
+    discouragedRoles: [],
+  },
+  {
+    trigger: /\b(?:catheter|foley|balloon|bladder|urethr|sphincter|dilat|insert|instrument|device)\b/i,
+    terms: ["catheter", "foley", "balloon", "bladder", "urethr", "sphincter", "dilat", "insert", "instrument", "device"],
+    preferredRoles: ["main", "wide", "lateral"],
+    discouragedRoles: ["feet", "foot", "lower_body"],
+  },
+];
+
+export function isVisualEvidenceQuestion(value = "") {
+  return VISUAL_QUESTION_RE.test(String(value || ""));
+}
+
+function rawVideoPassEntries(recordOrEntries) {
+  if (Array.isArray(recordOrEntries)) return recordOrEntries;
+  return [
+    ...(Array.isArray(recordOrEntries?.ai_analysis?._video_pass_findings) ? recordOrEntries.ai_analysis._video_pass_findings : []),
+    ...(Array.isArray(recordOrEntries?.ai_body_exploration?._video_pass_findings) ? recordOrEntries.ai_body_exploration._video_pass_findings : []),
+  ];
+}
+
+function visualQueryTerms(query = "") {
+  const value = String(query || "").toLowerCase();
+  const terms = new Set(
+    value.match(/[a-z][a-z0-9-]{2,}/g)
+      ?.filter((term) => !VISUAL_QUERY_STOP_WORDS.has(term)) || [],
+  );
+  VISUAL_QUERY_GROUPS.forEach((group) => {
+    if (group.trigger.test(value)) group.terms.forEach((term) => terms.add(term));
+  });
+  return [...terms];
+}
+
+function visualPassSearchText(pass = {}) {
+  return [
+    pass.summary,
+    pass.label,
+    pass.source_video_role,
+    pass.source_video?.role,
+    pass.source_video?.label,
+    pass.source_video?.filename,
+    ...(Array.isArray(pass.findings) ? pass.findings.map((finding) => (
+      typeof finding === "string" ? finding : [finding?.title, finding?.text, finding?.findingText, finding?.finding].filter(Boolean).join(" ")
+    )) : []),
+    ...(Array.isArray(pass.draft_events || pass.events) ? (pass.draft_events || pass.events).map((event) => [event?.note, event?.text, event?.label].filter(Boolean).join(" ")) : []),
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function videoPassRole(pass = {}) {
+  return String(pass.source_video_role || pass.source_video?.role || "").toLowerCase();
+}
+
+function frameTimelineSeconds(frame = {}, pass = {}) {
+  const explicit = Number(frame.recordTimeSeconds ?? frame.sessionTimeSeconds ?? frame.frameTimelineSeconds);
+  if (Number.isFinite(explicit)) return explicit;
+  const sourceTime = Number(frame.frameTimeSeconds ?? frame.time_s);
+  const offset = Number(pass.source_video?.source_zero_session_ms || pass.source_zero_session_ms || 0) / 1000;
+  return Number.isFinite(sourceTime) ? sourceTime + offset : Number(pass.clip?.start_s || pass.window?.start || 0);
+}
+
+export function selectSavedVideoPassFramesForChat(recordOrEntries, query = "", { limit = 5 } = {}) {
+  const terms = visualQueryTerms(query);
+  const activeGroups = VISUAL_QUERY_GROUPS.filter((group) => group.trigger.test(String(query || "")));
+  const entries = rawVideoPassEntries(recordOrEntries)
+    .map((pass, index) => {
+      const frames = Array.isArray(pass?.sampled_frames || pass?.sampledFrames) ? (pass.sampled_frames || pass.sampledFrames) : [];
+      const usableFrames = frames.filter((frame) => frame?.url || frame?.file_url || frame?.data);
+      if (!usableFrames.length) return null;
+      const text = visualPassSearchText(pass);
+      const role = videoPassRole(pass);
+      let score = terms.reduce((sum, term) => sum + (text.includes(term) ? 3 : 0), 0);
+      activeGroups.forEach((group) => {
+        if (group.preferredRoles.includes(role)) score += 8;
+        if (group.discouragedRoles.includes(role)) score -= 12;
+      });
+      if (!activeGroups.length && ["main", "wide", "lateral"].includes(role)) score += 2;
+      const start = Number(pass.clip?.start_s ?? pass.window?.start ?? frameTimelineSeconds(usableFrames[0], pass));
+      return { pass, index, frames: usableFrames, role, score, start: Number.isFinite(start) ? start : 0 };
+    })
+    .filter(Boolean);
+  if (!entries.length) return [];
+
+  const relevant = entries.some((entry) => entry.score > 0)
+    ? entries.filter((entry) => entry.score > 0)
+    : entries;
+  const selectedPasses = relevant
+    .slice()
+    .sort((a, b) => b.score - a.score || a.start - b.start)
+    .slice(0, Math.max(1, Math.min(Number(limit) || 5, 8)))
+    .sort((a, b) => a.start - b.start);
+
+  return selectedPasses.map(({ pass, frames, role, index }) => {
+    const frame = frames[Math.floor((frames.length - 1) / 2)];
+    const frameTimeSeconds = Number(frame.frameTimeSeconds ?? frame.time_s);
+    const timelineSeconds = frameTimelineSeconds(frame, pass);
+    return {
+      id: `saved-video-pass-frame-${pass.id || index}-${frame.frameIndex || Math.floor((frames.length - 1) / 2) + 1}`,
+      url: frame.url || frame.file_url || "",
+      data: frame.data || "",
+      filename: frame.filename || String(frame.url || frame.file_url || "").split("/").pop() || `saved-video-pass-${index + 1}.jpg`,
+      mimeType: frame.mimeType || "image/jpeg",
+      frameTimeSeconds: Number.isFinite(frameTimeSeconds) ? frameTimeSeconds : timelineSeconds,
+      frameTimelineSeconds: timelineSeconds,
+      frameIndex: frame.frameIndex || Math.floor((frames.length - 1) / 2) + 1,
+      sourceVideo: {
+        filename: pass.source_video?.filename || pass.source_video?.label || "saved video-pass source",
+        label: pass.label || "Saved Sarah video-pass evidence",
+        role,
+        startSeconds: Number(pass.clip?.start_s ?? pass.window?.start ?? timelineSeconds),
+        endSeconds: Number(pass.clip?.end_s ?? pass.window?.end ?? timelineSeconds),
+        frameTimeSeconds: Number.isFinite(frameTimeSeconds) ? frameTimeSeconds : timelineSeconds,
+        frameTimelineSeconds: timelineSeconds,
+        timelineStartSeconds: Number(pass.clip?.start_s ?? pass.window?.start ?? timelineSeconds),
+        timelineEndSeconds: Number(pass.clip?.end_s ?? pass.window?.end ?? timelineSeconds),
+        timelineLabel: "saved video-pass timeline",
+        frameIndex: frame.frameIndex || Math.floor((frames.length - 1) / 2) + 1,
+        processedClipUrl: pass.clip?.url || pass.clip?.clip_url || "",
+        momentTelemetry: pass.telemetry?.nearest_sample_to_center || null,
+      },
+    };
+  });
+}
+
 function formatVideoPassRange(entry) {
   const start = entry.clip.start_s;
   const end = entry.clip.end_s;

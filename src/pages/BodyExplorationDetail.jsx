@@ -159,8 +159,6 @@ function buildExplorationChatContext(exploration, timelineRows, emgRows, nearbyV
     emgRows.length ? `EMG rows available: ${emgRows.length}.` : null,
     `Measured physiology evidence and nearby imported vitals:\n${JSON.stringify(chatPhysiologyEvidence, null, 2)}`,
     events.length ? `Timestamped notes:\n${events.join("\n")}` : null,
-    buildBodyExplorationVisualEvidenceDigest(exploration),
-    buildBodyExplorationVideoPassDigest(exploration),
   ].filter(Boolean).join("\n");
 }
 
@@ -253,6 +251,13 @@ export default function BodyExplorationDetail() {
     }),
     [linkedLocalVideos, uploadedExplorationVideos],
   );
+  const explorationChatReviewContext = useMemo(() => {
+    if (!exploration) return "";
+    return [
+      buildBodyExplorationVisualEvidenceDigest(exploration),
+      buildBodyExplorationVideoPassDigest(exploration),
+    ].filter(Boolean).join("\n\n");
+  }, [exploration]);
 
   const scrollToSection = (section) => {
     setActiveSectionId(section.id);
@@ -560,7 +565,9 @@ export default function BodyExplorationDetail() {
             userProfile={userProfile}
             scopeId={id}
             context={buildExplorationChatContext(exploration, timelineRows, emgRows, nearbyVitals)}
+            extraReviewContext={explorationChatReviewContext}
             savedVideoClips={normalizeSessionKeyVideoClips(exploration)}
+            savedVisualEvidence={exploration.ai_body_exploration?._video_pass_findings || []}
             sessionVideoSources={explorationVideoSources}
             pendingTimestampReview={pendingTimestampReview}
             savedMessages={chatMessages}

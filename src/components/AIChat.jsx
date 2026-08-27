@@ -14,7 +14,11 @@ import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
 import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext } from "@/lib/aiGrounding";
-import { extractVisualMediaContextFromConversation } from "@/lib/visualEvidence";
+import {
+  extractVisualMediaContextFromConversation,
+  isVisualEvidenceQuestion,
+  selectSavedVideoPassFramesForChat,
+} from "@/lib/visualEvidence";
 import { serverUrl } from "@/lib/mobileApiBase";
 import { startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import { buildSarahVsVitalsPromptContext } from "@/lib/sarahVsVitalsContext";
@@ -603,6 +607,7 @@ export default function AIChat({
   subjectLabel,
   clipTimelineOffsetSeconds = 0,
   savedVideoClips = [],
+  savedVisualEvidence = [],
   sessionVideoSources = [],
   pendingTimestampReview = null,
   onSaveMessages,
@@ -1650,10 +1655,50 @@ export default function AIChat({
     }
   };
 
-  const uploadSelectedImages = async () => {
+  const materializeSavedVisualEvidenceFrames = async (query) => {
+    const selected = selectSavedVideoPassFramesForChat(savedVisualEvidence, query, { limit: MAX_IMAGE_COUNT });
+    if (!selected.length) return [];
+    const prepared = [];
+    setChatProcessingStatus(nextChatStatus({
+      phase: "sampling",
+      message: "Loading saved visual evidence",
+      detail: `Reusing ${selected.length} relevant frame${selected.length === 1 ? "" : "s"} already saved by Sarah's video review. No new video analysis is being run.`,
+    }));
+    for (const frame of selected) {
+      try {
+        const frameUrl = frame.url || "";
+        let base64Data = frame.data || "";
+        let previewUrl = frameUrl ? serverUrl(frameUrl) : `data:${frame.mimeType};base64,${frame.data || ""}`;
+        if (!base64Data && previewUrl) {
+          const response = await fetch(previewUrl);
+          if (!response.ok) continue;
+          const dataUrl = await fileToDataUrl(await response.blob());
+          base64Data = stripDataUrl(dataUrl);
+          previewUrl = dataUrl;
+        }
+        if (!base64Data) continue;
+        prepared.push({
+          id: frame.id || makeId("saved-video-pass-frame"),
+          filename: frame.filename,
+          mimeType: frame.mimeType || "image/jpeg",
+          sizeBytes: 0,
+          storagePath: frameUrl,
+          previewUrl,
+          base64Data,
+          createdAt: new Date().toISOString(),
+          sourceVideo: frame.sourceVideo || null,
+        });
+      } catch {
+        // Keep loading the remaining saved frames; the text digest remains a fallback.
+      }
+    }
+    return prepared;
+  };
+
+  const uploadSelectedImages = async (additionalImages = []) => {
     const videoFrames = await materializeVideoClipFrames();
     const maxPending = MAX_IMAGE_COUNT + (videoFrames.length ? VIDEO_FRAME_SAMPLE_COUNT : 0);
-    const pendingImages = [...selectedImages, ...videoFrames].slice(0, maxPending);
+    const pendingImages = [...selectedImages, ...additionalImages, ...videoFrames].slice(0, maxPending);
     if (!pendingImages.length) return { metadata: [], aiImages: [] };
     setUploadingImages(true);
     setChatProcessingStatus(nextChatStatus({
@@ -2149,7 +2194,15 @@ export default function AIChat({
     setImageError("");
     let imagePayload = { metadata: [], aiImages: [] };
     try {
-      imagePayload = await uploadSelectedImages();
+      const shouldReuseSavedFrames = !selectedImages.length
+        && !selectedVideoClip
+        && isVisualEvidenceQuestion(text)
+        && Array.isArray(savedVisualEvidence)
+        && savedVisualEvidence.length > 0;
+      const savedFrames = shouldReuseSavedFrames
+        ? await materializeSavedVisualEvidenceFrames(text)
+        : [];
+      imagePayload = await uploadSelectedImages(savedFrames);
     } catch (error) {
       setLoading(false);
       setChatProcessingStatus({ phase: "error", message: "Could not prepare attachments", detail: error.message || "Image upload failed." });
@@ -2177,9 +2230,13 @@ export default function AIChat({
     }));
     const localTimeContext = buildLocalTimeContext();
     const isVisualReviewRequest = imagePayload.aiImages.length > 0;
+    const isSavedVisualContextRequest = !isVisualReviewRequest
+      && isVisualEvidenceQuestion(text)
+      && Boolean(String(extraReviewContext || "").trim());
+    const hasVisualReviewContext = isVisualReviewRequest || isSavedVisualContextRequest;
     const history = buildPromptHistory(updated, {
-      limit: isVisualReviewRequest ? CHAT_PROVIDER_HISTORY_LIMIT : CHAT_INTERACTIVE_HISTORY_LIMIT,
-      perMessageChars: isVisualReviewRequest ? 760 : CHAT_HISTORY_MESSAGE_MAX_CHARS,
+      limit: hasVisualReviewContext ? CHAT_PROVIDER_HISTORY_LIMIT : CHAT_INTERACTIVE_HISTORY_LIMIT,
+      perMessageChars: hasVisualReviewContext ? 760 : CHAT_HISTORY_MESSAGE_MAX_CHARS,
     });
     const videoContext = imagePayload.metadata
       .filter((item) => item.sourceVideo)
@@ -2239,18 +2296,18 @@ SYNC AND BASELINE RULES:
         text: message.text,
         createdAt: message.createdAt,
       })),
-      hasVisualEvidence: isVisualReviewRequest,
+      hasVisualEvidence: hasVisualReviewContext,
     });
     const shouldPivot = Boolean(intelligence?.plan?.exploreNewThread);
 
-    const profileGroundingContext = isVisualReviewRequest
+    const profileGroundingContext = hasVisualReviewContext
       ? clipPromptText(buildAIGroundingContext(userProfile), CHAT_VISUAL_REVIEW_CONTEXT_MAX_CHARS)
       : "";
     const groundingContext = [profileGroundingContext, alignedPhysiologyContext]
       .filter(Boolean)
       .join("\n\n");
     let sarahVsVitalsContext = "";
-    const shouldLoadSarahVsVitalsContext = mode === "session" && isVisualReviewRequest;
+    const shouldLoadSarahVsVitalsContext = mode === "session" && hasVisualReviewContext;
     if (shouldLoadSarahVsVitalsContext) {
       setChatProcessingStatus(nextChatStatus({
         phase: "processing",
@@ -2280,9 +2337,10 @@ SYNC AND BASELINE RULES:
     });
     const intimateChatTonePrompt = buildIntimateChatTonePrompt(intimateChatSettings);
     const combinedContext = clipPromptText([
+      hasVisualReviewContext ? "SAVED VISUAL EVIDENCE RULE: This record contains timestamped Sarah video-pass findings and may include saved sampled frames in this request. Treat those as actual previously reviewed visual evidence for this specific record. Answer the visual question directly from that evidence. Never claim that you lack frame access, that only session notes are available, or that no visual evidence exists when the supplied saved visual evidence describes or shows the requested body area. Distinguish a prior saved visual observation from a brand-new inspection only when that distinction matters." : "",
+      hasVisualReviewContext ? String(extraReviewContext || "").trim() : "",
       String(context || "").trim(),
-      isVisualReviewRequest ? String(extraReviewContext || "").trim() : "",
-    ].filter(Boolean).join("\n\n"), isVisualReviewRequest ? CHAT_VISUAL_REVIEW_CONTEXT_MAX_CHARS : CHAT_INTERACTIVE_CONTEXT_MAX_CHARS);
+    ].filter(Boolean).join("\n\n"), hasVisualReviewContext ? CHAT_VISUAL_REVIEW_CONTEXT_MAX_CHARS : CHAT_INTERACTIVE_CONTEXT_MAX_CHARS);
 
     const ANATOMY_RULE = `ANATOMY RULE: Use ONLY the anatomical and physiological details stated in the profile above. Never assume or infer biological sex, genitalia, or anatomy not explicitly mentioned. If anatomy is ambiguous, use neutral language (e.g. "genital stimulation", "pelvic region", "that area").`;
 
@@ -2391,9 +2449,11 @@ Return a conversational answer plus structured findings for review/persistence.`
 
     setChatProcessingStatus(nextChatStatus({
       phase: "analyzing",
-      message: isVisualReviewRequest ? "Sarah is reviewing the visual evidence" : "Sarah is composing a response",
-      detail: isVisualReviewRequest
-        ? `Sarah now has ${imagePayload.aiImages.length} attached frame${imagePayload.aiImages.length === 1 ? "" : "s"}. Long video reviews can take a bit while the model reads frames, motion context, and session notes.`
+      message: hasVisualReviewContext ? "Sarah is reviewing the visual evidence" : "Sarah is composing a response",
+      detail: hasVisualReviewContext
+        ? isVisualReviewRequest
+          ? `Sarah now has ${imagePayload.aiImages.length} attached frame${imagePayload.aiImages.length === 1 ? "" : "s"}. Long video reviews can take a bit while the model reads frames, motion context, and session notes.`
+          : "Sarah is using the saved timestamped video-pass findings already attached to this record."
         : "",
       startedAt: requestStartedAt,
     }));
