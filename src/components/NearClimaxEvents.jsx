@@ -377,8 +377,10 @@ CRITICAL LABELING RULES — STRICTLY ENFORCED:
 3. Labels must describe what the body is doing physiologically, not what the user intended. Examples of good labels: "Strong arousal surge", "Sustained arousal plateau", "Intensity response peak", "Rapid escalation phase", "Deep autonomic activation".
 4. Interpretations must be grounded in: the HR pattern itself, nearby user-logged events, the user's arousal profile above, and the session context. Do not invent behavioral intent.
 5. If the arousal profile describes a specific response style (e.g. rapid climber, plateau-heavy, involuntary spasms), use that to explain observed HR patterns instead of defaulting to behavioral assumptions.
-6. HR and HRV can nominate a candidate, but they cannot confirm near-climax by themselves. When timestamp-aligned visual evidence or event notes exist, require a direct near-threshold cue or a changing arousal/stimulation cue such as active stroking, rising erection/glans/scrotal state, toe curl/bracing, pelvic contraction, breath hold, gasp, or tremble.
-7. Reject any candidate aligned with walking, standing up, getting off the table, an empty table/room, setup/preparation, camera/OBS/computer adjustment, troubleshooting, or other non-arousal exertion unless stronger direct near-climax evidence exists at the same moment.
+6. HR and HRV can nominate a candidate, but they cannot confirm near-climax by themselves. Near-climax is not synonymous with high heart rate, erection, genital movement, toe curl, mounting the table, or generic active stimulation. Confirmation requires BOTH active masturbation and direct threshold evidence at the candidate peak.
+7. A manually saved pre-climax marker is authoritative threshold evidence. When one exists, reject earlier candidates as build or exertion; evaluate active-masturbation candidates from that marker until the climax marker.
+8. Reject any candidate aligned with walking, standing up, mounting/remounting/getting off the table, finding position, an empty table/room, setup/preparation, selecting media, camera/monitor/OBS/app/computer adjustment, paused stimulation, troubleshooting, or other non-arousal exertion. Never include a movement-driven cardiovascular event in the near-climax array.
+9. Erection, glans/scrotal changes, toe curl, bracing, breathing changes, and tremble are supporting cues only. They never replace proof of active masturbation plus the threshold cue at the same timestamp.
 
 SESSION CONTEXT:
 - Duration: ${session.duration_minutes || "?"} minutes
@@ -404,11 +406,11 @@ ${hrSample.map((p) => `${p.t}:${p.hr}`).join("  ")}
 Instructions:
 1. Analyze the HR trace carefully. Identify rises of 8+ bpm that sustain for 20+ seconds before dropping.
 2. Confirm, adjust, or reject algorithmic hints based on the full context. Add an event the algorithm missed only when timestamp-aligned context corroborates it.
-3. Exclude the climax window (${session.pre_climax_offset_s != null ? Math.round(session.pre_climax_offset_s) : session.climax_offset_s != null ? Math.round(session.climax_offset_s) - 90 : "N/A"}s onward).
+3. When a pre-climax marker exists, only consider candidates from approximately fifteen seconds before it until the climax marker. Exclude the climax itself and all post-climax activity.
 4. Be conservative — only include genuine arousal elevations, not noise or minor fluctuations.
 5. Never write raw second offsets such as "at 943 seconds" or "943s". Use minutes and seconds.
 6. For each event: provide a short label (3-5 words) describing the physiological response — never use "edging", "edge", or intent-based language. Then write a 1-2 sentence interpretation grounded in HR data, the user's arousal profile, and logged events. Use "you"/"your", spell out numbers as words, no abbreviations, no digits starting a sentence.
-7. Set evidence_status to context_confirmed only when aligned visual/event evidence supports active arousal change or near-threshold response. Otherwise use physiology_only. Never return a contradicted walking/setup/technical event.
+7. Set evidence_status to context_confirmed only when peak-aligned evidence proves active masturbation AND either the manual pre-climax phase or a direct near-threshold cue. Otherwise omit the event. Never return a contradicted walking/setup/technical event.
 
 Return an array of near-climax events. If none exist, return an empty array.`,
       response_json_schema: {

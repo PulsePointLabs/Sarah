@@ -76,10 +76,10 @@ test("walking and technical frustration contradict a physiology-only near-climax
   assert.equal(assessment.status, "contradicted");
 });
 
-test("timestamp-aligned visual arousal change confirms a near-climax candidate", () => {
+test("timestamp-aligned active stimulation plus a direct threshold cue confirms a near-climax candidate", () => {
   const assessment = assessNearClimaxEventContext(
-    { start_offset_s: 1380, end_offset_s: 1520 },
-    [{ start_s: 1400, end_s: 1470, note: "Active stroking accelerates while the toes curl and the legs brace", category: ["visual"], evidence_source: "video_pass" }],
+    { start_offset_s: 1380, peak_offset_s: 1450, end_offset_s: 1520 },
+    [{ start_s: 1400, end_s: 1470, note: "Active stroking accelerates at the near-climax threshold", category: ["visual"], evidence_source: "video_pass" }],
   );
 
   assert.equal(assessment.confirmed, true);
@@ -119,7 +119,7 @@ test("only context-confirmed saved events reach confirmed timeline overlays", ()
   const session = {
     event_timeline: [
       { time_s: 1450, note: "Got off the table and walked to the computer", category: ["technical"] },
-      { time_s: 2180, note: "Active stroking accelerates with toe curl and breath hold", category: ["physical"] },
+      { time_s: 2180, note: "Active stroking accelerates at the near-climax threshold", category: ["physical"] },
     ],
     ai_near_climax_events: [
       { start_offset_s: 1380, end_offset_s: 1520, peak_offset_s: 1450 },
@@ -131,6 +131,82 @@ test("only context-confirmed saved events reach confirmed timeline overlays", ()
   const confirmed = confirmedNearClimaxEventsForSession(session);
   assert.equal(confirmed.length, 1);
   assert.equal(confirmed[0].peak_offset_s, 2180);
+});
+
+test("August 23 phase markers reject setup and early build while retaining the true threshold window", () => {
+  const session = {
+    pre_climax_offset_s: 305,
+    climax_offset_s: 452,
+    recovery_offset_s: 480,
+    event_timeline: [
+      { time_s: 61, note: "Mounting table", category: ["setup"] },
+      { time_s: 73, note: "Adjusting monitors", category: ["technical"] },
+      { time_s: 77, note: "Remounting exam tables", category: ["setup"] },
+      { time_s: 90, note: "Initial contact with flaccid penis", category: ["physical"] },
+      { time_s: 209, note: "Stimulation resumed", category: ["physical"] },
+      { time_s: 211, note: "Rapid light strokes", category: ["physical"] },
+      { time_s: 236, note: "Paused to adjust camera", category: ["technical"] },
+      { time_s: 240, note: "Stimulation resumes", category: ["physical"] },
+      { time_s: 364, note: "Active stroking continues through the saved pre-climax phase", category: ["physical"] },
+    ],
+    ai_near_climax_events: [
+      { start_offset_s: 46, peak_offset_s: 79, end_offset_s: 121, context_confirmed: true, evidence_status: "context_confirmed" },
+      { start_offset_s: 196, peak_offset_s: 226, end_offset_s: 287, context_confirmed: true, evidence_status: "context_confirmed" },
+      { start_offset_s: 311, peak_offset_s: 364, end_offset_s: 394, context_confirmed: true, evidence_status: "context_confirmed" },
+    ],
+  };
+
+  const confirmed = confirmedNearClimaxEventsForSession(session);
+  assert.deepEqual(confirmed.map((event) => event.peak_offset_s), [364]);
+  assert.equal(confirmed[0].context_evidence.manualThresholdCue, true);
+  assert.equal(confirmed[0].context_evidence.activeMasturbation, true);
+});
+
+test("generic erection and genital changes do not prove near climax without active masturbation", () => {
+  const evidence = buildNearClimaxContextEvidence({
+    pre_climax_offset_s: 300,
+    event_timeline: [{ time_s: 320, note: "Erection becomes fuller; glans engorgement and scrotal lift are visible", category: ["physical"] }],
+  });
+  const assessment = assessNearClimaxEventContext({ start_offset_s: 305, peak_offset_s: 320, end_offset_s: 350 }, evidence);
+
+  assert.equal(assessment.activeMasturbation, false);
+  assert.equal(assessment.confirmed, false);
+});
+
+test("active stroking before the manually saved pre-climax phase is build, not near climax", () => {
+  const evidence = buildNearClimaxContextEvidence({
+    pre_climax_offset_s: 305,
+    event_timeline: [{ time_s: 226, note: "Rapid active stroking continues", category: ["physical"] }],
+  });
+  const assessment = assessNearClimaxEventContext({ start_offset_s: 196, peak_offset_s: 226, end_offset_s: 287 }, evidence);
+
+  assert.equal(assessment.confirmed, false);
+  assert.equal(assessment.contradicted, true);
+  assert.equal(assessment.status, "before_pre_climax");
+});
+
+test("stale saved confirmation flags cannot bypass current evidence assessment", () => {
+  const confirmed = confirmedNearClimaxEventsForSession({
+    event_timeline: [{ time_s: 80, note: "Mounting table and adjusting monitors", category: ["setup"] }],
+    ai_near_climax_events: [{
+      start_offset_s: 46,
+      peak_offset_s: 79,
+      end_offset_s: 121,
+      context_confirmed: true,
+      evidence_status: "context_confirmed",
+    }],
+  });
+
+  assert.equal(confirmed.length, 0);
+});
+
+test("active stimulation outside the peak-centered evidence window does not confirm the candidate", () => {
+  const assessment = assessNearClimaxEventContext(
+    { start_offset_s: 100, peak_offset_s: 130, end_offset_s: 180 },
+    [{ time_s: 165, note: "Active stroking at the near-climax threshold", category: ["physical"] }],
+  );
+
+  assert.equal(assessment.confirmed, false);
 });
 
 test("saved video-pass windows become timestamp-aligned near-climax evidence", () => {

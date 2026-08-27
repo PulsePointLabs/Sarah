@@ -64,8 +64,8 @@ export const NCE_KEYWORDS = [
 ];
 
 const DIRECT_NEAR_CLIMAX_CUE_PATTERN = /\b(?:near[-\s]?climax|pre[-\s]?climax|climax\s+(?:approach|possible|imminent)|approach(?:ing)?\s+(?:climax|threshold)|at\s+threshold|almost\s+(?:there|climax)|orgasm(?:ic)?\s+(?:build|approach)|ejaculat(?:ion|ory)\s+(?:build|approach))\b/i;
-const ACTIVE_AROUSAL_CHANGE_PATTERN = /\b(?:active\s+(?:manual\s+)?stimulation|strok(?:e|es|ed|ing)|masturbat(?:e|es|ed|ing|ion)|hand\s+(?:speed|cadence)\s+(?:increase|increases|increased|quickens?|accelerat)|grip\s+(?:tightens?|shifts?|changes?)\s+(?:on|along|toward)\s+(?:the\s+)?(?:penis|shaft|glans)|erection\s+(?:increases?|deepens?|becomes?|holds?|is\s+fully)|glans\s+(?:engorg|flush|darken|swell|sheen)|scrot(?:um|al)\s+(?:lift|tighten|retract)|toe(?:s)?\s+curl|feet\s+(?:plant|brace)|leg(?:s)?\s+(?:brace|tense|clench|tremble|shak)|pelvic\s+(?:floor\s+)?(?:contract|pulse|spasm)|breath(?:ing)?\s+(?:hold|quickens?|deepens?)|gasp(?:s|ing)?|shudder(?:s|ing)?|trembl(?:e|es|ing)|pre[-\s]?ejaculat)\b/i;
-const NON_AROUSAL_EXERTION_PATTERN = /\b(?:walk(?:s|ed|ing)?|ambulatory|stand(?:s|ing|ing\s+up)?|stood|got\s+off\s+(?:the\s+)?(?:exam\s+)?table|get(?:ting)?\s+off\s+(?:the\s+)?(?:exam\s+)?table|off\s+(?:the\s+)?(?:exam\s+)?table|away\s+from\s+(?:the\s+)?table|left\s+(?:the\s+)?(?:room|table)|table\s+(?:is\s+)?vacant|empty\s+(?:exam\s+)?table|room\s+(?:is\s+)?empty|fighting\s+(?:the\s+)?(?:app|computer)|computer\s+(?:problem|issue|trouble)|technical\s+(?:problem|issue|trouble)|troubleshoot(?:s|ed|ing)?|restart(?:s|ed|ing)?\s+(?:the\s+)?(?:app|computer|obs)|adjust(?:s|ed|ing)?\s+(?:the\s+)?(?:camera|computer|obs|equipment)|room\s+(?:prep|setup)|prepar(?:e|es|ed|ing|ation)\s+(?:the\s+)?(?:room|camera|computer|equipment))\b/i;
+const ACTIVE_MASTURBATION_PATTERN = /\b(?:active\s+(?:manual\s+)?stimulation|stimulation\s+(?:resumes?|continues?|begins?|starts?|intensifies)|masturbat(?:e|es|ed|ing|ion)|strok(?:e|es|ed|ing)|(?:hand|stroke)\s+(?:speed|cadence)\s+(?:increase|increases|increased|quickens?|accelerat)|(?:rapid|quick|fast|full|upward|downward|focused)\s+(?:manual\s+)?strok(?:e|es|ing)|grip\s+(?:tightens?|shifts?|changes?)\s+(?:on|along|toward)\s+(?:the\s+)?(?:penis|shaft|glans))\b/i;
+const NON_AROUSAL_EXERTION_PATTERN = /\b(?:walk(?:s|ed|ing)?|ambulatory|stand(?:s|ing|ing\s+up)?|stood|mount(?:s|ed|ing)?\s+(?:the\s+)?(?:exam\s+)?table|re-?mount(?:s|ed|ing)?\s+(?:the\s+)?(?:exam\s+)?table|got\s+off\s+(?:the\s+)?(?:exam\s+)?table|get(?:ting)?\s+off\s+(?:the\s+)?(?:exam\s+)?table|off\s+(?:the\s+)?(?:exam\s+)?table|away\s+from\s+(?:the\s+)?table|left\s+(?:the\s+)?(?:room|table)|table\s+(?:is\s+)?vacant|empty\s+(?:exam\s+)?table|room\s+(?:is\s+)?empty|find(?:s|ing)?\s+(?:a\s+)?position(?:\s+of\s+comfort)?|position(?:ing)?\s+(?:on|at)\s+(?:the\s+)?table|select(?:s|ed|ing)?\s+(?:the\s+)?media|set(?:s|ting)?\s+up\s+(?:the\s+)?media|fighting\s+(?:the\s+)?(?:app|computer)|computer\s+(?:problem|issue|trouble)|technical\s+(?:problem|issue|trouble)|troubleshoot(?:s|ed|ing)?|restart(?:s|ed|ing)?\s+(?:the\s+)?(?:app|computer|obs)|adjust(?:s|ed|ing)?\s+(?:the\s+)?(?:camera|monitor|monitors|computer|app|obs|equipment)|camera\s+adjustment|stimulation\s+(?:is\s+)?paused|paus(?:e|es|ed|ing)\s+(?:stimulation|to\s+adjust)|no\s+(?:active\s+)?(?:stimulation|genital\s+contact)|room\s+(?:prep|setup)|prepar(?:e|es|ed|ing|ation)\s+(?:the\s+)?(?:room|camera|computer|equipment))\b/i;
 
 function evidenceText(event = {}) {
   return [
@@ -93,6 +93,13 @@ function evidenceOverlaps(event, startS, endS, padS = 45) {
   const bounds = evidenceBounds(event);
   if (bounds.start == null || bounds.end == null) return false;
   return bounds.end >= startS - padS && bounds.start <= endS + padS;
+}
+
+function evidenceDistanceToTime(event, timeS) {
+  const bounds = evidenceBounds(event);
+  if (bounds.start == null || bounds.end == null || !Number.isFinite(timeS)) return Number.POSITIVE_INFINITY;
+  if (bounds.start <= timeS && bounds.end >= timeS) return 0;
+  return Math.min(Math.abs(timeS - bounds.start), Math.abs(timeS - bounds.end));
 }
 
 function eventCategories(event = {}) {
@@ -193,49 +200,94 @@ export function buildNearClimaxContextEvidence(session = {}) {
     });
   });
 
+  const phaseMarkers = [
+    ["pre_climax", session.pre_climax_offset_s ?? session.pre_climax_time_s],
+    ["climax", session.climax_offset_s ?? session.climax_time_s],
+    ["recovery", session.recovery_offset_s ?? session.recovery_time_s],
+  ];
+  phaseMarkers.forEach(([phase, rawTime]) => {
+    const timeS = numberOrNull(rawTime);
+    if (timeS == null) return;
+    pushContextEvidence(evidence, {
+      time_s: timeS,
+      note: `Manually saved ${phase.replace("_", "-")} phase marker`,
+      category: ["phase_marker", phase],
+      evidence_source: "manual_phase_marker",
+    });
+  });
+
   return evidence;
 }
 
 export function assessNearClimaxEventContext(event = {}, contextEvidence = []) {
   const startS = numberOrNull(event.start_offset_s ?? event.start_s ?? event.time_s) ?? 0;
   const endS = numberOrNull(event.end_offset_s ?? event.end_s ?? event.time_s) ?? startS;
+  const peakS = numberOrNull(event.peak_offset_s ?? event.peak_s) ?? ((startS + endS) / 2);
   const aligned = (Array.isArray(contextEvidence) ? contextEvidence : [])
     .filter((item) => evidenceOverlaps(item, startS, endS));
+  const phaseEvidence = (Array.isArray(contextEvidence) ? contextEvidence : [])
+    .filter((item) => eventCategories(item).includes("phase_marker"));
+  const markerTime = (phase) => phaseEvidence
+    .filter((item) => eventCategories(item).includes(phase))
+    .map((item) => evidenceBounds(item).start)
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b)[0] ?? null;
+  const preClimaxS = markerTime("pre_climax");
+  const climaxS = markerTime("climax");
+  const beforePreClimax = preClimaxS != null && peakS < preClimaxS - 15;
+  const afterClimax = climaxS != null && peakS > climaxS + 5;
   let positiveScore = 0;
   let negativeScore = 0;
   const positiveSources = new Set();
   const negativeSources = new Set();
+  let activeMasturbation = false;
+  let directThresholdCue = false;
+  let nonArousalAtPeak = false;
 
   aligned.forEach((item) => {
     const text = evidenceText(item);
     const categories = eventCategories(item);
     const source = String(item.evidence_source || "context");
     const direct = DIRECT_NEAR_CLIMAX_CUE_PATTERN.test(text);
-    const activeChange = ACTIVE_AROUSAL_CHANGE_PATTERN.test(text);
+    const active = ACTIVE_MASTURBATION_PATTERN.test(text);
+    const distanceToPeak = evidenceDistanceToTime(item, peakS);
     const circularTelemetryCue = source === "live_climax_prediction"
       || categories.includes("phase_detection")
       || (categories.includes("physiology") && /\bnear[-\s]?climax\s+watch\b/i.test(text));
     const nonArousalExertion = NON_AROUSAL_EXERTION_PATTERN.test(text)
       || categories.some((category) => ["setup", "technical", "equipment", "room_setup"].includes(category));
 
-    if (!circularTelemetryCue) {
-      if (direct) positiveScore += 5;
-      if (activeChange) positiveScore += 3;
-      if (categories.some((category) => ["near_climax", "pre_climax", "sensation"].includes(category))) positiveScore += 2;
-      else if (categories.includes("physical") && (direct || activeChange)) positiveScore += 1;
-      if (direct || activeChange) positiveSources.add(source);
+    if (!circularTelemetryCue && source !== "manual_phase_marker" && distanceToPeak <= 18) {
+      if (direct) {
+        directThresholdCue = true;
+        positiveScore += 5;
+      }
+      if (active) {
+        activeMasturbation = true;
+        positiveScore += 3;
+      }
+      if (direct || active) positiveSources.add(source);
     }
 
-    if (nonArousalExertion) {
+    if (nonArousalExertion && distanceToPeak <= 25) {
+      nonArousalAtPeak = true;
       negativeScore += 6;
       negativeSources.add(source);
     }
   });
 
-  const contradicted = negativeScore >= 6 && positiveScore < 5;
-  const confirmed = !contradicted && positiveScore >= 3;
-  const status = contradicted
-    ? "contradicted"
+  const manualThresholdCue = preClimaxS != null
+    && peakS >= preClimaxS - 15
+    && (climaxS == null || peakS < climaxS);
+  if (manualThresholdCue) positiveScore += 5;
+  const contradicted = beforePreClimax || afterClimax || nonArousalAtPeak;
+  const confirmed = !contradicted && activeMasturbation && (manualThresholdCue || directThresholdCue);
+  const status = beforePreClimax
+    ? "before_pre_climax"
+    : afterClimax
+      ? "after_climax"
+      : nonArousalAtPeak
+        ? "contradicted"
     : confirmed
       ? "context_confirmed"
       : aligned.length
@@ -249,6 +301,13 @@ export function assessNearClimaxEventContext(event = {}, contextEvidence = []) {
     alignedEvidenceCount: aligned.length,
     positiveScore,
     negativeScore,
+    peakS,
+    preClimaxS,
+    climaxS,
+    activeMasturbation,
+    directThresholdCue,
+    manualThresholdCue,
+    nonArousalAtPeak,
     positiveSources: [...positiveSources],
     negativeSources: [...negativeSources],
   };
@@ -262,7 +321,7 @@ export function filterContradictedNearClimaxEvents(events = [], contextEvidence 
 
 export function getContextConfirmedNearClimaxEvents(events = [], contextEvidence = []) {
   return filterContradictedNearClimaxEvents(events, contextEvidence)
-    .filter((event) => event.context_evidence.confirmed || event.context_confirmed === true || event.evidence_status === "context_confirmed");
+    .filter((event) => event.context_evidence.confirmed);
 }
 
 export function confirmedNearClimaxEventsForSession(session = {}) {
