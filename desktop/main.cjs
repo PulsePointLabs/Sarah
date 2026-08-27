@@ -16,6 +16,9 @@ const PREFERRED_BACKEND_PORT = 8787;
 const PREFERRED_HR_RELAY_PORT = 8765;
 
 app.setName(APP_NAME);
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.pulsepointlabs.sarah');
+}
 app.commandLine.appendSwitch('enable-web-bluetooth');
 if (process.platform === 'linux') {
   // Chromium still gates Web Bluetooth on Linux behind Experimental Web Platform Features.

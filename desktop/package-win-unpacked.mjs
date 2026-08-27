@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const root = path.resolve(import.meta.dirname, '..');
 const electronDist = path.join(root, 'node_modules', 'electron', 'dist');
@@ -8,6 +9,8 @@ const appOut = path.join(outputRoot, 'win-unpacked');
 const resourcesOut = path.join(appOut, 'resources');
 const appResourcesOut = path.join(resourcesOut, 'app');
 const sarahExe = path.join(appOut, 'Sarah.exe');
+const sarahIcon = path.join(root, 'public', 'icons', 'sarah.ico');
+const rcEdit = path.join(root, 'node_modules', 'electron-winstaller', 'vendor', 'rcedit.exe');
 
 function assertInsideRoot(target) {
   const resolved = path.resolve(target);
@@ -107,6 +110,28 @@ if (removedAppOut || !fs.existsSync(path.join(appOut, 'Sarah.exe'))) {
 }
 
 copySarahResources({ overlay: !removedAppOut });
+
+if (!fs.existsSync(sarahIcon)) {
+  throw new Error(`Sarah Windows icon is missing: ${sarahIcon}`);
+}
+if (!fs.existsSync(rcEdit)) {
+  throw new Error(`Windows resource editor is missing: ${rcEdit}`);
+}
+const version = String(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version || '0.0.0');
+const windowsVersion = `${version}.0`;
+const rcResult = spawnSync(rcEdit, [
+  sarahExe,
+  '--set-icon', sarahIcon,
+  '--set-version-string', 'FileDescription', 'Sarah',
+  '--set-version-string', 'ProductName', 'Sarah',
+  '--set-version-string', 'OriginalFilename', 'Sarah.exe',
+  '--set-version-string', 'CompanyName', 'PulsePoint Labs',
+  '--set-file-version', windowsVersion,
+  '--set-product-version', windowsVersion,
+], { stdio: 'inherit' });
+if (rcResult.status !== 0) {
+  throw new Error(`Could not brand Sarah.exe (rcedit exit ${rcResult.status}).`);
+}
 
 console.log(`Built Windows unpacked desktop app at ${appOut}`);
 console.log(`Runnable: ${sarahExe}`);
