@@ -42,6 +42,22 @@ function sha256(filePath) {
   return hash.digest('hex');
 }
 
+function dependencyFingerprint() {
+  const lock = JSON.parse(fs.readFileSync(packageLock, 'utf8'));
+  delete lock.version;
+  if (lock.packages?.['']) delete lock.packages[''].version;
+  return `deps-v1:${crypto.createHash('sha256').update(JSON.stringify(lock)).digest('hex')}`;
+}
+
+function packagedDependencyManifestMatches() {
+  const packagedManifest = path.join(appResourcesOut, 'package.json');
+  if (!fs.existsSync(packagedManifest)) return false;
+  const source = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const packaged = JSON.parse(fs.readFileSync(packagedManifest, 'utf8'));
+  return JSON.stringify(source.dependencies || {}) === JSON.stringify(packaged.dependencies || {})
+    && JSON.stringify(source.devDependencies || {}) === JSON.stringify(packaged.devDependencies || {});
+}
+
 function copyFileIfChanged(from, to) {
   if (fs.existsSync(to) && fs.statSync(from).size === fs.statSync(to).size && sha256(from) === sha256(to)) return false;
   fs.mkdirSync(path.dirname(to), { recursive: true });
@@ -79,10 +95,11 @@ function initializeElectronShell() {
 
 function refreshPackagedDependencies() {
   const packagedNodeModules = path.join(appResourcesOut, 'node_modules');
-  const lockHash = sha256(packageLock);
+  const lockHash = dependencyFingerprint();
   const stampedHash = fs.existsSync(dependencyStamp) ? fs.readFileSync(dependencyStamp, 'utf8').trim() : '';
 
-  if (fs.existsSync(packagedNodeModules) && (!stampedHash || stampedHash === lockHash)) {
+  const legacyStampCanMigrate = !stampedHash.startsWith('deps-v1:') && packagedDependencyManifestMatches();
+  if (fs.existsSync(packagedNodeModules) && (stampedHash === lockHash || legacyStampCanMigrate)) {
     fs.writeFileSync(dependencyStamp, `${lockHash}\n`);
     console.log('Preserved unchanged packaged dependencies.');
     return;
