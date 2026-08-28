@@ -2324,7 +2324,7 @@ function mergeAnalysisPersistenceState(session, analysisField, nextResult) {
   };
 }
 
-export default function SessionAIPanel({ session, timelineRows, emgRows = [], nearbyVitals = {}, userProfile, sessionJournal, mode = "companion", onAnalysisSaved }) {
+export default function SessionAIPanel({ session, timelineRows = [], telemetryState = {}, emgRows = [], nearbyVitals = {}, userProfile, sessionJournal, mode = "companion", onAnalysisSaved }) {
   const isTechnical = mode === "technical";
   const analysisField = isTechnical ? "ai_session_deep_dive" : "ai_analysis";
   const analysisLabel = isTechnical ? "AI Session Technical Deep Dive" : "AI Session Analysis";
@@ -2338,6 +2338,12 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], ne
   const clipRepairRef = useRef("");
   const resultStale = isSessionAIContentStale(result, session);
   const evidencePreflight = sessionAIPreflight(session, timelineRows);
+  const telemetryExpected = telemetryState.expected ?? Boolean(
+    session.hr_data_file ||
+    session?.capture_files?.hr?.file_url,
+  );
+  const telemetryLoading = telemetryState.status === "loading" || (telemetryState.status === "idle" && timelineRows.length === 0);
+  const telemetryUnavailable = telemetryExpected && !telemetryLoading && timelineRows.length === 0;
 
   useEffect(() => {
     setResult(repairSessionAnalysisResult(session[analysisField] ?? null));
@@ -2347,6 +2353,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], ne
     let cancelled = false;
 
     const reconnect = async () => {
+      if (telemetryLoading || telemetryUnavailable) return;
       try {
         const data = await listBackgroundJobs({
           type: "ai_invoke",
@@ -2423,7 +2430,7 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], ne
     return () => {
       cancelled = true;
     };
-  }, [analysisField, analysisLabel, onAnalysisSaved, phaseMarkerFreshnessKey, result, session, session.id]);
+  }, [analysisField, analysisLabel, onAnalysisSaved, phaseMarkerFreshnessKey, result, session, session.id, telemetryExpected, telemetryLoading, telemetryUnavailable, timelineRows]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2517,6 +2524,16 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], ne
   }, [analysisField, analysisLabel, onAnalysisSaved, result, session, session.id, timelineRows]);
 
   const analyze = async () => {
+    if (telemetryLoading) {
+      setCollapsed(false);
+      setError("Saved HR and HRV telemetry is still loading. Analysis is paused so Sarah does not generate a false no-data report.");
+      return;
+    }
+    if (telemetryUnavailable) {
+      setCollapsed(false);
+      setError(telemetryState.message || "This session says HR data exists, but its timeline is unresolved. Analysis is blocked until the telemetry mismatch is repaired.");
+      return;
+    }
     setLoading(true);
     setError("");
     setCollapsed(false);
@@ -2643,7 +2660,10 @@ export default function SessionAIPanel({ session, timelineRows, emgRows = [], ne
     ].filter(Boolean);
 
     const hrSummary = timelineRows.length > 0 ? {
-      total_points: timelineRows.length,
+      loaded_review_points: timelineRows.length,
+      source_total_points: telemetryState.sourceRows || timelineRows.length,
+      sampling: telemetryState.sampled ? "evenly sampled across the complete saved timeline" : "complete loaded timeline",
+      full_csv_attached: Boolean(telemetryState.hasAttachedFile || session.hr_data_file || session?.capture_files?.hr?.file_url),
       duration_s: Math.round(Math.max(...timelineRows.map(r => Number(r.time_offset_s) || 0))),
       hr_min: Math.round(Math.min(...timelineRows.map(r => Number(r.hr)))),
       hr_avg: Math.round(timelineRows.reduce((sum, row) => sum + Number(row.hr), 0) / timelineRows.length),
@@ -2895,6 +2915,8 @@ The best output should feel like: "Here is what was happening in the body during
 ${hrTrajectory ? `HR TRAJECTORY (sampled readable time and heart rate):
 ${hrTrajectory}
 
+AUTHORITATIVE HR AVAILABILITY: ${hrSummary?.full_csv_attached ? "A linked full HR CSV exists." : "Saved timeline telemetry exists without a linked CSV."} The ${hrSummary?.loaded_review_points || timelineRows.length} rows in this prompt are ${hrSummary?.sampling || "the loaded timeline"}${hrSummary?.source_total_points > timelineRows.length ? ` representing ${hrSummary.source_total_points} saved readings` : ""}. Never claim that no HR CSV or no full HR timeline was attached merely because the prompt contains an evenly sampled review set.
+
 Use this to trace body-state transitions, exploratory response, arousal plateaus when relevant, and correlation between HR changes and event timing. Describe what the person’s body appeared to be doing: becoming engaged, holding effort, backing away, rebuilding, settling, or recovering. For non-climax body exploration sessions, HR still matters: use it to describe activation, settling, comfort/discomfort, or positional/sensory response rather than looking for a climax arc.` : ""}
 
 ${hrvEvidence ? `RR-DERIVED HRV EVIDENCE (interpret in context; do not dump numbers):
@@ -3087,12 +3109,23 @@ Provide ${isTechnical
           </h3>
           {collapsed ? <ChevronDown className="w-4 h-4 text-muted-foreground ml-1" /> : <ChevronUp className="w-4 h-4 text-muted-foreground ml-1" />}
         </button>
-        <Button size="sm" onClick={analyze} disabled={loading} className="h-7 text-xs gap-1.5">
+        <Button size="sm" onClick={analyze} disabled={loading || telemetryLoading || telemetryUnavailable} className="h-7 text-xs gap-1.5">
           {loading
             ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Working…</>
             : <><Brain className="w-3 h-3" />Analyze</>}
         </Button>
       </div>
+
+      {telemetryLoading && (
+        <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+          Loading saved HR and HRV telemetry before analysis…
+        </div>
+      )}
+      {telemetryUnavailable && (
+        <div className="rounded-lg border border-amber-400/35 bg-amber-400/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-200">
+          {telemetryState.message || "Attached HR telemetry is unresolved. Analyze is blocked to prevent another false no-data report."}
+        </div>
+      )}
 
       {!collapsed && loading && <AnalysisStatus job={jobStatus} />}
 

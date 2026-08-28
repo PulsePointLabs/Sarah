@@ -17,6 +17,7 @@ import EMGSection from "../components/session-form/EMGSection";
 import PulseOxSection from "../components/session-form/PulseOxSection";
 import BodyCompositionSection from "../components/session-form/BodyCompositionSection";
 import { Save, ChevronDown, ChevronUp, ArrowLeft, XCircle, ScanSearch } from "lucide-react";
+import { describeSessionTelemetry, loadSessionTelemetry, sessionTelemetryExpectation } from "@/lib/sessionTelemetry";
 
 const SECTIONS = [
   { id: "info", label: "Session Info" },
@@ -88,21 +89,23 @@ export default function EditSession() {
 
       if (cancelled || !results?.[0]) return;
       setTimelineLoading(true);
+      const expectation = sessionTelemetryExpectation(results[0]);
+      setData((current) => current ? {
+        ...current,
+        _telemetry_state: { status: "loading", loadedRows: 0, sampled: false, ...expectation },
+      } : current);
       try {
-        const timelineRows = await base44.entities.HeartRateTimeline.filter(
-          { session: id },
-          "time_offset_s",
-          10000,
-          undefined,
-          { timeoutMs: 30000 },
-        );
+        const { rows: timelineRows, state } = await loadSessionTelemetry(id, results[0]);
         if (cancelled) return;
-        if (timelineRows.length > 0) {
-          setData((current) => current ? { ...current, _csv_rows: timelineRows } : current);
-        }
+        setData((current) => current ? { ...current, _csv_rows: timelineRows, _telemetry_state: state } : current);
       } catch (error) {
         if (!cancelled) {
           setTimelineError(error?.message || "Heart-rate telemetry could not be loaded. You can still edit and save the session details.");
+          setData((current) => current ? {
+            ...current,
+            _csv_rows: [],
+            _telemetry_state: describeSessionTelemetry(results[0], [], error),
+          } : current);
         }
       } finally {
         if (!cancelled) setTimelineLoading(false);
@@ -132,7 +135,7 @@ export default function EditSession() {
 
       const duration = calcDuration(data.start_time, data.end_time);
       // Exclude internal/computed fields that shouldn't be re-saved
-      const { _csv_rows, _emg_rows, _emg_channel_mode, _pulse_ox_rows, ai_analysis, ai_cascade, ...sessionData } = data;
+      const { _csv_rows, _telemetry_state, _emg_rows, _emg_channel_mode, _pulse_ox_rows, ai_analysis, ai_cascade, ...sessionData } = data;
       // _emg_rows is only used for in-memory preview; emg_data_file URL is already in sessionData
 
       // Sanitize event_timeline: ensure category is always a clean array of strings

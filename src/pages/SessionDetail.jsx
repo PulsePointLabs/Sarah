@@ -54,6 +54,7 @@ import { buildSessionChatPhysiologyEvidence } from "@/lib/bodyExplorationPhysiol
 import { buildSessionMomentTelemetry, mapVideoTimeToSessionTime } from "@/utils/sessionMomentTelemetry";
 import { sortSessionVideosPrimaryFirst } from "@/lib/sessionVideoPriority";
 import { buildNearClimaxContextEvidence, filterContradictedNearClimaxEvents, getContextConfirmedNearClimaxEvents } from "@/utils/nearClimaxEvents";
+import { describeSessionTelemetry, loadSessionTelemetry, sessionTelemetryExpectation } from "@/lib/sessionTelemetry";
 
 function _getCategoryMeta(value) {
   return EVENT_CATEGORIES.find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -1020,6 +1021,7 @@ export default function SessionDetail() {
   const sessionRef = useRef(null);
   const aiAnalysisSaveQueueRef = useRef(Promise.resolve());
   const [rawTimelineRows, setRawTimelineRows] = useState([]);
+  const [telemetryState, setTelemetryState] = useState({ status: "idle", loadedRows: 0, expected: false });
   const [rawEmgRows, setRawEmgRows] = useState([]);
   const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1485,6 +1487,27 @@ export default function SessionDetail() {
         setLoading(false);
         if (!s) return;
 
+        const telemetryExpectation = sessionTelemetryExpectation(s);
+        setTelemetryState({
+          status: "loading",
+          loadedRows: 0,
+          sampled: false,
+          ...telemetryExpectation,
+          message: telemetryExpectation.expected ? "Loading saved HR and HRV telemetry…" : "Checking for saved telemetry…",
+        });
+        const telemetryPromise = loadSessionTelemetry(id, s)
+          .then(({ rows, state }) => {
+            setRawTimelineRows(rows);
+            setTelemetryState(state);
+            return rows;
+          })
+          .catch((error) => {
+            console.warn("[SessionDetail] Heart-rate telemetry load failed", error);
+            setRawTimelineRows([]);
+            setTelemetryState(describeSessionTelemetry(s, [], error));
+            return [];
+          });
+
         const [me, bloodPressure, bloodGlucose, bodyComposition, pulseOx] = await Promise.all([
           loadUserProfileWithProfilerResults(),
           base44.entities.BloodPressureReading.list("-measured_at", 250).catch(() => []),
@@ -1495,13 +1518,7 @@ export default function SessionDetail() {
         setUserProfile(me);
         setNearbyVitalImports({ bloodPressure, bloodGlucose, bodyComposition, pulseOx });
         await refreshNearbyBloodPressure(id);
-        const rows = await base44.entities.HeartRateTimeline.filter(
-          { session: id },
-          "time_offset_s",
-          10000,
-          undefined,
-          { timeoutMs: 30000 },
-        );
+        const rows = await telemetryPromise;
 
         // Load journal for this session so it can be factored into AI analyses
         base44.entities.Journal.filter({ session_id: id }, "-created_date", 10).then((rows) => {
@@ -1510,8 +1527,6 @@ export default function SessionDetail() {
         }).catch((error) => {
           console.warn("[SessionDetail] Journal load failed", error);
         });
-        setRawTimelineRows(rows);
-
         // Load EMG data from the stored CSV file (client-side parse — no DB rows needed)
         if (s?.emg_data_file) {
           try {
@@ -1871,7 +1886,7 @@ export default function SessionDetail() {
           analysisData: companionAnalysisData,
           routeHash: "session-ai-companion",
         })}
-        <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} nearbyVitals={nearbyVitals} userProfile={userProfile} sessionJournal={sessionJournal} onAnalysisSaved={handleAnalysisSaved} />
+        <SessionAIPanel session={s} timelineRows={timelineRows} telemetryState={telemetryState} emgRows={emgRows} nearbyVitals={nearbyVitals} userProfile={userProfile} sessionJournal={sessionJournal} onAnalysisSaved={handleAnalysisSaved} />
       </section>
       <section id="session-ai-technical" className="scroll-mt-24 space-y-3">
         {renderReviewVideoBuilder({
@@ -1882,7 +1897,7 @@ export default function SessionDetail() {
           analysisData: technicalAnalysisData,
           routeHash: "session-ai-technical",
         })}
-        <SessionAIPanel session={s} timelineRows={timelineRows} emgRows={emgRows} nearbyVitals={nearbyVitals} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" onAnalysisSaved={handleAnalysisSaved} />
+        <SessionAIPanel session={s} timelineRows={timelineRows} telemetryState={telemetryState} emgRows={emgRows} nearbyVitals={nearbyVitals} userProfile={userProfile} sessionJournal={sessionJournal} mode="technical" onAnalysisSaved={handleAnalysisSaved} />
       </section>
       <section id="session-ai-support" className="scroll-mt-24 rounded-xl border border-primary/20 bg-card p-4 space-y-3">
         <div>

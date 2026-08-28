@@ -28,7 +28,6 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import moment from "moment";
-import { gradeFromPct } from "@/utils/sessionScore";
 import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { getSessionLatestUpdateAt } from "@/utils/sessionFreshness";
 import { repairCharacterSplitParagraph } from "@/utils/aiTextRepair";
@@ -94,10 +93,6 @@ export default function SessionCard({ session, selectable, selected, onSelect, o
   const updatedTitle = updatedMoment ? `Last updated ${updatedMoment.format("MMM D, YYYY [at] h:mm A")}` : undefined;
   const methods = session.methods || [];
   const eventCount = (session.event_timeline || []).length;
-  // Prefer the cached score computed in SessionDetail (includes HR data); fall back to score without HR
-  // Use only persisted AI score for consistency across pages
-  const scorePct = session.ai_analysis?.ai_score;
-  const gradeInfo = scorePct != null ? gradeFromPct(scorePct) : null;
   const aiSummary = repairCharacterSplitParagraph(session.ai_analysis?.summary);
   const hasEMG = session.emg_enabled ||
     session.emg_general_notes || session.emg_left_placement_notes || session.emg_right_placement_notes ||
@@ -251,14 +246,6 @@ export default function SessionCard({ session, selectable, selected, onSelect, o
             {eventCount} event{eventCount !== 1 ? "s" : ""}
           </span>
         )}
-        {gradeInfo && (
-          <span
-            className="text-[10px] font-bold rounded-full px-2 py-0.5"
-            style={{ background: gradeInfo.color + "22", color: gradeInfo.color }}
-          >
-            {gradeInfo.grade} · {scorePct}%
-          </span>
-        )}
       </div>
 
       {signalLine && (
@@ -288,7 +275,7 @@ export default function SessionCard({ session, selectable, selected, onSelect, o
       <div className="mb-2 flex flex-wrap gap-1.5">
         <DataPill icon={Heart} label="HR" active={Boolean(session.avg_hr || session.max_hr)} tone="primary" />
         <DataPill icon={Activity} label={`${eventCount} Events`} active={eventCount > 0} />
-        <DataPill icon={Brain} label="AI" active={Boolean(aiSummary || gradeInfo)} tone="primary" />
+        <DataPill icon={Brain} label="AI" active={Boolean(aiSummary)} tone="primary" />
         {motionEvidence.hasSavedTelemetry && <DataPill icon={Activity} label="Motion Saved" active tone="primary" />}
         <DataPill icon={FileText} label={`${newerMetrics}/8 Metrics`} active={newerMetrics >= 5} />
         {hasDiscomfort(session) && <DataPill icon={AlertTriangle} label="Comfort" active tone="primary" />}

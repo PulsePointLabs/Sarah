@@ -179,6 +179,19 @@ export default function HeartRateSection({ data, onChange }) {
   };
 
   const csvRows = data._csv_rows || [];
+  const telemetryState = data._telemetry_state || {};
+  const hasAttachedHr = Boolean(data.hr_data_file || data?.capture_files?.hr?.file_url);
+  const telemetryLabel = uploading
+    ? "Importing…"
+    : csvRows.length > 0
+      ? telemetryState.sourceRows > csvRows.length
+        ? `${csvRows.length.toLocaleString()} review points loaded from ${telemetryState.sourceRows.toLocaleString()} saved readings ✓`
+        : `${csvRows.length.toLocaleString()} saved telemetry points loaded ✓`
+      : telemetryState.status === "loading" && hasAttachedHr
+        ? "HR CSV attached · loading telemetry…"
+        : hasAttachedHr
+          ? "HR CSV attached · preview unavailable"
+          : "Upload & Import CSV";
   const hideClimaxFields = !!data.no_climax || !!data.telemetry_only;
 
   return (
@@ -215,10 +228,17 @@ export default function HeartRateSection({ data, onChange }) {
         <label className="mt-1 flex items-center justify-center gap-2 border-2 border-dashed border-border rounded-lg p-3 cursor-pointer hover:border-primary/50 transition-colors">
           <Upload className="w-4 h-4 text-muted-foreground" />
           <span className="text-sm text-muted-foreground">
-            {uploading ? "Importing..." : csvRows.length > 0 ? `${csvRows.length} rows imported ✓` : "Upload & Import CSV"}
+            {telemetryLabel}
           </span>
           <input type="file" accept=".csv" className="hidden" onChange={handleCSVUpload} disabled={uploading} />
         </label>
+
+        {hasAttachedHr && telemetryState.status && !["idle", "ready", "loading"].includes(telemetryState.status) && (
+          <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-200">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>{telemetryState.message || "The saved HR file exists, but its timeline preview is unresolved."}</span>
+          </div>
+        )}
 
         {importResult && !importResult.error && (
           <div className="mt-2 p-2.5 rounded-lg bg-primary/10 text-primary text-xs space-y-1">

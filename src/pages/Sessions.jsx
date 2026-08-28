@@ -17,7 +17,6 @@ import SessionCard from "../components/SessionCard";
 import {
   Activity,
   AlertTriangle,
-  Brain,
   CheckCircle2,
   Clock,
   Download,
@@ -29,13 +28,9 @@ import {
   SlidersHorizontal,
   Sparkles,
   Star,
-  TrendingUp,
   Video,
-  Zap,
 } from "lucide-react";
 import RoutinePatternAnalysis from "../components/RoutinePatternAnalysis";
-import { computeAISessionScore } from "@/utils/sessionScore";
-import { buildAIGroundingContext } from "@/lib/aiGrounding";
 import { hasAnyMotionEvidence, summarizeMotionEvidenceCoverage } from "@/utils/sessionMotionEvidence";
 import { buildProfileExportFilename } from "@/utils/exportFilenames";
 import { useToast } from "@/components/ui/use-toast";
@@ -46,7 +41,6 @@ const BUILD_TYPES = ["Gradual", "Stepwise", "Spike", "Plateau-heavy", "Erratic",
 const SORT_OPTIONS = [
   { value: "newest", label: "Newest" },
   { value: "last_updated", label: "Last Updated" },
-  { value: "best_score", label: "Best Score" },
   { value: "satisfaction", label: "Satisfaction" },
   { value: "intensity", label: "Intensity" },
   { value: "peak_hr", label: "Peak HR" },
@@ -133,19 +127,6 @@ const num = (value) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const avg = (values) => {
-  const valid = values.map(num).filter((value) => value != null);
-  if (!valid.length) return null;
-  return valid.reduce((sum, value) => sum + value, 0) / valid.length;
-};
-
-const fmt = (value, digits = 1) => {
-  const parsed = num(value);
-  return parsed == null ? "—" : parsed.toFixed(digits);
-};
-
-const scoreOf = (session) => num(session.ai_analysis?.ai_score);
-
 const hasEMG = (session) =>
   session.emg_enabled ||
   session.emg_general_notes ||
@@ -163,7 +144,6 @@ const hasDiscomfort = (session) =>
 
 const needsReview = (session) =>
   !session.ai_analysis?.summary ||
-  scoreOf(session) == null ||
   hasDiscomfort(session) ||
   !(session.avg_hr || session.max_hr);
 
@@ -223,8 +203,6 @@ export default function Sessions() {
   const [hydrating, setHydrating] = useState(false);
   const [hydrateError, setHydrateError] = useState("");
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_RENDER_COUNT);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analyzeProgress, setAnalyzeProgress] = useState(0);
   const [backfilling, setBackfilling] = useState(false);
   const [backfillProgress, setBackfillProgress] = useState({ done: 0, total: 0 });
   const [showFilters, setShowFilters] = useState(false);
@@ -237,8 +215,6 @@ export default function Sessions() {
   const [filterBQMax, setFilterBQMax] = useState("");
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
-  const [grading, setGrading] = useState(false);
-  const [gradeProgress, setGradeProgress] = useState(0);
   const [viewMode, setViewMode] = useState("all");
   const [sortMode, setSortMode] = useState("newest");
 
@@ -282,23 +258,17 @@ export default function Sessions() {
 
   const stats = useMemo(() => {
     const withHr = sessions.filter((session) => session.avg_hr || session.max_hr);
-    const scored = sessions.filter((session) => scoreOf(session) != null);
     const completed = sessions.filter((session) => !session.no_climax);
-    const recent = sessions.slice(0, 5);
-    const previous = sessions.slice(5, 10);
-    const recentAvg = avg(recent.map((session) => scoreOf(session) ?? session.satisfaction ?? session.intensity));
-    const previousAvg = avg(previous.map((session) => scoreOf(session) ?? session.satisfaction ?? session.intensity));
-    const best = [...sessions].sort((a, b) => (scoreOf(b) ?? b.satisfaction ?? 0) - (scoreOf(a) ?? a.satisfaction ?? 0))[0];
+    const analyzed = sessions.filter((session) => session.ai_analysis?.summary);
+    const best = [...sessions].sort((a, b) => (num(b.satisfaction) ?? num(b.intensity) ?? 0) - (num(a.satisfaction) ?? num(a.intensity) ?? 0))[0];
     const motion = summarizeMotionEvidenceCoverage(sessions);
 
     return {
-      avgScore: avg(scored.map(scoreOf)),
       best,
       completed,
+      analyzed,
       missingAnalysis: sessions.filter((session) => !session.ai_analysis?.summary),
       needsReview: sessions.filter(needsReview),
-      recentDelta: recentAvg != null && previousAvg != null ? recentAvg - previousAvg : null,
-      scored,
       withHr,
       motion,
     };
@@ -311,7 +281,7 @@ export default function Sessions() {
       value: "best",
       label: "Best Outcomes",
       icon: Sparkles,
-      count: sessions.filter((session) => scoreOf(session) >= 85 || session.satisfaction >= 9 || session.intensity >= 9).length,
+      count: sessions.filter((session) => session.satisfaction >= 9 || session.intensity >= 9).length,
     },
     { value: "needs_review", label: "Needs Review", icon: AlertTriangle, count: stats.needsReview.length },
     { value: "no_climax", label: "No Climax", icon: CheckCircle2, count: sessions.filter((session) => session.no_climax).length },
@@ -336,7 +306,7 @@ export default function Sessions() {
   const visibleSessions = useMemo(() => {
     const matchesView = (session) => {
       if (viewMode === "favorites") return session.is_favorite;
-      if (viewMode === "best") return scoreOf(session) >= 85 || session.satisfaction >= 9 || session.intensity >= 9;
+      if (viewMode === "best") return session.satisfaction >= 9 || session.intensity >= 9;
       if (viewMode === "needs_review") return needsReview(session);
       if (viewMode === "no_climax") return session.no_climax;
       if (viewMode === "video") return hasVideo(session);
@@ -379,7 +349,6 @@ export default function Sessions() {
       if (sortMode === "last_updated") {
         return new Date(getSessionLatestUpdateAt(b) || b.date || 0) - new Date(getSessionLatestUpdateAt(a) || a.date || 0);
       }
-      if (sortMode === "best_score") return (scoreOf(b) ?? 0) - (scoreOf(a) ?? 0);
       if (sortMode === "satisfaction") return (num(b.satisfaction) ?? 0) - (num(a.satisfaction) ?? 0);
       if (sortMode === "intensity") return (num(b.intensity) ?? 0) - (num(a.intensity) ?? 0);
       if (sortMode === "peak_hr") return (num(b.max_hr) ?? 0) - (num(a.max_hr) ?? 0);
@@ -422,71 +391,6 @@ export default function Sessions() {
     });
     return () => cancel(id);
   }, [visibleLimit, visibleSessions.length]);
-
-  const analyzeAll = async () => {
-    const toAnalyze = sessions.filter((session) => !session.ai_analysis?.summary);
-    if (!toAnalyze.length) return;
-    setAnalyzing(true);
-    setAnalyzeProgress(0);
-    let done = 0;
-    await Promise.all(toAnalyze.map(async (session) => {
-      const eventCount = (session.event_timeline || []).length;
-      const text = await base44.integrations.Core.InvokeLLM({
-        prompt: `Write a brief 1-2 paragraph physiological summary of this session. Be concise and insightful. Focus on what happened, how the body responded, and any notable patterns.
-
-${buildAIGroundingContext(userProfile)}
-
-Session data:
-- Date: ${session.date?.slice(0, 10)}
-- Duration: ${session.duration_minutes ?? "unknown"} minutes
-- Methods: ${(session.methods || []).join(", ") || "none listed"}
-- Build type: ${buildTypeLabel(session) || "unknown"}
-- Intensity: ${session.intensity}/10
-- Build quality: ${session.build_quality ?? "-"}/10
-- Satisfaction: ${session.satisfaction ?? "-"}/10
-- Climax duration: ${session.climax_duration || "-"}
-- Avg HR: ${session.avg_hr ?? "-"} bpm, Max HR: ${session.max_hr ?? "-"} bpm, HR at climax: ${session.hr_at_climax ?? "-"} bpm
-- Mood: ${session.mood || "-"}
-- Events logged: ${eventCount}
-${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
-      });
-      const summary = typeof text === "string" ? text : (text?.response ?? text?.summary ?? "");
-      const updatedSession = await base44.entities.Session.update(session.id, { ai_analysis: { ...(session.ai_analysis || {}), summary } });
-      done++;
-      setAnalyzeProgress(Math.round((done / toAnalyze.length) * 100));
-      setSessions((prev) => prev.map((item) => item.id === session.id ? {
-        ...item,
-        ai_analysis: { ...(item.ai_analysis || {}), summary },
-        updated_date: updatedSession?.updated_date || updatedSession?.updated_at || new Date().toISOString(),
-      } : item));
-    }));
-    setAnalyzing(false);
-  };
-
-  const gradeAllSessions = async () => {
-    const toGrade = sessions;
-    if (!toGrade.length) return;
-    setGrading(true);
-    setGradeProgress(0);
-    let done = 0;
-    await Promise.all(toGrade.map(async (session) => {
-      const score = await computeAISessionScore(session, []);
-      if (score != null) {
-        const shouldFav = score >= 85 && (session.intensity >= 8 || session.satisfaction >= 9) && !session.no_climax;
-        const updated = { ...(session.ai_analysis || {}), ai_score: score };
-        const updatedSession = await base44.entities.Session.update(session.id, { ai_analysis: updated, is_favorite: shouldFav || session.is_favorite });
-        setSessions((prev) => prev.map((item) => item.id === session.id ? {
-          ...item,
-          ai_analysis: updated,
-          is_favorite: shouldFav || item.is_favorite,
-          updated_date: updatedSession?.updated_date || updatedSession?.updated_at || new Date().toISOString(),
-        } : item));
-      }
-      done++;
-      setGradeProgress(Math.round((done / toGrade.length) * 100));
-    }));
-    setGrading(false);
-  };
 
   const backfillStartTimes = async () => {
     const toBackfill = sessions.filter((session) => !session.start_time);
@@ -617,17 +521,6 @@ ${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
                   <Clock className="h-4 w-4" />
                   {backfilling ? `Backfilling ${backfillProgress.done}/${backfillProgress.total}` : "Backfill start times"}
                 </DropdownMenuItem>
-                <DropdownMenuItem disabled={grading} onSelect={gradeAllSessions}>
-                  <Zap className="h-4 w-4" />
-                  {grading ? `Grading ${gradeProgress}%` : "Grade sessions"}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={analyzing || sessions.every((session) => session.ai_analysis?.summary)}
-                  onSelect={analyzeAll}
-                >
-                  <Brain className="h-4 w-4" />
-                  {analyzing ? `Analyzing ${analyzeProgress}%` : "Analyze missing summaries"}
-                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
             <Link to="/new">
@@ -658,10 +551,10 @@ ${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
         )}
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <SummaryTile
-            icon={Sparkles}
-            label="Avg Score"
-            value={stats.avgScore == null ? "—" : `${fmt(stats.avgScore, 0)}%`}
-            detail={`${stats.scored.length} graded sessions`}
+            icon={FileText}
+            label="Sessions"
+            value={sessions.length}
+            detail={`${stats.completed.length} completed sessions`}
           />
           <SummaryTile
             icon={HeartPulse}
@@ -671,11 +564,11 @@ ${session.notes ? `- Notes: ${session.notes.slice(0, 200)}` : ""}`,
             tone="rose"
           />
           <SummaryTile
-            icon={TrendingUp}
-            label="Recent Shift"
-            value={stats.recentDelta == null ? "—" : `${stats.recentDelta >= 0 ? "+" : ""}${fmt(stats.recentDelta)}`}
-            detail="Latest five vs previous five"
-            tone={stats.recentDelta != null && stats.recentDelta < 0 ? "amber" : "cyan"}
+            icon={Sparkles}
+            label="Analysis Coverage"
+            value={stats.analyzed.length}
+            detail={`${Math.round((stats.analyzed.length / Math.max(1, sessions.length)) * 100)}% of library`}
+            tone="cyan"
           />
           <SummaryTile
             icon={AlertTriangle}
