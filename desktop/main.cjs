@@ -11,6 +11,7 @@ const {
 } = require('./remote-backend.cjs');
 
 const APP_NAME = 'Sarah';
+const RELEASE_QUIT_ARG = '--sarah-release-quit';
 const STARTUP_TIMEOUT_MS = 45000;
 const PREFERRED_BACKEND_PORT = 8787;
 const PREFERRED_HR_RELAY_PORT = 8765;
@@ -40,6 +41,7 @@ if (webBluetoothSecureContextOverrides.length > 0) {
 }
 
 const singleInstanceLock = app.requestSingleInstanceLock();
+const releaseQuitRequested = process.argv.includes(RELEASE_QUIT_ARG);
 if (!singleInstanceLock) {
   app.quit();
 }
@@ -711,7 +713,10 @@ async function stopBackend() {
 }
 
 app.whenReady().then(async () => {
-  if (!singleInstanceLock) return;
+  if (!singleInstanceLock || releaseQuitRequested) {
+    app.quit();
+    return;
+  }
   configureRemoteClientMode();
   configureDesktopPermissions();
   const win = createWindow();
@@ -741,7 +746,11 @@ app.whenReady().then(async () => {
   }
 });
 
-app.on('second-instance', () => {
+app.on('second-instance', (_event, commandLine) => {
+  if (commandLine.includes(RELEASE_QUIT_ARG)) {
+    void stopBackend().finally(() => app.quit());
+    return;
+  }
   if (!mainWindow || mainWindow.isDestroyed()) {
     if (backendUrl) {
       const win = createWindow();

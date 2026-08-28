@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -11,6 +12,9 @@ const appResourcesOut = path.join(resourcesOut, 'app');
 const sarahExe = path.join(appOut, 'Sarah.exe');
 const sarahIcon = path.join(root, 'public', 'icons', 'sarah.ico');
 const rcEdit = path.join(root, 'node_modules', 'electron-winstaller', 'vendor', 'rcedit.exe');
+const packageLock = path.join(root, 'package-lock.json');
+const dependencyStamp = path.join(appResourcesOut, '.package-lock.sha256');
+const electronStamp = path.join(appOut, '.electron-version');
 
 function assertInsideRoot(target) {
   const resolved = path.resolve(target);
@@ -23,100 +27,109 @@ function removeDir(target) {
   if (fs.existsSync(resolved)) fs.rmSync(resolved, { recursive: true, force: true });
 }
 
-function tryRemoveDir(target) {
-  try {
-    removeDir(target);
-    return true;
-  } catch (error) {
-    if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(error?.code)) throw error;
-    return false;
-  }
-}
-
 function copyDir(from, to, options = {}) {
-  fs.cpSync(from, to, {
-    recursive: true,
-    force: true,
-    dereference: false,
-    ...options,
-  });
-}
-
-if (!fs.existsSync(path.join(electronDist, 'electron.exe'))) {
-  throw new Error('Electron runtime is missing. Run npm install first.');
-}
-if (!fs.existsSync(path.join(root, 'dist', 'index.html'))) {
-  throw new Error('Built frontend is missing. Run npm run build first.');
-}
-if (!fs.existsSync(path.join(root, 'desktop', 'node-runtime', 'node.exe'))) {
-  throw new Error('Bundled Node runtime is missing. Run npm run desktop:prepare-node first.');
+  fs.cpSync(from, to, { recursive: true, force: true, dereference: false, ...options });
 }
 
 function refreshDir(from, to, options = {}) {
-  if (!tryRemoveDir(to)) {
-    console.warn(`Could not remove ${to}; overlaying files in place.`);
-  }
+  removeDir(to);
   copyDir(from, to, options);
 }
 
-function copySarahResources({ overlay = false } = {}) {
-  if (!overlay) removeDir(appResourcesOut);
-  fs.mkdirSync(appResourcesOut, { recursive: true });
+function sha256(filePath) {
+  const hash = crypto.createHash('sha256');
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest('hex');
+}
 
-  refreshDir(path.join(root, 'desktop'), path.join(appResourcesOut, 'desktop'), {
+function copyFileIfChanged(from, to) {
+  if (fs.existsSync(to) && fs.statSync(from).size === fs.statSync(to).size && sha256(from) === sha256(to)) return false;
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  fs.copyFileSync(from, to);
+  return true;
+}
+
+function assertSarahStopped() {
+  if (!fs.existsSync(sarahExe)) return;
+  const escaped = sarahExe.replaceAll("'", "''");
+  const command = `$target='${escaped}'; if (Get-CimInstance Win32_Process -Filter \"Name = 'Sarah.exe'\" | Where-Object { $_.ExecutablePath -eq $target }) { exit 2 }`;
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { stdio: 'ignore' });
+  if (result.status === 2) throw new Error(`Packaged Sarah is still running: ${sarahExe}`);
+  if (result.status !== 0) throw new Error('Could not confirm that packaged Sarah is stopped.');
+}
+
+function initializeElectronShell() {
+  const electronVersion = JSON.parse(fs.readFileSync(path.join(root, 'node_modules', 'electron', 'package.json'), 'utf8')).version;
+  const existingVersion = fs.existsSync(electronStamp) ? fs.readFileSync(electronStamp, 'utf8').trim() : '';
+  const shellExists = fs.existsSync(sarahExe) && fs.existsSync(resourcesOut);
+
+  if (!shellExists || (existingVersion && existingVersion !== electronVersion)) {
+    removeDir(appOut);
+    fs.mkdirSync(outputRoot, { recursive: true });
+    copyDir(electronDist, appOut);
+    const electronExe = path.join(appOut, 'electron.exe');
+    if (fs.existsSync(sarahExe)) fs.rmSync(sarahExe, { force: true });
+    fs.renameSync(electronExe, sarahExe);
+  }
+
+  fs.mkdirSync(resourcesOut, { recursive: true });
+  removeDir(path.join(resourcesOut, 'default_app.asar'));
+  fs.writeFileSync(electronStamp, `${electronVersion}\n`);
+}
+
+function refreshPackagedDependencies() {
+  const packagedNodeModules = path.join(appResourcesOut, 'node_modules');
+  const lockHash = sha256(packageLock);
+  const stampedHash = fs.existsSync(dependencyStamp) ? fs.readFileSync(dependencyStamp, 'utf8').trim() : '';
+
+  if (fs.existsSync(packagedNodeModules) && (!stampedHash || stampedHash === lockHash)) {
+    fs.writeFileSync(dependencyStamp, `${lockHash}\n`);
+    console.log('Preserved unchanged packaged dependencies.');
+    return;
+  }
+
+  refreshDir(path.join(root, 'node_modules'), packagedNodeModules, {
     filter(source) {
-      return !source.includes(`${path.sep}node-runtime${path.sep}`);
+      const normalized = source.replaceAll('\\', '/');
+      return !normalized.includes('/.cache/') && !normalized.includes('/electron/dist/');
     },
   });
-  refreshDir(path.join(root, 'dist'), path.join(appResourcesOut, 'dist'));
-  refreshDir(path.join(root, 'server'), path.join(appResourcesOut, 'server'));
-  refreshDir(path.join(root, 'src'), path.join(appResourcesOut, 'src'));
-  refreshDir(path.join(root, 'tools', 'capture', 'heart-rate'), path.join(appResourcesOut, 'tools', 'capture', 'heart-rate'));
-  refreshDir(path.join(root, 'local-vision'), path.join(appResourcesOut, 'local-vision'));
-  const packagedNodeModules = path.join(appResourcesOut, 'node_modules');
-  if (overlay && fs.existsSync(packagedNodeModules)) {
-    console.warn(`Sarah is running; leaving existing packaged node_modules in place.`);
-  } else {
-    refreshDir(path.join(root, 'node_modules'), packagedNodeModules, {
-      filter(source) {
-        const normalized = source.replaceAll('\\', '/');
-        return !normalized.includes('/.cache/') && !normalized.includes('/electron/dist/');
-      },
-    });
-  }
-  fs.copyFileSync(path.join(root, 'package.json'), path.join(appResourcesOut, 'package.json'));
-  const packagedNodeRuntime = path.join(resourcesOut, 'node-runtime');
-  if (overlay && fs.existsSync(packagedNodeRuntime)) {
-    console.warn(`Sarah is running; leaving existing packaged node-runtime in place.`);
-  } else {
-    refreshDir(path.join(root, 'desktop', 'node-runtime'), packagedNodeRuntime);
-  }
+  fs.writeFileSync(dependencyStamp, `${lockHash}\n`);
+  console.log('Refreshed packaged dependencies because package-lock.json changed.');
 }
 
-const removedAppOut = tryRemoveDir(appOut);
-fs.mkdirSync(outputRoot, { recursive: true });
-
-if (removedAppOut || !fs.existsSync(path.join(appOut, 'Sarah.exe'))) {
-  copyDir(electronDist, appOut);
-
-  const electronExe = path.join(appOut, 'electron.exe');
-  if (fs.existsSync(sarahExe)) fs.rmSync(sarahExe, { force: true });
-  fs.renameSync(electronExe, sarahExe);
-
-  removeDir(path.join(resourcesOut, 'default_app.asar'));
-} else {
-  console.warn(`Could not remove ${appOut}; refreshing packaged app resources in place.`);
-  removeDir(path.join(resourcesOut, 'default_app.asar'));
+function localVisionFilter(source) {
+  const normalized = source.replaceAll('\\', '/');
+  const parts = normalized.split('/');
+  const name = parts.at(-1) || '';
+  return !parts.some((part) => part.startsWith('.venv') || part === '__pycache__') && !name.endsWith('.pyc');
 }
 
-copySarahResources({ overlay: !removedAppOut });
+if (!fs.existsSync(path.join(electronDist, 'electron.exe'))) throw new Error('Electron runtime is missing. Run npm install first.');
+if (!fs.existsSync(path.join(root, 'dist', 'index.html'))) throw new Error('Built frontend is missing. Run Vite first.');
+if (!fs.existsSync(path.join(root, 'desktop', 'node-runtime', 'node.exe'))) throw new Error('Bundled Node runtime is missing.');
+if (!fs.existsSync(sarahIcon)) throw new Error(`Sarah Windows icon is missing: ${sarahIcon}`);
+if (!fs.existsSync(rcEdit)) throw new Error(`Windows resource editor is missing: ${rcEdit}`);
 
-if (!fs.existsSync(sarahIcon)) {
-  throw new Error(`Sarah Windows icon is missing: ${sarahIcon}`);
-}
-if (!fs.existsSync(rcEdit)) {
-  throw new Error(`Windows resource editor is missing: ${rcEdit}`);
-}
+assertSarahStopped();
+initializeElectronShell();
+fs.mkdirSync(appResourcesOut, { recursive: true });
+
+refreshDir(path.join(root, 'desktop'), path.join(appResourcesOut, 'desktop'), {
+  filter(source) {
+    return !source.includes(`${path.sep}node-runtime${path.sep}`);
+  },
+});
+refreshDir(path.join(root, 'dist'), path.join(appResourcesOut, 'dist'));
+refreshDir(path.join(root, 'server'), path.join(appResourcesOut, 'server'));
+refreshDir(path.join(root, 'src'), path.join(appResourcesOut, 'src'));
+refreshDir(path.join(root, 'tools', 'capture', 'heart-rate'), path.join(appResourcesOut, 'tools', 'capture', 'heart-rate'));
+refreshDir(path.join(root, 'local-vision'), path.join(appResourcesOut, 'local-vision'), { filter: localVisionFilter });
+refreshPackagedDependencies();
+fs.copyFileSync(path.join(root, 'package.json'), path.join(appResourcesOut, 'package.json'));
+copyFileIfChanged(path.join(root, 'desktop', 'node-runtime', 'node.exe'), path.join(resourcesOut, 'node-runtime', 'node.exe'));
+
+assertSarahStopped();
 const version = String(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version || '0.0.0');
 const windowsVersion = `${version}.0`;
 const rcResult = spawnSync(rcEdit, [
@@ -129,9 +142,6 @@ const rcResult = spawnSync(rcEdit, [
   '--set-file-version', windowsVersion,
   '--set-product-version', windowsVersion,
 ], { stdio: 'inherit' });
-if (rcResult.status !== 0) {
-  throw new Error(`Could not brand Sarah.exe (rcedit exit ${rcResult.status}).`);
-}
+if (rcResult.status !== 0) throw new Error(`Could not brand Sarah.exe (rcedit exit ${rcResult.status}).`);
 
-console.log(`Built Windows unpacked desktop app at ${appOut}`);
-console.log(`Runnable: ${sarahExe}`);
+console.log(`Refreshed Windows app at ${appOut}`);
