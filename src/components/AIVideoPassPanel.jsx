@@ -62,6 +62,11 @@ import {
   sanitizeUnsupportedStimulationPauseClaim,
 } from "@/lib/videoPassTextGuards";
 import { reduceConsistencyPhraseRepetition } from "@/utils/aiTextRepair";
+import { buildSarahPersonalityPrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
+import {
+  INTEGRATED_HEAD_TO_TOE_RULE,
+  UNMIRRORED_ANATOMICAL_LATERALITY_RULE,
+} from "@/lib/analysisOutputRules";
 import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
 import {
   buildAiCorrectionMemoryPrompt,
@@ -178,6 +183,8 @@ const ANATOMICAL_LATERALITY_RULE = `Anatomical laterality rule: "your left" and 
 const PRODUCTION_PROCEDURE_ANNOTATION_RULE = `Production procedure narration rule: output should be useful for later viewer-facing review, not an internal correction log. Do not write "possible visual/timeline mismatch", "correction", "video-pass conflict", "timeline of record", "not directly documented", "not visible", or "could not confirm" unless the uncertainty changes safety or the event should be rejected. If manual notes resolve the sequence, silently use the manual notes and write the clean visible/procedural action. Visible hands are your hands; write "your hand" or "your hands". Use "your gloved hand" only when glove/sterile technique matters. Never write "a gloved hand", "the gloved hand", "operator", "operator's hand", "clinician", or "assistant". Do not infer povidone-iodine from natural tissue color, warm lighting, shadow, or camera tone; only call iodine/staining when the swab/applicator or nearby manual note supports iodine at that stage. If manual notes place swabbing after draping, do not describe swabbing or iodine staining before draping. If two swabbing passes are logged, describe two passes total, not an extra prep pass.`;
 
 const MANUAL_NOTE_FOUNDATION_RULE = `Manual-note foundation rule: human-written session notes, freeform notes, and timestamped manual event notes are the foundation for Sarah's AI annotation. Use them to understand what the window is supposed to represent before interpreting the frames. Then add Sarah's observational layer: visible genital/resting or erection state, glans/meatus/foreskin/scrotal/perineal state when visible, body position, hand/body positioning, Foley or tool technique, field setup, comfort/tolerance cues, breathing/leg/foot response, and any telemetry-supported body response. Do not merely restate the note. Do not contradict or move a manual note unless the current frames directly and unmistakably show a mismatch; when there is ambiguity, keep the manual note as the procedural anchor and describe the visual uncertainty separately. Prior AI-generated cards are reference material only; they are not manual notes.`;
+
+const WHOLE_BODY_ANNOTATION_RULE = `AI annotation whole-body tracking rule: for every ordered window, scan the complete visible body before narrowing to the main action. Record meaningful changes in the face/head, jaw/neck, shoulders/arms/hands, chest/abdominal breathing, trunk posture, pelvis/perineum, genital and tissue state, thighs/legs, ankles/feet/toes, and overall tension or relaxation when those regions are visible. Track visible reaction and meaningful lack of reaction around stimulation, instrumentation, position, or technique changes. Do not manufacture findings for obscured regions, and do not repeat an unchanged state as a new event. Connect aligned telemetry only as telemetry support, never as visual proof.`;
 
 function formatLocalVisionRollingState(state) {
   if (!state) return "";
@@ -2573,6 +2580,7 @@ export default function AIVideoPassPanel({
             data: frame.data,
           }));
           const aiPayload = {
+            model: "claude_sonnet_4_6",
             max_tokens: 2400,
             max_images: 12,
             response_json_schema: {
@@ -2688,6 +2696,10 @@ You are Sarah, reviewing an ordered temporal burst sampled across one continuous
 ${SARAH_APP_OVERLAY_TELEMETRY_RULE}
 
 ${MANUAL_NOTE_FOUNDATION_RULE}
+${WHOLE_BODY_ANNOTATION_RULE}
+${UNMIRRORED_ANATOMICAL_LATERALITY_RULE}
+${INTEGRATED_HEAD_TO_TOE_RULE}
+${buildSarahPersonalityPrompt(readSarahPersonalitySettings(), { isTechnical: true })}
 
 ${isExploration ? "Exploration/procedure context grounding" : "Session context grounding"} has priority when it identifies known setup, devices, materials, or technique. Use the ${recordLabel} notes, methods, devices, and timestamped/manual notes below to interpret ambiguous visible objects and contact locations. ${isExploration ? (deviceIdentityContext.enemaKnown && !deviceIdentityContext.urethralKnown ? "For this enema record, identify a visibly matching rectal nozzle, enema tube, bag/tubing, lubricant, towel, or fluid return from the supported context, while keeping anal contact/insertion/flow stages tied to current-frame or manual evidence. Do not reinterpret ambiguous equipment as Foley, Hegar, urethral sounding, or meatal instrumentation." : "For example, if the exploration context says an 18 French Foley catheter or urethral sound is in use and the frames show a matching device at the meatus, identify it as that supported instrumentation rather than vague stimulation or generic object handling.") : "For example, if the session context says a vibrator is held at the perineum during stimulation and the frames show a matching device/contact at that location, call it a perineal vibrator/contact rather than a vague \"blue device near the scrotum and genitals.\""} If context and visuals do not line up, state the uncertainty instead of forcing the label.
 
@@ -2908,6 +2920,7 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
         setStatus(`Reassessing ${enemaOnlyExploration ? "enema" : "Foley"} sequence ${index + 1}/${cards.length}: ${fmtMmSs(card.window.start)}-${fmtMmSs(card.window.end)}`);
         const images = await sampledFrameImagePayload(card.sampledFrames || []);
         const aiPayload = {
+          model: "claude_sonnet_4_6",
           max_tokens: 1800,
           max_images: 12,
           images,
@@ -2950,6 +2963,9 @@ Return concise visual findings and 1-3 proposed timeline events only when the wi
           prompt: enemaOnlyExploration ? `You are Sarah doing a second-pass ENEMA BODY EXPLORATION audit for one already-generated video card.
 
 ${ENEMA_VISUAL_REVIEW_RULE}
+${WHOLE_BODY_ANNOTATION_RULE}
+${UNMIRRORED_ANATOMICAL_LATERALITY_RULE}
+${buildSarahPersonalityPrompt(readSarahPersonalitySettings(), { isTechnical: true })}
 
 Only correct the current card. The sampled frames are primary evidence; the sequence list and manual notes preserve chronology.
 
@@ -3282,6 +3298,7 @@ Return a corrected compact card for this same window. Keep timeline events only 
           data: frame.data,
         }));
         const aiPayload = {
+          model: "claude_sonnet_4_6",
           max_tokens: 2200,
           max_images: 10,
           response_json_schema: {
@@ -3330,6 +3347,10 @@ Return a corrected compact card for this same window. Keep timeline events only 
           prompt: `You are Sarah verifying a local GPU-selected video window for Sarah. The images are an ordered temporal burst from one continuous clip: compare adjacent frames in listed order and interpret visible change across the sequence rather than treating them as unrelated stills.
 
 ${deviceIdentityContext.enemaKnown ? ENEMA_VISUAL_REVIEW_RULE : ""}
+${WHOLE_BODY_ANNOTATION_RULE}
+${UNMIRRORED_ANATOMICAL_LATERALITY_RULE}
+${INTEGRATED_HEAD_TO_TOE_RULE}
+${buildSarahPersonalityPrompt(readSarahPersonalitySettings(), { isTechnical: true })}
 
 This is a hybrid local-first review: local CV/Qwen selected this window as worth looking at, but the local result is only a selector. The sampled frames in this request are the visual evidence. Do not promote the local candidate into a fact unless the current sampled frames visibly support it.
 

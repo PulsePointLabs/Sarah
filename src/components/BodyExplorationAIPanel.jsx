@@ -3,6 +3,13 @@ import { Activity, AlertCircle, Brain, Lightbulb, ScanSearch, ShieldCheck } from
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { buildAIGroundingContext, PERSONALIZED_ANATOMY_OUTPUT_RULE } from "@/lib/aiGrounding";
+import { buildSarahPersonalityPrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
+import {
+  INTEGRATED_HEAD_TO_TOE_RULE,
+  NO_CLIPBOARD_CLUTCHING_RULE,
+  removeMedicalReferralAndWarningLanguage,
+  UNMIRRORED_ANATOMICAL_LATERALITY_RULE,
+} from "@/lib/analysisOutputRules";
 import { pulseOxReadingsFromSession } from "@/lib/sessionContext";
 import { buildBodyExplorationPhysiologyEvidence } from "@/lib/bodyExplorationPhysiology";
 import { buildBodyExplorationVideoPassDigest, buildBodyExplorationVisualEvidenceDigest } from "@/lib/visualEvidence";
@@ -26,8 +33,8 @@ import {
 const SECTION_DEFS = [
   { key: "telemetry_findings", label: "Telemetry Findings", icon: <Activity className="h-3.5 w-3.5" />, color: "hsl(var(--chart-2))" },
   { key: "mechanical_findings", label: "Mechanical Findings", icon: <ScanSearch className="h-3.5 w-3.5" />, color: "hsl(var(--primary))" },
-  { key: "comfort_safety_findings", label: "Comfort & Safety", icon: <ShieldCheck className="h-3.5 w-3.5" />, color: "hsl(var(--chart-3))" },
-  { key: "recommendations", label: "Review Notes", icon: <Lightbulb className="h-3.5 w-3.5" />, color: "hsl(var(--chart-4))" },
+  { key: "comfort_safety_findings", label: "Comfort & Body Response", icon: <ShieldCheck className="h-3.5 w-3.5" />, color: "hsl(var(--chart-3))" },
+  { key: "recommendations", label: "What This Adds", icon: <Lightbulb className="h-3.5 w-3.5" />, color: "hsl(var(--chart-4))" },
 ];
 
 const DEEP_SECTION_DEFS = [
@@ -35,7 +42,7 @@ const DEEP_SECTION_DEFS = [
   { key: "mechanical_sensory_synthesis", label: "Mechanical & Sensory Synthesis", icon: <ScanSearch className="h-3.5 w-3.5" />, color: "hsl(var(--primary))" },
   { key: "user_sarah_findings", label: "Your Findings & Sarah's Findings", icon: <Brain className="h-3.5 w-3.5" />, color: "hsl(var(--chart-3))" },
   { key: "outcome_comparison", label: "Outcome & Comparison", icon: <ShieldCheck className="h-3.5 w-3.5" />, color: "hsl(var(--chart-4))" },
-  { key: "recommendations", label: "Focused Follow-Up", icon: <Lightbulb className="h-3.5 w-3.5" />, color: "hsl(var(--chart-4))" },
+  { key: "recommendations", label: "What This Adds", icon: <Lightbulb className="h-3.5 w-3.5" />, color: "hsl(var(--chart-4))" },
 ];
 
 const FOCUSED_SECTION_ICONS = {
@@ -162,7 +169,7 @@ function normalizeAnalysis(raw, { focusedFoley = false } = {}) {
 }
 
 function cleanupProductionText(value) {
-  return repairNumericElapsedTimeReferences(String(value || ""))
+  const cleaned = repairNumericElapsedTimeReferences(String(value || ""))
     .replace(/\b(?:a|the)\s+gloved\s+hand\b/gi, "your hand")
     .replace(/\b(?:a|the)\s+gloved\s+hands\b/gi, "your hands")
     .replace(/\bone\s+gloved\s+hand\b/gi, "one hand")
@@ -183,6 +190,7 @@ function cleanupProductionText(value) {
     .replace(/\bmm\s*hg\b/gi, "millimeters of mercury")
     .replace(/\s+/g, " ")
     .trim();
+  return removeMedicalReferralAndWarningLanguage(cleaned);
 }
 
 function cleanupProductionAnalysis(analysis) {
@@ -307,7 +315,7 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
           mechanical_sensory_synthesis: { type: "array", items: { type: "string" }, description: "Two to four substantive paragraphs organized into three to five response phases, connecting mechanics, position, distension or pressure as reported, verified visible responses, comfort, and first-person sensation. Compress repeated cycles instead of narrating each action." },
           user_sarah_findings: { type: "array", items: { type: "string" }, description: "Two to four paragraphs synthesizing the person's observations/interview findings with Sarah's reviewed visual and physiological findings. Each direct visual claim must include its matching elapsed time or short elapsed window in the same sentence." },
           outcome_comparison: { type: "array", items: { type: "string" }, description: "One to three paragraphs explaining immediate outcome and cautious comparison with prior explorations when supported." },
-          recommendations: { type: "array", items: { type: "string" }, description: "Two to four focused, evidence-grounded follow-up points emphasizing measurement quality, workflow, equipment integrity, comfort, and questions for future comparison without escalating invasive technique." },
+          recommendations: { type: "array", items: { type: "string" }, description: "Two to four evidence-grounded takeaways, useful comparisons, or data-quality improvements. Never include medical warnings, care escalation, testing advice, or physician/clinician referral." },
         },
         required: ["summary", "integrated_physiology", "mechanical_sensory_synthesis", "user_sarah_findings", "outcome_comparison", "recommendations"],
       };
@@ -360,13 +368,17 @@ ${visualEvidenceContext}
 ${videoPassEvidenceContext}
 ${PERSONALIZED_ANATOMY_OUTPUT_RULE}
 ${ANATOMICAL_LATERALITY_RULE}
+${UNMIRRORED_ANATOMICAL_LATERALITY_RULE}
 ${PRODUCTION_BODY_EXPLORATION_STYLE}
 ${SARAH_LANGUAGE_VARIETY_RULE}
 ${ELAPSED_TIME_OUTPUT_RULE}
 ${TTS_FRIENDLY_STRUCTURE_RULE}
-${focusedFoley ? "" : DEEP_BODY_EXPLORATION_SYNTHESIS_RULE}
-${focusedFoley ? "" : BODY_EXPLORATION_VIDEO_ALIGNMENT_RULE}
+${DEEP_BODY_EXPLORATION_SYNTHESIS_RULE}
+${BODY_EXPLORATION_VIDEO_ALIGNMENT_RULE}
+${INTEGRATED_HEAD_TO_TOE_RULE}
+${NO_CLIPBOARD_CLUTCHING_RULE}
 ${focusedFoley ? focusedFoleyPromptBlock() : ""}
+${buildSarahPersonalityPrompt(readSarahPersonalitySettings())}
 
 STYLE:
 - Write directly to the person using "you" and "your".

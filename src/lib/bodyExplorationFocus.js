@@ -1,4 +1,5 @@
 import { repairNumericElapsedTimeReferences } from "../utils/aiTextRepair.js";
+import { removeMedicalReferralAndWarningLanguage } from "./analysisOutputRules.js";
 
 const PROCEDURE_RE = /\b(foley|catheter|urethral|urethra|meatus|meatal|bladder|balloon|statlock|leg\s*bag|drainage|dwell|insertion|sounding|dilat(?:e|ion)|instrumentation)\b/i;
 const FOLEY_RE = /\b(foley|catheter|20\s*fr|18\s*fr|french|balloon|statlock|leg\s*bag|drainage|urine return|urethral|meatus|meatal)\b/i;
@@ -18,7 +19,7 @@ export const FOCUSED_FOLEY_SECTION_DEFS = [
   { key: "body_response_felt_experience", label: "Body Response & Felt Experience" },
   { key: "placement_confidence", label: "Placement Confidence & Immediate Outcome" },
   { key: "prior_comparison", label: "Comparison With Previous Insertions" },
-  { key: "focused_follow_up", label: "Focused Follow-Up" },
+  { key: "focused_follow_up", label: "What This Adds" },
 ];
 
 function compactText(value, max = 900) {
@@ -109,15 +110,15 @@ export const FOCUSED_FOLEY_NARRATIVE_RULE = `
 FOCUSED FOLEY NARRATIVE STRUCTURE:
 A. Clinical Overview: catheter type/size, duration, technical success, tolerance, main resistance point, maximum discomfort, urine return, balloon seating, immediate dwell status, and one or two conclusions.
 B. Procedural Course: meaningful phases only: preparation/sterile field; meatal engagement and distal passage; primary resistance point; proximal passage and bladder entry; urine return, balloon inflation, seating; immediate post-placement transition.
-C. Clinical Interpretation: explain whether placement appeared smooth, moderately difficult, or difficult; where resistance mattered; whether relaxation, breathing, angle change, or continued pressure helped; whether heart rate supports calm tolerance, anticipation, discomfort, exertion, or no meaningful autonomic response; whether absence of bracing, withdrawal, bleeding, severe discomfort, or HR escalation matters; whether size changed tolerance; and what deserves caution.
+C. Clinical Interpretation: explain whether placement appeared smooth, moderately difficult, or difficult; where resistance mattered; whether relaxation, breathing, angle change, or continued pressure helped; whether heart rate supports calm tolerance, anticipation, discomfort, exertion, or no meaningful autonomic response; whether absence of bracing, withdrawal, bleeding, severe discomfort, or HR escalation matters; and whether size changed tolerance.
 D. Body Response and Felt Experience: integrate subjective annotations, visible behavior, and telemetry. Include clinician-observer/dissociative state, deliberate pelvic relaxation, breathing, discomfort character, bracing/lack of bracing, and transition into background awareness when supported.
-E. Placement Confidence and Immediate Outcome: separate visual observation, subjective annotation, telemetry-supported interpretation, and historical comparison while summarizing advancement, urine return, balloon inflation without concerning pain, seating, drainage, tubing/bag state, ambulation, and absence of visible complications when supported.
+E. Placement Confidence and Immediate Outcome: separate visual observation, subjective annotation, telemetry-supported interpretation, and historical comparison while summarizing advancement, urine return, balloon inflation, seating, drainage, tubing/bag state, ambulation, and the visible immediate post-placement body state when supported.
 F. Comparison With Previous Insertions: use prior sessions only when comparison adds value, such as 18 Fr versus 20 Fr, resistance, meatal awareness, erection-related tugging, Kegel sensation, and dwell comfort.
-G. Focused Follow-Up: only procedure-specific monitoring: urine flow, tubing patency, meatal irritation, bleeding, bypass leakage, bladder spasms/urgency, securement/traction, erection-related tugging, pelvic-floor sensation during dwell, and comfort versus prior catheter size.
+G. What This Adds: summarize the most useful new body-response, mechanics, comparison, or evidence-quality takeaways. Do not provide monitoring instructions, safety warnings, testing advice, or healthcare referrals.
 
 Reduce play-by-play:
 - Do not narrate every timestamp, hand motion, pause, or HR sample.
-- Each major fact has one primary home: timeline/mechanics in Procedural Course; meaning in Clinical Interpretation; subjective experience in Body Response; placement evidence in Placement Confidence; prior differences in Comparison; future monitoring in Focused Follow-Up.
+- Each major fact has one primary home: timeline/mechanics in Procedural Course; meaning in Clinical Interpretation; subjective experience in Body Response; placement evidence in Placement Confidence; prior differences in Comparison; new takeaways in What This Adds.
 - Use timestamps selectively for major events only.
 - Summarize telemetry as ranges and response patterns rather than reciting samples.
 - Medium-length sentences. Avoid huge multi-clause sentences. Keep it natural for TTS.
@@ -184,6 +185,8 @@ function splitLongSentences(text, maxLength = 360) {
 function cleanFocusedRows(rows) {
   return normalizeArray(rows)
     .map((row) => splitLongSentences(row))
+    .map((row) => removeMedicalReferralAndWarningLanguage(row))
+    .filter(Boolean)
     .filter(isFocusedProcedureRelevantText);
 }
 
@@ -218,7 +221,7 @@ function buildProvenanceDebug(analysis) {
 export function normalizeFocusedFoleyAnalysis(raw) {
   const parsed = raw?.response ?? raw ?? {};
   const analysis = {
-    clinical_overview: splitLongSentences(parsed.clinical_overview || parsed.summary || ""),
+    clinical_overview: removeMedicalReferralAndWarningLanguage(splitLongSentences(parsed.clinical_overview || parsed.summary || "")),
     procedural_course: cleanFocusedRows(parsed.procedural_course || parsed.mechanical_findings),
     clinical_interpretation: cleanFocusedRows(parsed.clinical_interpretation || parsed.telemetry_findings),
     body_response_felt_experience: cleanFocusedRows(parsed.body_response_felt_experience || parsed.comfort_safety_findings),

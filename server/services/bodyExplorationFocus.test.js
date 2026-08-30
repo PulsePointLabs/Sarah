@@ -94,7 +94,7 @@ test('normalization preserves major Foley events while removing peripheral drift
       'Compared with the previous 18 Fr experience, the 20 Fr catheter seemed to create more meatal awareness but still remained tolerable during dwell.',
     ],
     focused_follow_up: [
-      'Monitor urine flow, tubing patency, meatal irritation, bleeding, bypass leakage, bladder spasms, securement traction, erection-related tugging, and comfort compared with the 18 Fr catheter.',
+      'This adds a useful comparison point: the 20 Fr catheter created more meatal awareness while erection-related tugging and overall dwell comfort remained comparable with the 18 Fr catheter.',
       'Watch unrelated foot edema and generalized skin findings.',
     ],
   });
@@ -127,7 +127,7 @@ test('focused output includes clinical synthesis and placement confidence rather
     body_response_felt_experience: ['Your clinician-observer state held through most steps and partially broke at the pinching discomfort.'],
     placement_confidence: ['Successful placement is supported by urine return, continued advancement before balloon inflation, balloon seating, drainage, and no visible bleeding, bypass leakage, or severe pain.'],
     prior_comparison: ['The 20 Fr catheter was more noticeable than the previous 18 Fr but remained tolerable.'],
-    focused_follow_up: ['Monitor urine flow, tubing patency, meatal irritation, bleeding, bypass leakage, bladder spasms, securement traction, and dwell comfort.'],
+    focused_follow_up: ['This adds a useful comparison point for insertion resistance, pelvic relaxation, erection-related tugging, and dwell comfort.'],
   });
 
   assert.ok(cleaned.clinical_interpretation.some((line) => /functional resistance point/i.test(line)));
@@ -151,7 +151,8 @@ test('focused prompt keeps Sarah warm while requiring procedure-only structure a
   const prompt = focusedFoleyPromptBlock();
   assert.match(prompt, /Clinical Overview/i);
   assert.match(prompt, /Clinical Interpretation/i);
-  assert.match(prompt, /Focused Follow-Up/i);
+  assert.match(prompt, /What This Adds/i);
+  assert.match(prompt, /Do not provide monitoring instructions, safety warnings, testing advice, or healthcare referrals/i);
   assert.match(prompt, /Do not narrate every timestamp/i);
   assert.match(prompt, /Medium-length sentences/i);
   assert.match(prompt, /Exclude peripheral findings/i);

@@ -23,6 +23,12 @@ import { summarizePerinealEmg } from "@/utils/perinealEmgSummary";
 import { REVIEW_WINDOW_RESPONSE_STYLE } from "@/lib/reviewWindowResponseStyle";
 import { REVIEW_VIDEO_RENDER_VERSION } from "@/lib/reviewVideoRenderVersion";
 import { buildSarahPersonalityPrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
+import {
+  INTEGRATED_HEAD_TO_TOE_RULE,
+  NO_CLIPBOARD_CLUTCHING_RULE,
+  removeMedicalReferralAndWarningLanguage,
+  UNMIRRORED_ANATOMICAL_LATERALITY_RULE,
+} from "@/lib/analysisOutputRules";
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import { buildSessionPhysiologyEvidence } from "@/lib/bodyExplorationPhysiology";
 import { buildSessionMomentTelemetry, formatMomentTelemetryForPrompt, MOMENT_TELEMETRY_INTERPRETATION_RULES } from "@/utils/sessionMomentTelemetry";
@@ -581,7 +587,7 @@ export function buildSessionAnalysisReaderData({ result, session, timelineRows =
   if (eventItems.length) { sections.push({ label: isTechnical ? "Event Analysis" : "Motion & Evidence Interpretation", color: "chart-1", icon: <Activity className="w-3.5 h-3.5" />, items: eventItems, start: idx }); idx += eventItems.length; }
   if (emgItems.length) { sections.push({ label: "EMG Analysis", color: "chart-3", icon: <Activity className="w-3.5 h-3.5" />, items: emgItems, start: idx }); idx += emgItems.length; }
   if (notableItems.length) { sections.push({ label: isTechnical ? "Notable Findings" : "Patterns & Hypotheses", color: "chart-4", icon: <Zap className="w-3.5 h-3.5" />, items: notableItems, start: idx }); idx += notableItems.length; }
-  if (recommendationItems.length) { sections.push({ label: isTechnical ? "Recommendations" : "Recommendations & Experiments", color: "accent", icon: <Lightbulb className="w-3.5 h-3.5" />, items: recommendationItems, start: idx }); }
+  if (recommendationItems.length) { sections.push({ label: "Session Takeaways & Experiments", color: "accent", icon: <Lightbulb className="w-3.5 h-3.5" />, items: recommendationItems, start: idx }); }
 
   const keyVideoClips = normalizeSessionKeyVideoClips({
     ...session,
@@ -1582,7 +1588,7 @@ COMPANION VOICE AND SINGLE-PASS STRUCTURE - HIGH PRIORITY:
   * arousal_arc = Chronological Deep Dive: one ordered, phase-by-phase timeline pass.
   * event_analysis = Motion Telemetry Interpretation and evidence integration: asymmetry, cadence proxy, movement patterns, conflicts between sources, and new implications only; do not replay chronology.
   * notable_findings = Pattern Recognition / Cross-Session Context and clearly identified hypotheses.
-  * recommendations = Recommendations / Experiments: focused next steps grounded in supported findings.
+  * recommendations = Session Takeaways / Experiments: focused comparisons, technique observations, or data-quality improvements grounded in supported findings; never medical warnings or referrals.
 - Prefix speculative mechanisms with "Hypothesis:" or "One possible explanation:" and qualify them with varied wording such as "may suggest", "may fit with", "aligns with", or "could reflect." Do not lean on "consistent with" or "consistently"; use those phrases sparingly.
 - Describe observed findings confidently, but never say evidence "proves," "confirms," or "indicates definitively" an inferred physiological mechanism.
 - If a subjective note conflicts with stronger direct visual review, reviewed media-derived evidence, telemetry, or a corrected later observation, prefer the stronger evidence and explicitly acknowledge the discrepancy. Do not build recommendations on a disputed note as though it were settled fact.
@@ -1802,12 +1808,13 @@ function removeUnsupportedSessionTangents(text = "", evidenceCorpus = "", direct
     ) return true;
     return false;
   };
-  return value
+  const cleaned = value
     .split(/(?<=[.!?])\s+/)
     .filter((sentence) => !shouldRemoveSentence(sentence))
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
+  return removeMedicalReferralAndWarningLanguage(cleaned);
 }
 
 function sanitizeSessionAnalysisResultForEvidence(result, session = {}) {
@@ -2840,6 +2847,9 @@ ${SARAH_LANGUAGE_VARIETY_RULE_V1}
 ${GENITAL_STIMULATION_MECHANICS_RULE_V1}
 ${BASELINE_ANATOMY_AND_DEVICE_SETUP_RULE_V1}
 ${ANATOMICAL_LATERALITY_RULE_V1}
+${UNMIRRORED_ANATOMICAL_LATERALITY_RULE}
+${INTEGRATED_HEAD_TO_TOE_RULE}
+${NO_CLIPBOARD_CLUTCHING_RULE}
 ${ESTIM_WAVEFORM_AND_MODE_RULE_V1}
 ${firstNameToneCue}
 ${!isTechnical ? WARM_COMPANION_OUTPUT_DISCIPLINE : ""}
@@ -3024,8 +3034,8 @@ Provide ${isTechnical
             ? { type: "array", items: { type: "string" } }
             : { type: "array", items: { type: "string" }, description: "Pattern recognition, cross-session context when supported, and clearly labelled hypotheses with calibrated mechanism language." },
           recommendations: isTechnical
-            ? { type: "array", items: { type: "string" } }
-            : { type: "array", items: { type: "string" }, description: "Focused recommendations or experiments grounded in supported findings rather than repeated narrative." },
+            ? { type: "array", items: { type: "string" }, description: "Session-specific comparison ideas, technique observations, or data-quality improvements only. Never include medical warnings, care escalation, testing advice, or physician/clinician referral." }
+            : { type: "array", items: { type: "string" }, description: "Focused session-specific comparison ideas or experiments grounded in supported findings. Never include medical warnings, care escalation, testing advice, or physician/clinician referral." },
         },
         required: ["summary", "baseline_trends", "arousal_arc", "event_analysis", "notable_findings", "recommendations"],
       },
