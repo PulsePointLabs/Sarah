@@ -175,6 +175,17 @@ function assertDistCopied(target) {
   }
 }
 
+function assertRootRelativeWebShell() {
+  const html = fs.readFileSync(path.join(root, 'dist', 'index.html'), 'utf8');
+  const relativeShellReference = /(?:src|href)=["']\.\/(?:assets|manifest\.json|icons|browserconfig\.xml)/i.exec(html);
+  if (relativeShellReference) {
+    throw new Error(`Vite emitted a deep-route-unsafe shell reference: ${relativeShellReference[0]}`);
+  }
+  if (!/(?:src|href)=["']\/(?:assets|manifest\.json|icons|browserconfig\.xml)/i.test(html)) {
+    throw new Error('Vite shell does not contain root-relative application assets.');
+  }
+}
+
 async function waitForHealth(url, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   let lastError;
@@ -224,6 +235,7 @@ async function main() {
 
   await stage('Provenance', async () => run('node', ['scripts/write-build-info.mjs']));
   await stage('Vite', async () => run('npx', ['vite', 'build']));
+  await stage('Web shell validation', async () => assertRootRelativeWebShell());
 
   const { apksigner, apkanalyzer } = androidTools();
   const previousSigner = signerDigest(apksigner, apkPath);

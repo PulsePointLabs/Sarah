@@ -6,7 +6,9 @@ const hmrEnabled = process.env.PULSEPOINT_HMR === '1';
 
 export default defineConfig({
   logLevel: 'error',
-  base: './',
+  // Sarah is served as an SPA from deep routes such as /sessions/. Root-relative
+  // assets keep a refreshed route from incorrectly requesting /sessions/assets/.
+  base: '/',
   plugins: [react()],
   resolve: {
     alias: {
