@@ -165,8 +165,6 @@ export default function SessionVisualChanges({ session, timelineRows = [] }) {
 
   useEffect(() => setHighResolutionFailed(false), [selectedIndex]);
 
-  if (!changes.length) return null;
-
   const selectedFallbackSrc = selected?.imageUrl ? serverUrl(selected.imageUrl) : "";
   const selectedHighResolutionSrc = selected?.highResolutionImageUrl ? serverUrl(selected.highResolutionImageUrl) : "";
   const selectedSrc = selectedHighResolutionSrc && !highResolutionFailed ? selectedHighResolutionSrc : selectedFallbackSrc;
@@ -201,6 +199,11 @@ export default function SessionVisualChanges({ session, timelineRows = [] }) {
 
         {expanded && (
           <div className="space-y-3 border-t border-border p-4">
+            {!changes.length && (
+              <div className="rounded-xl border border-dashed border-border bg-muted/10 p-4 text-sm text-muted-foreground">
+                No saved high-confidence visual changes are available for this session yet. This section fills from accepted AI Annotation video-pass findings; ordinary event notes and telemetry alone are not treated as visual proof.
+              </div>
+            )}
             {changes.map((change) => {
               const src = change.imageUrl ? serverUrl(change.imageUrl) : "";
               return (

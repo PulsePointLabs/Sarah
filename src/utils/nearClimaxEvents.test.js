@@ -173,7 +173,7 @@ test("generic erection and genital changes do not prove near climax without acti
   assert.equal(assessment.confirmed, false);
 });
 
-test("active stroking before the manually saved pre-climax phase is build, not near climax", () => {
+test("a final pre-climax marker does not automatically contradict an earlier candidate", () => {
   const evidence = buildNearClimaxContextEvidence({
     pre_climax_offset_s: 305,
     event_timeline: [{ time_s: 226, note: "Rapid active stroking continues", category: ["physical"] }],
@@ -181,8 +181,52 @@ test("active stroking before the manually saved pre-climax phase is build, not n
   const assessment = assessNearClimaxEventContext({ start_offset_s: 196, peak_offset_s: 226, end_offset_s: 287 }, evidence);
 
   assert.equal(assessment.confirmed, false);
-  assert.equal(assessment.contradicted, true);
-  assert.equal(assessment.status, "before_pre_climax");
+  assert.equal(assessment.contradicted, false);
+  assert.equal(assessment.beforePreClimax, true);
+  assert.equal(assessment.status, "context_unconfirmed");
+});
+
+test("an explicit multiple-near-climax session report can confirm earlier active candidates", () => {
+  const evidence = buildNearClimaxContextEvidence({
+    duration_minutes: 60,
+    pre_climax_offset_s: 3494,
+    climax_offset_s: 3532,
+    notes: "Multiple near climax events occurred before the final orgasm.",
+    event_timeline: [{ time_s: 1450, note: "Rapid active stroking continues", category: ["stimulation"] }],
+  });
+  const assessment = assessNearClimaxEventContext(
+    { start_offset_s: 1380, peak_offset_s: 1450, end_offset_s: 1520 },
+    evidence,
+  );
+
+  assert.equal(assessment.confirmed, true);
+  assert.equal(assessment.beforePreClimax, true);
+  assert.equal(assessment.status, "context_confirmed");
+  assert.ok(assessment.positiveSources.includes("user_session_summary"));
+});
+
+test("an explicit multiple-near-climax report can corroborate a peak-aligned detector candidate", () => {
+  const evidence = buildNearClimaxContextEvidence({
+    duration_minutes: 60,
+    pre_climax_offset_s: 3494,
+    climax_offset_s: 3532,
+    notes: "Multiple near climax events occurred before the final orgasm.",
+    event_timeline: [{
+      time_s: 1450,
+      note: "edging pattern candidate",
+      category: ["live_cue_edging_candidate"],
+      source: "sarah_live_cue",
+    }],
+  });
+  const assessment = assessNearClimaxEventContext(
+    { start_offset_s: 1380, peak_offset_s: 1450, end_offset_s: 1520 },
+    evidence,
+  );
+
+  assert.equal(assessment.confirmed, true);
+  assert.equal(assessment.activeMasturbation, false);
+  assert.equal(assessment.sessionMultipleNearClimaxReport, true);
+  assert.equal(assessment.telemetryCandidateAtPeak, true);
 });
 
 test("stale saved confirmation flags cannot bypass current evidence assessment", () => {

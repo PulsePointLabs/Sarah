@@ -126,6 +126,25 @@ export function buildNearClimaxContextEvidence(session = {}) {
     pushContextEvidence(evidence, { ...event, evidence_source: event.evidence_source || event.source || "session_event" });
   });
 
+  const sessionSummaryText = [session.notes, session.subjective_notes]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const sessionEndS = numberOrNull(session.capture_active_duration_seconds)
+    ?? (numberOrNull(session.duration_minutes) != null ? Number(session.duration_minutes) * 60 : null)
+    ?? numberOrNull(session.climax_offset_s)
+    ?? 0;
+  if (sessionSummaryText && DIRECT_NEAR_CLIMAX_CUE_PATTERN.test(sessionSummaryText) && sessionEndS > 0) {
+    pushContextEvidence(evidence, {
+      start_s: 0,
+      end_s: sessionEndS,
+      note: sessionSummaryText,
+      category: ["subjective", "session_summary", "near_climax_report"],
+      evidence_source: "user_session_summary",
+    });
+  }
+
   const analysis = session.ai_analysis || {};
   const videoPasses = Array.isArray(analysis._video_pass_findings) ? analysis._video_pass_findings : [];
   videoPasses.forEach((pass) => {
@@ -243,6 +262,8 @@ export function assessNearClimaxEventContext(event = {}, contextEvidence = []) {
   let activeMasturbation = false;
   let directThresholdCue = false;
   let nonArousalAtPeak = false;
+  let sessionMultipleNearClimaxReport = false;
+  let telemetryCandidateAtPeak = false;
 
   aligned.forEach((item) => {
     const text = evidenceText(item);
@@ -251,8 +272,16 @@ export function assessNearClimaxEventContext(event = {}, contextEvidence = []) {
     const direct = DIRECT_NEAR_CLIMAX_CUE_PATTERN.test(text);
     const active = ACTIVE_MASTURBATION_PATTERN.test(text);
     const distanceToPeak = evidenceDistanceToTime(item, peakS);
+    if (source === "user_session_summary" && /\b(?:multiple|several|repeated|many)\s+near[-\s]?climax\b/i.test(text)) {
+      sessionMultipleNearClimaxReport = true;
+    }
+    if (source === "sarah_live_cue" && categories.includes("live_cue_edging_candidate") && distanceToPeak <= 25) {
+      telemetryCandidateAtPeak = true;
+    }
     const circularTelemetryCue = source === "live_climax_prediction"
+      || source === "sarah_live_cue"
       || categories.includes("phase_detection")
+      || categories.includes("live_cue_edging_candidate")
       || (categories.includes("physiology") && /\bnear[-\s]?climax\s+watch\b/i.test(text));
     const nonArousalExertion = NON_AROUSAL_EXERTION_PATTERN.test(text)
       || categories.some((category) => ["setup", "technical", "equipment", "room_setup"].includes(category));
@@ -280,11 +309,14 @@ export function assessNearClimaxEventContext(event = {}, contextEvidence = []) {
     && peakS >= preClimaxS - 15
     && (climaxS == null || peakS < climaxS);
   if (manualThresholdCue) positiveScore += 5;
-  const contradicted = beforePreClimax || afterClimax || nonArousalAtPeak;
-  const confirmed = !contradicted && activeMasturbation && (manualThresholdCue || directThresholdCue);
-  const status = beforePreClimax
-    ? "before_pre_climax"
-    : afterClimax
+  // A saved pre-climax marker identifies the final approach window. It does not
+  // rule out earlier approach/recovery cycles in a multi-event session.
+  const contradicted = afterClimax || nonArousalAtPeak;
+  const confirmed = !contradicted && (
+    (activeMasturbation && (manualThresholdCue || directThresholdCue))
+    || (sessionMultipleNearClimaxReport && telemetryCandidateAtPeak)
+  );
+  const status = afterClimax
       ? "after_climax"
       : nonArousalAtPeak
         ? "contradicted"
@@ -304,9 +336,12 @@ export function assessNearClimaxEventContext(event = {}, contextEvidence = []) {
     peakS,
     preClimaxS,
     climaxS,
+    beforePreClimax,
     activeMasturbation,
     directThresholdCue,
     manualThresholdCue,
+    sessionMultipleNearClimaxReport,
+    telemetryCandidateAtPeak,
     nonArousalAtPeak,
     positiveSources: [...positiveSources],
     negativeSources: [...negativeSources],
@@ -338,7 +373,13 @@ export function scoreEventNoteCorroboration(eventStartS, eventEndS, sessionEvent
   for (const ev of sessionEvents) {
     const cats = eventCategories(ev);
     const source = String(ev.evidence_source || ev.source || "");
-    if (source === "live_climax_prediction" || cats.includes("phase_detection")) continue;
+    if (
+      source === "live_climax_prediction"
+      || source === "user_session_summary"
+      || source === "sarah_live_cue"
+      || cats.includes("phase_detection")
+      || cats.includes("live_cue_edging_candidate")
+    ) continue;
     const bounds = evidenceBounds(ev);
     if (bounds.start == null || bounds.end == null || bounds.end < eventStartS - windowS || bounds.start > eventEndS + windowS) continue;
     const t = Math.min(Math.max((bounds.start + bounds.end) / 2, eventStartS), eventEndS);

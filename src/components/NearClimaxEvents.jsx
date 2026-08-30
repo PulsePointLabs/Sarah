@@ -272,6 +272,10 @@ export default function NearClimaxEvents({ timelineRows, session, selectedIndex,
     () => detectNearClimaxEvents(timelineRows, session?.climax_offset_s, session?.pre_climax_offset_s, contextEvidence),
     [contextEvidence, timelineRows, session?.climax_offset_s, session?.pre_climax_offset_s]
   );
+  const confirmedAlgorithmicEvents = useMemo(
+    () => algorithmicEvents.filter((event) => event.context_confirmed || event.evidence_status === "context_confirmed"),
+    [algorithmicEvents]
+  );
 
   // Prefer AI-refined events if available
   const aiEvents = useMemo(
@@ -279,7 +283,11 @@ export default function NearClimaxEvents({ timelineRows, session, selectedIndex,
     [contextEvidence, session?.ai_near_climax_events]
   );
   const hasAIEvents = aiEvents && aiEvents.length > 0;
-  const events = hasAIEvents ? aiEvents : algorithmicEvents;
+  const events = hasAIEvents
+    ? aiEvents
+    : confirmedAlgorithmicEvents.length
+      ? confirmedAlgorithmicEvents
+      : algorithmicEvents;
   const isAIRefined = hasAIEvents;
 
   const [refining, setRefining] = useState(false);
@@ -355,7 +363,11 @@ export default function NearClimaxEvents({ timelineRows, session, selectedIndex,
       : "";
     const groundingContext = buildAIGroundingContext(userProfile);
     const reviewedVisualEvidence = buildSessionVisualEvidenceDigest(session);
-    const alignedContext = contextEvidence.slice(0, 160).map((item) => ({
+    const prioritizedContext = [
+      ...contextEvidence.filter((item) => item.evidence_source === "user_session_summary"),
+      ...contextEvidence.filter((item) => item.evidence_source !== "user_session_summary"),
+    ];
+    const alignedContext = prioritizedContext.slice(0, 160).map((item) => ({
       start_s: item.start_s,
       end_s: item.end_s,
       source: item.evidence_source,
@@ -378,7 +390,7 @@ CRITICAL LABELING RULES — STRICTLY ENFORCED:
 4. Interpretations must be grounded in: the HR pattern itself, nearby user-logged events, the user's arousal profile above, and the session context. Do not invent behavioral intent.
 5. If the arousal profile describes a specific response style (e.g. rapid climber, plateau-heavy, involuntary spasms), use that to explain observed HR patterns instead of defaulting to behavioral assumptions.
 6. HR and HRV can nominate a candidate, but they cannot confirm near-climax by themselves. Near-climax is not synonymous with high heart rate, erection, genital movement, toe curl, mounting the table, or generic active stimulation. Confirmation requires BOTH active masturbation and direct threshold evidence at the candidate peak.
-7. A manually saved pre-climax marker is authoritative threshold evidence. When one exists, reject earlier candidates as build or exertion; evaluate active-masturbation candidates from that marker until the climax marker.
+7. A manually saved pre-climax marker is authoritative evidence for the final approach window, but it is not proof that no earlier near-climax episodes occurred. Earlier candidates may be retained when candidate-aligned evidence shows active masturbation plus a direct threshold cue, or when the person's session summary explicitly reports multiple near-climax episodes and the candidate physiology shows a distinct approach-and-resolution cycle.
 8. Reject any candidate aligned with walking, standing up, mounting/remounting/getting off the table, finding position, an empty table/room, setup/preparation, selecting media, camera/monitor/OBS/app/computer adjustment, paused stimulation, troubleshooting, or other non-arousal exertion. Never include a movement-driven cardiovascular event in the near-climax array.
 9. Erection, glans/scrotal changes, toe curl, bracing, breathing changes, and tremble are supporting cues only. They never replace proof of active masturbation plus the threshold cue at the same timestamp.
 
@@ -387,6 +399,8 @@ SESSION CONTEXT:
 - Climax marker: ${session.climax_offset_s != null ? Math.round(session.climax_offset_s) + "s" : "none"}
 - Pre-climax marker: ${session.pre_climax_offset_s != null ? Math.round(session.pre_climax_offset_s) + "s" : "none"}
 - Max HR: ${session.max_hr || "?"} bpm | Avg HR: ${session.avg_hr || "?"} bpm
+- Session summary: ${session.notes || "none"}
+- Subjective session notes: ${session.subjective_notes || "none"}
 
 ${existingAnalysis ? `AI SESSION ANALYSIS (use this to identify arousal phases):\n${existingAnalysis.slice(0, 1500)}` : ""}
 
