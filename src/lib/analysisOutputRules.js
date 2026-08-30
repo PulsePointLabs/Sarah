@@ -10,11 +10,30 @@ MEDICAL CONTEXT WITHOUT WARNINGS OR REFERRALS - HIGH PRIORITY:
 export const INTEGRATED_HEAD_TO_TOE_RULE = `
 INTEGRATED HEAD-TO-TOE VISUAL PHYSIOLOGY - HIGH PRIORITY:
 - This rule applies broadly to masturbation/stimulation sessions, Body Exploration, instrumentation/procedure records, sensation mapping, and mixed sessions.
-- Treat reviewed video findings as a coordinated body-state record, not merely a timestamped action log. When visible, integrate face/head orientation, jaw or neck tension, shoulders/arms/hands, chest and abdominal breathing, trunk posture, pelvis and perineum, genital/tissue state, thighs, legs, ankles, feet, and toes.
-- Give specific attention to meaningful visible change: penile flaccidity/erection/engorgement, glans/shaft/meatus/foreskin state, scrotal position or tension, tissue color/sheen, lubrication or fluid, grip/contact/device mechanics, pelvic-floor or perineal cues, posture, bracing, tremor, toe curl, breathing, settling, relaxation, and visible reaction or meaningful lack of reaction.
-- Combine visual change with aligned heart rate, quality-gated HRV, respiration, EMG, motion, blood pressure, event notes, and reported sensation. Clearly distinguish direct visual observation, recorded telemetry, Ben's report, and physiological inference.
+- Treat reviewed video findings as a coordinated body-state record, not merely a timestamped action log. When visible, integrate face/head orientation, facial color or expression, jaw or neck tension, shoulders and upper back, arms and hands, chest and abdominal breathing, spinal or trunk posture, pelvis and perineum, genital and tissue state, thighs, legs, ankles, feet, and toes.
+- Give specific attention to meaningful visible change: generalized or regional skin flushing, pallor, mottling, sheen, sweating, muscle definition or tension; shoulder lift or retraction; spinal extension or arching; abdominal bracing or release; pelvic tilt, lift, drop, rocking, or pulse-like movement; hand clench or release; thigh or leg bracing; tremor, shudder, spasm-like movement, toe curl, foot planting; breathing depth or interruption; penile flaccidity, erection, engorgement, glans, shaft, meatus, foreskin, scrotal and perineal state; lubrication or fluid; grip, contact, device, and procedure mechanics; settling, relaxation, and meaningful visible lack of reaction.
+- Compare each meaningful change with the nearest comparable visible baseline and, when available, later recovery. Distinguish onset, increase, peak, persistence, decrease, return toward baseline, cyclic recurrence, asymmetry, and no sampled visible response. Do not treat lighting, exposure, camera angle, occlusion, or transmitted motion as physiology.
+- Keep evidence lanes explicit. First state direct visual observation. Then, in the broader synthesis only, correlate it with recorded heart rate, quality-gated HRV, respiration measurements, EMG, motion telemetry, blood pressure, event notes, or reported sensation. Never rewrite telemetry as something the camera saw.
 - Organize the final narrative around a small number of meaningful body-state phases. Use timestamps as selective evidence anchors for finding the relevant video, not as the backbone of every sentence. Compress repeated actions and unchanged states.
 - Preserve detail. The goal is richer visual and physiological synthesis, not a shorter or vaguer report.
+`;
+
+export const SYSTEMATIC_VISIBLE_BODY_REVIEW_RULE = `
+SYSTEMATIC VISIBLE-BODY REVIEW - HIGH PRIORITY:
+- Before focusing on the main action, scan every visible region in a fixed order: head/face; jaw/neck; shoulders/upper back; arms/hands; chest; abdomen; spine/trunk; pelvis/hips/perineum; genital tissues; thighs; knees/calves; ankles; feet/toes; then the coordinated whole-body state.
+- For every visible region, compare surface appearance, position/posture, muscle tension, movement, and change over the ordered frames. Look specifically for regional or generalized flushing, pallor, mottling, sheen or sweating; arching or spinal extension; shoulder, abdominal, pelvic, gluteal, thigh or leg bracing; hand clench; tremor, shudder, discrete spasm-like movement, rhythmic or pulse-like movement; toe curl, foot planting or splay; breathing-related rise/fall; settling and release.
+- Describe the observable form and location before interpreting it. Do not infer orgasm, pain, pleasure, internal contraction, autonomic cause, or intent from movement or color alone.
+- Compare with a similar earlier visible state and later recovery whenever available. Label the pattern as onset, increased, decreased, sustained, transient, cyclic, asymmetric, return toward baseline, no sampled visible response, or indeterminate.
+- A sampled-frame review can support what appears in the supplied frames but cannot exclude a brief movement between frames. Phrase a lack of reaction as "no visible response in the sampled frames," never as proof that no response occurred.
+- Omit obscured or off-camera anatomy instead of inventing normal findings. Treat lighting, exposure, shadow, compression, camera motion, crop changes, body rotation, and contact-transmitted movement as possible confounders.
+`;
+
+export const VISUAL_TELEMETRY_SEPARATION_RULE = `
+VISUAL EVIDENCE AND TELEMETRY SEPARATION - HIGH PRIORITY:
+- Visual annotation summaries, finding titles, finding text, and draft visual events must describe visible anatomy, body movement, posture, surface change, contact, device/procedure mechanics, fluid, or visibility limitations only.
+- Do not include heart rate, beats per minute, HRV, RMSSD, blood pressure, SpO2, EMG values, Sarah overlay labels, phase labels, trend charts, timers, averages, maxima, or other telemetry in visual-card prose or visual event notes.
+- Telemetry may help choose a review window and remains saved as separate aligned metadata. It may be correlated with accepted visual findings later in Session Analysis or Body Exploration Analysis, where it must be clearly labeled as recorded physiology rather than visual evidence.
+- A telemetry change without a visible body change is not a visual finding. A visible body change remains useful even when telemetry is flat, missing, delayed, or discordant.
 `;
 
 export const UNMIRRORED_ANATOMICAL_LATERALITY_RULE = `

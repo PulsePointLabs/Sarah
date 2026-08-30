@@ -9,6 +9,7 @@ import {
   NO_CLIPBOARD_CLUTCHING_RULE,
   removeMedicalReferralAndWarningLanguage,
   UNMIRRORED_ANATOMICAL_LATERALITY_RULE,
+  VISUAL_TELEMETRY_SEPARATION_RULE,
 } from "@/lib/analysisOutputRules";
 import { pulseOxReadingsFromSession } from "@/lib/sessionContext";
 import { buildBodyExplorationPhysiologyEvidence } from "@/lib/bodyExplorationPhysiology";
@@ -109,8 +110,8 @@ DEEP BODY EXPLORATION SYNTHESIS - HIGH PRIORITY:
 - HRV discipline: a sustained quality-gated RR pattern may support discussion of parasympathetic modulation. A single very high RMSSD value or abrupt one-bin jump may be artifact, ectopy, movement, or transient irregularity; describe it as a candidate signal unless surrounding RR quality and adjacent windows support it. Do not call one RMSSD spike proof of a vagal reflex.
 - Separate observation from mechanism. Use language such as "supports", "may reflect", or "is physiologically compatible with" when causation is not established.
 - Prefer synthesis over repetition. A timestamp belongs only when it anchors a major transition or a cross-stream relationship.
-- Visual evidence is not decoration. Use it only for something the reviewed frames or clips actually establish: visible leakage or expulsion, abdominal contour change, contraction/bracing, breathing, leg or foot response, positioning, equipment contact, visible genital state, or recovery behavior. Do not describe internal depth, sigmoid entry, retained volume, intraluminal pressure, sphincter tone, bladder causation, or autonomic mechanism as visually confirmed.
-- When a paragraph makes a substantive visual or procedural claim, put the supporting elapsed window in that same sentence. This is a production requirement: the review-video editor uses that exact citation to select source footage.
+- Visual evidence is not decoration. Use it only for something the reviewed frames or clips actually establish: regional or generalized skin/tissue change, posture or arching, abdominal contour change, bracing/release, breathing, tremor or spasm-like movement, leg or foot response, positioning, equipment contact, visible genital/perineal state, leakage/expulsion, or recovery behavior. Do not describe internal depth, sigmoid entry, retained volume, intraluminal pressure, sphincter tone, bladder causation, or autonomic mechanism as visually confirmed.
+- Use an elapsed window in the same sentence for the small number of major visual/procedural anchors selected for the report. Do not attach a timestamp to every supporting visual detail; consolidate related observations into the anchored body-state phase.
 - If no reviewed visual window supports a claim, keep it explicitly as a user report, telemetry interpretation, or cautious inference and do not imply Sarah saw it.
 - A single extreme RMSSD bin must not be called a vagal reflex or a parasympathetic opening. First inspect adjacent RR quality and sustained behavior; otherwise label it a candidate transient or artifact-sensitive observation.
 - Do not call an elevated heart-rate or blood-pressure response benign, non-pathological, expected, or free of cardiovascular strain unless the available record genuinely supports that conclusion. Describe the measured load and uncertainty instead.
@@ -119,8 +120,8 @@ DEEP BODY EXPLORATION SYNTHESIS - HIGH PRIORITY:
 
 const BODY_EXPLORATION_VIDEO_ALIGNMENT_RULE = `
 BODY EXPLORATION REVIEW-VIDEO EVIDENCE CONTRACT - MANDATORY:
-- Write each visually demonstrable action or body response as a self-contained sentence with its exact elapsed time or short elapsed window.
-- Keep the words describing the action next to the time citation. Do not place a timestamp in one paragraph and the corresponding visual claim several paragraphs later.
+- Select no more than six visually demonstrable actions or body-state transitions as review-video anchors, each with its exact elapsed time or short elapsed window. Supporting details within the same phase do not each need another timestamp.
+- Keep the words describing an anchored action next to its time citation. Do not place a timestamp in one paragraph and the corresponding anchor several paragraphs later.
 - One sentence should describe one visual concept or one tightly linked response window. Do not combine condom-catheter placement, enema insertion, leakage, leg trembling, accessory retrieval, and defecation in one sentence.
 - Never use a visually unrelated moment merely because it is dramatic. The editor must show the cited source interval for the action being described.
 - Untimed whole-session physiology may be narrated over continuous footage from the most recently matched evidence window. It must not trigger a jump to an unrelated event.
@@ -312,8 +313,8 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
         properties: {
           summary: { type: "string" },
           integrated_physiology: { type: "array", items: { type: "string" }, description: "Four to six substantive synthesis paragraphs. This is the majority of the report. Integrate full-trajectory heart rate, quality-gated RR/HRV, respiration, motion, EMG, blood pressure, glucose, SpO2, baseline context, load, and recovery where available. Explain relationships, provenance, and uncertainty; do not list metrics or events." },
-          mechanical_sensory_synthesis: { type: "array", items: { type: "string" }, description: "Two to four substantive paragraphs organized into three to five response phases, connecting mechanics, position, distension or pressure as reported, verified visible responses, comfort, and first-person sensation. Compress repeated cycles instead of narrating each action." },
-          user_sarah_findings: { type: "array", items: { type: "string" }, description: "Two to four paragraphs synthesizing the person's observations/interview findings with Sarah's reviewed visual and physiological findings. Each direct visual claim must include its matching elapsed time or short elapsed window in the same sentence." },
+          mechanical_sensory_synthesis: { type: "array", items: { type: "string" }, description: "Three to five substantive phase-based paragraphs connecting mechanics, position, verified visible whole-body response, comfort, and first-person sensation. Include regional skin/tissue change, posture or arching, bracing/release, breathing, tremor/spasm-like movement, genital/perineal response, and lower-body response when supported. Compress repeated cycles instead of narrating each action." },
+          user_sarah_findings: { type: "array", items: { type: "string" }, description: "Three to five substantive paragraphs synthesizing the person's observations with Sarah's reviewed visual evidence across all visible body regions. Describe baseline-to-change-to-recovery patterns and meaningful lack of sampled visible response. Use only a few elapsed-time anchors for the most important transitions; do not timestamp every visual claim. Keep HR and other telemetry out of the visual description itself, then correlate separately where useful." },
           outcome_comparison: { type: "array", items: { type: "string" }, description: "One to three paragraphs explaining immediate outcome and cautious comparison with prior explorations when supported." },
           recommendations: { type: "array", items: { type: "string" }, description: "Two to four evidence-grounded takeaways, useful comparisons, or data-quality improvements. Never include medical warnings, care escalation, testing advice, or physician/clinician referral." },
         },
@@ -376,6 +377,7 @@ ${TTS_FRIENDLY_STRUCTURE_RULE}
 ${DEEP_BODY_EXPLORATION_SYNTHESIS_RULE}
 ${BODY_EXPLORATION_VIDEO_ALIGNMENT_RULE}
 ${INTEGRATED_HEAD_TO_TOE_RULE}
+${VISUAL_TELEMETRY_SEPARATION_RULE}
 ${NO_CLIPBOARD_CLUTCHING_RULE}
 ${focusedFoley ? focusedFoleyPromptBlock() : ""}
 ${buildSarahPersonalityPrompt(readSarahPersonalitySettings())}

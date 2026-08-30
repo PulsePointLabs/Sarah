@@ -4,7 +4,9 @@ import {
   INTEGRATED_HEAD_TO_TOE_RULE,
   NO_CLIPBOARD_CLUTCHING_RULE,
   removeMedicalReferralAndWarningLanguage,
+  SYSTEMATIC_VISIBLE_BODY_REVIEW_RULE,
   UNMIRRORED_ANATOMICAL_LATERALITY_RULE,
+  VISUAL_TELEMETRY_SEPARATION_RULE,
 } from "../../src/lib/analysisOutputRules.js";
 
 test("analysis output rules prohibit medical referrals while preserving session context", () => {
@@ -26,6 +28,17 @@ test("visual synthesis rule is broad, head-to-toe, and phase-oriented", () => {
   assert.match(INTEGRATED_HEAD_TO_TOE_RULE, /masturbation\/stimulation sessions, Body Exploration/i);
   assert.match(INTEGRATED_HEAD_TO_TOE_RULE, /face\/head orientation/i);
   assert.match(INTEGRATED_HEAD_TO_TOE_RULE, /timestamps as selective evidence anchors/i);
+  assert.match(INTEGRATED_HEAD_TO_TOE_RULE, /generalized or regional skin flushing/i);
+  assert.match(INTEGRATED_HEAD_TO_TOE_RULE, /spasm-like movement/i);
+  assert.match(INTEGRATED_HEAD_TO_TOE_RULE, /nearest comparable visible baseline/i);
+});
+
+test("annotation rule requires systematic coverage and keeps telemetry out of visual prose", () => {
+  assert.match(SYSTEMATIC_VISIBLE_BODY_REVIEW_RULE, /head\/face; jaw\/neck; shoulders\/upper back/i);
+  assert.match(SYSTEMATIC_VISIBLE_BODY_REVIEW_RULE, /arching or spinal extension/i);
+  assert.match(SYSTEMATIC_VISIBLE_BODY_REVIEW_RULE, /cannot exclude a brief movement between frames/i);
+  assert.match(VISUAL_TELEMETRY_SEPARATION_RULE, /Do not include heart rate, beats per minute/i);
+  assert.match(VISUAL_TELEMETRY_SEPARATION_RULE, /remains saved as separate aligned metadata/i);
 });
 
 test("laterality rule uses Ben's anatomical side for unmirrored cameras", () => {

@@ -11,7 +11,25 @@ import {
   hasUnsupportedBareHandClaim,
   hasConfirmedStimulationPauseEvidence,
   sanitizeUnsupportedStimulationPauseClaim,
+  stripTelemetryFromVisualText,
 } from '../../src/lib/videoPassTextGuards.js';
+
+test('removes telemetry narration from otherwise useful visual findings', () => {
+  const result = stripTelemetryFromVisualText(
+    "Erection builds from partial to firm across the sampled frames, and HR climbs from 98 to 107 bpm while the Sarah overlay changes to Sustained Build.",
+  );
+
+  assert.match(result, /Erection builds from partial to firm/i);
+  assert.doesNotMatch(result, /\bHR\b|bpm|overlay|Sustained Build/i);
+});
+
+test('drops telemetry-only visual text and preserves a trailing visible observation', () => {
+  assert.equal(stripTelemetryFromVisualText('Heart rate rises from 92 to 104 bpm.'), '');
+  assert.equal(
+    stripTelemetryFromVisualText('HR rises toward its peak while your abdomen visibly braces and your pelvis lifts.'),
+    'Your abdomen visibly braces and your pelvis lifts.',
+  );
+});
 
 test('blocks Foley tip-at-meatus claims when contact is not explicitly confirmed', () => {
   const input = 'Other hand introduces and begins advancing the lubricated 18Fr Foley catheter tip toward and at the meatus.';

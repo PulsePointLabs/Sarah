@@ -1,4 +1,5 @@
 import { richTextToPlainText } from "./richText.js";
+import { stripTelemetryFromVisualText } from "./videoPassTextGuards.js";
 
 export const VISUAL_REVIEW_SOURCES = [
   "profile_sarah_image_review",
@@ -125,11 +126,11 @@ export function sessionEventsForCurrentPhaseMarkers(session = {}) {
 
 function compactFindingText(finding) {
   if (!finding) return "";
-  if (typeof finding === "string") return cleanText(finding);
+  if (typeof finding === "string") return stripTelemetryFromVisualText(cleanText(finding));
   const title = finding.title ? `${finding.title}: ` : "";
   const text = finding.findingText || finding.text || finding.finding || "";
   const confidence = finding.confidence ? ` (${finding.confidence} confidence)` : "";
-  return cleanText(`${title}${text}${confidence}`);
+  return stripTelemetryFromVisualText(cleanText(`${title}${text}${confidence}`));
 }
 
 function parseFindingBullets(text) {
@@ -305,6 +306,30 @@ export function buildSessionVisualEvidenceDigest(session, { limit = 12 } = {}) {
   return lines.length ? `Reviewed Sarah visual evidence for this session:\n${lines.join("\n")}` : "";
 }
 
+function compactVideoPassStructuredFinding(finding) {
+  if (!finding || typeof finding !== "object") return null;
+  const text = compactFindingText(finding);
+  if (!text) return null;
+  const compactTag = (value, maxLength = 60) => String(value || "").trim().slice(0, maxLength);
+  return {
+    text,
+    body_regions: Array.isArray(finding.body_regions) ? finding.body_regions.map((value) => compactTag(value)).filter(Boolean) : [],
+    response_domains: Array.isArray(finding.response_domains) ? finding.response_domains.map((value) => compactTag(value)).filter(Boolean) : [],
+    change_pattern: compactTag(finding.change_pattern),
+    visibility: compactTag(finding.visibility, 30),
+  };
+}
+
+function formatStructuredVideoPassFinding(finding) {
+  const tags = [
+    finding.body_regions?.length ? `regions ${finding.body_regions.join(", ")}` : null,
+    finding.response_domains?.length ? `domains ${finding.response_domains.join(", ")}` : null,
+    finding.change_pattern ? `pattern ${finding.change_pattern}` : null,
+    finding.visibility ? `visibility ${finding.visibility}` : null,
+  ].filter(Boolean);
+  return `${tags.length ? `[${tags.join("; ")}] ` : ""}${finding.text}`;
+}
+
 function compactTelemetryText(value) {
   if (!value) return "";
   if (typeof value === "string") return cleanText(value, 500);
@@ -334,11 +359,14 @@ function normalizeVideoPassFindingCard(card, index = 0) {
   const findings = Array.isArray(card.findings)
     ? card.findings.map(compactFindingText).filter(Boolean)
     : parseFindingBullets(card.findings);
+  const structuredFindings = Array.isArray(card.findings)
+    ? card.findings.map(compactVideoPassStructuredFinding).filter(Boolean)
+    : [];
   const events = Array.isArray(card.draft_events || card.events)
     ? (card.draft_events || card.events)
       .map((event) => ({
         time_s: Number(event?.time_s),
-        note: cleanText(event?.note || event?.text || "", 500),
+        note: stripTelemetryFromVisualText(cleanText(event?.note || event?.text || "", 500)),
         confidence: event?.confidence || "",
       }))
       .filter((event) => Number.isFinite(event.time_s) && event.note)
@@ -360,8 +388,9 @@ function normalizeVideoPassFindingCard(card, index = 0) {
       end_s: Number.isFinite(end) ? end : null,
       duration_s: Number(clip.duration_s || (Number.isFinite(start) && Number.isFinite(end) ? end - start : 0)) || null,
     },
-    summary: cleanText(card.summary, 900),
+    summary: stripTelemetryFromVisualText(cleanText(card.summary, 900)),
     findings,
+    structured_findings: structuredFindings,
     draft_events: events,
     telemetry: compactTelemetryText(card.telemetry),
     motion_summary: card.motion_summary || card.motionSummary || null,
@@ -725,7 +754,9 @@ export function buildSessionVideoPassDigest(session, {
   const entries = normalizeSessionVideoPassFindings(session).slice(0, limit);
   const lines = entries.map((entry) => {
     const videoLabel = entry.source_video.label || entry.source_video.filename || "linked local video";
-    const findings = entry.findings.slice(0, findingsPerCard);
+    const findings = entry.structured_findings?.length
+      ? entry.structured_findings.slice(0, findingsPerCard).map(formatStructuredVideoPassFinding)
+      : entry.findings.slice(0, findingsPerCard);
     const events = entry.draft_events.slice(0, eventsPerCard);
     const parts = [
       `- [${formatVideoPassRange(entry)}; ${videoLabel}] ${entry.summary}`,
@@ -734,7 +765,6 @@ export function buildSessionVideoPassDigest(session, {
     if (events.length) {
       parts.push(`Draft Video Sync events: ${events.map((event) => `${formatTimePhrase(event.time_s)} - ${event.note}${event.confidence ? ` (${event.confidence} confidence)` : ""}`).join(" | ")}`);
     }
-    if (entry.telemetry) parts.push(`Telemetry: ${entry.telemetry}`);
     return parts.filter(Boolean).join(" ");
   });
   const fallback = !lines.length ? cleanText(session?.ai_analysis?._video_pass_digest || "", 6000) : "";
@@ -982,7 +1012,9 @@ export function buildBodyExplorationVideoPassDigest(exploration, {
   const entries = normalizeBodyExplorationVideoPassFindings(exploration).slice(0, limit);
   const lines = entries.map((entry) => {
     const videoLabel = entry.source_video.label || entry.source_video.filename || "linked local video";
-    const findings = entry.findings.slice(0, findingsPerCard);
+    const findings = entry.structured_findings?.length
+      ? entry.structured_findings.slice(0, findingsPerCard).map(formatStructuredVideoPassFinding)
+      : entry.findings.slice(0, findingsPerCard);
     const events = entry.draft_events.slice(0, eventsPerCard);
     const parts = [
       `- [${formatVideoPassRange(entry)}; ${videoLabel}] ${entry.summary}`,
@@ -991,7 +1023,6 @@ export function buildBodyExplorationVideoPassDigest(exploration, {
     if (events.length) {
       parts.push(`Draft exploration timeline events: ${events.map((event) => `${formatTimePhrase(event.time_s)} - ${event.note}${event.confidence ? ` (${event.confidence} confidence)` : ""}`).join(" | ")}`);
     }
-    if (entry.telemetry) parts.push(`Telemetry: ${entry.telemetry}`);
     return parts.filter(Boolean).join(" ");
   });
   const reviewed = lines.length

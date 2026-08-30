@@ -28,6 +28,7 @@ import {
   NO_CLIPBOARD_CLUTCHING_RULE,
   removeMedicalReferralAndWarningLanguage,
   UNMIRRORED_ANATOMICAL_LATERALITY_RULE,
+  VISUAL_TELEMETRY_SEPARATION_RULE,
 } from "@/lib/analysisOutputRules";
 import { buildSessionHrvEvidence, RR_HRV_INTERPRETATION_RULES } from "@/utils/hrvEvidence";
 import { buildSessionPhysiologyEvidence } from "@/lib/bodyExplorationPhysiology";
@@ -2849,6 +2850,7 @@ ${BASELINE_ANATOMY_AND_DEVICE_SETUP_RULE_V1}
 ${ANATOMICAL_LATERALITY_RULE_V1}
 ${UNMIRRORED_ANATOMICAL_LATERALITY_RULE}
 ${INTEGRATED_HEAD_TO_TOE_RULE}
+${VISUAL_TELEMETRY_SEPARATION_RULE}
 ${NO_CLIPBOARD_CLUTCHING_RULE}
 ${ESTIM_WAVEFORM_AND_MODE_RULE_V1}
 ${firstNameToneCue}
@@ -3024,11 +3026,11 @@ Provide ${isTechnical
             ? { type: "array", items: { type: "string" }, description: "Three to six detailed paragraphs comparing the recorded entry reference with middle-session, peak-load, end-state, and recovery physiology. Integrate HR, tracked-baseline elevation, usable HRV, usable respiration, motion/position, multimodal state, recovery drops, response latency, EMG, and data quality. Do not call the entry window a true resting baseline unless separately documented." }
             : { type: "array", items: { type: "string" }, description: "Two to four readable paragraphs explaining how physiology changed from the recorded entry state through the middle, peak, end, and recovery. Integrate all usable signals in plain language and identify missing/noisy evidence without metric dumping." },
           arousal_arc: isTechnical
-            ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining HR and usable HRV as evidence for body-state transitions, beginning with a supported baseline physical setup read when available. Include exploration or stimulation links, supported anatomy, genital state, erection/response quality, grip/contact/stroke mechanics, e-stim waveform/mode or electrode-path details when available, pre-climax/climax/recovery shifts when present, and why the session progressed as it did. Preserve technical depth without becoming metric narration." }
-            : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: group related events into meaningful body-state transitions and explain what the body appears to be doing. Start with supported baseline physical setup when available, including genital state, Foley/catheter or e-stim setup, and whether stimulation had begun. Include supported erection quality, grip/contact/stroke mechanics, e-stim settings/electrode path, and stimulation effectiveness where they explain the arousal arc. Weave in usable HRV as plain physiology when it clarifies a transition, not as raw values." },
+            ? { type: "array", items: { type: "string" }, description: "Several detailed phase/window paragraphs explaining the coordinated visual body-state arc first, then HR and usable HRV as separately identified corroboration. Begin with a supported visible baseline and track regional skin/tissue change, posture/arching, bracing/release, breathing, tremor/spasm-like movement, genital/perineal state, hand/contact mechanics, and lower-body response through change and recovery. Include e-stim/device details when available. Preserve technical depth without metric narration or timestamp-by-timestamp replay." }
+            : { type: "array", items: { type: "string" }, description: "Chronological Deep Dive: group related evidence into meaningful body-state phases. Start with a supported visible baseline, then describe changes across all visible regions—skin/tissue appearance, posture or arching, bracing/release, breathing, tremor/spasm-like movement, genital/perineal state, hand/contact mechanics, and lower-body response—through recovery. Use only selective time anchors. Correlate HR/HRV afterward as recorded physiology, never as visual evidence." },
           event_analysis: isTechnical
-            ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs about major event clusters, phase markers, distinctive sensations/findings, visible or logged stimulation mechanics, genital/foley/device interaction, e-stim waveform/mode/electrode-path implications, HR/HRV-supported turning points, and what made the session notable. Use time and numbers as evidence anchors, then explain why they matter to the body-state story." }
-            : { type: "array", items: { type: "string" }, description: "Motion Telemetry Interpretation and evidence synthesis: interpret asymmetry, cadence proxy, movement patterns, visible or logged grip/contact/stroke/genital-state findings, e-stim waveform/mode/electrode-path implications when available, and HRV-informed body state where relevant, without raw HRV number dumps or chronology replay." },
+            ? { type: "array", items: { type: "string" }, description: "Several interpretive paragraphs synthesizing recurring visual-response patterns, major event clusters, phase markers, distinctive sensations, stimulation or procedure mechanics, genital/device interaction, motion telemetry, and HR/HRV-supported turning points. Explicitly distinguish accepted visual findings from derived motion telemetry and recorded physiology. Use selective time anchors, then explain why the pattern matters." }
+            : { type: "array", items: { type: "string" }, description: "Visual and motion evidence synthesis: identify recurring whole-body response patterns, asymmetry, cadence proxies, posture/arching, bracing/release, skin/tissue change, tremor/spasm-like movement, grip/contact mechanics, genital state, and recovery where supported. Clearly separate accepted visual evidence, derived motion telemetry, and HR/HRV physiology; avoid chronology replay and raw metric dumps." },
           emg_analysis: { type: "array", items: { type: "string" }, description: "EMG signal quality, activation patterns, L/R comparison, EMG vs HR, calibration notes, and practical meaning for muscle engagement or relaxation — only if EMG data present" },
           notable_findings: isTechnical
             ? { type: "array", items: { type: "string" } }

@@ -7,6 +7,36 @@ function lowerItemText(item) {
   return itemText(item).toLowerCase();
 }
 
+const VISUAL_BODY_LANGUAGE_RE = /\b(?:visible|visibly|frame|body|face|head|jaw|neck|shoulder|arm|hand|chest|abdomen|abdominal|trunk|spine|back|pelvi|perine|penis|penile|shaft|glans|meatus|foreskin|scrot|test|thigh|leg|knee|calf|ankle|foot|feet|toe|skin|tissue|flush|pallor|mottl|sheen|sweat|arch|brace|tens|relax|trem|shudder|spasm|curl|plant|breath|respir|contact|stroke|device|foley|catheter|tube|fluid|moisture|lubric)/i;
+const VISUAL_TELEMETRY_LANGUAGE_RE = /\b(?:heart rate|hr|bpm|telemetry|rmssd|sdnn|hrv|blood pressure|spo2|oxygen saturation|emg|overlay|phase label|trend chart|current bpm|average bpm|max(?:imum)? bpm|sustained build|elevated label|recovery label)\b/i;
+
+/** Keep generated visual-card prose visual-only; telemetry is stored separately. */
+export function stripTelemetryFromVisualText(value = '') {
+  const cleaned = String(value || '')
+    .replace(/\([^)]*\b(?:heart rate|hr|bpm|telemetry|rmssd|sdnn|hrv|blood pressure|spo2|oxygen saturation|emg|overlay|phase label|trend chart)\b[^)]*\)/gi, '')
+    .replace(/\[[^\]]*\b(?:heart rate|hr|bpm|telemetry|rmssd|sdnn|hrv|blood pressure|spo2|oxygen saturation|emg|overlay|phase label|trend chart)\b[^\]]*\]/gi, '')
+    .replace(/\s*(?:,|;|—)\s*(?:and\s+|while\s+|with\s+|as\s+)?(?:the\s+|your\s+|sarah(?: app)?\s+)?(?:heart rate|hr|telemetry|overlay|phase label|trend chart|rmssd|sdnn|hrv|blood pressure|spo2|oxygen saturation|emg)\b[^.!?]*(?=[.!?]|$)/gi, '')
+    .replace(/\s+(?:and|while|with|as)\s+(?:the\s+|your\s+|sarah(?: app)?\s+)?(?:heart rate|hr|telemetry|overlay|phase label|trend chart|rmssd|sdnn|hrv|blood pressure|spo2|oxygen saturation|emg)\b[^.!?]*(?=[.!?]|$)/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return cleaned
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => {
+      if (!VISUAL_TELEMETRY_LANGUAGE_RE.test(sentence)) return sentence;
+      const trailingVisual = sentence.match(/^(?:the\s+|your\s+)?(?:heart rate|hr|telemetry|overlay|phase label|trend chart|rmssd|sdnn|hrv|blood pressure|spo2|oxygen saturation|emg)\b.*?\b(?:while|as)\s+(.+)$/i)?.[1];
+      if (trailingVisual && VISUAL_BODY_LANGUAGE_RE.test(trailingVisual)) {
+        return `${trailingVisual.charAt(0).toUpperCase()}${trailingVisual.slice(1)}`;
+      }
+      return VISUAL_BODY_LANGUAGE_RE.test(sentence) ? sentence : '';
+    })
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+([,.!?])/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function hasBlueObjectFoleyMislabel(item) {
   const text = lowerItemText(item);
   return /(blue[-\s]?(?:tipped|capped)?\s+(?:object|item|bottle|cap)|blue\s+(?:object|item|bottle|cap))/.test(text)
