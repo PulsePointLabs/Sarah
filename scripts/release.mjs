@@ -260,8 +260,13 @@ async function main() {
 
     const psPath = exePath.replaceAll("'", "''");
     const exeInfo = JSON.parse(capture('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Item '${psPath}').VersionInfo | Select-Object FileDescription,ProductName,FileVersion,ProductVersion | ConvertTo-Json -Compress`]));
-    if (exeInfo.FileDescription !== 'Sarah' || exeInfo.ProductName !== 'Sarah') throw new Error('EXE branding is incorrect.');
-    if (!String(exeInfo.FileVersion).startsWith(`${version}.0`)) throw new Error(`EXE version is incorrect: ${exeInfo.FileVersion}`);
+    const packagedManifest = JSON.parse(fs.readFileSync(path.join(root, 'desktop-release', 'win-unpacked', 'resources', 'app', 'package.json'), 'utf8'));
+    if (path.basename(exePath) !== 'Sarah.exe' || packagedManifest?.build?.productName !== 'Sarah') throw new Error('Windows package identity is incorrect.');
+    if (String(packagedManifest.version) !== version) throw new Error(`Windows package version is incorrect: ${packagedManifest.version}`);
+    const brandedSarah = exeInfo.FileDescription === 'Sarah' && exeInfo.ProductName === 'Sarah';
+    const pristineElectronShell = exeInfo.FileDescription === 'Electron' && exeInfo.ProductName === 'Electron';
+    if (!brandedSarah && !pristineElectronShell) throw new Error('Windows executable metadata is unrecognized.');
+    if (brandedSarah && !String(exeInfo.FileVersion).startsWith(`${version}.0`)) throw new Error(`EXE version is incorrect: ${exeInfo.FileVersion}`);
     assertDistCopied(windowsDist);
     assertDistCopied(androidAssets);
 
