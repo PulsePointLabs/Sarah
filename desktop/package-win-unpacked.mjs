@@ -10,8 +10,6 @@ const appOut = path.join(outputRoot, 'win-unpacked');
 const resourcesOut = path.join(appOut, 'resources');
 const appResourcesOut = path.join(resourcesOut, 'app');
 const sarahExe = path.join(appOut, 'Sarah.exe');
-const sarahIcon = path.join(root, 'public', 'icons', 'sarah.ico');
-const rcEdit = path.join(root, 'node_modules', 'electron-winstaller', 'vendor', 'rcedit.exe');
 const packageLock = path.join(root, 'package-lock.json');
 const dependencyStamp = path.join(appResourcesOut, '.package-lock.sha256');
 const electronStamp = path.join(appOut, '.electron-version');
@@ -90,6 +88,10 @@ function initializeElectronShell() {
 
   fs.mkdirSync(resourcesOut, { recursive: true });
   removeDir(path.join(resourcesOut, 'default_app.asar'));
+  // rcedit is not reliably idempotent on an already-branded Electron binary.
+  // Refresh only the 232 MB executable before applying Sarah resources; keep the
+  // multi-gigabyte packaged dependency tree and the rest of the shell intact.
+  fs.copyFileSync(path.join(electronDist, 'electron.exe'), sarahExe);
   fs.writeFileSync(electronStamp, `${electronVersion}\n`);
 }
 
@@ -125,8 +127,6 @@ function localVisionFilter(source) {
 if (!fs.existsSync(path.join(electronDist, 'electron.exe'))) throw new Error('Electron runtime is missing. Run npm install first.');
 if (!fs.existsSync(path.join(root, 'dist', 'index.html'))) throw new Error('Built frontend is missing. Run Vite first.');
 if (!fs.existsSync(path.join(root, 'desktop', 'node-runtime', 'node.exe'))) throw new Error('Bundled Node runtime is missing.');
-if (!fs.existsSync(sarahIcon)) throw new Error(`Sarah Windows icon is missing: ${sarahIcon}`);
-if (!fs.existsSync(rcEdit)) throw new Error(`Windows resource editor is missing: ${rcEdit}`);
 
 assertSarahStopped();
 initializeElectronShell();
@@ -147,18 +147,6 @@ fs.copyFileSync(path.join(root, 'package.json'), path.join(appResourcesOut, 'pac
 copyFileIfChanged(path.join(root, 'desktop', 'node-runtime', 'node.exe'), path.join(resourcesOut, 'node-runtime', 'node.exe'));
 
 assertSarahStopped();
-const version = String(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version || '0.0.0');
-const windowsVersion = `${version}.0`;
-const rcResult = spawnSync(rcEdit, [
-  sarahExe,
-  '--set-icon', sarahIcon,
-  '--set-version-string', 'FileDescription', 'Sarah',
-  '--set-version-string', 'ProductName', 'Sarah',
-  '--set-version-string', 'OriginalFilename', 'Sarah.exe',
-  '--set-version-string', 'CompanyName', 'PulsePoint Labs',
-  '--set-file-version', windowsVersion,
-  '--set-product-version', windowsVersion,
-], { stdio: 'inherit' });
-if (rcResult.status !== 0) throw new Error(`Could not brand Sarah.exe (rcedit exit ${rcResult.status}).`);
+console.log('Preserved the valid Electron 42 shell; legacy rcedit branding is disabled because it corrupts this executable format.');
 
 console.log(`Refreshed Windows app at ${appOut}`);

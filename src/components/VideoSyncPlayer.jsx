@@ -30,11 +30,15 @@ import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
 import { cleanWhisperTranscript } from "@/utils/whisperTranscript";
 import { isSarahNativeShell } from "@/lib/mobileApiBase";
 import { readSttProviderPreference } from "@/lib/sttSettings";
+import { bloodPressureReadingsFromSession, pulseOxReadingsFromSession } from "@/lib/sessionContext";
+import { normalizeTimedReadings } from "@/lib/telemetryTheater";
+import { startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import {
   getVideoSyncCorrection,
   mediaTimeToSessionTime,
   sessionTimeToMediaTime,
 } from "@/lib/videoSyncClock";
+import { formatManualAnnotationReviewText } from "@/lib/manualAnnotationReviewText";
 
 function getCategoryMeta(value) {
   return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -329,6 +333,39 @@ function AnnotationTagPill({ value }) {
   );
 }
 
+function ManualNoteSarahRead({ review, pending = false, compact = false }) {
+  if (!review && !pending) return null;
+  const findings = Array.isArray(review?.findings) ? review.findings : [];
+  const visibleFindings = compact ? findings.slice(0, 2) : findings;
+  return (
+    <div className="mt-2 rounded-md border border-primary/20 bg-primary/[0.06] px-2.5 py-2 text-left">
+      <div className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-wider text-primary">
+        <Sparkles className={`h-3 w-3 ${pending ? "animate-pulse" : ""}`} /> Sarah&apos;s ±5s read
+      </div>
+      {pending ? (
+        <p className="mt-1 text-[10px] leading-snug text-muted-foreground">Reviewing the nearby frames quietly…</p>
+      ) : (
+        <>
+          {review?.summary && <p className="mt-1 text-[10px] leading-snug text-foreground/85">{formatManualAnnotationReviewText(review.summary)}</p>}
+          {visibleFindings.length > 0 && (
+            <div className="mt-1.5 space-y-1 border-t border-primary/10 pt-1.5">
+              {visibleFindings.map((finding, index) => (
+                <p key={`${finding.anatomical_area || "finding"}-${finding.evidence_time_s || index}`} className="text-[10px] leading-snug text-foreground/75">
+                  <span className="font-semibold text-primary/90">{finding.anatomical_area || "Visible finding"}:</span>{" "}
+                  {formatManualAnnotationReviewText(finding.observation)}
+                </p>
+              ))}
+              {compact && findings.length > visibleFindings.length && (
+                <p className="text-[9px] text-muted-foreground">+{findings.length - visibleFindings.length} more finding{findings.length - visibleFindings.length === 1 ? "" : "s"} on the full note card</p>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function MotionDerivedBadge({ event }) {
   if (event?.verification_status === "reviewed_verified") {
     return (
@@ -573,6 +610,7 @@ export default function VideoSyncPlayer({
   const videoFeedRefs = useRef({});
   const videoFeedUrls = useRef({});
   const pendingMasterTimeRef = useRef(null);
+  const frameDurationRef = useRef(1 / 30);
   const pendingFeedTimesRef = useRef({});
   const playbackClockFrameRef = useRef(null);
   const lastSecondarySyncAtRef = useRef(0);
@@ -589,9 +627,12 @@ export default function VideoSyncPlayer({
   const [playerHeight, setPlayerHeight] = useState(68);
   const [playerWidth, setPlayerWidth] = useState(66);
   const [telemetryDisplayMode, setTelemetryDisplayMode] = useState("sidebar");
+  const [fullTelemetryView, setFullTelemetryView] = useState(false);
+  const [fullTelemetryChannels, setFullTelemetryChannels] = useState({ spo2: true, respiration: true, motion: true });
   const [feedsExpanded, setFeedsExpanded] = useState(true);
   const layoutRef = useRef(null);
   const fullscreenSurfaceRef = useRef(null);
+  const fullTelemetryRootRef = useRef(null);
   const [domFullscreenActive, setDomFullscreenActive] = useState(false);
   const [shellFullscreenActive, setShellFullscreenActive] = useState(false);
   const fullscreenActive = domFullscreenActive || shellFullscreenActive;
@@ -602,6 +643,7 @@ export default function VideoSyncPlayer({
   const fullscreenTelemetryDragRef = useRef(null);
   const [fullscreenTelemetryPosition, setFullscreenTelemetryPosition] = useState({ x: 16, y: 64 });
   const resumeAfterShellFullscreenToggleRef = useRef(false);
+  const resumeAfterFeedSwitchRef = useRef(false);
   const suppressNextFullscreenVideoToggleRef = useRef(false);
   const nativeShell = isSarahNativeShell();
   const useSarahManagedFullscreen = nativeShell;
@@ -632,13 +674,46 @@ export default function VideoSyncPlayer({
 
   // Local mutable events list
   const [events, setEvents] = useState(session.event_timeline || []);
+  const analysisField = isExploration ? "ai_body_exploration" : "ai_analysis";
+  const [manualVisualReviews, setManualVisualReviews] = useState(
+    Array.isArray(session?.[analysisField]?._manual_annotation_visual_reviews)
+      ? session[analysisField]._manual_annotation_visual_reviews
+      : [],
+  );
+  const [pendingManualReviewIds, setPendingManualReviewIds] = useState(() => new Set());
 
   useEffect(() => {
     setEvents(session.event_timeline || []);
+    setManualVisualReviews(
+      Array.isArray(session?.[analysisField]?._manual_annotation_visual_reviews)
+        ? session[analysisField]._manual_annotation_visual_reviews
+        : [],
+    );
     setSelectedEventFilters([]);
     setActiveEventIdx(null);
     setEditingIdx(null);
-  }, [session.id, session.event_timeline]);
+  }, [analysisField, session.id, session.event_timeline, session?.[analysisField]?._manual_annotation_visual_reviews_updated_at]);
+
+  useEffect(() => {
+    setPendingManualReviewIds(new Set());
+  }, [session.id]);
+
+  const manualReviewByEventId = useMemo(() => new Map(
+    manualVisualReviews
+      .filter((review) => review?.event_id)
+      .map((review) => [String(review.event_id), review]),
+  ), [manualVisualReviews]);
+  const manualReviewForEvent = useCallback((event) => {
+    const eventId = String(event?.event_id || "");
+    if (eventId && manualReviewByEventId.has(eventId)) return manualReviewByEventId.get(eventId);
+    const note = String(event?.note || "").trim();
+    const time = Number(event?.time_s);
+    return manualVisualReviews.find((review) => (
+      Number.isFinite(time)
+      && Math.abs(Number(review?.note_time_s) - time) <= 0.6
+      && String(review?.manual_note || "").trim() === note
+    )) || null;
+  }, [manualReviewByEventId, manualVisualReviews]);
 
   // Edit state: idx of event being edited, or null
   const [editingIdx, setEditingIdx] = useState(null);
@@ -757,6 +832,51 @@ export default function VideoSyncPlayer({
     onEventsChange?.(sorted);
   };
 
+  const queueManualAnnotationVisualReview = (event) => {
+    const feed = videoFeeds[activeFeedKey];
+    if (!session?.id || !feed?.localPath || !event?.note) return;
+    const role = activeFeedKey === "lower_body" ? "feet" : activeFeedKey;
+    const eventId = String(event.event_id || `${event.time_s}:${event.note}`);
+    setPendingManualReviewIds((current) => new Set([...current, eventId]));
+    void startBackgroundJob("manual_annotation_visual_review", {
+      recordId: session.id,
+      recordType,
+      event,
+      video: {
+        path: feed.localPath,
+        label: feed.label || feed.fileName || activeFeedKey,
+        filename: feed.fileName || "",
+        fingerprint: feed.fingerprint || "",
+        role,
+        timelineOffsetSeconds: Number(feed.timelineOffsetSeconds ?? videoOffset) || 0,
+      },
+    }, {
+      source: "manual_annotation_visual_review",
+      sessionId: session.id,
+      recordType,
+      title: `Visual review near ${fmtMmSs(event.time_s)}`,
+      route: isExploration
+        ? `/ai-annotation?type=body_exploration&id=${encodeURIComponent(session.id)}`
+        : `/sessions/${encodeURIComponent(session.id)}/ai-annotation`,
+      quietInTray: true,
+      notifications: false,
+    }).then(async (startedJob) => {
+      await waitForBackgroundJob(startedJob.id, { intervalMs: 1800 });
+      const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
+      const refreshed = await entity.get(session.id);
+      const reviews = refreshed?.[analysisField]?._manual_annotation_visual_reviews;
+      if (Array.isArray(reviews)) setManualVisualReviews(reviews);
+    }).catch((error) => {
+      console.warn("Manual annotation visual review could not be completed:", error);
+    }).finally(() => {
+      setPendingManualReviewIds((current) => {
+        const next = new Set(current);
+        next.delete(eventId);
+        return next;
+      });
+    });
+  };
+
   const showQuickNotice = useCallback((message, tone = "success") => {
     if (quickNoticeTimerRef.current) clearTimeout(quickNoticeTimerRef.current);
     setQuickNotice({ message, tone });
@@ -835,6 +955,7 @@ export default function VideoSyncPlayer({
 
     try {
       await saveEvents([...eventsRef.current, event]);
+      queueManualAnnotationVisualReview(event);
       setLastUsedCat(categories[0] || defaultCategory);
       pulseHaptic([20, 35, 20]);
       const preview = cleanNote.length > 110 ? `${cleanNote.slice(0, 107)}...` : cleanNote;
@@ -1025,6 +1146,9 @@ export default function VideoSyncPlayer({
       const s = Math.min(59, parseInt(newSec, 10) || 0);
       const categories = newCatsTouched ? newCats : classification.categories;
       const ev = {
+        event_id: typeof globalThis.crypto?.randomUUID === "function"
+          ? `manual-${globalThis.crypto.randomUUID()}`
+          : `manual-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         time_s: m * 60 + s,
         note: cleanNote,
         category: categories,
@@ -1036,6 +1160,7 @@ export default function VideoSyncPlayer({
         },
       };
       await saveEvents([...events, ev]);
+      queueManualAnnotationVisualReview(ev);
       setLastUsedCat(categories[0] || "other");
       setNewNote(""); setNewMin(""); setNewSec(""); setNewCats([categories[0] || "other"]);
       setNewCatsTouched(false);
@@ -1165,13 +1290,19 @@ export default function VideoSyncPlayer({
   const selectMasterFeed = useCallback(async (key) => {
     const feed = videoFeeds[key];
     if (!feed?.src || key === activeFeedKey) return;
+    const currentVideo = videoRef.current;
+    const preservedSessionTime = currentVideo
+      ? mediaTimeToSessionTime(currentVideo.currentTime, videoOffset)
+      : playheadS;
     const nextOffset = Number(feed.timelineOffsetSeconds) || 0;
-    pendingMasterTimeRef.current = sessionTimeToMediaTime(playheadS, nextOffset);
-    videoRef.current?.pause();
+    pendingMasterTimeRef.current = sessionTimeToMediaTime(preservedSessionTime, nextOffset);
+    resumeAfterFeedSwitchRef.current = Boolean(currentVideo && !currentVideo.paused);
+    currentVideo?.pause();
+    setPlayheadS(preservedSessionTime);
     setVideoOffset(nextOffset);
     setActiveFeedKey(key);
     setVideoSrc(feed.src);
-  }, [activeFeedKey, playheadS, videoFeeds]);
+  }, [activeFeedKey, playheadS, videoFeeds, videoOffset]);
 
   // Load browser-local video feeds. Files remain in memory only for this review.
   const handleFileLoad = (e, feedKey = "composite") => {
@@ -1364,6 +1495,11 @@ export default function VideoSyncPlayer({
           resumePromise.catch(() => {});
         }
       }
+      if (resumeAfterFeedSwitchRef.current) {
+        resumeAfterFeedSwitchRef.current = false;
+        const resumePromise = v.play();
+        if (resumePromise?.catch) resumePromise.catch(() => {});
+      }
     };
     v.addEventListener("timeupdate", handleTimeUpdate);
     v.addEventListener("play", handlePlay);
@@ -1375,7 +1511,19 @@ export default function VideoSyncPlayer({
       v.removeEventListener("pause", handlePause);
       v.removeEventListener("loadedmetadata", handleLoadedMetadata);
     };
-  }, [handleTimeUpdate, playbackSpeed, syncSecondaryVideos, videoSrc]);
+  }, [fullTelemetryView, handleTimeUpdate, playbackSpeed, syncSecondaryVideos, videoSrc]);
+
+  useEffect(() => {
+    if (!fullTelemetryView) return undefined;
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+    };
+  }, [fullTelemetryView]);
 
   useEffect(() => {
     if (!isPlaying) return undefined;
@@ -1592,7 +1740,13 @@ export default function VideoSyncPlayer({
       if ((e.code === "ArrowLeft" || e.code === "ArrowRight") && !inInput && videoRef.current) {
         e.preventDefault();
         const direction = e.code === "ArrowLeft" ? -1 : 1;
-        const jumpS = e.shiftKey ? 30 : 5;
+        const quality = videoRef.current.getVideoPlaybackQuality?.();
+        const measuredFps = quality?.totalVideoFrames > 10 && videoRef.current.currentTime > 0.5
+          ? quality.totalVideoFrames / videoRef.current.currentTime
+          : 0;
+        if (measuredFps >= 10 && measuredFps <= 120) frameDurationRef.current = 1 / measuredFps;
+        const jumpS = fullTelemetryView ? frameDurationRef.current : (e.shiftKey ? 30 : 5);
+        if (fullTelemetryView && !videoRef.current.paused) videoRef.current.pause();
         setSynchronizedVideoTime(Math.max(0, Math.min(videoDuration || Infinity, videoRef.current.currentTime + (direction * jumpS))));
       }
 
@@ -1618,7 +1772,7 @@ export default function VideoSyncPlayer({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [addingNew, playheadS, lastUsedCat, setSynchronizedVideoTime, toggleQuickDictation, videoDuration]);
+  }, [addingNew, fullTelemetryView, playheadS, lastUsedCat, setSynchronizedVideoTime, toggleQuickDictation, videoDuration]);
 
   // Click on chart → seek video
   const handleChartClick = useCallback((data) => {
@@ -1655,6 +1809,37 @@ export default function VideoSyncPlayer({
     if (!v) return;
     pulseHaptic(8);
     setSynchronizedVideoTime(Math.max(0, v.currentTime + seconds));
+  };
+
+  const stepOneFrame = (direction) => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (!v.paused) v.pause();
+    const quality = v.getVideoPlaybackQuality?.();
+    const measuredFps = quality?.totalVideoFrames > 10 && v.currentTime > 0.5
+      ? quality.totalVideoFrames / v.currentTime
+      : 0;
+    if (measuredFps >= 10 && measuredFps <= 120) frameDurationRef.current = 1 / measuredFps;
+    pulseHaptic(8);
+    setSynchronizedVideoTime(Math.max(0, Math.min(videoDuration || Infinity, v.currentTime + (direction * frameDurationRef.current))));
+  };
+
+  const openFullTelemetryView = () => {
+    const video = videoRef.current;
+    if (video) {
+      pendingMasterTimeRef.current = video.currentTime;
+      video.pause();
+    }
+    setFullTelemetryView(true);
+  };
+
+  const closeFullTelemetryView = () => {
+    const video = videoRef.current;
+    if (video) {
+      pendingMasterTimeRef.current = video.currentTime;
+      video.pause();
+    }
+    setFullTelemetryView(false);
   };
 
   const setSpeed = (speed) => {
@@ -1798,6 +1983,23 @@ export default function VideoSyncPlayer({
       { ...ordered[nearestIndex + 1], position: "Next" },
     ].filter((entry) => entry.ev);
   }, [playheadS, visibleEventEntries]);
+  const fullTelemetryEvents = useMemo(() => {
+    const ordered = events
+      .map((ev, i) => ({ ev, i }))
+      .sort((left, right) => Number(left.ev.time_s) - Number(right.ev.time_s));
+    const current = [...ordered].reverse().find(({ ev }) => Number(ev.time_s) <= playheadS) || null;
+    const upcoming = ordered.find(({ ev }) => Number(ev.time_s) > playheadS) || null;
+    return { current, upcoming };
+  }, [events, playheadS]);
+  const bloodPressureReadings = useMemo(() => (
+    normalizeTimedReadings(bloodPressureReadingsFromSession(session), session)
+  ), [session]);
+  const pulseOxReadings = useMemo(() => (
+    normalizeTimedReadings(pulseOxReadingsFromSession(session), session)
+  ), [session]);
+  const hasSpo2 = useMemo(() => pulseOxReadings.some((reading) => (
+    Number.isFinite(Number(reading?.spo2_percent ?? reading?.spo2 ?? reading?.oxygen_saturation))
+  )), [pulseOxReadings]);
   const displayedFeeds = videoLayout === "multi"
     ? loadedFeeds
     : loadedFeeds.filter((feed) => feed.key === activeFeedKey);
@@ -1811,6 +2013,134 @@ export default function VideoSyncPlayer({
 
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden">
+      {fullTelemetryView && typeof document !== "undefined" && createPortal(
+        <div ref={fullTelemetryRootRef} className="dark fixed inset-0 z-[11000] grid h-[100svh] w-screen grid-cols-[minmax(0,1fr)_clamp(320px,34vw,560px)] gap-2 overflow-hidden bg-background p-2 text-foreground max-[900px]:grid-cols-[minmax(0,1fr)_300px]">
+          <main className="flex min-h-0 min-w-0 flex-col gap-2">
+            <header className="flex h-10 shrink-0 items-center justify-between gap-2 rounded-xl border border-white/10 bg-card/95 px-2.5">
+              <div className="flex min-w-0 items-center gap-2">
+                <Activity className="h-4 w-4 shrink-0 text-primary" />
+                <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.15em] text-primary">Full Telemetry</span>
+                <div className="flex min-w-0 gap-1 overflow-x-auto">
+                  {loadedFeeds.map((feed) => (
+                    <button
+                      key={feed.key}
+                      type="button"
+                      onClick={() => selectMasterFeed(feed.key)}
+                      className={`whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-semibold ${activeFeedKey === feed.key ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:text-foreground"}`}
+                    >
+                      {feed.key === "main" ? "Main" : feed.key === "lower_body" ? "Feet" : feed.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <button type="button" onClick={closeFullTelemetryView} className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-semibold text-muted-foreground hover:text-foreground">
+                <X className="h-3.5 w-3.5" /> Exit
+              </button>
+            </header>
+
+            <div className="grid h-[82px] shrink-0 grid-cols-2 gap-2">
+              {[{ label: "Current Event", entry: fullTelemetryEvents.current }, { label: "Upcoming Event", entry: fullTelemetryEvents.upcoming }].map(({ label, entry }) => (
+                <button
+                  key={label}
+                  type="button"
+                  disabled={!entry}
+                  onClick={() => entry && seekToEvent(entry.ev, entry.i)}
+                  className="min-w-0 overflow-hidden rounded-xl border border-white/10 bg-card/90 p-2 text-left disabled:cursor-default"
+                >
+                  <div className="flex items-center justify-between gap-2 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <span>{label}</span>
+                    <span className="font-mono text-primary">{entry ? fmtMmSs(entry.ev.time_s) : "--:--"}</span>
+                  </div>
+                  <div className="mt-1 h-10 overflow-y-auto pr-1 text-[11px] leading-snug text-foreground">
+                    {entry?.ev?.note || (label === "Current Event" ? "No event has occurred yet." : "No upcoming event note.")}
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black">
+              <video
+                ref={videoRef}
+                src={videoFeeds[activeFeedKey]?.src || videoSrc}
+                className="h-full w-full object-contain"
+                playsInline
+                onClick={togglePlay}
+              />
+              <div className="pointer-events-none absolute left-2 top-2 rounded-md bg-black/65 px-2 py-1 text-[9px] font-semibold text-white">
+                {videoFeeds[activeFeedKey]?.label || "Master camera"}
+              </div>
+            </div>
+
+            <div className="shrink-0 rounded-xl border border-white/10 bg-card/95 px-2 py-1.5">
+              <div
+                className="relative h-3 cursor-pointer rounded-full bg-muted"
+                onPointerDown={handleTimelinePointerDown}
+                onPointerMove={handleTimelinePointerMove}
+                onPointerUp={handleTimelinePointerUp}
+                onPointerCancel={handleTimelinePointerCancel}
+              >
+                <div className="absolute inset-y-0 left-0 rounded-full bg-primary" style={{ width: `${videoDuration ? Math.min(100, (displayedVideoTime / videoDuration) * 100) : 0}%` }} />
+                <div className="absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background bg-primary" style={{ left: `${videoDuration ? Math.min(100, (displayedVideoTime / videoDuration) * 100) : 0}%` }} />
+              </div>
+              <div className="mt-1 flex items-center gap-1.5">
+                <span className="w-12 font-mono text-[10px] text-muted-foreground">{fmtMmSs(displayedVideoTime)}</span>
+                <button type="button" onClick={() => setSynchronizedVideoTime(0)} className="rounded-md bg-muted p-1.5" title="Start"><SkipBack className="h-3.5 w-3.5" /></button>
+                <button type="button" onClick={() => stepFrames(-5)} className="rounded-md bg-muted p-1.5 text-[9px] font-bold" title="Back 5 seconds">-5s</button>
+                <button type="button" onClick={() => stepOneFrame(-1)} className="rounded-md border border-primary/25 bg-primary/10 p-1.5 text-primary" title="Previous frame (Left Arrow)"><ChevronLeft className="h-3.5 w-3.5" /></button>
+                <button type="button" onClick={togglePlay} className="inline-flex min-w-20 items-center justify-center gap-1 rounded-md bg-primary px-3 py-1.5 text-[10px] font-semibold text-primary-foreground">
+                  {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />} {isPlaying ? "Pause" : "Play"}
+                </button>
+                <button type="button" onClick={() => stepOneFrame(1)} className="rounded-md border border-primary/25 bg-primary/10 p-1.5 text-primary" title="Next frame (Right Arrow)"><ChevronRight className="h-3.5 w-3.5" /></button>
+                <button type="button" onClick={() => stepFrames(5)} className="rounded-md bg-muted p-1.5 text-[9px] font-bold" title="Forward 5 seconds">+5s</button>
+                <button type="button" onClick={() => setSynchronizedVideoTime(videoDuration)} className="rounded-md bg-muted p-1.5" title="End"><SkipForward className="h-3.5 w-3.5" /></button>
+                <div className="ml-auto flex items-center gap-1">
+                  {[0.5, 1, 1.5, 2].map((speed) => (
+                    <button key={speed} type="button" onClick={() => setSpeed(speed)} className={`rounded px-1.5 py-1 text-[9px] ${playbackSpeed === speed ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>{speed}×</button>
+                  ))}
+                </div>
+                <span className="w-12 text-right font-mono text-[10px] text-muted-foreground">{fmtMmSs(videoDuration)}</span>
+              </div>
+            </div>
+          </main>
+
+          <aside className="flex min-h-0 flex-col gap-2 overflow-hidden">
+            <div className="flex h-9 shrink-0 items-center justify-between rounded-xl border border-white/10 bg-card/95 px-2">
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Optional channels</span>
+              <div className="flex gap-1">
+                {[
+                  hasSpo2 && ["spo2", "SpO2"],
+                  ["respiration", "Resp"],
+                  ["motion", "Motion"],
+                ].filter(Boolean).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setFullTelemetryChannels((current) => ({ ...current, [key]: !current[key] }))}
+                    className={`rounded-md px-2 py-1 text-[9px] font-semibold ${fullTelemetryChannels[key] ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground"}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="min-h-0 flex-1">
+              <VideoSyncPhysiologySidebar
+                timelineRows={timelineRows}
+                playheadS={playheadS}
+                xDomain={xDomain}
+                zoomWindow={zoomWindow}
+                onZoomWindowChange={setZoomWindow}
+                onSeek={(sessionTime) => handleChartClick({ activeLabel: sessionTime })}
+                bloodPressureReadings={bloodPressureReadings}
+                pulseOxReadings={pulseOxReadings}
+                compact
+                optionalChannels={fullTelemetryChannels}
+              />
+            </div>
+          </aside>
+        </div>,
+        document.body,
+      )}
       {showScrollTop && (
         <button
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
@@ -1839,7 +2169,9 @@ export default function VideoSyncPlayer({
         }}
       >
         <DialogContent
-          portalContainer={fullscreenActive ? fullscreenSurfaceRef.current : undefined}
+          portalContainer={fullTelemetryView
+            ? fullTelemetryRootRef.current
+            : fullscreenActive ? fullscreenSurfaceRef.current : undefined}
           overlayClassName="bg-transparent"
           className="w-[calc(100vw-2rem)] max-w-lg rounded-xl border-primary/30 bg-card p-4 sm:left-auto sm:right-6 sm:top-auto sm:bottom-6 sm:translate-x-0 sm:translate-y-0"
         >
@@ -1982,6 +2314,17 @@ export default function VideoSyncPlayer({
                 Video Overlay
               </button>
             </div>
+          )}
+          {videoSrc && (
+            <button
+              type="button"
+              onClick={openFullTelemetryView}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-teal-400/30 bg-teal-400/10 px-2.5 py-1.5 text-[10px] font-semibold text-teal-400 hover:bg-teal-400/20"
+              title="Open the full telemetry theater"
+            >
+              <Activity className="h-3.5 w-3.5" />
+              Full Telemetry
+            </button>
           )}
           {videoSrc && (
             <button
@@ -2228,7 +2571,7 @@ export default function VideoSyncPlayer({
                 className={`video-sync-media relative min-h-0 min-w-0 flex-1 bg-black ${videoLayout === "multi" && displayedFeeds.length > 1 ? "grid gap-px bg-border md:grid-cols-2" : ""}`}
                 style={fullscreenActive ? undefined : { height: `${playerHeight}vh` }}
               >
-              {displayedFeeds.map((feed) => {
+              {!fullTelemetryView && displayedFeeds.map((feed) => {
                 const isMaster = feed.key === activeFeedKey;
                 return (
                   <div key={feed.key} className="relative flex min-h-0 min-w-0 items-center justify-center bg-black">
@@ -2848,6 +3191,8 @@ export default function VideoSyncPlayer({
                 zoomWindow={zoomWindow}
                 onZoomWindowChange={setZoomWindow}
                 onSeek={(sessionTime) => handleChartClick({ activeLabel: sessionTime })}
+                bloodPressureReadings={bloodPressureReadings}
+                pulseOxReadings={pulseOxReadings}
               />
             )}
 
@@ -2924,6 +3269,11 @@ export default function VideoSyncPlayer({
                             </div>
                           )}
                           <span className="text-[10px] text-foreground leading-tight line-clamp-2">{ev.note}</span>
+                          <ManualNoteSarahRead
+                            review={manualReviewForEvent(ev)}
+                            pending={pendingManualReviewIds.has(String(ev.event_id || `${ev.time_s}:${ev.note}`))}
+                            compact
+                          />
                         </div>
                         <span className="text-[8px] font-mono text-muted-foreground shrink-0 mt-0.5">
                           {dist < 1 ? "now" : `${Math.round(dist)}s`}
@@ -2985,6 +3335,11 @@ export default function VideoSyncPlayer({
                           </div>
                         )}
                         <span className="text-xs text-foreground leading-tight">{ev.note}</span>
+                        <ManualNoteSarahRead
+                          review={manualReviewForEvent(ev)}
+                          pending={pendingManualReviewIds.has(String(ev.event_id || `${ev.time_s}:${ev.note}`))}
+                          compact
+                        />
                         <span className="text-[9px] font-mono text-muted-foreground">
                           {diff < 1 ? "now" : `${Math.round(diff)}s ago`}
                         </span>
@@ -3091,6 +3446,10 @@ export default function VideoSyncPlayer({
                       </div>
                     )}
                     <span className="text-xs text-foreground leading-snug">{ev.note}</span>
+                    <ManualNoteSarahRead
+                      review={manualReviewForEvent(ev)}
+                      pending={pendingManualReviewIds.has(String(ev.event_id || `${ev.time_s}:${ev.note}`))}
+                    />
                   </button>
                   <div className="shrink-0 flex flex-col items-end gap-1">
                     <div className="flex items-center gap-1">

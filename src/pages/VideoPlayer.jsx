@@ -77,11 +77,12 @@ export default function VideoPlayer() {
     if (!id) return;
     setLoadingSession(true);
     const entity = selectedType === "body_exploration" ? base44.entities.BodyExploration : base44.entities.Session;
+    const analysisField = selectedType === "body_exploration" ? "ai_body_exploration" : "ai_analysis";
     try {
       const [recordList, rows] = await Promise.all([
         entity.filterFields(
           { id },
-          VIDEO_SYNC_RECORD_FIELDS,
+          [...VIDEO_SYNC_RECORD_FIELDS, analysisField],
           undefined,
           1,
           undefined,

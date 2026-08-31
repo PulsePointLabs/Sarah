@@ -35,6 +35,7 @@ import { DEFAULT_LIVE_CUE_SETTINGS, LIVE_CUE_PRESETS, resolveLiveCuePhraseBank }
 import { loadSyncedLiveCueCustomization, readLiveCueCustomization } from "@/lib/liveCueCustomization";
 import { useLiveCueAudio } from "@/hooks/useLiveCueAudio";
 import { useLiveCueEngine } from "@/hooks/useLiveCueEngine";
+import { shouldKeepLiveSessionEvent } from "@/lib/liveSessionEventFilters";
 import { toLiveTelemetryNotice } from "@/lib/liveCueDisplay";
 import { enemaInstilledAmountFromEvent, formatMilliliters, parseEnemaVolumeEntry, sumEnemaInstilledVolume } from "@/lib/enemaVolume";
 import { getTTSMime, getTTSRuntime, prepareTTSInput } from "@/components/TTSButton";
@@ -4645,7 +4646,9 @@ export default function LiveCapture() {
   ]);
 
   const appendLiveSessionEvents = useCallback(async (eventsToAdd, extraPatch = {}) => {
-    const additions = Array.isArray(eventsToAdd) ? eventsToAdd.filter(Boolean) : [eventsToAdd].filter(Boolean);
+    const additions = (Array.isArray(eventsToAdd) ? eventsToAdd : [eventsToAdd])
+      .filter(Boolean)
+      .filter(shouldKeepLiveSessionEvent);
     if (!additions.length && !Object.keys(extraPatch).length) return;
     const save = async () => {
       const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();

@@ -115,7 +115,7 @@ const AUDIO_PASS_WHISPER_PROMPT = [
   'stimulation', 'sleeve', 'vibrator', 'TENS', 'e-stim', 'ejaculation', 'climax', 'recovery',
 ].join('; ');
 
-function normalizeLocalVideoPath(value) {
+export function normalizeLocalVideoPath(value) {
   const raw = String(value || '').trim().replace(/^file:\/+/, '');
   if (!raw) return '';
   return process.platform === 'win32' ? decodeURIComponent(raw).replace(/\//g, '\\') : decodeURIComponent(raw);
@@ -260,7 +260,7 @@ function assertLocalVideoPath(filePath) {
   return { resolved, ext };
 }
 
-async function localVideoMetadata(filePath, { includeDuration = true } = {}) {
+export async function localVideoMetadata(filePath, { includeDuration = true } = {}) {
   const { resolved, ext } = assertLocalVideoPath(filePath);
   const stat = await fsp.stat(resolved);
   if (!stat.isFile()) {
@@ -839,7 +839,7 @@ filesRouter.get('/local-video/still', async (req, res) => {
   }
 });
 
-async function generateVideoClipPreview({
+export async function generateVideoClipPreview({
   sourcePath,
   startSeconds = 0,
   endSeconds,
@@ -938,6 +938,54 @@ async function generateVideoClipPreview({
     motion_summary: motionSummary,
     frames,
   };
+}
+
+export async function extractLocalVideoFramesAtTimes({ sourcePath, timesSeconds = [], label = 'manual-annotation' }) {
+  const meta = await localVideoMetadata(sourcePath);
+  const safeLabel = slugifyFilePart(label || 'manual-annotation');
+  const uniqueTimes = [...new Set((Array.isArray(timesSeconds) ? timesSeconds : [])
+    .map((value) => Number(Number(value).toFixed(2)))
+    .filter((value) => Number.isFinite(value) && value >= 0 && (!meta.durationSeconds || value <= meta.durationSeconds)))]
+    .slice(0, 18);
+  const frames = [];
+
+  for (let index = 0; index < uniqueTimes.length; index += 1) {
+    const time = uniqueTimes[index];
+    const timeMs = Math.round(time * 1000);
+    const cacheKey = slugifyFilePart(`manual-frame-v1-${meta.fingerprint}-${timeMs}`);
+    const filename = `${cacheKey}.jpg`;
+    const outputPath = path.join(uploadDir, filename);
+    let cached = false;
+    try {
+      const existing = await fsp.stat(outputPath);
+      cached = existing.isFile() && existing.size > 0;
+    } catch {
+      cached = false;
+    }
+    if (!cached) {
+      await runProcess('ffmpeg', [
+        '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+        '-ss', String(time), '-i', meta.path,
+        '-map', '0:v:0', '-frames:v', '1',
+        '-vf', 'scale=960:-2:force_original_aspect_ratio=decrease',
+        '-q:v', '3', outputPath,
+      ], { captureOutput: false });
+    }
+    const bytes = await fsp.readFile(outputPath);
+    frames.push({
+      filename: `${safeLabel}-${String(index + 1).padStart(2, '0')}.jpg`,
+      stored_filename: filename,
+      file_url: `/uploads/${filename}`,
+      url: `/uploads/${filename}`,
+      mimeType: 'image/jpeg',
+      data: bytes.toString('base64'),
+      frameTimeSeconds: time,
+      frameIndex: index + 1,
+      cached,
+    });
+  }
+
+  return { meta, frames };
 }
 
 filesRouter.post('/local-video/clip-preview', async (req, res) => {

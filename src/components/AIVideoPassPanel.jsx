@@ -70,6 +70,12 @@ import {
   UNMIRRORED_ANATOMICAL_LATERALITY_RULE,
   VISUAL_TELEMETRY_SEPARATION_RULE,
 } from "@/lib/analysisOutputRules";
+import {
+  FOOT_ASSESSMENT_SCHEMA,
+  FOOT_VISUAL_REVIEW_RULE,
+  keepFootVisualItem,
+  sanitizeFootSummary,
+} from "@/lib/footVisualAssessment";
 import { buildSessionMomentTelemetry } from "@/utils/sessionMomentTelemetry";
 import {
   buildAiCorrectionMemoryPrompt,
@@ -843,6 +849,9 @@ function isOutOfLaneForRole(item, role) {
 
 function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExploration = false, deviceContext = {}) {
   const value = typeof raw === "string" ? null : raw;
+  const footAssessment = selectedRole === "feet" && value?.foot_assessment && typeof value.foot_assessment === "object"
+    ? value.foot_assessment
+    : null;
   const respirationAssessment = normalizeVideoRespirationAssessment(value?.respiration_assessment, fallbackWindow, selectedRole);
   const respirationFinding = respirationFindingForAssessment(respirationAssessment);
   const respirationEvent = respirationEventForAssessment(respirationAssessment);
@@ -874,10 +883,12 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
       : sanitizeUnsupportedStimulationPauseClaim(sanitizeRegularSessionDeviceText(text, deviceContext, rawWindowText), rawWindowText)
   );
   const retainedFindings = findings.filter((finding) => !isUnsupportedUrethralItem(finding));
+  const cleanedSummary = cleanTextForMode(value?.summary || findings[0]?.text || "Review complete.")
+    || (deviceContext.enemaKnown ? "Enema-focused visual review complete." : "Review complete.");
   return {
     respirationAssessment,
-    summary: cleanTextForMode(value?.summary || findings[0]?.text || "Review complete.")
-      || (deviceContext.enemaKnown ? "Enema-focused visual review complete." : "Review complete."),
+    footAssessment,
+    summary: selectedRole === "feet" ? sanitizeFootSummary(cleanedSummary, footAssessment) : cleanedSummary,
     findings: retainedFindings.map((finding) => ({
       title: hasUnsupportedFoleySecurementClaim(finding)
         ? "Tubing/field handling"
@@ -916,7 +927,7 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
       response_domains: arrayFromMaybe(finding.response_domains).filter((domain) => VISUAL_RESPONSE_DOMAINS.includes(domain)),
       change_pattern: VISUAL_CHANGE_PATTERNS.includes(finding.change_pattern) ? finding.change_pattern : "indeterminate",
       visibility: ["clear", "partial", "limited"].includes(finding.visibility) ? finding.visibility : "partial",
-    })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding) && !isTelemetryOnlyFinding(finding) && !isGenericControlObjectMention(finding) && !isLowValueNoChangeForRole(finding, selectedRole) && !isOutOfLaneForRole(finding, selectedRole)),
+    })).filter((finding) => finding.text && !isStaticTrackingMarkerFinding(finding) && !isTelemetryOnlyFinding(finding) && !isGenericControlObjectMention(finding) && !isLowValueNoChangeForRole(finding, selectedRole) && !isOutOfLaneForRole(finding, selectedRole) && (selectedRole !== "feet" || keepFootVisualItem(finding, footAssessment))),
     events: events.filter((event) => (
       !isUnsupportedUrethralItem(event)
       && (
@@ -948,7 +959,7 @@ function normalizeAIResult(raw, fallbackWindow, selectedRole = "main", isExplora
         annotation_tags: Array.isArray(event.annotation_tags) ? event.annotation_tags : ["other_context"],
         confidence: (unsupportedFoleyForecast || unsupportedAlreadyPlaced || unsupportedFoleyRemoval || unsupportedMeatusClaim || unsupportedSleeveUse || unsupportedBareHand || unsupportedOrgasmClaim) && event.confidence === "high" ? "moderate" : event.confidence || "moderate",
       };
-    }).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note }) && !isTelemetryOnlyFinding({ title: "", text: event.note }) && !isGenericControlObjectMention(event) && !isLowValueNoChangeForRole(event, selectedRole) && !isOutOfLaneForRole(event, selectedRole)),
+    }).filter((event) => event.note && !isStaticTrackingMarkerFinding({ title: "", text: event.note }) && !isTelemetryOnlyFinding({ title: "", text: event.note }) && !isGenericControlObjectMention(event) && !isLowValueNoChangeForRole(event, selectedRole) && !isOutOfLaneForRole(event, selectedRole) && (selectedRole !== "feet" || keepFootVisualItem(event, footAssessment))),
   };
 }
 
@@ -1022,6 +1033,7 @@ function isAIGeneratedPassEvent(event) {
 function persistedCardFrom(card) {
   return {
     respiration_assessment: card.respirationAssessment || card.respiration_assessment || null,
+    foot_assessment: card.footAssessment || card.foot_assessment || null,
     id: card.id,
     saved_at: new Date().toISOString(),
     label: card.label,
@@ -1103,6 +1115,7 @@ function reviewCardFromPersisted(entry, availableVideos = []) {
     events: arrayFromMaybe(entry.draft_events).map((event) => ({ ...event })),
     confidence: confidenceWord(entry.confidence),
     respirationAssessment: entry.respiration_assessment || null,
+    footAssessment: entry.foot_assessment || null,
   };
 }
 
@@ -2641,8 +2654,9 @@ export default function AIVideoPassPanel({
                   },
                   required: ["assessable", "visibility_quality", "breaths_observed", "observation_seconds", "estimated_rate_bpm", "possible_breath_hold", "hold_start_time_s", "hold_end_time_s", "hold_duration_seconds", "pattern", "evidence", "confidence"],
                 },
+                ...(selectedVideoRole === "feet" ? { foot_assessment: FOOT_ASSESSMENT_SCHEMA } : {}),
               },
-              required: ["summary", "findings", "events", "respiration_assessment"],
+              required: ["summary", "findings", "events", "respiration_assessment", ...(selectedVideoRole === "feet" ? ["foot_assessment"] : [])],
             },
             images,
             prompt: `${isExploration ? (deviceIdentityContext.enemaKnown && !deviceIdentityContext.urethralKnown ? `HIGH-PRIORITY ENEMA BODY EXPLORATION MODE:
@@ -2683,6 +2697,7 @@ No forecasted Foley stages: do not write "meatal engagement appears imminent", "
 Meatal contact is its own stage: if the sampled frames show the actual catheter/Foley/tool tip touching or aligned at the meatus but do not prove motion through the meatus, say "catheter tip at the meatus" or "visible meatal contact/engagement." If the tip or meatus is out of frame, occluded, cropped, or ambiguous, do not say "at", "contacting", "touching", "entering", or "advancing through" the meatus. Do not downgrade true visible meatal contact to generic tubing/field handling. Upgrade meatal contact to active advancement when frame-to-frame catheter motion or progressive external-length shortening is visible. Do not upgrade it to already-in-place unless the already-in-place gate is satisfied.
 
 ${ANATOMICAL_LATERALITY_RULE}
+${selectedVideoRole === "feet" ? FOOT_VISUAL_REVIEW_RULE : ""}
 ${PRODUCTION_PROCEDURE_ANNOTATION_RULE}
 Handedness/camera rule: use the calibrated foot-camera mapping above for feet and legs. For other views, do not assign anatomical left/right unless landmarks establish it; omit uncertain sides rather than using screen-side language in viewer-facing output.
 Hands and participation rule: assume visible hands are your hands unless another participant is clearly visible or explicitly logged as assisting. Do not introduce another person, helper, clinician, operator, or assistant from hands alone.

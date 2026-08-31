@@ -37,6 +37,20 @@ import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js'
 import { runProfileAnatomyImageIndex } from '../services/profileAnatomyImageIndex.js';
 import { materializeProfileReviewBatchRequest } from '../services/profileReviewBatchPayload.js';
 import { runCloudMultimodalAnalysis } from '../services/cloudAnalysis/runner.js';
+import { extractLocalVideoFramesAtTimes, normalizeLocalVideoPath } from './files.js';
+import {
+  manualAnnotationTargetFrameTimes,
+  reviewedFrameTimesForVideo,
+  sameVideoEvidenceSource,
+  uncoveredFrameTimes,
+} from '../../src/lib/manualAnnotationFrameCoverage.js';
+import {
+  FOOT_ASSESSMENT_SCHEMA,
+  FOOT_VISUAL_REVIEW_RULE,
+  keepFootVisualItem,
+  sanitizeFootSummary,
+} from '../../src/lib/footVisualAssessment.js';
+import { formatManualAnnotationReviewText, formatSessionClock } from '../../src/lib/manualAnnotationReviewText.js';
 
 export const jobsRouter = express.Router();
 export const largeJobsRouter = express.Router();
@@ -526,6 +540,245 @@ registerJobHandler('mobile_session_video_render', async (payload, context) => {
     jobId: context.jobId,
     signal: context.signal,
     updateProgress: context.updateProgress,
+  });
+});
+
+registerJobHandler('manual_annotation_visual_review', async (payload, context) => {
+  const recordId = String(payload?.recordId || context?.meta?.sessionId || '');
+  const recordType = payload?.recordType === 'body_exploration' ? 'body_exploration' : 'session';
+  const entityName = recordType === 'body_exploration' ? 'BodyExploration' : 'Session';
+  const analysisField = recordType === 'body_exploration' ? 'ai_body_exploration' : 'ai_analysis';
+  const event = payload?.event || {};
+  const video = payload?.video || {};
+  const sourcePath = normalizeLocalVideoPath(video.path);
+  if (!recordId || !sourcePath || !String(event.note || '').trim()) {
+    throw new Error('Manual annotation visual review requires a saved record, note, and linked local video.');
+  }
+  const record = getEntity(entityName, recordId);
+  if (!record) throw new Error('The saved record for this manual annotation no longer exists.');
+
+  const noteTimeS = Math.max(0, Number(event.time_s) || 0);
+  const analysis = record?.[analysisField] || {};
+  const recordedDurationS = Number(record.duration_minutes || 0) * 60;
+  const desiredSessionTimes = manualAnnotationTargetFrameTimes(noteTimeS, {
+    maxSessionTimeS: recordedDurationS > 0 ? recordedDurationS : noteTimeS + 5,
+  });
+  const reviewedSessionTimes = reviewedFrameTimesForVideo(analysis, video);
+  const newSessionTimes = uncoveredFrameTimes(desiredSessionTimes, reviewedSessionTimes);
+  const timelineOffsetSeconds = Number(video.timelineOffsetSeconds) || 0;
+  const newSourceTimes = newSessionTimes
+    .map((time) => Number((time - timelineOffsetSeconds).toFixed(2)))
+    .filter((time) => time >= 0);
+  const generatedAt = new Date().toISOString();
+
+  const persistReview = (review) => {
+    const latestRecord = getEntity(entityName, recordId) || record;
+    const latestAnalysis = latestRecord?.[analysisField] || {};
+    const existingReviews = Array.isArray(latestAnalysis._manual_annotation_visual_reviews)
+      ? latestAnalysis._manual_annotation_visual_reviews
+      : [];
+    const reviewKey = String(event.event_id || `${noteTimeS}:${event.note}`);
+    const nextReviews = [
+      ...existingReviews.filter((item) => String(item.event_id || `${item.note_time_s}:${item.manual_note}`) !== reviewKey),
+      review,
+    ]
+      .sort((left, right) => Number(left.note_time_s || 0) - Number(right.note_time_s || 0))
+      .slice(-500);
+    const existingVideoFindings = Array.isArray(latestAnalysis._video_pass_findings)
+      ? latestAnalysis._video_pass_findings
+      : [];
+    const visibleCard = Array.isArray(review.findings) && review.findings.length ? {
+      id: review.id,
+      saved_at: review.created_at,
+      label: `Manual-guided visual review ${Math.floor(noteTimeS / 60)}:${String(Math.round(noteTimeS % 60)).padStart(2, '0')}`,
+      source: 'manual_annotation_guided_visual_review',
+      source_video: review.source_video,
+      source_video_role: review.source_video_role,
+      clip: {
+        url: '',
+        thumbnail_url: review.sampled_frames?.[0]?.url || '',
+        start_s: review.requested_window.start_s,
+        end_s: review.requested_window.end_s,
+        duration_s: review.requested_window.end_s - review.requested_window.start_s,
+      },
+      sampled_frames: review.sampled_frames || [],
+      summary: review.summary,
+      foot_assessment: review.foot_assessment || null,
+      findings: review.findings.map((finding) => ({
+        title: finding.anatomical_area,
+        text: [finding.observation, finding.change_from_prior ? `Change from prior: ${finding.change_from_prior}` : ''].filter(Boolean).join(' '),
+        category: finding.response_domain || 'physical',
+        confidence: finding.confidence,
+        body_regions: [finding.anatomical_area],
+        response_domains: [finding.response_domain].filter(Boolean),
+        visibility: finding.visibility,
+        evidence_time_s: finding.evidence_time_s,
+      })),
+      draft_events: [],
+      manual_note: review.manual_note,
+      note_assessment: review.note_assessment,
+    } : null;
+    const nextAnalysis = {
+      ...latestAnalysis,
+      _manual_annotation_visual_reviews: nextReviews,
+      _manual_annotation_visual_reviews_updated_at: generatedAt,
+      ...(visibleCard ? {
+        _video_pass_findings: [
+          visibleCard,
+          ...existingVideoFindings.filter((item) => item?.id !== visibleCard.id),
+        ].slice(0, 240),
+        _video_pass_findings_updated_at: generatedAt,
+      } : {}),
+    };
+    upsertEntity(entityName, recordId, {
+      ...latestRecord,
+      [analysisField]: nextAnalysis,
+    });
+    return review;
+  };
+
+  const baseReview = {
+    id: `manual-visual-${context.jobId}`,
+    event_id: event.event_id || null,
+    note_time_s: noteTimeS,
+    manual_note: String(event.note || '').trim(),
+    source: 'manual_annotation_guided_visual_review',
+    source_job_id: context.jobId,
+    source_video: {
+      label: video.label || '',
+      filename: video.filename || '',
+      fingerprint: video.fingerprint || '',
+      role: video.role || 'main',
+    },
+    source_video_role: video.role || 'main',
+    requested_window: { start_s: Math.max(0, noteTimeS - 5), end_s: noteTimeS + 5 },
+    reviewed_frame_times_s: newSessionTimes,
+    reused_frame_times_s: desiredSessionTimes.filter((time) => !newSessionTimes.includes(time)),
+    created_at: generatedAt,
+  };
+
+  if (!newSourceTimes.length) {
+    context.updateProgress({ phase: 'complete', current: 1, total: 1, message: 'Nearby frames were already reviewed; reused saved visual evidence.' });
+    return persistReview({
+      ...baseReview,
+      coverage_status: 'fully_reused',
+      summary: 'All requested frames were already covered by saved visual review on this camera; Sarah did not process them again.',
+      findings: [],
+      sampled_frames: [],
+    });
+  }
+
+  context.updateProgress({ phase: 'sampling', current: 0, total: 3, message: `Sampling ${newSourceTimes.length} previously unseen frame${newSourceTimes.length === 1 ? '' : 's'}…` });
+  const extracted = await extractLocalVideoFramesAtTimes({
+    sourcePath,
+    timesSeconds: newSourceTimes,
+    label: `manual-note-${recordId}-${Math.round(noteTimeS)}`,
+  });
+  const sampledFrames = extracted.frames.map((frame, index) => ({
+    url: frame.url,
+    filename: frame.stored_filename || frame.filename,
+    frameTimeSeconds: frame.frameTimeSeconds,
+    recordTimeSeconds: newSessionTimes[index],
+    frameIndex: frame.frameIndex,
+  }));
+  const priorManualReviews = (Array.isArray(analysis._manual_annotation_visual_reviews) ? analysis._manual_annotation_visual_reviews : [])
+    .filter((item) => sameVideoEvidenceSource(item, video) && Number(item.note_time_s) < noteTimeS)
+    .sort((left, right) => Number(right.note_time_s) - Number(left.note_time_s))
+    .slice(0, 4);
+  const priorContext = priorManualReviews.map((item) => (
+    `[${formatSessionClock(item.note_time_s)}] note: ${item.manual_note}; findings: ${(item.findings || []).map((finding) => `${finding.anatomical_area}: ${formatManualAnnotationReviewText(finding.observation)}`).join(' | ') || formatManualAnnotationReviewText(item.summary) || 'none'}`
+  )).join('\n') || 'No earlier manual-note-guided review exists for this camera.';
+  const isFeetCamera = String(video.role || '').toLowerCase().includes('feet') || String(video.role || '').toLowerCase().includes('lower');
+  const cameraFocus = isFeetCamera
+    ? 'This is the feet/lower-body camera. Prioritize toes, feet, ankles, calves, knees, thighs, lower-body symmetry, planting, tension, tremor, and release. Mention more proximal anatomy only when actually visible.'
+    : 'This is the main/composite camera. Review every visible region from head to toe, including face/head, neck, chest, abdomen, skin, hands/arms, pelvis/genitals, thighs/legs, and feet. Do not omit non-genital visible changes.';
+
+  const responseSchema = {
+    type: 'object',
+    properties: {
+      summary: { type: 'string' },
+      note_assessment: { type: 'string', enum: ['supported', 'partially_supported', 'not_visually_confirmed'] },
+      findings: {
+        type: 'array',
+        maxItems: 12,
+        items: {
+          type: 'object',
+          properties: {
+            anatomical_area: { type: 'string' },
+            observation: { type: 'string' },
+            change_from_prior: { type: 'string' },
+            evidence_time_s: { type: 'number' },
+            confidence: { type: 'string', enum: ['low', 'moderate', 'high'] },
+            visibility: { type: 'string', enum: ['clear', 'partial', 'limited'] },
+            response_domain: { type: 'string', enum: ['stimulation', 'genital_state', 'skin', 'muscle_tension', 'posture', 'movement', 'respiration_visible', 'whole_body', 'equipment_context', 'other'] },
+          },
+          required: ['anatomical_area', 'observation', 'change_from_prior', 'evidence_time_s', 'confidence', 'visibility', 'response_domain'],
+        },
+      },
+      ...(isFeetCamera ? { foot_assessment: FOOT_ASSESSMENT_SCHEMA } : {}),
+    },
+    required: ['summary', 'note_assessment', 'findings', ...(isFeetCamera ? ['foot_assessment'] : [])],
+  };
+  const frameTiming = sampledFrames.map((frame, index) => `image ${index + 1} = session ${formatSessionClock(frame.recordTimeSeconds)}`).join(', ');
+  const aiResult = await aiInvokeInternal({
+    model: 'claude_sonnet_4_6',
+    max_tokens: 2600,
+    max_images: 12,
+    response_json_schema: responseSchema,
+    images: extracted.frames.map((frame) => ({ filename: frame.filename, media_type: frame.mimeType, data: frame.data })),
+    signal: context.signal,
+    prompt: `You are Sarah performing a quiet, automatic, manual-note-guided visual review of a private physiology session.
+
+The user's note is a guide to what deserves extra scrutiny, not proof. Confirm, refine, expand, or decline each claim based only on visible ordered frames. Do not simply paraphrase the note. Do not invent anatomy, motion, color, sensation, internal physiology, or causation. Save only meaningful visible changes; omit static scene description unless it establishes a change baseline.
+
+${cameraFocus}
+${isFeetCamera ? FOOT_VISUAL_REVIEW_RULE : ''}
+
+Systematic review targets when visible: head/face expression; neck and upper-body flushing; chest/abdominal contour and visible breathing; shoulder, arm, and hand tension; back arching and trunk posture; pelvic movement; stimulation technique, speed, grip, pressure cues, contact location, pauses, and resumes; penile/glans/shaft erection or engorgement state; scrotal lift/descent, tightening, symmetry, and skin state; perineal/pelvic tension cues; thighs, knees, calves, ankles, feet, toe curl, plantar flexion, planting, bracing, tremor, spasm-like movement, and release; generalized versus regional skin color/surface changes; coordinated whole-body build or settling.
+
+Laterality rule: none of the cameras are mirrored. Determine the subject's anatomical right and left from body orientation, not screen side. If orientation is not reliable, avoid assigning laterality rather than guessing.
+
+Continuity rule: compare these new frames with the prior saved manual-note reviews below. State change from prior only when supported. Do not re-report unchanged facts. A visible stimulation change may be temporally associated with a body response, but do not claim it caused the response unless the ordered sequence strongly supports that wording.
+
+Manual note at ${formatSessionClock(noteTimeS)}:
+${String(event.note || '').trim()}
+
+Prior manual-note reviews on this camera:
+${priorContext}
+
+Only new, previously unreviewed frames are attached. Previously reviewed overlapping timestamps were deliberately excluded.
+Frame timing: ${frameTiming}.
+
+Return a compact structured review. Findings must be anatomical-area organized and evidence-timestamped. In summary, observation, and change_from_prior prose, write all session timestamps as minute:second clocks such as 20:14 or 20:14–20:24; never write cumulative values such as 1214s and never use a session timestamp as an image/frame number. Keep evidence_time_s as numeric cumulative seconds only because the schema requires it. Low-confidence possibilities may be returned for audit, but they will not be auto-saved as findings. Do not mention telemetry overlays or numeric HR/BP/SpO2 in visual findings.`,
+  });
+  const rawFindings = Array.isArray(aiResult?.findings) ? aiResult.findings : [];
+  const footAssessment = isFeetCamera && aiResult?.foot_assessment && typeof aiResult.foot_assessment === 'object'
+    ? aiResult.foot_assessment
+    : null;
+  const savedFindings = rawFindings.filter((finding) => (
+    ['moderate', 'high'].includes(String(finding?.confidence || '').toLowerCase())
+    && String(finding?.anatomical_area || '').trim()
+    && String(finding?.observation || '').trim()
+    && newSessionTimes.some((time) => Math.abs(time - Number(finding?.evidence_time_s)) <= 0.6)
+    && (!isFeetCamera || keepFootVisualItem(finding, footAssessment))
+  ));
+  context.updateProgress({ phase: 'saving', current: 2, total: 3, message: `Saving ${savedFindings.length} supported visual finding${savedFindings.length === 1 ? '' : 's'}…` });
+  return persistReview({
+    ...baseReview,
+    coverage_status: newSessionTimes.length === desiredSessionTimes.length ? 'new_frames_only' : 'mixed_new_and_reused',
+    source_video: { ...baseReview.source_video, fingerprint: video.fingerprint || extracted.meta.fingerprint || '' },
+    summary: formatManualAnnotationReviewText(isFeetCamera
+      ? sanitizeFootSummary(String(aiResult?.summary || '').trim(), footAssessment)
+      : String(aiResult?.summary || '').trim()),
+    foot_assessment: footAssessment,
+    note_assessment: aiResult?.note_assessment || 'not_visually_confirmed',
+    findings: savedFindings.map((finding) => ({
+      ...finding,
+      observation: formatManualAnnotationReviewText(finding.observation),
+      change_from_prior: formatManualAnnotationReviewText(finding.change_from_prior),
+    })),
+    sampled_frames: sampledFrames,
+    discarded_low_or_unsupported_findings: Math.max(0, rawFindings.length - savedFindings.length),
   });
 });
 

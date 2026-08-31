@@ -27,6 +27,7 @@ function defaultJobPriority(type, meta = {}, payload = {}) {
   if (name === 'tts_export') return 75;
   if (name === 'ai_invoke' && (meta.foreground || payload.foreground || payload.interactive)) return 70;
   if (name === 'ai_invoke') return 55;
+  if (name === 'manual_annotation_visual_review') return 45;
   if (name === 'profile_image_review_full') return 50;
   if (name.startsWith('local_vision_')) return 35;
   if (name === 'cloud_multimodal_analysis') return 30;
@@ -44,6 +45,7 @@ function jobLane(type, meta = {}, payload = {}) {
   if (name.startsWith('local_vision_')) return 'local_vision';
   if (name === 'cloud_multimodal_analysis') return 'cloud_analysis';
   if (name === 'ai_invoke' || name === 'profile_image_review_full') return 'ai';
+  if (name === 'manual_annotation_visual_review') return 'manual_visual';
   if (name === 'tts_export') return 'tts';
   if (name === 'session_review_video' || name === 'profile_anatomy_video' || name === 'mobile_session_video_render') return 'video';
   return 'general';
@@ -54,6 +56,7 @@ function laneConcurrency(lane) {
   if (lane === 'local_vision') return Math.max(1, Number(process.env.BACKGROUND_JOB_LOCAL_VISION_CONCURRENCY || 1));
   if (lane === 'cloud_analysis') return 1;
   if (lane === 'ai') return Math.max(1, Number(process.env.BACKGROUND_JOB_AI_CONCURRENCY || 2));
+  if (lane === 'manual_visual') return 1;
   if (lane === 'tts') return Math.max(1, Number(process.env.BACKGROUND_JOB_TTS_CONCURRENCY || 1));
   if (lane === 'video') return Math.max(1, Number(process.env.BACKGROUND_JOB_VIDEO_CONCURRENCY || 1));
   return Math.max(1, Number(process.env.BACKGROUND_JOB_GENERAL_CONCURRENCY || concurrency));
@@ -525,7 +528,7 @@ function hydratePersistedJob(record) {
   if (!record?.id) return null;
   const lane = jobLane(record.type, record.meta, record.payload);
   const storedPriority = normalizeJobPriority(record.priority ?? record.meta?.priority);
-  const priority = storedPriority === 0 && ['tts_export', 'ai_invoke', 'profile_image_review_full', 'session_review_video', 'profile_anatomy_video', 'mobile_session_video_render'].includes(String(record.type || ''))
+  const priority = storedPriority === 0 && ['tts_export', 'ai_invoke', 'manual_annotation_visual_review', 'profile_image_review_full', 'session_review_video', 'profile_anatomy_video', 'mobile_session_video_render'].includes(String(record.type || ''))
     ? defaultJobPriority(record.type, {}, record.payload)
     : storedPriority;
   return {
