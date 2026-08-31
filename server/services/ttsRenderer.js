@@ -93,6 +93,8 @@ function ttsExportChunkAttempts() {
 }
 
 export function isRetryableTTSChunkFailure(error) {
+  if (error?.retryable === true) return true;
+  if ([408, 500, 502, 503, 504].includes(Number(error?.status || 0))) return true;
   const message = String(error?.message || error || '');
   return /failed audio integrity check|too short for the requested text|fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(message);
 }

@@ -61,3 +61,15 @@ test('transient TTS fetch failures are eligible for bounded chunk retries', () =
   assert.equal(isRetryableTTSChunkFailure(new TypeError('fetch failed')), true);
   assert.equal(isRetryableTTSChunkFailure(new Error('HTTP 401 authentication failed')), false);
 });
+
+test('transient provider errors use bounded chunk retries without retrying quota failures', () => {
+  const serverError = new Error('The server had an error while processing your request.');
+  serverError.status = 500;
+  serverError.retryable = true;
+  assert.equal(isRetryableTTSChunkFailure(serverError), true);
+
+  const quotaError = new Error('insufficient_quota');
+  quotaError.status = 429;
+  quotaError.retryable = false;
+  assert.equal(isRetryableTTSChunkFailure(quotaError), false);
+});
