@@ -62,4 +62,18 @@ export function stripNonBodyObjectContext(value) {
     .trim();
 }
 
+const STATIC_CHANGE_LANGUAGE = /\b(?:remain(?:s|ed)?|retain(?:s|ed)?|persist(?:s|ed)?|unchanged|no (?:new|further|clear|visible|appreciable) (?:change|increase|decrease|arching|tilt|elevation)|without (?:further|clear|visible) (?:change|increase|decrease|relaxation)|flat baseline|baseline finding)\b/i;
+const STATIC_POSTURE = /\b(?:supine|flat (?:on|against) (?:the )?(?:table|surface)|no back arch(?:ing)?|no pelvic tilt|no postural elevation)\b/i;
+const STATIC_SKIN = /\b(?:skin|mottl(?:e|ed|ing)|pink(?:ish)?|red(?:ness)?|tone|color(?:ation)?|rugae|surface finding)\b/i;
+
+export function stripStaticManualAnnotationReviewText(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !(STATIC_CHANGE_LANGUAGE.test(sentence) && (STATIC_POSTURE.test(sentence) || STATIC_SKIN.test(sentence))))
+    .join(" ")
+    .trim();
+}
+
 export { formatSessionClock };

@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatManualAnnotationReviewText, formatSessionClock, stripNonBodyObjectContext } from "./manualAnnotationReviewText.js";
+import {
+  formatManualAnnotationReviewText,
+  formatSessionClock,
+  stripNonBodyObjectContext,
+  stripStaticManualAnnotationReviewText,
+} from "./manualAnnotationReviewText.js";
 
 test("formats long session-second references as minute clocks", () => {
   assert.equal(formatSessionClock(1214), "20:14");
@@ -43,4 +48,13 @@ test("removes guessed object context while preserving body findings", () => {
     stripNonBodyObjectContext("A dark device is held near the side table. Your scrotum remains elevated. Both feet remain relaxed."),
     "Your scrotum remains elevated. Both feet remain relaxed.",
   );
+});
+
+test("removes repeated flat posture and unchanged baseline skin sentences", () => {
+  const cleaned = stripStaticManualAnnotationReviewText(
+    "Your trunk remains fully supine and flat on the surface with no back arching. "
+    + "Diffuse pink mottled skin discoloration persists without further change. "
+    + "Your abdominal tension decreases as breathing settles.",
+  );
+  assert.equal(cleaned, "Your abdominal tension decreases as breathing settles.");
 });

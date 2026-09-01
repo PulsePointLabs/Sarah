@@ -3,6 +3,7 @@ import multer from 'multer';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { liveCaptureConfig, resolveUploadPath, uploadDir } from '../config.js';
@@ -848,8 +849,10 @@ export async function generateVideoClipPreview({
   maxDurationSeconds = 30,
   sourceDeleted = false,
   sourceType = 'upload',
+  cacheIdentity = '',
 }) {
   const mediaDuration = await getMediaDurationSeconds(sourcePath).catch(() => 0);
+  const sourceStat = await fsp.stat(sourcePath);
   const maxStart = mediaDuration ? Math.max(0, mediaDuration - 0.25) : Number.POSITIVE_INFINITY;
   const start = Math.min(Math.max(0, Number(startSeconds || 0)), maxStart);
   const requestedEnd = Number(endSeconds || start + 8);
@@ -858,47 +861,72 @@ export async function generateVideoClipPreview({
   const maxDuration = Math.max(1, Math.min(90, Number(maxDurationSeconds || 30)));
   const duration = Math.min(maxDuration, Math.max(0.25, end - start));
   const safeLabel = slugifyFilePart(label || 'video-clip');
-  const stem = `${Date.now()}-${crypto.randomUUID()}-${safeLabel}`;
+  const requestedFrameCount = Math.max(1, Math.min(18, Number(frameCount || 12)));
+  const sourceKey = String(cacheIdentity || `${sourceStat.size}-${Math.round(sourceStat.mtimeMs)}`);
+  const previewKey = crypto.createHash('sha256')
+    .update(JSON.stringify({ version: 3, sourceKey, start, duration, requestedFrameCount, safeLabel }))
+    .digest('hex')
+    .slice(0, 24);
+  const stem = `clip-preview-v3-${previewKey}-${safeLabel}`;
   const clipFilename = `${stem}.mp4`;
   const clipPath = path.join(uploadDir, clipFilename);
-  const requestedFrameCount = Math.max(1, Math.min(18, Number(frameCount || 12)));
   const framePattern = path.join(uploadDir, `${stem}-frame-%02d.jpg`);
 
-  await runProcess('ffmpeg', [
-    '-hide_banner',
-    '-y',
-    '-ss', String(start),
-    '-t', String(duration),
-    '-i', sourcePath,
-    '-map', '0:v:0',
-    '-map', '0:a?',
-    '-vf', 'scale=min(960\\,iw):-2',
-    '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '23',
-    '-c:a', 'aac',
-    '-b:a', '128k',
-    '-pix_fmt', 'yuv420p',
-    '-movflags', '+faststart',
-    clipPath,
-  ]);
+  let cached = false;
+  try {
+    const existing = await fsp.stat(clipPath);
+    cached = existing.isFile() && existing.size > 0;
+  } catch {
+    cached = false;
+  }
+  if (!cached) {
+    await runProcess('ffmpeg', [
+      '-hide_banner',
+      '-y',
+      '-ss', String(start),
+      '-t', String(duration),
+      '-i', sourcePath,
+      '-map', '0:v:0',
+      '-map', '0:a?',
+      '-vf', 'scale=min(960\\,iw):-2',
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-crf', '23',
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-pix_fmt', 'yuv420p',
+      '-movflags', '+faststart',
+      clipPath,
+    ]);
+  }
 
-  await runProcess('ffmpeg', [
-    '-hide_banner',
-    '-y',
-    '-i', clipPath,
-    '-an',
-    '-vf', `fps=${requestedFrameCount / duration}:start_time=0,scale=960:-2:force_original_aspect_ratio=decrease`,
-    '-frames:v', String(requestedFrameCount),
-    '-q:v', '3',
-    framePattern,
-  ]);
+  const expectedFrameFiles = Array.from(
+    { length: requestedFrameCount },
+    (_, index) => `${stem}-frame-${String(index + 1).padStart(2, '0')}.jpg`,
+  );
+  let frameFiles = [];
+  for (const filename of expectedFrameFiles) {
+    const stat = await fsp.stat(path.join(uploadDir, filename)).catch(() => null);
+    if (stat?.isFile() && stat.size > 0) frameFiles.push(filename);
+  }
+  if (frameFiles.length < requestedFrameCount) {
+    await runProcess('ffmpeg', [
+      '-hide_banner',
+      '-y',
+      '-i', clipPath,
+      '-an',
+      '-vf', `fps=${requestedFrameCount / duration}:start_time=0,scale=960:-2:force_original_aspect_ratio=decrease`,
+      '-frames:v', String(requestedFrameCount),
+      '-q:v', '3',
+      framePattern,
+    ]);
+    frameFiles = [];
+    for (const filename of expectedFrameFiles) {
+      const stat = await fsp.stat(path.join(uploadDir, filename)).catch(() => null);
+      if (stat?.isFile() && stat.size > 0) frameFiles.push(filename);
+    }
+  }
 
-  const files = await fsp.readdir(uploadDir);
-  const frameFiles = files
-    .filter((file) => file.startsWith(`${stem}-frame-`) && file.endsWith('.jpg'))
-    .sort()
-    .slice(0, requestedFrameCount);
   const frames = await Promise.all(frameFiles.map(async (filename, index) => {
     const framePath = path.join(uploadDir, filename);
     const bytes = await fsp.readFile(framePath);
@@ -924,6 +952,7 @@ export async function generateVideoClipPreview({
   const stat = await fsp.stat(clipPath);
   return {
     ok: true,
+    cached,
     source_deleted: sourceDeleted,
     source_type: sourceType,
     clip_url: `/uploads/${clipFilename}`,
@@ -1002,6 +1031,7 @@ filesRouter.post('/local-video/clip-preview', async (req, res) => {
       maxDurationSeconds: req.body?.maxDurationSeconds,
       sourceDeleted: false,
       sourceType: 'linked_local_video',
+      cacheIdentity: meta.fingerprint,
     });
     res.json({ ...result, source_filename: meta.filename, source_fingerprint: meta.fingerprint });
   } catch (error) {
@@ -1029,6 +1059,7 @@ filesRouter.post('/uploaded-video/clip-preview', async (req, res) => {
       maxDurationSeconds: req.body?.maxDurationSeconds,
       sourceDeleted: false,
       sourceType: 'uploaded_review_video',
+      cacheIdentity: `${filename}:${(await fsp.stat(sourcePath)).size}`,
     });
     res.json({ ...result, source_filename: filename, source_url: rawUrl });
   } catch (error) {

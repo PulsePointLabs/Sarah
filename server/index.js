@@ -26,6 +26,7 @@ import { profilerRouter } from './routes/profiler.js';
 import { startTelemetryEngine, telemetryEngine } from './localEngine/index.js';
 import { startHeartRateRelay } from './services/hrRelay.js';
 import { restorePersistedJobs } from './services/jobQueue.js';
+import { startMediaRetentionScheduler } from './services/mediaRetention.js';
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -37,6 +38,7 @@ initDb();
 restorePersistedJobs();
 startTelemetryEngine();
 await startHeartRateRelay();
+startMediaRetentionScheduler();
 
 app.use(cors());
 app.use('/api/jobs/start-large', largeJobsRouter);

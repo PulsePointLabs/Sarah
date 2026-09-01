@@ -33,7 +33,9 @@
     "capture:emg:install": "py -m pip install -r tools/capture/emg/requirements.txt",
     "capture:emg:dual": "py tools/capture/emg/emg_dual_obs.py",
     "capture:emg:single": "py tools/capture/emg/emg_single.py",
-    "cloud:preflight": "node scripts/cloud-analysis-preflight.mjs"
+    "cloud:preflight": "node scripts/cloud-analysis-preflight.mjs",
+    "media:retention:dry-run": "node scripts/media-retention.mjs",
+    "media:retention:apply": "node scripts/media-retention.mjs --apply"
   },
   "build": {
     "appId": "com.pulsepointlabs.sarah",

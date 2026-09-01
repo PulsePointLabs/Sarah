@@ -50,7 +50,12 @@ import {
   keepFootVisualItem,
   sanitizeFootSummary,
 } from '../../src/lib/footVisualAssessment.js';
-import { formatManualAnnotationReviewText, formatSessionClock, stripNonBodyObjectContext } from '../../src/lib/manualAnnotationReviewText.js';
+import {
+  formatManualAnnotationReviewText,
+  formatSessionClock,
+  stripNonBodyObjectContext,
+  stripStaticManualAnnotationReviewText,
+} from '../../src/lib/manualAnnotationReviewText.js';
 
 export const jobsRouter = express.Router();
 export const largeJobsRouter = express.Router();
@@ -700,7 +705,7 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
       note_assessment: { type: 'string', enum: ['supported', 'partially_supported', 'not_visually_confirmed'] },
       findings: {
         type: 'array',
-        maxItems: 12,
+        maxItems: 8,
         items: {
           type: 'object',
           properties: {
@@ -742,6 +747,10 @@ Systematic review targets when visible: head/face expression; neck and upper-bod
 
 Laterality rule: none of the cameras are mirrored. Determine your anatomical right and left from body orientation, not screen side. If orientation is not reliable, avoid assigning laterality rather than guessing.
 
+Change-only rule: this follow-up exists to identify what newly develops, increases, decreases, releases, or changes around the note. Prioritize directional changes in whole-body or regional muscle tension, bracing/release, chest or abdominal respiratory effort, shoulder/arm/hand tension, pelvic lift or settling, trunk elevation, and possible back arching. Back arching is often difficult to judge without a true lateral view: report it only when trunk-to-surface separation or a clear change in spinal/pelvic contour is visible. If this angle cannot establish an arch, omit the topic instead of repeatedly saying you remain flat or supine.
+
+Baseline suppression rule: do not repeat posture, skin tone, mottling, rugae, scars, redness, anatomical appearance, or other baseline findings merely because they remain visible. Skin belongs in the result only when a new or clearly changing flush, pallor, mottling pattern, sheen, swelling, or other surface change develops during this window. Do not inventory every visible body region. Omit unchanged findings completely rather than writing remains, continues, persists, retains, unchanged, or no further change.
+
 Continuity rule: compare these new frames with the prior saved manual-note reviews below. State change from prior only when supported. Do not re-report unchanged facts. A visible stimulation change may be temporally associated with a body response, but do not claim it caused the response unless the ordered sequence strongly supports that wording.
 
 Manual note at ${formatSessionClock(noteTimeS)}:
@@ -753,7 +762,7 @@ ${priorContext}
 Only new, previously unreviewed frames are attached. Previously reviewed overlapping timestamps were deliberately excluded.
 Frame timing: ${frameTiming}.
 
-Return a compact structured review. Findings must be anatomical-area organized and evidence-timestamped. In summary, observation, and change_from_prior prose, write all session timestamps as minute:second clocks such as 20:14 or 20:14–20:24; never write cumulative values such as 1214s and never use a session timestamp as an image/frame number. Keep evidence_time_s as numeric cumulative seconds only because the schema requires it. Low-confidence possibilities may be returned for audit, but they will not be auto-saved as findings. Do not mention telemetry overlays or numeric HR/BP/SpO2 in visual findings.`,
+Return a compact structured review centered on the few meaningful changes. Findings must be anatomical-area organized and evidence-timestamped. The summary must synthesize change rather than repeat every finding. In summary, observation, and change_from_prior prose, write all session timestamps as minute:second clocks such as 20:14 or 20:14–20:24; never write cumulative values such as 1214s and never use a session timestamp as an image/frame number. Keep evidence_time_s as numeric cumulative seconds only because the schema requires it. Low-confidence possibilities may be returned for audit, but they will not be auto-saved as findings. Do not mention telemetry overlays or numeric HR/BP/SpO2 in visual findings.`,
   });
   const rawFindings = Array.isArray(aiResult?.findings) ? aiResult.findings : [];
   const footAssessment = isFeetCamera && aiResult?.foot_assessment && typeof aiResult.foot_assessment === 'object'
@@ -772,15 +781,15 @@ Return a compact structured review. Findings must be anatomical-area organized a
     ...baseReview,
     coverage_status: newSessionTimes.length === desiredSessionTimes.length ? 'new_frames_only' : 'mixed_new_and_reused',
     source_video: { ...baseReview.source_video, fingerprint: video.fingerprint || extracted.meta.fingerprint || '' },
-    summary: stripNonBodyObjectContext(formatManualAnnotationReviewText(isFeetCamera
+    summary: stripStaticManualAnnotationReviewText(stripNonBodyObjectContext(formatManualAnnotationReviewText(isFeetCamera
       ? sanitizeFootSummary(String(aiResult?.summary || '').trim(), footAssessment)
-      : String(aiResult?.summary || '').trim())),
+      : String(aiResult?.summary || '').trim()))),
     foot_assessment: footAssessment,
     note_assessment: aiResult?.note_assessment || 'not_visually_confirmed',
     findings: savedFindings.map((finding) => ({
       ...finding,
-      observation: stripNonBodyObjectContext(formatManualAnnotationReviewText(finding.observation)),
-      change_from_prior: stripNonBodyObjectContext(formatManualAnnotationReviewText(finding.change_from_prior)),
+      observation: stripStaticManualAnnotationReviewText(stripNonBodyObjectContext(formatManualAnnotationReviewText(finding.observation))),
+      change_from_prior: stripStaticManualAnnotationReviewText(stripNonBodyObjectContext(formatManualAnnotationReviewText(finding.change_from_prior))),
     })).filter((finding) => finding.observation),
     sampled_frames: sampledFrames,
     discarded_low_or_unsupported_findings: Math.max(0, rawFindings.length - savedFindings.length),
