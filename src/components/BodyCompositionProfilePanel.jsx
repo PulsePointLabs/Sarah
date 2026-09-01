@@ -154,12 +154,13 @@ export default function BodyCompositionProfilePanel({ profile, onLatestReading }
           </h2>
           <p className="mt-1 text-xs text-muted-foreground">Read the ESF-551 directly over Bluetooth, or use Health Connect as a fallback.</p>
         </div>
-        {isSarahNativeShell() && (
-          <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2">
             <Button type="button" size="sm" onClick={readScaleDirectly} disabled={busy} className="gap-2">
               <Bluetooth className="h-4 w-4" />
               {busy ? "Working…" : "Read ESF-551 Scale"}
             </Button>
+          {isSarahNativeShell() && (
+            <>
             <Button type="button" size="sm" onClick={sync} disabled={busy} className="gap-2">
               <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
               Sync Health Connect
@@ -176,14 +177,13 @@ export default function BodyCompositionProfilePanel({ profile, onLatestReading }
             >
               <ExternalLink className="h-4 w-4" /> Permissions
             </Button>
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </div>
-      {isSarahNativeShell() && (
-        <p className="rounded-lg border border-cyan-400/20 bg-cyan-400/5 px-3 py-2 text-xs text-muted-foreground">
-          Direct capture: close VeSync, wake the scale, tap Read ESF-551 Scale, then stand barefoot and still on all four electrodes. Weight and impedance are measured; the remaining composition values are calculated locally from those signals and your saved profile.
-        </p>
-      )}
+      <p className="rounded-lg border border-cyan-400/20 bg-cyan-400/5 px-3 py-2 text-xs text-muted-foreground">
+        Direct capture works in the Windows EXE and Android APK: close VeSync, wake the scale, tap Read ESF-551 Scale, then stand barefoot and still on all four electrodes. Weight and impedance are measured; the remaining composition values are calculated locally from those signals and your saved profile.
+      </p>
       {syncMessage && (
         <div className={`rounded-lg border px-3 py-2 text-sm ${syncError ? "border-destructive/40 bg-destructive/10 text-destructive" : "border-primary/25 bg-primary/5 text-foreground"}`}>
           {syncMessage}
@@ -191,7 +191,7 @@ export default function BodyCompositionProfilePanel({ profile, onLatestReading }
       )}
       {readings[0] ? <BodyCompositionSummaryCard reading={readings[0]} compact title="Latest Weigh-In" /> : (
         <div className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
-          No weigh-ins saved yet. Open this page in the APK and tap Sync Health Connect.
+          No weigh-ins saved yet. Read the ESF-551 directly, or open this page in the APK to sync Health Connect.
         </div>
       )}
       {chart.length > 1 && (

@@ -258,9 +258,15 @@ function enrichHrTelemetry(telemetry) {
   const rrCount = cleanNumber(telemetry?.quality?.rrCount) ?? cleanNumber(hrv.sampleCount) ?? 0;
   const hrvQuality = hrv.quality || telemetry?.hrv_quality || telemetry?.quality?.hrvQuality || null;
   const rows = (derivedHrState.get(source) || [])
-    .filter((row) => now - row.t <= 8 * 60 * 1000);
-  rows.push({ t: now, hr, rmssd });
-  const trimmed = rows.slice(-240);
+    .filter((row) => now - row.t <= 4 * 60 * 60 * 1000);
+  const nextRow = { t: now, hr, rmssd };
+  const previousRow = rows[rows.length - 1];
+  // Direct H10 packets arrive several times per second. Keep a time-based history,
+  // not a packet-count history, or a 240-point "8 minute" baseline is really only
+  // about one minute and quickly chases a sustained build upward.
+  if (previousRow && now - previousRow.t < 900) rows[rows.length - 1] = nextRow;
+  else rows.push(nextRow);
+  const trimmed = rows.slice(-14400);
   derivedHrState.set(source, trimmed);
 
   const recent = trimmed.slice(-30).map((row) => row.hr);
@@ -1374,6 +1380,9 @@ function ensureLiveSession(recording, options = {}) {
     return reusable.id;
   }
   const id = crypto.randomUUID();
+  // A new recording needs a fresh physiological baseline. Telemetry collected
+  // while preparing the room or during the previous capture must not leak in.
+  derivedHrState.clear();
   upsertEntity(entity, id, captureKind === 'body_exploration' ? buildBodyExplorationSeed(recording) : buildSessionSeed(recording));
   telemetryEngine.setActiveSession(id);
   state.session = {

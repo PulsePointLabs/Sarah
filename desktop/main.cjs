@@ -293,9 +293,13 @@ function bluetoothDeviceLabel(device) {
   return String(device?.deviceName || device?.name || '').trim();
 }
 
-function isPreferredHeartRateDevice(device) {
+function isPreferredSarahDevice(device) {
   const label = bluetoothDeviceLabel(device);
-  return /polar\s+h10/i.test(label) || /\bh10\b/i.test(label) || /heart.?rate/i.test(label);
+  return /polar\s+h10/i.test(label)
+    || /\bh10\b/i.test(label)
+    || /heart.?rate/i.test(label)
+    || /omron|bp7000|blesmart|evolv|\bhem[-_\s]?/i.test(label)
+    || /etekcity|esf[-_\s]?551|smart fitness scale/i.test(label);
 }
 
 function resetBluetoothSelection() {
@@ -308,7 +312,7 @@ function finishBluetoothSelection(deviceId = '') {
   bluetoothSelection.done = true;
   const callback = bluetoothSelection.callback;
   resetBluetoothSelection();
-  desktopLog(deviceId ? `Selected Bluetooth device ${deviceId}` : 'Bluetooth scan ended without a selected H10 device');
+  desktopLog(deviceId ? `Selected Bluetooth device ${deviceId}` : 'Bluetooth scan ended without a selected Sarah device');
   callback(deviceId);
 }
 
@@ -444,7 +448,7 @@ function configureBluetoothSelection(win) {
       };
     }
 
-    const preferred = devices.find(isPreferredHeartRateDevice);
+    const preferred = devices.find(isPreferredSarahDevice);
     if (preferred?.deviceId) {
       finishBluetoothSelection(preferred.deviceId);
     }

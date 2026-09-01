@@ -31,7 +31,7 @@ async function stopNativeOmronListener() {
 
 async function startNativeOmronListener({ onStatus, onReading, onDisconnect, onError, forceDevicePicker, rememberDevice }) {
   await stopNativeOmronListener();
-  await initializeAndroidBle(onStatus);
+  await initializeBle(onStatus);
   let device = !forceDevicePicker ? getRememberedOmronDevice() : null;
   if (!device?.deviceId) {
     device = await requestOmronDevice(onStatus);
@@ -201,15 +201,12 @@ function isRecoverableOmronConnectionError(error) {
   return /connection\s+timeout|connect\s+timeout|timed?\s*out|gatt\s+133|disconnected|not\s+connected/i.test(message);
 }
 
-async function initializeAndroidBle(onStatus) {
-  if (!window.Capacitor?.isNativePlatform?.()) {
-    throw new Error("Direct OMRON BP sync currently needs the installed Android APK. Use the phone to sync; desktop will read the saved PulsePoint BP record.");
-  }
-
+async function initializeBle(onStatus) {
+  const native = Boolean(window.Capacitor?.isNativePlatform?.());
   onStatus?.("Press the BP7000 Bluetooth/Transfer button once until the O flashes, then select the OMRON device in the picker.");
-  await BleClient.initialize({ androidNeverForLocation: true });
+  await BleClient.initialize(native ? { androidNeverForLocation: true } : {});
 
-  if (typeof BleClient.isLocationEnabled === "function") {
+  if (native && typeof BleClient.isLocationEnabled === "function") {
     const enabled = await BleClient.isLocationEnabled().catch(() => true);
     if (!enabled) {
       throw new Error("Android Location services are off. Turn Location on, then try OMRON sync again so Android can scan for BLE devices.");
@@ -440,18 +437,27 @@ export async function startOmronBloodPressureListener({
     return startNativeOmronListener({ onStatus, onReading, onDisconnect, onError, forceDevicePicker, rememberDevice });
   }
   await stopOmronBloodPressureListener().catch(() => {});
-  await initializeAndroidBle(onStatus);
+  await initializeBle(onStatus);
 
   let device = !forceDevicePicker ? getRememberedOmronDevice() : null;
   if (device?.deviceId) {
-    onStatus?.(`Using saved OMRON BP7000 Bluetooth permission (${device.name || "OMRON BP7000"}).`);
-  } else {
+    const permittedDevices = await BleClient.getDevices([device.deviceId]).catch(() => []);
+    const permittedDevice = permittedDevices.find((candidate) => candidate.deviceId === device.deviceId);
+    if (permittedDevice) {
+      device = { ...device, ...permittedDevice };
+      onStatus?.(`Using saved OMRON BP7000 Bluetooth permission (${device.name || "OMRON BP7000"}).`);
+    } else {
+      clearRememberedOmronDevice();
+      device = null;
+    }
+  }
+  if (!device?.deviceId) {
     device = await requestOmronDevice(onStatus);
     if (rememberDevice) rememberOmronDevice(device);
   }
 
   const deviceId = device?.deviceId;
-  if (!deviceId) throw new Error("Android Bluetooth picker did not return a usable OMRON device id.");
+  if (!deviceId) throw new Error("Bluetooth picker did not return a usable OMRON device id.");
 
   try {
     const listener = {

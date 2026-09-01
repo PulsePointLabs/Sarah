@@ -93,7 +93,9 @@ import {
   stopOmronBloodPressureListener,
 } from "@/lib/omronBloodPressureBle";
 
-const MAX_TELEMETRY_POINTS = 240;
+// One time-bucketed point per second preserves an hour of real detector context
+// without feeding Recharts the raw multi-packet-per-second H10 stream.
+const MAX_TELEMETRY_POINTS = 3600;
 const TELEMETRY_DASHBOARD_STORAGE_KEY = "pulsepoint.telemetryDashboard.v5";
 const TELEMETRY_DASHBOARD_PANELS = [
   { id: "notices", label: "Sarah live cue", helper: "Current physiological cue and confidence", cols: 12, rows: 2 },
@@ -2293,17 +2295,9 @@ export default function LiveCapture() {
         howlIntensity: readHowlChannelIntensity(howlTelemetry, howlCommandForm.channel),
       });
       const previous = prev[prev.length - 1];
-      if (
-        previous
-        && previous.hr === point.hr
-        && previous.hrSmoothed === point.hrSmoothed
-        && previous.left === point.left
-        && previous.right === point.right
-        && point.ts - previous.ts < 750
-      ) {
-        return prev;
-      }
-      const pointPrediction = computeLiveClimaxPrediction(nextHr, nextEmg, [...prev, point], {
+      const replaceCurrentBucket = Boolean(previous && point.ts - previous.ts < 900);
+      const historyForPrediction = replaceCurrentBucket ? [...prev.slice(0, -1), point] : [...prev, point];
+      const pointPrediction = computeLiveClimaxPrediction(nextHr, nextEmg, historyForPrediction, {
         sessionTimeSec: point.sessionTimeSec,
       });
       point.nearClimax = pointPrediction.nearClimax;
@@ -2312,7 +2306,7 @@ export default function LiveCapture() {
       point.plateau = pointPrediction.plateauScore;
       point.controllerConfidence = pointPrediction.controllerConfidence;
       point.physiologicalIntensity = pointPrediction.physiologicalIntensity;
-      return [...prev, point].slice(-MAX_TELEMETRY_POINTS);
+      return historyForPrediction.slice(-MAX_TELEMETRY_POINTS);
     });
   };
   appendTelemetryPointRef.current = appendTelemetryPoint;
@@ -3671,9 +3665,6 @@ export default function LiveCapture() {
       }
     };
 
-    setLiveCaptureKeepAwake(recordingTransportActive || captureArmed).catch(() => {
-      // The browser wake lock remains available when the native bridge is absent.
-    });
     if (recordingTransportActive || captureArmed) requestWakeLock();
     else releaseWakeLock();
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -3682,9 +3673,17 @@ export default function LiveCapture() {
       cancelled = true;
       document.removeEventListener("visibilitychange", onVisibilityChange);
       releaseWakeLock();
-      setLiveCaptureKeepAwake(false).catch(() => {});
     };
   }, [captureArmed, recordingTransportActive]);
+
+  useEffect(() => {
+    // Keep the Android collector awake for the entire time Live Capture is open,
+    // including room prep and temporary OBS/session reconnects.
+    setLiveCaptureKeepAwake(true).catch(() => {});
+    return () => {
+      setLiveCaptureKeepAwake(false).catch(() => {});
+    };
+  }, []);
 
   useEffect(() => {
     if (captureArmed && recordingTransportActive) setCaptureArmed(false);
@@ -4886,7 +4885,9 @@ export default function LiveCapture() {
       message: `Received OMRON reading ${formatBloodPressure(reading)}. Saving...`,
     }));
 
-    const saved = await ingestBloodPressureReadings([reading]);
+    const activeSessionId = liveSession?.activeSessionId || null;
+    const sessionReading = activeSessionId ? { ...reading, session: activeSessionId } : reading;
+    const saved = await ingestBloodPressureReadings([sessionReading]);
     const savedReadings = Array.isArray(saved?.readings) && saved.readings.length ? saved.readings : [reading];
     const latestReading = savedReadings[0] || reading;
 
@@ -7538,7 +7539,7 @@ export default function LiveCapture() {
               )}
               {bpCapture.error && <p className="mt-1 text-xs text-destructive">{bpCapture.error}</p>}
               <p className="mt-2 text-[11px] text-muted-foreground">
-                Phone APK can sync the OMRON BP7000 directly over Bluetooth. Desktop reads the same local PulsePoint BP database and refreshes the active session.
+                Windows EXE and the phone APK can both listen to the OMRON BP7000 directly. Use one collector at a time; every reading is saved to the same local PulsePoint database and stamped into the active session.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">

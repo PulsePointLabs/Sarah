@@ -85,3 +85,25 @@ test("EMG remains optional but can raise sustained high-watch confidence when pr
   assert.equal(result.nearClimax, 90);
   assert.equal(result.confidenceBand, "high watch");
 });
+
+test("a brief signal dip does not reset a sustained build to zero", () => {
+  const points = Array.from({ length: 121 }, (_, second) => ({
+    ts: second * 1000,
+    sessionTimeSec: second,
+    hr: second >= 55 && second < 63 ? 88 : 106,
+    hrSmoothed: second >= 55 && second < 63 ? 88 : 106,
+    baseline: 88,
+    hrvRmssd: second < 45 ? 22 : 4,
+    build: second >= 55 && second < 63 ? 20 : 72,
+    phase: second >= 55 && second < 63 ? "baseline" : "build",
+  }));
+  const result = computeLiveClimaxPrediction(
+    { currentHr: 106, baselineHr: 88, phase: "build", buildConfidence: 72, hrv: { rmssdMs: 4, quality: "high", sampleCount: 60 } },
+    null,
+    points,
+    { sessionTimeSec: 120, elapsedMinutes: 20 },
+  );
+  assert.equal(result.buildDurationSec, 120);
+  assert.equal(result.buildEligibleForNearClimax, true);
+  assert.ok(result.nearClimax >= 68);
+});

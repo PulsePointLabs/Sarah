@@ -52,9 +52,19 @@ function estimateBuildDurationSec(history = [], fallbackSessionTimeSec = 0) {
   if (!points.length || !pointLooksLikeBuild(points[points.length - 1])) return 0;
   const lastPoint = points[points.length - 1];
   let startPoint = lastPoint;
+  let lastBuildPoint = lastPoint;
   for (let index = points.length - 2; index >= 0; index -= 1) {
-    if (!pointLooksLikeBuild(points[index])) break;
-    startPoint = points[index];
+    const candidate = points[index];
+    if (pointLooksLikeBuild(candidate)) {
+      startPoint = candidate;
+      lastBuildPoint = candidate;
+      continue;
+    }
+    const candidateTime = numberOrNull(candidate?.sessionTimeSec, candidate?.ts != null ? candidate.ts / 1000 : null);
+    const lastBuildTime = numberOrNull(lastBuildPoint?.sessionTimeSec, lastBuildPoint?.ts != null ? lastBuildPoint.ts / 1000 : null);
+    // A short HR dip or packet hiccup must not erase a genuine sustained build.
+    // Stop only after a real 15-second break in build evidence.
+    if (candidateTime == null || lastBuildTime == null || lastBuildTime - candidateTime > 15) break;
   }
   const lastSessionTime = numberOrNull(lastPoint?.sessionTimeSec, fallbackSessionTimeSec);
   const startSessionTime = numberOrNull(startPoint?.sessionTimeSec);

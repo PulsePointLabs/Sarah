@@ -1,6 +1,5 @@
 import { BleClient } from "@capacitor-community/bluetooth-le";
 import { calculateEsf551BodyComposition, parseEsf551Measurement } from "@/lib/etekcityEsf551Metrics";
-import { isSarahNativeShell } from "@/lib/mobileApiBase";
 
 const ESF551_SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb";
 const ESF551_MEASUREMENT_UUID = "0000fff1-0000-1000-8000-00805f9b34fb";
@@ -24,16 +23,14 @@ export async function readEsf551Scale({
   onStatus,
   timeoutMs = 75000,
 } = {}) {
-  if (!isSarahNativeShell()) {
-    throw new Error("Direct ESF-551 scale capture is available in the Android APK.");
-  }
   if (!Number.isFinite(Number(age)) || !Number.isFinite(Number(heightCm)) || !["male", "female"].includes(String(biologicalSex || "").toLowerCase())) {
     throw new Error("Enter age, height, and biological sex in Sarah's profile before reading the scale.");
   }
 
+  const native = Boolean(window.Capacitor?.isNativePlatform?.());
   onStatus?.("Close VeSync, wake the scale, then select Etekcity Smart Fitness Scale.");
-  await BleClient.initialize({ androidNeverForLocation: true });
-  if (typeof BleClient.isLocationEnabled === "function") {
+  await BleClient.initialize(native ? { androidNeverForLocation: true } : {});
+  if (native && typeof BleClient.isLocationEnabled === "function") {
     const enabled = await BleClient.isLocationEnabled().catch(() => true);
     if (!enabled) throw new Error("Turn on Android Location services so Sarah can scan for the scale.");
   }
