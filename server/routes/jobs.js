@@ -50,7 +50,7 @@ import {
   keepFootVisualItem,
   sanitizeFootSummary,
 } from '../../src/lib/footVisualAssessment.js';
-import { formatManualAnnotationReviewText, formatSessionClock } from '../../src/lib/manualAnnotationReviewText.js';
+import { formatManualAnnotationReviewText, formatSessionClock, stripNonBodyObjectContext } from '../../src/lib/manualAnnotationReviewText.js';
 
 export const jobsRouter = express.Router();
 export const largeJobsRouter = express.Router();
@@ -731,12 +731,16 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
 
 The user's note is a guide to what deserves extra scrutiny, not proof. Confirm, refine, expand, or decline each claim based only on visible ordered frames. Do not simply paraphrase the note. Do not invent anatomy, motion, color, sensation, internal physiology, or causation. Save only meaningful visible changes; omit static scene description unless it establishes a change baseline.
 
+Identity and voice rule: this is Ben's self-recorded private session. Address Ben directly as "you" and "your" in every summary and finding. Never call him the subject, patient, client, examinee, or operator. Unless the frames unmistakably show another person, all visible hands are Ben's own hands: call them "your hand" or "your hands," using anatomical right/left only when orientation supports it. Never invent a clinician, examiner, caregiver, operator, or third-party hand.
+
+Body-state-only rule: focus on visible anatomy, genital state, skin, posture, muscle tension, movement, breathing, stimulation contact/technique, and whole-body response. Do not identify or infer what Ben is holding from appearance or from the note. Do not label an object as a phone, tablet, blood-pressure interface, cuff, medical device, or other equipment unless its identity is unmistakably established by direct visual evidence and is necessary to describe body contact. Omit object handling, side-table activity, and equipment troubleshooting when they do not visibly change body state or stimulation.
+
 ${cameraFocus}
 ${isFeetCamera ? FOOT_VISUAL_REVIEW_RULE : ''}
 
 Systematic review targets when visible: head/face expression; neck and upper-body flushing; chest/abdominal contour and visible breathing; shoulder, arm, and hand tension; back arching and trunk posture; pelvic movement; stimulation technique, speed, grip, pressure cues, contact location, pauses, and resumes; penile/glans/shaft erection or engorgement state; scrotal lift/descent, tightening, symmetry, and skin state; perineal/pelvic tension cues; thighs, knees, calves, ankles, feet, toe curl, plantar flexion, planting, bracing, tremor, spasm-like movement, and release; generalized versus regional skin color/surface changes; coordinated whole-body build or settling.
 
-Laterality rule: none of the cameras are mirrored. Determine the subject's anatomical right and left from body orientation, not screen side. If orientation is not reliable, avoid assigning laterality rather than guessing.
+Laterality rule: none of the cameras are mirrored. Determine your anatomical right and left from body orientation, not screen side. If orientation is not reliable, avoid assigning laterality rather than guessing.
 
 Continuity rule: compare these new frames with the prior saved manual-note reviews below. State change from prior only when supported. Do not re-report unchanged facts. A visible stimulation change may be temporally associated with a body response, but do not claim it caused the response unless the ordered sequence strongly supports that wording.
 
@@ -759,6 +763,7 @@ Return a compact structured review. Findings must be anatomical-area organized a
     ['moderate', 'high'].includes(String(finding?.confidence || '').toLowerCase())
     && String(finding?.anatomical_area || '').trim()
     && String(finding?.observation || '').trim()
+    && String(finding?.response_domain || '').toLowerCase() !== 'equipment_context'
     && newSessionTimes.some((time) => Math.abs(time - Number(finding?.evidence_time_s)) <= 0.6)
     && (!isFeetCamera || keepFootVisualItem(finding, footAssessment))
   ));
@@ -767,16 +772,16 @@ Return a compact structured review. Findings must be anatomical-area organized a
     ...baseReview,
     coverage_status: newSessionTimes.length === desiredSessionTimes.length ? 'new_frames_only' : 'mixed_new_and_reused',
     source_video: { ...baseReview.source_video, fingerprint: video.fingerprint || extracted.meta.fingerprint || '' },
-    summary: formatManualAnnotationReviewText(isFeetCamera
+    summary: stripNonBodyObjectContext(formatManualAnnotationReviewText(isFeetCamera
       ? sanitizeFootSummary(String(aiResult?.summary || '').trim(), footAssessment)
-      : String(aiResult?.summary || '').trim()),
+      : String(aiResult?.summary || '').trim())),
     foot_assessment: footAssessment,
     note_assessment: aiResult?.note_assessment || 'not_visually_confirmed',
     findings: savedFindings.map((finding) => ({
       ...finding,
-      observation: formatManualAnnotationReviewText(finding.observation),
-      change_from_prior: formatManualAnnotationReviewText(finding.change_from_prior),
-    })),
+      observation: stripNonBodyObjectContext(formatManualAnnotationReviewText(finding.observation)),
+      change_from_prior: stripNonBodyObjectContext(formatManualAnnotationReviewText(finding.change_from_prior)),
+    })).filter((finding) => finding.observation),
     sampled_frames: sampledFrames,
     discarded_low_or_unsupported_findings: Math.max(0, rawFindings.length - savedFindings.length),
   });
