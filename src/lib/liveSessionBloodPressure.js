@@ -7,7 +7,11 @@ function usableBloodPressure(reading) {
 
 export function selectLiveSessionBloodPressure({ activeSessionId, activeSessionDoc, captureState } = {}) {
   const sessionId = String(activeSessionId || "").trim();
-  if (!sessionId) return null;
+  // While Live Capture is armed and waiting for OBS there is deliberately no
+  // session record yet. A reading captured by this live page is still current
+  // and should be visible in the telemetry display instead of being hidden
+  // behind the not-yet-created session id.
+  if (!sessionId) return usableBloodPressure(captureState?.lastReading);
 
   if (String(captureState?.sessionId || "").trim() === sessionId) {
     const captured = usableBloodPressure(captureState?.lastReading);

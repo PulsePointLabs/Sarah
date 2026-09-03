@@ -8,6 +8,7 @@ import {
   validateAutomaticHowlIncrease,
 } from '../services/howlSafety.js';
 import { isLiveCaptureObsActivelyRecording, onLiveCaptureObsStateChange } from '../services/liveCaptureObsState.js';
+import { readHowlActivityState } from '../services/howlActivityState.js';
 
 export const howlRouter = express.Router();
 
@@ -103,6 +104,7 @@ function authHeaders(settings) {
 
 function summarizeHowlResponse(data) {
   const options = data?.options || {};
+  const activity = readHowlActivityState(data);
   return {
     connected: true,
     power_a: options.power_a ?? null,
@@ -117,6 +119,9 @@ function summarizeHowlResponse(data) {
       position: data.player.position ?? null,
       duration: data.player.duration ?? null,
     } : null,
+    activity_reported: activity.reported,
+    activity_name: activity.name,
+    activity_display_name: activity.displayName,
     api_compatibility: HOWL_DIRECT_API_VERSION,
   };
 }

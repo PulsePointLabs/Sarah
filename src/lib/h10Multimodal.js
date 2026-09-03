@@ -93,6 +93,60 @@ function littleSigned(bytes, offset, size) {
   return result;
 }
 
+function signExtend(value, bitWidth) {
+  if (bitWidth < 1 || bitWidth > 31) throw new Error(`Unsupported H10 delta width ${bitWidth}`);
+  const signBit = 2 ** (bitWidth - 1);
+  return value >= signBit ? value - (2 ** bitWidth) : value;
+}
+
+function readLittleBits(bytes, bitOffset, bitWidth) {
+  if (bitOffset + bitWidth > bytes.length * 8) throw new Error("Truncated H10 compressed delta block");
+  let value = 0;
+  for (let index = 0; index < bitWidth; index += 1) {
+    const sourceBit = bitOffset + index;
+    if ((bytes[Math.floor(sourceBit / 8)] & (1 << (sourceBit % 8))) !== 0) {
+      value += 2 ** index;
+    }
+  }
+  return signExtend(value, bitWidth);
+}
+
+// Polar compressed ACC type 1 starts with one signed 16-bit XYZ reference
+// sample, followed by blocks of little-endian signed deltas. This mirrors the
+// public Polar BLE SDK decoder instead of discarding valid 0x81 PMD frames.
+function parseCompressedAccelerometerType1(content) {
+  if (content.length < 6) throw new Error("Truncated H10 compressed accelerometer reference sample");
+  const samples = [[
+    littleSigned(content, 0, 2),
+    littleSigned(content, 2, 2),
+    littleSigned(content, 4, 2),
+  ]];
+  let offset = 6;
+  while (offset < content.length) {
+    if (offset + 2 > content.length) throw new Error("Truncated H10 compressed accelerometer header");
+    const deltaSize = content[offset];
+    const sampleCount = content[offset + 1];
+    offset += 2;
+    if (!deltaSize || deltaSize > 31) throw new Error(`Invalid H10 accelerometer delta width ${deltaSize}`);
+    const bitLength = sampleCount * deltaSize * 3;
+    const byteLength = Math.ceil(bitLength / 8);
+    if (offset + byteLength > content.length) throw new Error("Truncated H10 compressed accelerometer samples");
+    const deltaBytes = content.subarray(offset, offset + byteLength);
+    let bitOffset = 0;
+    for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex += 1) {
+      const previous = samples[samples.length - 1];
+      const next = [...previous];
+      for (let axis = 0; axis < 3; axis += 1) {
+        next[axis] = previous[axis] + readLittleBits(deltaBytes, bitOffset, deltaSize);
+        bitOffset += deltaSize;
+      }
+      samples.push(next);
+    }
+    offset += byteLength;
+  }
+  return samples;
+}
+
 export function createH10PmdParserState(sampleRateHz) {
   return {
     sampleRateHz,
@@ -136,12 +190,12 @@ export function parseH10PmdFrame(value, parserStates, hostNowMs = Date.now()) {
   const measurement = bytes[0] & 0x3f;
   const deviceTimestampNs = littleUnsigned(bytes, 1, 8);
   const frameByte = bytes[9];
-  if ((frameByte & 0x80) !== 0) throw new Error("Compressed H10 PMD frames are not supported");
+  const compressed = (frameByte & 0x80) !== 0;
   const frameType = frameByte & 0x7f;
   const content = bytes.subarray(10);
 
   if (measurement === 0) {
-    if (frameType !== 0 || !content.length || content.length % 3 !== 0) {
+    if (compressed || frameType !== 0 || !content.length || content.length % 3 !== 0) {
       throw new Error("Malformed H10 ECG frame");
     }
     const state = parserStates.ecg;
@@ -157,6 +211,21 @@ export function parseH10PmdFrame(value, parserStates, hostNowMs = Date.now()) {
   }
 
   if (measurement === 2) {
+    if (compressed) {
+      if (frameType !== 1) throw new Error(`Unsupported H10 compressed accelerometer frame type ${frameType}`);
+      const decoded = parseCompressedAccelerometerType1(content);
+      const state = parserStates.accelerometer;
+      const timestamps = sampleTimestamps(state, deviceTimestampNs, decoded.length, hostNowMs);
+      return {
+        type: "accelerometer",
+        samples: decoded.map(([xMilliG, yMilliG, zMilliG], index) => ({
+          timestampMs: timestamps[index],
+          xMilliG,
+          yMilliG,
+          zMilliG,
+        })),
+      };
+    }
     const bytesPerAxis = frameType + 1;
     const sampleSize = bytesPerAxis * 3;
     if (bytesPerAxis < 1 || bytesPerAxis > 3 || !content.length || content.length % sampleSize !== 0) {

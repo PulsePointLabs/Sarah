@@ -16,6 +16,13 @@ function findMeasurementService(services = []) {
   ));
 }
 
+function packetSummary(value) {
+  const bytes = value instanceof DataView
+    ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+    : new Uint8Array(value?.buffer || value || []);
+  return `${bytes.length} bytes (${[...bytes].slice(0, 12).map((byte) => byte.toString(16).padStart(2, "0")).join(" ")}${bytes.length > 12 ? " …" : ""})`;
+}
+
 export async function readEsf551Scale({
   age,
   heightCm,
@@ -54,8 +61,13 @@ export async function readEsf551Scale({
 
     onStatus?.("Connected. Step on barefoot and remain still until impedance is captured.");
     const measurement = await new Promise((resolve, reject) => {
+      let receivedPackets = 0;
+      let lastPacket = "";
       timeoutId = window.setTimeout(() => {
-        reject(new Error("The scale did not send a complete body-composition reading. Keep VeSync closed, step on barefoot, and stay still through the impedance measurement."));
+        const packetDetail = receivedPackets
+          ? ` Sarah received ${receivedPackets} packet${receivedPackets === 1 ? "" : "s"}; the last was ${lastPacket}, but none was a complete ESF-551 composition result.`
+          : " Sarah connected but received no measurement packets.";
+        reject(new Error(`The scale did not send a complete body-composition reading.${packetDetail} Keep VeSync closed, wake the scale only after Sarah says Connected, then step on barefoot and stay still through the impedance measurement.`));
       }, timeoutMs);
 
       BleClient.startNotifications(
@@ -63,8 +75,13 @@ export async function readEsf551Scale({
         serviceUuid,
         ESF551_MEASUREMENT_UUID,
         (value) => {
+          receivedPackets += 1;
+          lastPacket = packetSummary(value);
           const parsed = parseEsf551Measurement(value);
-          if (!parsed) return;
+          if (!parsed) {
+            onStatus?.(`Scale connected; received ${lastPacket}. Waiting for the final stable ESF-551 reading.`);
+            return;
+          }
           if (parsed.impedance_ohms == null) {
             onStatus?.(`Stable weight ${(parsed.weight_kg * 2.2046226218).toFixed(1)} lb received. Keep bare feet on all four electrodes for composition.`);
             return;

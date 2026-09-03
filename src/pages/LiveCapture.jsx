@@ -1765,6 +1765,7 @@ export default function LiveCapture() {
   const [howlAutoStatus, setHowlAutoStatus] = useState("Sarah auto-control is off.");
   const [howlSettingsDirty, setHowlSettingsDirty] = useState(false);
   const [howlConnectionTest, setHowlConnectionTest] = useState({ status: "idle", message: "" });
+  const [howlActivitySync, setHowlActivitySync] = useState({ status: "unknown", name: "", message: "Howl has not reported its loaded activity yet." });
   const [howlAdvancedOpen, setHowlAdvancedOpen] = useState(false);
   const [howlQuickModalOpen, setHowlQuickModalOpen] = useState(false);
   const [bpCapture, setBpCapture] = useState({
@@ -2077,14 +2078,22 @@ export default function LiveCapture() {
         source: "howl_status",
         measured_at: liveStatus.measured_at || new Date().toISOString(),
         received_at: new Date().toISOString(),
-        mode: liveStatus.howl?.player?.filename || liveStatus.howl?.player?.title || null,
+        mode: liveStatus.howl?.activity_name || liveStatus.howl?.player?.filename || liveStatus.howl?.player?.title || null,
         raw: liveStatus.raw || null,
       } : null;
       const resolvedTelemetry = liveHowlTelemetry || recent?.samples?.[0] || null;
       setHowlTelemetry(resolvedTelemetry);
       setHowlCapabilities(capabilities);
       if (liveStatus?.ok) {
-        setHowlConnectionTest({ status: "ok", message: "Howl /status is live. Sarah is synced to the current Howl state." });
+        const reportedActivity = HOWL_ACTIVITY_MODES.find((mode) => mode.name === liveStatus.howl?.activity_name);
+        if (reportedActivity) {
+          setHowlCommandForm((prev) => ({ ...prev, mode: reportedActivity.name }));
+          setHowlActivitySync({ status: "verified", name: reportedActivity.name, message: `Howl confirms ${reportedActivity.displayName} is loaded.` });
+          setHowlConnectionTest({ status: "ok", message: `Howl /status is live. Power and activity (${reportedActivity.displayName}) are synchronized.` });
+        } else {
+          setHowlActivitySync({ status: "unknown", name: "", message: "Power is synchronized, but Howl /status did not report which activity is loaded." });
+          setHowlConnectionTest({ status: "ok", message: "Howl /status is live and power is synchronized. Loaded activity is not currently reported by Howl." });
+        }
       }
       if (settingsPayload?.settings) {
         const canApplySettings = forceSettings || (!howlSettingsDirtyRef.current && !howlFocusedFieldRef.current);
@@ -2442,6 +2451,24 @@ export default function LiveCapture() {
       if (!response.ok) throw new Error(data.error || "Howl command was rejected.");
       setHowlControlStatus(data.dispatch?.message || "Howl command queued.");
       const refreshedHowlTelemetry = await refreshHowlTelemetry({ quiet: true });
+      if (action === "load_activity") {
+        const requestedActivity = String(data?.command?.activity_name || extra.activityName || howlCommandForm.mode || "").toUpperCase();
+        const confirmedActivity = String(
+          data?.dispatch?.howl?.activity_name
+          || refreshedHowlTelemetry?.activity_name
+          || "",
+        ).toUpperCase();
+        if (!confirmedActivity || confirmedActivity !== requestedActivity) {
+          setHowlActivitySync({
+            status: "mismatch",
+            name: confirmedActivity,
+            message: confirmedActivity
+              ? `Howl reports ${confirmedActivity}, not ${requestedActivity}.`
+              : `Howl accepted the request but did not confirm ${requestedActivity} as loaded.`,
+          });
+          setHowlError("Howl activity could not be verified. Power readings may still be synchronized.");
+        }
+      }
       const eventSource = String(extra.reason || "").startsWith("voice_")
         ? "howl_voice_control"
         : String(extra.reason || "").startsWith("sarah_auto_")
@@ -4897,6 +4924,9 @@ export default function LiveCapture() {
       permissionGranted: prev.permissionGranted,
       syncing: false,
       status: "ready",
+      sessionId: activeSessionId,
+      lastReading: latestReading,
+      lastCapturedAt: new Date().toISOString(),
       message: `OMRON captured ${formatBloodPressure(latestReading)} and saved it to PulsePoint.`,
     }));
 
@@ -8405,6 +8435,9 @@ export default function LiveCapture() {
                       {selectedHowlActivity && (
                         <span className="block text-[11px] text-muted-foreground">{selectedHowlActivity.description}</span>
                       )}
+                      <span className={`block text-[11px] ${howlActivitySync.status === "verified" ? "text-emerald-600 dark:text-emerald-400" : howlActivitySync.status === "mismatch" ? "text-destructive" : "text-amber-600 dark:text-amber-400"}`}>
+                        {howlActivitySync.message}
+                      </span>
                     </label>
                   </div>
 
@@ -8415,7 +8448,7 @@ export default function LiveCapture() {
                       disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy) || !selectedHowlActivity}
                       className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
                     >
-                      Load activity
+                      Load + verify activity
                     </button>
                     <button
                       type="button"

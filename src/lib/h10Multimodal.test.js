@@ -49,6 +49,26 @@ test("parses uncompressed H10 ECG PMD samples", () => {
   assert.ok(parsed.samples[1].timestampMs >= parsed.samples[0].timestampMs);
 });
 
+test("parses Polar compressed type-1 accelerometer PMD samples", () => {
+  const bytes = new Uint8Array(20);
+  bytes[0] = 2;
+  bytes[9] = 0x81;
+  // Reference sample: x=-55, y=18, z=17.
+  bytes.set([0xc9, 0xff, 0x12, 0x00, 0x11, 0x00], 10);
+  // One 3-bit delta sample: +1, 0, +1 => LSB-first bits 001 000 001.
+  bytes.set([0x03, 0x01, 0x41, 0x00], 16);
+  const states = {
+    ecg: createH10PmdParserState(130),
+    accelerometer: createH10PmdParserState(25),
+  };
+  const parsed = parseH10PmdFrame(bytes, states, 10_000);
+  assert.equal(parsed.type, "accelerometer");
+  assert.deepEqual(parsed.samples.map(({ xMilliG, yMilliG, zMilliG }) => [xMilliG, yMilliG, zMilliG]), [
+    [-55, 18, 17],
+    [-54, 18, 18],
+  ]);
+});
+
 test("bounded sensor buffers discard stale samples", () => {
   const result = appendBoundedSamples(
     [{ timestampMs: 1000 }, { timestampMs: 5000 }],

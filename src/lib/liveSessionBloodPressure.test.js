@@ -38,6 +38,20 @@ test("the active session displays only its own captured or persisted blood press
   }), currentReading);
 });
 
+test("an armed capture displays the reading it just received before OBS creates a session", () => {
+  assert.equal(selectLiveSessionBloodPressure({
+    activeSessionId: null,
+    activeSessionDoc: null,
+    captureState: { sessionId: null, lastReading: currentReading },
+  }), currentReading);
+
+  assert.equal(selectLiveSessionBloodPressure({
+    activeSessionId: null,
+    activeSessionDoc: null,
+    captureState: { sessionId: null, lastReading: null },
+  }), null);
+});
+
 test("starting a different session clears session-specific blood pressure state", () => {
   const reset = resetBloodPressureCaptureForSession({
     status: "captured",
