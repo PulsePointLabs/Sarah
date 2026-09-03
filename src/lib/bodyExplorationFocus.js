@@ -3,7 +3,8 @@ import { removeMedicalReferralAndWarningLanguage } from "./analysisOutputRules.j
 
 const PROCEDURE_RE = /\b(foley|catheter|urethral|urethra|meatus|meatal|bladder|balloon|statlock|leg\s*bag|drainage|dwell|insertion|sounding|dilat(?:e|ion)|instrumentation)\b/i;
 const FOLEY_RE = /\b(foley|catheter|20\s*fr|18\s*fr|french|balloon|statlock|leg\s*bag|drainage|urine return|urethral|meatus|meatal)\b/i;
-const PRIMARY_FOLEY_RE = /\b(foley|urethral (?:catheter|insertion|instrumentation|sounding|dilat(?:ion|ion))|catheter insertion|bladder catheter|meatal prep|urine return|balloon inflation|statlock)\b/i;
+const PRIMARY_FOLEY_RE = /\b(foley|urethral catheter|catheter insertion|bladder catheter|balloon inflation|balloon seating|statlock|leg\s*bag)\b/i;
+const URETHRAL_SOUNDING_RE = /\b(urethral sound(?:ing)?|hegar|dilator|dilatation|urethral dilation)\b/i;
 const ENEMA_RE = /\b(enema|rectal|colon(?:ic)?|anal nozzle|enema bag|rectal tube|instill(?:ed|ation)?|retention|defecat(?:e|ion)|sigmoid)\b/i;
 const PROCEDURE_ALLOWED_RE = /\b(sterile|field|prep|preparation|drape|swab|iodine|glans|foreskin|meatus|meatal|urethra|urethral|lubricat|catheter|foley|french|fr\b|advanc|insert|passage|sphincter|resistance|relax|breath|angle|pressure|discomfort|pain|pinch|sensation|bracing|heart[-\s]?rate|telemetry|bladder|urine|return|balloon|seat|traction|drainage|secure|statlock|tubing|bag|dwell|ambulatory|blood|bleeding|bypass|leak|spasm|urgency|tolerance|comfort|prior|previous|18\s*fr|20\s*fr|kegel|pelvic|erection|tugging|subjective|annotation|visible|video|frame)\b/i;
 const PERIPHERAL_RE = /\b(ankle|foot|feet|edema|beer|alcohol|hydration coaching|daily hydration|respiratory|cough|head-to-toe|dog bite|skin finding|follicular|striae|bruise|wound|leg swelling|vascular history|venous history|urine color|leg-bag urine image|later leg bag|systemic context)\b/i;
@@ -49,15 +50,18 @@ export function isFocusedFoleyExploration(exploration = {}) {
   const primaryText = [
     exploration.title,
     exploration.exploration_type,
+    ...(Array.isArray(exploration.methods) ? exploration.methods : [exploration.methods]),
     exploration.purpose,
     exploration.methods,
     exploration.foley_size,
     exploration.foley_type,
-    exploration.sounding_notes,
   ].filter(Boolean).join(" ");
   const fullText = flattenExplorationText(exploration);
-  const explicitlyConfiguredFoley = Boolean(exploration.foley_size || exploration.foley_type || exploration.sounding_notes);
+  const explicitlyConfiguredFoley = Boolean(exploration.foley_size || exploration.foley_type || PRIMARY_FOLEY_RE.test(primaryText));
   if (ENEMA_RE.test(primaryText) && !/\bfoley insertion|urethral (?:catheter|insertion|instrumentation)|bladder catheter\b/i.test(primaryText)) return false;
+  // Sounding and dilation records need the broad Body Exploration synthesis. Urethral
+  // vocabulary alone must not route them through the chronology-heavy Foley report.
+  if (URETHRAL_SOUNDING_RE.test(primaryText) && !/\bfoley|catheter insertion|bladder catheter\b/i.test(primaryText)) return false;
   return (explicitlyConfiguredFoley || PRIMARY_FOLEY_RE.test(primaryText)) && FOLEY_RE.test(fullText) && PROCEDURE_RE.test(fullText);
 }
 
@@ -109,15 +113,17 @@ FOCUSED FOLEY INSERTION RELEVANCE GATE - HIGH PRIORITY:
 export const FOCUSED_FOLEY_NARRATIVE_RULE = `
 FOCUSED FOLEY NARRATIVE STRUCTURE:
 A. Clinical Overview: catheter type/size, duration, technical success, tolerance, main resistance point, maximum discomfort, urine return, balloon seating, immediate dwell status, and one or two conclusions.
-B. Procedural Course: meaningful phases only: preparation/sterile field; meatal engagement and distal passage; primary resistance point; proximal passage and bladder entry; urine return, balloon inflation, seating; immediate post-placement transition.
+B. Procedural Course: two or three compact phase-based paragraphs covering only the landmarks needed to understand the procedure. This section must remain under twenty percent of the report and must not reproduce the event log.
 C. Clinical Interpretation: explain whether placement appeared smooth, moderately difficult, or difficult; where resistance mattered; whether relaxation, breathing, angle change, or continued pressure helped; whether heart rate supports calm tolerance, anticipation, discomfort, exertion, or no meaningful autonomic response; whether absence of bracing, withdrawal, bleeding, severe discomfort, or HR escalation matters; and whether size changed tolerance.
-D. Body Response and Felt Experience: integrate subjective annotations, accepted visual behavior, and telemetry as explicitly separate evidence lanes. Start with visible regional or generalized skin/tissue change, posture or arching, shoulder/abdominal/pelvic/limb bracing or release, breathing, tremor or spasm-like movement, genital/perineal state, and meaningful lack of sampled visible response when supported. Then correlate recorded physiology and felt experience without inserting HR or overlay values into the visual description itself. Include clinician-observer/dissociative state, deliberate pelvic relaxation, discomfort character, and transition into background awareness when supported.
+D. Body Response and Felt Experience: this is the core and longest section. Integrate subjective annotations, accepted visual behavior, and telemetry as explicitly separate evidence lanes. Review every visible region in a stable head-to-toe order: face and jaw; neck and shoulders; arms and hands; chest and breathing; abdomen and trunk posture or arching; pelvis and perineum; genital and tissue state; thighs and legs; ankles, feet, and toes; then the coordinated whole-body state. For each visible region, describe meaningful baseline-to-change-to-peak-to-resolution patterns and pertinent negatives such as no sampled bracing, withdrawal, arching, tremor, color change, or respiratory disruption. Distinguish a supported lack of visible response from anatomy that was obscured or not reviewed. Then correlate recorded physiology and felt experience without inserting HR or overlay values into the visual description itself. Include clinician-observer/dissociative state, deliberate pelvic relaxation, discomfort character, and transition into background awareness when supported.
 E. Placement Confidence and Immediate Outcome: separate visual observation, subjective annotation, telemetry-supported interpretation, and historical comparison while summarizing advancement, urine return, balloon inflation, seating, drainage, tubing/bag state, ambulation, and the visible immediate post-placement body state when supported.
 F. Comparison With Previous Insertions: use prior sessions only when comparison adds value, such as 18 Fr versus 20 Fr, resistance, meatal awareness, erection-related tugging, Kegel sensation, and dwell comfort.
 G. What This Adds: summarize the most useful new body-response, mechanics, comparison, or evidence-quality takeaways. Do not provide monitoring instructions, safety warnings, testing advice, or healthcare referrals.
 
 Reduce play-by-play:
 - Do not narrate every timestamp, hand motion, pause, or HR sample.
+- Across the complete report, use no more than six elapsed-time anchors. Reserve them for major state transitions, not routine actions.
+- At least sixty percent of the report must be body-state evolution, physiological synthesis, meaningful lack of response, and recovery. Procedural chronology is supporting context only.
 - Each major fact has one primary home: timeline/mechanics in Procedural Course; meaning in Clinical Interpretation; subjective experience in Body Response; placement evidence in Placement Confidence; prior differences in Comparison; new takeaways in What This Adds.
 - Use timestamps selectively for major events only.
 - Summarize telemetry as ranges and response patterns rather than reciting samples.
@@ -128,10 +134,10 @@ export function focusedFoleyResponseSchema() {
   return {
     type: "object",
     properties: {
-      clinical_overview: { type: "string" },
-      procedural_course: { type: "array", items: { type: "string" } },
-      clinical_interpretation: { type: "array", items: { type: "string" } },
-      body_response_felt_experience: { type: "array", items: { type: "string" } },
+      clinical_overview: { type: "string", description: "A compact overview of outcome, tolerance, body response, and the one or two mechanics that matter most; not a timeline recap." },
+      procedural_course: { type: "array", items: { type: "string" }, description: "Two or three compact phase-based paragraphs only. Keep this below twenty percent of the report and use only major anchors." },
+      clinical_interpretation: { type: "array", items: { type: "string" }, description: "Integrated interpretation of mechanics, measured physiology, subjective experience, and meaningful pertinent negatives." },
+      body_response_felt_experience: { type: "array", items: { type: "string" }, description: "The longest section: systematic head-to-toe baseline, changes, persistence, release, recovery, and meaningful lack of visible response, with obscured regions identified rather than invented." },
       placement_confidence: { type: "array", items: { type: "string" } },
       prior_comparison: { type: "array", items: { type: "string" } },
       focused_follow_up: { type: "array", items: { type: "string" } },

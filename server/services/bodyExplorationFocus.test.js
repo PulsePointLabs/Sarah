@@ -41,6 +41,16 @@ test('does not misclassify an enema as Foley because a condom catheter collected
   }), false);
 });
 
+test('does not route urethral sounding or Hegar dilation through the focused Foley report', () => {
+  assert.equal(isFocusedFoleyExploration({
+    title: 'Urethral sounding session',
+    exploration_type: 'Urethral sounding',
+    methods: ['Live Capture', 'Urethral Sound'],
+    purpose: 'Compare progressive Hegar dilator sizes and whole-body response.',
+    notes: 'The sound reached the internal sphincter with a voiding response.',
+  }), false);
+});
+
 test('focused Foley profile context keeps procedure history and filters unrelated profile material', () => {
   const context = buildFocusedFoleyProfileContext({
     foley: {
@@ -154,6 +164,8 @@ test('focused prompt keeps Sarah warm while requiring procedure-only structure a
   assert.match(prompt, /What This Adds/i);
   assert.match(prompt, /Do not provide monitoring instructions, safety warnings, testing advice, or healthcare referrals/i);
   assert.match(prompt, /Do not narrate every timestamp/i);
+  assert.match(prompt, /At least sixty percent/i);
+  assert.match(prompt, /stable head-to-toe order/i);
   assert.match(prompt, /Medium-length sentences/i);
   assert.match(prompt, /Exclude peripheral findings/i);
 });
