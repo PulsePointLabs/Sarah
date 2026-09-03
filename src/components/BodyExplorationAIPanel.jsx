@@ -211,7 +211,7 @@ function cleanupProductionAnalysis(analysis) {
   };
 }
 
-export default function BodyExplorationAIPanel({ exploration, timelineRows, emgRows, nearbyVitals, userProfile }) {
+export default function BodyExplorationAIPanel({ exploration, timelineRows, emgRows, nearbyVitals, userProfile, evidenceLoading = false, evidenceError = "" }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(exploration.ai_body_exploration || null);
   const [error, setError] = useState("");
@@ -285,6 +285,14 @@ export default function BodyExplorationAIPanel({ exploration, timelineRows, emgR
   }, [jobKey]);
 
   const analyze = async () => {
+    if (evidenceLoading) {
+      setError("Sarah is still loading the attached visual and vital-sign evidence. Try again when loading finishes.");
+      return;
+    }
+    if (evidenceError) {
+      setError(`Sarah could not load all attached physiology evidence: ${evidenceError}`);
+      return;
+    }
     setLoading(true);
     setError("");
     try {
@@ -467,10 +475,20 @@ ${events.length ? `RAW TIMESTAMPED NOTES - EVIDENCE INDEX ONLY; DO NOT USE THIS 
             </p>
           )}
         </div>
-        <Button size="sm" onClick={analyze} disabled={loading} className="h-8 gap-1.5 text-xs">
-          {loading ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Analyzing</> : <><Brain className="h-3 w-3" />{result ? "Re-analyze" : "Analyze"}</>}
+        <Button size="sm" onClick={analyze} disabled={loading || evidenceLoading || Boolean(evidenceError)} className="h-8 gap-1.5 text-xs">
+          {evidenceLoading
+            ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Loading evidence</>
+            : loading
+              ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />Analyzing</>
+              : <><Brain className="h-3 w-3" />{result ? "Re-analyze" : "Analyze"}</>}
         </Button>
       </div>
+      {evidenceError && (
+        <div className="flex gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>Attached physiology evidence did not load. Analysis is blocked so Sarah cannot silently produce a notes-only report. Refresh this page and try again. {evidenceError}</span>
+        </div>
+      )}
       {error && (
         <div className="flex gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />

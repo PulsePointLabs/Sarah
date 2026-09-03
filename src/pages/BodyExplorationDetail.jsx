@@ -33,6 +33,15 @@ import {
   normalizeSessionKeyVideoClips,
 } from "@/lib/visualEvidence";
 
+const BODY_EXPLORATION_HR_FIELDS = [
+  "session", "time_offset_s", "time_s", "offset_s", "hr", "hr_smoothed", "baseline_hr", "elevated_delta",
+  "rr_intervals_ms", "hr_source", "signal_confidence_level", "hrv_quality", "hrv_rmssd_ms", "hrv_sdnn_ms", "hrv_pnn50",
+  "respiration_bpm", "respiration_source", "respiration_confidence", "respiration_unavailable_reason", "possible_breath_hold",
+  "motion_class", "motion_dynamic_rms_mg", "motion_peak_dynamic_mg", "position_state", "multimodal_state",
+  "recovery_drop_30_bpm", "recovery_drop_60_bpm", "recovery_drop_90_bpm",
+  "response_latency_seconds", "response_latency_sample_count", "response_latency_evaluated_count",
+];
+
 function NarrativeField({ label, value }) {
   if (!value && value !== 0) return null;
   return (
@@ -167,6 +176,8 @@ export default function BodyExplorationDetail() {
   const navigate = useNavigate();
   const [exploration, setExploration] = useState(null);
   const [timelineRows, setTimelineRows] = useState([]);
+  const [analysisEvidenceLoading, setAnalysisEvidenceLoading] = useState(true);
+  const [analysisEvidenceError, setAnalysisEvidenceError] = useState("");
   const [emgRows, setEmgRows] = useState([]);
   const [nearbyVitalImports, setNearbyVitalImports] = useState({
     bloodPressure: [],
@@ -188,6 +199,8 @@ export default function BodyExplorationDetail() {
     let cancelled = false;
     setLoading(true);
     setLoadError("");
+    setAnalysisEvidenceLoading(true);
+    setAnalysisEvidenceError("");
 
     (async () => {
       try {
@@ -199,25 +212,41 @@ export default function BodyExplorationDetail() {
         setLoading(false);
         if (!loadedExploration) return;
 
-        const [hr, emg, profile, bloodPressure, bloodGlucose, bodyComposition, pulseOx] = await Promise.all([
-          base44.entities.HeartRateTimeline.filter({ session: id }, "time_offset_s", 10000, undefined, { timeoutMs: 30000 }).catch(() => []),
-          base44.entities.EMGTimeline.filter({ session: id }, "time_s", 10000, undefined, { timeoutMs: 30000 }).catch(() => []),
-          base44.auth.me().catch(() => null),
-          base44.entities.BloodPressureReading.list("-measured_at", 250).catch(() => []),
-          base44.entities.BloodGlucoseReading.list("-measured_at", 250).catch(() => []),
-          base44.entities.BodyCompositionReading.list("-measured_at", 250).catch(() => []),
-          base44.entities.PulseOxReading.list("-measured_at", 5000).catch(() => []),
-        ]);
-        if (cancelled) return;
-        setTimelineRows(hr || []);
-        setEmgRows(emg || []);
-        setUserProfile(profile);
-        setNearbyVitalImports({ bloodPressure, bloodGlucose, bodyComposition, pulseOx });
+        try {
+          const [hr, emg, profile, bloodPressure, bloodGlucose, bodyComposition, pulseOx] = await Promise.all([
+            base44.entities.HeartRateTimeline.filterFieldsSampled(
+              { session: id },
+              BODY_EXPLORATION_HR_FIELDS,
+              "time_offset_s",
+              1200,
+              10000,
+              undefined,
+              { timeoutMs: 30000 },
+            ),
+            base44.entities.EMGTimeline.filter({ session: id }, "time_s", 10000, undefined, { timeoutMs: 30000 }),
+            base44.auth.me().catch(() => null),
+            base44.entities.BloodPressureReading.list("-measured_at", 250),
+            base44.entities.BloodGlucoseReading.list("-measured_at", 250),
+            base44.entities.BodyCompositionReading.list("-measured_at", 250),
+            base44.entities.PulseOxReading.list("-measured_at", 5000),
+          ]);
+          if (cancelled) return;
+          setTimelineRows(hr || []);
+          setEmgRows(emg || []);
+          setUserProfile(profile);
+          setNearbyVitalImports({ bloodPressure, bloodGlucose, bodyComposition, pulseOx });
+          setAnalysisEvidenceLoading(false);
+        } catch (evidenceLoadFailure) {
+          if (cancelled) return;
+          setAnalysisEvidenceError(evidenceLoadFailure?.message || "Could not load the attached physiology evidence.");
+          setAnalysisEvidenceLoading(false);
+        }
       } catch (error) {
         if (cancelled) return;
         setExploration(null);
         setLoadError(error?.message || "Could not load this body exploration record.");
         setLoading(false);
+        setAnalysisEvidenceLoading(false);
       }
     })();
 
@@ -546,7 +575,15 @@ export default function BodyExplorationDetail() {
               </Link>
             </Button>
           </div>
-          <BodyExplorationAIPanel exploration={exploration} timelineRows={timelineRows} emgRows={emgRows} nearbyVitals={nearbyVitals} userProfile={userProfile} />
+          <BodyExplorationAIPanel
+            exploration={exploration}
+            timelineRows={timelineRows}
+            emgRows={emgRows}
+            nearbyVitals={nearbyVitals}
+            userProfile={userProfile}
+            evidenceLoading={analysisEvidenceLoading}
+            evidenceError={analysisEvidenceError}
+          />
         </section>
 
         <div id="body-exploration-sarah-chat" className="scroll-mt-24 space-y-3 rounded-xl border border-border bg-card p-4">
