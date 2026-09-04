@@ -57,7 +57,10 @@ function javaEnvironment(base = process.env) {
   const env = { ...base };
   const jbr = 'C:\\Program Files\\Android\\Android Studio\\jbr';
   if (!env.JAVA_HOME && fs.existsSync(jbr)) env.JAVA_HOME = jbr;
-  if (env.JAVA_HOME) env.PATH = `${path.join(env.JAVA_HOME, 'bin')};${env.PATH || ''}`;
+  const systemRoot = env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows';
+  const requiredWindowsTools = [path.join(systemRoot, 'System32'), systemRoot];
+  if (env.JAVA_HOME) requiredWindowsTools.unshift(path.join(env.JAVA_HOME, 'bin'));
+  env.PATH = `${requiredWindowsTools.join(';')};${env.PATH || ''}`;
   return env;
 }
 
