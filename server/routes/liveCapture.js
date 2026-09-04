@@ -1346,8 +1346,7 @@ function markLiveSessionRecordingPaused(recording = {}) {
 function ensureLiveSession(recording, options = {}) {
   if (state.session.activeSessionId && state.session.active) {
     if (options.capturePreflight) {
-      const existing = currentLiveSessionEntity(state.session.activeSessionId);
-      if (!existing?.capture_preflight) patchCurrentLiveSession({ capture_preflight: options.capturePreflight });
+      patchCurrentLiveSession({ capture_preflight: options.capturePreflight });
     }
     return state.session.activeSessionId;
   }
@@ -1373,7 +1372,7 @@ function ensureLiveSession(recording, options = {}) {
       segments: mergedPersistedSegments([reusable]),
     });
     telemetryEngine.setActiveSession(reusable.id);
-    if (options.capturePreflight && !reusable.capture_preflight) {
+    if (options.capturePreflight) {
       patchCurrentLiveSession({ capture_preflight: options.capturePreflight });
     }
     broadcast('live_session', state.session);

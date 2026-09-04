@@ -92,7 +92,14 @@ export function computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, history =
   const hrvUsable = hrvQualityScore(hrvQuality) >= 2 || rrCount >= 40;
   const multimodal = hrTelemetry?.multimodal || {};
   const signalConfidence = numberOrNull(multimodal?.signalConfidence?.score);
-  const multimodalAvailable = signalConfidence != null || Number(multimodal?.streams?.accelerometer?.sampleCount || 0) > 0;
+  const rawEcgSampleCount = Number(multimodal?.streams?.ecg?.sampleCount || 0);
+  const rawAccelerometerSampleCount = Number(multimodal?.streams?.accelerometer?.sampleCount || 0);
+  // A derived snapshot always contains a numeric confidence score, including
+  // score=0/level=unavailable when PMD never produced a sample. Only treat the
+  // raw channel as available when it actually contains ECG or accelerometer
+  // evidence. Otherwise HR/RR remains usable without being punished as though
+  // a low-quality motion stream contradicted it.
+  const multimodalAvailable = rawEcgSampleCount > 0 || rawAccelerometerSampleCount > 0;
   const multimodalTrusted = !multimodalAvailable || signalConfidence >= 55;
   const respiration = multimodal?.respiration || {};
   const respirationBpm = respiration.available ? numberOrNull(respiration.bpm) : null;

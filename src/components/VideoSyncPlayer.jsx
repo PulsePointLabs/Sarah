@@ -1198,22 +1198,31 @@ export default function VideoSyncPlayer({
     setTimeout(() => newNoteRef.current?.focus(), 80);
   };
 
-  const chartData = useMemo(() =>
-    timelineRows.map((r) => ({
+  const chartData = useMemo(() => timelineRows
+    .map((r) => ({
       t: Number(r.time_offset_s),
-      hr: Math.round(Number(r.hr_smoothed || r.hr)),
-    })),
-    [timelineRows]
-  );
+      hr: Number(r.hr_smoothed ?? r.hr),
+    }))
+    .filter((row) => Number.isFinite(row.t) && Number.isFinite(row.hr) && row.hr > 0)
+    .sort((left, right) => left.t - right.t)
+    .map((row) => ({ ...row, hr: Math.round(row.hr) })), [timelineRows]);
 
-  const maxT = chartData.length ? chartData[chartData.length - 1].t : (session.duration_minutes || 60) * 60;
+  const maxT = useMemo(() => {
+    const measuredMax = chartData.reduce((maximum, row) => Math.max(maximum, row.t), 0);
+    const sessionFallback = Number(session.duration_minutes) * 60;
+    return Math.max(1, measuredMax, Number.isFinite(sessionFallback) ? sessionFallback : 0);
+  }, [chartData, session.duration_minutes]);
 
   // Visible x-domain centered on playhead
   const xDomain = useMemo(() => {
-    const half = zoomWindow / 2;
-    const lo = Math.max(0, playheadS - half);
-    const hi = Math.min(maxT, lo + zoomWindow);
-    return [lo, hi];
+    const boundedWindow = Number.isFinite(Number(zoomWindow)) && Number(zoomWindow) > 0
+      ? Number(zoomWindow)
+      : 300;
+    const safePlayhead = Number.isFinite(Number(playheadS)) ? Number(playheadS) : 0;
+    const half = boundedWindow / 2;
+    const lo = Math.max(0, safePlayhead - half);
+    const hi = Math.min(maxT, lo + boundedWindow);
+    return [lo, Math.max(lo + 1, hi)];
   }, [playheadS, zoomWindow, maxT]);
 
   const setSynchronizedVideoTime = useCallback((timeS) => {

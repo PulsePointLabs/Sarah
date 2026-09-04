@@ -89,6 +89,7 @@ function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = fa
 }
 
 function TrendChart({ rows, lines, playheadS, xDomain, onSeek, rightAxis = false, compact = false }) {
+  const safePlayheadS = numberOrNull(playheadS);
   return (
     <div className={`${compact ? "h-[clamp(6.5rem,14vh,9rem)]" : "h-40"} w-full`}>
       <ResponsiveContainer width="100%" height="100%">
@@ -132,13 +133,15 @@ function TrendChart({ rows, lines, playheadS, xDomain, onSeek, rightAxis = false
               borderColor: "hsl(var(--border))",
             }}
           />
-          <ReferenceLine
-            yAxisId="left"
-            x={playheadS}
-            stroke="hsl(var(--foreground))"
-            strokeWidth={1.5}
-            strokeDasharray="3 2"
-          />
+          {safePlayheadS != null && (
+            <ReferenceLine
+              yAxisId="left"
+              x={safePlayheadS}
+              stroke="hsl(var(--foreground))"
+              strokeWidth={1.5}
+              strokeDasharray="3 2"
+            />
+          )}
           {lines.map((line) => (
             <Line
               key={line.key}
@@ -186,9 +189,19 @@ export default function VideoSyncPhysiologySidebar({
     }))
     .filter((row) => row.t != null)
     .sort((left, right) => left.t - right.t), [timelineRows]);
+  const safeDomain = useMemo(() => {
+    const requestedStart = numberOrNull(xDomain?.[0]);
+    const requestedEnd = numberOrNull(xDomain?.[1]);
+    if (requestedStart != null && requestedEnd != null && requestedEnd > requestedStart) {
+      return [requestedStart, requestedEnd];
+    }
+    const first = normalizedRows[0]?.t ?? 0;
+    const last = normalizedRows[normalizedRows.length - 1]?.t ?? first + 1;
+    return [first, Math.max(first + 1, last)];
+  }, [normalizedRows, xDomain]);
   const visibleRows = useMemo(() => normalizedRows.filter(
-    (row) => row.t >= xDomain[0] - 5 && row.t <= xDomain[1] + 5,
-  ), [normalizedRows, xDomain]);
+    (row) => row.t >= safeDomain[0] - 5 && row.t <= safeDomain[1] + 5,
+  ), [normalizedRows, safeDomain]);
   const current = useMemo(
     () => nearestEvidenceRow(normalizedRows, playheadS),
     [normalizedRows, playheadS],
@@ -372,7 +385,7 @@ export default function VideoSyncPhysiologySidebar({
             { key: "baseline", label: "Baseline", color: "#64748b", width: 1.25, dash: "4 3" },
           ]}
           playheadS={playheadS}
-          xDomain={xDomain}
+          xDomain={safeDomain}
           onSeek={onSeek}
           compact={compact}
         />
@@ -394,7 +407,7 @@ export default function VideoSyncPhysiologySidebar({
               { key: "sdnn", label: "SDNN", color: "#8b5cf6", decimals: 1 },
             ]}
             playheadS={playheadS}
-            xDomain={xDomain}
+            xDomain={safeDomain}
             onSeek={onSeek}
             compact={compact}
           />
@@ -417,7 +430,7 @@ export default function VideoSyncPhysiologySidebar({
               optionalChannels.motion !== false && { key: "motion", label: "Chest motion", color: "#f59e0b", axis: "right" },
             ].filter(Boolean)}
             playheadS={playheadS}
-            xDomain={xDomain}
+            xDomain={safeDomain}
             onSeek={onSeek}
             rightAxis
             compact={compact}

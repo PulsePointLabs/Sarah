@@ -36,10 +36,10 @@ test('HR rise plus compressed usable HRV increases live climax approach watch', 
 
 test('recovery phase caps live climax approach even with a recent peak', () => {
   const history = [
-    historyPoint(0, 118, 9),
-    historyPoint(1, 125, 8),
-    historyPoint(2, 120, 13),
-    historyPoint(3, 109, 22),
+    { ...historyPoint(0, 118, 9), nearClimax: 70 },
+    { ...historyPoint(1, 125, 8), nearClimax: 76 },
+    { ...historyPoint(2, 120, 13), nearClimax: 58 },
+    { ...historyPoint(3, 109, 22), nearClimax: 22 },
   ];
 
   const prediction = computeLiveClimaxPrediction(
@@ -116,4 +116,33 @@ test('weak multimodal quality caps escalation instead of treating motion as arou
   assert.equal(prediction.lowMultimodalConfidenceCapApplied, true);
   assert.ok(prediction.nearClimax <= 55);
   assert.equal(prediction.coordinatedMotion, false);
+});
+
+test('an unavailable PMD snapshot does not cap otherwise valid HR and RR evidence', () => {
+  const history = Array.from({ length: 130 }, (_, index) => ({
+    ...historyPoint(index, 103 + Math.min(18, index * 0.16), index < 70 ? 16 : 6),
+    sessionTimeSec: index,
+    nearClimax: index < 80 ? 42 : 61,
+  }));
+  const prediction = computeLiveClimaxPrediction({
+    currentHr: 121,
+    baselineHr: 92,
+    buildConfidence: 76,
+    phase: 'build',
+    hrv: { rmssdMs: 6, sampleCount: 90, quality: 'high' },
+    multimodal: {
+      signalConfidence: { score: 15, level: 'unavailable' },
+      streams: {
+        ecg: { sampleCount: 0 },
+        accelerometer: { sampleCount: 0 },
+      },
+      respiration: { available: false, reason: 'sensor_unavailable' },
+      motion: { available: false, class: 'unavailable' },
+    },
+  }, null, history, { sessionTimeSec: 130, elapsedMinutes: 20, buildDurationSec: 130 });
+
+  assert.equal(prediction.multimodalAvailable, false);
+  assert.equal(prediction.multimodalTrusted, true);
+  assert.equal(prediction.lowMultimodalConfidenceCapApplied, false);
+  assert.ok(prediction.nearClimax > 55);
 });

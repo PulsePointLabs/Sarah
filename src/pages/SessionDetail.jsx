@@ -1406,8 +1406,24 @@ export default function SessionDetail() {
   const highlightRange = useMemo(() => {
     if (selectedNearClimaxIdx == null || !nearClimaxEvents[selectedNearClimaxIdx]) return null;
     const ev = nearClimaxEvents[selectedNearClimaxIdx];
-    return { start: ev.start_offset_s, end: ev.end_offset_s };
+    const start = Number(ev.start_offset_s ?? ev.start_s ?? ev.timeline_start_s ?? ev.time_s);
+    const end = Number(ev.end_offset_s ?? ev.end_s ?? ev.timeline_end_s ?? ev.time_s);
+    if (!Number.isFinite(start) && !Number.isFinite(end)) return null;
+    const safeStart = Number.isFinite(start) ? start : end;
+    const safeEnd = Number.isFinite(end) ? end : start;
+    return {
+      start: Math.min(safeStart, safeEnd),
+      end: Math.max(safeStart, safeEnd),
+    };
   }, [selectedNearClimaxIdx, nearClimaxEvents]);
+
+  const handleSelectNearClimaxEvent = useCallback((index) => {
+    setSelectedNearClimaxIdx(index);
+    if (index == null) return;
+    const event = nearClimaxEvents[index];
+    const peak = Number(event?.peak_offset_s ?? event?.peak_s ?? event?.time_s ?? event?.start_offset_s);
+    if (Number.isFinite(peak)) setInspectionTime(peak);
+  }, [nearClimaxEvents]);
 
   const elevatedTime = timelineRows.length > 1
     ? timelineRows.reduce((total, row, i) => {
@@ -2091,7 +2107,7 @@ export default function SessionDetail() {
                   timelineRows={timelineRows}
                   session={s}
                   selectedIndex={selectedNearClimaxIdx}
-                  onSelectIndex={setSelectedNearClimaxIdx}
+                  onSelectIndex={handleSelectNearClimaxEvent}
                   onEventsRefined={(refined) => setSession((prev) => ({ ...prev, ai_near_climax_events: trimNearClimaxEventsToRaw(refined) }))}
                   userProfile={userProfile}
                 />
@@ -2274,7 +2290,7 @@ export default function SessionDetail() {
                         timelineRows={timelineRows}
                         session={s}
                         selectedIndex={selectedNearClimaxIdx}
-                        onSelectIndex={setSelectedNearClimaxIdx}
+                        onSelectIndex={handleSelectNearClimaxEvent}
                         onEventsRefined={(refined) => setSession((prev) => ({ ...prev, ai_near_climax_events: trimNearClimaxEventsToRaw(refined) }))}
                         userProfile={userProfile}
                       />

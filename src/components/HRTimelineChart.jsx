@@ -679,21 +679,31 @@ export default function HRTimelineChart({
             })}
 
             {/* Legacy highlight range */}
-            {highlightRange && (
+            {highlightRange && Number.isFinite(Number(highlightRange.start)) && Number.isFinite(Number(highlightRange.end)) && (
               <>
-                <ReferenceLine
-                  x={highlightRange.start}
-                  stroke="hsl(var(--chart-3))"
-                  strokeOpacity={0.75}
-                  strokeDasharray="4 2"
-                  strokeWidth={1.25}
+                <ReferenceArea
+                  yAxisId={0}
+                  x1={Number(highlightRange.start)}
+                  x2={Number(highlightRange.end)}
+                  fill="#ef4444"
+                  fillOpacity={0.22}
+                  stroke="#ef4444"
+                  strokeOpacity={0.45}
+                  ifOverflow="hidden"
                 />
                 <ReferenceLine
-                  x={highlightRange.end}
-                  stroke="hsl(var(--chart-3))"
-                  strokeOpacity={0.75}
+                  x={Number(highlightRange.start)}
+                  stroke="#ef4444"
+                  strokeOpacity={1}
                   strokeDasharray="4 2"
-                  strokeWidth={1.25}
+                  strokeWidth={2}
+                />
+                <ReferenceLine
+                  x={Number(highlightRange.end)}
+                  stroke="#ef4444"
+                  strokeOpacity={1}
+                  strokeDasharray="4 2"
+                  strokeWidth={2}
                 />
               </>
             )}
