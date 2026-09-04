@@ -32,7 +32,7 @@ import { isSarahNativeShell } from "@/lib/mobileApiBase";
 import { readSttProviderPreference } from "@/lib/sttSettings";
 import { bloodPressureReadingsFromSession, pulseOxReadingsFromSession } from "@/lib/sessionContext";
 import { normalizeTimedReadings } from "@/lib/telemetryTheater";
-import { startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
+import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import {
   getVideoSyncCorrection,
   mediaTimeToSessionTime,
@@ -750,6 +750,7 @@ export default function VideoSyncPlayer({
   const [selectedSnapshotFilters, setSelectedSnapshotFilters] = useState([]);
   const [snapshotAuditJob, setSnapshotAuditJob] = useState(null);
   const [manualBackfillState, setManualBackfillState] = useState(null);
+  const snapshotRefreshAtRef = useRef(0);
 
   useEffect(() => {
     setEvents(session.event_timeline || []);
@@ -797,6 +798,32 @@ export default function VideoSyncPlayer({
     }
     return null;
   }, [activeFeedKey, videoFeeds]);
+
+  useEffect(() => {
+    if (reviewTab !== "snapshots") return undefined;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
+        const [refreshed, jobResponse] = await Promise.all([
+          entity.get(session.id),
+          listBackgroundJobs({ type: "session_visual_snapshot_review", metaSessionId: session.id, limit: 10 }),
+        ]);
+        if (!active) return;
+        const reviews = refreshed?.[analysisField]?._visual_snapshot_reviews;
+        if (Array.isArray(reviews)) setVisualSnapshotReviews(reviews);
+        const jobs = Array.isArray(jobResponse?.jobs) ? jobResponse.jobs : [];
+        const running = jobs.find((job) => ["queued", "running"].includes(job.status));
+        if (running) setSnapshotAuditJob({ running: true, progress: running.progress || null });
+        else setSnapshotAuditJob((current) => current?.running ? { ...current, running: false } : current);
+      } catch (error) {
+        console.warn("Could not refresh visual-audit progress:", error);
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 4000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [analysisField, isExploration, reviewTab, session.id]);
 
   // Edit state: idx of event being edited, or null
   const [editingIdx, setEditingIdx] = useState(null);
@@ -1029,7 +1056,17 @@ export default function VideoSyncPlayer({
       });
       await waitForBackgroundJob(job.id, {
         intervalMs: 1800,
-        onProgress: (currentJob) => setSnapshotAuditJob({ running: true, progress: currentJob?.progress || null }),
+        onProgress: (currentJob) => {
+          setSnapshotAuditJob({ running: true, progress: currentJob?.progress || null });
+          const now = Date.now();
+          if (now - snapshotRefreshAtRef.current < 3000) return;
+          snapshotRefreshAtRef.current = now;
+          const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
+          void entity.get(session.id).then((refreshed) => {
+            const reviews = refreshed?.[analysisField]?._visual_snapshot_reviews;
+            if (Array.isArray(reviews)) setVisualSnapshotReviews(reviews);
+          }).catch((error) => console.warn("Could not refresh partial visual-audit rows:", error));
+        },
       });
       const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
       const refreshed = await entity.get(session.id);

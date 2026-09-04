@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
   "version": "0.1.257",
-  "commit": "a5f2d5d",
-  "commitMessage": "Prepare Sarah v0.1.257 release",
-  "builtAt": "2026-09-04T21:24:05.109Z"
+  "commit": "8359cfe",
+  "commitMessage": "Record packaged v0.1.257 build provenance",
+  "builtAt": "2026-09-04T22:10:56.210Z"
 };
