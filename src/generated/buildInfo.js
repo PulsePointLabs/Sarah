@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
   "version": "0.1.257",
-  "commit": "f68aa21",
-  "commitMessage": "Stream partial visual audit results into Video Sync",
-  "builtAt": "2026-09-04T22:31:43.350Z"
+  "commit": "7224772",
+  "commitMessage": "Tighten visual audit evidence and camera controls",
+  "builtAt": "2026-09-04T23:10:11.101Z"
 };

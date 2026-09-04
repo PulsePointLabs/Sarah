@@ -2090,6 +2090,26 @@ export default function VideoSyncPlayer({
     setFullTelemetryView(false);
   };
 
+  const openSnapshotInFullTelemetry = useCallback((snapshot) => {
+    const sessionTime = Math.max(0, Number(snapshot?.time_s) || 0);
+    const requestedFeedKey = snapshotCameraKey(snapshot);
+    const requestedFeed = videoFeeds[requestedFeedKey];
+    const currentVideo = videoRef.current;
+    currentVideo?.pause();
+
+    if (requestedFeed?.src) {
+      const nextOffset = Number(requestedFeed.timelineOffsetSeconds) || 0;
+      pendingMasterTimeRef.current = sessionTimeToMediaTime(sessionTime, nextOffset);
+      setPlayheadS(sessionTime);
+      setVideoOffset(nextOffset);
+      setActiveFeedKey(requestedFeedKey);
+      setVideoSrc(requestedFeed.src);
+    } else {
+      setSynchronizedVideoTime(sessionTimeToMediaTime(sessionTime, videoOffset, videoDuration));
+    }
+    setFullTelemetryView(true);
+  }, [setSynchronizedVideoTime, videoDuration, videoFeeds, videoOffset]);
+
   const setSpeed = (speed) => {
     setPlaybackSpeed(speed);
     if (videoRef.current) videoRef.current.playbackRate = speed;
@@ -3817,7 +3837,7 @@ export default function VideoSyncPlayer({
               </div>
             </div>
             {filteredVisualSnapshots.map((snapshot) => (
-              <VisualSnapshotCard key={snapshot.id || `${snapshot.source_video_role}-${snapshot.time_s}`} snapshot={snapshot} onSeek={() => setSynchronizedVideoTime(Number(snapshot.time_s) || 0)} />
+              <VisualSnapshotCard key={snapshot.id || `${snapshot.source_video_role}-${snapshot.time_s}`} snapshot={snapshot} onSeek={() => openSnapshotInFullTelemetry(snapshot)} />
             ))}
             {!visualSnapshotReviews.length && !snapshotAuditJob?.running && (
               <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No 10-second visual checkpoints have been saved yet. Start the audit when you want Sarah to process this linked video.</p>
