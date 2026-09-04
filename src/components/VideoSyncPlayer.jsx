@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, Sparkles, Maximize2, Minimize2, Heart, Activity, Wind, Move } from "lucide-react";
+import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, ArrowDown, Minus, Sparkles, Maximize2, Minimize2, Heart, Activity, Wind, Move } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
   Dialog,
@@ -383,26 +383,47 @@ function visualSnapshotSearchText(snapshot = {}) {
   ].filter(Boolean).join(" ");
 }
 
+function snapshotCameraKey(snapshot = {}) {
+  const role = String(snapshot.source_video_role || snapshot.source_video?.role || "main");
+  return role === "feet" ? "lower_body" : role;
+}
+
+function SnapshotChangeBadge({ change }) {
+  const direction = String(change?.direction || "stable");
+  const high = String(change?.confidence || "").toLowerCase() === "high";
+  const styles = {
+    increasing: high ? "border-rose-400/60 bg-rose-500/15 text-rose-300" : "border-amber-400/40 bg-amber-500/10 text-amber-300",
+    new: high ? "border-rose-400/60 bg-rose-500/15 text-rose-300" : "border-amber-400/40 bg-amber-500/10 text-amber-300",
+    decreasing: high ? "border-sky-400/60 bg-sky-500/15 text-sky-300" : "border-cyan-400/40 bg-cyan-500/10 text-cyan-300",
+    released: high ? "border-sky-400/60 bg-sky-500/15 text-sky-300" : "border-cyan-400/40 bg-cyan-500/10 text-cyan-300",
+    stable: "border-slate-400/35 bg-slate-500/10 text-slate-300",
+  };
+  const Icon = ["increasing", "new"].includes(direction) ? ArrowUp : ["decreasing", "released"].includes(direction) ? ArrowDown : Minus;
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${styles[direction] || styles.stable}`}>
+      <Icon className="h-3 w-3" />
+      {change.anatomical_area}: {change.label}
+      {high && <span className="ml-0.5 text-[8px] uppercase tracking-wide opacity-75">strong</span>}
+    </span>
+  );
+}
+
 function VisualSnapshotCard({ snapshot, onSeek }) {
   const nearest = snapshot?.telemetry?.nearest || {};
   const changes = Array.isArray(snapshot?.significant_changes) ? snapshot.significant_changes : [];
   const findings = Array.isArray(snapshot?.findings) ? snapshot.findings : [];
   return (
     <article className={`grid gap-3 rounded-xl border p-3 sm:grid-cols-[160px_1fr] ${snapshot.possible_near_climax ? "border-rose-400/50 bg-rose-500/[0.06]" : "border-border bg-muted/15"}`}>
-      <button type="button" onClick={onSeek} className="group relative overflow-hidden rounded-lg border border-border bg-black text-left">
+      <button type="button" onClick={onSeek} className="group relative aspect-video self-start overflow-hidden rounded-lg border border-border bg-black text-left">
         {snapshot.thumbnail_url ? (
-          <img src={snapshot.thumbnail_url} alt={`Visual checkpoint at ${fmtMmSs(snapshot.time_s)}`} className="aspect-video h-full w-full object-cover transition-transform group-hover:scale-[1.02]" />
+          <img src={snapshot.thumbnail_url} alt={`Visual checkpoint at ${fmtMmSs(snapshot.time_s)}`} className="h-full w-full object-contain transition-transform group-hover:scale-[1.02]" />
         ) : <div className="flex aspect-video items-center justify-center text-xs text-white/60">No thumbnail</div>}
         <span className="absolute bottom-1 left-1 rounded bg-black/75 px-1.5 py-0.5 font-mono text-[10px] font-bold text-white">{fmtMmSs(snapshot.time_s)}</span>
       </button>
       <div className="min-w-0 space-y-2">
         <div className="flex flex-wrap items-center gap-1.5">
           {snapshot.possible_near_climax && <span className="rounded-full border border-rose-400/50 bg-rose-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-400">Possible near climax</span>}
-          {changes.map((change, index) => (
-            <span key={`${change.anatomical_area}-${change.direction}-${index}`} className="rounded-full border border-primary/25 bg-primary/[0.08] px-2 py-0.5 text-[10px] font-medium text-primary">
-              {change.anatomical_area}: {change.label} · {change.direction}
-            </span>
-          ))}
+          {changes.map((change, index) => <SnapshotChangeBadge key={`${change.anatomical_area}-${change.direction}-${index}`} change={change} />)}
         </div>
         {snapshot.summary && <p className="text-sm leading-relaxed text-foreground/90">{formatManualAnnotationReviewText(snapshot.summary)}</p>}
         {findings.length > 0 && (
@@ -748,6 +769,8 @@ export default function VideoSyncPlayer({
   const [pendingManualReviewIds, setPendingManualReviewIds] = useState(() => new Set());
   const [reviewTab, setReviewTab] = useState("events");
   const [selectedSnapshotFilters, setSelectedSnapshotFilters] = useState([]);
+  const [snapshotCameraFilter, setSnapshotCameraFilter] = useState("all");
+  const [snapshotAuditFeedKey, setSnapshotAuditFeedKey] = useState("");
   const [snapshotAuditJob, setSnapshotAuditJob] = useState(null);
   const [manualBackfillState, setManualBackfillState] = useState(null);
   const snapshotRefreshAtRef = useRef(0);
@@ -790,7 +813,19 @@ export default function VideoSyncPlayer({
     )) || null;
   }, [manualReviewByEventId, manualVisualReviews]);
 
-  const selectVisualReviewFeed = useCallback(() => {
+  const auditFeeds = useMemo(
+    () => VIDEO_FEED_SLOTS.map((meta) => ({ ...meta, ...videoFeeds[meta.key] })).filter((feed) => feed.localPath),
+    [videoFeeds],
+  );
+
+  useEffect(() => {
+    if (snapshotAuditFeedKey && auditFeeds.some((feed) => feed.key === snapshotAuditFeedKey)) return;
+    const preferred = auditFeeds.find((feed) => feed.key === activeFeedKey) || auditFeeds[0];
+    setSnapshotAuditFeedKey(preferred?.key || "");
+  }, [activeFeedKey, auditFeeds, snapshotAuditFeedKey]);
+
+  const selectVisualReviewFeed = useCallback((preferredKey = "") => {
+    if (preferredKey && videoFeeds[preferredKey]?.localPath) return { ...videoFeeds[preferredKey], key: preferredKey };
     const active = videoFeeds[activeFeedKey];
     if (active?.localPath) return { ...active, key: activeFeedKey };
     for (const key of ["main", "composite", "lower_body", "lateral"]) {
@@ -1023,7 +1058,7 @@ export default function VideoSyncPlayer({
 
   const startOrResumeVisualSnapshotAudit = async () => {
     if (snapshotAuditJob?.running) return;
-    const feed = selectVisualReviewFeed();
+    const feed = selectVisualReviewFeed(snapshotAuditFeedKey);
     if (!feed?.localPath) {
       showQuickNotice("Load or link a local video before starting the 10-second visual audit.", "error");
       return;
@@ -2140,10 +2175,11 @@ export default function VideoSyncPlayer({
     )), [events, selectedEventFilters]);
   const visibleEvents = useMemo(() => visibleEventEntries.map(({ ev }) => ev), [visibleEventEntries]);
   const filteredVisualSnapshots = useMemo(() => visualSnapshotReviews.filter((snapshot) => {
+    if (snapshotCameraFilter !== "all" && snapshotCameraKey(snapshot) !== snapshotCameraFilter) return false;
     if (!selectedSnapshotFilters.length) return true;
     const text = visualSnapshotSearchText(snapshot);
     return VISUAL_SNAPSHOT_FILTERS.some((filter) => selectedSnapshotFilters.includes(filter.key) && filter.terms.test(text));
-  }), [selectedSnapshotFilters, visualSnapshotReviews]);
+  }), [selectedSnapshotFilters, snapshotCameraFilter, visualSnapshotReviews]);
   const closestVisibleEvent = useMemo(() => {
     if (!visibleEventEntries.length) return null;
     return visibleEventEntries.reduce((closest, entry) => (
@@ -3601,11 +3637,20 @@ export default function VideoSyncPlayer({
             </button>
           )}
           {reviewTab === "snapshots" && (
-            <button type="button" disabled={snapshotAuditJob?.running} onClick={startOrResumeVisualSnapshotAudit} className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary disabled:opacity-50">
-              {snapshotAuditJob?.running
-                ? `${snapshotAuditJob.progress?.message || "Reviewing checkpoints…"}`
-                : visualSnapshotReviews.length ? "Resume missing checkpoints" : "Start 10-second visual audit"}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
+                Analyze camera
+                <select value={snapshotAuditFeedKey} onChange={(event) => setSnapshotAuditFeedKey(event.target.value)} disabled={snapshotAuditJob?.running}
+                  className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground disabled:opacity-50">
+                  {auditFeeds.map((feed) => <option key={feed.key} value={feed.key}>{feed.label}</option>)}
+                </select>
+              </label>
+              <button type="button" disabled={snapshotAuditJob?.running || !snapshotAuditFeedKey} onClick={startOrResumeVisualSnapshotAudit} className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary disabled:opacity-50">
+                {snapshotAuditJob?.running
+                  ? `${snapshotAuditJob.progress?.message || "Reviewing checkpoints…"}`
+                  : visualSnapshotReviews.length ? `Resume ${auditFeeds.find((feed) => feed.key === snapshotAuditFeedKey)?.label || "camera"}` : `Start ${auditFeeds.find((feed) => feed.key === snapshotAuditFeedKey)?.label || "camera"} audit`}
+              </button>
+            </div>
           )}
         </div>
 
@@ -3747,7 +3792,17 @@ export default function VideoSyncPlayer({
                   <p className="text-xs font-semibold text-foreground">Chronological body-state checkpoints</p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">One independent freeze-frame read every 10 seconds. These are reference-only and never become main event notes.</p>
                 </div>
-                <button type="button" onClick={() => setSelectedSnapshotFilters([])} className="text-[10px] font-medium text-primary hover:underline">Clear filters</button>
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
+                    Show camera
+                    <select value={snapshotCameraFilter} onChange={(event) => setSnapshotCameraFilter(event.target.value)} className="rounded-md border border-border bg-background px-2 py-1 text-[10px] text-foreground">
+                      <option value="all">All cameras</option>
+                      {VIDEO_FEED_SLOTS.filter((feed) => auditFeeds.some((candidate) => candidate.key === feed.key) || visualSnapshotReviews.some((snapshot) => snapshotCameraKey(snapshot) === feed.key))
+                        .map((feed) => <option key={feed.key} value={feed.key}>{feed.label}</option>)}
+                    </select>
+                  </label>
+                  <button type="button" onClick={() => { setSelectedSnapshotFilters([]); setSnapshotCameraFilter("all"); }} className="text-[10px] font-medium text-primary hover:underline">Clear filters</button>
+                </div>
               </div>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {VISUAL_SNAPSHOT_FILTERS.map((filter) => {

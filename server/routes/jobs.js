@@ -820,6 +820,46 @@ function compactSnapshotTelemetry(packet = {}) {
   };
 }
 
+function snapshotTextTokens(value) {
+  return new Set(String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length > 3 && !['your', 'with', 'from', 'this', 'that', 'visible', 'appears'].includes(token)));
+}
+
+function snapshotTextSimilarity(left, right) {
+  const a = snapshotTextTokens(left);
+  const b = snapshotTextTokens(right);
+  if (!a.size || !b.size) return 0;
+  let shared = 0;
+  for (const token of a) if (b.has(token)) shared += 1;
+  return shared / Math.max(1, Math.min(a.size, b.size));
+}
+
+function sanitizeSnapshotText(value, { clearMotion = false } = {}) {
+  const text = formatManualAnnotationReviewText(value);
+  if (!text) return '';
+  const forbiddenWithoutMotion = /\b(stimulation (?:continues|ongoing|is ongoing|phase)|stimulating|stroking|masturbat(?:ing|ion)|arousal (?:build|phase)|two-handed stimulation)\b/i;
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => clearMotion || !forbiddenWithoutMotion.test(sentence))
+    .join(' ')
+    .trim();
+}
+
+function sanitizeSnapshotFindings(findings, priorSnapshot, { clearMotion = false } = {}) {
+  const priorFindings = Array.isArray(priorSnapshot?.findings) ? priorSnapshot.findings : [];
+  return (Array.isArray(findings) ? findings : [])
+    .filter((item) => ['moderate', 'high'].includes(String(item?.confidence || '').toLowerCase()))
+    .map((item) => ({ ...item, observation: sanitizeSnapshotText(item?.observation, { clearMotion }) }))
+    .filter((item) => item.observation)
+    .filter((item) => !priorFindings.some((prior) => (
+      String(prior?.anatomical_area || '').toLowerCase() === String(item?.anatomical_area || '').toLowerCase()
+      && snapshotTextSimilarity(prior?.observation, item.observation) >= 0.72
+    )));
+}
+
 registerJobHandler('session_visual_snapshot_review', async (payload, context) => {
   const recordId = String(payload?.recordId || context?.meta?.sessionId || '');
   const recordType = payload?.recordType === 'body_exploration' ? 'body_exploration' : 'session';
@@ -901,7 +941,7 @@ registerJobHandler('session_visual_snapshot_review', async (payload, context) =>
               image_index: { type: 'integer' },
               body_visible: { type: 'boolean' },
               summary: { type: 'string' },
-              active_stimulation_visible: { type: 'boolean' },
+              stimulation_evidence: { type: 'string', enum: ['none', 'static_contact', 'clear_motion'] },
               possible_near_climax: { type: 'boolean' },
               near_climax_reason: { type: 'string' },
               findings: {
@@ -919,7 +959,7 @@ registerJobHandler('session_visual_snapshot_review', async (payload, context) =>
                 },
               },
             },
-            required: ['image_index', 'body_visible', 'summary', 'active_stimulation_visible', 'possible_near_climax', 'near_climax_reason', 'findings', 'significant_changes'],
+            required: ['image_index', 'body_visible', 'summary', 'stimulation_evidence', 'possible_near_climax', 'near_climax_reason', 'findings', 'significant_changes'],
           },
         },
       },
@@ -930,13 +970,19 @@ registerJobHandler('session_visual_snapshot_review', async (payload, context) =>
       model: 'claude_sonnet_4_6', max_tokens: 5000, max_images: usableCount, response_json_schema: responseSchema,
       images: extracted.frames.slice(0, usableCount).map((frame) => ({ filename: frame.filename, media_type: frame.mimeType, data: frame.data })),
       signal: context.signal,
-      prompt: `You are Sarah creating a quick, chronological visual audit of Ben's private physiology session. Each attached image is one independent freeze-frame checkpoint, sampled ten seconds apart. Analyze only what is visible in that image, while using prior saved checkpoint text solely to identify directional change.
+      prompt: `You are Sarah creating a quick, chronological visual audit of Ben's private physiology session. Each attached image is one freeze-frame checkpoint sampled ten seconds apart. Analyze the current image. You may compare it with the immediately preceding image/checkpoint only to describe a clearly visible directional change; never infer what happened during the unseen interval.
 
 For every image return exactly one snapshot with matching image_index. Set body_visible false when Ben's body is absent or too poorly visible to review. Before the first body-visible image, empty-table frames are setup and must have empty summary/findings/changes. Review visible body state head to toe without inventorying unchanged background: face/head when visible, chest/abdomen and breathing/tension, shoulders/arms/hands, trunk/pelvis, genital/erection/glans/scrotal state, thighs/legs, and feet/toes. Be compact and human-readable. Use "you" and "your". Cameras are not mirrored; derive anatomical laterality from Ben's orientation, never screen side, and omit laterality when uncertain.
 
-Significant changes are directional changes that make chronological review useful: erection/engorgement increase or decrease, scrotal lift/descent, new flushing, tension/bracing/planting/toe curl increase or release, altered breathing effort, posture/pelvic change, stimulation starting/stopping/changing. Do not call a static fact a significant change. Do not manufacture motion from one frame.
+CRITICAL MOTION RULE: a hand, sleeve, device, or penis being held in one freeze frame proves contact only. It does not prove stroking, masturbation, stimulation, continuation, speed, or motion. Set stimulation_evidence to static_contact for contact without unmistakable motion blur, and clear_motion only when the current frame itself contains strong visual evidence of movement. Never use words such as "continues", "ongoing", "maintained", "still", "sustained phase", or "new arousal build" merely because a current pose resembles the prior checkpoint. The app's on-video phase label is not evidence. If no meaningful state change is visible, say simply "No clear body-state change at this checkpoint" and return only genuinely useful current findings.
 
-Near-climax rule: possible_near_climax may be true only when active genital stimulation is visibly present AND at least two contemporaneous high-specificity build signs are visible (for example marked scrotal retraction, sustained penile/glans engorgement, coordinated lower-body bracing/toe curl, breath/tension loading), with nearby telemetry supporting rather than contradicting the pattern. HR or HRV alone can never qualify. Setup, walking, repositioning, camera work, or merely being erect never qualify. Keep this an audit flag, not a saved event note.
+Be conservative and anatomically specific about erection state: distinguish flaccid, mostly flaccid, partial, firm, and fully erect only when visually supported. An exposed or pink glans alone does not establish engorgement. Telemetry may support a visible finding but must never turn static contact, an HR rise, or an overlay label into arousal or stimulation.
+
+For feet and lower body, inspect each anatomically identified foot separately when visible. Look specifically for toe flexion/curl versus extension, plantar flexion versus dorsiflexion, heel/forefoot loading, sole flattening or wrinkling, new focal or diffuse sole flushing/pallor, inversion/eversion or inward/outward rotation, leg abduction/adduction, muscle definition, sustained bracing, tremor, and clear release/relaxation. Report subtle changes only at moderate/high confidence and do not convert camera perspective into left/right anatomy.
+
+Significant changes are directional changes that make chronological review useful: erection/engorgement increase or decrease, scrotal lift/descent, new flushing, tension/bracing/planting/toe curl increase or release, altered breathing effort, posture/pelvic change, or clearly visible stimulation motion starting/stopping/changing. Do not call a static fact a significant change. Use stable only when an unchanged state is itself clinically useful; otherwise omit it. Do not repeat the previous checkpoint's summary or findings in new wording.
+
+Near-climax rule: possible_near_climax may be true only when stimulation_evidence is clear_motion AND at least two contemporaneous high-specificity build signs are visible (for example marked scrotal retraction, penile/glans engorgement, coordinated lower-body bracing/toe curl, breath/tension loading), with nearby telemetry supporting rather than contradicting the pattern. HR or HRV alone can never qualify. Setup, walking, repositioning, camera work, static genital contact, or merely being erect never qualify. Keep this an audit flag, not a saved event note.
 
 Prior saved checkpoints:
 ${previousContext}
@@ -952,6 +998,15 @@ ${frameMap}`,
       if (!model?.body_visible) { if (!firstVisibleSeen) skipped += 1; continue; }
       firstVisibleSeen = true;
       const frame = extracted.frames[index];
+      const priorSnapshot = batchSnapshots.at(-1) || priorSnapshots.at(-1) || null;
+      const clearMotion = model.stimulation_evidence === 'clear_motion';
+      const summary = sanitizeSnapshotText(model.summary, { clearMotion });
+      const findings = sanitizeSnapshotFindings(model.findings, priorSnapshot, { clearMotion });
+      const significantChanges = (Array.isArray(model.significant_changes) ? model.significant_changes : [])
+        .filter((change) => change?.direction !== 'stable' || String(change?.confidence || '').toLowerCase() === 'high')
+        .map((change) => ({ ...change, label: sanitizeSnapshotText(change?.label, { clearMotion }) }))
+        .filter((change) => change.label);
+      const repetitiveSummary = priorSnapshot && snapshotTextSimilarity(priorSnapshot.summary, summary) >= 0.72;
       batchSnapshots.push({
         id: `visual-snapshot-${context.jobId}-${Math.round(pairs[index].sessionTime)}`,
         time_s: pairs[index].sessionTime,
@@ -961,12 +1016,13 @@ ${frameMap}`,
         source_video_role: video.role || 'main',
         thumbnail_url: frame.url,
         sampled_frame: { url: frame.url, filename: frame.stored_filename || frame.filename, frameTimeSeconds: frame.frameTimeSeconds, recordTimeSeconds: pairs[index].sessionTime },
-        summary: stripNonBodyObjectContext(formatManualAnnotationReviewText(model.summary)),
-        findings: (Array.isArray(model.findings) ? model.findings : []).filter((item) => ['moderate', 'high'].includes(String(item?.confidence || '').toLowerCase())),
-        significant_changes: Array.isArray(model.significant_changes) ? model.significant_changes : [],
-        active_stimulation_visible: model.active_stimulation_visible === true,
-        possible_near_climax: model.possible_near_climax === true && model.active_stimulation_visible === true,
-        near_climax_reason: model.active_stimulation_visible === true ? String(model.near_climax_reason || '') : '',
+        summary: stripNonBodyObjectContext(repetitiveSummary ? 'No clear body-state change at this checkpoint.' : summary),
+        findings,
+        significant_changes: significantChanges,
+        stimulation_evidence: model.stimulation_evidence,
+        active_stimulation_visible: clearMotion,
+        possible_near_climax: model.possible_near_climax === true && clearMotion && significantChanges.length >= 2,
+        near_climax_reason: clearMotion ? sanitizeSnapshotText(model.near_climax_reason, { clearMotion }) : '',
         telemetry: telemetry[index],
         created_at: generatedAt,
       });
