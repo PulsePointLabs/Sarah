@@ -108,6 +108,15 @@ const EVENT_FILTERS = [
   { key: "sensation", label: "Sensation", matches: (ev) => normalizeCategoryArray(ev.category).includes("sensation") || (ev.annotation_tags || []).includes("sensation_report") },
   { key: "context", label: "Context", matches: (ev) => (ev.annotation_tags || []).some((tag) => ["position_or_comfort", "equipment_or_setup", "other_context"].includes(tag)) },
 ];
+const VISUAL_SNAPSHOT_FILTERS = [
+  { key: "penis", label: "Penis", terms: /\b(penis|penile|shaft|glans|foreskin|erection|erect|engorg)/i },
+  { key: "scrotum", label: "Scrotum", terms: /\b(scrot|testic|rugae)/i },
+  { key: "feet", label: "Feet", terms: /\b(feet|foot|toe|toes|heel|plantar|sole)/i },
+  { key: "legs", label: "Legs", terms: /\b(leg|legs|thigh|thighs|knee|knees|calf|calves|ankle)/i },
+  { key: "abdomen", label: "Abdomen", terms: /\b(abdomen|abdominal|belly)/i },
+  { key: "torso", label: "Torso", terms: /\b(torso|trunk|chest|shoulder|back|pelvis|pelvic|breath|respirat)/i },
+  { key: "skin", label: "Skin", terms: /\b(skin|flush|flushing|color|pallor|mottl|sheen|sweat)/i },
+];
 const VIDEO_FEED_SLOTS = [
   { key: "composite", label: "Composite / Picture-in-Picture", description: "Current single-video workflow with all views already combined." },
   { key: "main", label: "Main Focus Camera", description: "Primary close view used for the main review angle." },
@@ -363,6 +372,57 @@ function ManualNoteSarahRead({ review, pending = false, compact = false }) {
         </>
       )}
     </div>
+  );
+}
+
+function visualSnapshotSearchText(snapshot = {}) {
+  return [
+    snapshot.summary,
+    ...(snapshot.findings || []).flatMap((item) => [item.anatomical_area, item.observation]),
+    ...(snapshot.significant_changes || []).flatMap((item) => [item.anatomical_area, item.label, item.direction]),
+  ].filter(Boolean).join(" ");
+}
+
+function VisualSnapshotCard({ snapshot, onSeek }) {
+  const nearest = snapshot?.telemetry?.nearest || {};
+  const changes = Array.isArray(snapshot?.significant_changes) ? snapshot.significant_changes : [];
+  const findings = Array.isArray(snapshot?.findings) ? snapshot.findings : [];
+  return (
+    <article className={`grid gap-3 rounded-xl border p-3 sm:grid-cols-[160px_1fr] ${snapshot.possible_near_climax ? "border-rose-400/50 bg-rose-500/[0.06]" : "border-border bg-muted/15"}`}>
+      <button type="button" onClick={onSeek} className="group relative overflow-hidden rounded-lg border border-border bg-black text-left">
+        {snapshot.thumbnail_url ? (
+          <img src={snapshot.thumbnail_url} alt={`Visual checkpoint at ${fmtMmSs(snapshot.time_s)}`} className="aspect-video h-full w-full object-cover transition-transform group-hover:scale-[1.02]" />
+        ) : <div className="flex aspect-video items-center justify-center text-xs text-white/60">No thumbnail</div>}
+        <span className="absolute bottom-1 left-1 rounded bg-black/75 px-1.5 py-0.5 font-mono text-[10px] font-bold text-white">{fmtMmSs(snapshot.time_s)}</span>
+      </button>
+      <div className="min-w-0 space-y-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {snapshot.possible_near_climax && <span className="rounded-full border border-rose-400/50 bg-rose-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-400">Possible near climax</span>}
+          {changes.map((change, index) => (
+            <span key={`${change.anatomical_area}-${change.direction}-${index}`} className="rounded-full border border-primary/25 bg-primary/[0.08] px-2 py-0.5 text-[10px] font-medium text-primary">
+              {change.anatomical_area}: {change.label} · {change.direction}
+            </span>
+          ))}
+        </div>
+        {snapshot.summary && <p className="text-sm leading-relaxed text-foreground/90">{formatManualAnnotationReviewText(snapshot.summary)}</p>}
+        {findings.length > 0 && (
+          <div className="grid gap-1.5 lg:grid-cols-2">
+            {findings.map((finding, index) => (
+              <p key={`${finding.anatomical_area}-${index}`} className="text-xs leading-relaxed text-foreground/75">
+                <span className="font-semibold text-primary">{finding.anatomical_area}:</span> {formatManualAnnotationReviewText(finding.observation)}
+              </p>
+            ))}
+          </div>
+        )}
+        <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border/60 pt-2 font-mono text-[10px] text-muted-foreground">
+          <span>{nearest.hr_bpm != null ? `HR ${nearest.hr_bpm} bpm` : "HR unavailable"}</span>
+          <span>{nearest.hrv_rmssd_ms != null ? `RMSSD ${Number(nearest.hrv_rmssd_ms).toFixed(1)} ms` : "HRV unavailable"}</span>
+          {nearest.respiration_bpm > 0 && <span>Resp {Number(nearest.respiration_bpm).toFixed(1)}/min</span>}
+          {nearest.motion_class && nearest.motion_class !== "unavailable" && <span>Motion {nearest.motion_class}</span>}
+        </div>
+        {snapshot.possible_near_climax && snapshot.near_climax_reason && <p className="text-[11px] leading-relaxed text-rose-300/90">{snapshot.near_climax_reason}</p>}
+      </div>
+    </article>
   );
 }
 
@@ -680,7 +740,16 @@ export default function VideoSyncPlayer({
       ? session[analysisField]._manual_annotation_visual_reviews
       : [],
   );
+  const [visualSnapshotReviews, setVisualSnapshotReviews] = useState(
+    Array.isArray(session?.[analysisField]?._visual_snapshot_reviews)
+      ? session[analysisField]._visual_snapshot_reviews
+      : [],
+  );
   const [pendingManualReviewIds, setPendingManualReviewIds] = useState(() => new Set());
+  const [reviewTab, setReviewTab] = useState("events");
+  const [selectedSnapshotFilters, setSelectedSnapshotFilters] = useState([]);
+  const [snapshotAuditJob, setSnapshotAuditJob] = useState(null);
+  const [manualBackfillState, setManualBackfillState] = useState(null);
 
   useEffect(() => {
     setEvents(session.event_timeline || []);
@@ -689,10 +758,15 @@ export default function VideoSyncPlayer({
         ? session[analysisField]._manual_annotation_visual_reviews
         : [],
     );
+    setVisualSnapshotReviews(
+      Array.isArray(session?.[analysisField]?._visual_snapshot_reviews)
+        ? session[analysisField]._visual_snapshot_reviews
+        : [],
+    );
     setSelectedEventFilters([]);
     setActiveEventIdx(null);
     setEditingIdx(null);
-  }, [analysisField, session.id, session.event_timeline, session?.[analysisField]?._manual_annotation_visual_reviews_updated_at]);
+  }, [analysisField, session.id, session.event_timeline, session?.[analysisField]?._manual_annotation_visual_reviews_updated_at, session?.[analysisField]?._visual_snapshot_reviews_updated_at]);
 
   useEffect(() => {
     setPendingManualReviewIds(new Set());
@@ -704,7 +778,7 @@ export default function VideoSyncPlayer({
       .map((review) => [String(review.event_id), review]),
   ), [manualVisualReviews]);
   const manualReviewForEvent = useCallback((event) => {
-    const eventId = String(event?.event_id || "");
+    const eventId = String(event?.event_id || event?.id || "");
     if (eventId && manualReviewByEventId.has(eventId)) return manualReviewByEventId.get(eventId);
     const note = String(event?.note || "").trim();
     const time = Number(event?.time_s);
@@ -714,6 +788,15 @@ export default function VideoSyncPlayer({
       && String(review?.manual_note || "").trim() === note
     )) || null;
   }, [manualReviewByEventId, manualVisualReviews]);
+
+  const selectVisualReviewFeed = useCallback(() => {
+    const active = videoFeeds[activeFeedKey];
+    if (active?.localPath) return { ...active, key: activeFeedKey };
+    for (const key of ["main", "composite", "lower_body", "lateral"]) {
+      if (videoFeeds[key]?.localPath) return { ...videoFeeds[key], key };
+    }
+    return null;
+  }, [activeFeedKey, videoFeeds]);
 
   // Edit state: idx of event being edited, or null
   const [editingIdx, setEditingIdx] = useState(null);
@@ -832,49 +915,133 @@ export default function VideoSyncPlayer({
     onEventsChange?.(sorted);
   };
 
-  const queueManualAnnotationVisualReview = (event) => {
-    const feed = videoFeeds[activeFeedKey];
-    if (!session?.id || !feed?.localPath || !event?.note) return;
-    const role = activeFeedKey === "lower_body" ? "feet" : activeFeedKey;
-    const eventId = String(event.event_id || `${event.time_s}:${event.note}`);
+  const queueManualAnnotationVisualReview = async (event, { quiet = true } = {}) => {
+    const feed = selectVisualReviewFeed();
+    if (!session?.id || !feed?.localPath || !event?.note) {
+      if (!quiet) showQuickNotice("Load or link a local video before requesting Sarah's ±5s read.", "error");
+      return false;
+    }
+    const role = feed.key === "lower_body" ? "feet" : feed.key;
+    const eventId = String(event.event_id || event.id || `${event.time_s}:${event.note}`);
     setPendingManualReviewIds((current) => new Set([...current, eventId]));
-    void startBackgroundJob("manual_annotation_visual_review", {
-      recordId: session.id,
-      recordType,
-      event,
-      video: {
-        path: feed.localPath,
-        label: feed.label || feed.fileName || activeFeedKey,
-        filename: feed.fileName || "",
-        fingerprint: feed.fingerprint || "",
-        role,
-        timelineOffsetSeconds: Number(feed.timelineOffsetSeconds ?? videoOffset) || 0,
-      },
-    }, {
-      source: "manual_annotation_visual_review",
-      sessionId: session.id,
-      recordType,
-      title: `Visual review near ${fmtMmSs(event.time_s)}`,
-      route: isExploration
-        ? `/ai-annotation?type=body_exploration&id=${encodeURIComponent(session.id)}`
-        : `/sessions/${encodeURIComponent(session.id)}/ai-annotation`,
-      quietInTray: true,
-      notifications: false,
-    }).then(async (startedJob) => {
+    try {
+      const startedJob = await startBackgroundJob("manual_annotation_visual_review", {
+        recordId: session.id,
+        recordType,
+        event: { ...event, event_id: event.event_id || event.id || null },
+        video: {
+          path: feed.localPath,
+          label: feed.label || feed.fileName || feed.key,
+          filename: feed.fileName || "",
+          fingerprint: feed.fingerprint || "",
+          role,
+          timelineOffsetSeconds: Number(feed.timelineOffsetSeconds ?? videoOffset) || 0,
+        },
+      }, {
+        source: "manual_annotation_visual_review",
+        sessionId: session.id,
+        recordType,
+        title: `Visual review near ${fmtMmSs(event.time_s)}`,
+        route: isExploration
+          ? `/ai-annotation?type=body_exploration&id=${encodeURIComponent(session.id)}`
+          : `/sessions/${encodeURIComponent(session.id)}/ai-annotation`,
+        quietInTray: true,
+        notifications: false,
+      });
       await waitForBackgroundJob(startedJob.id, { intervalMs: 1800 });
       const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
       const refreshed = await entity.get(session.id);
       const reviews = refreshed?.[analysisField]?._manual_annotation_visual_reviews;
       if (Array.isArray(reviews)) setManualVisualReviews(reviews);
-    }).catch((error) => {
+      return true;
+    } catch (error) {
       console.warn("Manual annotation visual review could not be completed:", error);
-    }).finally(() => {
+      if (!quiet) showQuickNotice(error?.message || "Sarah's ±5s review could not be completed.", "error");
+      return false;
+    } finally {
       setPendingManualReviewIds((current) => {
         const next = new Set(current);
         next.delete(eventId);
         return next;
       });
+    }
+  };
+
+  const missingManualReviewEvents = useMemo(() => {
+    const seen = new Set();
+    return events.filter((event) => {
+      if (!event?.note || !["manual", "voice"].includes(String(event.source || ""))) return false;
+      const key = `${Number(event.time_s).toFixed(1)}:${String(event.note).trim().toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return !manualReviewForEvent(event);
     });
+  }, [events, manualReviewForEvent]);
+
+  const backfillMissingManualReviews = async () => {
+    if (manualBackfillState?.running || !missingManualReviewEvents.length) return;
+    setManualBackfillState({ running: true, current: 0, total: missingManualReviewEvents.length });
+    let completed = 0;
+    for (const event of missingManualReviewEvents) {
+      const ok = await queueManualAnnotationVisualReview(event, { quiet: false });
+      if (!ok) break;
+      completed += 1;
+      setManualBackfillState({ running: true, current: completed, total: missingManualReviewEvents.length });
+    }
+    setManualBackfillState({ running: false, current: completed, total: missingManualReviewEvents.length });
+    showQuickNotice(completed === missingManualReviewEvents.length
+      ? `Filled ${completed} missing ±5s review${completed === 1 ? "" : "s"}.`
+      : `Stopped after ${completed} of ${missingManualReviewEvents.length} reviews.`, completed === missingManualReviewEvents.length ? "success" : "error");
+  };
+
+  const startOrResumeVisualSnapshotAudit = async () => {
+    if (snapshotAuditJob?.running) return;
+    const feed = selectVisualReviewFeed();
+    if (!feed?.localPath) {
+      showQuickNotice("Load or link a local video before starting the 10-second visual audit.", "error");
+      return;
+    }
+    const role = feed.key === "lower_body" ? "feet" : feed.key;
+    setSnapshotAuditJob({ running: true, progress: null });
+    setReviewTab("snapshots");
+    try {
+      const job = await startBackgroundJob("session_visual_snapshot_review", {
+        recordId: session.id,
+        recordType,
+        intervalSeconds: 10,
+        durationSeconds: Number(videoDuration) || Number(session.duration_minutes || 0) * 60,
+        video: {
+          path: feed.localPath,
+          label: feed.label || feed.fileName || feed.key,
+          filename: feed.fileName || "",
+          fingerprint: feed.fingerprint || "",
+          role,
+          timelineOffsetSeconds: Number(feed.timelineOffsetSeconds ?? videoOffset) || 0,
+        },
+      }, {
+        source: "session_visual_snapshot_review",
+        sessionId: session.id,
+        recordType,
+        title: `10-second visual audit · ${feed.label || role}`,
+        route: "/video",
+        quietInTray: false,
+        notifications: true,
+      });
+      await waitForBackgroundJob(job.id, {
+        intervalMs: 1800,
+        onProgress: (currentJob) => setSnapshotAuditJob({ running: true, progress: currentJob?.progress || null }),
+      });
+      const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
+      const refreshed = await entity.get(session.id);
+      const reviews = refreshed?.[analysisField]?._visual_snapshot_reviews;
+      if (Array.isArray(reviews)) setVisualSnapshotReviews(reviews);
+      showQuickNotice("10-second visual audit is current.");
+    } catch (error) {
+      console.warn("10-second visual audit could not be completed:", error);
+      showQuickNotice(error?.message || "The visual audit stopped. Saved rows are preserved; Resume will skip them.", "error");
+    } finally {
+      setSnapshotAuditJob((current) => ({ ...(current || {}), running: false }));
+    }
   };
 
   const showQuickNotice = useCallback((message, tone = "success") => {
@@ -1935,6 +2102,11 @@ export default function VideoSyncPlayer({
       || EVENT_FILTERS.some((filter) => selectedEventFilters.includes(filter.key) && filter.matches(ev))
     )), [events, selectedEventFilters]);
   const visibleEvents = useMemo(() => visibleEventEntries.map(({ ev }) => ev), [visibleEventEntries]);
+  const filteredVisualSnapshots = useMemo(() => visualSnapshotReviews.filter((snapshot) => {
+    if (!selectedSnapshotFilters.length) return true;
+    const text = visualSnapshotSearchText(snapshot);
+    return VISUAL_SNAPSHOT_FILTERS.some((filter) => selectedSnapshotFilters.includes(filter.key) && filter.terms.test(text));
+  }), [selectedSnapshotFilters, visualSnapshotReviews]);
   const closestVisibleEvent = useMemo(() => {
     if (!visibleEventEntries.length) return null;
     return visibleEventEntries.reduce((closest, entry) => (
@@ -3374,8 +3546,34 @@ export default function VideoSyncPlayer({
           )}
         </div>
 
+        {/* Review tabs — saved event notes stay separate from visual-audit checkpoints. */}
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-muted/15 p-2">
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={() => setReviewTab("events")} className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${reviewTab === "events" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+              Visible Events ({events.length})
+            </button>
+            <button type="button" onClick={() => setReviewTab("snapshots")} className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${reviewTab === "snapshots" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+              10-Second Visual Audit ({visualSnapshotReviews.length})
+            </button>
+          </div>
+          {reviewTab === "events" && missingManualReviewEvents.length > 0 && (
+            <button type="button" disabled={manualBackfillState?.running} onClick={backfillMissingManualReviews} className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary disabled:opacity-50">
+              {manualBackfillState?.running
+                ? `Filling ±5s reads ${manualBackfillState.current}/${manualBackfillState.total}…`
+                : `Fill ${missingManualReviewEvents.length} missing ±5s read${missingManualReviewEvents.length === 1 ? "" : "s"}`}
+            </button>
+          )}
+          {reviewTab === "snapshots" && (
+            <button type="button" disabled={snapshotAuditJob?.running} onClick={startOrResumeVisualSnapshotAudit} className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary disabled:opacity-50">
+              {snapshotAuditJob?.running
+                ? `${snapshotAuditJob.progress?.message || "Reviewing checkpoints…"}`
+                : visualSnapshotReviews.length ? "Resume missing checkpoints" : "Start 10-second visual audit"}
+            </button>
+          )}
+        </div>
+
         {/* All event notes — full list */}
-        {events.length > 0 && (
+        {reviewTab === "events" && (
           <div className="space-y-1.5">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
               Visible Events ({visibleEvents.length}/{events.length}) — nearby highlighted
@@ -3501,6 +3699,39 @@ export default function VideoSyncPlayer({
               <p className="rounded-lg border border-border bg-muted/20 px-3 py-3 text-sm text-muted-foreground">
                 No event notes match the selected filters.
               </p>
+            )}
+          </div>
+        )}
+        {reviewTab === "snapshots" && (
+          <div className="space-y-3">
+            <div className="rounded-xl border border-border bg-muted/15 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Chronological body-state checkpoints</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">One independent freeze-frame read every 10 seconds. These are reference-only and never become main event notes.</p>
+                </div>
+                <button type="button" onClick={() => setSelectedSnapshotFilters([])} className="text-[10px] font-medium text-primary hover:underline">Clear filters</button>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {VISUAL_SNAPSHOT_FILTERS.map((filter) => {
+                  const active = selectedSnapshotFilters.includes(filter.key);
+                  return (
+                    <button key={filter.key} type="button" onClick={() => setSelectedSnapshotFilters((current) => current.includes(filter.key) ? current.filter((key) => key !== filter.key) : [...current, filter.key])}
+                      className={`rounded-full border px-2 py-1 text-[10px] font-medium ${active ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}>
+                      {filter.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            {filteredVisualSnapshots.map((snapshot) => (
+              <VisualSnapshotCard key={snapshot.id || `${snapshot.source_video_role}-${snapshot.time_s}`} snapshot={snapshot} onSeek={() => setSynchronizedVideoTime(Number(snapshot.time_s) || 0)} />
+            ))}
+            {!visualSnapshotReviews.length && !snapshotAuditJob?.running && (
+              <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No 10-second visual checkpoints have been saved yet. Start the audit when you want Sarah to process this linked video.</p>
+            )}
+            {visualSnapshotReviews.length > 0 && filteredVisualSnapshots.length === 0 && (
+              <p className="rounded-xl border border-border bg-muted/15 px-4 py-5 text-center text-sm text-muted-foreground">No checkpoints match the selected anatomical filters.</p>
             )}
           </div>
         )}

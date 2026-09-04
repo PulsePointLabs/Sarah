@@ -17,7 +17,7 @@ import { analyzeLocalVisionForward } from '../services/localVision/forwardAnalyz
 import { askLocalVisionVideo } from '../services/localVision/videoQa.js';
 import { resolveCachedFramePath } from '../services/localVision/frameSampler.js';
 import { deleteJobPayload, loadJobPayload, saveJobPayload } from '../services/jobPayloadStore.js';
-import { getEntity, listEntities, upsertEntity } from '../db.js';
+import { getEntity, listEntities, listEntitiesByExactCriteria, upsertEntity } from '../db.js';
 import {
   buildClinicalJsonRetryPrompt,
   isMalformedStructuredResponseError,
@@ -56,6 +56,7 @@ import {
   stripNonBodyObjectContext,
   stripStaticManualAnnotationReviewText,
 } from '../../src/lib/manualAnnotationReviewText.js';
+import { buildSessionMomentTelemetry } from '../../src/utils/sessionMomentTelemetry.js';
 
 export const jobsRouter = express.Router();
 export const largeJobsRouter = express.Router();
@@ -582,7 +583,7 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
     const existingReviews = Array.isArray(latestAnalysis._manual_annotation_visual_reviews)
       ? latestAnalysis._manual_annotation_visual_reviews
       : [];
-    const reviewKey = String(event.event_id || `${noteTimeS}:${event.note}`);
+    const reviewKey = String(event.event_id || event.id || `${noteTimeS}:${event.note}`);
     const nextReviews = [
       ...existingReviews.filter((item) => String(item.event_id || `${item.note_time_s}:${item.manual_note}`) !== reviewKey),
       review,
@@ -644,7 +645,7 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
 
   const baseReview = {
     id: `manual-visual-${context.jobId}`,
-    event_id: event.event_id || null,
+    event_id: event.event_id || event.id || null,
     note_time_s: noteTimeS,
     manual_note: String(event.note || '').trim(),
     source: 'manual_annotation_guided_visual_review',
@@ -794,6 +795,197 @@ Return a compact structured review centered on the few meaningful changes. Findi
     sampled_frames: sampledFrames,
     discarded_low_or_unsupported_findings: Math.max(0, rawFindings.length - savedFindings.length),
   });
+});
+
+function visualSnapshotCoveredAt(analysis = {}, video = {}, timeS = 0) {
+  const time = Number(timeS);
+  const snapshots = Array.isArray(analysis?._visual_snapshot_reviews) ? analysis._visual_snapshot_reviews : [];
+  if (snapshots.some((item) => sameVideoEvidenceSource(item, video) && Math.abs(Number(item.time_s) - time) <= 0.6)) return true;
+  const manualReviews = Array.isArray(analysis?._manual_annotation_visual_reviews) ? analysis._manual_annotation_visual_reviews : [];
+  return manualReviews.some((item) => {
+    if (!sameVideoEvidenceSource(item, video)) return false;
+    const start = Number(item?.requested_window?.start_s);
+    const end = Number(item?.requested_window?.end_s);
+    return Number.isFinite(start) && Number.isFinite(end) && time >= start && time <= end;
+  });
+}
+
+function compactSnapshotTelemetry(packet = {}) {
+  return {
+    nearest: packet.nearest_sample_to_center || null,
+    heart_rate: packet.heart_rate || null,
+    rr_hrv: packet.rr_hrv || null,
+    multimodal: packet.multimodal || null,
+    nearby_events: packet.nearby_events || [],
+  };
+}
+
+registerJobHandler('session_visual_snapshot_review', async (payload, context) => {
+  const recordId = String(payload?.recordId || context?.meta?.sessionId || '');
+  const recordType = payload?.recordType === 'body_exploration' ? 'body_exploration' : 'session';
+  const entityName = recordType === 'body_exploration' ? 'BodyExploration' : 'Session';
+  const analysisField = recordType === 'body_exploration' ? 'ai_body_exploration' : 'ai_analysis';
+  const video = payload?.video || {};
+  const sourcePath = normalizeLocalVideoPath(video.path);
+  if (!recordId || !sourcePath) throw new Error('The 10-second visual audit requires a saved record and linked local video.');
+  const record = getEntity(entityName, recordId);
+  if (!record) throw new Error('The saved record for this visual audit no longer exists.');
+
+  const intervalS = Math.max(5, Math.round(Number(payload?.intervalSeconds) || 10));
+  const recordDurationS = Math.max(0, Number(record.duration_minutes || 0) * 60);
+  const durationS = Math.max(0, Math.min(
+    Number(payload?.durationSeconds) || recordDurationS,
+    recordDurationS || Number(payload?.durationSeconds) || 0,
+  ));
+  if (!durationS) throw new Error('The linked video duration is unavailable. Load the video once, then start the visual audit again.');
+  const startS = Math.max(0, Number(payload?.startSeconds) || 0);
+  const latestAnalysis = record?.[analysisField] || {};
+  const targetTimes = [];
+  for (let time = startS; time <= durationS + 0.01; time += intervalS) {
+    const rounded = Number(time.toFixed(2));
+    if (!visualSnapshotCoveredAt(latestAnalysis, video, rounded)) targetTimes.push(rounded);
+  }
+  if (!targetTimes.length) {
+    context.updateProgress({ phase: 'complete', current: 1, total: 1, message: 'Every 10-second checkpoint is already covered.' });
+    return { status: 'fully_reused', saved: 0, skipped: 0, total: 0 };
+  }
+
+  const timelineRows = listEntitiesByExactCriteria('HeartRateTimeline', { session: recordId }) || [];
+  const emgRows = listEntitiesByExactCriteria('EMGTimeline', { session: recordId }) || [];
+  const timelineOffsetSeconds = Number(video.timelineOffsetSeconds) || 0;
+  const batchSize = 12;
+  let saved = 0;
+  let skipped = 0;
+  let firstVisibleSeen = Boolean((latestAnalysis._visual_snapshot_reviews || []).some((item) => sameVideoEvidenceSource(item, video)));
+  let priorSnapshots = (Array.isArray(latestAnalysis._visual_snapshot_reviews) ? latestAnalysis._visual_snapshot_reviews : [])
+    .filter((item) => sameVideoEvidenceSource(item, video))
+    .sort((left, right) => Number(left.time_s) - Number(right.time_s));
+
+  for (let offset = 0; offset < targetTimes.length; offset += batchSize) {
+    if (context.signal?.aborted) throw new Error('Visual audit cancelled. Saved checkpoints are preserved and Resume will skip them.');
+    const sessionTimes = targetTimes.slice(offset, offset + batchSize);
+    const sourceTimes = sessionTimes.map((time) => Number((time - timelineOffsetSeconds).toFixed(2)));
+    const validPairs = sourceTimes.map((sourceTime, index) => ({ sourceTime, sessionTime: sessionTimes[index] })).filter((item) => item.sourceTime >= 0);
+    if (!validPairs.length) continue;
+    context.updateProgress({
+      phase: 'sampling', current: offset, total: targetTimes.length,
+      message: `Reviewing ${formatSessionClock(validPairs[0].sessionTime)}-${formatSessionClock(validPairs.at(-1).sessionTime)}; ${saved} saved so far…`,
+    });
+    const extracted = await extractLocalVideoFramesAtTimes({
+      sourcePath,
+      timesSeconds: validPairs.map((item) => item.sourceTime),
+      label: `visual-audit-${recordId}-${Math.round(validPairs[0].sessionTime)}`,
+    });
+    const usableCount = Math.min(extracted.frames.length, validPairs.length);
+    if (!usableCount) continue;
+    const pairs = validPairs.slice(0, usableCount);
+    const telemetry = pairs.map((item) => compactSnapshotTelemetry(buildSessionMomentTelemetry({
+      session: record,
+      timelineRows,
+      emgRows,
+      startSeconds: item.sessionTime,
+      endSeconds: item.sessionTime,
+      contextPadSeconds: 10,
+    })));
+    const previousContext = priorSnapshots.slice(-4).map((item) => (
+      `${formatSessionClock(item.time_s)}: ${formatManualAnnotationReviewText(item.summary)}; changes: ${(item.significant_changes || []).map((change) => `${change.anatomical_area} ${change.direction}`).join(', ') || 'none'}`
+    )).join('\n') || 'No earlier saved visual checkpoint exists for this camera.';
+    const responseSchema = {
+      type: 'object',
+      properties: {
+        snapshots: {
+          type: 'array', maxItems: usableCount,
+          items: {
+            type: 'object',
+            properties: {
+              image_index: { type: 'integer' },
+              body_visible: { type: 'boolean' },
+              summary: { type: 'string' },
+              active_stimulation_visible: { type: 'boolean' },
+              possible_near_climax: { type: 'boolean' },
+              near_climax_reason: { type: 'string' },
+              findings: {
+                type: 'array', maxItems: 8, items: {
+                  type: 'object', properties: {
+                    anatomical_area: { type: 'string' }, observation: { type: 'string' }, confidence: { type: 'string', enum: ['low', 'moderate', 'high'] },
+                  }, required: ['anatomical_area', 'observation', 'confidence'],
+                },
+              },
+              significant_changes: {
+                type: 'array', maxItems: 6, items: {
+                  type: 'object', properties: {
+                    anatomical_area: { type: 'string' }, label: { type: 'string' }, direction: { type: 'string', enum: ['increasing', 'decreasing', 'new', 'released', 'stable'] }, confidence: { type: 'string', enum: ['moderate', 'high'] },
+                  }, required: ['anatomical_area', 'label', 'direction', 'confidence'],
+                },
+              },
+            },
+            required: ['image_index', 'body_visible', 'summary', 'active_stimulation_visible', 'possible_near_climax', 'near_climax_reason', 'findings', 'significant_changes'],
+          },
+        },
+      },
+      required: ['snapshots'],
+    };
+    const frameMap = pairs.map((item, index) => `image ${index + 1} = session ${formatSessionClock(item.sessionTime)}; telemetry ${JSON.stringify(telemetry[index])}`).join('\n');
+    const aiResult = await aiInvokeInternal({
+      model: 'claude_sonnet_4_6', max_tokens: 5000, max_images: usableCount, response_json_schema: responseSchema,
+      images: extracted.frames.slice(0, usableCount).map((frame) => ({ filename: frame.filename, media_type: frame.mimeType, data: frame.data })),
+      signal: context.signal,
+      prompt: `You are Sarah creating a quick, chronological visual audit of Ben's private physiology session. Each attached image is one independent freeze-frame checkpoint, sampled ten seconds apart. Analyze only what is visible in that image, while using prior saved checkpoint text solely to identify directional change.
+
+For every image return exactly one snapshot with matching image_index. Set body_visible false when Ben's body is absent or too poorly visible to review. Before the first body-visible image, empty-table frames are setup and must have empty summary/findings/changes. Review visible body state head to toe without inventorying unchanged background: face/head when visible, chest/abdomen and breathing/tension, shoulders/arms/hands, trunk/pelvis, genital/erection/glans/scrotal state, thighs/legs, and feet/toes. Be compact and human-readable. Use "you" and "your". Cameras are not mirrored; derive anatomical laterality from Ben's orientation, never screen side, and omit laterality when uncertain.
+
+Significant changes are directional changes that make chronological review useful: erection/engorgement increase or decrease, scrotal lift/descent, new flushing, tension/bracing/planting/toe curl increase or release, altered breathing effort, posture/pelvic change, stimulation starting/stopping/changing. Do not call a static fact a significant change. Do not manufacture motion from one frame.
+
+Near-climax rule: possible_near_climax may be true only when active genital stimulation is visibly present AND at least two contemporaneous high-specificity build signs are visible (for example marked scrotal retraction, sustained penile/glans engorgement, coordinated lower-body bracing/toe curl, breath/tension loading), with nearby telemetry supporting rather than contradicting the pattern. HR or HRV alone can never qualify. Setup, walking, repositioning, camera work, or merely being erect never qualify. Keep this an audit flag, not a saved event note.
+
+Prior saved checkpoints:
+${previousContext}
+
+Image/time/telemetry map:
+${frameMap}`,
+    });
+    const modelSnapshots = Array.isArray(aiResult?.snapshots) ? aiResult.snapshots : [];
+    const generatedAt = new Date().toISOString();
+    const batchSnapshots = [];
+    for (let index = 0; index < usableCount; index += 1) {
+      const model = modelSnapshots.find((item) => Number(item?.image_index) === index + 1) || modelSnapshots[index];
+      if (!model?.body_visible) { if (!firstVisibleSeen) skipped += 1; continue; }
+      firstVisibleSeen = true;
+      const frame = extracted.frames[index];
+      batchSnapshots.push({
+        id: `visual-snapshot-${context.jobId}-${Math.round(pairs[index].sessionTime)}`,
+        time_s: pairs[index].sessionTime,
+        source: 'ten_second_visual_snapshot_review',
+        source_job_id: context.jobId,
+        source_video: { label: video.label || '', filename: video.filename || '', fingerprint: video.fingerprint || extracted.meta?.fingerprint || '', role: video.role || 'main' },
+        source_video_role: video.role || 'main',
+        thumbnail_url: frame.url,
+        sampled_frame: { url: frame.url, filename: frame.stored_filename || frame.filename, frameTimeSeconds: frame.frameTimeSeconds, recordTimeSeconds: pairs[index].sessionTime },
+        summary: stripNonBodyObjectContext(formatManualAnnotationReviewText(model.summary)),
+        findings: (Array.isArray(model.findings) ? model.findings : []).filter((item) => ['moderate', 'high'].includes(String(item?.confidence || '').toLowerCase())),
+        significant_changes: Array.isArray(model.significant_changes) ? model.significant_changes : [],
+        active_stimulation_visible: model.active_stimulation_visible === true,
+        possible_near_climax: model.possible_near_climax === true && model.active_stimulation_visible === true,
+        near_climax_reason: model.active_stimulation_visible === true ? String(model.near_climax_reason || '') : '',
+        telemetry: telemetry[index],
+        created_at: generatedAt,
+      });
+    }
+    if (batchSnapshots.length) {
+      const latestRecord = getEntity(entityName, recordId) || record;
+      const analysis = latestRecord?.[analysisField] || {};
+      const existing = Array.isArray(analysis._visual_snapshot_reviews) ? analysis._visual_snapshot_reviews : [];
+      const keys = new Set(batchSnapshots.map((item) => `${item.source_video?.fingerprint || item.source_video_role}:${item.time_s}`));
+      const merged = [...existing.filter((item) => !keys.has(`${item.source_video?.fingerprint || item.source_video_role}:${item.time_s}`)), ...batchSnapshots]
+        .sort((left, right) => Number(left.time_s) - Number(right.time_s))
+        .slice(-2000);
+      upsertEntity(entityName, recordId, { ...latestRecord, [analysisField]: { ...analysis, _visual_snapshot_reviews: merged, _visual_snapshot_reviews_updated_at: generatedAt } });
+      priorSnapshots = merged.filter((item) => sameVideoEvidenceSource(item, video));
+      saved += batchSnapshots.length;
+    }
+    context.updateProgress({ phase: 'reviewing', current: Math.min(offset + usableCount, targetTimes.length), total: targetTimes.length, message: `${saved} body-visible checkpoints saved; ${skipped} setup frames skipped.` });
+  }
+  return { status: 'complete', saved, skipped, requested: targetTimes.length, interval_seconds: intervalS };
 });
 
 registerJobHandler('ai_invoke', async (payload, context) => {
