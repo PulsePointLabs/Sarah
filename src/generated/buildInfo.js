@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.257",
-  "commit": "e23bf97",
-  "commitMessage": "Refine snapshot continuity and telemetry navigation",
-  "builtAt": "2026-09-05T05:07:47.343Z"
+  "version": "0.1.258",
+  "commit": "27284fa",
+  "commitMessage": "Protect Android capture and prevent H10 collector conflicts",
+  "builtAt": "2026-09-05T06:24:47.542Z"
 };
