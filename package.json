@@ -1,7 +1,7 @@
 {
   "name": "sarah-standalone",
   "private": true,
-  "version": "0.1.258",
+  "version": "0.1.259",
   "type": "module",
   "main": "desktop/main.cjs",
   "scripts": {

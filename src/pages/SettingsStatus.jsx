@@ -1469,7 +1469,9 @@ Honor the requested warmth, directness, intimacy, erotic intensity, vocabulary, 
           {!active && job.retryable && (
             <button type="button" disabled={retryingIds.has(job.id)} onClick={() => retryJob(job)} className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary/10 px-2.5 py-2 text-xs font-semibold text-primary hover:bg-primary/15 disabled:opacity-60 sm:py-1.5">
               {retryingIds.has(job.id) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-              {retryingIds.has(job.id) ? "Retrying" : "Retry"}
+              {retryingIds.has(job.id)
+                ? (job.type === "session_visual_snapshot_review" ? "Resuming" : "Retrying")
+                : (job.type === "session_visual_snapshot_review" ? "Resume saved checkpoints" : "Retry")}
             </button>
           )}
         </div>

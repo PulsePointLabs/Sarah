@@ -38,8 +38,8 @@ function nativeStillUrl(pass = {}, frame = {}, fallbackTimeS = 0) {
 
 export function visualChangeFocus(text = "") {
   const value = String(text || "").toLowerCase();
-  if (/\b(?:scrot|testic|penis|shaft|glans|corona|foreskin|meatus|genital|erection|pre[-\s]?ejaculat|ejaculat)\b/.test(value)) {
-    return { label: /\bscrot|testic/.test(value) ? "Scrotal area" : "Genital area", origin: "50% 68%", scale: 2.35 };
+  if (/\b(?:scrot\w*|testic\w*|penis|shaft|glans|corona|foreskin|meatus|genital|erection|pre[-\s]?ejaculat|ejaculat)\b/.test(value)) {
+    return { label: /\b(?:scrot\w*|testic\w*)/.test(value) ? "Scrotal area" : "Genital area", origin: "50% 68%", scale: 2.35 };
   }
   if (/\byour left (?:foot|sole|heel|toes?)\b/.test(value)) {
     return { label: "Your left foot", origin: "76% 60%", scale: 2.2 };
@@ -80,7 +80,7 @@ function nearestTimelineRow(rows = [], timeS) {
 
 function telemetryForMoment(pass = {}, timelineRows = [], timeS) {
   const row = nearestTimelineRow(timelineRows, timeS);
-  const saved = pass.telemetry?.nearest_sample_to_center || {};
+  const saved = pass.telemetry?.nearest_sample_to_center || pass.telemetry?.nearest || {};
   return {
     hr: numberOrNull(row?.hr ?? saved.hr_bpm),
     baseline: numberOrNull(row?.baseline_hr ?? saved.baseline_hr_bpm),
@@ -165,6 +165,59 @@ export function buildHighConfidenceVisualChanges(session = {}, timelineRows = []
         focus,
         telemetry: telemetryForMoment(pass, timelineRows, candidate.timeS),
       });
+    });
+  });
+
+  // The 10-second audit is a reference ledger, not an event stream. Promote
+  // only its high-confidence directional moments (or a visually corroborated
+  // approach flag) into Session Details, where they can be reviewed alongside
+  // the accepted video-pass findings without flooding the page.
+  const snapshots = Array.isArray(session.ai_analysis?._visual_snapshot_reviews)
+    ? session.ai_analysis._visual_snapshot_reviews
+    : [];
+  snapshots.forEach((snapshot, snapshotIndex) => {
+    if (snapshot?.body_visible === false) return;
+    const timeS = numberOrNull(snapshot?.time_s);
+    if (timeS == null) return;
+    const snapshotChanges = Array.isArray(snapshot?.significant_changes) ? snapshot.significant_changes : [];
+    const meaningful = snapshotChanges.filter((change) => (
+      ["increasing", "decreasing", "new", "released"].includes(String(change?.direction || "").toLowerCase())
+      && String(change?.confidence || "").toLowerCase() === "high"
+    ));
+    if (!meaningful.length && snapshot?.possible_near_climax !== true) return;
+    const title = snapshot?.possible_near_climax
+      ? "Visual approach pattern"
+      : meaningful.map((change) => `${change.anatomical_area || "Body"}: ${change.label || "change"}`).slice(0, 2).join(" · ");
+    const overview = snapshot?.possible_near_climax && snapshot?.near_climax_reason
+      ? snapshot.near_climax_reason
+      : [snapshot?.summary, ...meaningful.map((change) => change?.label)].filter(Boolean).join(" ");
+    const text = cleanLaterality(`${title} ${overview}`, { source_video_role: snapshot?.source_video_role });
+    if (!text || !isNoteworthyChange(text)) return;
+    const key = `${Math.round(timeS)}|${text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const frame = snapshot?.sampled_frame || {};
+    const imageUrl = snapshot?.thumbnail_url || frame.url || "";
+    const focus = visualChangeFocus(text);
+    changes.push({
+      id: snapshot?.id || `audit-snapshot-${snapshotIndex}-${Math.round(timeS)}`,
+      timeS,
+      clipStart: Math.max(0, timeS - Number(snapshot?.comparison_lead_seconds || 1.2)),
+      clipEnd: timeS,
+      title: title || focus.label,
+      overview,
+      confidence: "high",
+      category: "visual_audit",
+      camera: snapshot?.source_video?.label || snapshot?.source_video_role || "Visual audit",
+      imageUrl,
+      highResolutionImageUrl: "",
+      frameTimeS: numberOrNull(frame.recordTimeSeconds ?? frame.frameTimeSeconds) ?? timeS,
+      sourceFrameTimeS: numberOrNull(frame.frameTimeSeconds) ?? timeS,
+      focus,
+      telemetry: telemetryForMoment({ telemetry: snapshot?.telemetry }, timelineRows, timeS),
+      comparisonImageUrl: snapshot?.comparison_frame?.url || "",
+      comparisonTimeS: numberOrNull(snapshot?.comparison_frame?.recordTimeSeconds),
+      significantChanges: meaningful,
     });
   });
 

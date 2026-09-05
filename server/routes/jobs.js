@@ -679,6 +679,7 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
     sourcePath,
     timesSeconds: newSourceTimes,
     label: `manual-note-${recordId}-${Math.round(noteTimeS)}`,
+    maxWidth: 1920,
   });
   const sampledFrames = extracted.frames.map((frame, index) => ({
     url: frame.url,
@@ -696,7 +697,7 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
   )).join('\n') || 'No earlier manual-note-guided review exists for this camera.';
   const isFeetCamera = String(video.role || '').toLowerCase().includes('feet') || String(video.role || '').toLowerCase().includes('lower');
   const cameraFocus = isFeetCamera
-    ? 'This is the feet/lower-body camera. Prioritize toes, feet, ankles, calves, knees, thighs, lower-body symmetry, planting, tension, tremor, and release. Mention more proximal anatomy only when actually visible.'
+    ? 'ACTIVE CAMERA = FEET / LOWER BODY ONLY. This lane owns only feet, toes, soles, ankles, heels, calves, knees, thighs/legs, lower-body bracing or release, rotation/oscillation, and pelvic lift/drop when actually visible. Do not mention genitals, penis, scrotum, hands, sleeve/device, cadence, grip, shaft coverage, erection, or stimulation mechanics anywhere in this review. Complete each anatomical left/right foot state only when side is resolvable; otherwise omit the unilateral claim. Never write one foot, other foot, nearer foot, farther foot, or screen-left/screen-right.'
     : 'This is the main/composite camera. Review every visible region from head to toe, including face/head, neck, chest, abdomen, skin, hands/arms, pelvis/genitals, thighs/legs, and feet. Do not omit non-genital visible changes.';
 
   const responseSchema = {
@@ -744,7 +745,9 @@ Body-state-only rule: focus on visible anatomy, genital state, skin, posture, mu
 ${cameraFocus}
 ${isFeetCamera ? FOOT_VISUAL_REVIEW_RULE : ''}
 
-Systematic review targets when visible: head/face expression; neck and upper-body flushing; chest/abdominal contour and visible breathing; shoulder, arm, and hand tension; back arching and trunk posture; pelvic movement; stimulation technique, speed, grip, pressure cues, contact location, pauses, and resumes; penile/glans/shaft erection or engorgement state; scrotal lift/descent, tightening, symmetry, and skin state; perineal/pelvic tension cues; thighs, knees, calves, ankles, feet, toe curl, plantar flexion, planting, bracing, tremor, spasm-like movement, and release; generalized versus regional skin color/surface changes; coordinated whole-body build or settling.
+Systematic review targets when visible: ${isFeetCamera
+  ? 'anatomical left/right feet and soles; toes and toe curl/extension; ankle plantar flexion/dorsiflexion; heel lift/drop or planting; calf and thigh muscle tension; knees and subtle knee lift/drop; leg ab/adduction and rotation; side-to-side oscillation; sustained bracing, tremor, release; and pelvic lift/drop only when actually in view. Compare each target across the ordered frames and omit stable background anatomy.'
+  : 'head/face expression; neck and upper-body flushing; chest/abdominal contour and visible breathing; shoulder, arm, and hand tension; back arching and trunk posture; pelvic movement; stimulation technique, speed, grip, pressure cues, contact location, pauses, and resumes; penile/glans/shaft erection or engorgement state; scrotal lift/descent, tightening, symmetry, and skin state; perineal/pelvic tension cues; thighs, knees, calves, ankles, feet, toe curl, plantar flexion, planting, bracing, tremor, spasm-like movement, and release; generalized versus regional skin color/surface changes; coordinated whole-body build or settling.'}
 
 Laterality rule: none of the cameras are mirrored. Determine your anatomical right and left from body orientation, not screen side. If orientation is not reliable, avoid assigning laterality rather than guessing.
 
@@ -763,7 +766,7 @@ ${priorContext}
 Only new, previously unreviewed frames are attached. Previously reviewed overlapping timestamps were deliberately excluded.
 Frame timing: ${frameTiming}.
 
-Return a compact structured review centered on the few meaningful changes. Findings must be anatomical-area organized and evidence-timestamped. The summary must synthesize change rather than repeat every finding. In summary, observation, and change_from_prior prose, write all session timestamps as minute:second clocks such as 20:14 or 20:14–20:24; never write cumulative values such as 1214s and never use a session timestamp as an image/frame number. Keep evidence_time_s as numeric cumulative seconds only because the schema requires it. Low-confidence possibilities may be returned for audit, but they will not be auto-saved as findings. Do not mention telemetry overlays or numeric HR/BP/SpO2 in visual findings.`,
+Return a compact structured review centered on the few meaningful changes. Findings must be anatomical-area organized and evidence-timestamped. Summary is one short synthesis of new visible change only; return an empty summary and empty findings rather than filler when none are visible. Do not write a narrated report, a static posture inventory, "no clear change," "comparing frames," or generic bilateral language. In summary, observation, and change_from_prior prose, write all session timestamps as minute:second clocks such as 20:14 or 20:14–20:24; never write cumulative values such as 1214s and never use a session timestamp as an image/frame number. Keep evidence_time_s as numeric cumulative seconds only because the schema requires it. Low-confidence possibilities may be returned for audit, but they will not be auto-saved as findings. Do not mention telemetry overlays or numeric HR/BP/SpO2 in visual findings.`,
   });
   const rawFindings = Array.isArray(aiResult?.findings) ? aiResult.findings : [];
   const footAssessment = isFeetCamera && aiResult?.foot_assessment && typeof aiResult.foot_assessment === 'object'
@@ -776,6 +779,7 @@ Return a compact structured review centered on the few meaningful changes. Findi
     && String(finding?.response_domain || '').toLowerCase() !== 'equipment_context'
     && newSessionTimes.some((time) => Math.abs(time - Number(finding?.evidence_time_s)) <= 0.6)
     && (!isFeetCamera || keepFootVisualItem(finding, footAssessment))
+    && (!isFeetCamera || isFeetLaneAuditItem(finding))
   ));
   context.updateProgress({ phase: 'saving', current: 2, total: 3, message: `Saving ${savedFindings.length} supported visual finding${savedFindings.length === 1 ? '' : 's'}…` });
   return persistReview({
@@ -783,14 +787,14 @@ Return a compact structured review centered on the few meaningful changes. Findi
     coverage_status: newSessionTimes.length === desiredSessionTimes.length ? 'new_frames_only' : 'mixed_new_and_reused',
     source_video: { ...baseReview.source_video, fingerprint: video.fingerprint || extracted.meta.fingerprint || '' },
     summary: stripStaticManualAnnotationReviewText(stripNonBodyObjectContext(formatManualAnnotationReviewText(isFeetCamera
-      ? sanitizeFootSummary(String(aiResult?.summary || '').trim(), footAssessment)
+      ? sanitizeFeetLaneSnapshotText(sanitizeFootSummary(String(aiResult?.summary || '').trim(), footAssessment))
       : String(aiResult?.summary || '').trim()))),
     foot_assessment: footAssessment,
     note_assessment: aiResult?.note_assessment || 'not_visually_confirmed',
     findings: savedFindings.map((finding) => ({
       ...finding,
-      observation: stripStaticManualAnnotationReviewText(stripNonBodyObjectContext(formatManualAnnotationReviewText(finding.observation))),
-      change_from_prior: stripStaticManualAnnotationReviewText(stripNonBodyObjectContext(formatManualAnnotationReviewText(finding.change_from_prior))),
+      observation: stripStaticManualAnnotationReviewText(stripNonBodyObjectContext(formatManualAnnotationReviewText(isFeetCamera ? sanitizeFeetLaneSnapshotText(finding.observation) : finding.observation))),
+      change_from_prior: stripStaticManualAnnotationReviewText(stripNonBodyObjectContext(formatManualAnnotationReviewText(isFeetCamera ? sanitizeFeetLaneSnapshotText(finding.change_from_prior) : finding.change_from_prior))),
     })).filter((finding) => finding.observation),
     sampled_frames: sampledFrames,
     discarded_low_or_unsupported_findings: Math.max(0, rawFindings.length - savedFindings.length),
@@ -841,13 +845,14 @@ function sanitizeSnapshotText(value, { clearMotion = false, deviceState = 'uncle
   const text = formatManualAnnotationReviewText(value);
   if (!text) return '';
   const forbiddenWithoutMotion = /\b(stimulation (?:continues|ongoing|is ongoing|phase)|stimulating|stroking|masturbat(?:ing|ion)|arousal (?:build|phase)|two-handed stimulation)\b/i;
+  const telemetryNarration = /\b(?:heart rate|\bhr\b|\bbpm\b|rmssd|sdnn|telemetry|baseline elevation|multimodal|motion class|nearest sample|low[_ -]motion)\b/i;
   const continuitySafeText = deviceState === 'bare_hand'
     ? text
     : text.replace(/\bbare[- ]hand(?:ed)? (?:strokes?|stroking|stimulation)\b/gi, deviceState === 'sleeve_present' ? 'sleeve contact' : 'hand contact');
   return continuitySafeText
     .replace(/\b(?:image|frame)\s*#?\d+\b/gi, 'the prior checkpoint')
     .split(/(?<=[.!?])\s+/)
-    .filter((sentence) => clearMotion || !forbiddenWithoutMotion.test(sentence))
+    .filter((sentence) => (clearMotion || !forbiddenWithoutMotion.test(sentence)) && !telemetryNarration.test(sentence))
     .join(' ')
     .trim();
 }
@@ -864,12 +869,37 @@ function sanitizeSnapshotFindings(findings, priorSnapshot, { clearMotion = false
     )));
 }
 
+const FEET_AUDIT_FORBIDDEN_RE = /\b(?:penis|penile|genital(?:s)?|scrot(?:um|al)?|glans|shaft|foreskin|sleeve|hand(?:s)?|grip|stroke|cadence|erect(?:ion|ile)?|stimulati(?:on|ng)|masturbat\w*|device)\b/i;
+const FEET_AUDIT_AREA_RE = /\b(?:feet?|toes?|soles?|ankles?|heels?|calves?|knees?|thighs?|legs?|lower body|lower limbs?|pelvis|pelvic|hips?|glute)/i;
+const AMBIGUOUS_SINGLE_FOOT_RE = /\b(?:one|other|nearer|farther)\s+foot\b|\b(?:one|other)\s+sole\b/i;
+
+function isFeetLaneAuditItem(item = {}) {
+  const area = String(item?.anatomical_area || '');
+  const text = [area, item?.label, item?.observation].filter(Boolean).join(' ');
+  return Boolean(text) && FEET_AUDIT_AREA_RE.test(text) && !FEET_AUDIT_FORBIDDEN_RE.test(text) && !AMBIGUOUS_SINGLE_FOOT_RE.test(text);
+}
+
+function sanitizeFeetLaneSnapshotText(value = '') {
+  return String(value || '')
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !FEET_AUDIT_FORBIDDEN_RE.test(sentence) && !AMBIGUOUS_SINGLE_FOOT_RE.test(sentence))
+    .join(' ')
+    .trim();
+}
+
+function normalizeFeetLaneStates(states = []) {
+  return (Array.isArray(states) ? states : [])
+    .filter((state) => ['left', 'right'].includes(String(state?.side || '').toLowerCase()))
+    .map((state) => ({ ...state, side: String(state.side).toLowerCase() }));
+}
+
 registerJobHandler('session_visual_snapshot_review', async (payload, context) => {
   const recordId = String(payload?.recordId || context?.meta?.sessionId || '');
   const recordType = payload?.recordType === 'body_exploration' ? 'body_exploration' : 'session';
   const entityName = recordType === 'body_exploration' ? 'BodyExploration' : 'Session';
   const analysisField = recordType === 'body_exploration' ? 'ai_body_exploration' : 'ai_analysis';
   const video = payload?.video || {};
+  const isFeetCamera = /(?:feet|foot|lower[_ -]?body)/i.test(String(video.role || video.label || ''));
   const sourcePath = normalizeLocalVideoPath(video.path);
   if (!recordId || !sourcePath) throw new Error('The 10-second visual audit requires a saved record and linked local video.');
   const record = getEntity(entityName, recordId);
@@ -897,10 +927,10 @@ registerJobHandler('session_visual_snapshot_review', async (payload, context) =>
   const timelineRows = listEntitiesByExactCriteria('HeartRateTimeline', { session: recordId }) || [];
   const emgRows = listEntitiesByExactCriteria('EMGTimeline', { session: recordId }) || [];
   const timelineOffsetSeconds = Number(video.timelineOffsetSeconds) || 0;
-  // Four paired checkpoints keep the structured response comfortably below the
-  // provider output limit while giving each checkpoint a short motion sequence.
-  const batchSize = 4;
-  const comparisonLeadS = 1.2;
+  // Every lane is a high-resolution longitudinal review. Small cloud batches
+  // preserve image detail and avoid structured-response truncation.
+  const batchSize = 2;
+  const comparisonLeadS = intervalS;
   let saved = 0;
   let skipped = 0;
   let firstVisibleSeen = Boolean((latestAnalysis._visual_snapshot_reviews || []).some((item) => sameVideoEvidenceSource(item, video)));
@@ -925,6 +955,7 @@ registerJobHandler('session_visual_snapshot_review', async (payload, context) =>
         item.sourceTime,
       ]),
       label: `visual-audit-${recordId}-${Math.round(validPairs[0].sessionTime)}`,
+      maxWidth: 1920,
     });
     const usableCount = Math.min(Math.floor(extracted.frames.length / 2), validPairs.length);
     if (!usableCount) continue;
@@ -954,7 +985,7 @@ registerJobHandler('session_visual_snapshot_review', async (payload, context) =>
             properties: {
               image_index: { type: 'integer' },
               body_visible: { type: 'boolean' },
-              summary: { type: 'string' },
+              summary: { type: 'string', maxLength: 240 },
               stimulation_evidence: { type: 'string', enum: ['none', 'static_contact', 'clear_motion'] },
               device_state: { type: 'string', enum: ['sleeve_present', 'bare_hand', 'no_contact', 'unclear'] },
               device_transition: { type: 'string', enum: ['none', 'applied', 'removed'] },
@@ -963,14 +994,14 @@ registerJobHandler('session_visual_snapshot_review', async (payload, context) =>
               findings: {
                 type: 'array', maxItems: 8, items: {
                   type: 'object', properties: {
-                    anatomical_area: { type: 'string' }, observation: { type: 'string' }, confidence: { type: 'string', enum: ['low', 'moderate', 'high'] },
+                    anatomical_area: { type: 'string', maxLength: 48 }, observation: { type: 'string', maxLength: 220 }, confidence: { type: 'string', enum: ['low', 'moderate', 'high'] },
                   }, required: ['anatomical_area', 'observation', 'confidence'],
                 },
               },
               significant_changes: {
                 type: 'array', maxItems: 6, items: {
                   type: 'object', properties: {
-                    anatomical_area: { type: 'string' }, label: { type: 'string' }, direction: { type: 'string', enum: ['increasing', 'decreasing', 'new', 'released', 'stable'] }, confidence: { type: 'string', enum: ['moderate', 'high'] },
+                    anatomical_area: { type: 'string', maxLength: 48 }, label: { type: 'string', maxLength: 120 }, direction: { type: 'string', enum: ['increasing', 'decreasing', 'new', 'released', 'stable'] }, confidence: { type: 'string', enum: ['moderate', 'high'] },
                   }, required: ['anatomical_area', 'label', 'direction', 'confidence'],
                 },
               },
@@ -1021,19 +1052,23 @@ registerJobHandler('session_visual_snapshot_review', async (payload, context) =>
         { filename: `checkpoint-${index + 1}-current-${pair.current.filename}`, media_type: pair.current.mimeType, data: pair.current.data },
       ]),
       signal: context.signal,
-      prompt: `You are Sarah creating a quick, chronological visual audit of Ben's private physiology session. Each checkpoint has TWO attached frames in order: a frame 1.2 seconds before the checkpoint, then the current checkpoint frame. This short pair is your only motion sequence. Return one snapshot per checkpoint using image_index for the checkpoint number, never the individual frame number. Analyze the current frame and compare it only to its paired before-frame; never infer what happened outside that 1.2-second pair.
+      prompt: `You are Sarah creating a high-resolution, chronological visual audit of Ben's private physiology session. Each checkpoint has TWO attached frames in order: the prior ${comparisonLeadS.toFixed(1)}-second checkpoint, then the current checkpoint frame. This is a target-by-target longitudinal body-state comparison, not a cheap still-image caption. Return one snapshot per checkpoint using image_index for the checkpoint number, never the individual frame number. Analyze the current frame against its paired prior checkpoint; never infer what happened outside that comparison.
 
 For every image return exactly one snapshot with matching image_index. Set body_visible false when Ben's body is absent or too poorly visible to review. Before the first body-visible image, empty-table frames are setup and must have empty summary/findings/changes, technique_state values set to unassessable, body_response values set to unassessable, and foot_states empty. This is Ben's self-recorded private session: use "you" and "your"; never call a hand a practitioner, clinician, examiner, caregiver, operator, or third party unless another person is unmistakably visible. Cameras are not mirrored; derive anatomical laterality from Ben's orientation, never screen side, and omit laterality when uncertain.
 
-Camera-lane rule: main/composite frames prioritize genitals, hands, lower abdomen, chest/torso, pelvis, and visible thighs. Feet/lower-body frames prioritize left/right feet, toes, ankles, heels, knees, legs, and pelvic lift/drop. Do not claim a region outside the active camera's usable view. Return technique_state and body_response even when unassessable; those fields are a longitudinal ledger, not prose to repeat.
+Camera-lane rule: ${isFeetCamera
+  ? 'ACTIVE CAMERA = FEET / LOWER BODY ONLY. This lane owns only feet, toes, soles, ankles, heels, calves, knees, thighs/legs, lower-body bracing or release, rotation/oscillation, and pelvic lift/drop when actually visible. Do not mention genitals, penis, scrotum, hands, sleeve/device, cadence, grip, shaft coverage, erection, or stimulation mechanics anywhere in this snapshot. Set stimulation_evidence to none, device_state to unclear, device_transition to none, all technique_state fields to unassessable, and possible_near_climax false. A feet lane can contribute lower-body evidence later, but cannot independently diagnose a near-climax episode. Complete a left and/or right foot_state only when anatomical side is resolvable; omit that foot_state when it is not. Never use one foot, other foot, nearer foot, farther foot, or screen-left/screen-right in prose. Use your left foot, your right foot, or both feet only when evidence supports it.'
+  : 'ACTIVE CAMERA = MAIN / COMPOSITE. This lane owns genitals, hands, sleeve/device continuity, cadence, grip, shaft coverage, erection state, lower abdomen, chest/torso, pelvis, and visible thighs. Do not infer detailed foot/toe mechanics from an inset or distant feet view; the dedicated feet lane owns those observations.'} Do not claim a region outside the active camera's usable view. Return technique_state and body_response even when unassessable; those fields are a longitudinal ledger, not prose to repeat.
 
-CRITICAL MOTION RULE: a hand, sleeve, device, or penis being held in one frame proves contact only. It does not prove stroking, masturbation, stimulation, continuation, speed, or motion. Set stimulation_evidence to clear_motion when the paired frames show meaningful displacement of hand, sleeve, device, or penile shaft OR clear motion blur in either paired frame. Set static_contact only when paired frames show contact without movement. Assess cadence from the paired displacement/blur only; if too little can be resolved, use unassessable. Never use words such as "continues", "ongoing", "maintained", "still", "sustained phase", or "new arousal build" merely because a current pose resembles the prior checkpoint. The app's on-video phase label is not evidence. If no meaningful state change is visible, say simply "No clear body-state change at this checkpoint" and return only genuinely useful current findings. Never refer to an image number or frame number in prose.
+CRITICAL MOTION RULE: a hand, sleeve, device, or penis being held in one frame proves contact only. It does not prove stroking, masturbation, stimulation, continuation, speed, or motion. Set stimulation_evidence to clear_motion only when the paired frames show meaningful displacement of hand, sleeve, device, or penile shaft OR clear motion blur in either image. Set static_contact only when paired frames show contact without movement. The ten-second comparator can establish a technique/location change but not exact stroke cadence; use cadence only when visible blur or repeated-position evidence supports it, otherwise use unassessable. Never use words such as "continues", "ongoing", "maintained", "still", "sustained phase", or "new arousal build" merely because a current pose resembles the prior checkpoint. The app's on-video phase label is not evidence. Never refer to an image number or frame number in prose.
+
+OUTPUT STYLE RULE: Cloud vision supplies the eyes; do not write a narrated report. Summary is one short sentence naming only the specific new visual change(s), or an empty string when none are visible. Findings are terse target records, not prose paragraphs: anatomical target + visible state/direction. Include a target only when it changed or is needed to make a linked change intelligible. Do not narrate heart rate, HRV, BPM, RMSSD, telemetry, overlay text, phase labels, timers, or generic camera composition; the app shows those separately. Do not write "comparing frames", "both feet remain", "supine position", "no clear body-state change", or a generic bilateral statement unless a true bilateral change is the finding. When an individual side changes, name your left or right foot; bilateral is allowed only when both sides independently show the same change.
 
 DEVICE CONTINUITY RULE: track the silicone sleeve as an object across consecutive images. Once it is visible, device_state stays sleeve_present through partial occlusion or an ambiguous hand position until a later frame clearly shows its removal; set device_transition to removed only with direct visual evidence. A hand becoming more visible never proves a switch to bare-hand strokes. Use bare_hand only when the sleeve is clearly absent and direct bare-skin contact is unmistakable. Likewise, record applied only when the sleeve clearly changes from absent to present.
 
 Be conservative and anatomically specific about erection state: distinguish flaccid, mostly flaccid, partial, firm, and fully erect only when visually supported. An exposed or pink glans alone does not establish engorgement. Telemetry may support a visible finding but must never turn static contact, an HR rise, or an overlay label into arousal or stimulation.
 
-For feet and lower body, inspect each anatomically identified foot separately when visible and fill foot_states before writing prose. Compare ankle angle, toe angle, heel height/loading, sole plane, knee height, side-to-side oscillation, and leg rotation directly with the immediately preceding image. Relaxation and joint position are separate: a relaxed foot can still be clearly plantar-flexed, heel-lifted, rotated, or gently oscillating. Never default to neutral merely because no bracing is seen. Look specifically for toe flexion/curl versus extension, plantar flexion versus dorsiflexion, heel lift/drop or increasing heel planting, sole flattening or wrinkling, focal or diffuse sole flushing/pallor, inversion/eversion, foot oscillation, subtle knee lift/drop, leg abduction/adduction, muscle definition, sustained bracing, tremor, and clear release/relaxation. Report subtle but repeatable adjacent-frame changes at moderate confidence; use unclear rather than neutral when geometry cannot be resolved. Do not convert camera perspective into left/right anatomy. When a meaningful foot state changes, include it in significant_changes so the UI can surface its direction.
+For feet and lower body, inspect each anatomically identified foot separately when visible and fill foot_states before writing prose. Compare ankle angle, toe angle, heel height/loading, sole plane, knee height, side-to-side oscillation, and leg rotation directly with the immediately preceding image. Relaxation and joint position are separate: a relaxed foot can still be clearly plantar-flexed, heel-lifted, rotated, or gently oscillating. Never default to neutral merely because no bracing is seen. Look specifically for toe flexion/curl versus extension, plantar flexion versus dorsiflexion, heel lift/drop or increasing heel planting, sole flattening or wrinkling, focal or diffuse sole flushing/pallor, inversion/eversion, foot oscillation, subtle knee lift/drop, leg abduction/adduction, muscle definition, sustained bracing, tremor, and clear release/relaxation. Report subtle but repeatable adjacent-frame changes at moderate confidence; use unclear rather than neutral when geometry cannot be resolved. Do not convert camera perspective into left/right anatomy. When a meaningful foot state changes, include it in significant_changes so the UI can surface its direction. ${isFeetCamera ? 'For this feet-only lane, every prose finding and every significant change must pass that left/right-or-bilateral rule and must be lower-body only.' : ''}
 
 Significant changes are directional changes that make chronological review useful: erection/engorgement increase or decrease, scrotal lift/descent, new flushing, tension/bracing/planting/toe curl increase or release, altered breathing effort, posture/pelvic change, or clearly visible stimulation motion starting/stopping/changing. Do not call a static fact a significant change. Use stable only when an unchanged state is itself clinically useful; otherwise omit it. Do not repeat the previous checkpoint's summary or findings in new wording.
 
@@ -1055,21 +1090,31 @@ ${frameMap}`,
       const frame = framePairs[index]?.current;
       const comparisonFrame = framePairs[index]?.before;
       const priorSnapshot = batchSnapshots.at(-1) || priorSnapshots.at(-1) || null;
-      const clearMotion = model.stimulation_evidence === 'clear_motion';
+      const clearMotion = !isFeetCamera && model.stimulation_evidence === 'clear_motion';
       const priorDeviceState = String(priorSnapshot?.device_state || 'unclear');
       const reportedDeviceState = String(model.device_state || 'unclear');
-      const deviceState = priorDeviceState === 'sleeve_present'
+      const deviceState = isFeetCamera
+        ? 'unclear'
+        : priorDeviceState === 'sleeve_present'
         && ['bare_hand', 'no_contact'].includes(reportedDeviceState)
         && model.device_transition !== 'removed'
         ? 'sleeve_present'
         : reportedDeviceState;
-      const summary = sanitizeSnapshotText(model.summary, { clearMotion, deviceState });
-      const findings = sanitizeSnapshotFindings(model.findings, priorSnapshot, { clearMotion, deviceState });
+      const modelSummary = sanitizeSnapshotText(model.summary, { clearMotion, deviceState });
+      const summary = isFeetCamera ? sanitizeFeetLaneSnapshotText(modelSummary) : modelSummary;
+      const modelFindings = sanitizeSnapshotFindings(model.findings, priorSnapshot, { clearMotion, deviceState });
+      const findings = isFeetCamera
+        ? modelFindings.filter(isFeetLaneAuditItem).map((finding) => ({ ...finding, observation: sanitizeFeetLaneSnapshotText(finding.observation) })).filter((finding) => finding.observation)
+        : modelFindings;
       const significantChanges = (Array.isArray(model.significant_changes) ? model.significant_changes : [])
         .filter((change) => change?.direction !== 'stable' || String(change?.confidence || '').toLowerCase() === 'high')
         .map((change) => ({ ...change, label: sanitizeSnapshotText(change?.label, { clearMotion, deviceState }) }))
+        .filter((change) => change.label)
+        .filter((change) => !isFeetCamera || isFeetLaneAuditItem(change))
+        .map((change) => isFeetCamera ? { ...change, label: sanitizeFeetLaneSnapshotText(change.label) } : change)
         .filter((change) => change.label);
       const repetitiveSummary = priorSnapshot && snapshotTextSimilarity(priorSnapshot.summary, summary) >= 0.72;
+      const hasUsefulVisualChange = findings.length > 0 || significantChanges.length > 0;
       batchSnapshots.push({
         id: `visual-snapshot-${context.jobId}-${Math.round(pairs[index].sessionTime)}`,
         time_s: pairs[index].sessionTime,
@@ -1081,18 +1126,22 @@ ${frameMap}`,
         sampled_frame: { url: frame.url, filename: frame.stored_filename || frame.filename, frameTimeSeconds: frame.frameTimeSeconds, recordTimeSeconds: pairs[index].sessionTime },
         comparison_frame: comparisonFrame ? { url: comparisonFrame.url, filename: comparisonFrame.stored_filename || comparisonFrame.filename, frameTimeSeconds: comparisonFrame.frameTimeSeconds, recordTimeSeconds: Math.max(0, pairs[index].sessionTime - comparisonLeadS) } : null,
         comparison_lead_seconds: comparisonLeadS,
-        summary: stripNonBodyObjectContext(repetitiveSummary ? 'No clear body-state change at this checkpoint.' : summary),
+        summary: stripNonBodyObjectContext(repetitiveSummary ? '' : summary),
         findings,
         significant_changes: significantChanges,
-        stimulation_evidence: model.stimulation_evidence,
+        stimulation_evidence: isFeetCamera ? 'none' : model.stimulation_evidence,
         device_state: deviceState,
-        device_transition: model.device_transition,
-        technique_state: model.technique_state || { cadence: 'unassessable', shaft_coverage: 'unassessable', grip: 'unassessable' },
-        body_response: model.body_response || { overall_tension: 'unassessable', respiration_visible: 'unassessable', pelvic_state: 'unassessable' },
-        foot_states: Array.isArray(model.foot_states) ? model.foot_states : [],
+        device_transition: isFeetCamera ? 'none' : model.device_transition,
+        technique_state: isFeetCamera
+          ? { cadence: 'unassessable', shaft_coverage: 'unassessable', grip: 'unassessable' }
+          : model.technique_state || { cadence: 'unassessable', shaft_coverage: 'unassessable', grip: 'unassessable' },
+        body_response: hasUsefulVisualChange
+          ? model.body_response || { overall_tension: 'unassessable', respiration_visible: 'unassessable', pelvic_state: 'unassessable' }
+          : { overall_tension: 'unassessable', respiration_visible: 'unassessable', pelvic_state: 'unassessable' },
+        foot_states: isFeetCamera ? normalizeFeetLaneStates(model.foot_states) : Array.isArray(model.foot_states) ? model.foot_states : [],
         active_stimulation_visible: clearMotion,
-        possible_near_climax: model.possible_near_climax === true && clearMotion && significantChanges.length >= 2,
-        near_climax_reason: clearMotion ? sanitizeSnapshotText(model.near_climax_reason, { clearMotion, deviceState }) : '',
+        possible_near_climax: !isFeetCamera && model.possible_near_climax === true && clearMotion && significantChanges.length >= 2,
+        near_climax_reason: !isFeetCamera && clearMotion ? sanitizeSnapshotText(model.near_climax_reason, { clearMotion, deviceState }) : '',
         telemetry: telemetry[index],
         created_at: generatedAt,
       });

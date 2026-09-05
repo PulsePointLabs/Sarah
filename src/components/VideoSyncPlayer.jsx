@@ -396,11 +396,35 @@ function formatAuditLabel(value, fallback = "") {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function readableAuditState(value) {
+function readableAuditState(value, { hideDefault = false } = {}) {
   const text = String(value || "").trim().toLowerCase();
-  return text && text !== "unassessable" && text !== "unclear" && text !== "neutral" && text !== "stable"
+  if (hideDefault && ["none", "flat", "baseline", "relaxed", "uncertain", "unknown"].includes(text)) return "";
+  return text && !["unassessable", "unclear", "uncertain", "unknown", "neutral", "stable"].includes(text)
     ? formatAuditLabel(text)
     : "";
+}
+
+function footAuditLabel(side, suffix) {
+  const normalizedSide = String(side || "").trim().toLowerCase();
+  const foot = normalizedSide === "left" || normalizedSide === "right" ? formatAuditLabel(normalizedSide) : "Foot";
+  return `${foot} ${suffix}`;
+}
+
+const FEET_LANE_FORBIDDEN_RE = /\b(?:penis|penile|genital(?:s)?|scrot(?:um|al)?|glans|shaft|foreskin|sleeve|hand(?:s)?|grip|stroke|cadence|erect(?:ion|ile)?|stimulati(?:on|ng)|masturbat\w*|device)\b/i;
+const FEET_LANE_AREA_RE = /\b(?:feet?|toes?|soles?|ankles?|heels?|calves?|knees?|thighs?|legs?|lower body|lower limbs?|pelvis|pelvic|hips?|glute)/i;
+const AMBIGUOUS_SINGLE_FOOT_RE = /\b(?:one|other|nearer|farther)\s+foot\b|\b(?:one|other)\s+sole\b/i;
+
+function isFeetLaneDisplayItem(item = {}) {
+  const text = [item.anatomical_area, item.label, item.observation].filter(Boolean).join(" ");
+  return FEET_LANE_AREA_RE.test(text) && !FEET_LANE_FORBIDDEN_RE.test(text) && !AMBIGUOUS_SINGLE_FOOT_RE.test(text);
+}
+
+function feetLaneDisplaySummary(value = "") {
+  return formatManualAnnotationReviewText(value)
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !FEET_LANE_FORBIDDEN_RE.test(sentence) && !AMBIGUOUS_SINGLE_FOOT_RE.test(sentence))
+    .join(" ")
+    .trim();
 }
 
 function SnapshotChangeBadge({ change }) {
@@ -425,22 +449,29 @@ function SnapshotChangeBadge({ change }) {
 
 function VisualSnapshotCard({ snapshot, priorSnapshot, onSeek, onCompare }) {
   const nearest = snapshot?.telemetry?.nearest || {};
-  const changes = Array.isArray(snapshot?.significant_changes) ? snapshot.significant_changes : [];
-  const findings = Array.isArray(snapshot?.findings) ? snapshot.findings : [];
+  const isFeetLane = snapshotCameraKey(snapshot) === "lower_body";
+  const changes = (Array.isArray(snapshot?.significant_changes) ? snapshot.significant_changes : [])
+    .filter((change) => !isFeetLane || isFeetLaneDisplayItem(change));
+  const findings = (Array.isArray(snapshot?.findings) ? snapshot.findings : [])
+    .filter((finding) => !isFeetLane || isFeetLaneDisplayItem(finding));
   const technique = snapshot?.technique_state || {};
   const bodyResponse = snapshot?.body_response || {};
-  const footStates = Array.isArray(snapshot?.foot_states) ? snapshot.foot_states : [];
+  const footStates = (Array.isArray(snapshot?.foot_states) ? snapshot.foot_states : [])
+    .filter((foot) => !isFeetLane || ["left", "right"].includes(String(foot?.side || "").toLowerCase()));
+  const summary = isFeetLane ? feetLaneDisplaySummary(snapshot.summary) : formatManualAnnotationReviewText(snapshot.summary);
   const auditStates = [
-    ["Cadence", readableAuditState(technique.cadence)],
-    ["Coverage", readableAuditState(technique.shaft_coverage)],
-    ["Grip", readableAuditState(technique.grip)],
+    ...(!isFeetLane ? [
+      ["Cadence", readableAuditState(technique.cadence)],
+      ["Coverage", readableAuditState(technique.shaft_coverage)],
+      ["Grip", readableAuditState(technique.grip)],
+    ] : []),
     ["Body tension", readableAuditState(bodyResponse.overall_tension)],
     ["Breathing", readableAuditState(bodyResponse.respiration_visible)],
     ["Pelvis", readableAuditState(bodyResponse.pelvic_state)],
     ...footStates.flatMap((foot) => [
-      [`${formatAuditLabel(foot.side, "Foot")} heel`, readableAuditState(foot.heel)],
-      [`${formatAuditLabel(foot.side, "Foot")} knee`, readableAuditState(foot.knee)],
-      [`${formatAuditLabel(foot.side, "Foot")} oscillation`, readableAuditState(foot.oscillation)],
+      [footAuditLabel(foot.side, "heel"), readableAuditState(foot.heel, { hideDefault: true })],
+      [footAuditLabel(foot.side, "knee"), readableAuditState(foot.knee)],
+      [footAuditLabel(foot.side, "oscillation"), readableAuditState(foot.oscillation, { hideDefault: true })],
     ]),
   ].filter(([, value]) => value);
   return (
@@ -453,7 +484,7 @@ function VisualSnapshotCard({ snapshot, priorSnapshot, onSeek, onCompare }) {
       </button>
       <div className="min-w-0 space-y-2">
         <div className="flex flex-wrap items-center gap-1.5">
-          {snapshot.possible_near_climax && <span className="rounded-full border border-rose-400/50 bg-rose-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-400">Possible near climax</span>}
+          {!isFeetLane && snapshot.possible_near_climax && <span className="rounded-full border border-rose-400/50 bg-rose-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-400">Possible near climax</span>}
           {changes.map((change, index) => <SnapshotChangeBadge key={`${change.anatomical_area}-${change.direction}-${index}`} change={change} />)}
         </div>
         {(snapshot.comparison_frame?.url || priorSnapshot?.thumbnail_url) && (
@@ -461,7 +492,7 @@ function VisualSnapshotCard({ snapshot, priorSnapshot, onSeek, onCompare }) {
             Compare prior checkpoint · {fmtMmSs(Number(snapshot.comparison_frame?.recordTimeSeconds ?? priorSnapshot?.time_s ?? Math.max(0, snapshot.time_s - 10)))}
           </button>
         )}
-        {snapshot.summary && <p className="text-sm leading-relaxed text-foreground/90">{formatManualAnnotationReviewText(snapshot.summary)}</p>}
+        {summary && <p className="text-sm leading-relaxed text-foreground/90">{summary}</p>}
         {findings.length > 0 && (
           <div className="grid gap-1.5 lg:grid-cols-2">
             {findings.map((finding, index) => (
@@ -817,6 +848,7 @@ export default function VideoSyncPlayer({
   const [snapshotCameraFilter, setSnapshotCameraFilter] = useState("all");
   const [snapshotAuditFeedKey, setSnapshotAuditFeedKey] = useState("");
   const [snapshotAuditJob, setSnapshotAuditJob] = useState(null);
+  const [clearingVisualSnapshots, setClearingVisualSnapshots] = useState(false);
   const [snapshotComparison, setSnapshotComparison] = useState(null);
   const [manualBackfillState, setManualBackfillState] = useState(null);
   const snapshotRefreshAtRef = useRef(0);
@@ -1159,6 +1191,29 @@ export default function VideoSyncPlayer({
       showQuickNotice(error?.message || "The visual audit stopped. Saved rows are preserved; Resume will skip them.", "error");
     } finally {
       setSnapshotAuditJob((current) => ({ ...(current || {}), running: false }));
+    }
+  };
+
+  const clearVisualSnapshotAudit = async () => {
+    if (snapshotAuditJob?.running || clearingVisualSnapshots || !session?.id) return;
+    setClearingVisualSnapshots(true);
+    try {
+      const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
+      const refreshed = await entity.get(session.id);
+      const analysis = { ...(refreshed?.[analysisField] || {}) };
+      const removed = Array.isArray(analysis._visual_snapshot_reviews) ? analysis._visual_snapshot_reviews.length : 0;
+      delete analysis._visual_snapshot_reviews;
+      delete analysis._visual_snapshot_reviews_updated_at;
+      await entity.update(session.id, { [analysisField]: analysis });
+      setVisualSnapshotReviews([]);
+      setSelectedSnapshotFilters([]);
+      setSnapshotCameraFilter("all");
+      showQuickNotice(`Cleared ${removed} saved 10-second checkpoint${removed === 1 ? "" : "s"}. Manual notes and ±5s reads were kept.`, "success");
+    } catch (error) {
+      console.warn("Could not clear visual-audit checkpoints:", error);
+      showQuickNotice(error?.message || "Could not clear the saved 10-second checkpoints.", "error");
+    } finally {
+      setClearingVisualSnapshots(false);
     }
   };
 
@@ -3760,6 +3815,27 @@ export default function VideoSyncPlayer({
                   ? `${snapshotAuditJob.progress?.message || "Reviewing checkpoints…"}`
                   : visualSnapshotReviews.length ? `Resume ${auditFeeds.find((feed) => feed.key === snapshotAuditFeedKey)?.label || "camera"}` : `Start ${auditFeeds.find((feed) => feed.key === snapshotAuditFeedKey)?.label || "camera"} audit`}
               </button>
+              {visualSnapshotReviews.length > 0 && (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <button type="button" disabled={snapshotAuditJob?.running || clearingVisualSnapshots} className="rounded-lg border border-destructive/35 bg-destructive/10 px-3 py-2 text-xs font-semibold text-destructive hover:bg-destructive/15 disabled:opacity-50">
+                      {clearingVisualSnapshots ? "Clearing…" : "Clear audit results"}
+                    </button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Clear all 10-second visual-audit results?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This permanently removes only the saved 10-second checkpoint audit for this session. It keeps the linked videos, telemetry, timeline notes, and Sarah’s ±5-second manual-note reviews.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Keep results</AlertDialogCancel>
+                      <AlertDialogAction onClick={clearVisualSnapshotAudit} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Clear audit results</AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              )}
             </div>
           )}
         </div>
@@ -3900,7 +3976,7 @@ export default function VideoSyncPlayer({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-xs font-semibold text-foreground">Chronological body-state checkpoints</p>
-                  <p className="mt-0.5 text-[11px] text-muted-foreground">A paired 1.2-second motion comparison every 10 seconds. These are reference-only and never become main event notes.</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">A high-resolution prior-checkpoint versus current-checkpoint comparison every 10 seconds. These are reference-only and never become main event notes.</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <label className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">

@@ -969,9 +969,10 @@ export async function generateVideoClipPreview({
   };
 }
 
-export async function extractLocalVideoFramesAtTimes({ sourcePath, timesSeconds = [], label = 'manual-annotation' }) {
+export async function extractLocalVideoFramesAtTimes({ sourcePath, timesSeconds = [], label = 'manual-annotation', maxWidth = 960 }) {
   const meta = await localVideoMetadata(sourcePath);
   const safeLabel = slugifyFilePart(label || 'manual-annotation');
+  const width = Math.max(640, Math.min(1920, Math.round(Number(maxWidth) || 960)));
   const uniqueTimes = [...new Set((Array.isArray(timesSeconds) ? timesSeconds : [])
     .map((value) => Number(Number(value).toFixed(2)))
     .filter((value) => Number.isFinite(value) && value >= 0 && (!meta.durationSeconds || value <= meta.durationSeconds)))]
@@ -981,7 +982,7 @@ export async function extractLocalVideoFramesAtTimes({ sourcePath, timesSeconds 
   for (let index = 0; index < uniqueTimes.length; index += 1) {
     const time = uniqueTimes[index];
     const timeMs = Math.round(time * 1000);
-    const cacheKey = slugifyFilePart(`manual-frame-v1-${meta.fingerprint}-${timeMs}`);
+    const cacheKey = slugifyFilePart(`manual-frame-v2-${width}w-${meta.fingerprint}-${timeMs}`);
     const filename = `${cacheKey}.jpg`;
     const outputPath = path.join(uploadDir, filename);
     let cached = false;
@@ -996,7 +997,7 @@ export async function extractLocalVideoFramesAtTimes({ sourcePath, timesSeconds 
         '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
         '-ss', String(time), '-i', meta.path,
         '-map', '0:v:0', '-frames:v', '1',
-        '-vf', 'scale=960:-2:force_original_aspect_ratio=decrease',
+        '-vf', `scale=${width}:-2:force_original_aspect_ratio=decrease`,
         '-q:v', '3', outputPath,
       ], { captureOutput: false });
     }
