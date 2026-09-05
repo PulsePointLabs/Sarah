@@ -388,6 +388,21 @@ function snapshotCameraKey(snapshot = {}) {
   return role === "feet" ? "lower_body" : role;
 }
 
+function formatAuditLabel(value, fallback = "") {
+  const text = String(value || fallback || "").trim();
+  if (!text) return "";
+  return text
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function readableAuditState(value) {
+  const text = String(value || "").trim().toLowerCase();
+  return text && text !== "unassessable" && text !== "unclear" && text !== "neutral" && text !== "stable"
+    ? formatAuditLabel(text)
+    : "";
+}
+
 function SnapshotChangeBadge({ change }) {
   const direction = String(change?.direction || "stable");
   const high = String(change?.confidence || "").toLowerCase() === "high";
@@ -402,16 +417,32 @@ function SnapshotChangeBadge({ change }) {
   return (
     <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${styles[direction] || styles.stable}`}>
       <Icon className="h-3 w-3" />
-      {change.anatomical_area}: {change.label}
+      {formatAuditLabel(change.anatomical_area, "Body state")}: {change.label}
       {high && <span className="ml-0.5 text-[8px] uppercase tracking-wide opacity-75">strong</span>}
     </span>
   );
 }
 
-function VisualSnapshotCard({ snapshot, onSeek }) {
+function VisualSnapshotCard({ snapshot, priorSnapshot, onSeek, onCompare }) {
   const nearest = snapshot?.telemetry?.nearest || {};
   const changes = Array.isArray(snapshot?.significant_changes) ? snapshot.significant_changes : [];
   const findings = Array.isArray(snapshot?.findings) ? snapshot.findings : [];
+  const technique = snapshot?.technique_state || {};
+  const bodyResponse = snapshot?.body_response || {};
+  const footStates = Array.isArray(snapshot?.foot_states) ? snapshot.foot_states : [];
+  const auditStates = [
+    ["Cadence", readableAuditState(technique.cadence)],
+    ["Coverage", readableAuditState(technique.shaft_coverage)],
+    ["Grip", readableAuditState(technique.grip)],
+    ["Body tension", readableAuditState(bodyResponse.overall_tension)],
+    ["Breathing", readableAuditState(bodyResponse.respiration_visible)],
+    ["Pelvis", readableAuditState(bodyResponse.pelvic_state)],
+    ...footStates.flatMap((foot) => [
+      [`${formatAuditLabel(foot.side, "Foot")} heel`, readableAuditState(foot.heel)],
+      [`${formatAuditLabel(foot.side, "Foot")} knee`, readableAuditState(foot.knee)],
+      [`${formatAuditLabel(foot.side, "Foot")} oscillation`, readableAuditState(foot.oscillation)],
+    ]),
+  ].filter(([, value]) => value);
   return (
     <article className={`grid gap-3 rounded-xl border p-3 sm:grid-cols-[160px_1fr] ${snapshot.possible_near_climax ? "border-rose-400/50 bg-rose-500/[0.06]" : "border-border bg-muted/15"}`}>
       <button type="button" onClick={onSeek} className="group relative aspect-video self-start overflow-hidden rounded-lg border border-border bg-black text-left">
@@ -425,13 +456,27 @@ function VisualSnapshotCard({ snapshot, onSeek }) {
           {snapshot.possible_near_climax && <span className="rounded-full border border-rose-400/50 bg-rose-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-400">Possible near climax</span>}
           {changes.map((change, index) => <SnapshotChangeBadge key={`${change.anatomical_area}-${change.direction}-${index}`} change={change} />)}
         </div>
+        {(snapshot.comparison_frame?.url || priorSnapshot?.thumbnail_url) && (
+          <button type="button" onClick={onCompare} className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] font-semibold text-primary hover:bg-primary/20">
+            Compare prior checkpoint · {fmtMmSs(Number(snapshot.comparison_frame?.recordTimeSeconds ?? priorSnapshot?.time_s ?? Math.max(0, snapshot.time_s - 10)))}
+          </button>
+        )}
         {snapshot.summary && <p className="text-sm leading-relaxed text-foreground/90">{formatManualAnnotationReviewText(snapshot.summary)}</p>}
         {findings.length > 0 && (
           <div className="grid gap-1.5 lg:grid-cols-2">
             {findings.map((finding, index) => (
               <p key={`${finding.anatomical_area}-${index}`} className="text-xs leading-relaxed text-foreground/75">
-                <span className="font-semibold text-primary">{finding.anatomical_area}:</span> {formatManualAnnotationReviewText(finding.observation)}
+                <span className="font-semibold text-primary">{formatAuditLabel(finding.anatomical_area, "Visible change")}:</span> {formatManualAnnotationReviewText(finding.observation)}
               </p>
+            ))}
+          </div>
+        )}
+        {auditStates.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 border-t border-border/60 pt-2">
+            {auditStates.map(([label, value]) => (
+              <span key={`${label}:${value}`} className="rounded-full border border-primary/20 bg-primary/[0.06] px-2 py-0.5 text-[10px] font-medium text-primary/90">
+                {label}: {value}
+              </span>
             ))}
           </div>
         )}
@@ -772,6 +817,7 @@ export default function VideoSyncPlayer({
   const [snapshotCameraFilter, setSnapshotCameraFilter] = useState("all");
   const [snapshotAuditFeedKey, setSnapshotAuditFeedKey] = useState("");
   const [snapshotAuditJob, setSnapshotAuditJob] = useState(null);
+  const [snapshotComparison, setSnapshotComparison] = useState(null);
   const [manualBackfillState, setManualBackfillState] = useState(null);
   const snapshotRefreshAtRef = useRef(0);
 
@@ -2200,6 +2246,21 @@ export default function VideoSyncPlayer({
     const text = visualSnapshotSearchText(snapshot);
     return VISUAL_SNAPSHOT_FILTERS.some((filter) => selectedSnapshotFilters.includes(filter.key) && filter.terms.test(text));
   }), [selectedSnapshotFilters, snapshotCameraFilter, visualSnapshotReviews]);
+  const priorSnapshotById = useMemo(() => {
+    const priorById = new Map();
+    const grouped = new Map();
+    visualSnapshotReviews.forEach((snapshot) => {
+      const key = snapshotCameraKey(snapshot);
+      grouped.set(key, [...(grouped.get(key) || []), snapshot]);
+    });
+    grouped.forEach((snapshots) => {
+      snapshots.sort((left, right) => Number(left.time_s) - Number(right.time_s));
+      snapshots.forEach((snapshot, index) => {
+        if (index > 0) priorById.set(snapshot.id || `${snapshot.source_video_role}-${snapshot.time_s}`, snapshots[index - 1]);
+      });
+    });
+    return priorById;
+  }, [visualSnapshotReviews]);
   const closestVisibleEvent = useMemo(() => {
     if (!visibleEventEntries.length) return null;
     return visibleEventEntries.reduce((closest, entry) => (
@@ -2424,6 +2485,35 @@ export default function VideoSyncPlayer({
           <ArrowUp className="w-4 h-4" />
         </button>
       )}
+      <Dialog open={Boolean(snapshotComparison)} onOpenChange={(open) => !open && setSnapshotComparison(null)}>
+        <DialogContent className="max-h-[92vh] max-w-6xl overflow-y-auto">
+          {snapshotComparison && (() => {
+            const { snapshot, priorSnapshot } = snapshotComparison;
+            const priorTime = Number(snapshot.comparison_frame?.recordTimeSeconds ?? priorSnapshot?.time_s ?? Math.max(0, snapshot.time_s - 10));
+            const priorImage = snapshot.comparison_frame?.url || priorSnapshot?.thumbnail_url;
+            const focus = (snapshot.significant_changes || []).map((change) => formatAuditLabel(change.anatomical_area)).filter(Boolean);
+            return <>
+              <DialogHeader>
+                <DialogTitle className="text-primary">Checkpoint comparison · {fmtMmSs(snapshot.time_s)}</DialogTitle>
+                <DialogDescription>
+                  {focus.length ? `Focused review: ${[...new Set(focus)].join(", ")}.` : "Paired frames for direct visual comparison."}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-3 md:grid-cols-2">
+                <button type="button" onClick={() => { setSnapshotComparison(null); openSnapshotInFullTelemetry({ ...snapshot, time_s: priorTime, source_video_role: priorSnapshot?.source_video_role || snapshot.source_video_role }); }} className="rounded-lg border border-border bg-black p-2 text-left">
+                  <p className="mb-2 font-mono text-xs font-semibold text-muted-foreground">Before · {fmtMmSs(priorTime)} · click to inspect</p>
+                  {priorImage ? <img src={priorImage} alt={`Prior checkpoint at ${fmtMmSs(priorTime)}`} className="max-h-[62vh] w-full object-contain" /> : <div className="flex h-64 items-center justify-center text-sm text-muted-foreground">No paired frame saved</div>}
+                </button>
+                <button type="button" onClick={() => { setSnapshotComparison(null); openSnapshotInFullTelemetry(snapshot); }} className="rounded-lg border border-primary/40 bg-black p-2 text-left">
+                  <p className="mb-2 font-mono text-xs font-semibold text-primary">Current · {fmtMmSs(snapshot.time_s)} · click to inspect</p>
+                  {snapshot.thumbnail_url ? <img src={snapshot.thumbnail_url} alt={`Current checkpoint at ${fmtMmSs(snapshot.time_s)}`} className="max-h-[62vh] w-full object-contain" /> : <div className="flex h-64 items-center justify-center text-sm text-muted-foreground">No current frame saved</div>}
+                </button>
+              </div>
+              {focus.length > 0 && <div className="flex flex-wrap gap-1.5">{[...new Set(focus)].map((area) => <span key={area} className="rounded-full border border-primary/30 bg-primary/10 px-2 py-1 text-xs font-semibold text-primary">{area}</span>)}</div>}
+            </>;
+          })()}
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={addingNew}
         onOpenChange={(open) => {
@@ -3810,7 +3900,7 @@ export default function VideoSyncPlayer({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-xs font-semibold text-foreground">Chronological body-state checkpoints</p>
-                  <p className="mt-0.5 text-[11px] text-muted-foreground">One independent freeze-frame read every 10 seconds. These are reference-only and never become main event notes.</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">A paired 1.2-second motion comparison every 10 seconds. These are reference-only and never become main event notes.</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <label className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
@@ -3836,9 +3926,17 @@ export default function VideoSyncPlayer({
                 })}
               </div>
             </div>
-            {filteredVisualSnapshots.map((snapshot) => (
-              <VisualSnapshotCard key={snapshot.id || `${snapshot.source_video_role}-${snapshot.time_s}`} snapshot={snapshot} onSeek={() => openSnapshotInFullTelemetry(snapshot)} />
-            ))}
+            {filteredVisualSnapshots.map((snapshot) => {
+              const snapshotKey = snapshot.id || `${snapshot.source_video_role}-${snapshot.time_s}`;
+              const priorSnapshot = priorSnapshotById.get(snapshotKey) || null;
+              return <VisualSnapshotCard
+                key={snapshotKey}
+                snapshot={snapshot}
+                priorSnapshot={priorSnapshot}
+                onSeek={() => openSnapshotInFullTelemetry(snapshot)}
+                onCompare={() => setSnapshotComparison({ snapshot, priorSnapshot })}
+              />;
+            })}
             {!visualSnapshotReviews.length && !snapshotAuditJob?.running && (
               <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No 10-second visual checkpoints have been saved yet. Start the audit when you want Sarah to process this linked video.</p>
             )}

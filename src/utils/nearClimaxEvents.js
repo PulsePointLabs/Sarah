@@ -65,6 +65,8 @@ export const NCE_KEYWORDS = [
 
 const DIRECT_NEAR_CLIMAX_CUE_PATTERN = /\b(?:near[-\s]?climax|pre[-\s]?climax|climax\s+(?:approach|possible|imminent)|approach(?:ing)?\s+(?:climax|threshold)|at\s+threshold|almost\s+(?:there|climax)|orgasm(?:ic)?\s+(?:build|approach)|ejaculat(?:ion|ory)\s+(?:build|approach))\b/i;
 const ACTIVE_MASTURBATION_PATTERN = /\b(?:active\s+(?:manual\s+)?stimulation|stimulation\s+(?:resumes?|continues?|begins?|starts?|intensifies)|masturbat(?:e|es|ed|ing|ion)|strok(?:e|es|ed|ing)|(?:hand|stroke)\s+(?:speed|cadence)\s+(?:increase|increases|increased|quickens?|accelerat)|(?:rapid|quick|fast|full|upward|downward|focused)\s+(?:manual\s+)?strok(?:e|es|ing)|grip\s+(?:tightens?|shifts?|changes?)\s+(?:on|along|toward)\s+(?:the\s+)?(?:penis|shaft|glans))\b/i;
+const VISUAL_ACTIVE_MOTION_PATTERN = /\b(?:motion blur|visible (?:hand|sleeve|device) movement|hand.{0,30}\bmoving|sleeve.{0,30}\bmoving|cadence|rhythmic (?:motion|movement)|active movement)\b/i;
+const VISUAL_BUILD_SIGN_PATTERN = /\b(?:scrot(?:um|al).{0,40}\b(?:lift|elevat|tight|taut|engorg)|(?:erection|shaft|glans).{0,40}\b(?:increas|fuller|engorg|firm)|(?:toe|toes|foot|feet|heel|ankle).{0,40}\b(?:curl|plant|brace|flex|lift|oscillat)|(?:leg|thigh|abdomen|pelvis|trunk|body).{0,40}\b(?:tense|tension|brace|arch|lift)|breath.{0,30}\b(?:hold|shallow|rapid|interrupt)|respirat.{0,30}\b(?:hold|shallow|rapid|interrupt))\b/ig;
 const NON_AROUSAL_EXERTION_PATTERN = /\b(?:walk(?:s|ed|ing)?|ambulatory|stand(?:s|ing|ing\s+up)?|stood|mount(?:s|ed|ing)?\s+(?:the\s+)?(?:exam\s+)?table|re-?mount(?:s|ed|ing)?\s+(?:the\s+)?(?:exam\s+)?table|got\s+off\s+(?:the\s+)?(?:exam\s+)?table|get(?:ting)?\s+off\s+(?:the\s+)?(?:exam\s+)?table|off\s+(?:the\s+)?(?:exam\s+)?table|away\s+from\s+(?:the\s+)?table|left\s+(?:the\s+)?(?:room|table)|table\s+(?:is\s+)?vacant|empty\s+(?:exam\s+)?table|room\s+(?:is\s+)?empty|find(?:s|ing)?\s+(?:a\s+)?position(?:\s+of\s+comfort)?|position(?:ing)?\s+(?:on|at)\s+(?:the\s+)?table|select(?:s|ed|ing)?\s+(?:the\s+)?media|set(?:s|ting)?\s+up\s+(?:the\s+)?media|fighting\s+(?:the\s+)?(?:app|computer)|computer\s+(?:problem|issue|trouble)|technical\s+(?:problem|issue|trouble)|troubleshoot(?:s|ed|ing)?|restart(?:s|ed|ing)?\s+(?:the\s+)?(?:app|computer|obs)|adjust(?:s|ed|ing)?\s+(?:the\s+)?(?:camera|monitor|monitors|computer|app|obs|equipment)|camera\s+adjustment|stimulation\s+(?:is\s+)?paused|paus(?:e|es|ed|ing)\s+(?:stimulation|to\s+adjust)|no\s+(?:active\s+)?(?:stimulation|genital\s+contact)|room\s+(?:prep|setup)|prepar(?:e|es|ed|ing|ation)\s+(?:the\s+)?(?:room|camera|computer|equipment))\b/i;
 
 function evidenceText(event = {}) {
@@ -171,6 +173,28 @@ export function buildNearClimaxContextEvidence(session = {}) {
     }));
   });
 
+  const manualVisualReviews = Array.isArray(analysis._manual_annotation_visual_reviews)
+    ? analysis._manual_annotation_visual_reviews
+    : [];
+  manualVisualReviews.forEach((review) => {
+    const window = review?.requested_window || {};
+    const start = numberOrNull(window.start_s ?? review?.note_time_s);
+    const end = numberOrNull(window.end_s) ?? start;
+    if (start == null) return;
+    const findings = Array.isArray(review?.findings) ? review.findings : [];
+    pushContextEvidence(evidence, {
+      start_s: start,
+      end_s: end,
+      note: [
+        review?.summary,
+        review?.note_assessment === 'supported' ? review?.manual_note : '',
+        ...findings.map((finding) => `${finding?.anatomical_area || ''} ${finding?.observation || ''} ${finding?.change_from_prior || ''}`),
+      ].filter(Boolean).join(' '),
+      category: ['visual', 'manual_annotation_visual_review'],
+      evidence_source: 'manual_annotation_visual_review',
+    });
+  });
+
   const visualEntries = Array.isArray(analysis._visual_findings) ? analysis._visual_findings : [];
   visualEntries.forEach((entry) => {
     const findings = Array.isArray(entry?.findings)
@@ -219,6 +243,30 @@ export function buildNearClimaxContextEvidence(session = {}) {
     });
   });
 
+  const snapshots = Array.isArray(analysis._visual_snapshot_reviews) ? analysis._visual_snapshot_reviews : [];
+  snapshots.forEach((snapshot) => {
+    const timeS = numberOrNull(snapshot?.time_s);
+    if (timeS == null || snapshot?.body_visible === false) return;
+    const changes = Array.isArray(snapshot?.significant_changes) ? snapshot.significant_changes : [];
+    const findings = Array.isArray(snapshot?.findings) ? snapshot.findings : [];
+    const note = [
+      snapshot?.summary,
+      ...changes.map((change) => `${change?.anatomical_area || ''} ${change?.label || ''} ${change?.direction || ''}`),
+      ...findings.map((finding) => `${finding?.anatomical_area || ''} ${finding?.observation || ''}`),
+      snapshot?.near_climax_reason,
+    ].filter(Boolean).join(' ');
+    pushContextEvidence(evidence, {
+      start_s: timeS - 5,
+      end_s: timeS + 5,
+      note,
+      category: ['visual', 'visual_snapshot'],
+      evidence_source: 'visual_snapshot_review',
+      visual_active_stimulation: snapshot?.active_stimulation_visible === true,
+      visual_build_sign_count: changes.filter((change) => ['increasing', 'new'].includes(String(change?.direction || '').toLowerCase())).length,
+      visual_near_climax_candidate: snapshot?.possible_near_climax === true,
+    });
+  });
+
   const phaseMarkers = [
     ["pre_climax", session.pre_climax_offset_s ?? session.pre_climax_time_s],
     ["climax", session.climax_offset_s ?? session.climax_time_s],
@@ -264,13 +312,17 @@ export function assessNearClimaxEventContext(event = {}, contextEvidence = []) {
   let nonArousalAtPeak = false;
   let sessionMultipleNearClimaxReport = false;
   let telemetryCandidateAtPeak = false;
+  let visualBuildSignCount = 0;
+  let visualNearClimaxCandidate = false;
 
   aligned.forEach((item) => {
     const text = evidenceText(item);
     const categories = eventCategories(item);
     const source = String(item.evidence_source || "context");
     const direct = DIRECT_NEAR_CLIMAX_CUE_PATTERN.test(text);
-    const active = ACTIVE_MASTURBATION_PATTERN.test(text);
+    const active = item.visual_active_stimulation === true
+      || ACTIVE_MASTURBATION_PATTERN.test(text)
+      || (['visual_snapshot_review', 'manual_annotation_visual_review', 'video_pass'].includes(source) && VISUAL_ACTIVE_MOTION_PATTERN.test(text));
     const distanceToPeak = evidenceDistanceToTime(item, peakS);
     if (source === "user_session_summary" && /\b(?:multiple|several|repeated|many)\s+near[-\s]?climax\b/i.test(text)) {
       sessionMultipleNearClimaxReport = true;
@@ -296,6 +348,12 @@ export function assessNearClimaxEventContext(event = {}, contextEvidence = []) {
         positiveScore += 3;
       }
       if (direct || active) positiveSources.add(source);
+      if (source === 'visual_snapshot_review') {
+        const explicitSigns = Number(item.visual_build_sign_count || 0);
+        const textSigns = (text.match(VISUAL_BUILD_SIGN_PATTERN) || []).length;
+        visualBuildSignCount = Math.max(visualBuildSignCount, explicitSigns, textSigns);
+        visualNearClimaxCandidate ||= item.visual_near_climax_candidate === true;
+      }
     }
 
     if (nonArousalExertion && distanceToPeak <= 25) {
@@ -309,11 +367,18 @@ export function assessNearClimaxEventContext(event = {}, contextEvidence = []) {
     && peakS >= preClimaxS - 15
     && (climaxS == null || peakS < climaxS);
   if (manualThresholdCue) positiveScore += 5;
+  const telemetrySupported = Number(event?.rise_bpm || 0) >= 7
+    || Number(event?.confidence || 0) >= 3
+    || Number(event?.peak_hr || 0) > Number(event?.base_hr || 0) + 6;
+  const visualEpisodeConfirmed = activeMasturbation
+    && telemetrySupported
+    && (visualBuildSignCount >= 2 || visualNearClimaxCandidate);
   // A saved pre-climax marker identifies the final approach window. It does not
   // rule out earlier approach/recovery cycles in a multi-event session.
   const contradicted = afterClimax || nonArousalAtPeak;
   const confirmed = !contradicted && (
     (activeMasturbation && (manualThresholdCue || directThresholdCue))
+    || visualEpisodeConfirmed
     || (sessionMultipleNearClimaxReport && telemetryCandidateAtPeak)
   );
   const status = afterClimax
@@ -342,6 +407,10 @@ export function assessNearClimaxEventContext(event = {}, contextEvidence = []) {
     manualThresholdCue,
     sessionMultipleNearClimaxReport,
     telemetryCandidateAtPeak,
+    telemetrySupported,
+    visualBuildSignCount,
+    visualNearClimaxCandidate,
+    visualEpisodeConfirmed,
     nonArousalAtPeak,
     positiveSources: [...positiveSources],
     negativeSources: [...negativeSources],

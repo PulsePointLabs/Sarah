@@ -269,3 +269,55 @@ test("saved video-pass windows become timestamp-aligned near-climax evidence", (
   assert.equal(evidence[0].end_s, 624);
   assert.match(evidence[0].note, /Stroke speed increases/);
 });
+
+test("an active, telemetry-supported visual audit with multiple independent build signs confirms an approach", () => {
+  const evidence = buildNearClimaxContextEvidence({
+    ai_analysis: {
+      _visual_snapshot_reviews: [{
+        time_s: 1450,
+        body_visible: true,
+        active_stimulation_visible: true,
+        possible_near_climax: false,
+        summary: "Strong sleeve motion blur is visible while your body tightens.",
+        significant_changes: [
+          { anatomical_area: "Scrotum", label: "Lift and tautness increase", direction: "increasing" },
+          { anatomical_area: "Feet", label: "Bilateral plantar flexion and heel planting increase", direction: "increasing" },
+        ],
+      }],
+    },
+  });
+  const assessment = assessNearClimaxEventContext(
+    { start_offset_s: 1380, peak_offset_s: 1450, end_offset_s: 1520, rise_bpm: 12, base_hr: 96, peak_hr: 112 },
+    evidence,
+  );
+
+  assert.equal(assessment.activeMasturbation, true);
+  assert.equal(assessment.visualBuildSignCount >= 2, true);
+  assert.equal(assessment.visualEpisodeConfirmed, true);
+  assert.equal(assessment.confirmed, true);
+});
+
+test("a static visual audit cannot confirm near climax even with genital findings", () => {
+  const evidence = buildNearClimaxContextEvidence({
+    ai_analysis: {
+      _visual_snapshot_reviews: [{
+        time_s: 1450,
+        body_visible: true,
+        active_stimulation_visible: false,
+        summary: "Your hand remains in static contact while the penis is partially erect.",
+        significant_changes: [
+          { anatomical_area: "Scrotum", label: "Tautness visible", direction: "stable" },
+          { anatomical_area: "Feet", label: "Toes held curled", direction: "stable" },
+        ],
+      }],
+    },
+  });
+  const assessment = assessNearClimaxEventContext(
+    { start_offset_s: 1380, peak_offset_s: 1450, end_offset_s: 1520, rise_bpm: 12, base_hr: 96, peak_hr: 112 },
+    evidence,
+  );
+
+  assert.equal(assessment.activeMasturbation, false);
+  assert.equal(assessment.visualEpisodeConfirmed, false);
+  assert.equal(assessment.confirmed, false);
+});
