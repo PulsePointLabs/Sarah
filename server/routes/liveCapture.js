@@ -100,6 +100,9 @@ const state = {
       lastMessageAt: null,
       lastMeasuredAt: null,
       error: null,
+      collectorId: '',
+      collectorKind: '',
+      collectorClaimedAt: null,
     },
     lastMessageAt: null,
     error: null,
@@ -628,6 +631,18 @@ async function createDirectH10RecordingInternal(recording = {}, reason = 'obs_re
     });
   }
   return directH10Recording;
+}
+
+const DIRECT_H10_COLLECTOR_LEASE_MS = 15_000;
+
+function directH10CollectorLeaseIsFresh(now = Date.now()) {
+  const claimedAt = Date.parse(state.hr.directH10.collectorClaimedAt || '');
+  const lastMessageAt = Date.parse(state.hr.directH10.lastMessageAt || '');
+  const freshest = Math.max(
+    Number.isFinite(claimedAt) ? claimedAt : 0,
+    Number.isFinite(lastMessageAt) ? lastMessageAt : 0
+  );
+  return Boolean(state.hr.directH10.collectorId && freshest && now - freshest < DIRECT_H10_COLLECTOR_LEASE_MS);
 }
 
 async function createDirectH10Recording(recording = {}, reason = 'obs_record_start') {
@@ -1846,7 +1861,7 @@ function publishHrTelemetryToOverlay(telemetry) {
   }
 }
 
-function refreshDirectH10TelemetryState(telemetry, fallbackDeviceName = '') {
+function refreshDirectH10TelemetryState(telemetry, fallbackDeviceName = '', collector = {}) {
   // Connection freshness is based on arrival at this server, not the sender's clock.
   // measuredAt remains available separately for physiological timeline alignment.
   const receivedIso = new Date().toISOString();
@@ -1863,6 +1878,11 @@ function refreshDirectH10TelemetryState(telemetry, fallbackDeviceName = '') {
     error: null,
     lastMessageAt: receivedIso,
     lastMeasuredAt: telemetry?.measuredAt ? new Date(telemetry.measuredAt).toISOString() : null,
+    collectorId: String(collector.id || telemetry?.raw?.collectorId || state.hr.directH10.collectorId || ''),
+    collectorKind: String(collector.kind || telemetry?.raw?.collectorKind || state.hr.directH10.collectorKind || ''),
+    collectorClaimedAt: collector.id || telemetry?.raw?.collectorId
+      ? receivedIso
+      : state.hr.directH10.collectorClaimedAt,
   };
 }
 
@@ -2368,6 +2388,22 @@ liveCaptureRouter.post('/capture-kind', (req, res) => {
 });
 
 liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
+  const collectorId = String(req.body?.collectorId || '').trim();
+  const collectorKind = String(req.body?.collectorKind || '').trim();
+  if (
+    collectorId
+    && directH10CollectorLeaseIsFresh()
+    && state.hr.directH10.collectorId !== collectorId
+  ) {
+    res.status(409).json({
+      error: `Polar H10 is already owned by ${state.hr.directH10.collectorKind || 'another Sarah client'}.`,
+      owner: {
+        collectorId: state.hr.directH10.collectorId,
+        collectorKind: state.hr.directH10.collectorKind,
+      },
+    });
+    return;
+  }
   let telemetry = normalizeDirectH10Telemetry(req.body || {});
   if (!telemetry) {
     res.status(400).json({ error: 'Direct H10 telemetry did not include a valid heart rate.' });
@@ -2381,7 +2417,8 @@ liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
   }
   refreshDirectH10TelemetryState(
     telemetry,
-    req.body?.deviceName || req.body?.device_name || state.hr.directH10.deviceName || ''
+    req.body?.deviceName || req.body?.device_name || state.hr.directH10.deviceName || '',
+    { id: collectorId, kind: collectorKind }
   );
   if (shouldUseTelemetrySource(HR_SOURCE_IDS.DIRECT_H10)) {
     refreshHrSourceStatus('Direct H10 HR + RR live');
@@ -2401,6 +2438,47 @@ liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
   }
   broadcast('status', state);
   res.json({ ok: true, hr: { latestTelemetry: telemetry, sourceStatus: state.hr.sourceStatus, directH10: state.hr.directH10 } });
+});
+
+liveCaptureRouter.post('/hr-direct-h10/claim', (req, res) => {
+  const collectorId = String(req.body?.collectorId || '').trim();
+  const collectorKind = String(req.body?.collectorKind || 'Sarah client').trim();
+  if (!collectorId) {
+    res.status(400).json({ error: 'A collector ID is required.' });
+    return;
+  }
+  if (directH10CollectorLeaseIsFresh() && state.hr.directH10.collectorId !== collectorId) {
+    res.status(409).json({
+      error: `Polar H10 is already owned by ${state.hr.directH10.collectorKind || 'another Sarah client'}. This screen will use relayed telemetry instead.`,
+      owner: {
+        collectorId: state.hr.directH10.collectorId,
+        collectorKind: state.hr.directH10.collectorKind,
+      },
+    });
+    return;
+  }
+  state.hr.directH10 = {
+    ...state.hr.directH10,
+    collectorId,
+    collectorKind,
+    collectorClaimedAt: new Date().toISOString(),
+  };
+  broadcast('status', state);
+  res.json({ ok: true, owner: { collectorId, collectorKind } });
+});
+
+liveCaptureRouter.post('/hr-direct-h10/release', (req, res) => {
+  const collectorId = String(req.body?.collectorId || '').trim();
+  if (collectorId && state.hr.directH10.collectorId === collectorId) {
+    state.hr.directH10 = {
+      ...state.hr.directH10,
+      collectorId: '',
+      collectorKind: '',
+      collectorClaimedAt: null,
+    };
+    broadcast('status', state);
+  }
+  res.json({ ok: true });
 });
 
 liveCaptureRouter.post('/emg/calibration-command', async (req, res) => {

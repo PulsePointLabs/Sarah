@@ -899,6 +899,51 @@ function isSarahDesktopRuntime() {
   return typeof window !== "undefined" && Boolean(window.sarahDesktop?.isDesktop);
 }
 
+const H10_COLLECTOR_ID_KEY = "pulsepoint.directH10.collectorId";
+
+function getH10CollectorIdentity() {
+  let id = "";
+  try {
+    id = String(window.localStorage.getItem(H10_COLLECTOR_ID_KEY) || "");
+    if (!id) {
+      id = globalThis.crypto?.randomUUID?.() || `sarah-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      window.localStorage.setItem(H10_COLLECTOR_ID_KEY, id);
+    }
+  } catch {
+    id = `sarah-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+  return {
+    id,
+    kind: isCapacitorAndroidShell()
+      ? "Sarah Android APK"
+      : isSarahDesktopRuntime()
+        ? "Sarah Windows EXE"
+        : "Sarah browser",
+  };
+}
+
+async function claimH10Collector() {
+  const collector = getH10CollectorIdentity();
+  const response = await fetch(apiUrl("/live-capture/hr-direct-h10/claim"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ collectorId: collector.id, collectorKind: collector.kind }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error || "Another Sarah client owns the Polar H10.");
+  return collector;
+}
+
+function releaseH10Collector() {
+  const collector = getH10CollectorIdentity();
+  fetch(apiUrl("/live-capture/hr-direct-h10/release"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ collectorId: collector.id }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 function getLiveCaptureRelayUrl() {
   const base = new URL(apiUrl("/live-capture/status"), window.location.href);
   const apiUsesTls = base.protocol === "https:";
@@ -2257,10 +2302,16 @@ export default function LiveCapture() {
       rrCount: directH10RrRef.current.length,
     }));
 
+    const collector = getH10CollectorIdentity();
     fetch(apiUrl("/live-capture/hr-direct-h10/telemetry"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...telemetry, sensorBatch }),
+      body: JSON.stringify({
+        ...telemetry,
+        sensorBatch,
+        collectorId: collector.id,
+        collectorKind: collector.kind,
+      }),
     })
       .then(async (response) => {
         if (!response.ok) {
@@ -2938,7 +2989,7 @@ export default function LiveCapture() {
     return verification;
   }, [startBrowserH10Pmd, startNativeH10Pmd]);
 
-  const disconnectDirectH10 = useCallback(async ({ updateStatus = true, preserveAutoReconnect = false } = {}) => {
+  const disconnectDirectH10 = useCallback(async ({ updateStatus = true, preserveAutoReconnect = false, releaseOwnership = true } = {}) => {
     if (!preserveAutoReconnect) {
       directH10ReconnectEnabledRef.current = false;
       if (directH10ReconnectTimerRef.current) {
@@ -3029,6 +3080,7 @@ export default function LiveCapture() {
         pmdMessage: "Raw ECG + motion stopped",
       }));
     }
+    if (releaseOwnership) releaseH10Collector();
     window.setTimeout(() => {
       directH10IntentionalDisconnectRef.current = false;
     }, 1500);
@@ -3074,7 +3126,8 @@ export default function LiveCapture() {
       }));
 
       try {
-        await disconnectDirectH10({ updateStatus: false, preserveAutoReconnect: true });
+        await disconnectDirectH10({ updateStatus: false, preserveAutoReconnect: true, releaseOwnership: false });
+        await claimH10Collector();
         const device = await getNativeDirectH10Device({
           preferSaved: !forcePicker,
           forcePicker,
@@ -3186,7 +3239,8 @@ export default function LiveCapture() {
 
     try {
       const devicePromise = getDirectH10Device({ preferSaved: autoReconnect, silent: autoReconnect });
-      await disconnectDirectH10({ updateStatus: false });
+      await disconnectDirectH10({ updateStatus: false, releaseOwnership: false });
+      await claimH10Collector();
       const device = await devicePromise;
       directH10DeviceRef.current = device;
       const handleDisconnected = () => {

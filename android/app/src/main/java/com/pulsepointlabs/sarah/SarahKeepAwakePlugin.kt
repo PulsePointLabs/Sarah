@@ -15,8 +15,10 @@ class SarahKeepAwakePlugin : Plugin() {
         activity.runOnUiThread {
             if (enabled) {
                 activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                SarahCaptureService.start(context)
             } else {
                 activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                SarahCaptureService.stop(context)
             }
             call.resolve(JSObject().put("enabled", enabled).put("native", true))
         }
