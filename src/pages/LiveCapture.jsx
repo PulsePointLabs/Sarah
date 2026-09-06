@@ -1,3 +1,5 @@
+import LiveEncouragementControls from "@/components/LiveEncouragementControls";
+import { liveCuePlaybackMessage } from "@/lib/liveCueAudioReadiness";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { BleClient } from "@capacitor-community/bluetooth-le";
@@ -5438,8 +5440,18 @@ export default function LiveCapture() {
     }
   }, [liveCueAudio, liveCueEngine, liveCueSettings.enabled, toast]);
 
+  const testLiveEncouragement = useCallback(async () => {
+    try {
+      const result = await liveCueAudio.testVoice();
+      if (!result.ok) throw new Error(liveCuePlaybackMessage(result.reason) || "Sarah could not play the test clip.");
+      toast({ title: "Sarah voice test", description: "Playing through this device's current audio output." });
+    } catch (error) {
+      toast({ title: "Sarah voice needs attention", description: error?.message || "Unable to play Sarah voice.", variant: "destructive" });
+    }
+  }, [liveCueAudio.testVoice, toast]);
+
   useEffect(() => {
-    if (!recordingActive || !liveCueSettings.enabled || liveCueAudio.ready || liveCueAudio.status.phase === "preparing") return;
+    if (!recordingActive || !liveCueSettings.enabled || liveCueAudio.status.phase !== "idle") return;
     liveCueAudio.prepare().catch((error) => {
       toast({
         title: "Sarah encouragement is unavailable",
@@ -5912,7 +5924,7 @@ export default function LiveCapture() {
       hasMultipleSignalFamilies: Boolean(prediction.hrvUsable || emgTelemetry),
       sessionTimeSec: getCurrentSessionTime(),
     });
-  }, [emgTelemetry, getCurrentSessionTime, hrTelemetry, liveCueEngine, prediction, recordingActive, telemetryHistory.length]);
+  }, [emgTelemetry, getCurrentSessionTime, hrTelemetry, liveCueEngine.step, prediction, recordingActive, telemetryHistory.length]);
 
   useEffect(() => {
     const cue = liveCueEngine.latestCue;
@@ -7684,6 +7696,17 @@ export default function LiveCapture() {
           </div>
         </section>
       )}
+
+      <LiveEncouragementControls
+        enabled={liveCueSettings.enabled}
+        volume={liveCueSettings.volume}
+        audioState={liveCueAudio.audioState}
+        status={liveCueAudio.status}
+        playback={liveCueEngine.latestCue?.playback}
+        onToggle={toggleLiveEncouragement}
+        onTest={testLiveEncouragement}
+        onVolume={(volume) => setLiveCueSettings((previous) => ({ ...previous, volume }))}
+      />
 
       {!focusView && !launchActive && (
         <LiveCaptureLaunchpad
@@ -9776,20 +9799,7 @@ export default function LiveCapture() {
                   <option value="intimate_lovers_voice">Intimate lover</option>
                   <option value="custom">Custom encouragement</option>
                 </select>
-                <label className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs font-medium text-muted-foreground">
-                  Volume
-                  <input
-                    type="range"
-                    min="0.1"
-                    max="0.7"
-                    step="0.05"
-                    value={liveCueSettings.volume}
-                    onChange={(event) => setLiveCueSettings((previous) => ({ ...previous, volume: Number(event.target.value) }))}
-                    className="w-24 accent-primary"
-                    aria-label="Sarah encouragement volume"
-                  />
-                  <span className="w-8 text-right tabular-nums text-foreground">{Math.round(liveCueSettings.volume * 100)}%</span>
-                </label>
+
               </div>}
               {focusView && (
                 <p className="mt-2 inline-flex w-fit items-center gap-1.5 rounded-lg bg-primary/15 px-2.5 py-1.5 text-xs font-semibold text-primary">

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiUrl, serverUrl } from "@/lib/mobileApiBase";
 import { LIVE_CUE_PROFILE_VERSION } from "@/lib/liveCuePhrases";
+import { resumeLiveCueContext } from "@/lib/liveCueAudioReadiness";
 import { loadTTSSettings } from "@/components/TTSButton";
 
 function flattenCueClips(phrases = {}) {
@@ -17,7 +18,7 @@ async function decodeClip(ctx, clip) {
   const clipUrl = String(clip?.url || "").startsWith("/live-cues/")
     ? apiUrl(String(clip.url).replace(/^\/live-cues/, "/live-cues"))
     : serverUrl(clip.url);
-  const response = await fetch(clipUrl, { cache: "force-cache" });
+  const response = await fetch(clipUrl, { cache: "force-cache", signal: AbortSignal.timeout(30000) });
   if (!response.ok) throw new Error(`Cue audio fetch failed (${response.status})`);
   const contentType = response.headers.get("content-type") || "";
   if (contentType && !contentType.toLowerCase().startsWith("audio/") && !contentType.toLowerCase().includes("octet-stream")) {
@@ -38,10 +39,13 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
   const gainRef = useRef(null);
   const activeSourceRef = useRef(null);
   const decodedRef = useRef(new Map());
+  const prepareRef = useRef(null);
+  const generationRef = useRef(0);
+  const [audioState, setAudioState] = useState("suspended");
   const phraseSignature = useMemo(() => JSON.stringify(phrases || {}), [phrases]);
   const [status, setStatus] = useState({ phase: enabled ? "idle" : "disabled", message: "", decoded: 0, total: 0 });
 
-  const getAudioContext = useCallback(async () => {
+  const getAudioContext = useCallback(() => {
     const AudioCtor = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtor) throw new Error("Web Audio is unavailable in this browser.");
     if (!audioContextRef.current || audioContextRef.current.state === "closed") {
@@ -49,15 +53,16 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
       gainRef.current = audioContextRef.current.createGain();
       gainRef.current.gain.value = Math.max(0, Math.min(1, Number(settings?.volume ?? 0.28)));
       gainRef.current.connect(audioContextRef.current.destination);
+      audioContextRef.current.onstatechange = () => setAudioState(audioContextRef.current?.state || "closed");
     }
-    if (audioContextRef.current.state === "suspended") {
-      await audioContextRef.current.resume();
-    }
+    // Decode while suspended; do not wait for a gesture during background preparation.
     return audioContextRef.current;
   }, [settings?.volume]);
 
   const unlock = useCallback(async () => {
-    const ctx = await getAudioContext();
+    const ctx = getAudioContext();
+    await resumeLiveCueContext(ctx);
+    setAudioState(ctx.state);
     const buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
     const source = ctx.createBufferSource();
     source.buffer = buffer;
@@ -66,61 +71,76 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
     return ctx.state === "running";
   }, [getAudioContext]);
 
-  const prepare = useCallback(async () => {
-    if (!enabled) {
-      setStatus({ phase: "disabled", message: "Sarah voice cues disabled.", decoded: 0, total: 0 });
-      return { ok: false, disabled: true };
-    }
-    const requested = flattenCueClips(phrases);
-    if (!requested.length) {
-      setStatus({ phase: "disabled", message: "No live cue phrases enabled.", decoded: 0, total: 0 });
-      return { ok: false, disabled: true };
-    }
-    setStatus({ phase: "preparing", message: "Preparing Sarah voice cues...", decoded: 0, total: requested.length });
-    const ctx = await getAudioContext();
-    const ttsProvider = settings?.ttsProvider || loadTTSSettings().ttsProvider;
-    const response = await fetch(apiUrl("/live-cues/prepare"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        clips: requested,
-        voice: settings?.voice || "nova",
-        model: settings?.model || "tts-1-hd",
-        speed: settings?.speed || 1,
-        format: settings?.format || "mp3",
-        ttsProvider,
-        profileVersion: LIVE_CUE_PROFILE_VERSION,
-      }),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(payload.error || "Sarah voice cues could not be prepared.");
-    }
-    const decoded = new Map();
-    const decodeFailures = [];
-    for (const prepared of payload.clips || []) {
-      const source = requested.find((clip) => clip.text === prepared.text);
-      try {
-        const clip = await decodeClip(ctx, { ...source, ...prepared });
-        decoded.set(`${clip.type}:${clip.text}`, clip);
-      } catch (error) {
-        decodeFailures.push({ text: prepared.text, error: error?.message || String(error) });
+  const prepare = useCallback(() => {
+    if (prepareRef.current) return prepareRef.current;
+    const generation = generationRef.current;
+    const operation = (async () => {
+      if (!enabled) {
+        setStatus({ phase: "disabled", message: "Sarah voice cues disabled.", decoded: 0, total: 0 });
+        return { ok: false, disabled: true };
       }
-      setStatus({ phase: "preparing", message: "Decoding Sarah voice cues...", decoded: decoded.size, total: requested.length });
-    }
-    if (!decoded.size) {
-      throw new Error(decodeFailures[0]?.error || "Sarah voice cues could not be decoded on this device.");
-    }
-    decodedRef.current = decoded;
-    const skipped = Number(payload.failures?.length || 0) + decodeFailures.length;
-    setStatus({
-      phase: "ready",
-      message: skipped ? `Sarah voice ready (${decoded.size} clips; ${skipped} unavailable).` : "Sarah voice cues preloaded.",
-      decoded: decoded.size,
-      total: requested.length,
+      const requested = flattenCueClips(phrases);
+      if (!requested.length) {
+        setStatus({ phase: "disabled", message: "No live cue phrases enabled.", decoded: 0, total: 0 });
+        return { ok: false, disabled: true };
+      }
+      setStatus({ phase: "preparing", message: "Preparing Sarah voice cues...", decoded: 0, total: requested.length });
+      const ctx = await getAudioContext();
+      const ttsProvider = settings?.ttsProvider || loadTTSSettings().ttsProvider;
+      const response = await fetch(apiUrl("/live-cues/prepare"), {
+        signal: AbortSignal.timeout(180000),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clips: requested,
+          voice: settings?.voice || "nova",
+          model: settings?.model || "tts-1-hd",
+          speed: settings?.speed || 1,
+          format: settings?.format || "mp3",
+          ttsProvider,
+          profileVersion: LIVE_CUE_PROFILE_VERSION,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || "Sarah voice cues could not be prepared.");
+      }
+      const decoded = new Map();
+      const decodeFailures = [];
+      for (const prepared of payload.clips || []) {
+        if (generation !== generationRef.current) return { ok: false, cancelled: true };
+        const source = requested.find((clip) => clip.text === prepared.text);
+        try {
+          const clip = await decodeClip(ctx, { ...source, ...prepared });
+          decoded.set(`${clip.type}:${clip.text}`, clip);
+        } catch (error) {
+          decodeFailures.push({ text: prepared.text, error: error?.message || String(error) });
+        }
+        if (generation !== generationRef.current) return { ok: false, cancelled: true };
+        setStatus({ phase: "preparing", message: "Decoding Sarah voice cues...", decoded: decoded.size, total: requested.length });
+      }
+      if (generation !== generationRef.current) return { ok: false, cancelled: true };
+      if (!decoded.size) {
+        throw new Error(decodeFailures[0]?.error || "Sarah voice cues could not be decoded on this device.");
+      }
+      decodedRef.current = decoded;
+      const skipped = Number(payload.failures?.length || 0) + decodeFailures.length;
+      setStatus({
+        phase: "ready",
+        message: skipped ? `Sarah voice ready (${decoded.size} clips; ${skipped} unavailable).` : "Sarah voice cues preloaded.",
+        decoded: decoded.size,
+        total: requested.length,
+      });
+      return { ok: true, partial: skipped > 0, decoded: decoded.size, total: requested.length, skipped };
+    })().catch((error) => {
+      if (generation === generationRef.current) setStatus({ phase: "error", message: error?.message || "Voice preparation failed. Tap Test voice to retry.", decoded: 0, total: 0 });
+      throw error;
+    }).finally(() => {
+      if (prepareRef.current === operation) prepareRef.current = null;
     });
-    return { ok: true, partial: skipped > 0, decoded: decoded.size, total: requested.length, skipped };
-  }, [enabled, getAudioContext, phrases, settings?.format, settings?.model, settings?.speed, settings?.voice]);
+    prepareRef.current = operation;
+    return operation;
+  }, [enabled, getAudioContext, phrases, settings?.format, settings?.model, settings?.speed, settings?.voice, settings?.ttsProvider]);
 
   const playCue = useCallback((cue, { freshnessMs = 2500 } = {}) => {
     const ctx = audioContextRef.current;
@@ -131,6 +151,7 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
     const clip = decodedRef.current.get(`${cue.type}:${cue.phrase}`);
     if (!clip?.audioBuffer) return { ok: false, reason: "clip_not_preloaded" };
 
+    if (Number(settings?.volume ?? 0.28) === 0) return { ok: false, reason: "muted" };
     const startedAt = performance.now();
     try {
       activeSourceRef.current?.stop?.();
@@ -169,22 +190,42 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
   }, []);
 
   useEffect(() => {
+    generationRef.current += 1;
+    prepareRef.current = null;
     decodedRef.current = new Map();
     setStatus({ phase: enabled ? "idle" : "disabled", message: enabled ? "Sarah encouragement is ready to prepare." : "Sarah encouragement disabled.", decoded: 0, total: 0 });
-  }, [enabled, phraseSignature, settings?.format, settings?.model, settings?.speed, settings?.voice]);
+  }, [enabled, phraseSignature, settings?.format, settings?.model, settings?.speed, settings?.voice, settings?.ttsProvider]);
 
-  useEffect(() => stop, [stop]);
+  useEffect(() => () => {
+    generationRef.current += 1;
+    stop();
+    const ctx = audioContextRef.current;
+    if (ctx) {
+      ctx.onstatechange = null;
+      ctx.close().catch(() => {});
+    }
+  }, [stop]);
+
+  const testVoice = useCallback(async () => {
+    await unlock();
+    if (!decodedRef.current.size) await prepare();
+    const clip = decodedRef.current.values().next().value;
+    if (!clip) throw new Error("No encouragement audio is ready. Retry Test voice.");
+    return playCue({ type: clip.type, phrase: clip.text, atMs: Date.now() });
+  }, [unlock, prepare, playCue]);
 
   const ready = status.phase === "ready";
   const decodedCount = status.decoded;
 
   return useMemo(() => ({
     status,
+    audioState,
+    testVoice,
     unlock,
     prepare,
     playCue,
     stop,
     ready: status.phase === "ready",
     decodedCount: status.decoded,
-  }), [decodedCount, prepare, playCue, ready, status, stop, unlock]);
+  }), [audioState, testVoice, decodedCount, prepare, playCue, ready, status, stop, unlock]);
 }

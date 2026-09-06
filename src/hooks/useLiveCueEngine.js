@@ -20,14 +20,18 @@ export function useLiveCueEngine({
     [captureKind, cueSettings]
   );
 
+  const inputsRef = useRef(null);
+  inputsRef.current = { audio, cueSettings, captureKind, sessionId, getSessionTime, onTimelineEvent, microphoneActive, phraseBank };
+
   const reset = useCallback(() => {
     machineRef.current = createLiveCueStateMachineState();
     setLatestCue(null);
     setLastSuppression(null);
-    audio?.stop?.();
-  }, [audio]);
+    inputsRef.current.audio?.stop?.();
+  }, []);
 
   const step = useCallback((prediction, sample = {}) => {
+    const { audio, cueSettings, captureKind, sessionId, getSessionTime, onTimelineEvent, microphoneActive, phraseBank } = inputsRef.current;
     const now = Date.now();
     const sessionTimeSec = typeof getSessionTime === "function" ? getSessionTime() : sample.sessionTimeSec;
     const intimateCadence = cueSettings?.style === "intimate_lovers_voice";
@@ -73,7 +77,7 @@ export function useLiveCueEngine({
       sessionId,
       sessionTimeSec,
       playback,
-      spokenAt: new Date().toISOString(),
+      spokenAt: playback.ok ? new Date().toISOString() : null,
     };
     setLatestCue(cueRecord);
     onTimelineEvent?.({
@@ -83,7 +87,7 @@ export function useLiveCueEngine({
       metadata: cueRecord,
     });
     return cueRecord;
-  }, [audio, captureKind, cueSettings, getSessionTime, microphoneActive, onTimelineEvent, phraseBank.phrases, sessionId]);
+  }, []);
 
   return useMemo(() => ({
     phraseBank,
