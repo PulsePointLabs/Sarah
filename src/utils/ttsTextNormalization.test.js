@@ -11,4 +11,6 @@ test("physiological numeric bands are not read as seconds", () => {
 test("actual shorthand durations remain available for seconds expansion", () => {
   assert.equal(normalizeNumericBandsForSpeech("pause for 90s"), "pause for 90s");
   assert.equal(normalizeNumericBandsForSpeech("clip at 120s"), "clip at 120s");
+  assert.equal(normalizeNumericBandsForSpeech("heart rate recovered after 120s in the recording"), "heart rate recovered after 120s in the recording");
+  assert.equal(normalizeNumericBandsForSpeech("near 943s and around 120s"), "near 943s and around 120s");
 });

@@ -7,7 +7,29 @@ import {
   repairRawSecondTimeReferences,
   repairNumericElapsedTimeReferences,
   repairSpokenClockTimeReferences,
+  repairDecimalSpacing,
 } from '../../src/utils/aiTextRepair.js';
+import { normalizeNumericBandsForSpeech } from '../../src/utils/ttsTextNormalization.js';
+import { normalizeClinicalUnitsForSpeech } from '../../src/lib/ttsClinicalSpeech.js';
+
+test('report repair protects vital bands before playback and download speech cleanup', () => {
+  const input = 'Heart rate climbed through the 120s and low-130s, then the 90s–100s. At 120s it was 125 bpm.';
+  const repaired = repairCharacterSplitParagraph(input);
+  const spoken = normalizeClinicalUnitsForSpeech(normalizeNumericBandsForSpeech(repairDecimalSpacing(repaired)));
+  assert.equal(spoken, 'Heart rate climbed through the 120 range and low-130 range, then the nineties–100 range. At 2 minutes it was 125 beats per minute.');
+  assert.equal(repairDecimalSpacing(spoken), spoken);
+});
+
+test('complete elapsed timestamps are converted without partially rewriting clocks or ISO dates', () => {
+  assert.equal(repairNumericElapsedTimeReferences('At 1:02:03 and 123:45.'), 'At 62 minutes and 3 seconds and 123 minutes and 45 seconds.');
+  const clocks = 'At 14:20:30 UTC, 4:50 PM, local time 14:20, and 2026-09-05T14:20:30.000Z.';
+  assert.equal(repairDecimalSpacing(clocks), clocks);
+});
+
+test('spoken wall clocks and physiological numbers keep their meaning', () => {
+  const input = 'At four thirty PM, heart rate was around one twenty beats per minute and pressure near one forty over ninety.';
+  assert.equal(repairSpokenClockTimeReferences(input), input);
+});
 
 test('raw large second offsets are repaired in AI-facing/user-facing prose', () => {
   const repaired = repairRawSecondTimeReferences('candidate near 943s and at 943 seconds with [943s] evidence');

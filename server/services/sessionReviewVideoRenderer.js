@@ -76,7 +76,7 @@ async function mediaDurationSeconds(filePath) {
 
 export function matchAudioExport(record, request) {
   if (!record?.file_url) return false;
-  if (record.render_version !== 'tts_export_clinical_units_v3') return false;
+  if (record.render_version !== 'tts_export_clinical_units_v4') return false;
   if (String(record.tts_session_key || '') !== String(request.sessionId || '')) return false;
   if (String(record.source_generated_at || '') !== String(request.sourceGeneratedAt || '')) return false;
   if (String(record.review_type || '') && String(record.review_type || '') !== String(request.reviewType || '')) return false;
@@ -93,7 +93,7 @@ export function matchAudioExport(record, request) {
 function matchCompletedTtsJob(job, request) {
   const result = job?.result || {};
   if (job?.type !== 'tts_export' || job?.status !== 'complete' || !result?.file_url) return false;
-  if (result.render_version !== 'tts_export_clinical_units_v3') return false;
+  if (result.render_version !== 'tts_export_clinical_units_v4') return false;
   if (String(job?.meta?.sessionId || '') !== String(request.sessionId || '')) return false;
   if (String(job?.meta?.sourceGeneratedAt || '') !== String(request.sourceGeneratedAt || '')) return false;
   if (String(job?.meta?.reviewType || '') && String(job?.meta?.reviewType || '') !== String(request.reviewType || '')) return false;
@@ -214,7 +214,7 @@ async function resolveNarration(payload, { jobId, signal, onProgress }) {
     model: rendered.model || request.model,
     tts_provider: request.ttsProvider === 'openai' ? 'openai' : 'local',
     format: rendered.format || request.outputFormat,
-    render_version: rendered.render_version || 'tts_export_clinical_units_v3',
+    render_version: rendered.render_version || 'tts_export_clinical_units_v4',
     silence_trim: rendered.silence_trim || null,
     size: rendered.size,
     filename: rendered.filename,

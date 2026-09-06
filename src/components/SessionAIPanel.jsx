@@ -2901,7 +2901,9 @@ ${hrvEvidence ? RR_HRV_INTERPRETATION_RULES : ""}
 ${hrvIntegrationRules}
 
 CRITICAL FOR TEXT-TO-SPEECH QUALITY:
-- Write all times as words: "ten minutes and thirty seconds" not "10:30"
+- Distinguish elapsed session time from wall-clock time. Say "ten minutes and thirty seconds into the recording" for an offset. For a real time of day, retain AM/PM and timezone when supplied; never reinterpret it as elapsed time or invent a timezone.
+- Write elapsed times as words: "ten minutes and thirty seconds" not "10:30".
+- Keep physiological values distinct from times: say "heart rate in the one hundred twenty range" or "one hundred twenty beats per minute", never "120s" or clock-style "one twenty" for a heart rate.
 - Do not write clock-style spoken timestamps like "nine twenty two", "four thirty", or "one oh five". Those must be written as "nine minutes and twenty-two seconds", "four minutes and thirty seconds", or "one minute and five seconds".
 - Never write raw second offsets such as "at 943 seconds" or "943s". Convert them to minutes and seconds, such as "at fifteen minutes and forty-three seconds".
 - Spell out all numbers as words (e.g., "ten beats per minute" not "10 bpm")

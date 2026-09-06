@@ -527,7 +527,7 @@ test('legacy saved MP3 with exact source identity matches despite title formatti
   };
   const legacyExport = {
     file_url: '/uploads/july-1-2026-ai-session-analysis.mp3',
-    render_version: 'tts_export_clinical_units_v3',
+    render_version: 'tts_export_clinical_units_v4',
     tts_session_key: 'session-july-1',
     source_generated_at: '2026-07-03T18:31:39.069Z',
     title: 'July 1 2026 – AI Session Analysis',
@@ -538,6 +538,7 @@ test('legacy saved MP3 with exact source identity matches despite title formatti
   };
 
   assert.equal(matchAudioExport(legacyExport, request), true);
+  assert.equal(matchAudioExport({ ...legacyExport, render_version: 'tts_export_clinical_units_v3' }, request), false);
   assert.equal(matchAudioExport({ ...legacyExport, source_generated_at: 'different' }, request), false);
 });
 

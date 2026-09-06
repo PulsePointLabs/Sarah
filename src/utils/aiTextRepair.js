@@ -1,3 +1,5 @@
+import { normalizeNumericBandsForSpeech } from "./ttsTextNormalization.js";
+
 const DECIMAL_POINT_TOKEN = "__PULSEPOINT_DECIMAL_POINT__";
 
 function protectDecimalPoints(text) {
@@ -85,7 +87,10 @@ function displaySecondWords(value) {
 
 export function repairSpokenClockTimeReferences(text) {
   if (typeof text !== "string") return text;
-  return text.replace(SPOKEN_CLOCK_TIME_RE, (match, prefix, minuteWords, secondWords) => {
+  return text.replace(SPOKEN_CLOCK_TIME_RE, (match, prefix, minuteWords, secondWords, offset, source) => {
+    const suffix = source.slice(offset + match.length);
+    // A clock-like spoken number can be a vital, dose, or actual wall clock.
+    if (/^\s*(?:a\.?m\.?\b|p\.?m\.?\b|beats?\b|bpm\b|millimeters\b|mmHg\b|milliseconds\b|ms\b|percent\b|over\b|hundred\b)/i.test(suffix)) return match;
     const minutes = parseTimeWords(minuteWords);
     const seconds = parseTimeWords(secondWords);
     if (minutes == null || seconds == null || minutes < 0 || seconds < 0 || minutes > 59 || seconds > 59) return match;
@@ -97,23 +102,27 @@ export function repairSpokenClockTimeReferences(text) {
 
 export function repairNumericElapsedTimeReferences(text) {
   if (typeof text !== "string") return text;
-  return text.replace(/\b(\d{1,2}):([0-5]\d)\b/g, (match, minuteText, secondText, offset, source) => {
+  return text.replace(/(?<![\w:.])\b(?:(\d{1,3}):)?(\d{1,3}):([0-5]\d)\b(?![:\d])/g, (match, hourText, minuteText, secondText, offset, source) => {
     const prefix = source.slice(Math.max(0, offset - 72), offset);
-    const suffix = source.slice(offset + match.length, offset + match.length + 12);
-    if (/^\s*(?:a\.?m\.?|p\.?m\.?)/i.test(suffix)) return match;
+    const suffix = source.slice(offset + match.length);
+    if (/^\s*(?:a\.?m\.?\b|p\.?m\.?\b|UTC\b|GMT\b|[ECMP][SD]T\b|Z\b|[+-]\d{2}:?\d{2})/i.test(suffix)) return match;
+    if (/\b(?:clock(?: time)?|time of day|local time)\s*(?:was|is|of|at|:)?\s*$/i.test(prefix)) return match;
+    if (hourText != null && Number(minuteText) > 59) return match;
     // Claude occasionally rewrites a slash-form pressure such as 125/88 as
     // 1:25 over 88. Do not turn that into an elapsed-time phrase.
     if (/\b(?:blood pressure|BP|pressure|systolic|reading)\b[^.!?]{0,64}$/i.test(prefix)
       && /^\s*(?:over|\/)\s*\d{2,3}\b/i.test(suffix)) {
       return `${minuteText}${secondText}`;
     }
-    return formatSecondsAsWords((Number(minuteText) * 60) + Number(secondText));
+    return formatSecondsAsWords((Number(hourText || 0) * 3600) + (Number(minuteText) * 60) + Number(secondText));
   });
 }
 
 export function repairRawSecondTimeReferences(text) {
   if (typeof text !== "string") return text;
-  return repairNumericElapsedTimeReferences(repairSpokenClockTimeReferences(text))
+  // This runs during report repair, before TTS. Protect vital bands here, not
+  // only in the later speech cleaner, which cannot recover an already lost unit.
+  return repairNumericElapsedTimeReferences(repairSpokenClockTimeReferences(normalizeNumericBandsForSpeech(text)))
     .replace(/\b(at|around|near|by|before|after|from|until|through|to)\s+(\d{2,5})\s*seconds?\b/gi, (match, prefix, seconds) => {
       const value = Number(seconds);
       if (!Number.isFinite(value) || value < 60) return match;
