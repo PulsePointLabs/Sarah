@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.259",
-  "commit": "2198bb7",
-  "commitMessage": "Harden live capture and improve visual review",
-  "builtAt": "2026-09-05T23:02:39.437Z"
+  "version": "0.1.260",
+  "commit": "c746dee",
+  "commitMessage": "Fix Sarah narration confusing vital ranges with elapsed time",
+  "builtAt": "2026-09-06T01:35:23.861Z"
 };
