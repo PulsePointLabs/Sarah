@@ -9,6 +9,15 @@ export const HR_SOURCE_IDS = {
   DIRECT_H10: 'direct_h10',
 };
 
+// Each Live Capture screen reapplies its preferences on mount. A viewer must
+// not reset the shared H10 stream or replace the phone's active collector.
+export function sharedHrSourceUpdateAction({ currentSource, requestedSource, recordingActive, h10CollectorActive }) {
+  if (currentSource === HR_SOURCE_IDS.DIRECT_H10 && requestedSource === currentSource) return 'preserve';
+  if (recordingActive) return 'recording_locked';
+  if (currentSource === HR_SOURCE_IDS.DIRECT_H10 && h10CollectorActive) return 'collector_locked';
+  return 'apply';
+}
+
 export const HR_SOURCE_LABELS = {
   [HR_SOURCE_IDS.HEART_RATE_ON_STREAM]: 'HeartRateOnStream',
   [HR_SOURCE_IDS.PULSOID]: 'Pulsoid / Polar H10',

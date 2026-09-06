@@ -10,6 +10,7 @@ import { telemetryEngine } from '../localEngine/index.js';
 import {
   HR_SOURCE_IDS,
   HR_SOURCE_LABELS,
+  sharedHrSourceUpdateAction,
   cleanHr,
   maskToken,
   normalizeDirectH10Telemetry,
@@ -2315,11 +2316,25 @@ startEmgPolling();
 refreshLatestFiles();
 
 liveCaptureRouter.post('/hr-source', (req, res) => {
-  if (state.hr.recording?.active) {
+  const settings = sanitizeHrSourceSettings(req.body || {});
+  const action = sharedHrSourceUpdateAction({
+    currentSource: state.hr.selectedSource,
+    requestedSource: settings.source,
+    recordingActive: Boolean(state.hr.recording?.active),
+    h10CollectorActive: directH10CollectorLeaseIsFresh(),
+  });
+  if (action === 'preserve') {
+    res.json({ ok: true, hr: state.hr });
+    return;
+  }
+  if (action === 'recording_locked') {
     res.status(409).json({ error: 'Stop the active recording before switching heart-rate sources.' });
     return;
   }
-  const settings = sanitizeHrSourceSettings(req.body || {});
+  if (action === 'collector_locked') {
+    res.status(409).json({ error: 'Disconnect the active H10 collector before switching heart-rate sources.' });
+    return;
+  }
   state.hr.selectedSource = settings.source;
   state.hr.selectedSourceLabel = HR_SOURCE_LABELS[settings.source] || settings.source;
   pulsoidAccessToken = settings.pulsoidToken;
