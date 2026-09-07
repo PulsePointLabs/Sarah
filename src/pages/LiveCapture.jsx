@@ -5347,13 +5347,15 @@ export default function LiveCapture() {
     }
   }, []);
 
+  const syncBloodPressureRef = useRef(syncBloodPressureForLiveSession);
+  syncBloodPressureRef.current = syncBloodPressureForLiveSession;
   useEffect(() => {
-    syncBloodPressureForLiveSession({ manual: false });
+    syncBloodPressureRef.current({ manual: false });
     const timer = window.setInterval(() => {
-      syncBloodPressureForLiveSession({ manual: false });
+      syncBloodPressureRef.current({ manual: false });
     }, BLOOD_PRESSURE_SYNC_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [liveSession?.activeSessionId, syncBloodPressureForLiveSession]);
+  }, [liveSession?.activeSessionId]);
 
   useEffect(() => {
     if (!isSarahNativeShell()) return undefined;
