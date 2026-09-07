@@ -3959,7 +3959,7 @@ export default function LiveCapture() {
     ? `${latestBpReading.systolic_mm_hg}/${latestBpReading.diastolic_mm_hg}`
     : "--";
   const latestBpHelper = latestBpReading
-    ? `${latestBpReading.pulse_bpm ? `${Math.round(Number(latestBpReading.pulse_bpm))} bpm pulse · ` : ""}${formatBloodPressureTime(latestBpReading.measured_at)}`
+    ? `${latestBpReading.pulse_bpm ? `${Math.round(Number(latestBpReading.pulse_bpm))} bpm pulse · ` : ""}${formatBloodPressureTime(latestBpReading.measured_at, latestBpReading.timestamp_source)}`
     : "waiting for OMRON";
   const leftEmgLevel = readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct);
   const rightEmgLevel = readNumber(emgTelemetry?.right_pct);
@@ -4928,6 +4928,8 @@ export default function LiveCapture() {
         blood_pressure: {
           reading_id: reading.id,
           measured_at: reading.measured_at,
+          timestamp_source: reading.timestamp_source,
+          timestamp_note: reading.timestamp_note,
           systolic_mm_hg: reading.systolic_mm_hg,
           diastolic_mm_hg: reading.diastolic_mm_hg,
           pulse_bpm: reading.pulse_bpm ?? null,
@@ -4943,6 +4945,8 @@ export default function LiveCapture() {
         blood_pressure: {
           reading_id: latest.id,
           measured_at: latest.measured_at,
+          timestamp_source: latest.timestamp_source,
+          timestamp_note: latest.timestamp_note,
           systolic_mm_hg: latest.systolic_mm_hg,
           diastolic_mm_hg: latest.diastolic_mm_hg,
           pulse_bpm: latest.pulse_bpm ?? null,
@@ -4954,6 +4958,8 @@ export default function LiveCapture() {
       latest_blood_pressure_reading: {
         id: latest.id,
         measured_at: latest.measured_at,
+        timestamp_source: latest.timestamp_source,
+        timestamp_note: latest.timestamp_note,
         systolic_mm_hg: latest.systolic_mm_hg,
         diastolic_mm_hg: latest.diastolic_mm_hg,
         pulse_bpm: latest.pulse_bpm ?? null,
@@ -4980,7 +4986,7 @@ export default function LiveCapture() {
       }
       return;
     }
-    if (!manual && bpOmronListening) return;
+
     bpSyncInFlightRef.current = true;
     if (manual) {
       setBpCapture((prev) => ({
@@ -5070,7 +5076,7 @@ export default function LiveCapture() {
 
     const readingKey = reading.external_id || reading.id || `${reading.measured_at}-${reading.systolic_mm_hg}-${reading.diastolic_mm_hg}-${reading.pulse_bpm || ""}`;
     if (bpOmronSeenRef.current.has(readingKey)) return;
-    bpOmronSeenRef.current.add(readingKey);
+
 
     setBpCapture((prev) => ({
       ...prev,
@@ -5082,9 +5088,12 @@ export default function LiveCapture() {
     }));
 
     const activeSessionId = liveSession?.activeSessionId || null;
+    setBpCapture((prev) => ({ ...prev, sessionId: activeSessionId, lastReading: reading }));
     const sessionReading = activeSessionId ? { ...reading, session: activeSessionId } : reading;
     const saved = await ingestBloodPressureReadings([sessionReading]);
-    const savedReadings = Array.isArray(saved?.readings) && saved.readings.length ? saved.readings : [reading];
+    if (!Array.isArray(saved?.readings) || !saved.readings.length) throw new Error("The BP server did not confirm saving this reading. It will be retried.");
+    bpOmronSeenRef.current.add(readingKey);
+    const savedReadings = saved.readings;
     const latestReading = savedReadings[0] || reading;
 
     setBpCapture((prev) => ({
@@ -5120,6 +5129,9 @@ export default function LiveCapture() {
         }));
       });
   }, [liveSession?.activeSessionId, stampBloodPressureReadings]);
+
+  const saveOmronReadingRef = useRef(saveOmronBloodPressureForLiveSession);
+  saveOmronReadingRef.current = saveOmronBloodPressureForLiveSession;
 
   const startOmronBloodPressureListenerForLiveSession = useCallback(async ({ auto = false, forceDevicePicker = false } = {}) => {
     if (bpOmronActionInFlightRef.current) {
@@ -5168,7 +5180,7 @@ export default function LiveCapture() {
             lastReading: reading,
             message: `Received OMRON reading ${formatBloodPressure(reading)}. Saving...`,
           }));
-          return saveOmronBloodPressureForLiveSession(reading).catch((error) => {
+          return saveOmronReadingRef.current(reading).catch((error) => {
             setBpCapture((prev) => ({
               ...prev,
               syncing: false,
@@ -7738,7 +7750,7 @@ export default function LiveCapture() {
           icon={Activity}
           title="Blood Pressure"
           helper={bpCapture.lastReading
-            ? `Last reading: ${formatBloodPressure(bpCapture.lastReading)} · ${formatBloodPressureTime(bpCapture.lastReading.measured_at)}`
+            ? `Last reading: ${formatBloodPressure(bpCapture.lastReading)} · ${formatBloodPressureTime(bpCapture.lastReading.measured_at, bpCapture.lastReading.timestamp_source || bpCapture.lastReading.raw?.timestamp_source)}`
             : "OMRON and Health Connect controls"}
           status={bpOmronListening ? "OMRON armed" : bpCapture.lastReading ? "Latest ready" : "Not connected"}
         >
@@ -7749,7 +7761,7 @@ export default function LiveCapture() {
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
                 {bpCapture.lastReading
-                  ? `Last reading: ${formatBloodPressure(bpCapture.lastReading)} · ${formatBloodPressureTime(bpCapture.lastReading.measured_at)}`
+                  ? `Last reading: ${formatBloodPressure(bpCapture.lastReading)} · ${formatBloodPressureTime(bpCapture.lastReading.measured_at, bpCapture.lastReading.timestamp_source || bpCapture.lastReading.raw?.timestamp_source)}`
                   : bpCapture.message || "Waiting for a saved BP reading."}
               </p>
               {bpCapture.lastCapturedAt && (

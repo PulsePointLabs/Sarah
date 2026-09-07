@@ -24,6 +24,7 @@ async function stopNativeOmronListener() {
   const listener = nativeOmronListener;
   nativeOmronListener = null;
   if (!listener) return { ok: true, stopped: false };
+  clearInterval(listener.retryTimer);
   await Promise.all((listener.handles || []).map((handle) => handle?.remove?.().catch?.(() => {})));
   await NativeOmronBloodPressure.disarm().catch(() => {});
   return { ok: true, stopped: true, device: listener.device };
@@ -40,12 +41,17 @@ async function startNativeOmronListener({ onStatus, onReading, onDisconnect, onE
   }
   const listener = { device, handles: [], listening: true, connected: false, state: "starting", onDisconnect };
   nativeOmronListener = listener;
+  const inFlight = new Map();
   const deliverReading = (reading) => {
     if (!reading || nativeOmronListener !== listener) return;
+    const key = reading.external_id || JSON.stringify(reading);
+    if (inFlight.has(key)) return;
     listener.connected = true;
-    Promise.resolve(onReading?.(reading, { device, native: true }))
+    const operation = Promise.resolve().then(() => onReading?.(reading, { device, native: true }))
       .then(() => NativeOmronBloodPressure.acknowledgeReading({ externalId: reading.external_id || "" }))
-      .catch((error) => onError?.(error));
+      .catch((error) => onError?.(error))
+      .finally(() => inFlight.delete(key));
+    inFlight.set(key, operation);
   };
   listener.handles = await Promise.all([
     NativeOmronBloodPressure.addListener("status", (event) => {
@@ -66,7 +72,14 @@ async function startNativeOmronListener({ onStatus, onReading, onDisconnect, onE
     const result = await NativeOmronBloodPressure.arm({ deviceId: device.deviceId, name: device.name || device.displayName });
     listener.state = result?.state || "waiting_for_cuff";
     listener.connected = Boolean(result?.connected);
-    if (result?.pendingReading) deliverReading(result.pendingReading);
+    const replay = (state) => {
+      const pending = Array.isArray(state?.pendingReadings) ? state.pendingReadings : [state?.pendingReading].filter(Boolean);
+      pending.forEach(deliverReading);
+    };
+    replay(result);
+    listener.retryTimer = setInterval(() => {
+      NativeOmronBloodPressure.getState().then(replay).catch((error) => onError?.(error));
+    }, 10000);
     onStatus?.("OMRON is armed. Sarah will connect as soon as the cuff wakes or transmits.");
     return { ok: true, device, services: [], native: true };
   } catch (error) {

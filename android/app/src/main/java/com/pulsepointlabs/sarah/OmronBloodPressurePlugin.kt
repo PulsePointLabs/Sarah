@@ -26,7 +26,7 @@ import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
-import java.util.Calendar
+import org.json.JSONArray
 import java.util.UUID
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -84,10 +84,16 @@ class OmronBloodPressurePlugin : Plugin() {
     @PluginMethod
     fun acknowledgeReading(call: PluginCall) {
         val expectedId = call.getString("externalId")?.trim().orEmpty()
-        val pending = pendingReading()
-        val pendingId = pending?.getString("external_id").orEmpty()
-        if (expectedId.isBlank() || pendingId == expectedId) {
-            prefs.edit().remove(KEY_PENDING_READING).apply()
+        if (expectedId.isNotBlank()) {
+            synchronized(this) {
+                val retained = JSONArray()
+                val queue = pendingReadings()
+                for (index in 0 until queue.length()) {
+                    val item = queue.getJSONObject(index)
+                    if (item.optString("external_id") != expectedId) retained.put(item)
+                }
+                prefs.edit().putString(KEY_PENDING_QUEUE, retained.toString()).remove(KEY_PENDING_READING).commit()
+            }
         }
         call.resolve(JSObject().put("ok", true))
     }
@@ -211,7 +217,12 @@ class OmronBloodPressurePlugin : Plugin() {
         }
         // Persist before crossing into the WebView. If its renderer is restarted between
         // this callback and the API save, arm() replays the packet using its stable id.
-        prefs.edit().putString(KEY_PENDING_READING, reading.toString()).apply()
+        synchronized(this) {
+            val queue = pendingReadings()
+            val id = reading.getString("external_id")
+            if ((0 until queue.length()).none { queue.getJSONObject(it).optString("external_id") == id }) queue.put(reading)
+            prefs.edit().putString(KEY_PENDING_QUEUE, queue.toString()).remove(KEY_PENDING_READING).commit()
+        }
         notifyListeners("reading", reading)
         notifyListeners("status", stateObject("reading_received").put("message", "OMRON reading received."))
     }
@@ -227,8 +238,19 @@ class OmronBloodPressurePlugin : Plugin() {
         }
     }
 
-    private fun pendingReading(): JSObject? = prefs.getString(KEY_PENDING_READING, null)
-        ?.let { encoded -> runCatching { JSObject(encoded) }.getOrNull() }
+    private fun pendingReadings(): JSONArray {
+        val queue = runCatching { JSONArray(prefs.getString(KEY_PENDING_QUEUE, "[]")) }.getOrElse { JSONArray() }
+        prefs.getString(KEY_PENDING_READING, null)?.let { encoded ->
+            runCatching { JSObject(encoded) }.getOrNull()?.let { legacy ->
+                if ((0 until queue.length()).none { queue.getJSONObject(it).optString("external_id") == legacy.getString("external_id") }) queue.put(legacy)
+            }
+        }
+        return queue
+    }
+
+    private fun pendingReading(): JSObject? = pendingReadings().let {
+        if (it.length() > 0) JSObject(it.getJSONObject(0).toString()) else null
+    }
 
     private fun stateObject(state: String) = JSObject()
         .put("listening", armed)
@@ -237,6 +259,7 @@ class OmronBloodPressurePlugin : Plugin() {
         .put("deviceId", targetAddress ?: "")
         .put("deviceName", targetName)
         .put("pendingReading", pendingReading())
+        .put("pendingReadings", pendingReadings())
 
     private fun emitError(message: String) {
         notifyListeners("error", stateObject("error").put("message", message))
@@ -264,15 +287,15 @@ class OmronBloodPressurePlugin : Plugin() {
         val systolic = pressure()
         val diastolic = pressure()
         val mean = pressure()
-        var timestamp = System.currentTimeMillis()
+        val receivedAt = System.currentTimeMillis()
+        var timestamp = receivedAt
+        var cuffDate: Long? = null
         if (flags and 0x02 != 0 && bytes.size >= offset + 7) {
             val year = (bytes[offset].toInt() and 0xff) or ((bytes[offset + 1].toInt() and 0xff) shl 8)
-            val calendar = Calendar.getInstance().apply {
-                set(year, (bytes[offset + 2].toInt() and 0xff) - 1, bytes[offset + 3].toInt() and 0xff,
-                    bytes[offset + 4].toInt() and 0xff, bytes[offset + 5].toInt() and 0xff, bytes[offset + 6].toInt() and 0xff)
-                set(Calendar.MILLISECOND, 0)
-            }
-            timestamp = calendar.timeInMillis
+            cuffDate = OmronMeasurementTime.parse(year, bytes[offset + 2].toInt() and 0xff,
+                bytes[offset + 3].toInt() and 0xff, bytes[offset + 4].toInt() and 0xff,
+                bytes[offset + 5].toInt() and 0xff, bytes[offset + 6].toInt() and 0xff)
+            timestamp = cuffDate ?: receivedAt
             offset += 7
         }
         val pulse = if (flags and 0x04 != 0 && bytes.size >= offset + 2) readSfloat().roundToInt() else null
@@ -287,13 +310,17 @@ class OmronBloodPressurePlugin : Plugin() {
             .put("body_position", "unknown")
             .put("measurement_location", "upper_arm")
             .put("external_id", "omron-native-${device.address.replace(":", "")}-${timestamp}-${systolic}-${diastolic}-${pulse ?: 0}")
-            .put("raw", JSObject().put("transport", "native_bluetooth_le").put("mean_arterial_pressure_mm_hg", mean).put("flags", flags))
+            .put("raw", JSObject().put("transport", "native_bluetooth_le").put("mean_arterial_pressure_mm_hg", mean).put("flags", flags)
+                .put("timestamp_source", if (cuffDate == null) "received_at" else "cuff_clock")
+                .put("received_at", java.time.Instant.ofEpochMilli(receivedAt).toString())
+                .put("timestamp_note", if (cuffDate == null) "Cuff date unavailable or invalid; phone reception time used." else "Cuff local clock interpreted in phone time zone."))
     }
 
     companion object {
         private const val PREFS = "sarah_omron_device"
         private const val KEY_ADDRESS = "address"
         private const val KEY_NAME = "name"
+        private const val KEY_PENDING_QUEUE = "pending_readings_v2"
         private const val KEY_PENDING_READING = "pending_reading"
         private const val SCAN_WINDOW_MS = 12_000L
         private const val SCAN_RESTART_DELAY_MS = 750L

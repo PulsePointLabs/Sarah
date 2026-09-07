@@ -9,14 +9,16 @@ export function formatBloodPressure(reading) {
   return `${reading.systolic_mm_hg}/${reading.diastolic_mm_hg} mmHg${pulse}`;
 }
 
-export function formatBloodPressureTime(value) {
+export function formatBloodPressureTime(value, timestampSource = "") {
   if (!value) return "";
-  return new Date(value).toLocaleString([], {
+  if (!Number.isFinite(new Date(value).getTime())) return "Cuff date unavailable — reading not yet saved";
+  const label = new Date(value).toLocaleString([], {
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
   });
+  return timestampSource === "received_at" ? `${label} (phone received time; cuff date unavailable)` : label;
 }
 
 export async function getBloodPressureStatus() {

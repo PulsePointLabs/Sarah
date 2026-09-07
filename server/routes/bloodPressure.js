@@ -47,6 +47,9 @@ function normalizeReading(input = {}) {
   return {
     id: input.id || stableReadingId({ ...input, measured_at: measuredAt }),
     measured_at: measuredAt,
+    timestamp_source: cleanText(input.timestamp_source || input.raw?.timestamp_source || 'source_record'),
+    timestamp_note: cleanText(input.timestamp_note || input.raw?.timestamp_note),
+    received_at: isoOrNull(input.received_at || input.raw?.received_at),
     systolic_mm_hg: Math.round(systolic),
     diastolic_mm_hg: Math.round(diastolic),
     pulse_bpm: cleanNumber(input.pulse_bpm ?? input.pulse ?? input.heart_rate_bpm),
