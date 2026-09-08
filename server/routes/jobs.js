@@ -37,12 +37,14 @@ import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js'
 import { runProfileAnatomyImageIndex } from '../services/profileAnatomyImageIndex.js';
 import { materializeProfileReviewBatchRequest } from '../services/profileReviewBatchPayload.js';
 import { runCloudMultimodalAnalysis } from '../services/cloudAnalysis/runner.js';
-import { extractLocalVideoFramesAtTimes, normalizeLocalVideoPath } from './files.js';
+import { extractLocalVideoFramesAtTimes, normalizeLocalVideoPath, localVideoMetadata } from './files.js';
 import {
   manualAnnotationTargetFrameTimes,
   reviewedFrameTimesForVideo,
   sameVideoEvidenceSource,
   uncoveredFrameTimes,
+  mergeManualAnnotationReview,
+  reusedManualAnnotationEvidence,
 } from '../../src/lib/manualAnnotationFrameCoverage.js';
 import {
   FOOT_ASSESSMENT_SCHEMA,
@@ -555,7 +557,7 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
   const entityName = recordType === 'body_exploration' ? 'BodyExploration' : 'Session';
   const analysisField = recordType === 'body_exploration' ? 'ai_body_exploration' : 'ai_analysis';
   const event = payload?.event || {};
-  const video = payload?.video || {};
+  let video = payload?.video || {};
   const sourcePath = normalizeLocalVideoPath(video.path);
   if (!recordId || !sourcePath || !String(event.note || '').trim()) {
     throw new Error('Manual annotation visual review requires a saved record, note, and linked local video.');
@@ -563,15 +565,20 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
   const record = getEntity(entityName, recordId);
   if (!record) throw new Error('The saved record for this manual annotation no longer exists.');
 
+  const videoMeta = await localVideoMetadata(sourcePath);
+  video = { ...video, path: videoMeta.path, fingerprint: videoMeta.fingerprint };
+
   const noteTimeS = Math.max(0, Number(event.time_s) || 0);
   const analysis = record?.[analysisField] || {};
-  const recordedDurationS = Number(record.duration_minutes || 0) * 60;
-  const desiredSessionTimes = manualAnnotationTargetFrameTimes(noteTimeS, {
-    maxSessionTimeS: recordedDurationS > 0 ? recordedDurationS : noteTimeS + 5,
-  });
-  const reviewedSessionTimes = reviewedFrameTimesForVideo(analysis, video);
-  const newSessionTimes = uncoveredFrameTimes(desiredSessionTimes, reviewedSessionTimes);
   const timelineOffsetSeconds = Number(video.timelineOffsetSeconds) || 0;
+  const desiredSessionTimes = manualAnnotationTargetFrameTimes(noteTimeS, {
+    maxSessionTimeS: videoMeta.durationSeconds > 0 ? videoMeta.durationSeconds + timelineOffsetSeconds - 0.05 : Infinity,
+  }).filter((time) => time >= timelineOffsetSeconds);
+  if (!desiredSessionTimes.length) throw new Error('This annotation window is outside the selected camera video. Check its timeline offset.');
+  const reviewedSessionTimes = reviewedFrameTimesForVideo(analysis, video);
+  const newSessionTimes = payload.forceReview ? desiredSessionTimes : uncoveredFrameTimes(desiredSessionTimes, reviewedSessionTimes);
+  const reusedTimes = desiredSessionTimes.filter((time) => !newSessionTimes.includes(time));
+  const reusedEvidence = reusedManualAnnotationEvidence(analysis, video, reusedTimes);
   const newSourceTimes = newSessionTimes
     .map((time) => Number((time - timelineOffsetSeconds).toFixed(2)))
     .filter((time) => time >= 0);
@@ -583,13 +590,7 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
     const existingReviews = Array.isArray(latestAnalysis._manual_annotation_visual_reviews)
       ? latestAnalysis._manual_annotation_visual_reviews
       : [];
-    const reviewKey = String(event.event_id || event.id || `${noteTimeS}:${event.note}`);
-    const nextReviews = [
-      ...existingReviews.filter((item) => String(item.event_id || `${item.note_time_s}:${item.manual_note}`) !== reviewKey),
-      review,
-    ]
-      .sort((left, right) => Number(left.note_time_s || 0) - Number(right.note_time_s || 0))
-      .slice(-500);
+    const nextReviews = mergeManualAnnotationReview(existingReviews, review);
     const existingVideoFindings = Array.isArray(latestAnalysis._video_pass_findings)
       ? latestAnalysis._video_pass_findings
       : [];
@@ -655,11 +656,14 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
       filename: video.filename || '',
       fingerprint: video.fingerprint || '',
       role: video.role || 'main',
+      path: video.path,
+      timelineOffsetSeconds,
     },
     source_video_role: video.role || 'main',
     requested_window: { start_s: Math.max(0, noteTimeS - 5), end_s: noteTimeS + 5 },
     reviewed_frame_times_s: newSessionTimes,
-    reused_frame_times_s: desiredSessionTimes.filter((time) => !newSessionTimes.includes(time)),
+    reused_frame_times_s: reusedTimes,
+    reused_findings: reusedEvidence.findings,
     created_at: generatedAt,
   };
 
@@ -668,9 +672,9 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
     return persistReview({
       ...baseReview,
       coverage_status: 'fully_reused',
-      summary: 'All requested frames were already covered by saved visual review on this camera; Sarah did not process them again.',
+      summary: 'These frames were already reviewed on this camera. Saved evidence is shown where available; this note was not assessed again. Use Review again for a fresh read of the full window.',
       findings: [],
-      sampled_frames: [],
+      sampled_frames: reusedEvidence.sampled_frames,
     });
   }
 
@@ -681,11 +685,12 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
     label: `manual-note-${recordId}-${Math.round(noteTimeS)}`,
     maxWidth: 1920,
   });
-  const sampledFrames = extracted.frames.map((frame, index) => ({
+  if (!extracted.frames.length) throw new Error('No frames were available from the selected camera for this annotation.');
+  const sampledFrames = extracted.frames.map((frame) => ({
     url: frame.url,
     filename: frame.stored_filename || frame.filename,
     frameTimeSeconds: frame.frameTimeSeconds,
-    recordTimeSeconds: newSessionTimes[index],
+    recordTimeSeconds: Number((frame.frameTimeSeconds + timelineOffsetSeconds).toFixed(2)),
     frameIndex: frame.frameIndex,
   }));
   const priorManualReviews = (Array.isArray(analysis._manual_annotation_visual_reviews) ? analysis._manual_annotation_visual_reviews : [])
@@ -784,6 +789,7 @@ Return a compact structured review centered on the few meaningful changes. Findi
   context.updateProgress({ phase: 'saving', current: 2, total: 3, message: `Saving ${savedFindings.length} supported visual finding${savedFindings.length === 1 ? '' : 's'}…` });
   return persistReview({
     ...baseReview,
+    reviewed_frame_times_s: sampledFrames.map((frame) => frame.recordTimeSeconds),
     coverage_status: newSessionTimes.length === desiredSessionTimes.length ? 'new_frames_only' : 'mixed_new_and_reused',
     source_video: { ...baseReview.source_video, fingerprint: video.fingerprint || extracted.meta.fingerprint || '' },
     summary: stripStaticManualAnnotationReviewText(stripNonBodyObjectContext(formatManualAnnotationReviewText(isFeetCamera

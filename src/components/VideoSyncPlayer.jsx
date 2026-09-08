@@ -39,6 +39,7 @@ import {
   sessionTimeToMediaTime,
 } from "@/lib/videoSyncClock";
 import { formatManualAnnotationReviewText } from "@/lib/manualAnnotationReviewText";
+import { findManualAnnotationReview, manualReviewEventKey, normalizeReviewCameraRole } from "@/lib/manualAnnotationFrameCoverage";
 
 function getCategoryMeta(value) {
   return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -342,8 +343,8 @@ function AnnotationTagPill({ value }) {
   );
 }
 
-function ManualNoteSarahRead({ review, pending = false, compact = false }) {
-  if (!review && !pending) return null;
+function ManualNoteSarahRead({ review, pending = false, compact = false, cameraLabel, onReview }) {
+  if (!review && !pending && !onReview) return null;
   const findings = Array.isArray(review?.findings) ? review.findings : [];
   const visibleFindings = compact ? findings.slice(0, 2) : findings;
   return (
@@ -351,11 +352,19 @@ function ManualNoteSarahRead({ review, pending = false, compact = false }) {
       <div className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-wider text-primary">
         <Sparkles className={`h-3 w-3 ${pending ? "animate-pulse" : ""}`} /> Sarah&apos;s ±5s read
       </div>
+      <p className="mt-1 text-[10px] text-muted-foreground">{cameraLabel || review?.source_video?.label || "Selected camera"} · visual review</p>
       {pending ? (
         <p className="mt-1 text-[10px] leading-snug text-muted-foreground">Reviewing the nearby frames quietly…</p>
       ) : (
         <>
           {review?.summary && <p className="mt-1 text-[10px] leading-snug text-foreground/85">{formatManualAnnotationReviewText(review.summary)}</p>}
+          {!review?.summary && findings.length === 0 && <p className="mt-1 text-[10px] leading-snug text-muted-foreground">{review
+            ? "Review completed with no new supported visual changes saved."
+            : "No saved review for this note on the selected camera."}</p>}
+          {review?.note_assessment && <p className="mt-1 text-[10px] text-muted-foreground">Note: {String(review.note_assessment).replaceAll("_", " ")} in this camera.</p>}
+          {review?.sampled_frames?.length > 0 && <p className="mt-1 text-[10px] text-muted-foreground">Sampled: {fmtMmSs(Math.min(...review.sampled_frames.map((frame) => Number(frame.recordTimeSeconds))))}–{fmtMmSs(Math.max(...review.sampled_frames.map((frame) => Number(frame.recordTimeSeconds))))}</p>}
+          {review?.foot_assessment?.relaxation_evidence && <details className="mt-1 text-[10px] text-muted-foreground"><summary className="cursor-pointer">Saved foot assessment</summary><p className="mt-1">{formatManualAnnotationReviewText(review.foot_assessment.relaxation_evidence)}</p></details>}
+          {review?.reused_findings?.length > 0 && <details className="mt-1 text-[10px] text-muted-foreground"><summary className="cursor-pointer">Previously saved evidence from this camera ({review.reused_findings.length})</summary>{review.reused_findings.map((finding, index) => <p key={index} className="mt-1">{finding.anatomical_area}: {formatManualAnnotationReviewText(finding.observation)}</p>)}</details>}
           {visibleFindings.length > 0 && (
             <div className="mt-1.5 space-y-1 border-t border-primary/10 pt-1.5">
               {visibleFindings.map((finding, index) => (
@@ -369,6 +378,7 @@ function ManualNoteSarahRead({ review, pending = false, compact = false }) {
               )}
             </div>
           )}
+          {onReview && <button type="button" onClick={onReview} className="mt-2 text-[10px] font-semibold text-primary underline">{review ? "Review again" : "Review this camera"}</button>}
         </>
       )}
     </div>
@@ -874,22 +884,15 @@ export default function VideoSyncPlayer({
     setPendingManualReviewIds(new Set());
   }, [session.id]);
 
-  const manualReviewByEventId = useMemo(() => new Map(
-    manualVisualReviews
-      .filter((review) => review?.event_id)
-      .map((review) => [String(review.event_id), review]),
-  ), [manualVisualReviews]);
-  const manualReviewForEvent = useCallback((event) => {
-    const eventId = String(event?.event_id || event?.id || "");
-    if (eventId && manualReviewByEventId.has(eventId)) return manualReviewByEventId.get(eventId);
-    const note = String(event?.note || "").trim();
-    const time = Number(event?.time_s);
-    return manualVisualReviews.find((review) => (
-      Number.isFinite(time)
-      && Math.abs(Number(review?.note_time_s) - time) <= 0.6
-      && String(review?.manual_note || "").trim() === note
-    )) || null;
-  }, [manualReviewByEventId, manualVisualReviews]);
+  const activeReviewVideo = useMemo(() => ({
+    ...videoFeeds[activeFeedKey],
+    role: normalizeReviewCameraRole(activeFeedKey),
+    filename: videoFeeds[activeFeedKey]?.fileName || videoFeeds[activeFeedKey]?.label || activeFeedKey,
+    timelineOffsetSeconds: Number(videoFeeds[activeFeedKey]?.timelineOffsetSeconds ?? videoOffset) || 0,
+  }), [activeFeedKey, videoFeeds, videoOffset]);
+  const manualReviewForEvent = useCallback((event) => (
+    findManualAnnotationReview(manualVisualReviews, event, activeReviewVideo)
+  ), [manualVisualReviews, activeReviewVideo]);
 
   const auditFeeds = useMemo(
     () => VIDEO_FEED_SLOTS.map((meta) => ({ ...meta, ...videoFeeds[meta.key] })).filter((feed) => feed.localPath),
@@ -903,13 +906,8 @@ export default function VideoSyncPlayer({
   }, [activeFeedKey, auditFeeds, snapshotAuditFeedKey]);
 
   const selectVisualReviewFeed = useCallback((preferredKey = "") => {
-    if (preferredKey && videoFeeds[preferredKey]?.localPath) return { ...videoFeeds[preferredKey], key: preferredKey };
-    const active = videoFeeds[activeFeedKey];
-    if (active?.localPath) return { ...active, key: activeFeedKey };
-    for (const key of ["main", "composite", "lower_body", "lateral"]) {
-      if (videoFeeds[key]?.localPath) return { ...videoFeeds[key], key };
-    }
-    return null;
+    const key = preferredKey || activeFeedKey;
+    return videoFeeds[key]?.localPath ? { ...videoFeeds[key], key } : null;
   }, [activeFeedKey, videoFeeds]);
 
   useEffect(() => {
@@ -1055,19 +1053,20 @@ export default function VideoSyncPlayer({
     onEventsChange?.(sorted);
   };
 
-  const queueManualAnnotationVisualReview = async (event, { quiet = true } = {}) => {
+  const queueManualAnnotationVisualReview = async (event, { quiet = true, forceReview = false } = {}) => {
     const feed = selectVisualReviewFeed();
     if (!session?.id || !feed?.localPath || !event?.note) {
       if (!quiet) showQuickNotice("Load or link a local video before requesting Sarah's ±5s read.", "error");
       return false;
     }
     const role = feed.key === "lower_body" ? "feet" : feed.key;
-    const eventId = String(event.event_id || event.id || `${event.time_s}:${event.note}`);
+    const eventId = `${feed.key}:${manualReviewEventKey(event)}`;
     setPendingManualReviewIds((current) => new Set([...current, eventId]));
     try {
       const startedJob = await startBackgroundJob("manual_annotation_visual_review", {
         recordId: session.id,
         recordType,
+        forceReview,
         event: { ...event, event_id: event.event_id || event.id || null },
         video: {
           path: feed.localPath,
@@ -1096,7 +1095,7 @@ export default function VideoSyncPlayer({
       return true;
     } catch (error) {
       console.warn("Manual annotation visual review could not be completed:", error);
-      if (!quiet) showQuickNotice(error?.message || "Sarah's ±5s review could not be completed.", "error");
+      showQuickNotice(error?.message || "Sarah's ±5s review could not be completed.", "error");
       return false;
     } finally {
       setPendingManualReviewIds((current) => {
@@ -1106,6 +1105,10 @@ export default function VideoSyncPlayer({
       });
     }
   };
+
+  // Dictation callbacks can outlive the render in which a camera was selected.
+  const queueManualReviewRef = useRef(queueManualAnnotationVisualReview);
+  queueManualReviewRef.current = queueManualAnnotationVisualReview;
 
   const missingManualReviewEvents = useMemo(() => {
     const seen = new Set();
@@ -1295,7 +1298,7 @@ export default function VideoSyncPlayer({
 
     try {
       await saveEvents([...eventsRef.current, event]);
-      queueManualAnnotationVisualReview(event);
+      queueManualReviewRef.current(event);
       setLastUsedCat(categories[0] || defaultCategory);
       pulseHaptic([20, 35, 20]);
       const preview = cleanNote.length > 110 ? `${cleanNote.slice(0, 107)}...` : cleanNote;
@@ -1695,6 +1698,7 @@ export default function VideoSyncPlayer({
         label: video.label || video.filename || current[feedKey]?.label || "Linked video",
         src: null,
         fileName: video.label || video.filename || video.path,
+        fingerprint: video.fingerprint || "",
         localPath: video.path,
         timelineOffsetSeconds: Number(video.timelineOffsetSeconds) || 0,
         preparing: true,
@@ -3690,7 +3694,9 @@ export default function VideoSyncPlayer({
                           <span className="text-[10px] text-foreground leading-tight line-clamp-2">{ev.note}</span>
                           <ManualNoteSarahRead
                             review={manualReviewForEvent(ev)}
-                            pending={pendingManualReviewIds.has(String(ev.event_id || `${ev.time_s}:${ev.note}`))}
+                            pending={pendingManualReviewIds.has(`${activeFeedKey}:${manualReviewEventKey(ev)}`)}
+                      cameraLabel={videoFeeds[activeFeedKey]?.label || activeFeedKey}
+                      onReview={() => queueManualAnnotationVisualReview(ev, { quiet: false, forceReview: true })}
                             compact
                           />
                         </div>
@@ -3756,7 +3762,9 @@ export default function VideoSyncPlayer({
                         <span className="text-xs text-foreground leading-tight">{ev.note}</span>
                         <ManualNoteSarahRead
                           review={manualReviewForEvent(ev)}
-                          pending={pendingManualReviewIds.has(String(ev.event_id || `${ev.time_s}:${ev.note}`))}
+                          pending={pendingManualReviewIds.has(`${activeFeedKey}:${manualReviewEventKey(ev)}`)}
+                      cameraLabel={videoFeeds[activeFeedKey]?.label || activeFeedKey}
+                      onReview={() => queueManualAnnotationVisualReview(ev, { quiet: false, forceReview: true })}
                           compact
                         />
                         <span className="text-[9px] font-mono text-muted-foreground">
@@ -3798,7 +3806,7 @@ export default function VideoSyncPlayer({
             <button type="button" disabled={manualBackfillState?.running} onClick={backfillMissingManualReviews} className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary disabled:opacity-50">
               {manualBackfillState?.running
                 ? `Filling ±5s reads ${manualBackfillState.current}/${manualBackfillState.total}…`
-                : `Fill ${missingManualReviewEvents.length} missing ±5s read${missingManualReviewEvents.length === 1 ? "" : "s"}`}
+                : `Fill ${missingManualReviewEvents.length} missing ±5s read${missingManualReviewEvents.length === 1 ? "" : "s"} · ${videoFeeds[activeFeedKey]?.label || activeFeedKey}`}
             </button>
           )}
           {reviewTab === "snapshots" && (
@@ -3923,7 +3931,9 @@ export default function VideoSyncPlayer({
                     <span className="text-xs text-foreground leading-snug">{ev.note}</span>
                     <ManualNoteSarahRead
                       review={manualReviewForEvent(ev)}
-                      pending={pendingManualReviewIds.has(String(ev.event_id || `${ev.time_s}:${ev.note}`))}
+                      pending={pendingManualReviewIds.has(`${activeFeedKey}:${manualReviewEventKey(ev)}`)}
+                      cameraLabel={videoFeeds[activeFeedKey]?.label || activeFeedKey}
+                      onReview={() => queueManualAnnotationVisualReview(ev, { quiet: false, forceReview: true })}
                     />
                   </button>
                   <div className="shrink-0 flex flex-col items-end gap-1">
