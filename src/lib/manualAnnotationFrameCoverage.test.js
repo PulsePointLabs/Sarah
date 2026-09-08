@@ -51,6 +51,14 @@ test("reused evidence includes actual same-camera findings only within the reque
   assert.deepEqual(reused.sampled_frames, [{ recordTimeSeconds: 72 }]);
 });
 
+test("browser playback filenames do not hide a legacy labeled Main review or substitute Feet", () => {
+  const event = { event_id: 'note', note: 'Observation', time_s: 72 };
+  const main = { event_id: 'note', manual_note: 'Observation', note_time_s: 72, source_video: { role: 'main', filename: 'Main' }, summary: 'Main-camera report' };
+  const feet = { ...main, source_video: { role: 'feet', filename: 'Feet' }, summary: 'Feet-camera report' };
+  assert.equal(findManualAnnotationReview([main, feet], event, { role: 'main', filename: 'recording-2026-09-06.mp4' }), main);
+  assert.equal(findManualAnnotationReview([main, feet], event, { role: 'feet', filename: 'feet-recording.mp4' }), feet);
+});
+
 test("clips early-session windows without losing the note frame", () => {
   assert.deepEqual(manualAnnotationTargetFrameTimes(2), [0, 1, 2, 3, 4, 5, 6, 7]);
 });

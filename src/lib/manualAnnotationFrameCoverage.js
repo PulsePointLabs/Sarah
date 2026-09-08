@@ -47,7 +47,13 @@ export function manualReviewEventKey(event = {}) {
 
 export function findManualAnnotationReview(reviews = [], event = {}, video = {}) {
   return [...reviews].reverse().find((review) => (
-    sameVideoEvidenceSource(review, video)
+    // Display belongs to the annotation and camera. Browser-local playback can
+    // expose a filename while legacy reviews stored only a label like "Main".
+    // Those labels must not hide a saved review. Coverage still uses the strict
+    // file/offset matcher below before deciding whether to skip AI work.
+    normalizeReviewCameraRole(review.source_video_role || review.source_video?.role) === normalizeReviewCameraRole(video.role || video.key)
+    && Boolean(normalizeReviewCameraRole(video.role || video.key))
+    && (!video.fingerprint || !review.source_video?.fingerprint || video.fingerprint === review.source_video.fingerprint)
     && (!event.event_id || !review.event_id || String(event.event_id) === String(review.event_id))
     && Math.abs(Number(review.note_time_s) - Number(event.time_s)) <= 0.6
     && String(review.manual_note || "").trim() === String(event.note || "").trim()
