@@ -37,7 +37,7 @@ function fixture(prior = [], { duration = 1200, offset = 0 } = {}) {
   vm.runInNewContext(handlerSource, context);
   return {
     calls, sampled, record: () => record,
-    run: (time = 72, extra = {}) => handler({ recordId: 'session', recordType: 'session', event: { event_id: 'note', time_s: time, note: 'Movement' }, video: { path: 'C:/camera.mp4', role: 'feet', label: 'Feet', timelineOffsetSeconds: offset }, ...extra }, { jobId: 'test', signal: new AbortController().signal, updateProgress() {} }),
+    run: (time = 72, extra = {}) => handler({ recordId: 'session', recordType: 'session', event: { event_id: 'note', time_s: time, note: 'Movement', annotation_camera: { role: 'feet' } }, video: { path: 'C:/camera.mp4', role: 'feet', label: 'Feet', timelineOffsetSeconds: offset }, ...extra }, { jobId: 'test', signal: new AbortController().signal, updateProgress() {} }),
   };
 }
 
@@ -81,5 +81,11 @@ test('same-camera reuse retains evidence and explicit rerun analyzes the full wi
 test('an annotation outside the camera video fails visibly instead of claiming reuse', async () => {
   const f = fixture([], { duration: 10 });
   await assert.rejects(f.run(100), /outside the selected camera/);
+  assert.equal(f.calls.length, 0);
+});
+
+test('backend refuses a feet review for an annotation owned by main', async () => {
+  const f = fixture();
+  await assert.rejects(f.run(72, { event: { event_id: 'note', time_s: 72, note: 'Movement', annotation_camera: { role: 'main' } } }), /belongs to another camera/);
   assert.equal(f.calls.length, 0);
 });

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { buildManualReviewBackfillPlan, missingManualAnnotationEvents } from './manualAnnotationFrameCoverage.js';
 
-const events = [1, 2, 3].map((id) => ({ event_id: String(id), time_s: id * 10, note: `Note ${id}`, source: 'manual' }));
+const events = [1, 2, 3].map((id) => ({ event_id: String(id), time_s: id * 10, note: `Note ${id}`, source: 'manual', annotation_camera: { role: 'feet' } }));
 const feet = { key: 'lower_body', role: 'feet', label: 'Feet', filename: 'Feet', fileName: 'Feet', localPath: 'C:/feet.mp4', fingerprint: 'shared' };
 const review = (event, role, extra = {}) => ({ event_id: event.event_id, note_time_s: event.time_s, manual_note: event.note, source_video: { role, fingerprint: 'shared' }, coverage_status: 'new_frames_only', note_assessment: 'not_visually_confirmed', findings: [], summary: '', ...extra });
 

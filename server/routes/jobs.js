@@ -45,6 +45,8 @@ import {
   uncoveredFrameTimes,
   mergeManualAnnotationReview,
   reusedManualAnnotationEvidence,
+  annotationCameraRole,
+  normalizeReviewCameraRole,
 } from '../../src/lib/manualAnnotationFrameCoverage.js';
 import {
   FOOT_ASSESSMENT_SCHEMA,
@@ -564,6 +566,11 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
   }
   const record = getEntity(entityName, recordId);
   if (!record) throw new Error('The saved record for this manual annotation no longer exists.');
+  const storedEvent = (record.event_timeline || []).find((item) => item.event_id && item.event_id === event.event_id) || event;
+  const ownerCamera = annotationCameraRole(storedEvent, record?.[analysisField]?._manual_annotation_visual_reviews || []);
+  if (ownerCamera && ownerCamera !== normalizeReviewCameraRole(video.role)) {
+    throw new Error('This annotation belongs to another camera. Select its camera or change the annotation camera before reviewing.');
+  }
 
   const videoMeta = await localVideoMetadata(sourcePath);
   video = { ...video, path: videoMeta.path, fingerprint: videoMeta.fingerprint };
@@ -709,7 +716,6 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
     type: 'object',
     properties: {
       summary: { type: 'string' },
-      note_assessment: { type: 'string', enum: ['supported', 'partially_supported', 'not_visually_confirmed'] },
       findings: {
         type: 'array',
         maxItems: 8,
@@ -729,7 +735,7 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
       },
       ...(isFeetCamera ? { foot_assessment: FOOT_ASSESSMENT_SCHEMA } : {}),
     },
-    required: ['summary', 'note_assessment', 'findings', ...(isFeetCamera ? ['foot_assessment'] : [])],
+    required: ['summary', 'findings', ...(isFeetCamera ? ['foot_assessment'] : [])],
   };
   const frameTiming = sampledFrames.map((frame, index) => `image ${index + 1} = session ${formatSessionClock(frame.recordTimeSeconds)}`).join(', ');
   const aiResult = await aiInvokeInternal({
@@ -741,7 +747,7 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
     signal: context.signal,
     prompt: `You are Sarah performing a quiet, automatic, manual-note-guided visual review of a private physiology session.
 
-The user's note is a guide to what deserves extra scrutiny, not proof. Confirm, refine, expand, or decline each claim based only on visible ordered frames. Do not simply paraphrase the note. Do not invent anatomy, motion, color, sensation, internal physiology, or causation. Save only meaningful visible changes; omit static scene description unless it establishes a change baseline.
+The user's note directs attention. Report the visible body state and changes in the selected camera directly; do not grade, validate, rebut, or argue with the note. Do not simply paraphrase it or invent anatomy, motion, sensation, internal physiology, or causation. Omit uncertain claims instead of writing does not appear, not confirmed, not supported, or a verdict about the observation. Retain uncertainty internally in confidence and visibility fields; never turn an uncertain or negative observation into an affirmative claim.
 
 Identity and voice rule: this is Ben's self-recorded private session. Address Ben directly as "you" and "your" in every summary and finding. Never call him the subject, patient, client, examinee, or operator. Unless the frames unmistakably show another person, all visible hands are Ben's own hands: call them "your hand" or "your hands," using anatomical right/left only when orientation supports it. Never invent a clinician, examiner, caregiver, operator, or third-party hand.
 
@@ -756,11 +762,9 @@ Systematic review targets when visible: ${isFeetCamera
 
 Laterality rule: none of the cameras are mirrored. Determine your anatomical right and left from body orientation, not screen side. If orientation is not reliable, avoid assigning laterality rather than guessing.
 
-Change-only rule: this follow-up exists to identify what newly develops, increases, decreases, releases, or changes around the note. Prioritize directional changes in whole-body or regional muscle tension, bracing/release, chest or abdominal respiratory effort, shoulder/arm/hand tension, pelvic lift or settling, trunk elevation, and possible back arching. Back arching is often difficult to judge without a true lateral view: report it only when trunk-to-surface separation or a clear change in spinal/pelvic contour is visible. If this angle cannot establish an arch, omit the topic instead of repeatedly saying you remain flat or supine.
+Report rule: give concise anatomical findings relevant to this annotation. Describe visible directional changes where present. When position is stable, briefly report the relevant observed state, such as ankle position and toe posture, without a long baseline inventory or a moment-by-moment narration. Do not fill space with what cannot be seen.
 
-Baseline suppression rule: do not repeat posture, skin tone, mottling, rugae, scars, redness, anatomical appearance, or other baseline findings merely because they remain visible. Skin belongs in the result only when a new or clearly changing flush, pallor, mottling pattern, sheen, swelling, or other surface change develops during this window. Do not inventory every visible body region. Omit unchanged findings completely rather than writing remains, continues, persists, retains, unchanged, or no further change.
-
-Continuity rule: compare these new frames with the prior saved manual-note reviews below. State change from prior only when supported. Do not re-report unchanged facts. A visible stimulation change may be temporally associated with a body response, but do not claim it caused the response unless the ordered sequence strongly supports that wording.
+Continuity rule: compare these new frames with the prior saved manual-note reviews below. State change from prior only when supported. Include a concise current state when relevant to this annotation, even if it is stable. A visible stimulation change may be temporally associated with a body response, but do not claim it caused the response unless the ordered sequence strongly supports that wording.
 
 Manual note at ${formatSessionClock(noteTimeS)}:
 ${String(event.note || '').trim()}
@@ -771,7 +775,7 @@ ${priorContext}
 Only new, previously unreviewed frames are attached. Previously reviewed overlapping timestamps were deliberately excluded.
 Frame timing: ${frameTiming}.
 
-Return a compact structured review centered on the few meaningful changes. Findings must be anatomical-area organized and evidence-timestamped. Summary is one short synthesis of new visible change only; return an empty summary and empty findings rather than filler when none are visible. Do not write a narrated report, a static posture inventory, "no clear change," "comparing frames," or generic bilateral language. In summary, observation, and change_from_prior prose, write all session timestamps as minute:second clocks such as 20:14 or 20:14–20:24; never write cumulative values such as 1214s and never use a session timestamp as an image/frame number. Keep evidence_time_s as numeric cumulative seconds only because the schema requires it. Low-confidence possibilities may be returned for audit, but they will not be auto-saved as findings. Do not mention telemetry overlays or numeric HR/BP/SpO2 in visual findings.`,
+Return a compact structured review centered on the few meaningful changes. Findings must be anatomical-area organized and evidence-timestamped. Summary is one short synthesis of the visible state and changes relevant to the note. Use the same direct anatomical finding format for feet and main camera; do not leave the entire report empty when the structured foot assessment contains visible ankle, toe, or movement observations. If nothing relevant is assessable, leave the report empty rather than inventing observations. Do not write a narrated report, a static posture inventory, "no clear change," "comparing frames," or generic bilateral language. In summary, observation, and change_from_prior prose, write all session timestamps as minute:second clocks such as 20:14 or 20:14–20:24; never write cumulative values such as 1214s and never use a session timestamp as an image/frame number. Keep evidence_time_s as numeric cumulative seconds only because the schema requires it. Low-confidence possibilities may be returned for audit, but they will not be auto-saved as findings. Do not mention telemetry overlays or numeric HR/BP/SpO2 in visual findings.`,
   });
   const rawFindings = Array.isArray(aiResult?.findings) ? aiResult.findings : [];
   const footAssessment = isFeetCamera && aiResult?.foot_assessment && typeof aiResult.foot_assessment === 'object'
@@ -796,7 +800,6 @@ Return a compact structured review centered on the few meaningful changes. Findi
       ? sanitizeFeetLaneSnapshotText(sanitizeFootSummary(String(aiResult?.summary || '').trim(), footAssessment))
       : String(aiResult?.summary || '').trim()))),
     foot_assessment: footAssessment,
-    note_assessment: aiResult?.note_assessment || 'not_visually_confirmed',
     findings: savedFindings.map((finding) => ({
       ...finding,
       observation: stripStaticManualAnnotationReviewText(stripNonBodyObjectContext(formatManualAnnotationReviewText(isFeetCamera ? sanitizeFeetLaneSnapshotText(finding.observation) : finding.observation))),

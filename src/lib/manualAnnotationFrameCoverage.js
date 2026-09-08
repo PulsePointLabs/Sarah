@@ -54,10 +54,46 @@ export function findManualAnnotationReview(reviews = [], event = {}, video = {})
   )) || null;
 }
 
+export function annotationCameraRole(event = {}, reviews = []) {
+  if (event.annotation_camera) return normalizeReviewCameraRole(event.annotation_camera.role || event.annotation_camera.key);
+  // Legacy notes did not store ownership. Only recover an unambiguous camera
+  // from this exact note's saved reviews; never classify by its words or time alone.
+  const roles = new Set(reviews.filter((review) => (
+    event.event_id && String(review.event_id || "") === String(event.event_id)
+  )).map((review) => normalizeReviewCameraRole(review.source_video_role || review.source_video?.role)).filter(Boolean));
+  return roles.size === 1 ? [...roles][0] : "";
+}
+
+export function annotationCameraFromFeed(feed = {}, fallbackOffset = 0) {
+  return {
+    key: feed.key || "",
+    role: normalizeReviewCameraRole(feed.key),
+    label: feed.label || feed.key || "",
+    path: feed.localPath || "",
+    fingerprint: feed.fingerprint || "",
+    timelineOffsetSeconds: Number(feed.timelineOffsetSeconds ?? fallbackOffset) || 0,
+  };
+}
+
+export function annotationBelongsToCamera(event, reviews, video) {
+  const role = annotationCameraRole(event, reviews);
+  return Boolean(role && role === normalizeReviewCameraRole(video.role || video.key));
+}
+
+export function cameraAnnotationEntries(events, reviews, video, scope = "camera") {
+  return events.map((ev, i) => ({ ev, i })).filter(({ ev }) => {
+    const manual = ["manual", "voice"].includes(ev.source);
+    if (scope === "session") return !manual;
+    if (scope === "unassigned") return manual && !annotationCameraRole(ev, reviews);
+    return manual && annotationBelongsToCamera(ev, reviews, video);
+  });
+}
+
 export function missingManualAnnotationEvents(events = [], reviews = [], video = {}) {
   const seen = new Set();
   return events.filter((event) => {
     if (!String(event?.note || "").trim() || !["manual", "voice"].includes(event.source)) return false;
+    if (!annotationBelongsToCamera(event, reviews, video)) return false;
     const key = `${Number(event.time_s).toFixed(1)}:${String(event.note).trim().toLowerCase()}`;
     if (seen.has(key)) return false;
     seen.add(key);
