@@ -39,7 +39,7 @@ import {
   sessionTimeToMediaTime,
 } from "@/lib/videoSyncClock";
 import { formatManualAnnotationReviewText } from "@/lib/manualAnnotationReviewText";
-import { findManualAnnotationReview, manualReviewEventKey, normalizeReviewCameraRole } from "@/lib/manualAnnotationFrameCoverage";
+import { findManualAnnotationReview, manualReviewEventKey, normalizeReviewCameraRole, missingManualAnnotationEvents, buildManualReviewBackfillPlan } from "@/lib/manualAnnotationFrameCoverage";
 
 function getCategoryMeta(value) {
   return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -1053,8 +1053,8 @@ export default function VideoSyncPlayer({
     onEventsChange?.(sorted);
   };
 
-  const queueManualAnnotationVisualReview = async (event, { quiet = true, forceReview = false } = {}) => {
-    const feed = selectVisualReviewFeed();
+  const queueManualAnnotationVisualReview = async (event, { quiet = true, forceReview = false, feedOverride = null } = {}) => {
+    const feed = feedOverride || selectVisualReviewFeed();
     if (!session?.id || !feed?.localPath || !event?.note) {
       if (!quiet) showQuickNotice("Load or link a local video before requesting Sarah's ±5s read.", "error");
       return false;
@@ -1110,31 +1110,28 @@ export default function VideoSyncPlayer({
   const queueManualReviewRef = useRef(queueManualAnnotationVisualReview);
   queueManualReviewRef.current = queueManualAnnotationVisualReview;
 
-  const missingManualReviewEvents = useMemo(() => {
-    const seen = new Set();
-    return events.filter((event) => {
-      if (!event?.note || !["manual", "voice"].includes(String(event.source || ""))) return false;
-      const key = `${Number(event.time_s).toFixed(1)}:${String(event.note).trim().toLowerCase()}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return !manualReviewForEvent(event);
-    });
-  }, [events, manualReviewForEvent]);
+  const missingManualReviewEvents = useMemo(() => (
+    activeReviewVideo.localPath ? missingManualAnnotationEvents(events, manualVisualReviews, activeReviewVideo) : []
+  ), [events, manualVisualReviews, activeReviewVideo]);
 
   const backfillMissingManualReviews = async () => {
-    if (manualBackfillState?.running || !missingManualReviewEvents.length) return;
-    setManualBackfillState({ running: true, current: 0, total: missingManualReviewEvents.length });
+    if (manualBackfillState?.running) return;
+    const plan = buildManualReviewBackfillPlan(events, manualVisualReviews, selectVisualReviewFeed(), videoOffset);
+    if (!plan.events.length) return;
+    const cameraLabel = plan.feed.label || plan.feed.key;
+    const total = plan.events.length;
+    setManualBackfillState({ running: true, current: 0, total, cameraLabel });
     let completed = 0;
-    for (const event of missingManualReviewEvents) {
-      const ok = await queueManualAnnotationVisualReview(event, { quiet: false });
+    for (const event of plan.events) {
+      const ok = await queueManualAnnotationVisualReview(event, { quiet: false, forceReview: true, feedOverride: plan.feed });
       if (!ok) break;
       completed += 1;
-      setManualBackfillState({ running: true, current: completed, total: missingManualReviewEvents.length });
+      setManualBackfillState({ running: true, current: completed, total, cameraLabel });
     }
-    setManualBackfillState({ running: false, current: completed, total: missingManualReviewEvents.length });
-    showQuickNotice(completed === missingManualReviewEvents.length
-      ? `Filled ${completed} missing ±5s review${completed === 1 ? "" : "s"}.`
-      : `Stopped after ${completed} of ${missingManualReviewEvents.length} reviews.`, completed === missingManualReviewEvents.length ? "success" : "error");
+    setManualBackfillState({ running: false, current: completed, total, cameraLabel });
+    showQuickNotice(completed === total
+      ? `Filled ${completed} missing ±5s review${completed === 1 ? "" : "s"} · ${cameraLabel}.`
+      : `Stopped after ${completed} of ${total} reviews · ${cameraLabel}.`, completed === total ? "success" : "error");
   };
 
   const startOrResumeVisualSnapshotAudit = async () => {
@@ -3802,10 +3799,10 @@ export default function VideoSyncPlayer({
               10-Second Visual Audit ({visualSnapshotReviews.length})
             </button>
           </div>
-          {reviewTab === "events" && missingManualReviewEvents.length > 0 && (
+          {reviewTab === "events" && (manualBackfillState?.running || missingManualReviewEvents.length > 0) && (
             <button type="button" disabled={manualBackfillState?.running} onClick={backfillMissingManualReviews} className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary disabled:opacity-50">
               {manualBackfillState?.running
-                ? `Filling ±5s reads ${manualBackfillState.current}/${manualBackfillState.total}…`
+                ? `Filling ±5s reads ${manualBackfillState.current}/${manualBackfillState.total} · ${manualBackfillState.cameraLabel}…`
                 : `Fill ${missingManualReviewEvents.length} missing ±5s read${missingManualReviewEvents.length === 1 ? "" : "s"} · ${videoFeeds[activeFeedKey]?.label || activeFeedKey}`}
             </button>
           )}

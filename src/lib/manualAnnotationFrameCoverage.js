@@ -54,6 +54,34 @@ export function findManualAnnotationReview(reviews = [], event = {}, video = {})
   )) || null;
 }
 
+export function missingManualAnnotationEvents(events = [], reviews = [], video = {}) {
+  const seen = new Set();
+  return events.filter((event) => {
+    if (!String(event?.note || "").trim() || !["manual", "voice"].includes(event.source)) return false;
+    const key = `${Number(event.time_s).toFixed(1)}:${String(event.note).trim().toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    const review = findManualAnnotationReview(reviews, event, video);
+    // A skipped frame-reuse placeholder never assessed this annotation.
+    // A completed review with no new changes IS complete and must not loop.
+    return !review || review.coverage_status === "fully_reused";
+  });
+}
+
+export function buildManualReviewBackfillPlan(events, reviews, feed, fallbackOffset = 0) {
+  if (!feed?.localPath) return { feed: null, events: [] };
+  const camera = {
+    ...feed,
+    role: normalizeReviewCameraRole(feed.key),
+    filename: feed.fileName || feed.label || feed.key,
+    timelineOffsetSeconds: Number(feed.timelineOffsetSeconds ?? fallbackOffset) || 0,
+  };
+  return {
+    feed: camera,
+    events: missingManualAnnotationEvents(events, reviews, camera).map((event) => ({ ...event })),
+  };
+}
+
 export function mergeManualAnnotationReview(reviews = [], review) {
   const key = review.event_id || `${review.note_time_s}:${review.manual_note}`;
   return [...reviews.filter((item) => (
