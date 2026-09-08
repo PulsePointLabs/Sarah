@@ -40,7 +40,7 @@ import {
 } from "@/lib/videoSyncClock";
 import { formatManualAnnotationReviewText } from "@/lib/manualAnnotationReviewText";
 import { manualAnnotationReport } from "@/lib/manualAnnotationReport";
-import { findManualAnnotationReview, manualReviewEventKey, normalizeReviewCameraRole, missingManualAnnotationEvents, buildManualReviewBackfillPlan, annotationCameraRole, annotationCameraFromFeed, annotationBelongsToCamera, cameraAnnotationEntries } from "@/lib/manualAnnotationFrameCoverage";
+import { savedAnnotationReview, annotationTimelineEntries, manualReviewEventKey, normalizeReviewCameraRole, missingManualAnnotationEvents, buildManualReviewBackfillPlan, annotationCameraFromFeed, annotationBelongsToCamera } from "@/lib/manualAnnotationFrameCoverage";
 
 function getCategoryMeta(value) {
   return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -353,7 +353,7 @@ function ManualNoteSarahRead({ review, pending = false, compact = false, cameraL
       <div className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-wider text-primary">
         <Sparkles className={`h-3 w-3 ${pending ? "animate-pulse" : ""}`} /> Sarah&apos;s ±5s read
       </div>
-      <p className="mt-1 text-[10px] text-muted-foreground">{cameraLabel || review?.source_video?.label || "Selected camera"} · visual review</p>
+      <p className="mt-1 text-[10px] text-muted-foreground">{review?.source_video?.label || review?.source_video_role || cameraLabel || "Selected camera"} · visual review</p>
       {pending ? (
         <p className="mt-1 text-[10px] leading-snug text-muted-foreground">Reviewing the nearby frames quietly…</p>
       ) : (
@@ -840,7 +840,6 @@ export default function VideoSyncPlayer({
 
   // Local mutable events list
   const [events, setEvents] = useState(session.event_timeline || []);
-  const [annotationScope, setAnnotationScope] = useState("camera");
   const annotationDraftFeedRef = useRef(null);
   const analysisField = isExploration ? "ai_body_exploration" : "ai_analysis";
   const [manualVisualReviews, setManualVisualReviews] = useState(
@@ -892,8 +891,8 @@ export default function VideoSyncPlayer({
     timelineOffsetSeconds: Number(videoFeeds[activeFeedKey]?.timelineOffsetSeconds ?? videoOffset) || 0,
   }), [activeFeedKey, videoFeeds, videoOffset]);
   const manualReviewForEvent = useCallback((event) => (
-    findManualAnnotationReview(manualVisualReviews, event, activeReviewVideo)
-  ), [manualVisualReviews, activeReviewVideo]);
+    savedAnnotationReview(manualVisualReviews, event)
+  ), [manualVisualReviews]);
 
   const auditFeeds = useMemo(
     () => VIDEO_FEED_SLOTS.map((meta) => ({ ...meta, ...videoFeeds[meta.key] })).filter((feed) => feed.localPath),
@@ -1303,7 +1302,7 @@ export default function VideoSyncPlayer({
 
     try {
       await saveEvents([...eventsRef.current, event]);
-      queueManualReviewRef.current(event, { feedOverride: quickDictationRef.current.feed });
+      queueManualReviewRef.current(event, { feedOverride: quickDictationRef.current.feed, forceReview: event.annotation_camera.role === "feet" });
       setLastUsedCat(categories[0] || defaultCategory);
       pulseHaptic([20, 35, 20]);
       const preview = cleanNote.length > 110 ? `${cleanNote.slice(0, 107)}...` : cleanNote;
@@ -1483,14 +1482,6 @@ export default function VideoSyncPlayer({
     await saveEvents(events.filter((_, i) => i !== idx));
   };
 
-  const assignEventCamera = async (idx, key) => {
-    const feed = { ...videoFeeds[key], key };
-    const updated = eventsRef.current.map((event, i) => i === idx ? {
-      ...event, annotation_camera: { ...annotationCameraFromFeed(feed), assigned_by: "user" },
-    } : event);
-    await saveEvents(updated);
-  };
-
   const commitAdd = async ({ resume = false } = {}) => {
     const cleanNote = newNote.trim();
     if (!cleanNote || savingEvent) return;
@@ -1519,7 +1510,7 @@ export default function VideoSyncPlayer({
         },
       };
       await saveEvents([...events, ev]);
-      queueManualAnnotationVisualReview(ev, { feedOverride: annotationFeed });
+      queueManualAnnotationVisualReview(ev, { feedOverride: annotationFeed, forceReview: ev.annotation_camera.role === "feet" });
       setLastUsedCat(categories[0] || "other");
       setNewNote(""); setNewMin(""); setNewSec(""); setNewCats([categories[0] || "other"]);
       setNewCatsTouched(false);
@@ -2310,12 +2301,12 @@ export default function VideoSyncPlayer({
 
   const savedMotionSummary = !isExploration ? session.motion_analysis_summary : null;
   const motionEvidence = !isExploration ? getMotionEvidenceSummary(session) : null;
-  const scopedEventEntries = useMemo(() => cameraAnnotationEntries(events, manualVisualReviews, activeReviewVideo, annotationScope), [events, manualVisualReviews, activeReviewVideo, annotationScope]);
-  const visibleEventEntries = useMemo(() => scopedEventEntries
+  const timelineEventEntries = useMemo(() => annotationTimelineEntries(events), [events]);
+  const visibleEventEntries = useMemo(() => timelineEventEntries
     .filter(({ ev }) => (
       selectedEventFilters.length === 0
       || EVENT_FILTERS.some((filter) => selectedEventFilters.includes(filter.key) && filter.matches(ev))
-    )), [scopedEventEntries, selectedEventFilters]);
+    )), [timelineEventEntries, selectedEventFilters]);
   const visibleEvents = useMemo(() => visibleEventEntries.map(({ ev }) => ev), [visibleEventEntries]);
   const filteredVisualSnapshots = useMemo(() => visualSnapshotReviews.filter((snapshot) => {
     if (snapshotCameraFilter !== "all" && snapshotCameraKey(snapshot) !== snapshotCameraFilter) return false;
@@ -2396,12 +2387,12 @@ export default function VideoSyncPlayer({
     ].filter((entry) => entry.ev);
   }, [playheadS, visibleEventEntries]);
   const fullTelemetryEvents = useMemo(() => {
-    const ordered = [...scopedEventEntries]
+    const ordered = [...timelineEventEntries]
       .sort((left, right) => Number(left.ev.time_s) - Number(right.ev.time_s));
     const current = [...ordered].reverse().find(({ ev }) => Number(ev.time_s) <= playheadS) || null;
     const upcoming = ordered.find(({ ev }) => Number(ev.time_s) > playheadS) || null;
     return { current, upcoming };
-  }, [scopedEventEntries, playheadS]);
+  }, [timelineEventEntries, playheadS]);
   const bloodPressureReadings = useMemo(() => (
     normalizeTimedReadings(bloodPressureReadingsFromSession(session), session)
   ), [session]);
@@ -2422,23 +2413,11 @@ export default function VideoSyncPlayer({
       ? "Transcribing voice event"
       : `Dictate event at ${fmtMmSs(playheadS)}`;
 
-  const annotationScopeControl = (
-    <label className="flex items-center gap-2 text-xs text-muted-foreground">
-      Notes
-      <select aria-label="Annotation scope" value={annotationScope} onChange={(event) => setAnnotationScope(event.target.value)} className="max-w-full rounded-md border border-border bg-background px-2 py-1">
-        <option value="camera">{videoFeeds[activeFeedKey]?.label || activeFeedKey} camera ({cameraAnnotationEntries(events, manualVisualReviews, activeReviewVideo).length})</option>
-        <option value="unassigned">Unassigned older notes ({cameraAnnotationEntries(events, manualVisualReviews, activeReviewVideo, "unassigned").length})</option>
-        <option value="session">Session-wide events ({cameraAnnotationEntries(events, manualVisualReviews, activeReviewVideo, "session").length})</option>
-      </select>
-    </label>
-  );
-
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden">
       {fullTelemetryView && typeof document !== "undefined" && createPortal(
         <div ref={fullTelemetryRootRef} className="dark fixed inset-0 z-[11000] grid h-[100svh] w-screen grid-cols-[minmax(0,1fr)_clamp(320px,34vw,560px)] gap-2 overflow-hidden bg-background p-2 text-foreground max-[900px]:grid-cols-[minmax(0,1fr)_300px]">
           <main className="flex min-h-0 min-w-0 flex-col gap-2">
-            <div className="shrink-0 px-2">{annotationScopeControl}</div>
             <header className="flex h-10 shrink-0 items-center justify-between gap-2 rounded-xl border border-white/10 bg-card/95 px-2.5">
               <div className="flex min-w-0 items-center gap-2">
                 <Activity className="h-4 w-4 shrink-0 text-primary" />
@@ -3630,7 +3609,7 @@ export default function VideoSyncPlayer({
                   })}
                 </div>
                 <p className="text-[10px] text-muted-foreground">
-                  {selectedEventFilters.length ? `${visibleEvents.length} of ${scopedEventEntries.length} notes visible. Multiple filters combine.` : `Showing ${scopedEventEntries.length} notes in this view.`}
+                  {selectedEventFilters.length ? `${visibleEvents.length} of ${events.length} notes visible. Multiple filters combine.` : `Showing ${events.length} notes.`}
                 </p>
               </div>
             )}
@@ -3823,10 +3802,9 @@ export default function VideoSyncPlayer({
 
         {/* Review tabs — saved event notes stay separate from visual-audit checkpoints. */}
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-muted/15 p-2">
-          {annotationScopeControl}
           <div className="flex items-center gap-1">
             <button type="button" onClick={() => setReviewTab("events")} className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${reviewTab === "events" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
-              Visible Events ({scopedEventEntries.length})
+              Visible Events ({events.length})
             </button>
             <button type="button" onClick={() => setReviewTab("snapshots")} className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${reviewTab === "snapshots" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
               10-Second Visual Audit ({visualSnapshotReviews.length})
@@ -3882,7 +3860,7 @@ export default function VideoSyncPlayer({
         {reviewTab === "events" && (
           <div className="space-y-1.5">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-              Visible Events ({visibleEvents.length}/{scopedEventEntries.length}) — nearby highlighted
+              Visible Events ({visibleEvents.length}/{events.length}) — nearby highlighted
             </p>
             {[...visibleEventEntries].reverse().map(({ ev, i }) => {
               const color = EVENT_COLORS[i % EVENT_COLORS.length];
@@ -3959,13 +3937,6 @@ export default function VideoSyncPlayer({
                       </div>
                     )}
                     <button type="button" onClick={() => seekToEvent(ev, i)} className="text-left text-xs text-foreground leading-snug">{ev.note}</button>
-                    {["manual", "voice"].includes(ev.source) && <label className="my-1 flex items-center gap-1 text-[10px] text-muted-foreground">
-                      Annotation camera{!ev.annotation_camera && annotationCameraRole(ev, manualVisualReviews) ? " (from saved review)" : ""}
-                      <select aria-label={`Camera for annotation at ${fmtMmSs(ev.time_s)}`} value={annotationCameraRole(ev, manualVisualReviews)} onChange={(event) => void assignEventCamera(i, event.target.value === "feet" ? "lower_body" : event.target.value)} className="rounded border border-border bg-background px-1 py-0.5">
-                        <option value="">Unassigned</option>
-                        {VIDEO_FEED_SLOTS.map((feed) => <option key={feed.key} value={normalizeReviewCameraRole(feed.key)}>{feed.label}</option>)}
-                      </select>
-                    </label>}
                     <ManualNoteSarahRead
                       review={manualReviewForEvent(ev)}
                       pending={pendingManualReviewIds.has(`${activeFeedKey}:${manualReviewEventKey(ev)}`)}

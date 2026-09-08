@@ -37,7 +37,7 @@ test('camera without a saved review exposes an explicit review action', () => {
 });
 
 test('reused findings are visible as prior evidence rather than a fresh note assessment', () => {
-  const html = render({ review: { coverage_status: 'fully_reused', summary: 'Frames already reviewed.', findings: [], reused_findings: [{ anatomical_area: 'Left toes', observation: 'Extend.' }] } });
+  const html = render({ review: { source_video_role: 'feet', coverage_status: 'fully_reused', summary: 'Frames already reviewed.', findings: [], reused_findings: [{ anatomical_area: 'Left toes', observation: 'Extend.' }] } });
   assert.match(html, /Saved observations from this camera/);
   assert.match(html, /Left toes/);
   assert.match(html, /Extend/);

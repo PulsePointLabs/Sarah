@@ -8,6 +8,9 @@ export function directObservationText(value) {
 }
 
 export function manualAnnotationReport(review = {}) {
+  const role = review.source_video_role || review.source_video?.role;
+  const feet = ['feet', 'lower_body', 'lower-body', 'foot'].includes(role) || (!role && review.foot_assessment);
+  if (!feet) return { summary: review.summary || '', findings: Array.isArray(review.findings) ? review.findings : [] };
   const saved = [...(review.findings || []), ...(review.reused_findings || [])]
     .map((finding) => ({ ...finding, observation: directObservationText(finding.observation) }))
     .filter((finding) => finding.observation);

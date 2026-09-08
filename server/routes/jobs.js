@@ -716,6 +716,7 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
     type: 'object',
     properties: {
       summary: { type: 'string' },
+      ...(!isFeetCamera ? { note_assessment: { type: 'string', enum: ['supported', 'partially_supported', 'not_visually_confirmed'] } } : {}),
       findings: {
         type: 'array',
         maxItems: 8,
@@ -735,7 +736,7 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
       },
       ...(isFeetCamera ? { foot_assessment: FOOT_ASSESSMENT_SCHEMA } : {}),
     },
-    required: ['summary', 'findings', ...(isFeetCamera ? ['foot_assessment'] : [])],
+    required: ['summary', 'findings', ...(!isFeetCamera ? ['note_assessment'] : []), ...(isFeetCamera ? ['foot_assessment'] : [])],
   };
   const frameTiming = sampledFrames.map((frame, index) => `image ${index + 1} = session ${formatSessionClock(frame.recordTimeSeconds)}`).join(', ');
   const aiResult = await aiInvokeInternal({
@@ -745,7 +746,7 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
     response_json_schema: responseSchema,
     images: extracted.frames.map((frame) => ({ filename: frame.filename, media_type: frame.mimeType, data: frame.data })),
     signal: context.signal,
-    prompt: `You are Sarah performing a quiet, automatic, manual-note-guided visual review of a private physiology session.
+    prompt: isFeetCamera ? `You are Sarah performing a quiet, automatic, manual-note-guided visual review of a private physiology session.
 
 The user's note directs attention. Report the visible body state and changes in the selected camera directly; do not grade, validate, rebut, or argue with the note. Do not simply paraphrase it or invent anatomy, motion, sensation, internal physiology, or causation. Omit uncertain claims instead of writing does not appear, not confirmed, not supported, or a verdict about the observation. Retain uncertainty internally in confidence and visibility fields; never turn an uncertain or negative observation into an affirmative claim.
 
@@ -772,10 +773,42 @@ ${String(event.note || '').trim()}
 Prior manual-note reviews on this camera:
 ${priorContext}
 
+Attached frames belong to this annotation window on the selected feet/lower-body camera. Treat this as its own annotation review.
+Frame timing: ${frameTiming}.
+
+Return a compact structured review centered on the few meaningful changes. Findings must be anatomical-area organized and evidence-timestamped. Summary is one short synthesis of the visible state and changes relevant to the note. Use the same direct anatomical finding format for feet and main camera; do not leave the entire report empty when the structured foot assessment contains visible ankle, toe, or movement observations. If nothing relevant is assessable, leave the report empty rather than inventing observations. Do not write a narrated report, a static posture inventory, "no clear change," "comparing frames," or generic bilateral language. In summary, observation, and change_from_prior prose, write all session timestamps as minute:second clocks such as 20:14 or 20:14–20:24; never write cumulative values such as 1214s and never use a session timestamp as an image/frame number. Keep evidence_time_s as numeric cumulative seconds only because the schema requires it. Low-confidence possibilities may be returned for audit, but they will not be auto-saved as findings. Do not mention telemetry overlays or numeric HR/BP/SpO2 in visual findings.` : `You are Sarah performing a quiet, automatic, manual-note-guided visual review of a private physiology session.
+
+The user's note is a guide to what deserves extra scrutiny, not proof. Confirm, refine, expand, or decline each claim based only on visible ordered frames. Do not simply paraphrase the note. Do not invent anatomy, motion, color, sensation, internal physiology, or causation. Save only meaningful visible changes; omit static scene description unless it establishes a change baseline.
+
+Identity and voice rule: this is Ben's self-recorded private session. Address Ben directly as "you" and "your" in every summary and finding. Never call him the subject, patient, client, examinee, or operator. Unless the frames unmistakably show another person, all visible hands are Ben's own hands: call them "your hand" or "your hands," using anatomical right/left only when orientation supports it. Never invent a clinician, examiner, caregiver, operator, or third-party hand.
+
+Body-state-only rule: focus on visible anatomy, genital state, skin, posture, muscle tension, movement, breathing, stimulation contact/technique, and whole-body response. Do not identify or infer what Ben is holding from appearance or from the note. Do not label an object as a phone, tablet, blood-pressure interface, cuff, medical device, or other equipment unless its identity is unmistakably established by direct visual evidence and is necessary to describe body contact. Omit object handling, side-table activity, and equipment troubleshooting when they do not visibly change body state or stimulation.
+
+${cameraFocus}
+${isFeetCamera ? FOOT_VISUAL_REVIEW_RULE : ''}
+
+Systematic review targets when visible: ${isFeetCamera
+  ? 'anatomical left/right feet and soles; toes and toe curl/extension; ankle plantar flexion/dorsiflexion; heel lift/drop or planting; calf and thigh muscle tension; knees and subtle knee lift/drop; leg ab/adduction and rotation; side-to-side oscillation; sustained bracing, tremor, release; and pelvic lift/drop only when actually in view. Compare each target across the ordered frames and omit stable background anatomy.'
+  : 'head/face expression; neck and upper-body flushing; chest/abdominal contour and visible breathing; shoulder, arm, and hand tension; back arching and trunk posture; pelvic movement; stimulation technique, speed, grip, pressure cues, contact location, pauses, and resumes; penile/glans/shaft erection or engorgement state; scrotal lift/descent, tightening, symmetry, and skin state; perineal/pelvic tension cues; thighs, knees, calves, ankles, feet, toe curl, plantar flexion, planting, bracing, tremor, spasm-like movement, and release; generalized versus regional skin color/surface changes; coordinated whole-body build or settling.'}
+
+Laterality rule: none of the cameras are mirrored. Determine your anatomical right and left from body orientation, not screen side. If orientation is not reliable, avoid assigning laterality rather than guessing.
+
+Change-only rule: this follow-up exists to identify what newly develops, increases, decreases, releases, or changes around the note. Prioritize directional changes in whole-body or regional muscle tension, bracing/release, chest or abdominal respiratory effort, shoulder/arm/hand tension, pelvic lift or settling, trunk elevation, and possible back arching. Back arching is often difficult to judge without a true lateral view: report it only when trunk-to-surface separation or a clear change in spinal/pelvic contour is visible. If this angle cannot establish an arch, omit the topic instead of repeatedly saying you remain flat or supine.
+
+Baseline suppression rule: do not repeat posture, skin tone, mottling, rugae, scars, redness, anatomical appearance, or other baseline findings merely because they remain visible. Skin belongs in the result only when a new or clearly changing flush, pallor, mottling pattern, sheen, swelling, or other surface change develops during this window. Do not inventory every visible body region. Omit unchanged findings completely rather than writing remains, continues, persists, retains, unchanged, or no further change.
+
+Continuity rule: compare these new frames with the prior saved manual-note reviews below. State change from prior only when supported. Do not re-report unchanged facts. A visible stimulation change may be temporally associated with a body response, but do not claim it caused the response unless the ordered sequence strongly supports that wording.
+
+Manual note at ${formatSessionClock(noteTimeS)}:
+${String(event.note || '').trim()}
+
+Prior manual-note reviews on this camera:
+${priorContext}
+
 Only new, previously unreviewed frames are attached. Previously reviewed overlapping timestamps were deliberately excluded.
 Frame timing: ${frameTiming}.
 
-Return a compact structured review centered on the few meaningful changes. Findings must be anatomical-area organized and evidence-timestamped. Summary is one short synthesis of the visible state and changes relevant to the note. Use the same direct anatomical finding format for feet and main camera; do not leave the entire report empty when the structured foot assessment contains visible ankle, toe, or movement observations. If nothing relevant is assessable, leave the report empty rather than inventing observations. Do not write a narrated report, a static posture inventory, "no clear change," "comparing frames," or generic bilateral language. In summary, observation, and change_from_prior prose, write all session timestamps as minute:second clocks such as 20:14 or 20:14–20:24; never write cumulative values such as 1214s and never use a session timestamp as an image/frame number. Keep evidence_time_s as numeric cumulative seconds only because the schema requires it. Low-confidence possibilities may be returned for audit, but they will not be auto-saved as findings. Do not mention telemetry overlays or numeric HR/BP/SpO2 in visual findings.`,
+Return a compact structured review centered on the few meaningful changes. Findings must be anatomical-area organized and evidence-timestamped. Summary is one short synthesis of new visible change only; return an empty summary and empty findings rather than filler when none are visible. Do not write a narrated report, a static posture inventory, "no clear change," "comparing frames," or generic bilateral language. In summary, observation, and change_from_prior prose, write all session timestamps as minute:second clocks such as 20:14 or 20:14–20:24; never write cumulative values such as 1214s and never use a session timestamp as an image/frame number. Keep evidence_time_s as numeric cumulative seconds only because the schema requires it. Low-confidence possibilities may be returned for audit, but they will not be auto-saved as findings. Do not mention telemetry overlays or numeric HR/BP/SpO2 in visual findings.`,
   });
   const rawFindings = Array.isArray(aiResult?.findings) ? aiResult.findings : [];
   const footAssessment = isFeetCamera && aiResult?.foot_assessment && typeof aiResult.foot_assessment === 'object'
@@ -800,6 +833,7 @@ Return a compact structured review centered on the few meaningful changes. Findi
       ? sanitizeFeetLaneSnapshotText(sanitizeFootSummary(String(aiResult?.summary || '').trim(), footAssessment))
       : String(aiResult?.summary || '').trim()))),
     foot_assessment: footAssessment,
+    ...(!isFeetCamera ? { note_assessment: aiResult?.note_assessment || 'not_visually_confirmed' } : {}),
     findings: savedFindings.map((finding) => ({
       ...finding,
       observation: stripStaticManualAnnotationReviewText(stripNonBodyObjectContext(formatManualAnnotationReviewText(isFeetCamera ? sanitizeFeetLaneSnapshotText(finding.observation) : finding.observation))),
@@ -883,6 +917,7 @@ const FEET_AUDIT_AREA_RE = /\b(?:feet?|toes?|soles?|ankles?|heels?|calves?|knees
 const AMBIGUOUS_SINGLE_FOOT_RE = /\b(?:one|other|nearer|farther)\s+foot\b|\b(?:one|other)\s+sole\b/i;
 
 function isFeetLaneAuditItem(item = {}) {
+  if (['stimulation', 'genital_state'].includes(String(item.response_domain || '').toLowerCase())) return false;
   const area = String(item?.anatomical_area || '');
   const text = [area, item?.label, item?.observation].filter(Boolean).join(' ');
   return Boolean(text) && FEET_AUDIT_AREA_RE.test(text) && !FEET_AUDIT_FORBIDDEN_RE.test(text) && !AMBIGUOUS_SINGLE_FOOT_RE.test(text);

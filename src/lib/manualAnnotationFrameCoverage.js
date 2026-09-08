@@ -60,6 +60,22 @@ export function findManualAnnotationReview(reviews = [], event = {}, video = {})
   )) || null;
 }
 
+export function savedAnnotationReview(reviews = [], event = {}) {
+  const matching = reviews.filter((review) => event.event_id
+    ? String(review.event_id || '') === String(event.event_id)
+    : Math.abs(Number(review.note_time_s) - Number(event.time_s)) <= 0.6
+      && String(review.manual_note || '').trim() === String(event.note || '').trim());
+  const requestedRole = normalizeReviewCameraRole(event.annotation_camera?.role || event.annotation_camera?.key);
+  // Camera selection affects a NEW review, never which existing report is shown.
+  // Prefer the original Main report for legacy notes if both views were saved.
+  return [...matching].reverse().find((review) => normalizeReviewCameraRole(review.source_video_role || review.source_video?.role) === (requestedRole || 'main'))
+    || matching.at(-1) || null;
+}
+
+export function annotationTimelineEntries(events = []) {
+  return events.map((ev, i) => ({ ev, i }));
+}
+
 export function annotationCameraRole(event = {}, reviews = []) {
   if (event.annotation_camera) return normalizeReviewCameraRole(event.annotation_camera.role || event.annotation_camera.key);
   // Legacy notes did not store ownership. Only recover an unambiguous camera
