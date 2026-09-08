@@ -30,7 +30,7 @@ async function stopNativeOmronListener() {
   return { ok: true, stopped: true, device: listener.device };
 }
 
-async function startNativeOmronListener({ onStatus, onReading, onDisconnect, onError, forceDevicePicker, rememberDevice }) {
+async function startNativeOmronListener({ onStatus, onReading, onHeldReading, onDisconnect, onError, forceDevicePicker, rememberDevice }) {
   await stopNativeOmronListener();
   await initializeBle(onStatus);
   let device = !forceDevicePicker ? getRememberedOmronDevice() : null;
@@ -42,9 +42,16 @@ async function startNativeOmronListener({ onStatus, onReading, onDisconnect, onE
   const listener = { device, handles: [], listening: true, connected: false, state: "starting", onDisconnect };
   nativeOmronListener = listener;
   const inFlight = new Map();
+  const held = new Set();
   const deliverReading = (reading) => {
     if (!reading || nativeOmronListener !== listener) return;
     const key = reading.external_id || JSON.stringify(reading);
+    if (!reading.measured_at || !Number.isFinite(new Date(reading.measured_at).getTime())) {
+      // Keep the original in the native durable queue. A historical measurement
+      // cannot safely be assigned today's time or acknowledged as saved.
+      if (!held.has(key)) { held.add(key); onHeldReading?.(reading); }
+      return;
+    }
     if (inFlight.has(key)) return;
     listener.connected = true;
     const operation = Promise.resolve().then(() => onReading?.(reading, { device, native: true }))
@@ -441,13 +448,14 @@ function scheduleOmronReconnect(listener) {
 export async function startOmronBloodPressureListener({
   onStatus,
   onReading,
+  onHeldReading,
   onDisconnect,
   onError,
   forceDevicePicker = false,
   rememberDevice = true,
 } = {}) {
   if (canUseNativeOmronListener()) {
-    return startNativeOmronListener({ onStatus, onReading, onDisconnect, onError, forceDevicePicker, rememberDevice });
+    return startNativeOmronListener({ onStatus, onReading, onHeldReading, onDisconnect, onError, forceDevicePicker, rememberDevice });
   }
   await stopOmronBloodPressureListener().catch(() => {});
   await initializeBle(onStatus);

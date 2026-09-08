@@ -33,10 +33,11 @@ test('listener armed earlier calls the latest session save callback', async () =
   assert.equal(h.state.sessionId, 'next-session');
 });
 test('native replay coalesces deliveries, retries failed saves, and acknowledges only success', async () => {
-  let interval; let delivered = 0; let fail = true; const acknowledgements = []; const handlers = {};
+  let interval; let delivered = 0; let fail = true; const acknowledgements = []; const handlers = {}; const held = [];
+  const pending = [reading, {...reading, external_id:"second"}, {...reading, external_id:"old-invalid", measured_at:"-0001-11-28T05:00:00Z"}];
   const native = { addListener: async (name, fn) => { handlers[name] = fn; return { remove: async () => {} }; },
-    arm: async () => ({ pendingReadings: [reading, {...reading, external_id:'second'}] }),
-    getState: async () => ({ pendingReadings: [reading, {...reading, external_id:'second'}] }),
+    arm: async () => ({ pendingReadings: pending }),
+    getState: async () => ({ pendingReadings: pending }),
     acknowledgeReading: async value => acknowledgements.push(value.externalId), disarm: async () => {} };
   const source = fs.readFileSync(new URL('../lib/omronBloodPressureBle.js', import.meta.url), 'utf8');
   const start = source.indexOf('async function startNativeOmronListener('); const end = source.indexOf('\nfunction readStoredJson', start);
@@ -44,8 +45,23 @@ test('native replay coalesces deliveries, retries failed saves, and acknowledges
     stopNativeOmronListener: async () => {}, initializeBle: async () => {}, getRememberedOmronDevice: () => ({deviceId:'cuff'}),
     setInterval: fn => { interval = fn; return 1; }, Map, Promise });
   vm.runInContext(source.slice(start,end)+'\nthis.start = startNativeOmronListener;',context);
-  await context.start({onReading: async () => { delivered++; if(fail) throw Error('offline'); }, onError:()=>{}});
+  await context.start({onReading: async () => { delivered++; if(fail) throw Error('offline'); }, onError:()=>{}, onHeldReading: r => held.push(r)});
   await new Promise(resolve=>setImmediate(resolve)); assert.equal(acknowledgements.length,0); assert.equal(delivered,2);
   fail=false; interval(); interval(); await new Promise(resolve=>setImmediate(resolve));
   assert.equal(delivered,4); assert.deepEqual(acknowledgements.sort(),['second','test']);
+  assert.equal(held.length, 1); assert.equal(held[0].external_id, 'old-invalid');
+});
+
+test('automatic database refresh does not clear cuff save error or change controls while armed', async () => {
+  let state = { status: 'error', error: 'offline', lastReading: reading, message: 'Retry pending', permissionGranted: true };
+  const original = state;
+  const context = vm.createContext({ useCallback: f => f, bpSyncInFlightRef: {current:false}, bpOmronListening:true,
+    liveSession:{activeSessionId:'session'}, setBpCapture:f=>{state=f(state);},
+    getBloodPressureStatus:async()=>({native:true,permissionGranted:false}), listRecentBloodPressure:async()=>({readings:[]}),
+    stampBloodPressureReadings:async()=>({stamped:0,latest:null}) });
+  const start=page.indexOf('  const syncBloodPressureForLiveSession =');
+  const end=page.indexOf('  const saveOmronBloodPressureForLiveSession',start);
+  vm.runInContext(page.slice(start,end)+'\nthis.sync=syncBloodPressureForLiveSession;',context);
+  for(let i=0;i<6;i++) await context.sync({manual:false});
+  assert.equal(state,original);
 });

@@ -1922,6 +1922,7 @@ export default function LiveCapture() {
   const bpSyncInFlightRef = useRef(false);
   const bpOmronActionInFlightRef = useRef(false);
   const bpForegroundRefreshCooldownRef = useRef(0);
+  const [heldBpReadings, setHeldBpReadings] = useState({});
   const bpOmronSeenRef = useRef(new Set());
   const bpSessionIdRef = useRef(null);
   const howlSettingsDirtyRef = useRef(false);
@@ -4996,11 +4997,6 @@ export default function LiveCapture() {
         error: "",
         message: "Refreshing BP readings...",
       }));
-    } else {
-      setBpCapture((prev) => ({
-        ...prev,
-        error: "",
-      }));
     }
     try {
       const nativeStatus = await getBloodPressureStatus().catch(() => ({ native: false, permissionGranted: false }));
@@ -5008,7 +5004,7 @@ export default function LiveCapture() {
       let nativeSyncAttempted = false;
       let nativePermissionGranted = Boolean(nativeStatus?.permissionGranted);
 
-      if (nativeStatus?.native !== false && nativeStatus?.permissionGranted) {
+      if ((!bpOmronListening || manual) && nativeStatus?.native !== false && nativeStatus?.permissionGranted) {
         nativeSyncAttempted = true;
         const result = await syncBloodPressureFromHealthConnect({ days: 2, limit: 25 });
         readings = Array.isArray(result?.readings) ? result.readings : [];
@@ -5030,7 +5026,9 @@ export default function LiveCapture() {
       const latestStoredReading = readings[0] || null;
       const activeSessionId = liveSession?.activeSessionId || null;
       const needsPermission = nativeStatus?.native !== false && !nativePermissionGranted;
-      setBpCapture((prev) => ({
+      setBpCapture((prev) => {
+        if (bpOmronListening && !manual && !stamped.stamped) return prev;
+        return ({
         ...prev,
         sessionId: stamped.latest
           ? activeSessionId
@@ -5057,7 +5055,8 @@ export default function LiveCapture() {
             : needsPermission
               ? "Health Connect BP permission is not granted on this device. Desktop will still show readings after the phone syncs them."
               : (manual ? "No saved BP reading found yet." : prev.message || "BP sync is watching the local database."),
-      }));
+      });
+      });
     } catch (error) {
       setBpCapture((prev) => ({
         ...prev,
@@ -5161,13 +5160,13 @@ export default function LiveCapture() {
     try {
       await startOmronBloodPressureListener({
         forceDevicePicker,
+        onHeldReading: (reading) => setHeldBpReadings((prev) => ({ ...prev, [reading.external_id || reading.id || JSON.stringify(reading)]: reading })),
         onStatus: (message) => {
           setBpCapture((prev) => ({
             ...prev,
             syncing: false,
-            status: "syncing",
-            error: "",
-            message,
+            status: prev.error ? "error" : prev.lastReading ? prev.status : "armed",
+            message: prev.error ? prev.message : message,
           }));
         },
         onReading: (reading) => {
@@ -7754,7 +7753,7 @@ export default function LiveCapture() {
           helper={bpCapture.lastReading
             ? `Last reading: ${formatBloodPressure(bpCapture.lastReading)} · ${formatBloodPressureTime(bpCapture.lastReading.measured_at, bpCapture.lastReading.timestamp_source || bpCapture.lastReading.raw?.timestamp_source)}`
             : "OMRON and Health Connect controls"}
-          status={bpOmronListening ? "OMRON armed" : bpCapture.lastReading ? "Latest ready" : "Not connected"}
+          status={bpOmronListening ? "OMRON armed" : bpCapture.lastReading ? (bpCapture.error ? "Not saved" : "Latest ready") : "Not connected"}
         >
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
@@ -7772,7 +7771,16 @@ export default function LiveCapture() {
                 </p>
               )}
               {bpCapture.error && <p className="mt-1 text-xs text-destructive">{bpCapture.error}</p>}
-              <p className="mt-2 text-[11px] text-muted-foreground">
+              {Object.keys(heldBpReadings).length > 0 && (
+            <details className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+              <summary>{Object.keys(heldBpReadings).length} older cuff reading(s) preserved — date needs recovery</summary>
+              <ul className="mt-2 list-disc pl-5">
+                {Object.entries(heldBpReadings).map(([key, reading]) => <li key={key}>{formatBloodPressure(reading)}</li>)}
+              </ul>
+              <p className="mt-2">These remain on this phone. They are not retried or treated as current measurements. New cuff readings can still be captured normally.</p>
+            </details>
+          )}
+          <p className="mt-2 text-[11px] text-muted-foreground">
                 Windows EXE and the phone APK can both listen to the OMRON BP7000 directly. Use one collector at a time; every reading is saved to the same local PulsePoint database and stamped into the active session.
               </p>
             </div>
@@ -7786,7 +7794,7 @@ export default function LiveCapture() {
                       ? "border-amber-400/30 bg-amber-400/10 text-amber-300"
                       : "border-border bg-muted/40 text-muted-foreground"
               }`}>
-                {bpCapture.syncing ? "Syncing" : bpCapture.status === "captured" ? "Captured" : bpCapture.status === "permission_needed" ? "Permission needed" : bpCapture.lastReading ? "Latest ready" : "Watching"}
+                {bpCapture.syncing ? "Syncing" : bpCapture.status === "captured" ? "Captured" : bpCapture.status === "permission_needed" ? "Permission needed" : bpCapture.error ? "Not saved" : bpCapture.lastReading ? "Latest ready" : "Watching"}
               </span>
               {bpOmronListening && (
                 <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
