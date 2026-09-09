@@ -40,7 +40,7 @@ import {
 } from "@/lib/videoSyncClock";
 import { formatManualAnnotationReviewText } from "@/lib/manualAnnotationReviewText";
 import { manualAnnotationReport } from "@/lib/manualAnnotationReport";
-import { savedAnnotationReview, annotationTimelineEntries, manualReviewEventKey, normalizeReviewCameraRole, missingManualAnnotationEvents, buildManualReviewBackfillPlan, annotationCameraFromFeed, annotationBelongsToCamera } from "@/lib/manualAnnotationFrameCoverage";
+import { savedAnnotationReview, annotationTimelineEntries, manualReviewEventKey, normalizeReviewCameraRole, missingManualAnnotationEvents, buildManualReviewBackfillPlan, annotationCameraFromFeed, filterAnnotationTimeline, annotationReviewFeed } from "@/lib/manualAnnotationFrameCoverage";
 
 function getCategoryMeta(value) {
   return [...EVENT_CATEGORIES, ...EXPLORATION_EVENT_CATEGORIES].find((c) => c.value === value) || EVENT_CATEGORIES[EVENT_CATEGORIES.length - 1];
@@ -355,21 +355,21 @@ function ManualNoteSarahRead({ review, pending = false, compact = false, cameraL
       </div>
       <p className="mt-1 text-[10px] text-muted-foreground">{review?.source_video?.label || review?.source_video_role || cameraLabel || "Selected camera"} · visual review</p>
       {pending ? (
-        <p className="mt-1 text-[10px] leading-snug text-muted-foreground">Reviewing the nearby frames quietly…</p>
+        <p className="mt-1 text-[10px] leading-snug text-muted-foreground">Reviewing the full ±5-second window…</p>
       ) : (
         <>
           {summary && <p className="mt-1 text-[10px] leading-snug text-foreground/85">{summary}</p>}
           {!summary && findings.length === 0 && <p className="mt-1 text-[10px] leading-snug text-muted-foreground">{review
             ? "No report text was saved for this review. Use Review again to generate it."
             : "No saved review for this note on the selected camera."}</p>}
-          {review?.sampled_frames?.length > 0 && <p className="mt-1 text-[10px] text-muted-foreground">Sampled: {fmtMmSs(Math.min(...review.sampled_frames.map((frame) => Number(frame.recordTimeSeconds))))}–{fmtMmSs(Math.max(...review.sampled_frames.map((frame) => Number(frame.recordTimeSeconds))))}</p>}
+          {review?.sampled_frames?.length > 0 && <p className="mt-1 text-[10px] text-muted-foreground">Reviewed: {fmtMmSs(review.analyzed_window?.start_s ?? Math.min(...review.sampled_frames.map((frame) => Number(frame.recordTimeSeconds))))}–{fmtMmSs(review.analyzed_window?.end_s ?? Math.max(...review.sampled_frames.map((frame) => Number(frame.recordTimeSeconds))))}</p>}
           {review?.coverage_status === "fully_reused" && findings.length > 0 && <p className="mt-1 text-[10px] text-muted-foreground">Saved observations from this camera</p>}
           {visibleFindings.length > 0 && (
             <div className="mt-1.5 space-y-1 border-t border-primary/10 pt-1.5">
               {visibleFindings.map((finding, index) => (
                 <p key={`${finding.anatomical_area || "finding"}-${finding.evidence_time_s || index}`} className="text-[10px] leading-snug text-foreground/75">
                   <span className="font-semibold text-primary/90">{finding.anatomical_area || "Visible finding"}:</span>{" "}
-                  {formatManualAnnotationReviewText(finding.observation)}
+                  {(finding.evidence_status === "candidate" || finding.confidence === "low") && <span className="text-muted-foreground">Possible · </span>}{formatManualAnnotationReviewText(finding.observation)}
                 </p>
               ))}
               {compact && findings.length > visibleFindings.length && (
@@ -821,6 +821,7 @@ export default function VideoSyncPlayer({
   const [zoomWindow, setZoomWindow] = useState(60);
   const [activeEventIdx, setActiveEventIdx] = useState(null);
   const [selectedEventFilters, setSelectedEventFilters] = useState([]);
+  const [annotationSourceFilter, setAnnotationSourceFilter] = useState("both");
   const loadedFeeds = useMemo(
     () => VIDEO_FEED_SLOTS.map((meta) => ({ ...meta, ...videoFeeds[meta.key] })).filter((feed) => feed.src),
     [videoFeeds],
@@ -882,6 +883,7 @@ export default function VideoSyncPlayer({
 
   useEffect(() => {
     setPendingManualReviewIds(new Set());
+    setAnnotationSourceFilter("both");
   }, [session.id]);
 
   const activeReviewVideo = useMemo(() => ({
@@ -1056,13 +1058,13 @@ export default function VideoSyncPlayer({
   };
 
   const queueManualAnnotationVisualReview = async (event, { quiet = true, forceReview = false, feedOverride = null } = {}) => {
-    const feed = feedOverride || selectVisualReviewFeed();
+    const feed = feedOverride || annotationReviewFeed(event, manualVisualReviews, videoFeeds, session.linked_local_videos || [], selectVisualReviewFeed());
     if (event.annotation_camera && normalizeReviewCameraRole(event.annotation_camera.role) !== normalizeReviewCameraRole(feed?.key)) {
       showQuickNotice("Select this annotation's camera before reviewing it.", "error");
       return false;
     }
     if (!session?.id || !feed?.localPath || !event?.note) {
-      if (!quiet) showQuickNotice("Load or link a local video before requesting Sarah's ±5s read.", "error");
+      showQuickNotice("Link the original video for this annotation’s camera before requesting Sarah’s ±5s read.", "error");
       return false;
     }
     const role = feed.key === "lower_body" ? "feet" : feed.key;
@@ -2302,11 +2304,11 @@ export default function VideoSyncPlayer({
   const savedMotionSummary = !isExploration ? session.motion_analysis_summary : null;
   const motionEvidence = !isExploration ? getMotionEvidenceSummary(session) : null;
   const timelineEventEntries = useMemo(() => annotationTimelineEntries(events), [events]);
-  const visibleEventEntries = useMemo(() => timelineEventEntries
+  const visibleEventEntries = useMemo(() => filterAnnotationTimeline(timelineEventEntries, manualVisualReviews, annotationSourceFilter)
     .filter(({ ev }) => (
       selectedEventFilters.length === 0
       || EVENT_FILTERS.some((filter) => selectedEventFilters.includes(filter.key) && filter.matches(ev))
-    )), [timelineEventEntries, selectedEventFilters]);
+    )), [timelineEventEntries, selectedEventFilters, manualVisualReviews, annotationSourceFilter]);
   const visibleEvents = useMemo(() => visibleEventEntries.map(({ ev }) => ev), [visibleEventEntries]);
   const filteredVisualSnapshots = useMemo(() => visualSnapshotReviews.filter((snapshot) => {
     if (snapshotCameraFilter !== "all" && snapshotCameraKey(snapshot) !== snapshotCameraFilter) return false;
@@ -3609,7 +3611,7 @@ export default function VideoSyncPlayer({
                   })}
                 </div>
                 <p className="text-[10px] text-muted-foreground">
-                  {selectedEventFilters.length ? `${visibleEvents.length} of ${events.length} notes visible. Multiple filters combine.` : `Showing ${events.length} notes.`}
+                  {selectedEventFilters.length || annotationSourceFilter !== "both" ? `${visibleEvents.length} of ${events.length} notes visible. Multiple filters combine.` : `Showing ${events.length} notes.`}
                 </p>
               </div>
             )}
@@ -3702,9 +3704,9 @@ export default function VideoSyncPlayer({
                           <span className="text-[10px] text-foreground leading-tight line-clamp-2">{ev.note}</span>
                           <ManualNoteSarahRead
                             review={manualReviewForEvent(ev)}
-                            pending={pendingManualReviewIds.has(`${activeFeedKey}:${manualReviewEventKey(ev)}`)}
+                            pending={[...pendingManualReviewIds].some(key => key.endsWith(`:${manualReviewEventKey(ev)}`))}
                       cameraLabel={videoFeeds[activeFeedKey]?.label || activeFeedKey}
-                      onReview={annotationBelongsToCamera(ev, manualVisualReviews, activeReviewVideo) ? () => queueManualAnnotationVisualReview(ev, { quiet: false, forceReview: true }) : undefined}
+                      onReview={["manual", "voice"].includes(ev.source) ? () => queueManualAnnotationVisualReview(ev, { quiet: false, forceReview: true }) : undefined}
                             compact
                           />
                         </div>
@@ -3770,9 +3772,9 @@ export default function VideoSyncPlayer({
                         <span className="text-xs text-foreground leading-tight">{ev.note}</span>
                         <ManualNoteSarahRead
                           review={manualReviewForEvent(ev)}
-                          pending={pendingManualReviewIds.has(`${activeFeedKey}:${manualReviewEventKey(ev)}`)}
+                          pending={[...pendingManualReviewIds].some(key => key.endsWith(`:${manualReviewEventKey(ev)}`))}
                       cameraLabel={videoFeeds[activeFeedKey]?.label || activeFeedKey}
-                      onReview={annotationBelongsToCamera(ev, manualVisualReviews, activeReviewVideo) ? () => queueManualAnnotationVisualReview(ev, { quiet: false, forceReview: true }) : undefined}
+                      onReview={["manual", "voice"].includes(ev.source) ? () => queueManualAnnotationVisualReview(ev, { quiet: false, forceReview: true }) : undefined}
                           compact
                         />
                         <span className="text-[9px] font-mono text-muted-foreground">
@@ -3800,6 +3802,11 @@ export default function VideoSyncPlayer({
           )}
         </div>
 
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">Annotation camera
+          <select aria-label="Annotation camera filter" value={annotationSourceFilter} onChange={event => setAnnotationSourceFilter(event.target.value)} className="rounded-md border border-border bg-background p-2 text-foreground">
+            <option value="both">Both</option><option value="main">Main</option><option value="feet">Feet</option>
+          </select>
+        </label>
         {/* Review tabs — saved event notes stay separate from visual-audit checkpoints. */}
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-muted/15 p-2">
           <div className="flex items-center gap-1">
@@ -3860,9 +3867,9 @@ export default function VideoSyncPlayer({
         {reviewTab === "events" && (
           <div className="space-y-1.5">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-              Visible Events ({visibleEvents.length}/{events.length}) — nearby highlighted
+              Visible Events ({visibleEvents.length}/{events.length}) — chronological, nearby highlighted
             </p>
-            {[...visibleEventEntries].reverse().map(({ ev, i }) => {
+            {visibleEventEntries.map(({ ev, i }) => {
               const color = EVENT_COLORS[i % EVENT_COLORS.length];
               const cats = normalizeCategoryArray(ev.category);
               const annotationTags = getAnnotationTags(ev);
@@ -3939,9 +3946,9 @@ export default function VideoSyncPlayer({
                     <button type="button" onClick={() => seekToEvent(ev, i)} className="text-left text-xs text-foreground leading-snug">{ev.note}</button>
                     <ManualNoteSarahRead
                       review={manualReviewForEvent(ev)}
-                      pending={pendingManualReviewIds.has(`${activeFeedKey}:${manualReviewEventKey(ev)}`)}
+                      pending={[...pendingManualReviewIds].some(key => key.endsWith(`:${manualReviewEventKey(ev)}`))}
                       cameraLabel={videoFeeds[activeFeedKey]?.label || activeFeedKey}
-                      onReview={annotationBelongsToCamera(ev, manualVisualReviews, activeReviewVideo) ? () => queueManualAnnotationVisualReview(ev, { quiet: false, forceReview: true }) : undefined}
+                      onReview={["manual", "voice"].includes(ev.source) ? () => queueManualAnnotationVisualReview(ev, { quiet: false, forceReview: true }) : undefined}
                     />
                   </div>
                   <div className="shrink-0 flex flex-col items-end gap-1">

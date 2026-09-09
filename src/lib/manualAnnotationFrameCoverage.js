@@ -73,7 +73,34 @@ export function savedAnnotationReview(reviews = [], event = {}) {
 }
 
 export function annotationTimelineEntries(events = []) {
-  return events.map((ev, i) => ({ ev, i }));
+  return events.map((ev, i) => ({ ev, i })).sort((a, b) => Number(a.ev.time_s) - Number(b.ev.time_s) || a.i-b.i);
+}
+
+export function filterAnnotationTimeline(entries, reviews, filter = 'both') {
+  if (filter === 'both') return entries;
+  return entries.filter(({ ev }) => {
+    const saved = savedAnnotationReview(reviews, ev);
+    const role = annotationCameraRole(ev, reviews) || normalizeReviewCameraRole(saved?.source_video_role || saved?.source_video?.role);
+    // Legacy unassigned entries stay available under Both, never reclassified.
+    return filter === 'main' ? ['main', 'composite'].includes(role) : role === 'feet';
+  });
+}
+
+export function annotationReviewFeed(event, reviews, feeds = {}, linked = [], active = null) {
+  const review = savedAnnotationReview(reviews, event);
+  const owner = event.annotation_camera || review?.source_video;
+  const role = normalizeReviewCameraRole(owner?.role || owner?.key || review?.source_video_role);
+  const key = role === 'feet' ? 'lower_body' : role;
+  const storedPath = owner?.path || review?.source_video?.path;
+  if (storedPath) return { key, localPath: storedPath, fileName: owner?.filename || review?.source_video?.filename, label: owner?.label || review?.source_video?.label || role, fingerprint: owner?.fingerprint || '', timelineOffsetSeconds: Number(owner?.timelineOffsetSeconds ?? review?.source_video?.timelineOffsetSeconds) || 0 };
+  // Resolve legacy reviews against the saved original link, never a proxy URL.
+  const original = linked.find(v => v.path && (
+    normalizeReviewCameraRole(v.role || v.key || v.label) === role
+    || (review?.source_video?.fingerprint && v.fingerprint === review.source_video.fingerprint && !v.role && !v.key)
+  ));
+  if (original) return { ...original, key, localPath: original.path, fileName: original.filename };
+  if (key && feeds[key]?.localPath) return { ...feeds[key], key };
+  return !role ? active : null;
 }
 
 export function annotationCameraRole(event = {}, reviews = []) {
@@ -144,8 +171,8 @@ export function mergeManualAnnotationReview(reviews = [], review) {
   const key = review.event_id || `${review.note_time_s}:${review.manual_note}`;
   return [...reviews.filter((item) => (
     (item.event_id || `${item.note_time_s}:${item.manual_note}`) !== key
-    || !sameVideoEvidenceSource(item, review.source_video)
-  )), review].sort((a, b) => Number(a.note_time_s) - Number(b.note_time_s)).slice(-500);
+    || normalizeReviewCameraRole(item.source_video_role || item.source_video?.role) !== normalizeReviewCameraRole(review.source_video_role || review.source_video?.role)
+  )), review].sort((a, b) => Number(a.note_time_s) - Number(b.note_time_s));
 }
 
 export function reusedManualAnnotationEvidence(analysis = {}, video = {}, times = []) {

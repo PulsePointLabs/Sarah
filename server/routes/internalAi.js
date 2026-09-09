@@ -77,9 +77,11 @@ function jsonInstruction(responseJsonSchema, schemaMode) {
   return `\n\nReturn ONLY valid JSON matching this JSON schema. Do not wrap in markdown.\n${JSON.stringify(responseJsonSchema, null, 2)}`;
 }
 
-function resolveMaxImageCount(value) {
+export function resolveMaxImageCount(value) {
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? Math.max(1, Math.min(12, Math.floor(parsed))) : 5;
+  // Explicit dense-window requests include ordered context AND detail crops.
+  // Keep the default unchanged; do not silently drop everything after image 12.
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(48, Math.floor(parsed))) : 5;
 }
 
 function imageBlocksFromPayload(images = [], maxImages = 5) {

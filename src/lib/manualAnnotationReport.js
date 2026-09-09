@@ -3,7 +3,7 @@ import { formatManualAnnotationReviewText } from './manualAnnotationReviewText.j
 export function directObservationText(value) {
   // Omit uncertainty/verdict sentences rather than turning a negation into a fact.
   return formatManualAnnotationReviewText(value).split(/(?<=[.!?])\s+/)
-    .filter((sentence) => !/\b(?:does? not appear|not visually confirmed|not supported by|contrary to your|your (?:note|observation) (?:is|was) (?:incorrect|unsupported))\b/i.test(sentence))
+    .filter((sentence) => !/\b(?:does? not appear|not visually confirmed|not supported by|partially supported|note is unsupported|contrary to your|your (?:note|observation) (?:is|was) (?:incorrect|unsupported)|reduced sampled movement alone does not establish relaxation)\b/i.test(sentence))
     .join(' ').trim();
 }
 

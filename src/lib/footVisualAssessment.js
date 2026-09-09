@@ -75,8 +75,8 @@ function sideStateText(label, side = {}) {
 
 export function footAssessmentSummary(assessment = {}) {
   const states = [sideStateText("Your left foot", assessment.left), sideStateText("your right foot", assessment.right)].filter(Boolean);
-  if (!states.length) return "Current foot posture is uncertain; reduced sampled movement alone does not establish relaxation.";
-  return `${states.join("; ")}. Reduced sampled movement alone does not establish relaxation.`;
+  if (!states.length) return "";
+  return `${states.join("; ")}.`;
 }
 
 export function sanitizeFootSummary(summary = "", assessment = null) {

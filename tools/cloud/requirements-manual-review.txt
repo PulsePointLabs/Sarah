@@ -1,0 +1,3 @@
+# Local manual-window CV; the existing Modal image also supplies these modules.
+numpy>=1.26,<3
+opencv-python-headless>=4.11,<5

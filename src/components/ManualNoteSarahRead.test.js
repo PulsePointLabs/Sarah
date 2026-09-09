@@ -18,6 +18,12 @@ vm.runInNewContext(transformSync(`export ${component}`, { loader: 'jsx', jsx: 'a
 });
 const render = (props) => renderToStaticMarkup(React.createElement(module.exports.ManualNoteSarahRead, props));
 
+test('temporal candidates stay visible inline with the actual reviewed window', () => {
+  const html = render({onReview() {}, review:{source_video_role:'feet',summary:'Before, toe curl begins. Around the mark it increases. Afterward it decreases.',analyzed_window:{start_s:67,end_s:77},sampled_frames:[{recordTimeSeconds:72},{recordTimeSeconds:67}],findings:[{anatomical_area:'Left toes',observation:'Slight possible curl.',confidence:'low',evidence_status:'candidate'}]}});
+  assert.match(html,/Possible/);assert.match(html,/Slight possible curl/);assert.match(html,/1:07.*1:17/);
+  assert.doesNotMatch(html,/No saved review|<details/);
+});
+
 test('feet report is displayed inline like main, without a verdict or hidden dropdown', () => {
   const html = render({ cameraLabel: 'Feet', onReview() {}, review: {
     summary: '', findings: [], note_assessment: 'not_visually_confirmed',
