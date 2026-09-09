@@ -9,7 +9,7 @@ const worker = fileURLToPath(new URL('../../tools/cloud/manual_annotation_motion
 const root = path.join(os.tmpdir(), 'sarah-manual-review');
 const live = new Set();
 
-export function runEvidenceProcess(command, args, signal) {
+export function runEvidenceProcess(command, args, signal, { captureStderr = false } = {}) {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -17,13 +17,13 @@ export function runEvidenceProcess(command, args, signal) {
     const abort = () => child.kill();
     signal?.addEventListener('abort', abort, { once: true });
     child.stdout.on('data', (b) => { stdout += b; });
-    child.stderr.on('data', (b) => { stderr = (stderr + b).slice(-4000); });
+    child.stderr.on('data', (b) => { stderr = (stderr + b).slice(captureStderr ? -1_000_000 : -4000); });
     child.on('error', (error) => { signal?.removeEventListener('abort', abort); reject(error); });
     child.on('close', (code) => {
       signal?.removeEventListener('abort', abort);
       if (signal?.aborted) reject(new Error('Visual review cancelled.'));
       else if (code) reject(new Error(`Visual evidence processing failed: ${stderr}`));
-      else resolve(stdout);
+      else resolve(captureStderr ? { stdout, stderr } : stdout);
     });
   });
 }
@@ -102,11 +102,15 @@ export const LOWER_BODY_LOCALIZATION_SCHEMA = {
 export async function denseFeetEvidence({ sourcePath, start, end, mark, offset, directory, signal, invoke, source }) {
   const fps = Math.min(8, source.fps);
   const count = Math.floor((end - start) * fps + .00001) + 1;
-  await runEvidenceProcess('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-ss', String(start), '-i', sourcePath,
-    '-map', '0:v:0', '-an', '-vf', `fps=${fps}`, '-frames:v', String(count), '-q:v', '2', path.join(directory, 'dense-%03d.jpg')], signal);
+  // Select real source frames (no fps-filter duplication or retimed images).
+  // showinfo records the actual selected PTS, including variable-rate footage.
+  const decoded = await runEvidenceProcess('ffmpeg', ['-hide_banner', '-loglevel', 'info', '-nostdin', '-y', '-ss', String(start), '-t', String(end-start+2/source.fps), '-i', sourcePath,
+    '-map', '0:v:0', '-an', '-vf', `select=lte(t\\,${end-start+.000001})*gte(t\\,selected_n/${fps}-.000001),showinfo`, '-fps_mode', 'vfr', '-q:v', '2', path.join(directory, 'dense-%03d.jpg')], signal, { captureStderr: true });
   const files = (await fsp.readdir(directory)).filter((name) => /^dense-\d+\.jpg$/.test(name)).sort();
   if (files.length < Math.max(2, count - 1)) throw new Error('The full dense annotation window could not be decoded.');
-  const descriptors = files.map((filename, i) => ({ filename, time_s: Number((start + i / fps + offset).toFixed(4)) }));
+  const times = [...decoded.stderr.matchAll(/\bn:\s*\d+\s+pts:\s*-?\d+\s+pts_time:([-+\d.eE]+)/g)].map(m=>Number(m[1]));
+  if (times.length !== files.length || times.some(t=>!Number.isFinite(t) || t < -.001 || t > end-start+.001)) throw new Error('Source frame timestamps could not be aligned to the dense window.');
+  const descriptors = files.map((filename, i) => ({ filename, time_s: Number((start + times[i] + offset).toFixed(6)) }));
   const seeds = await Promise.all([0, Math.floor(files.length/2), files.length-1].map(i => imageDescriptor(directory, files[i], descriptors[i].time_s-offset)));
   const localized = await invoke({ model: 'claude_sonnet_4_6', max_tokens: 3000, max_images: 3, signal,
     response_json_schema: LOWER_BODY_LOCALIZATION_SCHEMA, images: seeds.map(f => ({ filename: f.filename, media_type: f.mimeType, data: f.data })),

@@ -61,3 +61,15 @@ test('real 1080p dense path supplies subsecond full-field CV and ordered native 
     assert.ok(result.frames.every(f=>f.context==='full native frame'));
   });
 });
+
+test('30fps source retains real presentation timestamps instead of invented 8fps times',async()=>{
+  await withManualEvidenceWorkspace(async directory=>{
+    const sourcePath=path.join(directory,'source.mp4');
+    await runEvidenceProcess('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=size=128x96:rate=30','-t','1.2','-c:v','libx264','-preset','ultrafast',sourcePath]);
+    const source=await probeAnnotationVideo(sourcePath);
+    const result=await denseFeetEvidence({sourcePath,start:0,end:1,mark:.5,offset:67,directory,source,invoke:async()=>({regions:[]})});
+    assert.equal(result.motion.frame_times_s.length,9);
+    assert.ok(Math.abs(result.motion.frame_times_s[1]-(67+4/30))<.00001);
+    assert.equal(result.motion.frame_times_s.at(-1),68);
+  });
+});
