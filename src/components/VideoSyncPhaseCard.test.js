@@ -43,3 +43,15 @@ test("full telemetry inserts the card above cardiac trend, normal sidebar retain
   assert.match(html, /overflow-y-auto/);
   assert.doesNotMatch(render(Sidebar, props), /Phase evidence at playhead/);
 });
+
+test("sidebar exposes exact prior sample time, windowed metrics, and missing intervals", () => {
+  const timed = { ...props, timelineRows: [
+    { time_offset_s: 10, hr: 90, hrv_rmssd_ms: 25, hrv_quality: "high" },
+    { time_offset_s: 10.5, hr: 140, hrv_rmssd_ms: 5, hrv_quality: "high" },
+  ], playheadS: 10.4, videoTiming: { label: "Main", time: 8.4, offset: 2 } };
+  const html = render(Sidebar, timed);
+  assert.match(html, /sample 0:10.000 · 0.400s earlier/);
+  assert.match(html, /rolling RR window, not instantaneous/);
+  assert.match(html, /0:08.400/);
+  assert.match(render(Sidebar, { ...timed, playheadS: 30 }), /telemetry gap: last sample 19.500s earlier/);
+});

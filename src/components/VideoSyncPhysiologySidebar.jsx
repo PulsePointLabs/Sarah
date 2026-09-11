@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import VideoSyncPhaseCard from "./VideoSyncPhaseCard";
+import { telemetryAtOrBefore, telemetryTimeLabel, breakTelemetryGaps } from "../lib/telemetryPlayhead.js";
 import { Activity, Droplets, Gauge, HeartPulse, ShieldCheck, Wind } from "lucide-react";
 import {
   CartesianGrid,
@@ -34,45 +35,6 @@ function humanize(value, fallback = "Unavailable") {
   return text.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
-function evidenceScore(row = {}) {
-  return (
-    (positiveOrNull(row.hr) != null ? 1 : 0)
-    + (String(row.rr_intervals_ms || "").trim() ? 5 : 0)
-    + (positiveOrNull(row.hrv_rmssd_ms) != null ? 4 : 0)
-    + (positiveOrNull(row.respiration_bpm) != null ? 4 : 0)
-    + (positiveOrNull(row.motion_peak_dynamic_mg) != null ? 3 : 0)
-    + (numberOrNull(row.signal_confidence_score) != null ? 1 : 0)
-  );
-}
-
-function nearestEvidenceRow(rows, seconds) {
-  if (!rows.length) return null;
-  const distance = (row) => Math.abs(Number(row.time_offset_s) - seconds);
-  let low = 0;
-  let high = rows.length;
-  while (low < high) {
-    const middle = Math.floor((low + high) / 2);
-    if (Number(rows[middle].time_offset_s) < seconds) low = middle + 1;
-    else high = middle;
-  }
-  const closestCandidates = [rows[low - 1], rows[low]].filter(Boolean);
-  const closestDistance = Math.min(...closestCandidates.map(distance));
-  const nearby = [];
-  for (let index = low - 1; index >= 0; index -= 1) {
-    if (distance(rows[index]) > closestDistance + 0.75) break;
-    nearby.push(rows[index]);
-  }
-  for (let index = low; index < rows.length; index += 1) {
-    if (distance(rows[index]) > closestDistance + 0.75) break;
-    nearby.push(rows[index]);
-  }
-  return nearby.reduce((best, row) => {
-    const scoreDifference = evidenceScore(row) - evidenceScore(best);
-    if (scoreDifference !== 0) return scoreDifference > 0 ? row : best;
-    return distance(row) < distance(best) ? row : best;
-  }, nearby[0]);
-}
-
 function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = false }) {
   return (
     <div className={`rounded-xl border border-border bg-background/70 shadow-sm ${compact ? "p-2" : "p-3"}`}>
@@ -84,7 +46,7 @@ function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = fa
         {value}
         {unit && value !== "--" && <span className="ml-1 text-[10px] font-semibold">{unit}</span>}
       </p>
-      <p className={`${compact ? "mt-1 min-h-0 line-clamp-1" : "mt-2 min-h-7"} text-[9px] leading-relaxed text-muted-foreground`}>{detail}</p>
+      <p className={`${compact ? "mt-1 min-h-0" : "mt-2 min-h-7"} text-[9px] leading-relaxed text-muted-foreground`}>{detail}</p>
     </div>
   );
 }
@@ -147,14 +109,14 @@ function TrendChart({ rows, lines, playheadS, xDomain, onSeek, rightAxis = false
             <Line
               key={line.key}
               yAxisId={line.axis || "left"}
-              type="monotone"
+              type="stepAfter"
               dataKey={line.key}
               name={line.key}
               stroke={line.color}
               strokeWidth={line.width || 2}
               strokeDasharray={line.dash}
               dot={false}
-              connectNulls
+              connectNulls={false}
               isAnimationActive={false}
             />
           ))}
@@ -176,6 +138,7 @@ export default function VideoSyncPhysiologySidebar({
   compact = false,
   optionalChannels = { spo2: true, respiration: true, motion: true },
   phaseSession,
+  videoTiming,
 }) {
   const normalizedRows = useMemo(() => timelineRows
     .map((row) => ({
@@ -201,13 +164,16 @@ export default function VideoSyncPhysiologySidebar({
     const last = normalizedRows[normalizedRows.length - 1]?.t ?? first + 1;
     return [first, Math.max(first + 1, last)];
   }, [normalizedRows, xDomain]);
-  const visibleRows = useMemo(() => normalizedRows.filter(
+  const chartRows = useMemo(() => breakTelemetryGaps(normalizedRows,
+    ["hr", "smoothed", "baseline", "rmssd", "sdnn", "respiration", "motion"]), [normalizedRows]);
+  const visibleRows = useMemo(() => chartRows.filter(
     (row) => row.t >= safeDomain[0] - 5 && row.t <= safeDomain[1] + 5,
-  ), [normalizedRows, safeDomain]);
-  const current = useMemo(
-    () => nearestEvidenceRow(normalizedRows, playheadS),
+  ), [chartRows, safeDomain]);
+  const sample = useMemo(
+    () => telemetryAtOrBefore(normalizedRows, playheadS),
     [normalizedRows, playheadS],
   );
+  const current = sample.row;
   const currentTime = numberOrNull(current?.time_offset_s);
   const sampleDistance = currentTime == null ? null : Math.abs(currentTime - playheadS);
   const hr = positiveOrNull(current?.hr);
@@ -253,9 +219,14 @@ export default function VideoSyncPhysiologySidebar({
             Physiology At Playhead
           </p>
           <p className="mt-1 text-[10px] text-muted-foreground">
-            Saved telemetry synchronized to {formatTime(playheadS)}
-            {sampleDistance != null && sampleDistance >= 2 ? ` · nearest sample ${sampleDistance.toFixed(1)}s away` : ""}
+            Session {telemetryTimeLabel(playheadS)}
+            {current ? ` · sample ${telemetryTimeLabel(currentTime)} · ${sampleDistance.toFixed(3)}s earlier`
+              : sample.stale ? ` · telemetry gap: last sample ${sample.age.toFixed(3)}s earlier` : " · no prior telemetry"}
           </p>
+          {videoTiming && <p className="mt-1 text-[10px] text-muted-foreground">
+            {videoTiming.label} video {telemetryTimeLabel(videoTiming.time)} · offset {Number(videoTiming.offset).toFixed(3)}s.
+            {" "}Saved alignment; sensor-to-frame accuracy has not been verified.
+          </p>}
         </div>
         <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.08] px-2 py-1 text-right">
           <p className="text-[8px] font-semibold uppercase tracking-wider text-emerald-600">Core evidence</p>
@@ -278,7 +249,7 @@ export default function VideoSyncPhysiologySidebar({
           label="RMSSD"
           value={rmssd != null ? rmssd.toFixed(1) : "--"}
           unit="ms"
-          detail={rmssd != null ? `${humanize(current?.hrv_quality, "RR-derived")} variability` : "No RR-derived HRV at this moment"}
+          detail={rmssd != null ? `${humanize(current?.hrv_quality, "RR-derived")} · rolling RR window, not instantaneous` : "No RR-derived HRV at this moment"}
           tone="text-teal-500"
           compact={compact}
         />
@@ -287,7 +258,7 @@ export default function VideoSyncPhysiologySidebar({
           label="SDNN"
           value={sdnn != null ? sdnn.toFixed(1) : "--"}
           unit="ms"
-          detail={sdnn != null ? `${humanize(current?.hrv_quality, "RR-derived")} variability` : "No RR-derived SDNN at this moment"}
+          detail={sdnn != null ? `${humanize(current?.hrv_quality, "RR-derived")} · rolling RR window, not instantaneous` : "No RR-derived SDNN at this moment"}
           tone="text-violet-500"
           compact={compact}
         />
@@ -315,7 +286,7 @@ export default function VideoSyncPhysiologySidebar({
           value={respiration != null ? respiration.toFixed(1) : "--"}
           unit="/min"
           detail={respiration != null
-            ? `${humanize(current?.respiration_source)} · ${humanize(current?.respiration_confidence)}`
+            ? `${humanize(current?.respiration_source)} · ${humanize(current?.respiration_confidence)} · window estimate`
             : humanize(current?.respiration_unavailable_reason, "No respiratory evidence recorded")}
           tone="text-sky-500"
           compact={compact}
@@ -326,7 +297,7 @@ export default function VideoSyncPhysiologySidebar({
           value={motion != null ? Math.round(motion) : "--"}
           unit="mg"
           detail={motion != null
-            ? `${humanize(current?.motion_class)} · dynamic H10 acceleration`
+            ? `${humanize(current?.motion_class)} · H10 window estimate`
             : "No H10 accelerometer evidence recorded"}
           tone="text-amber-500"
           compact={compact}
