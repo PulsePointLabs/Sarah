@@ -92,7 +92,7 @@ function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = fa
   );
 }
 
-function TrendChart({ rows, lines, playheadS, xDomain, onSeek, rightAxis = false, compact = false, phaseBands = [] }) {
+function TrendChart({ rows, lines, playheadS, xDomain, onSeek, rightAxis = false, compact = false, phaseBands = [], subjectiveEpisodes = [] }) {
   const safePlayheadS = numberOrNull(playheadS);
   return (
     <div className={`${compact ? "min-h-0 flex-1" : "h-40"} w-full`}>
@@ -125,6 +125,13 @@ function TrendChart({ rows, lines, playheadS, xDomain, onSeek, rightAxis = false
           )}
           {phaseBands.map((band) => <ReferenceArea key={`${band.start}-${band.phase}`} yAxisId="left"
             x1={band.start} x2={band.end} fill={band.color} fillOpacity={0.18} strokeOpacity={0} ifOverflow="hidden" />)}
+          {subjectiveEpisodes.filter((e) => e.start_s <= xDomain[1] && (e.end_s ?? playheadS) >= xDomain[0]).map((e) => <ReferenceArea key={e.id} yAxisId="left"
+            x1={Math.max(e.start_s, xDomain[0])} x2={Math.min(e.end_s ?? Math.max(e.start_s, playheadS), xDomain[1])}
+            fill={e.kind === "climax" ? "#e879f9" : "#a78bfa"} fillOpacity={0.12} stroke={e.kind === "climax" ? "#e879f9" : "#a78bfa"} strokeDasharray="3 2"
+            label={{ value: e.kind === "climax" ? "C" : "N", position: "insideTop", fill: "#e9d5ff", fontSize: 9 }} ifOverflow="hidden" />)}
+          {subjectiveEpisodes.flatMap((e) => [e.start_s, e.end_s].filter((t) => t != null && t >= xDomain[0] && t <= xDomain[1])
+            .map((t, i) => <ReferenceLine key={`${e.id}-${i}`} yAxisId="left" x={t} stroke={e.kind === "climax" ? "#e879f9" : "#a78bfa"}
+              strokeWidth={1.5} strokeDasharray="3 2" />))}
           <Tooltip
             labelFormatter={(value) => `Time ${formatTime(value)}${phaseBands.find((b) => value >= b.start && value < b.end)?.label ? ` · ${phaseBands.find((b) => value >= b.start && value < b.end).label}` : ""}`}
             formatter={(value, key) => {
@@ -181,6 +188,7 @@ export default function VideoSyncPhysiologySidebar({
   compact = false,
   optionalChannels = { spo2: true, respiration: true, motion: true },
   phaseSession,
+  subjectiveEpisodes = [],
 }) {
   const [showPhaseBands, setShowPhaseBands] = useState(true);
   const phaseModel = useMemo(() => phaseSession ? buildPhaseEvidence(timelineRows) : null, [timelineRows, phaseSession]);
@@ -395,6 +403,7 @@ export default function VideoSyncPhysiologySidebar({
         </div>
         {phaseSession && showPhaseBands && <PhaseBandLegend />}
         <TrendChart
+          subjectiveEpisodes={subjectiveEpisodes}
           phaseBands={showPhaseBands ? clipPhaseBands(phaseBands, safeDomain[0], safeDomain[1]) : []}
           rows={visibleRows}
           lines={[

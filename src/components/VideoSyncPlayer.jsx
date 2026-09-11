@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { sidebarLimits, sidebarWidth, isFocusShortcut } from "../lib/fullTelemetryLayout.js";
+import { useSubjectiveEpisodes } from "../hooks/useSubjectiveEpisodes.js";
+import { toggleSubjectiveEpisode } from "../lib/subjectiveNearClimax.js";
+import SubjectiveNearClimaxEpisodes from "./SubjectiveNearClimaxEpisodes";
 import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, ArrowDown, Minus, Sparkles, Maximize2, Minimize2, Heart, Activity, Wind, Move } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -769,6 +772,8 @@ export default function VideoSyncPlayer({
   onEventsChange,
 }) {
   const isExploration = recordType === "body_exploration";
+  const subjective = useSubjectiveEpisodes(session, isExploration);
+  const toggleSubjectiveRef = useRef(null);
   const recordLabel = isExploration ? "exploration" : "session";
   const categoryOptions = isExploration ? EXPLORATION_EVENT_CATEGORIES : EVENT_CATEGORIES;
   const defaultCategory = isExploration ? "instrumentation" : "stimulation";
@@ -2112,6 +2117,9 @@ export default function VideoSyncPlayer({
     const handleKeyDown = (e) => {
       const active = document.activeElement;
       const inInput = active?.tagName === "INPUT" || active?.tagName === "TEXTAREA" || active?.tagName === "SELECT";
+      if (fullTelemetryView && ["KeyN", "KeyC"].includes(e.code) && !inInput && !active?.isContentEditable && !e.repeat && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault(); toggleSubjectiveRef.current?.(e.code === "KeyC" ? "climax" : "near_climax"); return;
+      }
       if (fullTelemetryView && isFocusShortcut(e, active)) {
         e.preventDefault();
         setTelemetryFocus((current) => !current);
@@ -2265,6 +2273,51 @@ export default function VideoSyncPlayer({
         videoFeedRefs.current[feed.key].playbackRate = speed;
       }
     });
+  };
+
+  const toggleSubjective = (kind = "near_climax") => {
+    const video = videoRef.current;
+    if (!video || video.readyState < 2) { showQuickNotice("Load the video before marking an episode.", "error"); return; }
+    const source = videoFeeds[activeFeedKey] || {};
+    const time = mediaTimeToSessionTime(video.currentTime, videoOffset);
+    let thumbnail = "";
+    if (!subjective.current.current.some((e) => e.end_s == null && (e.kind || "near_climax") === kind)) {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = 320; canvas.height = Math.max(1, Math.round(320 * video.videoHeight / video.videoWidth));
+        canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+        thumbnail = canvas.toDataURL("image/jpeg", 0.7);
+      } catch {
+        const filename = source.localPath?.split(/[\\/]/).at(-1) || source.fileName;
+        if (filename) thumbnail = `/api/files/local-video/still?${new URLSearchParams({ filename, time: String(video.currentTime), fingerprint: source.fingerprint || "" })}`;
+      }
+      if (!thumbnail) { showQuickNotice("Could not capture the start thumbnail. Link the original source video and try again.", "error"); return; }
+    }
+    try {
+      subjective.save(toggleSubjectiveEpisode(subjective.current.current, time,
+        { key: activeFeedKey, label: source.label, localPath: source.localPath, filename: source.fileName, fingerprint: source.fingerprint, timelineOffsetSeconds: videoOffset },
+        thumbnail, timelineRows, session, crypto.randomUUID(), kind));
+    } catch (error) { showQuickNotice(error.message, "error"); }
+  };
+  toggleSubjectiveRef.current = toggleSubjective;
+  const seekSubjective = (episode) => {
+    const savedSource = episode.source || {};
+    const match = Object.entries(videoFeeds).find(([key, candidate]) => savedSource.localPath
+      ? candidate.localPath === savedSource.localPath || (savedSource.fingerprint && candidate.fingerprint === savedSource.fingerprint)
+      : key === savedSource.key);
+    const feedKey = match?.[0];
+    const feed = match?.[1];
+    if (!feed?.src) { showQuickNotice("Load this episode's source camera to view its start.", "error"); return; }
+    const nextOffset = Number(feed.timelineOffsetSeconds) || 0;
+    videoRef.current?.pause();
+    if (activeFeedKey !== feedKey) {
+      pendingMasterTimeRef.current = sessionTimeToMediaTime(episode.start_s, nextOffset);
+      setActiveFeedKey(feedKey); setVideoOffset(nextOffset); setVideoSrc(feed.src); setPlayheadS(episode.start_s);
+    } else setSynchronizedVideoTime(sessionTimeToMediaTime(episode.start_s, nextOffset, videoDuration));
+    if (!fullTelemetryView) {
+      pendingMasterTimeRef.current = sessionTimeToMediaTime(episode.start_s, nextOffset);
+      setFullTelemetryView(true);
+    }
   };
 
   const handleWidthDragStart = useCallback((e) => {
@@ -2503,6 +2556,10 @@ export default function VideoSyncPlayer({
                 playsInline
                 onClick={togglePlay}
               />
+              {(subjective.episodes.some((e) => e.end_s == null) || subjective.error || subjective.saving || quickNotice?.tone === "error") && <div className="absolute bottom-2 left-2 rounded bg-black/80 px-2 py-1 text-xs text-violet-300" role="status">
+                {quickNotice?.tone === "error" ? quickNotice.message : subjective.error ? <button type="button" onClick={subjective.retry}>Episode save failed — click to retry</button> : subjective.episodes.some((e) => e.end_s == null)
+                  ? subjective.episodes.filter((e) => e.end_s == null).map((e) => e.kind === "climax" ? "Climax open · C to end" : "Near climax open · N to end").join(" · ") : "Saving episode…"}
+              </div>}
               <div className={`${telemetryFocus ? "hidden" : ""} pointer-events-none absolute left-2 top-2 rounded-md bg-black/65 px-2 py-1 text-[9px] font-semibold text-white`}>
                 {videoFeeds[activeFeedKey]?.label || "Master camera"}
               </div>
@@ -2587,6 +2644,7 @@ export default function VideoSyncPlayer({
                 compact
                 optionalChannels={fullTelemetryChannels}
                 phaseSession={session}
+                subjectiveEpisodes={subjective.episodes}
               />
             </div>
           </aside>
@@ -3674,6 +3732,7 @@ export default function VideoSyncPlayer({
                 onSeek={(sessionTime) => handleChartClick({ activeLabel: sessionTime })}
                 bloodPressureReadings={bloodPressureReadings}
                 pulseOxReadings={pulseOxReadings}
+                subjectiveEpisodes={subjective.episodes}
               />
             )}
 
@@ -3864,6 +3923,9 @@ export default function VideoSyncPlayer({
             <button type="button" onClick={() => setReviewTab("snapshots")} className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${reviewTab === "snapshots" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
               10-Second Visual Audit ({visualSnapshotReviews.length})
             </button>
+            <button type="button" onClick={() => setReviewTab("subjective")} className={`rounded-lg px-3 py-2 text-xs font-semibold ${reviewTab === "subjective" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>
+              Near-climax / climax episodes ({subjective.episodes.length})
+            </button>
           </div>
           {reviewTab === "events" && (manualBackfillState?.running || missingManualReviewEvents.length > 0) && (
             <button type="button" disabled={manualBackfillState?.running} onClick={backfillMissingManualReviews} className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary disabled:opacity-50">
@@ -3911,6 +3973,10 @@ export default function VideoSyncPlayer({
           )}
         </div>
 
+        {reviewTab === "subjective" && <SubjectiveNearClimaxEpisodes episodes={subjective.episodes} onSeek={seekSubjective}
+          timelineRows={timelineRows} onSeekTime={seekToMotionPeak}
+          onToggle={toggleSubjective} onDelete={(id) => subjective.save(subjective.current.current.filter((e) => e.id !== id))}
+          error={subjective.error} saving={subjective.saving} onRetry={subjective.retry} />}
         {/* All event notes — full list */}
         {reviewTab === "events" && (
           <div className="space-y-1.5">

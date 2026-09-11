@@ -18,6 +18,7 @@ function loadComponent(file) {
 }
 const Card = loadComponent("./VideoSyncPhaseCard.jsx");
 const Sidebar = loadComponent("./VideoSyncPhysiologySidebar.jsx");
+const Episodes = loadComponent("./SubjectiveNearClimaxEpisodes.jsx");
 const timelineRows = Array.from({ length: 150 }, (_, t) => ({ time_offset_s: t,
   hr: t < 25 ? 80 : t < 105 ? 105 : Math.max(80, 105 - (t - 105)), baseline_hr: 80 }));
 const props = { timelineRows, session: { climax_offset_s: 100 }, playheadS: 80, xDomain: [0, 150], onSeek() {} };
@@ -46,4 +47,15 @@ test("full telemetry inserts the card above cardiac trend, normal sidebar retain
   assert.match(html, /Phase bands/);
   assert.match(html, /Physiology phase colors/);
   assert.doesNotMatch(render(Sidebar, props), /Phase evidence at playhead/);
+});
+
+test("episode tab exposes both shortcuts, retained thumbnail, totals and candidate durations", () => {
+  const html = render(Episodes, { episodes: [{ id: "n", kind: "near_climax", start_s: 20, end_s: 30, duration_s: 10,
+    thumbnail_url: "data:image/jpeg;base64,test", source: { label: "Feet" } }], timelineRows, onSeek() {}, onSeekTime() {}, onToggle() {}, onDelete() {}, onRetry() {} });
+  assert.match(html, /Near climax \(N\)/);
+  assert.match(html, /Climax \(C\)/);
+  assert.match(html, /Marked near climax/);
+  assert.match(html, /10.0/);
+  assert.match(html, /data:image\/jpeg;base64,test/);
+  assert.match(html, /near-threshold candidate durations/);
 });

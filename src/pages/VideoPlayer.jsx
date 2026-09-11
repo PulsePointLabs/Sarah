@@ -19,6 +19,7 @@ const RECORD_PICKER_FIELDS = [
 const VIDEO_SYNC_RECORD_FIELDS = [
   ...RECORD_PICKER_FIELDS,
   "event_timeline",
+  "subjective_near_climax_episodes",
   "linked_local_videos",
   "motion_analysis_summary",
   "pre_climax_offset_s",
