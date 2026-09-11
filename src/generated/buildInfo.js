@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
   "version": "0.1.263",
-  "commit": "1c7a7b2",
-  "commitMessage": "Add N and C subjective episode markers with telemetry and duration summaries",
-  "builtAt": "2026-09-11T22:49:13.907Z"
+  "commit": "6639802",
+  "commitMessage": "Add slim contextual physiology graphs to subjective episode cards",
+  "builtAt": "2026-09-11T23:09:31.023Z"
 };
