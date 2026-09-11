@@ -58,4 +58,8 @@ test("episode tab exposes both shortcuts, retained thumbnail, totals and candida
   assert.match(html, /10.0/);
   assert.match(html, /data:image\/jpeg;base64,test/);
   assert.match(html, /near-threshold candidate durations/);
+  assert.match(html, /Cardiac · bpm/);
+  assert.match(html, /Autonomic · ms/);
+  assert.match(html, /Approach &amp; recovery/);
+  assert.match(html, /Median before/);
 });
