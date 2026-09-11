@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import VideoSyncPhaseCard from "./VideoSyncPhaseCard";
 import { Activity, Droplets, Gauge, HeartPulse, ShieldCheck, Wind } from "lucide-react";
 import {
   CartesianGrid,
@@ -174,6 +175,7 @@ export default function VideoSyncPhysiologySidebar({
   pulseOxReadings = [],
   compact = false,
   optionalChannels = { spo2: true, respiration: true, motion: true },
+  phaseSession,
 }) {
   const normalizedRows = useMemo(() => timelineRows
     .map((row) => ({
@@ -243,7 +245,7 @@ export default function VideoSyncPhysiologySidebar({
   );
 
   return (
-    <section className={`${compact ? "flex h-full min-h-0 flex-col gap-2 overflow-hidden p-2" : "space-y-3 p-3"} rounded-2xl border border-primary/15 bg-gradient-to-b from-primary/[0.055] via-card to-card shadow-sm`}>
+    <section className={`${compact ? "flex h-full min-h-0 flex-col gap-2 overflow-y-auto p-2 [&>*]:shrink-0" : "space-y-3 p-3"} rounded-2xl border border-primary/15 bg-gradient-to-b from-primary/[0.055] via-card to-card shadow-sm`}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
@@ -367,6 +369,9 @@ export default function VideoSyncPhysiologySidebar({
           </button>
         ))}
       </div>
+
+      {phaseSession && <VideoSyncPhaseCard timelineRows={timelineRows} session={phaseSession}
+        playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek} />}
 
       <div className={`rounded-xl border border-border bg-background/60 ${compact ? "min-h-0 flex-1 p-2" : "p-2.5"}`}>
         <div className="mb-1.5 flex items-center justify-between gap-2">

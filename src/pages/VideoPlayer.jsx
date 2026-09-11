@@ -88,15 +88,14 @@ export default function VideoPlayer() {
           undefined,
           { timeoutMs: 20000 },
         ),
-        base44.entities.HeartRateTimeline.filterFieldsSampled(
+        base44.entities.HeartRateTimeline.filterFields(
           { session: id },
           VIDEO_SYNC_TIMELINE_FIELDS,
           "time_offset_s",
-          3000,
-          10000,
+          undefined,
           undefined,
           { timeoutMs: 30000 },
-        ).catch(() => []),
+        ),
       ]);
       const record = recordList[0] || null;
       setSelectedRecord(record);

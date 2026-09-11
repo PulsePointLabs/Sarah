@@ -2539,6 +2539,7 @@ export default function VideoSyncPlayer({
                 pulseOxReadings={pulseOxReadings}
                 compact
                 optionalChannels={fullTelemetryChannels}
+                phaseSession={session}
               />
             </div>
           </aside>
