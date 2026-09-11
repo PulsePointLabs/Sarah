@@ -70,6 +70,9 @@ function Metric({ label, value, tone = "text-foreground" }) {
 export default function SessionTelemetryDashboard({
   session,
   timelineRows = [],
+  phaseEvidenceRows,
+  phaseTimeOffset = 0,
+  subjectiveEpisodes,
   emgRows = [],
   nearClimaxEvents = [],
   confirmedNearClimaxEvents = [],
@@ -282,6 +285,9 @@ export default function SessionTelemetryDashboard({
             <div className="mt-3 min-w-0 w-full max-w-full overflow-hidden">
               <HRTimelineChart
                 rows={timelineRows}
+                phaseEvidenceRows={phaseEvidenceRows || timelineRows}
+                phaseTimeOffset={phaseTimeOffset}
+                subjectiveEpisodes={subjectiveEpisodes || session.subjective_near_climax_episodes || []}
                 savedMarkers={{
                   pre_climax_offset_s: session.pre_climax_offset_s,
                   climax_offset_s: session.climax_offset_s,
@@ -381,6 +387,9 @@ export default function SessionTelemetryDashboard({
                 </div>
                 <div className="rounded-xl border border-border bg-card p-2">
                   <HRTimelineChart
+                    phaseEvidenceRows={phaseEvidenceRows || timelineRows}
+                    phaseTimeOffset={phaseTimeOffset}
+                    subjectiveEpisodes={subjectiveEpisodes || session.subjective_near_climax_episodes || []}
                     rows={timelineRows}
                     savedMarkers={{
                       pre_climax_offset_s: session.pre_climax_offset_s,

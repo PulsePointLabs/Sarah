@@ -2003,6 +2003,9 @@ export default function SessionDetail() {
         <SessionTelemetryDashboard
           session={s}
           timelineRows={timelineRows}
+          phaseEvidenceRows={rawTimelineRows}
+          phaseTimeOffset={analysisTrim?.start_s || 0}
+          subjectiveEpisodes={session.subjective_near_climax_episodes || []}
           emgRows={emgRows}
           nearClimaxEvents={nearClimaxEvents}
           confirmedNearClimaxEvents={confirmedNearClimaxEvents}
@@ -2239,6 +2242,7 @@ export default function SessionDetail() {
                   <HRTimelineChart
                     rows={timelineRows}
                     phaseEvidenceRows={rawTimelineRows}
+                    subjectiveEpisodes={session.subjective_near_climax_episodes || []}
                     phaseTimeOffset={analysisTrim?.start_s || 0}
                     savedMarkers={{
                       pre_climax_offset_s: s.pre_climax_offset_s,
@@ -2595,6 +2599,7 @@ export default function SessionDetail() {
                 <HRTimelineChart
                   rows={timelineRows}
                   phaseEvidenceRows={rawTimelineRows}
+                  subjectiveEpisodes={session.subjective_near_climax_episodes || []}
                   phaseTimeOffset={analysisTrim?.start_s || 0}
                   savedMarkers={{
                     pre_climax_offset_s: s.pre_climax_offset_s,

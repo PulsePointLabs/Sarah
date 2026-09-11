@@ -106,6 +106,7 @@ export default function HRTimelineChart({
   rows,
   phaseEvidenceRows = null,
   phaseTimeOffset = 0,
+  subjectiveEpisodes = null,
   savedMarkers = {},
   onMarkersChange,
   highlightRange = null,
@@ -127,6 +128,12 @@ export default function HRTimelineChart({
     : requestedDefaultWindow;
   const chartRows = useMemo(() => buildCleanChartRows(rows), [rows]);
   const [showEvidencePhases, setShowEvidencePhases] = useState(true);
+  const [showSubjectiveEpisodes, setShowSubjectiveEpisodes] = useState(true);
+  const subjectiveBands = useMemo(() => (subjectiveEpisodes || []).map((e) => ({
+    id: e.id, start: e.start_s - phaseTimeOffset, end: (e.end_s ?? e.start_s) - phaseTimeOffset,
+    color: e.kind === "climax" ? "#e879f9" : "#a78bfa", label: e.kind === "climax" ? "My climax" : "My near climax",
+    marker: e.kind === "climax" ? "C" : "N", complete: e.end_s != null,
+  })), [subjectiveEpisodes, phaseTimeOffset]);
   const evidenceBands = useMemo(() => phaseBandsFromPoints(buildPhaseEvidence(phaseEvidenceRows || []).points, phaseTimeOffset), [phaseEvidenceRows, phaseTimeOffset]);
   const [window, setWindow] = useState(defaultWindow);
   const [showBuild, setShowBuild] = useState(false);
@@ -446,8 +453,10 @@ export default function HRTimelineChart({
   };
 
   const layerControls = [
-    ...(phaseEvidenceRows ? [{ label: "Phase bands", active: showEvidencePhases, setter: setShowEvidencePhases,
+    ...(phaseEvidenceRows ? [{ label: "Build / plateau / recovery", active: showEvidencePhases, setter: setShowEvidencePhases,
       disabled: false, title: "Same physiology phase estimates as Video Sync: baseline, build, sustained plateau, climax candidate and recovery." }] : []),
+    ...(subjectiveEpisodes ? [{ label: `My episodes (${subjectiveEpisodes.length})`, active: showSubjectiveEpisodes, setter: setShowSubjectiveEpisodes,
+      disabled: subjectiveEpisodes.length === 0, title: "Show your N near-climax and C climax start/stop intervals from Video Sync, independently of AI detections." }] : []),
     ...(noClimax
       ? [{
         label: "HR shifts",
@@ -457,13 +466,13 @@ export default function HRTimelineChart({
         title: "Show sustained HR rise/drop bands.",
       }]
       : [{
-        label: "Phases",
+        label: "Saved phases",
         active: showPhases,
         setter: setShowPhases,
         disabled: phaseBands.length === 0,
         title: "Show the saved build, pre-climax, climax, and recovery phase ranges.",
       }, {
-        label: `Near Climax${confirmedNearClimaxEvents.length ? ` (${confirmedNearClimaxEvents.length})` : ""}`,
+        label: `AI near climax${confirmedNearClimaxEvents.length ? ` (${confirmedNearClimaxEvents.length})` : ""}`,
         active: showNearClimax,
         setter: setShowNearClimax,
         disabled: confirmedNearClimaxEvents.length === 0,
@@ -578,6 +587,15 @@ export default function HRTimelineChart({
               <ReferenceArea key={`evidence-${band.start}-${band.phase}`} yAxisId={0} x1={band.start} x2={band.end}
                 fill={band.color} fillOpacity={0.18} strokeOpacity={0} ifOverflow="hidden" />
             ))}
+            {showSubjectiveEpisodes && clipPhaseBands(subjectiveBands.filter((b) => b.complete), zoomDomain?.x1 ?? visibleMin, zoomDomain?.x2 ?? visibleMax).map((band) => (
+              <ReferenceArea key={`subjective-${band.id}`} yAxisId={0} x1={band.start} x2={band.end}
+                fill={band.color} fillOpacity={0.13} stroke={band.color} strokeDasharray="3 2" ifOverflow="hidden"
+                label={{ value: band.marker, position: "insideTop", fill: band.color, fontSize: 10 }} />
+            ))}
+            {showSubjectiveEpisodes && subjectiveBands.filter((b) => !b.complete).map((band) => (
+              <ReferenceLine key={`open-${band.id}`} x={band.start} yAxisId={0} stroke={band.color} strokeDasharray="3 2"
+                label={{ value: `${band.marker} open`, position: "insideTopLeft", fill: band.color, fontSize: 10 }} ifOverflow="hidden" />
+            ))}
             {/* Saved phase ranges */}
             {showPhases && phaseBands.map((band) => (
               <ReferenceArea
@@ -603,7 +621,8 @@ export default function HRTimelineChart({
               }}
               labelFormatter={(v) => {
                 const phase = showEvidencePhases && evidenceBands.find((band) => Number(v) >= band.start && Number(v) < band.end);
-                return `Time: ${fmtSec(Math.round(Number(v)))}${phase ? ` · ${phase.label}` : ""}`;
+                const subjective = showSubjectiveEpisodes && subjectiveBands.filter((band) => Number(v) >= band.start && Number(v) <= band.end).map((band) => band.label).join(" / ");
+                return `Time: ${fmtSec(Math.round(Number(v)))}${phase ? ` · ${phase.label}` : ""}${subjective ? ` · ${subjective}` : ""}`;
               }}
               contentStyle={{ fontSize: 11 }}
               labelStyle={{ color: '#111827', fontWeight: 600 }}
