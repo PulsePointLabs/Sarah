@@ -2540,7 +2540,6 @@ export default function VideoSyncPlayer({
                 compact
                 optionalChannels={fullTelemetryChannels}
                 phaseSession={session}
-                videoTiming={{ label: videoFeeds[activeFeedKey]?.label || "Selected", time: displayedVideoTime, offset: videoOffset }}
               />
             </div>
           </aside>
@@ -3532,7 +3531,7 @@ export default function VideoSyncPlayer({
                 onChange={(e) => setVideoOffset(Number(e.target.value) || 0)}
                 onBlur={persistVideoOffset}
                 className="w-20 text-xs font-mono text-center bg-background border border-border rounded px-2 py-1 h-7"
-                step="0.001"
+                step="0.1"
               />
               <span className="text-xs text-muted-foreground">s</span>
               <span className="text-xs text-muted-foreground ml-auto">Video 0:00 = {isExploration ? "Exploration" : "Session"} {fmtSignedMmSs(videoOffset)}</span>
@@ -3628,7 +3627,6 @@ export default function VideoSyncPlayer({
                 onSeek={(sessionTime) => handleChartClick({ activeLabel: sessionTime })}
                 bloodPressureReadings={bloodPressureReadings}
                 pulseOxReadings={pulseOxReadings}
-                videoTiming={{ label: videoFeeds[activeFeedKey]?.label || "Selected", time: displayedVideoTime, offset: videoOffset }}
               />
             )}
 
