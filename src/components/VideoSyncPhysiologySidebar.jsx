@@ -75,7 +75,7 @@ function nearestEvidenceRow(rows, seconds) {
 
 function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = false }) {
   return (
-    <div className={`rounded-xl border border-border bg-background/70 shadow-sm ${compact ? "p-2" : "p-3"}`}>
+    <div className={`rounded-xl border border-border bg-background/70 shadow-sm ${compact ? "p-1.5" : "p-3"}`}>
       <div className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
         <Icon className={`h-3.5 w-3.5 ${tone}`} />
         {label}
@@ -92,7 +92,7 @@ function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = fa
 function TrendChart({ rows, lines, playheadS, xDomain, onSeek, rightAxis = false, compact = false }) {
   const safePlayheadS = numberOrNull(playheadS);
   return (
-    <div className={`${compact ? "h-[clamp(6.5rem,14vh,9rem)]" : "h-40"} w-full`}>
+    <div className={`${compact ? "min-h-0 flex-1" : "h-40"} w-full`}>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart
           data={rows}
@@ -245,8 +245,8 @@ export default function VideoSyncPhysiologySidebar({
   );
 
   return (
-    <section className={`${compact ? "flex h-full min-h-0 flex-col gap-2 overflow-y-auto p-2 [&>*]:shrink-0" : "space-y-3 p-3"} rounded-2xl border border-primary/15 bg-gradient-to-b from-primary/[0.055] via-card to-card shadow-sm`}>
-      <div className="flex items-start justify-between gap-3">
+    <section className={`${compact ? "flex h-full min-h-0 flex-col gap-1 overflow-hidden p-2" : "space-y-3 p-3"} rounded-2xl border border-primary/15 bg-gradient-to-b from-primary/[0.055] via-card to-card shadow-sm`}>
+      <div className="flex shrink-0 items-start justify-between gap-3">
         <div>
           <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
             <Gauge className="h-3.5 w-3.5" />
@@ -263,7 +263,7 @@ export default function VideoSyncPhysiologySidebar({
         </div>
       </div>
 
-      <div className={`grid gap-2 ${compact ? "grid-cols-3" : "grid-cols-2"}`}>
+      <div className={`grid shrink-0 gap-1 ${compact ? "grid-cols-4" : "grid-cols-2"}`}>
         <MetricCard
           icon={HeartPulse}
           label="Heart Rate"
@@ -352,7 +352,7 @@ export default function VideoSyncPhysiologySidebar({
         </div>
       </div>}
 
-      <div className="flex flex-wrap items-center gap-1">
+      <div className="flex shrink-0 flex-wrap items-center gap-1">
         <span className="mr-1 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Window</span>
         {[30, 60, 120, 300].map((windowSeconds) => (
           <button
@@ -373,7 +373,7 @@ export default function VideoSyncPhysiologySidebar({
       {phaseSession && <VideoSyncPhaseCard timelineRows={timelineRows} session={phaseSession}
         playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek} />}
 
-      <div className={`rounded-xl border border-border bg-background/60 ${compact ? "min-h-0 flex-1 p-2" : "p-2.5"}`}>
+      <div className={`rounded-xl border border-border bg-background/60 ${compact ? "flex min-h-0 flex-1 flex-col p-1.5" : "p-2.5"}`}>
         <div className="mb-1.5 flex items-center justify-between gap-2">
           <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Cardiac Trend</p>
           <div className="flex gap-2 text-[8px]">
@@ -397,7 +397,7 @@ export default function VideoSyncPhysiologySidebar({
       </div>
 
       {hasAutonomic && (
-        <div className={`rounded-xl border border-border bg-background/60 ${compact ? "min-h-0 flex-1 p-2" : "p-2.5"}`}>
+        <div className={`rounded-xl border border-border bg-background/60 ${compact ? "flex min-h-0 flex-1 flex-col p-1.5" : "p-2.5"}`}>
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Autonomic Trend</p>
             <div className="flex gap-2 text-[8px]">
@@ -420,7 +420,7 @@ export default function VideoSyncPhysiologySidebar({
       )}
 
       {hasRespirationMotion && (optionalChannels.respiration !== false || optionalChannels.motion !== false) ? (
-        <div className={`rounded-xl border border-border bg-background/60 ${compact ? "min-h-0 flex-1 p-2" : "p-2.5"}`}>
+        <div className={`rounded-xl border border-border bg-background/60 ${compact ? "flex min-h-0 flex-1 flex-col p-1.5" : "p-2.5"}`}>
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Respiration & Motion</p>
             <div className="flex gap-2 text-[8px]">

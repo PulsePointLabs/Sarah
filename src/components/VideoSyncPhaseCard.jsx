@@ -29,7 +29,7 @@ export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, x
   const latestMarker = markers.filter((m) => m.t <= playheadS).at(-1);
   const color = COLORS[current.phase];
   return (
-    <section aria-label="Phase evidence at playhead" className="shrink-0 rounded-xl border p-2 transition-colors duration-300"
+    <section aria-label="Phase evidence at playhead" className="relative flex h-[clamp(180px,28svh,240px)] shrink-0 flex-col rounded-xl border p-2 transition-colors duration-300"
       style={{ borderColor: color, backgroundColor: colorCue ? `${color}22` : "transparent" }}>
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-[10px] font-bold uppercase tracking-wider">Build · Plateau · Recovery</h3>
@@ -47,7 +47,7 @@ export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, x
         <span>HR Δ <b>{current.delta != null ? signed(current.delta) : "—"}</b> bpm</span>
       </div>
       <svg viewBox="0 0 400 108" role="img" aria-label="Approach, plateau, and recovery evidence over session time; use the time slider to seek"
-        className="mt-1 block h-24 w-full cursor-crosshair" preserveAspectRatio="none"
+        className="mt-1 block min-h-0 w-full flex-1 cursor-crosshair" preserveAspectRatio="none"
         onClick={(event) => { const bounds = event.currentTarget.getBoundingClientRect();
           onSeek(start + Math.max(0, Math.min(1, ((event.clientX - bounds.left) / bounds.width * 400 - 28) / 364)) * (end - start)); }}>
         {[0, 50, 100].map((n) => <g key={n}><line x1="28" x2="392" y1={88 - n * .75} y2={88 - n * .75} stroke="currentColor" opacity=".12" />
@@ -66,11 +66,12 @@ export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, x
         <span className="text-orange-400">Plateau --</span><span className="text-sky-400">Recovery</span><span className="text-violet-300">Logged markers ⋮</span></div>
       <input type="range" aria-label="Seek phase evidence timeline" min={start} max={end} step="0.1"
         value={Math.max(start, Math.min(end, playheadS))} onChange={(e) => onSeek(Number(e.target.value))} className="mt-1 h-2 w-full accent-teal-500" />
-      <p className="mt-1 text-[9px] text-muted-foreground">Review heuristic, not a calibrated climax probability. Scores follow saved samples.</p>
-      {current.reason && <p className="mt-1 text-[10px]">{current.reason}</p>}
-      {previous && <button type="button" onClick={() => onSeek(previous.t)} className="mt-1 text-left text-[10px] text-primary underline">
-        Latest cue: {previous.label} · {clock(previous.t)}</button>}
-      <details className="mt-1 text-[10px]"><summary className="cursor-pointer">Evidence & key moments</summary>
+      <details className="mt-1 shrink-0 text-[10px]"><summary className="cursor-pointer">Evidence & key moments</summary>
+        <div className="absolute inset-x-0 top-full z-20 mt-1 max-h-[40svh] overflow-y-auto rounded-xl border border-border bg-popover p-3 text-popover-foreground shadow-xl">
+        <p className="text-[9px] text-muted-foreground">Review heuristic, not a calibrated climax probability. Scores follow saved samples.</p>
+        {current.reason && <p className="mt-1">{current.reason}</p>}
+        {previous && <button type="button" onClick={() => onSeek(previous.t)} className="mt-1 text-left text-primary underline">
+          Latest cue: {previous.label} · {clock(previous.t)}</button>}
         {current.slope != null && <p className="mt-1">HR trend {signed(current.slope)} bpm/30s · elevated for {Math.round(current.dwell)}s · drop from recent peak {current.drop.toFixed(1)} bpm.</p>}
         <p>{current.hrvUsable ? `RMSSD ${current.rmssd.toFixed(1)} ms${current.reference ? `; prior reference ${current.reference.toFixed(1)} ms` : "; gathering prior reference"}.` : "No usable moderate/high-quality HRV reference; approach is capped at 60."}</p>
         {current.contributions && <p>Approach contributions: HR elevation {Math.round(current.contributions.elevation)}/45; rising HR {Math.round(current.contributions.rise)}/20;
@@ -80,6 +81,7 @@ export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, x
         <p className="mt-1">All key moments observed through this playhead ({elapsedMoments.length}):</p>
         <div className="mt-1 flex flex-wrap gap-1">{elapsedMoments.map((m, i) => <button key={i} type="button" onClick={() => onSeek(m.t)}
           className="rounded border border-border px-1.5 py-1">{clock(m.t)} · {m.label}</button>)}</div>
+        </div>
       </details>
     </section>
   );
