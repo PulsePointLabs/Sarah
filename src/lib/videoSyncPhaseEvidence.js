@@ -12,6 +12,30 @@ export const PHASE_LABELS = {
   baseline: "Baseline / low build", build: "Building", plateau: "Elevated plateau",
   approach: "Climax approach candidate", recovery: "Release / recovery candidate",
 };
+export const PHASE_COLORS = { unavailable: "#64748b", warming: "#64748b", baseline: "#22c55e", build: "#eab308",
+  plateau: "#f97316", approach: "#ef4444", recovery: "#38bdf8" };
+
+// Use the card's persisted-in-time classification, without backdating transitions
+// or filling missing telemetry. Offsets translate a trimmed view only.
+export function phaseBandsFromPoints(points, offset = 0) {
+  const bands = [];
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const point = points[i];
+    if (!["baseline", "build", "plateau", "approach", "recovery"].includes(point.phase)) continue;
+    const start = point.t - offset;
+    const end = Math.min(points[i + 1].t, point.t + PHASE_SAMPLE_MAX_AGE_S) - offset;
+    if (end <= start) continue;
+    const last = bands.at(-1);
+    if (last?.phase === point.phase && last.end === start) last.end = end;
+    else bands.push({ start, end, phase: point.phase, color: PHASE_COLORS[point.phase], label: PHASE_LABELS[point.phase] });
+  }
+  return bands;
+}
+
+export function clipPhaseBands(bands, start, end) {
+  return bands.filter((b) => b.end > start && b.start < end)
+    .map((b) => ({ ...b, start: Math.max(start, b.start), end: Math.min(end, b.end) }));
+}
 
 export function buildPhaseEvidence(rows = []) {
   const sorted = rows.map((r) => ({ ...r, t: finite(r.time_offset_s) }))

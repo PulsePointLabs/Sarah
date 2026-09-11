@@ -1,14 +1,12 @@
 import { useMemo, useState } from "react";
-import { buildPhaseEvidence, phaseEvidenceAt, PHASE_LABELS, savedPhaseMarkers } from "../lib/videoSyncPhaseEvidence.js";
+import { buildPhaseEvidence, phaseEvidenceAt, PHASE_LABELS, PHASE_COLORS as COLORS, savedPhaseMarkers } from "../lib/videoSyncPhaseEvidence.js";
 
 const clock = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const signed = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
-const COLORS = { unavailable: "#64748b", warming: "#64748b", baseline: "#22c55e", build: "#eab308",
-  plateau: "#f97316", approach: "#ef4444", recovery: "#38bdf8" };
 
-export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, xDomain, onSeek }) {
+export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, xDomain, onSeek, evidenceModel }) {
   const [colorCue, setColorCue] = useState(true);
-  const model = useMemo(() => buildPhaseEvidence(timelineRows), [timelineRows]);
+  const model = useMemo(() => evidenceModel || buildPhaseEvidence(timelineRows), [timelineRows, evidenceModel]);
   const markers = useMemo(() => savedPhaseMarkers(session), [session]);
   const current = phaseEvidenceAt(model.points, playheadS);
   const start = xDomain?.[0] ?? Math.max(0, playheadS - 60);

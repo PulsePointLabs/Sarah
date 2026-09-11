@@ -43,5 +43,7 @@ test("full telemetry inserts the card above cardiac trend, normal sidebar retain
   assert.match(html, /flex h-full min-h-0 flex-col gap-1 overflow-hidden/);
   assert.match(html, /flex min-h-0 flex-1 flex-col p-1.5/);
   assert.match(html, /absolute inset-x-0 top-full/);
+  assert.match(html, /Phase bands/);
+  assert.match(html, /Physiology phase colors/);
   assert.doesNotMatch(render(Sidebar, props), /Phase evidence at playhead/);
 });

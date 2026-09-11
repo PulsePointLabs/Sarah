@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { ChevronDown, Layers, SlidersHorizontal, ZoomIn, ZoomOut } from "lucide-react";
 import { useChartZoom } from "@/hooks/useChartZoom";
 import { buildCleanChartRows, numberOrNull } from "@/lib/hrTimelineChartData";
+import { buildPhaseEvidence, phaseBandsFromPoints, clipPhaseBands } from "../lib/videoSyncPhaseEvidence.js";
+import PhaseBandLegend from "./PhaseBandLegend";
 
 const MARKER_COLORS = {
   build: "#f59e0b",
@@ -102,6 +104,8 @@ const PHASE_LABELS = { pre_climax: "Pre-Climax", climax: "Climax", recovery: "Re
 
 export default function HRTimelineChart({
   rows,
+  phaseEvidenceRows = null,
+  phaseTimeOffset = 0,
   savedMarkers = {},
   onMarkersChange,
   highlightRange = null,
@@ -122,6 +126,8 @@ export default function HRTimelineChart({
     ? "full"
     : requestedDefaultWindow;
   const chartRows = useMemo(() => buildCleanChartRows(rows), [rows]);
+  const [showEvidencePhases, setShowEvidencePhases] = useState(true);
+  const evidenceBands = useMemo(() => phaseBandsFromPoints(buildPhaseEvidence(phaseEvidenceRows || []).points, phaseTimeOffset), [phaseEvidenceRows, phaseTimeOffset]);
   const [window, setWindow] = useState(defaultWindow);
   const [showBuild, setShowBuild] = useState(false);
   const [showRecovery, setShowRecovery] = useState(false);
@@ -440,6 +446,8 @@ export default function HRTimelineChart({
   };
 
   const layerControls = [
+    ...(phaseEvidenceRows ? [{ label: "Phase bands", active: showEvidencePhases, setter: setShowEvidencePhases,
+      disabled: false, title: "Same physiology phase estimates as Video Sync: baseline, build, sustained plateau, climax candidate and recovery." }] : []),
     ...(noClimax
       ? [{
         label: "HR shifts",
@@ -537,6 +545,7 @@ export default function HRTimelineChart({
 
 
 
+      {phaseEvidenceRows && showEvidencePhases && <PhaseBandLegend />}
       <div className={`${compact ? "h-40" : "h-64"} min-w-0 w-full max-w-full cursor-crosshair overflow-hidden`} {...wrapperProps}>
         <ResponsiveContainer width="100%" height="100%" minWidth={1} initialDimension={{ width: 320, height: compact ? 160 : 256 }} debounce={50}>
           <LineChart
@@ -565,6 +574,10 @@ export default function HRTimelineChart({
               />
             )}
 
+            {showEvidencePhases && clipPhaseBands(evidenceBands, zoomDomain?.x1 ?? visibleMin, zoomDomain?.x2 ?? visibleMax).map((band) => (
+              <ReferenceArea key={`evidence-${band.start}-${band.phase}`} yAxisId={0} x1={band.start} x2={band.end}
+                fill={band.color} fillOpacity={0.18} strokeOpacity={0} ifOverflow="hidden" />
+            ))}
             {/* Saved phase ranges */}
             {showPhases && phaseBands.map((band) => (
               <ReferenceArea
@@ -588,7 +601,10 @@ export default function HRTimelineChart({
                 if (name === "hrv_pnn50") return [`${Math.round(val)}%`, "pNN50"];
                 return [val, name];
               }}
-              labelFormatter={(v) => `Time: ${fmtSec(Math.round(Number(v)))}`}
+              labelFormatter={(v) => {
+                const phase = showEvidencePhases && evidenceBands.find((band) => Number(v) >= band.start && Number(v) < band.end);
+                return `Time: ${fmtSec(Math.round(Number(v)))}${phase ? ` · ${phase.label}` : ""}`;
+              }}
               contentStyle={{ fontSize: 11 }}
               labelStyle={{ color: '#111827', fontWeight: 600 }}
             />

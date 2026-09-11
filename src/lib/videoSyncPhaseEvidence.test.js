@@ -1,10 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildPhaseEvidence, phaseEvidenceAt, savedPhaseMarkers } from "./videoSyncPhaseEvidence.js";
+import { buildPhaseEvidence, phaseEvidenceAt, savedPhaseMarkers, phaseBandsFromPoints, clipPhaseBands, PHASE_COLORS } from "./videoSyncPhaseEvidence.js";
 
 const rows = (n, fn = () => ({})) => Array.from({ length: n }, (_, t) => ({
   time_offset_s: t, hr: 80, baseline_hr: 80, ...fn(t),
 }));
+
+test("overlay bands match the card's phase without bridging gaps or resetting trimmed history", () => {
+  const model = buildPhaseEvidence(rows(120, (t) => ({ hr: t < 20 ? 80 : 105 })));
+  const bands = phaseBandsFromPoints(model.points);
+  for (const t of [20, 40, 60, 90]) {
+    const band = bands.find((b) => t >= b.start && t < b.end);
+    assert.equal(band.phase, phaseEvidenceAt(model.points, t).phase);
+    assert.equal(band.color, PHASE_COLORS[band.phase]);
+  }
+  const trimmed = clipPhaseBands(phaseBandsFromPoints(model.points, 60), 0, 30);
+  assert.equal(trimmed[0].phase, phaseEvidenceAt(model.points, 60).phase);
+  assert.ok(trimmed.every((b) => b.start >= 0 && b.end <= 30));
+  const gapBands = phaseBandsFromPoints([{ t: 0, phase: "build" }, { t: 30, phase: "build" }, { t: 31, phase: "recovery" }]);
+  assert.equal(gapBands[0].end, 5);
+  assert.equal(gapBands[1].start, 30);
+});
 
 test("missing values never become evidence or logged zero-time climax", () => {
   for (const hr of [null, undefined, "", 0, NaN]) {

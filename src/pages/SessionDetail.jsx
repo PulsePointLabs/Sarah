@@ -2238,6 +2238,8 @@ export default function SessionDetail() {
                 <div className="space-y-3">
                   <HRTimelineChart
                     rows={timelineRows}
+                    phaseEvidenceRows={rawTimelineRows}
+                    phaseTimeOffset={analysisTrim?.start_s || 0}
                     savedMarkers={{
                       pre_climax_offset_s: s.pre_climax_offset_s,
                       climax_offset_s: s.climax_offset_s,
@@ -2592,6 +2594,8 @@ export default function SessionDetail() {
               {timelineRows.length > 0 ? (
                 <HRTimelineChart
                   rows={timelineRows}
+                  phaseEvidenceRows={rawTimelineRows}
+                  phaseTimeOffset={analysisTrim?.start_s || 0}
                   savedMarkers={{
                     pre_climax_offset_s: s.pre_climax_offset_s,
                     climax_offset_s: s.climax_offset_s,

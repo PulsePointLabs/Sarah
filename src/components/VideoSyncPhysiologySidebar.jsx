@@ -1,4 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { buildPhaseEvidence, phaseBandsFromPoints, clipPhaseBands } from "../lib/videoSyncPhaseEvidence.js";
+import PhaseBandLegend from "./PhaseBandLegend";
 import VideoSyncPhaseCard from "./VideoSyncPhaseCard";
 import { Activity, Droplets, Gauge, HeartPulse, ShieldCheck, Wind } from "lucide-react";
 import {
@@ -6,6 +8,7 @@ import {
   Line,
   LineChart,
   ReferenceLine,
+  ReferenceArea,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -89,7 +92,7 @@ function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = fa
   );
 }
 
-function TrendChart({ rows, lines, playheadS, xDomain, onSeek, rightAxis = false, compact = false }) {
+function TrendChart({ rows, lines, playheadS, xDomain, onSeek, rightAxis = false, compact = false, phaseBands = [] }) {
   const safePlayheadS = numberOrNull(playheadS);
   return (
     <div className={`${compact ? "min-h-0 flex-1" : "h-40"} w-full`}>
@@ -120,8 +123,10 @@ function TrendChart({ rows, lines, playheadS, xDomain, onSeek, rightAxis = false
               tick={{ fontSize: 8, fill: "hsl(var(--muted-foreground))" }}
             />
           )}
+          {phaseBands.map((band) => <ReferenceArea key={`${band.start}-${band.phase}`} yAxisId="left"
+            x1={band.start} x2={band.end} fill={band.color} fillOpacity={0.18} strokeOpacity={0} ifOverflow="hidden" />)}
           <Tooltip
-            labelFormatter={(value) => `Time ${formatTime(value)}`}
+            labelFormatter={(value) => `Time ${formatTime(value)}${phaseBands.find((b) => value >= b.start && value < b.end)?.label ? ` · ${phaseBands.find((b) => value >= b.start && value < b.end).label}` : ""}`}
             formatter={(value, key) => {
               const line = lines.find((candidate) => candidate.key === key);
               return [Number(value).toFixed(line?.decimals ?? 0), line?.label || key];
@@ -177,6 +182,9 @@ export default function VideoSyncPhysiologySidebar({
   optionalChannels = { spo2: true, respiration: true, motion: true },
   phaseSession,
 }) {
+  const [showPhaseBands, setShowPhaseBands] = useState(true);
+  const phaseModel = useMemo(() => phaseSession ? buildPhaseEvidence(timelineRows) : null, [timelineRows, phaseSession]);
+  const phaseBands = useMemo(() => phaseBandsFromPoints(phaseModel?.points || []), [phaseModel]);
   const normalizedRows = useMemo(() => timelineRows
     .map((row) => ({
       ...row,
@@ -372,18 +380,22 @@ export default function VideoSyncPhysiologySidebar({
       </div>
 
       {phaseSession && <VideoSyncPhaseCard timelineRows={timelineRows} session={phaseSession}
-        playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek} />}
+        playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek} evidenceModel={phaseModel} />}
 
       <div className={`rounded-xl border border-border bg-background/60 ${compact ? "flex min-h-0 flex-1 flex-col p-1.5" : "p-2.5"}`}>
         <div className="mb-1.5 flex items-center justify-between gap-2">
           <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Cardiac Trend</p>
+          {phaseSession && <button type="button" aria-pressed={showPhaseBands} onClick={() => setShowPhaseBands(!showPhaseBands)}
+            className="text-[8px] text-primary">Phase bands {showPhaseBands ? "on" : "off"}</button>}
           <div className="flex gap-2 text-[8px]">
             <span className="text-primary">HR</span>
             <span className="text-pink-500">Smoothed</span>
             <span className="text-slate-500">Baseline</span>
           </div>
         </div>
+        {phaseSession && showPhaseBands && <PhaseBandLegend />}
         <TrendChart
+          phaseBands={showPhaseBands ? clipPhaseBands(phaseBands, safeDomain[0], safeDomain[1]) : []}
           rows={visibleRows}
           lines={[
             { key: "hr", label: "HR", color: "hsl(var(--primary))" },
