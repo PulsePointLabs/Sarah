@@ -263,7 +263,8 @@ export default function VideoSyncPhysiologySidebar({
         </div>
       </div>
 
-      <div className={`grid shrink-0 gap-1 ${compact ? "grid-cols-4" : "grid-cols-2"}`}>
+      <div className={`grid shrink-0 gap-1 ${compact ? "" : "grid-cols-2"}`}
+        style={compact ? { gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))" } : undefined}>
         <MetricCard
           icon={HeartPulse}
           label="Heart Rate"

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { sidebarLimits, sidebarWidth, isFocusShortcut } from "../lib/fullTelemetryLayout.js";
 import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, ArrowDown, Minus, Sparkles, Maximize2, Minimize2, Heart, Activity, Wind, Move } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -794,6 +795,26 @@ export default function VideoSyncPlayer({
   const [playerWidth, setPlayerWidth] = useState(66);
   const [telemetryDisplayMode, setTelemetryDisplayMode] = useState("sidebar");
   const [fullTelemetryView, setFullTelemetryView] = useState(false);
+  const [telemetryFocus, setTelemetryFocus] = useState(false);
+  const [telemetryViewport, setTelemetryViewport] = useState(() => typeof window === "undefined" ? 1920 : window.innerWidth);
+  const [preferredSidebarWidth, setPreferredSidebarWidth] = useState(() => {
+    try { return Number(localStorage.getItem("sarah.videoSync.sidebarWidth")) || null; } catch { return null; }
+  });
+  const telemetrySidebarWidth = sidebarWidth(preferredSidebarWidth, telemetryViewport);
+  const telemetrySidebarLimits = sidebarLimits(telemetryViewport);
+  useEffect(() => {
+    const resize = () => setTelemetryViewport(window.innerWidth);
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
+  useEffect(() => {
+    if (!fullTelemetryView) setTelemetryFocus(false);
+  }, [fullTelemetryView]);
+  const resizeTelemetrySidebar = (width) => {
+    const next = sidebarWidth(width, window.innerWidth);
+    setPreferredSidebarWidth(next);
+    try { localStorage.setItem("sarah.videoSync.sidebarWidth", String(next)); } catch { /* Private browser storage may be unavailable. */ }
+  };
   const [fullTelemetryChannels, setFullTelemetryChannels] = useState({ spo2: true, respiration: true, motion: true });
   const [feedsExpanded, setFeedsExpanded] = useState(true);
   const layoutRef = useRef(null);
@@ -2091,6 +2112,16 @@ export default function VideoSyncPlayer({
     const handleKeyDown = (e) => {
       const active = document.activeElement;
       const inInput = active?.tagName === "INPUT" || active?.tagName === "TEXTAREA" || active?.tagName === "SELECT";
+      if (fullTelemetryView && isFocusShortcut(e, active)) {
+        e.preventDefault();
+        setTelemetryFocus((current) => !current);
+        return;
+      }
+      if (fullTelemetryView && e.code === "Escape" && telemetryFocus) {
+        e.preventDefault();
+        setTelemetryFocus(false);
+        return;
+      }
 
       // Space: play/pause (not when typing)
       if (e.code === "Space" && !inInput) {
@@ -2136,7 +2167,7 @@ export default function VideoSyncPlayer({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [addingNew, fullTelemetryView, playheadS, lastUsedCat, setSynchronizedVideoTime, toggleQuickDictation, videoDuration]);
+  }, [addingNew, fullTelemetryView, telemetryFocus, playheadS, lastUsedCat, setSynchronizedVideoTime, toggleQuickDictation, videoDuration]);
 
   // Click on chart → seek video
   const handleChartClick = useCallback((data) => {
@@ -2418,9 +2449,10 @@ export default function VideoSyncPlayer({
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden">
       {fullTelemetryView && typeof document !== "undefined" && createPortal(
-        <div ref={fullTelemetryRootRef} className="dark fixed inset-0 z-[11000] grid h-[100svh] w-screen grid-cols-[minmax(0,1fr)_clamp(320px,34vw,560px)] gap-2 overflow-hidden bg-background p-2 text-foreground max-[900px]:grid-cols-[minmax(0,1fr)_300px]">
+        <div ref={fullTelemetryRootRef} className="dark fixed inset-0 z-[11000] grid h-[100svh] w-screen gap-1 overflow-hidden bg-background p-2 text-foreground"
+          style={{ gridTemplateColumns: `minmax(0,1fr) 6px ${telemetrySidebarWidth}px` }}>
           <main className="flex min-h-0 min-w-0 flex-col gap-2">
-            <header className="flex h-10 shrink-0 items-center justify-between gap-2 rounded-xl border border-white/10 bg-card/95 px-2.5">
+            <header className={`${telemetryFocus ? "hidden" : "flex"} h-10 shrink-0 items-center justify-between gap-2 rounded-xl border border-white/10 bg-card/95 px-2.5`}>
               <div className="flex min-w-0 items-center gap-2">
                 <Activity className="h-4 w-4 shrink-0 text-primary" />
                 <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.15em] text-primary">Full Telemetry</span>
@@ -2437,12 +2469,13 @@ export default function VideoSyncPlayer({
                   ))}
                 </div>
               </div>
+              <button type="button" onClick={() => setTelemetryFocus(true)} title="Video and sidebar only (F); F or Escape restores controls" className="ml-auto shrink-0 rounded-md border border-border px-2 py-1 text-[10px]">Focus (F)</button>
               <button type="button" onClick={closeFullTelemetryView} className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-semibold text-muted-foreground hover:text-foreground">
                 <X className="h-3.5 w-3.5" /> Exit
               </button>
             </header>
 
-            <div className="grid h-[82px] shrink-0 grid-cols-2 gap-2">
+            <div className={`${telemetryFocus ? "hidden" : "grid"} h-[82px] shrink-0 grid-cols-2 gap-2`}>
               {[{ label: "Current Event", entry: fullTelemetryEvents.current }, { label: "Upcoming Event", entry: fullTelemetryEvents.upcoming }].map(({ label, entry }) => (
                 <button
                   key={label}
@@ -2470,12 +2503,12 @@ export default function VideoSyncPlayer({
                 playsInline
                 onClick={togglePlay}
               />
-              <div className="pointer-events-none absolute left-2 top-2 rounded-md bg-black/65 px-2 py-1 text-[9px] font-semibold text-white">
+              <div className={`${telemetryFocus ? "hidden" : ""} pointer-events-none absolute left-2 top-2 rounded-md bg-black/65 px-2 py-1 text-[9px] font-semibold text-white`}>
                 {videoFeeds[activeFeedKey]?.label || "Master camera"}
               </div>
             </div>
 
-            <div className="shrink-0 rounded-xl border border-white/10 bg-card/95 px-2 py-1.5">
+            <div className={`${telemetryFocus ? "hidden" : ""} shrink-0 rounded-xl border border-white/10 bg-card/95 px-2 py-1.5`}>
               <div
                 className="relative h-3 cursor-pointer rounded-full bg-muted"
                 onPointerDown={handleTimelinePointerDown}
@@ -2507,8 +2540,22 @@ export default function VideoSyncPlayer({
             </div>
           </main>
 
-          <aside className="flex min-h-0 flex-col gap-2 overflow-hidden">
-            <div className="flex h-9 shrink-0 items-center justify-between rounded-xl border border-white/10 bg-card/95 px-2">
+          <div role="separator" aria-label="Resize telemetry sidebar" aria-orientation="vertical" tabIndex={0}
+            aria-valuemin={telemetrySidebarLimits.min} aria-valuemax={telemetrySidebarLimits.max} aria-valuenow={telemetrySidebarWidth}
+            title="Drag to resize sidebar; arrow keys adjust width"
+            className="min-h-0 cursor-col-resize touch-none select-none rounded bg-border/30 hover:bg-primary/50 focus:bg-primary/50 focus:outline-none"
+            onPointerDown={(e) => { if (e.button !== 0) return; e.preventDefault(); e.currentTarget.focus(); e.currentTarget.setPointerCapture(e.pointerId); }}
+            onPointerMove={(e) => { if (e.currentTarget.hasPointerCapture(e.pointerId)) resizeTelemetrySidebar(window.innerWidth - e.clientX - 8); }}
+            onPointerUp={(e) => { if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId); }}
+            onPointerCancel={(e) => { if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId); }}
+            onKeyDown={(e) => {
+              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+              e.preventDefault(); e.stopPropagation();
+              resizeTelemetrySidebar(e.key === "Home" ? telemetrySidebarLimits.min : e.key === "End" ? telemetrySidebarLimits.max
+                : telemetrySidebarWidth + (e.key === "ArrowLeft" ? 16 : -16));
+            }} />
+          <aside className="flex min-h-0 min-w-0 flex-col gap-2 overflow-hidden">
+            <div className={`${telemetryFocus ? "hidden" : "flex"} h-9 shrink-0 items-center justify-between rounded-xl border border-white/10 bg-card/95 px-2`}>
               <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Optional channels</span>
               <div className="flex gap-1">
                 {[
