@@ -1,3 +1,4 @@
+import { buildLoadEvidence, loadBandsFromPoints } from "../lib/videoSyncLoadEvidence.js";
 import { useMemo, useState } from "react";
 import { buildPhaseEvidence, phaseBandsFromPoints, clipPhaseBands } from "../lib/videoSyncPhaseEvidence.js";
 import PhaseBandLegend from "./PhaseBandLegend";
@@ -188,11 +189,12 @@ export default function VideoSyncPhysiologySidebar({
   compact = false,
   optionalChannels = { spo2: true, respiration: true, motion: true },
   phaseSession,
+  physiologicalLoad = false,
   subjectiveEpisodes = [],
 }) {
   const [showPhaseBands, setShowPhaseBands] = useState(true);
-  const phaseModel = useMemo(() => phaseSession ? buildPhaseEvidence(timelineRows) : null, [timelineRows, phaseSession]);
-  const phaseBands = useMemo(() => phaseBandsFromPoints(phaseModel?.points || []), [phaseModel]);
+  const phaseModel = useMemo(() => phaseSession ? (physiologicalLoad ? buildLoadEvidence(timelineRows) : buildPhaseEvidence(timelineRows)) : null, [timelineRows, phaseSession, physiologicalLoad]);
+  const phaseBands = useMemo(() => (physiologicalLoad ? loadBandsFromPoints : phaseBandsFromPoints)(phaseModel?.points || []), [phaseModel, physiologicalLoad]);
   const normalizedRows = useMemo(() => timelineRows
     .map((row) => ({
       ...row,
@@ -388,7 +390,7 @@ export default function VideoSyncPhysiologySidebar({
       </div>
 
       {phaseSession && <VideoSyncPhaseCard timelineRows={timelineRows} session={phaseSession}
-        playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek} evidenceModel={phaseModel} />}
+        playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek} evidenceModel={phaseModel} physiologicalLoad={physiologicalLoad} />}
 
       <div className={`rounded-xl border border-border bg-background/60 ${compact ? "flex min-h-0 flex-1 flex-col p-1.5" : "p-2.5"}`}>
         <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -401,7 +403,7 @@ export default function VideoSyncPhysiologySidebar({
             <span className="text-slate-500">Baseline</span>
           </div>
         </div>
-        {phaseSession && showPhaseBands && <PhaseBandLegend />}
+        {phaseSession && showPhaseBands && <PhaseBandLegend physiologicalLoad={physiologicalLoad} />}
         <TrendChart
           subjectiveEpisodes={subjectiveEpisodes}
           phaseBands={showPhaseBands ? clipPhaseBands(phaseBands, safeDomain[0], safeDomain[1]) : []}

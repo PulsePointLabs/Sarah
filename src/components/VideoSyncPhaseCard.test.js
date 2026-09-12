@@ -63,3 +63,19 @@ test("episode tab exposes both shortcuts, retained thumbnail, totals and candida
   assert.match(html, /Approach &amp; recovery/);
   assert.match(html, /Median before/);
 });
+
+test("Body Exploration replaces the card and band labels while regular sessions retain theirs", () => {
+ const html = render(Sidebar, { ...props, phaseSession: props.session, compact: true, physiologicalLoad: true });
+ assert.match(html, /Physiological load at playhead/);
+ assert.match(html, /Relative load/);
+ assert.match(html, /Sustained load/);
+ assert.match(html, /Seek physiological load timeline/);
+ assert.doesNotMatch(html, /climax|Approach|Build · Plateau/i);
+ assert.match(render(Sidebar, { ...props, phaseSession: props.session, compact: true }), /Build · Plateau · Recovery/);
+});
+
+test("load number is the load model value, not the approach number", () => {
+ const html = render(Card, { ...props, physiologicalLoad: true, evidenceModel: {points:[{t:80,phase:'build',load:73,approach:12}],moments:[]} });
+ assert.match(html, /leading-none">73<span/);
+ assert.doesNotMatch(html, /Logged markers/);
+});

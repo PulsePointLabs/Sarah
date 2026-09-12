@@ -2644,6 +2644,7 @@ export default function VideoSyncPlayer({
                 compact
                 optionalChannels={fullTelemetryChannels}
                 phaseSession={session}
+                physiologicalLoad={isExploration}
                 subjectiveEpisodes={subjective.episodes}
               />
             </div>
