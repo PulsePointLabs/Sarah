@@ -6,10 +6,39 @@ export const LOAD_LABELS = {
   plateau: 'Sustained physiological load', approach: 'High physiological load', recovery: 'Recovering / settling',
 };
 
+// Saved timeline packets can interleave complete and partial records. Carry only
+// already-observed fields for at most five seconds; never borrow future packets.
+export function normalizeLoadRows(rows) {
+  const positive = (v) => v != null && v !== '' && Number.isFinite(Number(v)) && Number(v) > 0;
+  const sorted = rows.filter(r => r.time_offset_s != null && r.time_offset_s !== '' && Number.isFinite(Number(r.time_offset_s)))
+    .map(r => ({ ...r, time_offset_s: Number(r.time_offset_s) })).sort((a,b) => a.time_offset_s-b.time_offset_s);
+  const recent = {};
+  const result = [];
+  for (const row of sorted) {
+    const t = row.time_offset_s;
+    const next = { ...row };
+    for (const key of ['hr', 'baseline_hr']) {
+      if (positive(row[key])) recent[key] = { t, value: Number(row[key]) };
+      if (recent[key] && t - recent[key].t <= 5) next[key] = recent[key].value;
+    }
+    if (positive(row.hrv_rmssd_ms) && ['high', 'moderate'].includes(String(row.hrv_quality).toLowerCase())) {
+      recent.hrv = { t, value: Number(row.hrv_rmssd_ms), quality: String(row.hrv_quality).toLowerCase() };
+    }
+    if (recent.hrv && t - recent.hrv.t <= 5) {
+      next.hrv_rmssd_ms = recent.hrv.value;
+      next.hrv_quality = recent.hrv.quality;
+    }
+    // Merge simultaneous records before the feature builder's duplicate guard.
+    if (result.at(-1)?.time_offset_s === t) result[result.length - 1] = next;
+    else result.push(next);
+  }
+  return result;
+}
+
 // Reuse causal cardiac features, not the approach score or its classifications.
 // This is relative cardiac demand, not exercise intensity or a diagnosis.
 export function buildLoadEvidence(rows = []) {
-  const features = buildPhaseEvidence(rows).points;
+  const features = buildPhaseEvidence(normalizeLoadRows(rows)).points;
   let phase = 'warming', pending = null, since = 0;
   const moments = [];
   const points = features.map((p) => {
