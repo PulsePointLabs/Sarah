@@ -1,3 +1,5 @@
+import { useHowlTimeline } from "../hooks/useHowlTimeline.js";
+import HowlTimelineCard from "./HowlTimelineCard.jsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Clapperboard, Crosshair, HeartPulse, Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -85,6 +87,7 @@ export default function SessionTelemetryDashboard({
   onOpenReview,
   recordType = "session",
 }) {
+  const howl = useHowlTimeline(session?.id);
   const [inspectorPlaying, setInspectorPlaying] = useState(false);
   const [inspectorSpeed, setInspectorSpeed] = useState(1);
   const [inspectorDockOpen, setInspectorDockOpen] = useState(false);
@@ -315,6 +318,8 @@ export default function SessionTelemetryDashboard({
           />
         </>
       )}
+
+      <HowlTimelineCard rows={howl.rows} error={howl.error} onRetry={howl.retry} offset={phaseTimeOffset || 0} playheadS={inspectionTime} onSeek={onInspectionTimeChange} />
 
       {(perinealEmgSummary.hasPerinealEvents || perinealEmgSummary.hasPerinealSetup) && (
         <PerinealEmgPanel

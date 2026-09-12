@@ -1,3 +1,4 @@
+import HowlTimelineCard from "./HowlTimelineCard.jsx";
 import { buildLoadEvidence, loadBandsFromPoints } from "../lib/videoSyncLoadEvidence.js";
 import { useMemo, useState } from "react";
 import { buildPhaseEvidence, phaseBandsFromPoints, clipPhaseBands } from "../lib/videoSyncPhaseEvidence.js";
@@ -188,6 +189,7 @@ export default function VideoSyncPhysiologySidebar({
   pulseOxReadings = [],
   compact = false,
   optionalChannels = { spo2: true, respiration: true, motion: true },
+  howl,
   phaseSession,
   physiologicalLoad = false,
   subjectiveEpisodes = [],
@@ -442,6 +444,8 @@ export default function VideoSyncPhysiologySidebar({
           />
         </div>
       )}
+
+      {optionalChannels.howl && howl && <HowlTimelineCard rows={howl.rows} error={howl.error} onRetry={howl.retry} compact={compact} playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek} />}
 
       {hasRespirationMotion && (optionalChannels.respiration !== false || optionalChannels.motion !== false) ? (
         <div className={`rounded-xl border border-border bg-background/60 ${compact ? "flex min-h-0 flex-1 flex-col p-1.5" : "p-2.5"}`}>

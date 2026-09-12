@@ -1,3 +1,4 @@
+import { useHowlTimeline } from '../hooks/useHowlTimeline.js';
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { sidebarLimits, sidebarWidth, isFocusShortcut } from "../lib/fullTelemetryLayout.js";
@@ -772,6 +773,7 @@ export default function VideoSyncPlayer({
   onEventsChange,
 }) {
   const isExploration = recordType === "body_exploration";
+  const howl = useHowlTimeline(session?.id);
   const subjective = useSubjectiveEpisodes(session, isExploration);
   const toggleSubjectiveRef = useRef(null);
   const recordLabel = isExploration ? "exploration" : "session";
@@ -820,7 +822,7 @@ export default function VideoSyncPlayer({
     setPreferredSidebarWidth(next);
     try { localStorage.setItem("sarah.videoSync.sidebarWidth", String(next)); } catch { /* Private browser storage may be unavailable. */ }
   };
-  const [fullTelemetryChannels, setFullTelemetryChannels] = useState({ spo2: true, respiration: true, motion: true });
+  const [fullTelemetryChannels, setFullTelemetryChannels] = useState({ spo2: true, respiration: true, motion: true, howl: false });
   const [feedsExpanded, setFeedsExpanded] = useState(true);
   const layoutRef = useRef(null);
   const fullscreenSurfaceRef = useRef(null);
@@ -2617,6 +2619,7 @@ export default function VideoSyncPlayer({
               <div className="flex gap-1">
                 {[
                   hasSpo2 && ["spo2", "SpO2"],
+                  (howl.rows.length > 0 || howl.error) && ["howl", "Howl"],
                   ["respiration", "Resp"],
                   ["motion", "Motion"],
                 ].filter(Boolean).map(([key, label]) => (
@@ -2643,6 +2646,7 @@ export default function VideoSyncPlayer({
                 pulseOxReadings={pulseOxReadings}
                 compact
                 optionalChannels={fullTelemetryChannels}
+                howl={howl}
                 phaseSession={session}
                 physiologicalLoad={isExploration}
                 subjectiveEpisodes={subjective.episodes}

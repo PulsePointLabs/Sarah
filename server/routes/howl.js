@@ -1,6 +1,7 @@
+import { createHowlRecorder } from '../services/howlRecorder.js';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
-import { getEntity, listEntities, upsertEntity } from '../db.js';
+import { getEntity, listEntities, listEntitiesByExactCriteria, upsertEntity } from '../db.js';
 import { HOWL_CONTROL_DEFAULT_LIMITS, normalizeHowlTelemetrySample } from '../services/howlTelemetry.js';
 import {
   ABSOLUTE_HOWL_INTENSITY_CEILING,
@@ -747,4 +748,38 @@ howlRouter.post('/control/emergency-stop', async (req, res) => {
     dispatched_at: new Date().toISOString(),
   });
   res.json({ ok: true, command: saved, dispatch });
+});
+
+export function startHowlRecording(getSession) {
+  const tick = createHowlRecorder({ getSession,
+    readStatus: async () => {
+      const settings = getSettings();
+      if (!settings.controlUrl || !settings.remoteAccessKey) return null;
+      const data = (await requestHowl(settings, '/status', {}, { timeoutMs: 2500 })).data;
+      if (!data || typeof data !== 'object' || (!data.options && !data.player)) throw new Error('Howl status did not include telemetry');
+      return data;
+    },
+    save: sample => upsertEntity('HowlTelemetry', sample.id, sample),
+  });
+  const timer = setInterval(() => { tick().catch(() => {}); }, 500);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
+howlRouter.get('/telemetry/session/:id', (req, res) => {
+  const record = getEntity('Session', req.params.id) || getEntity('BodyExploration', req.params.id);
+  const start = Date.parse(record?.capture_started_at || '');
+  const samples = listEntitiesByExactCriteria('HowlTelemetry', { session: req.params.id }).map(row => ({
+    ...row, time_offset_s: row.time_offset_s ?? (Number.isFinite(start) ? (Date.parse(row.measured_at)-start)/1000 : null),
+  }));
+  // Old Sarah command notes remain available, explicitly separate from observations.
+  for (const event of record?.event_timeline || []) {
+    if (!event.howl_control) continue;
+    samples.push({ id: event.id, session: req.params.id, time_offset_s: event.time_s,
+      origin: 'sarah_command_note', connection_state: 'command', is_change: true,
+      script_title: event.howl_control.activity_display_name || event.howl_control.activity_name || 'Sarah command',
+      raw: { command: event.howl_control },
+    });
+  }
+  res.json({ ok: true, samples: samples.sort((a,b) => Number(a.time_offset_s)-Number(b.time_offset_s)) });
 });

@@ -79,3 +79,12 @@ test("load number is the load model value, not the approach number", () => {
  assert.match(html, /leading-none">73<span/);
  assert.doesNotMatch(html, /Logged markers/);
 });
+
+test("Howl graph is hidden by default and renders observed parameters only when enabled", () => {
+ const rows=[{id:'howl-1',time_offset_s:80,connection_state:'connected',script_title:'download.hwl',options:{power_a:4,power_b:6},raw:{options:{power_a:4,power_b:6,frequency_hz:65},player:{title:'download.hwl'}}}];
+ const p={...props,compact:true,howl:{rows},phaseSession:props.session};
+ assert.doesNotMatch(render(Sidebar,p),/Howl settings timeline/);
+ const html=render(Sidebar,{...p,optionalChannels:{howl:true}});
+ assert.match(html,/Howl settings timeline/);assert.match(html,/download.hwl/);assert.match(html,/options.frequency_hz/);
+ assert.match(html,/All recorded changes/);assert.match(html,/Howl graph parameter/);
+});

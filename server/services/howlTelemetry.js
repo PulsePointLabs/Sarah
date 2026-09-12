@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 const CHANNEL_KEYS = ['a', 'b', 'c', 'd', 'left', 'right', 'main'];
 
 function asNumber(value) {
+  if (value == null || value === '') return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
@@ -25,12 +26,13 @@ function firstText(...values) {
 
 function normalizeChannelState(input = {}) {
   const channels = input.channels || input.channel_state || input.channelState || null;
-  if (!channels || typeof channels !== 'object') return null;
+  // Flat channel fields are valid even without a nested channels object.
   const out = {};
-  for (const key of Object.keys(channels)) {
+  for (const key of Object.keys(channels || {})) {
     const channel = channels[key];
     if (channel && typeof channel === 'object') {
       out[key] = {
+        ...channel,
         enabled: channel.enabled ?? channel.active ?? null,
         intensity: firstNumber(channel.intensity, channel.level, channel.power),
         frequency_hz: firstNumber(channel.frequency_hz, channel.frequencyHz, channel.frequency, channel.freq),
@@ -49,9 +51,9 @@ function normalizeChannelState(input = {}) {
     if (intensity != null || frequency != null || mode) {
       out[key] = {
         ...(out[key] && typeof out[key] === 'object' ? out[key] : {}),
-        intensity,
-        frequency_hz: frequency,
-        mode,
+        intensity: intensity ?? out[key]?.intensity ?? null,
+        frequency_hz: frequency ?? out[key]?.frequency_hz ?? null,
+        mode: mode ?? out[key]?.mode ?? null,
       };
     }
   }
@@ -71,6 +73,11 @@ export const HOWL_CONTROL_DEFAULT_LIMITS = Object.freeze({
 
 export function normalizeHowlTelemetrySample(input = {}) {
   const now = new Date().toISOString();
+  const options = input.options || {};
+  const player = input.player || {};
+  const channels = normalizeChannelState({ ...options, ...input,
+    a_power: options.power_a ?? input.a_power,
+    b_power: options.power_b ?? input.b_power });
   const sample = {
     id: input.id || randomUUID(),
     source: 'howl',
@@ -85,8 +92,23 @@ export function normalizeHowlTelemetrySample(input = {}) {
     waveform: firstText(input.waveform, input.wave, input.shape),
     playback_status: firstText(input.playback_status, input.playbackStatus, input.playback, input.transport),
     activity_state: firstText(input.activity_state, input.activityState, input.state, input.status),
-    channel_state: normalizeChannelState(input),
-    raw: input,
+    channel_state: scrubHowlSecrets(channels),
+    options: scrubHowlSecrets(options),
+    player: scrubHowlSecrets(player),
+    activity_name: firstText(input.activity_name, input.activity, player.title),
+    script_title: firstText(player.title, player.filename, player.file),
+    mute: options.mute ?? input.mute ?? null,
+    swap_channels: options.swap_channels ?? null,
+    auto_increase_power: options.auto_increase_power ?? null,
+    raw: scrubHowlSecrets(input),
   };
   return sample;
+}
+
+// Howl settings can contain credentials in future versions: never persist them.
+export function scrubHowlSecrets(value) {
+  if (Array.isArray(value)) return value.map(scrubHowlSecrets);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !/key|token|password|authorization|secret/i.test(key))
+    .map(([key, item]) => [key, scrubHowlSecrets(item)]));
 }
