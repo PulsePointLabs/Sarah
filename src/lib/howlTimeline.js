@@ -95,3 +95,13 @@ export function howlChangeSummary(point) {
   return [point.title,point.powerA!=null?`A ${point.powerA}`:null,point.powerB!=null?`B ${point.powerB}`:null,
     point.mute?'Muted':null,point.player?.playing===false?'Stopped':null].filter(Boolean).join(' · ');
 }
+
+// Legacy controls contain discrete saved values, not a continuously observed state.
+// Keep them as dots; never fill the time between them or treat their Hz as observed.
+export function howlCommandGraphData(points) {
+  return points.filter(p=>p.connection_state==='command').map(p=>{
+    const c=p.raw?.command||{};
+    return {t:p.t,powerA:numeric(c.intensity_a) ?? (c.channel==='a'?numeric(c.intensity):null),
+      powerB:numeric(c.intensity_b) ?? (c.channel==='b'?numeric(c.intensity):null)};
+  });
+}

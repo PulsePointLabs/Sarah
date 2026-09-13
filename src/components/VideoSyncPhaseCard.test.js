@@ -90,10 +90,11 @@ test("Howl graph is hidden by default and renders observed parameters only when 
 });
 
 
-test("command-only Howl sessions show useful history without a fake graph or parameter controls", () => {
+test("command-only Howl sessions show discrete power history without controller dumps", () => {
  const rows=Array.from({length:8},(_,i)=>({id:`c${i}`,time_offset_s:30+i,connection_state:'command',raw:{command:{action:'set_power',intensity_a:5,frequency_hz:0}}}));
  const Howl=loadComponent('./HowlTimelineCard.jsx');
  const html=render(Howl,{rows,onSeek(){}});
  assert.match(html,/8 saved controls/);assert.match(html,/A 5/);assert.match(html,/Show all 8 saved changes/);
- assert.doesNotMatch(html,/<select|recharts|Hz reported|Howl graph controls|No Howl reading/);
+ assert.match(html,/dots show saved power levels only/);
+ assert.doesNotMatch(html,/<select|Hz reported|Howl graph controls|No Howl reading|<dl|Controller|Details/);
 });

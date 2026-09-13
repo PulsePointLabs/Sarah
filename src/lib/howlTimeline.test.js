@@ -20,3 +20,10 @@ test('graph data excludes command parameters and explicitly breaks stale observa
  const groups=HOWL_GRAPH_GROUPS.filter(g=>g.lines.some(([k])=>graph.some(p=>p[k]!=null)));
  assert.deepEqual(groups.map(g=>g.key),['power']);
 });
+
+test('legacy power snapshots have only their recorded times and no inferred Hz or intervening levels',async()=>{
+ const {howlCommandGraphData}=await import('./howlTimeline.js');
+ const points=howlTimeline([{id:'a',time_offset_s:158,connection_state:'command',raw:{command:{intensity_a:6,intensity_b:0,frequency_hz:20,controller:{rmssd:106.4}}}},
+ {id:'b',time_offset_s:276,connection_state:'command',raw:{command:{intensity_a:14,intensity_b:43}}}]);
+ assert.deepEqual(howlCommandGraphData(points),[{t:158,powerA:6,powerB:0},{t:276,powerA:14,powerB:43}]);
+});

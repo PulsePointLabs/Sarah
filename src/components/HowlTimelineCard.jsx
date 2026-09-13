@@ -1,28 +1,25 @@
 import { useMemo, useState } from 'react';
 import { ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, ReferenceLine } from 'recharts';
-import { howlTimeline, howlAt, howlClock, howlGraphData, HOWL_GRAPH_GROUPS, howlChangeSummary, howlFieldLabel } from '../lib/howlTimeline.js';
+import { howlTimeline, howlAt, howlClock, howlGraphData, HOWL_GRAPH_GROUPS, howlChangeSummary, howlCommandGraphData } from '../lib/howlTimeline.js';
 
 function ChangeRow({ point, onSeek }) {
-  const fields=Object.entries(point.fields).filter(([key])=>!['session','measured_at'].includes(key));
   return <div className="border-t border-border/50 py-1.5">
     <div className="flex items-start gap-2 text-xs">
       <button type="button" onClick={()=>onSeek?.(point.t)} className="shrink-0 font-mono text-primary hover:underline">{howlClock(point.t)}</button>
       <span className="min-w-0 break-words">{howlChangeSummary(point)}</span>
       {point.connection_state==='command' && <span className="ml-auto shrink-0 text-[9px] text-muted-foreground">Saved control</span>}
     </div>
-    <details className="mt-1 text-[10px] text-muted-foreground"><summary className="cursor-pointer">Details</summary>
-      <dl className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1">{fields.map(([key,value])=><div key={key} className="min-w-0 break-words"><dt>{howlFieldLabel(key)}</dt><dd className="text-foreground">{typeof value==='boolean'?(value?'On':'Off'):String(value)}</dd></div>)}</dl>
-    </details>
+
   </div>;
 }
 
 export default function HowlTimelineCard({ rows = [], error, onRetry, playheadS = 0, xDomain, onSeek, compact = false, offset = 0 }) {
   const [parameter,setParameter]=useState('power');
   const points=useMemo(()=>howlTimeline(rows,offset),[rows,offset]);
-  const chartRows=useMemo(()=>howlGraphData(points),[points]);
+  const commandOnly=points.length>0 && points.every(p=>p.connection_state==='command');
+  const chartRows=useMemo(()=>commandOnly?howlCommandGraphData(points):howlGraphData(points),[points,commandOnly]);
   const groups=useMemo(()=>HOWL_GRAPH_GROUPS.map(group=>({...group,lines:group.lines.filter(([key])=>chartRows.some(p=>p[key]!=null))})).filter(group=>group.lines.length),[chartRows]);
   const changes=points.filter(p=>p.is_change!==false);
-  const commandOnly=points.length>0 && points.every(p=>p.connection_state==='command');
   const selected=groups.find(group=>group.key===parameter)||groups[0];
   const current=howlAt(points,playheadS);
   const start=xDomain?.[0]??0;
@@ -39,9 +36,10 @@ export default function HowlTimelineCard({ rows = [], error, onRetry, playheadS 
       {groups.length>1&&<div aria-label="Howl graph controls" className="flex gap-1">{groups.map(group=><button key={group.key} type="button" aria-pressed={selected.key===group.key} onClick={()=>setParameter(group.key)} className={`rounded-full border px-2 py-0.5 text-[10px] ${selected.key===group.key?'border-primary bg-primary text-primary-foreground':'border-border text-muted-foreground'}`}>{group.label}</button>)}</div>}
     </div>
     {error&&<button type="button" onClick={onRetry} className="text-xs text-destructive">{error} Retry</button>}
-    {commandOnly?<p className="my-1 text-xs text-muted-foreground">{changes.length} saved controls. Changes made directly in Howl were not recorded in this session.</p>:
+    {commandOnly?<p className="my-1 text-xs text-muted-foreground">{changes.length} saved controls · dots show saved power levels only. Changes between them are unknown.</p>:
       <p className="my-1 truncate text-[10px] text-muted-foreground" title={current?howlChangeSummary(current):''}>{current?howlChangeSummary(current):'No Howl reading at this playhead'}</p>}
     {selected&&<>
+      {commandOnly && <p className="mb-1 text-[10px] text-muted-foreground">{[...new Set(points.map(p=>p.raw?.command?.activity_display_name||p.raw?.command?.activity_name).filter(Boolean))].join(' · ')}</p>}
       <div className="mb-1 flex shrink-0 items-center gap-3 text-[9px] text-muted-foreground"><span>{selected.label} Â· {selected.unit}</span>{selected.lines.map(([key,label,color])=><span key={key} style={{color}}>{label}</span>)}</div>
       <div className={compact?'min-h-0 flex-1':'h-36 w-full'}>
         <ResponsiveContainer width="100%" height="100%">
@@ -50,7 +48,7 @@ export default function HowlTimelineCard({ rows = [], error, onRetry, playheadS 
             <XAxis dataKey="t" type="number" domain={[start,end]} allowDataOverflow tickFormatter={howlClock} tick={{fontSize:10,fill:'#94a3b8'}} minTickGap={45}/>
             <YAxis width={38} tick={{fontSize:10,fill:'#94a3b8'}} domain={[0,'auto']}/>
             <Tooltip labelFormatter={t=>howlClock(t)} formatter={(value,name)=>[`${value} ${selected.unit}`,name]} contentStyle={{background:'hsl(var(--popover))',border:'1px solid hsl(var(--border))',borderRadius:8,fontSize:11}}/>
-            {selected.lines.map(([key,label,color])=><Line key={key} dataKey={key} name={label} type="stepAfter" stroke={color} strokeWidth={1.5} dot={false} connectNulls={false} isAnimationActive={false}/>)}
+            {selected.lines.map(([key,label,color])=><Line key={key} dataKey={key} name={label} type="stepAfter" stroke={color} strokeWidth={1.5} strokeOpacity={commandOnly?0:1} dot={commandOnly?{r:4,fill:color,strokeWidth:1}:false} activeDot={commandOnly?{r:6}:undefined} connectNulls={false} isAnimationActive={false}/>)}
             {playheadS>=start&&playheadS<=end&&<ReferenceLine x={playheadS} stroke="#94a3b8" strokeDasharray="3 3"/>}
           </LineChart>
         </ResponsiveContainer>
