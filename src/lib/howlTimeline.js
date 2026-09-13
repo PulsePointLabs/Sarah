@@ -46,3 +46,52 @@ export function howlStepPath(rows, key, start, end, max = 200) {
   }
   return path;
 }
+
+const numeric = value => value != null && value !== '' && Number.isFinite(Number(value)) ? Number(value) : null;
+export const HOWL_GRAPH_GROUPS = [
+  { key:'power', label:'Power', unit:'level', lines:[['powerA','Channel A','#14b8a6'],['powerB','Channel B','#a855f7']] },
+  { key:'frequency', label:'Frequency', unit:'Hz', lines:[['frequencyA','Channel A','#14b8a6'],['frequencyB','Channel B','#a855f7'],['frequency','Frequency','#f59e0b']] },
+  { key:'pulseWidth', label:'Pulse width', unit:'µs', lines:[['pulseWidth','Pulse width','#38bdf8']] },
+];
+export function howlGraphData(points) {
+  const observations = points.filter(p=>p.connection_state!=='command');
+  const data=[];
+  for(let i=0;i<observations.length;i++) {
+    const p=observations[i], f=p.fields;
+    const known=p.connection_state!=='disconnected';
+    const pick=(...values)=>known ? values.map(numeric).find(v=>v!=null) ?? null : null;
+    const row={t:p.t,
+      powerA:pick(p.powerA),powerB:pick(p.powerB),
+      frequencyA:pick(p.channel_state?.a?.frequency_hz,f['channels.a.frequency_hz'],f['channels.a.frequencyHz']),
+      frequencyB:pick(p.channel_state?.b?.frequency_hz,f['channels.b.frequency_hz'],f['channels.b.frequencyHz']),
+      frequency:pick(p.frequency_hz,f.frequency_hz,f['options.frequency_hz'],f['options.frequencyHz']),
+      pulseWidth:pick(p.pulse_width_us,f.pulse_width_us,f['options.pulse_width_us'])};
+    data.push(row);
+    const next=observations[i+1];
+    if(known && (!next || next.t>p.t+6)) {
+      data.push({...row,t:p.t+6});
+      data.push({t:p.t+6.001,powerA:null,powerB:null,frequencyA:null,frequencyB:null,frequency:null,pulseWidth:null});
+    }
+  }
+  return data;
+}
+export function howlFieldLabel(key) {
+  return key.replace(/^(command|options|player)\./,'').replace(/channels\.([ab])\./i,(_,side)=>`Channel ${side.toUpperCase()} `)
+    .replace(/_/g,' ').replace(/\b(a|b)\b/g,side=>side.toUpperCase())
+    .replace(/\bhz\b/gi,'Hz').replace(/\bus\b/g,'µs').replace(/^./,c=>c.toUpperCase());
+}
+export function howlChangeSummary(point) {
+  if(point.connection_state==='disconnected') return 'Connection lost';
+  const c=point.raw?.command;
+  if(c) {
+    const action=String(c.action||'').replace(/_/g,' ');
+    const parts=[];
+    if(c.activity_display_name || c.activity_name) parts.push(c.activity_display_name || c.activity_name);
+    if(numeric(c.intensity_a)!=null) parts.push(`A ${c.intensity_a}`);
+    if(numeric(c.intensity_b)!=null) parts.push(`B ${c.intensity_b}`);
+    if(!parts.length && numeric(c.intensity)!=null) parts.push(`${String(c.channel||'').toUpperCase()} ${c.intensity}`.trim());
+    return [action,...parts].filter(Boolean).join(' · ') || 'Saved control';
+  }
+  return [point.title,point.powerA!=null?`A ${point.powerA}`:null,point.powerB!=null?`B ${point.powerB}`:null,
+    point.mute?'Muted':null,point.player?.playing===false?'Stopped':null].filter(Boolean).join(' · ');
+}
