@@ -1,3 +1,4 @@
+import ServerVideoBrowser from "./ServerVideoBrowser.jsx";
 import { useMemo, useRef, useState } from "react";
 import { CheckCircle2, ExternalLink, FileVideo, FolderOpen, RefreshCw, Trash2, Upload, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ function formatDate(value) {
 
 function normalizeVideoRecord(video) {
   return {
+    ...video,
     id: video.id || makeId(),
     label: video.label || video.filename || "Linked local video",
     path: video.path || "",
@@ -108,6 +110,7 @@ export default function LinkedLocalVideoManager({
       const next = normalizeVideoRecord({
         id: makeId(),
         label: labelInput.trim() || meta.filename,
+        cameraRole: ({Main:"main", "Feet / Lower Body":"lower_body", "Composite / PiP":"composite", Lateral:"lateral"})[labelInput.trim()] || "",
         path: meta.path,
         filename: meta.filename,
         sizeBytes: meta.sizeBytes,
@@ -331,6 +334,8 @@ export default function LinkedLocalVideoManager({
           Drop a video file or copied path here. If the browser hides the path, paste it from File Explorer or OBS.
         </div>
       </div>
+      <ServerVideoBrowser onSelect={meta=>{setPathInput(meta.path);setLabelInput(meta.filename);setError('');}} />
+      <div className="flex items-center gap-2 text-xs"><span>Camera label:</span>{['Main','Feet / Lower Body','Composite / PiP','Lateral'].map(label=><button type="button" key={label} onClick={()=>setLabelInput(label)} className="rounded border border-border px-2 py-1 hover:bg-primary/10">{label}</button>)}</div>
       <p className="mt-1 text-[10px] text-muted-foreground">
         Browse opens this device&apos;s file picker. Sarah reuses a matching server recording when available; otherwise it copies the selected video into Sarah&apos;s private local storage.
       </p>

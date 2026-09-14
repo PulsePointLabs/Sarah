@@ -1,3 +1,5 @@
+import LinkedLocalVideoManager from "./LinkedLocalVideoManager.jsx";
+import PlaybackPreparationStatus from "./PlaybackPreparationStatus.jsx";
 import { useHowlTimeline } from '../hooks/useHowlTimeline.js';
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
@@ -144,6 +146,7 @@ function blankVideoFeeds() {
 }
 
 function inferLinkedVideoFeedKey(video) {
+  if (VIDEO_FEED_SLOTS.some(slot=>slot.key===video?.cameraRole)) return video.cameraRole;
   const text = `${video?.label || ""} ${video?.filename || ""} ${video?.path || ""}`.toLowerCase();
   if (/\b(feet|foot|toe|toes|heel|heels|lower[-_\s]?body|legs?|pelvis)\b/.test(text)) return "lower_body";
   if (/\b(main|focus|primary|close|genital|penis|shaft|glans|meatus)\b/.test(text)) return "main";
@@ -773,6 +776,20 @@ export default function VideoSyncPlayer({
   onEventsChange,
 }) {
   const isExploration = recordType === "body_exploration";
+  const [sourceVideos,setSourceVideos] = useState(session.linked_local_videos || []);
+  useEffect(()=>setSourceVideos(session.linked_local_videos || []),[session.linked_local_videos]);
+  const preparationControllers = useRef({});
+  useEffect(()=>()=>Object.values(preparationControllers.current).forEach(c=>c.abort()),[]);
+  const saveSourceVideos = async nextVideos => {
+    const entity = recordType === 'body_exploration' ? base44.entities.BodyExploration : base44.entities.Session;
+    await entity.update(session.id,{linked_local_videos:nextVideos});
+    setSourceVideos(nextVideos);
+    const retained = new Set(nextVideos.map(v=>v.path));
+    Object.entries(videoFeeds).forEach(([key,feed])=>{ if(feed.localPath && !retained.has(feed.localPath)) preparationControllers.current[key]?.abort(); });
+    setVideoFeeds(current=>Object.fromEntries(Object.entries(current).map(([key,feed])=>[key,feed.localPath&&!retained.has(feed.localPath)?blankVideoFeeds()[key]:feed])));
+    if(videoFeeds[activeFeedKey]?.localPath && !retained.has(videoFeeds[activeFeedKey].localPath)) setVideoSrc(null);
+  };
+
   const howl = useHowlTimeline(session?.id);
   const subjective = useSubjectiveEpisodes(session, isExploration);
   const toggleSubjectiveRef = useRef(null);
@@ -863,8 +880,8 @@ export default function VideoSyncPlayer({
     [videoFeeds],
   );
   const linkedLocalVideos = useMemo(
-    () => (session.linked_local_videos || []).filter((video) => video?.path && video.exists !== false),
-    [session.linked_local_videos],
+    () => (sourceVideos).filter((video) => video?.path && video.exists !== false),
+    [sourceVideos],
   );
 
   // Local mutable events list
@@ -1086,7 +1103,7 @@ export default function VideoSyncPlayer({
   };
 
   const queueManualAnnotationVisualReview = async (event, { quiet = true, forceReview = false, feedOverride = null } = {}) => {
-    const feed = feedOverride || annotationReviewFeed(event, manualVisualReviews, videoFeeds, session.linked_local_videos || [], selectVisualReviewFeed());
+    const feed = feedOverride || annotationReviewFeed(event, manualVisualReviews, videoFeeds, sourceVideos, selectVisualReviewFeed());
     if (event.annotation_camera && normalizeReviewCameraRole(event.annotation_camera.role) !== normalizeReviewCameraRole(feed?.key)) {
       showQuickNotice("Select this annotation's camera before reviewing it.", "error");
       return false;
@@ -1470,12 +1487,13 @@ export default function VideoSyncPlayer({
   const persistVideoOffset = async () => {
     const activePath = videoFeeds[activeFeedKey]?.localPath;
     if (!activePath) return;
-    const nextVideos = (session.linked_local_videos || []).map((video) => (
+    const nextVideos = (sourceVideos).map((video) => (
       video.path === activePath ? { ...video, timelineOffsetSeconds: Number(videoOffset) || 0 } : video
     ));
     const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
     try {
       await entity.update(session.id, { linked_local_videos: nextVideos });
+      setSourceVideos(nextVideos);
       setVideoFeeds((current) => ({
         ...current,
         [activeFeedKey]: {
@@ -1698,6 +1716,7 @@ export default function VideoSyncPlayer({
   const handleFileLoad = (e, feedKey = "composite") => {
     const file = e.target.files?.[0];
     if (!file) return;
+    preparationControllers.current[feedKey]?.abort();
     const url = URL.createObjectURL(file);
     const previousUrl = videoFeedUrls.current[feedKey];
     if (previousUrl) URL.revokeObjectURL(previousUrl);
@@ -1722,8 +1741,11 @@ export default function VideoSyncPlayer({
     e.target.value = "";
   };
 
-  const prepareLinkedVideoForPlayback = useCallback(async (video, feedKey, { activate = false } = {}) => {
+  const prepareLinkedVideoForPlayback = useCallback(async (video, feedKey, { activate = false, retry = false } = {}) => {
     if (!video?.path) return;
+    preparationControllers.current[feedKey]?.abort();
+    const controller = new AbortController();
+    preparationControllers.current[feedKey] = controller;
     const previousUrl = videoFeedUrls.current[feedKey];
     if (previousUrl) {
       URL.revokeObjectURL(previousUrl);
@@ -1740,6 +1762,7 @@ export default function VideoSyncPlayer({
         localPath: video.path,
         timelineOffsetSeconds: Number(video.timelineOffsetSeconds) || 0,
         preparing: true,
+        preparationProgress: null,
         playbackError: "",
       },
     }));
@@ -1752,6 +1775,8 @@ export default function VideoSyncPlayer({
       const result = await base44.integrations.Core.ConvertLocalVideoForPlayback({
         path: video.path,
         label: video.label || video.filename || "video-sync",
+        signal: controller.signal, retry,
+        onProgress: progress => { if(!controller.signal.aborted) setVideoFeeds(current=>({...current,[feedKey]:{...current[feedKey],preparationProgress:progress}})); },
       });
       const rawPlaybackUrl = result?.url || result?.file_url;
       if (!rawPlaybackUrl) throw new Error("Playback conversion did not return an MP4 URL.");
@@ -1767,6 +1792,7 @@ export default function VideoSyncPlayer({
       }));
       if (activate) setVideoSrc(playbackUrl);
     } catch (error) {
+      if (controller.signal.aborted) return;
       console.warn("Could not prepare linked Video Sync feed for browser playback:", error);
       setVideoFeeds((current) => ({
         ...current,
@@ -1788,7 +1814,7 @@ export default function VideoSyncPlayer({
   useEffect(() => {
     if (!linkedLocalVideos.length) return;
     const signature = linkedLocalVideos
-      .map((video) => `${video.id || video.path}:${Number(video.timelineOffsetSeconds) || 0}`)
+      .map((video) => `${video.id || video.path}:${Number(video.timelineOffsetSeconds) || 0}:${video.cameraRole || ""}:${video.label || ""}`)
       .join("|");
     if (autoLinkedSignatureRef.current === signature) return;
     autoLinkedSignatureRef.current = signature;
@@ -1821,6 +1847,7 @@ export default function VideoSyncPlayer({
   };
 
   const removeFeed = (feedKey) => {
+    preparationControllers.current[feedKey]?.abort();
     const removedUrl = videoFeedUrls.current[feedKey];
     const remaining = loadedFeeds.filter((feed) => feed.key !== feedKey);
     setVideoFeeds((current) => ({
@@ -2893,6 +2920,11 @@ export default function VideoSyncPlayer({
       </div>
 
       <div className="p-4 space-y-4">
+        <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-xs font-semibold text-primary">Assign original source videos for this session</summary>
+          <LinkedLocalVideoManager videos={sourceVideos} onChange={saveSourceVideos} title="Session source videos" helper="Saved originals are used for processing and camera review. Browse Windows recordings from any Chrome device; no SFTP copy or upload is needed." />
+        </details>
+        {videoSrc && preparingFeeds.map(feed=><PlaybackPreparationStatus key={feed.key} filename={feed.fileName} progress={feed.preparationProgress}/>)}
+        {playbackFeedErrors.map(feed=><div key={feed.key} role="alert" className="rounded border border-destructive/30 p-3 text-xs"><p className="font-semibold">{feed.fileName}: preview failed</p><p className="whitespace-pre-wrap break-words text-muted-foreground">{feed.playbackError}</p><button type="button" className="mt-1 text-primary underline" onClick={()=>{const linked=linkedLocalVideos.find(v=>v.path===feed.localPath);if(linked)prepareLinkedVideoForPlayback(linked,feed.key,{activate:feed.key===activeFeedKey,retry:true});}}>Retry / reconnect</button></div>)}
         <div className="rounded-lg border border-border bg-muted/15 p-3 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -2953,7 +2985,7 @@ export default function VideoSyncPlayer({
                         <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                         Preparing MP4 preview
                       </div>
-                      <p className="mt-1 truncate text-[10px] text-muted-foreground">{feed.fileName}</p>
+                      <PlaybackPreparationStatus progress={feed.preparationProgress} filename={feed.fileName}/>
                     </div>
                   ) : feed.playbackError ? (
                     <div className="mt-3 rounded-lg border border-destructive/25 bg-destructive/[0.06] px-3 py-3">
@@ -2963,7 +2995,7 @@ export default function VideoSyncPlayer({
                         type="button"
                         onClick={() => {
                           const linked = linkedLocalVideos.find((video) => video.path === feed.localPath);
-                          if (linked) loadLinkedLocalVideo(linked, slot.key);
+                          if (linked) prepareLinkedVideoForPlayback(linked, slot.key, {activate: slot.key === activeFeedKey, retry: true});
                         }}
                         className="mt-2 rounded-md border border-destructive/25 px-2 py-1 text-[10px] font-semibold text-destructive"
                       >
@@ -3649,11 +3681,11 @@ export default function VideoSyncPlayer({
           </div>
         ) : preparingFeeds.length > 0 ? (
           <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl border border-primary/20 bg-black px-6 text-center text-white">
-            <span className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <div className="w-full max-w-xl space-y-2 text-left">{preparingFeeds.map(feed=><PlaybackPreparationStatus key={feed.key} filename={feed.fileName} progress={feed.preparationProgress}/>)}</div>
             <div>
-              <p className="text-sm font-semibold">Preparing mobile-friendly playback</p>
+              <p className="text-sm font-semibold">Preparing browser playback</p>
               <p className="mt-1 text-xs text-white/70">
-                Converting {preparingFeeds.length} linked MKV feed{preparingFeeds.length === 1 ? "" : "s"} to cached MP4 preview{preparingFeeds.length === 1 ? "" : "s"}.
+                Converting {preparingFeeds.length} linked video feed{preparingFeeds.length === 1 ? "" : "s"} to cached MP4 preview{preparingFeeds.length === 1 ? "" : "s"}.
               </p>
             </div>
           </div>

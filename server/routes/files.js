@@ -1,3 +1,4 @@
+import { runPlaybackProcess, playbackJobStatus } from '../services/playbackProgress.js';
 import express from 'express';
 import multer from 'multer';
 import fs from 'node:fs';
@@ -25,7 +26,7 @@ function queueLocalPlaybackConversion(task) {
   return queued;
 }
 
-async function convertLocalVideoPreview(sourcePath, partialPath) {
+async function convertLocalVideoPreview(sourcePath, partialPath, job) {
   const commonArgs = [
     '-hide_banner',
     '-loglevel', 'error',
@@ -48,7 +49,8 @@ async function convertLocalVideoPreview(sourcePath, partialPath) {
   ];
 
   try {
-    await runProcess('ffmpeg', [
+    job.stage = 'Converting with GPU';
+    await runPlaybackProcess([
       ...commonArgs,
       '-c:v', 'h264_nvenc',
       '-preset', 'p4',
@@ -57,11 +59,12 @@ async function convertLocalVideoPreview(sourcePath, partialPath) {
       ...LOCAL_PLAYBACK_GOP_ARGS,
       '-forced-idr', '1',
       ...outputArgs,
-    ], { captureOutput: false });
+    ], job);
   } catch (hardwareError) {
+    job.stage = 'Converting with CPU'; job.fallback = true; job.encodedSeconds = 0; job.percent = 0; job.speed = null; job.etaSeconds = null;
     await fsp.unlink(partialPath).catch(() => {});
     try {
-      await runProcess('ffmpeg', [
+      await runPlaybackProcess([
         ...commonArgs,
         '-c:v', 'libx264',
         '-preset', 'veryfast',
@@ -71,7 +74,7 @@ async function convertLocalVideoPreview(sourcePath, partialPath) {
         '-keyint_min', '30',
         '-sc_threshold', '0',
         ...outputArgs,
-      ], { captureOutput: false });
+      ], job);
     } catch (softwareError) {
       throw new Error(
         `Hardware preview conversion failed: ${hardwareError?.message || hardwareError}. `
@@ -621,18 +624,20 @@ filesRouter.post('/local-video/playback-preview', async (req, res) => {
     const outputPath = path.join(uploadDir, filename);
     const partialPath = `${outputPath}.partial`;
     const startConversion = () => {
-      const job = { status: 'processing', error: '' };
+      const job = { status: 'queued', stage: 'Waiting for another conversion', createdAt: Date.now(), error: '' };
       localPlaybackJobs.set(cacheKey, job);
       queueLocalPlaybackConversion(async () => {
-        job.status = 'processing';
+        job.status = 'processing'; job.startedAt = Date.now(); job.stage = 'Reading video duration';
+        job.durationSeconds = await getMediaDurationSeconds(meta.path).catch(() => 0);
         await fsp.unlink(partialPath).catch(() => {});
-        await convertLocalVideoPreview(meta.path, partialPath);
+        await convertLocalVideoPreview(meta.path, partialPath, job);
+        job.stage = 'Saving MP4';
         await fsp.rename(partialPath, outputPath);
         localPlaybackJobs.delete(cacheKey);
-      }).catch((error) => {
+      }).catch(async (error) => {
+        await fsp.unlink(partialPath).catch(() => {});
         job.status = 'failed';
         job.error = error?.message || 'Could not convert local video for browser playback';
-        fsp.unlink(partialPath).catch(() => {});
       });
       return job;
     };
@@ -656,7 +661,9 @@ filesRouter.post('/local-video/playback-preview', async (req, res) => {
       // Cache miss, convert below.
     }
 
-    const existingJob = localPlaybackJobs.get(cacheKey);
+    let existingJob = localPlaybackJobs.get(cacheKey);
+    if (existingJob?.status === 'failed' && req.body?.retry === true) { localPlaybackJobs.delete(cacheKey); existingJob = null; }
+    const describeJob = (job) => playbackJobStatus(job, job.status === 'queued' ? [...localPlaybackJobs.values()].filter(j => ['queued','processing'].includes(j.status)).indexOf(job) + 1 : 0);
     const legacyCacheKey = slugifyFilePart(`${meta.fingerprint}-${label}`);
     const legacyFilename = `local-playback-${legacyCacheKey}.mp4`;
     const legacyOutputPath = path.join(uploadDir, legacyFilename);
@@ -682,9 +689,10 @@ filesRouter.post('/local-video/playback-preview', async (req, res) => {
       // No older preview is available, so the client must wait for conversion.
     }
 
+    existingJob = localPlaybackJobs.get(cacheKey);
     if (existingJob?.status === 'failed') {
-      localPlaybackJobs.delete(cacheKey);
       return res.status(500).json({
+        code: 'PLAYBACK_CONVERSION_FAILED',
         error: existingJob.error || 'Could not convert local video for browser playback',
       });
     }
@@ -692,16 +700,18 @@ filesRouter.post('/local-video/playback-preview', async (req, res) => {
       return res.status(202).json({
         ok: true,
         processing: true,
+        progress: describeJob(existingJob),
         retry_after_ms: 2000,
         source_filename: meta.filename,
       });
     }
 
-    startConversion();
+    const startedJob = startConversion();
 
     return res.status(202).json({
       ok: true,
       processing: true,
+      progress: describeJob(startedJob),
       retry_after_ms: 2000,
       source_filename: meta.filename,
     });
@@ -1159,4 +1169,24 @@ filesRouter.post('/video-clip-preview', upload.single('file'), async (req, res) 
   } finally {
     fsp.unlink(sourcePath).catch(() => {});
   }
+});
+
+// Browser-based listing: paths are on the Sarah host, not on the Chrome device.
+filesRouter.post('/local-video/directory', async (req, res) => {
+  try {
+    const requested = String(req.body?.path || '').trim();
+    if (!requested) {
+      const drives = process.platform === 'win32' ? Array.from({length:26},(_,i)=>`${String.fromCharCode(65+i)}:\\`) : ['/'];
+      const roots = await existingDirectories([...drives,...likelyLocalVideoSearchRoots()]);
+      return res.json({ path:'', parent:null, entries:[...new Set(roots)].map(p=>({name:p,path:p,directory:true})) });
+    }
+    if (!path.isAbsolute(requested) || /^[a-z]+:\/\//i.test(requested)) return res.status(400).json({error:'Choose a folder on the Windows host or enter its Windows path. An SFTP address is not a Windows filesystem path.'});
+    const resolved=await fsp.realpath(requested);
+    const entries=(await fsp.readdir(resolved,{withFileTypes:true}))
+      .filter(e=>e.isDirectory() || (e.isFile() && LOCAL_VIDEO_EXTENSIONS.has(path.extname(e.name).toLowerCase())))
+      .map(e=>({name:e.name,path:path.join(resolved,e.name),directory:e.isDirectory()}))
+      .sort((a,b)=>Number(b.directory)-Number(a.directory)||a.name.localeCompare(b.name,undefined,{numeric:true}));
+    const parent=path.dirname(resolved);
+    res.json({path:resolved,parent:parent===resolved?'':parent,entries});
+  } catch(error) { res.status(400).json({error:error.code==='EACCES'?'Windows denied access to this folder.':'Could not open that folder on the Sarah host.'}); }
 });

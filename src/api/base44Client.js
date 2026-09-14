@@ -297,36 +297,37 @@ export const base44 = {
         form.append('label', label);
         return request('/files/video-playback-preview', { method: 'POST', body: form });
       },
-      ConvertLocalVideoForPlayback: async ({ path, label = '', signal }) => {
-        const startedAt = Date.now();
-        const waitForRetry = (delayMs) => new Promise((resolve, reject) => {
-          const timeoutId = window.setTimeout(resolve, delayMs);
-          signal?.addEventListener('abort', () => {
-            window.clearTimeout(timeoutId);
-            reject(new DOMException('Playback preparation cancelled.', 'AbortError'));
-          }, { once: true });
+      ConvertLocalVideoForPlayback: async ({ path, label = '', signal, onProgress, retry = false }) => {
+        let failures = 0, first = true;
+        const wait = ms => new Promise((resolve, reject) => {
+          const abort = () => { window.clearTimeout(timer); reject(new DOMException('Playback preparation cancelled.', 'AbortError')); };
+          const timer = window.setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, ms);
+          signal?.addEventListener('abort', abort, { once: true });
+          if (signal?.aborted) abort();
         });
-        while (Date.now() - startedAt < 2 * 60 * 60 * 1000) {
+        while (!signal?.aborted) {
           let result;
           try {
             result = await request('/files/local-video/playback-preview', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ path, label }),
-              signal,
-              timeoutMs: 15000,
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path, label, retry: first && retry }), timeoutMs: 15000,
             });
+            first = false; failures = 0;
           } catch (error) {
-            if (signal?.aborted || error?.name === 'AbortError') throw error;
-            if (Number(error?.status || 0) > 0 && Number(error.status) < 500) throw error;
-            await waitForRetry(1500);
-            continue;
+            first = false;
+            if (signal?.aborted) throw new DOMException('Playback preparation cancelled.', 'AbortError');
+            if (error?.data?.code === 'PLAYBACK_CONVERSION_FAILED' || (error.status > 0 && error.status < 500)) throw error;
+            failures += 1;
+            onProgress?.({ status: 'reconnecting', stage: `Connection interrupted; reconnecting (${failures}/10)` });
+            if (failures >= 10) throw new Error('Cannot reach the conversion status. The Windows job may still be running. Retry to reconnect.');
+            await wait(2000); continue;
           }
-          if (!result?.processing) return result;
-          const delayMs = Math.max(500, Number(result.retry_after_ms) || 2000);
-          await waitForRetry(delayMs);
+          if (signal?.aborted) throw new DOMException('Playback preparation cancelled.', 'AbortError');
+          onProgress?.(result.progress || (result.processing ? {status:'processing',stage:'Preparing MP4 preview'} : { status: 'complete', stage: 'MP4 ready', percent: 100 }));
+          if (!result.processing) return result;
+          await wait(Math.max(500, Number(result.retry_after_ms) || 2000));
         }
-        throw new Error('Timed out preparing the local video for browser playback.');
+        throw new DOMException('Playback preparation cancelled.', 'AbortError');
       },
       GetLocalVideoMetadata: async ({ path }) => request('/files/local-video/metadata', {
         method: 'POST',
@@ -346,6 +347,9 @@ export const base44 = {
           body: form,
         });
       },
+      ListServerVideos: async ({ path = '' } = {}) => request('/files/local-video/directory', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }),
+      }),
       BrowseLocalVideo: async () => request('/files/local-video/browse', { method: 'POST' }),
       localVideoStreamUrl: (path) => serverUrl(`/api/files/local-video/stream?path=${encodeURIComponent(path)}`),
       localVisionAssetUrl: (path) => serverUrl(path),
