@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
   "version": "0.1.263",
-  "commit": "cc906dd",
-  "commitMessage": "Expose Video Sync conversion progress and remote Windows source linking",
-  "builtAt": "2026-09-14T00:35:22.058Z"
+  "commit": "f445ac8",
+  "commitMessage": "Allow changing and clearing videos directly on camera cards",
+  "builtAt": "2026-09-14T01:03:45.547Z"
 };
