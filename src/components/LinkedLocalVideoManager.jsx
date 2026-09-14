@@ -1,6 +1,7 @@
+import VideoLinkRecovery from "./VideoLinkRecovery.jsx";
 import ServerVideoBrowser from "./ServerVideoBrowser.jsx";
 import { useMemo, useRef, useState } from "react";
-import { CheckCircle2, ExternalLink, FileVideo, FolderOpen, RefreshCw, Trash2, Upload, XCircle } from "lucide-react";
+import { CheckCircle2, ExternalLink, FileVideo, FolderOpen, RefreshCw, Upload, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 
@@ -258,9 +259,7 @@ export default function LinkedLocalVideoManager({
     }
   };
 
-  const removeVideo = async (videoId) => {
-    await saveVideos(normalizedVideos.filter((video) => video.id !== videoId));
-  };
+
 
   const updateTimelineOffset = async (videoId, value) => {
     const timelineOffsetSeconds = Number(value) || 0;
@@ -400,9 +399,7 @@ export default function LinkedLocalVideoManager({
                       <RefreshCw className={`h-3.5 w-3.5 ${busy === video.id ? "animate-spin" : ""}`} />
                       Check
                     </Button>
-                    <Button type="button" size="sm" variant="ghost" onClick={() => removeVideo(video.id)} className="h-8 px-2 text-[11px] text-muted-foreground hover:text-destructive">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                    <VideoLinkRecovery video={video} videos={normalizedVideos} onChange={saveVideos}/>
                   </div>
                 </div>
               </div>

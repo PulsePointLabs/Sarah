@@ -1,3 +1,4 @@
+import VideoLinkRecovery from "./VideoLinkRecovery.jsx";
 import LinkedLocalVideoManager from "./LinkedLocalVideoManager.jsx";
 import PlaybackPreparationStatus from "./PlaybackPreparationStatus.jsx";
 import { useHowlTimeline } from '../hooks/useHowlTimeline.js';
@@ -2924,7 +2925,7 @@ export default function VideoSyncPlayer({
           <LinkedLocalVideoManager videos={sourceVideos} onChange={saveSourceVideos} title="Session source videos" helper="Saved originals are used for processing and camera review. Browse Windows recordings from any Chrome device; no SFTP copy or upload is needed." />
         </details>
         {videoSrc && preparingFeeds.map(feed=><PlaybackPreparationStatus key={feed.key} filename={feed.fileName} progress={feed.preparationProgress}/>)}
-        {playbackFeedErrors.map(feed=><div key={feed.key} role="alert" className="rounded border border-destructive/30 p-3 text-xs"><p className="font-semibold">{feed.fileName}: preview failed</p><p className="whitespace-pre-wrap break-words text-muted-foreground">{feed.playbackError}</p><button type="button" className="mt-1 text-primary underline" onClick={()=>{const linked=linkedLocalVideos.find(v=>v.path===feed.localPath);if(linked)prepareLinkedVideoForPlayback(linked,feed.key,{activate:feed.key===activeFeedKey,retry:true});}}>Retry / reconnect</button></div>)}
+        {playbackFeedErrors.map(feed=><div key={feed.key} role="alert" className="rounded border border-destructive/30 p-3 text-xs"><p className="font-semibold">{feed.fileName}: preview failed</p><p className="whitespace-pre-wrap break-words text-muted-foreground">{feed.playbackError}</p><button type="button" className="mt-1 text-primary underline" onClick={()=>{const linked=linkedLocalVideos.find(v=>v.path===feed.localPath);if(linked)prepareLinkedVideoForPlayback(linked,feed.key,{activate:feed.key===activeFeedKey,retry:true});}}>Retry / reconnect</button><VideoLinkRecovery video={sourceVideos.find(v=>v.path===feed.localPath)} videos={sourceVideos} onChange={saveSourceVideos}/></div>)}
         <div className="rounded-lg border border-border bg-muted/15 p-3 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -2972,6 +2973,7 @@ export default function VideoSyncPlayer({
             {VIDEO_FEED_SLOTS.map((slot) => {
               const feed = videoFeeds[slot.key];
               const isMaster = feed.src && activeFeedKey === slot.key;
+              const linkedVideo = sourceVideos.find(v=>v.path===feed.localPath);
               return (
                 <div key={slot.key} className={`rounded-lg border p-2.5 ${isMaster ? "border-primary/40 bg-primary/[0.06]" : "border-border bg-card/50"}`}>
                   <div className="flex items-center justify-between gap-2">
@@ -3023,10 +3025,10 @@ export default function VideoSyncPlayer({
                             Use as master
                           </button>
                         )}
-                        <label className="cursor-pointer rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted-foreground hover:text-foreground">
-                          Replace
+                        {!linkedVideo && <label className="cursor-pointer rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted-foreground hover:text-foreground">
+                          Change video
                           <input type="file" accept="video/*" className="hidden" onChange={(event) => handleFileLoad(event, slot.key)} />
-                        </label>
+                        </label>}
                         {linkedLocalVideos.length > 0 && (
                           <select
                             value=""
@@ -3043,9 +3045,9 @@ export default function VideoSyncPlayer({
                             ))}
                           </select>
                         )}
-                        <button type="button" onClick={() => removeFeed(slot.key)} className="rounded-md border border-border px-2 py-1 text-[10px] text-muted-foreground hover:text-destructive">
-                          Remove
-                        </button>
+                        {!linkedVideo && <button type="button" onClick={() => removeFeed(slot.key)} className="rounded-md border border-border px-2 py-1 text-[10px] text-muted-foreground hover:text-destructive">
+                          Clear video
+                        </button>}
                       </div>
                     </>
                   ) : (
@@ -3072,6 +3074,7 @@ export default function VideoSyncPlayer({
                       </label>
                     </div>
                   )}
+                  {linkedVideo && <VideoLinkRecovery video={{...linkedVideo,cameraRole:linkedVideo.cameraRole||slot.key}} videos={sourceVideos} onChange={saveSourceVideos} cameraCard />}
                 </div>
               );
             })}

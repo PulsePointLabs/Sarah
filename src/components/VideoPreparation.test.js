@@ -29,3 +29,15 @@ test('conversion client stops on explicit encoder failure instead of retrying',a
  await assert.rejects(base44.integrations.Core.ConvertLocalVideoForPlayback({path:'E:/broken.mkv'}),/Invalid video/);
  assert.equal(calls,1);
 });
+
+test('video recovery exposes change location and clear link for the original',()=>{
+ const Recovery=bundle('./VideoLinkRecovery.jsx').default;
+ const html=renderToStaticMarkup(React.createElement(Recovery,{video:{id:'v',path:'E:/old.mkv'},videos:[],onChange(){}}));
+ assert.match(html,/Change location/);assert.match(html,/Clear link/);
+});
+
+test('camera card recovery uses Change video and Clear video labels',()=>{
+ const Recovery=bundle('./VideoLinkRecovery.jsx').default;
+ const html=renderToStaticMarkup(React.createElement(Recovery,{cameraCard:true,video:{id:'v',path:'E:/old.mkv'},videos:[],onChange(){}}));
+ assert.match(html,/Change video/);assert.match(html,/Clear video/);
+});

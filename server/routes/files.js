@@ -716,6 +716,8 @@ filesRouter.post('/local-video/playback-preview', async (req, res) => {
       source_filename: meta.filename,
     });
   } catch (error) {
+    if (['ENOENT','ENOTDIR'].includes(error?.code)) return res.status(404).json({code:'SOURCE_VIDEO_MISSING',error:'The original video is no longer at its saved location. Change location or clear the link.'});
+    if (['EACCES','EPERM'].includes(error?.code)) return res.status(403).json({error:'Windows cannot access this video. Check the drive or change its location.'});
     res.status(error?.status || 500).json({ error: error?.message || 'Could not convert local video for browser playback' });
   }
 });
