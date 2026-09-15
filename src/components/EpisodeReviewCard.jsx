@@ -47,8 +47,9 @@ export default function EpisodeReviewCard({ episode: e, timelineRows, phaseModel
   return <article className="overflow-hidden rounded-2xl border border-violet-400/20 bg-gradient-to-r from-violet-500/[0.055] to-card p-3" style={{ contentVisibility: "auto", containIntrinsicSize: "260px" }}>
     <div className="grid gap-3 sm:grid-cols-[144px_minmax(0,1fr)]">
       <button type="button" onClick={() => onSeek(e)} className="group relative self-start overflow-hidden rounded-xl bg-black" title="Jump to episode start">
-        {e.thumbnail_url ? <img src={e.thumbnail_url} alt={`Episode start ${time(e.start_s)}`} className="aspect-video w-full object-contain" loading="lazy" /> : <span className="block p-6 text-xs">Open start frame</span>}
+        {e.thumbnail_url ? <img src={e.thumbnail_url} alt={`Episode reference frame ${time(e.thumbnail_time_s ?? e.start_s)}`} className="aspect-video w-full object-contain" loading="lazy" /> : <span className="block p-6 text-xs">Open start frame</span>}
         <span className="block bg-violet-950/40 px-2 py-1 text-[10px] text-violet-300">▶ {time(e.start_s)} · {e.source?.label || "Selected camera"}</span>
+        {e.thumbnail_time_s != null && e.thumbnail_time_s !== e.start_s && <span className="block text-[9px] text-muted-foreground">Original thumbnail: {time(e.thumbnail_time_s)}</span>}
       </button>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: e.kind === "climax" ? "#e879f9" : PHASE_COLORS[phaseAtEnd] || "#a78bfa" }} />

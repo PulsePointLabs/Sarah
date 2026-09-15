@@ -1,3 +1,4 @@
+import EpisodeBoundaryHandle from "./EpisodeBoundaryHandle.jsx";
 import HowlTimelineCard from "./HowlTimelineCard.jsx";
 import { buildLoadEvidence, loadBandsFromPoints } from "../lib/videoSyncLoadEvidence.js";
 import { useMemo, useState } from "react";
@@ -94,7 +95,7 @@ function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = fa
   );
 }
 
-function TrendChart({ rows, lines, playheadS, xDomain, onSeek, rightAxis = false, compact = false, phaseBands = [], subjectiveEpisodes = [] }) {
+function TrendChart({ rows, lines, playheadS, xDomain, onSeek, rightAxis = false, compact = false, phaseBands = [], subjectiveEpisodes = [], onEpisodeEdit, onEpisodeEditStart, onEpisodePreview }) {
   const safePlayheadS = numberOrNull(playheadS);
   return (
     <div className={`${compact ? "min-h-0 flex-1" : "h-40"} w-full`}>
@@ -131,9 +132,11 @@ function TrendChart({ rows, lines, playheadS, xDomain, onSeek, rightAxis = false
             x1={Math.max(e.start_s, xDomain[0])} x2={Math.min(e.end_s ?? Math.max(e.start_s, playheadS), xDomain[1])}
             fill={e.kind === "climax" ? "#e879f9" : "#a78bfa"} fillOpacity={0.12} stroke={e.kind === "climax" ? "#e879f9" : "#a78bfa"} strokeDasharray="3 2"
             label={{ value: e.kind === "climax" ? "C" : "N", position: "insideTop", fill: "#e9d5ff", fontSize: 9 }} ifOverflow="hidden" />)}
-          {subjectiveEpisodes.flatMap((e) => [e.start_s, e.end_s].filter((t) => t != null && t >= xDomain[0] && t <= xDomain[1])
-            .map((t, i) => <ReferenceLine key={`${e.id}-${i}`} yAxisId="left" x={t} stroke={e.kind === "climax" ? "#e879f9" : "#a78bfa"}
-              strokeWidth={1.5} strokeDasharray="3 2" />))}
+          {subjectiveEpisodes.flatMap((episode) => ["start_s", "end_s"].filter((boundary) => episode[boundary] != null && episode[boundary] >= xDomain[0] && episode[boundary] <= xDomain[1])
+            .map((boundary) => <ReferenceLine key={`${episode.id}-${boundary}`} yAxisId="left" x={episode[boundary]}
+              stroke={episode.kind === "climax" ? "#e879f9" : "#a78bfa"} strokeWidth={1.5} strokeDasharray="3 2"
+              shape={onEpisodeEdit ? (props) => <EpisodeBoundaryHandle {...props} episode={episode} boundary={boundary} domain={xDomain}
+                onPreview={onEpisodePreview} onCommit={onEpisodeEdit} onStart={onEpisodeEditStart} /> : undefined} />))}
           <Tooltip
             labelFormatter={(value) => `Time ${formatTime(value)}${phaseBands.find((b) => value >= b.start && value < b.end)?.label ? ` Â· ${phaseBands.find((b) => value >= b.start && value < b.end).label}` : ""}`}
             formatter={(value, key) => {
@@ -193,7 +196,12 @@ export default function VideoSyncPhysiologySidebar({
   phaseSession,
   physiologicalLoad = false,
   subjectiveEpisodes = [],
+  onEpisodeEdit,
+  onEpisodeEditStart,
 }) {
+  const [episodePreview, setEpisodePreview] = useState(null);
+  const displayedEpisodes = subjectiveEpisodes.map((episode) => episode.id === episodePreview?.id
+    ? { ...episode, [episodePreview.boundary]: episodePreview.time } : episode);
   const [showPhaseBands, setShowPhaseBands] = useState(true);
   const phaseModel = useMemo(() => phaseSession ? (physiologicalLoad ? buildLoadEvidence(timelineRows) : buildPhaseEvidence(timelineRows)) : null, [timelineRows, phaseSession, physiologicalLoad]);
   const phaseBands = useMemo(() => (physiologicalLoad ? loadBandsFromPoints : phaseBandsFromPoints)(phaseModel?.points || []), [phaseModel, physiologicalLoad]);
@@ -406,8 +414,10 @@ export default function VideoSyncPhysiologySidebar({
           </div>
         </div>
         {phaseSession && showPhaseBands && <PhaseBandLegend physiologicalLoad={physiologicalLoad} />}
+        {subjectiveEpisodes.length > 0 && <p className="text-[8px] text-violet-300">N · Near climax &nbsp; C · Climax{onEpisodeEdit ? " · Drag boundary handles to edit" : ""}</p>}
         <TrendChart
-          subjectiveEpisodes={subjectiveEpisodes}
+          subjectiveEpisodes={displayedEpisodes}
+          onEpisodeEdit={onEpisodeEdit} onEpisodeEditStart={onEpisodeEditStart} onEpisodePreview={setEpisodePreview}
           phaseBands={showPhaseBands ? clipPhaseBands(phaseBands, safeDomain[0], safeDomain[1]) : []}
           rows={visibleRows}
           lines={[
@@ -432,6 +442,8 @@ export default function VideoSyncPhysiologySidebar({
             </div>
           </div>
           <TrendChart
+            subjectiveEpisodes={displayedEpisodes}
+            onEpisodeEdit={onEpisodeEdit} onEpisodeEditStart={onEpisodeEditStart} onEpisodePreview={setEpisodePreview}
             rows={visibleRows}
             lines={[
               { key: "rmssd", label: "RMSSD", color: "#14b8a6", decimals: 1 },

@@ -6,7 +6,7 @@ import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { sidebarLimits, sidebarWidth, isFocusShortcut } from "../lib/fullTelemetryLayout.js";
 import { useSubjectiveEpisodes } from "../hooks/useSubjectiveEpisodes.js";
-import { toggleSubjectiveEpisode } from "../lib/subjectiveNearClimax.js";
+import { toggleSubjectiveEpisode, editSubjectiveEpisode } from "../lib/subjectiveNearClimax.js";
 import SubjectiveNearClimaxEpisodes from "./SubjectiveNearClimaxEpisodes";
 import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, ArrowDown, Minus, Sparkles, Maximize2, Minimize2, Heart, Activity, Wind, Move } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
@@ -2305,6 +2305,10 @@ export default function VideoSyncPlayer({
     });
   };
 
+  const editSubjective = (id, boundary, time) => {
+    try { subjective.save(editSubjectiveEpisode(subjective.current.current, id, boundary, time, timelineRows, session)); }
+    catch (error) { showQuickNotice(error.message, "error"); }
+  };
   const toggleSubjective = (kind = "near_climax") => {
     const video = videoRef.current;
     if (!video || video.readyState < 2) { showQuickNotice("Load the video before marking an episode.", "error"); return; }
@@ -2678,6 +2682,7 @@ export default function VideoSyncPlayer({
                 phaseSession={session}
                 physiologicalLoad={isExploration}
                 subjectiveEpisodes={subjective.episodes}
+                onEpisodeEdit={editSubjective} onEpisodeEditStart={() => videoRef.current?.pause()}
               />
             </div>
           </aside>
@@ -3773,6 +3778,7 @@ export default function VideoSyncPlayer({
                 bloodPressureReadings={bloodPressureReadings}
                 pulseOxReadings={pulseOxReadings}
                 subjectiveEpisodes={subjective.episodes}
+                onEpisodeEdit={editSubjective} onEpisodeEditStart={() => videoRef.current?.pause()}
               />
             )}
 

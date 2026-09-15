@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
   "version": "0.1.263",
-  "commit": "f445ac8",
-  "commitMessage": "Allow changing and clearing videos directly on camera cards",
-  "builtAt": "2026-09-14T01:03:45.547Z"
+  "commit": "725f811",
+  "commitMessage": "Update build metadata for camera video recovery",
+  "builtAt": "2026-09-15T23:11:33.210Z"
 };

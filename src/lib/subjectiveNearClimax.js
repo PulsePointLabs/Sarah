@@ -2,6 +2,24 @@ import { buildPhaseEvidence } from "./videoSyncPhaseEvidence.js";
 const number = (v) => v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v);
 const median = (values) => { const a = values.sort((a, b) => a - b); return a.length ? a[Math.floor(a.length / 2)] : null; };
 
+export function episodeBoundaryTime(episode, boundary, time) {
+  if (!["start_s", "end_s"].includes(boundary) || !Number.isFinite(time)) throw new Error("Invalid episode boundary");
+  if (boundary === "end_s" && episode.end_s == null) throw new Error("Finish the episode before editing its end");
+  return boundary === "start_s"
+    ? Math.max(0, Math.min(time, episode.end_s == null ? Infinity : episode.end_s - 0.1))
+    : Math.max(episode.start_s + 0.1, time);
+}
+
+export function editSubjectiveEpisode(episodes, id, boundary, time, rows, session) {
+  return episodes.map((episode) => {
+    if (episode.id !== id) return episode;
+    const next = { ...episode, [boundary]: episodeBoundaryTime(episode, boundary, time), updated_at: new Date().toISOString() };
+    // Retain the original image and its actual timestamp when moving the start.
+    if (boundary === "start_s") next.thumbnail_time_s = episode.thumbnail_time_s ?? episode.start_s;
+    return next.end_s == null ? next : { ...next, ...summarizeSubjectiveEpisode(next.start_s, next.end_s, rows, session) };
+  }).sort((a, b) => a.start_s - b.start_s);
+}
+
 export function summarizeSubjectiveEpisode(start, end, rows, session) {
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("Episode end must be after its start. Seek forward, then press N again.");
   const inside = rows.filter((r) => Number(r.time_offset_s) >= start && Number(r.time_offset_s) <= end);
