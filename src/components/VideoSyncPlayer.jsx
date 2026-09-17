@@ -887,6 +887,8 @@ export default function VideoSyncPlayer({
 
   // Local mutable events list
   const [events, setEvents] = useState(session.event_timeline || []);
+  const [clearingEventAnnotations, setClearingEventAnnotations] = useState(false);
+  const [clearEventError, setClearEventError] = useState("");
   const annotationDraftFeedRef = useRef(null);
   const analysisField = isExploration ? "ai_body_exploration" : "ai_analysis";
   const [manualVisualReviews, setManualVisualReviews] = useState(
@@ -1529,6 +1531,22 @@ export default function VideoSyncPlayer({
 
   const deleteEvent = async (idx) => {
     await saveEvents(events.filter((_, i) => i !== idx));
+  };
+
+  const clearEventAnnotations = async () => {
+    if (clearingEventAnnotations || savingEvent || manualBackfillState?.running) return;
+    setClearingEventAnnotations(true); setClearEventError("");
+    try {
+      const entity = isExploration ? base44.entities.BodyExploration : base44.entities.Session;
+      const result = await entity.resetEventAnnotations(session.id);
+      eventsRef.current = []; setEvents([]); setManualVisualReviews([]);
+      setPendingManualReviewIds(new Set()); setManualBackfillState(null);
+      setActiveEventIdx(null); setEditingIdx(null); setSelectedEventFilters([]);
+      onEventsChange?.([], result.record);
+      if (result.cleanupFailures?.length) setClearEventError(`Annotations cleared, but ${result.cleanupFailures.length} generated files could not be removed from disk.`);
+      showQuickNotice(`Cleared ${result.removedEvents} event annotations and their saved reviews.`);
+    } catch (error) { setClearEventError(error.message || "Could not clear annotations. Please retry."); }
+    finally { setClearingEventAnnotations(false); }
   };
 
   const commitAdd = async ({ resume = false } = {}) => {
@@ -4029,6 +4047,31 @@ export default function VideoSyncPlayer({
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
               Visible Events ({visibleEvents.length}/{events.length}) — chronological, nearby highlighted
             </p>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button type="button" disabled={clearingEventAnnotations || savingEvent || manualBackfillState?.running}
+                  className="flex items-center gap-1 rounded border border-destructive/40 px-2 py-1 text-xs text-destructive disabled:opacity-50">
+                  <Trash2 className="h-3 w-3" />{clearingEventAnnotations ? "Clearing annotations..." : "Clear all event annotations"}
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Start this session's event annotations fresh?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Permanently clear ALL manual and AI event notes across every camera, including hidden/filtered entries,
+                    their Sarah +/-5-second reviews, saved AI video/audio annotation results and annotation job history.
+                    Generated evidence files are removed only when no saved record still uses them.
+                    Recordings, video links, telemetry, session reports, near-climax/climax episodes and separate visual-audit checkpoints are kept.
+                    Stop any running annotation jobs first. This cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Keep annotations</AlertDialogCancel>
+                  <AlertDialogAction onClick={clearEventAnnotations} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Clear all annotations and reviews</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+            {clearEventError && <p role="alert" className="text-xs text-destructive">{clearEventError}</p>}
             {visibleEventEntries.map(({ ev, i }) => {
               const color = EVENT_COLORS[i % EVENT_COLORS.length];
               const cats = normalizeCategoryArray(ev.category);

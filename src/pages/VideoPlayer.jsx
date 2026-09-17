@@ -270,8 +270,8 @@ export default function VideoPlayer() {
             session={selectedRecord}
             timelineRows={timelineRows}
             recordType={recordType}
-            onEventsChange={(eventTimeline) => {
-              setSelectedRecord((current) => (current ? { ...current, event_timeline: eventTimeline } : current));
+            onEventsChange={(eventTimeline, refreshedRecord) => {
+              setSelectedRecord((current) => (current ? { ...current, ...refreshedRecord, event_timeline: eventTimeline } : current));
               if (recordType === "body_exploration") {
                 setExplorations((current) => current.map((record) => (
                   record.id === selectedRecord.id ? { ...record, event_timeline: eventTimeline } : record

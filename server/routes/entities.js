@@ -1,7 +1,14 @@
 import express from 'express';
+import { resetEventAnnotations } from '../services/resetEventAnnotations.js';
 import { bulkCreate, deleteEntity, getEntity, listEntities, listEntitiesByExactCriteria, listEntityPage, normalizeEntityName, upsertEntity } from '../db.js';
 
 export const entitiesRouter = express.Router();
+
+entitiesRouter.post('/:entity/:id/reset-event-annotations', (req, res) => {
+  if (req.body?.confirm !== 'clear_all_event_annotations') return res.status(400).json({ error: 'Explicit annotation reset confirmation is required.' });
+  try { res.json(resetEventAnnotations(normalizeEntityName(req.params.entity), req.params.id)); }
+  catch (error) { res.status(error.status || 500).json({ error: error.message }); }
+});
 
 function coerceValue(value) {
   if (value === 'true') return true;

@@ -784,13 +784,14 @@ export function clearJobsByMeta({ type = '', meta = {}, includeTypes = [] } = {}
   };
 }
 
-export function purgeJobsByMeta({ type = '', meta = {}, includeTypes = [] } = {}) {
+export function purgeJobsByMeta({ type = '', meta = {}, includeTypes = [], ids } = {}) {
   const requestedTypes = [type, ...(Array.isArray(includeTypes) ? includeTypes : [])]
     .map((value) => String(value || '').trim())
     .filter(Boolean);
   const metaEntries = Object.entries(meta || {}).filter(([, value]) => value !== undefined && value !== null && value !== '');
   const matches = (job) => {
     if (!job?.id) return false;
+    if (ids && !ids.includes(job.id)) return false;
     if (requestedTypes.length && !requestedTypes.includes(String(job.type || ''))) return false;
     return metaEntries.every(([key, value]) => String(job.meta?.[key] ?? '') === String(value));
   };

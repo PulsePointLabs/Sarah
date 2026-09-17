@@ -176,6 +176,10 @@ function entityApi(entity) {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data || {}),
     }),
     delete: (id) => request(`/entities/${entity}/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    resetEventAnnotations: (id) => request(`/entities/${entity}/${encodeURIComponent(id)}/reset-event-annotations`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: 'clear_all_event_annotations' }),
+    }),
     bulkCreate: (rows) => request(`/entities/${entity}/bulk`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rows }),
     }),
