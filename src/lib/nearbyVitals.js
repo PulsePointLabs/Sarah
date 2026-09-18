@@ -24,8 +24,11 @@ export function bodyExplorationTimeRange(exploration = {}) {
     : "00:00";
   const localStart = date ? new Date(`${date}T${time}:00`).getTime() : Number.NaN;
   const fallbackStart = timestampMs(exploration.started_at || exploration.created_date);
-  const startMs = Number.isFinite(localStart) ? localStart : fallbackStart;
-  const durationMinutes = Math.max(0, finite(exploration.duration_minutes) || 0);
+  const captureStart = timestampMs(exploration.capture_started_at || exploration.started_at);
+  const startMs = captureStart ?? (Number.isFinite(localStart) ? localStart : fallbackStart);
+  // Live capture keeps exact seconds; the editable minutes field is rounded.
+  const durationSeconds = finite(exploration.capture_digest?.duration_s);
+  const durationMinutes = durationSeconds > 0 ? durationSeconds / 60 : Math.max(0, finite(exploration.duration_minutes) || 0);
   return {
     startMs,
     endMs: startMs == null ? null : startMs + durationMinutes * 60 * 1000,
@@ -101,16 +104,20 @@ function source(reading = {}) {
 }
 
 function relation(reading = {}) {
-  const minutes = Math.abs(Number(reading.delta_minutes) || 0);
-  if (/^during\s+/i.test(String(reading.relationship || ""))) return `${reading.relationship} at +${Math.round(minutes)} min`;
-  const amount = minutes >= 60 ? `${(minutes / 60).toFixed(1)} h` : `${Math.round(minutes)} min`;
-  return `${amount} ${reading.relationship}`;
+  const during = /^during\s+/i.test(String(reading.relationship || ""));
+  const seconds = Math.round(Math.abs(during ? Number(reading.time_offset_s) || 0 : Number(reading.distance_minutes) * 60 || 0));
+  const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  return during ? `${reading.relationship} at ${clock} elapsed from capture start`
+    : `${clock} ${reading.relationship} (${String(reading.relationship).startsWith('after') ? 'after capture end' : 'before capture start'})`;
 }
 
 export function buildNearbyVitalsEvidence(nearby = {}) {
   const bloodPressure = (nearby.bloodPressure || []).map((reading) => ({
     measured_at: reading.measured_at,
     relationship: relation(reading),
+    time_offset_s: reading.time_offset_s,
+    timestamp_source: reading.timestamp_source || 'source_record',
+    timing_rule: 'Elapsed time is measured from capture START, not from its end. Phone reception time is not cuff inflation/start time. Do not infer posture or activity from BP values or timestamp alone.',
     systolic_mm_hg: finite(reading.systolic_mm_hg ?? reading.systolic),
     diastolic_mm_hg: finite(reading.diastolic_mm_hg ?? reading.diastolic),
     pulse_bpm: finite(reading.pulse_bpm ?? reading.pulse),

@@ -2687,5 +2687,5 @@ liveCaptureRouter.post('/end-session', async (req, res) => {
 
 export function getHowlCaptureSession() {
   if (!state.session.active || !state.session.activeSessionId) return null;
-  return { id: state.session.activeSessionId, startedAt: state.session.startedAt };
+  return { id: state.session.activeSessionId, startedAt: state.session.startedAt, entity: state.session.entity || 'Session' };
 }

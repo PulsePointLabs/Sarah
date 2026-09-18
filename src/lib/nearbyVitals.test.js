@@ -2,6 +2,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildNearbyVitalsEvidence, selectNearbyVitalReadings } from "./nearbyVitals.js";
 
+test("exact capture seconds keep a late BP inside the session despite rounded duration minutes", () => {
+  const record = { date: "2026-09-15", start_time: "21:03", duration_minutes: 9,
+    capture_started_at: "2026-09-16T01:03:07.288Z", capture_digest: { duration_s: 581 } };
+  const nearby = selectNearbyVitalReadings(record, { bloodPressure: [
+    { measured_at: "2026-09-16T01:12:25.688Z", systolic_mm_hg: 140, diastolic_mm_hg: 104, timestamp_source: "received_at" },
+    { measured_at: "2026-09-16T01:13:48.288Z", systolic_mm_hg: 130, diastolic_mm_hg: 90 },
+  ] });
+  assert.equal(nearby.bloodPressure[0].relationship, "during exploration");
+  const evidence = buildNearbyVitalsEvidence(nearby).blood_pressure;
+  assert.match(evidence[0].relationship, /9:18 elapsed from capture start/);
+  assert.equal(evidence[0].timestamp_source, "received_at");
+  assert.match(evidence[1].relationship, /1:00 after exploration/);
+  assert.doesNotMatch(evidence[1].relationship, /10:41/);
+});
+
 test("matches imported vitals to a body exploration with transparent time relationships", () => {
   const exploration = { date: "2026-08-01", start_time: "04:50", duration_minutes: 50 };
   const nearby = selectNearbyVitalReadings(exploration, {
