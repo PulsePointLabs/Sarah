@@ -1,4 +1,5 @@
 import EpisodeBoundaryHandle from "./EpisodeBoundaryHandle.jsx";
+import { telemetryValueChange, discreteValueChange } from "../lib/telemetryValueChange.js";
 import HowlTimelineCard from "./HowlTimelineCard.jsx";
 import { buildLoadEvidence, loadBandsFromPoints } from "../lib/videoSyncLoadEvidence.js";
 import { useMemo, useState } from "react";
@@ -79,17 +80,21 @@ function nearestEvidenceRow(rows, seconds) {
   }, nearby[0]);
 }
 
-function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = false }) {
+function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = false, change }) {
   return (
-    <div className={`rounded-xl border border-border bg-background/70 shadow-sm ${compact ? "p-1.5" : "p-3"}`}>
+    <div style={change?.delta ? { backgroundColor: change.delta > 0 ? "rgba(251,146,60,0.09)" : "rgba(56,189,248,0.09)", transition: "background-color 300ms" } : undefined} className={`rounded-xl border border-border bg-background/70 shadow-sm ${compact ? "p-1.5" : "p-3"}`}>
       <div className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
         <Icon className={`h-3.5 w-3.5 ${tone}`} />
         {label}
       </div>
-      <p className={`${compact ? "mt-1 text-base" : "mt-2 text-xl"} font-mono font-bold leading-none ${tone}`}>
+      <p className={`monitor-metric-value ${compact ? "mt-1 text-base" : "mt-2 text-xl"} font-mono font-bold leading-none ${tone}`}>
         {value}
         {unit && value !== "--" && <span className="ml-1 text-[10px] font-semibold">{unit}</span>}
       </p>
+      {change && <p className="text-xs font-mono" title={change.label || "Change over the preceding 10 seconds"}>
+        <span className={change.delta > 0 ? "text-orange-300" : change.delta < 0 ? "text-sky-300" : "text-muted-foreground"}>{change.text || `${change.arrow} ${change.delta > 0 ? "+" : ""}${change.delta}`} {unit}</span>
+        <span className="text-[9px] text-muted-foreground"> / {change.label || "10s"}</span>
+      </p>}
       <p className={`${compact ? "mt-1 min-h-0 line-clamp-1" : "mt-2 min-h-7"} text-[9px] leading-relaxed text-muted-foreground`}>{detail}</p>
     </div>
   );
@@ -296,6 +301,7 @@ export default function VideoSyncPhysiologySidebar({
         <MetricCard
           icon={HeartPulse}
           label="Heart Rate"
+          change={telemetryValueChange(normalizedRows, "hr", playheadS)}
           value={hr != null ? Math.round(hr) : "--"}
           unit="bpm"
           detail={hr != null ? humanize(current?.hr_source, "Saved HR sample") : "No HR sample near this playhead"}
@@ -305,6 +311,7 @@ export default function VideoSyncPhysiologySidebar({
         <MetricCard
           icon={Activity}
           label="RMSSD"
+          change={telemetryValueChange(normalizedRows, "rmssd", playheadS)}
           value={rmssd != null ? rmssd.toFixed(1) : "--"}
           unit="ms"
           detail={rmssd != null ? `${humanize(current?.hrv_quality, "RR-derived")} variability` : "No RR-derived HRV at this moment"}
@@ -314,6 +321,7 @@ export default function VideoSyncPhysiologySidebar({
         <MetricCard
           icon={Activity}
           label="SDNN"
+          change={telemetryValueChange(normalizedRows, "sdnn", playheadS)}
           value={sdnn != null ? sdnn.toFixed(1) : "--"}
           unit="ms"
           detail={sdnn != null ? `${humanize(current?.hrv_quality, "RR-derived")} variability` : "No RR-derived SDNN at this moment"}
@@ -323,6 +331,7 @@ export default function VideoSyncPhysiologySidebar({
         <MetricCard
           icon={Gauge}
           label="Blood Pressure"
+          change={discreteValueChange(bloodPressureReadings, ['systolic_mm_hg', 'diastolic_mm_hg'], playheadS)}
           value={bpSystolic != null && bpDiastolic != null ? `${Math.round(bpSystolic)}/${Math.round(bpDiastolic)}` : "--"}
           unit="mmHg"
           detail={currentBp ? `${formatTime(currentBp.t)} Â· ${Math.round(bpAge)}s old` : "No prior BP reading in this session"}
@@ -332,6 +341,7 @@ export default function VideoSyncPhysiologySidebar({
         {optionalChannels.spo2 !== false && pulseOxReadings.length > 0 && <MetricCard
           icon={Droplets}
           label="SpO2"
+          change={discreteValueChange(pulseOxReadings, ['spo2_percent'], playheadS)}
           value={spo2 != null ? Math.round(spo2) : "--"}
           unit="%"
           detail={currentSpo2 ? `${formatTime(currentSpo2.t)} Â· ${Math.round(spo2Age)}s old` : "No prior SpO2 reading"}
@@ -341,6 +351,7 @@ export default function VideoSyncPhysiologySidebar({
         {optionalChannels.respiration !== false && <MetricCard
           icon={Wind}
           label="Respiration"
+          change={telemetryValueChange(normalizedRows, "respiration", playheadS)}
           value={respiration != null ? respiration.toFixed(1) : "--"}
           unit="/min"
           detail={respiration != null
@@ -352,6 +363,7 @@ export default function VideoSyncPhysiologySidebar({
         {optionalChannels.motion !== false && <MetricCard
           icon={Activity}
           label="Chest Motion"
+          change={telemetryValueChange(normalizedRows, "motion", playheadS)}
           value={motion != null ? Math.round(motion) : "--"}
           unit="mg"
           detail={motion != null
@@ -414,7 +426,7 @@ export default function VideoSyncPhysiologySidebar({
           </div>
         </div>
         {phaseSession && showPhaseBands && <PhaseBandLegend physiologicalLoad={physiologicalLoad} />}
-        {subjectiveEpisodes.length > 0 && <p className="text-[8px] text-violet-300">N · Near climax &nbsp; C · Climax{onEpisodeEdit ? " · Drag boundary handles to edit" : ""}</p>}
+        {subjectiveEpisodes.length > 0 && <p className="text-[8px] text-violet-300">N Â· Near climax &nbsp; C Â· Climax{onEpisodeEdit ? " Â· Drag boundary handles to edit" : ""}</p>}
         <TrendChart
           subjectiveEpisodes={displayedEpisodes}
           onEpisodeEdit={onEpisodeEdit} onEpisodeEditStart={onEpisodeEditStart} onEpisodePreview={setEpisodePreview}

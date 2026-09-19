@@ -681,7 +681,11 @@ function createWindow() {
   // the backend and renderer are healthy. Never leave a live, invisible Sarah
   // process holding the single-instance lock.
   setTimeout(revealWindow, 1500);
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  mainWindow.webContents.setWindowOpenHandler(({ url, frameName }) => {
+    if (url === 'about:blank' && frameName === 'SarahTelemetry') {
+      return { action: 'allow', overrideBrowserWindowOptions: { title: 'Sarah Telemetry', width: 1280, height: 900,
+        webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, preload: '' } } };
+    }
     shell.openExternal(url);
     return { action: 'deny' };
   });

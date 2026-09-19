@@ -1,0 +1,3 @@
+import React from 'react';import{createRoot}from'react-dom/client';import VideoSyncPlayer from '/src/components/VideoSyncPlayer.jsx';import '/src/index.css';
+const rows=Array.from({length:121},(_,t)=>({time_offset_s:t,hr:90+Math.sin(t/10)*8,hrv_rmssd_ms:12+Math.cos(t/10)*3,hrv_sdnn_ms:25,hrv_quality:'high',rr_intervals_ms:'650,670,660',respiration_bpm:14,motion_dynamic_rms_mg:12}));
+createRoot(document.getElementById('root')).render(<VideoSyncPlayer session={{id:'dual-test',duration_minutes:2,event_timeline:[{time_s:5,note:'Test event',source:'manual'},{time_s:45,note:'Upcoming test',source:'manual'}],subjective_near_climax_episodes:[{id:'n',kind:'near_climax',start_s:15,end_s:25}]}} timelineRows={rows}/>);

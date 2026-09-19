@@ -1,3 +1,5 @@
+import { useTelemetryWindow } from "../hooks/useTelemetryWindow.js";
+import "./dualMonitor.css";
 import VideoLinkRecovery from "./VideoLinkRecovery.jsx";
 import LinkedLocalVideoManager from "./LinkedLocalVideoManager.jsx";
 import PlaybackPreparationStatus from "./PlaybackPreparationStatus.jsx";
@@ -820,6 +822,8 @@ export default function VideoSyncPlayer({
   const [playerWidth, setPlayerWidth] = useState(66);
   const [telemetryDisplayMode, setTelemetryDisplayMode] = useState("sidebar");
   const [fullTelemetryView, setFullTelemetryView] = useState(false);
+  const telemetryWindow = useTelemetryWindow();
+  const [videoControlsHidden, setVideoControlsHidden] = useState(false);
   const [telemetryFocus, setTelemetryFocus] = useState(false);
   const [telemetryViewport, setTelemetryViewport] = useState(() => typeof window === "undefined" ? 1920 : window.innerWidth);
   const [preferredSidebarWidth, setPreferredSidebarWidth] = useState(() => {
@@ -2163,8 +2167,11 @@ export default function VideoSyncPlayer({
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
-      const active = document.activeElement;
+      const active = e.target?.ownerDocument?.activeElement || document.activeElement;
+      if (e.defaultPrevented || active?.getAttribute?.("role") === "slider") return;
       const inInput = active?.tagName === "INPUT" || active?.tagName === "TEXTAREA" || active?.tagName === "SELECT";
+      if (telemetryWindow.target && e.code === "KeyH" && !inInput && !active?.isContentEditable && !e.repeat) { e.preventDefault(); setVideoControlsHidden(v => !v); return; }
+      if (active?.isContentEditable) return;
       if (fullTelemetryView && ["KeyN", "KeyC"].includes(e.code) && !inInput && !active?.isContentEditable && !e.repeat && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault(); toggleSubjectiveRef.current?.(e.code === "KeyC" ? "climax" : "near_climax"); return;
       }
@@ -2222,12 +2229,13 @@ export default function VideoSyncPlayer({
       }
     };
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [addingNew, fullTelemetryView, telemetryFocus, playheadS, lastUsedCat, setSynchronizedVideoTime, toggleQuickDictation, videoDuration]);
+    telemetryWindow.target?.addEventListener("keydown", handleKeyDown);
+    return () => { window.removeEventListener("keydown", handleKeyDown); telemetryWindow.target?.removeEventListener("keydown", handleKeyDown); };
+  }, [telemetryWindow.target, addingNew, fullTelemetryView, telemetryFocus, playheadS, lastUsedCat, setSynchronizedVideoTime, toggleQuickDictation, videoDuration]);
 
   // Click on chart → seek video
   const handleChartClick = useCallback((data) => {
-    if (!data?.activeLabel) return;
+    if (data?.activeLabel == null) return;
     const sessionT = Number(data.activeLabel);
     setPlayheadS(sessionT);
     const videoT = Math.max(0, sessionT - videoOffset);
@@ -2284,7 +2292,12 @@ export default function VideoSyncPlayer({
     setFullTelemetryView(true);
   };
 
+  const openDualMonitor = () => {
+    if (!telemetryWindow.open()) { showQuickNotice("Allow pop-ups for Sarah to open the telemetry monitor.", "error"); return; }
+    setVideoControlsHidden(false); setTelemetryFocus(false); openFullTelemetryView();
+  };
   const closeFullTelemetryView = () => {
+    telemetryWindow.close();
     const video = videoRef.current;
     if (video) {
       pendingMasterTimeRef.current = video.currentTime;
@@ -2551,13 +2564,68 @@ export default function VideoSyncPlayer({
       ? "Transcribing voice event"
       : `Dictate event at ${fmtMmSs(playheadS)}`;
 
+  const telemetryPanel = (
+          <aside className={telemetryWindow.target ? "telemetry-monitor dark" : "flex min-h-0 min-w-0 flex-col gap-2 overflow-hidden"}>
+            {telemetryWindow.target && <div className="monitor-toolbar">
+              <strong className="text-primary">Telemetry | {fmtMmSs(playheadS)}</strong>
+              <button onClick={togglePlay}>{isPlaying ? "Pause" : "Play"}</button>
+              <button onClick={() => toggleSubjective("near_climax")}>{subjective.episodes.some(e => e.end_s == null && e.kind !== "climax") ? "End near climax (N)" : "Start near climax (N)"}</button>
+              <button onClick={() => toggleSubjective("climax")}>{subjective.episodes.some(e => e.end_s == null && e.kind === "climax") ? "End climax (C)" : "Start climax (C)"}</button>
+              <button onClick={() => telemetryWindow.target.dispatchEvent(new telemetryWindow.target.KeyboardEvent("keydown", {code:"KeyS",bubbles:true}))}>Annotate (S)</button>
+              <button onClick={() => telemetryWindow.target.document.fullscreenElement ? telemetryWindow.target.document.exitFullscreen() : telemetryWindow.target.document.documentElement.requestFullscreen()}>Fullscreen</button>
+              <button onClick={telemetryWindow.close}>Single window</button>
+              <span role="status">{subjective.error || (subjective.saving ? "Saving episode..." : "")}</span>
+            </div>}
+            <div className={`${telemetryFocus ? "hidden" : "flex"} h-9 shrink-0 items-center justify-between rounded-xl border border-white/10 bg-card/95 px-2`}>
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Optional channels</span>
+              <div className="flex gap-1">
+                {[
+                  hasSpo2 && ["spo2", "SpO2"],
+                  (howl.rows.length > 0 || howl.error) && ["howl", "Howl"],
+                  ["respiration", "Resp"],
+                  ["motion", "Motion"],
+                ].filter(Boolean).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setFullTelemetryChannels((current) => ({ ...current, [key]: !current[key] }))}
+                    className={`rounded-md px-2 py-1 text-[9px] font-semibold ${fullTelemetryChannels[key] ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground"}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className={telemetryWindow.target ? "monitor-dashboard" : "min-h-0 flex-1"}>
+              <VideoSyncPhysiologySidebar
+                timelineRows={timelineRows}
+                playheadS={playheadS}
+                xDomain={xDomain}
+                zoomWindow={zoomWindow}
+                onZoomWindowChange={setZoomWindow}
+                onSeek={(sessionTime) => handleChartClick({ activeLabel: sessionTime })}
+                bloodPressureReadings={bloodPressureReadings}
+                pulseOxReadings={pulseOxReadings}
+                compact
+                optionalChannels={fullTelemetryChannels}
+                howl={howl}
+                phaseSession={session}
+                physiologicalLoad={isExploration}
+                subjectiveEpisodes={subjective.episodes}
+                onEpisodeEdit={editSubjective} onEpisodeEditStart={() => videoRef.current?.pause()}
+              />
+            </div>
+            {telemetryWindow.target && <div className="monitor-events">{[{label:"Current event",entry:fullTelemetryEvents.current},{label:"Upcoming event",entry:fullTelemetryEvents.upcoming}].map(({label,entry}) => <button key={label} disabled={!entry} onClick={() => entry && seekToEvent(entry.ev,entry.i)}><div className="text-primary text-xs font-bold">{label} {entry ? fmtMmSs(entry.ev.time_s) : ""}</div><div className="text-sm">{entry?.ev?.note || "No event"}</div></button>)}</div>}
+          </aside>
+  );
+
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden">
       {fullTelemetryView && typeof document !== "undefined" && createPortal(
         <div ref={fullTelemetryRootRef} className="dark fixed inset-0 z-[11000] grid h-[100svh] w-screen gap-1 overflow-hidden bg-background p-2 text-foreground"
-          style={{ gridTemplateColumns: `minmax(0,1fr) 6px ${telemetrySidebarWidth}px` }}>
+          style={{ gridTemplateColumns: telemetryWindow.target ? "minmax(0,1fr)" : `minmax(0,1fr) 6px ${telemetrySidebarWidth}px` }}>
           <main className="flex min-h-0 min-w-0 flex-col gap-2">
-            <header className={`${telemetryFocus ? "hidden" : "flex"} h-10 shrink-0 items-center justify-between gap-2 rounded-xl border border-white/10 bg-card/95 px-2.5`}>
+            <header className={`${telemetryFocus || telemetryWindow.target ? "hidden" : "flex"} h-10 shrink-0 items-center justify-between gap-2 rounded-xl border border-white/10 bg-card/95 px-2.5`}>
               <div className="flex min-w-0 items-center gap-2">
                 <Activity className="h-4 w-4 shrink-0 text-primary" />
                 <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.15em] text-primary">Full Telemetry</span>
@@ -2574,13 +2642,14 @@ export default function VideoSyncPlayer({
                   ))}
                 </div>
               </div>
+              <button type="button" onClick={openDualMonitor} className="rounded border border-primary/40 px-2 py-1 text-xs">Dual monitors</button>
               <button type="button" onClick={() => setTelemetryFocus(true)} title="Video and sidebar only (F); F or Escape restores controls" className="ml-auto shrink-0 rounded-md border border-border px-2 py-1 text-[10px]">Focus (F)</button>
               <button type="button" onClick={closeFullTelemetryView} className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-semibold text-muted-foreground hover:text-foreground">
                 <X className="h-3.5 w-3.5" /> Exit
               </button>
             </header>
 
-            <div className={`${telemetryFocus ? "hidden" : "grid"} h-[82px] shrink-0 grid-cols-2 gap-2`}>
+            <div className={`${telemetryFocus || telemetryWindow.target ? "hidden" : "grid"} h-[82px] shrink-0 grid-cols-2 gap-2`}>
               {[{ label: "Current Event", entry: fullTelemetryEvents.current }, { label: "Upcoming Event", entry: fullTelemetryEvents.upcoming }].map(({ label, entry }) => (
                 <button
                   key={label}
@@ -2617,7 +2686,7 @@ export default function VideoSyncPlayer({
               </div>
             </div>
 
-            <div className={`${telemetryFocus ? "hidden" : ""} shrink-0 rounded-xl border border-white/10 bg-card/95 px-2 py-1.5`}>
+            <div className={`${(telemetryWindow.target ? videoControlsHidden : telemetryFocus) ? "hidden" : ""} shrink-0 rounded-xl border border-white/10 bg-card/95 px-2 py-1.5`}>
               <div
                 className="relative h-3 cursor-pointer rounded-full bg-muted"
                 onPointerDown={handleTimelinePointerDown}
@@ -2628,6 +2697,13 @@ export default function VideoSyncPlayer({
                 <div className="absolute inset-y-0 left-0 rounded-full bg-primary" style={{ width: `${videoDuration ? Math.min(100, (displayedVideoTime / videoDuration) * 100) : 0}%` }} />
                 <div className="absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background bg-primary" style={{ left: `${videoDuration ? Math.min(100, (displayedVideoTime / videoDuration) * 100) : 0}%` }} />
               </div>
+              {telemetryWindow.target && <div className="monitor-toolbar py-1">
+                {loadedFeeds.map(feed => <button key={feed.key} className={feed.key === activeFeedKey ? "text-primary" : ""} onClick={() => selectMasterFeed(feed.key)}>{feed.label}</button>)}
+                <button onClick={() => document.fullscreenElement ? document.exitFullscreen() : fullTelemetryRootRef.current?.requestFullscreen()}>Fullscreen</button>
+                <button onClick={() => setVideoControlsHidden(true)}>Hide controls (H)</button>
+                <button onClick={closeFullTelemetryView}>Exit review</button>
+                <span>N / C: episodes | S: annotation | M: voice | Left / Right: frame</span>
+              </div>}
               <div className="mt-1 flex items-center gap-1.5">
                 <span className="w-12 font-mono text-[10px] text-muted-foreground">{fmtMmSs(displayedVideoTime)}</span>
                 <button type="button" onClick={() => setSynchronizedVideoTime(0)} className="rounded-md bg-muted p-1.5" title="Start"><SkipBack className="h-3.5 w-3.5" /></button>
@@ -2644,12 +2720,12 @@ export default function VideoSyncPlayer({
                     <button key={speed} type="button" onClick={() => setSpeed(speed)} className={`rounded px-1.5 py-1 text-[9px] ${playbackSpeed === speed ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>{speed}×</button>
                   ))}
                 </div>
-                <span className="w-12 text-right font-mono text-[10px] text-muted-foreground">{fmtMmSs(videoDuration)}</span>
+                <span className="text-right font-mono text-[10px] text-muted-foreground">{fmtMmSs(videoDuration)}{telemetryWindow.target ? ` | -${fmtMmSs(Math.max(0, videoDuration-displayedVideoTime))} remaining` : ""}</span>
               </div>
             </div>
           </main>
 
-          <div role="separator" aria-label="Resize telemetry sidebar" aria-orientation="vertical" tabIndex={0}
+          {!telemetryWindow.target && <div role="separator" aria-label="Resize telemetry sidebar" aria-orientation="vertical" tabIndex={0}
             aria-valuemin={telemetrySidebarLimits.min} aria-valuemax={telemetrySidebarLimits.max} aria-valuenow={telemetrySidebarWidth}
             title="Drag to resize sidebar; arrow keys adjust width"
             className="min-h-0 cursor-col-resize touch-none select-none rounded bg-border/30 hover:bg-primary/50 focus:bg-primary/50 focus:outline-none"
@@ -2662,48 +2738,8 @@ export default function VideoSyncPlayer({
               e.preventDefault(); e.stopPropagation();
               resizeTelemetrySidebar(e.key === "Home" ? telemetrySidebarLimits.min : e.key === "End" ? telemetrySidebarLimits.max
                 : telemetrySidebarWidth + (e.key === "ArrowLeft" ? 16 : -16));
-            }} />
-          <aside className="flex min-h-0 min-w-0 flex-col gap-2 overflow-hidden">
-            <div className={`${telemetryFocus ? "hidden" : "flex"} h-9 shrink-0 items-center justify-between rounded-xl border border-white/10 bg-card/95 px-2`}>
-              <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Optional channels</span>
-              <div className="flex gap-1">
-                {[
-                  hasSpo2 && ["spo2", "SpO2"],
-                  (howl.rows.length > 0 || howl.error) && ["howl", "Howl"],
-                  ["respiration", "Resp"],
-                  ["motion", "Motion"],
-                ].filter(Boolean).map(([key, label]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setFullTelemetryChannels((current) => ({ ...current, [key]: !current[key] }))}
-                    className={`rounded-md px-2 py-1 text-[9px] font-semibold ${fullTelemetryChannels[key] ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground"}`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="min-h-0 flex-1">
-              <VideoSyncPhysiologySidebar
-                timelineRows={timelineRows}
-                playheadS={playheadS}
-                xDomain={xDomain}
-                zoomWindow={zoomWindow}
-                onZoomWindowChange={setZoomWindow}
-                onSeek={(sessionTime) => handleChartClick({ activeLabel: sessionTime })}
-                bloodPressureReadings={bloodPressureReadings}
-                pulseOxReadings={pulseOxReadings}
-                compact
-                optionalChannels={fullTelemetryChannels}
-                howl={howl}
-                phaseSession={session}
-                physiologicalLoad={isExploration}
-                subjectiveEpisodes={subjective.episodes}
-                onEpisodeEdit={editSubjective} onEpisodeEditStart={() => videoRef.current?.pause()}
-              />
-            </div>
-          </aside>
+            }} />}
+          {telemetryWindow.target ? createPortal(telemetryPanel, telemetryWindow.target.document.body) : telemetryPanel}
         </div>,
         document.body,
       )}
@@ -2764,7 +2800,7 @@ export default function VideoSyncPlayer({
         }}
       >
         <DialogContent
-          portalContainer={fullTelemetryView
+          portalContainer={telemetryWindow.target ? telemetryWindow.target.document.body : fullTelemetryView
             ? fullTelemetryRootRef.current
             : fullscreenActive ? fullscreenSurfaceRef.current : undefined}
           overlayClassName="bg-transparent"
