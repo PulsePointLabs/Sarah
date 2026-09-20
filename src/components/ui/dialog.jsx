@@ -31,7 +31,7 @@ function ForeignWindowDialog({ container, className, children, onClose, label })
   React.useEffect(() => {
     const dialog = ref.current;
     dialog.showModal();
-    dialog.querySelector('textarea, input, button')?.focus();
+    (dialog.querySelector('[autofocus]') || dialog.querySelector('textarea') || dialog.querySelector('input, button'))?.focus();
     return () => { if (dialog.open) dialog.close(); };
   }, []);
   return createPortal(

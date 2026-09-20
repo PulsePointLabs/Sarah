@@ -2217,6 +2217,7 @@ export default function VideoSyncPlayer({
       // S: pause video + open event form at current playhead (if not already open)
       if (e.code === "KeyS" && !inInput) {
         e.preventDefault();
+        telemetryWindow.target?.focus();
         if (videoRef.current && !videoRef.current.paused) videoRef.current.pause();
         if (!addingNew) {
           annotationDraftFeedRef.current = { ...selectedAnnotationFeedRef.current };
@@ -2836,6 +2837,7 @@ export default function VideoSyncPlayer({
             <div className="flex gap-2 items-end">
               <textarea
                 ref={newNoteRef}
+                autoFocus
                 value={newNote}
                 onChange={(e) => {
                   setNewNote(e.target.value);
