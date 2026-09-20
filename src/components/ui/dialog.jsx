@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { createPortal } from "react-dom"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { X } from "lucide-react"
 
@@ -25,7 +26,31 @@ const DialogOverlay = React.forwardRef(({ className, ...props }, ref) => (
 ))
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
-const DialogContent = React.forwardRef(({ className, overlayClassName, portalContainer, children, ...props }, ref) => (
+function ForeignWindowDialog({ container, className, children, onClose, label }) {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const dialog = ref.current;
+    dialog.showModal();
+    dialog.querySelector('textarea, input, button')?.focus();
+    return () => { if (dialog.open) dialog.close(); };
+  }, []);
+  return createPortal(
+    <dialog ref={ref} aria-label={label} style={{ margin: 0 }}
+      className={cn('fixed z-50 grid gap-4 border bg-background p-6 text-foreground shadow-lg backdrop:bg-black/30', className)}
+      onCancel={(event) => { event.preventDefault(); event.stopPropagation(); onClose?.(); }}
+      onKeyDown={(event) => event.stopPropagation()}>
+      {children}
+      <button type="button" onClick={onClose} className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100" aria-label="Close">
+        <X className="h-4 w-4" />
+      </button>
+    </dialog>, container);
+}
+
+const DialogContent = React.forwardRef(({ className, overlayClassName, portalContainer, foreignWindowOpen, onForeignClose, foreignWindowLabel, children, ...props }, ref) => {
+  if (foreignWindowOpen !== undefined && portalContainer && portalContainer.ownerDocument !== document) {
+    return foreignWindowOpen ? <ForeignWindowDialog container={portalContainer} className={className} onClose={onForeignClose} label={foreignWindowLabel}>{children}</ForeignWindowDialog> : null;
+  }
+  return (
   <DialogPortal container={portalContainer}>
     <DialogOverlay className={overlayClassName} />
     <DialogPrimitive.Content
@@ -43,7 +68,8 @@ const DialogContent = React.forwardRef(({ className, overlayClassName, portalCon
       </DialogPrimitive.Close>
     </DialogPrimitive.Content>
   </DialogPortal>
-))
+  );
+})
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
 const DialogHeader = ({

@@ -2167,6 +2167,7 @@ export default function VideoSyncPlayer({
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
+      if (addingNew || e.isComposing) return;
       const active = e.target?.ownerDocument?.activeElement || document.activeElement;
       if (e.defaultPrevented || active?.getAttribute?.("role") === "slider") return;
       const inInput = active?.tagName === "INPUT" || active?.tagName === "TEXTAREA" || active?.tagName === "SELECT";
@@ -2564,6 +2565,21 @@ export default function VideoSyncPlayer({
       ? "Transcribing voice event"
       : `Dictate event at ${fmtMmSs(playheadS)}`;
 
+  const handleAnnotationOpenChange = (open) => {
+          if (!open) {
+            stopListening();
+            setAddingNew(false);
+            setAutoTagging(false);
+            setSavingEvent(false);
+            autoTagRequestIdRef.current += 1;
+            autoTagPromiseRef.current = null;
+            autoTagPromiseNoteRef.current = "";
+            setAutoTagSuggestion(null);
+            setAutoTagSuggestionNote("");
+            setAutoTagError("");
+            setNewCatsTouched(false);
+          }
+        };
   const telemetryPanel = (
           <aside className={telemetryWindow.target ? "telemetry-monitor dark" : "flex min-h-0 min-w-0 flex-col gap-2 overflow-hidden"}>
             {telemetryWindow.target && <div className="monitor-toolbar">
@@ -2783,23 +2799,12 @@ export default function VideoSyncPlayer({
       </Dialog>
       <Dialog
         open={addingNew}
-        onOpenChange={(open) => {
-          if (!open) {
-            stopListening();
-            setAddingNew(false);
-            setAutoTagging(false);
-            setSavingEvent(false);
-            autoTagRequestIdRef.current += 1;
-            autoTagPromiseRef.current = null;
-            autoTagPromiseNoteRef.current = "";
-            setAutoTagSuggestion(null);
-            setAutoTagSuggestionNote("");
-            setAutoTagError("");
-            setNewCatsTouched(false);
-          }
-        }}
+        onOpenChange={handleAnnotationOpenChange}
       >
         <DialogContent
+          foreignWindowOpen={addingNew}
+          onForeignClose={() => handleAnnotationOpenChange(false)}
+          foreignWindowLabel={`New Event at ${fmtMmSs(playheadS)}`}
           portalContainer={telemetryWindow.target ? telemetryWindow.target.document.body : fullTelemetryView
             ? fullTelemetryRootRef.current
             : fullscreenActive ? fullscreenSurfaceRef.current : undefined}
