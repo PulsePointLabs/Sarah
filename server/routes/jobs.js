@@ -8,6 +8,8 @@ import { renderSessionReviewVideo } from '../services/sessionReviewVideoRenderer
 import { renderProfileAnatomyVideo } from '../services/profileAnatomyVideoRenderer.js';
 import { renderMobileSessionVideo } from '../services/sessionVideoPipeline.js';
 import { aiInvokeInternal } from './internalAi.js';
+import { createEpisodeReviewHandler } from '../services/episodeVisualReview.js';
+registerJobHandler('episode_visual_review', createEpisodeReviewHandler(aiInvokeInternal));
 import { resolveUploadPath } from '../config.js';
 import { startAIForensicCapture } from '../services/aiForensics.js';
 import { analyzeLocalVisionWindow } from '../services/localVision/analyzeWindow.js';

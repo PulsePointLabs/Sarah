@@ -10,7 +10,7 @@ import { buildSync } from "esbuild";
 const require = createRequire(import.meta.url);
 function loadComponent(file) {
   const bundle = buildSync({ entryPoints: [fileURLToPath(new URL(file, import.meta.url))],
-    bundle: true, write: false, platform: "node", format: "cjs", jsx: "automatic",
+    bundle: true, write: false, platform: "node", format: "cjs", jsx: "automatic", define: { 'import.meta.env': '{}' },
     mainFields: ["module", "main"], external: ["react", "react-dom", "recharts"] }).outputFiles[0].text;
   const module = { exports: {} };
   vm.runInNewContext(bundle, { module, exports: module.exports, require, console });

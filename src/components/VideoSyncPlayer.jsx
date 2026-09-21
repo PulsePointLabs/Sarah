@@ -4080,7 +4080,7 @@ export default function VideoSyncPlayer({
           )}
         </div>
 
-        {reviewTab === "subjective" && <SubjectiveNearClimaxEpisodes episodes={subjective.episodes} onSeek={seekSubjective}
+        {reviewTab === "subjective" && <SubjectiveNearClimaxEpisodes recordId={session.id} isExploration={isExploration} episodes={subjective.episodes} onSeek={seekSubjective}
           timelineRows={timelineRows} onSeekTime={seekToMotionPeak}
           onToggle={toggleSubjective} onDelete={(id) => subjective.save(subjective.current.current.filter((e) => e.id !== id))}
           error={subjective.error} saving={subjective.saving} onRetry={subjective.retry} />}

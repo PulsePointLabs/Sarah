@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { episodeReviewContext, slimSeriesPath, episodeClock as time, episodeDuration } from "../lib/episodeReviewContext.js";
 import { PHASE_COLORS } from "../lib/videoSyncPhaseEvidence.js";
+import EpisodeAnalysisReview from './EpisodeAnalysisReview';
 
 const HR_LINES = [{ key: "hr", label: "HR", color: "#14b8a6" }, { key: "smoothed", label: "Smoothed", color: "#ec4899" }, { key: "baseline", label: "Baseline", color: "#64748b", dash: true }];
 const HRV_LINES = [{ key: "rmssd", label: "RMSSD", color: "#14b8a6" }, { key: "sdnn", label: "SDNN", color: "#8b5cf6" }];
@@ -38,7 +39,7 @@ function SlimTimeline({ title, rows, lines, context, onSeek, score = false, foot
   </div>;
 }
 
-export default function EpisodeReviewCard({ episode: e, timelineRows, phaseModel, onSeek, onDelete }) {
+export default function EpisodeReviewCard({ episode: e, timelineRows, phaseModel, onSeek, onDelete, review, onAnalyze, analysisDisabled }) {
   const context = useMemo(() => episodeReviewContext(e, timelineRows, phaseModel.points), [e, timelineRows, phaseModel]);
   const peakRecovery = context.phases.filter((p) => p.t >= e.start_s && p.recovery != null).reduce((max, p) => Math.max(max, p.recovery), 0);
   const hasRecovery = context.phases.some((p) => p.t >= e.start_s && p.recovery != null);
@@ -77,5 +78,6 @@ export default function EpisodeReviewCard({ episode: e, timelineRows, phaseModel
         </div>
       </div>
     </div>
+    <EpisodeAnalysisReview episode={e} review={review} onAnalyze={onAnalyze} disabled={analysisDisabled} onSeek={seek}/>
   </article>;
 }

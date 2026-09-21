@@ -1,8 +1,25 @@
 import express from 'express';
+import { episodeReviews, queueEpisodeReview, queueChangedEpisodes } from '../services/episodeReviewJobs.js';
+import { completedEpisode } from '../../src/lib/episodeAnalysis.js';
 import { resetEventAnnotations } from '../services/resetEventAnnotations.js';
 import { bulkCreate, deleteEntity, getEntity, listEntities, listEntitiesByExactCriteria, listEntityPage, normalizeEntityName, upsertEntity } from '../db.js';
 
 export const entitiesRouter = express.Router();
+
+entitiesRouter.get('/:entity/:id/episode-reviews', (req,res) => {
+  const entity = normalizeEntityName(req.params.entity);
+  if (!getEntity(entity,req.params.id)) return res.status(404).json({error:'Record not found'});
+  res.json(episodeReviews(entity,req.params.id));
+});
+entitiesRouter.post('/:entity/:id/episode-reviews', (req,res) => {
+  const entity = normalizeEntityName(req.params.entity), record = getEntity(entity,req.params.id);
+  if (!record) return res.status(404).json({error:'Record not found'});
+  try {
+    const ids = req.body?.fillMissing ? (record.subjective_near_climax_episodes || []).filter(completedEpisode).sort((a,b)=>a.start_s-b.start_s).map(e=>e.id) : [req.body?.episodeId];
+    const jobs = ids.map(id=>queueEpisodeReview(entity,record.id,id,{force:!req.body?.fillMissing})).filter(Boolean);
+    res.json({jobs:jobs.map(j=>({id:j.id,status:j.status}))});
+  } catch(error) {res.status(400).json({error:error.message});}
+});
 
 entitiesRouter.post('/:entity/:id/reset-event-annotations', (req, res) => {
   if (req.body?.confirm !== 'clear_all_event_annotations') return res.status(400).json({ error: 'Explicit annotation reset confirmation is required.' });
@@ -159,10 +176,12 @@ entitiesRouter.patch('/:entity/:id', (req, res) => {
   if (!existing) return res.status(404).json({ error: 'Not found' });
   // A PATCH is a new persisted revision. Never let an old timestamp copied from
   // the current document suppress the revision time.
-  res.json(publicEntity(entity, upsertEntity(entity, req.params.id, {
+  const saved = upsertEntity(entity, req.params.id, {
     ...(req.body || {}),
     updated_date: new Date().toISOString(),
-  })));
+  });
+  if (Array.isArray(req.body?.subjective_near_climax_episodes)) queueChangedEpisodes(entity,existing,saved);
+  res.json(publicEntity(entity, saved));
 });
 
 entitiesRouter.delete('/:entity/:id', (req, res) => {

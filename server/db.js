@@ -24,6 +24,7 @@ export const ENTITY_NAMES = [
   'HowlControlSettings',
   'AudioExport',
   'SessionReviewVideo',
+  'EpisodeVisualReview',
   'CompareAnalysisResult',
   'CascadeAnalysisResult',
   'SessionClusterAnalysis',

@@ -47,6 +47,7 @@ function jobLane(type, meta = {}, payload = {}) {
   if (name === 'cloud_multimodal_analysis') return 'cloud_analysis';
   if (name === 'ai_invoke' || name === 'profile_image_review_full') return 'ai';
   if (name === 'manual_annotation_visual_review') return 'manual_visual';
+  if (name === 'episode_visual_review') return 'manual_visual';
   if (name === 'session_visual_snapshot_review') return 'manual_visual';
   if (name === 'tts_export') return 'tts';
   if (name === 'session_review_video' || name === 'profile_anatomy_video' || name === 'mobile_session_video_render') return 'video';
