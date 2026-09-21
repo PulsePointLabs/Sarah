@@ -26,7 +26,7 @@ const {chromium}=require('C:/Users/benja/.cache/codex-runtimes/codex-primary-run
       segments:[{start_s:10,end_s:30,summary:'Early to late progression.',metrics:[{metric:'Toes',visibility:'partial',confidence:'low',observation:'Possible slight flexion.',progression:'Later decrease.',time_s:22}]}]}}];
     await page.getByText('Independent current episode review.').waitFor();
     await page.getByRole('button',{name:'Fill missing analyses (0)'}).waitFor();
-    await page.getByText('Head-to-toe visual checklist',{exact:false}).click();
+    assert.equal(await page.getByText('Head-to-toe visual checklist',{exact:false}).evaluate(el=>el.parentElement.open),true);
     await page.getByText('Early to late progression.',{exact:false}).click();
     await page.getByText('Possible slight flexion.').waitFor();
     await page.getByRole('button',{name:'0:22.0 ↗',exact:true}).click();

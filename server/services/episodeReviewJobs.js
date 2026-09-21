@@ -17,11 +17,13 @@ export function queueEpisodeReview(entity, id, episodeId, { force = false } = {}
   const previous = getEntity('EpisodeVisualReview', reviewId);
   const active = listJobs({ type: 'episode_visual_review', limit: 1000, meta: { reviewId } }).find(j=>['queued','running'].includes(j.status) && j.meta?.signature === signature);
   if (active) return active;
-  if (!force && previous?.result?.signature === signature) return null;
+  const incompleteComparison = ['error','incomplete','pending'].includes(previous?.result?.comparison_status);
+  if (!force && previous?.result?.signature === signature && !incompleteComparison) return null;
   for (const job of listJobs({ type: 'episode_visual_review', meta: {reviewId} })) {
     if (['queued','running'].includes(job.status)) cancelJob(job.id);
   }
-  const job = createJob('episode_visual_review', { entity, recordId: id, episodeId, signature }, {
+  const resume = previous?.checkpoint?.signature === signature && (previous?.result?.signature !== signature || incompleteComparison);
+  const job = createJob('episode_visual_review', { entity, recordId: id, episodeId, signature, resume }, {
     sessionId: id, reviewId, signature, title: `${episode.kind === 'climax' ? 'Climax' : 'Near climax'} episode review`,
     source: 'episode_visual_review', route: '/video', quietInTray: true, notifications: false,
   });

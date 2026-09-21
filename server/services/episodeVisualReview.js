@@ -23,7 +23,7 @@ export function createEpisodeReviewHandler(invoke, dependencies = {}) {
   const extract = dependencies.extract || extractNativeAnnotationFrames;
   const details = dependencies.details || mainDetailCrops;
   const dense = dependencies.dense || denseFeetEvidence;
-  return async ({ entity, recordId, episodeId, signature }, context) => {
+  return async ({ entity, recordId, episodeId, signature, resume = false }, context) => {
     const record = dbGet(entity, recordId);
     const episode = record?.subjective_near_climax_episodes?.find(e=>e.id === episodeId);
     if (!episode || !completedEpisode(episode) || episodeSignature(episode) !== signature) throw new Error('Episode changed or was removed. Review its current boundaries.');
@@ -41,9 +41,26 @@ export function createEpisodeReviewHandler(invoke, dependencies = {}) {
     const availableStart = offset, availableEnd = offset + source.duration_s - 1/source.fps;
     if (episode.start_s < availableStart || episode.end_s > availableEnd) throw new Error('The linked video does not cover the whole episode. Check its location and synchronization offset, then re-analyze.');
     const start = Math.max(availableStart, episode.start_s - 5), end = Math.min(availableEnd, episode.end_s + 5);
+    const id = episodeReviewId(entity,recordId,episodeId);
+    const assertCurrent = () => {
+      context.signal?.throwIfAborted();
+      const latest = dbGet(entity,recordId)?.subjective_near_climax_episodes?.find(e=>e.id === episodeId);
+      if (!latest || episodeSignature(latest)!==signature) throw new Error('Episode changed during review. Old analysis was not attached to the new boundaries.');
+      if (dbGet('EpisodeVisualReview',id)?.job_id !== context.jobId) throw new Error('A newer review superseded this job.');
+    };
+    const rows = dbList('HeartRateTimeline',{session:recordId}) || [];
+    const evidence = episodeEvidence(episode,rows);
     const windows = episodeSegments(start, end), segments = [];
+    const prior = dbGet('EpisodeVisualReview',id)?.checkpoint;
+    const cached = resume && prior?.signature === signature && prior.source?.path === sourcePath && prior.source?.offset === offset ? prior.segments : [];
+    const report = () => ({signature,episode_id:episodeId,created_at:new Date().toISOString(),source:{path:sourcePath,role,offset,...source},
+      window:{start_s:episode.start_s,end_s:episode.end_s},reviewed_window:{start_s:start,end_s:end},segments:[...segments],evidence,
+      visual_complete:segments.length===windows.length,total_segments:windows.length,
+      synthesis:{overview:'Head-to-toe observations saved below. Episode summary pending.',approach_assessment:'',progression:'',recovery:'',limitations:'',comparisons:[]}});
     for (const [index, window] of windows.entries()) {
       context.signal?.throwIfAborted();
+      const saved = cached?.find(s=>s.start_s===window.start_s && s.end_s===window.end_s);
+      if (saved) { validateEpisodeSegment(saved,metrics,window.start_s,window.end_s); segments.push(saved); continue; }
       context.updateProgress({ phase: 'visual_review', current: index, total: windows.length + 1, message: `Reviewing segment ${index+1} of ${windows.length} · ${feet ? 'Feet / lower body' : 'Main head to toe'}` });
       // A separate workspace per chunk bounds both disk and memory for long episodes.
       segments.push(await workspace(async directory => {
@@ -74,40 +91,52 @@ ${temporal ? `Temporal CV evidence at up to 8 FPS; tracking labels are hypothese
           evidence: { frame_times_s: frames.map(f=>f.frameTimeSeconds+offset), native_full_frame:true, detail_crops:crops.length,
             temporal_cv: Boolean(motion), temporal_sample_times_s:motion?.frame_times_s || [] } };
       }));
+      assertCurrent();
+      dbPut('EpisodeVisualReview',id,{checkpoint:report()});
     }
     context.signal?.throwIfAborted();
     context.updateProgress({phase:'synthesis',current:windows.length,total:windows.length+1,message:'Comparing episode progression and saved physiology…'});
-    const rows = dbList('HeartRateTimeline',{session:recordId}) || [];
-    const evidence = episodeEvidence(episode,rows);
     const earlier = (record.subjective_near_climax_episodes || []).filter(e=>completedEpisode(e) && e.end_s < episode.start_s).sort((a,b)=>a.start_s-b.start_s).map(e=>{
       const review = dbGet('EpisodeVisualReview',episodeReviewId(entity,recordId,e.id))?.result;
       return {id:e.id,kind:e.kind,start_s:e.start_s,end_s:e.end_s,source_camera:episodeRole(e),
         evidence: {...episodeEvidence(e,rows),points:undefined},
         visual_review:review?.signature === episodeSignature(e) ? review.synthesis : null};
     });
-    const synthesis = await invoke({model:'claude_sonnet_4_6',max_tokens:6500,signal:context.signal,
+    const savedResult = dbGet('EpisodeVisualReview',id)?.result;
+    const synthesis = resume && cached?.length === windows.length && savedResult?.signature === signature ? savedResult.synthesis : await invoke({model:'claude_sonnet_4_6',max_tokens:6500,signal:context.signal,
       response_json_schema:{type:'object',properties:{overview:{type:'string'}, approach_assessment:{type:'string'},
         progression:{type:'string'},recovery:{type:'string'},limitations:{type:'string'},
-        comparisons:{type:'array',items:{type:'object',properties:{episode_id:{type:'string'},observation:{type:'string'}},required:['episode_id','observation']}},
-      },required:['overview','approach_assessment','progression','recovery','limitations','comparisons']},
-      prompt:`Write Ben's episode review using the independently analyzed current segment results below, then compare with earlier logged episodes. Neutral physiological reporting, address you/your. Respect the subjective ${episode.kind} marker without grading or disputing it. Describe early, middle, late and post-episode progression. Separate visible findings from telemetry and user labels. ${feet ? 'Feet/lower body ONLY: no genital state or stimulation mechanics.' : ''}
-Approach scores are heuristic evidence estimates, NOT calibrated climax probabilities. Explain score trajectory, peak timing, contributing factors, HR/HRV support and missing data; never invent a percentage chance of climax, a validated threshold, or claim telemetry proves climax. Do not infer a score when unavailable. Do not infer relaxation merely from reduced motion. Report candidate findings as uncertain. Compare only earlier episodes listed here, explicitly noting missing visual reviews or different camera coverage. Use earlier structured reviews for comparison only, never overwrite the current independent interpretation. Avoid repeating every checklist item in this overview. All prose times and durations must use minutes/seconds, never hundreds of seconds.
+      },required:['overview','approach_assessment','progression','recovery','limitations']},
+      prompt:`Write Ben's standalone episode review using the independently analyzed current segment results below. Do not compare to other episodes; comparison is a separate later step. Neutral physiological reporting, address you/your. Respect the subjective ${episode.kind} marker without grading or disputing it. Describe early, middle, late and post-episode progression. Separate visible findings from telemetry and user labels. ${feet ? 'Feet/lower body ONLY: no genital state or stimulation mechanics.' : ''}
+Approach scores are heuristic evidence estimates, NOT calibrated climax probabilities. Explain score trajectory, peak timing, contributing factors, HR/HRV support and missing data; never invent a percentage chance of climax, a validated threshold, or claim telemetry proves climax. Do not infer a score when unavailable. Do not infer relaxation merely from reduced motion. Report candidate findings as uncertain. This report covers ONLY the current episode; no earlier-episode information is supplied. Avoid repeating every checklist item in this overview. All prose times and durations must use minutes/seconds, never hundreds of seconds.
 Current marked window: ${episode.start_s}–${episode.end_s} SESSION seconds. Reviewed with up to 5 seconds either side.
 Current visual segments: ${JSON.stringify(segments)}
-Current physiological evidence: ${JSON.stringify(evidence)}
-Earlier episodes: ${JSON.stringify(earlier)}`,
+Current physiological evidence: ${JSON.stringify(evidence)}`,
     });
-    if (!synthesis || ['overview','approach_assessment','progression','recovery','limitations'].some(k=>typeof synthesis[k] !== 'string') || !Array.isArray(synthesis.comparisons)) throw new Error('Episode synthesis was incomplete. Re-analyze to retry.');
-    if (synthesis.comparisons.some(c=>!earlier.some(e=>e.id===c.episode_id) || typeof c.observation !== 'string')) throw new Error('Episode comparison referenced an unknown earlier event.');
-    context.signal?.throwIfAborted();
-    const latest = dbGet(entity,recordId)?.subjective_near_climax_episodes?.find(e=>e.id === episodeId);
-    if (!latest || episodeSignature(latest)!==signature) throw new Error('Episode changed during review. Old analysis was not attached to the new boundaries.');
-    const id = episodeReviewId(entity,recordId,episodeId);
-    if (dbGet('EpisodeVisualReview',id)?.job_id !== context.jobId) throw new Error('A newer review superseded this job.');
-    const result = {signature,episode_id:episodeId,created_at:new Date().toISOString(),source:{path:sourcePath,role,offset,...source},
-      window:{start_s:episode.start_s,end_s:episode.end_s},reviewed_window:{start_s:start,end_s:end},segments,evidence,synthesis,
-      compared_episode_ids:earlier.map(e=>e.id)};
+    if (!synthesis || ['overview','approach_assessment','progression','recovery','limitations'].some(k=>typeof synthesis[k] !== 'string')) throw new Error('Episode summary was incomplete. The visual checklist is saved; retry to finish.');
+    assertCurrent();
+    const result = {...report(),synthesis:{...synthesis,comparisons:[]},comparison_status:earlier.length?'pending':'not_applicable',compared_episode_ids:[]};
+    // The standalone report is durable BEFORE any optional historical comparison.
     dbPut('EpisodeVisualReview',id,{result,queue_error:null});
+    if (earlier.length) {
+      context.updateProgress({phase:'comparison',current:windows.length,total:windows.length+1,message:'Head-to-toe report saved. Comparing earlier episodes…'});
+      try {
+        const compared = await invoke({model:'claude_sonnet_4_6',max_tokens:4000,signal:context.signal,
+          response_json_schema:{type:'object',properties:{comparisons:{type:'array',items:{type:'object',properties:{episode_id:{type:'string',enum:earlier.map(e=>e.id)},observation:{type:'string'}},required:['episode_id','observation']}}},required:['comparisons']},
+          prompt:`Compare this independently completed physiological episode report with the provided earlier episodes only. Address Ben as you/your, use minute:second times. Preserve the current observations; never grade subjective markers or invent climax probabilities. Keep uncertain findings uncertain and identify differing camera coverage or missing prior visual reviews. ${feet?'Feet/lower-body findings only; exclude genital state and stimulation mechanics.':''} Return only comparisons with the EXACT episode_id from earlier episodes. If no useful comparison is possible, return an empty comparisons array.\nCurrent report: ${JSON.stringify(result)}\nEarlier episodes: ${JSON.stringify(earlier)}`});
+        if (!Array.isArray(compared?.comparisons)) throw new Error('Comparison response was incomplete.');
+        const valid = compared.comparisons.filter(c=>earlier.some(e=>e.id===c.episode_id) && typeof c.observation==='string' && c.observation.trim());
+        result.synthesis.comparisons = valid;
+        result.compared_episode_ids = [...new Set(valid.map(c=>c.episode_id))];
+        result.comparison_status = valid.length===compared.comparisons.length?'complete':'incomplete';
+        if(result.comparison_status==='incomplete')result.comparison_error='An unlinked comparison was omitted. Your complete head-to-toe report is saved.';
+      } catch(error) {
+        result.comparison_status='error';result.comparison_error=`Comparison could not finish: ${error.message}. Your head-to-toe report is saved.`;
+        assertCurrent();dbPut('EpisodeVisualReview',id,{result});
+        throw error;
+      }
+      assertCurrent();dbPut('EpisodeVisualReview',id,{result});
+    }
     context.updateProgress({phase:'complete',current:windows.length+1,total:windows.length+1,message:'Episode review saved'});
     return {reviewId:id,episodeId};
   };

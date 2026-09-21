@@ -7,7 +7,7 @@ import { useEpisodeReviews } from '../hooks/useEpisodeReviews';
 import { completedEpisode, episodeSignature } from '../lib/episodeAnalysis.js';
 export default function SubjectiveNearClimaxEpisodes({ episodes, timelineRows, onSeekTime, onSeek, onToggle, onDelete, error, saving, onRetry, recordId, isExploration }) {
   const analysis = useEpisodeReviews(recordId,isExploration);
-  const missing = episodes.filter(e=>completedEpisode(e) && !analysis.reviews.some(r=>r.episode_id===e.id && r.result?.signature===episodeSignature(e))).length;
+  const missing = episodes.filter(e=>completedEpisode(e) && !analysis.reviews.some(r=>r.episode_id===e.id && r.result?.signature===episodeSignature(e) && !['pending','error','incomplete'].includes(r.result?.comparison_status))).length;
   const phaseModel = useMemo(() => buildPhaseEvidence(timelineRows), [timelineRows]);
   const highApproach = useMemo(() => phaseBandsFromPoints(phaseModel.points).filter((b) => b.phase === "approach"), [phaseModel]);
   return <section className="space-y-3" aria-label="Subjective near-climax episodes">
