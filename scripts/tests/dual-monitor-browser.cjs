@@ -29,6 +29,17 @@ catch { playwright = require(path.join(os.homedir(), '.cache/codex-runtimes/code
     await page.getByRole('button', {name:'Dual monitors',exact:true}).click();
     const monitor = await opened; monitor.on('pageerror', e => errors.push(e.message));
     await monitor.getByRole('button', {name:'Annotate (S)'}).waitFor();
+    const rate = () => page.locator('video:visible').first().evaluate(v=>v.playbackRate);
+    await page.keyboard.press(']'); assert.equal(await rate(),1.1);
+    await page.keyboard.press(']'); assert.equal(await rate(),1.2);
+    await monitor.keyboard.press('['); assert.equal(await rate(),1.1);
+    await monitor.keyboard.press('['); assert.equal(await rate(),1);
+    await page.keyboard.press('Control+]'); assert.equal(await rate(),1);
+    for(let i=0;i<12;i++)await monitor.keyboard.press('[');
+    assert.equal(await rate(),0.1);
+    await monitor.evaluate(()=>{for(let i=0;i<200;i++)window.dispatchEvent(new KeyboardEvent('keydown',{key:']',code:'BracketRight',repeat:true}));});
+    assert.equal(await rate(),16);
+    await page.getByRole('main').getByRole('button',{name:'1×',exact:true}).click();
     await page.keyboard.press('h'); assert.equal(await page.getByRole('button',{name:'Hide controls (H)',exact:true}).isVisible(),false);
     await page.keyboard.press('h'); assert.equal(await page.getByRole('button',{name:'Hide controls (H)',exact:true}).isVisible(),true);
     const seek = async time => {
@@ -54,8 +65,9 @@ catch { playwright = require(path.join(os.homedir(), '.cache/codex-runtimes/code
     await monitor.getByRole('dialog').waitFor();
     const note = monitor.getByRole('dialog').locator('textarea');
     assert.equal(await note.evaluate(el=>el.ownerDocument.activeElement===el),true);
-    await monitor.keyboard.type('S T test H N C M space text', {delay:80});
-    assert.equal(await note.inputValue(), 'S T test H N C M space text');
+    await monitor.keyboard.type('S T test H N C M [brackets] space text', {delay:80});
+    assert.equal(await note.inputValue(), 'S T test H N C M [brackets] space text');
+    assert.equal(await rate(),1);
     assert.equal(await note.evaluate(el=>el.ownerDocument.activeElement===el),true);
     await monitor.keyboard.press('Tab');
     assert.equal(await monitor.evaluate(()=>Boolean(document.activeElement.closest('dialog'))),true);
@@ -70,6 +82,6 @@ catch { playwright = require(path.join(os.homedir(), '.cache/codex-runtimes/code
     assert.equal(await note.inputValue(),'Typing immediately from telemetry');
     await monitor.close();await page.getByRole('dialog').waitFor();await page.getByRole('button',{name:'Cancel',exact:true}).click();await page.getByRole('button',{name:'Dual monitors',exact:true}).waitFor();
     assert.deepEqual(errors,[]);
-    console.log('PASS: dual windows, H controls, shared seek, N/C save, boundary drag, annotation typing/focus/Tab, 720/900px layout and close recovery. All API writes mocked.');
+    console.log('PASS: dual windows, bracket speed steps/repeat/limits/typing guards, H controls, shared seek, N/C save, boundary drag, annotation typing/focus/Tab, 720/900px layout and close recovery. All API writes mocked.');
   } finally { await browser?.close(); fs.rmSync(temp,{recursive:true,force:true}); }
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -818,6 +818,8 @@ export default function VideoSyncPlayer({
   const [isPlaying, setIsPlaying] = useState(false);
   const [videoDuration, setVideoDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const speedShortcutRef = useRef(null);
+  const playbackSpeedRef = useRef(1);
   const [playerHeight, setPlayerHeight] = useState(68);
   const [playerWidth, setPlayerWidth] = useState(66);
   const [telemetryDisplayMode, setTelemetryDisplayMode] = useState("sidebar");
@@ -2173,6 +2175,11 @@ export default function VideoSyncPlayer({
       const inInput = active?.tagName === "INPUT" || active?.tagName === "TEXTAREA" || active?.tagName === "SELECT";
       if (telemetryWindow.target && e.code === "KeyH" && !inInput && !active?.isContentEditable && !e.repeat) { e.preventDefault(); setVideoControlsHidden(v => !v); return; }
       if (active?.isContentEditable) return;
+      if (!inInput && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && (e.key === "[" || e.key === "]")) {
+        e.preventDefault();
+        speedShortcutRef.current?.(e.key === "]" ? 1 : -1);
+        return;
+      }
       if (fullTelemetryView && ["KeyN", "KeyC"].includes(e.code) && !inInput && !active?.isContentEditable && !e.repeat && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault(); toggleSubjectiveRef.current?.(e.code === "KeyC" ? "climax" : "near_climax"); return;
       }
@@ -2329,6 +2336,7 @@ export default function VideoSyncPlayer({
   }, [setSynchronizedVideoTime, videoDuration, videoFeeds, videoOffset]);
 
   const setSpeed = (speed) => {
+    playbackSpeedRef.current = speed;
     setPlaybackSpeed(speed);
     if (videoRef.current) videoRef.current.playbackRate = speed;
     loadedFeeds.forEach((feed) => {
@@ -2336,6 +2344,13 @@ export default function VideoSyncPlayer({
         videoFeedRefs.current[feed.key].playbackRate = speed;
       }
     });
+  };
+
+  speedShortcutRef.current = (direction) => {
+    // Haruna uses additive 0.1x steps; bound them to Chromium's playback range.
+    const speed = Math.min(16, Math.max(0.1, Number((playbackSpeedRef.current + direction * 0.1).toFixed(2))));
+    setSpeed(speed);
+    showQuickNotice(`Playback speed: ${speed.toFixed(2)}×`);
   };
 
   const editSubjective = (id, boundary, time) => {
@@ -2733,6 +2748,7 @@ export default function VideoSyncPlayer({
                 <button type="button" onClick={() => stepFrames(5)} className="rounded-md bg-muted p-1.5 text-[9px] font-bold" title="Forward 5 seconds">+5s</button>
                 <button type="button" onClick={() => setSynchronizedVideoTime(videoDuration)} className="rounded-md bg-muted p-1.5" title="End"><SkipForward className="h-3.5 w-3.5" /></button>
                 <div className="ml-auto flex items-center gap-1">
+                  <span className="font-mono text-[10px] text-primary" title="Playback speed: [ slower / ] faster">{playbackSpeed.toFixed(2)}×</span>
                   {[0.5, 1, 1.5, 2].map((speed) => (
                     <button key={speed} type="button" onClick={() => setSpeed(speed)} className={`rounded px-1.5 py-1 text-[9px] ${playbackSpeed === speed ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>{speed}×</button>
                   ))}
@@ -3469,6 +3485,7 @@ export default function VideoSyncPlayer({
                       <ChevronRight className="h-4 w-4" />
                     </button>
                     <div className="ml-1 flex items-center gap-1 max-[950px]:ml-0">
+                      <span className="font-mono text-[10px] text-primary" title="Playback speed: [ slower / ] faster">{playbackSpeed.toFixed(2)}×</span>
                       {[0.5, 1, 1.5, 2].map((speed) => (
                         <button
                           key={speed}
@@ -3696,6 +3713,7 @@ export default function VideoSyncPlayer({
             {/* Playback speed */}
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider shrink-0">Speed:</span>
+              <span className="font-mono text-[10px] text-primary" title="Playback speed: [ slower / ] faster">{playbackSpeed.toFixed(2)}×</span>
               {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2].map((s) => (
                 <button
                   key={s}

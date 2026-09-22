@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
   "version": "0.1.263",
-  "commit": "a5ae941",
-  "commitMessage": "Analyze marked episodes automatically with visual and physiology reviews",
-  "builtAt": "2026-09-21T02:49:30.251Z"
+  "commit": "6303d8d",
+  "commitMessage": "Preserve episode visual reports independently of historical comparisons",
+  "builtAt": "2026-09-22T22:13:59.342Z"
 };
