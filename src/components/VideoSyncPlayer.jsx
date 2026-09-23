@@ -8,6 +8,7 @@ import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { sidebarLimits, sidebarWidth, isFocusShortcut } from "../lib/fullTelemetryLayout.js";
 import { useSubjectiveEpisodes } from "../hooks/useSubjectiveEpisodes.js";
+import { DEFAULT_VIDEO_VIEW, changeVideoView } from '../lib/videoViewport.js';
 import { toggleSubjectiveEpisode, editSubjectiveEpisode } from "../lib/subjectiveNearClimax.js";
 import SubjectiveNearClimaxEpisodes from "./SubjectiveNearClimaxEpisodes";
 import { Play, Pause, Video, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, Check, X, SkipBack, SkipForward, Mic, MicOff, ArrowUp, ArrowDown, Minus, Sparkles, Maximize2, Minimize2, Heart, Activity, Wind, Move } from "lucide-react";
@@ -818,6 +819,14 @@ export default function VideoSyncPlayer({
   const [isPlaying, setIsPlaying] = useState(false);
   const [videoDuration, setVideoDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [videoView, setVideoView] = useState(DEFAULT_VIDEO_VIEW);
+  const videoViewRef = useRef(DEFAULT_VIDEO_VIEW);
+  const updateVideoView = (key) => {
+    const next = key === 'reset' ? DEFAULT_VIDEO_VIEW : changeVideoView(videoViewRef.current, key);
+    videoViewRef.current = next; setVideoView(next);
+  };
+  useEffect(() => { videoViewRef.current = DEFAULT_VIDEO_VIEW; setVideoView(DEFAULT_VIDEO_VIEW); }, [session.id, activeFeedKey, videoSrc]);
+  const videoViewStyle = {transform:`translate(${videoView.x}%, ${videoView.y}%) scale(${videoView.zoom})`,transformOrigin:'center'};
   const speedShortcutRef = useRef(null);
   const playbackSpeedRef = useRef(1);
   const [playerHeight, setPlayerHeight] = useState(68);
@@ -2175,6 +2184,12 @@ export default function VideoSyncPlayer({
       const inInput = active?.tagName === "INPUT" || active?.tagName === "TEXTAREA" || active?.tagName === "SELECT";
       if (telemetryWindow.target && e.code === "KeyH" && !inInput && !active?.isContentEditable && !e.repeat) { e.preventDefault(); setVideoControlsHidden(v => !v); return; }
       if (active?.isContentEditable) return;
+      if (!inInput && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        const zoomKey = e.key === '+' || e.key === '=' || e.code === 'NumpadAdd' ? '+' : e.key === '-' || e.code === 'NumpadSubtract' ? '-' : null;
+        if (zoomKey || (videoViewRef.current.zoom > 1 && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.code))) {
+          e.preventDefault(); updateVideoView(zoomKey || e.code); return;
+        }
+      }
       if (!inInput && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && (e.key === "[" || e.key === "]")) {
         e.preventDefault();
         speedShortcutRef.current?.(e.key === "]" ? 1 : -1);
@@ -2706,9 +2721,11 @@ export default function VideoSyncPlayer({
                 ref={videoRef}
                 src={videoFeeds[activeFeedKey]?.src || videoSrc}
                 className="h-full w-full object-contain"
+                style={videoViewStyle}
                 playsInline
                 onClick={togglePlay}
               />
+              {videoView.zoom > 1 && <button type="button" onClick={()=>updateVideoView('reset')} className="absolute right-2 top-2 rounded bg-black/75 px-2 py-1 text-xs text-white" title="Reset video zoom and pan">{Math.round(videoView.zoom*100)}% · Arrows pan · Reset zoom</button>}
               {(subjective.episodes.some((e) => e.end_s == null) || subjective.error || subjective.saving || quickNotice?.tone === "error") && <div className="absolute bottom-2 left-2 rounded bg-black/80 px-2 py-1 text-xs text-violet-300" role="status">
                 {quickNotice?.tone === "error" ? quickNotice.message : subjective.error ? <button type="button" onClick={subjective.retry}>Episode save failed — click to retry</button> : subjective.episodes.some((e) => e.end_s == null)
                   ? subjective.episodes.filter((e) => e.end_s == null).map((e) => e.kind === "climax" ? "Climax open · C to end" : "Near climax open · N to end").join(" · ") : "Saving episode…"}
@@ -3235,7 +3252,7 @@ export default function VideoSyncPlayer({
               {!fullTelemetryView && displayedFeeds.map((feed) => {
                 const isMaster = feed.key === activeFeedKey;
                 return (
-                  <div key={feed.key} className="relative flex min-h-0 min-w-0 items-center justify-center bg-black">
+                  <div key={feed.key} className="relative flex min-h-0 min-w-0 items-center justify-center overflow-hidden bg-black">
                     <video
                       ref={isMaster
                         ? videoRef
@@ -3243,6 +3260,7 @@ export default function VideoSyncPlayer({
                       src={feed.src}
                       muted={!isMaster}
                       className="h-full w-full object-contain cursor-pointer"
+                      style={isMaster ? videoViewStyle : undefined}
                       controls={nativeShell && isMaster}
                       playsInline={!nativeShell}
                       onLoadedMetadata={() => {
@@ -3266,6 +3284,7 @@ export default function VideoSyncPlayer({
                         else selectMasterFeed(feed.key);
                       }}
                     />
+                    {isMaster && videoView.zoom > 1 && <button type="button" onClick={()=>updateVideoView('reset')} className="absolute right-2 top-2 rounded bg-black/75 px-2 py-1 text-xs text-white">{Math.round(videoView.zoom*100)}% · Arrows pan · Reset zoom</button>}
                     <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-1 rounded bg-black/65 px-2 py-1 text-[10px] font-medium text-white">
                       {feed.label}
                       {isMaster && <span className="text-primary">Master</span>}
