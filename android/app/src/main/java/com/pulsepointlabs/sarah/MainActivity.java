@@ -17,6 +17,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(SarahBackgroundJobsPlugin.class);
         registerPlugin(SarahMediaPlugin.class);
         registerPlugin(SarahKeepAwakePlugin.class);
+        registerPlugin(SarahH10Plugin.class);
         registerPlugin(SharedVitalImportPlugin.class);
         super.onCreate(savedInstanceState);
         if (getBridge() != null && getBridge().getWebView() != null) {

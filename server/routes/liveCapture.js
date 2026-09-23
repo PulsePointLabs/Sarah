@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import WebSocket from 'ws';
 import { parse } from 'csv-parse/sync';
-import { bulkCreate, getEntity, listEntities, upsertEntity } from '../db.js';
+import { db, bulkCreate, getEntity, listEntities, upsertEntity } from '../db.js';
 import { liveCaptureConfig, uploadDir } from '../config.js';
 import { telemetryEngine } from '../localEngine/index.js';
 import {
@@ -24,6 +24,8 @@ import { summarizeCapturePauseIntervals } from '../services/capturePauseInterval
 import { coalesceDuplicateHrRows } from '../services/hrCaptureMerge.js';
 import { updateLiveCaptureObsState } from '../services/liveCaptureObsState.js';
 import { decideObsSessionLifecycleTransition } from '../services/liveCaptureSessionLifecycle.js';
+
+import { createNativeH10Decoder } from '../services/nativeH10Telemetry.js';
 
 export const liveCaptureRouter = express.Router();
 
@@ -665,6 +667,7 @@ async function appendDirectH10TelemetryRow(telemetry) {
   const hr = cleanHr(telemetry?.heartRate || telemetry?.currentHr || telemetry?.hr);
   if (hr == null) return;
   const timeOffsetMs = epochMs - directH10Recording.startEpochMs;
+  if (timeOffsetMs < 0) return;
   const hrv = telemetry?.hrv || {};
   const multimodal = telemetry?.multimodal || {};
   const confidence = multimodal.signalConfidence || {};
@@ -737,6 +740,7 @@ async function appendDirectH10SensorBatch(sensorBatch, telemetry) {
   })).filter((sample) => sample.timestamp_ms != null && sample.x_mg != null && sample.y_mg != null && sample.z_mg != null) : [];
   if (!ecg.length && !accelerometer.length) return;
   const receivedAt = Number(telemetry?.receivedAt) || Date.now();
+  if (receivedAt < directH10Recording.startEpochMs) return;
   await fs.appendFile(directH10Recording.rawSensorPath, `${JSON.stringify({
     received_at_ms: receivedAt,
     session_offset_ms: receivedAt - directH10Recording.startEpochMs,
@@ -2402,7 +2406,15 @@ liveCaptureRouter.post('/capture-kind', (req, res) => {
   res.json({ ok: true, session: state.session });
 });
 
-liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
+const decodeNativeH10 = createNativeH10Decoder();
+let nativeDeliveryChain = Promise.resolve();
+// Durable receipts prevent a lost HTTP response from duplicating a native packet.
+// Undelivered-to-recording packets retain their raw payload for recovery instead of being discarded.
+db.exec(`CREATE TABLE IF NOT EXISTS native_h10_receipts (
+  packet_id TEXT PRIMARY KEY, received_at INTEGER NOT NULL, payload TEXT, recorded INTEGER NOT NULL DEFAULT 0
+)`);
+
+async function receiveDirectH10(req, res) {
   const collectorId = String(req.body?.collectorId || '').trim();
   const collectorKind = String(req.body?.collectorKind || '').trim();
   if (
@@ -2419,7 +2431,21 @@ liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
     });
     return;
   }
-  let telemetry = normalizeDirectH10Telemetry(req.body || {});
+  const native = req.body?.nativeH10 === true;
+  const packetId = String(req.body?.packetId || '');
+  if (native && (!collectorId || !/^[a-f0-9-]{36}$/i.test(packetId))) return res.status(400).json({ error: 'Invalid native packet identity' });
+  if (native && db.prepare('SELECT recorded FROM native_h10_receipts WHERE packet_id = ?').get(packetId)) {
+    return res.json({ ok: true, nativeAcknowledged: true });
+  }
+  let payload;
+  try { payload = native ? decodeNativeH10(req.body, {
+    baselineHr: state.hr.latestTelemetry?.baselineHr,
+    eventHistory: (currentLiveSessionEntity()?.event_timeline || []).map((event) => ({
+      ...event, timestampMs: Date.parse(state.session.startedAt || '') + Number(event.time_s || 0) * 1000,
+    })),
+  }) : req.body || {}; }
+  catch (error) { return res.status(400).json({ error: error.message }); }
+  let telemetry = normalizeDirectH10Telemetry(payload, native ? payload.measuredAt : Date.now());
   if (!telemetry) {
     res.status(400).json({ error: 'Direct H10 telemetry did not include a valid heart rate.' });
     return;
@@ -2435,24 +2461,54 @@ liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
     req.body?.deviceName || req.body?.device_name || state.hr.directH10.deviceName || '',
     { id: collectorId, kind: collectorKind }
   );
+  const buffered = native && Date.now() - payload.measuredAt > 5000;
+  if (buffered) telemetry.quality = { ...telemetry.quality, stale: true, ageMs: Date.now() - payload.measuredAt };
   if (shouldUseTelemetrySource(HR_SOURCE_IDS.DIRECT_H10)) {
     refreshHrSourceStatus('Direct H10 HR + RR live');
-    telemetry = applySelectedHrTelemetry(telemetry);
-    publishHrTelemetryToOverlay(telemetry);
-    appendDirectH10TelemetryRow(telemetry)
-      .then(() => appendDirectH10SensorBatch(req.body?.sensorBatch, telemetry))
-      .catch((error) => {
-        state.hr.directH10.error = `Direct H10 sensor recording failed: ${error.message || error}`;
-        refreshHrSourceStatus();
-        broadcast('status', state);
-      });
+    if (!buffered) {
+      telemetry = applySelectedHrTelemetry(telemetry);
+      publishHrTelemetryToOverlay(telemetry);
+    }
+    try {
+      await appendDirectH10TelemetryRow(telemetry);
+      await appendDirectH10SensorBatch(payload.sensorBatch, telemetry);
+    } catch (error) {
+      state.hr.directH10.error = `Direct H10 sensor recording failed: ${error.message || error}`;
+      return res.status(503).json({ error: state.hr.directH10.error });
+    }
   } else {
     telemetry = applySelectedHrTelemetry(telemetry);
     publishHrTelemetryToOverlay(telemetry);
     refreshHrSourceStatus();
   }
+  if (native) {
+    const recorded = Boolean(state.hr.recording?.active && !state.hr.recording?.paused
+      && directH10Recording && payload.measuredAt >= directH10Recording.startEpochMs);
+    db.prepare('INSERT OR IGNORE INTO native_h10_receipts (packet_id, received_at, payload, recorded) VALUES (?, ?, ?, ?)')
+      .run(packetId, payload.measuredAt, recorded ? null : JSON.stringify(req.body), recorded ? 1 : 0);
+    if (recorded && payload.gestures?.length) {
+      const events = [...(currentLiveSessionEntity()?.event_timeline || [])];
+      const start = Date.parse(state.session.startedAt || '');
+      for (const gesture of payload.gestures) {
+        const id = `h10_tap_${Math.round(gesture.timestampMs)}`;
+        if (!Number.isFinite(start) || gesture.timestampMs < start || events.some((event) => event.id === id)) continue;
+        events.push({ id, time_s: (gesture.timestampMs - start) / 1000, label: 'H10 tap marker',
+          note: 'Hands-free triple-tap marker detected on the Polar H10 chest sensor.',
+          category: ['physical', 'manual_marker'], source: 'h10_accelerometer_gesture',
+          created_at: new Date(gesture.timestampMs).toISOString() });
+      }
+      patchCurrentLiveSession({ event_timeline: events.sort((a, b) => a.time_s - b.time_s) });
+    }
+  }
   broadcast('status', state);
-  res.json({ ok: true, hr: { latestTelemetry: telemetry, sourceStatus: state.hr.sourceStatus, directH10: state.hr.directH10 } });
+  res.json({ ok: true, nativeAcknowledged: native, hr: { latestTelemetry: telemetry, sourceStatus: state.hr.sourceStatus, directH10: state.hr.directH10 } });
+}
+
+liveCaptureRouter.post('/hr-direct-h10/telemetry', (req, res) => {
+  const run = () => receiveDirectH10(req, res).catch((error) => {
+    if (!res.headersSent) res.status(503).json({ error: error.message });
+  });
+  nativeDeliveryChain = nativeDeliveryChain.then(run, run);
 });
 
 liveCaptureRouter.post('/hr-direct-h10/claim', (req, res) => {

@@ -27,6 +27,7 @@ class SarahCaptureService : Service() {
         }
 
         fun stop(context: Context) {
+            if (H10Collector.enabled) return
             context.stopService(Intent(context, SarahCaptureService::class.java))
         }
     }
@@ -56,6 +57,7 @@ class SarahCaptureService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+        H10Collector.restore(applicationContext)
         return START_STICKY
     }
 

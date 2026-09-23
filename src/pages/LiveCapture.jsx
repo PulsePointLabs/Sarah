@@ -3,6 +3,7 @@ import { liveCuePlaybackMessage } from "@/lib/liveCueAudioReadiness";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { BleClient } from "@capacitor-community/bluetooth-le";
+import { NativeH10 } from "@/lib/nativeH10Collector";
 import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, Footprints, GripVertical, HeartPulse, Maximize2, Mic, MicOff, MoveDown, MoveUp, Pause, Play, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, Volume2, X, Zap } from "lucide-react";
 import {
   Area,
@@ -2200,7 +2201,7 @@ export default function LiveCapture() {
       }
       const tapResult = detectH10TapGesture(parsed.samples, store.tapState);
       store.tapState = tapResult.state;
-      if (tapResult.gesture && !recording?.paused && appendLiveSessionEventsRef.current) {
+      if (tapResult.gesture && !canUseNativeAndroidBle() && !recording?.paused && appendLiveSessionEventsRef.current) {
         const sessionStartMs = Number(recording?.startedAtMs || recording?.startEpochMs || 0);
         const timeS = sessionStartMs > 0
           ? Math.max(0, (tapResult.gesture.timestampMs - sessionStartMs) / 1000)
@@ -2234,6 +2235,11 @@ export default function LiveCapture() {
     const timer = window.setInterval(() => {
       const store = directH10PmdStoreRef.current;
       const telemetry = latestHrRef.current || {};
+      if (canUseNativeAndroidBle() && telemetry.multimodal) {
+        h10MultimodalRef.current = telemetry.multimodal;
+        setH10Multimodal(telemetry.multimodal);
+        return;
+      }
       const recordingStartMs = Number(recording?.startedAtMs || recording?.startEpochMs || 0);
       const eventHistory = liveEventsRef.current.map((event) => ({
         ...event,
@@ -2264,7 +2270,7 @@ export default function LiveCapture() {
 
   const publishDirectH10Measurement = useCallback((parsed, deviceName = "Polar H10") => {
     if (!parsed?.heartRate) return;
-    const receivedAt = Date.now();
+    const receivedAt = parsed.receivedAt || Date.now();
     directH10ReconnectAttemptRef.current = 0;
     setHrLossDialog(null);
     directH10RrRef.current = appendRollingRrIntervals(directH10RrRef.current, parsed.rrIntervalsMs);
@@ -2305,6 +2311,9 @@ export default function LiveCapture() {
       rrCount: directH10RrRef.current.length,
     }));
 
+    // Android saves and sends the original packets natively, even while this screen is suspended.
+    // Never send a second JS copy or replace the native receipt timestamp with screen wake-up time.
+    if (canUseNativeAndroidBle()) return;
     const collector = getH10CollectorIdentity();
     fetch(apiUrl("/live-capture/hr-direct-h10/telemetry"), {
       method: "POST",
@@ -2660,9 +2669,10 @@ export default function LiveCapture() {
       message: `Reconnecting saved H10 (attempt ${attempt + 1})`,
       error: "",
     }));
-    directH10ReconnectTimerRef.current = window.setTimeout(() => {
+    directH10ReconnectTimerRef.current = window.setTimeout(async () => {
       directH10ReconnectTimerRef.current = null;
       if (!directH10ReconnectEnabledRef.current) return;
+      if ((await NativeH10.status().catch(() => null))?.enabled) return;
       const current = directH10StatusRef.current || {};
       const lastPacketMs = timestampMs(current.lastMessageAt);
       const hasFreshPacket = current.connected && Number.isFinite(lastPacketMs) && Date.now() - lastPacketMs <= 9000;
@@ -2763,18 +2773,18 @@ export default function LiveCapture() {
   }, [waitForH10PmdStreamSamples]);
 
   const startNativeH10Pmd = useCallback(async (deviceId) => {
-    await BleClient.stopNotifications(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_DATA_UUID).catch(() => {});
-    await BleClient.stopNotifications(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID).catch(() => {});
+    await NativeH10.stopNotifications(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_DATA_UUID).catch(() => {});
+    await NativeH10.stopNotifications(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID).catch(() => {});
     directH10PmdNativeActiveRef.current = false;
     directH10PmdStoreRef.current = createH10PmdStore();
-    await BleClient.startNotifications(
+    await NativeH10.startNotifications(
       deviceId,
       H10_PMD_SERVICE_UUID,
       H10_PMD_CONTROL_UUID,
       handleH10PmdControl,
       { timeout: 12000 },
     );
-    await BleClient.startNotifications(
+    await NativeH10.startNotifications(
       deviceId,
       H10_PMD_SERVICE_UUID,
       H10_PMD_DATA_UUID,
@@ -2786,7 +2796,7 @@ export default function LiveCapture() {
     const resetMeasurement = async (measurement, command) => {
       const responsePromise = waitForH10PmdControlResponse(measurement, 3, 2500);
       await Promise.all([
-        BleClient.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(command), { timeout: 5000 }),
+        NativeH10.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(command), { timeout: 5000 }),
         responsePromise,
       ]).catch(() => {});
     };
@@ -2801,7 +2811,7 @@ export default function LiveCapture() {
         try {
           const responsePromise = waitForH10PmdControlResponse(measurement, 2, 7000);
           const [, response] = await Promise.all([
-            BleClient.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(command), { timeout: 12000 }),
+            NativeH10.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(command), { timeout: 12000 }),
             responsePromise,
           ]);
           if (!isH10PmdStreamActiveResponse(response)) {
@@ -2812,7 +2822,7 @@ export default function LiveCapture() {
         } catch (error) {
           lastError = error;
           if (attempt < 2) {
-            await BleClient.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(stopCommand), { timeout: 5000 }).catch(() => {});
+            await NativeH10.write(deviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(stopCommand), { timeout: 5000 }).catch(() => {});
             await wait(500);
           }
         }
@@ -3002,20 +3012,21 @@ export default function LiveCapture() {
     }
     directH10IntentionalDisconnectRef.current = true;
     const nativeDeviceId = directH10NativeDeviceIdRef.current;
+    if (canUseNativeAndroidBle() && !nativeDeviceId) await NativeH10.disconnect();
     if (nativeDeviceId) {
       if (directH10PmdNativeActiveRef.current) {
-        await BleClient.write(nativeDeviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ECG_STOP_COMMAND), { timeout: 3000 }).catch(() => {});
-        await BleClient.write(nativeDeviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ACCELEROMETER_STOP_COMMAND), { timeout: 3000 }).catch(() => {});
-        await BleClient.stopNotifications(nativeDeviceId, H10_PMD_SERVICE_UUID, H10_PMD_DATA_UUID).catch(() => {});
-        await BleClient.stopNotifications(nativeDeviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID).catch(() => {});
+        await NativeH10.write(nativeDeviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ECG_STOP_COMMAND), { timeout: 3000 }).catch(() => {});
+        await NativeH10.write(nativeDeviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID, commandDataView(H10_ACCELEROMETER_STOP_COMMAND), { timeout: 3000 }).catch(() => {});
+        await NativeH10.stopNotifications(nativeDeviceId, H10_PMD_SERVICE_UUID, H10_PMD_DATA_UUID).catch(() => {});
+        await NativeH10.stopNotifications(nativeDeviceId, H10_PMD_SERVICE_UUID, H10_PMD_CONTROL_UUID).catch(() => {});
       }
       try {
-        await BleClient.stopNotifications(nativeDeviceId, HEART_RATE_SERVICE_UUID, HEART_RATE_MEASUREMENT_UUID);
+        await NativeH10.stopNotifications(nativeDeviceId, HEART_RATE_SERVICE_UUID, HEART_RATE_MEASUREMENT_UUID);
       } catch {
         // Native BLE notifications may already be stopped.
       }
       try {
-        await BleClient.disconnect(nativeDeviceId);
+        await NativeH10.disconnect(nativeDeviceId);
       } catch {
         // Native BLE may already be disconnected.
       }
@@ -3142,24 +3153,6 @@ export default function LiveCapture() {
         directH10NativeDeviceIdRef.current = device.deviceId;
         directH10DeviceRef.current = device;
 
-        const handleNativeDisconnected = () => {
-          const intentionalDisconnect = directH10IntentionalDisconnectRef.current;
-          directH10IntentionalDisconnectRef.current = false;
-          directH10NativeDeviceIdRef.current = "";
-          directH10TransportRef.current = "";
-          directH10DeviceRef.current = null;
-          directH10RrRef.current = [];
-          setDirectH10Status((prev) => ({
-            ...prev,
-            connected: false,
-            connecting: false,
-            message: intentionalDisconnect ? "Direct H10 disconnected" : "H10 disconnected; automatic reconnect scheduled",
-            rrCount: 0,
-          }));
-          if (!intentionalDisconnect) {
-            scheduleNativeH10Reconnect({ reason: "The native Android BLE connection dropped." });
-          }
-        };
 
         setDirectH10Status((prev) => ({
           ...prev,
@@ -3171,15 +3164,20 @@ export default function LiveCapture() {
 
         // Clear stale Android GATT state before opening a fresh connection to the remembered ID.
         directH10IntentionalDisconnectRef.current = true;
-        await BleClient.disconnect(device.deviceId).catch(() => {});
+        await NativeH10.disconnect(device.deviceId).catch(() => {});
         await wait(250);
         directH10IntentionalDisconnectRef.current = false;
-        await BleClient.connect(device.deviceId, handleNativeDisconnected, { timeout: 15000 });
-        await BleClient.startNotifications(
+        await NativeH10.configure({
+          endpoint: new URL(apiUrl("/live-capture/hr-direct-h10/telemetry"), window.location.href).href,
+          collectorId: getH10CollectorIdentity().id,
+          deviceName,
+        });
+        await NativeH10.connect(device.deviceId);
+        await NativeH10.startNotifications(
           device.deviceId,
           HEART_RATE_SERVICE_UUID,
           HEART_RATE_MEASUREMENT_UUID,
-          (value) => publishDirectH10Measurement(parseHeartRateMeasurement(value), deviceName),
+          (value) => publishDirectH10Measurement({ ...parseHeartRateMeasurement(value), receivedAt: value.receivedAt }, deviceName),
           { timeout: 12000 },
         );
         startNativeH10Pmd(device.deviceId).catch((error) => {
@@ -3350,8 +3348,10 @@ export default function LiveCapture() {
 
     let mounted = true;
     let appStateHandle = null;
-    const reconnectRememberedH10 = () => {
+    const reconnectRememberedH10 = async () => {
       if (!mounted || document.visibilityState === "hidden") return;
+      const native = await NativeH10.status().catch(() => null);
+      if (!mounted || native?.enabled) return; // Native watchdog owns reconnect, including in background.
       const now = Date.now();
       const current = directH10StatusRef.current || {};
       const lastPacketMs = timestampMs(current.lastMessageAt);
@@ -3538,8 +3538,31 @@ export default function LiveCapture() {
   useEffect(() => () => {
     directH10RelaySocketRef.current?.close?.();
     directH10RelaySocketRef.current = null;
-    disconnectDirectH10();
+    if (!canUseNativeAndroidBle()) disconnectDirectH10();
   }, [disconnectDirectH10]);
+
+  useEffect(() => {
+    if (!canUseNativeAndroidBle()) return undefined;
+    let active = true;
+    const refresh = async () => {
+      const native = await NativeH10.status().catch(() => null);
+      if (!active || !native?.enabled) return;
+      directH10NativeDeviceIdRef.current = native.deviceId;
+      directH10TransportRef.current = "native";
+      setDirectH10Status((previous) => ({
+        ...previous,
+        connected: native.connected,
+        deviceName: native.deviceName,
+        lastMessageAt: native.lastPacketAt ? new Date(native.lastPacketAt).toISOString() : previous.lastMessageAt,
+        message: native.pending > 2 ? `H10 recording on phone · ${native.pending} packets waiting to sync`
+          : native.connected ? "Native H10 capture active · background protected" : "Native H10 reconnecting in background",
+        error: native.error || "",
+      }));
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 3000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
 
   useEffect(() => {
     fetch(apiUrl("/live-capture/status")).then((res) => res.json()).then((data) => {
