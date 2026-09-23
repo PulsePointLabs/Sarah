@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
   "version": "0.1.264",
-  "commit": "8e5fe98",
-  "commitMessage": "Attach H10 UI listeners when reconnecting to an already-running service",
-  "builtAt": "2026-09-23T21:50:46.890Z"
+  "commit": "577b3db",
+  "commitMessage": "Coordinate primary and secondary OBS recording without duplicate sessions",
+  "builtAt": "2026-09-23T23:00:28.223Z"
 };
