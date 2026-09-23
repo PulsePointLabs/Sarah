@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { BleClient } from "@capacitor-community/bluetooth-le";
 import { NativeH10 } from "@/lib/nativeH10Collector";
+import ObsRecordingSync from "@/components/live/ObsRecordingSync";
 import { Activity, AlertTriangle, Brain, CheckCircle2, ChevronDown, CircleDot, ExternalLink, FileText, Flag, Footprints, GripVertical, HeartPulse, Maximize2, Mic, MicOff, MoveDown, MoveUp, Pause, Play, Radio, RefreshCw, SlidersHorizontal, Undo2, UploadCloud, Video, Volume2, X, Zap } from "lucide-react";
 import {
   Area,
@@ -7537,6 +7538,8 @@ export default function LiveCapture() {
           </div>
         </div>
       )}
+
+      {!focusView && !mainTelemetryView && <ObsRecordingSync />}
 
       {(recordingTransportActive || liveSession?.activeSessionId) && !focusView && !liveSession?.importing && (
         <button

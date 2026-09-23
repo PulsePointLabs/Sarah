@@ -1203,6 +1203,22 @@ function patchCurrentLiveSession(patch = {}) {
   });
 }
 
+// Secondary recordings are metadata on the primary session, never a session trigger.
+function attachObsRecordingSync(sync = state.hr.obsRecordingSync) {
+  if (!sync?.id) return;
+  let target = db.prepare(`SELECT entity, id, data FROM entities WHERE entity IN ('Session', 'BodyExploration')
+    AND json_extract(data, '$.obs_recording_sync.id') = ? LIMIT 1`).get(sync.id);
+  if (!target && state.session.active && state.session.activeSessionId) {
+    const existing = currentLiveSessionEntity();
+    const started = Date.parse(state.session.startedAt || '');
+    const requested = Date.parse(sync.requestedAt || '');
+    if (existing && !existing.obs_recording_sync && Math.abs(started - requested) < 30000) {
+      target = { entity: state.session.entity || 'Session', id: state.session.activeSessionId, data: JSON.stringify(existing) };
+    }
+  }
+  if (target) upsertEntity(target.entity, target.id, { ...JSON.parse(target.data), obs_recording_sync: sync });
+}
+
 function normalizeRecordingSegment(recording = {}, reason = 'obs_record_stop') {
   const filepath = recording?.filepath || null;
   const outputPath = recording?.obsOutputPath || recording?.outputPath || null;
@@ -2098,11 +2114,18 @@ function connectHrBridge() {
         broadcast('status', state);
       }
 
+      if (msg.type === 'obs_recording_sync') {
+        state.hr.obsRecordingSync = msg.sync || null;
+        attachObsRecordingSync();
+        broadcast('status', state);
+      }
+
       if (msg.type === 'recording_info') {
         state.hr.recording = msg.recording || null;
         updateLiveCaptureObsState(state.hr.recording || {});
         if (state.hr.recording?.active) {
           ensureLiveSession(state.hr.recording);
+          attachObsRecordingSync();
           if (state.hr.recording.paused) markLiveSessionRecordingPaused(state.hr.recording);
           else markLiveSessionRecordingResumed(state.hr.recording);
           if (state.hr.selectedSource === HR_SOURCE_IDS.PULSOID && !pulsoidRecording) {
@@ -2141,6 +2164,7 @@ function connectHrBridge() {
         });
         if (lifecycleTransition === 'start') {
           ensureLiveSession(state.hr.recording);
+          attachObsRecordingSync();
           markLiveSessionRecordingResumed(state.hr.recording);
           if (state.hr.selectedSource === HR_SOURCE_IDS.PULSOID && !pulsoidRecording) {
             createPulsoidRecording(state.hr.recording).catch((error) => {

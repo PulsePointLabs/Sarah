@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { liveCaptureConfig } from '../config.js';
+import { ObsRecordingCoordinator, setObsRecordingCoordinator } from './obsRecordingCoordinator.js';
 
 const TZ = 'America/New_York';
 
@@ -128,6 +129,14 @@ export class HeartRateRelay {
     this.obsLastErrorMessage = null;
     this.obsWasEverConnected = false;
     this.appWss = null;
+    this.stopped = false;
+    this.recordingCoordinator = new ObsRecordingCoordinator({
+      primary: {
+        request: (type) => this.obsRequest(type),
+        status: () => ({ identified: this.obsIdentified, connected: this.obsConnected, recording: this.obsRecordActive, paused: this.obsRecordPaused, error: this.obsError }),
+      },
+      onChange: (snapshot) => this.broadcast({ type: 'obs_recording_sync', sync: snapshot.run }),
+    });
   }
 
   start() {
@@ -137,6 +146,8 @@ export class HeartRateRelay {
     this.appWss.on('listening', () => {
       console.log(`Sarah HR relay running on ws://127.0.0.1:${liveCaptureConfig.hrRelayPort}`);
       this.connectObs();
+      setObsRecordingCoordinator(this.recordingCoordinator);
+      this.recordingCoordinator.start();
     });
     this.appWss.on('error', (error) => {
       const detail = error?.code === 'EADDRINUSE'
@@ -148,6 +159,8 @@ export class HeartRateRelay {
   }
 
   stop() {
+    this.stopped = true;
+    this.recordingCoordinator.close();
     clearTimeout(this.obsReconnectTimer);
     for (const pending of this.obsPending.values()) pending.reject(new Error('HR relay stopped'));
     this.obsPending.clear();
@@ -178,6 +191,7 @@ export class HeartRateRelay {
         paused: this.obsRecordPaused,
         error: this.obsError,
       },
+      obsSync: this.recordingCoordinator.snapshot(),
     };
   }
 
@@ -309,6 +323,7 @@ export class HeartRateRelay {
   }
 
   scheduleObsReconnect(reason = 'disconnected') {
+    if (this.stopped) return;
     this.obsRetryCount += 1;
     this.logObsRetry(reason);
     this.broadcastRelayStatus();
@@ -335,6 +350,8 @@ export class HeartRateRelay {
       const reason = this.obsLastErrorMessage || (this.obsWasEverConnected ? 'websocket disconnected' : 'OBS not listening yet');
       this.obsConnected = false;
       this.obsIdentified = false;
+      for (const pending of this.obsPending.values()) pending.reject(new Error('Primary OBS disconnected'));
+      this.obsPending.clear();
       this.scheduleObsReconnect(reason);
     });
     this.obsSocket.on('error', (error) => {
@@ -375,10 +392,14 @@ export class HeartRateRelay {
       this.broadcastRelayStatus();
       try {
         const status = await this.obsRequest('GetRecordStatus');
-        if (status?.outputActive) {
+        if (status?.outputActive && !this.obsRecordActive) {
           this.obsRecordActive = true;
           this.obsRecordPaused = Boolean(status?.outputPaused);
           this.createNewRecording('obs_already_recording');
+        } else if (!status?.outputActive && this.obsRecordActive) {
+          this.handleObsEvent('RecordStateChanged', { outputState: 'OBS_WEBSOCKET_OUTPUT_STOPPED', outputActive: false });
+        } else if (status?.outputActive && Boolean(status.outputPaused) !== this.obsRecordPaused) {
+          this.handleObsEvent('RecordStateChanged', { outputState: status.outputPaused ? 'OBS_WEBSOCKET_OUTPUT_PAUSED' : 'OBS_WEBSOCKET_OUTPUT_RESUMED', outputActive: true });
         }
       } catch (error) {
         console.warn(`Sarah HR relay could not read initial OBS recording state: ${error.message || error}`);
@@ -407,6 +428,9 @@ export class HeartRateRelay {
   handleObsEvent(eventType, eventData) {
     if (eventType !== 'RecordStateChanged') return;
     const outputState = String(eventData?.outputState || '').toUpperCase();
+    this.recordingCoordinator.primaryEvent(eventData);
+    // STARTING/STOPPING are intentions, not confirmed recording boundaries.
+    if (outputState.endsWith('_STARTING') || outputState.endsWith('_STOPPING')) return;
     const eventAtMs = Date.now();
     const wasActive = this.obsRecordActive;
     this.obsRecordActive = Boolean(eventData.outputActive);
@@ -492,7 +516,14 @@ export class HeartRateRelay {
         return;
       }
       const requestId = String(this.obsRpcId++);
-      this.obsPending.set(requestId, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.obsPending.delete(requestId);
+        reject(new Error(`Primary OBS ${requestType} timed out`));
+      }, 8000);
+      this.obsPending.set(requestId, {
+        resolve: (value) => { clearTimeout(timer); resolve(value); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+      });
       this.obsSocket.send(JSON.stringify({
         op: 6,
         d: { requestType, requestId, requestData },
@@ -506,6 +537,7 @@ export class HeartRateRelay {
     console.log(`Sarah HR relay app client connected id=${clientId} remote=${remoteAddress}`);
     socket.send(JSON.stringify({ type: 'config', config: this.latestConfig }));
     socket.send(JSON.stringify({ type: 'relay_status', relay: this.relayStatus() }));
+    socket.send(JSON.stringify({ type: 'obs_recording_sync', sync: this.recordingCoordinator.run }));
     socket.send(JSON.stringify({
       type: 'recording_info',
       recording: this.currentRecording
@@ -548,7 +580,7 @@ export class HeartRateRelay {
       if (message.type === 'obs_start_record') {
         console.log(`Sarah HR relay OBS command=StartRecord client=${clientId} source=${message.source || 'unknown'} request=${message.requestId || 'none'} requestedAt=${message.requestedAt || 'unknown'}`);
         try {
-          await this.obsRequest('StartRecord');
+          await this.recordingCoordinator.startRecording();
         } catch (error) {
           socket.send(JSON.stringify({ type: 'error', message: error.message }));
         }
@@ -557,7 +589,7 @@ export class HeartRateRelay {
       if (message.type === 'obs_stop_record') {
         console.warn(`Sarah HR relay OBS command=StopRecord client=${clientId} source=${message.source || 'unknown'} request=${message.requestId || 'none'} requestedAt=${message.requestedAt || 'unknown'}`);
         try {
-          const result = await this.obsRequest('StopRecord');
+          const result = await this.recordingCoordinator.stopRecording();
           socket.send(JSON.stringify({ type: 'obs_stop_result', outputPath: result?.outputPath || null }));
         } catch (error) {
           socket.send(JSON.stringify({ type: 'error', message: error.message }));

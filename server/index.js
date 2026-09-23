@@ -25,6 +25,7 @@ import { sarahConversationRouter } from './routes/sarahConversation.js';
 import { profilerRouter } from './routes/profiler.js';
 import { startTelemetryEngine, telemetryEngine } from './localEngine/index.js';
 import { startHeartRateRelay } from './services/hrRelay.js';
+import { obsRecordingRouter } from './routes/obsRecording.js';
 import { restorePersistedJobs } from './services/jobQueue.js';
 import { startMediaRetentionScheduler } from './services/mediaRetention.js';
 
@@ -78,6 +79,7 @@ app.use('/api/functions', functionsRouter);
 app.use('/api/jobs', jobsRouter);
 app.use('/api/status', statusRouter);
 app.use('/api/live-capture', liveCaptureRouter);
+app.use('/api/obs-recording', obsRecordingRouter);
 app.use('/api/live-cues', liveCuesRouter);
 app.use('/api/sarah-brand', sarahBrandRouter);
 app.use('/api/local-vision', localVisionRouter);
