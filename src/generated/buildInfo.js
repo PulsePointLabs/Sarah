@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.264",
-  "commit": "577b3db",
-  "commitMessage": "Coordinate primary and secondary OBS recording without duplicate sessions",
-  "builtAt": "2026-09-23T23:00:28.223Z"
+  "version": "0.1.265",
+  "commit": "8c3e958",
+  "commitMessage": "Fix native H10 queue stalls and expose mobile recovery controls",
+  "builtAt": "2026-09-25T00:20:11.896Z"
 };
