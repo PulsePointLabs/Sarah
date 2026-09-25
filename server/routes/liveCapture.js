@@ -723,6 +723,7 @@ async function appendDirectH10TelemetryRow(telemetry) {
   ].join(',') + '\n';
   await fs.appendFile(directH10Recording.filepath, row, 'utf8');
   directH10Recording.lastEpochMs = epochMs;
+  return true;
 }
 
 async function appendDirectH10SensorBatch(sensorBatch, telemetry) {
@@ -2431,6 +2432,7 @@ liveCaptureRouter.post('/capture-kind', (req, res) => {
 });
 
 const decodeNativeH10 = createNativeH10Decoder();
+const decodeBufferedNativeH10 = createNativeH10Decoder();
 let nativeDeliveryChain = Promise.resolve();
 // Durable receipts prevent a lost HTTP response from duplicating a native packet.
 // Undelivered-to-recording packets retain their raw payload for recovery instead of being discarded.
@@ -2441,10 +2443,13 @@ db.exec(`CREATE TABLE IF NOT EXISTS native_h10_receipts (
 async function receiveDirectH10(req, res) {
   const collectorId = String(req.body?.collectorId || '').trim();
   const collectorKind = String(req.body?.collectorKind || '').trim();
+  const native = req.body?.nativeH10 === true;
+  const historical = native && Number(req.body.measuredAt) > 0 && Date.now() - Number(req.body.measuredAt) > 5000;
   if (
     collectorId
     && directH10CollectorLeaseIsFresh()
     && state.hr.directH10.collectorId !== collectorId
+    && !historical
   ) {
     res.status(409).json({
       error: `Polar H10 is already owned by ${state.hr.directH10.collectorKind || 'another Sarah client'}.`,
@@ -2455,59 +2460,82 @@ async function receiveDirectH10(req, res) {
     });
     return;
   }
-  const native = req.body?.nativeH10 === true;
   const packetId = String(req.body?.packetId || '');
   if (native && (!collectorId || !/^[a-f0-9-]{36}$/i.test(packetId))) return res.status(400).json({ error: 'Invalid native packet identity' });
   if (native && db.prepare('SELECT recorded FROM native_h10_receipts WHERE packet_id = ?').get(packetId)) {
     return res.json({ ok: true, nativeAcknowledged: true });
   }
+  // A sensor can report zero HR while acquiring contact. A rejected packet at
+  // the head of Android's durable FIFO used to block every subsequent reading.
+  // Acknowledge only after preserving the original bytes for recovery.
+  const preserveUnusableNativePacket = (reason) => {
+    db.prepare('INSERT OR IGNORE INTO native_h10_receipts (packet_id, received_at, payload, recorded) VALUES (?, ?, ?, 0)')
+      .run(packetId, Number(req.body.measuredAt) || Date.now(), JSON.stringify(req.body));
+    return res.json({ ok: true, nativeAcknowledged: true, usable: false, warning: reason });
+  };
+  const buffered = native && (Date.now() - Number(req.body.measuredAt) > 5000
+    || Number(req.body.measuredAt) < Number(state.hr.latestTelemetry?.measuredAt || 0));
+  const measuredAt = Number(req.body?.measuredAt);
+  // Old sessions cannot be appended to today's CSV. Archive their original
+  // packets directly so a night-long backlog drains without replaying analysis.
+  if (buffered && Number.isFinite(measuredAt) && measuredAt > 0
+    && (!state.hr.recording?.active || (directH10Recording && measuredAt < directH10Recording.startEpochMs)
+      || (state.hr.directH10.collectorId && state.hr.directH10.collectorId !== collectorId))) {
+    db.prepare('INSERT OR IGNORE INTO native_h10_receipts (packet_id, received_at, payload, recorded) VALUES (?, ?, ?, 0)')
+      .run(packetId, measuredAt, JSON.stringify(req.body));
+    return res.json({ ok: true, nativeAcknowledged: true, archived: true });
+  }
   let payload;
-  try { payload = native ? decodeNativeH10(req.body, {
+  try { payload = native ? (buffered ? decodeBufferedNativeH10 : decodeNativeH10)(req.body, {
     baselineHr: state.hr.latestTelemetry?.baselineHr,
     eventHistory: (currentLiveSessionEntity()?.event_timeline || []).map((event) => ({
       ...event, timestampMs: Date.parse(state.session.startedAt || '') + Number(event.time_s || 0) * 1000,
     })),
   }) : req.body || {}; }
-  catch (error) { return res.status(400).json({ error: error.message }); }
+  catch (error) {
+    if (native) return preserveUnusableNativePacket(error.message);
+    return res.status(400).json({ error: error.message });
+  }
   let telemetry = normalizeDirectH10Telemetry(payload, native ? payload.measuredAt : Date.now());
   if (!telemetry) {
+    if (native) return preserveUnusableNativePacket('H10 packet has no usable heart rate; retained for recovery.');
     res.status(400).json({ error: 'Direct H10 telemetry did not include a valid heart rate.' });
     return;
   }
-  telemetry = enrichHrTelemetry(telemetry);
-  if (state.hr.selectedSource !== HR_SOURCE_IDS.DIRECT_H10) {
-    closePulsoidConnection({ quiet: true });
-    state.hr.selectedSource = HR_SOURCE_IDS.DIRECT_H10;
-    state.hr.selectedSourceLabel = HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10];
+  if (!buffered) telemetry = enrichHrTelemetry(telemetry);
+  let recorded = false;
+  if (!buffered) {
+    if (state.hr.selectedSource !== HR_SOURCE_IDS.DIRECT_H10) {
+      closePulsoidConnection({ quiet: true });
+      state.hr.selectedSource = HR_SOURCE_IDS.DIRECT_H10;
+      state.hr.selectedSourceLabel = HR_SOURCE_LABELS[HR_SOURCE_IDS.DIRECT_H10];
+    }
+    refreshDirectH10TelemetryState(
+      telemetry,
+      req.body?.deviceName || req.body?.device_name || state.hr.directH10.deviceName || '',
+      { id: collectorId, kind: collectorKind }
+    );
   }
-  refreshDirectH10TelemetryState(
-    telemetry,
-    req.body?.deviceName || req.body?.device_name || state.hr.directH10.deviceName || '',
-    { id: collectorId, kind: collectorKind }
-  );
-  const buffered = native && Date.now() - payload.measuredAt > 5000;
   if (buffered) telemetry.quality = { ...telemetry.quality, stale: true, ageMs: Date.now() - payload.measuredAt };
   if (shouldUseTelemetrySource(HR_SOURCE_IDS.DIRECT_H10)) {
-    refreshHrSourceStatus('Direct H10 HR + RR live');
     if (!buffered) {
+      refreshHrSourceStatus('Direct H10 HR + RR live');
       telemetry = applySelectedHrTelemetry(telemetry);
       publishHrTelemetryToOverlay(telemetry);
     }
     try {
-      await appendDirectH10TelemetryRow(telemetry);
+      recorded = Boolean(await appendDirectH10TelemetryRow(telemetry));
       await appendDirectH10SensorBatch(payload.sensorBatch, telemetry);
     } catch (error) {
       state.hr.directH10.error = `Direct H10 sensor recording failed: ${error.message || error}`;
       return res.status(503).json({ error: state.hr.directH10.error });
     }
-  } else {
+  } else if (!buffered) {
     telemetry = applySelectedHrTelemetry(telemetry);
     publishHrTelemetryToOverlay(telemetry);
     refreshHrSourceStatus();
   }
   if (native) {
-    const recorded = Boolean(state.hr.recording?.active && !state.hr.recording?.paused
-      && directH10Recording && payload.measuredAt >= directH10Recording.startEpochMs);
     db.prepare('INSERT OR IGNORE INTO native_h10_receipts (packet_id, received_at, payload, recorded) VALUES (?, ?, ?, ?)')
       .run(packetId, payload.measuredAt, recorded ? null : JSON.stringify(req.body), recorded ? 1 : 0);
     if (recorded && payload.gestures?.length) {
@@ -2524,7 +2552,7 @@ async function receiveDirectH10(req, res) {
       patchCurrentLiveSession({ event_timeline: events.sort((a, b) => a.time_s - b.time_s) });
     }
   }
-  broadcast('status', state);
+  if (!buffered) broadcast('status', state);
   res.json({ ok: true, nativeAcknowledged: native, hr: { latestTelemetry: telemetry, sourceStatus: state.hr.sourceStatus, directH10: state.hr.directH10 } });
 }
 

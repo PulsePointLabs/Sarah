@@ -26,6 +26,11 @@ export const NativeH10 = {
   connect(deviceId) { return plugin.connect({ deviceId }); },
   disconnect() { callbacks.clear(); return plugin.disconnect(); },
   status() { return plugin.status(); },
+  async observe(characteristic, callback) {
+    await observePackets();
+    callbacks.set(characteristic, callback);
+    return () => { if (callbacks.get(characteristic) === callback) callbacks.delete(characteristic); };
+  },
   async startNotifications(deviceId, service, characteristic, callback) {
     await observePackets();
     callbacks.set(characteristic, callback);

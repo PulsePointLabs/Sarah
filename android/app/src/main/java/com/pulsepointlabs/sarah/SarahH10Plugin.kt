@@ -62,19 +62,25 @@ object H10Collector {
     private const val DATA = "fb005c82-02e7-f387-1cad-8acd2d8df0c8"
     private val handler = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadScheduledExecutor()
+    private val liveIo = Executors.newSingleThreadScheduledExecutor()
     private val journal = Executors.newSingleThreadExecutor()
     private lateinit var app: Context
     private lateinit var db: SQLiteDatabase
     private var initialized = false
     private var device: Device? = null
     private var address = ""
-    private var endpoint = ""
+    @Volatile private var endpoint = ""
     private var collectorId = ""
     private var deviceName = "Polar H10"
     @Volatile var enabled = false
         private set
     @Volatile private var lastPacket = 0L
     @Volatile private var deliveryError = ""
+    @Volatile private var liveDeliveryError = ""
+    @Volatile private var signalWarning = ""
+    private data class PendingDelivery(val id: Long, val url: String, val body: String, val receivedAt: Long)
+    @Volatile private var latestDelivery: PendingDelivery? = null
+    @Volatile private var lastDeliveredAt = 0L
     private var connecting = false
     private var generation = 0
     private var connectionId = ""
@@ -89,6 +95,9 @@ object H10Collector {
         db.execSQL("CREATE TABLE IF NOT EXISTS packets (id INTEGER PRIMARY KEY AUTOINCREMENT, endpoint TEXT NOT NULL, body TEXT NOT NULL)")
         initialized = true
         io.scheduleWithFixedDelay({ flush() }, 0, 1, TimeUnit.SECONDS)
+        // One replaceable live candidate, never an unbounded second queue. The
+        // SQLite FIFO still retains every reading until a durable acknowledgement.
+        liveIo.scheduleWithFixedDelay({ flushLive() }, 0, 200, TimeUnit.MILLISECONDS)
         handler.post(object : Runnable {
             override fun run() {
                 if (enabled && !connecting && (device?.isConnected() != true || System.currentTimeMillis() - lastPacket > 7000)) reconnect()
@@ -100,6 +109,8 @@ object H10Collector {
     fun configure(url: String, id: String, name: String) {
         require(URL(url).protocol in listOf("http", "https")) { "Invalid Sarah API address" }
         endpoint = url; collectorId = id; deviceName = name
+        app.getSharedPreferences("h10_collector", 0).edit().putString("endpoint", url)
+            .putString("collectorId", id).putString("deviceName", name).apply()
     }
 
     fun connect(id: String, callback: (CallbackResponse) -> Unit) = handler.post {
@@ -208,7 +219,8 @@ object H10Collector {
             journal.execute {
                 try {
                     val row = ContentValues().apply { put("endpoint", url); put("body", payload.toString()) }
-                    db.insertOrThrow("packets", null, row)
+                    val rowId = db.insertOrThrow("packets", null, row)
+                    latestDelivery = PendingDelivery(rowId, url, payload.toString(), receivedAt)
                 } catch (e: Exception) { deliveryError = "Cannot save H10 queue: ${e.message}" }
             }
         }
@@ -224,20 +236,44 @@ object H10Collector {
                     if (!c.moveToFirst()) return
                     id = c.getLong(0); url = c.getString(1); body = c.getString(2)
                 }
-                val connection = URL(url).openConnection() as HttpURLConnection
-                try {
-                    connection.requestMethod = "POST"; connection.connectTimeout = 5000; connection.readTimeout = 5000
-                    connection.doOutput = true; connection.setRequestProperty("Content-Type", "application/json")
-                    connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                    val code = connection.responseCode
-                    if (code !in 200..299) { deliveryError = "H10 delivery waiting (HTTP $code)"; return }
-                    val response = connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }
-                    if (!response.optBoolean("nativeAcknowledged")) { deliveryError = "Sarah desktop needs the background-capture update"; return }
-                    db.delete("packets", "id=?", arrayOf(id.toString()))
-                    deliveryError = ""
-                } finally { connection.disconnect() }
+                deliver(PendingDelivery(id, url, body, 0))
+                deliveryError = ""
             }
         } catch (e: Exception) { deliveryError = "H10 buffered on phone: ${e.message}" }
+    }
+
+    private fun flushLive() {
+        val pending = latestDelivery ?: return
+        if (System.currentTimeMillis() - pending.receivedAt > 5000 || pending.receivedAt <= lastDeliveredAt) return
+        try {
+            deliver(pending)
+            lastDeliveredAt = pending.receivedAt
+            liveDeliveryError = ""
+        } catch (e: Exception) { liveDeliveryError = "Live H10 upload: ${e.message}" }
+    }
+
+    private fun deliver(pending: PendingDelivery) {
+        // Reuse the API address verified by the foreground app, including for
+        // previously buffered packets whose original network address went stale.
+        val connection = URL(endpoint.ifBlank { pending.url }).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "POST"; connection.connectTimeout = 5000; connection.readTimeout = 5000
+            connection.doOutput = true; connection.setRequestProperty("Content-Type", "application/json")
+            connection.outputStream.use { it.write(pending.body.toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                val message = try {
+                    connection.errorStream?.bufferedReader()?.use { JSONObject(it.readText()).optString("error") }
+                } catch (_: Exception) { null }
+                throw IllegalStateException("HTTP $code${if (message.isNullOrBlank()) "" else ": ${message.take(240)}"}")
+            }
+            val response = connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }
+            check(response.optBoolean("nativeAcknowledged")) { "Sarah desktop needs the background-capture update" }
+            if (pending.receivedAt > 0 && System.currentTimeMillis() - pending.receivedAt <= 5000) {
+                signalWarning = if (response.optBoolean("usable", true)) "" else response.optString("warning", "Check H10 strap contact.")
+            }
+            db.delete("packets", "id=?", arrayOf(pending.id.toString()))
+        } finally { connection.disconnect() }
     }
 
     fun status(): JSONObject {
@@ -245,7 +281,8 @@ object H10Collector {
         if (initialized) db.rawQuery("SELECT count(*) FROM packets", null).use { if (it.moveToFirst()) pending = it.getInt(0) }
         return JSONObject().put("enabled", enabled).put("connected", device?.isConnected() == true)
             .put("deviceId", address).put("deviceName", deviceName)
-            .put("lastPacketAt", lastPacket).put("pending", pending).put("error", deliveryError)
+            .put("lastPacketAt", lastPacket).put("pending", pending).put("lastDeliveredAt", lastDeliveredAt)
+            .put("error", liveDeliveryError.ifBlank { signalWarning.ifBlank { deliveryError } })
     }
 
     fun stop() = handler.post {

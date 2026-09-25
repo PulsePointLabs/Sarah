@@ -1,4 +1,4 @@
-import { computeHrvFromRr } from './hrSources.js';
+import { cleanHr, computeHrvFromRr } from './hrSources.js';
 import { appendBoundedSamples, createH10PmdParserState, deriveH10MultimodalSnapshot, detectH10TapGesture, parseH10PmdFrame } from '../../src/lib/h10Multimodal.js';
 
 export function decodeNativeHeartRate(hex) {
@@ -23,6 +23,7 @@ export function createNativeH10Decoder() {
     const at = Number(packet.measuredAt);
     if (!Number.isFinite(at) || at <= 0 || at > Date.now() + 60_000) throw new Error('Invalid native receipt timestamp');
     const hr = decodeNativeHeartRate(packet.heartRatePacket);
+    if (cleanHr(hr.heartRate) == null) throw new Error('H10 has no usable heart-rate reading. Check strap contact.');
     let store = collectors.get(packet.collectorId);
     if (!store || store.connectionId !== packet.connectionId) {
       store = { connectionId: packet.connectionId, rr: [], ecg: [], accelerometer: [], history: [], parsers: {

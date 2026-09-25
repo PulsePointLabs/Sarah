@@ -39,6 +39,7 @@ try {
   const session = status.session.activeSessionId;
   const packet = { nativeH10: true, packetId: randomUUID(), connectionId: randomUUID(), collectorId: 'phone', collectorKind: 'APK',
     heartRatePacket: '105a00040003', measuredAt: start + 60000, pmdFrames: [] };
+  assert.equal((await post('/hr-direct-h10/claim', { collectorId: 'phone', collectorKind: 'APK' })).status, 200);
   let response = await post('/hr-direct-h10/telemetry', packet);
   assert.equal(response.status, 200);
   assert.equal((await response.json()).nativeAcknowledged, true);
@@ -63,6 +64,27 @@ try {
   status = await (await fetch(base + '/status')).json();
   assert.equal(status.hr.latestTelemetry.heartRate, 90);
   assert.equal(status.hr.latestTelemetry.measuredAt, newer.measuredAt);
+  const zero = { ...newer, packetId: randomUUID(), heartRatePacket: '0000' };
+  response = await post('/hr-direct-h10/telemetry', zero);
+  assert.equal(response.status, 200, 'a zero-HR packet must not wedge the native FIFO');
+  assert.equal((await response.json()).nativeAcknowledged, true);
+  assert.equal(JSON.parse(db.prepare('SELECT payload FROM native_h10_receipts WHERE packet_id = ?').get(zero.packetId).payload).heartRatePacket, '0000', 'unusable readings are preserved, not invented or dropped');
+  const malformed = { ...zero, packetId: randomUUID(), heartRatePacket: '105a00' };
+  response = await post('/hr-direct-h10/telemetry', malformed);
+  assert.equal((await response.json()).nativeAcknowledged, true, 'malformed readings are durably quarantined');
+  const delayed = { ...packet, packetId: randomUUID(), measuredAt: start + 61000 };
+  response = await post('/hr-direct-h10/telemetry', delayed);
+  assert.equal(response.status, 200);
+  status = await (await fetch(base + '/status')).json();
+  assert.equal(Date.parse(status.hr.directH10.lastMeasuredAt), newer.measuredAt, 'backlog cannot replace current connection freshness');
+  assert.equal(status.hr.latestTelemetry.measuredAt, newer.measuredAt);
+  assert.ok(db.prepare('SELECT payload FROM native_h10_receipts WHERE packet_id = ?').get(delayed.packetId).payload, 'out-of-order data remains recoverable even when CSV has advanced');
+  const previousInstall = { ...delayed, packetId: randomUUID(), collectorId: 'old-phone-id', measuredAt: start - 1000 };
+  response = await post('/hr-direct-h10/telemetry', previousInstall);
+  assert.equal((await response.json()).archived, true, 'old collector backlog is archived without stealing the live collector');
+  status = await (await fetch(base + '/status')).json();
+  assert.equal(status.hr.directH10.collectorId, 'phone');
+  assert.equal((await post('/hr-direct-h10/telemetry', { ...previousInstall, packetId: randomUUID(), measuredAt: Date.now() })).status, 409, 'fresh foreign collectors still cannot steal ownership');
   console.log('PASS: original timestamps, durable ack, retry deduplication, collector ownership, shared session, live stream');
   process.exitCode = 0;
 } catch (error) {

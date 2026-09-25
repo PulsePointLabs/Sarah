@@ -19,7 +19,10 @@ function ReadinessCard({ label, item = {}, required = false }) {
         </div>
         {ready ? <CheckCircle2 className="h-5 w-5 shrink-0" /> : <AlertTriangle className="h-5 w-5 shrink-0" />}
       </div>
-      <p className="mt-2 text-xs leading-relaxed opacity-90">{item.helper || "No status received yet."}</p>
+      <p className="mt-2 break-words text-sm leading-relaxed text-foreground">{item.helper || "No status received yet."}</p>
+      {item.error && <p role="alert" className="mt-3 break-words rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm font-semibold text-red-700 dark:text-red-200">{item.error}</p>}
+      {item.action && <button type="button" onClick={item.action.onClick} disabled={item.action.disabled}
+        className="mt-3 min-h-12 w-full rounded-lg border border-current bg-background px-4 py-3 text-sm font-bold text-foreground disabled:opacity-50">{item.action.label}</button>}
       <p className="mt-2 text-[10px] font-bold uppercase tracking-wider opacity-75">{required ? "Required" : "Optional"}</p>
     </div>
   );

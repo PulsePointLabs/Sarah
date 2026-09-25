@@ -67,3 +67,12 @@ test('a real interruption clears the rolling RR window instead of implying conti
   decode(packet({ measuredAt: at + 1000 }));
   assert.equal(decode(packet({ measuredAt: at + 20000 })).hrv.sampleCount, first.hrv.sampleCount);
 });
+
+test('zero HR is rejected before it changes the running physiology window', () => {
+  const decode = createNativeH10Decoder();
+  const first = packet();
+  const before = decode(first);
+  assert.throws(() => decode(packet({ measuredAt: first.measuredAt + 1000, heartRatePacket: '100000040003' })), /strap contact/);
+  const after = decode(packet({ measuredAt: first.measuredAt + 2000 }));
+  assert.equal(after.hrv.sampleCount, before.hrv.sampleCount + 2);
+});

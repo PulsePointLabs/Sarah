@@ -3545,25 +3545,43 @@ export default function LiveCapture() {
   useEffect(() => {
     if (!canUseNativeAndroidBle()) return undefined;
     let active = true;
+    let unobserve;
+    let configuredEndpoint = "";
+    NativeH10.observe(HEART_RATE_MEASUREMENT_UUID, (value) => {
+      publishDirectH10Measurement({ ...parseHeartRateMeasurement(value), receivedAt: value.receivedAt }, directH10StatusRef.current?.deviceName);
+    }).then((remove) => { if (active) unobserve = remove; else remove(); }).catch(() => {});
     const refresh = async () => {
       const native = await NativeH10.status().catch(() => null);
       if (!active || !native?.enabled) return;
+      const endpoint = new URL(apiUrl("/live-capture/hr-direct-h10/telemetry"), window.location.href).href;
+      if (endpoint !== configuredEndpoint) {
+        try {
+          await NativeH10.configure({ endpoint, collectorId: getH10CollectorIdentity().id, deviceName: native.deviceName });
+          configuredEndpoint = endpoint;
+        } catch (error) {
+          if (active) setDirectH10Status((previous) => ({ ...previous, error: error.message || "Could not restore H10 delivery." }));
+          return;
+        }
+      }
+      if (!active) return;
       directH10NativeDeviceIdRef.current = native.deviceId;
       directH10TransportRef.current = "native";
       setDirectH10Status((previous) => ({
         ...previous,
         connected: native.connected,
         deviceName: native.deviceName,
+        pending: native.pending,
         lastMessageAt: native.lastPacketAt ? new Date(native.lastPacketAt).toISOString() : previous.lastMessageAt,
-        message: native.pending > 2 ? `H10 recording on phone · ${native.pending} packets waiting to sync`
-          : native.connected ? "Native H10 capture active · background protected" : "Native H10 reconnecting in background",
+        message: !native.connected ? `H10 reconnecting${native.pending ? ` · ${native.pending.toLocaleString()} readings saved on phone` : ""}`
+          : native.pending > 2 ? `H10 connected · ${native.pending.toLocaleString()} readings saved on phone, waiting to sync`
+          : "Native H10 capture active · background protected",
         error: native.error || "",
       }));
     };
     refresh();
     const timer = window.setInterval(refresh, 3000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, []);
+    return () => { active = false; unobserve?.(); window.clearInterval(timer); };
+  }, [publishDirectH10Measurement]);
 
   useEffect(() => {
     fetch(apiUrl("/live-capture/status")).then((res) => res.json()).then((data) => {
@@ -7241,6 +7259,12 @@ export default function LiveCapture() {
   const captureKindLabel = CAPTURE_KINDS.find((kind) => kind.value === captureKind)?.label || "Session";
   const launchReadiness = {
     h10: {
+      error: hrSourceSettings.source === "direct_h10" ? directH10Status.error : "",
+      action: hrSourceSettings.source === "direct_h10" && (!h10Recent || directH10Status.error) ? {
+        label: directH10Status.connecting ? "Connecting…" : "Reconnect H10",
+        disabled: directH10Status.connecting,
+        onClick: () => connectDirectH10(),
+      } : null,
       label: sharedServerHr ? "Shared HR" : hrSourceSettings.source === "direct_h10" ? "H10" : "HR Source",
       value: sharedServerHr
         ? "Receiving"
@@ -7259,8 +7283,11 @@ export default function LiveCapture() {
       tone: h10Recent || hrSourceSettings.source !== "direct_h10" ? "good" : directH10Status.connected || directH10Status.connecting ? "warn" : "bad",
     },
     hr: {
+      error: hrSourceSettings.source === "direct_h10" ? directH10Status.error : "",
       value: h10Recent ? `${fmtNumber(hrTelemetry?.currentHr, 0)} BPM` : "Waiting",
-      helper: h10Recent ? `${serverHrLabel} packet received.` : "Sarah will wait for an actual HR packet.",
+      helper: h10Recent ? directH10Status.pending > 2 && hrSourceSettings.source === "direct_h10"
+        ? `Live readings arriving · ${directH10Status.pending.toLocaleString()} older readings waiting to sync.`
+        : `${serverHrLabel} packet received.` : "Sarah will wait for an actual HR packet.",
       tone: h10Recent ? "good" : "warn",
     },
     obs: {
