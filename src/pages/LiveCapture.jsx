@@ -5492,6 +5492,8 @@ export default function LiveCapture() {
 
   const startFromLaunchpad = useCallback(async ({ allowWithoutRawSensors = false } = {}) => {
     if (launchInFlightRef.current) return launchInFlightRef.current;
+    // Use the launch gesture before any network await, including when encouragement is off.
+    if (phaseAnnouncements.settings.enabled) phaseAnnouncements.audio.unlock().catch(() => {});
     const transaction = (async () => {
       setLaunchState({ phase: "starting", message: "Starting session...", steps: [], busy: true, error: "" });
       let rawSensorWarning = "";
@@ -5623,6 +5625,8 @@ export default function LiveCapture() {
     verifyDirectH10Pmd,
     waitForH10PmdSamples,
     waitForRecentHrPacket,
+    phaseAnnouncements.settings.enabled,
+    phaseAnnouncements.audio.unlock,
   ]);
 
   const queuePerinealSessionEvents = useCallback((eventsToAdd, extraPatch = {}) => {
