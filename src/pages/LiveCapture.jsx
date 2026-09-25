@@ -1,3 +1,7 @@
+import EditableTelemetryPanel from "@/components/EditableTelemetryPanel";
+import EditableVitalCards from "@/components/EditableVitalCards";
+import PhaseAnnouncementControls from "@/components/PhaseAnnouncementControls";
+import { usePhaseAnnouncements } from "@/hooks/usePhaseAnnouncements";
 import LiveEncouragementControls from "@/components/LiveEncouragementControls";
 import { liveCuePlaybackMessage } from "@/lib/liveCueAudioReadiness";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1522,7 +1526,7 @@ function MetricCard({ icon, label, value, helper, active, level, trendValues = [
   const color = hasLevel ? levelColor(level) : null;
   return (
     <div
-      className={`telemetry-metric-card relative min-w-0 overflow-hidden rounded-xl border transition-shadow ${display ? "min-h-0 p-2.5 pb-4" : large ? "min-h-[10.5rem] p-5 pb-6" : "min-h-[8rem] p-4 pb-5"} ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"} ${beatPulse ? "shadow-[0_0_30px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
+      className={`telemetry-metric-card relative min-w-0 overflow-hidden rounded-xl border transition-shadow ${display ? "flex h-full min-h-0 flex-col justify-center p-2.5 pb-4" : large ? "min-h-[10.5rem] p-5 pb-6" : "min-h-[8rem] p-4 pb-5"} ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"} ${beatPulse ? "shadow-[0_0_30px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
       style={hasLevel ? { borderColor: `${color}9a`, background: `linear-gradient(135deg, ${color}38, ${color}10 55%, hsl(var(--card)) 100%)` } : undefined}
     >
       {beatPulse ? <span key={`metric-beat-${label}-${beatPulse}`} className="pointer-events-none absolute right-4 top-4 h-5 w-5 rounded-full bg-rose-400/45 animate-ping" /> : null}
@@ -1540,7 +1544,7 @@ function MetricCard({ icon, label, value, helper, active, level, trendValues = [
         <StatusDot active={active || hasLevel} />
       </div>
       <div className="mt-1.5 flex min-w-0 items-end justify-between gap-3">
-        <p className={`min-h-[1em] min-w-0 whitespace-nowrap font-bold leading-none tracking-normal text-foreground tabular-nums ${display ? "text-[clamp(2rem,2.7vw,3.5rem)]" : large ? "text-5xl" : "text-3xl"} ${valueClassName}`}>{value}</p>
+        <p className={`min-h-[1em] min-w-0 whitespace-nowrap font-bold leading-none tracking-normal text-foreground tabular-nums ${display ? "text-[clamp(2rem,18cqw,6rem)]" : large ? "text-5xl" : "text-3xl"} ${valueClassName}`}>{value}</p>
         {display && <MetricSparkline values={trendValues} color={color || "hsl(var(--primary))"} />}
       </div>
       {helper && <p className={`mt-1 text-muted-foreground ${display ? "line-clamp-1 text-xs" : large ? "min-h-[2.5rem] text-sm" : "min-h-[2.5rem] text-xs"}`}>{helper}</p>}
@@ -1613,78 +1617,6 @@ function TrendPanel({ title, subtitle, children, empty, heightClass = "h-56", di
         {empty ? <EmptyChartState /> : children}
       </div>
     </div>
-  );
-}
-
-function TelemetryDashboardFrame({
-  id,
-  definition,
-  layout,
-  focusView,
-  editing,
-  dragging,
-  onDragStart,
-  onDragEnd,
-  onDrop,
-  onResize,
-  children,
-}) {
-  if (!focusView) return <div className="contents">{children}</div>;
-  return (
-    <section
-      className={`telemetry-focus-panel group relative min-h-0 min-w-0 overflow-hidden rounded-xl transition ${
-        dragging ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""
-      } ${editing ? "ring-1 ring-primary/35" : ""}`}
-      style={{
-        gridColumn: `span ${layout.cols}`,
-        gridRow: `span ${layout.rows}`,
-      }}
-      onDragOver={(event) => {
-        if (!editing) return;
-        event.preventDefault();
-      }}
-      onDrop={(event) => {
-        if (!editing) return;
-        event.preventDefault();
-        onDrop(id);
-      }}
-    >
-      {editing && (
-        <div className="absolute right-1.5 top-1.5 z-20 flex items-center gap-1 rounded-lg border border-white/20 bg-black/80 p-1 text-white shadow-xl">
-          <button
-            type="button"
-            draggable
-            onDragStart={(event) => {
-              event.dataTransfer.effectAllowed = "move";
-              onDragStart(id);
-            }}
-            onDragEnd={onDragEnd}
-            className="cursor-grab rounded p-1 hover:bg-white/15 active:cursor-grabbing"
-            aria-label={`Move ${definition.label}`}
-            title={`Drag ${definition.label}`}
-          >
-            <GripVertical className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => onResize(id, "cols")}
-            className="rounded px-1.5 py-1 font-mono text-[10px] font-bold hover:bg-white/15"
-            title="Cycle panel width"
-          >
-            W{layout.cols}
-          </button>
-          <button
-            type="button"
-            onClick={() => onResize(id, "rows")}
-            className="rounded px-1.5 py-1 font-mono text-[10px] font-bold hover:bg-white/15"
-            title="Cycle panel height"
-          >
-            H{layout.rows}
-          </button>
-        </div>
-      )}
-      <div className="h-full min-h-0 overflow-hidden">{children}</div>
-    </section>
   );
 }
 
@@ -1791,7 +1723,7 @@ export default function LiveCapture() {
   const [presetModalOpen, setPresetModalOpen] = useState(false);
   const [telemetryDashboardOpen, setTelemetryDashboardOpen] = useState(false);
   const [telemetryDashboard, setTelemetryDashboard] = useState(() => readTelemetryDashboard());
-  const [telemetryLayoutEditing, setTelemetryLayoutEditing] = useState(false);
+  const [selectedTelemetryPanel, setSelectedTelemetryPanel] = useState("");
   const [detailedTelemetryOpen, setDetailedTelemetryOpen] = useState(false);
   const [draggedTelemetryPanelId, setDraggedTelemetryPanelId] = useState("");
   const [calibrationOpen, setCalibrationOpen] = useState(false);
@@ -4456,7 +4388,7 @@ export default function LiveCapture() {
     const handleFocusViewKeyDown = (event) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      setTelemetryLayoutEditing(false);
+      setSelectedTelemetryPanel("");
       setFocusView(false);
     };
     document.body.style.overflow = "hidden";
@@ -4519,17 +4451,6 @@ export default function LiveCapture() {
       next.splice(targetIndex, 0, moved);
       return next;
     });
-  }, []);
-
-  const cycleTelemetryPanelSize = useCallback((id, dimension) => {
-    const options = dimension === "cols" ? [3, 4, 6, 8, 12] : [1, 2, 3, 4, 5, 6, 8];
-    setTelemetryDashboard((previous) => previous.map((panel) => {
-      if (panel.id !== id) return panel;
-      const current = Number(panel[dimension]) || options[0];
-      const currentIndex = options.findIndex((value) => value >= current);
-      const nextValue = options[(currentIndex + 1) % options.length];
-      return { ...panel, [dimension]: nextValue };
-    }));
   }, []);
 
   const clearMediaVideo = useCallback(() => {
@@ -5454,6 +5375,13 @@ export default function LiveCapture() {
     phrases: liveCuePhraseBank.phrases,
     settings: liveCuePhraseBank.settings,
     enabled: liveCueSettings.enabled,
+  });
+  const phaseAnnouncements = usePhaseAnnouncements({
+    prediction, voiceSettings: liveCuePhraseBank.settings, sessionId: liveSession?.activeSessionId,
+    microphoneActive: annotationRecording,
+    sample: { active: recordingActive, measuredAt: Number(hrTelemetry?.measuredAt || hrTelemetry?.receivedAt),
+      hr: hrTelemetry?.currentHr, baselineHr: hrTelemetry?.baselineHr, buildConfidence: hrTelemetry?.buildConfidence,
+      bodyExploration: captureIsBodyExploration },
   });
   const liveCueEngine = useLiveCueEngine({
     captureKind,
@@ -7461,30 +7389,15 @@ export default function LiveCapture() {
   ];
 
   const renderTelemetryDashboardPanel = (id, content) => {
+    if (!focusView) return <div className="contents">{content}</div>;
     const definition = TELEMETRY_DASHBOARD_PANELS.find((panel) => panel.id === id);
-    const savedLayout = telemetryPanelLayout(id);
-    const layout = focusView && telemetryEmgLive && (id === "cardiac" || id === "emg")
-      ? { ...savedLayout, cols: 6, rows: 4 }
-      : savedLayout;
-    return (
-      <TelemetryDashboardFrame
-        id={id}
-        definition={definition}
-        layout={layout}
-        focusView={focusView}
-        editing={telemetryLayoutEditing}
-        dragging={draggedTelemetryPanelId === id}
-        onDragStart={setDraggedTelemetryPanelId}
-        onDragEnd={() => setDraggedTelemetryPanelId("")}
-        onDrop={(targetId) => {
-          reorderTelemetryPanel(draggedTelemetryPanelId, targetId);
-          setDraggedTelemetryPanelId("");
-        }}
-        onResize={cycleTelemetryPanelSize}
-      >
-        {content}
-      </TelemetryDashboardFrame>
-    );
+    return <EditableTelemetryPanel id={id} label={definition.label} layout={telemetryPanelLayout(id)}
+      order={telemetryPanelOrder(id)} selected={selectedTelemetryPanel === id} onSelect={setSelectedTelemetryPanel}
+      onResize={(size) => updateTelemetryPanel(id, size)} onMove={(direction) => moveTelemetryPanel(id, direction)}
+      onReorder={(targetId) => reorderTelemetryPanel(id, targetId)}
+      onReset={() => updateTelemetryPanel(id, { cols: definition.cols, rows: definition.rows })}>
+      {id === "vitals" ? <EditableVitalCards selected={selectedTelemetryPanel} onSelect={setSelectedTelemetryPanel}>{content.props.children}</EditableVitalCards> : content}
+    </EditableTelemetryPanel>;
   };
 
   return (
@@ -7763,6 +7676,7 @@ export default function LiveCapture() {
         </section>
       )}
 
+      {!focusView && <PhaseAnnouncementControls controller={phaseAnnouncements} />}
       <LiveEncouragementControls
         enabled={liveCueSettings.enabled}
         volume={liveCueSettings.volume}
@@ -9452,7 +9366,7 @@ export default function LiveCapture() {
 
       {(telemetryFocusView || (!mediaFocusView && mainTelemetryView) || (!mediaFocusView && launchActive && detailedTelemetryOpen)) && <div
         className={telemetryFocusView
-          ? "fixed inset-0 z-[60] flex h-[100dvh] flex-col overflow-hidden bg-card p-3"
+          ? "fixed inset-0 z-[60] !m-0 flex h-[100dvh] flex-col overflow-hidden bg-card p-3"
           : `rounded-xl border border-border bg-card ${distanceTelemetryView ? "space-y-6 p-5 md:p-6" : "space-y-4 p-4"}`}
         style={telemetryFocusView ? {
           "--background": "204 46% 7%",
@@ -9464,10 +9378,10 @@ export default function LiveCapture() {
           "--border": "199 28% 25%",
         } : undefined}
       >
-        <div className={`flex items-center justify-between gap-3 ${telemetryFocusView ? "shrink-0 pb-2" : ""}`}>
-          <h3 className={`${telemetryFocusView ? "text-2xl md:text-3xl" : distanceTelemetryView ? "text-lg" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex items-center gap-2`}>
+        <div className={`flex min-w-0 flex-wrap items-center justify-between gap-3 ${telemetryFocusView ? "shrink-0 pb-2" : ""}`}>
+          <h3 className={`${telemetryFocusView ? "text-base md:text-3xl" : distanceTelemetryView ? "text-lg" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex min-w-0 flex-wrap items-center gap-2`}>
             <CircleDot className={distanceTelemetryView ? "w-6 h-6" : "w-4 h-4"} /> Live Telemetry
-            {telemetryFocusView && <span className="ml-2 font-mono text-xl font-medium tracking-normal text-muted-foreground">{new Date(liveHealthNowMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}
+            {telemetryFocusView && <span className="ml-2 whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{new Date(liveHealthNowMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}
           </h3>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <span className={`${distanceTelemetryView ? "text-sm" : "text-[10px]"} text-muted-foreground`}>
@@ -9494,7 +9408,7 @@ export default function LiveCapture() {
                 <button
                   type="button"
                   onClick={() => {
-                    setTelemetryLayoutEditing(false);
+                    setSelectedTelemetryPanel("");
                     setFocusView(true, "media");
                   }}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-primary/35 bg-primary/10 px-3 py-2 text-sm font-semibold text-foreground hover:bg-primary/15"
@@ -9538,21 +9452,13 @@ export default function LiveCapture() {
                 >
                   <SlidersHorizontal className="h-4 w-4" /> Customize display
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setTelemetryLayoutEditing((previous) => !previous)}
-                  className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold ${
-                    telemetryLayoutEditing
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-muted text-foreground hover:bg-muted/80"
-                  }`}
-                >
-                  <GripVertical className="h-4 w-4" /> {telemetryLayoutEditing ? "Finish layout" : "Edit layout"}
+                <button type="button" onClick={() => setSelectedTelemetryPanel("")} className="min-h-11 rounded-lg border border-border px-3 text-sm">
+                  {selectedTelemetryPanel ? "Done editing" : "Tap any item to move or resize"}
                 </button>
                 <button
                   type="button"
                   onClick={() => {
-                    setTelemetryLayoutEditing(false);
+                    setSelectedTelemetryPanel("");
                     setFocusView(false);
                   }}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/80"
@@ -9563,6 +9469,8 @@ export default function LiveCapture() {
             )}
           </div>
         </div>
+
+        {telemetryFocusView && <PhaseAnnouncementControls controller={phaseAnnouncements} compact />}
 
         {telemetryDashboardOpen && (
           <div className="fixed inset-0 z-[80] flex items-start justify-end bg-black/55 p-4 pt-20 md:p-7 md:pt-24" onMouseDown={() => setTelemetryDashboardOpen(false)}>
@@ -9662,9 +9570,9 @@ export default function LiveCapture() {
 
         <div
           className={focusView
-            ? "grid min-h-0 flex-1 grid-cols-12 grid-rows-[repeat(15,minmax(0,1fr))] gap-2 overflow-hidden"
+            ? "grid min-h-0 flex-1 grid-cols-12 content-start gap-2 overflow-auto p-1 pb-44"
             : "flex flex-col gap-6"}
-          style={focusView ? { gridAutoFlow: "dense" } : undefined}
+          style={focusView ? { gridAutoRows: "max(48px, calc((100dvh - 180px) / 15))" } : undefined}
         >
 
         {telemetryPanelEnabled("notices") && telemetryNoticesEnabled && latestTelemetryNotice && !focusView && renderTelemetryDashboardPanel("notices", (

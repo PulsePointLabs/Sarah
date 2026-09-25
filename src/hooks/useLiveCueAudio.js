@@ -4,6 +4,9 @@ import { LIVE_CUE_PROFILE_VERSION } from "@/lib/liveCuePhrases";
 import { resumeLiveCueContext } from "@/lib/liveCueAudioReadiness";
 import { loadTTSSettings } from "@/components/TTSButton";
 
+// Independent controls share the speaker without talking over one another.
+let speaking = null;
+
 function flattenCueClips(phrases = {}) {
   const clips = [];
   Object.entries(phrases || {}).forEach(([type, values]) => {
@@ -38,6 +41,7 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
   const audioContextRef = useRef(null);
   const gainRef = useRef(null);
   const activeSourceRef = useRef(null);
+  const ownerRef = useRef(Symbol('live-voice'));
   const decodedRef = useRef(new Map());
   const prepareRef = useRef(null);
   const generationRef = useRef(0);
@@ -143,6 +147,8 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
   }, [enabled, getAudioContext, phrases, settings?.format, settings?.model, settings?.speed, settings?.voice, settings?.ttsProvider]);
 
   const playCue = useCallback((cue, { freshnessMs = 2500 } = {}) => {
+    if (!enabled) return { ok: false, reason: "disabled" };
+    if (speaking && speaking.owner !== ownerRef.current) return { ok: false, reason: "voice_busy" };
     const ctx = audioContextRef.current;
     if (!ctx || ctx.state !== "running") return { ok: false, reason: "audio_context_not_running" };
     if (!cue?.phrase) return { ok: false, reason: "missing_phrase" };
@@ -170,7 +176,9 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
     gain.connect(ctx.destination);
     activeSourceRef.current = source;
     source.start(now + 0.02);
+    speaking = { owner: ownerRef.current, source };
     source.onended = () => {
+      if (speaking?.source === source) speaking = null;
       try { source.disconnect(); gain.disconnect(); } catch {}
       if (activeSourceRef.current === source) activeSourceRef.current = null;
     };
@@ -180,21 +188,23 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
       dispatchLatencyMs: Math.round(performance.now() - startedAt),
       estimatedFirstFrameMs: Math.round(performance.now() - startedAt + 20),
     };
-  }, [settings?.volume]);
+  }, [enabled, settings?.volume]);
 
   const stop = useCallback(() => {
     try {
       activeSourceRef.current?.stop?.();
     } catch {}
     activeSourceRef.current = null;
+    if (speaking?.owner === ownerRef.current) speaking = null;
   }, []);
 
   useEffect(() => {
+    if (!enabled) stop();
     generationRef.current += 1;
     prepareRef.current = null;
     decodedRef.current = new Map();
     setStatus({ phase: enabled ? "idle" : "disabled", message: enabled ? "Sarah encouragement is ready to prepare." : "Sarah encouragement disabled.", decoded: 0, total: 0 });
-  }, [enabled, phraseSignature, settings?.format, settings?.model, settings?.speed, settings?.voice, settings?.ttsProvider]);
+  }, [enabled, phraseSignature, settings?.format, settings?.model, settings?.speed, settings?.voice, settings?.ttsProvider, stop]);
 
   useEffect(() => () => {
     generationRef.current += 1;
