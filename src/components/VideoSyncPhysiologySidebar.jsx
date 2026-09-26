@@ -86,7 +86,7 @@ function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = fa
     <div style={change?.delta ? { backgroundColor: change.delta > 0 ? "rgba(251,146,60,0.09)" : "rgba(56,189,248,0.09)", transition: "background-color 300ms" } : undefined} className={`rounded-xl border border-border bg-background/70 shadow-sm ${compact ? "p-1.5" : "p-3"}`}>
       <div className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
         <Icon className={`h-3.5 w-3.5 ${tone}`} />
-        {label}
+        <span className="metric-full-label">{label}</span><span className="metric-short-label" title={label}>{({ 'Heart Rate': 'HR', 'Blood Pressure': 'BP', 'Respiration': 'Resp', 'Chest Motion': 'Motion' })[label] || label}</span>
       </div>
       <p className={`monitor-metric-value ${compact ? "mt-1 text-base" : "mt-2 text-xl"} font-mono font-bold leading-none ${tone}`}>
         {value}
@@ -96,7 +96,7 @@ function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = fa
         <span className={change.delta > 0 ? "text-orange-300" : change.delta < 0 ? "text-sky-300" : "text-muted-foreground"}>{change.text || `${change.arrow} ${change.delta > 0 ? "+" : ""}${change.delta}`} {unit}</span>
         <span className="text-[9px] text-muted-foreground"> / {change.label || "10s"}</span>
       </p>}
-      <p className={`${compact ? "mt-1 min-h-0 line-clamp-1" : "mt-2 min-h-7"} text-[9px] leading-relaxed text-muted-foreground`}>{detail}</p>
+      <p title={detail} className={`${compact ? "mt-1 min-h-0 line-clamp-1" : "mt-2 min-h-7"} text-[9px] leading-relaxed text-muted-foreground`}>{detail}</p>
     </div>
   );
 }

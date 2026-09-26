@@ -836,8 +836,6 @@ export default function VideoSyncPlayer({
   const telemetryWindow = useTelemetryWindow();
   const [videoControlsHidden, setVideoControlsHidden] = useState(false);
   const [telemetryFocus, setTelemetryFocus] = useState(false);
-  const [singleVideoFill, setSingleVideoFill] = useState(() => localStorage.getItem("sarah.videoSync.singleVideoFill") === "true");
-  useEffect(() => { localStorage.setItem("sarah.videoSync.singleVideoFill", String(singleVideoFill)); }, [singleVideoFill]);
   const [telemetryViewport, setTelemetryViewport] = useState(() => typeof window === "undefined" ? 1920 : window.innerWidth);
   const [preferredSidebarWidth, setPreferredSidebarWidth] = useState(() => {
     try { return Number(localStorage.getItem("sarah.videoSync.sidebarWidth")) || null; } catch { return null; }
@@ -2723,12 +2721,11 @@ export default function VideoSyncPlayer({
               <video
                 ref={videoRef}
                 src={videoFeeds[activeFeedKey]?.src || videoSrc}
-                className="h-full w-full"
-                style={{ ...videoViewStyle, objectFit: !telemetryWindow.target && singleVideoFill ? "cover" : "contain" }}
+                className="h-full w-full object-contain"
+                style={videoViewStyle}
                 playsInline
                 onClick={togglePlay}
               />
-              {!telemetryWindow.target && <button type="button" aria-label="Fill video display" aria-pressed={singleVideoFill} onClick={() => setSingleVideoFill(value => !value)} title="Fit shows the whole frame. Fill keeps proportions and crops edges to fill the available space." className="absolute bottom-2 right-2 z-10 rounded-lg border border-white/30 bg-black/80 px-3 py-2 text-sm font-semibold text-white">{singleVideoFill ? "Fill (crop edges)" : "Fit (whole frame)"}</button>}
               {videoView.zoom > 1 && <button type="button" onClick={()=>updateVideoView('reset')} className="absolute right-2 top-2 rounded bg-black/75 px-2 py-1 text-xs text-white" title="Reset video zoom and pan">{Math.round(videoView.zoom*100)}% · Arrows pan · Reset zoom</button>}
               {(subjective.episodes.some((e) => e.end_s == null) || subjective.error || subjective.saving || quickNotice?.tone === "error") && <div className="absolute bottom-2 left-2 rounded bg-black/80 px-2 py-1 text-xs text-violet-300" role="status">
                 {quickNotice?.tone === "error" ? quickNotice.message : subjective.error ? <button type="button" onClick={subjective.retry}>Episode save failed — click to retry</button> : subjective.episodes.some((e) => e.end_s == null)

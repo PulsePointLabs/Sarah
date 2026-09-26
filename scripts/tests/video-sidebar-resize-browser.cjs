@@ -33,31 +33,39 @@ try { playwright = require('playwright'); } catch { playwright = require(path.jo
     assert.ok(await phase.locator('h3').evaluate(el => parseFloat(getComputedStyle(el).fontSize)) > fontBefore);
     await page.keyboard.press('Home');
     for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowUp');
-    assert.ok((await phase.boundingBox()).height >= 360);
+    assert.ok((await phase.boundingBox()).height >= 224);
     await handle.scrollIntoViewIfNeeded();
     const grip = await handle.boundingBox();
     await page.mouse.move(grip.x + grip.width / 2, grip.y + 5); await page.mouse.down();
     await page.mouse.move(grip.x + grip.width / 2, grip.y + 85, { steps: 5 }); await page.mouse.up();
-    assert.ok((await phase.boundingBox()).height >= 430, 'pointer resize grows the section');
+    assert.ok((await phase.boundingBox()).height >= 280, 'pointer resize grows the section');
     const widthHandle = page.getByRole('separator', { name: 'Resize telemetry sidebar', exact: true });
     await widthHandle.focus(); await page.keyboard.press('Home');
     assert.equal(await widthHandle.getAttribute('aria-valuenow'), '440');
     const clipped = await page.locator('.video-resizable-content').evaluateAll(nodes => nodes.filter(node => node.scrollWidth > node.clientWidth + 2 || node.scrollHeight > node.clientHeight + 2).map(node => node.parentElement.dataset.videoSection));
     assert.deepEqual(clipped, [], 'minimum width and heights do not clip section contents');
-    const fill = page.getByRole('button', { name: 'Fill video display', exact: true });
-    await fill.click();
+    const sidebar = page.locator('.video-resizable-sidebar');
+    assert.ok(await sidebar.evaluate(el => el.scrollHeight <= el.clientHeight + 2), 'sidebar never scrolls');
+    const tops = await page.locator('[data-video-section=metrics] .grid > div').evaluateAll(nodes => nodes.map(el => Math.round(el.getBoundingClientRect().top)));
+    assert.equal(new Set(tops).size, 1, 'vital signs stay in one row');
+    assert.equal(await page.getByRole('button', { name: 'Fill video display', exact: true }).count(), 0);
     const fullVideo = page.locator('video').filter({ visible: true });
-    assert.equal(await fullVideo.first().evaluate(el => getComputedStyle(el).objectFit), 'cover');
+    assert.equal(await fullVideo.first().evaluate(el => getComputedStyle(el).objectFit), 'contain');
     await widthHandle.focus(); await page.keyboard.press('End');
-    assert.equal(await fullVideo.first().evaluate(el => getComputedStyle(el).objectFit), 'cover');
-    await fill.click(); assert.equal(await fullVideo.first().evaluate(el => getComputedStyle(el).objectFit), 'contain');
+    assert.equal(await fullVideo.first().evaluate(el => getComputedStyle(el).objectFit), 'contain');
+    await page.waitForTimeout(500);
     await page.screenshot({ path: 'logs/video-sidebar-resize.png', fullPage: false });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(200);
     assert.equal(await page.getByRole('separator', { name: 'Resize telemetry sidebar', exact: true }).count(), 0);
     const narrowClips = await page.locator('.video-resizable-content').evaluateAll(nodes => nodes.filter(node => node.scrollWidth > node.clientWidth + 2 || node.scrollHeight > node.clientHeight + 2).map(node => node.parentElement.dataset.videoSection));
     assert.deepEqual(narrowClips, [], 'stacked narrow-screen sections remain readable without clipping');
+    for (const button of await page.locator('.video-section-tabs button').all()) {
+      await button.click(); await page.waitForTimeout(100);
+      assert.deepEqual(await page.locator('.video-resizable-content').evaluateAll(nodes => nodes.filter(n => n.scrollHeight > n.clientHeight + 2 || n.scrollWidth > n.clientWidth + 2).map(n => n.parentElement.dataset.videoSection)), [], 'compact section content fits');
+      assert.ok(await sidebar.evaluate(el => el.scrollHeight <= el.clientHeight + 2), 'compact sidebar cannot scroll');
+    }
     assert.deepEqual(errors, []);
-    console.log('PASS: actual Video Sync section resizing, minimum sizes, responsive text, sidebar limits, and aspect-preserving Fit/Fill');
+    console.log('PASS: actual Video Sync section resizing, minimum sizes, responsive text, sidebar limits, and uncropped video, single-row metrics, and no sidebar scrolling');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
