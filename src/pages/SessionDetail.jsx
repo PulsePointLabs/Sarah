@@ -1,3 +1,4 @@
+import { CivetSession } from "../components/CivetCard.jsx";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
@@ -2330,6 +2331,7 @@ export default function SessionDetail() {
         </div>
         </div>}
 
+        <CivetSession sessionId={s.id} />
         {/* EMG */}
         {(emgRows.length > 0 || s.emg_enabled || perinealEmgSummary.hasPerinealEvents || perinealEmgSummary.hasPerinealSetup) && (
           <details id="session-emg" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">

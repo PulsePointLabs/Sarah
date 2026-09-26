@@ -1,3 +1,4 @@
+import { createCivetRouter } from './routes/civet.js';
 import 'dotenv/config.js';
 import express from 'express';
 import cors from 'cors';
@@ -84,6 +85,7 @@ app.use('/api/live-cues', liveCuesRouter);
 app.use('/api/sarah-brand', sarahBrandRouter);
 app.use('/api/local-vision', localVisionRouter);
 app.use('/api/howl', howlRouter);
+app.use('/api/civet', createCivetRouter(getHowlCaptureSession));
 setBloodPressureCaptureResolver(getHowlCaptureSession);
 app.use('/api/blood-pressure', bloodPressureRouter);
 app.use('/api/sarahvs', sarahVsRouter);

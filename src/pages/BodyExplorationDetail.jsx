@@ -1,3 +1,4 @@
+import { CivetSession } from "../components/CivetCard.jsx";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Activity, ArrowLeft, Brain, Clock, Clapperboard, FileText, Gauge, HeartPulse, ListChecks, MessageCircle, Pencil, ScanSearch, Star, Timer, Trash2 } from "lucide-react";
@@ -471,6 +472,7 @@ export default function BodyExplorationDetail() {
             </div>
           </details>
 
+          <CivetSession sessionId={exploration.id} />
           {hasProcedureDetails && (
             <details className="rounded-xl border border-border bg-card p-4">
               <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-primary">Methods, Devices & Setup</summary>

@@ -1,3 +1,4 @@
+import { civetAt, civetEvidence } from "./civet.js";
 // Playback-only, causal review heuristic. Scores are evidence strength, not
 // calibrated probabilities or confirmation of orgasm. No capture/control writes.
 export const PHASE_SAMPLE_MAX_AGE_S = 5;
@@ -37,7 +38,7 @@ export function clipPhaseBands(bands, start, end) {
     .map((b) => ({ ...b, start: Math.max(start, b.start), end: Math.min(end, b.end) }));
 }
 
-export function buildPhaseEvidence(rows = []) {
+export function buildPhaseEvidence(rows = [], civetRows = []) {
   const sorted = rows.map((r) => ({ ...r, t: finite(r.time_offset_s) }))
     .filter((r) => r.t != null && r.t >= 0).sort((a, b) => a.t - b.t);
   const points = [], moments = [];
@@ -81,11 +82,13 @@ export function buildPhaseEvidence(rows = []) {
     const drop = peak - smooth;
     const priorLoad = history.some((p) => p.delta >= 8);
     const warming = !history.length || r.t - history[0].t < 10;
+    const pelvic = civetEvidence(civetAt(civetRows, r.t));
     const contributions = {
       elevation: clamp(delta / 25, 1) * 45,
       rise: clamp(slope / 12, 1) * 20,
       dwell: clamp(dwell / 60, 1) * 10,
       hrv: (compression ?? 0) * 25,
+      pelvic: dwell >= 30 && drop < 5 ? pelvic.contribution : 0,
     };
     const recovery = priorLoad && drop >= 5
       ? Math.round(clamp(drop / 15, 1) * 60 + clamp(-slope / 10, 1) * 25 + (opening ?? 0) * 15) : 0;
@@ -105,7 +108,7 @@ export function buildPhaseEvidence(rows = []) {
       phase = wanted;
     }
     const point = { t: r.t, hr, baseline, smooth, delta, slope, rmssd, hrvUsable, reference,
-      compression, opening, dwell, drop, contributions, phase,
+      compression, opening, dwell, drop, contributions, phase, pelvicEvidence: pelvic.label,
       approach: warming ? null : approach, recovery: warming ? null : recovery, plateau: warming ? null : plateau };
     if (!warming) {
       if (!approachPeak || approach >= approachPeak.approach) approachPeak = point;

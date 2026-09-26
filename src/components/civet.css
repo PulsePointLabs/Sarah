@@ -1,0 +1,30 @@
+.civet-card {height:100%;min-height:0;min-width:0;display:flex;flex-direction:column;gap:4px;padding:8px;border:1px solid;border-radius:12px;color:#fff;container-type:inline-size;transition:background-color .18s linear;overflow:hidden;}
+.civet-card header,.civet-card footer,.civet-main {display:flex;justify-content:space-between;align-items:center;gap:6px;flex-shrink:0;}
+.civet-card header {font-size:clamp(11px,2.7cqi,18px);}
+.civet-card header span {font-size:11px;}
+.civet-main strong {font-size:clamp(28px,10cqi,72px);font-variant-numeric:tabular-nums;line-height:1.1;}
+.civet-main>b {font-size:clamp(20px,6cqi,44px);font-variant-numeric:tabular-nums;}
+.civet-main small {font-size:12px;display:inline-block;}
+.civet-main>b small {display:block;}
+.civet-state {min-height:18px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.civet-stats {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;font-size:11px;flex-shrink:0;}
+.civet-stats b {display:block;font-size:clamp(15px,4cqi,25px);font-variant-numeric:tabular-nums;}
+.civet-card svg {width:100%;flex:1;min-height:24px;}
+.civet-card footer {font-size:10px;}
+.civet-compact {padding:4px;gap:2px;}
+.civet-compact .civet-main strong {font-size:clamp(24px,6cqi,40px);}
+.civet-compact .civet-stats b {display:inline;font-size:12px;}
+.civet-compact header span,.civet-compact footer {display:none;}
+.video-resizable-content .civet-card :is(span,b,strong,small) {font-size:revert !important;}
+.civet-card {container-type:size;}
+@container (max-height:220px) {
+  .civet-main strong {font-size:28px;}
+  .civet-main>b {font-size:22px;}
+  .civet-stats b {font-size:14px;}
+  .civet-card header {font-size:11px;}
+  .civet-card footer {display:none;}
+}
+.video-resizable-content .civet-card .civet-main strong {font-size:clamp(26px,6cqi,40px) !important;}
+.video-resizable-content .civet-card .civet-main>b {font-size:24px !important;}
+.video-resizable-content .civet-card .civet-main small {font-size:11px !important;}
+.video-resizable-content .civet-card .civet-stats b {font-size:14px !important;}

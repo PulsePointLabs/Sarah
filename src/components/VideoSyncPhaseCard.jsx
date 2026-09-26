@@ -77,7 +77,8 @@ export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, x
         {!physiologicalLoad && current.contributions && <p>Approach contributions: HR elevation {Math.round(current.contributions.elevation)}/45; rising HR {Math.round(current.contributions.rise)}/20;
           elevated duration {Math.round(current.contributions.dwell)}/10; HRV compression {Math.round(current.contributions.hrv)}/25. Peak decline reduces approach.</p>}
         {physiologicalLoad && current.loadContributions && <p>Load contributions: HR elevation {Math.round(current.loadContributions.elevation)}/65; rising HR {Math.round(current.loadContributions.rise)}/10; HRV compression {Math.round(current.loadContributions.hrv)}/25. Sustained load reflects persistent elevation; recovery reflects a fall from a recent elevated HR peak.</p>}
-        <p className="mt-1">States require 3s persistence; initial warm-up 10s. Gaps over 5s reset evidence. HR and HRV share a cardiac source; movement, breathing and visual findings are not scored here.</p>
+        <p>{current.pelvicEvidence || ""}</p>
+        <p className="mt-1">States require 3s persistence; initial warm-up 10s. Gaps over 5s reset evidence. HR and HRV share a cardiac source; CIVET pressure can add bounded supporting evidence when recorded; movement, breathing and visual findings are not scored here.</p>
         {latestMarker && <p className="mt-1 text-violet-300">{latestMarker.label} at {clock(latestMarker.t)} — recorded separately, never used to boost the score.</p>}
         <p className="mt-1">All key moments observed through this playhead ({elapsedMoments.length}):</p>
         <div className="mt-1 flex flex-wrap gap-1">{elapsedMoments.map((m, i) => <button key={i} type="button" onClick={() => onSeek(m.t)}

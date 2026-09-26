@@ -1,3 +1,7 @@
+import CivetCard from "@/components/CivetCard.jsx";
+import CivetSetup from "@/components/CivetSetup.jsx";
+import { useCivetLive } from "@/hooks/useCivet.js";
+import { withCivetEvidence } from "@/lib/civet.js";
 import StableTelemetryText from "@/components/StableTelemetryText";
 import EditableTelemetryPanel from "@/components/EditableTelemetryPanel";
 import ViewportTelemetryGrid from "@/components/ViewportTelemetryGrid";
@@ -116,6 +120,7 @@ const TELEMETRY_DASHBOARD_PANELS = [
   { id: "threshold", label: "Threshold Load Matrix", helper: "Approach, plateau, confidence, and Howl dose", cols: 6, rows: 3 },
   { id: "respiratory", label: "Respiratory & Somatic Response", helper: "Breathing and chest motion", cols: 6, rows: 3 },
   { id: "cardiac", label: "Cardiac timeline", helper: "HR, baseline, HRV, and approach", cols: 12, rows: 4 },
+  { id: "civet", label: "CIVET pelvic response", helper: "Pressure and contraction evidence", cols: 6, rows: 4 },
   { id: "emg", label: "EMG timeline", helper: "Perineal or dual-channel muscle activity", cols: 12, rows: 4, enabled: false },
 ];
 
@@ -1726,6 +1731,8 @@ export default function LiveCapture() {
   useEffect(() => { localStorage.setItem("pulsepoint.telemetryHidden.v1", JSON.stringify(hiddenTelemetryItems)); }, [hiddenTelemetryItems]);
   const setTelemetryItemVisible = (id, visible) => setHiddenTelemetryItems(old => visible ? old.filter(item => item !== id) : [...new Set([...old, id])]);
   const [telemetryControlsOpen, setTelemetryControlsOpen] = useState(false);
+  const civet = useCivetLive();
+  const [civetSetupOpen, setCivetSetupOpen] = useState(false);
   const [emgSetupOpen, setEmgSetupOpen] = useState(false);
   const [emgNames, setEmgNames] = useState(() => { try { return JSON.parse(localStorage.getItem("pulsepoint.emgNames")) || []; } catch { return []; } });
   const [telemetryDashboardOpen, setTelemetryDashboardOpen] = useState(false);
@@ -3722,6 +3729,7 @@ export default function LiveCapture() {
   const prediction = useMemo(() => computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory, {
     sessionTimeSec: getCurrentSessionTime(),
   }), [emgTelemetry, getCurrentSessionTime, hrTelemetry, telemetryHistory]);
+  const monitoringPrediction = useMemo(() => withCivetEvidence(prediction, civet.latest, Math.max(emgTelemetry?.left_pct || emgTelemetry?.level_pct || 0, emgTelemetry?.right_pct || 0)), [prediction, civet.latest, emgTelemetry]);
   const recordingTransportActive = Boolean(recording?.active);
   const recordingPaused = Boolean(recordingTransportActive && recording?.paused);
   const recordingActive = Boolean(recordingTransportActive && !recordingPaused);
@@ -3737,11 +3745,11 @@ export default function LiveCapture() {
 
     const now = Date.now();
     const highProbability = Boolean(
-      prediction.nearClimax >= 68
-      && prediction.buildEligibleForNearClimax
-      && prediction.confirmationCount >= 2
-      && prediction.controllerConfidence >= 50
-      && prediction.multimodalTrusted
+      monitoringPrediction.nearClimax >= 68
+      && monitoringPrediction.buildEligibleForNearClimax
+      && monitoringPrediction.confirmationCount >= 2
+      && monitoringPrediction.controllerConfidence >= 50
+      && monitoringPrediction.multimodalTrusted
     );
     if (highProbability) {
       tracker.belowSince = 0;
@@ -3756,16 +3764,16 @@ export default function LiveCapture() {
         id: `approach_candidate_${tracker.count}_${Math.round(getCurrentSessionTime())}`,
         time_s: getCurrentSessionTime(),
         label: `High-probability physiology candidate ${tracker.count}`,
-        note: `Physiology-only approach candidate: near-climax watch reached ${prediction.nearClimax}% with ${prediction.confirmationCount} signal families. Post-session visual or event evidence is required before confirmation.`,
+        note: `Physiology-only approach candidate: near-climax watch reached ${monitoringPrediction.nearClimax}% with ${monitoringPrediction.confirmationCount} signal families. Post-session visual or event evidence is required before confirmation.`,
         category: ["physiology", "phase_detection", "review_candidate"],
         annotation_tags: ["approach_candidate", "high_probability", "trend_detected", "needs_context_confirmation"],
         source: "live_climax_prediction",
         created_at: new Date().toISOString(),
         prediction: {
-          near_climax: prediction.nearClimax,
-          controller_confidence: prediction.controllerConfidence,
-          confirmation_count: prediction.confirmationCount,
-          reason: prediction.reason,
+          near_climax: monitoringPrediction.nearClimax,
+          controller_confidence: monitoringPrediction.controllerConfidence,
+          confirmation_count: monitoringPrediction.confirmationCount,
+          reason: monitoringPrediction.reason,
           evidence_status: "physiology_only",
         },
       })?.catch?.(() => {});
@@ -3773,13 +3781,13 @@ export default function LiveCapture() {
     }
 
     tracker.candidateSince = 0;
-    if (!tracker.active || prediction.nearClimax >= 52) return;
+    if (!tracker.active || monitoringPrediction.nearClimax >= 52) return;
     if (!tracker.belowSince) tracker.belowSince = now;
     if (now - tracker.belowSince >= 8000) {
       tracker.active = false;
       tracker.belowSince = 0;
     }
-  }, [getCurrentSessionTime, prediction, recordingPaused, recordingTransportActive]);
+  }, [getCurrentSessionTime, monitoringPrediction, recordingPaused, recordingTransportActive]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3947,7 +3955,7 @@ export default function LiveCapture() {
   const leftEmgLevel = readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct);
   const rightEmgLevel = readNumber(emgTelemetry?.right_pct);
   const displayedHr = heldCurrentHr;
-  const displayedNearClimax = heldTelemetryValue(telemetryHistory, "nearClimax", recentHrPacket ? prediction.nearClimax : null);
+  const displayedNearClimax = heldTelemetryValue(telemetryHistory, "nearClimax", recentHrPacket ? monitoringPrediction.nearClimax : null);
   const displayedRrCount = heldTelemetryValue(telemetryHistory, "rrCount", rrCount);
   const displayedRmssd = heldTelemetryValue(telemetryHistory, "hrvRmssd", hrvRmssd);
   const displayedSdnn = heldTelemetryValue(telemetryHistory, "hrvSdnn", hrvSdnn);
@@ -7095,12 +7103,12 @@ export default function LiveCapture() {
             {!captureIsBodyExploration && (
               <div
                 className="min-h-[12.25rem] rounded-xl border p-4"
-                style={{ borderColor: `${levelColor(prediction.nearClimax)}80`, background: `linear-gradient(135deg, ${levelColor(prediction.nearClimax)}28, hsl(var(--card)) 65%)` }}
+                style={{ borderColor: `${levelColor(monitoringPrediction.nearClimax)}80`, background: `linear-gradient(135deg, ${levelColor(monitoringPrediction.nearClimax)}28, hsl(var(--card)) 65%)` }}
               >
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <p className="text-sm font-semibold uppercase tracking-wider text-primary">Real-Time Phase Watch</p>
-                    <p className="mt-1 h-6 truncate text-base font-medium leading-6 text-foreground">{prediction.label}</p>
+                    <p className="mt-1 h-6 truncate text-base font-medium leading-6 text-foreground">{monitoringPrediction.label}</p>
                   </div>
                   <Brain className="h-5 w-5 text-primary" />
                 </div>
@@ -7108,11 +7116,11 @@ export default function LiveCapture() {
                   {nearClimaxEpisodeCount} high-probability episode{nearClimaxEpisodeCount === 1 ? "" : "s"} this session
                 </p>
                 <div className="mt-3 h-3 overflow-hidden rounded-full bg-muted">
-                  <div className="h-full rounded-full transition-all" style={{ width: `${prediction.nearClimax}%`, backgroundColor: levelColor(prediction.nearClimax) }} />
+                  <div className="h-full rounded-full transition-all" style={{ width: `${monitoringPrediction.nearClimax}%`, backgroundColor: levelColor(monitoringPrediction.nearClimax) }} />
                 </div>
-                <p className="mt-3 line-clamp-3 min-h-[3.75rem] text-sm leading-5 text-muted-foreground">{prediction.reason || "\u00a0"}</p>
+                <p className="mt-3 line-clamp-3 min-h-[3.75rem] text-sm leading-5 text-muted-foreground">{monitoringPrediction.reason || "\u00a0"}</p>
                 <p className="mt-2 line-clamp-2 min-h-8 text-xs leading-4 text-muted-foreground">
-                  {prediction.hrvExplanation}
+                  {monitoringPrediction.hrvExplanation}
                 </p>
               </div>
             )}
@@ -7415,7 +7423,9 @@ export default function LiveCapture() {
 
   return (
     <div className={`${focusView ? "h-screen overflow-hidden bg-[#071016] p-0" : "p-4 md:p-6"} space-y-4`}>
+      {civetSetupOpen && <CivetSetup live={civet} onClose={() => setCivetSetupOpen(false)} />}
       {emgSetupOpen && <EmgSetup onClose={() => { setEmgSetupOpen(false); try { setEmgNames(JSON.parse(localStorage.getItem("pulsepoint.emgNames")) || []); } catch {} }} onConnected={() => updateTelemetryPanel("emg", { enabled: true })} />}
+      {!focusView && <button type="button" className="rounded-lg border border-primary px-4 py-2" onClick={() => setCivetSetupOpen(true)}>Connect CIVET · pelvic pressure</button>}
       {hrLossDialog && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4">
           <div
@@ -8286,9 +8296,9 @@ export default function LiveCapture() {
               <SetupTile
                 icon={<Brain className="h-3.5 w-3.5 text-primary" />}
                 label="Phase Watch"
-                value={`${prediction.nearClimax}%`}
-                helper={prediction.reason || prediction.label}
-                active={prediction.nearClimax >= 35 || prediction.recovery >= 35}
+                value={`${monitoringPrediction.nearClimax}%`}
+                helper={monitoringPrediction.reason || monitoringPrediction.label}
+                active={monitoringPrediction.nearClimax >= 35 || monitoringPrediction.recovery >= 35}
               >
                 <button
                   type="button"
@@ -9401,6 +9411,7 @@ export default function LiveCapture() {
           {telemetryFocusView && <div className="flex items-center gap-3"><span aria-label="Session timer" className="whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{launchActive && resolveLiveSessionStartMs() ? fmtMmSs(Math.max(0, (liveHealthNowMs - resolveLiveSessionStartMs()) / 1000)) : "00:00"}</span><button type="button" aria-label="Telemetry controls" aria-expanded={telemetryControlsOpen} onClick={() => setTelemetryControlsOpen(true)} className="rounded-lg border border-border px-2 py-1 text-sm">Controls</button></div>}
           <div hidden={telemetryFocusView && !telemetryControlsOpen} className={telemetryFocusView ? "telemetry-top-controls" : ""}>
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <button type="button" onClick={() => setCivetSetupOpen(true)} className="min-h-11 rounded-lg border border-primary/40 px-3 text-sm font-semibold">Connect CIVET</button>
             <button type="button" onClick={() => setEmgSetupOpen(true)} className="min-h-11 rounded-lg border border-primary/40 px-3 text-sm font-semibold">Connect EMG</button>
             <span className={`${distanceTelemetryView ? "text-sm" : "text-[10px]"} text-muted-foreground`}>
               HR {fmtTime(status?.hr?.lastMessageAt)}{telemetryEmgLive ? ` · EMG ${fmtTime(status?.emg?.lastMessageAt || status?.emg?.lastPollAt)}` : ""}
@@ -9701,7 +9712,7 @@ export default function LiveCapture() {
                 icon={<Brain className="w-4 h-4" />}
                 label="Near-Climax Watch"
                 value={`${fmtNumber(displayedNearClimax, 0)}%`}
-                helper={`${nearClimaxEpisodeCount} high-probability episode${nearClimaxEpisodeCount === 1 ? "" : "s"} · ${prediction.confidenceBand}`}
+                helper={`${nearClimaxEpisodeCount} high-probability episode${nearClimaxEpisodeCount === 1 ? "" : "s"} · ${monitoringPrediction.confidenceBand}`}
                 active={displayedNearClimax >= 42}
                 level={displayedNearClimax}
                 trendValues={telemetryTrendValues(telemetryHistory, "nearClimax", displayedNearClimax)}
@@ -9769,9 +9780,9 @@ export default function LiveCapture() {
                 <Brain className="w-4 h-4" /> Real-Time Phase Watch
               </p>
               <StableTelemetryText enabled={focusView} className="telemetry-phase-label mt-1"><div className="flex flex-wrap items-center gap-2">
-                <p className="text-lg font-medium text-foreground">{prediction.label}</p>
+                <p className="text-lg font-medium text-foreground">{monitoringPrediction.label}</p>
                 <span className="rounded-full border border-rose-400/45 bg-rose-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-rose-600 dark:text-rose-300">
-                  {prediction.physiologicalIntensityLabel}
+                  {monitoringPrediction.physiologicalIntensityLabel}
                 </span>
                 {howlSarahAutoEnabled && (
                   <span className="rounded-full border border-cyan-400/45 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-700 dark:text-cyan-300">
@@ -9780,7 +9791,7 @@ export default function LiveCapture() {
                 )}
               </div></StableTelemetryText>
               <StableTelemetryText enabled={focusView} className="telemetry-phase-explanation mt-1 text-sm leading-relaxed text-muted-foreground">
-                {prediction.hrvExplanation}
+                {monitoringPrediction.civetEvidence ? `${monitoringPrediction.hrvExplanation} · ${monitoringPrediction.civetEvidence}` : monitoringPrediction.hrvExplanation}
               </StableTelemetryText>
               {!focusView && <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
@@ -9826,15 +9837,15 @@ export default function LiveCapture() {
               </div>
               <div className="rounded-lg border border-amber-400/45 bg-amber-500/10 px-4 py-3">
                 <p className="text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-300">Plateau</p>
-                <p className="text-4xl font-bold text-foreground">{prediction.plateauScore}%</p>
+                <p className="text-4xl font-bold text-foreground">{monitoringPrediction.plateauScore}%</p>
               </div>
               <div className="rounded-lg border border-cyan-400/45 bg-cyan-500/10 px-4 py-3">
                 <p className="text-xs font-semibold uppercase tracking-wider text-cyan-700 dark:text-cyan-300">Control Trust</p>
-                <p className="text-4xl font-bold text-foreground">{prediction.controllerConfidence}%</p>
+                <p className="text-4xl font-bold text-foreground">{monitoringPrediction.controllerConfidence}%</p>
               </div>
-              <div className="rounded-lg border px-4 py-3" style={{ borderColor: `${levelColor(prediction.recovery)}80`, backgroundColor: `${levelColor(prediction.recovery)}20` }}>
+              <div className="rounded-lg border px-4 py-3" style={{ borderColor: `${levelColor(monitoringPrediction.recovery)}80`, backgroundColor: `${levelColor(monitoringPrediction.recovery)}20` }}>
                 <p className="text-xs uppercase tracking-wider text-chart-2 font-semibold">Recovery</p>
-                <p className="text-4xl font-bold text-foreground">{prediction.recovery}%</p>
+                <p className="text-4xl font-bold text-foreground">{monitoringPrediction.recovery}%</p>
               </div>
             </div>
           </div>
@@ -9842,10 +9853,10 @@ export default function LiveCapture() {
             <div className="h-full rounded-full transition-all" style={{ width: `${displayedNearClimax}%`, backgroundColor: levelColor(displayedNearClimax) }} />
           </div>
           {!focusView && <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-lg border border-border bg-card/70 px-3 py-2"><span className="text-muted-foreground">Respiratory load</span><p className="mt-1 font-semibold text-foreground">{prediction.possibleBreathHold ? `Possible ${fmtNumber(prediction.breathHoldDurationSeconds, 1)}s hold` : prediction.respirationBpm != null ? `${fmtNumber(prediction.respirationBpm, 1)} breaths/min` : "Withheld"}</p></div>
-            <div className="rounded-lg border border-border bg-card/70 px-3 py-2"><span className="text-muted-foreground">Somatic motion</span><p className="mt-1 font-semibold capitalize text-foreground">{String(prediction.motionClass || "unavailable").replaceAll("_", " ")}</p></div>
-            <div className="rounded-lg border border-border bg-card/70 px-3 py-2"><span className="text-muted-foreground">Approach velocity</span><p className="mt-1 font-semibold text-foreground">{prediction.approachVelocity > 0 ? "+" : ""}{fmtNumber(prediction.approachVelocity, 1)} points/30s</p></div>
-            <div className="rounded-lg border border-border bg-card/70 px-3 py-2"><span className="text-muted-foreground">Signal gate</span><p className="mt-1 font-semibold text-foreground">{prediction.multimodalTrusted ? "Trusted multimodal" : "Hold escalation"}</p></div>
+            <div className="rounded-lg border border-border bg-card/70 px-3 py-2"><span className="text-muted-foreground">Respiratory load</span><p className="mt-1 font-semibold text-foreground">{monitoringPrediction.possibleBreathHold ? `Possible ${fmtNumber(monitoringPrediction.breathHoldDurationSeconds, 1)}s hold` : monitoringPrediction.respirationBpm != null ? `${fmtNumber(monitoringPrediction.respirationBpm, 1)} breaths/min` : "Withheld"}</p></div>
+            <div className="rounded-lg border border-border bg-card/70 px-3 py-2"><span className="text-muted-foreground">Somatic motion</span><p className="mt-1 font-semibold capitalize text-foreground">{String(monitoringPrediction.motionClass || "unavailable").replaceAll("_", " ")}</p></div>
+            <div className="rounded-lg border border-border bg-card/70 px-3 py-2"><span className="text-muted-foreground">Approach velocity</span><p className="mt-1 font-semibold text-foreground">{monitoringPrediction.approachVelocity > 0 ? "+" : ""}{fmtNumber(monitoringPrediction.approachVelocity, 1)} points/30s</p></div>
+            <div className="rounded-lg border border-border bg-card/70 px-3 py-2"><span className="text-muted-foreground">Signal gate</span><p className="mt-1 font-semibold text-foreground">{monitoringPrediction.multimodalTrusted ? "Trusted multimodal" : "Hold escalation"}</p></div>
           </div>}
           {!focusView && <div className="mt-3 flex flex-wrap gap-2">
             {[
@@ -9985,6 +9996,7 @@ export default function LiveCapture() {
         </TrendPanel>
         </div>)}
 
+        {telemetryPanelEnabled("civet") && (civet.latest || civet.history?.length > 0) && renderTelemetryDashboardPanel("civet", <div className="h-full min-h-0" style={{ minHeight: focusView ? 0 : 260 }}><CivetCard rows={civet.history} sample={civet.latest} statusText={civet.error} /></div>)}
         {telemetryPanelEnabled("emg") && telemetryEmgLive && (
           renderTelemetryDashboardPanel("emg", <div className="h-full min-h-0" style={{ order: telemetryPanelOrder("emg") }}><TrendPanel title={selectedEmgConfig.trendTitle} subtitle={selectedEmgConfig.trendSubtitle} empty={!hasEmgTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-64 md:h-72"} distanceView={distanceTelemetryView} fill={focusView}>
             <ResponsiveContainer width="100%" height="100%">

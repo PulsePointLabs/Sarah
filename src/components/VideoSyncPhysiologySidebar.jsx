@@ -1,3 +1,4 @@
+import CivetCard from "./CivetCard.jsx";
 import ResizableVideoTelemetry from "./ResizableVideoTelemetry";
 import EpisodeBoundaryHandle from "./EpisodeBoundaryHandle.jsx";
 import { telemetryValueChange, discreteValueChange } from "../lib/telemetryValueChange.js";
@@ -200,6 +201,7 @@ export default function VideoSyncPhysiologySidebar({
   resizable = false,
   optionalChannels = { spo2: true, respiration: true, motion: true },
   howl,
+  civet,
   phaseSession,
   physiologicalLoad = false,
   subjectiveEpisodes = [],
@@ -210,7 +212,7 @@ export default function VideoSyncPhysiologySidebar({
   const displayedEpisodes = subjectiveEpisodes.map((episode) => episode.id === episodePreview?.id
     ? { ...episode, [episodePreview.boundary]: episodePreview.time } : episode);
   const [showPhaseBands, setShowPhaseBands] = useState(true);
-  const phaseModel = useMemo(() => phaseSession ? (physiologicalLoad ? buildLoadEvidence(timelineRows) : buildPhaseEvidence(timelineRows)) : null, [timelineRows, phaseSession, physiologicalLoad]);
+  const phaseModel = useMemo(() => phaseSession ? (physiologicalLoad ? buildLoadEvidence(timelineRows) : buildPhaseEvidence(timelineRows, civet?.rows)) : null, [timelineRows, phaseSession, physiologicalLoad, civet?.rows]);
   const phaseBands = useMemo(() => (physiologicalLoad ? loadBandsFromPoints : phaseBandsFromPoints)(phaseModel?.points || []), [phaseModel, physiologicalLoad]);
   const normalizedRows = useMemo(() => timelineRows
     .map((row) => ({
@@ -472,6 +474,7 @@ export default function VideoSyncPhysiologySidebar({
         </div>
       )}
 
+      {optionalChannels.civet !== false && civet?.rows?.length > 0 && <CivetCard data-sidebar-section={["civet", "Pelvic response"]} rows={civet.rows} playheadS={playheadS} onSeek={onSeek} compact={compact} />}
       {optionalChannels.howl && howl && <HowlTimelineCard data-sidebar-section={["howl", "Howl timeline"]} rows={howl.rows} error={howl.error} onRetry={howl.retry} compact={compact} playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek} />}
 
       {hasRespirationMotion && (optionalChannels.respiration !== false || optionalChannels.motion !== false) ? (

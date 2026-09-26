@@ -1,3 +1,4 @@
+import { useCivetTimeline } from "../hooks/useCivet.js";
 import { useTelemetryWindow } from "../hooks/useTelemetryWindow.js";
 import "./dualMonitor.css";
 import VideoLinkRecovery from "./VideoLinkRecovery.jsx";
@@ -795,6 +796,7 @@ export default function VideoSyncPlayer({
   };
 
   const howl = useHowlTimeline(session?.id);
+  const civet = useCivetTimeline(session?.id);
   const subjective = useSubjectiveEpisodes(session, isExploration);
   const toggleSubjectiveRef = useRef(null);
   const recordLabel = isExploration ? "exploration" : "session";
@@ -855,7 +857,7 @@ export default function VideoSyncPlayer({
     setPreferredSidebarWidth(next);
     try { localStorage.setItem("sarah.videoSync.sidebarWidth", String(next)); } catch { /* Private browser storage may be unavailable. */ }
   };
-  const [fullTelemetryChannels, setFullTelemetryChannels] = useState({ spo2: true, respiration: true, motion: true, howl: false });
+  const [fullTelemetryChannels, setFullTelemetryChannels] = useState({ spo2: true, respiration: true, motion: true, howl: false, civet: true });
   const [feedsExpanded, setFeedsExpanded] = useState(true);
   const layoutRef = useRef(null);
   const fullscreenSurfaceRef = useRef(null);
@@ -2629,6 +2631,7 @@ export default function VideoSyncPlayer({
                 {[
                   hasSpo2 && ["spo2", "SpO2"],
                   (howl.rows.length > 0 || howl.error) && ["howl", "Howl"],
+                  civet.rows.length > 0 && ["civet", "CIVET"],
                   ["respiration", "Resp"],
                   ["motion", "Motion"],
                 ].filter(Boolean).map(([key, label]) => (
@@ -2657,6 +2660,7 @@ export default function VideoSyncPlayer({
                 resizable={!telemetryWindow.target}
                 optionalChannels={fullTelemetryChannels}
                 howl={howl}
+                civet={civet}
                 phaseSession={session}
                 physiologicalLoad={isExploration}
                 subjectiveEpisodes={subjective.episodes}
@@ -3876,6 +3880,7 @@ export default function VideoSyncPlayer({
                 onSeek={(sessionTime) => handleChartClick({ activeLabel: sessionTime })}
                 bloodPressureReadings={bloodPressureReadings}
                 pulseOxReadings={pulseOxReadings}
+                civet={civet}
                 subjectiveEpisodes={subjective.episodes}
                 onEpisodeEdit={editSubjective} onEpisodeEditStart={() => videoRef.current?.pause()}
               />

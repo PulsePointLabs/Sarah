@@ -2,7 +2,7 @@ import { Children, cloneElement, isValidElement, useLayoutEffect, useRef, useSta
 import './resizableVideoTelemetry.css';
 
 const STORAGE = 'sarah.videoSync.sectionWeights.v2';
-const minimumFor = id => id === 'metrics' ? 112 : id === 'phase' ? 224 : 140;
+const minimumFor = id => id === 'metrics' ? 112 : id === 'phase' ? 224 : id === 'civet' ? 180 : 140;
 
 function FittedSidebar({ children }) {
   const ref = useRef(null), drag = useRef(null);
