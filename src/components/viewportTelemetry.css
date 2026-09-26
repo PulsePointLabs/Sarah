@@ -1,9 +1,22 @@
 .telemetry-viewport-grid { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); gap:4px; flex:1; min-height:0; min-width:0; padding:3px; }
 .telemetry-fit-outer { width:100%; height:100%; position:relative; }
-.telemetry-fit-body { position:absolute; left:0; top:0; transform-origin:top left; container-type:inline-size; }
+.telemetry-fit-body { position:absolute; left:0; top:0; transform-origin:top left; container-type:size; }
 .telemetry-fit-body > * { overflow:visible !important; }
 .telemetry-fit-body .line-clamp-1 { display:block; -webkit-line-clamp:unset; overflow:visible; }
-.telemetry-fit-body .telemetry-metric-card { justify-content:flex-start; }
-[data-telemetry-item="phase"] .telemetry-fit-body > div { display:flex; flex-direction:column; height:auto; min-height:100%; }
-[data-telemetry-item="phase"] .telemetry-fit-body > div > div:first-child { flex:none; height:auto; min-height:max-content; }
+.telemetry-text-slot { position:relative; min-width:0; }
+.telemetry-text-slot > div { position:absolute; top:0; left:0; width:100%; transform-origin:top left; }
+.telemetry-fit-body .telemetry-metric-card { display:grid; grid-template-columns:minmax(0,1fr); justify-content:stretch; grid-template-rows:32px minmax(0,1fr) 48px; gap:4px; }
+.telemetry-fit-body .telemetry-metric-main { display:grid; grid-template-columns:minmax(0,1fr) 28%; align-items:stretch; margin:0; }
+.telemetry-fit-body .telemetry-metric-value { height:100%; min-height:0; font-size:min(18cqw,40cqh) !important; }
+.telemetry-fit-body .telemetry-metric-main > svg { width:100%; align-self:center; }
+.telemetry-fit-body .telemetry-metric-helper { height:48px; margin:0; }
+[data-telemetry-item="phase"] .telemetry-fit-body > div { display:flex; flex-direction:column; height:100%; }
+[data-telemetry-item="phase"] .telemetry-phase-body { display:grid; grid-template-rows:232px minmax(0,1fr); gap:8px; flex:1; min-height:0; }
+.telemetry-fit-body .telemetry-phase-label { height:48px; }
+.telemetry-fit-body .telemetry-phase-explanation { height:48px; }
+.telemetry-fit-body .telemetry-phase-cue { height:56px; }
+.telemetry-fit-body .telemetry-phase-stats { min-height:0; grid-template-rows:repeat(2,minmax(0,1fr)); }
+.telemetry-fit-body .telemetry-phase-stats > div { container-type:size; display:flex; flex-direction:column; justify-content:space-between; min-height:0; }
+.telemetry-fit-body .telemetry-phase-stats .text-4xl { font-size:clamp(28px,min(22cqw,42cqh),100px); line-height:1; font-variant-numeric:tabular-nums; }
+.telemetry-fit-body .telemetry-trend-heading { height:76px; flex:none; }
 .telemetry-top-controls { position:absolute; left:0; right:0; top:100%; padding:12px; background:hsl(var(--card)); border:1px solid hsl(var(--border)); border-radius:0 0 12px 12px; box-shadow:0 12px 30px #0008; z-index:35; max-height:75dvh; overflow:auto; }

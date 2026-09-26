@@ -18,3 +18,9 @@ Python is a desktop prerequisite. **One-time Arduino / helper setup → Install 
 The Android APK supplies the new UI. Managed EMG also needs the 0.1.267 desktop backend. Extract the matching Windows patch ZIP and double-click **Apply-SarahPatch.cmd**. It verifies payload hashes, refuses an active capture, backs up replaced app files, updates the default 0.1.266 installation and checks the restarted backend. It does not replace session data or calibration files. For a different installation folder, invoke the included PowerShell script with `-InstallDirectory`.
 
 Validation covers browser layout and simulated serial input. Physical Arduino, H10 and phone validation is still required. The Windows apply script is supplied for manual execution; automatic application was blocked in the build session.
+
+## Display refinements in 0.1.268
+
+Every metric, including Respiration, Chest Motion and the new SDNN card, has an independent checkbox under **Controls → Choose items**. Selecting any card exposes **Hide card**; restore it from Choose items. Visibility choices persist on this device.
+
+Phase statistics expand into the available vertical space. Changing status text uses reserved, locally fitted text areas, leaving values and plotting areas anchored. The elapsed session timer uses the same font size as the wall clock.

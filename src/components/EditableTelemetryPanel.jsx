@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 
-export default function EditableTelemetryPanel({ id, label, layout, order, selected, onSelect, onResize, onMove, onReorder, onReset, children, placement, fit = false }) {
+export default function EditableTelemetryPanel({ id, label, layout, order, selected, onSelect, onResize, onMove, onReorder, onReset, onHide, children, placement, fit = false }) {
   const ref = useRef(null);
   const gesture = useRef(null);
   const [preview, setPreview] = useState(null);
@@ -55,6 +55,7 @@ export default function EditableTelemetryPanel({ id, label, layout, order, selec
         <button type="button" className={buttonClass} disabled={layout.rows <= 1} onClick={() => adjust('rows', -1)}>Shorter</button>
         <button type="button" className={buttonClass} disabled={layout.rows >= 8} onClick={() => adjust('rows', 1)}>Taller</button>
         <button type="button" className={buttonClass} onClick={onReset}>Reset size</button>
+        {onHide && <button type="button" className={buttonClass} onClick={onHide}>Hide card</button>}
         <button type="button" className={buttonClass} onClick={() => onSelect('')}>Done</button>
       </div>
     </>}

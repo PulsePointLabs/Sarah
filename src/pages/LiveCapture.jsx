@@ -1,3 +1,4 @@
+import StableTelemetryText from "@/components/StableTelemetryText";
 import EditableTelemetryPanel from "@/components/EditableTelemetryPanel";
 import ViewportTelemetryGrid from "@/components/ViewportTelemetryGrid";
 import EmgSetup from "@/components/EmgSetup";
@@ -1545,11 +1546,11 @@ function MetricCard({ icon, label, value, helper, active, level, trendValues = [
         </div>
         <StatusDot active={active || hasLevel} />
       </div>
-      <div className="mt-1.5 flex min-w-0 items-end justify-between gap-3">
-        <p className={`min-h-[1em] min-w-0 whitespace-nowrap font-bold leading-none tracking-normal text-foreground tabular-nums ${display ? "text-[clamp(2rem,18cqw,6rem)]" : large ? "text-5xl" : "text-3xl"} ${valueClassName}`}>{value}</p>
+      <div className="telemetry-metric-main mt-1.5 flex min-w-0 items-end justify-between gap-3">
+        <StableTelemetryText enabled={display} center className={`telemetry-metric-value min-h-[1em] min-w-0 whitespace-nowrap font-bold leading-none tracking-normal text-foreground tabular-nums ${display ? "text-[clamp(2rem,18cqw,6rem)]" : large ? "text-5xl" : "text-3xl"} ${valueClassName}`}>{value}</StableTelemetryText>
         {display && <MetricSparkline values={trendValues} color={color || "hsl(var(--primary))"} />}
       </div>
-      {helper && <p className={`mt-1 text-muted-foreground ${display ? "line-clamp-1 text-xs" : large ? "min-h-[2.5rem] text-sm" : "min-h-[2.5rem] text-xs"}`}>{helper}</p>}
+      <StableTelemetryText enabled={display} className={`telemetry-metric-helper mt-1 text-muted-foreground ${display ? "text-xs" : large ? "min-h-[2.5rem] text-sm" : "min-h-[2.5rem] text-xs"}`}>{helper || " "}</StableTelemetryText>
     </div>
   );
 }
@@ -1609,13 +1610,11 @@ function EmptyChartState() {
 function TrendPanel({ title, subtitle, children, empty, heightClass = "h-56", distanceView = false, fill = false }) {
   return (
     <div className={`rounded-xl border border-border bg-muted/20 p-3 ${fill ? "flex h-full min-h-0 flex-col overflow-hidden" : ""}`}>
-      <div className={`flex items-center justify-between gap-3 ${fill ? "mb-1.5 shrink-0" : "mb-3"}`}>
-        <div>
-          <p className={`${distanceView ? "text-sm" : "text-xs"} font-semibold uppercase tracking-wider text-primary`}>{title}</p>
-          {subtitle && <p className={`mt-0.5 text-muted-foreground ${fill ? "line-clamp-1 text-xs" : distanceView ? "text-sm" : "text-[11px]"}`}>{subtitle}</p>}
-        </div>
+      <div className={fill ? "telemetry-trend-heading mb-1.5 shrink-0" : "mb-3"}>
+        <StableTelemetryText enabled={fill} className={`${fill ? "h-8" : ""} ${distanceView ? "text-sm" : "text-xs"} font-semibold uppercase tracking-wider text-primary`}>{title}</StableTelemetryText>
+        <StableTelemetryText enabled={fill} className={`${fill ? "h-11 text-xs" : distanceView ? "text-sm" : "text-[11px]"} text-muted-foreground`}>{subtitle || ' '}</StableTelemetryText>
       </div>
-      <div className={fill ? "min-h-0 flex-1" : heightClass}>
+      <div className={fill ? "telemetry-trend-plot min-h-0 flex-1" : heightClass}>
         {empty ? <EmptyChartState /> : children}
       </div>
     </div>
@@ -1723,6 +1722,9 @@ export default function LiveCapture() {
   const [mediaProcessing, setMediaProcessing] = useState("");
   const [mediaError, setMediaError] = useState("");
   const [presetModalOpen, setPresetModalOpen] = useState(false);
+  const [hiddenTelemetryItems, setHiddenTelemetryItems] = useState(() => { try { const stored = JSON.parse(localStorage.getItem("pulsepoint.telemetryHidden.v1")); return Array.isArray(stored) ? stored : []; } catch { return []; } });
+  useEffect(() => { localStorage.setItem("pulsepoint.telemetryHidden.v1", JSON.stringify(hiddenTelemetryItems)); }, [hiddenTelemetryItems]);
+  const setTelemetryItemVisible = (id, visible) => setHiddenTelemetryItems(old => visible ? old.filter(item => item !== id) : [...new Set([...old, id])]);
   const [telemetryControlsOpen, setTelemetryControlsOpen] = useState(false);
   const [emgSetupOpen, setEmgSetupOpen] = useState(false);
   const [emgNames, setEmgNames] = useState(() => { try { return JSON.parse(localStorage.getItem("pulsepoint.emgNames")) || []; } catch { return []; } });
@@ -3865,6 +3867,7 @@ export default function LiveCapture() {
   const hrv = hrTelemetry?.hrv || {};
   const rrCount = readNumber(hrTelemetry?.quality?.rrCount, hrv.sampleCount);
   const hrvRmssd = readNumber(hrv.rmssdMs, hrTelemetry?.hrv_rmssd_ms);
+  const hrvSdnn = readNumber(hrv.sdnnMs, hrTelemetry?.hrv_sdnn_ms);
   const hrvQuality = hrv.quality || hrTelemetry?.hrv_quality || null;
   const directH10Source = hrSourceSettings.source === "direct_h10";
   const effectiveH10Multimodal = hrTelemetry?.multimodal?.streams?.ecg?.sampleCount > 0
@@ -3947,6 +3950,7 @@ export default function LiveCapture() {
   const displayedNearClimax = heldTelemetryValue(telemetryHistory, "nearClimax", recentHrPacket ? prediction.nearClimax : null);
   const displayedRrCount = heldTelemetryValue(telemetryHistory, "rrCount", rrCount);
   const displayedRmssd = heldTelemetryValue(telemetryHistory, "hrvRmssd", hrvRmssd);
+  const displayedSdnn = heldTelemetryValue(telemetryHistory, "hrvSdnn", hrvSdnn);
   const displayedRespiration = heldTelemetryValue(telemetryHistory, "respirationBpm", h10Respiration.available ? h10Respiration.bpm : null);
   const displayedMotion = heldTelemetryValue(telemetryHistory, "motionRms", h10Motion.available ? h10Motion.dynamicRmsMilliG : null);
   const displayedRecoveryDrop = heldTelemetryValue(telemetryHistory, "recoveryDropBpm", h10Recovery.available ? h10Recovery.currentDropBpm : null);
@@ -9394,7 +9398,7 @@ export default function LiveCapture() {
             <CircleDot className={distanceTelemetryView ? "w-6 h-6" : "w-4 h-4"} /> Live Telemetry
             {telemetryFocusView && <span className="ml-2 whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{new Date(liveHealthNowMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}
           </h3>
-          {telemetryFocusView && <div className="flex items-center gap-3"><span aria-label="Session timer" className="font-mono text-sm text-muted-foreground">{launchActive && resolveLiveSessionStartMs() ? fmtMmSs(Math.max(0, (liveHealthNowMs - resolveLiveSessionStartMs()) / 1000)) : "00:00"}</span><button type="button" aria-label="Telemetry controls" aria-expanded={telemetryControlsOpen} onClick={() => setTelemetryControlsOpen(true)} className="rounded-lg border border-border px-2 py-1 text-sm">Controls</button></div>}
+          {telemetryFocusView && <div className="flex items-center gap-3"><span aria-label="Session timer" className="whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{launchActive && resolveLiveSessionStartMs() ? fmtMmSs(Math.max(0, (liveHealthNowMs - resolveLiveSessionStartMs()) / 1000)) : "00:00"}</span><button type="button" aria-label="Telemetry controls" aria-expanded={telemetryControlsOpen} onClick={() => setTelemetryControlsOpen(true)} className="rounded-lg border border-border px-2 py-1 text-sm">Controls</button></div>}
           <div hidden={telemetryFocusView && !telemetryControlsOpen} className={telemetryFocusView ? "telemetry-top-controls" : ""}>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button type="button" onClick={() => setEmgSetupOpen(true)} className="min-h-11 rounded-lg border border-primary/40 px-3 text-sm font-semibold">Connect EMG</button>
@@ -9498,6 +9502,12 @@ export default function LiveCapture() {
                   <X className="h-4 w-4" />
                 </button>
               </div>
+              <fieldset className="mt-4 grid grid-cols-2 gap-2 rounded-lg border border-border p-3">
+                <legend className="px-2 text-sm font-semibold">Individual metric cards</legend>
+                {[...['Current HR', 'Blood Pressure', 'Near-Climax Watch', 'RR Samples', 'RMSSD', 'SDNN', 'Respiration', 'Chest Motion', 'Recovery'].map(label => ({ id: `metric:${label}`, label })), { id: 'metric:emg-left', label: emgNames[0] || 'EMG sensor 1' }, { id: 'metric:emg-right', label: emgNames[1] || 'EMG sensor 2' }].map(item => <label key={item.id} className="flex min-h-11 items-center gap-2 text-sm">
+                  <input type="checkbox" aria-label={`Show ${item.label} card`} checked={!hiddenTelemetryItems.includes(item.id)} onChange={event => { setTelemetryItemVisible(item.id, event.target.checked); if (event.target.checked) updateTelemetryPanel('vitals', { enabled: true }); }} />{item.label}
+                </label>)}
+              </fieldset>
               <div className="mt-5 space-y-2">
                 {telemetryDashboard.map((item, index) => {
                   const definition = TELEMETRY_DASHBOARD_PANELS.find((panel) => panel.id === item.id);
@@ -9525,8 +9535,8 @@ export default function LiveCapture() {
                       </button>}
                       <input
                         type="checkbox"
-                        checked={item.enabled}
-                        onChange={(event) => updateTelemetryPanel(item.id, { enabled: event.target.checked })}
+                        checked={item.enabled && !hiddenTelemetryItems.includes(item.id)}
+                        onChange={(event) => { updateTelemetryPanel(item.id, { enabled: event.target.checked }); setTelemetryItemVisible(item.id, event.target.checked); }}
                         className="h-5 w-5 shrink-0 accent-primary"
                         aria-label={`Show ${definition.label}`}
                       />
@@ -9576,14 +9586,14 @@ export default function LiveCapture() {
                 })}
               </div>
               <div className="mt-5 flex items-center justify-between border-t border-border pt-4">
-                <button type="button" onClick={() => { setTelemetryDashboard(defaultTelemetryDashboard()); localStorage.removeItem("pulsepoint.telemetryViewport.v1"); window.dispatchEvent(new Event("telemetry-layout-reset")); }} className="rounded-lg border border-border px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted">Reset default</button>
+                <button type="button" onClick={() => { setTelemetryDashboard(defaultTelemetryDashboard()); setHiddenTelemetryItems([]); localStorage.removeItem("pulsepoint.telemetryViewport.v1"); window.dispatchEvent(new Event("telemetry-layout-reset")); }} className="rounded-lg border border-border px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted">Reset default</button>
                 <button type="button" onClick={() => setTelemetryDashboardOpen(false)} className="rounded-lg bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">Use this dashboard</button>
               </div>
             </div>
           </div>
         )}
 
-        <ViewportTelemetryGrid enabled={focusView} selected={selectedTelemetryPanel} onSelect={setSelectedTelemetryPanel}>
+        <ViewportTelemetryGrid hiddenItems={hiddenTelemetryItems} onHide={id => setTelemetryItemVisible(id, false)} enabled={focusView} selected={selectedTelemetryPanel} onSelect={setSelectedTelemetryPanel}>
 
         {telemetryPanelEnabled("notices") && telemetryNoticesEnabled && latestTelemetryNotice && !focusView && renderTelemetryDashboardPanel("notices", (
           <div
@@ -9704,6 +9714,7 @@ export default function LiveCapture() {
             <>
               <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="RR Samples" value={fmtNumber(displayedRrCount, 0)} helper="rolling H10 interval window" active={Number(displayedRrCount) > 0} level={Math.min(100, (Number(displayedRrCount) || 0) * 1.25)} trendValues={telemetryTrendValues(telemetryHistory, "rrCount", displayedRrCount)} large display={focusView} />
               <MetricCard icon={<Activity className="w-4 h-4" />} label="RMSSD" value={fmtNumber(displayedRmssd, 1)} helper={hrvQuality ? `HRV quality: ${hrvQuality}` : "holding last valid RR window"} active={displayedRmssd != null} level={hrvQuality === "high" ? 90 : hrvQuality === "moderate" ? 65 : hrvQuality === "low" ? 35 : 0} trendValues={telemetryTrendValues(telemetryHistory, "hrvRmssd", displayedRmssd)} large display={focusView} />
+              <MetricCard icon={<Activity className="w-4 h-4" />} label="SDNN" value={fmtNumber(displayedSdnn, 1)} helper={hrvQuality ? `HRV quality: ${hrvQuality}` : "holding last valid RR window"} active={displayedSdnn != null} level={hrvQuality === "high" ? 90 : hrvQuality === "moderate" ? 65 : hrvQuality === "low" ? 35 : 0} trendValues={telemetryTrendValues(telemetryHistory, "hrvSdnn", displayedSdnn)} large display={focusView} />
               <MetricCard
                 icon={<Activity className="w-4 h-4" />}
                 label="Respiration"
@@ -9752,12 +9763,12 @@ export default function LiveCapture() {
 
         {telemetryPanelEnabled("phase") && !captureIsBodyExploration && (
           renderTelemetryDashboardPanel("phase", <div className="h-full overflow-hidden rounded-xl border border-border bg-muted/20 p-3" style={{ order: telemetryPanelOrder("phase") }}>
-          <div className={focusView ? "flex h-full min-h-0 flex-col gap-2" : "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"}>
+          <div className={focusView ? "telemetry-phase-body" : "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"}>
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
                 <Brain className="w-4 h-4" /> Real-Time Phase Watch
               </p>
-              <div className="mt-1 flex flex-wrap items-center gap-2">
+              <StableTelemetryText enabled={focusView} className="telemetry-phase-label mt-1"><div className="flex flex-wrap items-center gap-2">
                 <p className="text-lg font-medium text-foreground">{prediction.label}</p>
                 <span className="rounded-full border border-rose-400/45 bg-rose-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-rose-600 dark:text-rose-300">
                   {prediction.physiologicalIntensityLabel}
@@ -9767,10 +9778,10 @@ export default function LiveCapture() {
                     Howl: {howlControllerMode}
                   </span>
                 )}
-              </div>
-              <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+              </div></StableTelemetryText>
+              <StableTelemetryText enabled={focusView} className="telemetry-phase-explanation mt-1 text-sm leading-relaxed text-muted-foreground">
                 {prediction.hrvExplanation}
-              </p>
+              </StableTelemetryText>
               {!focusView && <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
@@ -9799,13 +9810,13 @@ export default function LiveCapture() {
                   <Volume2 className="h-3.5 w-3.5" /> Sarah encouragement {liveCueSettings.enabled ? "on" : "off"}
                 </p>
               )}
-              {liveCueSettings.enabled && liveCueEngine.latestCue?.phrase && (
-                <p className="mt-2 rounded-lg border border-primary/20 bg-primary/[0.06] px-3 py-2 text-xs text-muted-foreground">
-                  Last encouragement: <span className="font-medium text-foreground">{liveCueEngine.latestCue.phrase}</span>
-                </p>
+              {(focusView || (liveCueSettings.enabled && liveCueEngine.latestCue?.phrase)) && (
+                <StableTelemetryText enabled={focusView} className="telemetry-phase-cue mt-2 text-xs text-muted-foreground">
+                  {liveCueSettings.enabled && liveCueEngine.latestCue?.phrase ? <>Last encouragement: <span className="font-medium text-foreground">{liveCueEngine.latestCue.phrase}</span></> : ' '}
+                </StableTelemetryText>
               )}
             </div>
-            <div className={`grid grid-cols-2 gap-2 text-right ${focusView ? "mt-auto" : "lg:grid-cols-4"}`}>
+            <div className={`grid grid-cols-2 gap-2 text-right ${focusView ? "telemetry-phase-stats" : "lg:grid-cols-4"}`}>
               <div className="rounded-lg border px-4 py-3" style={{ borderColor: `${levelColor(displayedNearClimax)}80`, backgroundColor: `${levelColor(displayedNearClimax)}20` }}>
                 <p className="text-xs uppercase tracking-wider text-primary font-semibold">Near-Climax Watch</p>
                 <div className="flex items-end justify-between gap-3">
