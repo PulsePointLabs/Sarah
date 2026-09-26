@@ -1,7 +1,7 @@
 {
   "name": "sarah-standalone",
   "private": true,
-  "version": "0.1.266",
+  "version": "0.1.267",
   "type": "module",
   "main": "desktop/main.cjs",
   "scripts": {
@@ -53,6 +53,8 @@
       "server/**/*",
       "src/**/*",
       "tools/capture/heart-rate/**/*",
+      "tools/capture/emg/*.py",
+      "tools/capture/emg/requirements.txt",
       "tools/cloud/**/*",
       "!tools/cloud/__pycache__/**/*",
       "local-vision/**/*",

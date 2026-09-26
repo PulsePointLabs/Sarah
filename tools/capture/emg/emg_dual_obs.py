@@ -24,6 +24,9 @@ except ImportError:
 # ================= SETTINGS =================
 
 BASE_DIR = Path(__file__).resolve().parent
+HEADLESS = os.getenv("EMG_HEADLESS") == "1"
+STOP_FILE = os.getenv("EMG_STOP_FILE")
+HEARTBEAT_FILE = os.getenv("EMG_HEARTBEAT_FILE")
 
 SERIAL_PORT = os.getenv("EMG_SERIAL_PORT", "COM5")
 SERIAL_BAUD = int(os.getenv("EMG_SERIAL_BAUD", "115200"))
@@ -273,7 +276,8 @@ def main():
 
     obs_client = connect_obs()
     recording, obs_state = get_obs_state(obs_client)
-    last_recording = recording
+    last_recording = False
+    last_obs_retry = time.monotonic()
     print(f"OBS state: {obs_state}")
 
     dt = 1.0 / PUBLISH_HZ
@@ -458,6 +462,11 @@ def main():
 
     try:
         while True:
+            if STOP_FILE and Path(STOP_FILE).exists():
+                break
+            if HEARTBEAT_FILE and (not Path(HEARTBEAT_FILE).exists() or time.time() - Path(HEARTBEAT_FILE).stat().st_mtime > 15):
+                print("Desktop disconnected; closing EMG helper.")
+                break
             s = get_latest_dual_line(ser)
             if not s:
                 continue
@@ -494,6 +503,9 @@ def main():
             if now - last_pub >= dt:
                 last_pub = now
 
+                if obs_client is None and OBS_ENABLED and time.monotonic() - last_obs_retry >= 5:
+                    last_obs_retry = time.monotonic()
+                    obs_client = connect_obs()
                 recording, obs_state = get_obs_state(obs_client)
 
                 if recording and not last_recording:
@@ -561,15 +573,18 @@ def main():
                     f"headroom:{HEADROOM:.2f} | {mapping} | OBS:{obs_state}"
                 )
 
-                fig.canvas.draw_idle()
-                fig.canvas.flush_events()
-                plt.pause(0.001)
+                if not HEADLESS:
+                    fig.canvas.draw_idle()
+                    fig.canvas.flush_events()
+                    plt.pause(0.001)
 
                 LEFT_TXT.write_text(f"{pct_l:.1f}")
                 RIGHT_TXT.write_text(f"{pct_r:.1f}")
                 DIFF_TXT.write_text(f"{(pct_l - pct_r):.1f}")
 
     except KeyboardInterrupt:
+        pass
+    finally:
         print("\nStopping...")
 
         if csv_writer is not None and csv_file is not None:

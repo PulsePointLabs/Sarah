@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 
-export default function EditableTelemetryPanel({ id, label, layout, order, selected, onSelect, onResize, onMove, onReorder, onReset, children }) {
+export default function EditableTelemetryPanel({ id, label, layout, order, selected, onSelect, onResize, onMove, onReorder, onReset, children, placement, fit = false }) {
   const ref = useRef(null);
   const gesture = useRef(null);
   const [preview, setPreview] = useState(null);
@@ -12,7 +12,7 @@ export default function EditableTelemetryPanel({ id, label, layout, order, selec
     const style = getComputedStyle(grid);
     gesture.current = { kind, x: event.clientX, y: event.clientY, layout, grid,
       col: (grid.clientWidth + parseFloat(style.columnGap || 0)) / 12,
-      row: parseFloat(style.gridAutoRows) || ref.current.offsetHeight / layout.rows };
+      row: ref.current.offsetHeight / layout.rows };
     event.currentTarget.setPointerCapture(event.pointerId);
     setMoving(kind === 'move');
   };
@@ -39,8 +39,8 @@ export default function EditableTelemetryPanel({ id, label, layout, order, selec
     onClick={(event) => { event.stopPropagation(); if (!event.target.closest('button,input,select,a,textarea')) onSelect(id); }}
     onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(id); } if (event.key === 'Escape') onSelect(''); }}
     className={`relative min-h-0 min-w-0 rounded-xl ${selected ? 'ring-2 ring-cyan-300 z-10' : ''} ${moving ? 'opacity-60' : ''}`}
-    style={{ gridColumn: `span ${size.cols}`, gridRow: `span ${size.rows}`, order }}>
-    <div className="h-full min-h-0 overflow-auto rounded-xl" style={{ containerType: 'inline-size' }}>{children}</div>
+    style={{ gridColumn: `span ${size.cols}`, gridRow: `span ${size.rows}`, order, ...(placement ? { gridColumn: `${placement.x + 1} / span ${placement.cols}`, gridRow: `${placement.y + 1} / span ${placement.rows}` } : {}) }}>
+    <div className={`h-full min-h-0 rounded-xl ${fit ? "" : "overflow-auto"}`} style={{ containerType: 'inline-size' }}>{children}</div>
     {selected && <>
       <button type="button" aria-label={`Drag ${label} to move`} onPointerDown={(e) => begin(e, 'move')} onPointerUp={end} onPointerCancel={(e) => end(e, true)}
         className="absolute left-1 top-1 z-20 min-h-11 touch-none rounded-lg border border-cyan-200 bg-slate-950 px-3 text-sm font-bold text-white">↔ Move</button>

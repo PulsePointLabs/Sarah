@@ -141,6 +141,9 @@ refreshDir(path.join(root, 'dist'), path.join(appResourcesOut, 'dist'));
 refreshDir(path.join(root, 'server'), path.join(appResourcesOut, 'server'));
 refreshDir(path.join(root, 'src'), path.join(appResourcesOut, 'src'));
 refreshDir(path.join(root, 'tools', 'capture', 'heart-rate'), path.join(appResourcesOut, 'tools', 'capture', 'heart-rate'));
+refreshDir(path.join(root, 'tools', 'capture', 'emg'), path.join(appResourcesOut, 'tools', 'capture', 'emg'), {
+  filter: (entry) => fs.statSync(entry).isDirectory() ? path.basename(entry) === 'emg' : entry.endsWith('.py') || path.basename(entry) === 'requirements.txt',
+});
 refreshDir(path.join(root, 'tools', 'cloud'), path.join(appResourcesOut, 'tools', 'cloud'), { filter: localVisionFilter });
 refreshDir(path.join(root, 'local-vision'), path.join(appResourcesOut, 'local-vision'), { filter: localVisionFilter });
 refreshPackagedDependencies();

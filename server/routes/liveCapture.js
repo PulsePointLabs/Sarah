@@ -1,3 +1,4 @@
+import { createEmgHelper } from '../services/emgHelper.js';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -33,6 +34,7 @@ const HR_WS_URL = liveCaptureConfig.hrWsUrl;
 const HR_RECORDINGS_DIR = liveCaptureConfig.hrRecordingsDir;
 const EMG_TEXT_DIR = liveCaptureConfig.emgTextDir;
 const EMG_SESSIONS_DIR = liveCaptureConfig.emgSessionsDir;
+const emgHelper = createEmgHelper(liveCaptureConfig);
 const EMG_COMMAND_FILE = path.join(EMG_TEXT_DIR, 'emg_command.json');
 const EMG_COMMAND_STATUS_FILE = path.join(EMG_TEXT_DIR, 'emg_command_status.json');
 const EMG_CALIBRATION_ACTIONS = new Set([
@@ -2306,11 +2308,12 @@ async function readEmgTextTelemetry() {
     .sort();
   const sourceAt = sourceTimes[sourceTimes.length - 1] || state.emg.lastSourceAt;
 
+  const currentValue = file => sourceAt && file.modifiedAt && new Date(sourceAt) - new Date(file.modifiedAt) <= 6000 ? cleanNumber(file.text) : null;
   const telemetry = {
-    left_pct: cleanNumber(leftFile.text),
-    right_pct: cleanNumber(rightFile.text),
-    diff_pct: cleanNumber(diffFile.text),
-    level_pct: cleanNumber(levelFile.text),
+    left_pct: currentValue(leftFile),
+    right_pct: currentValue(rightFile),
+    diff_pct: currentValue(diffFile),
+    level_pct: currentValue(levelFile),
     source_at: sourceAt,
   };
 
@@ -2603,6 +2606,17 @@ liveCaptureRouter.post('/hr-direct-h10/release', (req, res) => {
   }
   res.json({ ok: true });
 });
+
+liveCaptureRouter.get('/emg/helper', async (_req, res) => {
+  res.json({ ...emgHelper.status(), telemetry: state.emg });
+});
+liveCaptureRouter.get('/emg/ports', async (_req, res) => res.json(await emgHelper.ports()));
+for (const action of ['start', 'stop', 'install']) {
+  liveCaptureRouter.post(`/emg/helper/${action}`, async (req, res) => {
+    try { res.json(await emgHelper[action](req.body || {})); }
+    catch (error) { res.status(400).json({ error: error.message }); }
+  });
+}
 
 liveCaptureRouter.post('/emg/calibration-command', async (req, res) => {
   const action = String(req.body?.action || '');
