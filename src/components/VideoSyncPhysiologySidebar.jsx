@@ -89,7 +89,7 @@ function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = fa
         <Icon className={`h-3.5 w-3.5 ${tone}`} />
         <span className="metric-full-label">{label}</span><span className="metric-short-label" title={label}>{({ 'Heart Rate': 'HR', 'Blood Pressure': 'BP', 'Respiration': 'Resp', 'Chest Motion': 'Motion' })[label] || label}</span>
       </div>
-      <p className={`monitor-metric-value ${compact ? "mt-1 text-base" : "mt-2 text-xl"} font-mono font-bold leading-none ${tone}`}>
+      <p style={{ '--metric-width-font': `${Math.min(34, 150 / Math.max(1, String(value).length))}cqi` }} className={`monitor-metric-value ${compact ? "mt-1 text-base" : "mt-2 text-xl"} font-mono font-bold leading-none ${tone}`}>
         {value}
         {unit && value !== "--" && <span className="ml-1 text-[10px] font-semibold">{unit}</span>}
       </p>

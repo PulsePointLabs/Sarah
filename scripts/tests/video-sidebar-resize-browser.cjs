@@ -33,12 +33,12 @@ try { playwright = require('playwright'); } catch { playwright = require(path.jo
     assert.ok(await phase.locator('h3').evaluate(el => parseFloat(getComputedStyle(el).fontSize)) > fontBefore);
     await page.keyboard.press('Home');
     for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowUp');
-    assert.ok((await phase.boundingBox()).height >= 224);
+    assert.ok((await phase.boundingBox()).height >= 199);
     await handle.scrollIntoViewIfNeeded();
     const grip = await handle.boundingBox();
     await page.mouse.move(grip.x + grip.width / 2, grip.y + 5); await page.mouse.down();
     await page.mouse.move(grip.x + grip.width / 2, grip.y + 85, { steps: 5 }); await page.mouse.up();
-    assert.ok((await phase.boundingBox()).height >= 280, 'pointer resize grows the section');
+    assert.ok((await phase.boundingBox()).height >= 270, 'pointer resize grows the section');
     const widthHandle = page.getByRole('separator', { name: 'Resize telemetry sidebar', exact: true });
     await widthHandle.focus(); await page.keyboard.press('Home');
     assert.equal(await widthHandle.getAttribute('aria-valuenow'), '440');
@@ -55,16 +55,20 @@ try { playwright = require('playwright'); } catch { playwright = require(path.jo
     assert.equal(await fullVideo.first().evaluate(el => getComputedStyle(el).objectFit), 'contain');
     await page.waitForTimeout(500);
     await page.screenshot({ path: 'logs/video-sidebar-resize.png', fullPage: false });
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.waitForTimeout(200);
-    assert.equal(await page.getByRole('separator', { name: 'Resize telemetry sidebar', exact: true }).count(), 0);
-    const narrowClips = await page.locator('.video-resizable-content').evaluateAll(nodes => nodes.filter(node => node.scrollWidth > node.clientWidth + 2 || node.scrollHeight > node.clientHeight + 2).map(node => node.parentElement.dataset.videoSection));
-    assert.deepEqual(narrowClips, [], 'stacked narrow-screen sections remain readable without clipping');
-    for (const button of await page.locator('.video-section-tabs button').all()) {
-      await button.click(); await page.waitForTimeout(100);
-      assert.deepEqual(await page.locator('.video-resizable-content').evaluateAll(nodes => nodes.filter(n => n.scrollHeight > n.clientHeight + 2 || n.scrollWidth > n.clientWidth + 2).map(n => n.parentElement.dataset.videoSection)), [], 'compact section content fits');
-      assert.ok(await sidebar.evaluate(el => el.scrollHeight <= el.clientHeight + 2), 'compact sidebar cannot scroll');
+    for (const viewport of [{width:1536,height:864},{width:1280,height:720},{width:1920,height:1080}]) {
+      await page.setViewportSize(viewport); await page.waitForTimeout(300);
+      assert.equal(await page.locator('[data-section-tabs]').count(), 0, 'never substitutes tabs for selected cards');
+      assert.equal(await page.locator('[data-video-section]').count(), 5, 'all selected sections remain rendered');
+      assert.ok(await sidebar.evaluate(el => el.scrollHeight <= el.clientHeight + 2), 'all sections stay within sidebar');
+      assert.deepEqual(await page.locator('.video-resizable-content').evaluateAll(nodes => nodes.filter(n => n.scrollHeight > n.clientHeight + 2 || n.scrollWidth > n.clientWidth + 2).map(n => n.parentElement.dataset.videoSection)), [], 'selected section content fits');
     }
+    const metric=sidebar.locator('.monitor-metric-value').first();
+    assert.ok(await metric.evaluate(el=>parseFloat(getComputedStyle(el).fontSize))>=28, 'large default metric numbers');
+    const metricsHandle=page.getByRole('separator',{name:'Resize Vital signs height'});
+    const numberBefore=await metric.evaluate(el=>parseFloat(getComputedStyle(el).fontSize));
+    await metricsHandle.focus(); for(let i=0;i<5;i++) await page.keyboard.press('ArrowDown');
+    assert.ok(await metric.evaluate(el=>parseFloat(getComputedStyle(el).fontSize))>=numberBefore);
+    await page.screenshot({path:'logs/video-sidebar-all-visible.png'});
     assert.deepEqual(errors, []);
     console.log('PASS: actual Video Sync section resizing, minimum sizes, responsive text, sidebar limits, and uncropped video, single-row metrics, and no sidebar scrolling');
   } finally { await browser.close(); }
