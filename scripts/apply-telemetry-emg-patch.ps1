@@ -1,5 +1,7 @@
 param([string]$InstallDirectory = 'C:\PulsePoint-Standalone\desktop-release\win-unpacked')
 $ErrorActionPreference = 'Stop'
+# Launch Electron as an app even when invoked from a Node-based tool host.
+Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 $appDirectory = [IO.Path]::GetFullPath((Join-Path $InstallDirectory 'resources\app'))
 $executable = [IO.Path]::GetFullPath((Join-Path $InstallDirectory 'Sarah.exe'))
 $payloadDirectory = Join-Path $PSScriptRoot 'payload'
