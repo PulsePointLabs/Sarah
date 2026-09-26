@@ -1,3 +1,4 @@
+import ResizableVideoTelemetry from "./ResizableVideoTelemetry";
 import EpisodeBoundaryHandle from "./EpisodeBoundaryHandle.jsx";
 import { telemetryValueChange, discreteValueChange } from "../lib/telemetryValueChange.js";
 import HowlTimelineCard from "./HowlTimelineCard.jsx";
@@ -100,14 +101,14 @@ function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = fa
   );
 }
 
-function TrendChart({ rows, lines, playheadS, xDomain, onSeek, rightAxis = false, compact = false, phaseBands = [], subjectiveEpisodes = [], onEpisodeEdit, onEpisodeEditStart, onEpisodePreview }) {
+function TrendChart({ readable = false, rows, lines, playheadS, xDomain, onSeek, rightAxis = false, compact = false, phaseBands = [], subjectiveEpisodes = [], onEpisodeEdit, onEpisodeEditStart, onEpisodePreview }) {
   const safePlayheadS = numberOrNull(playheadS);
   return (
     <div className={`${compact ? "min-h-0 flex-1" : "h-40"} w-full`}>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart
           data={rows}
-          margin={{ top: 8, right: rightAxis ? 12 : 4, bottom: 0, left: -24 }}
+          margin={{ top: 8, right: rightAxis ? 12 : 4, bottom: 0, left: readable ? 0 : -24 }}
           onClick={(event) => {
             if (Number.isFinite(Number(event?.activeLabel))) onSeek?.(Number(event.activeLabel));
           }}
@@ -196,6 +197,7 @@ export default function VideoSyncPhysiologySidebar({
   bloodPressureReadings = [],
   pulseOxReadings = [],
   compact = false,
+  resizable = false,
   optionalChannels = { spo2: true, respiration: true, motion: true },
   howl,
   phaseSession,
@@ -278,6 +280,7 @@ export default function VideoSyncPhysiologySidebar({
   );
 
   return (
+    <ResizableVideoTelemetry enabled={resizable}>
     <section className={`${compact ? "flex h-full min-h-0 flex-col gap-1 overflow-hidden p-2" : "space-y-3 p-3"} rounded-2xl border border-primary/15 bg-gradient-to-b from-primary/[0.055] via-card to-card shadow-sm`}>
       <div className="flex shrink-0 items-start justify-between gap-3">
         <div>
@@ -296,7 +299,7 @@ export default function VideoSyncPhysiologySidebar({
         </div>
       </div>
 
-      <div className={`grid shrink-0 gap-1 ${compact ? "" : "grid-cols-2"}`}
+      <div data-sidebar-section={["metrics", "Vital signs"]} className={`grid shrink-0 gap-1 ${compact ? "" : "grid-cols-2"}`}
         style={compact ? { gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))" } : undefined}>
         <MetricCard
           icon={HeartPulse}
@@ -411,10 +414,10 @@ export default function VideoSyncPhysiologySidebar({
         ))}
       </div>
 
-      {phaseSession && <VideoSyncPhaseCard timelineRows={timelineRows} session={phaseSession}
+      {phaseSession && <VideoSyncPhaseCard data-sidebar-section={["phase", "Phase evidence"]} timelineRows={timelineRows} session={phaseSession}
         playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek} evidenceModel={phaseModel} physiologicalLoad={physiologicalLoad} />}
 
-      <div className={`rounded-xl border border-border bg-background/60 ${compact ? "flex min-h-0 flex-1 flex-col p-1.5" : "p-2.5"}`}>
+      <div data-sidebar-section={["cardiac", "Cardiac trend"]} className={`rounded-xl border border-border bg-background/60 ${compact ? "flex min-h-0 flex-1 flex-col p-1.5" : "p-2.5"}`}>
         <div className="mb-1.5 flex items-center justify-between gap-2">
           <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Cardiac Trend</p>
           {phaseSession && <button type="button" aria-pressed={showPhaseBands} onClick={() => setShowPhaseBands(!showPhaseBands)}
@@ -427,7 +430,7 @@ export default function VideoSyncPhysiologySidebar({
         </div>
         {phaseSession && showPhaseBands && <PhaseBandLegend physiologicalLoad={physiologicalLoad} />}
         {subjectiveEpisodes.length > 0 && <p className="text-[8px] text-violet-300">N · Near climax &nbsp; C · Climax{onEpisodeEdit ? " · Drag boundary handles to edit" : ""}</p>}
-        <TrendChart
+        <TrendChart readable={resizable}
           subjectiveEpisodes={displayedEpisodes}
           onEpisodeEdit={onEpisodeEdit} onEpisodeEditStart={onEpisodeEditStart} onEpisodePreview={setEpisodePreview}
           phaseBands={showPhaseBands ? clipPhaseBands(phaseBands, safeDomain[0], safeDomain[1]) : []}
@@ -445,7 +448,7 @@ export default function VideoSyncPhysiologySidebar({
       </div>
 
       {hasAutonomic && (
-        <div className={`rounded-xl border border-border bg-background/60 ${compact ? "flex min-h-0 flex-1 flex-col p-1.5" : "p-2.5"}`}>
+        <div data-sidebar-section={["autonomic", "Autonomic trend"]} className={`rounded-xl border border-border bg-background/60 ${compact ? "flex min-h-0 flex-1 flex-col p-1.5" : "p-2.5"}`}>
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Autonomic Trend</p>
             <div className="flex gap-2 text-[8px]">
@@ -453,7 +456,7 @@ export default function VideoSyncPhysiologySidebar({
               <span className="text-violet-500">SDNN</span>
             </div>
           </div>
-          <TrendChart
+          <TrendChart readable={resizable}
             subjectiveEpisodes={displayedEpisodes}
             onEpisodeEdit={onEpisodeEdit} onEpisodeEditStart={onEpisodeEditStart} onEpisodePreview={setEpisodePreview}
             rows={visibleRows}
@@ -469,10 +472,10 @@ export default function VideoSyncPhysiologySidebar({
         </div>
       )}
 
-      {optionalChannels.howl && howl && <HowlTimelineCard rows={howl.rows} error={howl.error} onRetry={howl.retry} compact={compact} playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek} />}
+      {optionalChannels.howl && howl && <HowlTimelineCard data-sidebar-section={["howl", "Howl timeline"]} rows={howl.rows} error={howl.error} onRetry={howl.retry} compact={compact} playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek} />}
 
       {hasRespirationMotion && (optionalChannels.respiration !== false || optionalChannels.motion !== false) ? (
-        <div className={`rounded-xl border border-border bg-background/60 ${compact ? "flex min-h-0 flex-1 flex-col p-1.5" : "p-2.5"}`}>
+        <div data-sidebar-section={["respiration", "Respiration and motion"]} className={`rounded-xl border border-border bg-background/60 ${compact ? "flex min-h-0 flex-1 flex-col p-1.5" : "p-2.5"}`}>
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Respiration & Motion</p>
             <div className="flex gap-2 text-[8px]">
@@ -480,7 +483,7 @@ export default function VideoSyncPhysiologySidebar({
               <span className="text-amber-500">Motion mg</span>
             </div>
           </div>
-          <TrendChart
+          <TrendChart readable={resizable}
             rows={visibleRows}
             lines={[
               optionalChannels.respiration !== false && { key: "respiration", label: "Respiration", color: "#0ea5e9", decimals: 1 },
@@ -505,5 +508,6 @@ export default function VideoSyncPhysiologySidebar({
         </div>
       ) : null}
     </section>
+    </ResizableVideoTelemetry>
   );
 }

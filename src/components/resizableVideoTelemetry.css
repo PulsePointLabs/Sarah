@@ -1,0 +1,22 @@
+.video-resizable-sidebar { overflow-y:auto !important; overflow-x:hidden !important; scrollbar-gutter:stable; }
+.video-resizable-section { display:flex; flex-direction:column; flex:1 0 auto; min-width:0; }
+.video-resizable-content { min-height:0; flex:1; container-type:inline-size; }
+.video-resizable-content > * { height:100% !important; min-height:0; }
+.video-section-handle { flex:none; display:flex; height:24px; align-items:center; justify-content:center; cursor:row-resize; touch-action:none; user-select:none; color:hsl(var(--muted-foreground)); border-radius:6px; background:hsl(var(--muted)/.3); }
+.video-section-handle:hover,.video-section-handle:focus { background:hsl(var(--primary)/.25); color:hsl(var(--primary)); outline:2px solid hsl(var(--primary)/.5); }
+.video-resizable-content :is(p,span,button,summary,h3,b) { font-size:var(--section-font) !important; line-height:1.35; }
+.video-resizable-content .monitor-metric-value { font-size:var(--section-value) !important; }
+.video-resizable-content .text-2xl { font-size:var(--section-value) !important; line-height:1; }
+.video-resizable-sidebar > div:not(.video-resizable-section) :is(p,span,button) { font-size:12px !important; }
+.video-resizable-content .truncate { white-space:normal; overflow:visible; text-overflow:clip; }
+.video-resizable-content .line-clamp-1 { display:block; -webkit-line-clamp:unset; overflow:visible; }
+.video-resizable-content > .grid { grid-template-columns:repeat(auto-fit,minmax(176px,1fr)) !important; grid-auto-rows:minmax(142px,1fr); }
+.video-resizable-content > .grid > div { display:flex; flex-direction:column; justify-content:space-between; min-height:142px; padding:8px; }
+.video-resizable-content > .grid > div > div { font-size:var(--section-font) !important; flex-wrap:wrap; }
+.video-resizable-content > :not(.grid) > .flex { flex-wrap:wrap; flex-shrink:0; }
+.video-resizable-content .recharts-cartesian-axis-tick text { font-size:var(--section-font) !important; }
+.video-resizable-content > section > svg { min-height:120px; }
+.video-resizable-content > section > svg text { font-size:12px; }
+.single-window-telemetry > div:first-child { height:auto; min-height:36px; flex-wrap:wrap; gap:4px; }
+.single-window-telemetry > div:first-child :is(span,button) { font-size:12px; }
+@media (max-width:799px) { .video-full-header { height:auto; min-height:40px; flex-wrap:wrap; } }

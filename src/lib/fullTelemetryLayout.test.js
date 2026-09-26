@@ -10,7 +10,7 @@ test("desktop sidebar cannot collapse its metrics or consume the video", () => {
     assert.equal(sidebarWidth(10000, viewport), max);
     assert.ok(viewport - max >= 320);
   }
-  assert.equal(sidebarWidth(200, 1920), 400);
+  assert.equal(sidebarWidth(200, 1920), 440);
   assert.equal(sidebarWidth(680, 1920), 680);
   assert.equal(sidebarWidth(680, 1024), sidebarLimits(1024).max);
 });

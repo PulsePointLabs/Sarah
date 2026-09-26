@@ -1,6 +1,7 @@
 export function sidebarLimits(viewportWidth) {
+  if (viewportWidth < 800) { const width = Math.max(240, Number(viewportWidth) - 16); return { min: width, max: width }; }
   const available = Math.max(280, Number(viewportWidth) - 32);
-  const min = Math.min(400, Math.max(240, available * 0.45));
+  const min = Math.min(440, available - 320);
   const max = Math.max(min, Math.min(760, available * 0.55, available - 320));
   return { min: Math.round(min), max: Math.round(max) };
 }
