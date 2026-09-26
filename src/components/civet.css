@@ -28,3 +28,8 @@
 .video-resizable-content .civet-card .civet-main>b {font-size:24px !important;}
 .video-resizable-content .civet-card .civet-main small {font-size:11px !important;}
 .video-resizable-content .civet-card .civet-stats b {font-size:14px !important;}
+@container (max-height:150px) {
+  .civet-card { gap:1px; padding:2px !important; }
+  .civet-card svg { min-height:12px; }
+  .civet-card .civet-state { min-height:14px; }
+}
