@@ -1,3 +1,5 @@
+import VideoPhaseVoice from "./VideoPhaseVoice.jsx";
+import { useVideoPhaseAnnouncements } from "../hooks/useVideoPhaseAnnouncements.js";
 import { useCivetTimeline } from "../hooks/useCivet.js";
 import { useTelemetryWindow } from "../hooks/useTelemetryWindow.js";
 import "./dualMonitor.css";
@@ -2613,8 +2615,10 @@ export default function VideoSyncPlayer({
             setNewCatsTouched(false);
           }
         };
+  const playbackPhaseVoice = useVideoPhaseAnnouncements({ videoRef, active: fullTelemetryView, sessionId: session?.id, feedKey: activeFeedKey, offset: videoOffset, rows: timelineRows, civetRows: civet.rows, exploration: isExploration, microphoneActive: quickListening || isListening });
   const telemetryPanel = (
           <aside className={telemetryWindow.target ? "telemetry-monitor dark" : "single-window-telemetry flex min-h-0 min-w-0 flex-col gap-2 overflow-hidden"}>
+            <VideoPhaseVoice controller={playbackPhaseVoice} />
             {telemetryWindow.target && <div className="monitor-toolbar">
               <strong className="text-primary">Telemetry | {fmtMmSs(playheadS)}</strong>
               <button onClick={togglePlay}>{isPlaying ? "Pause" : "Play"}</button>
