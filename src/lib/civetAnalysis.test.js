@@ -1,0 +1,32 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createCivetProcessor,civetEvidence} from './civet.js';
+import {analyzeCivetReview,summarizeTrains,CIVET_VERSION} from './civetAnalysis.js';
+const pulse=(t,c,a=1,w=.8)=>Math.abs(t-c)<w/2?a*(1+Math.cos((t-c)*2*Math.PI/w))/2:0;
+function rig(){const p=createCivetProcessor();let t=0;const rows=[];function feed(v,n=1){let r;for(let i=0;i<n;i++){r=p.ingest(typeof v==='function'?v(t):v,Math.round(t*1000)/1000,{timestamp_ms:100000+t*1000});rows.push(r);t+=.1;}return r;}
+ p.calibrate('baseline');feed(2,51);p.calibrate('reference');feed(4,51);feed(2,30);rows.length=0;return {p,feed,rows,get t(){return t;},events:()=>rows.flatMap(r=>r.events)};}
+function wave(peaks,amps=peaks.map(()=>1),tonic=0,width=.8){const r=rig(),start=r.t; r.feed(t=>2+tonic+peaks.reduce((s,c,i)=>s+pulse(t-start,c,amps[i],width),0),Math.ceil((peaks.at(-1)+3)*10));return {r,start,events:r.events()};}
+for(const [name,peaks,amps,tonic] of [
+ ['isolated contraction',[2],[1],0],['rhythmic baseline returning',[2,3,4,5],[1,1,1,1],0],
+ ['rhythmic atop tonic',[2,3,4,5],[1,1,1,1],.5],['decreasing amplitude',[2,3,4,5],[1.4,1.1,.8,.5],0],['increasing amplitude',[2,3,4,5],[.5,.8,1.1,1.4],0]]) {
+ test(name+' preserves raw, resolves peaks, and exports morphology',()=>{
+  const {r,start,events}=wave(peaks,amps,tonic);assert.equal(events.length,peaks.length);assert.ok(events.every(e=>e.quality==='usable'));
+  events.forEach((e,i)=>{assert.ok(Math.abs(e.peak-start-peaks[i])<=.11);assert.ok(e.confirmed_at>e.peak);assert.ok(e.duration_s>=.5);assert.ok(e.rise_s>=.2&&e.fall_s>=.2);assert.ok(e.prominence_kpa>.3);});
+  const before=JSON.stringify(r.rows),review=analyzeCivetReview(r.rows);assert.equal(JSON.stringify(r.rows),before);assert.equal(review.events.length,peaks.length);
+  review.rows.forEach((row,i)=>assert.equal(row.pressure_kpa,r.rows[i].pressure_kpa));
+  if(peaks.length>=3){const train=summarizeTrains(events,r.rows)[0];assert.equal(train.count,4);assert.ok(Math.abs(train.mean_interval_s-1)<1e-6);assert.ok(train.interval_cv<1e-6);assert.equal(train.start,events[0].onset);assert.equal(train.end,events.at(-1).end);assert.ok(train.tonic_before_kpa>1);if(name.startsWith('decreasing'))assert.ok(train.amplitude_slope_kpa_s<0);if(name.startsWith('increasing'))assert.ok(train.amplitude_slope_kpa_s>0);}
+ });
+}
+test('noisy baseline and flat pressure do not create contractions',()=>{for(const noisy of [false,true]){const r=rig();r.feed(t=>2+(noisy?.015*Math.sin(t*29):0),400);assert.equal(r.events().length,0);assert.equal(analyzeCivetReview(r.rows).events.length,0);}});
+test('gradual baseline drift invalidates reference normalization without fake contractions',()=>{const r=rig(),s=r.t;r.feed(t=>2+(t-s)*.12,300);assert.equal(r.rows.at(-1).level_pct,null);assert.ok(r.rows.some(p=>p.quality_flags.includes('baseline_drift_or_tonic_shift')));assert.equal(r.events().length,0);});
+test('sudden repositioning step is flagged and cannot support phase evidence',()=>{const r=rig();r.feed(5,50);const row=r.rows.at(-1);assert.equal(row.usable,false);assert.equal(civetEvidence(row).contribution,0);assert.ok(r.rows.some(p=>p.quality_flags.includes('possible_reposition_or_external_pressure')));});
+test('movement-like impulse remains available but is flagged',()=>{const r=rig();r.feed(2,10);r.feed(7);r.feed(2,10);assert.equal(r.events().length,1);assert.ok(r.events()[0].flags.includes('under_resolved_or_impulsive'));assert.equal(r.events()[0].quality,'review');});
+test('missing packets and reconnect split analysis segments and require recalibration',()=>{const r=rig();r.feed(2,10);const gap=r.p.ingest(3,r.t+1,{reconnected:true});assert.equal(gap.gap,true);assert.equal(gap.usable,false);assert.equal(gap.level_pct,null);const review=analyzeCivetReview([...r.rows,gap]);assert.equal(review.rows.length,r.rows.length+1);assert.equal(review.rows.at(-1).gap,true);});
+test('calibration failure and mid-session recalibration preserve earlier samples and events',()=>{const {r}=wave([2,3,4]);const before=JSON.stringify(r.rows);r.p.calibrate('baseline');r.feed(2,51);r.p.calibrate('reference');r.feed(2,51);assert.equal(r.rows.at(-1).usable,false);assert.ok(r.rows.some(p=>p.calibration_error));assert.equal(JSON.stringify(r.rows.slice(0,JSON.parse(before).length)),before);r.p.calibrate('baseline');r.feed(2,51);r.p.calibrate('reference');r.feed(4,51);assert.equal(r.rows.at(-1).calibration.quality,'valid');assert.notEqual(r.rows.at(-1).calibration.id,r.rows[0].calibration.id);});
+test('minimum resolvable spacing at 0.4s is retained with uncertainty flags',()=>{const {events}=wave([2,2.4,2.8,3.2],[1,1,1,1],0,.4);assert.equal(events.length,4);assert.ok(events.every(e=>e.duration_s>=.3));});
+test('trains split after long pauses and do not cross gaps',()=>{const {r,events}=wave([2,3,4,9,10,11]);assert.equal(summarizeTrains(events,r.rows).length,2);});
+test('live outputs cannot depend on future samples and versions are explicit',()=>{const {r}=wave([2,3,4]);const copy=JSON.stringify(r.rows);r.feed(3,100);assert.equal(JSON.stringify(r.rows.slice(0,JSON.parse(copy).length)),copy);assert.ok(r.events().every(e=>e.algorithm===CIVET_VERSION&&e.mode==='live'));});
+
+test('one dropped 10Hz sample creates an explicit gap, never an interpolated row',()=>{const r=rig();const row=r.p.ingest(2,r.t+.1);assert.equal(row.gap,true);assert.ok(Math.abs(row.gap_s-.2)<1e-6);assert.equal(row.usable,false);});
+test('unstable baseline fails; missing calibration samples fail; review never contributes live evidence',()=>{const p=createCivetProcessor();p.calibrate('baseline');let row;for(let i=0;i<=50;i++)row=p.ingest(2+(i%2)*.5,i/10);assert.match(row.calibration_error,/unstable/);p.calibrate('baseline');for(let i=0;i<=25;i++)row=p.ingest(2,10+i/5);assert.match(row.calibration_error,/Missing samples/);assert.equal(civetEvidence({mode:'review',usable:true,rhythm:true}).contribution,0);});
+test('review detects legacy impulses and normalization drift while retaining original pressures',()=>{const calibration={baseline:2,noise:.01,reference:1};const rows=Array.from({length:200},(_,i)=>({t:i/10,pressure_kpa:i===20?7:i>60?4:2,calibration,usable:true,level_pct:50}));const result=analyzeCivetReview(rows);assert.ok(result.events.some(e=>e.flags.includes('impulsive_pressure_change')));assert.equal(result.rows.at(-1).level_pct,null);assert.equal(result.rows.at(-1).pressure_kpa,4);assert.equal(rows.at(-1).level_pct,50);});

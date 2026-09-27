@@ -474,7 +474,7 @@ export default function VideoSyncPhysiologySidebar({
         </div>
       )}
 
-      {optionalChannels.civet !== false && civet?.rows?.length > 0 && <CivetCard data-sidebar-section={["civet", "Pelvic response"]} rows={civet.rows} playheadS={playheadS} onSeek={onSeek} compact={compact} />}
+      {optionalChannels.civet !== false && civet?.rows?.length > 0 && <CivetCard data-sidebar-section={["civet", "Pelvic response"]} rows={civet.rows} analysis={civet.analysis} sessionId={civet.sessionId} markers={[{t:phaseSession?.climax_offset_s,label:"Manual climax"}]} playheadS={playheadS} onSeek={onSeek} compact={compact} />}
       {optionalChannels.howl && howl && <HowlTimelineCard data-sidebar-section={["howl", "Howl timeline"]} rows={howl.rows} error={howl.error} onRetry={howl.retry} compact={compact} playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek} />}
 
       {hasRespirationMotion && (optionalChannels.respiration !== false || optionalChannels.motion !== false) ? (

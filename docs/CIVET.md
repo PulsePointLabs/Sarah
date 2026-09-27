@@ -1,4 +1,6 @@
-# CIVET monitoring
+# CIVET monitoring (historical v1)
+
+For the current implementation, see [CIVET v2 acquisition, analysis and validation](CIVET_V2.md). The text below describes the original threshold detector.
 
 Live Capture: Connect CIVET -> Scan -> select sensor -> Connect. This Windows host has the helper installed; elsewhere use Install helper once. CIVET must be within Bluetooth range of the desktop. If it is not discoverable, press its power button five times until the Bluetooth icon is yellow. Close other apps that hold its Bluetooth connection.
 

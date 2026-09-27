@@ -776,6 +776,7 @@ Annotation:
 }
 
 export default function VideoSyncPlayer({
+  civetTrim = null,
   session,
   timelineRows,
   recordType = "session",
@@ -798,7 +799,7 @@ export default function VideoSyncPlayer({
   };
 
   const howl = useHowlTimeline(session?.id);
-  const civet = useCivetTimeline(session?.id);
+  const civet = useCivetTimeline(session?.id,civetTrim);
   const subjective = useSubjectiveEpisodes(session, isExploration);
   const toggleSubjectiveRef = useRef(null);
   const recordLabel = isExploration ? "exploration" : "session";

@@ -2331,7 +2331,7 @@ export default function SessionDetail() {
         </div>
         </div>}
 
-        <CivetSession sessionId={s.id} />
+        <CivetSession sessionId={s.id} trim={analysisTrim} markers={[{t:s.climax_offset_s,label:"Manual climax"}]} />
         {/* EMG */}
         {(emgRows.length > 0 || s.emg_enabled || perinealEmgSummary.hasPerinealEvents || perinealEmgSummary.hasPerinealSetup) && (
           <details id="session-emg" className="scroll-mt-24 rounded-xl border border-border bg-card p-4">
@@ -2482,6 +2482,7 @@ export default function SessionDetail() {
                 </p>
                 <div className="mt-3">
                   <VideoSyncPlayer
+                    civetTrim={analysisTrim}
                     key={`media-sync:${s.id}:${linkedLocalVideos.map((video) => video.fingerprint || video.path).join("|")}`}
                     session={s}
                     timelineRows={timelineRows}

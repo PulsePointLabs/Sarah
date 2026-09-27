@@ -6,8 +6,8 @@ $appDirectory = [IO.Path]::GetFullPath((Join-Path $InstallDirectory 'resources\a
 $executable = [IO.Path]::GetFullPath((Join-Path $InstallDirectory 'Sarah.exe'))
 $payloadDirectory = Join-Path $PSScriptRoot 'payload'
 $installed = Get-Content -LiteralPath (Join-Path $appDirectory 'package.json') -Raw | ConvertFrom-Json
-if ($installed.name -ne 'sarah-standalone' -or $installed.version -notin @('0.1.266', '0.1.267', '0.1.268', '0.1.269', '0.1.270', '0.1.271', '0.1.272', '0.1.273')) {
-    throw 'This patch requires the Sarah 0.1.266 through 0.1.273 Windows installation.'
+if ($installed.name -ne 'sarah-standalone' -or $installed.version -notin @('0.1.266', '0.1.267', '0.1.268', '0.1.269', '0.1.270', '0.1.271', '0.1.272', '0.1.273', '0.1.274')) {
+    throw 'This patch requires the Sarah 0.1.266 through 0.1.274 Windows installation.'
 }
 $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'manifest.json') -Raw | ConvertFrom-Json
 # Check every source and destination before stopping Sarah or replacing files.
@@ -30,7 +30,7 @@ if ($running.Count) {
     if ($running.Count) { throw 'Sarah did not close. Quit Sarah, then run this patch again.' }
 }
 if (Get-NetTCPConnection -LocalPort 8787 -State Listen -ErrorAction SilentlyContinue) { throw 'The Sarah backend is still running. Close it before applying the patch.' }
-$backup = Join-Path $InstallDirectory ('patch-backups\0.1.273-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$backup = Join-Path $InstallDirectory ('patch-backups\0.1.274-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 foreach ($entry in $manifest) {
     $destination = Join-Path $appDirectory $entry.path
     if (Test-Path -LiteralPath $destination) {
@@ -55,4 +55,4 @@ for ($attempt = 0; $attempt -lt 30; $attempt++) {
     } catch { }
 }
 if (!$ready) { throw "Files updated, but backend readiness was not confirmed. Backup: $backup" }
-Write-Host "Sarah 0.1.273 is ready. Previous files are backed up at $backup"
+Write-Host "Sarah 0.1.274 is ready. Previous files are backed up at $backup"
