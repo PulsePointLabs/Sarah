@@ -2,22 +2,22 @@ import { CIVET_VERSION, CIVET_PARAMETERS, average, quantile, prominenceThreshold
 export const CIVET_ALGORITHM = CIVET_VERSION;
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 export function createCivetProcessor() {
-  let calibration=null,pending=null,window=[],events=[],last=null,tonic=null,invalid=false,count=0,sessionMax=0,heldAt=null,step=null,serial=0;
+  let calibration=null,pending=null,window=[],events=[],last=null,tonic=null,invalid=false,count=0,sessionMax=0,heldAt=null,step=null,serial=0,lastCalibrationError=null;
   const detector=createMorphologyDetector();
   function reset() {window=[];events=[];last=null;tonic=null;heldAt=null;step=null;pending=null;count=0;sessionMax=0;detector.reset();}
   return {
     reset,
-    invalidate() {invalid=true;pending=null;detector.reset();},
+    invalidate() {invalid=true;if(pending)lastCalibrationError='Calibration interrupted; repeat baseline and reference.';pending=null;detector.reset();},
     calibrate(kind) {
       if(!['baseline','reference'].includes(kind))throw new Error('Unknown calibration');
       if(kind==='reference'&&(!calibration||invalid))throw new Error('Capture relaxed baseline first.');
-      pending={kind,samples:[],start:null};detector.reset();heldAt=null;
+      lastCalibrationError=null;pending={kind,samples:[],start:null};detector.reset();heldAt=null;
     },
     ingest(pressure,t,context={}) {
       if(!Number.isFinite(pressure)||!Number.isFinite(t))throw new Error('Invalid pressure sample');
       const dt=last?t-last.t:null;
       const gap=!!last&&(dt>.18||dt<=0||!!context.reconnected);
-      const quality=[];let calibrationError=null,calibrationEvent=null;
+      const quality=[];let calibrationError=lastCalibrationError,calibrationEvent=null;
       if(gap){quality.push('packet_gap');window=[];heldAt=null;step=null;tonic=null;invalid=true;}
       if(pending) {
         pending.start??=t;pending.samples.push(pressure);pending.invalid ||=gap;
@@ -35,7 +35,7 @@ export function createCivetProcessor() {
             else calibration={...calibration,id:`cal-${context.timestamp_ms??t}-${++serial}`,reference,at:t,timestamp_ms:context.timestamp_ms??null,quality:'valid',reference_variance:variance};
           }
           calibrationEvent={type:'calibration',kind:pending.kind,t,timestamp_ms:context.timestamp_ms??null,success:!calibrationError,error:calibrationError,calibration};
-          if(calibrationError)invalid=true;
+          lastCalibrationError=calibrationError;if(calibrationError)invalid=true;
           pending=null;detector.reset();window=[];heldAt=null;step=null;tonic=calibration?.baseline??pressure;
         }
       }

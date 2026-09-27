@@ -13,7 +13,11 @@ export function useCivetLive() {
 export function useCivetTimeline(id,trim) {
   const [state,setState]=useState({id:null,rows:[],error:null});
   const [revision,setRevision]=useState(0);
-  useEffect(()=>{if(!id)return;let active=true;setState({id,rows:[],error:null});civetRequest(`session/${encodeURIComponent(id)}`).then(data=>{if(active)setState({id,rows:data.samples||[],analysis:data.analysis,sessionId:id,error:null});}).catch(error=>{if(active)setState({id,rows:[],error:error.message});});return()=>{active=false;};},[id,revision]);
+  useEffect(()=>{
+    if(!id)return;let active=true,timer;setState({id,rows:[],error:null});
+    const read=async()=>{try{const data=await civetRequest(`session/${encodeURIComponent(id)}`);if(active){setState({id,rows:data.samples||[],analysis:data.analysis,sessionId:id,error:null});if(data.analysis?.active)timer=setTimeout(read,5000);}}catch(error){if(active)setState({id,rows:[],error:error.message});}};
+    read();return()=>{active=false;clearTimeout(timer);};
+  },[id,revision]);
   const view=useMemo(()=>civetView({samples:state.rows,analysis:state.analysis},trim),[state.rows,state.analysis,trim]);
   return {...(state.id===id?{...state,rows:view.samples,analysis:view.analysis}:{rows:[],error:null}),retry:()=>setRevision(n=>n+1)};
 }

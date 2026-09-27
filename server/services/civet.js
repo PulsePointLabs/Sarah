@@ -39,7 +39,7 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
     const metadata=fs.existsSync(metadataFile)?fs.readFileSync(metadataFile,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)):[];
     const liveEvents=linkIntervals(rows.flatMap(r=>r.events||[]));
     const result={raw_sha256:hash,algorithm:CIVET_VERSION,parameters:CIVET_PARAMETERS,active,metadata,
-      live:{mode:'live',algorithm:rows[0]?.algorithm||'unknown',events:liveEvents,trains:summarizeTrains(liveEvents,rows)},review:null};
+      live:{mode:'live',algorithm:rows[0]?.algorithm||'unknown',parameters:metadata.find(e=>e.type==='capture_started')?.parameters??null,events:liveEvents,trains:summarizeTrains(liveEvents,rows)},review:null};
     if(!active&&rows.length) {
       const cache=file.replace('.jsonl',`.${CIVET_VERSION}.${hash.slice(0,16)}.review.json`);
       if(fs.existsSync(cache))result.review=JSON.parse(fs.readFileSync(cache,'utf8'));
@@ -78,7 +78,7 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
         const filename=safe(current.id), first=!fs.existsSync(filename);
         fs.appendFileSync(filename,JSON.stringify(latest)+'\n');
         if(first) {
-          appendMetadata({type:'capture_started',timestamp_ms:message.timestamp_ms,calibration:feature.calibration,algorithm:CIVET_VERSION,clock:'host monotonic anchored UTC; t relative to Sarah session start'});
+          appendMetadata({type:'capture_started',timestamp_ms:message.timestamp_ms,calibration:feature.calibration,algorithm:CIVET_VERSION,parameters:CIVET_PARAMETERS,clock:'host monotonic anchored UTC; t relative to Sarah session start'});
           if(lastHardwareZero&&lastHardwareZero.address===state.address)appendMetadata({...lastHardwareZero,type:'preceding_hardware_zero'});
         }
         if(feature.calibration_event)appendMetadata(feature.calibration_event);
