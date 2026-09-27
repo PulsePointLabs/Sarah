@@ -17,6 +17,30 @@ foreach ($entry in $manifest) {
     if (!$source.StartsWith([IO.Path]::GetFullPath($payloadDirectory) + '\', [StringComparison]::OrdinalIgnoreCase) -or !$destination.StartsWith($appDirectory + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid patch path.' }
     if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $entry.sha256) { throw "Patch checksum failed: $($entry.path)" }
 }
+# Opening an already-applied patch should open Sarah, not stop a healthy backend.
+$needsUpdate = @($manifest | Where-Object {
+    $destination = Join-Path $appDirectory $_.path
+    !(Test-Path -LiteralPath $destination) -or (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash -ne $_.sha256
+}).Count -gt 0
+if (!$needsUpdate) {
+    Start-Process -FilePath $executable -WindowStyle Hidden
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        try {
+            $health = Invoke-RestMethod 'http://127.0.0.1:8787/api/health' -TimeoutSec 2
+            $null = Invoke-RestMethod 'http://127.0.0.1:8787/api/civet/status' -TimeoutSec 2
+            if ($health.ok -and $health.app -eq 'Sarah Local API') {
+                # A native owner in service session 0 cannot show a user-desktop window.
+                if ([Diagnostics.Process]::GetCurrentProcess().SessionId -ne 0) {
+                    Start-Process -FilePath 'http://127.0.0.1:8787'
+                }
+                Write-Host 'This Sarah patch is already installed. Sarah is running; no files or recordings were changed.'
+                return
+            }
+        } catch { }
+        Start-Sleep -Seconds 1
+    }
+    throw 'The patch is already installed, but Sarah did not become ready. Check the desktop backend logs.'
+}
 $running = @(Get-Process Sarah -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $executable })
 if ($running.Count) {
     $capture = Invoke-RestMethod 'http://127.0.0.1:8787/api/live-capture/status' -TimeoutSec 5
