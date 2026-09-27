@@ -1,40 +1,48 @@
 import { CIVET_VERSION, CIVET_PARAMETERS, average, quantile, prominenceThreshold, createMorphologyDetector } from './civetAnalysis.js';
+import { calibrationFeedback } from './civetCalibration.js';
 export const CIVET_ALGORITHM = CIVET_VERSION;
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 export function createCivetProcessor() {
-  let calibration=null,pending=null,window=[],events=[],last=null,tonic=null,invalid=false,count=0,sessionMax=0,heldAt=null,step=null,serial=0,lastCalibrationError=null;
+  let calibration=null,pending=null,window=[],events=[],last=null,tonic=null,invalid=false,count=0,sessionMax=0,heldAt=null,step=null,serial=0,lastCalibrationError=null,baselineReady=false,calibrationStatus=null;
   const detector=createMorphologyDetector();
-  function reset() {window=[];events=[];last=null;tonic=null;heldAt=null;step=null;pending=null;count=0;sessionMax=0;detector.reset();}
+  function reset() {window=[];events=[];last=null;tonic=null;heldAt=null;step=null;pending=null;calibrationStatus=null;count=0;sessionMax=0;detector.reset();}
   return {
     reset,
-    invalidate() {invalid=true;if(pending)lastCalibrationError='Calibration interrupted; repeat baseline and reference.';pending=null;detector.reset();},
-    calibrate(kind) {
+    invalidate() {invalid=true;baselineReady=false;calibrationStatus=null;if(pending)lastCalibrationError='Calibration interrupted; repeat baseline and reference.';pending=null;detector.reset();},
+    calibrate(kind,{prepareS=0}={}) {
       if(!['baseline','reference'].includes(kind))throw new Error('Unknown calibration');
-      if(kind==='reference'&&(!calibration||invalid))throw new Error('Capture relaxed baseline first.');
-      lastCalibrationError=null;pending={kind,samples:[],start:null};detector.reset();heldAt=null;
+      if(kind==='reference'&&!baselineReady)throw new Error('Capture relaxed baseline first.');
+      if(kind==='baseline')baselineReady=false;
+      if(!Number.isFinite(prepareS)||prepareS<0||prepareS>10)throw new Error('Invalid preparation duration.');
+      lastCalibrationError=null;calibrationStatus=null;pending={kind,samples:[],start:null,prepareS};detector.reset();heldAt=null;step=null;
     },
     ingest(pressure,t,context={}) {
       if(!Number.isFinite(pressure)||!Number.isFinite(t))throw new Error('Invalid pressure sample');
       const dt=last?t-last.t:null;
       const gap=!!last&&(dt>.18||dt<=0||!!context.reconnected);
       const quality=[];let calibrationError=lastCalibrationError,calibrationEvent=null;
-      if(gap){quality.push('packet_gap');window=[];heldAt=null;step=null;tonic=null;invalid=true;}
+      if(gap){quality.push('packet_gap');window=[];heldAt=null;step=null;tonic=null;invalid=true;baselineReady=false;}
       if(pending) {
-        pending.start??=t;pending.samples.push(pressure);pending.invalid ||=gap;
+        pending.start??=t+pending.prepareS;if(t>=pending.start-1e-6)pending.samples.push(pressure);pending.invalid ||=gap;
+        const feedback=calibrationFeedback(pending.samples,pending.kind,calibration);
+        if(pending.invalid)Object.assign(feedback,{tone:'warning',acceptable:false,message:'Signal interrupted. Reconnect if needed, then redo rest.'});
+        calibrationStatus={kind:pending.kind,phase:t<pending.start-1e-6?'preparing':'collecting',...feedback};
         if(t-pending.start>=5-1e-6) {
           const a=pending.samples,baseline=average(a),variance=average(a.map(v=>(v-baseline)**2)),noise=Math.sqrt(variance);
           const drift=Math.abs(average(a.slice(-10))-average(a.slice(0,10)));
           if(a.length<45||pending.invalid)calibrationError='Missing samples during calibration; repeat baseline.';
           else if(pending.kind==='baseline') {
-            if(noise>.12 || drift>.15)calibrationError='Baseline is unstable; relax and check placement, then repeat.';
-            else {calibration={id:`cal-${context.timestamp_ms??t}-${++serial}`,baseline,noise,variance,reference:null,at:t,timestamp_ms:context.timestamp_ms??null,quality:'baseline only',baseline_drift_kpa:drift};invalid=false;}
+            if(!feedback.acceptable)calibrationError=feedback.message;
+            else {calibration={id:`cal-${context.timestamp_ms??t}-${++serial}`,policy:'pressure-stability-1',baseline,noise,variance,reference:null,at:t,timestamp_ms:context.timestamp_ms??null,quality:'baseline only',baseline_drift_kpa:drift};invalid=false;baselineReady=true;}
           } else {
             const reference=quantile(a,.95)-calibration.baseline;
-            if(reference<Math.max(.1,calibration.noise*6))calibrationError='Reference is too small or noisy. Repeat baseline and contraction reference.';
+            if(reference<Math.max(.1,calibration.noise*6))calibrationError='Reference is too small or noisy. Rest, then redo the hold.';
             else if(quantile(a,.25)-calibration.baseline<reference*.3)calibrationError='Reference was not held steadily; repeat the five-second contraction.';
-            else calibration={...calibration,id:`cal-${context.timestamp_ms??t}-${++serial}`,reference,at:t,timestamp_ms:context.timestamp_ms??null,quality:'valid',reference_variance:variance};
+            else if(!feedback.acceptable)calibrationError=feedback.message;
+            else {calibration={...calibration,id:`cal-${context.timestamp_ms??t}-${++serial}`,reference,at:t,timestamp_ms:context.timestamp_ms??null,quality:'valid',reference_variance:variance};invalid=false;}
           }
-          calibrationEvent={type:'calibration',kind:pending.kind,t,timestamp_ms:context.timestamp_ms??null,success:!calibrationError,error:calibrationError,calibration};
+          calibrationEvent={type:'calibration',policy:'pressure-stability-1',kind:pending.kind,t,timestamp_ms:context.timestamp_ms??null,success:!calibrationError,error:calibrationError,calibration};
+          calibrationStatus={kind:pending.kind,phase:calibrationError?'failed':'complete',tone:calibrationError?'warning':'good',message:calibrationError||(pending.kind==='baseline'?'Rest accepted. Ready for the five-second hold.':'Calibration ready. You can relax now.')};
           lastCalibrationError=calibrationError;if(calibrationError)invalid=true;
           pending=null;detector.reset();window=[];heldAt=null;step=null;tonic=calibration?.baseline??pressure;
         }
@@ -48,13 +56,13 @@ export function createCivetProcessor() {
       }
       if(step&&t-step.t>=2) {
         if(Math.abs(pressure-step.to)<Math.abs(step.to-step.from)*.2 && (!calibration || Math.abs(step.to-calibration.baseline)>Math.max(.2,calibration.noise*6))) {quality.push('possible_reposition_or_external_pressure');invalid=true;}
-        step=null;
+        if(invalid)baselineReady=false;step=null;
       }
       window.push({t,pressure_kpa:pressure,delta});window=window.filter(r=>t-r.t<=30);
       const recentFloor=window.filter(r=>t-r.t<=8);
       if(calibration&&!pending&&recentFloor.length>=75) {
         const floor=quantile(recentFloor.map(r=>r.pressure_kpa),.1);
-        if(floor-calibration.baseline>Math.max(.4,(calibration.reference||1)*.6)||floor-calibration.baseline< -Math.max(.2,calibration.noise*6)) {invalid=true;quality.push('baseline_drift_or_tonic_shift');}
+        if(floor-calibration.baseline>Math.max(.4,(calibration.reference||1)*.6)||floor-calibration.baseline< -Math.max(.2,calibration.noise*6)) {invalid=true;baselineReady=false;quality.push('baseline_drift_or_tonic_shift');}
       }
       if(invalid)quality.push('calibration_invalidated');
       if(pending)quality.push('calibrating');
@@ -74,7 +82,7 @@ export function createCivetProcessor() {
       last=row;
       return {...row,level_pct:usable?clamp(delta/calibration.reference*100,0,150):null,avg_kpa:values.length?average(values):null,max_kpa:values.length?Math.max(...values):null,
         session_max_kpa:sessionMax,contractions_60s:events.filter(e=>e.quality==='usable').length,contraction_count:count,duration_s:held,mean_duration_s:average(events.map(e=>e.duration_s)),
-        rhythm,evidence,usable,events:emitted,calibration_event:calibrationEvent,calibration_error:calibrationError,calibration_remaining_s:pending?Math.max(0,5-(t-pending.start)):0};
+        rhythm,evidence,usable,events:emitted,calibration_event:calibrationEvent,calibration_error:calibrationError,calibration_status:calibrationStatus,baseline_ready:baselineReady,calibration_preparing_s:pending?Math.max(0,pending.start-t):0,calibration_remaining_s:pending?Math.min(5,Math.max(0,5-(t-pending.start))):0};
     },
   };
 }
@@ -92,3 +100,4 @@ export function withCivetEvidence(base,sample,emgLevel=0) {
   const addition=base.buildEligibleForNearClimax&&base.recovery<45?Math.max(0,evidence.contribution-Math.min(8,Math.max(0,emgLevel)*.16)):0;
   return {...base,nearClimax:Math.min(100,base.nearClimax+addition),civetContribution:addition,civetEvidence:evidence.label,reason:[base.reason,evidence.label].filter(Boolean).join(' · ')};
 }
+

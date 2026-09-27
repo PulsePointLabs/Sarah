@@ -55,3 +55,11 @@ All derived metrics are available in inspector details or complete JSON. CSV esc
 Synthetic tests cover isolated/rhythmic contractions, tonic elevation, increasing/decreasing amplitudes, noise/flat signals, drift, steps, impulses, single missing packets/long gaps, reconnect, unstable/weak calibration, recalibration, 0.4s spacing, train boundaries, raw preservation, legacy files, reproducible caches, CSV escaping and simulated zero success/failure/disconnect. Python tests cover official positive/negative decoding, malformed packets and exact zero bytes. Browser checks cover layers, event seeking, desktop/mobile inspection and the no-scroll Video Sync sidebar.
 
 Still needs the physical sensor: Windows cadence/latency under load, firmware zero behavior (including the manufacturer's length inconsistency), calibration repeatability, tubing/placement effects, real contractions against synchronized video/manual markers, and EMG comparisons. Synthetic correctness does not validate orgasm classification or sensor accuracy.
+
+## Distance-readable calibration panel
+
+Setup uses a single **Zero — deflated & outside body** button; clicking explicitly confirms those conditions. Hardware-zero transport and acknowledgement remain unchanged.
+
+**Start rest** and **Start hold** each allow three seconds to prepare before five seconds of sampled measurement. Both countdowns are driven by received sensor time, so a frozen or disconnected feed cannot silently complete calibration. Large text, pressure trace, and green/amber feedback show stability; they cannot identify the source of pressure changes. Failed holds can be retried against the accepted baseline unless a gap, reconnect, or placement change invalidates it.
+
+Calibration policy `pressure-stability-1` retains the existing missing-sample, baseline SD/drift, and reference amplitude gates. It additionally rejects rest excursions over 0.3 kPa. Holds are rejected for SD over max(0.12 kPa, 20% reference), endpoint drift over max(0.15 kPa, 30% reference), or total range over max(0.3 kPa, 65% reference). These engineering thresholds still need physical calibration validation. Failed calibration is withheld from normalized pressure and live phase evidence. Earlier recordings are unchanged.

@@ -125,6 +125,6 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
       });
     },
     disconnect() { rejectCommands();child?.kill();child=null;latest=null;state.state='disconnected';return status(); },
-    calibrate({kind}) {if(!status().latest)throw new Error('Wait for live pressure samples.');processor.calibrate(kind);return status();},
+    calibrate({kind,prepare_s=0}) {if(!status().latest)throw new Error('Wait for live pressure samples.');processor.calibrate(kind,{prepareS:prepare_s});return status();},
   };
 }

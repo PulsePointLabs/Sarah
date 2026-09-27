@@ -49,3 +49,23 @@
 .civet-inspector pre {white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;}
 .civet-export a {color:#2dd4bf;text-decoration:underline;}
 @media(max-width:600px) {.civet-inspector-backdrop{padding:4px}.civet-inspector{padding:8px}.civet-event-list{font-size:12px}.civet-event-list td,.civet-event-list th{padding:3px}}
+
+/* Calibration controls are read from the telemetry monitor across the room. */
+.civet-setup-backdrop{position:fixed;inset:0;z-index:15000;background:#000d;display:flex;align-items:center;justify-content:center;padding:12px}
+.civet-setup{width:min(1180px,100%);max-height:96dvh;overflow:auto;background:#152329;color:#f2f8fb;border:1px solid #458b88;border-radius:16px;padding:20px;font-size:20px;line-height:1.35}
+.civet-setup header,.civet-connection,.civet-calibration-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.civet-setup h2{font-size:30px;font-weight:700}.civet-setup h3{font-size:32px;font-weight:750;margin:0 0 8px}
+.civet-setup button,.civet-setup select{min-height:52px;padding:10px 18px;border:1px solid #718e96;border-radius:10px;background:#243a42;color:#fff;font-size:20px}
+.civet-setup button:disabled{opacity:.45;cursor:not-allowed}.civet-setup button:focus-visible,.civet-setup summary:focus-visible{outline:3px solid #fff;outline-offset:3px}
+.civet-setup button:hover:not(:disabled){background:#315760}.civet-setup details{margin-top:8px}.civet-setup summary{cursor:pointer;padding:6px 0}
+.civet-connection{font-size:18px;margin:8px 0}.civet-connection-controls{display:flex;gap:8px;flex-wrap:wrap}.civet-setup-error{color:#ffb0b8;margin:8px 0;overflow-wrap:anywhere}
+.civet-calibration-feedback{margin:12px 0;padding:18px;border:2px solid #8198ac;border-radius:12px;background:#1d303f}
+.civet-calibration-feedback[data-tone=good]{border-color:#49dfb0;background:#143c32}.civet-calibration-feedback[data-tone=warning]{border-color:#ffc36b;background:#483819}
+.civet-calibration-heading>div:first-child{flex:1;min-width:0}.civet-calibration-heading p{font-size:24px;min-height:3em}
+.civet-calibration-clock{flex:0 0 185px;text-align:center;font-size:96px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
+.civet-calibration-clock small{display:block;font-size:18px;line-height:1.4;font-weight:500;margin-top:4px}
+.civet-calibration-pressure{display:flex;align-items:center;gap:24px;margin:8px 0}.civet-calibration-pressure strong{font-size:44px;font-variant-numeric:tabular-nums;min-width:210px}.civet-calibration-pressure small{font-size:20px}.civet-calibration-pressure span{font-size:18px}
+.civet-calibration-plot{height:100px}.civet-calibration-plot svg{height:100%;width:100%}.civet-calibration-note{font-size:16px;margin:6px 0}
+.civet-calibration-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0}.civet-calibration-actions button{min-height:94px;text-align:center;background:#19544d;border-color:#4ed5c4}.civet-calibration-actions b{display:block;font-size:30px}.civet-calibration-actions span{display:block;font-size:18px;margin-top:4px}
+.civet-zero-row{display:flex;align-items:center;gap:16px;margin-top:12px}.civet-zero-row button{font-size:22px;flex-shrink:0}.civet-zero-row p{font-size:16px}
+@media(max-width:650px){.civet-setup-backdrop{padding:4px}.civet-setup{padding:12px;font-size:18px}.civet-setup h2{font-size:24px}.civet-setup h3{font-size:25px}.civet-connection{flex-wrap:wrap;gap:4px}.civet-calibration-heading{align-items:flex-start;gap:8px}.civet-calibration-heading p{font-size:20px;min-height:5.4em}.civet-calibration-clock{flex-basis:95px;font-size:64px}.civet-calibration-clock small{font-size:14px}.civet-calibration-pressure{gap:8px;flex-wrap:wrap}.civet-calibration-pressure strong{font-size:36px}.civet-calibration-actions{grid-template-columns:1fr}.civet-calibration-actions b{font-size:26px}.civet-zero-row{flex-direction:column;align-items:stretch}.civet-zero-row button{font-size:20px}.civet-calibration-feedback{padding:12px}.civet-setup select{max-width:100%}}
