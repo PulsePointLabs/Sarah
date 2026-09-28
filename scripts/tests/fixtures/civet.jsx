@@ -9,6 +9,7 @@ import {analyzeCivetReview,linkIntervals,summarizeTrains} from '/src/lib/civetAn
 const processor=createCivetProcessor();
 processor.calibrate('baseline');for(let i=0;i<=50;i++)processor.ingest(2,i/10);
 processor.calibrate('reference');for(let i=51;i<=101;i++)processor.ingest(4,i/10);
+for(let i=102;i<=141;i++)processor.ingest(2,i/10);
 processor.reset();
 const samples=Array.from({length:601},(_,i)=>processor.ingest(2+Math.max(0,Math.sin(i/10*Math.PI*2/1.2))*1.8,i/10));
 const events=linkIntervals(samples.flatMap(r=>r.events));

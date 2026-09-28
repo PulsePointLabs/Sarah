@@ -12,7 +12,8 @@ export default function CivetSetup({ live, onClose }) {
   const status = sample?.calibration_status;
   const preparing = status?.phase === 'preparing';
   const collecting = !preparing && (status?.phase === 'collecting' || sample?.calibration_remaining_s > 0);
-  const active = !!preparing || collecting;
+  const settling = sample?.acquisition_state === 'settling';
+  const active = !!preparing || collecting || settling;
   const baselineReady = sample?.baseline_ready ?? (!!sample?.calibration && !sample?.quality_flags?.includes('calibration_invalidated'));
   const action = async (name, body = {}) => {
     setBusy(true); setError(''); setNotice('');
@@ -28,11 +29,11 @@ export default function CivetSetup({ live, onClose }) {
   };
   const begin = kind => action('calibrate', { kind, prepare_s: 3 });
   const kind = status?.kind;
-  const remaining = Math.ceil((preparing ? sample?.calibration_preparing_s : sample?.calibration_remaining_s) || 0);
+  const remaining = Math.ceil((settling ? sample?.settling_remaining_s : preparing ? sample?.calibration_preparing_s : sample?.calibration_remaining_s) || 0);
   const ready = sample?.calibration_valid;
   const needsRest = connected && !baselineReady && !active;
-  const title = !connected ? 'Waiting for live pressure' : preparing ? (kind === 'baseline' ? 'Get ready to relax' : 'Get ready to hold') : collecting ? (kind === 'baseline' ? 'REST — stay relaxed' : 'HOLD — keep it steady') : needsRest ? 'Collect a relaxed baseline' : ready ? 'Calibration ready' : status?.phase === 'failed' ? 'Redo suggested' : 'Rest accepted — ready to hold';
-  const feedback = !connected ? 'Connect the sensor before calibration. Old readings are not used.' : preparing ? (kind === 'baseline' ? 'Relax now. Measurement begins after this countdown.' : 'Build a comfortable squeeze now. Hold through the next five seconds.') : collecting ? status?.message || 'Collecting pressure…' : sample?.calibration_error || (needsRest ? 'Start with five seconds of quiet, steady pressure.' : status?.message) || 'Collect rest, then a comfortable five-second hold.';
+  const title = !connected ? 'Waiting for live pressure' : preparing ? (kind === 'baseline' ? 'Get ready to relax' : 'Get ready to hold') : collecting ? (kind === 'baseline' ? 'REST — stay relaxed' : 'HOLD — keep it steady') : settling ? 'Release and relax' : needsRest ? 'Collect a relaxed baseline' : ready ? 'Calibration ready' : status?.phase === 'failed' ? 'Redo suggested' : 'Rest accepted — ready to hold';
+  const feedback = !connected ? 'Connect the sensor before calibration. Old readings are not used.' : preparing ? (kind === 'baseline' ? 'Relax now. Measurement begins after this countdown.' : 'Build a comfortable squeeze now. Hold through the next five seconds.') : collecting ? status?.message || 'Collecting pressure…' : sample?.acquisition_message || sample?.calibration_error || (needsRest ? 'Start with five seconds of quiet, steady pressure.' : status?.message) || 'Collect rest, then a comfortable five-second hold.';
   const tone = !connected || preparing ? 'waiting' : collecting ? status?.tone || 'waiting' : needsRest || status?.phase === 'failed' ? 'warning' : 'good';
   const end = sample?.t ?? 0;
   const rows = connected ? (live.history || []).filter(r => r.t >= end - 10 && r.t <= end) : [];
@@ -50,7 +51,7 @@ export default function CivetSetup({ live, onClose }) {
     {notice && <p role="status">{notice}</p>}
     <div className="civet-calibration-feedback" data-tone={tone}>
       <div className="civet-calibration-heading"><div><h3>{title}</h3><p aria-live="polite">{feedback}</p></div>
-        <div className="civet-calibration-clock" aria-label={active ? `${preparing ? 'Preparation' : 'Measurement'}: ${remaining} seconds remaining` : 'No countdown running'}>{active ? <>{remaining}<small>seconds · {preparing ? 'get ready' : 'measuring'}</small></> : <>{ready ? '✓' : '—'}<small>{ready ? 'ready' : 'not measuring'}</small></>}</div>
+        <div className="civet-calibration-clock" aria-label={active ? `${settling ? 'Settling check' : preparing ? 'Preparation' : 'Measurement'}: ${remaining} seconds remaining` : 'No countdown running'}>{active ? <>{remaining}<small>seconds · {settling ? 'maximum settling wait' : preparing ? 'get ready' : 'measuring'}</small></> : <>{ready ? '✓' : '—'}<small>{ready ? 'ready' : 'not measuring'}</small></>}</div>
       </div>
       <div className="civet-calibration-pressure"><strong>{connected ? sample.pressure_kpa.toFixed(2) : '—'} <small>kPa</small></strong><span>Live pressure · last 10 seconds<br/>Aim for a flat trace during rest and hold</span></div>
       <div className="civet-calibration-plot"><CivetPlot rows={rows} start={end - 10} end={end} layers={{ raw: true }} /></div>

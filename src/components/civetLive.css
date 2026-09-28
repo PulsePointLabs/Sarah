@@ -1,0 +1,21 @@
+.civet-live-card{height:100%;min-height:0;display:flex;flex-direction:column;gap:8px;padding:12px;border:2px solid #67cabb;border-radius:12px;color:#f7ffff;container-type:size;overflow:hidden;font-variant-numeric:tabular-nums}
+.civet-live-card header{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:clamp(20px,4cqi,28px)}
+.civet-live-card button,.civet-live-alert button{padding:10px 14px;min-height:48px;border:1px solid #91bfb8;border-radius:8px;font-size:20px;background:#153a36;color:white}
+.civet-live-state{font-size:clamp(22px,4.5cqi,30px);min-height:2.6em;line-height:1.25;font-weight:700}
+.civet-live-values,.civet-live-stats{display:grid;grid-template-columns:1fr 1fr;gap:12px;text-align:center}
+.civet-live-values strong{display:block;font-size:clamp(38px,9cqi,84px);line-height:1.05}.civet-live-values small{font-size:.55em}
+.civet-live-values span,.civet-live-stats span{display:block;font-size:20px;line-height:1.2;min-height:2.4em}
+.civet-intensity{height:16px;flex-shrink:0;background:#071b22;border-radius:10px;overflow:hidden}.civet-intensity i{display:block;height:100%;background:#64f4c4;transition:width .15s}
+.civet-live-stats b{font-size:clamp(28px,6cqi,48px)}.civet-live-trend{font-size:20px;min-height:2.4em}
+.civet-live-plot{flex:1;min-height:45px}.civet-live-plot svg{width:100%;height:100%;min-height:45px}
+.civet-live-alert{position:fixed;z-index:14900;bottom:12px;left:12px;max-width:min(950px,calc(100vw - 24px));padding:14px;background:#593318;color:#fff;border:3px solid #ffc264;border-radius:12px;font-size:24px;box-shadow:0 4px 20px #0009}
+.civet-live-alert p{margin:0 0 10px}.civet-live-alert-controls{display:flex;flex-wrap:wrap;gap:8px}.civet-live-alert small{display:block;font-size:18px}
+
+@container (max-height: 430px){.civet-live-card .civet-live-plot{display:none}.civet-live-card .civet-live-trend{min-height:1.3em}.civet-live-card .civet-live-state{min-height:1.3em}.civet-live-card .civet-live-values span,.civet-live-card .civet-live-stats span{min-height:1.2em}.civet-live-card .civet-live-values strong{font-size:42px}.civet-live-card .civet-live-stats b{font-size:28px}}
+@container (max-height: 310px){.civet-live-card .civet-live-trend{display:none}.civet-live-card .civet-live-values strong{font-size:36px}.civet-live-card .civet-live-state{font-size:22px}.civet-live-card header b{font-size:20px}}
+
+.civet-live-expanded{position:fixed;inset:5vh 5vw;z-index:14500;background:#112e30;display:flex;flex-direction:column;border:2px solid #53e9cc;padding:10px;border-radius:12px}.civet-live-close{align-self:flex-end;background:#243f47;color:white;padding:10px 18px;font-size:24px;border:1px solid #abd9d3;border-radius:8px}.civet-live-expanded .civet-live-card{flex:1}.civet-live-expanded .civet-live-values strong{font-size:clamp(56px,9cqi,110px)}
+.civet-live-small{padding:6px;gap:4px}.civet-live-small .civet-live-state{font-size:20px;min-height:0;line-height:1.1}.civet-live-small .civet-live-values>div:first-child,.civet-live-small .civet-live-trend,.civet-live-small .civet-live-plot{display:none}.civet-live-small .civet-live-values{display:block}.civet-live-small .civet-live-values strong{font-size:32px;display:inline}.civet-live-small .civet-live-values span{display:inline;font-size:20px;margin-left:8px}.civet-live-small .civet-live-stats b{font-size:24px}.civet-live-small .civet-live-stats span{font-size:20px;min-height:0}.civet-live-small header{font-size:20px}.civet-live-small button{min-height:36px;padding:3px 9px}.civet-live-small .civet-intensity{height:8px}
+
+.civet-live-small.civet-live-unready .civet-live-values>div:first-child{display:block}.civet-live-small.civet-live-unready .civet-live-values>div:last-child{display:none}.civet-hold-bar{height:6px;border-radius:4px;background:#062128;margin-top:4px;overflow:hidden}.civet-hold-bar i{display:block;height:100%;background:#75e2e7}.civet-live-small .civet-hold-bar{display:none}
+

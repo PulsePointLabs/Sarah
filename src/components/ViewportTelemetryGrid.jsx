@@ -47,7 +47,7 @@ export default function ViewportTelemetryGrid({ children, enabled, selected, onS
       id: `metric:${card.props.telemetryId || card.props.label}`, label: card.props.label, content: card, cols: narrow ? 6 : 3, rows: 2, metric: true,
     }));
     if (!child.props.id) return [];
-    return [{ id: child.props.id, label: child.props.label, content: child.props.children, cols: narrow ? 12 : 6, rows: child.props.id === 'phase' ? 4 : 3 }];
+    return [{ id: child.props.id, label: child.props.label, content: child.props.children, cols: narrow ? 12 : 6, rows: ['phase','civet'].includes(child.props.id) ? 4 : 3 }];
   }).filter(item => !hiddenItems.includes(item.id)).sort((a,b) => (saved[a.id]?.order ?? 100) - (saved[b.id]?.order ?? 100));
   const packed = packTelemetry(items.map(item => ({ ...item, ...saved[item.id] })));
   const update = (id, patch) => setSaved(old => ({ ...old, [id]: { ...old[id], ...patch } }));
@@ -63,7 +63,7 @@ export default function ViewportTelemetryGrid({ children, enabled, selected, onS
       onHide={onHide ? () => { onHide(item.id); onSelect(''); } : undefined}
       onResize={size => update(item.id, size)} onMove={delta => reorder(item.id, items[index + delta]?.id)}
       onReorder={target => reorder(item.id, target)} onReset={() => update(item.id, { cols: item.cols, rows: item.rows })}>
-      <FitContents metric={item.metric} phase={item.id === 'phase'}>{item.content}</FitContents>
+      {item.id === 'civet' ? item.content : <FitContents metric={item.metric} phase={item.id === 'phase'}>{item.content}</FitContents>}
     </EditableTelemetryPanel>)}
   </div>;
 }

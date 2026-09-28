@@ -1,4 +1,5 @@
-import CivetCard from "@/components/CivetCard.jsx";
+import CivetLiveCard from "@/components/CivetLiveCard.jsx";
+import CivetLiveAlert from "@/components/CivetLiveAlert.jsx";
 import CivetSetup from "@/components/CivetSetup.jsx";
 import { useCivetLive } from "@/hooks/useCivet.js";
 import { withCivetEvidence } from "@/lib/civet.js";
@@ -7423,6 +7424,7 @@ export default function LiveCapture() {
 
   return (
     <div className={`${focusView ? "h-screen overflow-hidden bg-[#071016] p-0" : "p-4 md:p-6"} space-y-4`}>
+      <CivetLiveAlert live={civet} onSetup={() => setCivetSetupOpen(true)} />
       {civetSetupOpen && <CivetSetup live={civet} onClose={() => setCivetSetupOpen(false)} />}
       {emgSetupOpen && <EmgSetup onClose={() => { setEmgSetupOpen(false); try { setEmgNames(JSON.parse(localStorage.getItem("pulsepoint.emgNames")) || []); } catch {} }} onConnected={() => updateTelemetryPanel("emg", { enabled: true })} />}
       {!focusView && <button type="button" className="rounded-lg border border-primary px-4 py-2" onClick={() => setCivetSetupOpen(true)}>Connect CIVET · pelvic pressure</button>}
@@ -9996,7 +9998,7 @@ export default function LiveCapture() {
         </TrendPanel>
         </div>)}
 
-        {telemetryPanelEnabled("civet") && (civet.latest || civet.history?.length > 0) && renderTelemetryDashboardPanel("civet", <div className="h-full min-h-0" style={{ minHeight: focusView ? 0 : 260 }}><CivetCard rows={civet.history} sample={civet.latest} statusText={civet.error} /></div>)}
+        {telemetryPanelEnabled("civet") && (civet.latest || civet.history?.length > 0) && renderTelemetryDashboardPanel("civet", <div className="h-full min-h-0" style={{ minHeight: focusView ? 0 : 420 }}><CivetLiveCard live={civet} onSetup={() => setCivetSetupOpen(true)} /></div>)}
         {telemetryPanelEnabled("emg") && telemetryEmgLive && (
           renderTelemetryDashboardPanel("emg", <div className="h-full min-h-0" style={{ order: telemetryPanelOrder("emg") }}><TrendPanel title={selectedEmgConfig.trendTitle} subtitle={selectedEmgConfig.trendSubtitle} empty={!hasEmgTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-64 md:h-72"} distanceView={distanceTelemetryView} fill={focusView}>
             <ResponsiveContainer width="100%" height="100%">

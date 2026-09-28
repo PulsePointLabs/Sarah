@@ -18,7 +18,7 @@ test('early release fails reference but allows a fresh hold with the accepted ba
   assert.equal(failed.calibration_status.phase, 'failed');
   assert.equal(failed.baseline_ready, true); assert.equal(failed.usable, false);
   r.feed(2, 60); r.p.calibrate('reference'); const retry = r.feed(4);
-  assert.equal(retry.calibration_status.phase, 'complete'); assert.equal(retry.usable, true);
+  assert.equal(retry.calibration_status.phase, 'settling'); assert.equal(retry.usable, false); assert.equal(r.feed(2,40).usable,true);
 });
 test('uneven sustained pressure fails instead of setting a misleading reference', () => {
   const r = rig(); r.p.calibrate('baseline'); r.feed(2);
@@ -38,5 +38,5 @@ test('preparation allows building a hold without invalidating baseline and is ex
   const prep = r.feed(i => 2 + i / 15, 30);
   assert.equal(prep.calibration_status.phase, 'preparing'); assert.equal(prep.baseline_ready, true);
   const result = r.feed(4, 51);
-  assert.equal(result.usable, true); assert.equal(result.calibration.reference, 2);
+  assert.equal(result.usable, false); assert.equal(result.acquisition_state,'settling'); assert.equal(result.calibration.reference, 2); assert.equal(r.feed(2,40).usable,true);
 });

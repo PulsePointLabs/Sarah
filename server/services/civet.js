@@ -78,10 +78,11 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
         const filename=safe(current.id), first=!fs.existsSync(filename);
         fs.appendFileSync(filename,JSON.stringify(latest)+'\n');
         if(first) {
-          appendMetadata({type:'capture_started',timestamp_ms:message.timestamp_ms,calibration:feature.calibration,algorithm:CIVET_VERSION,parameters:CIVET_PARAMETERS,clock:'host monotonic anchored UTC; t relative to Sarah session start'});
+          appendMetadata({type:'capture_started',timestamp_ms:message.timestamp_ms,calibration:feature.calibration,algorithm:CIVET_VERSION,acquisition_policy:feature.acquisition_policy,parameters:CIVET_PARAMETERS,clock:'host monotonic anchored UTC; t relative to Sarah session start'});
           if(lastHardwareZero&&lastHardwareZero.address===state.address)appendMetadata({...lastHardwareZero,type:'preceding_hardware_zero'});
         }
         if(feature.calibration_event)appendMetadata(feature.calibration_event);
+        if(feature.acquisition_event)appendMetadata(feature.acquisition_event);
       } catch(error) {state.error=`CIVET recording failed: ${error.message}`;}
     }
   }
@@ -107,7 +108,7 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
       state={state:'connecting',address,error:null,battery:null};
       const process=launch(python,['-u',helper,'connect',address],{windowsHide:true,stdio:['pipe','pipe','pipe']});child=process;
       let buffer='';
-      process.stdout.on('data',chunk=>{buffer+=chunk.toString();let end;while((end=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,end);buffer=buffer.slice(end+1);try{const message=JSON.parse(line);if(message.command_id) {commandReply(message);}else if(Number.isFinite(message.pressure_kpa)) ingest(message);else {state={...state,...message};if(message.state==='reconnecting'){latest=null;reconnected=true;processor.invalidate();}}}catch(error){state.error=`CIVET packet error: ${error.message}`;}}});
+      process.stdout.on('data',chunk=>{buffer+=chunk.toString();let end;while((end=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,end);buffer=buffer.slice(end+1);try{const message=JSON.parse(line);if(message.command_id) {commandReply(message);}else if(Number.isFinite(message.pressure_kpa)) ingest(message);else {if(message.state&&message.state!==state.state)appendMetadata({type:'sensor_connection',state:message.state,timestamp_ms:message.timestamp_ms??Date.now()});state={...state,...message};if(message.state==='reconnecting'){latest=null;reconnected=true;processor.invalidate();}}}catch(error){state.error=`CIVET packet error: ${error.message}`;}}});
       process.stderr.on('data',chunk=>{state.error=chunk.toString().slice(-500);});
       process.on('error',error=>{state.error=error.message;state.state='disconnected';if(child===process)child=null;});
       process.on('exit',()=>{if(child===process){rejectCommands();child=null;state.state='disconnected';latest=null;}});

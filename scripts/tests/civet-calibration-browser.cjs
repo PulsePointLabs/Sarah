@@ -12,7 +12,7 @@ await page.getByText('Rest accepted — ready to hold',{exact:true}).waitFor({ti
 await hold.click();await page.evaluate(()=>window.setPressure(4));await page.getByText('HOLD — keep it steady',{exact:true}).waitFor();
 await page.waitForTimeout(2000);await page.evaluate(()=>window.setPressure(2));await page.getByText('Redo suggested',{exact:true}).waitFor({timeout:8000});
 const redo=page.getByRole('button',{name:/Redo hold/});assert.equal(await redo.isEnabled(),true);await page.screenshot({path:'logs/civet-calibration-redo.png'});
-await redo.click();await page.evaluate(()=>window.setPressure(4));await page.getByText('Calibration ready',{exact:true}).waitFor({timeout:11000});
+await redo.click();await page.evaluate(()=>window.setPressure(4));await page.getByText('Release and relax',{exact:true}).waitFor({timeout:11000});await page.evaluate(()=>window.setPressure(2));await page.getByText('Calibration ready',{exact:true}).waitFor({timeout:7000});
 await page.evaluate(()=>window.setPressure(2));await page.waitForTimeout(500);await page.screenshot({path:'logs/civet-calibration-ready.png'});
 assert.equal(await page.locator('.civet-setup').evaluate(el=>el.scrollHeight>el.clientHeight+2),false);
 await page.setViewportSize({width:390,height:844});assert.equal(await page.locator('.civet-setup').evaluate(el=>el.scrollWidth>el.clientWidth+2),false);await page.screenshot({path:'logs/civet-calibration-mobile.png'});
