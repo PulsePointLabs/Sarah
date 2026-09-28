@@ -86,7 +86,7 @@ test('summary failure keeps independently validated checklist checkpoints',async
   assert.equal(f.entry.result.overview,'old review');
 });
 
-test('automatic completion, deduplication, missing fill and re-run keep episode identity',async()=>{
+test('near-climax saves stay manual; deduplication, missing fill and re-run keep episode identity',async()=>{
   const {upsertEntity,getEntity,initDb}=await import('../db.js');
   initDb();
   const {registerJobHandler,cancelJob,getJob}=await import('./jobQueue.js');
@@ -97,6 +97,8 @@ test('automatic completion, deduplication, missing fill and re-run keep episode 
   queueChangedEpisodes('Session',old,old);assert.equal(episodeReviews('Session',old.id).length,0);
   const done=upsertEntity('Session',old.id,{subjective_near_climax_episodes:[{...e,end_s:12}]});
   queueChangedEpisodes('Session',old,done);
+  assert.equal(episodeReviews('Session',old.id).length,0);
+  queueEpisodeReview('Session',old.id,e.id);
   const review=episodeReviews('Session',old.id)[0];assert.ok(review.job_id);
   assert.equal(queueEpisodeReview('Session',old.id,e.id,{force:true}).id,review.job_id);
   cancelJob(review.job_id);
@@ -112,7 +114,7 @@ test('automatic completion, deduplication, missing fill and re-run keep episode 
   cancelJob(episodeReviews('Session',old.id)[0].job_id);
 });
 
-test('HTTP episode endpoints enqueue after a persisted PATCH and support fill/re-run',async()=>{
+test('HTTP marker PATCH does not enqueue near-climax review; explicit fill/re-run still work',async()=>{
   const express=(await import('express')).default;
   const {entitiesRouter}=await import('../routes/entities.js');
   const {upsertEntity}=await import('../db.js');
@@ -124,11 +126,21 @@ test('HTTP episode endpoints enqueue after a persisted PATCH and support fill/re
   try{
     const response=await fetch(url,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({subjective_near_climax_episodes:[{id:'http-e',start_s:10,end_s:20,source:{key:'feet',localPath:'synthetic.mkv'}}]})});
     assert.equal(response.status,200);
-    const reviews=await (await fetch(`${url}/episode-reviews`)).json();assert.equal(reviews.length,1);assert.ok(reviews[0].job_id);
+    const reviews=await (await fetch(`${url}/episode-reviews`)).json();assert.equal(reviews.length,0);
     const filled=await (await fetch(`${url}/episode-reviews`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fillMissing:true})})).json();
-    assert.equal(filled.jobs[0].id,reviews[0].job_id);
-    cancelJob(reviews[0].job_id);
+    assert.ok(filled.jobs[0].id);
+    cancelJob(filled.jobs[0].id);
     const retry=await (await fetch(`${url}/episode-reviews`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({episodeId:'http-e'})})).json();
-    assert.notEqual(retry.jobs[0].id,reviews[0].job_id);cancelJob(retry.jobs[0].id);
+    assert.notEqual(retry.jobs[0].id,filled.jobs[0].id);cancelJob(retry.jobs[0].id);
   }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
+test('climax completion retains automatic review', async()=>{
+  const {upsertEntity}=await import('../db.js');
+  const {queueChangedEpisodes,episodeReviews}=await import('./episodeReviewJobs.js');
+  const {cancelJob}=await import('./jobQueue.js');
+  const old=upsertEntity('Session','climax-auto-test',{subjective_near_climax_episodes:[]});
+  const done=upsertEntity('Session',old.id,{subjective_near_climax_episodes:[{id:'climax',kind:'climax',start_s:3,end_s:12,source:{key:'main',localPath:'synthetic.mkv'}}]});
+  queueChangedEpisodes('Session',old,done);
+  const reviews=episodeReviews('Session',old.id);assert.equal(reviews.length,1);assert.ok(reviews[0].job_id);cancelJob(reviews[0].job_id);
 });

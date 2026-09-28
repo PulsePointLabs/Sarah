@@ -11,7 +11,7 @@ export default function SubjectiveNearClimaxEpisodes({ episodes, timelineRows, o
   const phaseModel = useMemo(() => buildPhaseEvidence(timelineRows), [timelineRows]);
   const highApproach = useMemo(() => phaseBandsFromPoints(phaseModel.points).filter((b) => b.phase === "approach"), [phaseModel]);
   return <section className="space-y-3" aria-label="Subjective near-climax episodes">
-    <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><span className="text-muted-foreground">Completed episodes automatically receive a camera-specific video and physiology review.</span><button type="button" disabled={saving || analysis.submitting || !missing} onClick={()=>analysis.run({fillMissing:true})} className="rounded border border-primary/30 px-3 py-2 text-primary disabled:opacity-40">Fill missing analyses ({missing})</button></div>
+    <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><span className="text-muted-foreground">Near-climax reviews run only when requested. Use Analyze or Fill missing analyses. Climax reviews remain automatic.</span><button type="button" disabled={saving || analysis.submitting || !missing} onClick={()=>analysis.run({fillMissing:true})} className="rounded border border-primary/30 px-3 py-2 text-primary disabled:opacity-40">Fill missing analyses ({missing})</button></div>
     {analysis.error && <p role="alert" className="text-xs text-amber-300">{analysis.error}</p>}
     <div className="flex flex-wrap items-center gap-2">{[["near_climax", "Near climax", "N"], ["climax", "Climax", "C"]].map(([kind, label, key]) =>
       <button key={kind} type="button" onClick={() => onToggle(kind)} className="rounded border border-violet-400/40 px-3 py-2 text-xs text-violet-400">

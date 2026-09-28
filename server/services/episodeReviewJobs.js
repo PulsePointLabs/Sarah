@@ -34,13 +34,15 @@ export function queueChangedEpisodes(entity, previous, current) {
   if (!['Session','BodyExploration'].includes(entity)) return;
   for (const old of previous.subjective_near_climax_episodes || []) {
     const next = current.subjective_near_climax_episodes?.find(e=>e.id===old.id);
-    if (!next || !completedEpisode(next)) {
+    if (!next || !completedEpisode(next) || episodeSignature(old) !== episodeSignature(next)) {
       for (const job of listJobs({type:'episode_visual_review',meta:{reviewId:episodeReviewId(entity,current.id,old.id)}})) {
         if (['queued','running'].includes(job.status)) cancelJob(job.id);
       }
     }
   }
   for (const episode of current.subjective_near_climax_episodes || []) {
+    // Near-climax markers are saved without starting paid AI work; manual review remains available.
+    if ((episode.kind || "near_climax") === "near_climax") continue;
     const old = previous.subjective_near_climax_episodes?.find(e=>e.id === episode.id);
     if (completedEpisode(episode) && (!old || episodeSignature(old) !== episodeSignature(episode))) {
       try { queueEpisodeReview(entity, current.id, episode.id); }
