@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
   "version": "0.1.274",
-  "commit": "9fbc597",
-  "commitMessage": "Keep near-climax episode AI reviews manual",
-  "builtAt": "2026-09-28T23:04:59.713Z"
+  "commit": "543ab90",
+  "commitMessage": "Preserve Video Sync sidebar design proposals and synthetic previews",
+  "builtAt": "2026-09-30T18:14:53.837Z"
 };
