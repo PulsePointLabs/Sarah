@@ -19,5 +19,6 @@ export function useCivetTimeline(id,trim) {
     read();return()=>{active=false;clearTimeout(timer);};
   },[id,revision]);
   const view=useMemo(()=>civetView({samples:state.rows,analysis:state.analysis},trim),[state.rows,state.analysis,trim]);
-  return {...(state.id===id?{...state,rows:view.samples,analysis:view.analysis}:{rows:[],error:null}),retry:()=>setRevision(n=>n+1)};
+  const analysis = useMemo(() => view.analysis ? {...view.analysis, live: {...view.analysis.live, rows: view.samples}} : null, [view.analysis, view.samples]);
+  return {...(state.id===id?{...state,rows:analysis?.reprocessed?.rows || view.samples,analysis}:{rows:[],error:null}),retry:()=>setRevision(n=>n+1)};
 }

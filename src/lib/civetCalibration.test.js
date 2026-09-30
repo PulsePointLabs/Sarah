@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCivetProcessor } from './civet.js';
+test('queued Windows notifications with identical receive timestamps do not invalidate rest', () => {
+  const p=createCivetProcessor(); p.calibrate('baseline'); let row;
+  for(let i=0;i<=50;i++)row=p.ingest(20,(i%10===4?i+1:i)/10);
+  assert.equal(row.baseline_ready,true); assert.equal(row.calibration_error,null);
+});
+test('a genuine outage inside the measurement fails even with enough later samples', () => {
+  const p=createCivetProcessor();p.calibrate('baseline');let row;
+  for(let i=0;i<=50;i++)row=p.ingest(20,i<20?i/10:2.4+(i-20)*2.6/30);
+  assert.equal(row.baseline_ready,false);assert.match(row.calibration_error,/interrupted/);
+});
+test('delivery gap in preparation does not poison the subsequent complete measurement', () => {
+  const p=createCivetProcessor();p.calibrate('baseline',{prepareS:3});p.ingest(20,0);p.ingest(20,1);
+  let row;for(let i=0;i<=70;i++)row=p.ingest(20,1+i/10);
+  assert.equal(row.baseline_ready,true);
+});
 function rig() {
   const p = createCivetProcessor(); let t = 0;
   return { p, feed(value, n = 51) { let row; for (let i = 0; i < n; i++) { row = p.ingest(typeof value === 'function' ? value(i) : value, t); t = Math.round((t + .1) * 10) / 10; } return row; } };

@@ -3,8 +3,11 @@ import { createCivetReadiness, CIVET_ACQUISITION_POLICY } from './civetReadiness
 import { calibrationFeedback } from './civetCalibration.js';
 export const CIVET_ALGORITHM = CIVET_VERSION;
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
-export function createCivetProcessor() {
-  let calibration=null,pending=null,window=[],events=[],last=null,tonic=null,invalid=false,count=0,sessionMax=0,heldAt=null,step=null,serial=0,lastCalibrationError=null,baselineReady=false,calibrationStatus=null,signalStart=-Infinity;
+export function createCivetProcessor({ verifiedCalibration = null } = {}) {
+  if (verifiedCalibration && (!Number.isFinite(verifiedCalibration.baseline) || !Number.isFinite(verifiedCalibration.reference) || verifiedCalibration.reference <= 0 || !Number.isFinite(verifiedCalibration.noise) || verifiedCalibration.noise < 0)) throw new Error('Invalid recorded calibration');
+  // Offline replay may start at an already verified recorded sample. Live capture
+  // always starts without a reference and uses the full rest/hold/release sequence.
+  let calibration=verifiedCalibration ? {...verifiedCalibration} : null,pending=null,window=[],events=[],last=null,tonic=null,invalid=false,count=0,sessionMax=0,heldAt=null,step=null,serial=0,lastCalibrationError=null,baselineReady=!!verifiedCalibration,calibrationStatus=null,signalStart=-Infinity;
   const detector=createMorphologyDetector();
   const readiness=createCivetReadiness();
   function reset() {signalStart=-Infinity;if(pending){readiness.invalidate("Calibration interrupted. Repeat rest and hold.");baselineReady=false;}readiness.reset();window=[];events=[];last=null;tonic=null;heldAt=null;step=null;pending=null;calibrationStatus=null;count=0;sessionMax=0;detector.reset();}
@@ -21,18 +24,20 @@ export function createCivetProcessor() {
     ingest(pressure,t,context={}) {
       if(!Number.isFinite(pressure)||!Number.isFinite(t))throw new Error('Invalid pressure sample');
       const dt=last?t-last.t:null;
-      const gap=!!last&&(dt>.18+1e-6||dt<=0||!!context.reconnected);
+      // Host receive timestamps can coincide when Windows delivers queued BLE notifications.
+      // Keep actual timestamps; tolerate up to 350 ms delivery jitter without inventing samples.
+      const gap=!!last&&(dt>.35+1e-6||dt<0||!!context.reconnected);
       const quality=[];let calibrationError=lastCalibrationError,calibrationEvent=null;
-      if(gap){signalStart=t;quality.push('packet_gap');window=[];heldAt=null;step=null;tonic=null;if(context.reconnected||dt>2||dt<=0){invalid=true;baselineReady=false;}}
+      if(gap){signalStart=t;quality.push('packet_gap');window=[];heldAt=null;step=null;tonic=null;if(context.reconnected||dt>2||dt<0){invalid=true;baselineReady=false;}}
       if(pending) {
-        pending.start??=t+pending.prepareS;if(t>=pending.start-1e-6)pending.samples.push(pressure);pending.invalid ||=gap;
+        pending.start??=t+pending.prepareS;if(t>=pending.start-1e-6)pending.samples.push(pressure);pending.invalid ||= !!context.reconnected || (t>=pending.start-1e-6 && gap && t-Math.max(last?.t??t,pending.start)>.35);
         const feedback=calibrationFeedback(pending.samples,pending.kind,calibration);
         if(pending.invalid)Object.assign(feedback,{tone:'warning',acceptable:false,message:'Signal interrupted. Reconnect if needed, then redo rest.'});
         calibrationStatus={kind:pending.kind,phase:t<pending.start-1e-6?'preparing':'collecting',...feedback};
         if(t-pending.start>=5-1e-6) {
           const a=pending.samples,baseline=average(a),variance=average(a.map(v=>(v-baseline)**2)),noise=Math.sqrt(variance);
           const drift=Math.abs(average(a.slice(-10))-average(a.slice(0,10)));
-          if(a.length<45||pending.invalid)calibrationError='Missing samples during calibration; repeat baseline.';
+          if(a.length<45||pending.invalid)calibrationError=`Pressure sampling interrupted (${a.length} samples in 5 seconds; at least 45 required). Redo ${pending.kind==='baseline'?'rest':'hold'}.`;
           else if(pending.kind==='baseline') {
             if(!feedback.acceptable)calibrationError=feedback.message;
             else {calibration={id:`cal-${context.timestamp_ms??t}-${++serial}`,policy:'pressure-stability-1',baseline,noise,variance,reference:null,at:t,timestamp_ms:context.timestamp_ms??null,quality:'baseline only',baseline_drift_kpa:drift};invalid=false;baselineReady=true;readiness.baseline();}
@@ -44,7 +49,7 @@ export function createCivetProcessor() {
             else {calibration={...calibration,id:`cal-${context.timestamp_ms??t}-${++serial}`,reference,at:t,timestamp_ms:context.timestamp_ms??null,quality:'valid',reference_variance:variance};invalid=false;readiness.reference(t);}
           }
           calibrationEvent={type:'calibration',policy:'pressure-stability-1',kind:pending.kind,t,timestamp_ms:context.timestamp_ms??null,success:!calibrationError,error:calibrationError,calibration};
-          calibrationStatus={kind:pending.kind,phase:calibrationError?'failed':'complete',tone:calibrationError?'warning':'good',message:calibrationError||(pending.kind==='baseline'?'Rest accepted. Ready for the five-second hold.':'Calibration ready. You can relax now.')};
+          calibrationStatus={kind:pending.kind,phase:calibrationError?'failed':pending.kind==='baseline'?'baseline_accepted':'settling',tone:calibrationError?'warning':pending.kind==='baseline'?'good':'waiting',message:calibrationError||(pending.kind==='baseline'?'Rest accepted. Ready for the five-second hold.':'Hold accepted. Release and relax to finish calibration.')};
           lastCalibrationError=calibrationError;if(calibrationError)invalid=true;
           pending=null;detector.reset();window=[];heldAt=null;step=null;tonic=calibration?.baseline??pressure;
         }
@@ -96,4 +101,3 @@ export function withCivetEvidence(base,sample,emgLevel=0) {
   const addition=base.buildEligibleForNearClimax&&base.recovery<45?Math.max(0,evidence.contribution-Math.min(8,Math.max(0,emgLevel)*.16)):0;
   return {...base,nearClimax:Math.min(100,base.nearClimax+addition),civetContribution:addition,civetEvidence:evidence.label,reason:[base.reason,evidence.label].filter(Boolean).join(' · ')};
 }
-

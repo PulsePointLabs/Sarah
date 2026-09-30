@@ -106,7 +106,8 @@ export function analyzeCivetReview(rawRows) {
       const c=r.calibration, before=segment[i-1], after=segment[i+1], jump=Math.max(.4,(c?.reference||1)*.6);
       if(before&&Math.abs(r.pressure_kpa-before.pressure_kpa)>jump)flags.push('abrupt_pressure_change');
       if(before&&after&&Math.abs(r.pressure_kpa-before.pressure_kpa)>jump&&Math.abs(r.pressure_kpa-after.pressure_kpa)>jump)flags.push('impulsive_pressure_change');
-      const shifted=c&&(tonic-c.baseline>Math.max(.4,(c.reference||1)*.6)||tonic-c.baseline< -Math.max(.2,(c.noise||0)*6));
+      // Elevated tonic pressure is not evidence that a comfortable reference failed.
+      const shifted=c&&tonic < c.baseline-Math.max(.5,(c.reference||0)*.2,(c.noise||0)*8);
       if(shifted)flags.push('baseline_drift_or_tonic_shift');
       if(i===0||i===segment.length-1)flags.push('filter_edge');
       const row={...r,events:[],rhythm:null,duration_s:null,contraction_count:null,contractions_60s:null,mean_duration_s:null,filtered_kpa:filtered,tonic_kpa:tonic,phasic_kpa:filtered-tonic,

@@ -34,7 +34,7 @@ export default function CivetSetup({ live, onClose }) {
   const needsRest = connected && !baselineReady && !active;
   const title = !connected ? 'Waiting for live pressure' : preparing ? (kind === 'baseline' ? 'Get ready to relax' : 'Get ready to hold') : collecting ? (kind === 'baseline' ? 'REST — stay relaxed' : 'HOLD — keep it steady') : settling ? 'Release and relax' : needsRest ? 'Collect a relaxed baseline' : ready ? 'Calibration ready' : status?.phase === 'failed' ? 'Redo suggested' : 'Rest accepted — ready to hold';
   const feedback = !connected ? 'Connect the sensor before calibration. Old readings are not used.' : preparing ? (kind === 'baseline' ? 'Relax now. Measurement begins after this countdown.' : 'Build a comfortable squeeze now. Hold through the next five seconds.') : collecting ? status?.message || 'Collecting pressure…' : sample?.acquisition_message || sample?.calibration_error || (needsRest ? 'Start with five seconds of quiet, steady pressure.' : status?.message) || 'Collect rest, then a comfortable five-second hold.';
-  const tone = !connected || preparing ? 'waiting' : collecting ? status?.tone || 'waiting' : needsRest || status?.phase === 'failed' ? 'warning' : 'good';
+  const tone = !connected || preparing || settling ? 'waiting' : collecting ? status?.tone || 'waiting' : needsRest || status?.phase === 'failed' || (sample?.calibration?.reference && !ready) ? 'warning' : 'good';
   const end = sample?.t ?? 0;
   const rows = connected ? (live.history || []).filter(r => r.t >= end - 10 && r.t <= end) : [];
   return <div className="civet-setup-backdrop"><section role="dialog" aria-modal="true" aria-label="Connect CIVET" className="civet-setup">

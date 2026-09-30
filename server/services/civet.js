@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { CIVET_VERSION, CIVET_PARAMETERS, analyzeCivetReview, linkIntervals, summarizeTrains } from '../../src/lib/civetAnalysis.js';
 import { fileURLToPath } from 'node:url';
 import { createCivetProcessor } from '../../src/lib/civet.js';
+import { reprocessCivetRecording, CIVET_REPROCESS_VERSION } from '../../src/lib/civetReprocess.js';
 const execute=promisify(execFile);
 const helper=fileURLToPath(new URL('../../tools/capture/civet/civet_ble.py',import.meta.url));
 export function createCivetService({directory,session=()=>null,onRecorded=()=>{},run=execute,launch=spawn}) {
@@ -39,11 +40,17 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
     const metadata=fs.existsSync(metadataFile)?fs.readFileSync(metadataFile,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)):[];
     const liveEvents=linkIntervals(rows.flatMap(r=>r.events||[]));
     const result={raw_sha256:hash,algorithm:CIVET_VERSION,parameters:CIVET_PARAMETERS,active,metadata,
-      live:{mode:'live',algorithm:rows[0]?.algorithm||'unknown',parameters:metadata.find(e=>e.type==='capture_started')?.parameters??null,events:liveEvents,trains:summarizeTrains(liveEvents,rows)},review:null};
+      live:{mode:'live',algorithm:rows[0]?.algorithm||'unknown',parameters:metadata.find(e=>e.type==='capture_started')?.parameters??null,events:liveEvents,trains:summarizeTrains(liveEvents,rows)},review:null,reprocessed:null};
     if(!active&&rows.length) {
-      const cache=file.replace('.jsonl',`.${CIVET_VERSION}.${hash.slice(0,16)}.review.json`);
+      const replayCache=file.replace('.jsonl',`.${CIVET_REPROCESS_VERSION}.${hash.slice(0,16)}.json`);
+      if(fs.existsSync(replayCache))result.reprocessed=JSON.parse(fs.readFileSync(replayCache,'utf8'));
+      else {
+        result.reprocessed={...reprocessCivetRecording(rows),raw_sha256:hash};
+        fs.writeFileSync(replayCache+'.tmp',JSON.stringify(result.reprocessed));fs.renameSync(replayCache+'.tmp',replayCache);
+      }
+      const cache=file.replace('.jsonl',`.${CIVET_VERSION}.${CIVET_REPROCESS_VERSION}.${hash.slice(0,16)}.review.json`);
       if(fs.existsSync(cache))result.review=JSON.parse(fs.readFileSync(cache,'utf8'));
-      else {result.review={...analyzeCivetReview(rows),raw_sha256:hash};fs.writeFileSync(cache+'.tmp',JSON.stringify(result.review));fs.renameSync(cache+'.tmp',cache);}
+      else {result.review={...analyzeCivetReview(result.reprocessed.rows),raw_sha256:hash};fs.writeFileSync(cache+'.tmp',JSON.stringify(result.review));fs.renameSync(cache+'.tmp',cache);}
     }
     return result;
   }

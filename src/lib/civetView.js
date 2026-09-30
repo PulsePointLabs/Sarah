@@ -7,10 +7,10 @@ export function civetView(data,trim) {
   const events=a=>(a||[]).filter(e=>e.peak>=start&&e.peak<=end).map(event);
   const rows=a=>(a||[]).filter(r=>r.t>=start&&r.t<=end).map(r=>({...r,source_t:r.t,t:r.t-start,events:events(r.events)}));
   const samples=rows(data.samples),analysis=data.analysis?{...data.analysis,view_offset_s:start}:null;
-  if(analysis)for(const mode of ['live','review']) {
+  if(analysis)for(const mode of ['live','review','reprocessed']) {
     if(!analysis[mode])continue;
     const displayRows=mode==='live'?samples:rows(analysis[mode].rows),displayEvents=events(analysis[mode].events);
-    analysis[mode]={...analysis[mode],...(mode==='review'?{rows:displayRows}:{}),events:displayEvents,trains:summarizeTrains(displayEvents,displayRows)};
+    analysis[mode]={...analysis[mode],...(mode!=='live'?{rows:displayRows}:{}),events:displayEvents,trains:summarizeTrains(displayEvents,displayRows)};
   }
   return {...data,samples,analysis};
 }
