@@ -27,6 +27,7 @@ import { updateLiveCaptureObsState } from '../services/liveCaptureObsState.js';
 import { decideObsSessionLifecycleTransition } from '../services/liveCaptureSessionLifecycle.js';
 
 import { createNativeH10Decoder } from '../services/nativeH10Telemetry.js';
+import { LiveMonitoring } from '../services/liveMonitoring.js';
 
 export const liveCaptureRouter = express.Router();
 
@@ -149,10 +150,31 @@ const state = {
   engine: null,
 };
 
+let monitoringCivet = () => null;
+export function setMonitoringCivetProvider(provider) { monitoringCivet = provider; }
+const liveMonitoring = new LiveMonitoring({ onCandidate(event) {
+  const session = currentLiveSessionEntity();
+  if (!session || session.id !== liveMonitoring.sessionId) throw new Error('Monitoring session changed before candidate save.');
+  const events = session.event_timeline || [];
+  if (!events.some(existing => existing.id === event.id)) patchCurrentLiveSession({ event_timeline: [...events, event].sort((a, b) => a.time_s - b.time_s) });
+} });
+function monitoringState() {
+  const snapshot = liveMonitoring.snapshot(Date.now(), { active: Boolean(state.session.active && state.hr.recording?.active), paused: Boolean(state.hr.recording?.paused) });
+  return state.monitoring?.error ? { ...snapshot, stale: true, error: state.monitoring.error } : snapshot;
+}
 telemetryEngine.on('snapshot', (snapshot) => {
   state.engine = snapshot.engine;
   if (snapshot.hr) state.hr.latestTelemetry = snapshot.hr;
   if (snapshot.emg) state.emg.latestTelemetry = snapshot.emg;
+  try {
+    const changed = state.session.activeSessionId !== liveMonitoring.sessionId;
+    state.monitoring = liveMonitoring.update({ hr: snapshot.hr, emg: snapshot.emg, civet: monitoringCivet(),
+      sessionId: state.session.activeSessionId, startedAt: state.session.startedAt,
+      active: Boolean(state.session.active && state.hr.recording?.active), paused: Boolean(state.hr.recording?.paused),
+      candidateCount: changed ? (currentLiveSessionEntity()?.event_timeline || []).filter(event => event.source === 'live_climax_prediction').length : 0,
+    });
+  } catch (error) { state.monitoring = { ...monitoringState(), stale: true, error: error.message }; }
+  snapshot.monitoring = state.monitoring;
   broadcast('telemetry_snapshot', snapshot);
   if (snapshot.hr) broadcastOverlayHeartRate(snapshot.hr);
 });
@@ -2664,7 +2686,12 @@ liveCaptureRouter.get('/status', async (_req, res) => {
   markSelectedHrStaleIfNeeded();
   state.engine = telemetryEngine.snapshot().engine;
   await recoverPersistedLiveSession({ finalize: true });
+  state.monitoring = { ...state.monitoring, ...monitoringState() };
   res.json(state);
+});
+
+liveCaptureRouter.get('/monitoring', (_req, res) => {
+  res.json({ ...monitoringState(), history: liveMonitoring.history });
 });
 
 liveCaptureRouter.get('/overlay-heart-rate', (_req, res) => {

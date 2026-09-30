@@ -3,6 +3,7 @@ import CivetLiveAlert from "@/components/CivetLiveAlert.jsx";
 import CivetSetup from "@/components/CivetSetup.jsx";
 import { useCivetLive } from "@/hooks/useCivet.js";
 import { withCivetEvidence } from "@/lib/civet.js";
+import { createResumableLiveStream, mergeMonitoringPoints } from "@/lib/resumableLiveStream";
 import StableTelemetryText from "@/components/StableTelemetryText";
 import EditableTelemetryPanel from "@/components/EditableTelemetryPanel";
 import ViewportTelemetryGrid from "@/components/ViewportTelemetryGrid";
@@ -1687,6 +1688,8 @@ export default function LiveCapture() {
   const [activeSessionDoc, setActiveSessionDoc] = useState(null);
   const [connected, setConnected] = useState(false);
   const [telemetryHistory, setTelemetryHistory] = useState([]);
+  const serverMonitoringRef = useRef(false);
+  const serverMonitoringSessionRef = useRef(null);
   const [liveEvents, setLiveEvents] = useState([]);
   const [phaseMarkers, setPhaseMarkers] = useState([]);
   const [nearClimaxEpisodeCount, setNearClimaxEpisodeCount] = useState(0);
@@ -3531,7 +3534,14 @@ export default function LiveCapture() {
   }, [publishDirectH10Measurement]);
 
   useEffect(() => {
-    fetch(apiUrl("/live-capture/status")).then((res) => res.json()).then((data) => {
+    let disposed = false;
+    let refreshGeneration = 0;
+    let appStateHandle = null;
+    const refresh = () => {
+    const generation = ++refreshGeneration;
+    fetch(apiUrl("/live-capture/status"), { cache: "no-store" }).then((res) => res.json()).then((data) => {
+      if (disposed || generation !== refreshGeneration) return;
+      serverMonitoringRef.current = data.monitoring?.version === 1;
       setStatus(data);
       const nextHr = data.hr?.latestTelemetry || null;
       const nextEmg = data.emg?.latestTelemetry || null;
@@ -3543,13 +3553,26 @@ export default function LiveCapture() {
       setFiles(data.files || null);
       setLiveSession(data.session || null);
       setCalibrationCommandStatus(data.emg?.calibrationCommandStatus || null);
+      if (serverMonitoringRef.current) fetch(apiUrl("/live-capture/monitoring"), { cache: "no-store" })
+        .then(res => res.json()).then(monitor => {
+          if (disposed || generation !== refreshGeneration || !Array.isArray(monitor.history)) return;
+          const sameSession = serverMonitoringSessionRef.current === monitor.sessionId;
+          serverMonitoringSessionRef.current = monitor.sessionId;
+          setTelemetryHistory(prev => mergeMonitoringPoints(sameSession ? prev : [], monitor.history));
+        }).catch(() => {});
     }).catch(() => {});
+    };
+    refresh();
 
-    const events = new EventSource(apiUrl("/live-capture/stream"));
+    const events = createResumableLiveStream(apiUrl("/live-capture/stream"), { onResume: refresh });
+    import("@capacitor/app").then(({ App }) => App.addListener("appStateChange", ({ isActive }) => {
+      if (isActive) events.resume();
+    })).then(handle => { if (disposed) handle.remove(); else appStateHandle = handle; }).catch(() => {});
     events.onopen = () => setConnected(true);
     events.onerror = () => setConnected(false);
     events.addEventListener("status", (event) => {
       const data = JSON.parse(event.data);
+      serverMonitoringRef.current = data.monitoring?.version === 1;
       const nextHr = data.hr?.latestTelemetry || null;
       const nextEmg = data.emg?.latestTelemetry || null;
       latestHrRef.current = nextHr;
@@ -3566,7 +3589,7 @@ export default function LiveCapture() {
       const data = JSON.parse(event.data);
       latestHrRef.current = data;
       setHrTelemetry(data);
-      appendTelemetryPointRef.current(data, latestEmgRef.current);
+      if (!serverMonitoringRef.current) appendTelemetryPointRef.current(data, latestEmgRef.current);
       maybeTriggerHeartbeatFromTelemetry(data);
     });
     events.addEventListener("emg_telemetry", (event) => {
@@ -3579,10 +3602,15 @@ export default function LiveCapture() {
       const nextEmg = snapshot.emg || latestEmgRef.current;
       latestHrRef.current = nextHr;
       latestEmgRef.current = nextEmg;
-      setStatus((prev) => ({ ...(prev || {}), engine: snapshot.engine || null }));
+      setStatus((prev) => ({ ...(prev || {}), engine: snapshot.engine || null, monitoring: snapshot.monitoring || prev?.monitoring }));
       setHrTelemetry(nextHr);
       setEmgTelemetry(nextEmg);
-      appendTelemetryPointRef.current(nextHr, nextEmg);
+      if (snapshot.monitoring?.version === 1) {
+        serverMonitoringRef.current = true;
+        const sameSession = serverMonitoringSessionRef.current === snapshot.monitoring.sessionId;
+        serverMonitoringSessionRef.current = snapshot.monitoring.sessionId;
+        setTelemetryHistory(prev => mergeMonitoringPoints(sameSession ? prev : [], [snapshot.monitoring.point]));
+      } else appendTelemetryPointRef.current(nextHr, nextEmg);
     });
     events.addEventListener("emg_calibration_status", (event) => {
       setCalibrationCommandStatus(JSON.parse(event.data));
@@ -3594,7 +3622,7 @@ export default function LiveCapture() {
     events.addEventListener("live_session_imported", (event) => {
       setLiveSession((prev) => ({ ...(prev || {}), lastImportedAt: new Date().toISOString(), lastImportResult: JSON.parse(event.data) }));
     });
-    return () => events.close();
+    return () => { disposed = true; events.close(); appStateHandle?.remove?.(); };
   }, [maybeTriggerHeartbeatFromTelemetry]);
 
   useEffect(() => {
@@ -3727,16 +3755,20 @@ export default function LiveCapture() {
     );
   }, [hrTelemetry]);
 
-  const prediction = useMemo(() => computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory, {
+  const prediction = useMemo(() => status?.monitoring?.basePrediction || computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory, {
     sessionTimeSec: getCurrentSessionTime(),
-  }), [emgTelemetry, getCurrentSessionTime, hrTelemetry, telemetryHistory]);
-  const monitoringPrediction = useMemo(() => withCivetEvidence(prediction, civet.latest, Math.max(emgTelemetry?.left_pct || emgTelemetry?.level_pct || 0, emgTelemetry?.right_pct || 0)), [prediction, civet.latest, emgTelemetry]);
+  }), [status?.monitoring?.basePrediction, emgTelemetry, getCurrentSessionTime, hrTelemetry, telemetryHistory]);
+  const monitoringPrediction = useMemo(() => status?.monitoring?.prediction || withCivetEvidence(prediction, civet.latest, Math.max(emgTelemetry?.left_pct || emgTelemetry?.level_pct || 0, emgTelemetry?.right_pct || 0)), [status?.monitoring?.prediction, prediction, civet.latest, emgTelemetry]);
   const recordingTransportActive = Boolean(recording?.active);
   const recordingPaused = Boolean(recordingTransportActive && recording?.paused);
   const recordingActive = Boolean(recordingTransportActive && !recordingPaused);
 
   useEffect(() => {
     const tracker = nearClimaxEpisodeRef.current;
+    if (status?.monitoring?.version === 1) {
+      setNearClimaxEpisodeCount(status.monitoring.candidateCount || 0);
+      return;
+    }
     if (!recordingTransportActive) {
       if (tracker.count) setNearClimaxEpisodeCount(0);
       nearClimaxEpisodeRef.current = { active: false, candidateSince: 0, belowSince: 0, count: 0 };
@@ -3788,7 +3820,7 @@ export default function LiveCapture() {
       tracker.active = false;
       tracker.belowSince = 0;
     }
-  }, [getCurrentSessionTime, monitoringPrediction, recordingPaused, recordingTransportActive]);
+  }, [getCurrentSessionTime, monitoringPrediction, recordingPaused, recordingTransportActive, status?.monitoring]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3956,7 +3988,17 @@ export default function LiveCapture() {
   const leftEmgLevel = readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct);
   const rightEmgLevel = readNumber(emgTelemetry?.right_pct);
   const displayedHr = heldCurrentHr;
-  const displayedNearClimax = heldTelemetryValue(telemetryHistory, "nearClimax", recentHrPacket ? monitoringPrediction.nearClimax : null);
+  const serverMonitoringFresh = status?.monitoring?.version === 1 && !status.monitoring.stale
+    && !status.monitoring.error && liveHealthNowMs - Number(status.monitoring.latestAt || 0) < 5000;
+  const monitoringHelper = status?.monitoring?.version === 1
+    ? status.monitoring.error ? `Server monitoring error: ${status.monitoring.error}`
+      : !status.monitoring.active ? "Server monitor ready · start a session"
+        : status.monitoring.paused ? "Session paused"
+          : serverMonitoringFresh ? "Live server monitoring · independent of phone screen" : "Server monitoring waiting for fresh data"
+    : "Local screen monitoring · update the Sarah server";
+  const displayedNearClimax = status?.monitoring?.version === 1
+    ? serverMonitoringFresh ? status.monitoring.prediction?.nearClimax : null
+    : heldTelemetryValue(telemetryHistory, "nearClimax", recentHrPacket ? monitoringPrediction.nearClimax : null);
   const displayedRrCount = heldTelemetryValue(telemetryHistory, "rrCount", rrCount);
   const displayedRmssd = heldTelemetryValue(telemetryHistory, "hrvRmssd", hrvRmssd);
   const displayedSdnn = heldTelemetryValue(telemetryHistory, "hrvSdnn", hrvSdnn);
@@ -7094,7 +7136,7 @@ export default function LiveCapture() {
                   <CompactStat
                     label="Near-Climax Watch"
                     value={`${fmtNumber(displayedNearClimax, 0)}%`}
-                    helper={`${nearClimaxEpisodeCount} high-prob episode${nearClimaxEpisodeCount === 1 ? "" : "s"}`}
+                    helper={`${monitoringHelper} · ${nearClimaxEpisodeCount} high-prob episode${nearClimaxEpisodeCount === 1 ? "" : "s"}`}
                     level={displayedNearClimax}
                   />
                 </>
@@ -7109,6 +7151,7 @@ export default function LiveCapture() {
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <p className="text-sm font-semibold uppercase tracking-wider text-primary">Real-Time Phase Watch</p>
+                    <p className="text-xs text-muted-foreground">{monitoringHelper}</p>
                     <p className="mt-1 h-6 truncate text-base font-medium leading-6 text-foreground">{monitoringPrediction.label}</p>
                   </div>
                   <Brain className="h-5 w-5 text-primary" />
@@ -9714,7 +9757,7 @@ export default function LiveCapture() {
                 icon={<Brain className="w-4 h-4" />}
                 label="Near-Climax Watch"
                 value={`${fmtNumber(displayedNearClimax, 0)}%`}
-                helper={`${nearClimaxEpisodeCount} high-probability episode${nearClimaxEpisodeCount === 1 ? "" : "s"} · ${monitoringPrediction.confidenceBand}`}
+                helper={`${monitoringHelper} · ${nearClimaxEpisodeCount} high-probability episode${nearClimaxEpisodeCount === 1 ? "" : "s"}`}
                 active={displayedNearClimax >= 42}
                 level={displayedNearClimax}
                 trendValues={telemetryTrendValues(telemetryHistory, "nearClimax", displayedNearClimax)}

@@ -37,5 +37,5 @@ compilation, Android unit-test task, and release artifact checks. Android unit t
 do not exercise physical Bluetooth. A real phone test must still cover Sarah → Howl,
 screen off, cuff measurement, return to Sarah, and a temporary server outage.
 
-Build/near-climax UI history restoration was not changed in this patch. The Android
-screen can pause in the background even while native physiological capture continues.
+Build/near-climax UI history restoration was not changed in v0.1.275. v0.1.276 adds
+continuous server monitoring; see [Live server monitoring](LIVE_SERVER_MONITORING.md).
