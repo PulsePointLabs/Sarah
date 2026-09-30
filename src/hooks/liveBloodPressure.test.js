@@ -33,19 +33,21 @@ test('listener armed earlier calls the latest session save callback', async () =
   assert.equal(h.state.sessionId, 'next-session');
 });
 test('native replay coalesces deliveries, retries failed saves, and acknowledges only success', async () => {
-  let interval; let delivered = 0; let fail = true; const acknowledgements = []; const handlers = {}; const held = [];
+  let interval; let configured; let delivered = 0; let fail = true; const acknowledgements = []; const handlers = {}; const held = [];
   const pending = [reading, {...reading, external_id:"second"}, {...reading, external_id:"old-invalid", measured_at:"-0001-11-28T05:00:00Z"}];
   const native = { addListener: async (name, fn) => { handlers[name] = fn; return { remove: async () => {} }; },
-    arm: async () => ({ pendingReadings: pending }),
+    arm: async options => { configured = options; return { pendingReadings: pending }; },
     getState: async () => ({ pendingReadings: pending }),
     acknowledgeReading: async value => acknowledgements.push(value.externalId), disarm: async () => {} };
   const source = fs.readFileSync(new URL('../lib/omronBloodPressureBle.js', import.meta.url), 'utf8');
   const start = source.indexOf('async function startNativeOmronListener('); const end = source.indexOf('\nfunction readStoredJson', start);
   const context = vm.createContext({ NativeOmronBloodPressure: native, nativeOmronListener: null,
     stopNativeOmronListener: async () => {}, initializeBle: async () => {}, getRememberedOmronDevice: () => ({deviceId:'cuff'}),
-    setInterval: fn => { interval = fn; return 1; }, Map, Promise });
+    setInterval: fn => { interval = fn; return 1; }, Map, Promise, URL,
+    apiUrl: path => `https://sarah.test/api${path}`, window: { location: { href: 'https://localhost' } } });
   vm.runInContext(source.slice(start,end)+'\nthis.start = startNativeOmronListener;',context);
   await context.start({onReading: async () => { delivered++; if(fail) throw Error('offline'); }, onError:()=>{}, onHeldReading: r => held.push(r)});
+  assert.equal(configured.endpoint, 'https://sarah.test/api/blood-pressure/ingest');
   await new Promise(resolve=>setImmediate(resolve)); assert.equal(acknowledgements.length,0); assert.equal(delivered,2);
   fail=false; interval(); interval(); await new Promise(resolve=>setImmediate(resolve));
   assert.equal(delivered,4); assert.deepEqual(acknowledgements.sort(),['second','test']);
@@ -64,4 +66,27 @@ test('automatic database refresh does not clear cuff save error or change contro
   vm.runInContext(page.slice(start,end)+'\nthis.sync=syncBloodPressureForLiveSession;',context);
   for(let i=0;i<6;i++) await context.sync({manual:false});
   assert.equal(state,original);
+});
+
+test('recreated WebView receives a reading already uploaded by native background delivery', async () => {
+  const source = fs.readFileSync(new URL('../lib/omronBloodPressureBle.js', import.meta.url), 'utf8');
+  const start = source.indexOf('async function startNativeOmronListener(');
+  const end = source.indexOf('\nfunction readStoredJson', start);
+  const received = [], ack = [];
+  const context = vm.createContext({
+    NativeOmronBloodPressure: {
+      addListener: async () => ({ remove: async () => {} }),
+      arm: async () => ({ pendingReadings: [], lastDeliveredReading: reading }),
+      acknowledgeReading: async value => ack.push(value.externalId),
+    },
+    nativeOmronListener: null, stopNativeOmronListener: async () => {}, initializeBle: async () => {},
+    getRememberedOmronDevice: () => ({ deviceId: 'cuff' }), setInterval: () => 1,
+    Map, Promise, URL, apiUrl: path => `https://sarah.test/api${path}`,
+    window: { location: { href: 'https://localhost' } },
+  });
+  vm.runInContext(source.slice(start, end) + '\nthis.start = startNativeOmronListener;', context);
+  await context.start({ onReading: value => received.push(value) });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(received, [reading]);
+  assert.deepEqual(ack, ['test']);
 });

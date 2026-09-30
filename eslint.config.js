@@ -8,6 +8,17 @@ export default [
   {
     ignores: [
       "android/app/build/**",
+      "android/**/build/**",
+      "android/app/src/main/assets/**",
+      "local-vision/.venv*/**",
+      "logs/**",
+      ".codex*/**",
+      ".npm-cache/**",
+      "data/**",
+      "uploads/**",
+      "releases/**",
+      "release-assets/**",
+      "desktop/node-runtime/**",
       "dist/**",
       "desktop-release/**",
       "release/**",

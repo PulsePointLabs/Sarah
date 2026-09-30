@@ -27,7 +27,7 @@ class SarahCaptureService : Service() {
         }
 
         fun stop(context: Context) {
-            if (H10Collector.enabled) return
+            if (H10Collector.enabled || OmronCollector.armed) return
             context.stopService(Intent(context, SarahCaptureService::class.java))
         }
     }
@@ -58,6 +58,7 @@ class SarahCaptureService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
         H10Collector.restore(applicationContext)
+        OmronCollector.restore(applicationContext)
         return START_STICKY
     }
 
@@ -91,7 +92,7 @@ class SarahCaptureService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setContentTitle("Sarah Live Capture is protected")
+            .setContentTitle("Sarah background capture active")
             .setContentText("Keeping H10 and blood-pressure telemetry active")
             .setContentIntent(pendingIntent)
             .setOngoing(true)

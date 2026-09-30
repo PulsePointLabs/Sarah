@@ -1,3 +1,24 @@
+import { computeHrvFromRr } from './hrSources.js';
+
+// A live packet can overtake the phone's durable FIFO. Rebuild the review HRV
+// window in measurement order once delayed RR samples have joined the recording.
+export function repairBufferedHrvRows(rows) {
+  if (!rows.some(row => String(row.note || '').includes('native_buffered_delivery=true'))) return rows;
+  let rr = [], previousAt = null;
+  return rows.map(row => {
+    if (row.hr_source !== 'direct_h10') return row;
+    const at = Number(row.hr_measured_at) || Date.parse(row.timestamp);
+    if (previousAt != null && at - previousAt > 5000) rr = [];
+    previousAt = at;
+    rr = [...rr, ...String(row.rr_intervals_ms || '').split('|').map(Number).filter(value => value >= 300 && value <= 2000)].slice(-180);
+    if (rr.length < 180) return row;
+    const hrv = computeHrvFromRr(rr);
+    return { ...row, hrv_rmssd_ms: hrv.rmssdMs, hrv_sdnn_ms: hrv.sdnnMs, hrv_pnn50: hrv.pnn50,
+      hrv_window_seconds: hrv.windowSeconds, hrv_quality: hrv.quality,
+      note: `${row.note || ''}; hrv_reprocessed_from_ordered_rr=true` };
+  });
+}
+
 const RICH_EVIDENCE_FIELDS = [
   'rr_intervals_ms',
   'hrv_rmssd_ms',

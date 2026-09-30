@@ -22,7 +22,7 @@ import {
 import { SHARED_HR_PACKET_STALE_MS, isSharedHrPacketFresh } from '../services/hrFreshness.js';
 import { normalizeOverlayHeartRateSnapshot } from '../services/overlayHeartRate.js';
 import { summarizeCapturePauseIntervals } from '../services/capturePauseIntervals.js';
-import { coalesceDuplicateHrRows } from '../services/hrCaptureMerge.js';
+import { coalesceDuplicateHrRows, repairBufferedHrvRows } from '../services/hrCaptureMerge.js';
 import { updateLiveCaptureObsState } from '../services/liveCaptureObsState.js';
 import { decideObsSessionLifecycleTransition } from '../services/liveCaptureSessionLifecycle.js';
 
@@ -665,7 +665,10 @@ async function appendDirectH10TelemetryRow(telemetry) {
   if (!state.hr.recording?.active || state.hr.recording?.paused || state.hr.selectedSource !== HR_SOURCE_IDS.DIRECT_H10) return;
   if (!directH10Recording) await createDirectH10Recording(state.hr.recording, 'direct_h10_auto_start');
   const epochMs = Number(telemetry?.receivedAt) || Date.now();
-  if (directH10Recording.lastEpochMs != null && epochMs <= directH10Recording.lastEpochMs) return;
+  const native = telemetry?.quality?.nativeBackgroundCapture === true;
+  if (!native && directH10Recording.lastEpochMs != null && epochMs <= directH10Recording.lastEpochMs) return;
+  const recordedTimes = directH10Recording.recordedTimes ||= new Set();
+  if (recordedTimes.has(epochMs)) return;
   const hr = cleanHr(telemetry?.heartRate || telemetry?.currentHr || telemetry?.hr);
   if (hr == null) return;
   const timeOffsetMs = epochMs - directH10Recording.startEpochMs;
@@ -679,9 +682,10 @@ async function appendDirectH10TelemetryRow(telemetry) {
   const recovery = multimodal.recovery || {};
   const latency = multimodal.responseLatency || {};
   const rr = Array.isArray(telemetry?.rrIntervalsMs) ? telemetry.rrIntervalsMs.join('|') : '';
-  const note = hrv.quality && hrv.quality !== 'unavailable'
+  let note = hrv.quality && hrv.quality !== 'unavailable'
     ? `direct_h10=true; real_rr_intervals=true; hrv_quality=${hrv.quality}`
     : 'direct_h10=true; hrv_waiting_for_rr_window';
+  if (native && telemetry.quality?.stale) note += '; native_buffered_delivery=true';
   const row = [
     csvEscape(new Date(epochMs).toISOString()),
     csvEscape(timeOffsetMs),
@@ -723,8 +727,13 @@ async function appendDirectH10TelemetryRow(telemetry) {
     csvEscape(latency.sampleCount ?? ''),
     csvEscape(latency.evaluatedCount ?? ''),
   ].join(',') + '\n';
-  await fs.appendFile(directH10Recording.filepath, row, 'utf8');
-  directH10Recording.lastEpochMs = epochMs;
+  // Native FIFO replay can arrive behind the live lane. Preserve its real sample
+  // time; the review importer sorts rows. Reserve before await to coalesce retries.
+  const targetRecording = directH10Recording;
+  recordedTimes.add(epochMs);
+  try { await fs.appendFile(targetRecording.filepath, row, 'utf8'); }
+  catch (error) { recordedTimes.delete(epochMs); throw error; }
+  targetRecording.lastEpochMs = Math.max(targetRecording.lastEpochMs || 0, epochMs);
   return true;
 }
 
@@ -1465,7 +1474,7 @@ async function mergedCaptureRowsForSegments(segments = []) {
     .filter((segment) => segment?.filepath)
     .map(async (segment) => {
       const text = await fs.readFile(segment.filepath, 'utf8');
-      const rows = parseHrRows(text);
+      const rows = parseHrRows(text).sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
       const firstTimestampMs = rows.length ? Date.parse(rows[0].timestamp || '') : NaN;
       return {
         segment,
@@ -1503,7 +1512,7 @@ async function mergedCaptureRowsForSegments(segments = []) {
   mergedRows.sort((a, b) => Number(a.time_offset_s || 0) - Number(b.time_offset_s || 0));
   const originalRows = mergedRows.length;
   return {
-    rows: coalesceDuplicateHrRows(mergedRows),
+    rows: repairBufferedHrvRows(coalesceDuplicateHrRows(mergedRows)),
     originalRows,
   };
 }
