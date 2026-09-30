@@ -1,3 +1,4 @@
+import StackedVideoViews from './StackedVideoViews.jsx';
 import VideoPhaseVoice from "./VideoPhaseVoice.jsx";
 import { useVideoPhaseAnnouncements } from "../hooks/useVideoPhaseAnnouncements.js";
 import { useCivetTimeline } from "../hooks/useCivet.js";
@@ -49,6 +50,7 @@ import { normalizeTimedReadings } from "@/lib/telemetryTheater";
 import { listBackgroundJobs, startBackgroundJob, waitForBackgroundJob } from "@/lib/backgroundJobs";
 import {
   getVideoSyncCorrection,
+  preferredMasterFeedKey,
   mediaTimeToSessionTime,
   sessionTimeToMediaTime,
 } from "@/lib/videoSyncClock";
@@ -824,20 +826,36 @@ export default function VideoSyncPlayer({
   const [isPlaying, setIsPlaying] = useState(false);
   const [videoDuration, setVideoDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [secondAngleKey, setSecondAngleKey] = useState('');
+  const [cameraLayout, setCameraLayout] = useState('stacked');
+  const [selectedViewKey, setSelectedViewKey] = useState('composite');
+  const selectedViewKeyRef = useRef('composite');
+  const [feedViews, setFeedViews] = useState({});
+  const feedViewsRef = useRef({});
   const [videoView, setVideoView] = useState(DEFAULT_VIDEO_VIEW);
+  const selectView = key => {
+    selectedViewKeyRef.current=key; setSelectedViewKey(key);
+    videoViewRef.current=feedViewsRef.current[key] || DEFAULT_VIDEO_VIEW;
+    setVideoView(videoViewRef.current);
+  };
   const videoViewRef = useRef(DEFAULT_VIDEO_VIEW);
   const updateVideoView = (key) => {
     const next = key === 'reset' ? DEFAULT_VIDEO_VIEW : changeVideoView(videoViewRef.current, key);
+    feedViewsRef.current={...feedViewsRef.current,[selectedViewKeyRef.current]:next};
+    setFeedViews(feedViewsRef.current);
     videoViewRef.current = next; setVideoView(next);
   };
-  useEffect(() => { videoViewRef.current = DEFAULT_VIDEO_VIEW; setVideoView(DEFAULT_VIDEO_VIEW); }, [session.id, activeFeedKey, videoSrc]);
+  useEffect(() => { feedViewsRef.current={}; setFeedViews({}); setSecondAngleKey(''); }, [session.id]);
+  useEffect(() => { selectView(activeFeedKey); }, [activeFeedKey, videoSrc]);
   const videoViewStyle = {transform:`translate(${videoView.x}%, ${videoView.y}%) scale(${videoView.zoom})`,transformOrigin:'center'};
   const speedShortcutRef = useRef(null);
+  const directSpeedShortcutRef = useRef(null);
   const playbackSpeedRef = useRef(1);
   const [playerHeight, setPlayerHeight] = useState(68);
   const [playerWidth, setPlayerWidth] = useState(66);
   const [telemetryDisplayMode, setTelemetryDisplayMode] = useState("sidebar");
   const [fullTelemetryView, setFullTelemetryView] = useState(false);
+  useEffect(() => { if (!fullTelemetryView) selectView(activeFeedKey); }, [fullTelemetryView, activeFeedKey]);
   const telemetryWindow = useTelemetryWindow();
   const [videoControlsHidden, setVideoControlsHidden] = useState(false);
   const [telemetryFocus, setTelemetryFocus] = useState(false);
@@ -1712,10 +1730,10 @@ export default function VideoSyncPlayer({
         video?.duration,
       );
       pendingFeedTimesRef.current[feed.key] = targetTime;
-      if (!video || video.readyState === 0) return;
+      if (!video || video.readyState === 0 || (!force && video.seeking)) return;
 
       const correction = getVideoSyncCorrection(video.currentTime, targetTime, playbackSpeed);
-      if (force || correction.seek) video.currentTime = targetTime;
+      if ((force && Math.abs(video.currentTime-targetTime)>.025) || correction.seek) video.currentTime = targetTime;
       video.playbackRate = force ? playbackSpeed : correction.playbackRate;
 
       const feedHasStarted = sessionTime >= (Number(feed.timelineOffsetSeconds) || 0);
@@ -1729,8 +1747,6 @@ export default function VideoSyncPlayer({
     const master = videoRef.current;
     const video = videoFeedRefs.current[feedKey];
     if (!master || !video || video.readyState === 0) return;
-    const pendingTime = pendingFeedTimesRef.current[feedKey];
-    if (Number.isFinite(pendingTime)) video.currentTime = pendingTime;
     syncSecondaryVideos(master.currentTime, !master.paused, true);
   }, [syncSecondaryVideos]);
 
@@ -1861,9 +1877,10 @@ export default function VideoSyncPlayer({
     const assignments = assignLinkedVideosToFeeds(linkedLocalVideos);
     if (!assignments.length) return;
     const shouldActivateFirst = !videoSrc;
-    assignments.forEach(({ video, slotKey }, index) => {
+    const initialMaster = preferredMasterFeedKey(assignments);
+    assignments.forEach(({ video, slotKey }) => {
       prepareLinkedVideoForPlayback(video, slotKey, {
-        activate: shouldActivateFirst && index === 0,
+        activate: shouldActivateFirst && slotKey === initialMaster,
       });
     });
 
@@ -1922,7 +1939,7 @@ export default function VideoSyncPlayer({
     if (!v) return;
     const sessionTime = mediaTimeToSessionTime(v.currentTime, videoOffset);
     setPlayheadS(sessionTime);
-    syncSecondaryVideos(v.currentTime, !v.paused);
+    syncSecondaryVideos(v.currentTime, !v.paused && v.readyState >= 3);
   }, [syncSecondaryVideos, videoOffset]);
 
   useEffect(() => {
@@ -1958,11 +1975,17 @@ export default function VideoSyncPlayer({
         if (resumePromise?.catch) resumePromise.catch(() => {});
       }
     };
+    const handleWaiting = () => syncSecondaryVideos(v.currentTime, false);
+    const handlePlaying = () => syncSecondaryVideos(v.currentTime, true);
+    v.addEventListener("waiting", handleWaiting);
+    v.addEventListener("playing", handlePlaying);
     v.addEventListener("timeupdate", handleTimeUpdate);
     v.addEventListener("play", handlePlay);
     v.addEventListener("pause", handlePause);
     v.addEventListener("loadedmetadata", handleLoadedMetadata);
     return () => {
+      v.removeEventListener("waiting", handleWaiting);
+      v.removeEventListener("playing", handlePlaying);
       v.removeEventListener("timeupdate", handleTimeUpdate);
       v.removeEventListener("play", handlePlay);
       v.removeEventListener("pause", handlePause);
@@ -1988,10 +2011,10 @@ export default function VideoSyncPlayer({
     const updatePlaybackClock = (now) => {
       const master = videoRef.current;
       if (!master || master.paused) return;
-      setPlayheadS(mediaTimeToSessionTime(master.currentTime, videoOffset));
       if (now - lastSecondarySyncAtRef.current >= 100) {
         lastSecondarySyncAtRef.current = now;
-        syncSecondaryVideos(master.currentTime, true);
+        setPlayheadS(mediaTimeToSessionTime(master.currentTime, videoOffset));
+        if (!master.seeking && master.readyState >= 3) syncSecondaryVideos(master.currentTime, true);
       }
       playbackClockFrameRef.current = requestAnimationFrame(updatePlaybackClock);
     };
@@ -2189,9 +2212,14 @@ export default function VideoSyncPlayer({
       const inInput = active?.tagName === "INPUT" || active?.tagName === "TEXTAREA" || active?.tagName === "SELECT";
       if (telemetryWindow.target && e.code === "KeyH" && !inInput && !active?.isContentEditable && !e.repeat) { e.preventDefault(); setVideoControlsHidden(v => !v); return; }
       if (active?.isContentEditable) return;
+      const focusedCamera = active?.matches?.('[data-camera]') ? active : null;
+      if (e.code === 'Escape' && focusedCamera) { e.preventDefault(); focusedCamera.blur(); return; }
+      if (!inInput && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && /^Numpad[1-9]$/.test(e.code)) {
+        e.preventDefault(); directSpeedShortcutRef.current?.(Number(e.code.slice(-1))); return;
+      }
       if (!inInput && !e.ctrlKey && !e.altKey && !e.metaKey) {
         const zoomKey = e.key === '+' || e.key === '=' || e.code === 'NumpadAdd' ? '+' : e.key === '-' || e.code === 'NumpadSubtract' ? '-' : null;
-        if (zoomKey || (videoViewRef.current.zoom > 1 && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.code))) {
+        if (zoomKey || (focusedCamera && videoViewRef.current.zoom > 1 && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.code))) {
           e.preventDefault(); updateVideoView(zoomKey || e.code); return;
         }
       }
@@ -2222,7 +2250,7 @@ export default function VideoSyncPlayer({
         }
       }
 
-      if ((e.code === "ArrowLeft" || e.code === "ArrowRight") && !inInput && videoRef.current) {
+      if ((e.code === "ArrowLeft" || e.code === "ArrowRight") && !inInput && !e.altKey && !e.metaKey && videoRef.current) {
         e.preventDefault();
         const direction = e.code === "ArrowLeft" ? -1 : 1;
         const quality = videoRef.current.getVideoPlaybackQuality?.();
@@ -2230,8 +2258,8 @@ export default function VideoSyncPlayer({
           ? quality.totalVideoFrames / videoRef.current.currentTime
           : 0;
         if (measuredFps >= 10 && measuredFps <= 120) frameDurationRef.current = 1 / measuredFps;
-        const jumpS = fullTelemetryView ? frameDurationRef.current : (e.shiftKey ? 30 : 5);
-        if (fullTelemetryView && !videoRef.current.paused) videoRef.current.pause();
+        const jumpS = e.ctrlKey ? 5 : fullTelemetryView ? frameDurationRef.current : (e.shiftKey ? 30 : 5);
+        if (fullTelemetryView && !e.ctrlKey && !videoRef.current.paused) videoRef.current.pause();
         setSynchronizedVideoTime(Math.max(0, Math.min(videoDuration || Infinity, videoRef.current.currentTime + (direction * jumpS))));
       }
 
@@ -2366,6 +2394,7 @@ export default function VideoSyncPlayer({
     });
   };
 
+  directSpeedShortcutRef.current = speed => { setSpeed(speed); showQuickNotice(`Playback speed: ${speed}×`); };
   speedShortcutRef.current = (direction) => {
     // Haruna uses additive 0.1x steps; bound them to Chromium's playback range.
     const speed = Math.min(16, Math.max(0.1, Number((playbackSpeedRef.current + direction * 0.1).toFixed(2))));
@@ -2617,6 +2646,22 @@ export default function VideoSyncPlayer({
           }
         };
   const playbackPhaseVoice = useVideoPhaseAnnouncements({ videoRef, active: fullTelemetryView, sessionId: session?.id, feedKey: activeFeedKey, offset: videoOffset, rows: timelineRows, civetRows: civet.rows, exploration: isExploration, microphoneActive: quickListening || isListening });
+  const cameraLayoutControls = (
+    <>
+      <select aria-label="Second camera angle" value={secondAngleKey === activeFeedKey ? '' : secondAngleKey}
+        onChange={e => { setSecondAngleKey(e.target.value); selectView(activeFeedKey); }}
+        className="min-w-0 max-w-48 rounded border border-border bg-card px-2 py-1 text-sm">
+        <option value="">+ Add second angle</option>
+        {loadedFeeds.filter(f => f.key !== activeFeedKey).map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+      </select>
+      {secondAngleKey && secondAngleKey !== activeFeedKey && <button type="button"
+        aria-label="Side-by-side cameras" aria-pressed={cameraLayout === 'split'}
+        onClick={() => setCameraLayout(current => current === 'stacked' ? 'split' : 'stacked')}
+        className="shrink-0 rounded border border-border px-2 py-1 text-sm">
+        {cameraLayout === 'stacked' ? 'Stacked' : 'Side by side'}
+      </button>}
+    </>
+  );
   const telemetryPanel = (
           <aside className={telemetryWindow.target ? "telemetry-monitor dark" : "single-window-telemetry flex min-h-0 min-w-0 flex-col gap-2 overflow-hidden"}>
             <VideoPhaseVoice controller={playbackPhaseVoice} />
@@ -2699,6 +2744,7 @@ export default function VideoSyncPlayer({
                   ))}
                 </div>
               </div>
+              {!telemetryWindow.target && cameraLayoutControls}
               <button type="button" onClick={openDualMonitor} className="rounded border border-primary/40 px-2 py-1 text-xs">Dual monitors</button>
               <button type="button" onClick={() => setTelemetryFocus(true)} title="Video and sidebar only (F); F or Escape restores controls" className="ml-auto shrink-0 rounded-md border border-border px-2 py-1 text-[10px]">Focus (F)</button>
               <button type="button" onClick={closeFullTelemetryView} className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-semibold text-muted-foreground hover:text-foreground">
@@ -2727,22 +2773,16 @@ export default function VideoSyncPlayer({
             </div>
 
             <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black">
-              <video
-                ref={videoRef}
-                src={videoFeeds[activeFeedKey]?.src || videoSrc}
-                className="h-full w-full object-contain"
-                style={videoViewStyle}
-                playsInline
-                onClick={togglePlay}
-              />
-              {videoView.zoom > 1 && <button type="button" onClick={()=>updateVideoView('reset')} className="absolute right-2 top-2 rounded bg-black/75 px-2 py-1 text-xs text-white" title="Reset video zoom and pan">{Math.round(videoView.zoom*100)}% · Arrows pan · Reset zoom</button>}
+              <StackedVideoViews layout={cameraLayout} master={{key:activeFeedKey,label:videoFeeds[activeFeedKey]?.label || 'Master camera',src:videoFeeds[activeFeedKey]?.src || videoSrc}}
+                secondary={secondAngleKey!==activeFeedKey?loadedFeeds.find(f=>f.key===secondAngleKey):null}
+                masterRef={videoRef} secondaryRefs={videoFeedRefs} views={feedViews} selected={selectedViewKey}
+                onSelect={selectView} onReady={handleSecondaryReady}
+                onReset={key=>{selectView(key);updateVideoView('reset');}} />
               {(subjective.episodes.some((e) => e.end_s == null) || subjective.error || subjective.saving || quickNotice?.tone === "error") && <div className="absolute bottom-2 left-2 rounded bg-black/80 px-2 py-1 text-xs text-violet-300" role="status">
                 {quickNotice?.tone === "error" ? quickNotice.message : subjective.error ? <button type="button" onClick={subjective.retry}>Episode save failed — click to retry</button> : subjective.episodes.some((e) => e.end_s == null)
                   ? subjective.episodes.filter((e) => e.end_s == null).map((e) => e.kind === "climax" ? "Climax open · C to end" : "Near climax open · N to end").join(" · ") : "Saving episode…"}
               </div>}
-              <div className={`${telemetryFocus ? "hidden" : ""} pointer-events-none absolute left-2 top-2 rounded-md bg-black/65 px-2 py-1 text-[9px] font-semibold text-white`}>
-                {videoFeeds[activeFeedKey]?.label || "Master camera"}
-              </div>
+
             </div>
 
             <div className={`${(telemetryWindow.target ? videoControlsHidden : telemetryFocus) ? "hidden" : ""} shrink-0 rounded-xl border border-white/10 bg-card/95 px-2 py-1.5`}>
@@ -2758,6 +2798,7 @@ export default function VideoSyncPlayer({
               </div>
               {telemetryWindow.target && <div className="monitor-toolbar py-1">
                 {loadedFeeds.map(feed => <button key={feed.key} className={feed.key === activeFeedKey ? "text-primary" : ""} onClick={() => selectMasterFeed(feed.key)}>{feed.label}</button>)}
+                {cameraLayoutControls}
                 <button onClick={() => document.fullscreenElement ? document.exitFullscreen() : fullTelemetryRootRef.current?.requestFullscreen()}>Fullscreen</button>
                 <button onClick={() => setVideoControlsHidden(true)}>Hide controls (H)</button>
                 <button onClick={closeFullTelemetryView}>Exit review</button>
@@ -2775,7 +2816,7 @@ export default function VideoSyncPlayer({
                 <button type="button" onClick={() => stepFrames(5)} className="rounded-md bg-muted p-1.5 text-[9px] font-bold" title="Forward 5 seconds">+5s</button>
                 <button type="button" onClick={() => setSynchronizedVideoTime(videoDuration)} className="rounded-md bg-muted p-1.5" title="End"><SkipForward className="h-3.5 w-3.5" /></button>
                 <div className="ml-auto flex items-center gap-1">
-                  <span className="font-mono text-[10px] text-primary" title="Playback speed: [ slower / ] faster">{playbackSpeed.toFixed(2)}×</span>
+                  <span className="font-mono text-[10px] text-primary" title="Playback speed: Numpad 1–9 = 1×–9×; [ slower / ] faster">{playbackSpeed.toFixed(2)}×</span>
                   {[0.5, 1, 1.5, 2].map((speed) => (
                     <button key={speed} type="button" onClick={() => setSpeed(speed)} className={`rounded px-1.5 py-1 text-[9px] ${playbackSpeed === speed ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>{speed}×</button>
                   ))}
@@ -3276,9 +3317,6 @@ export default function VideoSyncPlayer({
                       onLoadedMetadata={() => {
                         if (!isMaster) handleSecondaryReady(feed.key);
                       }}
-                      onCanPlay={() => {
-                        if (!isMaster) handleSecondaryReady(feed.key);
-                      }}
                       onClick={() => {
                         if (isMaster) {
                           if (suppressNextFullscreenVideoToggleRef.current) {
@@ -3514,7 +3552,7 @@ export default function VideoSyncPlayer({
                       <ChevronRight className="h-4 w-4" />
                     </button>
                     <div className="ml-1 flex items-center gap-1 max-[950px]:ml-0">
-                      <span className="font-mono text-[10px] text-primary" title="Playback speed: [ slower / ] faster">{playbackSpeed.toFixed(2)}×</span>
+                      <span className="font-mono text-[10px] text-primary" title="Playback speed: Numpad 1–9 = 1×–9×; [ slower / ] faster">{playbackSpeed.toFixed(2)}×</span>
                       {[0.5, 1, 1.5, 2].map((speed) => (
                         <button
                           key={speed}
@@ -3742,7 +3780,7 @@ export default function VideoSyncPlayer({
             {/* Playback speed */}
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider shrink-0">Speed:</span>
-              <span className="font-mono text-[10px] text-primary" title="Playback speed: [ slower / ] faster">{playbackSpeed.toFixed(2)}×</span>
+              <span className="font-mono text-[10px] text-primary" title="Playback speed: Numpad 1–9 = 1×–9×; [ slower / ] faster">{playbackSpeed.toFixed(2)}×</span>
               {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2].map((s) => (
                 <button
                   key={s}

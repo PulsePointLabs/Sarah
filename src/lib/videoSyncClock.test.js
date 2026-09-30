@@ -2,9 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   getVideoSyncCorrection,
+  preferredMasterFeedKey,
   mediaTimeToSessionTime,
   sessionTimeToMediaTime,
 } from "./videoSyncClock.js";
+
+test('initial master prefers primary views even when Feet is linked first', () => {
+  assert.equal(preferredMasterFeedKey([{slotKey:'lower_body'},{slotKey:'main'}]),'main');
+  assert.equal(preferredMasterFeedKey([{slotKey:'lower_body'},{slotKey:'main'},{slotKey:'composite'}]),'composite');
+  assert.equal(preferredMasterFeedKey([{slotKey:'lower_body'}]),'lower_body');
+});
 
 test("maps feeds with different file starts onto the same session time", () => {
   const sessionTime = mediaTimeToSessionTime(240, 15);

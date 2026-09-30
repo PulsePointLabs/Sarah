@@ -1,6 +1,12 @@
 export const VIDEO_SYNC_SOFT_DRIFT_S = 0.06;
 export const VIDEO_SYNC_HARD_DRIFT_S = 0.35;
 
+export function preferredMasterFeedKey(assignments = []) {
+  return assignments.find(a => a.slotKey === 'composite')?.slotKey
+    || assignments.find(a => a.slotKey === 'main')?.slotKey
+    || assignments[0]?.slotKey;
+}
+
 export function clampMediaTime(timeS, durationS = Infinity) {
   const finiteTime = Number.isFinite(Number(timeS)) ? Number(timeS) : 0;
   const finiteDuration = Number.isFinite(Number(durationS)) && Number(durationS) > 0
