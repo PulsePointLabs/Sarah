@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.275",
-  "commit": "ee346ca",
-  "commitMessage": "Keep OMRON capture independent of Android foreground and preserve late H10 samples",
-  "builtAt": "2026-09-30T20:17:57.383Z"
+  "version": "0.1.276",
+  "commit": "52d24a1",
+  "commitMessage": "Run live physiological monitoring on the server independently of Android foreground",
+  "builtAt": "2026-09-30T23:55:14.143Z"
 };
