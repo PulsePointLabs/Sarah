@@ -1,0 +1,7 @@
+.emg-status-grid,.emg-names,.emg-signal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0}
+.emg-status-grid{grid-template-columns:repeat(3,minmax(0,1fr));font-size:17px}.emg-status-grid span{padding:10px;background:#21373e;border-radius:8px}.emg-status-grid b{display:block}
+.emg-setup input,.emg-setup textarea{display:block;width:100%;min-width:0;background:#21373e;color:#fff;border:1px solid #718e96;border-radius:8px;padding:8px;margin-top:6px}.emg-setup textarea{font-size:15px}
+.emg-names label{min-width:0;font-size:17px}.emg-names summary{font-size:15px}.emg-signal-grid strong{display:block;font-size:32px}.emg-signal-grid small,.emg-signal-grid span{font-size:15px}.emg-signal-grid svg{width:100%;height:65px}
+.emg-setup .civet-calibration-actions b{font-size:24px;overflow-wrap:anywhere}
+@media(max-width:650px){.emg-status-grid{grid-template-columns:1fr}.emg-names,.emg-signal-grid{grid-template-columns:1fr}.emg-setup .civet-connection-controls>*{max-width:100%}}
+.emg-setup,.emg-setup *{box-sizing:border-box}.emg-setup{overflow-wrap:anywhere}

@@ -39,6 +39,7 @@ const emgHelper = createEmgHelper(liveCaptureConfig);
 const EMG_COMMAND_FILE = path.join(EMG_TEXT_DIR, 'emg_command.json');
 const EMG_COMMAND_STATUS_FILE = path.join(EMG_TEXT_DIR, 'emg_command_status.json');
 const EMG_CALIBRATION_ACTIONS = new Set([
+  'guided_rest', 'guided_hold_0', 'guided_hold_1', 'guided_save', 'guided_cancel',
   'set_both_rest',
   'set_both_max',
   'set_left_max',
@@ -60,6 +61,7 @@ let pulsoidBackoffMs = 1500;
 let pulsoidAccessToken = '';
 let emgPollTimer = null;
 let lastEmgSignature = '';
+let emgProfileSessionId = null;
 let pulsoidRecording = null;
 let directH10Recording = null;
 let directH10RecordingStartPromise = null;
@@ -164,6 +166,9 @@ function monitoringState() {
 }
 telemetryEngine.on('snapshot', (snapshot) => {
   state.engine = snapshot.engine;
+  if (snapshot.emg && (snapshot.engine?.latest?.emgAgeMs > 1500 || state.emg.latestTelemetry?.calibration_valid === false || state.emg.latestTelemetry?.stale)) {
+    snapshot.emg = {...snapshot.emg, left_pct:null,right_pct:null,diff_pct:null,level_pct:null,calibration_valid:false,stale:true};
+  }
   if (snapshot.hr) state.hr.latestTelemetry = snapshot.hr;
   if (snapshot.emg) state.emg.latestTelemetry = snapshot.emg;
   try {
@@ -2339,7 +2344,7 @@ async function readEmgTextTelemetry() {
     .sort();
   const sourceAt = sourceTimes[sourceTimes.length - 1] || state.emg.lastSourceAt;
 
-  const currentValue = file => sourceAt && file.modifiedAt && new Date(sourceAt) - new Date(file.modifiedAt) <= 6000 ? cleanNumber(file.text) : null;
+  const currentValue = file => sourceAt && file.modifiedAt && Date.now()-new Date(file.modifiedAt).getTime() <= 1500 ? cleanNumber(file.text) : null;
   const telemetry = {
     left_pct: currentValue(leftFile),
     right_pct: currentValue(rightFile),
@@ -2348,9 +2353,25 @@ async function readEmgTextTelemetry() {
     source_at: sourceAt,
   };
 
-  if ([telemetry.left_pct, telemetry.right_pct, telemetry.diff_pct, telemetry.level_pct].every((value) => value == null)) return;
+  if (emgHelper.status().running) {
+    let setup = null;
+    try { setup = JSON.parse(await fs.readFile(path.join(EMG_TEXT_DIR, 'emg_setup_status.json'), 'utf8')); } catch { /* Await first measured sample. */ }
+    telemetry.calibration_valid = !!(setup?.calibration?.valid && setup?.calibration?.saved && setup?.fresh && setup?.signal_valid !== false && Date.now()-setup.measured_at*1000<1500);
+    telemetry.calibration_phase = setup?.calibration?.phase || 'waiting';
+    if (!telemetry.calibration_valid) for (const key of ['left_pct','right_pct','diff_pct','level_pct']) telemetry[key] = null;
+  }
+  if ([telemetry.left_pct, telemetry.right_pct, telemetry.diff_pct, telemetry.level_pct].every((value) => value == null)) {
+    telemetry.stale = !sourceAt || Date.now()-Date.parse(sourceAt)>1500;
+    const signature = JSON.stringify(telemetry);
+    if (signature !== lastEmgSignature) { lastEmgSignature = signature; state.emg.latestTelemetry = telemetry; broadcast('emg_telemetry', telemetry); }
+    return;
+  }
 
   state.emg.lastPollAt = new Date().toISOString();
+  if (state.session.active && state.session.activeSessionId !== emgProfileSessionId) {
+    patchCurrentLiveSession({emg_channel_profile:await emgHelper.profile()});
+    emgProfileSessionId = state.session.activeSessionId;
+  }
   state.emg.lastSourceAt = sourceAt;
   const signature = JSON.stringify(telemetry);
   if (signature === lastEmgSignature) return;
@@ -2639,7 +2660,12 @@ liveCaptureRouter.post('/hr-direct-h10/release', (req, res) => {
 });
 
 liveCaptureRouter.get('/emg/helper', async (_req, res) => {
-  res.json({ ...emgHelper.status(), telemetry: state.emg });
+  res.json({ ...await emgHelper.inspect(), telemetry: state.emg });
+});
+liveCaptureRouter.get('/emg/profile', async (_req, res) => res.json(await emgHelper.profile()));
+liveCaptureRouter.post('/emg/profile', async (req, res) => {
+  try { const profile = await emgHelper.saveProfile(req.body || {}); res.json(profile); }
+  catch (error) { res.status(400).json({error:error.message}); }
 });
 liveCaptureRouter.get('/emg/ports', async (_req, res) => res.json(await emgHelper.ports()));
 for (const action of ['start', 'stop', 'install']) {
@@ -2654,6 +2680,16 @@ liveCaptureRouter.post('/emg/calibration-command', async (req, res) => {
   if (!EMG_CALIBRATION_ACTIONS.has(action)) {
     res.status(400).json({ error: 'Unsupported EMG calibration command.' });
     return;
+  }
+
+  if (action.startsWith('guided_')) {
+    const helper = await emgHelper.inspect();
+    if (!helper.running || (!helper.receiving && action !== 'guided_cancel')) {
+      res.status(409).json({error:'Connect the Arduino and wait for fresh samples before calibration.'}); return;
+    }
+    if (action !== 'guided_cancel' && (['preparing','collecting','settling'].includes(helper.setup?.calibration?.phase) || (state.emg.calibrationCommandStatus?.status === 'queued' && Date.now()-Date.parse(state.emg.calibrationCommandStatus.requested_at)<3000))) {
+      res.status(409).json({error:'A calibration step is already running.'}); return;
+    }
   }
 
   const command = {

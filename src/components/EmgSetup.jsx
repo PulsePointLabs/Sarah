@@ -1,87 +1,39 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiUrl } from '@/lib/mobileApiBase';
-
+import { EMG_ARDUINO_SKETCH } from '@/lib/emgArduino';
+import './civet.css';
+import './emgSetup.css';
 async function request(path, body) {
-  const response = await fetch(apiUrl(`/live-capture/emg/${path}`), body === undefined ? {} : {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `Desktop returned ${response.status}`);
-  return data;
+  const response=await fetch(apiUrl(`/live-capture/emg/${path}`),body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const data=await response.json();if(!response.ok)throw new Error(data.error||`Desktop returned ${response.status}`);return data;
 }
-export default function EmgSetup({ onClose, onConnected }) {
-  const [ports, setPorts] = useState([]), [port, setPort] = useState('');
-  const [channels, setChannels] = useState(2), [helper, setHelper] = useState({});
-  const [error, setError] = useState(''), [busy, setBusy] = useState(false), [pending, setPending] = useState(null);
-  const [labels, setLabels] = useState(() => { try { return JSON.parse(localStorage.getItem('pulsepoint.emgNames')) || ['Sensor 1', 'Sensor 2']; } catch { return ['Sensor 1', 'Sensor 2']; } });
-  const [step, setStep] = useState(0);
-  const refresh = async () => {
-    try {
-      const data = await request('ports'); setPorts(data.ports || []); setError(data.error || '');
-      if (data.port) setPort(data.port); else if (data.ports?.length === 1) setPort(data.ports[0].port);
-      if (data.running) setChannels(data.channels);
-    } catch (e) { setError(`Cannot reach desktop: ${e.message}`); }
-  };
-  useEffect(() => { refresh(); }, []);
-  useEffect(() => { localStorage.setItem('pulsepoint.emgNames', JSON.stringify(labels)); }, [labels]);
-  useEffect(() => {
-    let active = true;
-    const poll = async () => { try { const data = await request('helper'); if (active) setHelper(data); } catch (e) { if (active) setError(`Desktop unavailable: ${e.message}`); } };
-    poll(); const timer = setInterval(poll, 1000); return () => { active = false; clearInterval(timer); };
-  }, []);
-  useEffect(() => {
-    if (!pending) return;
-    const status = helper.telemetry?.calibrationCommandStatus;
-    if (status?.id === pending.id && status.status !== 'queued') {
-      if (status.status === 'applied') setStep(value => value + 1); else setError(status.message || 'Calibration was not applied.');
-      setPending(null);
-    } else if (Date.now() - pending.at > 12000) { setError('Calibration was not acknowledged. Check that live samples are arriving, then retry.'); setPending(null); }
-  }, [helper, pending]);
-  const action = async (name) => {
-    setBusy(true); setError('');
-    try { setHelper(await request(`helper/${name}`, { port, channels })); if (name === 'start') onConnected?.(); if (name === 'install') await refresh(); }
-    catch (e) { setError(e.message); } finally { setBusy(false); }
-  };
-  const steps = [
-    { label: 'Relax both muscles', action: 'set_both_rest' },
-    { label: `Contract ${labels[0]}`, action: channels === 2 ? 'set_left_max' : 'set_both_max' },
-    ...(channels === 2 ? [{ label: `Contract ${labels[1]}`, action: 'set_right_max' }] : []),
-    { label: 'Save calibration', action: 'save_calibration' },
-  ];
-  const calibrate = async () => {
-    setBusy(true); setError('');
-    try { const result = await request('calibration-command', { action: steps[step].action, save: false }); setPending({ id: result.id, at: Date.now() }); }
-    catch (e) { setError(e.message); } finally { setBusy(false); }
-  };
-  const telemetry = helper.telemetry;
-  const live = Date.now() - new Date(telemetry?.lastSourceAt || 0).getTime() < 6000;
-  const values = telemetry?.latestTelemetry || {};
-  const button = 'min-h-11 rounded-lg border border-border bg-muted px-3 text-sm font-semibold disabled:opacity-40';
-  return <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/70 p-3" onKeyDown={e => { if (e.key === 'Escape') onClose(); }}>
-    <section role="dialog" aria-modal="true" aria-label="EMG setup" className="max-h-[94dvh] w-full max-w-xl space-y-4 overflow-auto rounded-xl border border-border bg-card p-5 text-foreground">
-      <div className="flex items-center justify-between"><h2 className="text-xl font-bold">Connect EMG</h2><button autoFocus className={button} onClick={onClose}>Done</button></div>
-      <p className="text-sm text-muted-foreground">Arduino → desktop → Sarah. Keep the Arduino connected to the desktop, even when using your phone.</p>
-      <div className="flex flex-wrap gap-2">
-        <select aria-label="Sensor count" value={channels} disabled={helper.running} onChange={e => { setChannels(Number(e.target.value)); setStep(0); }} className={button}><option value={1}>One sensor · A0</option><option value={2}>Two sensors · A0 + A1</option></select>
-        <select aria-label="Arduino port" value={port} disabled={helper.running} onChange={e => setPort(e.target.value)} className={button}><option value="">Select Arduino port</option>{ports.map(item => <option key={item.port} value={item.port}>{item.port} · {item.label}</option>)}</select>
-        <button className={button} onClick={refresh}>Refresh ports</button>
-        <button className={button} disabled={busy || (!helper.running && !port)} onClick={() => action(helper.running ? 'stop' : 'start')}>{helper.running ? 'Disconnect' : 'Connect'}</button>
-      </div>
-      <p role="status" className="text-sm">{live ? 'Receiving live EMG' : helper.message || 'Plug in Arduino and refresh ports.'}</p>
-      {(error || helper.error) && <div role="alert" className="rounded-lg border border-amber-500 p-3 text-sm"><p>{error || helper.error}</p><button className={button} onClick={() => navigator.clipboard?.writeText(error || helper.error)}>Copy diagnostics</button></div>}
-      <div className="grid gap-3 sm:grid-cols-2">{labels.slice(0, channels).map((label, index) => <label key={index} className="rounded-lg border border-border p-3">
-        <span className="text-xs text-muted-foreground">A{index} · Sensor location</span>
-        <input aria-label={`Sensor ${index + 1} name`} value={label} maxLength={60} onChange={e => setLabels(old => old.map((item, i) => i === index ? e.target.value : item))} className="my-2 w-full rounded border border-border bg-muted p-2" />
-        <meter aria-label={`${label} signal`} min={0} max={150} value={live ? Number(channels === 1 ? values.level_pct : index ? values.right_pct : values.left_pct) || 0 : 0} className="w-full" />
-      </label>)}</div>
-      <div className="space-y-2 rounded-lg border border-primary/40 p-3">
-        <h3 className="font-semibold">Calibration · {step >= steps.length ? 'Saved' : `Step ${step + 1} of ${steps.length}`}</h3>
-        <p className="text-sm">{step >= steps.length ? 'Calibration acknowledged and saved by the desktop helper.' : `${steps[step].label}, hold steady, then tap Capture.`}</p>
-        <div className="flex flex-wrap gap-2">{step < steps.length && <button className={button} disabled={!live || busy || Boolean(pending)} onClick={calibrate}>{pending ? 'Waiting for helper…' : step === steps.length - 1 ? 'Save' : 'Capture'}</button>}
-          <button className={button} disabled={Boolean(pending)} onClick={() => setStep(0)}>Recalibrate</button>
-          {step > 0 && <button className={button} disabled={Boolean(pending)} onClick={() => setStep(value => value - 1)}>Redo previous</button>}</div>
-      </div>
-      <details className="text-sm"><summary className="cursor-pointer">One-time Arduino / helper setup</summary><p className="my-2">Upload the dual A0,A1 sketch once at 115200 baud. One-sensor mode also accepts its A0 column. Close Serial Monitor before connecting. Python must be installed on the desktop.</p><button disabled={busy || helper.running} className={button} onClick={() => action('install')}>{busy ? 'Working…' : 'Install helper dependencies'}</button><p className="mt-2 text-muted-foreground">Downloads Python packages into Sarah’s EMG folder. Sensor readings stay local. CSV recording follows primary OBS.</p></details>
-    </section>
-  </div>;
+export default function EmgSetup({onClose,onConnected,onProfileChange}) {
+  const [helper,setHelper]=useState({}),[ports,setPorts]=useState([]),[port,setPort]=useState(''),[channels,setChannels]=useState(2);
+  const [names,setNames]=useState(['Sensor 1','Sensor 2']),[notes,setNotes]=useState(['','']);
+  const [error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[pending,setPending]=useState(false),[showCode,setShowCode]=useState(false);
+  const callback=useRef(onProfileChange);callback.current=onProfileChange;const code=useRef(null);
+  const refresh=async()=>{try{const data=await request('ports');setPorts(data.ports||[]);if(data.error)setError(data.error);setPort(old=>old||data.port||(data.ports?.length===1?data.ports[0].port:''));}catch(e){setError(e.message);}};
+  useEffect(()=>{let active=true,first=true,timer;const poll=async()=>{try{const data=await request('helper');if(!active)return;setHelper(data);if(first){first=false;const p=data.profile||{};setNames(p.names||['Sensor 1','Sensor 2']);setNotes(p.notes||['','']);setChannels(data.running?data.channels:p.channels||2);setPort(old=>data.port||p.lastPort||old);callback.current?.(p.names);}}catch(e){if(active)setError(`Desktop unavailable: ${e.message}`);}if(active)timer=setTimeout(poll,500);};poll();refresh();return()=>{active=false;clearTimeout(timer);};},[]);
+  const cal=helper.setup?.calibration||{},phase=cal.phase,measuring=['preparing','collecting','settling'].includes(phase),live=!!helper.receiving;
+  const saveProfile=async()=>{const p=await request('profile',{names,notes,channels});setNames(p.names);callback.current?.(p.names);};
+  const action=async(name)=>{setBusy(true);setError('');setNotice('');try{if(name==='profile'){await saveProfile();setNotice('Sensor names and placement notes saved for all devices.');}else{if(name==='start')await saveProfile();const data=await request(`helper/${name}`,{port,channels});setHelper(old=>({...old,...data}));if(name==='start')onConnected?.();if(name==='install')await refresh();}}catch(e){setError(e.message);}finally{setBusy(false);}};
+  const calibrate=async(action)=>{setPending(true);setError('');try{await request('calibration-command',{action,save:false});}catch(e){setError(e.message);}finally{setTimeout(()=>setPending(false),1000);}};
+  const copy=async()=>{setShowCode(true);try{await navigator.clipboard.writeText(EMG_ARDUINO_SKETCH);setNotice('Arduino code copied. Paste into Arduino IDE, upload once, then close Serial Monitor.');}catch{setNotice('Clipboard unavailable here. Select the code below and copy it.');setTimeout(()=>{code.current?.focus();code.current?.select();},0);}};
+  const title=phase==='preparing'?'Get ready':phase==='collecting'?(cal.channel==null?'REST — stay relaxed':`HOLD — ${names[cal.channel]}`):phase==='settling'?'Release and relax':phase==='saved'?'Calibration complete':phase==='failed'?'Redo suggested':cal.valid?'Ready to save':cal.rest?'Rest accepted — ready to hold':'Collect a relaxed baseline';
+  const tone=phase==='failed'||!live?'warning':measuring?'waiting':cal.rest?'good':'waiting',history=helper.setup?.history||[];
+  return <div className="civet-setup-backdrop" onKeyDown={e=>{if(e.key==='Escape')onClose();}}><section role="dialog" aria-modal="true" aria-label="EMG setup" className="civet-setup emg-setup">
+    <header><h2>EMG sensor setup</h2><button autoFocus onClick={onClose}>Close</button></header>
+    <div className="emg-status-grid" role="status"><span>Windows helper: <b>{helper.installed===true?'Installed':helper.installed===false?'Setup needed':'Checking…'}</b></span><span>Process: <b>{helper.running?'Running':helper.busy?'Working…':'Stopped'}</b></span><span>Signal: <b>{live?'Receiving live samples':'No fresh samples'}</b></span></div>
+    <p className="civet-calibration-note">Arduino → Windows desktop → Sarah. Calibration continues on the desktop if you close this window or use another phone app.</p>
+    <div className="civet-connection-controls"><select aria-label="Sensor count" disabled={helper.running||busy} value={channels} onChange={e=>setChannels(Number(e.target.value))}><option value={1}>One sensor · A0</option><option value={2}>Two sensors · A0 + A1</option></select><select aria-label="Arduino port" disabled={helper.running||busy} value={port} onChange={e=>setPort(e.target.value)}><option value="">Choose Arduino</option>{ports.map(p=><option key={p.port} value={p.port}>{p.port} · {p.label}</option>)}</select><button disabled={busy} onClick={refresh}>Refresh ports</button><button disabled={busy||(!helper.running&&!port)} onClick={()=>action(helper.running?'stop':'start')}>{helper.running?'Disconnect':'Connect'}</button><button disabled={busy||helper.running} onClick={()=>action('install')}>{busy?'Working…':helper.installed?'Repair helper':'Install Windows helper'}</button></div>
+    <p className="civet-calibration-note">{helper.message}</p>{(error||helper.error)&&<p role="alert" className="civet-setup-error">{error||helper.error}</p>}{notice&&<p role="status" className="civet-calibration-note">{notice}</p>}
+    <div className="emg-names">{names.slice(0,channels).map((name,i)=><label key={i}>{helper.setup?.channel_map?.[i] || `A${i}`} · Sensor location / name<input aria-label={`Sensor ${i+1} name`} maxLength={60} value={name} onChange={e=>setNames(a=>a.map((n,j)=>i===j?e.target.value:n))}/><details><summary>Placement notes</summary><textarea aria-label={`Sensor ${i+1} placement notes`} maxLength={500} value={notes[i]} onChange={e=>setNotes(a=>a.map((n,j)=>i===j?e.target.value:n))}/></details></label>)}</div><button disabled={busy} onClick={()=>action('profile')}>Save sensor names & notes</button>
+    <div className="civet-calibration-feedback" data-tone={tone}><div className="civet-calibration-heading"><div><h3>{title}</h3><p aria-live="polite">{!live?'Connect and wait for fresh samples before measuring.':cal.message||'Three seconds to prepare, then five seconds of steady measurement.'}</p></div><div className="civet-calibration-clock" aria-label={measuring?`${phase}: ${Math.ceil(cal.remaining_s||0)} seconds remaining`:'No countdown running'}>{measuring?Math.ceil(cal.remaining_s||0):cal.saved?'✓':'—'}<small>{measuring?(phase==='settling'?'maximum release wait':phase==='preparing'?'get ready':'measuring'):cal.saved?'saved':'not measuring'}</small></div></div>
+      <div className="emg-signal-grid">{names.slice(0,channels).map((name,i)=>{const values=history.map(p=>p.values[i]).filter(Number.isFinite),max=Math.max(1,...values),min=Math.min(0,...values);return <div key={i}><b>{name}</b><strong>{live&&helper.setup?.values?.[i]!=null?helper.setup.values[i].toFixed(0):'—'} <small>ENV · ADC units</small></strong><svg viewBox="0 0 400 65" role="img" aria-label={`${name} recent envelope`}><polyline fill="none" stroke="#4ed5c4" strokeWidth="2" points={values.map((v,j)=>`${j/Math.max(1,values.length-1)*400},${60-(v-min)/(max-min)*55}`).join(' ')}/></svg><span>Rest {cal.rest?.[i]?.toFixed(0)??'—'} · Hold {cal.reference?.[i]?.toFixed(0)??'—'}</span></div>;})}</div>
+      <p className="civet-calibration-note">{helper.setup?.quality||'Waiting for samples'}. This is the sensor’s ENV envelope, not raw broadband EMG. Movement and nearby muscles can affect it.</p></div>
+    <div className="civet-calibration-actions"><button disabled={!live||busy||pending||measuring} onClick={()=>calibrate('guided_rest')}><b>1 · {cal.rest?'Redo rest':'Start rest'}</b><span>3 seconds to prepare · 5 seconds relaxed</span></button>{names.slice(0,channels).map((name,i)=><button key={i} disabled={!live||!cal.rest||busy||pending||measuring} onClick={()=>calibrate(`guided_hold_${i}`)}><b>{i+2} · Hold {name}</b><span>3 seconds to prepare · 5 seconds steady · release check</span></button>)}<button disabled={!live||!cal.valid||busy||pending||measuring||cal.saved} onClick={()=>calibrate('guided_save')}><b>{channels+2} · Save calibration</b><span>After every hold and release passes</span></button></div>
+    {measuring&&<button disabled={pending} onClick={()=>calibrate('guided_cancel')}>Cancel measurement</button>}
+    <p className="civet-calibration-note">Use comfortable, repeatable holds. 100% matches the envelope rise above rest during your calibration hold; it is not maximum strength or closeness to climax. Recalibrate after moving electrodes or reconnecting. Old recordings keep their original scale.</p>
+    <button onClick={copy}>Copy Arduino code</button><details open={showCode} onToggle={e=>setShowCode(e.currentTarget.open)}><summary>One-time Arduino setup & code</summary><p className="civet-calibration-note">Upload once using Arduino IDE. This sketch targets a 10-bit ADC board such as Uno/Nano, sends A0,A1 at 115200 baud, and supports one sensor on A0. Follow your sensor manufacturer’s wiring instructions. Close Serial Monitor before Connect. Helper installation needs Python and installs packages into Sarah’s dedicated environment.</p><textarea ref={code} aria-label="Arduino code" readOnly value={EMG_ARDUINO_SKETCH} rows={12}/></details>
+  </section></div>;
 }

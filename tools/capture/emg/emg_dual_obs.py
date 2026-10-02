@@ -1,4 +1,9 @@
 import csv
+import math
+from guided_calibration import GuidedBridge
+from serial_envelope import latest_line
+
+GUIDED = None
 import json
 import time
 import collections
@@ -117,7 +122,7 @@ def normalize(env, rest, max_val):
 
     effective_max = rest + ((max_val - rest) * HEADROOM)
     pct = ((env - rest) / (effective_max - rest)) * 100.0
-    pct = clamp(pct, 0.0, DISPLAY_MAX)
+    pct = max(0.0, pct) if HEADROOM == 1.0 else clamp(pct, 0.0, DISPLAY_MAX)
 
     if pct < NOISE_FLOOR_PCT:
         pct = 0.0
@@ -136,26 +141,7 @@ def parse_dual_line(s):
 
 
 def get_latest_dual_line(ser):
-    """
-    Backlog-proof serial reader.
-    Uses only the newest A0,A1 line.
-    """
-    latest = None
-
-    waiting = ser.in_waiting
-    if waiting:
-        chunk = ser.read(waiting).decode(errors="ignore")
-        for line in chunk.splitlines():
-            line = line.strip()
-            if "," in line and not line.startswith("A0"):
-                latest = line
-
-    if latest is None:
-        line = ser.readline().decode(errors="ignore").strip()
-        if "," in line and not line.startswith("A0"):
-            latest = line
-
-    return latest
+    return latest_line(ser, dual=True)
 
 
 def connect_obs():
@@ -227,9 +213,11 @@ def new_csv():
         "flip_lr",
         "obs_recording",
         "obs_state",
-        "marker"
+        "marker", "calibration_valid", "calibration_phase"
     ])
 
+    if GUIDED:
+        GUIDED.record_metadata(path, ['A1','A0'] if FLIP_LR else ['A0','A1'])
     return path, f, writer
 
 
@@ -246,11 +234,11 @@ def write_csv_row(writer, t0, raw_l, env_l, pct_l,
         datetime.now().isoformat(timespec="milliseconds"),
         f"{raw_l:.1f}",
         f"{env_l:.1f}",
-        f"{pct_l:.1f}",
+        f"{pct_l:.1f}" if GUIDED and GUIDED.cal.valid and GUIDED.cal.saved else "",
         f"{raw_r:.1f}",
         f"{env_r:.1f}",
-        f"{pct_r:.1f}",
-        f"{(pct_l - pct_r):.1f}",
+        f"{pct_r:.1f}" if GUIDED and GUIDED.cal.valid and GUIDED.cal.saved else "",
+        f"{(pct_l - pct_r):.1f}" if GUIDED and GUIDED.cal.valid and GUIDED.cal.saved else "",
         f"{REST_L:.1f}",
         f"{MAX_L:.1f}",
         f"{REST_R:.1f}",
@@ -259,14 +247,16 @@ def write_csv_row(writer, t0, raw_l, env_l, pct_l,
         int(bool(FLIP_LR)),
         int(bool(obs_recording)),
         obs_state,
-        marker
+        marker, bool(GUIDED and GUIDED.cal.valid and GUIDED.cal.saved),
+        GUIDED.cal.state["phase"] if GUIDED else "legacy"
     ])
 
 
 # ================= MAIN =================
 
 def main():
-    global REST_L, MAX_L, REST_R, MAX_R, HEADROOM, FLIP_LR
+    global REST_L, MAX_L, REST_R, MAX_R, HEADROOM, FLIP_LR, GUIDED
+    GUIDED = GuidedBridge(2, COMMAND_FILE.parent, ["A1", "A0"] if FLIP_LR else ["A0", "A1"])
 
     print(f"Opening serial {SERIAL_PORT} @ {SERIAL_BAUD}...")
     ser = serial.Serial(SERIAL_PORT, SERIAL_BAUD, timeout=0.05)
@@ -413,16 +403,33 @@ def main():
             save_calibration()
         return True, message
 
+    def apply_guided_calibration():
+        global REST_L, MAX_L, REST_R, MAX_R, HEADROOM
+        REST_L, REST_R = GUIDED.cal.rest
+        MAX_L, MAX_R = GUIDED.cal.reference
+        HEADROOM = 1.0
+        save_calibration()
+
     def consume_app_command():
         if not COMMAND_FILE.exists():
             return
         try:
             command = json.loads(COMMAND_FILE.read_text())
             COMMAND_FILE.unlink(missing_ok=True)
+            if str(command.get("action", "")).startswith("guided_"):
+                GUIDED.start(command)
+                if command["action"] == "guided_save":
+                    apply_guided_calibration()
+                GUIDED.update()
+                return
+            if GUIDED.cal.pending:
+                raise ValueError("Finish or cancel guided calibration first.")
             ok, message = apply_calibration_action(command.get("action", ""), command.get("save", True))
+            GUIDED.cal.fail("Legacy calibration changed. Use guided rest and hold to verify the new reference.")
             write_command_status(command, "applied" if ok else "rejected", message)
         except Exception as exc:
-            write_command_status({"id": None, "action": "unknown"}, "rejected", str(exc))
+            GUIDED.cal.fail(str(exc))
+            write_command_status(locals().get("command", {"id": None, "action": "unknown"}), "rejected", str(exc))
 
     def on_key(event):
         key = event.key.lower() if event.key else ""
@@ -462,6 +469,8 @@ def main():
 
     try:
         while True:
+            consume_app_command()
+            GUIDED.update()
             if STOP_FILE and Path(STOP_FILE).exists():
                 break
             if HEARTBEAT_FILE and (not Path(HEARTBEAT_FILE).exists() or time.time() - Path(HEARTBEAT_FILE).stat().st_mtime > 15):
@@ -472,7 +481,7 @@ def main():
                 continue
 
             a0, a1 = parse_dual_line(s)
-            if a0 is None:
+            if a0 is None or not all(math.isfinite(v) for v in (a0, a1)):
                 continue
 
             if FLIP_LR:
@@ -480,7 +489,6 @@ def main():
             else:
                 raw_l, raw_r = a0, a1
 
-            consume_app_command()
 
             if env_l is None:
                 env_l = raw_l
@@ -488,6 +496,8 @@ def main():
 
             env_l = ALPHA_ENV * raw_l + (1 - ALPHA_ENV) * env_l
             env_r = ALPHA_ENV * raw_r + (1 - ALPHA_ENV) * env_r
+
+            GUIDED.update([env_l, env_r], [raw_l, raw_r])
 
             level_raw_l = normalize(env_l, REST_L, MAX_L)
             level_raw_r = normalize(env_r, REST_R, MAX_R)

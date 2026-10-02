@@ -1739,6 +1739,23 @@ export default function LiveCapture() {
   const [civetSetupOpen, setCivetSetupOpen] = useState(false);
   const [emgSetupOpen, setEmgSetupOpen] = useState(false);
   const [emgNames, setEmgNames] = useState(() => { try { return JSON.parse(localStorage.getItem("pulsepoint.emgNames")) || []; } catch { return []; } });
+  const [emgSetupStatus, setEmgSetupStatus] = useState(null);
+  useEffect(() => {
+    let cancelled = false, timer;
+    const poll = async () => {
+      try { const response = await fetch(apiUrl('/live-capture/emg/helper')); if (!response.ok) throw new Error('EMG status unavailable'); const data = await response.json();
+        if (data.profile?.configured === false) {
+          try { const legacy = JSON.parse(localStorage.getItem('pulsepoint.emgNames')); if (Array.isArray(legacy) && legacy.length === 2 && legacy.some((name,i) => name && name !== `Sensor ${i+1}`)) {
+            const migrated = await fetch(apiUrl('/live-capture/emg/profile'), {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({names:legacy})});
+            if(migrated.ok)data.profile=await migrated.json();
+          } } catch { /* Keep usable defaults if local preferences cannot be read. */ }
+        }
+        if (!cancelled) { setEmgSetupStatus(data); if (data.profile?.names) setEmgNames(data.profile.names); }
+      } catch { if (!cancelled) setEmgSetupStatus(null); }
+      if (!cancelled) timer = setTimeout(poll, 3000);
+    };
+    poll(); return () => { cancelled = true; clearTimeout(timer); };
+  }, []);
   const [telemetryDashboardOpen, setTelemetryDashboardOpen] = useState(false);
   const [telemetryDashboard, setTelemetryDashboard] = useState(() => readTelemetryDashboard());
   const [selectedTelemetryPanel, setSelectedTelemetryPanel] = useState("");
@@ -4015,8 +4032,9 @@ export default function LiveCapture() {
   const displayedRespiration = heldTelemetryValue(telemetryHistory, "respirationBpm", h10Respiration.available ? h10Respiration.bpm : null);
   const displayedMotion = heldTelemetryValue(telemetryHistory, "motionRms", h10Motion.available ? h10Motion.dynamicRmsMilliG : null);
   const displayedRecoveryDrop = heldTelemetryValue(telemetryHistory, "recoveryDropBpm", h10Recovery.available ? h10Recovery.currentDropBpm : null);
-  const displayedLeftEmg = heldTelemetryValue(telemetryHistory, "left", emgTelemetry?.left_pct ?? emgTelemetry?.level_pct);
-  const displayedRightEmg = heldTelemetryValue(telemetryHistory, "right", emgTelemetry?.right_pct);
+  const emgUnavailable = emgTelemetry?.stale || emgTelemetry?.calibration_valid === false || (emgSetupStatus?.running && (!emgSetupStatus.receiving || !emgSetupStatus.setup?.calibration?.saved));
+  const displayedLeftEmg = emgUnavailable ? null : heldTelemetryValue(telemetryHistory, "left", emgTelemetry?.left_pct ?? emgTelemetry?.level_pct);
+  const displayedRightEmg = emgUnavailable ? null : heldTelemetryValue(telemetryHistory, "right", emgTelemetry?.right_pct);
   const engineStatus = status?.engine || null;
   const engineRunning = Boolean(engineStatus?.running);
   const engineStorageOk = engineStatus?.storage?.ok !== false && Number(engineStatus?.queue?.droppedStored || 0) === 0;
@@ -7479,8 +7497,8 @@ export default function LiveCapture() {
     <div className={`${focusView ? "h-screen overflow-hidden bg-[#071016] p-0" : "p-4 md:p-6"} space-y-4`}>
       <CivetLiveAlert live={civet} onSetup={() => setCivetSetupOpen(true)} />
       {civetSetupOpen && <CivetSetup live={civet} onClose={() => setCivetSetupOpen(false)} />}
-      {emgSetupOpen && <EmgSetup onClose={() => { setEmgSetupOpen(false); try { setEmgNames(JSON.parse(localStorage.getItem("pulsepoint.emgNames")) || []); } catch {} }} onConnected={() => updateTelemetryPanel("emg", { enabled: true })} />}
-      {!focusView && <button type="button" className="rounded-lg border border-primary px-4 py-2" onClick={() => setCivetSetupOpen(true)}>Connect CIVET · pelvic pressure</button>}
+      {emgSetupOpen && <EmgSetup onClose={() => setEmgSetupOpen(false)} onProfileChange={names => { if(names) setEmgNames(names); }} onConnected={() => updateTelemetryPanel("emg", { enabled: true })} />}
+      {!focusView && <div className="flex flex-wrap items-center gap-3"><button type="button" className="rounded-lg border border-primary px-4 py-2" onClick={() => setCivetSetupOpen(true)}>Pelvic pressure · setup</button><button type="button" className="rounded-lg border border-primary px-4 py-2" onClick={() => setEmgSetupOpen(true)}>EMG · setup & sensor names</button><span className="text-sm text-muted-foreground">{!emgSetupStatus?'EMG status unavailable':emgSetupStatus.receiving?'EMG receiving live samples':emgSetupStatus.running?'EMG helper running · waiting for samples':emgSetupStatus.installed?'EMG helper installed · stopped':'EMG helper setup needed'}</span></div>}
       {hrLossDialog && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4">
           <div
@@ -9012,6 +9030,7 @@ export default function LiveCapture() {
           </button>
           {calibrationOpen && (
             <div className="space-y-4 border-t border-border p-4">
+              <button type="button" className="min-h-11 rounded-lg border border-primary px-4 py-2" onClick={() => setEmgSetupOpen(true)}>Open guided EMG setup · names, status & calibration</button>
               <div className="rounded-lg border border-primary/20 bg-primary/[0.06] p-3 text-xs text-muted-foreground">
                 {selectedEmgConfig.calibrationIntro}
               </div>
@@ -9185,7 +9204,7 @@ export default function LiveCapture() {
                       <button
                         type="button"
                         disabled={Boolean(calibrationSaving) || (!calibrationReading.left && !calibrationReading.right) || (requiresDualChannel && !calibrationReading.right)}
-                        onClick={() => captureEmgCalibrationReference(step)}
+                        onClick={() => emgSetupStatus?.installed ? setEmgSetupOpen(true) : captureEmgCalibrationReference(step)}
                         className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 text-xs font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-45"
                       >
                         {calibrationSaving === step.key ? (
@@ -10061,8 +10080,8 @@ export default function LiveCapture() {
                 <YAxis tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} domain={[0, 100]} width={distanceTelemetryView ? 44 : 34} />
                 <Tooltip content={<ChartTooltip />} />
                 <Legend wrapperStyle={{ fontSize: distanceTelemetryView ? 14 : 11 }} />
-                <Line type="monotone" dataKey="left" name={usingPerinealEmgConfig ? "Perineal" : "Left"} stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} connectNulls />
-                <Line type="monotone" dataKey="right" name={usingPerinealEmgConfig ? "Aux" : "Right"} stroke="hsl(var(--chart-2))" strokeWidth={2.5} dot={false} connectNulls />
+                <Line type="monotone" dataKey="left" name={emgNames[0] || (usingPerinealEmgConfig ? "Perineal" : "Left")} stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} connectNulls />
+                <Line type="monotone" dataKey="right" name={emgNames[1] || (usingPerinealEmgConfig ? "Aux" : "Right")} stroke="hsl(var(--chart-2))" strokeWidth={2.5} dot={false} connectNulls />
                 <Line type="monotone" dataKey="diff" name="Diff" stroke="hsl(var(--chart-4))" strokeWidth={1.75} dot={false} connectNulls />
               </LineChart>
             </ResponsiveContainer>

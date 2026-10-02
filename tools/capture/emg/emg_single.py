@@ -1,4 +1,9 @@
 import csv
+import math
+from guided_calibration import GuidedBridge
+from serial_envelope import latest_line
+
+GUIDED = None
 import json
 import time
 import collections
@@ -101,7 +106,7 @@ def norm_with_headroom(env, rest, max_val):
     denom = effective_max - rest
 
     pct = ((env - rest) / denom) * 100.0
-    pct = clamp(pct, 0.0, DISPLAY_MAX)
+    pct = max(0.0, pct) if HEADROOM == 1.0 else clamp(pct, 0.0, DISPLAY_MAX)
 
     if pct < NOISE_FLOOR_PCT:
         pct = 0.0
@@ -110,26 +115,7 @@ def norm_with_headroom(env, rest, max_val):
 
 
 def get_latest_numeric_line(ser):
-    """
-    Backlog-proof serial reader.
-    Drains serial buffer and returns only newest numeric line.
-    """
-    latest = None
-
-    waiting = ser.in_waiting
-    if waiting:
-        chunk = ser.read(waiting).decode(errors="ignore")
-        for line in chunk.splitlines():
-            s = line.strip()
-            if s and (s[0].isdigit() or s[0] == "-"):
-                latest = s
-
-    if latest is None:
-        s = ser.readline().decode(errors="ignore").strip()
-        if s and (s[0].isdigit() or s[0] == "-"):
-            latest = s
-
-    return latest
+    return latest_line(ser, dual=False)
 
 
 def connect_obs():
@@ -194,9 +180,11 @@ def new_csv():
         "display_max",
         "obs_recording",
         "obs_state",
-        "marker"
+        "marker", "calibration_valid", "calibration_phase"
     ])
 
+    if GUIDED:
+        GUIDED.record_metadata(path, ['A0'])
     return path, f, writer
 
 
@@ -211,22 +199,24 @@ def write_csv_row(writer, t0, raw, env_s, level_pct, trend_pct,
         datetime.now().isoformat(timespec="milliseconds"),
         f"{raw:.1f}",
         f"{env_s:.1f}",
-        f"{level_pct:.1f}",
-        f"{trend_pct:.1f}",
+        f"{level_pct:.1f}" if GUIDED and GUIDED.cal.valid and GUIDED.cal.saved else "",
+        f"{trend_pct:.1f}" if GUIDED and GUIDED.cal.valid and GUIDED.cal.saved else "",
         f"{REST:.1f}",
         f"{MAX_CONTRACT:.1f}",
         f"{HEADROOM:.2f}",
         f"{DISPLAY_MAX:.1f}",
         int(bool(obs_recording)),
         obs_state,
-        marker
+        marker, bool(GUIDED and GUIDED.cal.valid and GUIDED.cal.saved),
+        GUIDED.cal.state["phase"] if GUIDED else "legacy"
     ])
 
 
 # ================= MAIN =================
 
 def main():
-    global REST, MAX_CONTRACT, HEADROOM
+    global REST, MAX_CONTRACT, HEADROOM, GUIDED
+    GUIDED = GuidedBridge(1, COMMAND_FILE.parent)
 
     print(f"Opening serial {SERIAL_PORT} @ {SERIAL_BAUD}...")
     ser = serial.Serial(SERIAL_PORT, SERIAL_BAUD, timeout=0.05)
@@ -334,16 +324,33 @@ def main():
             save_calibration()
         return True, message
 
+    def apply_guided_calibration():
+        global REST, MAX_CONTRACT, HEADROOM
+        REST = GUIDED.cal.rest[0]
+        MAX_CONTRACT = GUIDED.cal.reference[0]
+        HEADROOM = 1.0
+        save_calibration()
+
     def consume_app_command():
         if not COMMAND_FILE.exists():
             return
         try:
             command = json.loads(COMMAND_FILE.read_text())
             COMMAND_FILE.unlink(missing_ok=True)
+            if str(command.get("action", "")).startswith("guided_"):
+                GUIDED.start(command)
+                if command["action"] == "guided_save":
+                    apply_guided_calibration()
+                GUIDED.update()
+                return
+            if GUIDED.cal.pending:
+                raise ValueError("Finish or cancel guided calibration first.")
             ok, message = apply_calibration_action(command.get("action", ""), command.get("save", True))
+            GUIDED.cal.fail("Legacy calibration changed. Use guided rest and hold to verify the new reference.")
             write_command_status(command, "applied" if ok else "rejected", message)
         except Exception as exc:
-            write_command_status({"id": None, "action": "unknown"}, "rejected", str(exc))
+            GUIDED.cal.fail(str(exc))
+            write_command_status(locals().get("command", {"id": None, "action": "unknown"}), "rejected", str(exc))
 
     def on_key(event):
         key = event.key.lower() if event.key else ""
@@ -372,6 +379,8 @@ def main():
 
     try:
         while True:
+            consume_app_command()
+            GUIDED.update()
             if STOP_FILE and Path(STOP_FILE).exists():
                 break
             if HEARTBEAT_FILE and (not Path(HEARTBEAT_FILE).exists() or time.time() - Path(HEARTBEAT_FILE).stat().st_mtime > 15):
@@ -390,10 +399,14 @@ def main():
                 env_s = raw
                 trend_s = 0.0
 
+            if not math.isfinite(raw):
+                continue
+
             # Smooth the incoming ENV signal.
             env_s = ALPHA_ENV * raw + (1 - ALPHA_ENV) * env_s
 
-            consume_app_command()
+
+            GUIDED.update([env_s], [raw])
 
             # Normalize with headroom and extended ceiling.
             level_raw = norm_with_headroom(env_s, REST, MAX_CONTRACT)
