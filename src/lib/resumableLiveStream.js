@@ -1,4 +1,12 @@
 // This connection is display-only. Closing it never stops native acquisition.
+export const ownsMonitoringHistory = monitor => monitor?.version === 1 && (monitor.active === true || monitor.paused === true);
+
+export function freshTelemetryTimestamp(hr, emg, now = Date.now()) {
+  const value = hr?.measuredAt || hr?.receivedAt || emg?.source_at || emg?.receivedAt;
+  const at = Number(value) || Date.parse(value || '');
+  return Number.isFinite(at) && now - at <= 5000 && at <= now + 5000 && !hr?.quality?.stale ? at : null;
+}
+
 export function createResumableLiveStream(url, {
   EventSourceClass = EventSource, visibility = document, onResume = () => {},
 } = {}) {

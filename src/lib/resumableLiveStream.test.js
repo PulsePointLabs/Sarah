@@ -1,6 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createResumableLiveStream, mergeMonitoringPoints } from './resumableLiveStream.js';
+import { createResumableLiveStream, mergeMonitoringPoints, ownsMonitoringHistory, freshTelemetryTimestamp } from './resumableLiveStream.js';
+
+test('idle monitoring uses preview history; active and paused sessions remain server-owned', () => {
+  assert.equal(ownsMonitoringHistory({version:1,active:false,point:null}),false);
+  assert.equal(ownsMonitoringHistory({version:1,active:true}),true);
+  assert.equal(ownsMonitoringHistory({version:1,active:false,paused:true}),true);
+});
+test('preview samples retain receipt time and reject stale, future and missing timestamps', () => {
+  const now=1790900000000;
+  assert.equal(freshTelemetryTimestamp({measuredAt:now-1000},null,now),now-1000);
+  assert.equal(freshTelemetryTimestamp({receivedAt:new Date(now).toISOString()},null,now),now);
+  assert.equal(freshTelemetryTimestamp({measuredAt:now-6000},null,now),null);
+  assert.equal(freshTelemetryTimestamp({measuredAt:now+6000},null,now),null);
+  assert.equal(freshTelemetryTimestamp({},null,now),null);
+});
 
 test('returning to the page replaces its stream and rejects queued events from the old stream', () => {
   const sources = [], received = []; let resumed = 0;

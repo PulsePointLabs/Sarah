@@ -3,7 +3,7 @@ import CivetLiveAlert from "@/components/CivetLiveAlert.jsx";
 import CivetSetup from "@/components/CivetSetup.jsx";
 import { useCivetLive } from "@/hooks/useCivet.js";
 import { withCivetEvidence } from "@/lib/civet.js";
-import { createResumableLiveStream, mergeMonitoringPoints } from "@/lib/resumableLiveStream";
+import { createResumableLiveStream, mergeMonitoringPoints, ownsMonitoringHistory, freshTelemetryTimestamp } from "@/lib/resumableLiveStream";
 import StableTelemetryText from "@/components/StableTelemetryText";
 import EditableTelemetryPanel from "@/components/EditableTelemetryPanel";
 import ViewportTelemetryGrid from "@/components/ViewportTelemetryGrid";
@@ -1472,7 +1472,7 @@ function parseLiveCommand(text) {
 }
 
 function makeTelemetryPoint(hrTelemetry, emgTelemetry, options = {}) {
-  const now = Date.now();
+  const now = options.sampleAt ?? Date.now();
   const hrv = hrTelemetry?.hrv || {};
   const multimodal = hrTelemetry?.multimodal || {};
   return {
@@ -2302,9 +2302,12 @@ export default function LiveCapture() {
   }, []);
 
   const appendTelemetryPoint = (nextHr = latestHrRef.current, nextEmg = latestEmgRef.current) => {
-    if (!nextHr && !nextEmg) return;
+    const sampleAt = freshTelemetryTimestamp(nextHr, nextEmg);
+    if (sampleAt == null) return;
     setTelemetryHistory((prev) => {
+      if (prev.at(-1)?.ts >= sampleAt) return prev;
       const point = makeTelemetryPoint(nextHr, nextEmg, {
+        sampleAt,
         sessionTimeSec: getCurrentSessionTime(),
         howlIntensity: readHowlChannelIntensity(howlTelemetry, howlCommandForm.channel),
       });
@@ -3541,7 +3544,7 @@ export default function LiveCapture() {
     const generation = ++refreshGeneration;
     fetch(apiUrl("/live-capture/status"), { cache: "no-store" }).then((res) => res.json()).then((data) => {
       if (disposed || generation !== refreshGeneration) return;
-      serverMonitoringRef.current = data.monitoring?.version === 1;
+      serverMonitoringRef.current = ownsMonitoringHistory(data.monitoring);
       setStatus(data);
       const nextHr = data.hr?.latestTelemetry || null;
       const nextEmg = data.emg?.latestTelemetry || null;
@@ -3572,7 +3575,7 @@ export default function LiveCapture() {
     events.onerror = () => setConnected(false);
     events.addEventListener("status", (event) => {
       const data = JSON.parse(event.data);
-      serverMonitoringRef.current = data.monitoring?.version === 1;
+      serverMonitoringRef.current = ownsMonitoringHistory(data.monitoring);
       const nextHr = data.hr?.latestTelemetry || null;
       const nextEmg = data.emg?.latestTelemetry || null;
       latestHrRef.current = nextHr;
@@ -3605,12 +3608,19 @@ export default function LiveCapture() {
       setStatus((prev) => ({ ...(prev || {}), engine: snapshot.engine || null, monitoring: snapshot.monitoring || prev?.monitoring }));
       setHrTelemetry(nextHr);
       setEmgTelemetry(nextEmg);
-      if (snapshot.monitoring?.version === 1) {
+      if (ownsMonitoringHistory(snapshot.monitoring)) {
         serverMonitoringRef.current = true;
         const sameSession = serverMonitoringSessionRef.current === snapshot.monitoring.sessionId;
         serverMonitoringSessionRef.current = snapshot.monitoring.sessionId;
         setTelemetryHistory(prev => mergeMonitoringPoints(sameSession ? prev : [], [snapshot.monitoring.point]));
-      } else appendTelemetryPointRef.current(nextHr, nextEmg);
+      } else {
+        serverMonitoringRef.current = false;
+        if (serverMonitoringSessionRef.current != null) {
+          serverMonitoringSessionRef.current = null;
+          setTelemetryHistory([]);
+        }
+        appendTelemetryPointRef.current(nextHr, nextEmg);
+      }
     });
     events.addEventListener("emg_calibration_status", (event) => {
       setCalibrationCommandStatus(JSON.parse(event.data));
