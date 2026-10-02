@@ -1,6 +1,6 @@
 // Pressure morphology, not muscle force or a diagnostic orgasm classifier.
-export const CIVET_VERSION = 'civet-morphology-2.0.0';
-export const CIVET_PARAMETERS = Object.freeze({gap_s:0.18, refractory_s:0.4, prominence_kpa:0.05, noise_multiplier:4, reference_fraction:0.04, train_gap_s:3, tonic_tau_s:3});
+export const CIVET_VERSION = 'civet-morphology-2.1.0';
+export const CIVET_PARAMETERS = Object.freeze({gap_s:0.18, live_gap_s:0.35, refractory_s:0.4, prominence_kpa:0.05, noise_multiplier:4, reference_fraction:0.04, train_gap_s:3, tonic_tau_s:3, reversal_confirm_s:0.15, shoulder_fraction:0.25});
 export const average = a => a.length ? a.reduce((s,v)=>s+v,0)/a.length : null;
 export const quantile = (a,q=.5) => {if(!a.length)return null;const b=[...a].sort((x,y)=>x-y);return b[Math.min(b.length-1,Math.floor((b.length-1)*q))];};
 const sd = a => a.length ? Math.sqrt(average(a.map(v=>(v-average(a))**2))) : null;
@@ -10,13 +10,13 @@ export const prominenceThreshold = c => Math.max(.05,(c?.noise||0)*4,(c?.referen
 // Direction-change detector. A falling shoulder confirms a peak; a subsequent rise
 // or settled trough closes it. observed peak time and confirmation time are separate.
 export function createMorphologyDetector(mode='live') {
-  let trough=null,peak=null,fall=null,previous=null,lastPeak=-Infinity,index=0,segment=0,flags=[],flatSince=null;
-  const reset=()=>{trough=peak=fall=previous=null;flags=[];flatSince=null;lastPeak=-Infinity;segment++;};
+  let trough=null,peak=null,fall=null,previous=null,lastPeak=-Infinity,lastResolvedPeak=-Infinity,index=0,segment=0,flags=[],flatSince=null,shoulders=[],candidates=[],lastCandidate=null,candidateIndex=0;
+  const reset=()=>{trough=peak=fall=previous=null;flags=[];flatSince=null;shoulders=[];lastCandidate=null;lastPeak=lastResolvedPeak=-Infinity;segment++;};
   function finish(at, extra=[]) {
     if(!peak||!fall||!trough)return null;
     const amplitude=peak.filtered_kpa-trough.filtered_kpa;
     const prominence=Math.min(amplitude,peak.filtered_kpa-fall.filtered_kpa);
-    const quality=unique([...flags,...extra,...(peak.t-lastPeak<CIVET_PARAMETERS.refractory_s-1e-6?['below_resolvable_separation']:[]),...(peak.calibration_valid?[]:['uncalibrated'])]);
+    const quality=unique([...flags,...extra,...(peak.t-lastResolvedPeak<CIVET_PARAMETERS.refractory_s-1e-6?['below_resolvable_separation']:[]),...(peak.calibration_valid?[]:['uncalibrated'])]);
     const rise=peak.t-trough.t,decay=fall.t-peak.t;
     if(rise<.15 || decay<.15)quality.push('under_resolved_or_impulsive');
     const event={event_index:++index,id:`${mode}-${index}`,segment,mode,algorithm:CIVET_VERSION,
@@ -25,10 +25,10 @@ export function createMorphologyDetector(mode='live') {
       duration_s:fall.t-trough.t,rise_s:rise,fall_s:decay,
       tonic_kpa:peak.tonic_kpa,calibration:peak.calibration||null,calibration_valid:!!peak.calibration_valid,
       flags:unique(quality),quality:quality.length?'review':'usable',timing:'observed samples; no interpolation',
-      nominal_resolution_s:.1,preceding_interval_s:Number.isFinite(lastPeak)?peak.t-lastPeak:null};
-    lastPeak=peak.t;return event;
+      merged_shoulders:shoulders.map(s=>({...s})),nominal_resolution_s:.1,preceding_interval_s:Number.isFinite(lastPeak)?peak.t-lastPeak:null};
+    lastPeak=peak.t;if(event.quality==='usable')lastResolvedPeak=peak.t;return event;
   }
-  return {reset, ingest(row) {
+  return {reset() {reset();candidates=[];}, takeCandidates() {const result=candidates;candidates=[];return result;}, ingest(row) {
     const out=[];
     if(row.gap || (previous && row.calibration?.id!==previous.calibration?.id)) {
       if(peak&&fall){const e=finish(row.t,['truncated_by_gap_or_calibration']);if(e)out.push(e);}
@@ -51,10 +51,28 @@ export function createMorphologyDetector(mode='live') {
     } else {
       if(value<fall.filtered_kpa-1e-9)fall=row;
       const turning=value-fall.filtered_kpa>=h;
+      // Preserve threshold-crossing reversals even if confirmation later merges
+      // them into a wave. These are observations, not asserted contractions.
+      if(turning && lastCandidate!==peak.t) {
+        candidates.push({candidate_index:++candidateIndex,algorithm:CIVET_VERSION,mode,
+          peak:peak.t,onset:trough.t,trough:fall.t,observed_at:row.t,
+          peak_pressure_kpa:peak.pressure_kpa,trough_pressure_kpa:fall.pressure_kpa,
+          prominence_kpa:Math.min(peak.filtered_kpa-trough.filtered_kpa,peak.filtered_kpa-fall.filtered_kpa),
+          status:'observed_reversal',classification:'pressure feature; not a confirmed contraction'});
+        lastCandidate=peak.t;
+      }
       const settled=row.t-fall.t>=.3-1e-6 && Math.abs(value-fall.filtered_kpa)<h*.5;
-      if(turning || settled) {
+      // Wait for sampled reversal support instead of declaring a second pulse
+      // on its first rising sample. A shallow notch that promptly returns to
+      // the previous high belongs to the same wave; preserve it as morphology.
+      const shallow = peak.filtered_kpa-fall.filtered_kpa <= Math.max(h, (peak.filtered_kpa-trough.filtered_kpa)*CIVET_PARAMETERS.shoulder_fraction);
+      const resumed = turning && value >= peak.filtered_kpa && row.t-peak.t < CIVET_PARAMETERS.refractory_s && shallow;
+      if(resumed) {
+        shoulders.push({peak:peak.t,trough:fall.t,depth_kpa:peak.filtered_kpa-fall.filtered_kpa});
+        peak=row;fall=null;flatSince=null;
+      } else if((turning && row.t-fall.t>=CIVET_PARAMETERS.reversal_confirm_s-1e-6) || settled) {
         const e=finish(row.t);if(e)out.push(e);
-        trough=fall;peak=turning?row:null;fall=null;flags=[...(row.quality_flags||[])];
+        trough=fall;peak=turning?row:null;fall=null;shoulders=[];flags=[...(row.quality_flags||[])];
       }
     }
     previous=row;return out;

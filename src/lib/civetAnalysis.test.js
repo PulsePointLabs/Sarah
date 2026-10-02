@@ -30,3 +30,36 @@ test('live outputs cannot depend on future samples and versions are explicit',()
 test('a 400ms outage creates an explicit gap, never an interpolated row',()=>{const r=rig();const row=r.p.ingest(2,r.t+.3);assert.equal(row.gap,true);assert.ok(Math.abs(row.gap_s-.4)<1e-6);assert.equal(row.usable,false);});
 test('unstable baseline fails; missing calibration samples fail; review never contributes live evidence',()=>{const p=createCivetProcessor();p.calibrate('baseline');let row;for(let i=0;i<=50;i++)row=p.ingest(2+(i%2)*.5,i/10);assert.match(row.calibration_error,/unstable/);p.calibrate('baseline');for(let i=0;i<=25;i++)row=p.ingest(2,10+i/5);assert.match(row.calibration_error,/sampling interrupted/);assert.equal(civetEvidence({mode:'review',usable:true,rhythm:true}).contribution,0);});
 test('review detects legacy impulses and normalization drift while retaining original pressures',()=>{const calibration={baseline:2,noise:.01,reference:1};const rows=Array.from({length:200},(_,i)=>({t:i/10,pressure_kpa:i===20?7:i>60?1:2,calibration,usable:true,level_pct:50}));const result=analyzeCivetReview(rows);assert.ok(result.events.some(e=>e.flags.includes('impulsive_pressure_change')));assert.equal(result.rows.at(-1).level_pct,null);assert.equal(result.rows.at(-1).pressure_kpa,1);assert.equal(rows.at(-1).level_pct,50);});
+
+test('a shallow short shoulder stays in one wave and retains its measured geometry',async()=>{
+  const {createMorphologyDetector}=await import('./civetAnalysis.js');const detector=createMorphologyDetector();
+  const values=[2,2.3,2.7,3,2.8,3.1,3.3,3,2.6,2.2,2,2,2,2,2,2];
+  const rows=values.map((v,i)=>({t:i/10,pressure_kpa:v,filtered_kpa:v,tonic_kpa:2,calibration:{id:'test',reference:2,noise:.01},calibration_valid:true,quality_flags:[]}));
+  const events=rows.flatMap(r=>detector.ingest(r));assert.equal(events.length,1);assert.equal(events[0].quality,'usable');assert.equal(events[0].peak,.6);
+  assert.equal(events[0].merged_shoulders.length,1);assert.ok(Math.abs(events[0].merged_shoulders[0].depth_kpa-.2)<1e-8);
+  assert.deepEqual(rows.map(r=>r.pressure_kpa),values);
+});
+
+test('an unresolved bump cannot downgrade the next independently resolved pulse',async()=>{
+  const {createMorphologyDetector}=await import('./civetAnalysis.js');const detector=createMorphologyDetector();
+  const values=[2,2,2.2,2,2.4,3,2.5,2,2,2,2,2,2];
+  const events=values.flatMap((v,i)=>detector.ingest({t:i/10,pressure_kpa:v,filtered_kpa:v,tonic_kpa:2,calibration:{id:'test',reference:2,noise:.01},calibration_valid:true,quality_flags:[]}));
+  assert.equal(events.length,2);assert.ok(events[0].flags.includes('under_resolved_or_impulsive'));
+  assert.ok(events[1].peak-events[0].peak<.4);assert.equal(events[1].quality,'usable');assert.ok(Math.abs(events[1].preceding_interval_s-.3)<1e-8);
+});
+
+test('gaps never merge shoulders across discontinuous samples',async()=>{
+  const {createMorphologyDetector}=await import('./civetAnalysis.js');const detector=createMorphologyDetector();
+  const values=[2,2.4,3,2.8];const row=(v,t,gap=false)=>({t,pressure_kpa:v,filtered_kpa:v,tonic_kpa:2,calibration:{id:'test',reference:2,noise:.01},calibration_valid:true,gap,quality_flags:gap?['packet_gap']:[]});
+  values.forEach((v,i)=>detector.ingest(row(v,i/10)));const ended=detector.ingest(row(3.2,1,true));
+  assert.equal(ended.length,1);assert.ok(ended[0].flags.includes('truncated_by_gap_or_calibration'));assert.equal(ended[0].merged_shoulders.length,0);
+});
+
+test('unpromoted small reversals remain recorded separately from contraction counts',async()=>{
+  const {createMorphologyDetector}=await import('./civetAnalysis.js');const detector=createMorphologyDetector();
+  const values=[2,2.3,2.7,3,2.8,3.1,3.3,3,2.6,2.2,2,2,2,2,2,2];
+  const events=[],candidates=[];
+  values.forEach((v,i)=>{events.push(...detector.ingest({t:i/10,pressure_kpa:v,filtered_kpa:v,tonic_kpa:2,calibration:{id:'test',reference:2,noise:.01},calibration_valid:true,quality_flags:[]}));candidates.push(...detector.takeCandidates());});
+  assert.equal(events.length,1);assert.ok(candidates.some(c=>c.peak===.3&&c.peak_pressure_kpa===3));
+  assert.equal(candidates[0].observed_at,.5);assert.equal(candidates[0].status,'observed_reversal');assert.deepEqual(detector.takeCandidates(),[]);
+});

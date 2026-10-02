@@ -19,7 +19,7 @@ export function createCivetRouter(session, onService = () => {}) {
     if(kind==='analysis'){res.attachment(`civet-${req.params.id}-analysis.json`).json(analysis);return;}
     if(mode==='reprocessed'&&!analysis?.reprocessed)throw new Error('Reprocessed analysis is available after recording ends.');
     const rows=kind==='samples'?(mode==='live'?service.samples(req.params.id):analysis[mode].rows):analysis[mode][kind];
-    const sampleKeys=['t','timestamp_ms','pressure_kpa','delta_kpa','level_pct','avg_kpa','max_kpa','contractions_60s','duration_s','rhythm','usable','evidence','monotonic_ms','sequence','connection_id','raw_pressure_integer','raw_packet_hex','filtered_kpa','tonic_kpa','phasic_kpa','gap','gap_s','calibration','calibration_valid','quality_flags','algorithm','mode'];
+    const sampleKeys=['t','timestamp_ms','pressure_kpa','delta_kpa','level_pct','avg_kpa','max_kpa','contractions_60s','duration_s','rhythm','usable','evidence','monotonic_ms','sequence','connection_id','raw_pressure_integer','raw_packet_hex','filtered_kpa','tonic_kpa','phasic_kpa','gap','gap_s','calibration','calibration_valid','quality_flags','algorithm','mode','peak_candidates'];
     const keys=kind==='samples'?[...sampleKeys,'acquisition_policy','acquisition_state','reprocessed','recorded_acquisition_state','recorded_usable']:[...new Set(rows.flatMap(Object.keys))];
     res.type('text/csv').attachment(`civet-${req.params.id}-${kind}-${mode}.csv`).send(civetCsv(rows,keys.length?keys:[kind==='trains'?'train_index':'event_index','algorithm']));
   }catch(error){res.status(400).json({error:error.message});}});

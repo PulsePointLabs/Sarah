@@ -21,3 +21,16 @@ test('analysis preserves original JSONL, distinguishes live/review, and reads le
  fs.appendFileSync(file,'broken\n');assert.throws(()=>service.samples('legacy'),/unreadable row/);
  }finally{fs.rmSync(directory,{recursive:true,force:true});}
 });
+
+test('recorded reversal candidates retain sample-relative and absolute timing',()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'sarah-civet-candidates-'));
+  try {
+    const service=createCivetService({directory,session:()=>({id:'candidate-session',startedAt:new Date(100000).toISOString()})});
+    const values=[2,2.3,2.7,3,2.8,3.1,3.3,3,2.6,2.2,2,2,2,2,2];
+    values.forEach((pressure_kpa,i)=>service.ingest({pressure_kpa,timestamp_ms:100000+i*100,monotonic_ms:200000+i*100,sequence:i+1,connection_id:1,raw_packet_hex:'test'}));
+    const rows=service.samples('candidate-session'),candidates=rows.flatMap(r=>r.peak_candidates||[]);
+    assert.equal(rows.length,values.length);assert.deepEqual(rows.map(r=>r.pressure_kpa),values);
+    assert.ok(candidates.length>0);assert.equal(candidates[0].peak_timestamp_ms,100300);assert.equal(candidates[0].observed_timestamp_ms,100500);
+    assert.match(candidates[0].id,/candidate-/);assert.equal(rows[0].raw_packet_hex,'test');
+  } finally {fs.rmSync(directory,{recursive:true,force:true});}
+});

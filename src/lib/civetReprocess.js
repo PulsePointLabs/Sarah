@@ -2,7 +2,7 @@ import { createCivetProcessor } from './civet.js';
 import { CIVET_ACQUISITION_POLICY } from './civetReadiness.js';
 import { CIVET_VERSION, linkIntervals, summarizeTrains } from './civetAnalysis.js';
 
-export const CIVET_REPROCESS_VERSION = `civet-reprocess-1-${CIVET_ACQUISITION_POLICY}`;
+export const CIVET_REPROCESS_VERSION = `civet-reprocess-2-${CIVET_ACQUISITION_POLICY}-${CIVET_VERSION}`;
 
 // Replay only after an original sample attests that rest/hold/release passed.
 // Never infer a calibration from high pressure, or carry one across a hardware reset.

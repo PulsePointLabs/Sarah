@@ -26,11 +26,11 @@ export function createCivetProcessor({ verifiedCalibration = null } = {}) {
       const dt=last?t-last.t:null;
       // Host receive timestamps can coincide when Windows delivers queued BLE notifications.
       // Keep actual timestamps; tolerate up to 350 ms delivery jitter without inventing samples.
-      const gap=!!last&&(dt>.35+1e-6||dt<0||!!context.reconnected);
+      const gap=!!last&&(dt>CIVET_PARAMETERS.live_gap_s+1e-6||dt<0||!!context.reconnected);
       const quality=[];let calibrationError=lastCalibrationError,calibrationEvent=null;
       if(gap){signalStart=t;quality.push('packet_gap');window=[];heldAt=null;step=null;tonic=null;if(context.reconnected||dt>2||dt<0){invalid=true;baselineReady=false;}}
       if(pending) {
-        pending.start??=t+pending.prepareS;if(t>=pending.start-1e-6)pending.samples.push(pressure);pending.invalid ||= !!context.reconnected || (t>=pending.start-1e-6 && gap && t-Math.max(last?.t??t,pending.start)>.35);
+        pending.start??=t+pending.prepareS;if(t>=pending.start-1e-6)pending.samples.push(pressure);pending.invalid ||= !!context.reconnected || (t>=pending.start-1e-6 && gap && t-Math.max(last?.t??t,pending.start)>CIVET_PARAMETERS.live_gap_s);
         const feedback=calibrationFeedback(pending.samples,pending.kind,calibration);
         if(pending.invalid)Object.assign(feedback,{tone:'warning',acceptable:false,message:'Signal interrupted. Reconnect if needed, then redo rest.'});
         calibrationStatus={kind:pending.kind,phase:t<pending.start-1e-6?'preparing':'collecting',...feedback};
@@ -83,7 +83,7 @@ export function createCivetProcessor({ verifiedCalibration = null } = {}) {
       last=row;
       return {...row,level_pct:usable?clamp(delta/calibration.reference*100,0,150):null,avg_kpa:values.length?average(values):null,max_kpa:values.length?Math.max(...values):null,
         session_max_kpa:sessionMax,contractions_60s:events.filter(e=>e.quality==='usable').length,uncertain_pulses_60s:events.filter(e=>e.quality!=='usable').length,contraction_count:count,duration_s:held,mean_duration_s:average(events.map(e=>e.duration_s)),
-        rhythm,evidence,usable,acquisition_event:acquisition.event?{...acquisition.event,timestamp_ms:context.timestamp_ms??null}:null,events:emitted,calibration_event:calibrationEvent,calibration_error:calibrationError,calibration_status:calibrationStatus,baseline_ready:baselineReady,calibration_preparing_s:pending?Math.max(0,pending.start-t):0,calibration_remaining_s:pending?Math.min(5,Math.max(0,5-(t-pending.start))):0};
+        rhythm,evidence,usable,peak_candidates:detector.takeCandidates(),acquisition_event:acquisition.event?{...acquisition.event,timestamp_ms:context.timestamp_ms??null}:null,events:emitted,calibration_event:calibrationEvent,calibration_error:calibrationError,calibration_status:calibrationStatus,baseline_ready:baselineReady,calibration_preparing_s:pending?Math.max(0,pending.start-t):0,calibration_remaining_s:pending?Math.min(5,Math.max(0,5-(t-pending.start))):0};
     },
   };
 }

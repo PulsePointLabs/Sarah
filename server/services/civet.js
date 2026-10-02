@@ -76,6 +76,10 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
     previousConnection=message.connection_id??previousConnection;
     const feature=processor.ingest(message.pressure_kpa,t,{timestamp_ms:message.timestamp_ms,reconnected});reconnected=false;
     feature.events=feature.events.map(e=>({...e,id:`${captureId}-${e.id}`,segment:`${captureId}-${e.segment}`,peak_timestamp_ms:message.timestamp_ms+(e.peak-t)*1000}));
+    feature.peak_candidates=(feature.peak_candidates||[]).map(candidate=>({...candidate,
+      id:`${captureId}-candidate-${candidate.candidate_index}`,
+      peak_timestamp_ms:message.timestamp_ms+(candidate.peak-t)*1000,
+      observed_timestamp_ms:message.timestamp_ms}));
     latest={...feature,capture_id:captureId,t,timestamp_ms:message.timestamp_ms,monotonic_ms:message.monotonic_ms,sequence:message.sequence,raw_packet_hex:message.raw_packet_hex??null,raw_pressure_integer:message.raw_pressure_integer??null,connection_id:message.connection_id??null}; lastAt=Date.now();
     history.push(latest); history=history.filter(p=>t-p.t<=60).slice(-700);
     state.state='connected';state.error=feature.calibration_error||null;
