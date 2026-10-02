@@ -1,5 +1,9 @@
 # CIVET morphology v2
 
+Current timing and calibration display changes: [CIVET 2.2](CIVET_TIMING_2_2.md).
+The 180 ms gap rule below describes historical 2.0 behavior and is superseded by
+the shared 350 ms host-receipt policy.
+
 ## Setup
 
 Connect CIVET → Scan → select device → Connect. Windows records independently of browser visibility. The sensor must be within Bluetooth range. Five power-button presses make its Bluetooth icon yellow/discoverable.

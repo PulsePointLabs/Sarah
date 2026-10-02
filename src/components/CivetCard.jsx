@@ -4,6 +4,7 @@ import { civetAt } from '../lib/civet.js';
 import { linkIntervals, summarizeTrains } from '../lib/civetAnalysis.js';
 import { useCivetTimeline } from '../hooks/useCivet.js';
 import { apiUrl } from '../lib/mobileApiBase.js';
+import { civetTraceBreak } from '../lib/civetTiming.js';
 import './civet.css';
 const fmt=(v,d=2)=>v==null?'—':Number(v).toFixed(d);
 const colors={raw:'#a6b1bd',filtered:'#fff',tonic:'#fbbf24',phasic:'#2dd4bf'};
@@ -13,7 +14,7 @@ export function CivetPlot({rows,events=[],start,end,layers,onSeek,markers=[]}) {
   const values=points.flatMap(p=>selected.map(k=>p[fields[k]]??(k==='filtered'?p.pressure_kpa:null)).filter(Number.isFinite));
   const min=Math.min(0,...values),max=Math.max(.1,...values),x=t=>(t-start)/Math.max(.1,end-start)*600,y=v=>94-(v-min)/(max-min)*86;
   return <svg viewBox="0 0 600 100" preserveAspectRatio="none" role="img" aria-label="CIVET pressure layers and contraction peaks" onClick={onSeek?e=>{const r=e.currentTarget.getBoundingClientRect();onSeek(start+(e.clientX-r.left)/r.width*(end-start));}:undefined}>
-    {selected.map(k=>{let previous=null;const trace=points.map(p=>{const v=p[fields[k]]??(k==='filtered'?p.pressure_kpa:null);if(!Number.isFinite(v)){previous=null;return '';}const move=!previous||p.gap||p.t-previous.t>.18;previous=p;return `${move?'M':'L'}${x(p.t)},${y(v)}`;}).join(' ');return <path key={k} d={trace} fill="none" stroke={colors[k]} strokeWidth={k==='raw'?1:2} vectorEffect="non-scaling-stroke"/>;})}
+    {selected.map(k=>{let previous=null;const trace=points.map(p=>{const v=p[fields[k]]??(k==='filtered'?p.pressure_kpa:null);if(!Number.isFinite(v)){previous=null;return '';}const move=civetTraceBreak(previous,p);previous=p;return `${move?'M':'L'}${x(p.t)},${y(v)}`;}).join(' ');return <path key={k} d={trace} fill="none" stroke={colors[k]} strokeWidth={k==='raw'?1:2} vectorEffect="non-scaling-stroke"/>;})}
     {layers.events&&events.filter(e=>e.peak>=start&&e.peak<=end&&(e.mode==='review'||e.confirmed_at<=end)).map(e=><g key={e.id}>
       <rect x={Math.max(0,x(e.onset))} width={Math.max(1,Math.min(600,x(e.end))-Math.max(0,x(e.onset)))} y="4" height="92" fill={e.quality==='usable'?'#2dd4bf12':'#fbbf2418'} />
       <line x1={x(e.peak)} x2={x(e.peak)} y1="4" y2="96" stroke={e.quality==='usable'?'#2dd4bf':'#fbbf24'} strokeDasharray="2 2"/>
@@ -44,7 +45,7 @@ export default function CivetCard({rows=[],sample,playheadS,onSeek,compact=false
   const seek=t=>onSeek?.(t);
   return <section className={`civet-card ${compact?'civet-compact':''}`} aria-label="CIVET pelvic pressure" style={{background:`hsl(${hue} 55% ${level==null?11:14+level*.07}% / .95)`,borderColor:`hsl(${hue} 65% 48%)`}}>
     <header><b>CIVET · PELVIC RESPONSE</b><button className="civet-review-button" onClick={e=>{setPortalRoot(e.currentTarget.ownerDocument.body);setOpen(true);}}>Inspect</button></header>
-    <div className="civet-main"><strong>{fmt(current?.delta_kpa??current?.pressure_kpa)}<small> kPa{current?.delta_kpa!=null?' Δ':''}</small></strong><b>{fmt(current?.level_pct,0)}<small>% reference</small></b></div>
+    <div className="civet-main"><strong>{fmt(current?.delta_kpa??current?.pressure_kpa)}<small> kPa{current?.delta_kpa!=null?' above rest':''}</small></strong><b title="Pressure above your recorded rest divided by the rise during your calibration hold. 100% matches that hold; it is not maximum strength or an arousal score.">{fmt(current?.usable?current.level_pct:null,0)}<small>% of calibration hold</small></b></div>
     <div className="civet-state" title={statusText||current?.evidence}>{statusText||displayState||'No current pressure sample'}{current?.calibration_remaining_s>0?` · ${Math.ceil(current.calibration_remaining_s)}s`:''}</div>
     <div className="civet-stats"><span>30s avg <b>{fmt(current?.avg_kpa)}</b></span><span>30s peak <b>{fmt(current?.max_kpa)}</b></span><span>60s pulses <b>{pulseCount??'—'}</b></span><span>Tonic <b>{fmt(current?.tonic_kpa)}</b></span></div>
     <CivetPlot rows={displayRows} events={events} start={start} end={end} layers={layers} onSeek={onSeek} markers={markers}/>
@@ -52,6 +53,7 @@ export default function CivetCard({rows=[],sample,playheadS,onSeek,compact=false
     {open&&createPortal(<div className="civet-inspector-backdrop"><section role="dialog" aria-modal="true" aria-label="CIVET contraction analysis" className="civet-inspector" onKeyDown={e=>{if(e.key==='Escape')setOpen(false);}}>
       <header><h2>CIVET · Contraction analysis</h2><button autoFocus onClick={()=>setOpen(false)}>Close</button></header>
       <p>Mechanical pressure, not calibrated muscle force. A contraction train is supporting evidence, not proof of orgasm. Amber events need review; their possible causes cannot be distinguished from pressure alone.</p>
+      <p>100% means the pressure rise above rest matches your comfortable calibration hold. Higher values can occur; this is not maximum strength or percent toward climax. Rest: {fmt(current?.calibration?.baseline)} kPa · calibration hold rise: {fmt(current?.calibration?.reference)} kPa. Zeroing the hardware is separate from measuring this resting baseline.</p>
       <div className="civet-tools"><label>Analysis <select value={review?'review':reprocessed?'reprocessed':'live'} onChange={e=>{setMode(e.target.value);setSelectedTrain(null);}}>{analysis?.reprocessed&&<option value="reprocessed">Reprocessed pressure (corrected policy)</option>}<option value="live">Recorded live (causal)</option>{analysis?.review&&<option value="review">Retrospective review (noncausal)</option>}</select></label>{Object.keys(layers).map(k=><label key={k}><input type="checkbox" checked={layers[k]} onChange={e=>setLayers(p=>({...p,[k]:e.target.checked}))}/>{k}</label>)}</div>
       {reprocessed && <p>Reprocessed from unchanged raw samples. {reprocessed.recovered_samples} samples regained reference metrics under {reprocessed.policy}. The original rest/hold calibration is retained; disconnects and genuine calibration failures remain flagged. This is pressure relative to that reference, not absolute muscle force.</p>}
       <p>{review?'Symmetric pressure smoothing and centered tonic estimate. Does not change the recorded live phase model.':'Peaks are confirmed after a falling shoulder and trough. Confirmation timestamps remain distinct from observed peaks.'} Timing is sample-based (~0.1s); no interpolated samples.</p>

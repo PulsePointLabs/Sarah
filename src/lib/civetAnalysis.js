@@ -1,6 +1,7 @@
 // Pressure morphology, not muscle force or a diagnostic orgasm classifier.
-export const CIVET_VERSION = 'civet-morphology-2.1.0';
-export const CIVET_PARAMETERS = Object.freeze({gap_s:0.18, live_gap_s:0.35, refractory_s:0.4, prominence_kpa:0.05, noise_multiplier:4, reference_fraction:0.04, train_gap_s:3, tonic_tau_s:3, reversal_confirm_s:0.15, shoulder_fraction:0.25});
+import { CIVET_GAP_S, civetTraceBreak } from './civetTiming.js';
+export const CIVET_VERSION = 'civet-morphology-2.2.0';
+export const CIVET_PARAMETERS = Object.freeze({gap_s:CIVET_GAP_S, live_gap_s:CIVET_GAP_S, refractory_s:0.4, prominence_kpa:0.05, noise_multiplier:4, reference_fraction:0.04, train_gap_s:3, tonic_tau_s:3, reversal_confirm_s:0.15, shoulder_fraction:0.25});
 export const average = a => a.length ? a.reduce((s,v)=>s+v,0)/a.length : null;
 export const quantile = (a,q=.5) => {if(!a.length)return null;const b=[...a].sort((x,y)=>x-y);return b[Math.min(b.length-1,Math.floor((b.length-1)*q))];};
 const sd = a => a.length ? Math.sqrt(average(a.map(v=>(v-average(a))**2))) : null;
@@ -136,7 +137,7 @@ export function analyzeCivetReview(rawRows) {
   }
   for(const row of rawRows) {
     const p=segment.at(-1);
-    if(p&&(row.t-p.t>.18||row.t<=p.t||row.gap||(row.calibration?.id??row.calibration?.at)!==(p.calibration?.id??p.calibration?.at))){flush();segment.push({...row,gap:row.gap||row.t-p.t>.18||row.t<=p.t,gap_s:row.t-p.t});}
+    if(p&&(civetTraceBreak(p,row)||(row.calibration?.id??row.calibration?.at)!==(p.calibration?.id??p.calibration?.at))){flush();segment.push({...row,gap:civetTraceBreak(p,row),gap_s:row.t-p.t});}
     else segment.push(row);
   }
   flush();const linked=linkIntervals(events);

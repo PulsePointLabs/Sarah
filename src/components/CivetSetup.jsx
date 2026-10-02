@@ -55,13 +55,14 @@ export default function CivetSetup({ live, onClose }) {
       </div>
       <div className="civet-calibration-pressure"><strong>{connected ? sample.pressure_kpa.toFixed(2) : '—'} <small>kPa</small></strong><span>Live pressure · last 10 seconds<br/>Aim for a flat trace during rest and hold</span></div>
       <div className="civet-calibration-plot"><CivetPlot rows={rows} start={end - 10} end={end} layers={{ raw: true }} /></div>
-      <p className="civet-calibration-note">Pressure stability is a check for changes, not proof of muscle relaxation. Movement and handling can also change pressure.</p>
+      <p className="civet-calibration-note">Collect rest after positioning and inflation, once pressure has settled. This sets your software baseline without resetting the sensor. Hold a comfortable, repeatable squeeze for five seconds, then release; maximum effort is not required. Pressure alone cannot verify which muscles produced it.</p>
+      {sample?.calibration && <p className="civet-calibration-note">Rest: {sample.calibration.baseline.toFixed(2)} kPa{sample.calibration.reference != null ? ` · Hold rise: ${sample.calibration.reference.toFixed(2)} kPa = 100% of calibration hold` : ' · Hold not yet accepted'}. Repeat rest and hold after changing position or inflation.</p>}
     </div>
     <div className="civet-calibration-actions">
       <button disabled={!connected || busy || active} onClick={() => begin('baseline')}><b>{baselineReady ? 'Redo rest' : '1 · Start rest'}</b><span>3 seconds to prepare · 5 seconds relaxed</span></button>
       <button disabled={!connected || !baselineReady || busy || active} onClick={() => begin('reference')}><b>{status?.kind === 'reference' ? 'Redo hold' : '2 · Start hold'}</b><span>{baselineReady ? '3 seconds to prepare · 5 seconds steady' : 'Complete rest first to enable hold'}</span></button>
     </div>
-    <div className="civet-zero-row"><button disabled={!connected || busy || active} onClick={() => action('zero', { deflated: true })}>Zero — deflated & outside body</button><p>Optional before insertion. Clicking confirms both conditions. Clears calibration; repeat rest and hold afterward.</p></div>
+    <div className="civet-zero-row"><button disabled={!connected || busy || active} onClick={() => action('zero', { deflated: true })}>Zero — deflated & outside body</button><p>Optional before insertion. Clicking confirms both conditions. Once positioned and inflated, use Start rest instead. Hardware zero clears calibration.</p></div>
     <p className="civet-calibration-note">{busy ? 'Working…' : 'You can repeat either step. Repositioned or reconnected? Repeat rest and hold. Reference is comfortable pressure, not maximum strength.'}</p>
   </section></div>;
 }

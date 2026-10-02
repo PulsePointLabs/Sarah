@@ -1,6 +1,7 @@
 import { createCivetProcessor } from './civet.js';
 import { CIVET_ACQUISITION_POLICY } from './civetReadiness.js';
 import { CIVET_VERSION, linkIntervals, summarizeTrains } from './civetAnalysis.js';
+import { CIVET_TIMING_POLICY } from './civetTiming.js';
 
 export const CIVET_REPROCESS_VERSION = `civet-reprocess-2-${CIVET_ACQUISITION_POLICY}-${CIVET_VERSION}`;
 
@@ -38,6 +39,6 @@ export function reprocessCivetRecording(source) {
   });
   const events = linkIntervals(rows.flatMap(r => r.events || []));
   return { mode: 'reprocessed', algorithm: CIVET_VERSION, policy: CIVET_ACQUISITION_POLICY,
-    version: CIVET_REPROCESS_VERSION, recovered_samples: recoveredSamples,
+    version: CIVET_REPROCESS_VERSION, timing_policy: CIVET_TIMING_POLICY, timestamps_preserved: true, recovered_samples: recoveredSamples,
     rows, events, trains: summarizeTrains(events, rows) };
 }

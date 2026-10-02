@@ -1,8 +1,8 @@
 import { CIVET_VERSION, CIVET_PARAMETERS, average, quantile, prominenceThreshold, createMorphologyDetector } from './civetAnalysis.js';
 import { createCivetReadiness, CIVET_ACQUISITION_POLICY } from './civetReadiness.js';
 import { calibrationFeedback } from './civetCalibration.js';
+import { CIVET_GAP_S, civetTimingGap } from './civetTiming.js';
 export const CIVET_ALGORITHM = CIVET_VERSION;
-const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 export function createCivetProcessor({ verifiedCalibration = null } = {}) {
   if (verifiedCalibration && (!Number.isFinite(verifiedCalibration.baseline) || !Number.isFinite(verifiedCalibration.reference) || verifiedCalibration.reference <= 0 || !Number.isFinite(verifiedCalibration.noise) || verifiedCalibration.noise < 0)) throw new Error('Invalid recorded calibration');
   // Offline replay may start at an already verified recorded sample. Live capture
@@ -26,7 +26,7 @@ export function createCivetProcessor({ verifiedCalibration = null } = {}) {
       const dt=last?t-last.t:null;
       // Host receive timestamps can coincide when Windows delivers queued BLE notifications.
       // Keep actual timestamps; tolerate up to 350 ms delivery jitter without inventing samples.
-      const gap=!!last&&(dt>CIVET_PARAMETERS.live_gap_s+1e-6||dt<0||!!context.reconnected);
+      const gap=!!last&&(civetTimingGap(last,{t})||!!context.reconnected);
       const quality=[];let calibrationError=lastCalibrationError,calibrationEvent=null;
       if(gap){signalStart=t;quality.push('packet_gap');window=[];heldAt=null;step=null;tonic=null;if(context.reconnected||dt>2||dt<0){invalid=true;baselineReady=false;}}
       if(pending) {
@@ -81,7 +81,7 @@ export function createCivetProcessor({ verifiedCalibration = null } = {}) {
       if(usable)sessionMax=Math.max(sessionMax,delta);
       const evidence=usable?(rhythm?'rhythmic contractions':held>=3?'sustained contraction':heldAt!=null?'contraction':'relaxed'):pending?`calibrating ${pending.kind}`:calibrationError?'calibration failed':invalid?'placement / signal changed · recalibrate':'calibration needed';
       last=row;
-      return {...row,level_pct:usable?clamp(delta/calibration.reference*100,0,150):null,avg_kpa:values.length?average(values):null,max_kpa:values.length?Math.max(...values):null,
+      return {...row,level_pct:usable?Math.max(0,delta/calibration.reference*100):null,avg_kpa:values.length?average(values):null,max_kpa:values.length?Math.max(...values):null,
         session_max_kpa:sessionMax,contractions_60s:events.filter(e=>e.quality==='usable').length,uncertain_pulses_60s:events.filter(e=>e.quality!=='usable').length,contraction_count:count,duration_s:held,mean_duration_s:average(events.map(e=>e.duration_s)),
         rhythm,evidence,usable,peak_candidates:detector.takeCandidates(),acquisition_event:acquisition.event?{...acquisition.event,timestamp_ms:context.timestamp_ms??null}:null,events:emitted,calibration_event:calibrationEvent,calibration_error:calibrationError,calibration_status:calibrationStatus,baseline_ready:baselineReady,calibration_preparing_s:pending?Math.max(0,pending.start-t):0,calibration_remaining_s:pending?Math.min(5,Math.max(0,5-(t-pending.start))):0};
     },
@@ -94,7 +94,7 @@ export function civetEvidence(sample) {
 export function civetAt(rows,t) {
   let lo=0,hi=rows.length-1,found=null;
   while(lo<=hi){const mid=(lo+hi)>>1;if(rows[mid].t<=t){found=rows[mid];lo=mid+1;}else hi=mid-1;}
-  return found&&t-found.t<=.18?found:null;
+  return found&&t-found.t<=CIVET_GAP_S+1e-6?found:null;
 }
 export function withCivetEvidence(base,sample,emgLevel=0) {
   const evidence=civetEvidence(sample);
