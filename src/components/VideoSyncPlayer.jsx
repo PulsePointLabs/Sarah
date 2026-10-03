@@ -1,4 +1,5 @@
 import StackedVideoViews from './StackedVideoViews.jsx';
+import { useVideoTelemetryOverlays } from './VideoTelemetryOverlays.jsx';
 import VideoPhaseVoice from "./VideoPhaseVoice.jsx";
 import { useVideoPhaseAnnouncements } from "../hooks/useVideoPhaseAnnouncements.js";
 import { useCivetTimeline } from "../hooks/useCivet.js";
@@ -857,6 +858,7 @@ export default function VideoSyncPlayer({
   const [fullTelemetryView, setFullTelemetryView] = useState(false);
   useEffect(() => { if (!fullTelemetryView) selectView(activeFeedKey); }, [fullTelemetryView, activeFeedKey]);
   const telemetryWindow = useTelemetryWindow();
+  const telemetryOverlays = useVideoTelemetryOverlays();
   const [videoControlsHidden, setVideoControlsHidden] = useState(false);
   const [telemetryFocus, setTelemetryFocus] = useState(false);
   const [telemetryViewport, setTelemetryViewport] = useState(() => typeof window === "undefined" ? 1920 : window.innerWidth);
@@ -2708,6 +2710,7 @@ export default function VideoSyncPlayer({
                 pulseOxReadings={pulseOxReadings}
                 compact
                 resizable={!telemetryWindow.target}
+                overlays={telemetryOverlays}
                 optionalChannels={fullTelemetryChannels}
                 howl={howl}
                 civet={civet}
@@ -2778,6 +2781,7 @@ export default function VideoSyncPlayer({
                 masterRef={videoRef} secondaryRefs={videoFeedRefs} views={feedViews} selected={selectedViewKey}
                 onSelect={selectView} onReady={handleSecondaryReady}
                 onReset={key=>{selectView(key);updateVideoView('reset');}} />
+              <div ref={telemetryOverlays.setTarget} className="video-overlay-layer" />
               {(subjective.episodes.some((e) => e.end_s == null) || subjective.error || subjective.saving || quickNotice?.tone === "error") && <div className="absolute bottom-2 left-2 rounded bg-black/80 px-2 py-1 text-xs text-violet-300" role="status">
                 {quickNotice?.tone === "error" ? quickNotice.message : subjective.error ? <button type="button" onClick={subjective.retry}>Episode save failed — click to retry</button> : subjective.episodes.some((e) => e.end_s == null)
                   ? subjective.episodes.filter((e) => e.end_s == null).map((e) => e.kind === "climax" ? "Climax open · C to end" : "Near climax open · N to end").join(" · ") : "Saving episode…"}

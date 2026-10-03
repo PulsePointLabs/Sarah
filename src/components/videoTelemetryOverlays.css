@@ -1,0 +1,17 @@
+.video-overlay-layer { position:absolute; inset:0; pointer-events:none; z-index:10; }
+.video-telemetry-overlay { position:absolute; pointer-events:auto; display:flex; flex-direction:column; min-width:0; min-height:0; border:1px solid #ffffff50; border-radius:8px; overflow:hidden; }
+.video-telemetry-overlay:focus-within { z-index:2; border-color:hsl(var(--primary)); }
+.video-overlay-toolbar { display:flex; flex-shrink:0; align-items:center; gap:5px; height:28px; background:#111827e6; padding:2px 5px; color:white; font-size:11px; }
+.video-overlay-drag { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; text-align:left; cursor:move; touch-action:none; }
+.video-overlay-toolbar input { width:60px; max-width:100%; }
+.video-overlay-toolbar > button:last-child { font-size:20px; line-height:20px; }
+.video-overlay-content { flex:1; min-height:0; overflow:auto; container-type:inline-size; background:hsl(var(--background)); }
+.video-overlay-content > * { height:100%; min-height:0; }
+.video-overlay-content > .grid { grid-template-columns:repeat(auto-fit,minmax(100px,1fr)) !important; }
+.video-overlay-content .monitor-metric-value { font-size:clamp(20px,12cqi,64px); }
+.video-overlay-resize { position:absolute; bottom:0; right:0; width:24px; height:24px; background:#111827e6; color:white; cursor:nwse-resize; touch-action:none; border-radius:6px 0 0 0; }
+.video-overlay-picker { flex-shrink:0; font-size:11px; position:relative; }
+.video-overlay-picker summary { cursor:pointer; padding:4px; color:hsl(var(--primary)); }
+.video-overlay-picker > div { position:absolute; top:100%; left:0; right:0; z-index:50; display:flex; flex-wrap:wrap; gap:5px; padding:8px; max-height:250px; overflow:auto; background:hsl(var(--popover)); border:1px solid hsl(var(--border)); border-radius:8px; }
+.video-overlay-picker button { border:1px solid hsl(var(--border)); border-radius:4px; padding:4px; }
+.video-overlay-picker button[aria-pressed=true] { background:hsl(var(--primary)); color:hsl(var(--primary-foreground)); }

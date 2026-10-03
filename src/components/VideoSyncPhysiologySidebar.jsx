@@ -1,5 +1,5 @@
 import CivetCard from "./CivetCard.jsx";
-import ResizableVideoTelemetry from "./ResizableVideoTelemetry";
+import VideoTelemetryOverlays from "./VideoTelemetryOverlays.jsx";
 import EpisodeBoundaryHandle from "./EpisodeBoundaryHandle.jsx";
 import { telemetryValueChange, discreteValueChange } from "../lib/telemetryValueChange.js";
 import HowlTimelineCard from "./HowlTimelineCard.jsx";
@@ -199,6 +199,7 @@ export default function VideoSyncPhysiologySidebar({
   pulseOxReadings = [],
   compact = false,
   resizable = false,
+  overlays,
   optionalChannels = { spo2: true, respiration: true, motion: true },
   howl,
   civet,
@@ -282,7 +283,7 @@ export default function VideoSyncPhysiologySidebar({
   );
 
   return (
-    <ResizableVideoTelemetry enabled={resizable}>
+    <VideoTelemetryOverlays controller={overlays} resizable={resizable}>
     <section className={`${compact ? "flex h-full min-h-0 flex-col gap-1 overflow-hidden p-2" : "space-y-3 p-3"} rounded-2xl border border-primary/15 bg-gradient-to-b from-primary/[0.055] via-card to-card shadow-sm`}>
       <div className="flex shrink-0 items-start justify-between gap-3">
         <div>
@@ -511,6 +512,6 @@ export default function VideoSyncPhysiologySidebar({
         </div>
       ) : null}
     </section>
-    </ResizableVideoTelemetry>
+    </VideoTelemetryOverlays>
   );
 }

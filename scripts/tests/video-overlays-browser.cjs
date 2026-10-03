@@ -1,0 +1,45 @@
+const assert=require('node:assert/strict'),path=require('node:path'),os=require('node:os');
+let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright'));}
+(async()=>{const browser=await pw.chromium.launch({channel:'chrome',headless:true});try{
+  const page=await browser.newPage({viewport:{width:1600,height:1000}}), errors=[];
+  page.on('pageerror',e=>errors.push(e.message));
+  await page.route('**/api/**',r=>r.request().url().includes('/src/')?r.continue():r.fulfill({json:[]}));
+  const open=async()=>{
+    await page.goto('http://127.0.0.1:5175/scripts/tests/fixtures/video-sidebar-resize.html');
+    await page.locator('input[type=file][accept*="video"]').first().setInputFiles('logs/two-angle-test.mp4');
+    await page.getByRole('button',{name:'Full Telemetry',exact:true}).click();
+  };
+  await open();
+  await page.locator('.video-overlay-picker summary').click();
+  await page.locator('.video-overlay-picker').getByRole('button',{name:'Cardiac trend',exact:true}).click();
+  await page.locator('.video-overlay-picker').getByRole('button',{name:'Heart Rate',exact:true}).click();
+  await page.locator('.video-overlay-picker summary').click();
+  const overlay=page.locator('[data-video-overlay=cardiac]');
+  await overlay.waitFor();
+  assert.equal(await page.locator('[data-video-section=cardiac]').count(),1,'original chart remains');
+  const drag=async(locator,dx,dy)=>{const b=await locator.boundingBox();await page.mouse.move(b.x+b.width/2,b.y+b.height/2);await page.mouse.down();await page.mouse.move(b.x+b.width/2+dx,b.y+b.height/2+dy,{steps:8});await page.mouse.up();};
+  const before=await overlay.boundingBox();
+  await drag(page.getByLabel('Move Cardiac trend overlay',{exact:true}),180,90);
+  const moved=await overlay.boundingBox();assert.ok(moved.x-before.x>170);assert.ok(moved.y-before.y>80);
+  await drag(page.getByLabel('Resize Cardiac trend overlay'),100,80);
+  const resized=await overlay.boundingBox();assert.ok(resized.width-moved.width>90);assert.ok(resized.height-moved.height>70);
+  await page.getByLabel('Cardiac trend transparency').fill('55');
+  assert.equal(await overlay.locator('.video-overlay-content').evaluate(e=>getComputedStyle(e).opacity),'0.45');
+  const chart=overlay.locator('.recharts-wrapper');const chartBox=await chart.boundingBox();
+  await page.mouse.click(chartBox.x+chartBox.width*.65,chartBox.y+chartBox.height*.5);
+  await page.waitForTimeout(300);
+  assert.ok(await page.locator('[data-camera] video').first().evaluate(e=>e.currentTime)>1,'overlay chart click seeks the master');
+  const saved=await page.evaluate(()=>localStorage.getItem('sarah.videoSync.overlays.v1'));
+  await open();await overlay.waitFor();
+  assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('sarah.videoSync.overlays.v1'))),JSON.parse(saved),'layout survives reload and video loading');
+  const popupPromise=page.waitForEvent('popup');await page.getByRole('button',{name:'Dual monitors',exact:true}).click();const popup=await popupPromise;
+  await popup.locator('.video-overlay-picker summary').click();
+  await popup.locator('.video-overlay-picker').getByRole('button',{name:'Autonomic trend',exact:true}).click();
+  await page.locator('[data-video-overlay=autonomic]').waitFor();
+  assert.equal(await popup.locator('.recharts-wrapper').count()>0,true,'monitor charts remain');
+  await page.getByLabel('Remove Autonomic trend overlay').click();
+  assert.equal(await page.locator('[data-video-overlay=autonomic]').count(),0);
+  await popup.getByRole('button',{name:'Single window',exact:true}).click();await overlay.waitFor();
+  await page.screenshot({path:'logs/video-overlays.png'});
+  assert.deepEqual(errors,[]);console.log('PASS overlay move, resize, transparency, seek, refresh persistence, video load, dual-monitor selection and removal');
+}finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});
