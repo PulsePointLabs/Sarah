@@ -14,6 +14,18 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   await bottom.waitFor();await page.waitForFunction(()=>[...document.querySelectorAll('[data-camera] video')].every(v=>v.readyState>=2));
   const boxes=await page.locator('[data-camera]').evaluateAll(es=>es.map(e=>({top:e.getBoundingClientRect().top,bottom:e.getBoundingClientRect().bottom,h:e.clientHeight})));
   assert.ok(boxes[1].top>=boxes[0].bottom);assert.ok(boxes.every(b=>b.h>100));
+  const divider=page.getByRole('separator',{name:'Resize video panels'});
+  const dragDivider=async(vertical)=>{
+    const before=await top.evaluate(e=>({w:e.clientWidth,h:e.clientHeight}));
+    const box=await divider.boundingBox();
+    await page.mouse.move(box.x+box.width/2,box.y+box.height/2);
+    await page.mouse.down();await page.mouse.move(box.x+box.width/2+(vertical?0:80),box.y+box.height/2+(vertical?80:0),{steps:8});await page.mouse.up();
+    const after=await top.evaluate(e=>({w:e.clientWidth,h:e.clientHeight}));
+    assert.ok((vertical?after.h-before.h:after.w-before.w)>60,'divider resizes the video panel');
+    assert.equal(await top.evaluate(e=>getComputedStyle(e).objectFit),'fill');
+    await divider.dblclick();assert.equal(await divider.getAttribute('aria-valuenow'),'50');
+  };
+  await dragDivider(true);
   await bottom.click();await page.keyboard.press('+');
   assert.match(await bottom.getAttribute('style'),/scale\(1.25\)/);assert.match(await top.getAttribute('style'),/scale\(1\)/);
   await top.click();await page.keyboard.press('+');await page.keyboard.press('+');
@@ -54,6 +66,11 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   assert.ok(split[1].x>=split[0].x+split[0].w);assert.equal(split[0].y,split[1].y);
   assert.equal(await top.evaluate(e=>e===window.masterElement),true);
   await page.screenshot({path:'logs/video-split.png'});
+  await dragDivider(false);
+  await divider.focus();const dividerTime=await top.evaluate(e=>e.currentTime);
+  await page.keyboard.press('ArrowRight');assert.equal(await divider.getAttribute('aria-valuenow'),'52');
+  assert.equal(await top.evaluate(e=>e.currentTime),dividerTime);
+  await divider.dblclick();
   await page.getByRole('button',{name:'Side-by-side cameras',exact:true}).click();
   assert.equal(await top.evaluate(e=>e===window.masterElement),true);
   await page.screenshot({path:'logs/video-stacked.png'});
@@ -67,8 +84,10 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   const dualSplit=await page.locator('[data-camera]').evaluateAll(es=>es.map(e=>({x:e.getBoundingClientRect().x,y:e.getBoundingClientRect().y,w:e.clientWidth})));
   assert.ok(dualSplit[1].x>=dualSplit[0].x+dualSplit[0].w);assert.equal(dualSplit[0].y,dualSplit[1].y);
   assert.equal(await top.evaluate(e=>e===window.masterElement),true);
+  await dragDivider(false);
   await page.getByLabel('Second camera angle').selectOption('');
   assert.equal(await bottom.count(),0);
+  assert.equal(await divider.count(),0);
   await page.getByLabel('Second camera angle').selectOption('lower_body');
   await bottom.waitFor();
   await page.screenshot({path:'logs/video-dual-monitor-split.png'});
