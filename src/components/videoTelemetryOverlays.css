@@ -10,8 +10,11 @@
 .video-overlay-content > .grid { grid-template-columns:repeat(auto-fit,minmax(100px,1fr)) !important; }
 .video-overlay-content .monitor-metric-value { font-size:clamp(20px,12cqi,64px); }
 .video-overlay-resize { position:absolute; bottom:0; right:0; width:24px; height:24px; background:#111827e6; color:white; cursor:nwse-resize; touch-action:none; border-radius:6px 0 0 0; }
-.video-overlay-picker { flex-shrink:0; font-size:11px; position:relative; }
-.video-overlay-picker summary { cursor:pointer; padding:4px; color:hsl(var(--primary)); }
+.video-overlay-picker { flex-shrink:0; font-size:13px; position:relative; }
+.video-overlay-picker summary { cursor:pointer; padding:12px; color:hsl(var(--primary-foreground)); background:hsl(var(--primary)); border:1px solid hsl(var(--primary)); border-radius:8px; display:flex; align-items:center; justify-content:space-between; gap:8px; font-weight:700; list-style:none; }
+.video-overlay-picker summary::-webkit-details-marker { display:none; }
+.video-overlay-count { font-size:11px; white-space:nowrap; }
+.video-overlay-picker-help { width:100%; margin:0 0 5px; font-size:12px; line-height:1.5; color:hsl(var(--foreground)); }
 .video-overlay-picker > div { position:absolute; top:100%; left:0; right:0; z-index:50; display:flex; flex-wrap:wrap; gap:5px; padding:8px; max-height:250px; overflow:auto; background:hsl(var(--popover)); border:1px solid hsl(var(--border)); border-radius:8px; }
 .video-overlay-picker button { border:1px solid hsl(var(--border)); border-radius:4px; padding:4px; }
 .video-overlay-picker button[aria-pressed=true] { background:hsl(var(--primary)); color:hsl(var(--primary-foreground)); }

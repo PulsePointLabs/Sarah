@@ -10,9 +10,13 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
     await page.getByRole('button',{name:'Full Telemetry',exact:true}).click();
   };
   await open();
+  await page.getByRole('button',{name:'Focus (F)',exact:true}).click();
+  assert.equal(await page.locator('.video-overlay-picker summary').isVisible(),false);
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('.video-overlay-picker summary').isVisible(),true);
   await page.locator('.video-overlay-picker summary').click();
-  await page.locator('.video-overlay-picker').getByRole('button',{name:'Cardiac trend',exact:true}).click();
-  await page.locator('.video-overlay-picker').getByRole('button',{name:'Heart Rate',exact:true}).click();
+  await page.locator('.video-overlay-picker').getByRole('button',{name:'＋ Cardiac trend',exact:true}).click();
+  await page.locator('.video-overlay-picker').getByRole('button',{name:'＋ Heart Rate',exact:true}).click();
   await page.locator('.video-overlay-picker summary').click();
   const overlay=page.locator('[data-video-overlay=cardiac]');
   await overlay.waitFor();
@@ -34,7 +38,7 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('sarah.videoSync.overlays.v1'))),JSON.parse(saved),'layout survives reload and video loading');
   const popupPromise=page.waitForEvent('popup');await page.getByRole('button',{name:'Dual monitors',exact:true}).click();const popup=await popupPromise;
   await popup.locator('.video-overlay-picker summary').click();
-  await popup.locator('.video-overlay-picker').getByRole('button',{name:'Autonomic trend',exact:true}).click();
+  await popup.locator('.video-overlay-picker').getByRole('button',{name:'＋ Autonomic trend',exact:true}).click();
   await page.locator('[data-video-overlay=autonomic]').waitFor();
   assert.equal(await popup.locator('.recharts-wrapper').count()>0,true,'monitor charts remain');
   await page.getByLabel('Remove Autonomic trend overlay').click();

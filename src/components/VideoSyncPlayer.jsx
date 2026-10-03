@@ -2677,6 +2677,7 @@ export default function VideoSyncPlayer({
               <button onClick={telemetryWindow.close}>Single window</button>
               <span role="status">{subjective.error || (subjective.saving ? "Saving episode..." : "")}</span>
             </div>}
+            <div ref={telemetryOverlays.setPickerTarget} className={`${telemetryFocus && !telemetryWindow.target ? 'hidden' : ''} relative z-50 shrink-0`} />
             <div className={`${telemetryFocus ? "hidden" : "flex"} h-9 shrink-0 items-center justify-between rounded-xl border border-white/10 bg-card/95 px-2`}>
               <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Optional channels</span>
               <div className="flex gap-1">

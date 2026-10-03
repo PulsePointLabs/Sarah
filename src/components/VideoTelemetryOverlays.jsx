@@ -1,4 +1,4 @@
-import { Children, cloneElement, isValidElement, useEffect, useRef, useState } from 'react';
+import { Children, isValidElement, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import ResizableVideoTelemetry from './ResizableVideoTelemetry.jsx';
 import './videoTelemetryOverlays.css';
@@ -16,6 +16,7 @@ function clean(value) {
 export function useVideoTelemetryOverlays() {
   const [boxes, setBoxes] = useState(() => { try { return clean(JSON.parse(localStorage.getItem(STORAGE))); } catch { return {}; } });
   const [target, setTarget] = useState(null);
+  const [pickerTarget, setPickerTarget] = useState(null);
   useEffect(() => { try { localStorage.setItem(STORAGE, JSON.stringify(boxes)); } catch { /* Storage may be unavailable. */ } }, [boxes]);
   const update = (id, patch) => setBoxes(previous => ({ ...previous, [id]: { ...previous[id], ...patch } }));
   const toggle = id => setBoxes(previous => {
@@ -27,7 +28,7 @@ export function useVideoTelemetryOverlays() {
     }
     return next;
   });
-  return { boxes, target, setTarget, update, toggle };
+  return { boxes, target, setTarget, pickerTarget, setPickerTarget, update, toggle };
 }
 
 function FloatingTelemetry({ id, label, children, controller }) {
@@ -85,11 +86,12 @@ export default function VideoTelemetryOverlays({ children, controller, resizable
   });
   const missing = Object.keys(controller.boxes).filter(id => !entries.some(entry => entry.id === id));
   const picker = <details key="overlay-picker" className="video-overlay-picker">
-    <summary>Video overlays · {Object.keys(controller.boxes).length} selected</summary>
-    <div>{entries.map(({id,label}) => <button type="button" key={id} aria-pressed={Boolean(controller.boxes[id])} onClick={() => controller.toggle(id)}>{label}</button>)}
+    <summary><span>＋ Add overlays to video</span><span className="video-overlay-count">{Object.keys(controller.boxes).length} selected ▾</span></summary>
+    <div><p className="video-overlay-picker-help">Choose a card or graph to add over the video. Originals stay here. Drag the overlay title to move it, drag its corner to resize, and use its slider for transparency.</p>{entries.map(({id,label}) => <button type="button" key={id} aria-pressed={Boolean(controller.boxes[id])} onClick={() => controller.toggle(id)}>{controller.boxes[id] ? '✓ ' : '＋ '}{label}</button>)}
       {missing.map(id => <button type="button" key={id} aria-pressed="true" onClick={() => controller.toggle(id)}>{id} · no data (remove)</button>)}</div>
   </details>;
-  return <><ResizableVideoTelemetry enabled={resizable}>{cloneElement(children, {}, picker, ...items)}</ResizableVideoTelemetry>
+  return <><ResizableVideoTelemetry enabled={resizable}>{children}</ResizableVideoTelemetry>
+    {controller.pickerTarget && createPortal(picker, controller.pickerTarget)}
     {controller.target && createPortal(entries.filter(entry => controller.boxes[entry.id]).map(({ id, label, child }) =>
       <FloatingTelemetry key={id} id={id} label={label} controller={controller}>{child}</FloatingTelemetry>), controller.target)}
   </>;
