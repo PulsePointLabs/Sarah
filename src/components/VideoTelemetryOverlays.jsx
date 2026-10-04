@@ -2,6 +2,7 @@ import { Children, isValidElement, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import ResizableVideoTelemetry from './ResizableVideoTelemetry.jsx';
 import './videoTelemetryOverlays.css';
+import { fits, place, restoreLayout } from '../lib/videoOverlayLayout.js';
 
 const STORAGE = 'sarah.videoSync.overlays.v1';
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -14,29 +15,36 @@ function clean(value) {
     }));
 }
 export function useVideoTelemetryOverlays() {
-  const [boxes, setBoxes] = useState(() => { try { return clean(JSON.parse(localStorage.getItem(STORAGE))); } catch { return {}; } });
+  const [boxes, setBoxes] = useState(() => { try { return restoreLayout(clean(JSON.parse(localStorage.getItem(STORAGE)))); } catch { return {}; } });
+  const [notice, setNotice] = useState(null);
   const [target, setTarget] = useState(null);
   const [pickerTarget, setPickerTarget] = useState(null);
   useEffect(() => { try { localStorage.setItem(STORAGE, JSON.stringify(boxes)); } catch { /* Storage may be unavailable. */ } }, [boxes]);
-  const update = (id, patch) => setBoxes(previous => ({ ...previous, [id]: { ...previous[id], ...patch } }));
-  const toggle = id => setBoxes(previous => {
-    const next = { ...previous };
+  const update = (id, patch) => setBoxes(previous => { const next = { ...previous[id], ...patch }; return fits(next, previous, id) ? { ...previous, [id]: next } : previous; });
+  const toggle = id => { setNotice(null);
+    const next = { ...boxes };
     if (next[id]) delete next[id];
     else {
       const offset = (Object.keys(next).length % 6) * .045;
-      next[id] = { x: .03 + offset, y: .03 + offset, w: id.startsWith('metric-') ? .24 : .48, h: id.startsWith('metric-') ? .25 : .4, opacity: .9 };
+      const candidate = { x: .03 + offset, y: .03 + offset, w: id.startsWith('metric-') ? .24 : .48, h: id.startsWith('metric-') ? .25 : .4, opacity: .9 };
+      const available = place(candidate, next);
+      if (available) next[id] = available;
+      else setNotice('No free space for this overlay. Shrink or remove another card first.');
     }
-    return next;
-  });
-  return { boxes, target, setTarget, pickerTarget, setPickerTarget, update, toggle };
+    setBoxes(next);
+  };
+  return { boxes, notice, target, setTarget, pickerTarget, setPickerTarget, update, toggle };
 }
 
 function FloatingTelemetry({ id, label, children, controller }) {
   const drag = useRef(null);
+  const suppressClick = useRef(false);
+  const lastDown = useRef(null);
   const box = controller.boxes[id];
   const start = (event, mode) => {
     if (event.button !== 0) return;
     event.preventDefault(); event.stopPropagation();
+    suppressClick.current = true;
     event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId);
     const bounds = controller.target.getBoundingClientRect();
     drag.current = { mode, x: event.clientX, y: event.clientY, bounds, box };
@@ -59,21 +67,37 @@ function FloatingTelemetry({ id, label, children, controller }) {
     controller.update(id, mode === 'move' ? { x: clamp(box.x+dx, 0, 1-box.w), y: clamp(box.y+dy, 0, 1-box.h) }
       : { w: clamp(box.w+dx, .15, 1-box.x), h: clamp(box.h+dy, .12, 1-box.y) });
   };
-  return <section data-video-overlay={id} aria-label={`${label} video overlay`} className="video-telemetry-overlay"
-    onKeyDown={event => event.stopPropagation()}
+  const keyDown = event => {
+    if (event.target.closest('input,textarea,select') || event.ctrlKey || event.altKey || event.metaKey) return;
+    const plus = ['+', '='].includes(event.key) || event.code === 'NumpadAdd';
+    const minus = event.key === '-' || event.code === 'NumpadSubtract';
+    if (plus || minus) {
+      event.preventDefault(); event.stopPropagation();
+      controller.update(id, { opacity: clamp(box.opacity + (plus ? -.05 : .05), .15, 1) });
+    }
+    if (event.key === 'Escape') { event.stopPropagation(); event.currentTarget.blur(); }
+    if (event.key === 'Delete' && event.target === event.currentTarget) { event.preventDefault(); controller.toggle(id); }
+  };
+  return <section data-video-overlay={id} aria-label={`${label} video overlay`} tabIndex={0} className="video-telemetry-overlay"
+    title="Click to select. + increases transparency; − decreases it. Double-click and hold the second click to drag. Delete removes."
+    onKeyDown={keyDown}
+    onPointerDown={event => {
+      if (event.target.closest('button,input,select,textarea,[role=slider]')) return;
+      event.currentTarget.focus({preventScroll:true});
+      const previous = lastDown.current;
+      lastDown.current = { time: event.timeStamp, x: event.clientX, y: event.clientY };
+      if (previous && event.timeStamp-previous.time < 450 && Math.hypot(event.clientX-previous.x, event.clientY-previous.y) < 8) {
+        lastDown.current = null;
+        start(event, 'move');
+      }
+    }} {...pointerProps}
+    onClickCapture={event => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false; } }}
     style={{ left: `${box.x*100}%`, top: `${box.y*100}%`, width: `${box.w*100}%`, height: `${box.h*100}%` }}>
-    <div className="video-overlay-toolbar">
-      <button type="button" className="video-overlay-drag" aria-label={`Move ${label} overlay`} title="Drag to move; arrow keys also move"
-        onPointerDown={event => start(event, 'move')} onKeyDown={event => keyboard(event, 'move')} {...pointerProps}>{label}</button>
-      <label title="Transparency"><span className="sr-only">{label} transparency</span><input aria-label={`${label} transparency`} type="range" min="0" max="85" value={Math.round((1-box.opacity)*100)} onChange={event => controller.update(id, { opacity: 1-Number(event.target.value)/100 })} /></label>
-      <button type="button" aria-label={`Remove ${label} overlay`} onClick={() => controller.toggle(id)}>×</button>
-    </div>
     <div className="video-overlay-content" style={{ opacity: box.opacity }}>{children}</div>
     <button type="button" className="video-overlay-resize" aria-label={`Resize ${label} overlay`} title="Drag to resize; arrow keys also resize"
-      onPointerDown={event => start(event, 'resize')} onKeyDown={event => keyboard(event, 'resize')} {...pointerProps}>◢</button>
+      onPointerDown={event => start(event, 'resize')} onKeyDown={event => { keyboard(event, 'resize'); event.stopPropagation(); }} {...pointerProps}>◢</button>
   </section>;
 }
-
 // Reuse the actual React cards and their callbacks, not screenshots or DOM copies.
 export default function VideoTelemetryOverlays({ children, controller, resizable }) {
   if (!controller) return <ResizableVideoTelemetry enabled={resizable}>{children}</ResizableVideoTelemetry>;
@@ -87,8 +111,8 @@ export default function VideoTelemetryOverlays({ children, controller, resizable
   const missing = Object.keys(controller.boxes).filter(id => !entries.some(entry => entry.id === id));
   const picker = <details key="overlay-picker" className="video-overlay-picker">
     <summary><span>＋ Add overlays to video</span><span className="video-overlay-count">{Object.keys(controller.boxes).length} selected ▾</span></summary>
-    <div><p className="video-overlay-picker-help">Choose a card or graph to add over the video. Originals stay here. Drag the overlay title to move it, drag its corner to resize, and use its slider for transparency.</p>{entries.map(({id,label}) => <button type="button" key={id} aria-pressed={Boolean(controller.boxes[id])} onClick={() => controller.toggle(id)}>{controller.boxes[id] ? '✓ ' : '＋ '}{label}</button>)}
-      {missing.map(id => <button type="button" key={id} aria-pressed="true" onClick={() => controller.toggle(id)}>{id} · no data (remove)</button>)}</div>
+    <div><p className="video-overlay-picker-help">Choose a card or graph to add over the video. Originals stay here. Click a card to select it: + makes it more transparent, − less transparent. Double-click and hold the second click to drag. Drag its corner to resize. Deselect here or press Delete to remove.</p>{entries.map(({id,label}) => <button type="button" key={id} aria-pressed={Boolean(controller.boxes[id])} onClick={() => controller.toggle(id)}>{controller.boxes[id] ? '✓ ' : '＋ '}{label}</button>)}
+      {controller.notice && <p role="status">{controller.notice}</p>}{missing.map(id => <button type="button" key={id} aria-pressed="true" onClick={() => controller.toggle(id)}>{id} · no data (remove)</button>)}</div>
   </details>;
   return <><ResizableVideoTelemetry enabled={resizable}>{children}</ResizableVideoTelemetry>
     {controller.pickerTarget && createPortal(picker, controller.pickerTarget)}

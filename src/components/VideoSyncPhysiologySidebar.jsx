@@ -84,7 +84,7 @@ function nearestEvidenceRow(rows, seconds) {
 
 function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = false, change }) {
   return (
-    <div style={change?.delta ? { backgroundColor: change.delta > 0 ? "rgba(251,146,60,0.09)" : "rgba(56,189,248,0.09)", transition: "background-color 300ms" } : undefined} className={`rounded-xl border border-border bg-background/70 shadow-sm ${compact ? "p-1.5" : "p-3"}`}>
+    <div style={change?.delta ? { backgroundColor: change.delta > 0 ? "rgba(251,146,60,0.09)" : "rgba(56,189,248,0.09)", transition: "background-color 300ms" } : undefined} className={`telemetry-metric-card rounded-xl border border-border bg-background/70 shadow-sm ${compact ? "p-1.5" : "p-3"}`}>
       <div className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
         <Icon className={`h-3.5 w-3.5 ${tone}`} />
         <span className="metric-full-label">{label}</span><span className="metric-short-label" title={label}>{({ 'Heart Rate': 'HR', 'Blood Pressure': 'BP', 'Respiration': 'Resp', 'Chest Motion': 'Motion' })[label] || label}</span>

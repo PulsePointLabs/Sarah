@@ -1,10 +1,6 @@
 .video-overlay-layer { position:absolute; inset:0; pointer-events:none; z-index:10; }
 .video-telemetry-overlay { position:absolute; pointer-events:auto; display:flex; flex-direction:column; min-width:0; min-height:0; border:1px solid #ffffff50; border-radius:8px; overflow:hidden; }
 .video-telemetry-overlay:focus-within { z-index:2; border-color:hsl(var(--primary)); }
-.video-overlay-toolbar { display:flex; flex-shrink:0; align-items:center; gap:5px; height:28px; background:#111827e6; padding:2px 5px; color:white; font-size:11px; }
-.video-overlay-drag { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; text-align:left; cursor:move; touch-action:none; }
-.video-overlay-toolbar input { width:60px; max-width:100%; }
-.video-overlay-toolbar > button:last-child { font-size:20px; line-height:20px; }
 .video-overlay-content { flex:1; min-height:0; overflow:auto; container-type:inline-size; background:hsl(var(--background)); }
 .video-overlay-content > * { height:100%; min-height:0; }
 .video-overlay-content > .grid { grid-template-columns:repeat(auto-fit,minmax(100px,1fr)) !important; }
@@ -18,3 +14,17 @@
 .video-overlay-picker > div { position:absolute; top:100%; left:0; right:0; z-index:50; display:flex; flex-wrap:wrap; gap:5px; padding:8px; max-height:250px; overflow:auto; background:hsl(var(--popover)); border:1px solid hsl(var(--border)); border-radius:8px; }
 .video-overlay-picker button { border:1px solid hsl(var(--border)); border-radius:4px; padding:4px; }
 .video-overlay-picker button[aria-pressed=true] { background:hsl(var(--primary)); color:hsl(var(--primary-foreground)); }
+/* Overlay cards scale their content against both dimensions, not padding. */
+.video-overlay-content { container-type:size; }
+.video-overlay-content .telemetry-metric-card { display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; padding:3%; container-type:size; overflow:hidden; }
+.video-overlay-content .telemetry-metric-card > div { justify-content:center; font-size:clamp(8px,min(7cqi,12cqh),28px); flex:none; }
+.video-overlay-content .telemetry-metric-card > div svg { width:1em; height:1em; }
+.video-overlay-content .telemetry-metric-card > .monitor-metric-value { flex:1; display:flex; justify-content:center; align-items:center; flex-wrap:wrap; margin:0; font-size:clamp(14px,min(var(--metric-width-font,34cqi),46cqh),240px); line-height:1; }
+.video-overlay-content .telemetry-metric-card > .monitor-metric-value > span { font-size:.25em; }
+.video-overlay-content .telemetry-metric-card > p:last-child { display:none; }
+.video-overlay-content .telemetry-metric-card > p:not(.monitor-metric-value) { margin:0; font-size:clamp(8px,min(5cqi,9cqh),24px); }
+.video-overlay-content .telemetry-metric-card > p:not(.monitor-metric-value) span { font-size:inherit; }
+.video-telemetry-overlay { outline:none; border-radius:12px; }
+.video-telemetry-overlay:focus-within { border:2px solid hsl(var(--primary)); }
+.video-overlay-resize { opacity:0; background:transparent; }
+.video-telemetry-overlay:hover .video-overlay-resize,.video-telemetry-overlay:focus-within .video-overlay-resize { opacity:.8; }
