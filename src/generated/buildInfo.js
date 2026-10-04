@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.281",
-  "commit": "691a305",
-  "commitMessage": "Make video overlay controls prominent above telemetry sidebar",
-  "builtAt": "2026-10-03T23:40:42.833Z"
+  "version": "0.1.282",
+  "commit": "7d15102",
+  "commitMessage": "Simplify video overlays with keyboard transparency and collision protection",
+  "builtAt": "2026-10-04T21:51:39.929Z"
 };
