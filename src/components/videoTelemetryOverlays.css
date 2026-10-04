@@ -28,3 +28,4 @@
 .video-telemetry-overlay:focus-within { border:2px solid hsl(var(--primary)); }
 .video-overlay-resize { opacity:0; background:transparent; }
 .video-telemetry-overlay:hover .video-overlay-resize,.video-telemetry-overlay:focus-within .video-overlay-resize { opacity:.8; }
+.video-telemetry-overlay { user-select:none; -webkit-user-select:none; }

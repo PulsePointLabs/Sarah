@@ -39,7 +39,7 @@ export function useVideoTelemetryOverlays() {
 function FloatingTelemetry({ id, label, children, controller }) {
   const drag = useRef(null);
   const suppressClick = useRef(false);
-  const lastDown = useRef(null);
+
   const box = controller.boxes[id];
   const start = (event, mode) => {
     if (event.button !== 0) return;
@@ -79,17 +79,12 @@ function FloatingTelemetry({ id, label, children, controller }) {
     if (event.key === 'Delete' && event.target === event.currentTarget) { event.preventDefault(); controller.toggle(id); }
   };
   return <section data-video-overlay={id} aria-label={`${label} video overlay`} tabIndex={0} className="video-telemetry-overlay"
-    title="Click to select. + increases transparency; − decreases it. Double-click and hold the second click to drag. Delete removes."
+    title="Click to select. + increases transparency; − decreases it. Hold Ctrl and drag to move. Delete removes."
     onKeyDown={keyDown}
     onPointerDown={event => {
       if (event.target.closest('button,input,select,textarea,[role=slider]')) return;
       event.currentTarget.focus({preventScroll:true});
-      const previous = lastDown.current;
-      lastDown.current = { time: event.timeStamp, x: event.clientX, y: event.clientY };
-      if (previous && event.timeStamp-previous.time < 450 && Math.hypot(event.clientX-previous.x, event.clientY-previous.y) < 8) {
-        lastDown.current = null;
-        start(event, 'move');
-      }
+      if (event.ctrlKey) start(event, 'move');
     }} {...pointerProps}
     onClickCapture={event => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false; } }}
     style={{ left: `${box.x*100}%`, top: `${box.y*100}%`, width: `${box.w*100}%`, height: `${box.h*100}%` }}>
@@ -111,7 +106,7 @@ export default function VideoTelemetryOverlays({ children, controller, resizable
   const missing = Object.keys(controller.boxes).filter(id => !entries.some(entry => entry.id === id));
   const picker = <details key="overlay-picker" className="video-overlay-picker">
     <summary><span>＋ Add overlays to video</span><span className="video-overlay-count">{Object.keys(controller.boxes).length} selected ▾</span></summary>
-    <div><p className="video-overlay-picker-help">Choose a card or graph to add over the video. Originals stay here. Click a card to select it: + makes it more transparent, − less transparent. Double-click and hold the second click to drag. Drag its corner to resize. Deselect here or press Delete to remove.</p>{entries.map(({id,label}) => <button type="button" key={id} aria-pressed={Boolean(controller.boxes[id])} onClick={() => controller.toggle(id)}>{controller.boxes[id] ? '✓ ' : '＋ '}{label}</button>)}
+    <div><p className="video-overlay-picker-help">Choose a card or graph to add over the video. Originals stay here. Click a card to select it: + makes it more transparent, − less transparent. Hold Ctrl and drag to move. Drag its corner to resize. Deselect here or press Delete to remove.</p>{entries.map(({id,label}) => <button type="button" key={id} aria-pressed={Boolean(controller.boxes[id])} onClick={() => controller.toggle(id)}>{controller.boxes[id] ? '✓ ' : '＋ '}{label}</button>)}
       {controller.notice && <p role="status">{controller.notice}</p>}{missing.map(id => <button type="button" key={id} aria-pressed="true" onClick={() => controller.toggle(id)}>{id} · no data (remove)</button>)}</div>
   </details>;
   return <><ResizableVideoTelemetry enabled={resizable}>{children}</ResizableVideoTelemetry>

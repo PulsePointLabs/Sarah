@@ -23,7 +23,7 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   assert.equal(await page.locator('[data-video-section=cardiac]').count(),1,'original chart remains');
   const drag=async(locator,dx,dy)=>{const b=await locator.boundingBox();await page.mouse.move(b.x+b.width/2,b.y+b.height/2);await page.mouse.down();await page.mouse.move(b.x+b.width/2+dx,b.y+b.height/2+dy,{steps:8});await page.mouse.up();};
   const before=await overlay.boundingBox();
-  const b=await overlay.boundingBox(); await page.mouse.click(b.x+15,b.y+15); await page.mouse.move(b.x+15,b.y+15); await page.mouse.down({clickCount:2}); await page.mouse.move(b.x+15,b.y+295,{steps:12}); await page.mouse.up();
+  const b=await overlay.boundingBox(); await page.keyboard.down('Control'); await page.mouse.move(b.x+15,b.y+15); await page.mouse.down(); await page.mouse.move(b.x+15,b.y+295,{steps:12}); await page.mouse.up(); await page.keyboard.up('Control'); assert.equal(await page.evaluate(()=>window.getSelection().toString()),'');
   const moved=await overlay.boundingBox();assert.ok(moved.y-before.y>270);
   await drag(page.getByLabel('Resize Cardiac trend overlay'),100,80);
   const resized=await overlay.boundingBox();assert.ok(resized.width-moved.width>90);assert.ok(resized.height-moved.height>70);
