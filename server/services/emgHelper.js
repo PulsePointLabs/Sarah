@@ -111,7 +111,8 @@ export function createEmgHelper(config, dependencies = {}) {
         child.on('exit', code => { clearInterval(heartbeat); child = null; state.running = false; state.message = desired ? 'Connection lost. Waiting for the same Arduino; calibration must be repeated.' : 'EMG helper stopped.'; if (code && !state.error) state.error = `EMG helper exited (${code}).`; if (desired) this.scheduleReconnect(); });
         // Drain stdout without retaining physiological readings or file paths.
         child.stdout.on('data', data => {
-          if (String(data).includes('OBS connection failed:')) state.message = 'EMG is running; OBS is unavailable. Live signals work; CSV waits for OBS.';
+          if (String(data).includes('OBS connection failed:')) state.message = 'OBS is not connected. EMG sampling and calibration continue independently; CSV recording starts when OBS records.';
+          if (String(data).includes('OBS connected:')) state.message = 'EMG and OBS connected. CSV recording follows OBS recording.';
         });
         return this.status();
       } finally { busy = false; }

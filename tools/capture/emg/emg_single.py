@@ -1,3 +1,4 @@
+from obs_monitor import ObsMonitor
 import csv
 import math
 from guided_calibration import GuidedBridge
@@ -224,10 +225,9 @@ def main():
     ser.reset_input_buffer()
     print("Serial connected.")
 
-    obs_client = connect_obs()
-    recording, obs_state = get_obs_state(obs_client)
+    obs_monitor = ObsMonitor(connect_obs, get_obs_state, OBS_ENABLED)
+    recording, obs_state = obs_monitor.snapshot()
     last_recording = False
-    last_obs_retry = time.monotonic()
     print(f"OBS state: {obs_state}")
 
     dt = 1.0 / PUBLISH_HZ
@@ -423,10 +423,7 @@ def main():
             if now - last_pub >= dt:
                 last_pub = now
 
-                if obs_client is None and OBS_ENABLED and time.monotonic() - last_obs_retry >= 5:
-                    last_obs_retry = time.monotonic()
-                    obs_client = connect_obs()
-                recording, obs_state = get_obs_state(obs_client)
+                recording, obs_state = obs_monitor.snapshot()
 
                 if recording and not last_recording:
                     csv_path, csv_file, csv_writer = new_csv()
@@ -498,6 +495,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        obs_monitor.close()
         print("\nStopping...")
 
         if csv_writer is not None and csv_file is not None:
