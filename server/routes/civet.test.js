@@ -20,6 +20,11 @@ test('CIVET HTTP history and all exports preserve raw values and distinguish ana
   const url=`http://127.0.0.1:${server.address().port}/api/civet`;
   try {
     const data=await (await fetch(`${url}/session/session`)).json();assert.deepEqual(data.samples,rows);assert.ok(data.analysis.review.events.length>10);
+    const {unpackCivetTimeline}=await import('../../src/lib/civetTimelineTransport.js');
+    const packed=await (await fetch(`${url}/session/session?encoding=columns`)).json();
+    assert.equal(packed.encoding,'civet-columns-v1');
+    assert.deepEqual(unpackCivetTimeline(packed).samples,data.samples);
+    assert.deepEqual(unpackCivetTimeline(packed).analysis,data.analysis);
     for(const kind of ['samples','events','trains']) {
       const response=await fetch(`${url}/session/session/export?kind=${kind}&mode=review`);assert.equal(response.status,200);
       const parsed=parse(await response.text(),{columns:true});assert.ok(parsed.length>0);

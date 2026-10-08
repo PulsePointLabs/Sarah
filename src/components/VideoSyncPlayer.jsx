@@ -2684,7 +2684,7 @@ export default function VideoSyncPlayer({
                 {[
                   hasSpo2 && ["spo2", "SpO2"],
                   (howl.rows.length > 0 || howl.error) && ["howl", "Howl"],
-                  civet.rows.length > 0 && ["civet", "CIVET"],
+                  (civet.rows.length > 0 || civet.loading || civet.error) && ["civet", "CIVET"],
                   ["respiration", "Resp"],
                   ["motion", "Motion"],
                 ].filter(Boolean).map(([key, label]) => (

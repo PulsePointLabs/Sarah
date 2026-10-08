@@ -5,12 +5,13 @@ import { upsertEntity } from '../db.js';
 import { createCivetService } from '../services/civet.js';
 import { CIVET_VERSION } from '../../src/lib/civetAnalysis.js';
 import { civetCsv } from '../../src/lib/civetExport.js';
+import { packCivetTimeline } from '../../src/lib/civetTimelineTransport.js';
 export function createCivetRouter(session, onService = () => {}) {
   const router=Router();
   const service=createCivetService({directory:path.join(dataDir,'civet'),session,onRecorded:current=>upsertEntity(current.entity||'Session',current.id,{civet_enabled:true,civet_algorithm:CIVET_VERSION})});
   onService(service);
   router.get('/status',(_req,res)=>res.json(service.status()));
-  router.get('/session/:id',(req,res)=>{try{res.json({samples:service.samples(req.params.id),analysis:service.analysis(req.params.id)});}catch(error){res.status(400).json({error:error.message});}});
+  router.get('/session/:id',(req,res)=>{try{const data={samples:service.samples(req.params.id),analysis:service.analysis(req.params.id)};res.json(req.query.encoding==='columns'?packCivetTimeline(data):data);}catch(error){res.status(400).json({error:error.message});}});
   router.get('/session/:id/export',(req,res)=>{try{
     const kind=req.query.kind||'samples',mode=req.query.mode||'review';
     if(!['samples','events','trains','analysis'].includes(kind)||!['live','review','reprocessed'].includes(mode))throw new Error('Unknown CIVET export.');
