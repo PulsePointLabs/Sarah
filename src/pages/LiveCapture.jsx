@@ -59,6 +59,7 @@ import { computeLiveClimaxPrediction } from "@/utils/liveClimaxPrediction";
 import {
   computeHowlPhysiologyAction,
   createHowlPhysiologyControllerState,
+  observeHowlIntensity,
 } from "@/lib/howlPhysiologyController";
 import {
   H10_ACCELEROMETER_STOP_COMMAND,
@@ -1887,6 +1888,7 @@ export default function LiveCapture() {
   const howlAutoLastActionRef = useRef({ at: 0, intensity: null, reason: "" });
   const howlAutoCandidateRef = useRef({ key: "", since: 0, target: null });
   const howlPhysiologyControllerRef = useRef(createHowlPhysiologyControllerState());
+  const howlChannelControllerRef = useRef({});
   const appendLiveSessionEventsRef = useRef(null);
   const bpSyncInFlightRef = useRef(false);
   const bpOmronActionInFlightRef = useRef(false);
@@ -2107,6 +2109,14 @@ export default function LiveCapture() {
         raw: liveStatus.raw || null,
       } : null;
       const resolvedTelemetry = liveHowlTelemetry || recent?.samples?.[0] || null;
+      // Only live status can establish a new baseline; cached history is not a new adjustment.
+      if (liveHowlTelemetry) {
+        for (const channel of ['a', 'b']) {
+          howlChannelControllerRef.current[channel] = observeHowlIntensity(
+            howlChannelControllerRef.current[channel], readHowlChannelIntensity(liveHowlTelemetry, channel),
+          );
+        }
+      }
       setHowlTelemetry(resolvedTelemetry);
       setHowlCapabilities(capabilities);
       if (liveStatus?.ok) {
@@ -2476,6 +2486,20 @@ export default function LiveCapture() {
       if (!response.ok) throw new Error(data.error || "Howl command was rejected.");
       setHowlControlStatus(data.dispatch?.message || "Howl command queued.");
       const refreshedHowlTelemetry = await refreshHowlTelemetry({ quiet: true });
+      if (data.dispatch?.sent && !String(extra.reason || '').startsWith('sarah_auto_')
+        && ['set_intensity', 'set_state', 'increment_power', 'decrement_power'].includes(action)) {
+        const channels = payload.channel === 'all' ? ['a', 'b'] : [payload.channel || 'a'];
+        for (const channel of channels) {
+          const intensity = appliedHowlIntensity(data, channel);
+          if (intensity != null) {
+            howlChannelControllerRef.current[channel] = {
+              ...createHowlPhysiologyControllerState(intensity),
+              observedIntensity: intensity, manualFloor: intensity, expectedIntensity: intensity,
+            };
+          }
+        }
+        howlAutoCandidateRef.current = { key: '', since: 0, target: null };
+      }
       if (action === "load_activity") {
         const requestedActivity = String(data?.command?.activity_name || extra.activityName || howlCommandForm.mode || "").toUpperCase();
         const confirmedActivity = String(
@@ -4271,6 +4295,12 @@ export default function LiveCapture() {
   const visibleHeartbeatPulseId = heartbeatAudioEnabled ? heartbeatPulseId : 0;
 
   useEffect(() => {
+    howlChannelControllerRef.current = {};
+    howlAutoCandidateRef.current = { key: '', since: 0, target: null };
+    howlAutoLastActionRef.current = { at: 0, intensity: null, reason: '' };
+  }, [liveSession?.activeSessionId]);
+
+  useEffect(() => {
     if (!howlManualControlsUnlocked || !howlSarahAutoEnabled) {
       howlAutoCandidateRef.current = { key: "", since: 0, target: null };
       howlPhysiologyControllerRef.current = createHowlPhysiologyControllerState(howlCommandForm.intensity);
@@ -4310,9 +4340,10 @@ export default function LiveCapture() {
       floor,
       ceiling,
       settings: howlControlForm,
-      state: howlPhysiologyControllerRef.current,
+      state: howlChannelControllerRef.current[channel] || createHowlPhysiologyControllerState(currentIntensity),
     });
     howlPhysiologyControllerRef.current = decision.state;
+    howlChannelControllerRef.current[channel] = decision.state;
     const target = decision.target;
     const desiredAction = decision.action;
     const dwellMs = decision.dwellMs;
@@ -4352,6 +4383,7 @@ export default function LiveCapture() {
     }
 
     howlAutoLastActionRef.current = { at: now, intensity: target, reason };
+    howlChannelControllerRef.current[channel] = { ...decision.state, expectedIntensity: target };
     howlAutoCandidateRef.current = { key: "", since: 0, target: null };
     setHowlCommandForm((prev) => ({ ...prev, intensity: target }));
     setHowlAutoStatus(
@@ -4388,6 +4420,7 @@ export default function LiveCapture() {
         motionClass: prediction.motionClass,
         retainedPeakIntensity: decision.state.peakIntensity,
         recoveryFloor: decision.state.recoveryFloor,
+        manualFloor: decision.state.manualFloor ?? null,
       },
     });
   }, [
@@ -6918,7 +6951,7 @@ export default function LiveCapture() {
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-primary">Sarah HR/HRV Auto</p>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            When armed, Sarah uses live phase watch plus HR/HRV quality to step intensity within the saved floor/ceiling and cooldown.
+            Manual intensity increases set a new floor for Auto’s ramps. Auto keeps the saved ceiling, cooldown, and physiology rules.
           </p>
         </div>
         <button
@@ -8786,7 +8819,7 @@ export default function LiveCapture() {
                       Closed-loop stays off by default. Manual Howl control must be tested and enabled before Sarah can be armed.
                     </p>
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                      Sarah now stamps manual Howl mode and intensity changes into the active session timeline so later analysis can see when device control changed.
+                      Confirmed manual intensity changes set the baseline for that channel. Auto can ramp above it, but recovery will not drop below it. Lowering intensity manually resets that baseline.
                     </p>
                   </div>
                   <button
