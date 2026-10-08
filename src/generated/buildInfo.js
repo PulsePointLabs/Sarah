@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.284",
-  "commit": "2927e4b",
-  "commitMessage": "Isolate OBS network polling from EMG acquisition",
-  "builtAt": "2026-10-07T01:44:57.255Z"
+  "version": "0.1.285",
+  "commit": "66e91b2",
+  "commitMessage": "Keep CIVET review visible while loading and reduce lossless timeline payloads",
+  "builtAt": "2026-10-08T01:17:46.957Z"
 };
