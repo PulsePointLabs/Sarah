@@ -4,7 +4,55 @@ import assert from 'node:assert/strict';
 import {
   computeHowlPhysiologyAction,
   createHowlPhysiologyControllerState,
+  observeHowlIntensity,
 } from '../../src/lib/howlPhysiologyController.js';
+
+test('manual increase becomes a floor while automatic ramp feedback does not ratchet it', () => {
+  let state = observeHowlIntensity({}, 6);
+  state = observeHowlIntensity(state, 10);
+  assert.equal(state.manualFloor, 10);
+  state = observeHowlIntensity({ ...state, expectedIntensity: 11 }, 10);
+  assert.equal(state.expectedIntensity, 11);
+  state = observeHowlIntensity(state, 11);
+  assert.equal(state.manualFloor, 10);
+  const recovery = computeHowlPhysiologyAction({
+    state, currentIntensity: 11, ceiling: 16,
+    prediction: loadedPrediction({ recovery: 80, dropFromRecentPeak: 8 }),
+  });
+  assert.equal(recovery.target, 10);
+  const hold = computeHowlPhysiologyAction({
+    state: recovery.state, currentIntensity: 10, ceiling: 16,
+    prediction: loadedPrediction({ recovery: 80, dropFromRecentPeak: 8 }),
+  });
+  assert.equal(hold.target, 10);
+});
+
+test('manual baseline still permits gradual build and respects the configured ceiling', () => {
+  const state = observeHowlIntensity(observeHowlIntensity({}, 5), 9);
+  const build = computeHowlPhysiologyAction({
+    state, currentIntensity: 9, ceiling: 10,
+    prediction: loadedPrediction({ nearClimax: 45, plateauScore: 0, plateauDwell: false, recentSlope: 2 }),
+  });
+  assert.equal(build.target, 10);
+  assert.equal(build.state.manualFloor, 9);
+});
+
+test('manual decrease resets the retained peak instead of bouncing back up', () => {
+  const state = observeHowlIntensity({ observedIntensity: 12, manualFloor: 10, peakIntensity: 14 }, 4);
+  assert.equal(state.manualFloor, 4);
+  assert.equal(state.peakIntensity, 4);
+  const result = computeHowlPhysiologyAction({ state, currentIntensity: 4, floor: 5, ceiling: 16,
+    prediction: loadedPrediction({ recovery: 80, dropFromRecentPeak: 8 }) });
+  assert.equal(result.target, 4);
+});
+
+test('missing readings do not reset floors and channels keep independent baselines', () => {
+  const a = observeHowlIntensity(observeHowlIntensity({}, 4), 9);
+  const b = observeHowlIntensity(observeHowlIntensity({}, 2), 3);
+  assert.equal(observeHowlIntensity(a, null), a);
+  assert.equal(a.manualFloor, 9);
+  assert.equal(b.manualFloor, 3);
+});
 
 function loadedPrediction(overrides = {}) {
   return {

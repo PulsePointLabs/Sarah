@@ -24,6 +24,23 @@ export const DEFAULT_HOWL_PHYSIOLOGY_SETTINGS = Object.freeze({
 
 const RISING_HR_SLOPE_BPM_30S = 1;
 
+// Track confirmed device levels separately from proposed automatic targets.
+export function observeHowlIntensity(state = {}, value) {
+  if (value == null || !Number.isFinite(Number(value))) return state;
+  const intensity = Math.max(0, Number(value));
+  const previous = state.observedIntensity;
+  const expected = state.expectedIntensity;
+  if (intensity === expected) return { ...state, observedIntensity: intensity, expectedIntensity: null };
+  if (previous == null) return { ...state, observedIntensity: intensity, manualFloor: intensity };
+  if (intensity === previous) return { ...state, observedIntensity: intensity };
+  // A changed level other than our pending target is an external/manual override.
+  return {
+    ...state, observedIntensity: intensity, expectedIntensity: null,
+    manualFloor: intensity,
+    peakIntensity: intensity < previous ? intensity : Math.max(state.peakIntensity || 0, intensity),
+  };
+}
+
 export function createHowlPhysiologyControllerState(currentIntensity = 0) {
   const intensity = Math.max(0, finite(currentIntensity));
   return {
@@ -43,9 +60,10 @@ export function computeHowlPhysiologyAction({
   state = createHowlPhysiologyControllerState(currentIntensity),
 } = {}) {
   const config = { ...DEFAULT_HOWL_PHYSIOLOGY_SETTINGS, ...settings };
-  const minimum = Math.max(0, finite(floor));
-  const maximum = Math.max(minimum, finite(ceiling, 10));
-  const current = clamp(Math.round(finite(currentIntensity)), minimum, maximum);
+  const configuredMinimum = Math.max(0, finite(floor));
+  const maximum = Math.max(configuredMinimum, finite(ceiling, 10));
+  const minimum = clamp(Math.max(configuredMinimum, finite(state.manualFloor)), configuredMinimum, maximum);
+  const current = clamp(Math.round(finite(currentIntensity)), 0, maximum);
   const peakIntensity = clamp(Math.max(finite(state?.peakIntensity), current), minimum, maximum);
   const maxRetreat = Math.max(0, finite(config.maxRecoveryRetreat, 3));
   const recoveryFloor = config.nearClimaxReductionEnabled !== false
@@ -82,7 +100,7 @@ export function computeHowlPhysiologyAction({
     explanation = `Holding at ${current}: controller confidence ${Math.round(confidence)}% is below the escalation gate.`;
   } else if (recoveryEvidence && config.recoveryReductionEnabled !== false) {
     mode = "recovery_retreat";
-    target = Math.max(recoveryFloor, current - Math.max(0, finite(config.reduceStep, 2)));
+    target = Math.min(current, Math.max(recoveryFloor, current - Math.max(0, finite(config.reduceStep, 2))));
     action = target < current ? "recovery_retreat" : "recovery_hold";
     dwellMs = 4500;
     explanation = target < current
@@ -109,7 +127,7 @@ export function computeHowlPhysiologyAction({
     explanation = `Holding at ${current}: HR is not rising reliably (${recentSlope.toFixed(1)} bpm/30s).`;
   }
 
-  target = clamp(Math.round(target), minimum, maximum);
+  target = clamp(Math.round(target), Math.min(current, minimum), maximum);
   return {
     action,
     target,
@@ -121,6 +139,7 @@ export function computeHowlPhysiologyAction({
     plateau,
     threshold,
     state: {
+      ...state,
       mode,
       peakIntensity: Math.max(peakIntensity, target),
       recoveryFloor,
