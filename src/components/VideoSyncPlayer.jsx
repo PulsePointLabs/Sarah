@@ -1736,6 +1736,9 @@ export default function VideoSyncPlayer({
       pendingFeedTimesRef.current[feed.key] = targetTime;
       if (!video || video.readyState === 0 || (!force && video.seeking)) return;
 
+      // Stop the media clock before seeking; at high speed it can advance
+      // between the seek request and pause and leave the cameras misaligned.
+      if (!playing && !video.paused) video.pause();
       const correction = getVideoSyncCorrection(video.currentTime, targetTime, playbackSpeed);
       if ((force && Math.abs(video.currentTime-targetTime)>.025) || correction.seek) video.currentTime = targetTime;
       video.playbackRate = force ? playbackSpeed : correction.playbackRate;

@@ -6949,7 +6949,7 @@ export default function LiveCapture() {
 
       <div className="flex flex-col gap-2 rounded-xl border border-primary/20 bg-primary/[0.05] p-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-primary">Sarah HR/HRV Auto</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-primary">Automatic control</p>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             Manual intensity increases set a new floor for Auto’s ramps. Auto keeps the saved ceiling, cooldown, and physiology rules.
           </p>
@@ -6962,7 +6962,7 @@ export default function LiveCapture() {
             howlSarahAutoEnabled ? "bg-primary/15 text-primary hover:bg-primary/25" : "bg-primary text-primary-foreground hover:bg-primary/90"
           }`}
         >
-          {howlSarahAutoEnabled ? "Disarm auto" : "Arm auto"}
+          {howlSarahAutoEnabled ? "Turn Auto off" : "Turn Auto on"}
         </button>
       </div>
 
@@ -8814,9 +8814,9 @@ export default function LiveCapture() {
               <div className="rounded-lg border border-primary/20 bg-primary/[0.045] p-3">
                 <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                   <div>
-                    <p className="text-sm font-semibold text-foreground">Sarah multimodal threshold controller</p>
+                    <p className="text-sm font-semibold text-foreground">Automatic control settings</p>
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                      Closed-loop stays off by default. Manual Howl control must be tested and enabled before Sarah can be armed.
+                      Test the connection and enable manual control first. Auto is off until you turn it on.
                     </p>
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                       Confirmed manual intensity changes set the baseline for that channel. Auto can ramp above it, but recovery will not drop below it. Lowering intensity manually resets that baseline.
@@ -8830,11 +8830,14 @@ export default function LiveCapture() {
                       howlSarahAutoEnabled ? "bg-primary/15 text-primary hover:bg-primary/25" : "bg-primary text-primary-foreground hover:bg-primary/90"
                     }`}
                   >
-                    {howlSarahAutoEnabled ? "Sarah auto off" : "Arm Sarah auto"}
+                    {howlSarahAutoEnabled ? "Turn Auto off" : "Turn Auto on"}
                   </button>
                 </div>
 
-                <div className="mt-3 grid gap-2 md:grid-cols-5">
+                <details className="mt-4 rounded-xl border border-border bg-background/60 p-3">
+                  <summary className="cursor-pointer py-2 text-base font-semibold">Advanced settings · thresholds and adjustment rules</summary>
+                  <p className="mt-2 text-sm text-muted-foreground">These are the existing settings. Editing a field does not save it until you select Save settings.</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                   <label className="space-y-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Build starts</span>
                     <input
@@ -8989,6 +8992,8 @@ export default function LiveCapture() {
                   </label>
                 </div>
 
+                </details>
+
                 <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
                     <span className="font-semibold text-foreground">Sarah status:</span> {howlAutoStatus}
@@ -8999,7 +9004,7 @@ export default function LiveCapture() {
                     disabled={howlControlBusy === "settings"}
                     className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
                   >
-                    Save Sarah controller
+                    Save settings
                   </button>
                 </div>
               </div>
