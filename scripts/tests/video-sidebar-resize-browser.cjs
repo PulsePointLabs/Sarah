@@ -4,7 +4,7 @@ const os = require('node:os');
 let playwright;
 try { playwright = require('playwright'); } catch { playwright = require(path.join(os.homedir(), '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright')); }
 (async () => {
-  const browser = await playwright.chromium.launch({ channel: 'chrome', headless: true });
+  const browser = await playwright.chromium.launch({ ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : { channel: 'chrome' }), headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
     const errors = []; page.on('pageerror', error => errors.push(error.message));
@@ -22,6 +22,8 @@ try { playwright = require('playwright'); } catch { playwright = require(path.jo
     });
     await page.locator('input[type="file"][accept*="video"]').first().setInputFiles({ name: 'fixture.webm', mimeType: 'video/webm', buffer: Buffer.from(video) });
     await page.getByRole('button', { name: 'Full Telemetry', exact: true }).click();
+    const initialSizes = await page.locator('[data-video-section]').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height));
+    assert.ok(initialSizes.every(height => height >= 300 && Math.abs(height - initialSizes[0]) < 1), 'cards start at the same readable height');
     const phase = page.locator('[data-video-section="phase"]'); await phase.waitFor();
     const handle = page.getByRole('separator', { name: 'Resize Phase evidence height', exact: true });
     await handle.scrollIntoViewIfNeeded();
@@ -45,7 +47,7 @@ try { playwright = require('playwright'); } catch { playwright = require(path.jo
     const clipped = await page.locator('.video-resizable-content').evaluateAll(nodes => nodes.filter(node => node.scrollWidth > node.clientWidth + 2 || node.scrollHeight > node.clientHeight + 2).map(node => node.parentElement.dataset.videoSection));
     assert.deepEqual(clipped, [], 'minimum width and heights do not clip section contents');
     const sidebar = page.locator('.video-resizable-sidebar');
-    assert.ok(await sidebar.evaluate(el => el.scrollHeight <= el.clientHeight + 2), 'sidebar never scrolls');
+    assert.ok(await sidebar.evaluate(el => getComputedStyle(el).overflowY === 'auto'), 'sidebar scrolls instead of squeezing cards');
     const tops = await page.locator('[data-video-section=metrics] .grid > div').evaluateAll(nodes => nodes.map(el => Math.round(el.getBoundingClientRect().top)));
     assert.equal(new Set(tops).size, 1, 'vital signs stay in one row');
     assert.equal(await page.getByRole('button', { name: 'Fill video display', exact: true }).count(), 0);
@@ -59,9 +61,40 @@ try { playwright = require('playwright'); } catch { playwright = require(path.jo
       await page.setViewportSize(viewport); await page.waitForTimeout(300);
       assert.equal(await page.locator('[data-section-tabs]').count(), 0, 'never substitutes tabs for selected cards');
       assert.equal(await page.locator('[data-video-section]').count(), 5, 'all selected sections remain rendered');
-      assert.ok(await sidebar.evaluate(el => el.scrollHeight <= el.clientHeight + 2), 'all sections stay within sidebar');
+      assert.ok((await page.locator('[data-video-section]').evaluateAll(nodes => nodes.map(n => n.clientHeight))).every(h => h >= 260), 'all sections retain readable minimum height');
       assert.deepEqual(await page.locator('.video-resizable-content').evaluateAll(nodes => nodes.filter(n => n.scrollHeight > n.clientHeight + 2 || n.scrollWidth > n.clientWidth + 2).map(n => n.parentElement.dataset.videoSection)), [], 'selected section content fits');
     }
+    const toggles = page.getByLabel('Sidebar cards');
+    const cardiacBefore = (await page.locator('[data-video-section=cardiac]').boundingBox()).height;
+    await toggles.getByRole('button', {name:'Autonomic trend', exact:true}).click();
+    assert.ok((await page.locator('[data-video-section=cardiac]').boundingBox()).height > cardiacBefore, 'hiding one card expands remaining cards even when scrolling');
+    await toggles.getByRole('button', {name:'Autonomic trend', exact:true}).click();
+    for (const button of await toggles.getByRole('button').all()) {
+      await button.click(); assert.equal(await button.getAttribute('aria-pressed'), 'false');
+    }
+    assert.equal(await page.locator('[data-video-section]').count(), 0, 'every card can be hidden');
+    await toggles.getByRole('button', {name:'Cardiac trend', exact:true}).click();
+    assert.ok((await page.locator('[data-video-section=cardiac]').boundingBox()).height > 300, 'remaining card grows');
+    for (const button of await toggles.getByRole('button').all()) if (await button.getAttribute('aria-pressed') === 'false') await button.click();
+    const playback = page.getByLabel('Video playback controls');
+    assert.equal(await playback.getByRole('group', {name:'Telemetry window'}).count(), 1);
+    assert.equal(await sidebar.getByText('Window', {exact:true}).count(), 0);
+    await playback.getByRole('button', {name:'30s', exact:true}).click();
+    assert.equal(await playback.getByRole('button', {name:'30s', exact:true}).getAttribute('aria-pressed'), 'true');
+    await page.locator('.video-overlay-picker summary').click();
+    await page.locator('.video-overlay-picker').getByRole('button', {name:/Vital signs/}).click();
+    await page.mouse.move(100, 100);
+    await page.keyboard.press('h');
+    assert.equal(await sidebar.isVisible(), false);
+    assert.equal(await page.locator('[data-video-overlay=metrics]').isVisible(), true, 'overlays survive H');
+    assert.ok((await fullVideo.first().boundingBox()).width > 1800, 'video uses the whole display');
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('[aria-label="Video playback controls"]')).opacity === '0');
+    assert.equal(await playback.evaluate(el=>getComputedStyle(el).opacity), '0');
+    await page.mouse.move(900, 1060); await page.waitForFunction(() => getComputedStyle(document.querySelector('[aria-label="Video playback controls"]')).opacity === '1');
+    assert.equal(await playback.evaluate(el=>getComputedStyle(el).opacity), '1', 'bottom hover reveals playback');
+    await page.mouse.move(900, 200); await page.waitForFunction(() => getComputedStyle(document.querySelector('[aria-label="Video playback controls"]')).opacity === '0');
+    assert.equal(await playback.evaluate(el=>getComputedStyle(el).opacity), '0');
+    await page.keyboard.press('h'); assert.equal(await sidebar.isVisible(), true);
     const metric=sidebar.locator('.monitor-metric-value').first();
     assert.ok(await metric.evaluate(el=>parseFloat(getComputedStyle(el).fontSize))>=28, 'large default metric numbers');
     const metricsHandle=page.getByRole('separator',{name:'Resize Vital signs height'});
@@ -70,6 +103,6 @@ try { playwright = require('playwright'); } catch { playwright = require(path.jo
     assert.ok(await metric.evaluate(el=>parseFloat(getComputedStyle(el).fontSize))>=numberBefore);
     await page.screenshot({path:'logs/video-sidebar-all-visible.png'});
     assert.deepEqual(errors, []);
-    console.log('PASS: actual Video Sync section resizing, minimum sizes, responsive text, sidebar limits, and uncropped video, single-row metrics, and no sidebar scrolling');
+    console.log('PASS: actual Video Sync section resizing, minimum sizes, responsive text, sidebar limits, and uncropped video, single-row metrics, safe sidebar scrolling, card toggles and video-only hover controls');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

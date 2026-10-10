@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict'),path=require('node:path'),os=require('node:os');
 let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright'));}
-(async()=>{const browser=await pw.chromium.launch({channel:'chrome',headless:true});try{
+(async()=>{const browser=await pw.chromium.launch({...(process.env.CHROME_BIN?{executablePath:process.env.CHROME_BIN}:{channel:'chrome'}),headless:true});try{
   const page=await browser.newPage({viewport:{width:1600,height:1000}}),errors=[];
   page.on('pageerror',e=>errors.push(e.message));
   await page.route('**/api/**',r=>r.request().url().includes('/src/')?r.continue():r.fulfill({json:[]}));
@@ -22,7 +22,7 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
     await page.mouse.down();await page.mouse.move(box.x+box.width/2+(vertical?0:80),box.y+box.height/2+(vertical?80:0),{steps:8});await page.mouse.up();
     const after=await top.evaluate(e=>({w:e.clientWidth,h:e.clientHeight}));
     assert.ok((vertical?after.h-before.h:after.w-before.w)>60,'divider resizes the video panel');
-    assert.equal(await top.evaluate(e=>getComputedStyle(e).objectFit),'fill');
+    assert.equal(await top.evaluate(e=>getComputedStyle(e).objectFit),'contain');
     await divider.dblclick();assert.equal(await divider.getAttribute('aria-valuenow'),'50');
   };
   await dragDivider(true);

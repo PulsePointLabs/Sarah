@@ -199,6 +199,7 @@ export default function VideoSyncPhysiologySidebar({
   pulseOxReadings = [],
   compact = false,
   resizable = false,
+  showWindowControls = true,
   overlays,
   optionalChannels = { spo2: true, respiration: true, motion: true },
   howl,
@@ -399,7 +400,7 @@ export default function VideoSyncPhysiologySidebar({
         </div>
       </div>}
 
-      <div className="flex shrink-0 flex-wrap items-center gap-1">
+      {showWindowControls && <div className="flex shrink-0 flex-wrap items-center gap-1">
         <span className="mr-1 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Window</span>
         {[30, 60, 120, 300].map((windowSeconds) => (
           <button
@@ -415,7 +416,7 @@ export default function VideoSyncPhysiologySidebar({
             {windowSeconds < 60 ? `${windowSeconds}s` : `${windowSeconds / 60}m`}
           </button>
         ))}
-      </div>
+      </div>}
 
       {phaseSession && <VideoSyncPhaseCard data-sidebar-section={["phase", "Phase evidence"]} timelineRows={timelineRows} session={phaseSession}
         playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek} evidenceModel={phaseModel} physiologicalLoad={physiologicalLoad} />}
@@ -480,7 +481,7 @@ export default function VideoSyncPhysiologySidebar({
         <p className="text-sm">{civet.error ? `Could not load saved pressure: ${civet.error}` : 'Loading saved CIVET pressure and analysis…'}</p>
         {civet.error && <button type="button" className="text-primary underline" onClick={civet.retry}>Retry CIVET</button>}
       </section>}
-      {optionalChannels.civet !== false && civet?.rows?.length > 0 && <CivetCard data-sidebar-section={["civet", "Pelvic response"]} rows={civet.rows} analysis={civet.analysis} sessionId={civet.sessionId} markers={[{t:phaseSession?.climax_offset_s,label:"Manual climax"}]} playheadS={playheadS} onSeek={onSeek} compact={compact} />}
+      {optionalChannels.civet !== false && civet?.rows?.length > 0 && <CivetCard data-sidebar-section={["civet", "Pelvic response"]} rows={civet.rows} analysis={civet.analysis} sessionId={civet.sessionId} markers={[{t:phaseSession?.climax_offset_s,label:"Manual climax"}]} playheadS={playheadS} onSeek={onSeek} compact={compact} windowSeconds={zoomWindow} />}
       {optionalChannels.howl && howl && <HowlTimelineCard data-sidebar-section={["howl", "Howl timeline"]} rows={howl.rows} error={howl.error} onRetry={howl.retry} compact={compact} playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek} />}
 
       {hasRespirationMotion && (optionalChannels.respiration !== false || optionalChannels.motion !== false) ? (

@@ -70,3 +70,39 @@
 .civet-calibration-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0}.civet-calibration-actions button{min-height:94px;text-align:center;background:#19544d;border-color:#4ed5c4}.civet-calibration-actions b{display:block;font-size:30px}.civet-calibration-actions span{display:block;font-size:18px;margin-top:4px}
 .civet-zero-row{display:flex;align-items:center;gap:16px;margin-top:12px}.civet-zero-row button{font-size:22px;flex-shrink:0}.civet-zero-row p{font-size:16px}
 @media(max-width:650px){.civet-setup-backdrop{padding:4px}.civet-setup{padding:12px;font-size:18px}.civet-setup h2{font-size:24px}.civet-setup h3{font-size:25px}.civet-connection{flex-wrap:wrap;gap:4px}.civet-calibration-heading{align-items:flex-start;gap:8px}.civet-calibration-heading p{font-size:20px;min-height:5.4em}.civet-calibration-clock{flex-basis:95px;font-size:64px}.civet-calibration-clock small{font-size:14px}.civet-calibration-pressure{gap:8px;flex-wrap:wrap}.civet-calibration-pressure strong{font-size:36px}.civet-calibration-actions{grid-template-columns:1fr}.civet-calibration-actions b{font-size:26px}.civet-zero-row{flex-direction:column;align-items:stretch}.civet-zero-row button{font-size:20px}.civet-calibration-feedback{padding:12px}.civet-setup select{max-width:100%}}
+
+.civet-rhythm { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; padding:5px 0; border-top:1px solid #ffffff26; flex:none; font-size:10px; color:#cbd5e1; }
+.civet-rhythm b { display:block; color:#5eead4; font-size:15px; font-variant-numeric:tabular-nums; }
+.civet-plot-key { display:flex; flex-wrap:wrap; gap:3px 10px; flex:none; font-size:10px; color:#cbd5e1; }
+.civet-plot-key span:nth-child(2) { color:#fbbf24; }
+.civet-plot-key span:nth-child(3) { color:#2dd4bf; }
+.civet-plot-key span:last-child { color:#fbbf24; }
+.video-resizable-content .civet-plot-key span { font-size:10px !important; }
+.video-resizable-content .civet-rhythm span { font-size:10px !important; }
+.video-resizable-content .civet-rhythm b { font-size:15px !important; }
+.civet-card > svg { min-height:70px; }
+@container (max-height:220px) { .civet-rhythm { padding:2px 0; } .civet-rhythm b { display:inline; margin-left:4px; font-size:12px; } .civet-plot-key { display:none; } .civet-card > svg { min-height:32px; } }
+
+/* Reserve graph space as cards get shorter, including standalone/overlay cards. */
+.civet-card > svg { height:0; flex:1 1 0%; }
+@container (max-height:280px) {
+  .civet-main strong { font-size:32px; }
+  .civet-main > b { font-size:22px; }
+  .civet-main small { font-size:10px; }
+  .civet-stats b { display:inline; font-size:12px; margin-left:3px; }
+  .civet-rhythm { padding:2px 0; }
+  .civet-rhythm b { display:inline; font-size:12px; margin-left:3px; }
+  .civet-card footer { display:none; }
+}
+@container (max-height:180px) {
+  .civet-card header { font-size:11px; }
+  .civet-main strong, .civet-compact .civet-main strong { font-size:24px; }
+  .civet-main > b { font-size:18px; }
+  .civet-state { min-height:14px; font-size:10px; }
+  .civet-stats, .civet-rhythm { font-size:9px; }
+  .civet-card > svg { min-height:24px; }
+}
+@container (max-height:180px) {
+  .civet-card { gap:1px; }
+  .civet-rhythm { padding:1px 0; }
+}
