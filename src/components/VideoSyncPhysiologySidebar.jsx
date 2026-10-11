@@ -84,7 +84,7 @@ function nearestEvidenceRow(rows, seconds) {
 
 function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = false, change }) {
   return (
-    <div style={change?.delta ? { backgroundColor: change.delta > 0 ? "rgba(251,146,60,0.09)" : "rgba(56,189,248,0.09)", transition: "background-color 300ms" } : undefined} className={`telemetry-metric-card rounded-xl border border-border bg-background/70 shadow-sm ${compact ? "p-1.5" : "p-3"}`}>
+    <div title={`${label}: ${value} ${unit || ''} · ${detail}${change ? ` · ${change.text || change.delta} ${unit || ''} / ${change.label || '10s'}` : ''}`} style={change?.delta ? { backgroundColor: change.delta > 0 ? "rgba(251,146,60,0.09)" : "rgba(56,189,248,0.09)", transition: "background-color 300ms" } : undefined} className={`telemetry-metric-card rounded-xl border border-border bg-background/70 shadow-sm ${compact ? "p-1.5" : "p-3"}`}>
       <div className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
         <Icon className={`h-3.5 w-3.5 ${tone}`} />
         <span className="metric-full-label">{label}</span><span className="metric-short-label" title={label}>{({ 'Heart Rate': 'HR', 'Blood Pressure': 'BP', 'Respiration': 'Resp', 'Chest Motion': 'Motion' })[label] || label}</span>
@@ -286,7 +286,7 @@ export default function VideoSyncPhysiologySidebar({
   return (
     <VideoTelemetryOverlays controller={overlays} resizable={resizable}>
     <section className={`${compact ? "flex h-full min-h-0 flex-col gap-1 overflow-hidden p-2" : "space-y-3 p-3"} rounded-2xl border border-primary/15 bg-gradient-to-b from-primary/[0.055] via-card to-card shadow-sm`}>
-      <div className="flex shrink-0 items-start justify-between gap-3">
+      {(!compact || !resizable) && <div className="flex shrink-0 items-start justify-between gap-3">
         <div>
           <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
             <Gauge className="h-3.5 w-3.5" />
@@ -301,7 +301,7 @@ export default function VideoSyncPhysiologySidebar({
           <p className="text-[8px] font-semibold uppercase tracking-wider text-emerald-600">Core evidence</p>
           <p className="font-mono text-sm font-bold text-emerald-600">{coreReliability}%</p>
         </div>
-      </div>
+      </div>}
 
       <div data-sidebar-section={["metrics", "Vital signs"]} className={`grid shrink-0 gap-1 ${compact ? "" : "grid-cols-2"}`}
         style={compact ? { gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))" } : undefined}>

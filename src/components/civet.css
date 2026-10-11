@@ -106,3 +106,36 @@
   .civet-card { gap:1px; }
   .civet-rhythm { padding:1px 0; }
 }
+
+/* A short sidebar card keeps the signal, duration strip and snapshot readable.
+   The expanded inspector retains every metric and acquisition detail. */
+.video-resizable-content .civet-card { gap:2px; }
+.video-resizable-content .civet-card > svg { min-height:50px; }
+@container (max-height:210px) {
+  .video-resizable-content .civet-card .civet-main strong { font-size:22px !important; }
+  .video-resizable-content .civet-card .civet-main > b { font-size:17px !important; }
+  .video-resizable-content .civet-card .civet-main small { font-size:9px !important; }
+  .video-resizable-content .civet-card .civet-state { font-size:9px; min-height:11px; line-height:11px; }
+  .video-resizable-content .civet-card .civet-stats { font-size:9px; }
+  .video-resizable-content .civet-card .civet-stats b { font-size:10px !important; }
+  .video-resizable-content .civet-card .civet-rhythm { font-size:9px; gap:3px; padding:1px 0; }
+  .video-resizable-content .civet-card .civet-rhythm b { font-size:11px !important; }
+  .video-resizable-content .civet-card .civet-plot-key { display:none; }
+  .video-resizable-content .civet-card.civet-has-sample .civet-state { display:none; }
+  .video-resizable-content .civet-card .civet-rhythm b { display:inline; margin-left:3px; }
+  .video-resizable-content .civet-card header { font-size:10px; }
+  .video-resizable-content .civet-card .civet-main { line-height:1; }
+  .video-resizable-content .civet-card .civet-main strong { line-height:1; }
+}
+@container (max-height:150px) {
+  .video-resizable-content .civet-card { gap:1px; padding:2px !important; }
+  .video-resizable-content .civet-card .civet-stats { display:none; }
+  .video-resizable-content .civet-card .civet-main strong { font-size:20px !important; }
+  .video-resizable-content .civet-card .civet-main > b { font-size:15px !important; }
+  .video-resizable-content .civet-card .civet-main > b small { display:inline; margin-left:3px; font-size:8px !important; }
+  .video-resizable-content .civet-card:not(.civet-has-sample) .civet-main { display:none; }
+  .video-resizable-content .civet-card .civet-rhythm { line-height:11px; }
+  .video-resizable-content .civet-card .civet-rhythm span { font-size:9px !important; }
+  .video-resizable-content .civet-card .civet-rhythm b { font-size:10px !important; }
+  .video-resizable-content .civet-card > svg { min-height:30px; }
+}

@@ -2684,9 +2684,9 @@ export default function VideoSyncPlayer({
               <span role="status">{subjective.error || (subjective.saving ? "Saving episode..." : "")}</span>
             </div>}
             <div ref={telemetryOverlays.setPickerTarget} className={`${telemetryFocus && !telemetryWindow.target ? 'hidden' : ''} relative z-50 shrink-0`} />
-            <div className={`${telemetryFocus ? "hidden" : "flex"} h-9 shrink-0 items-center justify-between rounded-xl border border-white/10 bg-card/95 px-2`}>
-              <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Optional channels</span>
-              <div className="flex gap-1">
+            <details className={`${telemetryFocus ? "hidden" : ""} video-channel-picker shrink-0`}>
+              <summary>Channels</summary>
+              <div role="group" aria-label="Optional telemetry channels">
                 {[
                   hasSpo2 && ["spo2", "SpO2"],
                   (howl.rows.length > 0 || howl.error) && ["howl", "Howl"],
@@ -2694,17 +2694,15 @@ export default function VideoSyncPlayer({
                   ["respiration", "Resp"],
                   ["motion", "Motion"],
                 ].filter(Boolean).map(([key, label]) => (
-                  <button
+                  <label
                     key={key}
-                    type="button"
-                    onClick={() => setFullTelemetryChannels((current) => ({ ...current, [key]: !current[key] }))}
-                    className={`rounded-md px-2 py-1 text-[9px] font-semibold ${fullTelemetryChannels[key] ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground"}`}
                   >
+                    <input type="checkbox" checked={Boolean(fullTelemetryChannels[key])} onChange={() => setFullTelemetryChannels((current) => ({ ...current, [key]: !current[key] }))} />
                     {label}
-                  </button>
+                  </label>
                 ))}
               </div>
-            </div>
+            </details>
             <div className={telemetryWindow.target ? "monitor-dashboard" : "min-h-0 flex-1"}>
               <VideoSyncPhysiologySidebar
                 timelineRows={timelineRows}
