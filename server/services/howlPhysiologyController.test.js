@@ -7,6 +7,20 @@ import {
   observeHowlIntensity,
 } from '../../src/lib/howlPhysiologyController.js';
 
+test('native high levels retain manual baseline through build and recovery', () => {
+  const state = createHowlPhysiologyControllerState(80);
+  const build = computeHowlPhysiologyAction({
+    state, currentIntensity: 80,
+    prediction: loadedPrediction({ nearClimax: 45, plateauScore: 0, plateauDwell: false, recentSlope: 2 }),
+  });
+  assert.equal(build.target, 81);
+  const recovery = computeHowlPhysiologyAction({
+    state: { ...build.state, manualFloor: 80 }, currentIntensity: 81,
+    prediction: loadedPrediction({ recovery: 80, dropFromRecentPeak: 8 }),
+  });
+  assert.equal(recovery.target, 80);
+});
+
 test('manual increase becomes a floor while automatic ramp feedback does not ratchet it', () => {
   let state = observeHowlIntensity({}, 6);
   state = observeHowlIntensity(state, 10);

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { HOWL_MAX_INTENSITY } from '../../src/lib/howlIntensity.js';
 
 const CHANNEL_KEYS = ['a', 'b', 'c', 'd', 'left', 'right', 'main'];
 
@@ -65,8 +66,8 @@ export const HOWL_CONTROL_DEFAULT_LIMITS = Object.freeze({
   manualOverrideRequired: true,
   emergencyStopRequired: true,
   intensityFloor: 0,
-  intensityCeiling: 10,
-  absoluteIntensityCeiling: 15,
+  intensityCeiling: HOWL_MAX_INTENSITY,
+  absoluteIntensityCeiling: HOWL_MAX_INTENSITY,
   maximumUpwardStep: 2,
   rampRateLimitPerSecond: 2,
 });

@@ -1,4 +1,5 @@
 import CivetLiveCard from "@/components/CivetLiveCard.jsx";
+import { HOWL_MAX_INTENSITY } from "@/lib/howlIntensity.js";
 import CivetLiveAlert from "@/components/CivetLiveAlert.jsx";
 import CivetSetup from "@/components/CivetSetup.jsx";
 import { useCivetLive } from "@/hooks/useCivet.js";
@@ -426,7 +427,7 @@ const HOWL_DEFAULT_CONTROL_FORM = {
   controlUrl: "",
   remoteAccessKey: "",
   intensityFloor: 0,
-  intensityCeiling: 10,
+  intensityCeiling: HOWL_MAX_INTENSITY,
   rampRateLimitPerSecond: 2,
   buildRampEnabled: true,
   nearClimaxReductionEnabled: true,
@@ -1402,7 +1403,7 @@ function getHowlActivityByVoicePhrase(phrase) {
   }) || null;
 }
 
-function parseHowlVoiceCommand(text, { ceiling = 20 } = {}) {
+function parseHowlVoiceCommand(text, { ceiling = HOWL_MAX_INTENSITY } = {}) {
   const phrase = normalizeHowlVoicePhrase(text);
   if (!phrase || !/\bsarah\b/.test(phrase)) return null;
 
@@ -4222,7 +4223,7 @@ export default function LiveCapture() {
   const howlEndpointText = `${apiUrl("/howl/telemetry").replace(/^https?:\/\/[^/]+/, "")}`;
   const howlControlEnabled = Boolean(howlControlForm.controlEnabled);
   const howlSarahAutoEnabled = Boolean(howlControlForm.sarahAutoEnabled);
-  const howlControlCeiling = readNumber(howlControlForm.intensityCeiling) ?? 20;
+  const howlControlCeiling = readNumber(howlControlForm.intensityCeiling) ?? HOWL_MAX_INTENSITY;
   const howlControlFloor = readNumber(howlControlForm.intensityFloor) ?? 0;
   const howlHelperPollPath = apiUrl("/howl/control/next?client=howl-helper").replace(/^https?:\/\/[^/]+/, "");
   const howlControlUrlPreview = previewHowlControlUrl(howlControlForm.controlUrl);
@@ -8609,7 +8610,7 @@ export default function LiveCapture() {
                           className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
                           type="number"
                           min="0"
-                          max="15"
+                          max={HOWL_MAX_INTENSITY}
                           value={howlControlForm.intensityCeiling}
                           onChange={(event) => updateHowlControlForm({ intensityCeiling: event.target.value }, { resetConnection: false })}
                         />
@@ -8723,12 +8724,12 @@ export default function LiveCapture() {
                         className="w-full accent-primary"
                         type="range"
                         min="0"
-                        max="15"
+                        max={HOWL_MAX_INTENSITY}
                         step="1"
-                        value={Math.max(0, Math.min(15, Number(howlControlForm.intensityCeiling) || 0))}
+                        value={Math.max(0, Math.min(HOWL_MAX_INTENSITY, Number(howlControlForm.intensityCeiling) || 0))}
                         onChange={(event) => updateHowlControlForm({ intensityCeiling: Number(event.target.value) }, { resetConnection: false })}
                       />
-                      <span className="block text-[11px] text-muted-foreground">Hard cap for manual and Sarah-driven intensity changes so the helper never ramps above this level.</span>
+                      <span className="block text-[11px] text-muted-foreground">Howl range: 0–{HOWL_MAX_INTENSITY}. Manual and Sarah-driven changes also respect each channel's limit in Howl.</span>
                     </label>
                     <label className="space-y-1 sm:col-span-2">
                       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Howl activity mode</span>

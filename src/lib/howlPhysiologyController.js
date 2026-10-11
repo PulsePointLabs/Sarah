@@ -1,3 +1,5 @@
+import { HOWL_MAX_INTENSITY } from './howlIntensity.js';
+
 function finite(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -55,13 +57,13 @@ export function computeHowlPhysiologyAction({
   multimodal = {},
   currentIntensity = 0,
   floor = 0,
-  ceiling = 10,
+  ceiling = HOWL_MAX_INTENSITY,
   settings = {},
   state = createHowlPhysiologyControllerState(currentIntensity),
 } = {}) {
   const config = { ...DEFAULT_HOWL_PHYSIOLOGY_SETTINGS, ...settings };
   const configuredMinimum = Math.max(0, finite(floor));
-  const maximum = Math.max(configuredMinimum, finite(ceiling, 10));
+  const maximum = Math.max(configuredMinimum, finite(ceiling, HOWL_MAX_INTENSITY));
   const minimum = clamp(Math.max(configuredMinimum, finite(state.manualFloor)), configuredMinimum, maximum);
   const current = clamp(Math.round(finite(currentIntensity)), 0, maximum);
   const peakIntensity = clamp(Math.max(finite(state?.peakIntensity), current), minimum, maximum);

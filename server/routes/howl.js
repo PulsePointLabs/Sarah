@@ -10,6 +10,7 @@ import {
 } from '../services/howlSafety.js';
 import { isLiveCaptureObsActivelyRecording, onLiveCaptureObsStateChange } from '../services/liveCaptureObsState.js';
 import { readHowlActivityState } from '../services/howlActivityState.js';
+import { howlPowerTarget } from '../../src/lib/howlIntensity.js';
 
 export const howlRouter = express.Router();
 
@@ -437,12 +438,12 @@ async function dispatchCommand(command, settings) {
         const status = await requestHowl(settings, '/status', {});
         const currentPower = powerFromStatus(status.data, channel);
         const direction = command.action === 'increment_power' ? 1 : -1;
-        const targetPower = clampNumber(
-          currentPower + direction * (command.step ?? 1),
-          settings.intensityFloor,
-          settings.intensityCeiling,
-          currentPower,
-        );
+        const targetPower = howlPowerTarget({
+          options: status.data?.options, channel,
+          requested: currentPower + direction * (command.step ?? 1),
+          floor: settings.intensityFloor, ceiling: settings.intensityCeiling,
+          maximumUpwardStep: MAXIMUM_UPWARD_STEP,
+        });
         const powerResult = await requestHowl(settings, '/set_power', setPowerBody(channel, targetPower));
         result = {
           ...powerResult,
@@ -455,8 +456,8 @@ async function dispatchCommand(command, settings) {
         const requested = clampNumber(command.intensity, settings.intensityFloor, Math.min(settings.intensityCeiling, ABSOLUTE_INTENSITY_CEILING), 0);
         const currentA = powerFromStatus(status.data, 0);
         const currentB = powerFromStatus(status.data, 1);
-        const targetA = Math.min(requested, currentA + MAXIMUM_UPWARD_STEP);
-        const targetB = Math.min(requested, currentB + MAXIMUM_UPWARD_STEP);
+        const targetA = howlPowerTarget({ options: status.data?.options, channel: 'a', requested, floor: settings.intensityFloor, ceiling: settings.intensityCeiling, maximumUpwardStep: MAXIMUM_UPWARD_STEP });
+        const targetB = howlPowerTarget({ options: status.data?.options, channel: 'b', requested, floor: settings.intensityFloor, ceiling: settings.intensityCeiling, maximumUpwardStep: MAXIMUM_UPWARD_STEP });
         const body = command.channel === 'all'
           ? { power_a: targetA, power_b: targetB }
           : setPowerBody(channelIndex(command.channel), command.channel === 'b' ? targetB : targetA);

@@ -58,3 +58,14 @@ test('holds and reductions do not require rising-HR evidence', () => {
     increasing: false,
   });
 });
+
+test('automatic increases above 15 still require evidence and small steps', () => {
+  const request = automaticIncrease({ previousIntensity: 80 });
+  request.intensity = 81;
+  assert.equal(validateAutomaticHowlIncrease(request, settings).ok, true);
+  request.intensity = 90;
+  assert.equal(validateAutomaticHowlIncrease(request, settings).ok, false);
+  request.intensity = 81;
+  request.controller.recovery = 80;
+  assert.equal(validateAutomaticHowlIncrease(request, settings).ok, false);
+});
