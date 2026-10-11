@@ -1,4 +1,5 @@
 const assert=require('node:assert/strict'),path=require('node:path'),os=require('node:os');
+require('node:fs').mkdirSync('logs',{recursive:true});
 let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright'));}
 (async()=>{const browser=await pw.chromium.launch({...process.env.CHROME_BIN?{executablePath:process.env.CHROME_BIN}:{channel:'chrome'},headless:true});try{
   const page=await browser.newPage({viewport:{width:1920,height:1080}}),errors=[];
@@ -6,7 +7,16 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   await page.addInitScript(()=>localStorage.setItem('sarah.videoSync.sectionWeights.v4',JSON.stringify({civet:99999})));
   await page.route('**/api/**',async route=>{const url=route.request().url();if(url.includes('/src/'))return route.continue();return route.fulfill({json:url.includes('/civet/session/')?await page.evaluate(()=>window.civetFixture):[]});});
   await page.goto('http://127.0.0.1:5175/scripts/tests/fixtures/video-sidebar-resize.html');
-  await page.locator('input[type=file][accept="video/*"]').first().setInputFiles('logs/two-angle-test.mp4');
+  const bytes=await page.evaluate(async()=>{
+    const canvas=document.createElement('canvas');canvas.width=640;canvas.height=360;
+    const context=canvas.getContext('2d');context.fillStyle='#156e75';context.fillRect(0,0,640,360);
+    const stream=canvas.captureStream(10),recorder=new MediaRecorder(stream),chunks=[];
+    recorder.ondataavailable=event=>chunks.push(event.data);const done=new Promise(resolve=>recorder.onstop=resolve);
+    recorder.start();await new Promise(resolve=>setTimeout(resolve,350));recorder.stop();await done;
+    stream.getTracks().forEach(track=>track.stop());return [...new Uint8Array(await new Blob(chunks).arrayBuffer())];
+  });
+  const fixtureVideo={name:'sidebar-fixture.webm',mimeType:'video/webm',buffer:Buffer.from(bytes)};
+  await page.locator('input[type=file][accept="video/*"]').first().setInputFiles(fixtureVideo);
   await page.getByRole('button',{name:'Full Telemetry',exact:true}).click();
   const sidebar=page.locator('.video-resizable-sidebar');
   await page.locator('[data-video-section=civet]').waitFor();
@@ -68,7 +78,7 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   assert.equal(await page.locator('[data-camera] video').first().evaluate(el=>getComputedStyle(el).objectFit),'contain');
   await page.setViewportSize({width:1280,height:720});
   await page.goto('http://127.0.0.1:5175/scripts/tests/fixtures/video-sidebar-resize.html?missingPressure=1');
-  await page.locator('input[type=file][accept="video/*"]').first().setInputFiles('logs/two-angle-test.mp4');
+  await page.locator('input[type=file][accept="video/*"]').first().setInputFiles(fixtureVideo);
   await page.getByRole('button',{name:'Full Telemetry',exact:true}).click();
   await sidebar.getByText('No current pressure sample',{exact:true}).waitFor();await fits();
   assert.deepEqual(errors,[]);
