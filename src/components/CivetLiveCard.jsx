@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { civetLiveSnapshot, updateCivetMonitorZoom } from '../lib/civetLiveMonitor.js';
 import { civetTraceBreak } from '../lib/civetTiming.js';
+import { civetLiveColor } from '../lib/civetLiveColor.js';
 import './civetLive.css';
 const preferenceKey = 'sarah.civet.live-card.v1';
 const layouts = { balanced: 'Balanced', focus: 'Live + timer', session: 'Recent + session', waveform: 'Waveform first', rhythm: 'Rhythm' };
@@ -27,16 +28,31 @@ function LivePlot({ snapshot, zoom }) {
   }).join(' ');
   return <svg ref={ref} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Live pressure above recorded rest" data-window-seconds={zoom.seconds}>
     {[0, .5, 1].map(f => { const value = zoom.min + f * (zoom.max - zoom.min); return <g key={f}><line x1={left} x2={right} y1={y(value)} y2={y(value)} stroke="#35545d" /><text x="0" y={y(value) + 4} fill="#b9cdd4" fontSize="12">{fmt(value)}</text></g>; })}
-    <path d={trace} stroke="#55e4ce" strokeWidth="2.5" fill="none" vectorEffect="non-scaling-stroke" />
-    {snapshot.events.filter(e => e.end >= start && e.end <= snapshot.end).map(e => <rect key={e.id} x={x(Math.max(start, e.onset))} y={bottom + 5} width={Math.max(2, x(e.end) - x(Math.max(start, e.onset)))} height="5" rx="2" fill="#55e4ce"><title>{`Resolved pulse ${fmt(e.duration_s, 2)}s`}</title></rect>)}
+    <path d={trace} stroke="var(--pressure-accent, #55e4ce)" strokeWidth="2.5" fill="none" vectorEffect="non-scaling-stroke" />
+    {snapshot.events.filter(e => e.end >= start && e.end <= snapshot.end).map(e => <rect key={e.id} x={x(Math.max(start, e.onset))} y={bottom + 5} width={Math.max(2, x(e.end) - x(Math.max(start, e.onset)))} height="5" rx="2" fill="var(--pressure-accent, #55e4ce)"><title>{`Resolved pulse ${fmt(e.duration_s, 2)}s`}</title></rect>)}
     {[0, .5, 1].map(f => <text key={f} x={left + f * (right - left)} y={height - 2} textAnchor={f === 0 ? 'start' : f === 1 ? 'end' : 'middle'} fill="#b9cdd4" fontSize="12">{f === 1 ? 'NOW' : `−${zoom.seconds * (1 - f)}s`}</text>)}
   </svg>;
 }
 export default function CivetLiveCard({ live, onSetup, expanded = false, preferences, onPreferences }) {
   const box = useRef(null), zoomRef = useRef({});
+  const pulseRef = useRef(null), eventRef = useRef(null), animationRef = useRef(null);
   const [saved, setSaved] = useState(readPreferences), [open, setOpen] = useState(false), [details, setDetails] = useState(false), [small, setSmall] = useState(false);
   const prefs = preferences || saved;
   const snapshot = useMemo(() => civetLiveSnapshot(live), [live]);
+  const visual = civetLiveColor(snapshot);
+  useEffect(() => {
+    const context = `${snapshot.anchor?.capture_id}:${snapshot.anchor?.calibration?.id}`;
+    const event = snapshot.snapshot.latest;
+    const identity = event ? `${event.id}:${event.confirmed_at}` : null;
+    const previous = eventRef.current;
+    eventRef.current = { context, identity };
+    const reduced = box.current?.ownerDocument.defaultView.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduced || snapshot.current == null || previous?.context !== context) { animationRef.current?.cancel(); return; }
+    if (!event || identity === previous.identity || snapshot.end - event.confirmed_at > 1.5) return;
+    animationRef.current?.cancel();
+    animationRef.current = pulseRef.current.animate([{ opacity: 0 }, { opacity: .24, offset: .22 }, { opacity: 0 }], { duration: 650, easing: 'ease-out' });
+  }, [snapshot]);
+  useEffect(() => () => animationRef.current?.cancel(), []);
   const zoom = updateCivetMonitorZoom(zoomRef.current, snapshot, prefs.auto);
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
   useLayoutEffect(() => { const observer = new ResizeObserver(([entry]) => setSmall(entry.contentRect.height < 350 || entry.contentRect.width < 420)); observer.observe(box.current); return () => observer.disconnect(); }, []);
@@ -50,7 +66,8 @@ export default function CivetLiveCard({ live, onSetup, expanded = false, prefere
   const average = <Reading value={blank ? null : snapshot.average} label="Average · last 30s" />;
   const max = <Reading value={snapshot.sessionMax} label={`Max · ${sessionLabel}`} />;
   const portalRoot = () => box.current?.ownerDocument.body || document.body;
-  return <section ref={box} className={`civet-live-card civet-monitor civet-monitor-${prefs.layout} ${small ? 'civet-monitor-small' : ''} ${blank ? 'civet-live-unready' : ''}`} aria-label="CIVET live pressure">
+  return <section ref={box} data-pressure-mode={visual.mode} style={{ '--pressure-accent': visual.accent, backgroundColor: visual.background }} className={`civet-live-card civet-monitor civet-monitor-${prefs.layout} ${small ? 'civet-monitor-small' : ''} ${blank ? 'civet-live-unready' : ''}`} aria-label="CIVET live pressure">
+    <span ref={pulseRef} className="civet-pressure-pulse" aria-hidden="true" />
     <header><b>Pelvic pressure</b><div className="civet-monitor-controls"><select aria-label="Pressure card view" value={prefs.layout} onChange={e => change({ layout: e.target.value })}>{Object.entries(layouts).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button aria-pressed={prefs.auto} onClick={() => change({ auto: !prefs.auto })}>Auto zoom: {prefs.auto ? 'on' : 'off'}</button></div></header>
     <div className="civet-monitor-state"><span>{state}</span>{sample?.usable && <small title="Relative to the comfortable reference hold, not maximum strength or orgasm progress">{fmt(sample.level_pct, 0)}% of reference</small>}</div>
     <div className="civet-monitor-readings">{now}{prefs.layout === 'session' ? <><div className="civet-monitor-summary"><b>Recent · 30s</b>{average}<Reading value={blank ? null : snapshot.recentMax} label="Max · last 30s" />{timer}</div><div className="civet-monitor-summary"><b>{live.recordingId ? 'Session' : 'Monitor'}</b><Reading value={snapshot.sessionAverage} label="Average" />{max}<Reading value={snapshot.longest} unit="s" label="Longest hold" /></div></> : prefs.layout === 'rhythm' ? <><Reading value={blank ? null : snapshot.snapshot.train.length || 0} unit="peaks" label="Repeated · last 10s" /><Reading value={blank ? null : snapshot.snapshot.spacing} unit="s" label="Typical spacing" /></> : prefs.layout === 'focus' ? <>{timer}<div className="civet-monitor-summary">{average}{max}</div></> : <>{average}{max}{timer}</>}</div>

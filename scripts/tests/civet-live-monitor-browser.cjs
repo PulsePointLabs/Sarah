@@ -11,6 +11,8 @@ try { playwright = require('playwright'); } catch { playwright = require(path.jo
     await page.goto('http://127.0.0.1:5175/scripts/tests/fixtures/civet-live-monitor.html');
     const wide = page.locator('#wide'), compact = page.locator('#compact');
     await wide.getByLabel('Pressure card view').waitFor();
+    const strongColor = await wide.locator('.civet-monitor').evaluate(card => getComputedStyle(card).backgroundColor);
+    assert.equal(await wide.locator('.civet-monitor').getAttribute('data-pressure-mode'), 'sustained');
     assert.equal(await wide.locator('svg').getAttribute('data-window-seconds'), '8');
     assert.match(await wide.innerText(), /Current hold/);
     for (const layout of ['balanced', 'focus', 'session', 'waveform', 'rhythm']) {
@@ -22,12 +24,16 @@ try { playwright = require('playwright'); } catch { playwright = require(path.jo
     await page.getByRole('button', { name: 'quiet', exact: true }).click();
     assert.equal(await wide.locator('svg').getAttribute('data-window-seconds'), '20');
     await page.getByRole('button', { name: 'pulses', exact: true }).click();
+    assert.equal(await wide.locator('.civet-monitor').getAttribute('data-pressure-mode'), 'rhythmic');
+    assert.notEqual(await wide.locator('.civet-monitor').evaluate(card => card.style.backgroundColor), strongColor);
+    assert.ok(await wide.locator('.civet-pressure-pulse').evaluate(element => element.getAnimations().length > 0));
     assert.equal(await wide.locator('svg').getAttribute('data-window-seconds'), '8');
     await wide.getByRole('button', { name: 'Auto zoom: on' }).click();
     assert.equal(await wide.locator('svg').getAttribute('data-window-seconds'), '20');
     await wide.getByLabel('Pressure card view').selectOption('balanced');
     assert.match(await wide.innerText(), /Last completed pulse/);
     await page.getByRole('button', { name: 'missing', exact: true }).click();
+    assert.equal(await wide.locator('.civet-pressure-pulse').evaluate(element => element.getAnimations().length), 0);
     assert.match(await wide.innerText(), /Signal lost/);
     assert.match(await wide.locator('.civet-reading-primary').innerText(), /—/);
     assert.ok((await wide.locator('svg path').getAttribute('d')).length > 0);
