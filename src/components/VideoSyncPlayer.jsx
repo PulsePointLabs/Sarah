@@ -2711,10 +2711,12 @@ export default function VideoSyncPlayer({
                 zoomWindow={zoomWindow}
                 onZoomWindowChange={setZoomWindow}
                 onSeek={(sessionTime) => handleChartClick({ activeLabel: sessionTime })}
+                onPlay={() => { const promise=videoRef.current?.play();promise?.catch(()=>showQuickNotice('Video playback could not start. Use the playback bar to try again.','error')); }}
                 bloodPressureReadings={bloodPressureReadings}
                 pulseOxReadings={pulseOxReadings}
                 compact
                 resizable={!telemetryWindow.target}
+                dashboard={Boolean(telemetryWindow.target)}
                 showWindowControls={false}
                 overlays={telemetryOverlays}
                 optionalChannels={fullTelemetryChannels}

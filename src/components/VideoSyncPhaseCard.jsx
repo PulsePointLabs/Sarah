@@ -9,7 +9,7 @@ const signed = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
 export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, xDomain, onSeek, evidenceModel, physiologicalLoad = false }) {
   const plotRef = useRef(null);
   const [plotSize, setPlotSize] = useState({ width:400, height:108 });
-  useLayoutEffect(() => { const element=plotRef.current; const measure=()=>{const bounds=element.getBoundingClientRect();if(bounds.width>0&&bounds.height>0)setPlotSize(previous=>Math.abs(previous.width-bounds.width)<.5&&Math.abs(previous.height-bounds.height)<.5?previous:{width:bounds.width,height:bounds.height});};const observer=new ResizeObserver(measure);observer.observe(element);measure();return()=>observer.disconnect(); }, []);
+  useLayoutEffect(() => { const element=plotRef.current; const measure=()=>{const bounds=element.getBoundingClientRect();if(bounds.width>0&&bounds.height>0)setPlotSize(previous=>Math.abs(previous.width-bounds.width)<.5&&Math.abs(previous.height-bounds.height)<.5?previous:{width:bounds.width,height:bounds.height});};const observer=new element.ownerDocument.defaultView.ResizeObserver(measure);observer.observe(element);measure();return()=>observer.disconnect(); }, []);
   const [colorCue, setColorCue] = useState(true);
   const model = useMemo(() => evidenceModel || (physiologicalLoad ? buildLoadEvidence(timelineRows) : buildPhaseEvidence(timelineRows)), [timelineRows, evidenceModel, physiologicalLoad]);
   const markers = useMemo(() => physiologicalLoad ? [] : savedPhaseMarkers(session), [session, physiologicalLoad]);

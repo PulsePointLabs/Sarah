@@ -1,5 +1,7 @@
 # CIVET pressure design direction — October 12, 2026
 
+Implementation update, October 13: Ben authorized the Video Sync pressure redesign and detached telemetry sizing fix. Video Sync now has switchable Balanced, Waveform first, and Burst review cards; the visual pressure review workspace is the default Inspect view, with technical analysis and exports under Details. The detached dashboard uses semantic card wrappers, readable grid rows, and popup-owned ResizeObservers for pressure/phase graphs. The historical mockup-only boundaries below describe the earlier brainstorming stage.
+
 Ben likes the Pressure review wide/navigator concepts and all three compact card concepts. This is approved visual direction, not approval of a final implementation.
 
 - Pressure review is the proposed replacement for the pressure **Inspect** dialog's train-button/statistics/data-dump presentation. It is not a redesign of the app's general Insights area.

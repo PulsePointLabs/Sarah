@@ -94,8 +94,8 @@ function FloatingTelemetry({ id, label, children, controller }) {
   </section>;
 }
 // Reuse the actual React cards and their callbacks, not screenshots or DOM copies.
-export default function VideoTelemetryOverlays({ children, controller, resizable }) {
-  if (!controller) return <ResizableVideoTelemetry enabled={resizable}>{children}</ResizableVideoTelemetry>;
+export default function VideoTelemetryOverlays({ children, controller, resizable, dashboard }) {
+  if (!controller) return <ResizableVideoTelemetry enabled={resizable} dashboard={dashboard}>{children}</ResizableVideoTelemetry>;
   const items = Children.toArray(children.props.children);
   const sections = items.filter(child => isValidElement(child) && child.props['data-sidebar-section']);
   const entries = sections.map(child => ({ id: child.props['data-sidebar-section'][0], label: child.props['data-sidebar-section'][1], child }));
@@ -109,7 +109,7 @@ export default function VideoTelemetryOverlays({ children, controller, resizable
     <div><p className="video-overlay-picker-help">Choose a card or graph to add over the video. Originals stay here. Click a card to select it: + makes it more transparent, − less transparent. Hold Ctrl and drag to move. Drag its corner to resize. Deselect here or press Delete to remove.</p>{entries.map(({id,label}) => <button type="button" key={id} aria-pressed={Boolean(controller.boxes[id])} onClick={() => controller.toggle(id)}>{controller.boxes[id] ? '✓ ' : '＋ '}{label}</button>)}
       {controller.notice && <p role="status">{controller.notice}</p>}{missing.map(id => <button type="button" key={id} aria-pressed="true" onClick={() => controller.toggle(id)}>{id} · no data (remove)</button>)}</div>
   </details>;
-  return <><ResizableVideoTelemetry enabled={resizable}>{children}</ResizableVideoTelemetry>
+  return <><ResizableVideoTelemetry enabled={resizable} dashboard={dashboard}>{children}</ResizableVideoTelemetry>
     {controller.pickerTarget && createPortal(picker, controller.pickerTarget)}
     {controller.target && createPortal(entries.filter(entry => controller.boxes[entry.id]).map(({ id, label, child }) =>
       <FloatingTelemetry key={id} id={id} label={label} controller={controller}>{child}</FloatingTelemetry>), controller.target)}

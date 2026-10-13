@@ -73,6 +73,15 @@ function FittedSidebar({ children }) {
       </div>;
     }));
 }
-export default function ResizableVideoTelemetry({ enabled, children }) {
+function DashboardTelemetry({ children }) {
+  const items = Children.toArray(children.props.children);
+  return cloneElement(children, { className: `${children.props.className} monitor-card-grid` }, items.map(child => {
+    if (!isValidElement(child) || !child.props['data-sidebar-section']) return child;
+    const [id] = child.props['data-sidebar-section'];
+    return <div key={id} className="monitor-section" data-monitor-section={id}><div className="monitor-section-content">{child}</div></div>;
+  }));
+}
+export default function ResizableVideoTelemetry({ enabled, dashboard = false, children }) {
+  if (dashboard) return <DashboardTelemetry>{children}</DashboardTelemetry>;
   return enabled ? <FittedSidebar>{children}</FittedSidebar> : children;
 }

@@ -3,7 +3,7 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
 (async()=>{const browser=await pw.chromium.launch({...(process.env.CHROME_BIN?{executablePath:process.env.CHROME_BIN}:{channel:'chrome'}),headless:true});try{
   const page=await browser.newPage({viewport:{width:1600,height:1000}}),errors=[];
   page.on('pageerror',e=>errors.push(e.message));
-  await page.route('**/api/**',r=>r.request().url().includes('/src/')?r.continue():r.fulfill({json:[]}));
+  await page.route('**/api/**',async r=>{if(r.request().url().includes('/src/'))return r.continue();if(r.request().url().includes('/api/civet/session/'))return r.fulfill({json:await page.evaluate(()=>window.civetFixture)});return r.fulfill({json:[]});});
   await page.goto('http://127.0.0.1:5175/scripts/tests/fixtures/video-sidebar-resize.html');
   await page.locator('input[type=file][accept*="video"]').first().setInputFiles('logs/two-angle-test.mp4');
   const inputs=page.locator('input[type=file][accept*="video"]');
@@ -78,6 +78,24 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   await page.getByRole('button',{name:'Dual monitors',exact:true}).click();
   const telemetry=await popupPromise;
   await telemetry.getByRole('button',{name:'Single window',exact:true}).waitFor();
+  for (const viewport of [{width:1920,height:1080},{width:1280,height:900},{width:1024,height:768}]) {
+    await telemetry.setViewportSize(viewport);await telemetry.waitForTimeout(150);
+    const cards=await telemetry.locator('[data-monitor-section]').evaluateAll(nodes=>nodes.map(node=>({id:node.dataset.monitorSection,height:node.clientHeight,contentHeight:node.firstElementChild.firstElementChild.scrollHeight,visibleHeight:node.firstElementChild.firstElementChild.clientHeight})));
+    assert.ok(cards.length>=4,'detached dashboard exposes real semantic card wrappers');
+    assert.ok(cards.filter(card=>card.id!=='metrics').every(card=>card.height>=150),'detached graph cards keep readable height');
+    assert.deepEqual(cards.filter(card=>card.contentHeight>card.visibleHeight+2),[],'detached cards do not clip their contents');
+    assert.ok(await telemetry.locator('[data-monitor-section=civet] svg').evaluate(svg=>{const box=svg.getBoundingClientRect(),view=svg.viewBox.baseVal;return Math.abs(box.width-view.width)<1&&Math.abs(box.height-view.height)<1;}),'detached pressure SVG uses its own window dimensions');
+    assert.ok(await telemetry.locator('[data-monitor-section=phase] svg').evaluate(svg=>{const box=svg.getBoundingClientRect(),view=svg.viewBox.baseVal;return Math.abs(box.width-view.width)<1&&Math.abs(box.height-view.height)<1;}),'detached phase SVG uses its own window dimensions');
+    assert.ok(await telemetry.locator('[data-monitor-section=phase] svg').evaluate(svg=>svg.getBoundingClientRect().height>=60),'phase waveform retains readable vertical space');
+  }
+  await telemetry.screenshot({path:'logs/video-detached-telemetry-layout.png'});
+  await telemetry.locator('[data-monitor-section=civet]').getByRole('button',{name:'Inspect',exact:true}).click();
+  const review=telemetry.getByRole('dialog',{name:'CIVET contraction analysis'});
+  await review.getByLabel('Pressure review zoom').selectOption('8');
+  await review.getByRole('button',{name:'Play from here',exact:true}).click();
+  await page.waitForFunction(()=>!document.querySelector('[data-camera=composite] video').paused);
+  await top.evaluate(video=>video.pause());
+  await telemetry.keyboard.press('Escape');
   assert.equal(await page.getByLabel('Second camera angle').isVisible(),true);
   assert.equal(await page.getByLabel('Second camera angle').inputValue(),'lower_body');
   await page.getByRole('button',{name:'Side-by-side cameras',exact:true}).click();

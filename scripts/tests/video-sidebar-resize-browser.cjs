@@ -37,6 +37,10 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   };
   for(const viewport of [{width:1920,height:1080},{width:1536,height:864},{width:1280,height:720}]){
     await page.setViewportSize(viewport);await fits();
+    for(const view of ['balanced','waveform','burst']){
+      await sidebar.getByLabel('Pressure card view').selectOption(view);await fits();
+    }
+    await sidebar.getByLabel('Pressure card view').selectOption('balanced');
     assert.equal(await page.locator('[data-video-section]').count(),6);
     const initial=await sizes();
     assert.ok(initial.metrics<initial.phase,'vital row starts shorter');

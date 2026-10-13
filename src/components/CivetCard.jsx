@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { contractionSnapshot } from '../lib/civetSnapshot.js';
 import { civetAt } from '../lib/civet.js';
@@ -7,16 +7,19 @@ import { useCivetTimeline } from '../hooks/useCivet.js';
 import { apiUrl } from '../lib/mobileApiBase.js';
 import { civetTraceBreak } from '../lib/civetTiming.js';
 import './civet.css';
+import CivetPressureReview from './CivetPressureReview.jsx';
+import { videoPressureSummary } from '../lib/videoPressureView.js';
+import { civetLiveColor } from '../lib/civetLiveColor.js';
 const fmt=(v,d=2)=>v==null?'—':Number(v).toFixed(d);
 const colors={raw:'#a6b1bd',filtered:'#fff',tonic:'#fbbf24',phasic:'#2dd4bf'};
 const fields={raw:'pressure_kpa',filtered:'filtered_kpa',tonic:'tonic_kpa',phasic:'phasic_kpa'};
-export function CivetPlot({rows,events=[],start,end,layers,onSeek,markers=[],playheadS}) {
+export function CivetPlot({rows,events=[],start,end,layers,onSeek,markers=[],playheadS,localScale=false,domain,accent}) {
   const plotRef=useRef(null),[size,setSize]=useState({width:600,height:166});
-  useLayoutEffect(()=>{const element=plotRef.current;const measure=()=>{const bounds=element.getBoundingClientRect();if(bounds.width>0&&bounds.height>0)setSize(previous=>Math.abs(previous.width-bounds.width)<.5&&Math.abs(previous.height-bounds.height)<.5?previous:{width:bounds.width,height:bounds.height});};const observer=new ResizeObserver(measure);observer.observe(element);measure();return()=>observer.disconnect();},[]);
+  useLayoutEffect(()=>{const element=plotRef.current;const measure=()=>{const bounds=element.getBoundingClientRect();if(bounds.width>0&&bounds.height>0)setSize(previous=>Math.abs(previous.width-bounds.width)<.5&&Math.abs(previous.height-bounds.height)<.5?previous:{width:bounds.width,height:bounds.height});};const observer=new element.ownerDocument.defaultView.ResizeObserver(measure);observer.observe(element);measure();return()=>observer.disconnect();},[]);
   const {width,height}=size,left=34,right=Math.max(44,width-8),top=height<50?2:12,bottom=Math.max(top+8,height-(height<50?20:34)),durationY=height-(height<50?5:12);
   const points=rows.filter(p=>p.t>=start&&p.t<=end),selected=Object.keys(fields).filter(k=>layers[k]);
   const values=points.flatMap(p=>selected.map(k=>p[fields[k]]??(k==='filtered'?p.pressure_kpa:null)).filter(Number.isFinite));
-  const min=Math.min(0,...values),max=Math.max(.1,...values),x=t=>left+(t-start)/Math.max(.1,end-start)*(right-left),y=v=>bottom-(v-min)/(max-min)*(bottom-top);
+  const min=domain?.[0]??(localScale&&values.length?Math.min(...values)-.05:Math.min(0,...values)),max=domain?.[1]??Math.max(min+.1,...values),x=t=>left+(t-start)/Math.max(.1,end-start)*(right-left),y=v=>bottom-(v-min)/(max-min)*(bottom-top);
   const visible=events.filter(e=>e.end>=start&&e.onset<=end&&(e.mode==='review'||e.confirmed_at<=end));
   const timeLabel=t=>`${Math.floor(t/60)}:${String(Math.floor(t%60)).padStart(2,'0')}`;
   return <svg ref={plotRef} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Pelvic pressure in kPa over time; shaded contractions with duration bars and marked peaks" onClick={onSeek?e=>{const r=e.currentTarget.getBoundingClientRect();const t=(e.clientX-r.left)/r.width*width;onSeek(Math.max(start,Math.min(end,start+(t-left)/(right-left)*(end-start))));}:undefined}>
@@ -27,7 +30,7 @@ export function CivetPlot({rows,events=[],start,end,layers,onSeek,markers=[],pla
       <rect x={onset} width={Math.max(1,offset-onset)} y={durationY} height="6" rx="2" fill={color} opacity=".8"><title>{`Contraction ${e.event_index} · ${fmt(e.duration_s??e.end-e.onset,2)}s · onset ${fmt(e.onset,1)}s → end ${fmt(e.end,1)}s`}</title></rect>
       {offset-onset>32&&height>100&&<text x={(onset+offset)/2} y={height-1} textAnchor="middle" fill={color} fontSize="9">{fmt(e.duration_s??e.end-e.onset,1)}s</text>}
     </g>;})}
-    {selected.map(k=>{let previous=null;const trace=points.map(p=>{const v=p[fields[k]]??(k==='filtered'?p.pressure_kpa:null);if(!Number.isFinite(v)){previous=null;return '';}const move=civetTraceBreak(previous,p);previous=p;return `${move?'M':'L'}${x(p.t)},${y(v)}`;}).join(' ');return <path key={k} d={trace} fill="none" stroke={colors[k]} strokeWidth={k==='raw'?1:2} vectorEffect="non-scaling-stroke"/>;})}
+    {selected.map(k=>{let previous=null;const trace=points.map(p=>{const v=p[fields[k]]??(k==='filtered'?p.pressure_kpa:null);if(!Number.isFinite(v)){previous=null;return '';}const move=civetTraceBreak(previous,p);previous=p;return `${move?'M':'L'}${x(p.t)},${y(v)}`;}).join(' ');return <path key={k} d={trace} fill="none" stroke={k==='filtered'&&accent?accent:colors[k]} strokeWidth={k==='raw'?1:2} vectorEffect="non-scaling-stroke"/>;})}
     {layers.events&&visible.filter(e=>e.peak>=start&&e.peak<=end).map(e=><g key={`peak-${e.id}`}>
       <line x1={x(e.peak)} x2={x(e.peak)} y1={top} y2={bottom} stroke={e.quality==='usable'?'#2dd4bf':'#fbbf24'} strokeDasharray="2 3" opacity=".6"/>
       <circle role="button" tabIndex={0} aria-label={`Contraction ${e.event_index} at ${fmt(e.peak,1)} seconds, duration ${fmt(e.duration_s??e.end-e.onset,2)} seconds`} cx={x(e.peak)} cy={selected.includes('filtered')?y(e.peak_pressure_kpa):selected.includes('raw')?y(e.raw_peak_pressure_kpa??e.peak_pressure_kpa):selected.includes('phasic')?y(e.peak_pressure_kpa-e.tonic_kpa):selected.includes('tonic')?y(e.tonic_kpa):18} r="3.5" fill={e.quality==='usable'?'#2dd4bf':'#fbbf24'} onClick={ev=>{ev.stopPropagation();onSeek?.(e.peak);}} onKeyDown={ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();onSeek?.(e.peak);}}}><title>{`Peak ${fmt(e.peak,1)}s · duration ${fmt(e.duration_s??e.end-e.onset,2)}s · spacing ${fmt(e.preceding_interval_s,2)}s · prominence ${fmt(e.prominence_kpa)} kPa · ${(e.flags||[]).join(', ')||'usable'}`}</title></circle>
@@ -42,8 +45,10 @@ function Exports({sessionId,mode}) {
   if(!sessionId)return null;
   return <div className="civet-export">{['samples','events','trains','analysis'].map(kind=><a key={kind} href={apiUrl(`/civet/session/${encodeURIComponent(sessionId)}/export?kind=${kind}&mode=${mode}`)}>Export {kind}{kind==='analysis'?' JSON':' CSV'}</a>)}</div>;
 }
-export default function CivetCard({rows=[],sample,playheadS,onSeek,compact=false,statusText,analysis,sessionId,markers=[],windowSeconds=30}) {
+export default function CivetCard({rows=[],sample,playheadS,onSeek,onPlay,compact=false,statusText,analysis,sessionId,markers=[],windowSeconds=30}) {
   const [open,setOpen]=useState(false),[portalRoot,setPortalRoot]=useState(null),[mode,setMode]=useState('reprocessed'),[layers,setLayers]=useState({raw:false,filtered:true,tonic:true,phasic:false,events:true}),[selectedTrain,setSelectedTrain]=useState(null);
+  const [view,setView]=useState(()=>{try{return ['balanced','waveform','burst'].includes(localStorage.getItem('sarah.video.pressure.view'))?localStorage.getItem('sarah.video.pressure.view'):'balanced';}catch{return 'balanced';}});
+  useEffect(()=>{if(!open)return;const doc=portalRoot?.ownerDocument||document;const close=e=>{if(e.key==='Escape')setOpen(false);};doc.addEventListener('keydown',close);return()=>doc.removeEventListener('keydown',close);},[open,portalRoot]);
   const review=mode==='review'&&analysis?.review;
   const reprocessed=mode==='reprocessed'&&analysis?.reprocessed;
   const selectedAnalysis=review || reprocessed || analysis?.live;
@@ -62,25 +67,30 @@ export default function CivetCard({rows=[],sample,playheadS,onSeek,compact=false
   const train=trains.find(t=>t.train_index===selectedTrain);
   const viewStart=train?Math.max(displayRows[0]?.t??0,train.start-2):start,viewEnd=train?Math.min(displayRows.at(-1)?.t??end,train.end+2):end;
   const seek=t=>onSeek?.(t);
-  return <section className={`civet-card ${compact?'civet-compact':''} ${current?'civet-has-sample':''}`} aria-label="CIVET pelvic pressure" style={{background:`hsl(${hue} 55% ${level==null?11:14+level*.07}% / .95)`,borderColor:`hsl(${hue} 65% 48%)`}}>
-    <header><b>CIVET · PELVIC RESPONSE</b><button className="civet-review-button" onClick={e=>{setPortalRoot(e.currentTarget.ownerDocument.body);setOpen(true);}}>Inspect</button></header>
-    <div className="civet-main"><strong>{fmt(current?.delta_kpa??current?.pressure_kpa)}<small> kPa{current?.delta_kpa!=null?' above rest':''}</small></strong><b title="Pressure above your recorded rest divided by the rise during your calibration hold. 100% matches that hold; it is not maximum strength or an arousal score.">{fmt(current?.usable?current.level_pct:null,0)}<small>% of calibration hold</small></b></div>
-    <div className="civet-state" title={statusText||current?.evidence}>{statusText||displayState||'No current pressure sample'}{current?.calibration_remaining_s>0?` · ${Math.ceil(current.calibration_remaining_s)}s`:''}</div>
-    <div className="civet-stats"><span>30s avg <b>{fmt(average)}</b></span><span>30s peak <b>{fmt(peak)}</b></span><span>60s pulses <b>{pulseCount??'—'}</b></span><span>Tonic <b>{fmt(current?.tonic_kpa)}</b></span></div>
-    <div className="civet-rhythm" aria-label="Rolling contraction snapshot">
-      <span>Last duration <b>{snapshot.latest?`${fmt(snapshot.latest.duration_s??snapshot.latest.end-snapshot.latest.onset,2)}s`:'—'}</b></span>
-      <span>Peak spacing <b>{snapshot.spacing!=null?`${fmt(snapshot.spacing,2)}s`:'—'}</b></span>
-      <span title="At least three resolved usable contractions, separated by 0.4–3 seconds, in the last 10 seconds. Pressure pattern alone does not establish orgasm.">Repeated pulses <b>{snapshot.train.length?`${snapshot.train.length} / 10s`:'—'}</b></span>
-    </div>
-    <CivetPlot rows={displayRows} events={events} start={start} end={Math.max(end,start+.1)} layers={layers} onSeek={onSeek} markers={markers} playheadS={end}/>
-    <div className="civet-plot-key"><span>● Pressure</span><span>━ Tonic</span><span>▰ Contraction duration</span><span>Amber: review</span></div>
-    <footer><span title={reprocessed ? 'Recomputed from original pressure samples using the corrected acquisition policy. Original recording preserved.' : undefined}>{review?'Review · noncausal':reprocessed?'Reprocessed · causal replay':'Recorded live · causal'} · {Math.round(end-start)}s · kPa</span><span>White pressure · gold tonic</span></footer>
+  const summary=useMemo(()=>videoPressureSummary(displayRows,events,end),[displayRows,events,end]);
+  const cardRows=useMemo(()=>summary.relative?displayRows.map(row=>({...row,pressure_kpa:(row.usable??row.calibration_valid)&&row.calibration?.id===summary.current?.calibration?.id?row.delta_kpa:null,filtered_kpa:(row.usable??row.calibration_valid)&&row.calibration?.id===summary.current?.calibration?.id?row.delta_kpa:null,tonic_kpa:row.tonic_kpa-(row.calibration?.baseline??0)})):displayRows,[displayRows,summary.relative,summary.current?.calibration?.id]);
+  const cardEvents=useMemo(()=>summary.relative?events.filter(event=>event.calibration?.id===summary.current?.calibration?.id).map(event=>({...event,peak_pressure_kpa:event.peak_pressure_kpa-(event.calibration?.baseline??0),raw_peak_pressure_kpa:(event.raw_peak_pressure_kpa??event.peak_pressure_kpa)-(event.calibration?.baseline??0),tonic_kpa:event.tonic_kpa-(event.calibration?.baseline??0)})):events,[events,summary.relative,summary.current?.calibration?.id]);
+  const visual=civetLiveColor({current:summary.relative?summary.value:null,sample:current,held:summary.held,rhythmic:summary.snapshot.train.length>=3});
+  const recentBurst=summary.snapshot.train;
+  const cardStart=view==='burst'&&recentBurst.length?Math.max(displayRows[0]?.t??0,recentBurst[0].onset-1,end-12):start;
+  const changeView=value=>{setView(value);try{localStorage.setItem('sarah.video.pressure.view',value);}catch{}};
+
+  return <section className={`civet-card pressure-video-card pressure-video-${view} ${compact?'civet-compact':''} ${current?'civet-has-sample':''}`} aria-label="CIVET pelvic pressure" style={{background:visual.background,borderColor:visual.accent,'--pressure-accent':visual.accent}}>
+    <header><b>Pelvic pressure</b><div className="pressure-video-actions"><select aria-label="Pressure card view" value={view} onChange={e=>changeView(e.target.value)}><option value="balanced">Balanced</option><option value="waveform">Waveform first</option><option value="burst">Burst review</option></select><button className="civet-review-button" onClick={e=>{setPortalRoot(e.currentTarget.ownerDocument.body);setOpen(true);}}>Inspect</button></div></header>
+    <div className="pressure-video-values">{view==='burst'?<><div><strong>{summary.snapshot.train.length||'—'}<small> peaks</small></strong><span>Resolved · 10s</span></div><div><strong>{fmt(recentBurst.length?recentBurst.at(-1).end-recentBurst[0].onset:null,1)}<small> s</small></strong><span>Recent burst</span></div><div><strong>{fmt(summary.snapshot.spacing,2)}<small> s</small></strong><span>Typical spacing</span></div></>:<><div><strong>{fmt(summary.value,1)}<small> kPa</small></strong><span>{summary.relative?'Above rest':'Measured pressure'}</span></div>{view!=='waveform'&&<><div><strong>{fmt(summary.average,1)}</strong><span>Average · 30s</span></div><div><strong>{fmt(summary.peak,1)}</strong><span>Max · 30s</span></div></>}</>}</div>
+    {!current&&<div className="civet-state">{statusText||'No current pressure sample'}</div>}
+    <div className="civet-rhythm" aria-label="Rolling contraction snapshot"><span>{summary.held?'Current hold':'Last pulse'} <b>{fmt(summary.duration,2)}s</b></span><span>Spacing <b>{fmt(summary.snapshot.spacing,2)}s</b></span><span>Repeated <b>{summary.snapshot.train.length||'—'} / 10s</b></span></div>
+    <CivetPlot rows={cardRows} events={cardEvents} start={cardStart} end={Math.max(end,cardStart+.1)} layers={{filtered:true,events:true}} domain={summary.range} accent={visual.accent} onSeek={onSeek} markers={markers} playheadS={end}/>
+    <footer><span>{Math.round(end-cardStart)}s · {summary.relative?'above recorded rest':'measured kPa'}</span><span>{view==='burst'?'Latest resolved burst':summary.relative?'Reference ready':'Reference uncertain'}</span></footer>
     {open&&createPortal(<div className="civet-inspector-backdrop"><section role="dialog" aria-modal="true" aria-label="CIVET contraction analysis" className="civet-inspector" onKeyDown={e=>{if(e.key==='Escape')setOpen(false);}}>
-      <header><h2>CIVET · Contraction analysis</h2><button autoFocus onClick={()=>setOpen(false)}>Close</button></header>
+      <header><h2>Pelvic pressure · Review</h2><button autoFocus onClick={()=>setOpen(false)}>Close</button></header>
+      <div className="civet-tools"><label>Analysis <select aria-label="Analysis version" value={review?'review':reprocessed?'reprocessed':'live'} onChange={e=>{setMode(e.target.value);setSelectedTrain(null);}}>{analysis?.reprocessed&&<option value="reprocessed">Reprocessed pressure (corrected policy)</option>}<option value="live">Recorded live (causal)</option>{analysis?.review&&<option value="review">Retrospective review (noncausal)</option>}</select></label></div>
+      <CivetPressureReview rows={displayRows} events={events} trains={trains} train={train} playhead={end} start={viewStart} end={viewEnd} onSelect={setSelectedTrain} onSeek={seek} onPlay={onPlay} markers={markers} Plot={CivetPlot} />
+      <details className="pressure-review-advanced"><summary>Signal &amp; analysis details</summary>
       <p>Mechanical pressure, not calibrated muscle force. A contraction train is supporting evidence, not proof of orgasm. Amber events need review; their possible causes cannot be distinguished from pressure alone.</p>
       <p>100% means the pressure rise above rest matches your comfortable calibration hold. Higher values can occur; this is not maximum strength or percent toward climax. Rest: {fmt(current?.calibration?.baseline)} kPa · calibration hold rise: {fmt(current?.calibration?.reference)} kPa. Zeroing the hardware is separate from measuring this resting baseline.</p>
       <p>At playhead: {fmt(current?.pressure_kpa)} kPa · 30s average {fmt(average)} · 30s peak {fmt(peak)} · 60s pulses {pulseCount??'—'} · tonic {fmt(current?.tonic_kpa)} kPa.</p>
-      <div className="civet-tools"><label>Analysis <select value={review?'review':reprocessed?'reprocessed':'live'} onChange={e=>{setMode(e.target.value);setSelectedTrain(null);}}>{analysis?.reprocessed&&<option value="reprocessed">Reprocessed pressure (corrected policy)</option>}<option value="live">Recorded live (causal)</option>{analysis?.review&&<option value="review">Retrospective review (noncausal)</option>}</select></label>{Object.keys(layers).map(k=><label key={k}><input type="checkbox" checked={layers[k]} onChange={e=>setLayers(p=>({...p,[k]:e.target.checked}))}/>{k}</label>)}</div>
+<p>Technical plot layers</p><div className="civet-tools">{Object.keys(layers).map(k=><label key={k}><input type="checkbox" checked={layers[k]} onChange={e=>setLayers(p=>({...p,[k]:e.target.checked}))}/>{k}</label>)}</div>
       {reprocessed && <p>Reprocessed from unchanged raw samples. {reprocessed.recovered_samples} samples regained reference metrics under {reprocessed.policy}. The original rest/hold calibration is retained; disconnects and genuine calibration failures remain flagged. This is pressure relative to that reference, not absolute muscle force.</p>}
       <p>{review?'Symmetric pressure smoothing and centered tonic estimate. Does not change the recorded live phase model.':'Peaks are confirmed after a falling shoulder and trough. Confirmation timestamps remain distinct from observed peaks.'} Timing is sample-based (~0.1s); no interpolated samples.</p>
       <div className="civet-inspector-plot"><CivetPlot rows={displayRows} events={events} start={viewStart} end={viewEnd} layers={layers} onSeek={onSeek} markers={markers} playheadS={end}/></div>
@@ -93,6 +103,7 @@ export default function CivetCard({rows=[],sample,playheadS,onSeek,compact=false
       <details><summary>Calibration and acquisition history</summary><pre>{JSON.stringify({current_calibration:current?.calibration||null,metadata:analysis?.metadata||[],algorithm:review?.algorithm||current?.algorithm},null,2)}</pre></details>
       {analysis?.view_offset_s>0&&<p>Display times subtract {fmt(analysis.view_offset_s,1)}s from the original session. Exports retain the original session clock.</p>}
       <Exports sessionId={sessionId} mode={review?'review':reprocessed?'reprocessed':'live'}/>
+      </details>
     </section></div>,portalRoot||document.body)}
   </section>;
 }
