@@ -83,6 +83,7 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
     const cards=await telemetry.locator('[data-monitor-section]').evaluateAll(nodes=>nodes.map(node=>({id:node.dataset.monitorSection,height:node.clientHeight,contentHeight:node.firstElementChild.firstElementChild.scrollHeight,visibleHeight:node.firstElementChild.firstElementChild.clientHeight})));
     assert.ok(cards.length>=4,'detached dashboard exposes real semantic card wrappers');
     assert.ok(cards.filter(card=>card.id!=='metrics').every(card=>card.height>=150),'detached graph cards keep readable height');
+    assert.ok(await telemetry.locator('.monitor-card-grid').evaluate(grid=>grid.scrollHeight<=grid.clientHeight+2),'standard detached viewports show all cards without a scroll canvas');
     assert.deepEqual(cards.filter(card=>card.contentHeight>card.visibleHeight+2),[],'detached cards do not clip their contents');
     assert.ok(await telemetry.locator('[data-monitor-section=civet] svg').evaluate(svg=>{const box=svg.getBoundingClientRect(),view=svg.viewBox.baseVal;return Math.abs(box.width-view.width)<1&&Math.abs(box.height-view.height)<1;}),'detached pressure SVG uses its own window dimensions');
     assert.ok(await telemetry.locator('[data-monitor-section=phase] svg').evaluate(svg=>{const box=svg.getBoundingClientRect(),view=svg.viewBox.baseVal;return Math.abs(box.width-view.width)<1&&Math.abs(box.height-view.height)<1;}),'detached phase SVG uses its own window dimensions');
