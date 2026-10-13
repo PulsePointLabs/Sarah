@@ -49,6 +49,14 @@ try { playwright = require('playwright'); } catch { playwright = require(path.jo
     await page.reload();
     assert.equal(await wide.getByLabel('Pressure card view').inputValue(), 'focus');
     assert.equal(await wide.getByRole('button', { name: 'Auto zoom: off' }).count(), 1);
+    await page.getByRole('button', { name: 'pulses', exact: true }).click();
+    await page.waitForTimeout(750);
+    await page.getByRole('button', { name: 'pulses', exact: true }).click();
+    assert.equal(await wide.locator('.civet-pressure-pulse').evaluate(element => element.getAnimations().filter(animation => animation.playState === 'running').length), 0, 'repeated status must not replay the same pulse');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.getByRole('button', { name: 'quiet', exact: true }).click();
+    await page.getByRole('button', { name: 'pulses', exact: true }).click();
+    assert.equal(await wide.locator('.civet-pressure-pulse').evaluate(element => element.getAnimations().length), 0, 'reduced motion suppresses pulse animation');
     await wide.screenshot({ path: 'logs/civet-live-monitor-installed-design.png' });
     assert.deepEqual(errors, []);
     console.log('PASS live pressure views, readable fit, automatic zoom, override, missing signal, expansion and saved preferences');
