@@ -7,11 +7,13 @@ import { CIVET_VERSION, CIVET_PARAMETERS, analyzeCivetReview, linkIntervals, sum
 import { fileURLToPath } from 'node:url';
 import { createCivetProcessor } from '../../src/lib/civet.js';
 import { reprocessCivetRecording, CIVET_REPROCESS_VERSION } from '../../src/lib/civetReprocess.js';
+import { createCivetMonitorSummary } from '../../src/lib/civetLiveMonitor.js';
 const execute=promisify(execFile);
 const helper=fileURLToPath(new URL('../../tools/capture/civet/civet_ble.py',import.meta.url));
 export function createCivetService({directory,session=()=>null,onRecorded=()=>{},run=execute,launch=spawn}) {
   const venv=path.join(directory,'python'), python=path.join(venv,process.platform==='win32'?'Scripts/python.exe':'bin/python');
   let child=null,busy=false,processor=createCivetProcessor(),history=[],latest=null,lastAt=0,recordingId=null,reconnected=false;
+  let summarizeMonitor=createCivetMonitorSummary(),monitorSummary=null;
   const pendingCommands=new Map();
   let captureId=randomUUID(),previousConnection=null;
   let lastHardwareZero=null;
@@ -20,7 +22,7 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
   let state={state:'disconnected',error:null,battery:null,address:null};
   const safe=id=>{if(!/^[a-zA-Z0-9_-]{1,150}$/.test(id)) throw new Error('Invalid session id'); return path.join(directory,`${id}.jsonl`);};
   process.once('exit',()=>child?.kill());
-  const status=()=>({...state,busy,latest:lastAt && Date.now()-lastAt<1500 ? latest : null,history,age_ms:lastAt?Date.now()-lastAt:null,recordingId});
+  const status=()=>({...state,busy,latest:lastAt && Date.now()-lastAt<1500 ? latest : null,history,age_ms:lastAt?Date.now()-lastAt:null,recordingId,monitorSummary});
   function appendMetadata(event) {
     const current=session();if(!current)return;
     fs.mkdirSync(directory,{recursive:true});
@@ -70,7 +72,7 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
   function ingest(message) {
     if(!Number.isFinite(message.pressure_kpa)) return;
     const current=session();
-    if((current?.id||null)!==recordingId) { processor.reset(); recordingId=current?.id||null; history=[]; }
+    if((current?.id||null)!==recordingId) { processor.reset(); recordingId=current?.id||null; history=[]; summarizeMonitor=createCivetMonitorSummary();monitorSummary=null; }
     const t=current ? (message.timestamp_ms-Date.parse(current.startedAt))/1000 : message.monotonic_ms/1000;
     if(previousConnection!=null&&message.connection_id!=null&&previousConnection!==message.connection_id)reconnected=true;
     previousConnection=message.connection_id??previousConnection;
@@ -81,6 +83,7 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
       peak_timestamp_ms:message.timestamp_ms+(candidate.peak-t)*1000,
       observed_timestamp_ms:message.timestamp_ms}));
     latest={...feature,capture_id:captureId,t,timestamp_ms:message.timestamp_ms,monotonic_ms:message.monotonic_ms,sequence:message.sequence,raw_packet_hex:message.raw_packet_hex??null,raw_pressure_integer:message.raw_pressure_integer??null,connection_id:message.connection_id??null}; lastAt=Date.now();
+    monitorSummary=summarizeMonitor(latest);
     history.push(latest); history=history.filter(p=>t-p.t<=60).slice(-700);
     state.state='connected';state.error=feature.calibration_error||null;
     if(current && t>=0) {
