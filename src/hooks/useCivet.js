@@ -8,6 +8,7 @@ export async function civetRequest(action,body,signal) {
 }
 export function useCivetLive() {
   const [state,setState]=useState({state:'disconnected',history:[],latest:null});
+  useEffect(()=>{civetRequest('resume',{}).catch(error=>setState(previous=>({...previous,error:error.message})));},[]);
   useEffect(()=>{let active=true,timer;const poll=async()=>{try{const data=await civetRequest('status');if(active)setState(data);}catch(error){if(active)setState(previous=>({...previous,latest:null,error:error.message,state:'unavailable'}));}finally{if(active)timer=setTimeout(poll,250);}};poll();return()=>{active=false;clearTimeout(timer);};},[]);
   return state;
 }

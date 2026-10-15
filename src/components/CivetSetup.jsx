@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CivetPlot } from './CivetCard.jsx';
 import { civetRequest } from '../hooks/useCivet.js';
 import './civet.css';
 
 export default function CivetSetup({ live, onClose }) {
-  const [devices, setDevices] = useState([]), [address, setAddress] = useState('');
+  const [devices, setDevices] = useState([]), [address, setAddress] = useState(live.remembered?.address || live.address || '');
+  useEffect(()=>{if(live.remembered?.address)setAddress(current=>current||live.remembered.address);},[live.remembered?.address]);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const sample = live.latest;
@@ -24,6 +25,7 @@ export default function CivetSetup({ live, onClose }) {
         if (!data.devices.length) setError('No CIVET found. Power it on; press its power button five times until its Bluetooth icon is yellow, then scan again.');
       }
       if (name === 'zero') setNotice('Zero command completed. Next: set up in your recording position and collect rest.');
+      if (name === 'remember' && body.forget) {setAddress('');setNotice('Remembered sensor removed. The current connection stays active until you disconnect.');}
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   };
@@ -43,10 +45,11 @@ export default function CivetSetup({ live, onClose }) {
     <details open={!connected}><summary>Bluetooth connection</summary><div className="civet-connection-controls">
       <button disabled={busy || active} onClick={() => action('install')}>Install helper (once)</button>
       <button disabled={busy || active} onClick={() => action('scan')}>Scan for CIVET</button>
-      <select aria-label="CIVET device" value={address} onChange={e => setAddress(e.target.value)}><option value="">Choose sensor</option>{devices.map(d => <option key={d.address} value={d.address}>{d.name} · {d.address}</option>)}</select>
+      <select aria-label="CIVET device" value={address} onChange={e => setAddress(e.target.value)}><option value="">Choose sensor</option>{address && !devices.some(d=>d.address===address) && <option value={address}>Remembered CIVET · {address}</option>}{devices.map(d => <option key={d.address} value={d.address}>{d.name} · {d.address}</option>)}</select>
       <button disabled={busy || active || !address} onClick={() => action('connect', { address })}>Connect</button>
       <button disabled={busy} onClick={() => action('disconnect')}>Disconnect</button>
     </div></details>
+    {live.remembered && <div className="civet-connection-controls"><label><input type="checkbox" checked={live.remembered.autoReconnect} disabled={busy} onChange={e=>action('remember',{enabled:e.target.checked})}/> Reconnect my CIVET when Live Capture opens</label><button disabled={busy} onClick={()=>action('remember',{forget:true})}>Forget sensor</button>{live.autoReconnectPaused && <span>Disconnected by you · press Connect to resume.</span>}</div>}
     {(error || live.error) && <p role="alert" className="civet-setup-error">{error || live.error}</p>}
     {notice && <p role="status">{notice}</p>}
     <div className="civet-calibration-feedback" data-tone={tone}>

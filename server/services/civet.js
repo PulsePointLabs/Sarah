@@ -12,6 +12,16 @@ const execute=promisify(execFile);
 const helper=fileURLToPath(new URL('../../tools/capture/civet/civet_ble.py',import.meta.url));
 export function createCivetService({directory,session=()=>null,onRecorded=()=>{},run=execute,launch=spawn}) {
   const venv=path.join(directory,'python'), python=path.join(venv,process.platform==='win32'?'Scripts/python.exe':'bin/python');
+  const connectionFile=path.join(directory,'device','connection.json');
+  const validAddress=address=>typeof address==='string'&&/^[a-zA-Z0-9:-]{8,80}$/.test(address);
+  let remembered=null,paused=false,rememberAllowed=true;
+  try {const saved=JSON.parse(fs.readFileSync(connectionFile,'utf8'));if(validAddress(saved.address))remembered={address:saved.address,autoReconnect:saved.autoReconnect!==false};} catch { /* First use or unreadable preferences: use manual setup. */ }
+  function saveConnection(value) {
+    fs.mkdirSync(path.dirname(connectionFile),{recursive:true});
+    fs.writeFileSync(`${connectionFile}.tmp`,JSON.stringify(value));
+    fs.renameSync(`${connectionFile}.tmp`,connectionFile);
+    remembered=value;
+  }
   let child=null,busy=false,processor=createCivetProcessor(),history=[],latest=null,lastAt=0,recordingId=null,reconnected=false;
   let summarizeMonitor=createCivetMonitorSummary(),monitorSummary=null;
   const pendingCommands=new Map();
@@ -22,7 +32,7 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
   let state={state:'disconnected',error:null,battery:null,address:null};
   const safe=id=>{if(!/^[a-zA-Z0-9_-]{1,150}$/.test(id)) throw new Error('Invalid session id'); return path.join(directory,`${id}.jsonl`);};
   process.once('exit',()=>child?.kill());
-  const status=()=>({...state,busy,latest:lastAt && Date.now()-lastAt<1500 ? latest : null,history,age_ms:lastAt?Date.now()-lastAt:null,recordingId,monitorSummary});
+  const status=()=>({...state,busy,remembered,autoReconnectPaused:paused,latest:lastAt && Date.now()-lastAt<1500 ? latest : null,history,age_ms:lastAt?Date.now()-lastAt:null,recordingId,monitorSummary});
   function appendMetadata(event) {
     const current=session();if(!current)return;
     fs.mkdirSync(directory,{recursive:true});
@@ -100,9 +110,18 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
       } catch(error) {state.error=`CIVET recording failed: ${error.message}`;}
     }
   }
-  return {
+  const service={
     status, ingest,
     samples, analysis,
+    async resume() {
+      if(!child&&!busy&&!paused&&remembered?.autoReconnect){try{await service.connect({address:remembered.address});}catch(error){state.error=error.message;}}
+      return status();
+    },
+    remember({enabled,forget=false}) {
+      if(forget){fs.rmSync(connectionFile,{force:true});remembered=null;paused=true;rememberAllowed=false;}
+      else {if(typeof enabled!=='boolean'||!remembered)throw new Error('Connect a CIVET before changing automatic reconnect.');saveConnection({...remembered,autoReconnect:enabled});}
+      return status();
+    },
     async install() {
       if(child||busy) throw new Error('Disconnect CIVET before installing its helper.'); busy=true;
       try { fs.mkdirSync(directory,{recursive:true}); await run(process.platform==='win32'?'py':'python3',['-m','venv',venv],{windowsHide:true,timeout:60000}); await run(python,['-m','pip','install','-r',path.join(path.dirname(helper),'requirements.txt')],{windowsHide:true,timeout:180000,maxBuffer:1024*1024}); state.error=null; }
@@ -116,15 +135,15 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
     },
     async connect({address}) {
       if(child||busy) throw new Error('Disconnect before reconnecting.');
-      if(typeof address!=='string'||!/^[a-zA-Z0-9:-]{8,80}$/.test(address)) throw new Error('Choose a discovered CIVET.');
+      if(!validAddress(address)) throw new Error('Choose a discovered CIVET.');
       if(!fs.existsSync(python)) throw new Error('Install the CIVET helper first.');
-      captureId=randomUUID();previousConnection=null;processor=createCivetProcessor();latest=null;history=[];lastAt=0;
+      paused=false;rememberAllowed=true;captureId=randomUUID();previousConnection=null;processor=createCivetProcessor();summarizeMonitor=createCivetMonitorSummary();monitorSummary=null;latest=null;history=[];lastAt=0;
       state={state:'connecting',address,error:null,battery:null};
       const process=launch(python,['-u',helper,'connect',address],{windowsHide:true,stdio:['pipe','pipe','pipe']});child=process;
       let buffer='';
-      process.stdout.on('data',chunk=>{buffer+=chunk.toString();let end;while((end=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,end);buffer=buffer.slice(end+1);try{const message=JSON.parse(line);if(message.command_id) {commandReply(message);}else if(Number.isFinite(message.pressure_kpa)) ingest(message);else {if(message.state&&message.state!==state.state)appendMetadata({type:'sensor_connection',state:message.state,timestamp_ms:message.timestamp_ms??Date.now()});state={...state,...message};if(message.state==='reconnecting'){latest=null;reconnected=true;processor.invalidate();}}}catch(error){state.error=`CIVET packet error: ${error.message}`;}}});
-      process.stderr.on('data',chunk=>{state.error=chunk.toString().slice(-500);});
-      process.on('error',error=>{state.error=error.message;state.state='disconnected';if(child===process)child=null;});
+      process.stdout.on('data',chunk=>{if(child!==process)return;buffer+=chunk.toString();let end;while((end=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,end);buffer=buffer.slice(end+1);try{const message=JSON.parse(line);if(message.command_id) {commandReply(message);}else if(Number.isFinite(message.pressure_kpa)) ingest(message);else {if(message.state&&message.state!==state.state)appendMetadata({type:'sensor_connection',state:message.state,timestamp_ms:message.timestamp_ms??Date.now()});state={...state,...message};if(message.state==='connected'){state.error=null;if(rememberAllowed&&(!remembered||remembered.address!==address))saveConnection({address,autoReconnect:true});}if(message.state==='reconnecting'){latest=null;reconnected=true;processor.invalidate();}}}catch(error){state.error=`CIVET packet error: ${error.message}`;}}});
+      process.stderr.on('data',chunk=>{if(child!==process)return;state.error=chunk.toString().slice(-500);});
+      process.on('error',error=>{if(child!==process)return;state.error=error.message;state.state='disconnected';if(child===process)child=null;});
       process.on('exit',()=>{if(child===process){rejectCommands();child=null;state.state='disconnected';latest=null;}});
       return status();
     },
@@ -139,7 +158,8 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
         child.stdin.write(JSON.stringify({action:'zero',command_id})+'\n',error=>{if(error){clearTimeout(timer);pendingCommands.delete(command_id);reject(error);}});
       });
     },
-    disconnect() { rejectCommands();child?.kill();child=null;latest=null;state.state='disconnected';return status(); },
+    disconnect() { paused=true;rejectCommands();const previous=child;child=null;previous?.kill();latest=null;state.state='disconnected';return status(); },
     calibrate({kind,prepare_s=0}) {if(!status().latest)throw new Error('Wait for live pressure samples.');processor.calibrate(kind,{prepareS:prepare_s});return status();},
   };
+  return service;
 }

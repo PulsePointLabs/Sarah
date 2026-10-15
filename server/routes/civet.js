@@ -24,6 +24,6 @@ export function createCivetRouter(session, onService = () => {}) {
     const keys=kind==='samples'?[...sampleKeys,'acquisition_policy','acquisition_state','reprocessed','recorded_acquisition_state','recorded_usable']:[...new Set(rows.flatMap(Object.keys))];
     res.type('text/csv').attachment(`civet-${req.params.id}-${kind}-${mode}.csv`).send(civetCsv(rows,keys.length?keys:[kind==='trains'?'train_index':'event_index','algorithm']));
   }catch(error){res.status(400).json({error:error.message});}});
-  for(const action of ['install','scan','connect','disconnect','calibrate','zero'])router.post(`/${action}`,async(req,res)=>{try{res.json(await service[action](req.body||{}));}catch(error){res.status(400).json({error:error.message});}});
+  for(const action of ['install','scan','connect','disconnect','calibrate','zero','resume','remember'])router.post(`/${action}`,async(req,res)=>{try{res.json(await service[action](req.body||{}));}catch(error){res.status(400).json({error:error.message});}});
   return router;
 }
