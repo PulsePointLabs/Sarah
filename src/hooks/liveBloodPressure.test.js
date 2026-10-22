@@ -32,6 +32,23 @@ test('listener armed earlier calls the latest session save callback', async () =
   await h.context.callback(reading); assert.equal(h.sent[0].session, 'next-session');
   assert.equal(h.state.sessionId, 'next-session');
 });
+
+test('a replay from outside the recording is saved without relabeling current-session telemetry', async () => {
+  const h=saveHarness();h.recover();h.context.readingIsInActiveSession=()=>false;
+  await h.save(reading);
+  assert.equal(h.sent[0].session,undefined);
+  assert.equal(h.state.lastReading,undefined);
+  assert.match(h.state.message,/BP history/);
+});
+
+test('an in-flight BP save cannot repopulate a different session after a transition', async () => {
+  const h=saveHarness();let resolve;
+  h.context.ingestBloodPressureReadings=()=>new Promise(done=>{resolve=done;});
+  const saving=h.save(reading);h.context.bpSessionKeyRef.current='next-session';
+  resolve({readings:[reading]});await saving;
+  assert.equal(h.state.lastReading,undefined);
+  assert.equal(h.state.sessionId,undefined);
+});
 test('native replay coalesces deliveries, retries failed saves, and acknowledges only success', async () => {
   let interval; let configured; let delivered = 0; let fail = true; const acknowledgements = []; const handlers = {}; const held = [];
   const pending = [reading, {...reading, external_id:"second"}, {...reading, external_id:"old-invalid", measured_at:"-0001-11-28T05:00:00Z"}];
