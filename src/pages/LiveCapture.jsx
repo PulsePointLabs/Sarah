@@ -99,6 +99,7 @@ import {
   syncBloodPressureFromHealthConnect,
 } from "@/lib/bloodPressure";
 import {
+  bloodPressureFallsInSession,
   resetBloodPressureCaptureForSession,
   selectLiveSessionBloodPressure,
 } from "@/lib/liveSessionBloodPressure";
@@ -1896,6 +1897,8 @@ export default function LiveCapture() {
   const bpForegroundRefreshCooldownRef = useRef(0);
   const [heldBpReadings, setHeldBpReadings] = useState({});
   const bpOmronSeenRef = useRef(new Set());
+  const bpSessionKeyRef = useRef(null);
+  bpSessionKeyRef.current = liveSession?.active ? liveSession.activeSessionId || null : null;
   const bpSessionIdRef = useRef(null);
   const howlSettingsDirtyRef = useRef(false);
   const howlFocusedFieldRef = useRef("");
@@ -1922,11 +1925,11 @@ export default function LiveCapture() {
   }, [liveEvents]);
 
   useEffect(() => {
-    const activeSessionId = liveSession?.activeSessionId || null;
+    const activeSessionId = liveSession?.active ? liveSession.activeSessionId || null : null;
     if (bpSessionIdRef.current === activeSessionId) return;
     bpSessionIdRef.current = activeSessionId;
     setBpCapture((previous) => resetBloodPressureCaptureForSession(previous, activeSessionId));
-  }, [liveSession?.activeSessionId]);
+  }, [liveSession?.active, liveSession?.activeSessionId]);
 
   useEffect(() => {
     if (restoredLaunchProfileRef.current) return;
@@ -4027,9 +4030,14 @@ export default function LiveCapture() {
     && (liveHealthNowMs - liveHealthEmgSeenAtRef.current) <= LIVE_HEALTH_EMG_GRACE_MS
   );
   const latestBpReading = selectLiveSessionBloodPressure({
-    activeSessionId: liveSession?.activeSessionId,
+    activeSessionId: liveSession?.active ? liveSession.activeSessionId : null,
     activeSessionDoc,
     captureState: bpCapture,
+    window: {
+      startMs: Date.parse(liveSession?.startedAt || activeSessionDoc?.capture_started_at || ""),
+      endMs: Date.parse(activeSessionDoc?.capture_finalized_at || liveSession?.finalizedAt || "") || Date.now(),
+      pauses: activeSessionDoc?.capture_pause_intervals || liveSession?.pauseIntervals || [],
+    },
   });
   const latestBpValue = latestBpReading?.systolic_mm_hg && latestBpReading?.diastolic_mm_hg
     ? `${latestBpReading.systolic_mm_hg}/${latestBpReading.diastolic_mm_hg}`
@@ -4976,18 +4984,18 @@ export default function LiveCapture() {
   }, [activeSessionDoc, liveSession?.startedAt, recording?.startedAtMs]);
 
   const readingIsInActiveSession = useCallback((reading, session = activeSessionDoc) => {
-    const measuredMs = new Date(reading?.measured_at || 0).getTime();
+    if (!liveSession?.active || !liveSession?.activeSessionId) return false;
     const startMs = resolveLiveSessionStartMs(session);
-    if (!Number.isFinite(measuredMs) || measuredMs <= 0 || !startMs) return false;
-    const durationMs = Math.max(0, Number(session?.duration_minutes || 0)) * 60000;
-    const endMs = recordingActive ? Date.now() + 15000 : startMs + durationMs + 10 * 60000;
-    return measuredMs >= startMs - 60000 && measuredMs <= endMs;
-  }, [activeSessionDoc, recordingActive, resolveLiveSessionStartMs]);
+    const final = Date.parse(session?.capture_finalized_at || liveSession?.finalizedAt || "");
+    const endMs = Number.isFinite(final) ? final : liveSession?.active ? Date.now() : startMs + Math.max(0, Number(session?.duration_minutes || 0)) * 60000;
+    return bloodPressureFallsInSession(reading, {startMs, endMs, sessionId: liveSession.activeSessionId,
+      pauses: session?.capture_pause_intervals || liveSession?.pauseIntervals || []});
+  }, [activeSessionDoc, liveSession, resolveLiveSessionStartMs]);
 
   const stampBloodPressureReadings = useCallback(async (readings = [], { source = "health_connect_auto" } = {}) => {
     const sessionState = liveSession?.activeSessionId ? liveSession : null;
     const sessionId = sessionState?.activeSessionId;
-    if (!sessionId) return { stamped: 0, latest: null };
+    if (!sessionId || bpSessionKeyRef.current !== sessionId) return { stamped: 0, latest: null };
     const rows = await liveRecordApi.filter({ id: sessionId });
     const session = rows[0] || activeSessionDoc || {};
     const startMs = resolveLiveSessionStartMs(session);
@@ -5025,6 +5033,7 @@ export default function LiveCapture() {
       };
     });
     const latest = usable[usable.length - 1];
+    if (bpSessionKeyRef.current !== sessionId) return { stamped: 0, latest: null };
     await appendLiveSessionEvents(events, {
       session_context: {
         ...(session.session_context || {}),
@@ -5109,9 +5118,10 @@ export default function LiveCapture() {
           : manual ? "blood_pressure_database_manual_refresh" : "blood_pressure_database_auto_refresh",
       });
       const latestStoredReading = readings[0] || null;
-      const activeSessionId = liveSession?.activeSessionId || null;
+      const activeSessionId = liveSession?.active ? liveSession.activeSessionId || null : null;
       const needsPermission = nativeStatus?.native !== false && !nativePermissionGranted;
       setBpCapture((prev) => {
+        if (bpSessionKeyRef.current !== activeSessionId) return prev;
         if (bpOmronListening && !manual && !stamped.stamped) return prev;
         return ({
         ...prev,
@@ -5153,66 +5163,31 @@ export default function LiveCapture() {
     } finally {
       bpSyncInFlightRef.current = false;
     }
-  }, [bpOmronListening, liveSession?.activeSessionId, stampBloodPressureReadings]);
+  }, [bpOmronListening, liveSession?.active, liveSession?.activeSessionId, stampBloodPressureReadings]);
 
   const saveOmronBloodPressureForLiveSession = useCallback(async (reading) => {
     if (!reading) throw new Error("OMRON did not return a blood pressure reading.");
-
     const readingKey = reading.external_id || reading.id || `${reading.measured_at}-${reading.systolic_mm_hg}-${reading.diastolic_mm_hg}-${reading.pulse_bpm || ""}`;
     if (bpOmronSeenRef.current.has(readingKey)) return;
-
-
-    setBpCapture((prev) => ({
-      ...prev,
-      native: true,
-      syncing: false,
-      status: "syncing",
-      error: "",
-      message: `Received OMRON reading ${formatBloodPressure(reading)}. Saving...`,
-    }));
-
-    const activeSessionId = liveSession?.activeSessionId || null;
-    setBpCapture((prev) => ({ ...prev, sessionId: activeSessionId, lastReading: reading }));
-    const sessionReading = activeSessionId ? { ...reading, session: activeSessionId } : reading;
-    const saved = await ingestBloodPressureReadings([sessionReading]);
+    const activeSessionId = liveSession?.active ? liveSession.activeSessionId || null : null;
+    const belongs = Boolean(activeSessionId && readingIsInActiveSession(reading));
+    const saved = await ingestBloodPressureReadings([belongs ? {...reading, session: activeSessionId} : reading]);
     if (!Array.isArray(saved?.readings) || !saved.readings.length) throw new Error("The BP server did not confirm saving this reading. It will be retried.");
     bpOmronSeenRef.current.add(readingKey);
-    const savedReadings = saved.readings;
-    const latestReading = savedReadings[0] || reading;
-
-    setBpCapture((prev) => ({
-      ...prev,
-      native: true,
-      permissionGranted: prev.permissionGranted,
-      syncing: false,
-      status: "ready",
-      sessionId: activeSessionId,
-      lastReading: latestReading,
-      lastCapturedAt: new Date().toISOString(),
-      message: `OMRON captured ${formatBloodPressure(latestReading)} and saved it to PulsePoint.`,
-    }));
-
-    stampBloodPressureReadings(savedReadings, { source: "omron_direct_ble_listener" })
-      .then((stamped) => {
-        if (!stamped?.stamped) return;
-        setBpCapture((prev) => ({
-          ...prev,
-          sessionId: liveSession?.activeSessionId || null,
-          status: "captured",
-          lastReading: stamped.latest || latestReading,
-          lastCapturedAt: new Date().toISOString(),
-          capturedCount: prev.capturedCount + stamped.stamped,
-          message: `OMRON captured ${formatBloodPressure(stamped.latest || latestReading)} and stamped it into this session.`,
-        }));
-      })
-      .catch((error) => {
-        setBpCapture((prev) => ({
-          ...prev,
-          error: error?.message || "Saved BP, but could not stamp it into the live session.",
-          message: `OMRON captured ${formatBloodPressure(latestReading)} and saved it to PulsePoint. Session stamp failed.`,
-        }));
-      });
-  }, [liveSession?.activeSessionId, stampBloodPressureReadings]);
+    if (bpSessionKeyRef.current !== activeSessionId) return;
+    if (!belongs) {
+      setBpCapture(prev => ({...prev, syncing:false,
+        message:"Cuff reading saved to BP history; its measurement time does not belong to this session."}));
+      return;
+    }
+    const latestReading = saved.readings[0];
+    const stamped = await stampBloodPressureReadings(saved.readings, {source:"omron_direct_ble_listener"});
+    if (bpSessionKeyRef.current !== activeSessionId) return;
+    setBpCapture(prev => ({...prev, native:true, syncing:false, error:"", status:"captured", sessionId:activeSessionId,
+      lastReading:stamped.latest || latestReading, lastCapturedAt:new Date().toISOString(),
+      capturedCount:prev.capturedCount + (stamped.stamped || 0),
+      message:`OMRON captured ${formatBloodPressure(latestReading)} during this session.`}));
+  }, [liveSession?.active, liveSession?.activeSessionId, readingIsInActiveSession, stampBloodPressureReadings]);
 
   const saveOmronReadingRef = useRef(saveOmronBloodPressureForLiveSession);
   saveOmronReadingRef.current = saveOmronBloodPressureForLiveSession;
@@ -5255,15 +5230,6 @@ export default function LiveCapture() {
           }));
         },
         onReading: (reading) => {
-          setBpCapture((prev) => ({
-            ...prev,
-            syncing: false,
-            status: "syncing",
-            error: "",
-            sessionId: liveSession?.activeSessionId || null,
-            lastReading: reading,
-            message: `Received OMRON reading ${formatBloodPressure(reading)}. Saving...`,
-          }));
           return saveOmronReadingRef.current(reading).catch((error) => {
             setBpCapture((prev) => ({
               ...prev,
@@ -7529,6 +7495,11 @@ export default function LiveCapture() {
 
   return (
     <div className={`${focusView ? "h-screen overflow-hidden bg-[#071016] p-0" : "p-4 md:p-6"} space-y-4`}>
+      {!mainTelemetryView && <div className="flex flex-wrap items-center gap-2" aria-label="Blood pressure cuff controls">
+        <button type="button" className="rounded-lg border border-primary/40 px-3 py-2 text-sm" onClick={toggleOmronBloodPressureListener} disabled={bpOmronActionInFlightRef.current}>{bpOmronListening ? "Stop cuff listener" : "Listen for cuff"}</button>
+        <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" onClick={()=>startOmronBloodPressureListenerForLiveSession({forceDevicePicker:true})} disabled={bpOmronActionInFlightRef.current}>Choose / reconnect cuff</button>
+        <span className="text-sm text-muted-foreground">{latestBpReading ? `This session: ${formatBloodPressure(latestBpReading)}` : "No cuff reading in this session"}</span>
+      </div>}
       <CivetLiveAlert live={civet} onSetup={() => setCivetSetupOpen(true)} />
       {civetSetupOpen && <CivetSetup live={civet} onClose={() => setCivetSetupOpen(false)} />}
       {emgSetupOpen && <EmgSetup onClose={() => setEmgSetupOpen(false)} onProfileChange={names => { if(names) setEmgNames(names); }} onConnected={() => updateTelemetryPanel("emg", { enabled: true })} />}
@@ -7923,7 +7894,7 @@ export default function LiveCapture() {
               <button
                 type="button"
                 onClick={toggleOmronBloodPressureListener}
-                disabled={bpCapture.syncing}
+                disabled={bpOmronActionInFlightRef.current}
                 className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
                   bpOmronListening
                     ? "bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
@@ -9523,6 +9494,10 @@ export default function LiveCapture() {
           </h3>
           {telemetryFocusView && <div className="flex items-center gap-3"><span aria-label="Session timer" className="whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{launchActive && resolveLiveSessionStartMs() ? fmtMmSs(Math.max(0, (liveHealthNowMs - resolveLiveSessionStartMs()) / 1000)) : "00:00"}</span><button type="button" aria-label="Telemetry controls" aria-expanded={telemetryControlsOpen} onClick={() => setTelemetryControlsOpen(true)} className="rounded-lg border border-border px-2 py-1 text-sm">Controls</button></div>}
           <div hidden={telemetryFocusView && !telemetryControlsOpen} className={telemetryFocusView ? "telemetry-top-controls" : ""}>
+            <div className="flex flex-wrap items-center gap-2" aria-label="Telemetry cuff controls">
+              <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" disabled={bpOmronActionInFlightRef.current} onClick={toggleOmronBloodPressureListener}>{bpOmronListening ? "Stop cuff listener" : "Listen for cuff"}</button>
+              <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" disabled={bpOmronActionInFlightRef.current} onClick={()=>startOmronBloodPressureListenerForLiveSession({forceDevicePicker:true})}>Choose / reconnect cuff</button>
+            </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button type="button" onClick={() => setCivetSetupOpen(true)} className="min-h-11 rounded-lg border border-primary/40 px-3 text-sm font-semibold">Connect CIVET</button>
             <button type="button" onClick={() => setEmgSetupOpen(true)} className="min-h-11 rounded-lg border border-primary/40 px-3 text-sm font-semibold">Connect EMG</button>

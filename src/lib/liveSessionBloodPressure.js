@@ -5,22 +5,33 @@ function usableBloodPressure(reading) {
   return Number.isFinite(systolic) && Number.isFinite(diastolic) ? reading : null;
 }
 
-export function selectLiveSessionBloodPressure({ activeSessionId, activeSessionDoc, captureState } = {}) {
+export function bloodPressureFallsInSession(reading, { startMs, endMs, sessionId, pauses = [] } = {}) {
+  const measured = Date.parse(reading?.measured_at || '');
+  // A reception timestamp cannot establish when a stored cuff measurement happened.
+  if ((reading?.timestamp_source || reading?.raw?.timestamp_source) === 'received_at') return false;
+  if (reading?.session && sessionId && reading.session !== sessionId) return false;
+  if (!Number.isFinite(measured) || !(startMs > 0) || !Number.isFinite(endMs)) return false;
+  if (measured < startMs || measured > endMs) return false;
+  return !pauses.some(p => {
+    const start = Date.parse(p.started_at || p.paused_at || p.start || p.pausedAt || '');
+    const end = Date.parse(p.ended_at || p.resumed_at || p.end || p.resumedAt || '') || endMs;
+    return Number.isFinite(start) && measured >= start && measured < end;
+  });
+}
+
+export function selectLiveSessionBloodPressure({ activeSessionId, activeSessionDoc, captureState, window } = {}) {
   const sessionId = String(activeSessionId || "").trim();
-  // While Live Capture is armed and waiting for OBS there is deliberately no
-  // session record yet. A reading captured by this live page is still current
-  // and should be visible in the telemetry display instead of being hidden
-  // behind the not-yet-created session id.
-  if (!sessionId) return usableBloodPressure(captureState?.lastReading);
+  if (!sessionId) return null;
+  const usable = reading => usableBloodPressure(reading) && (!window || bloodPressureFallsInSession(reading, {...window, sessionId})) ? reading : null;
 
   if (String(captureState?.sessionId || "").trim() === sessionId) {
-    const captured = usableBloodPressure(captureState?.lastReading);
+    const captured = usable(captureState?.lastReading);
     if (captured) return captured;
   }
 
   if (String(activeSessionDoc?.id || "").trim() !== sessionId) return null;
-  return usableBloodPressure(activeSessionDoc?.latest_blood_pressure_reading)
-    || usableBloodPressure(activeSessionDoc?.session_context?.blood_pressure)
+  return usable(activeSessionDoc?.latest_blood_pressure_reading)
+    || usable(activeSessionDoc?.session_context?.blood_pressure)
     || null;
 }
 

@@ -7,7 +7,7 @@ function saveHarness() {
   let fail = true; let attempts = 0; let state = {}; const sent = [];
   const context = vm.createContext({ useCallback: f => f, bpOmronSeenRef: { current: new Set() },
     setBpCapture: f => { state = f(state); }, formatBloodPressure: () => '120/80',
-    liveSession: { activeSessionId: 'current-session' },
+    liveSession: { active:true, activeSessionId: 'current-session' }, bpSessionKeyRef: {current:'current-session'}, readingIsInActiveSession:()=>true,
     stampBloodPressureReadings: async () => ({ stamped: 0 }),
     ingestBloodPressureReadings: async readings => { attempts++; if (fail) throw Error('offline'); sent.push(...readings); return { readings }; },
   });
@@ -28,7 +28,7 @@ test('listener armed earlier calls the latest session save callback', async () =
   const start = page.indexOf('        onReading: (reading) => {', page.indexOf('const startOmronBloodPressureListenerForLiveSession'));
   const end = page.indexOf('        onDisconnect:', start);
   vm.runInContext('this.callback = ({'+page.slice(start, end)+'}).onReading;', h.context);
-  h.context.liveSession = { activeSessionId: 'next-session' };
+  h.context.liveSession = { active:true, activeSessionId: 'next-session' }; h.context.bpSessionKeyRef.current='next-session';
   await h.context.callback(reading); assert.equal(h.sent[0].session, 'next-session');
   assert.equal(h.state.sessionId, 'next-session');
 });
@@ -58,7 +58,7 @@ test('automatic database refresh does not clear cuff save error or change contro
   let state = { status: 'error', error: 'offline', lastReading: reading, message: 'Retry pending', permissionGranted: true };
   const original = state;
   const context = vm.createContext({ useCallback: f => f, bpSyncInFlightRef: {current:false}, bpOmronListening:true,
-    liveSession:{activeSessionId:'session'}, setBpCapture:f=>{state=f(state);},
+    liveSession:{active:true,activeSessionId:'session'}, bpSessionKeyRef:{current:'session'}, setBpCapture:f=>{state=f(state);},
     getBloodPressureStatus:async()=>({native:true,permissionGranted:false}), listRecentBloodPressure:async()=>({readings:[]}),
     stampBloodPressureReadings:async()=>({stamped:0,latest:null}) });
   const start=page.indexOf('  const syncBloodPressureForLiveSession =');

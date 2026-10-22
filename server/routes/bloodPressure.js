@@ -1,4 +1,5 @@
 import express from 'express';
+import {bloodPressureFallsInSession} from '../../src/lib/liveSessionBloodPressure.js';
 import { db, getEntity, listEntities, upsertEntity } from '../db.js';
 
 export const bloodPressureRouter = express.Router();
@@ -216,8 +217,7 @@ bloodPressureRouter.post('/ingest', (req, res) => {
       if (capture && (!input.session || input.session === capture.id) && /omron/i.test(reading.source_app)) {
         const session = getEntity(capture.entity || 'Session', capture.id);
         const start = Date.parse(capture.startedAt || session?.capture_started_at || '');
-        const measured = Date.parse(reading.measured_at);
-        if (session && Number.isFinite(start) && measured >= start && measured <= Date.now() + 15000) {
+        if (session && bloodPressureFallsInSession(reading, {startMs:start, endMs:Math.min(Date.now(), Date.parse(session.capture_finalized_at || '') || Infinity), sessionId:capture.id, pauses:session.capture_pause_intervals || []})) {
           attachReadingsToSession({ ...session, capture_started_at: session.capture_started_at || capture.startedAt }, [reading], {
             source: 'omron_direct_ble_listener', entity: capture.entity || 'Session',
           });
