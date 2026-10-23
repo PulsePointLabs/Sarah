@@ -105,6 +105,7 @@ import {
 } from "@/lib/liveSessionBloodPressure";
 import {
   getOmronBloodPressureListenerState,
+  getOmronConnectionDiagnostics,
   getRememberedOmronDevice,
   isOmronAutoListenEnabled,
   setOmronAutoListenEnabled,
@@ -5221,12 +5222,14 @@ export default function LiveCapture() {
       await startOmronBloodPressureListener({
         forceDevicePicker,
         onHeldReading: (reading) => setHeldBpReadings((prev) => ({ ...prev, [reading.external_id || reading.id || JSON.stringify(reading)]: reading })),
-        onStatus: (message) => {
+        onStatus: (message, connection = {}) => {
           setBpCapture((prev) => ({
             ...prev,
             syncing: false,
             status: prev.error ? "error" : prev.lastReading ? prev.status : "armed",
             message: prev.error ? prev.message : message,
+            cuffClockStatus: connection.clockStatus || prev.cuffClockStatus || "unchecked",
+            cuffClockMessage: connection.clockMessage || prev.cuffClockMessage || "Bluetooth listener enabled; cuff setup has not been verified.",
           }));
         },
         onReading: (reading) => {
@@ -5290,6 +5293,13 @@ export default function LiveCapture() {
       bpOmronActionInFlightRef.current = false;
     }
   }, [saveOmronBloodPressureForLiveSession]);
+
+  const copyCuffDiagnostics = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(await getOmronConnectionDiagnostics(), null, 2));
+      toast({title:"Cuff connection diagnostics copied",description:"Paste into this chat. No BP readings or device address are included."});
+    } catch (error) { toast({title:"Could not copy cuff diagnostics",description:error.message,variant:"destructive"}); }
+  }, [toast]);
 
   const toggleOmronBloodPressureListener = useCallback(async () => {
     if (bpOmronActionInFlightRef.current) {
@@ -7498,6 +7508,8 @@ export default function LiveCapture() {
       {!mainTelemetryView && <div className="flex flex-wrap items-center gap-2" aria-label="Blood pressure cuff controls">
         <button type="button" className="rounded-lg border border-primary/40 px-3 py-2 text-sm" onClick={toggleOmronBloodPressureListener} disabled={bpOmronActionInFlightRef.current}>{bpOmronListening ? "Stop cuff listener" : "Listen for cuff"}</button>
         <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" onClick={()=>startOmronBloodPressureListenerForLiveSession({forceDevicePicker:true})} disabled={bpOmronActionInFlightRef.current}>Choose / reconnect cuff</button>
+              <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" onClick={copyCuffDiagnostics}>Copy cuff diagnostics</button>
+              {bpOmronListening && <span className={`text-sm ${bpCapture.cuffClockStatus === "verified" ? "text-muted-foreground" : "text-amber-400"}`}>{bpCapture.cuffClockMessage || "Bluetooth listener enabled; cuff setup has not been verified."}</span>}
         <span className="text-sm text-muted-foreground">{latestBpReading ? `This session: ${formatBloodPressure(latestBpReading)}` : "No cuff reading in this session"}</span>
       </div>}
       <CivetLiveAlert live={civet} onSetup={() => setCivetSetupOpen(true)} />
@@ -7822,7 +7834,7 @@ export default function LiveCapture() {
           helper={bpCapture.lastReading
             ? `Last reading: ${formatBloodPressure(bpCapture.lastReading)} · ${formatBloodPressureTime(bpCapture.lastReading.measured_at, bpCapture.lastReading.timestamp_source || bpCapture.lastReading.raw?.timestamp_source)}`
             : "OMRON and Health Connect controls"}
-          status={bpOmronListening ? "OMRON armed" : bpCapture.lastReading ? (bpCapture.error ? "Not saved" : "Latest ready") : "Not connected"}
+          status={bpOmronListening ? "Listener enabled · cuff setup separate" : bpCapture.lastReading ? (bpCapture.error ? "Not saved" : "Latest ready") : "Not connected"}
         >
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
@@ -7897,7 +7909,7 @@ export default function LiveCapture() {
                 disabled={bpOmronActionInFlightRef.current}
                 className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
                   bpOmronListening
-                    ? "bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
+                    ? "bg-muted text-foreground hover:bg-muted/80"
                     : "bg-primary text-primary-foreground hover:bg-primary/90"
                 }`}
               >
@@ -9490,6 +9502,7 @@ export default function LiveCapture() {
         <div data-telemetry-header onMouseEnter={() => setTelemetryControlsOpen(true)} onMouseLeave={() => setTelemetryControlsOpen(false)} onFocus={() => setTelemetryControlsOpen(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setTelemetryControlsOpen(false); }} className={`relative flex min-w-0 flex-wrap items-center justify-between gap-3 ${telemetryFocusView ? "shrink-0 pb-2 z-30" : ""}`}>
           <h3 className={`${telemetryFocusView ? "text-base md:text-3xl" : distanceTelemetryView ? "text-lg" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex min-w-0 flex-wrap items-center gap-2`}>
             <CircleDot className={distanceTelemetryView ? "w-6 h-6" : "w-4 h-4"} /> Live Telemetry
+            {bpOmronListening && <button type="button" onClick={()=>setTelemetryControlsOpen(true)} className={`text-xs normal-case tracking-normal ${bpCapture.cuffClockStatus === "verified" ? "text-muted-foreground" : "text-amber-400"}`}>{bpCapture.cuffClockStatus === "verified" ? "Cuff clock checked" : "Cuff setup not verified"}</button>}
             {telemetryFocusView && <span className="ml-2 whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{new Date(liveHealthNowMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}
           </h3>
           {telemetryFocusView && <div className="flex items-center gap-3"><span aria-label="Session timer" className="whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{launchActive && resolveLiveSessionStartMs() ? fmtMmSs(Math.max(0, (liveHealthNowMs - resolveLiveSessionStartMs()) / 1000)) : "00:00"}</span><button type="button" aria-label="Telemetry controls" aria-expanded={telemetryControlsOpen} onClick={() => setTelemetryControlsOpen(true)} className="rounded-lg border border-border px-2 py-1 text-sm">Controls</button></div>}
@@ -9497,6 +9510,8 @@ export default function LiveCapture() {
             <div className="flex flex-wrap items-center gap-2" aria-label="Telemetry cuff controls">
               <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" disabled={bpOmronActionInFlightRef.current} onClick={toggleOmronBloodPressureListener}>{bpOmronListening ? "Stop cuff listener" : "Listen for cuff"}</button>
               <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" disabled={bpOmronActionInFlightRef.current} onClick={()=>startOmronBloodPressureListenerForLiveSession({forceDevicePicker:true})}>Choose / reconnect cuff</button>
+              <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" onClick={copyCuffDiagnostics}>Copy cuff diagnostics</button>
+              {bpOmronListening && <span className={`text-sm ${bpCapture.cuffClockStatus === "verified" ? "text-muted-foreground" : "text-amber-400"}`}>{bpCapture.cuffClockMessage || "Bluetooth listener enabled; cuff setup has not been verified."}</span>}
             </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button type="button" onClick={() => setCivetSetupOpen(true)} className="min-h-11 rounded-lg border border-primary/40 px-3 text-sm font-semibold">Connect CIVET</button>

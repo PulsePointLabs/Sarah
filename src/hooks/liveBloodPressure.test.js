@@ -107,3 +107,30 @@ test('recreated WebView receives a reading already uploaded by native background
   assert.deepEqual(received, [reading]);
   assert.deepEqual(ack, ['test']);
 });
+
+test('native clock warnings survive arm and background polling instead of being replaced by a generic ready message', async () => {
+  const source=fs.readFileSync(new URL('../lib/omronBloodPressureBle.js',import.meta.url),'utf8');
+  const statuses=[];let poll;
+  let state={clockStatus:'unavailable',clockMessage:'Complete cuff setup in OMRON Connect.',pendingReadings:[]};
+  const context=vm.createContext({NativeOmronBloodPressure:{addListener:async()=>({remove:async()=>{}}),arm:async()=>state,getState:async()=>state},
+    nativeOmronListener:null,stopNativeOmronListener:async()=>{},initializeBle:async()=>{},getRememberedOmronDevice:()=>({deviceId:'cuff'}),
+    setInterval:fn=>{poll=fn;return 1;},Map,Promise,URL,apiUrl:p=>`https://sarah.test/api${p}`,window:{location:{href:'https://localhost'}}});
+  vm.runInContext(source.slice(source.indexOf('async function startNativeOmronListener('),source.indexOf('\nfunction readStoredJson'))+'\nthis.start=startNativeOmronListener;',context);
+  await context.start({onStatus:(message,connection)=>statuses.push({message,clock:connection?.clockStatus})});
+  assert.equal(statuses.at(-1).clock,'unavailable');assert.match(statuses.at(-1).message,/Complete cuff setup/);
+  state={...state,clockStatus:'verified',clockMessage:'Cuff clock checked; cuff-side pairing prompts not verified.'};
+  poll();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(statuses.at(-1).clock,'verified');assert.match(statuses.at(-1).message,/pairing prompts not verified/);
+});
+
+test('copyable cuff diagnostics omit readings, delivery URLs and device addresses', async () => {
+  const source=fs.readFileSync(new URL('../lib/omronBloodPressureBle.js',import.meta.url),'utf8');
+  const context=vm.createContext({canUseNativeOmronListener:()=>true,NativeOmronBloodPressure:{getState:async()=>({
+    listening:true,connected:true,clockStatus:'failed',clockMessage:'Clock read failed',deviceId:'PRIVATE',endpoint:'PRIVATE',
+    pendingReadings:[reading],lastDeliveredReading:reading,diagnostics:[{event:'clock_read',status:5}]
+  })}});
+  vm.runInContext(source.slice(source.indexOf('export async function getOmronConnectionDiagnostics')).replace('export ','')+'\nthis.get=getOmronConnectionDiagnostics;',context);
+  const result=await context.get();assert.equal(result.clockStatus,'failed');
+  for(const key of ['deviceId','endpoint','pendingReadings','lastDeliveredReading'])assert.equal(result[key],undefined);
+  assert.equal(result.diagnostics[0].status,5);
+});
