@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiUrl } from '@/lib/mobileApiBase';
 import { EMG_ARDUINO_SKETCH } from '@/lib/emgArduino';
+import { emgInputDiagnostics, emgPlotRange } from '@/lib/emgInputDiagnostics';
 import './civet.css';
 import './emgSetup.css';
 async function request(path, body) {
@@ -11,6 +12,7 @@ export default function EmgSetup({onClose,onConnected,onProfileChange}) {
   const [helper,setHelper]=useState({}),[ports,setPorts]=useState([]),[port,setPort]=useState(''),[channels,setChannels]=useState(2);
   const [names,setNames]=useState(['Sensor 1','Sensor 2']),[notes,setNotes]=useState(['','']);
   const [error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[pending,setPending]=useState(false),[showCode,setShowCode]=useState(false);
+  const [detail,setDetail]=useState(false);
   const callback=useRef(onProfileChange);callback.current=onProfileChange;const code=useRef(null);
   const refresh=async()=>{try{const data=await request('ports');setPorts(data.ports||[]);if(data.error)setError(data.error);setPort(old=>old||data.port||(data.ports?.length===1?data.ports[0].port:''));}catch(e){setError(e.message);}};
   useEffect(()=>{let active=true,first=true,timer;const poll=async()=>{try{const data=await request('helper');if(!active)return;setHelper(data);if(first){first=false;const p=data.profile||{};setNames(p.names||['Sensor 1','Sensor 2']);setNotes(p.notes||['','']);setChannels(data.running?data.channels:p.channels||2);setPort(old=>data.port||p.lastPort||old);callback.current?.(p.names);}}catch(e){if(active)setError(`Desktop unavailable: ${e.message}`);}if(active)timer=setTimeout(poll,500);};poll();refresh();return()=>{active=false;clearTimeout(timer);};},[]);
@@ -20,16 +22,35 @@ export default function EmgSetup({onClose,onConnected,onProfileChange}) {
   const calibrate=async(action)=>{setPending(true);setError('');try{await request('calibration-command',{action,save:false});}catch(e){setError(e.message);}finally{setTimeout(()=>setPending(false),1000);}};
   const copy=async()=>{setShowCode(true);try{await navigator.clipboard.writeText(EMG_ARDUINO_SKETCH);setNotice('Arduino code copied. Paste into Arduino IDE, upload once, then close Serial Monitor.');}catch{setNotice('Clipboard unavailable here. Select the code below and copy it.');setTimeout(()=>{code.current?.focus();code.current?.select();},0);}};
   const title=phase==='preparing'?'Get ready':phase==='collecting'?(cal.channel==null?'REST — stay relaxed':`HOLD — ${names[cal.channel]}`):phase==='settling'?'Release and relax':phase==='saved'?'Calibration complete':phase==='failed'?'Redo suggested':cal.valid?'Ready to save':cal.rest?'Rest accepted — ready to hold':'Collect a relaxed baseline';
-  const tone=phase==='failed'||!live?'warning':measuring?'waiting':cal.rest?'good':'waiting',history=helper.setup?.history||[];
+  const tone=phase==='failed'||!live?'warning':measuring?'waiting':cal.rest?'good':'waiting',history=live?(helper.setup?.history||[]):[];
   return <div className="civet-setup-backdrop" onKeyDown={e=>{if(e.key==='Escape')onClose();}}><section role="dialog" aria-modal="true" aria-label="EMG setup" className="civet-setup emg-setup">
     <header><h2>EMG sensor setup</h2><button autoFocus onClick={onClose}>Close</button></header>
-    <div className="emg-status-grid" role="status"><span>Windows helper: <b>{helper.installed===true?'Installed':helper.installed===false?'Setup needed':'Checking…'}</b></span><span>Process: <b>{helper.running?'Running':helper.busy?'Working…':'Stopped'}</b></span><span>Signal: <b>{live?'Receiving live samples':'No fresh samples'}</b></span></div>
+    <div className="emg-status-grid" role="status"><span>Windows helper: <b>{helper.installed===true?'Installed':helper.installed===false?'Setup needed':'Checking…'}</b></span><span>Process: <b>{helper.running?'Running':helper.busy?'Working…':'Stopped'}</b></span><span>Serial input: <b>{live?'Receiving live samples':'No fresh samples'}</b></span></div>
     <p className="civet-calibration-note">Arduino → Windows desktop → Sarah. Calibration continues on the desktop if you close this window or use another phone app.</p>
     <div className="civet-connection-controls"><select aria-label="Sensor count" disabled={helper.running||busy} value={channels} onChange={e=>setChannels(Number(e.target.value))}><option value={1}>One sensor · A0</option><option value={2}>Two sensors · A0 + A1</option></select><select aria-label="Arduino port" disabled={helper.running||busy} value={port} onChange={e=>setPort(e.target.value)}><option value="">Choose Arduino</option>{ports.map(p=><option key={p.port} value={p.port}>{p.port} · {p.label}</option>)}</select><button disabled={busy} onClick={refresh}>Refresh ports</button><button disabled={busy||(!helper.running&&!port)} onClick={()=>action(helper.running?'stop':'start')}>{helper.running?'Disconnect':'Connect'}</button><button disabled={busy||helper.running} onClick={()=>action('install')}>{busy?'Working…':helper.installed?'Repair helper':'Install Windows helper'}</button></div>
     <p className="civet-calibration-note">{helper.message}</p>{(error||helper.error)&&<p role="alert" className="civet-setup-error">{error||helper.error}</p>}{notice&&<p role="status" className="civet-calibration-note">{notice}</p>}
     <div className="emg-names">{names.slice(0,channels).map((name,i)=><label key={i}>{helper.setup?.channel_map?.[i] || `A${i}`} · Sensor location / name<input aria-label={`Sensor ${i+1} name`} maxLength={60} value={name} onChange={e=>setNames(a=>a.map((n,j)=>i===j?e.target.value:n))}/><details><summary>Placement notes</summary><textarea aria-label={`Sensor ${i+1} placement notes`} maxLength={500} value={notes[i]} onChange={e=>setNotes(a=>a.map((n,j)=>i===j?e.target.value:n))}/></details></label>)}</div><button disabled={busy} onClick={()=>action('profile')}>Save sensor names & notes</button>
     <div className="civet-calibration-feedback" data-tone={tone}><div className="civet-calibration-heading"><div><h3>{title}</h3><p aria-live="polite">{!live?'Connect and wait for fresh samples before measuring.':cal.message||'Three seconds to prepare, then five seconds of steady measurement.'}</p></div><div className="civet-calibration-clock" aria-label={measuring?`${phase}: ${Math.ceil(cal.remaining_s||0)} seconds remaining`:'No countdown running'}>{measuring?Math.ceil(cal.remaining_s||0):cal.saved?'✓':'—'}<small>{measuring?(phase==='settling'?'maximum release wait':phase==='preparing'?'get ready':'measuring'):cal.saved?'saved':'not measuring'}</small></div></div>
-      <div className="emg-signal-grid">{names.slice(0,channels).map((name,i)=>{const values=history.map(p=>p.values[i]).filter(Number.isFinite),max=Math.max(1,...values),min=Math.min(0,...values);return <div key={i}><b>{name}</b><strong>{live&&helper.setup?.values?.[i]!=null?helper.setup.values[i].toFixed(0):'—'} <small>ENV · ADC units</small></strong><svg viewBox="0 0 400 65" role="img" aria-label={`${name} recent envelope`}><polyline fill="none" stroke="#4ed5c4" strokeWidth="2" points={values.map((v,j)=>`${j/Math.max(1,values.length-1)*400},${60-(v-min)/(max-min)*55}`).join(' ')}/></svg><span>Rest {cal.rest?.[i]?.toFixed(0)??'—'} · Hold {cal.reference?.[i]?.toFixed(0)??'—'}</span></div>;})}</div>
+      <button type="button" onClick={()=>setDetail(value=>!value)} aria-pressed={detail}>{detail ? 'Graph: local detail (magnified)' : 'Graph: full ADC range'}</button>
+      <div className="emg-signal-grid">{names.slice(0,channels).map((name,i)=>{
+        const raw=live ? helper.setup?.raw?.[i] : null;
+        const diagnostic=emgInputDiagnostics(history,i,raw), range=emgPlotRange(history,i,detail);
+        const points=key=>history.map((p,j)=>Number.isFinite(p[key]?.[i]) ? `${j/Math.max(1,history.length-1)*400},${60-(p[key][i]-range.min)/(range.max-range.min)*55}` : null).filter(Boolean).join(' ');
+        return <div key={i} data-input-state={diagnostic.state}>
+          <b>{name} · {helper.setup?.channel_map?.[i] || `A${i}`}</b>
+          <strong>{Number.isFinite(raw)?Math.round(raw):'—'} <small>raw ENV · ADC units</small></strong>
+          <span>Smoothed {live&&Number.isFinite(helper.setup?.values?.[i])?helper.setup.values[i].toFixed(1):'—'}</span>
+          <svg viewBox="0 0 400 65" role="img" aria-label={`${name} recent envelope`}>
+            <polyline data-trace="raw" fill="none" stroke="#f6bd60" strokeWidth="1" points={points('raw')}/>
+            <polyline data-trace="smoothed" fill="none" stroke="#4ed5c4" strokeWidth="2" points={points('values')}/>
+          </svg>
+          <span>Scale {range.min.toFixed(0)}–{range.max.toFixed(0)} ADC · last 10s{detail?' · magnified':''}</span>
+          <span className="emg-input-range">Raw min {diagnostic.min??'—'} · max {diagnostic.max??'—'} · change {diagnostic.span??'—'} ADC</span>
+          <p role="status" className={['high','low','quiet'].includes(diagnostic.state)?'emg-input-warning':'civet-calibration-note'}>{diagnostic.message}</p>
+          <span>Rest {cal.rest?.[i]?.toFixed(0)??'—'} · Hold {cal.reference?.[i]?.toFixed(0)??'—'}</span>
+        </div>;
+      })}</div>
+      <p className="civet-calibration-note">Amber: raw sensor ENV · teal: smoothed. Raw means the unsmoothed envelope arriving from Arduino, not broadband EMG. No calibration is needed for this connection check.</p>
       <p className="civet-calibration-note">{helper.setup?.quality||'Waiting for samples'}. This is the sensor’s ENV envelope, not raw broadband EMG. Movement and nearby muscles can affect it.</p></div>
     <div className="civet-calibration-actions"><button disabled={!live||busy||pending||measuring} onClick={()=>calibrate('guided_rest')}><b>1 · {cal.rest?'Redo rest':'Start rest'}</b><span>3 seconds to prepare · 5 seconds relaxed</span></button>{names.slice(0,channels).map((name,i)=><button key={i} disabled={!live||!cal.rest||busy||pending||measuring} onClick={()=>calibrate(`guided_hold_${i}`)}><b>{i+2} · Hold {name}</b><span>3 seconds to prepare · 5 seconds steady · release check</span></button>)}<button disabled={!live||!cal.valid||busy||pending||measuring||cal.saved} onClick={()=>calibrate('guided_save')}><b>{channels+2} · Save calibration</b><span>After every hold and release passes</span></button></div>
     {measuring&&<button disabled={pending} onClick={()=>calibrate('guided_cancel')}>Cancel measurement</button>}

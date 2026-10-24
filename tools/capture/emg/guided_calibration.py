@@ -167,7 +167,7 @@ class GuidedBridge:
         self.cal.tick(now, values, raw)
         if values is not None:
             self.raw = raw
-            self.history.append(dict(t=time.time(), values=values))
+            self.history.append(dict(t=time.time(), values=values, raw=raw))
         raw = self.raw
         if now-self.last_publish < .1:
             return

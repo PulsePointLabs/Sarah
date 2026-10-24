@@ -54,3 +54,22 @@ frames, server profiles/status/reconnection, production freshness handling,
 and desktop/phone modal behavior with clipboard copying. Physical Arduino and
 electrode validation remains necessary. Check rest, separate channel holds,
 release, cable movement, and unplug/replug before relying on a full recording.
+
+
+## Checking the signal path without recalibrating (v0.1.293)
+
+The setup display shows raw sensor ENV from the Arduino alongside the smoothed
+trace, plus raw minimum, maximum and change over the recent window. These ADC
+readings do not require calibration. The default plot covers 0–1023. Optional
+local detail is explicitly magnified and keeps at least a 40-count vertical span
+so a few counts of noise do not appear to be a full-scale contraction.
+
+A near-upper-limit warning describes electrical input, not a diagnosis of sensor
+failure or muscle activity. If it persists while attached and relaxed, investigate
+gain, snap alignment/contact and the analog cable/signal path. Power down before
+changing connections. Quiet or near-zero readings alone cannot prove a disconnected
+sensor. The serial receiving indicator establishes data traffic only.
+
+ENV is already an envelope; this sketch is not intended to capture broadband RAW
+EMG. The existing A0,A1 / 115200 / 100 Hz sketch and CSV columns are unchanged.
+Calibration references are not changed by displaying raw diagnostics.

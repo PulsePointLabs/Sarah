@@ -3,6 +3,11 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
 (async()=>{const browser=await pw.chromium.launch({channel:'chrome',headless:true});try{
 const context=await browser.newContext({permissions:['clipboard-read','clipboard-write'],viewport:{width:1920,height:1080}});const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
 await page.goto('http://127.0.0.1:5175/scripts/tests/fixtures/emg-setup.html');const dialog=page.getByRole('dialog',{name:'EMG setup'});await dialog.getByText('Installed',{exact:true}).waitFor();await dialog.getByText('Running',{exact:true}).waitFor();await dialog.getByText('Receiving live samples',{exact:true}).waitFor();
+await page.evaluate(()=>{window.emgTest.setup.raw=[996,110];window.emgTest.setup.values=[995.8,110];window.emgTest.setup.history=Array.from({length:100},(_,i)=>({raw:[995+i%3,110],values:[995.8,110]}));});
+await dialog.locator('[data-input-state="high"]').waitFor();await dialog.getByText(/Input near upper ADC limit/).waitFor();
+assert.ok((await dialog.locator('[data-trace="raw"]').first().getAttribute('points')).length>20);
+await page.getByRole('button',{name:'Graph: full ADC range',exact:true}).click();await page.getByText(/Scale .*magnified/).first().waitFor();
+assert.equal(await page.evaluate(()=>window.emgCommands.length),0);
 await page.getByLabel('Sensor 1 name',{exact:true}).fill('Left foot');await page.getByRole('button',{name:'Save sensor names & notes'}).click();await page.getByText('Sensor names and placement notes saved for all devices.').waitFor();assert.equal(await page.evaluate(()=>window.lastNames[0]),'Left foot');
 assert.equal(await page.getByRole('button',{name:/Hold Left foot/}).isDisabled(),true);await page.getByRole('button',{name:/Start rest/}).click();await page.getByLabel('preparing: 3 seconds remaining').waitFor();assert.equal(await page.getByRole('button',{name:/Save calibration/}).isDisabled(),true);
 await page.evaluate(()=>{window.emgTest.setup.calibration={phase:'accepted',rest:[100,110],reference:[null,null],message:'Rest accepted'};});await page.getByRole('button',{name:/Hold Left foot/}).waitFor();await page.waitForTimeout(1200);assert.equal(await page.getByRole('button',{name:/Hold Left foot/}).isEnabled(),true);

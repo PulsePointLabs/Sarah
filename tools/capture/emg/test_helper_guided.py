@@ -65,7 +65,10 @@ runpy.run_path(os.environ['TEST_SCRIPT'],run_name='__main__')
                 def command(action):
                     (base/'emg_command.json').write_text(json.dumps(dict(id=action,action=action,save=False)))
                     wait_for(lambda s:s['calibration']['phase']=='preparing' if action!='guided_save' else s['calibration']['saved'])
-                wait_for(lambda s:s['fresh'])
+                initial=wait_for(lambda s:s['fresh'])
+                assert initial['raw'][0]==100
+                assert initial['history'][-1]['raw'][0]==100
+                assert not initial['calibration']['saved']
                 command('guided_rest');wait_for(lambda s:s['calibration']['phase']=='accepted')
                 for i in range(channels):
                     v=[100,100];v[i]=300;values.write_text(json.dumps(v))

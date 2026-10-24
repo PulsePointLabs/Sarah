@@ -5,3 +5,5 @@
 .emg-setup .civet-calibration-actions b{font-size:24px;overflow-wrap:anywhere}
 @media(max-width:650px){.emg-status-grid{grid-template-columns:1fr}.emg-names,.emg-signal-grid{grid-template-columns:1fr}.emg-setup .civet-connection-controls>*{max-width:100%}}
 .emg-setup,.emg-setup *{box-sizing:border-box}.emg-setup{overflow-wrap:anywhere}
+
+.emg-input-range{display:block}.emg-input-warning{color:#f6bd60;font-size:15px;margin:6px 0}.emg-signal-grid [data-input-state="high"]{border-left:3px solid #f6bd60;padding-left:8px}
