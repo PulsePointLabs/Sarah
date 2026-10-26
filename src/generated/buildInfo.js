@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.293",
-  "commit": "7cddb11",
-  "commitMessage": "Expose raw EMG envelope and near-limit input diagnostics without calibration",
-  "builtAt": "2026-10-24T01:50:02.663Z"
+  "version": "0.1.294",
+  "commit": "e8998c9",
+  "commitMessage": "Restore read-only OMRON clock checks and reliable cuff release",
+  "builtAt": "2026-10-26T06:16:59.492Z"
 };
