@@ -21,18 +21,19 @@ function canUseNativeOmronListener() {
   return Boolean(window.Capacitor?.isNativePlatform?.());
 }
 
-async function stopNativeOmronListener() {
+async function stopNativeOmronListener({ releaseCuff = true } = {}) {
   const listener = nativeOmronListener;
   nativeOmronListener = null;
-  if (!listener) return { ok: true, stopped: false };
-  clearInterval(listener.retryTimer);
-  await Promise.all((listener.handles || []).map((handle) => handle?.remove?.().catch?.(() => {})));
-  await NativeOmronBloodPressure.disarm().catch(() => {});
-  return { ok: true, stopped: true, device: listener.device };
+  clearInterval(listener?.retryTimer);
+  await Promise.all((listener?.handles || []).map((handle) => handle?.remove?.().catch?.(() => {})));
+  // The native service can outlive this JavaScript module. Explicit Stop must
+  // release it even when the WebView has no local listener handle.
+  if (releaseCuff) await NativeOmronBloodPressure.disarm();
+  return { ok: true, stopped: releaseCuff, device: listener?.device };
 }
 
 async function startNativeOmronListener({ onStatus, onReading, onHeldReading, onDisconnect, onError, forceDevicePicker, rememberDevice }) {
-  await stopNativeOmronListener();
+  await stopNativeOmronListener({ releaseCuff: Boolean(forceDevicePicker) });
   await initializeBle(onStatus);
   let device = !forceDevicePicker ? getRememberedOmronDevice() : null;
   if (!device?.deviceId) {
@@ -54,7 +55,6 @@ async function startNativeOmronListener({ onStatus, onReading, onHeldReading, on
       return;
     }
     if (inFlight.has(key)) return;
-    listener.connected = true;
     const operation = Promise.resolve().then(() => onReading?.(reading, { device, native: true }))
       .then(() => NativeOmronBloodPressure.acknowledgeReading({ externalId: reading.external_id || "" }))
       .catch((error) => onError?.(error))
@@ -81,6 +81,10 @@ async function startNativeOmronListener({ onStatus, onReading, onHeldReading, on
     listener.state = result?.state || "waiting_for_cuff";
     listener.connected = Boolean(result?.connected);
     const replay = (state) => {
+      if (nativeOmronListener !== listener) return;
+      listener.listening = Boolean(state?.listening);
+      listener.connected = Boolean(state?.connected);
+      listener.state = state?.state || listener.state;
       if (state?.clockStatus) onStatus?.(state.clockMessage || "Cuff setup is not verified.", state);
       const pending = Array.isArray(state?.pendingReadings) ? state.pendingReadings : [state?.pendingReading].filter(Boolean);
       pending.forEach(deliverReading);
@@ -520,7 +524,7 @@ export async function startOmronBloodPressureListener({
 }
 
 export async function stopOmronBloodPressureListener() {
-  if (nativeOmronListener) return stopNativeOmronListener();
+  if (canUseNativeOmronListener()) return stopNativeOmronListener();
   const listener = activeOmronListener;
   activeOmronListener = null;
   if (!listener?.deviceId) return { ok: true, stopped: false };
@@ -534,7 +538,7 @@ export async function stopOmronBloodPressureListener() {
 export function getOmronBloodPressureListenerState() {
   if (nativeOmronListener) {
     return {
-      listening: true,
+      listening: nativeOmronListener.listening,
       connected: Boolean(nativeOmronListener.connected),
       reconnecting: nativeOmronListener.state === "scanning" || nativeOmronListener.state === "connecting",
       state: nativeOmronListener.state,

@@ -40,7 +40,6 @@ object OmronCollector {
     private var subscribed = false
     private var clockStatus = "unchecked"
     private var clockMessage = "Cuff setup has not been verified."
-    private var clockWriteAttempted = false
     private var clockOperation = 0
     private val connectionDiagnostics = java.util.ArrayDeque<JSObject>()
     private var targetAddress: String? = null
@@ -79,6 +78,8 @@ object OmronCollector {
         check(hasBluetoothPermission()) { "Bluetooth permission is required before Sarah can listen for the OMRON cuff." }
         val url = java.net.URI(deliveryEndpoint)
         require(url.scheme in listOf("https", "http") && !url.host.isNullOrBlank()) { "A valid Sarah server address is required." }
+        val previousAddress = targetAddress
+        val wasArmed = armed
         targetAddress = address?.trim()?.takeIf { it.isNotBlank() } ?: prefs.getString(KEY_ADDRESS, null)
         require(!targetAddress.isNullOrBlank()) { "Select the OMRON cuff once before enabling automatic listening." }
         targetName = name?.trim()?.takeIf { it.isNotBlank() } ?: prefs.getString(KEY_NAME, "OMRON BP7000").orEmpty()
@@ -92,8 +93,11 @@ object OmronCollector {
             prefs.edit().putBoolean("armed", false).commit()
             throw error
         }
-        closeGatt()
-        stopScan()
+        // A resumed WebView attaches to the existing collector without tearing down BLE.
+        if (!wasArmed || !targetAddress.equals(previousAddress, ignoreCase = true)) {
+            closeGatt()
+            stopScan()
+        }
         startScan()
         return state()
     }
@@ -101,6 +105,8 @@ object OmronCollector {
     fun disarm(): JSObject {
         armed = false
         prefs.edit().putBoolean("armed", false).commit()
+        diagnostic("listener_stopped")
+        handler.removeCallbacksAndMessages(null)
         stopScan()
         closeGatt()
         SarahCaptureService.stop(context)
@@ -161,7 +167,7 @@ object OmronCollector {
 
     @SuppressLint("MissingPermission")
     private fun startScan() {
-        if (!armed || scanning || !hasBluetoothPermission()) return
+        if (!armed || scanning || gatt != null || !hasBluetoothPermission()) return
         val scanner = adapter?.bluetoothLeScanner ?: run {
             emitError("Bluetooth scanner is unavailable.")
             handler.postDelayed({ startScan() }, 5000)
@@ -226,7 +232,6 @@ object OmronCollector {
         closeGatt()
         clockStatus = "checking"
         clockMessage = "Checking cuff clock; Bluetooth connection alone does not confirm cuff setup."
-        clockWriteAttempted = false
         diagnostic("connect")
         notifyListeners("status", stateObject("connecting").put("message", "OMRON cuff found. Connecting..."))
         gatt = if (Build.VERSION.SDK_INT >= 26) {
@@ -265,7 +270,7 @@ object OmronCollector {
                 if (armed) startScan()
                 return
             }
-            checkClock(connection)
+            subscribeToReadings(connection)
         }
 
         override fun onDescriptorWrite(connection: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
@@ -273,7 +278,8 @@ object OmronCollector {
             diagnostic("subscription", status)
             if (status != BluetoothGatt.GATT_SUCCESS) { retryConnection("OMRON indication setup failed; retrying."); return }
             subscribed = true
-            notifyListeners("status", stateObject("waiting_for_reading").put("message", clockMessage))
+            notifyListeners("status", stateObject("waiting_for_reading").put("message", "OMRON receiving enabled. Checking cuff clock without changing it."))
+            checkClock(connection)
         }
 
         override fun onCharacteristicRead(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
@@ -283,20 +289,6 @@ object OmronCollector {
         @Deprecated("Deprecated by Android")
         override fun onCharacteristicRead(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
             clockRead(connection, characteristic, characteristic.value ?: byteArrayOf(), status)
-        }
-
-        @SuppressLint("MissingPermission")
-        override fun onCharacteristicWrite(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-            if (gatt !== connection || !armed || characteristic.uuid != CURRENT_TIME || clockStatus != "checking") return
-            clockOperation++
-            diagnostic("clock_write", status)
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                finishClock("failed", "Bluetooth receives readings, but cuff clock setup failed ($status). Complete pairing/sync in OMRON Connect.")
-            } else if (characteristic.properties and BluetoothGattCharacteristic.PROPERTY_READ != 0 && connection.readCharacteristic(characteristic)) {
-                clockTimeout(connection)
-            } else {
-                finishClock("write_acknowledged", "Cuff accepted the phone time, but read-back verification is unavailable. Check the cuff before recording.")
-            }
         }
 
         override fun onCharacteristicChanged(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
@@ -338,7 +330,6 @@ object OmronCollector {
         clockStatus = state
         clockMessage = message
         notifyListeners("status", stateObject(if (subscribed) "waiting_for_reading" else "checking_setup").put("message", message))
-        gatt?.let { if (armed && !subscribed) subscribeToReadings(it) }
     }
 
     private fun clockTimeout(connection: BluetoothGatt) {
@@ -346,7 +337,7 @@ object OmronCollector {
         handler.postDelayed({
             if (gatt === connection && armed && clockOperation == operation) {
                 diagnostic("clock_timeout")
-                finishClock("failed", "Cuff clock check timed out. Readings can still arrive; complete setup in OMRON Connect.")
+                finishClock("failed", "Cuff clock check timed out. Receiving remains enabled; Sarah has not changed the cuff clock.")
             }
         }, 6000)
     }
@@ -359,7 +350,7 @@ object OmronCollector {
             finishClock("unavailable", "Bluetooth receives readings; cuff clock/setup cannot be verified. If the cuff says Please pair, complete pairing/sync in OMRON Connect.")
         } else if (time.properties and BluetoothGattCharacteristic.PROPERTY_READ != 0 && connection.readCharacteristic(time)) {
             clockTimeout(connection)
-        } else writeClock(connection, time)
+        } else finishClock("unavailable", "Receiving enabled; cuff clock cannot be read. Sarah has not changed it.")
     }
 
     @SuppressLint("MissingPermission")
@@ -369,22 +360,7 @@ object OmronCollector {
         diagnostic("clock_read", status)
         if (status == BluetoothGatt.GATT_SUCCESS && OmronCurrentTime.matchesPhone(value, System.currentTimeMillis())) {
             finishClock("verified", "Bluetooth receiving enabled; cuff clock matches phone. This does not verify cuff-side pairing prompts.")
-        } else if (!clockWriteAttempted) writeClock(connection, characteristic)
-        else finishClock("failed", "Cuff clock remains invalid or could not be verified. Complete pairing/sync in OMRON Connect before recording.")
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun writeClock(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-        if (clockWriteAttempted || characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE == 0) {
-            finishClock("unavailable", "Cuff clock needs setup, but standard clock writes are unavailable. Complete pairing/sync in OMRON Connect.")
-            return
-        }
-        clockWriteAttempted = true
-        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        characteristic.value = OmronCurrentTime.encode(java.util.Calendar.getInstance())
-        diagnostic("clock_write_requested")
-        if (connection.writeCharacteristic(characteristic)) clockTimeout(connection)
-        else finishClock("failed", "Could not send cuff clock setup. Complete pairing/sync in OMRON Connect.")
+        } else finishClock("unverified", "Receiving enabled; cuff clock does not match the phone or could not be read. Stop Sarah's cuff listener before syncing in OMRON Connect. Sarah has not changed the clock.")
     }
 
     @SuppressLint("MissingPermission")
@@ -512,7 +488,7 @@ object OmronCollector {
         private const val KEY_PENDING_QUEUE = "pending_readings_v2"
         private const val KEY_PENDING_READING = "pending_reading"
         private const val SCAN_WINDOW_MS = 12_000L
-        private const val SCAN_RESTART_DELAY_MS = 750L
+        private const val SCAN_RESTART_DELAY_MS = 3000L
         private val BP_SERVICE: UUID = UUID.fromString("00001810-0000-1000-8000-00805f9b34fb")
         private val BP_MEASUREMENT: UUID = UUID.fromString("00002a35-0000-1000-8000-00805f9b34fb")
         private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")

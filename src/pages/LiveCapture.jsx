@@ -5301,7 +5301,7 @@ export default function LiveCapture() {
     } catch (error) { toast({title:"Could not copy cuff diagnostics",description:error.message,variant:"destructive"}); }
   }, [toast]);
 
-  const toggleOmronBloodPressureListener = useCallback(async () => {
+  const toggleOmronBloodPressureListener = useCallback(async (forceStop = false) => {
     if (bpOmronActionInFlightRef.current) {
       setBpCapture((prev) => ({
         ...prev,
@@ -5310,7 +5310,7 @@ export default function LiveCapture() {
       return;
     }
 
-    if (bpOmronListening) {
+    if (bpOmronListening || forceStop === true) {
       bpOmronActionInFlightRef.current = true;
       setBpCapture((prev) => ({
         ...prev,
@@ -5326,7 +5326,7 @@ export default function LiveCapture() {
           ...prev,
           syncing: false,
           status: prev.lastReading ? "ready" : "idle",
-          message: prev.lastReading ? "OMRON listener stopped. Latest BP is saved." : "OMRON listener stopped.",
+          message: "Cuff released for OMRON Connect. Saved readings are retained. Tap Listen for cuff when finished syncing.",
         }));
       } catch (error) {
         setBpCapture((prev) => ({
@@ -7506,7 +7506,8 @@ export default function LiveCapture() {
   return (
     <div className={`${focusView ? "h-screen overflow-hidden bg-[#071016] p-0" : "p-4 md:p-6"} space-y-4`}>
       {!mainTelemetryView && <div className="flex flex-wrap items-center gap-2" aria-label="Blood pressure cuff controls">
-        <button type="button" className="rounded-lg border border-primary/40 px-3 py-2 text-sm" onClick={toggleOmronBloodPressureListener} disabled={bpOmronActionInFlightRef.current}>{bpOmronListening ? "Stop cuff listener" : "Listen for cuff"}</button>
+        <button type="button" className="rounded-lg border border-primary/40 px-3 py-2 text-sm" onClick={toggleOmronBloodPressureListener} disabled={bpOmronActionInFlightRef.current}>{bpOmronListening ? "Stop / release cuff" : "Listen for cuff"}</button>
+              <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" onClick={() => toggleOmronBloodPressureListener(true)}>Release for OMRON app</button>
         <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" onClick={()=>startOmronBloodPressureListenerForLiveSession({forceDevicePicker:true})} disabled={bpOmronActionInFlightRef.current}>Choose / reconnect cuff</button>
               <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" onClick={copyCuffDiagnostics}>Copy cuff diagnostics</button>
               {bpOmronListening && <span className={`text-sm ${bpCapture.cuffClockStatus === "verified" ? "text-muted-foreground" : "text-amber-400"}`}>{bpCapture.cuffClockMessage || "Bluetooth listener enabled; cuff setup has not been verified."}</span>}
@@ -9508,7 +9509,8 @@ export default function LiveCapture() {
           {telemetryFocusView && <div className="flex items-center gap-3"><span aria-label="Session timer" className="whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{launchActive && resolveLiveSessionStartMs() ? fmtMmSs(Math.max(0, (liveHealthNowMs - resolveLiveSessionStartMs()) / 1000)) : "00:00"}</span><button type="button" aria-label="Telemetry controls" aria-expanded={telemetryControlsOpen} onClick={() => setTelemetryControlsOpen(true)} className="rounded-lg border border-border px-2 py-1 text-sm">Controls</button></div>}
           <div hidden={telemetryFocusView && !telemetryControlsOpen} className={telemetryFocusView ? "telemetry-top-controls" : ""}>
             <div className="flex flex-wrap items-center gap-2" aria-label="Telemetry cuff controls">
-              <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" disabled={bpOmronActionInFlightRef.current} onClick={toggleOmronBloodPressureListener}>{bpOmronListening ? "Stop cuff listener" : "Listen for cuff"}</button>
+              <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" disabled={bpOmronActionInFlightRef.current} onClick={toggleOmronBloodPressureListener}>{bpOmronListening ? "Stop / release cuff" : "Listen for cuff"}</button>
+              <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" onClick={() => toggleOmronBloodPressureListener(true)}>Release for OMRON app</button>
               <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" disabled={bpOmronActionInFlightRef.current} onClick={()=>startOmronBloodPressureListenerForLiveSession({forceDevicePicker:true})}>Choose / reconnect cuff</button>
               <button type="button" className="rounded-lg border border-border px-3 py-2 text-sm" onClick={copyCuffDiagnostics}>Copy cuff diagnostics</button>
               {bpOmronListening && <span className={`text-sm ${bpCapture.cuffClockStatus === "verified" ? "text-muted-foreground" : "text-amber-400"}`}>{bpCapture.cuffClockMessage || "Bluetooth listener enabled; cuff setup has not been verified."}</span>}

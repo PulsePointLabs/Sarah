@@ -18,17 +18,22 @@ acknowledgment. Connection/discovery timeouts and failed scans retry. This follo
 [Android's background BLE guidance](https://developer.android.com/develop/connectivity/bluetooth/ble/background)
 for a connected-device foreground service started while the app is visible.
 
-### Cuff setup versus a Bluetooth connection (v0.1.292)
+### Read-only cuff clock checks and Bluetooth ownership (v0.1.294)
 
-A successful subscription, or the cuff displaying OK after a transfer, does not
-prove that cuff-side pairing/setup is complete. Before enabling BP indications,
-Sarah checks the advertised standard Current Time service (1805/2A2B). If its
-clock is invalid or differs from the phone by more than three minutes, Sarah
-writes the phone's local time only when the characteristic advertises acknowledged
-writes, then reads it back when supported. Unsupported, rejected, or timed-out
-clock operations fall back to receiving readings with an explicit setup warning.
-Clock verification is never labeled as proof of device-side pairing. Old packets
-retain their original timestamp provenance; clock setup only affects future readings.
+Sarah subscribes to BP indications first, then optionally reads Current Time
+(1805/2A2B). It never automatically writes the cuff clock. This replaces the
+v0.1.292 automatic clock setup: CTS status 128 (0x80) means one or more fields
+were ignored, not necessarily that the entire write failed. A clock mismatch
+is an unverified timestamp warning, not a pairing failure. Clock reads cannot
+block initial reading subscription. Historical timestamp/session rules are unchanged.
+
+Reattaching a WebView to the same armed cuff keeps its existing GATT connection.
+Explicit Stop / release cuff disarms the native service even without a JavaScript
+listener handle, cancels pending BLE callbacks and leaves saved readings intact.
+Reconnect scans cannot overlap a current GATT connection and use a three-second
+retry interval. Use one app at a time: stop/release Sarah before OMRON Connect
+sync; close OMRON Connect before enabling Sarah's listener again. A peripheral
+disconnect alone is not evidence of a pairing failure or competition.
 
 Live Capture's telemetry Controls include Copy cuff diagnostics. The copied report
 contains connection/clock result codes, OS bond state, delivery-pending/count flags,
