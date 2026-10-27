@@ -1,3 +1,4 @@
+import "./liveCaptureMedia.css";
 import BloodPressureCuffControls from "@/components/live/BloodPressureCuffControls";
 import { cuffReceiptSince } from "@/lib/omronCuffStatus";
 import CivetLiveCard from "@/components/CivetLiveCard.jsx";
@@ -1568,19 +1569,19 @@ function MetricCard({ icon, label, value, helper, active, level, trendValues = [
   );
 }
 
-function CompactStat({ label, value, helper, level, emphasis = false, beatPulse = 0 }) {
+function CompactStat({ label, value, helper, level, emphasis = false, beatPulse = 0, compact = false }) {
   const hasLevel = Number.isFinite(Number(level));
   const color = hasLevel ? levelColor(level) : null;
   return (
     <div
-      className={`relative flex overflow-hidden rounded-xl border px-4 py-3 transition-shadow ${emphasis ? "h-[7.5rem]" : "h-[6.75rem]"} ${hasLevel ? "" : "border-border bg-muted/25"} ${beatPulse ? "shadow-[0_0_26px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
+      className={`relative flex overflow-hidden rounded-xl border px-4 py-3 transition-shadow ${compact ? "!h-[5.5rem] !px-3 !py-2" : emphasis ? "h-[7.5rem]" : "h-[6.75rem]"} ${hasLevel ? "" : "border-border bg-muted/25"} ${beatPulse ? "shadow-[0_0_26px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
       style={hasLevel ? { borderColor: `${color}9a`, background: `linear-gradient(135deg, ${color}42, ${color}12 54%, hsl(var(--card)) 100%)` } : undefined}
     >
       {beatPulse ? <span key={`compact-beat-${label}-${beatPulse}`} className="pointer-events-none absolute right-4 top-4 h-4 w-4 rounded-full bg-rose-400/45 animate-ping" /> : null}
       {hasLevel && <div className="absolute inset-x-0 bottom-0 h-1.5" style={{ backgroundColor: color }} />}
       <div className="flex min-w-0 flex-1 flex-col justify-between">
         <p className="truncate text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
-        <p className={`mt-2 truncate font-bold tabular-nums leading-none tracking-tight text-foreground ${emphasis ? "text-5xl" : "text-4xl"}`}>{value}</p>
+        <p className={`mt-2 truncate font-bold tabular-nums leading-none tracking-tight text-foreground ${compact ? "!mt-0 text-3xl" : emphasis ? "text-5xl" : "text-4xl"}`}>{value}</p>
         <p className="mt-1 h-5 truncate text-sm font-medium leading-5 text-foreground/75">{helper || "\u00a0"}</p>
       </div>
     </div>
@@ -1620,12 +1621,12 @@ function EmptyChartState() {
   );
 }
 
-function TrendPanel({ title, subtitle, children, empty, heightClass = "h-56", distanceView = false, fill = false }) {
+function TrendPanel({ title, subtitle, children, empty, heightClass = "h-56", distanceView = false, fill = false, compactHeading = false }) {
   return (
     <div className={`rounded-xl border border-border bg-muted/20 p-3 ${fill ? "flex h-full min-h-0 flex-col overflow-hidden" : ""}`}>
       <div className={fill ? "telemetry-trend-heading mb-1.5 shrink-0" : "mb-3"}>
         <StableTelemetryText enabled={fill} className={`${fill ? "h-8" : ""} ${distanceView ? "text-sm" : "text-xs"} font-semibold uppercase tracking-wider text-primary`}>{title}</StableTelemetryText>
-        <StableTelemetryText enabled={fill} className={`${fill ? "h-11 text-xs" : distanceView ? "text-sm" : "text-[11px]"} text-muted-foreground`}>{subtitle || ' '}</StableTelemetryText>
+        {!compactHeading && <StableTelemetryText enabled={fill} className={`${fill ? "h-11 text-xs" : distanceView ? "text-sm" : "text-[11px]"} text-muted-foreground`}>{subtitle || ' '}</StableTelemetryText>}
       </div>
       <div className={fill ? "telemetry-trend-plot min-h-0 flex-1" : heightClass}>
         {empty ? <EmptyChartState /> : children}
@@ -6955,7 +6956,7 @@ export default function LiveCapture() {
 
   const mediaPanel = (captureMode === "media" || mediaFocusView) ? (
     <div className={mediaFocusView
-      ? "fixed inset-0 z-[60] flex h-[100dvh] flex-col overflow-hidden bg-background p-3"
+      ? "fixed inset-0 z-[60] !m-0 flex h-[100dvh] flex-col overflow-hidden bg-background p-3"
       : focusView
         ? "flex h-full flex-col bg-background p-3"
         : "rounded-xl border border-border bg-card p-3 md:p-4"}>
@@ -7165,17 +7166,17 @@ export default function LiveCapture() {
         </div>
 
         {!mediaFullscreen && (
-          <div className={`grid content-start gap-3 ${focusView ? "min-h-0 overflow-y-auto pr-1" : "xl:sticky xl:top-4 xl:max-h-[calc(100vh-9rem)] xl:overflow-hidden"}`}>
+          <div aria-label="Media review live telemetry" data-display={focusView} data-body-exploration={captureIsBodyExploration} className={`media-live-sidebar ${focusView ? "min-h-0 overflow-y-auto pr-1" : "xl:sticky xl:top-4 xl:max-h-[calc(100vh-9rem)] xl:overflow-y-auto"}`}>
             <div className="grid auto-rows-fr grid-cols-2 items-stretch gap-2">
-              <CompactStat label="Current HR" value={fmtNumber(displayedHr, 0)} helper="bpm" level={currentHrLevel} emphasis beatPulse={visibleHeartbeatPulseId} />
-              <CompactStat label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} emphasis />
-              <CompactStat label="Max HR" value={fmtNumber(maxHr, 0)} helper="session peak" level={hrLevelPercent(maxHr, hrTelemetry?.baselineHr)} emphasis />
+              <CompactStat compact label="Current HR" value={fmtNumber(displayedHr, 0)} helper="bpm" level={currentHrLevel} emphasis beatPulse={visibleHeartbeatPulseId} />
+              <CompactStat compact label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} emphasis />
+              <CompactStat compact label="Max HR" value={fmtNumber(maxHr, 0)} helper="session peak" level={hrLevelPercent(maxHr, hrTelemetry?.baselineHr)} emphasis />
               {!captureIsBodyExploration && (
                 <>
-                  <CompactStat
+                  <CompactStat compact
                     label="Near-Climax Watch"
                     value={`${fmtNumber(displayedNearClimax, 0)}%`}
-                    helper={`${monitoringHelper} · ${nearClimaxEpisodeCount} high-prob episode${nearClimaxEpisodeCount === 1 ? "" : "s"}`}
+                    helper="live approach"
                     level={displayedNearClimax}
                   />
                 </>
@@ -7183,32 +7184,22 @@ export default function LiveCapture() {
             </div>
 
             {!captureIsBodyExploration && (
-              <div
-                className="min-h-[12.25rem] rounded-xl border p-4"
-                style={{ borderColor: `${levelColor(monitoringPrediction.nearClimax)}80`, background: `linear-gradient(135deg, ${levelColor(monitoringPrediction.nearClimax)}28, hsl(var(--card)) 65%)` }}
-              >
+              <section aria-label="Real-time phase watch" className="media-phase-watch rounded-xl border border-border bg-muted/20 p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-semibold uppercase tracking-wider text-primary">Real-Time Phase Watch</p>
-                    <p className="text-xs text-muted-foreground">{monitoringHelper}</p>
-                    <p className="mt-1 h-6 truncate text-base font-medium leading-6 text-foreground">{monitoringPrediction.label}</p>
-                  </div>
-                  <Brain className="h-5 w-5 text-primary" />
+                  <h3 className="text-sm font-semibold text-primary">Phase watch</h3>
+                  <span className="text-sm tabular-nums"><strong>{nearClimaxEpisodeCount}</strong> high-probability episodes</span>
                 </div>
-                <p className="mt-2 text-xs font-semibold uppercase tracking-wider text-primary">
-                  {nearClimaxEpisodeCount} high-probability episode{nearClimaxEpisodeCount === 1 ? "" : "s"} this session
-                </p>
-                <div className="mt-3 h-3 overflow-hidden rounded-full bg-muted">
-                  <div className="h-full rounded-full transition-all" style={{ width: `${monitoringPrediction.nearClimax}%`, backgroundColor: levelColor(monitoringPrediction.nearClimax) }} />
+                <div className="media-phase-track" role="meter" aria-label="Live phase marker" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(displayedNearClimax)}>
+                  <div className="media-phase-fill" style={{width:`${displayedNearClimax}%`,backgroundColor:levelColor(displayedNearClimax)}} />
+                  <span className="media-phase-marker" style={{left:`${Math.max(2, Math.min(98, displayedNearClimax))}%`}} />
                 </div>
-                <p className="mt-3 line-clamp-3 min-h-[3.75rem] text-sm leading-5 text-muted-foreground">{monitoringPrediction.reason || "\u00a0"}</p>
-                <p className="mt-2 line-clamp-2 min-h-8 text-xs leading-4 text-muted-foreground">
-                  {monitoringPrediction.hrvExplanation}
-                </p>
-              </div>
+                <div className="flex justify-between text-xs text-muted-foreground"><span>Baseline</span><span>Build</span><span>High watch</span></div>
+              </section>
             )}
 
-            <TrendPanel title="HR Trend" subtitle="Compact live view" empty={!hasHrTrend} heightClass="h-48" distanceView>
+            <div className="media-live-pressure"><CivetLiveCard live={civet} compact onSetup={() => setCivetSetupOpen(true)} /></div>
+
+            <TrendPanel title="HR Trend" empty={!hasHrTrend} heightClass="h-64" distanceView fill={focusView} compactHeading>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={telemetryHistory} margin={{ top: 8, right: 8, bottom: 0, left: -22 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.35} />
