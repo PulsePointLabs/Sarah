@@ -1,3 +1,4 @@
+import { summarizeOmronConnection } from "./omronCuffStatus.js";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -13,6 +14,7 @@ function harness() {
   const storage = new Map([['pulsepoint.omronBp.device', JSON.stringify({deviceId:'test-cuff'})]]);
   let state = {listening:true, connected:true, state:'waiting_for_reading', clockStatus:'verified', pendingReadings:[]};
   const context = vm.createContext({
+    summarizeOmronConnection,
     registerPlugin: () => ({
       arm: async () => { arms++; return state; },
       disarm: async () => { disarms++; if (rejectStop) throw Error('stop failed'); state={...state,listening:false,connected:false,state:'stopped'}; },
@@ -52,9 +54,9 @@ test('polling reflects a native disconnect or stop and ignores late polls after 
 test('Stop errors are visible instead of falsely claiming the cuff was released',async()=>{
   const h=harness();h.failStop();await assert.rejects(h.api.stop(),/stop failed/);
 });
-test('native collector cannot write the cuff clock and subscribes before a clock read',()=>{
+test('native collector only subscribes for readings and never reads or writes cuff setup',()=>{
   const native=fs.readFileSync(new URL('../../android/app/src/main/java/com/pulsepointlabs/sarah/OmronCollector.kt',import.meta.url),'utf8');
-  assert.doesNotMatch(native,/writeCharacteristic\(|clock_write_requested/);
+  assert.doesNotMatch(native,/writeCharacteristic\(|readCharacteristic\(|clock_write_requested|checkClock\(/);
   const services=native.slice(native.indexOf('override fun onServicesDiscovered'),native.indexOf('override fun onDescriptorWrite'));
   assert.match(services,/subscribeToReadings\(connection\)/);assert.doesNotMatch(services,/checkClock\(connection\)/);
   assert.match(native,/if \(!armed \|\| scanning \|\| gatt != null/);

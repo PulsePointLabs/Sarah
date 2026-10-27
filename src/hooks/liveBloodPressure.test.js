@@ -1,3 +1,4 @@
+import { cuffReceiptSince, summarizeOmronConnection } from "../lib/omronCuffStatus.js";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -5,7 +6,7 @@ import vm from 'node:vm';
 const page = fs.readFileSync(new URL('../pages/LiveCapture.jsx', import.meta.url), 'utf8');
 function saveHarness() {
   let fail = true; let attempts = 0; let state = {}; const sent = [];
-  const context = vm.createContext({ useCallback: f => f, bpOmronSeenRef: { current: new Set() },
+  const context = vm.createContext({ cuffReceiptSince, bpCaptureOpenedAtRef: {current:0}, useCallback: f => f, bpOmronSeenRef: { current: new Set() },
     setBpCapture: f => { state = f(state); }, formatBloodPressure: () => '120/80',
     liveSession: { active:true, activeSessionId: 'current-session' }, bpSessionKeyRef: {current:'current-session'}, readingIsInActiveSession:()=>true,
     stampBloodPressureReadings: async () => ({ stamped: 0 }),
@@ -108,19 +109,10 @@ test('recreated WebView receives a reading already uploaded by native background
   assert.deepEqual(ack, ['test']);
 });
 
-test('native clock warnings survive arm and background polling instead of being replaced by a generic ready message', async () => {
-  const source=fs.readFileSync(new URL('../lib/omronBloodPressureBle.js',import.meta.url),'utf8');
-  const statuses=[];let poll;
-  let state={clockStatus:'unavailable',clockMessage:'Complete cuff setup in OMRON Connect.',pendingReadings:[]};
-  const context=vm.createContext({NativeOmronBloodPressure:{addListener:async()=>({remove:async()=>{}}),arm:async()=>state,getState:async()=>state},
-    nativeOmronListener:null,stopNativeOmronListener:async()=>{},initializeBle:async()=>{},getRememberedOmronDevice:()=>({deviceId:'cuff'}),
-    setInterval:fn=>{poll=fn;return 1;},Map,Promise,URL,apiUrl:p=>`https://sarah.test/api${p}`,window:{location:{href:'https://localhost'}}});
-  vm.runInContext(source.slice(source.indexOf('async function startNativeOmronListener('),source.indexOf('\nfunction readStoredJson'))+'\nthis.start=startNativeOmronListener;',context);
-  await context.start({onStatus:(message,connection)=>statuses.push({message,clock:connection?.clockStatus})});
-  assert.equal(statuses.at(-1).clock,'unavailable');assert.match(statuses.at(-1).message,/Complete cuff setup/);
-  state={...state,clockStatus:'verified',clockMessage:'Cuff clock checked; cuff-side pairing prompts not verified.'};
-  poll();await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(statuses.at(-1).clock,'verified');assert.match(statuses.at(-1).message,/pairing prompts not verified/);
+test('clock warnings do not replace the actual Bluetooth connection and delivery status', () => {
+  assert.equal(summarizeOmronConnection({listening:true, connected:true, clockStatus:'failed', clockMessage:'Pair again'}), 'Cuff connected. Ready for a reading.');
+  assert.match(summarizeOmronConnection({listening:true, connected:false}), /Waiting for cuff/);
+  assert.match(summarizeOmronConnection({listening:true, connected:true, deliveryError:'HTTP 503',pendingReadings:[reading]}), /Reading saved on phone/);
 });
 
 test('copyable cuff diagnostics omit readings, delivery URLs and device addresses', async () => {
@@ -130,7 +122,20 @@ test('copyable cuff diagnostics omit readings, delivery URLs and device addresse
     pendingReadings:[reading],lastDeliveredReading:reading,diagnostics:[{event:'clock_read',status:5}]
   })}});
   vm.runInContext(source.slice(source.indexOf('export async function getOmronConnectionDiagnostics')).replace('export ','')+'\nthis.get=getOmronConnectionDiagnostics;',context);
-  const result=await context.get();assert.equal(result.clockStatus,'failed');
+  const result=await context.get();assert.equal(result.clockStatus,undefined);
   for(const key of ['deviceId','endpoint','pendingReadings','lastDeliveredReading'])assert.equal(result[key],undefined);
   assert.equal(result.diagnostics[0].status,5);
+});
+
+test('fresh test readings are visible without assigning them to a session', async () => {
+  const h=saveHarness();h.recover();h.context.readingIsInActiveSession=()=>false;
+  const received={...reading,received_at:'2026-10-26T06:00:00Z'};
+  await h.save(received);assert.equal(h.state.lastCuffReceipt,received);
+  assert.equal(h.state.lastReading,undefined);assert.equal(h.sent[0].session,undefined);
+});
+test('a historical native replay cannot look like a new test reading', async () => {
+  const h=saveHarness();h.recover();h.context.bpCaptureOpenedAtRef.current=Date.parse('2026-10-26T06:00:00Z');
+  h.context.readingIsInActiveSession=()=>false;
+  await h.save({...reading,received_at:'2026-10-25T06:00:00Z'});
+  assert.equal(h.state.lastCuffReceipt,undefined);assert.equal(h.state.lastReading,undefined);
 });

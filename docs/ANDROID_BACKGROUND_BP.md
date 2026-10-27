@@ -18,33 +18,27 @@ acknowledgment. Connection/discovery timeouts and failed scans retry. This follo
 [Android's background BLE guidance](https://developer.android.com/develop/connectivity/bluetooth/ble/background)
 for a connected-device foreground service started while the app is visible.
 
-### Read-only cuff clock checks and Bluetooth ownership (v0.1.294)
+### Cuff connection recovery and simple controls (v0.1.295)
 
-Sarah subscribes to BP indications first, then optionally reads Current Time
-(1805/2A2B). It never automatically writes the cuff clock. This replaces the
-v0.1.292 automatic clock setup: CTS status 128 (0x80) means one or more fields
-were ignored, not necessarily that the entire write failed. A clock mismatch
-is an unverified timestamp warning, not a pairing failure. Clock reads cannot
-block initial reading subscription. Historical timestamp/session rules are unchanged.
+The transport returns to the pre-v0.1.292 indication-only flow: service discovery,
+BP indication subscription, then measurement callbacks. There are no Current Time
+reads or writes. The clock checks added in v0.1.292 and made read-only in v0.1.294
+produced confusing setup warnings; they are not part of the cuff connection flow.
+The actual stored readings show successful native deliveries during the reported
+clock-write warning sequence. A warning was not evidence of a failed BP transfer.
 
-Reattaching a WebView to the same armed cuff keeps its existing GATT connection.
-Explicit Stop / release cuff disarms the native service even without a JavaScript
-listener handle, cancels pending BLE callbacks and leaves saved readings intact.
-Reconnect scans cannot overlap a current GATT connection and use a three-second
-retry interval. Use one app at a time: stop/release Sarah before OMRON Connect
-sync; close OMRON Connect before enabling Sarah's listener again. A peripheral
-disconnect alone is not evidence of a pairing failure or competition.
+Live Capture presents Connect cuff / Disconnect cuff and the actual connection or
+save status. Change cuff and Copy technical details sit under Cuff options.
+A reading received since opening Live Capture is shown even without a recording,
+explicitly saved to BP history. Historical replays do not appear as fresh readings.
+Only exact measurement/session membership can populate the session telemetry card.
+Unknown, stale, paused, pre-session and post-session timestamps remain history-only.
 
-Live Capture's telemetry Controls include Copy cuff diagnostics. The copied report
-contains connection/clock result codes, OS bond state, delivery-pending/count flags,
-and the last 20 connection events retained on the phone. It excludes BP values,
-device addresses and server URLs. Native callbacks and polling both refresh this
-status, so a resumed WebView does not replace a setup warning with generic readiness.
-
-If the cuff still says Please pair, stop Sarah's listener before pairing and syncing
-in OMRON Connect. Test one measurement while Sarah remains stopped to distinguish
-cuff setup from a Sarah reconnection problem. Do not clear cuff memory, Android app
-data, or saved readings as a troubleshooting shortcut.
+Native reattachment keeps its existing collector. Disconnect releases native BLE
+even after JavaScript loses its listener handle; queued readings remain saved.
+The durable uploader and exact-ID acknowledgement are unchanged. Diagnostics are
+available on request, not a required user workflow. A physical phone/cuff trial is
+still required; browser and protocol tests do not demonstrate radio behavior.
 
 H10 already has native acquisition and native delivery. The recording writer now
 accepts delayed native samples with their original measurement timestamps, deduplicates

@@ -1,6 +1,7 @@
 import { BleClient } from "@capacitor-community/bluetooth-le";
 import { registerPlugin } from "@capacitor/core";
 import { apiUrl } from "./mobileApiBase";
+import { summarizeOmronConnection } from "./omronCuffStatus.js";
 
 const NativeOmronBloodPressure = registerPlugin("OmronBloodPressure");
 
@@ -66,7 +67,8 @@ async function startNativeOmronListener({ onStatus, onReading, onHeldReading, on
       if (nativeOmronListener !== listener) return;
       listener.state = event?.state || listener.state;
       listener.connected = Boolean(event?.connected);
-      onStatus?.(event?.message || "OMRON listener enabled; cuff setup is not verified.", event);
+      listener.listening = Boolean(event?.listening);
+      onStatus?.(summarizeOmronConnection(event), event);
     }),
     NativeOmronBloodPressure.addListener("reading", (reading) => {
       deliverReading(reading);
@@ -85,7 +87,7 @@ async function startNativeOmronListener({ onStatus, onReading, onHeldReading, on
       listener.listening = Boolean(state?.listening);
       listener.connected = Boolean(state?.connected);
       listener.state = state?.state || listener.state;
-      if (state?.clockStatus) onStatus?.(state.clockMessage || "Cuff setup is not verified.", state);
+      onStatus?.(summarizeOmronConnection(state), state);
       const pending = Array.isArray(state?.pendingReadings) ? state.pendingReadings : [state?.pendingReading].filter(Boolean);
       pending.forEach(deliverReading);
       // A native upload may finish while this WebView is paused or destroyed.
@@ -96,7 +98,6 @@ async function startNativeOmronListener({ onStatus, onReading, onHeldReading, on
     listener.retryTimer = setInterval(() => {
       NativeOmronBloodPressure.getState().then(replay).catch((error) => onError?.(error));
     }, 10000);
-    if (!result?.clockStatus) onStatus?.("OMRON listener enabled. Cuff setup is not verified; Sarah will connect when it wakes.");
     return { ok: true, device, services: [], native: true };
   } catch (error) {
     await stopNativeOmronListener();
@@ -603,6 +604,6 @@ export async function getOmronConnectionDiagnostics() {
   const state = await NativeOmronBloodPressure.getState();
   // Exclude readings, device addresses and the delivery endpoint from clipboard diagnostics.
   return {listening:state.listening,connected:state.connected,state:state.state,deliveryPending:Boolean(state.deliveryError),pendingReadingCount:state.pendingReadings?.length || 0,
-    clockStatus:state.clockStatus || "unchecked",clockMessage:state.clockMessage,bondState:state.bondState,
+    bondState:state.bondState,
     diagnostics:state.diagnostics || []};
 }

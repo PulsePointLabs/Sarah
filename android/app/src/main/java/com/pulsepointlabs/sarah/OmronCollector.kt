@@ -38,9 +38,6 @@ object OmronCollector {
         private set
     private var scanning = false
     private var subscribed = false
-    private var clockStatus = "unchecked"
-    private var clockMessage = "Cuff setup has not been verified."
-    private var clockOperation = 0
     private val connectionDiagnostics = java.util.ArrayDeque<JSObject>()
     private var targetAddress: String? = null
     private var targetName: String = "OMRON BP7000"
@@ -230,8 +227,6 @@ object OmronCollector {
     private fun connect(device: BluetoothDevice) {
         if (!armed) return
         closeGatt()
-        clockStatus = "checking"
-        clockMessage = "Checking cuff clock; Bluetooth connection alone does not confirm cuff setup."
         diagnostic("connect")
         notifyListeners("status", stateObject("connecting").put("message", "OMRON cuff found. Connecting..."))
         gatt = if (Build.VERSION.SDK_INT >= 26) {
@@ -278,17 +273,7 @@ object OmronCollector {
             diagnostic("subscription", status)
             if (status != BluetoothGatt.GATT_SUCCESS) { retryConnection("OMRON indication setup failed; retrying."); return }
             subscribed = true
-            notifyListeners("status", stateObject("waiting_for_reading").put("message", "OMRON receiving enabled. Checking cuff clock without changing it."))
-            checkClock(connection)
-        }
-
-        override fun onCharacteristicRead(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
-            clockRead(connection, characteristic, value, status)
-        }
-
-        @Deprecated("Deprecated by Android")
-        override fun onCharacteristicRead(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-            clockRead(connection, characteristic, characteristic.value ?: byteArrayOf(), status)
+            notifyListeners("status", stateObject("waiting_for_reading").put("message", "Cuff connected. Ready for a reading."))
         }
 
         override fun onCharacteristicChanged(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
@@ -325,44 +310,6 @@ object OmronCollector {
         }
     }
 
-    private fun finishClock(state: String, message: String) {
-        clockOperation++
-        clockStatus = state
-        clockMessage = message
-        notifyListeners("status", stateObject(if (subscribed) "waiting_for_reading" else "checking_setup").put("message", message))
-    }
-
-    private fun clockTimeout(connection: BluetoothGatt) {
-        val operation = ++clockOperation
-        handler.postDelayed({
-            if (gatt === connection && armed && clockOperation == operation) {
-                diagnostic("clock_timeout")
-                finishClock("failed", "Cuff clock check timed out. Receiving remains enabled; Sarah has not changed the cuff clock.")
-            }
-        }, 6000)
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun checkClock(connection: BluetoothGatt) {
-        val time = connection.getService(TIME_SERVICE)?.getCharacteristic(CURRENT_TIME)
-        diagnostic(if (time == null) "clock_service_absent" else "clock_service_available")
-        if (time == null) {
-            finishClock("unavailable", "Bluetooth receives readings; cuff clock/setup cannot be verified. If the cuff says Please pair, complete pairing/sync in OMRON Connect.")
-        } else if (time.properties and BluetoothGattCharacteristic.PROPERTY_READ != 0 && connection.readCharacteristic(time)) {
-            clockTimeout(connection)
-        } else finishClock("unavailable", "Receiving enabled; cuff clock cannot be read. Sarah has not changed it.")
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun clockRead(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
-        if (gatt !== connection || !armed || characteristic.uuid != CURRENT_TIME || clockStatus != "checking") return
-        clockOperation++
-        diagnostic("clock_read", status)
-        if (status == BluetoothGatt.GATT_SUCCESS && OmronCurrentTime.matchesPhone(value, System.currentTimeMillis())) {
-            finishClock("verified", "Bluetooth receiving enabled; cuff clock matches phone. This does not verify cuff-side pairing prompts.")
-        } else finishClock("unverified", "Receiving enabled; cuff clock does not match the phone or could not be read. Stop Sarah's cuff listener before syncing in OMRON Connect. Sarah has not changed the clock.")
-    }
-
     @SuppressLint("MissingPermission")
     private fun handleMeasurement(device: BluetoothDevice, bytes: ByteArray) {
         val reading = runCatching { parseMeasurement(bytes, device) }.getOrElse {
@@ -384,9 +331,6 @@ object OmronCollector {
     @SuppressLint("MissingPermission")
     private fun closeGatt() {
         subscribed = false
-        clockOperation++
-        clockStatus = "unchecked"
-        clockMessage = "Cuff setup has not been verified."
         val current = gatt
         gatt = null
         if (current != null) {
@@ -414,8 +358,6 @@ object OmronCollector {
         .put("connected", subscribed)
         .put("state", state)
         .put("bondState", runCatching { gatt?.device?.bondState }.getOrNull())
-        .put("clockStatus", clockStatus)
-        .put("clockMessage", clockMessage)
         .put("diagnostics", synchronized(connectionDiagnostics) { JSONArray(connectionDiagnostics.toList()) })
         .put("deviceId", targetAddress ?: "")
         .put("deviceName", targetName)
@@ -492,6 +434,4 @@ object OmronCollector {
         private val BP_SERVICE: UUID = UUID.fromString("00001810-0000-1000-8000-00805f9b34fb")
         private val BP_MEASUREMENT: UUID = UUID.fromString("00002a35-0000-1000-8000-00805f9b34fb")
         private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-        private val TIME_SERVICE: UUID = UUID.fromString("00001805-0000-1000-8000-00805f9b34fb")
-        private val CURRENT_TIME: UUID = UUID.fromString("00002a2b-0000-1000-8000-00805f9b34fb")
 }
