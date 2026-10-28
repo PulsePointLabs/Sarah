@@ -1,23 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- All of the focus-mode look lives here so it can be re-skinned in one place. -->
+<!-- All of the focus-mode look lives here so it can be re-skinned in one place.
+     Sky colors live in Sky.kt (SkyPalettes) because they're blended in code. -->
 <resources>
-    <color name="focus_background">#000000</color>
-    <color name="focus_time">#F2F2F2</color>
-    <color name="focus_date">#A6A6A6</color>
-    <color name="focus_label">#6E6E6E</color>
-    <color name="focus_weather">#CFCFCF</color>
-    <color name="focus_accent">#7FB7FF</color>
-    <color name="focus_divider">#262626</color>
+    <color name="focus_background">#03060F</color>
+    <color name="focus_time">#FFFFFF</color>
+    <color name="focus_date">#E6FFFFFF</color>
+    <color name="focus_label">#B3FFFFFF</color>
+    <color name="focus_weather">#FFFFFF</color>
+    <color name="focus_detail">#D9FFFFFF</color>
+    <color name="focus_glass">#2E0A0F24</color>
+    <color name="focus_glass_edge">#33FFFFFF</color>
+    <color name="focus_accent">#9CC8FF</color>
 
     <!-- Time is sized from the screen in code; these are ratios of the short screen edge. -->
-    <item name="time_size_ratio" format="float" type="dimen">0.34</item>
-    <item name="time_only_size_ratio" format="float" type="dimen">0.46</item>
+    <item name="time_size_ratio" format="float" type="dimen">0.3</item>
+    <item name="time_only_size_ratio" format="float" type="dimen">0.44</item>
 
-    <dimen name="date_size">26sp</dimen>
-    <dimen name="label_size">13sp</dimen>
-    <dimen name="weather_temp_size">40sp</dimen>
-    <dimen name="weather_detail_size">16sp</dimen>
-    <dimen name="burn_in_shift">14dp</dimen>
+    <dimen name="date_size">22sp</dimen>
+    <dimen name="label_size">11sp</dimen>
+    <dimen name="weather_temp_size">34sp</dimen>
+    <dimen name="weather_detail_size">14sp</dimen>
+    <dimen name="weather_icon_size">40dp</dimen>
+    <dimen name="burn_in_shift">12dp</dimen>
 
     <string name="font_time">sans-serif-thin</string>
     <string name="font_body">sans-serif-light</string>
@@ -25,9 +29,48 @@
 
     <style name="FocusTheme" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/focus_background</item>
-        <item name="android:statusBarColor">@color/focus_background</item>
-        <item name="android:navigationBarColor">@color/focus_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
         <item name="android:colorAccent">@color/focus_accent</item>
+    </style>
+
+    <style name="FocusText">
+        <item name="android:shadowColor">#59000000</item>
+        <item name="android:shadowRadius">14</item>
+        <item name="android:shadowDy">2</item>
+        <item name="android:includeFontPadding">false</item>
+    </style>
+
+    <style name="FocusText.Label">
+        <item name="android:fontFamily">@string/font_label</item>
+        <item name="android:letterSpacing">0.22</item>
+        <item name="android:textColor">@color/focus_label</item>
+        <item name="android:textSize">@dimen/label_size</item>
+        <item name="android:textAllCaps">true</item>
+    </style>
+
+    <style name="FocusText.Temp">
+        <item name="android:fontFamily">@string/font_time</item>
+        <item name="android:textColor">@color/focus_weather</item>
+        <item name="android:textSize">@dimen/weather_temp_size</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+
+    <style name="FocusText.Detail">
+        <item name="android:fontFamily">@string/font_body</item>
+        <item name="android:textColor">@color/focus_detail</item>
+        <item name="android:textSize">@dimen/weather_detail_size</item>
+        <item name="android:lineSpacingExtra">2dp</item>
+    </style>
+
+    <style name="FocusCard">
+        <item name="android:background">@drawable/glass_card</item>
+        <item name="android:paddingStart">20dp</item>
+        <item name="android:paddingEnd">22dp</item>
+        <item name="android:paddingTop">14dp</item>
+        <item name="android:paddingBottom">16dp</item>
+        <item name="android:minWidth">170dp</item>
+        <item name="android:orientation">vertical</item>
     </style>
 </resources>

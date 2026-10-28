@@ -10,6 +10,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Google's mirror of Maven Central, used when Central rate-limits.
+        maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' }
     }
 }
 rootProject.name = "FocusClock"

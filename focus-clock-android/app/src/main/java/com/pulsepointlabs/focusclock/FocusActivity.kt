@@ -6,6 +6,7 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.location.Location
 import android.location.LocationManager
 import android.os.Build
@@ -30,35 +31,67 @@ class FocusActivity : Activity() {
 
     private lateinit var prefs: SharedPreferences
     private lateinit var root: View
+    private lateinit var sky: SkyView
     private lateinit var content: View
     private lateinit var timeView: TextView
     private lateinit var ampmView: TextView
     private lateinit var dateView: TextView
     private lateinit var weatherView: View
+    private lateinit var nowIcon: WeatherIconView
     private lateinit var nowTemp: TextView
     private lateinit var nowDetail: TextView
+    private lateinit var tomorrowIcon: WeatherIconView
     private lateinit var tomorrowTemp: TextView
     private lateinit var tomorrowDetail: TextView
     private lateinit var statusView: TextView
+    private lateinit var previewBadge: TextView
+    private val shadowed = mutableListOf<TextView>()
+    private val cards = mutableListOf<View>()
 
     private val handler = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
     private var lastWeather: WeatherReport? = null
     private var lastWeatherAt = 0L
     private var lastShiftMinute = -1
+    private var previewStartedAt = 0L
 
     private val timeOnly get() = prefs.getBoolean(KEY_TIME_ONLY, false)
     private val use24h get() = prefs.getBoolean(KEY_24H, DateFormat.is24HourFormat(this))
     private val fahrenheit get() = prefs.getBoolean(KEY_FAHRENHEIT, Locale.getDefault().country in FAHRENHEIT_COUNTRIES)
     private val showSeconds get() = prefs.getBoolean(KEY_SECONDS, false)
     private val dim get() = prefs.getBoolean(KEY_DIM, false)
+    private val previewing get() = previewStartedAt != 0L
 
     private val tick = object : Runnable {
         override fun run() {
-            renderClock()
+            renderClock(Calendar.getInstance())
             if (System.currentTimeMillis() - lastWeatherAt > WEATHER_REFRESH_MS) refreshWeather()
             val step = if (showSeconds) 1_000L else 60_000L
             handler.postDelayed(this, step - System.currentTimeMillis() % step + 20)
+        }
+    }
+
+    /** Fast-forwards a whole day (and every kind of weather) so the skies can be checked at a glance. */
+    private val previewTick = object : Runnable {
+        override fun run() {
+            val elapsed = System.currentTimeMillis() - previewStartedAt
+            val dayStart = Calendar.getInstance().apply {
+                timeInMillis = previewStartedAt
+                set(Calendar.HOUR_OF_DAY, 4); set(Calendar.MINUTE, 0)
+            }.timeInMillis
+            val sim = dayStart + elapsed * PREVIEW_SPEED
+            val kinds = WeatherKind.values()
+            val kind = kinds[((elapsed / PREVIEW_WEATHER_MS) % kinds.size).toInt()]
+            sky.timeOverride = sim
+            sky.setWeather(kind, when (kind) {
+                WeatherKind.CLEAR -> 0.1f
+                WeatherKind.PARTLY -> 0.45f
+                else -> 0.9f
+            })
+            val cal = Calendar.getInstance().apply { timeInMillis = sim }
+            renderClock(cal)
+            previewBadge.text = "Preview · ${kind.label} · tap to exit"
+            handler.postDelayed(this, 250)
         }
     }
 
@@ -69,18 +102,25 @@ class FocusActivity : Activity() {
         prefs = getSharedPreferences("focus", Context.MODE_PRIVATE)
 
         root = findViewById(R.id.root)
+        sky = findViewById(R.id.sky)
         content = findViewById(R.id.content)
         timeView = findViewById(R.id.time)
         ampmView = findViewById(R.id.ampm)
         dateView = findViewById(R.id.date)
         weatherView = findViewById(R.id.weather)
+        nowIcon = findViewById(R.id.nowIcon)
         nowTemp = findViewById(R.id.nowTemp)
         nowDetail = findViewById(R.id.nowDetail)
+        tomorrowIcon = findViewById(R.id.tomorrowIcon)
         tomorrowTemp = findViewById(R.id.tomorrowTemp)
         tomorrowDetail = findViewById(R.id.tomorrowDetail)
         statusView = findViewById(R.id.status)
+        previewBadge = findViewById(R.id.previewBadge)
+        cards += listOf(findViewById(R.id.nowCard), findViewById<View>(R.id.tomorrowCard), previewBadge)
+        shadowed += listOf(timeView, ampmView, dateView, nowTemp, nowDetail, tomorrowTemp, tomorrowDetail, statusView)
 
         root.setOnClickListener {
+            if (previewing) return@setOnClickListener stopPreview()
             prefs.edit().putBoolean(KEY_TIME_ONLY, !timeOnly).apply()
             applyMode()
         }
@@ -88,6 +128,7 @@ class FocusActivity : Activity() {
         root.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
             if (r - l != or - ol || b - t != ob - ot) sizeClock()
         }
+        sky.onLumaChanged = ::tuneContrast
 
         applyMode()
         applyDim()
@@ -96,13 +137,16 @@ class FocusActivity : Activity() {
     override fun onResume() {
         super.onResume()
         hideSystemBars()
+        sky.animating = true
         handler.removeCallbacks(tick)
         handler.post(tick)
     }
 
     override fun onPause() {
         super.onPause()
+        sky.animating = false
         handler.removeCallbacks(tick)
+        if (previewing) stopPreview()
     }
 
     override fun onDestroy() {
@@ -117,12 +161,12 @@ class FocusActivity : Activity() {
 
     // ---- Clock ----
 
-    private fun renderClock() {
-        val now = Calendar.getInstance()
+    private fun renderClock(now: Calendar) {
+        val seconds = showSeconds && !previewing
         val pattern = when {
-            use24h && showSeconds -> "HH:mm:ss"
+            use24h && seconds -> "HH:mm:ss"
             use24h -> "HH:mm"
-            showSeconds -> "h:mm:ss"
+            seconds -> "h:mm:ss"
             else -> "h:mm"
         }
         timeView.text = DateFormat.format(pattern, now)
@@ -131,7 +175,7 @@ class FocusActivity : Activity() {
         dateView.text = DateFormat.format("EEEE, MMMM d", now)
 
         val minute = now.get(Calendar.MINUTE)
-        if (minute != lastShiftMinute) {
+        if (!previewing && minute != lastShiftMinute) {
             lastShiftMinute = minute
             shiftForBurnIn()
         }
@@ -144,7 +188,7 @@ class FocusActivity : Activity() {
         var size = shortEdge * resources.getFloat(ratioRes)
         if (showSeconds) size *= 0.72f
         timeView.setTextSize(TypedValue.COMPLEX_UNIT_PX, size)
-        ampmView.setTextSize(TypedValue.COMPLEX_UNIT_PX, size * 0.2f)
+        ampmView.setTextSize(TypedValue.COMPLEX_UNIT_PX, size * 0.13f)
     }
 
     /** Nudges everything a few pixels each minute so a screen left on doesn't burn in. */
@@ -157,20 +201,48 @@ class FocusActivity : Activity() {
             .start()
     }
 
+    /** Bright daytime skies get a stronger text shadow so white type stays readable. */
+    private fun tuneContrast(luma: Float) {
+        val alpha = (70 + luma * 150).toInt().coerceIn(60, 190)
+        val radius = 10f + luma * 16f
+        for (v in shadowed) v.setShadowLayer(radius, 0f, 2f, Color.argb(alpha, 4, 10, 30))
+        Glass.tint(cards, luma)
+    }
+
     private fun applyMode() {
         val gone = if (timeOnly) View.GONE else View.VISIBLE
         dateView.visibility = gone
         weatherView.visibility = gone
         statusView.visibility = if (timeOnly || statusView.text.isNullOrEmpty()) View.GONE else View.VISIBLE
         sizeClock()
-        renderClock()
+        renderClock(Calendar.getInstance())
     }
 
     private fun applyDim() {
         window.attributes = window.attributes.apply {
             screenBrightness = if (dim) 0.05f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
         }
-        content.alpha = if (dim) 0.55f else 1f
+        content.alpha = if (dim) 0.6f else 1f
+        sky.dimmed = dim
+    }
+
+    // ---- Preview ----
+
+    private fun startPreview() {
+        previewStartedAt = System.currentTimeMillis()
+        handler.removeCallbacks(tick)
+        previewBadge.visibility = View.VISIBLE
+        handler.post(previewTick)
+    }
+
+    private fun stopPreview() {
+        previewStartedAt = 0L
+        handler.removeCallbacks(previewTick)
+        previewBadge.visibility = View.GONE
+        sky.timeOverride = null
+        val w = lastWeather
+        if (w != null) sky.setWeather(WeatherKind.fromCode(w.currentCode), w.cloudCover) else sky.setWeather(WeatherKind.CLEAR, 0f)
+        handler.post(tick)
     }
 
     // ---- Weather ----
@@ -234,11 +306,18 @@ class FocusActivity : Activity() {
     }
 
     private fun renderWeather(w: WeatherReport) {
+        val nowKind = WeatherKind.fromCode(w.currentCode)
+        sky.setSunTimes(w.sun)
+        if (!previewing) sky.setWeather(nowKind, w.cloudCover)
+
+        nowIcon.set(nowKind, w.isDay)
         nowTemp.text = "${w.currentTemp}°"
-        nowDetail.text = "${Weather.describe(w.currentCode)}\nH ${w.today.high}°  L ${w.today.low}°"
+        nowDetail.text = "${Weather.describe(w.currentCode)}\nH ${w.today.high}°  ·  L ${w.today.low}°"
+
+        tomorrowIcon.set(WeatherKind.fromCode(w.tomorrow.code), true)
         tomorrowTemp.text = "${w.tomorrow.high}°"
-        val rain = w.tomorrow.precipChance?.takeIf { it >= 20 }?.let { "  ·  $it% rain" } ?: ""
-        tomorrowDetail.text = "${Weather.describe(w.tomorrow.code)}$rain\nL ${w.tomorrow.low}°"
+        val rain = w.tomorrow.precipChance?.takeIf { it >= 20 }?.let { "  ·  $it%" } ?: ""
+        tomorrowDetail.text = "${Weather.describe(w.tomorrow.code)}$rain\nLow ${w.tomorrow.low}°"
     }
 
     private fun setStatus(text: String?) {
@@ -268,12 +347,13 @@ class FocusActivity : Activity() {
             if (dim) "Normal brightness" else "Night dim",
             if (place != null) "City: $place (change)" else "Set city manually",
             "Use device location",
+            "Preview skies",
         )
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> { toggle(KEY_TIME_ONLY, timeOnly); applyMode() }
-                    1 -> { toggle(KEY_24H, use24h); renderClock() }
+                    1 -> { toggle(KEY_24H, use24h); renderClock(Calendar.getInstance()) }
                     2 -> { toggle(KEY_SECONDS, showSeconds); sizeClock(); handler.removeCallbacks(tick); handler.post(tick) }
                     3 -> { toggle(KEY_FAHRENHEIT, fahrenheit); refreshWeather() }
                     4 -> { toggle(KEY_DIM, dim); applyDim() }
@@ -282,6 +362,7 @@ class FocusActivity : Activity() {
                         prefs.edit().remove(KEY_PLACE_NAME).remove(KEY_PLACE_LAT).remove(KEY_PLACE_LON).apply()
                         refreshWeather()
                     }
+                    7 -> startPreview()
                 }
             }
             .setOnDismissListener { hideSystemBars() }
@@ -348,6 +429,8 @@ class FocusActivity : Activity() {
         private const val REQ_LOCATION = 1
         private const val WEATHER_REFRESH_MS = 30 * 60_000L
         private const val RETRY_MS = 2 * 60_000L
+        private const val PREVIEW_SPEED = 1_800L        // 30 sim-minutes per real second
+        private const val PREVIEW_WEATHER_MS = 9_000L   // next weather type every 9 s
         private val FAHRENHEIT_COUNTRIES = setOf("US", "LR", "MM", "BS", "BZ", "KY", "PW")
 
         private const val KEY_TIME_ONLY = "time_only"

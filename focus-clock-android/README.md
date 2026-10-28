@@ -1,18 +1,29 @@
 # Focus Clock (Android)
 
-Standalone keep-the-screen-on focus display: big clock, date, and current + tomorrow weather.
+Standalone keep-the-screen-on focus display: big clock, date, and current + tomorrow weather
+over an animated sky that follows the real sunrise/sunset and the current weather
+(clouds, rain, snow, fog, storms with lightning, stars and moon at night).
+
+![Sky preview](sky-preview.png)
 Native Kotlin, no third-party libraries. Weather comes from Open-Meteo (no API key).
 
 ## Using it
 
 - **Tap** anywhere: toggle time-only mode.
-- **Long-press**: settings (12/24h, seconds, °F/°C, night dim, set a city, back to device location).
+- **Long-press**: settings (12/24h, seconds, °F/°C, night dim, set a city, back to device location,
+  and **Preview skies**, which fast-forwards a day and cycles every weather type).
 - Screen stays on while the app is open; content drifts a few pixels each minute to avoid burn-in.
 - Weather refreshes every 30 minutes (retries after 2 minutes if it fails).
 
 ## Re-skinning
 
-All colors, fonts, and sizes live in `app/src/main/res/values/focus_style.xml`.
+Type, card, and size tokens live in `app/src/main/res/values/focus_style.xml`.
+Sky colors per time of day are in `SkyPalettes` (`Sky.kt`).
+
+## Design snapshots
+
+`./gradlew testDebugUnitTest` renders the screen for 14 times/weathers into
+`app/build/snapshots/` (Robolectric native graphics, no device needed).
 
 ## Build
 

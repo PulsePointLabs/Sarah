@@ -4,6 +4,8 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.time.LocalDateTime
+import java.time.ZoneOffset
 import kotlin.math.roundToInt
 
 data class DayForecast(val code: Int, val high: Int, val low: Int, val precipChance: Int?)
@@ -12,8 +14,11 @@ data class WeatherReport(
     val currentTemp: Int,
     val feelsLike: Int,
     val currentCode: Int,
+    val cloudCover: Float,
+    val isDay: Boolean,
     val today: DayForecast,
     val tomorrow: DayForecast,
+    val sun: SunTimes,
 )
 
 data class Place(val name: String, val latitude: Double, val longitude: Double)
@@ -25,12 +30,15 @@ object Weather {
         val unit = if (fahrenheit) "fahrenheit" else "celsius"
         val url = "https://api.open-meteo.com/v1/forecast" +
             "?latitude=$lat&longitude=$lon" +
-            "&current=temperature_2m,apparent_temperature,weather_code" +
-            "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
+            "&current=temperature_2m,apparent_temperature,weather_code,cloud_cover,is_day" +
+            "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset" +
             "&temperature_unit=$unit&timezone=auto&forecast_days=2"
         val json = JSONObject(get(url))
         val current = json.getJSONObject("current")
         val daily = json.getJSONObject("daily")
+        val offset = ZoneOffset.ofTotalSeconds(json.optInt("utc_offset_seconds", 0))
+        fun epoch(key: String, i: Int) =
+            LocalDateTime.parse(daily.getJSONArray(key).getString(i)).toEpochSecond(offset) * 1000
 
         fun day(i: Int) = DayForecast(
             code = daily.getJSONArray("weather_code").getInt(i),
@@ -44,8 +52,12 @@ object Weather {
             currentTemp = current.getDouble("temperature_2m").roundToInt(),
             feelsLike = current.getDouble("apparent_temperature").roundToInt(),
             currentCode = current.getInt("weather_code"),
+            cloudCover = if (current.has("cloud_cover")) current.getDouble("cloud_cover").toFloat() / 100f
+                else WeatherKind.cloudCoverFor(current.getInt("weather_code")),
+            isDay = current.optInt("is_day", 1) == 1,
             today = day(0),
             tomorrow = day(1),
+            sun = SunTimes(epoch("sunrise", 0), epoch("sunset", 0), epoch("sunrise", 1)),
         )
     }
 

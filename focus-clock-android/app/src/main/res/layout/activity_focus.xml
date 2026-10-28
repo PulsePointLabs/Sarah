@@ -5,6 +5,11 @@
     android:layout_height="match_parent"
     android:background="@color/focus_background">
 
+    <com.pulsepointlabs.focusclock.SkyView
+        android:id="@+id/sky"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
     <LinearLayout
         android:id="@+id/content"
         android:layout_width="wrap_content"
@@ -21,29 +26,33 @@
 
             <TextView
                 android:id="@+id/time"
+                style="@style/FocusText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:fontFamily="@string/font_time"
-                android:includeFontPadding="false"
-                android:textColor="@color/focus_time"
-                android:fontFeatureSettings="tnum" />
+                android:fontFeatureSettings="tnum"
+                android:letterSpacing="-0.02"
+                android:textColor="@color/focus_time" />
 
             <TextView
                 android:id="@+id/ampm"
+                style="@style/FocusText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
-                android:fontFamily="@string/font_body"
+                android:layout_marginStart="12dp"
+                android:fontFamily="@string/font_label"
+                android:letterSpacing="0.12"
                 android:textColor="@color/focus_date" />
         </LinearLayout>
 
         <TextView
             android:id="@+id/date"
+            style="@style/FocusText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
+            android:layout_marginTop="6dp"
             android:fontFamily="@string/font_body"
-            android:letterSpacing="0.04"
+            android:letterSpacing="0.06"
             android:textColor="@color/focus_date"
             android:textSize="@dimen/date_size" />
 
@@ -51,95 +60,114 @@
             android:id="@+id/weather"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="36dp"
+            android:layout_marginTop="34dp"
             android:orientation="horizontal">
 
             <LinearLayout
+                android:id="@+id/nowCard"
+                style="@style/FocusCard"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:gravity="center_horizontal"
-                android:minWidth="150dp"
-                android:orientation="vertical">
+                android:layout_height="match_parent">
 
                 <TextView
+                    android:id="@+id/nowLabel"
+                    style="@style/FocusText.Label"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:fontFamily="@string/font_label"
-                    android:letterSpacing="0.2"
-                    android:text="NOW"
-                    android:textColor="@color/focus_label"
-                    android:textSize="@dimen/label_size" />
+                    android:text="Now" />
 
-                <TextView
-                    android:id="@+id/nowTemp"
+                <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:fontFamily="@string/font_time"
-                    android:text="--°"
-                    android:textColor="@color/focus_weather"
-                    android:textSize="@dimen/weather_temp_size" />
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <com.pulsepointlabs.focusclock.WeatherIconView
+                        android:id="@+id/nowIcon"
+                        android:layout_width="@dimen/weather_icon_size"
+                        android:layout_height="@dimen/weather_icon_size" />
+
+                    <TextView
+                        android:id="@+id/nowTemp"
+                        style="@style/FocusText.Temp"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="12dp"
+                        android:text="--°" />
+                </LinearLayout>
 
                 <TextView
                     android:id="@+id/nowDetail"
+                    style="@style/FocusText.Detail"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:fontFamily="@string/font_body"
-                    android:gravity="center"
-                    android:textColor="@color/focus_date"
-                    android:textSize="@dimen/weather_detail_size" />
+                    android:layout_marginTop="8dp" />
             </LinearLayout>
 
-            <View
-                android:layout_width="1dp"
-                android:layout_height="match_parent"
-                android:layout_marginStart="28dp"
-                android:layout_marginEnd="28dp"
-                android:background="@color/focus_divider" />
-
             <LinearLayout
+                android:id="@+id/tomorrowCard"
+                style="@style/FocusCard"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:gravity="center_horizontal"
-                android:minWidth="150dp"
-                android:orientation="vertical">
+                android:layout_height="match_parent"
+                android:layout_marginStart="14dp">
 
                 <TextView
+                    style="@style/FocusText.Label"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:fontFamily="@string/font_label"
-                    android:letterSpacing="0.2"
-                    android:text="TOMORROW"
-                    android:textColor="@color/focus_label"
-                    android:textSize="@dimen/label_size" />
+                    android:text="Tomorrow" />
 
-                <TextView
-                    android:id="@+id/tomorrowTemp"
+                <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:fontFamily="@string/font_time"
-                    android:text="--°"
-                    android:textColor="@color/focus_weather"
-                    android:textSize="@dimen/weather_temp_size" />
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <com.pulsepointlabs.focusclock.WeatherIconView
+                        android:id="@+id/tomorrowIcon"
+                        android:layout_width="@dimen/weather_icon_size"
+                        android:layout_height="@dimen/weather_icon_size" />
+
+                    <TextView
+                        android:id="@+id/tomorrowTemp"
+                        style="@style/FocusText.Temp"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="12dp"
+                        android:text="--°" />
+                </LinearLayout>
 
                 <TextView
                     android:id="@+id/tomorrowDetail"
+                    style="@style/FocusText.Detail"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:fontFamily="@string/font_body"
-                    android:gravity="center"
-                    android:textColor="@color/focus_date"
-                    android:textSize="@dimen/weather_detail_size" />
+                    android:layout_marginTop="8dp" />
             </LinearLayout>
         </LinearLayout>
 
         <TextView
             android:id="@+id/status"
+            style="@style/FocusText.Detail"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
-            android:fontFamily="@string/font_body"
-            android:textColor="@color/focus_label"
-            android:textSize="@dimen/label_size"
             android:visibility="gone" />
     </LinearLayout>
+
+    <TextView
+        android:id="@+id/previewBadge"
+        style="@style/FocusText.Label"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="28dp"
+        android:background="@drawable/glass_pill"
+        android:paddingStart="16dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone" />
 </FrameLayout>
