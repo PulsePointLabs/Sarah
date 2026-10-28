@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- All of the focus-mode look lives here so it can be re-skinned in one place. -->
+<resources>
+    <color name="focus_background">#000000</color>
+    <color name="focus_time">#F2F2F2</color>
+    <color name="focus_date">#A6A6A6</color>
+    <color name="focus_label">#6E6E6E</color>
+    <color name="focus_weather">#CFCFCF</color>
+    <color name="focus_accent">#7FB7FF</color>
+    <color name="focus_divider">#262626</color>
+
+    <!-- Time is sized from the screen in code; these are ratios of the short screen edge. -->
+    <item name="time_size_ratio" format="float" type="dimen">0.34</item>
+    <item name="time_only_size_ratio" format="float" type="dimen">0.46</item>
+
+    <dimen name="date_size">26sp</dimen>
+    <dimen name="label_size">13sp</dimen>
+    <dimen name="weather_temp_size">40sp</dimen>
+    <dimen name="weather_detail_size">16sp</dimen>
+    <dimen name="burn_in_shift">14dp</dimen>
+
+    <string name="font_time">sans-serif-thin</string>
+    <string name="font_body">sans-serif-light</string>
+    <string name="font_label">sans-serif-medium</string>
+
+    <style name="FocusTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/focus_background</item>
+        <item name="android:statusBarColor">@color/focus_background</item>
+        <item name="android:navigationBarColor">@color/focus_background</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <item name="android:colorAccent">@color/focus_accent</item>
+    </style>
+</resources>

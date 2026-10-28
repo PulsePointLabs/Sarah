@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/focus_background">
+
+    <LinearLayout
+        android:id="@+id/content"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center_horizontal"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:baselineAligned="true"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/time"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="@string/font_time"
+                android:includeFontPadding="false"
+                android:textColor="@color/focus_time"
+                android:fontFeatureSettings="tnum" />
+
+            <TextView
+                android:id="@+id/ampm"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:fontFamily="@string/font_body"
+                android:textColor="@color/focus_date" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/date"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:fontFamily="@string/font_body"
+            android:letterSpacing="0.04"
+            android:textColor="@color/focus_date"
+            android:textSize="@dimen/date_size" />
+
+        <LinearLayout
+            android:id="@+id/weather"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="36dp"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:minWidth="150dp"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="@string/font_label"
+                    android:letterSpacing="0.2"
+                    android:text="NOW"
+                    android:textColor="@color/focus_label"
+                    android:textSize="@dimen/label_size" />
+
+                <TextView
+                    android:id="@+id/nowTemp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="@string/font_time"
+                    android:text="--°"
+                    android:textColor="@color/focus_weather"
+                    android:textSize="@dimen/weather_temp_size" />
+
+                <TextView
+                    android:id="@+id/nowDetail"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="@string/font_body"
+                    android:gravity="center"
+                    android:textColor="@color/focus_date"
+                    android:textSize="@dimen/weather_detail_size" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="28dp"
+                android:layout_marginEnd="28dp"
+                android:background="@color/focus_divider" />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:minWidth="150dp"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="@string/font_label"
+                    android:letterSpacing="0.2"
+                    android:text="TOMORROW"
+                    android:textColor="@color/focus_label"
+                    android:textSize="@dimen/label_size" />
+
+                <TextView
+                    android:id="@+id/tomorrowTemp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="@string/font_time"
+                    android:text="--°"
+                    android:textColor="@color/focus_weather"
+                    android:textSize="@dimen/weather_temp_size" />
+
+                <TextView
+                    android:id="@+id/tomorrowDetail"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="@string/font_body"
+                    android:gravity="center"
+                    android:textColor="@color/focus_date"
+                    android:textSize="@dimen/weather_detail_size" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:fontFamily="@string/font_body"
+            android:textColor="@color/focus_label"
+            android:textSize="@dimen/label_size"
+            android:visibility="gone" />
+    </LinearLayout>
+</FrameLayout>
