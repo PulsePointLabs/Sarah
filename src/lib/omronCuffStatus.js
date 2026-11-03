@@ -1,7 +1,7 @@
 // Bluetooth readiness, delivery, and session membership are separate facts.
 export function summarizeOmronConnection(state = {}) {
   if (state.deliveryError && (state.pendingReadings?.length || state.pendingReading)) {
-    return "Reading saved on phone. Saving to Sarah failed; retrying automatically.";
+    return "Reading received. Sarah will keep retrying the save automatically.";
   }
   if (!state.listening) return "Cuff disconnected.";
   if (state.connected) return "Cuff connected. Ready for a reading.";

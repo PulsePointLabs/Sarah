@@ -5196,21 +5196,23 @@ export default function LiveCapture() {
     if (bpOmronSeenRef.current.has(readingKey)) return;
     const activeSessionId = liveSession?.active ? liveSession.activeSessionId || null : null;
     const belongs = Boolean(activeSessionId && readingIsInActiveSession(reading));
+    const receipt = cuffReceiptSince(reading, bpCaptureOpenedAtRef.current);
+    if (receipt) setBpCapture(prev => ({...prev, lastCuffReceipt:receipt, cuffDeliveryPending:true,
+      ...(belongs && bpSessionKeyRef.current === activeSessionId ? {sessionId:activeSessionId,lastReading:reading} : {})}));
     const saved = await ingestBloodPressureReadings([belongs ? {...reading, session: activeSessionId} : reading]);
     if (!Array.isArray(saved?.readings) || !saved.readings.length) throw new Error("The BP server did not confirm saving this reading. It will be retried.");
-    bpOmronSeenRef.current.add(readingKey);
-    const receipt = cuffReceiptSince(reading, bpCaptureOpenedAtRef.current);
-    if (receipt) setBpCapture(prev => ({...prev, lastCuffReceipt:receipt, error:"", cuffDeliveryPending:false}));
     if (bpSessionKeyRef.current !== activeSessionId) return;
     if (!belongs) {
-      setBpCapture(prev => ({...prev, syncing:false,
+      bpOmronSeenRef.current.add(readingKey);
+      setBpCapture(prev => ({...prev, syncing:false, error:"", cuffDeliveryPending:false,
         message:"Cuff reading saved to BP history; its measurement time does not belong to this session."}));
       return;
     }
     const latestReading = saved.readings[0];
     const stamped = await stampBloodPressureReadings(saved.readings, {source:"omron_direct_ble_listener"});
     if (bpSessionKeyRef.current !== activeSessionId) return;
-    setBpCapture(prev => ({...prev, native:true, syncing:false, error:"", status:"captured", sessionId:activeSessionId,
+    bpOmronSeenRef.current.add(readingKey);
+    setBpCapture(prev => ({...prev, native:true, syncing:false, error:"", cuffDeliveryPending:false, status:"captured", sessionId:activeSessionId,
       lastReading:stamped.latest || latestReading, lastCapturedAt:new Date().toISOString(),
       capturedCount:prev.capturedCount + (stamped.stamped || 0),
       message:`OMRON captured ${formatBloodPressure(latestReading)} during this session.`}));
@@ -5256,7 +5258,7 @@ export default function LiveCapture() {
             message: prev.error ? prev.message : message,
             cuffConnected: Boolean(connection.connected),
             cuffConnectionMessage: message,
-            cuffDeliveryPending: Boolean(connection.deliveryError),
+            cuffDeliveryPending: Boolean(connection.deliveryError || connection.pendingReadings?.length || connection.pendingReading),
           }));
         },
         onReading: (reading) => {
@@ -7519,7 +7521,7 @@ export default function LiveCapture() {
     <div className={`${focusView ? "h-screen overflow-hidden bg-[#071016] p-0" : "p-4 md:p-6"} space-y-4`}>
       {!mainTelemetryView && <BloodPressureCuffControls label="Blood pressure cuff controls" listening={bpOmronListening} busy={bpOmronActionInFlightRef.current}
         message={bpCapture.error || bpCapture.cuffConnectionMessage || (bpOmronListening ? "Waiting for cuff." : "Cuff disconnected.")}
-        error={Boolean(bpCapture.error || bpCapture.cuffDeliveryPending)} receipt={bpCapture.lastCuffReceipt} sessionReading={latestBpReading}
+        error={Boolean(bpCapture.error || bpCapture.cuffDeliveryPending)} receipt={bpCapture.lastCuffReceipt} sessionReading={latestBpReading} deliveryPending={bpCapture.cuffDeliveryPending}
         onToggle={toggleOmronBloodPressureListener} onChoose={() => startOmronBloodPressureListenerForLiveSession({forceDevicePicker:true})} onDiagnostics={copyCuffDiagnostics} />}
       <CivetLiveAlert live={civet} onSetup={() => setCivetSetupOpen(true)} />
       {civetSetupOpen && <CivetSetup live={civet} onClose={() => setCivetSetupOpen(false)} />}
@@ -9518,7 +9520,7 @@ export default function LiveCapture() {
           <div hidden={telemetryFocusView && !telemetryControlsOpen} className={telemetryFocusView ? "telemetry-top-controls" : ""}>
             <BloodPressureCuffControls label="Telemetry cuff controls" listening={bpOmronListening} busy={bpOmronActionInFlightRef.current}
         message={bpCapture.error || bpCapture.cuffConnectionMessage || (bpOmronListening ? "Waiting for cuff." : "Cuff disconnected.")}
-        error={Boolean(bpCapture.error || bpCapture.cuffDeliveryPending)} receipt={bpCapture.lastCuffReceipt} sessionReading={latestBpReading}
+        error={Boolean(bpCapture.error || bpCapture.cuffDeliveryPending)} receipt={bpCapture.lastCuffReceipt} sessionReading={latestBpReading} deliveryPending={bpCapture.cuffDeliveryPending}
         onToggle={toggleOmronBloodPressureListener} onChoose={() => startOmronBloodPressureListenerForLiveSession({forceDevicePicker:true})} onDiagnostics={copyCuffDiagnostics} />
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button type="button" onClick={() => setCivetSetupOpen(true)} className="min-h-11 rounded-lg border border-primary/40 px-3 text-sm font-semibold">Connect CIVET</button>

@@ -1,5 +1,6 @@
 import { registerPlugin } from "@capacitor/core";
-import { apiUrl, isSarahNativeShell } from "@/lib/mobileApiBase";
+import { apiUrl, discoverSarahApiBase, isSarahNativeShell } from "@/lib/mobileApiBase";
+import { postBloodPressureReadings } from './bloodPressureTransport.js';
 
 const NativeBloodPressure = registerPlugin("BloodPressureHealth");
 
@@ -49,14 +50,10 @@ export async function readNativeBloodPressure({ days = 30, limit = 100 } = {}) {
 }
 
 export async function ingestBloodPressureReadings(readings = []) {
-  const response = await fetch(apiUrl("/blood-pressure/ingest"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ readings }),
+  return postBloodPressureReadings(readings, {
+    url: () => apiUrl('/blood-pressure/ingest'),
+    discover: isSarahNativeShell() ? () => discoverSarahApiBase({ timeoutMs: 1500 }) : undefined,
   });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data?.error || `BP ingest failed: HTTP ${response.status}`);
-  return data;
 }
 
 export async function syncBloodPressureFromHealthConnect({ days = 30, limit = 100 } = {}) {

@@ -25,4 +25,26 @@ public class OmronCurrentTimeTest {
         assertTrue(OmronCurrentTime.matchesPhone(packet,clock.getTimeInMillis()+60000));
         assertFalse(OmronCurrentTime.matchesPhone(packet,clock.getTimeInMillis()+240000));
     }
+    @Test public void fallDstMismatchIsCorrectedWithoutTurningStoredReadingsIntoFreshReadings() {
+        TimeZone original=TimeZone.getDefault();
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("America/New_York"));
+            Calendar phone=Calendar.getInstance();phone.clear();phone.set(2026,Calendar.NOVEMBER,2,22,37,50);
+            Calendar cuff=(Calendar)phone.clone();cuff.add(Calendar.HOUR_OF_DAY,1);
+            Long offset=OmronCurrentTime.daylightSavingOffset(OmronCurrentTime.encode(cuff),phone.getTimeInMillis());
+            assertEquals(Long.valueOf(3600000),offset);
+            long measured=OmronMeasurementTime.parse(2026,11,2,23,37,42);
+            assertEquals(phone.getTimeInMillis()-8000,measured-offset);
+            assertEquals(phone.getTimeInMillis()-86408000,measured-86400000-offset);
+        } finally {TimeZone.setDefault(original);}
+    }
+    @Test public void unrelatedClockErrorsAndUnknownDatesAreNotGuessed() {
+        Calendar phone=Calendar.getInstance();phone.set(Calendar.MILLISECOND,0);
+        assertEquals(Long.valueOf(0),OmronCurrentTime.daylightSavingOffset(OmronCurrentTime.encode(phone),phone.getTimeInMillis()));
+        Calendar cuff=(Calendar)phone.clone();cuff.add(Calendar.DAY_OF_MONTH,-1);
+        assertNull(OmronCurrentTime.daylightSavingOffset(OmronCurrentTime.encode(cuff),phone.getTimeInMillis()));
+        assertNull(OmronCurrentTime.daylightSavingOffset(new byte[10],phone.getTimeInMillis()));
+        cuff=(Calendar)phone.clone();cuff.add(Calendar.HOUR_OF_DAY,-1);
+        assertEquals(Long.valueOf(-3600000),OmronCurrentTime.daylightSavingOffset(OmronCurrentTime.encode(cuff),phone.getTimeInMillis()));
+    }
 }

@@ -38,6 +38,9 @@ object OmronCollector {
         private set
     private var scanning = false
     private var subscribed = false
+    private var clockChecking = false
+    private var clockOffsetMs: Long? = null
+    private val clockPackets = mutableListOf<Pair<BluetoothDevice, ByteArray>>()
     private val connectionDiagnostics = java.util.ArrayDeque<JSObject>()
     private var targetAddress: String? = null
     private var targetName: String = "OMRON BP7000"
@@ -112,6 +115,14 @@ object OmronCollector {
 
     fun state() = stateObject(if (!armed) "stopped" else if (subscribed) "waiting_for_reading" else "waiting_for_cuff")
 
+    fun updateDeliveryEndpoint(value: String) {
+        val url = java.net.URI(value)
+        require(url.scheme in listOf("https", "http") && !url.host.isNullOrBlank()) { "A valid Sarah server address is required." }
+        endpoint = value
+        prefs.edit().putString("endpoint", value).apply()
+        uploader.execute { runCatching { flushPending() } }
+    }
+
     @Synchronized fun acknowledge(expectedId: String) {
         if (expectedId.isBlank()) return
         val retained = JSONArray()
@@ -125,6 +136,7 @@ object OmronCollector {
         val editor = prefs.edit().putString(KEY_PENDING_QUEUE, retained.toString()).remove(KEY_PENDING_READING)
         if (delivered != null) editor.putString("last_delivered_reading", delivered)
         editor.commit()
+        if (retained.length() == 0) deliveryError = ""
     }
 
     // The foreground service owns transport; a paused/destroyed WebView is only a view.
@@ -139,6 +151,7 @@ object OmronCollector {
             val id = reading.optString("external_id")
             if (id.isBlank() || runCatching { java.time.Instant.parse(reading.optString("measured_at")) }.isFailure) continue
             val connection = java.net.URL(destination).openConnection() as java.net.HttpURLConnection
+            var httpStatus = 0
             try {
                 connection.requestMethod = "POST"
                 connection.connectTimeout = 5000
@@ -147,7 +160,8 @@ object OmronCollector {
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json")
                 connection.outputStream.use { it.write(JSObject().put("reading", reading).toString().toByteArray(Charsets.UTF_8)) }
-                check(connection.responseCode in 200..299) { "Sarah server returned HTTP ${connection.responseCode}" }
+                httpStatus = connection.responseCode
+                check(httpStatus in 200..299) { "Sarah server returned HTTP $httpStatus" }
                 val response = org.json.JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
                 val saved = response.optJSONArray("readings") ?: JSONArray()
                 check(response.optBoolean("ok") && (0 until saved.length()).any { saved.getJSONObject(it).optString("external_id") == id }) {
@@ -155,8 +169,18 @@ object OmronCollector {
                 }
                 acknowledge(id)
                 deliveryError = ""
+                diagnostic("delivery_saved")
+                handler.post { notifyListeners("status", state()) }
             } catch (error: Exception) {
-                deliveryError = "BP saved on phone; server delivery pending: ${error.message}"
+                // Never include the private endpoint or body in clipboard diagnostics.
+                deliveryError = if (error is java.net.SocketTimeoutException) "timeout"
+                    else if (error is javax.net.ssl.SSLException) "tls_error"
+                    else if (error is java.net.UnknownHostException) "host_unreachable"
+                    else if (error is java.net.ConnectException) "connection_failed"
+                    else if (httpStatus in 400..599) "http_$httpStatus"
+                    else "save_not_confirmed"
+                diagnostic("delivery_$deliveryError")
+                handler.post { notifyListeners("status", state()) }
                 return
             } finally { connection.disconnect() }
         }
@@ -246,6 +270,8 @@ object OmronCollector {
                 connection.discoverServices()
                 return
             }
+            if (clockChecking) finishClock()
+            clockOffsetMs = null
             subscribed = false
             runCatching { connection.close() }
             if (gatt === connection) gatt = null
@@ -273,17 +299,27 @@ object OmronCollector {
             diagnostic("subscription", status)
             if (status != BluetoothGatt.GATT_SUCCESS) { retryConnection("OMRON indication setup failed; retrying."); return }
             subscribed = true
+            checkClock(connection)
             notifyListeners("status", stateObject("waiting_for_reading").put("message", "Cuff connected. Ready for a reading."))
         }
 
+        override fun onCharacteristicRead(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
+            clockRead(connection, characteristic, value, status)
+        }
+
+        @Deprecated("Deprecated by Android")
+        override fun onCharacteristicRead(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            clockRead(connection, characteristic, characteristic.value ?: byteArrayOf(), status)
+        }
+
         override fun onCharacteristicChanged(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
-            if (gatt !== connection || !armed) return
+            if (gatt !== connection || !armed || characteristic.uuid != BP_MEASUREMENT) return
             handleMeasurement(connection.device, value)
         }
 
         @Deprecated("Deprecated by Android")
         override fun onCharacteristicChanged(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            if (gatt !== connection || !armed) return
+            if (gatt !== connection || !armed || characteristic.uuid != BP_MEASUREMENT) return
             handleMeasurement(connection.device, characteristic.value ?: return)
         }
     }
@@ -311,7 +347,37 @@ object OmronCollector {
     }
 
     @SuppressLint("MissingPermission")
+    private fun checkClock(connection: BluetoothGatt) {
+        val clock = connection.getService(TIME_SERVICE)?.getCharacteristic(CURRENT_TIME) ?: return
+        clockChecking = true
+        if (clock.properties and BluetoothGattCharacteristic.PROPERTY_READ == 0 || !connection.readCharacteristic(clock)) {
+            finishClock()
+            return
+        }
+        handler.postDelayed({ if (gatt === connection && clockChecking) finishClock() }, 1000)
+    }
+
+    private fun clockRead(connection: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
+        if (gatt !== connection || characteristic.uuid != CURRENT_TIME || !clockChecking) return
+        diagnostic("clock_read", status)
+        if (status == BluetoothGatt.GATT_SUCCESS) clockOffsetMs = OmronCurrentTime.daylightSavingOffset(value, System.currentTimeMillis())
+        if (clockOffsetMs != null && clockOffsetMs != 0L) diagnostic("clock_dst_corrected")
+        finishClock()
+    }
+
+    private fun finishClock() {
+        clockChecking = false
+        val packets = clockPackets.toList()
+        clockPackets.clear()
+        packets.forEach { (device, bytes) -> handleMeasurement(device, bytes) }
+    }
+
+    @SuppressLint("MissingPermission")
     private fun handleMeasurement(device: BluetoothDevice, bytes: ByteArray) {
+        if (clockChecking) {
+            clockPackets.add(device to bytes.copyOf())
+            return
+        }
         val reading = runCatching { parseMeasurement(bytes, device) }.getOrElse {
             emitError(it.message ?: "OMRON sent an unreadable blood-pressure packet.")
             return
@@ -326,10 +392,14 @@ object OmronCollector {
         }
         notifyListeners("reading", reading)
         notifyListeners("status", stateObject("reading_received").put("message", "OMRON reading received."))
+        diagnostic("reading_received")
+        uploader.execute { runCatching { flushPending() } }
     }
 
     @SuppressLint("MissingPermission")
     private fun closeGatt() {
+        if (clockChecking) finishClock()
+        clockOffsetMs = null
         subscribed = false
         val current = gatt
         gatt = null
@@ -401,7 +471,7 @@ object OmronCollector {
             cuffDate = OmronMeasurementTime.parse(year, bytes[offset + 2].toInt() and 0xff,
                 bytes[offset + 3].toInt() and 0xff, bytes[offset + 4].toInt() and 0xff,
                 bytes[offset + 5].toInt() and 0xff, bytes[offset + 6].toInt() and 0xff)
-            timestamp = cuffDate ?: receivedAt
+            timestamp = cuffDate?.minus(clockOffsetMs ?: 0L) ?: receivedAt
             offset += 7
         }
         val pulse = if (flags and 0x04 != 0 && bytes.size >= offset + 2) readSfloat().roundToInt() else null
@@ -415,11 +485,13 @@ object OmronCollector {
             .put("source_package", "native_direct_ble")
             .put("body_position", "unknown")
             .put("measurement_location", "upper_arm")
-            .put("external_id", "omron-native-${device.address.replace(":", "")}-${timestamp}-${systolic}-${diastolic}-${pulse ?: 0}")
+            .put("external_id", "omron-native-${device.address.replace(":", "")}-${cuffDate ?: timestamp}-${systolic}-${diastolic}-${pulse ?: 0}")
             .put("raw", JSObject().put("transport", "native_bluetooth_le").put("mean_arterial_pressure_mm_hg", mean).put("flags", flags)
-                .put("timestamp_source", if (cuffDate == null) "received_at" else "cuff_clock")
+                .put("timestamp_source", if (cuffDate == null) "received_at" else if (clockOffsetMs != null && clockOffsetMs != 0L) "cuff_clock_corrected" else "cuff_clock")
+                .put("cuff_measured_at", cuffDate?.let { java.time.Instant.ofEpochMilli(it).toString() })
+                .put("clock_offset_ms", clockOffsetMs)
                 .put("received_at", java.time.Instant.ofEpochMilli(receivedAt).toString())
-                .put("timestamp_note", if (cuffDate == null) "Cuff date unavailable or invalid; phone reception time used." else "Cuff local clock interpreted in phone time zone."))
+                .put("timestamp_note", if (cuffDate == null) "Cuff date unavailable or invalid; phone reception time used." else if (clockOffsetMs != null && clockOffsetMs != 0L) "Cuff timestamp corrected using its read-only current-clock offset; original retained." else "Cuff local clock interpreted in phone time zone."))
     }
 
     // Bluetooth identifiers and persisted queue keys.
@@ -433,5 +505,7 @@ object OmronCollector {
         private const val SCAN_RESTART_DELAY_MS = 3000L
         private val BP_SERVICE: UUID = UUID.fromString("00001810-0000-1000-8000-00805f9b34fb")
         private val BP_MEASUREMENT: UUID = UUID.fromString("00002a35-0000-1000-8000-00805f9b34fb")
+        private val TIME_SERVICE: UUID = UUID.fromString("00001805-0000-1000-8000-00805f9b34fb")
+        private val CURRENT_TIME: UUID = UUID.fromString("00002a2b-0000-1000-8000-00805f9b34fb")
         private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 }

@@ -46,6 +46,15 @@ async function startNativeOmronListener({ onStatus, onReading, onHeldReading, on
   nativeOmronListener = listener;
   const inFlight = new Map();
   const held = new Set();
+  const delivered = new Set();
+  let deliveryEndpoint = '';
+  const syncDeliveryEndpoint = async () => {
+    const endpoint = new URL(apiUrl('/blood-pressure/ingest'), window.location.href).href;
+    if (endpoint !== deliveryEndpoint && NativeOmronBloodPressure.updateDeliveryEndpoint) {
+      await NativeOmronBloodPressure.updateDeliveryEndpoint({endpoint});
+      deliveryEndpoint = endpoint;
+    }
+  };
   const deliverReading = (reading) => {
     if (!reading || nativeOmronListener !== listener) return;
     const key = reading.external_id || JSON.stringify(reading);
@@ -55,11 +64,14 @@ async function startNativeOmronListener({ onStatus, onReading, onHeldReading, on
       if (!held.has(key)) { held.add(key); onHeldReading?.(reading); }
       return;
     }
-    if (inFlight.has(key)) return;
+    if (inFlight.has(key) || delivered.has(key)) return;
     const operation = Promise.resolve().then(() => onReading?.(reading, { device, native: true }))
       .then(() => NativeOmronBloodPressure.acknowledgeReading({ externalId: reading.external_id || "" }))
+      .then(() => { delivered.add(key); return NativeOmronBloodPressure.getState?.().then(state => {
+        if (state && nativeOmronListener === listener) onStatus?.(summarizeOmronConnection(state), state);
+      }); })
       .catch((error) => onError?.(error))
-      .finally(() => inFlight.delete(key));
+      .finally(() => { inFlight.delete(key); syncDeliveryEndpoint().catch(() => {}); });
     inFlight.set(key, operation);
   };
   listener.handles = await Promise.all([
@@ -95,9 +107,11 @@ async function startNativeOmronListener({ onStatus, onReading, onHeldReading, on
       if (state?.lastDeliveredReading?.external_id) deliverReading(state.lastDeliveredReading);
     };
     replay(result);
+    deliveryEndpoint = new URL(apiUrl('/blood-pressure/ingest'), window.location.href).href;
     listener.retryTimer = setInterval(() => {
+      syncDeliveryEndpoint().catch(() => {});
       NativeOmronBloodPressure.getState().then(replay).catch((error) => onError?.(error));
-    }, 10000);
+    }, 2000);
     return { ok: true, device, services: [], native: true };
   } catch (error) {
     await stopNativeOmronListener();
@@ -604,6 +618,7 @@ export async function getOmronConnectionDiagnostics() {
   const state = await NativeOmronBloodPressure.getState();
   // Exclude readings, device addresses and the delivery endpoint from clipboard diagnostics.
   return {listening:state.listening,connected:state.connected,state:state.state,deliveryPending:Boolean(state.deliveryError),pendingReadingCount:state.pendingReadings?.length || 0,
+    deliveryError:/^(timeout|tls_error|host_unreachable|connection_failed|http_\d{3}|save_not_confirmed)$/.test(state.deliveryError || '') ? state.deliveryError : state.deliveryError ? 'delivery_failed' : '',
     bondState:state.bondState,
     diagnostics:state.diagnostics || []};
 }

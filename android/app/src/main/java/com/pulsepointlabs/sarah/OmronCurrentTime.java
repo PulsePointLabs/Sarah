@@ -19,4 +19,15 @@ public final class OmronCurrentTime {
             value[2] & 255, value[3] & 255, value[4] & 255, value[5] & 255, value[6] & 255);
         return parsed != null && Math.abs(parsed - now) <= 180000;
     }
+    /** Read-only correction. Only a verified current one-hour DST mismatch is corrected. */
+    public static Long daylightSavingOffset(byte[] value, long now) {
+        if (value == null || value.length < 10) return null;
+        Long parsed = OmronMeasurementTime.parse((value[0] & 255) | ((value[1] & 255) << 8),
+            value[2] & 255, value[3] & 255, value[4] & 255, value[5] & 255, value[6] & 255);
+        if (parsed == null) return null;
+        long offset = parsed - now;
+        if (Math.abs(offset) <= 180000) return 0L;
+        if (Math.abs(Math.abs(offset) - 3600000L) <= 180000) return offset;
+        return null;
+    }
 }

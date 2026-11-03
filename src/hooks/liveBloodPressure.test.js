@@ -112,7 +112,7 @@ test('recreated WebView receives a reading already uploaded by native background
 test('clock warnings do not replace the actual Bluetooth connection and delivery status', () => {
   assert.equal(summarizeOmronConnection({listening:true, connected:true, clockStatus:'failed', clockMessage:'Pair again'}), 'Cuff connected. Ready for a reading.');
   assert.match(summarizeOmronConnection({listening:true, connected:false}), /Waiting for cuff/);
-  assert.match(summarizeOmronConnection({listening:true, connected:true, deliveryError:'HTTP 503',pendingReadings:[reading]}), /Reading saved on phone/);
+  assert.match(summarizeOmronConnection({listening:true, connected:true, deliveryError:'HTTP 503',pendingReadings:[reading]}), /Reading received/);
 });
 
 test('copyable cuff diagnostics omit readings, delivery URLs and device addresses', async () => {
@@ -138,4 +138,35 @@ test('a historical native replay cannot look like a new test reading', async () 
   h.context.readingIsInActiveSession=()=>false;
   await h.save({...reading,received_at:'2026-10-25T06:00:00Z'});
   assert.equal(h.state.lastCuffReceipt,undefined);assert.equal(h.state.lastReading,undefined);
+});
+
+test('a fresh reading reaches telemetry before the server responds, without claiming it is saved', async () => {
+  const h=saveHarness();let resolve;
+  const fresh={...reading,received_at:new Date().toISOString()};
+  h.context.ingestBloodPressureReadings=()=>new Promise(done=>{resolve=done;});
+  const saving=h.save(fresh);
+  assert.equal(h.state.lastCuffReceipt,fresh);assert.equal(h.state.lastReading,fresh);
+  assert.equal(h.state.cuffDeliveryPending,true);
+  resolve({readings:[fresh]});await saving;assert.equal(h.state.cuffDeliveryPending,false);
+});
+
+test('failed session attachment is retried before a reading is marked handled', async () => {
+  const h=saveHarness();h.recover();let stamps=0;
+  h.context.stampBloodPressureReadings=async()=>{if(++stamps===1)throw Error('attachment offline');return {stamped:1,latest:reading};};
+  await assert.rejects(h.save(reading),/attachment offline/);
+  await h.save(reading);assert.equal(stamps,2);assert.equal(h.state.status,'captured');
+});
+
+test('a rediscovered API address updates background delivery without reconnecting Bluetooth', async () => {
+  const source=fs.readFileSync(new URL('../lib/omronBloodPressureBle.js',import.meta.url),'utf8');
+  const start=source.indexOf('async function startNativeOmronListener('),end=source.indexOf('\nfunction readStoredJson',start);
+  let tick,base='https://old.test/api',arms=0;const updates=[];
+  const context=vm.createContext({nativeOmronListener:null,stopNativeOmronListener:async()=>{},initializeBle:async()=>{},
+    getRememberedOmronDevice:()=>({deviceId:'fixture'}),setInterval:fn=>{tick=fn;return 1;},URL,Map,Promise,
+    apiUrl:path=>base+path,window:{location:{href:'https://localhost'}},
+    NativeOmronBloodPressure:{addListener:async()=>({remove:async()=>{}}),arm:async()=>{arms++;return {};},
+      getState:async()=>({pendingReadings:[]}),updateDeliveryEndpoint:async value=>updates.push(value.endpoint)}});
+  vm.runInContext(source.slice(start,end)+'\nthis.start=startNativeOmronListener;',context);
+  await context.start({});base='https://current.test/api';tick();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(arms,1);assert.deepEqual(updates,['https://current.test/api/blood-pressure/ingest']);
 });

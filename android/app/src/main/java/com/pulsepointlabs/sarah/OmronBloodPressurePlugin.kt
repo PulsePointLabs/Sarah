@@ -21,6 +21,12 @@ class OmronBloodPressurePlugin : Plugin() {
     }
     @PluginMethod fun disarm(call: PluginCall) { activity.runOnUiThread { call.resolve(OmronCollector.disarm()) } }
     @PluginMethod fun getState(call: PluginCall) { call.resolve(OmronCollector.state()) }
+    @PluginMethod fun updateDeliveryEndpoint(call: PluginCall) {
+        try {
+            OmronCollector.updateDeliveryEndpoint(call.getString("endpoint").orEmpty())
+            call.resolve(JSObject().put("ok", true))
+        } catch (error: Exception) { call.reject(error.message, error) }
+    }
     @PluginMethod fun acknowledgeReading(call: PluginCall) {
         OmronCollector.acknowledge(call.getString("externalId").orEmpty())
         call.resolve(JSObject().put("ok", true))
