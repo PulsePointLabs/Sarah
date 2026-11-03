@@ -1,6 +1,7 @@
 package com.pulsepointlabs.sarah;
 
 import java.util.Calendar;
+import java.util.TimeZone;
 
 /** Bluetooth SIG Current Time (2A2B): local wall clock, Monday=1, 1/256 seconds. */
 public final class OmronCurrentTime {
@@ -29,5 +30,11 @@ public final class OmronCurrentTime {
         if (Math.abs(offset) <= 180000) return 0L;
         if (Math.abs(Math.abs(offset) - 3600000L) <= 180000) return offset;
         return null;
+    }
+    public static long correctMeasurement(long measuredAt, Long offset, long now) {
+        // A stored pre-DST measurement already uses its historical UTC offset.
+        TimeZone zone=TimeZone.getDefault();
+        return offset != null && zone.getOffset(measuredAt) == zone.getOffset(now)
+            ? measuredAt-offset : measuredAt;
     }
 }

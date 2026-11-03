@@ -36,6 +36,9 @@ public class OmronCurrentTimeTest {
             long measured=OmronMeasurementTime.parse(2026,11,2,23,37,42);
             assertEquals(phone.getTimeInMillis()-8000,measured-offset);
             assertEquals(phone.getTimeInMillis()-86408000,measured-86400000-offset);
+            assertEquals(phone.getTimeInMillis()-8000,OmronCurrentTime.correctMeasurement(measured,offset,phone.getTimeInMillis()));
+            long old=OmronMeasurementTime.parse(2026,10,27,2,40,8);
+            assertEquals(old,OmronCurrentTime.correctMeasurement(old,offset,phone.getTimeInMillis()));
         } finally {TimeZone.setDefault(original);}
     }
     @Test public void unrelatedClockErrorsAndUnknownDatesAreNotGuessed() {

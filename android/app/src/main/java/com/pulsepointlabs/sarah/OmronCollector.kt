@@ -471,7 +471,7 @@ object OmronCollector {
             cuffDate = OmronMeasurementTime.parse(year, bytes[offset + 2].toInt() and 0xff,
                 bytes[offset + 3].toInt() and 0xff, bytes[offset + 4].toInt() and 0xff,
                 bytes[offset + 5].toInt() and 0xff, bytes[offset + 6].toInt() and 0xff)
-            timestamp = cuffDate?.minus(clockOffsetMs ?: 0L) ?: receivedAt
+            timestamp = cuffDate?.let { OmronCurrentTime.correctMeasurement(it, clockOffsetMs, receivedAt) } ?: receivedAt
             offset += 7
         }
         val pulse = if (flags and 0x04 != 0 && bytes.size >= offset + 2) readSfloat().roundToInt() else null
@@ -487,11 +487,11 @@ object OmronCollector {
             .put("measurement_location", "upper_arm")
             .put("external_id", "omron-native-${device.address.replace(":", "")}-${cuffDate ?: timestamp}-${systolic}-${diastolic}-${pulse ?: 0}")
             .put("raw", JSObject().put("transport", "native_bluetooth_le").put("mean_arterial_pressure_mm_hg", mean).put("flags", flags)
-                .put("timestamp_source", if (cuffDate == null) "received_at" else if (clockOffsetMs != null && clockOffsetMs != 0L) "cuff_clock_corrected" else "cuff_clock")
+                .put("timestamp_source", if (cuffDate == null) "received_at" else if (timestamp != cuffDate) "cuff_clock_corrected" else "cuff_clock")
                 .put("cuff_measured_at", cuffDate?.let { java.time.Instant.ofEpochMilli(it).toString() })
-                .put("clock_offset_ms", clockOffsetMs)
+                .put("clock_offset_ms", cuffDate?.minus(timestamp))
                 .put("received_at", java.time.Instant.ofEpochMilli(receivedAt).toString())
-                .put("timestamp_note", if (cuffDate == null) "Cuff date unavailable or invalid; phone reception time used." else if (clockOffsetMs != null && clockOffsetMs != 0L) "Cuff timestamp corrected using its read-only current-clock offset; original retained." else "Cuff local clock interpreted in phone time zone."))
+                .put("timestamp_note", if (cuffDate == null) "Cuff date unavailable or invalid; phone reception time used." else if (timestamp != cuffDate) "Cuff timestamp corrected using its read-only current-clock offset; original retained." else "Cuff local clock interpreted in phone time zone."))
     }
 
     // Bluetooth identifiers and persisted queue keys.
