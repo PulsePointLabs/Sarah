@@ -1,3 +1,4 @@
+import { REVIEW_READER_RULE, anatomyChecklistLabels } from '../../src/lib/anatomyReview.js';
 import express from 'express';
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
@@ -747,20 +748,29 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
     required: ['summary', 'findings', ...(isFeetCamera ? ['foot_assessment'] : [])],
   };
   const frameTiming = [...extracted.frames, ...crops].map((frame,index) => `image ${index+1} = session ${formatSessionClock(frame.frameTimeSeconds+timelineOffsetSeconds)}, ${frame.context}`).join('; ');
+  const anatomyAreas=anatomyChecklistLabels(isFeetCamera?'feet':'main');
+  const reviewSchema=structuredClone(isFeetCamera?TEMPORAL_FEET_SCHEMA:responseSchema);
+  reviewSchema.properties.anatomy_checklist={type:'array',items:{type:'object',properties:{
+    anatomical_area:{type:'string',enum:anatomyAreas},observation:{type:'string'},
+    visibility:{type:'string',enum:['clear','partial','not_visible','uncertain']},
+    confidence:{type:'string',enum:['low','moderate','high']},evidence_time_s:{type:'number'}
+  },required:['anatomical_area','observation','visibility','confidence','evidence_time_s']},minItems:anatomyAreas.length,maxItems:anatomyAreas.length};
+  reviewSchema.required=[...reviewSchema.required,'anatomy_checklist'];
+  const anatomyRule=`Check every area exactly once: ${anatomyAreas.join('; ')}. In anatomy_checklist give one concise visible state/change for each, or not_visible if obscured/out of frame. Do not infer a normal finding for missing coverage. Keep the same checklist on every note; meaningful changes also belong in findings. evidence_time_s is SESSION time within this window.`;
   let aiResult = await aiInvokeInternal({
     model: 'claude_sonnet_4_6',
-    max_tokens: isFeetCamera ? 6000 : 2600,
+    max_tokens: isFeetCamera ? 6000 : 4000,
     max_images: extracted.frames.length + crops.length,
-    response_json_schema: isFeetCamera ? TEMPORAL_FEET_SCHEMA : responseSchema,
+    response_json_schema: reviewSchema,
     images: [...extracted.frames, ...crops].map((frame) => ({ filename: frame.filename, media_type: frame.mimeType, data: frame.data })),
     signal: context.signal,
-    prompt: isFeetCamera ? `${TEMPORAL_FEET_RULES}
+    prompt: isFeetCamera ? `${REVIEW_READER_RULE}\n${anatomyRule}\n${TEMPORAL_FEET_RULES}
 Annotation attention marker at ${formatSessionClock(noteTimeS)}: ${String(event.note || '').trim()}
 Full window available: ${formatSessionClock(start+timelineOffsetSeconds)} through ${formatSessionClock(end+timelineOffsetSeconds)}.
 Ordered evidence: ${frameTiming}
 Dense temporal measurements (pixels, SESSION seconds; track labels are localization hypotheses):
 ${JSON.stringify({ ...motion, frame_metrics: motion.frame_metrics.map(m => ({ time_s: m.time_s, camera_compensated: m.camera_compensated, motion_p95_px: m.motion_p95_px, strongest_cells: [...m.tiles].sort((a,b) => b.p90_px-a.p90_px).slice(0,3) })) })}
-` : `You are Sarah performing a quiet, automatic, manual-note-guided visual review of a private physiology session.
+` : `${REVIEW_READER_RULE}\n${anatomyRule}\nYou are Sarah performing a quiet, automatic, manual-note-guided visual review of a private physiology session.
 
 The user's note is an attention marker. Independently describe the current window; do not grade, validate, rebut, or decline the annotation. Do not simply paraphrase the note. Do not invent anatomy, motion, color, sensation, internal physiology, or causation. Save only meaningful visible changes; omit static scene description unless it establishes a change baseline.
 
@@ -812,10 +822,10 @@ Return a compact structured review centered on the few meaningful changes. Findi
     && (!isFeetCamera || isFeetLaneAuditItem(finding))
   ));
   context.updateProgress({ phase: 'saving', current: 2, total: 3, message: `Saving ${savedFindings.length} supported visual finding${savedFindings.length === 1 ? '' : 's'}…` });
-  if (previousReview?.evidence_quality?.full_frame_native && sameVideoEvidenceSource(previousReview, video) && previousReview.note_time_s === noteTimeS && await retainedEvidenceAvailable(previousReview.sampled_frames)) {
+  if (previousReview?.evidence_quality?.full_frame_native && sameVideoEvidenceSource(previousReview, video) && previousReview.note_time_s === noteTimeS && [...savedFindings, ...(Array.isArray(aiResult.anatomy_checklist)?aiResult.anatomy_checklist:[]).filter(item=>item.visibility!=='not_visible')].every(finding => previousReview.sampled_frames?.some(frame => Math.abs(Number(frame.recordTimeSeconds)-Number(finding.evidence_time_s))<=.6)) && await retainedEvidenceAvailable(previousReview.sampled_frames)) {
     retained = previousReview.sampled_frames;
   } else {
-  const kept = await extractNativeAnnotationFrames({ sourcePath, timesSeconds: [...new Set([mark, start])], directory, signal: context.signal, prefix: 'retained' });
+  const kept = await extractNativeAnnotationFrames({ sourcePath, timesSeconds: [...new Set([mark, start, ...savedFindings.map(finding=>Number(finding.evidence_time_s)-timelineOffsetSeconds), ...(aiResult.anatomy_checklist||[]).filter(item=>item.visibility!=='not_visible').map(item=>Number(item.evidence_time_s)-timelineOffsetSeconds)].filter(time=>Number.isFinite(time)&&time>=start&&time<=end))], directory, signal: context.signal, prefix: 'retained' });
   newlyRetained = await retainAnnotationEvidence(kept.map((f,i) => ({ ...f, recordTimeSeconds: f.frameTimeSeconds+timelineOffsetSeconds, purpose: i === 0 ? 'annotation_mark' : 'comparison_reference' })), directory, crypto.randomUUID());
   retained = newlyRetained;
   }
@@ -844,6 +854,7 @@ Return a compact structured review centered on the few meaningful changes. Findi
       change_from_prior: stripStaticManualAnnotationReviewText(stripNonBodyObjectContext(formatManualAnnotationReviewText(isFeetCamera ? sanitizeFeetLaneSnapshotText(finding.change_from_prior) : finding.change_from_prior))),
     })).filter((finding) => finding.observation),
     sampled_frames: retained,
+    anatomy_checklist: (Array.isArray(aiResult.anatomy_checklist)?aiResult.anatomy_checklist:[]).filter(item=>anatomyAreas.includes(item.anatomical_area) && ['clear','partial','not_visible','uncertain'].includes(item.visibility) && ['low','moderate','high'].includes(item.confidence) && Number.isFinite(item.evidence_time_s) && item.evidence_time_s>=start+timelineOffsetSeconds && item.evidence_time_s<=end+timelineOffsetSeconds).map(item=>({...item,observation:formatManualAnnotationReviewText(item.observation)})),
     reference_frames: previousReview?.reference_frames || previousEvidence,
     excluded_invalid_or_out_of_lane_findings: Math.max(0, rawFindings.length - savedFindings.length),
   });

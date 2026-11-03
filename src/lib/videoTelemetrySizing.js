@@ -1,8 +1,8 @@
-export const telemetryMinimum = id => ({ metrics: 64, 'civet-status': 64 })[id] ?? 96;
-export const telemetryMaximum = id => id === 'metrics' ? 240 : 360;
+export const telemetryMinimum = id => ({ metrics: 180, 'civet-status': 80 })[id] ?? 210;
+export const telemetryMaximum = id => id === 'metrics' ? 400 : 700;
 
-// Resize within the viewport, stopping at content floors rather than creating
-// a taller scroll canvas. Hidden cards never donate blank space automatically.
+// Borrow space from peers down to readable floors. If those floors cannot fit,
+// allow scrolling instead of tiny type. Hidden cards do not donate blank space.
 export function fitTelemetryHeights(ids, available, preferred = {}, locked) {
   if (!ids.length) return {};
   const budget = Math.max(0, available);
@@ -19,9 +19,6 @@ export function fitTelemetryHeights(ids, available, preferred = {}, locked) {
     donors.forEach(id => { sizes[id] -= take * (sizes[id] - telemetryMinimum(id)) / capacity; });
     excess -= take;
   }
-  if (excess > .01) {
-    const total = ids.reduce((sum, id) => sum + sizes[id], 0);
-    ids.forEach(id => { sizes[id] *= budget / total; });
-  }
+  // When there is no readable fit, retain the floors and let the sidebar scroll.
   return sizes;
 }

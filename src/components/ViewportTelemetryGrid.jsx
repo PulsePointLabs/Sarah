@@ -1,6 +1,6 @@
 import { Children, Fragment, isValidElement, useLayoutEffect, useRef, useState, useEffect } from 'react';
 import EditableTelemetryPanel from './EditableTelemetryPanel';
-import { packTelemetry } from '@/lib/telemetryPacking';
+import { packTelemetry, telemetryPositionFree } from '@/lib/telemetryPacking';
 import './viewportTelemetry.css';
 
 const STORAGE = 'pulsepoint.telemetryViewport.v1';
@@ -12,30 +12,14 @@ function flatten(children) {
   });
 }
 
-function FitContents({ children, metric, phase }) {
-  const outer = useRef(null), inner = useRef(null);
-  const [box, setBox] = useState({ width: 460, height: 280, scale: 1 });
-  useLayoutEffect(() => {
-    const update = () => {
-      const w = outer.current.clientWidth, h = outer.current.clientHeight;
-      if (!w || !h) return;
-      // Geometry depends only on the card, never on the latest telemetry text.
-      // Changing copy fits inside dedicated slots instead of moving the canvas.
-      const scale = Math.min(1, w / (metric ? 300 : 460), h / (metric ? 200 : phase ? 460 : 280));
-      const width = w / scale, height = h / scale;
-      setBox(old => old.width === width && old.height === height && Math.abs(old.scale - scale) < .001 ? old : { width, height, scale });
-    };
-    const observer = new ResizeObserver(update);
-    observer.observe(outer.current);
-    update();
-    return () => observer.disconnect();
-  }, [metric, phase]);
-  return <div ref={outer} className="telemetry-fit-outer">
-    <div ref={inner} className="telemetry-fit-body" style={{ width: box.width, height: box.height, transform: `scale(${box.scale})` }}>{children}</div>
-  </div>;
+function FitContents({ children }) {
+  return <div className="telemetry-fit-outer"><div className="telemetry-fit-body">{children}</div></div>;
 }
 
 export default function ViewportTelemetryGrid({ children, enabled, selected, onSelect, hiddenItems = [], onHide }) {
+  const viewport = useRef(null);
+  const [height,setHeight] = useState(720);
+  useLayoutEffect(()=>{if(!enabled || !viewport.current)return;const observer=new ResizeObserver(([entry])=>setHeight(entry.contentRect.height));observer.observe(viewport.current);return()=>observer.disconnect();},[enabled]);
   const [narrow, setNarrow] = useState(() => window.innerWidth < 640);
   useEffect(() => { const resize = () => setNarrow(window.innerWidth < 640); window.addEventListener('resize', resize); return () => window.removeEventListener('resize', resize); }, []);
   const [saved, setSaved] = useState(() => { try { return JSON.parse(localStorage.getItem(STORAGE)) || {}; } catch { return {}; } });
@@ -47,23 +31,25 @@ export default function ViewportTelemetryGrid({ children, enabled, selected, onS
       id: `metric:${card.props.telemetryId || card.props.label}`, label: card.props.label, content: card, cols: narrow ? 6 : 3, rows: 2, metric: true,
     }));
     if (!child.props.id) return [];
-    return [{ id: child.props.id, label: child.props.label, content: child.props.children, cols: narrow ? 12 : 6, rows: ['phase','civet'].includes(child.props.id) ? 4 : 3 }];
+    return [{ id: child.props.id, label: child.props.label, content: child.props.children, cols: narrow ? 12 : 6, rows: child.props.id==='civet'?6:child.props.id==='phase'?5:3 }];
   }).filter(item => !hiddenItems.includes(item.id)).sort((a,b) => (saved[a.id]?.order ?? 100) - (saved[b.id]?.order ?? 100));
-  const packed = packTelemetry(items.map(item => ({ ...item, ...saved[item.id] })));
+  const packed = packTelemetry(items.map(item => ({ ...item, ...saved[item.id], rows:Math.max(item.id==='civet'?6:item.id==='phase'?5:item.metric?2:3,saved[item.id]?.rows || item.rows) })));
   const update = (id, patch) => setSaved(old => ({ ...old, [id]: { ...old[id], ...patch } }));
   const reorder = (id, target) => {
     const next = [...items], from = next.findIndex(i => i.id === id), to = next.findIndex(i => i.id === target);
     if (from < 0 || to < 0) return;
     next.splice(to, 0, next.splice(from, 1)[0]);
-    setSaved(old => ({ ...old, ...Object.fromEntries(next.map((item, order) => [item.id, { ...old[item.id], order }])) }));
+    setSaved(old => ({ ...old, ...Object.fromEntries(next.map((item, order) => [item.id, { ...old[item.id], order, x:undefined, y:undefined }])) }));
   };
-  return <div data-testid="viewport-telemetry-grid" className="telemetry-viewport-grid" style={{ gridTemplateRows: `repeat(${packed.rows}, minmax(0, 1fr))` }}>
+  return <div ref={viewport} className="telemetry-viewport-scroll"><div data-testid="viewport-telemetry-grid" className="telemetry-viewport-grid" style={{height:Math.max(height,packed.rows*72+4*(packed.rows-1)+6),gridTemplateRows:`repeat(${packed.rows},minmax(0,1fr))`}}>
     {items.map((item, index) => <EditableTelemetryPanel key={item.id} id={item.id} label={item.label}
       layout={packed.placements[index]} placement={packed.placements[index]} fit selected={selected === item.id} onSelect={onSelect}
       onHide={onHide ? () => { onHide(item.id); onSelect(''); } : undefined}
       onResize={size => update(item.id, size)} onMove={delta => reorder(item.id, items[index + delta]?.id)}
+      onReposition={position=>{const candidate={...packed.placements[index],...position};if(telemetryPositionFree(candidate,packed.placements,packed.rows))setSaved(previous=>({...previous,...Object.fromEntries(packed.placements.map(placement=>[placement.id,{...previous[placement.id],...placement,...(placement.id===item.id?position:{})}]))}));}}
+      minRows={item.id==='civet'?6:item.id==='phase'?5:item.metric?2:3}
       onReorder={target => reorder(item.id, target)} onReset={() => update(item.id, { cols: item.cols, rows: item.rows })}>
       {item.id === 'civet' ? item.content : <FitContents metric={item.metric} phase={item.id === 'phase'}>{item.content}</FitContents>}
     </EditableTelemetryPanel>)}
-  </div>;
+  </div></div>;
 }

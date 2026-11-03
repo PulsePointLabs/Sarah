@@ -1,5 +1,7 @@
+import crypto from 'node:crypto';
+import { REVIEW_READER_RULE } from '../../src/lib/anatomyReview.js';
 import { getEntity, upsertEntity, listEntitiesByExactCriteria } from '../db.js';
-import { withManualEvidenceWorkspace, probeAnnotationVideo, extractNativeAnnotationFrames, denseFeetEvidence, mainDetailCrops } from './manualAnnotationEvidence.js';
+import { withManualEvidenceWorkspace, probeAnnotationVideo, extractNativeAnnotationFrames, denseFeetEvidence, mainDetailCrops, retainAnnotationEvidence, removeUnpersistedAnnotationEvidence } from './manualAnnotationEvidence.js';
 import { completedEpisode, episodeSignature, episodeSegments, episodeRole, mainMetrics, feetMetrics, episodeEvidence, validateEpisodeSegment } from '../../src/lib/episodeAnalysis.js';
 import { episodeReviewId } from './episodeReviewJobs.js';
 
@@ -23,6 +25,8 @@ export function createEpisodeReviewHandler(invoke, dependencies = {}) {
   const extract = dependencies.extract || extractNativeAnnotationFrames;
   const details = dependencies.details || mainDetailCrops;
   const dense = dependencies.dense || denseFeetEvidence;
+  const retain = dependencies.retain || retainAnnotationEvidence;
+  const removeEvidence = dependencies.removeEvidence || removeUnpersistedAnnotationEvidence;
   return async ({ entity, recordId, episodeId, signature, resume = false }, context) => {
     const record = dbGet(entity, recordId);
     const episode = record?.subjective_near_climax_episodes?.find(e=>e.id === episodeId);
@@ -63,7 +67,7 @@ export function createEpisodeReviewHandler(invoke, dependencies = {}) {
       if (saved) { validateEpisodeSegment(saved,metrics,window.start_s,window.end_s); segments.push(saved); continue; }
       context.updateProgress({ phase: 'visual_review', current: index, total: windows.length + 1, message: `Reviewing segment ${index+1} of ${windows.length} · ${feet ? 'Feet / lower body' : 'Main head to toe'}` });
       // A separate workspace per chunk bounds both disk and memory for long episodes.
-      segments.push(await workspace(async directory => {
+      const segment = await workspace(async directory => {
         const a = window.start_s-offset, b = window.end_s-offset, mark = (a+b)/2;
         let frames, crops, motion;
         if (feet) {
@@ -78,7 +82,7 @@ export function createEpisodeReviewHandler(invoke, dependencies = {}) {
         const result = await invoke({ model:'claude_sonnet_4_6', max_tokens:7000, max_images:images.length,
           signal:context.signal, response_json_schema:metricSchema(metrics),
           images:images.map(f=>({filename:f.filename, media_type:f.mimeType, data:f.data})),
-          prompt:`Independently review this ordered segment of Ben's private physiological session. Address him as you/your. This is observational analysis, not erotic narration.
+          prompt:`${REVIEW_READER_RULE}\nIndependently review this ordered segment of Ben's private physiological session. Address him as you/your. This is observational analysis, not erotic narration.
 The current visual evidence is your only basis. No previous Sarah prose or physiological scores are provided. Do not judge, validate, rebut or grade subjective episode labels. Do not infer sensations, climax, internal physiology, causation or unseen anatomy.
 ${feet ? 'FEET / LOWER BODY lane ONLY. Exclude genitals, penis, glans, scrotum, erection, stimulation, devices, grip and stroke cadence. Keep full lower-body context; distinguish toe extension from splay and anatomical left/right only when resolvable.' : 'MAIN lane: review head to toe wherever in view, including visible genital state and stimulation mechanics using neutral anatomical language. Do not infer pressure or contact hidden from this view.'}
 Return exactly one entry for EACH checklist metric. Report visible baseline and progression in the segment, including subtle asymmetry, onset, persistence, direction changes and local release. When obscured or outside the frame use not_visible; do not guess or silently omit it. Low confidence candidates remain explicitly uncertain. Reduced movement does not itself prove relaxation; describe local changes without a canned warning. Do not argue with the user or narrate frame numbers.
@@ -87,12 +91,22 @@ Segment SESSION seconds: ${window.start_s} to ${window.end_s}; time_s must be wi
 Ordered image timestamps (session seconds): ${JSON.stringify(images.map(f=>({time_s:f.frameTimeSeconds+offset, context:f.context})))}
 ${temporal ? `Temporal CV evidence at up to 8 FPS; tracking labels are hypotheses, motion is not physiological diagnosis: ${JSON.stringify(temporal)}` : 'Full native-resolution frames approximately 1 second apart, with native detail supplements. Sub-second motion cannot be established from these samples alone.'}`,
         });
-        return { ...validateEpisodeSegment(result, metrics, window.start_s, window.end_s),
+        const checked=validateEpisodeSegment(result, metrics, window.start_s, window.end_s);
+        const selected=new Map();
+        for(const metric of checked.metrics.filter(item=>item.visibility!=='not_visible')) {
+          const nearest=frames.reduce((best,frame)=>!best || Math.abs(frame.frameTimeSeconds+offset-metric.time_s)<Math.abs(best.frameTimeSeconds+offset-metric.time_s)?frame:best,null);
+          if(nearest && Math.abs(nearest.frameTimeSeconds+offset-metric.time_s)<=.6)selected.set(nearest.filename,nearest);
+        }
+        const sampled_frames=await retain([...selected.values()].map(frame=>({...frame,recordTimeSeconds:frame.frameTimeSeconds+offset,purpose:'episode_finding'})),directory,crypto.randomUUID());
+        return { ...checked, sampled_frames,
           evidence: { frame_times_s: frames.map(f=>f.frameTimeSeconds+offset), native_full_frame:true, detail_crops:crops.length,
             temporal_cv: Boolean(motion), temporal_sample_times_s:motion?.frame_times_s || [] } };
-      }));
-      assertCurrent();
-      dbPut('EpisodeVisualReview',id,{checkpoint:report()});
+      });
+      try {
+        assertCurrent();
+        segments.push(segment);
+        dbPut('EpisodeVisualReview',id,{checkpoint:report()});
+      } catch(error) { await removeEvidence(segment.sampled_frames || []); throw error; }
     }
     context.signal?.throwIfAborted();
     context.updateProgress({phase:'synthesis',current:windows.length,total:windows.length+1,message:'Comparing episode progression and saved physiology…'});
@@ -107,7 +121,7 @@ ${temporal ? `Temporal CV evidence at up to 8 FPS; tracking labels are hypothese
       response_json_schema:{type:'object',properties:{overview:{type:'string'}, approach_assessment:{type:'string'},
         progression:{type:'string'},recovery:{type:'string'},limitations:{type:'string'},
       },required:['overview','approach_assessment','progression','recovery','limitations']},
-      prompt:`Write Ben's standalone episode review using the independently analyzed current segment results below. Do not compare to other episodes; comparison is a separate later step. Neutral physiological reporting, address you/your. Respect the subjective ${episode.kind} marker without grading or disputing it. Describe early, middle, late and post-episode progression. Separate visible findings from telemetry and user labels. ${feet ? 'Feet/lower body ONLY: no genital state or stimulation mechanics.' : ''}
+      prompt:`${REVIEW_READER_RULE}\nWrite Ben's standalone episode review using the independently analyzed current segment results below. Do not compare to other episodes; comparison is a separate later step. Neutral physiological reporting, address you/your. Respect the subjective ${episode.kind} marker without grading or disputing it. Describe early, middle, late and post-episode progression. Separate visible findings from telemetry and user labels. ${feet ? 'Feet/lower body ONLY: no genital state or stimulation mechanics.' : ''}
 Approach scores are heuristic evidence estimates, NOT calibrated climax probabilities. Explain score trajectory, peak timing, contributing factors, HR/HRV support and missing data; never invent a percentage chance of climax, a validated threshold, or claim telemetry proves climax. Do not infer a score when unavailable. Do not infer relaxation merely from reduced motion. Report candidate findings as uncertain. This report covers ONLY the current episode; no earlier-episode information is supplied. Avoid repeating every checklist item in this overview. All prose times and durations must use minutes/seconds, never hundreds of seconds.
 Current marked window: ${episode.start_s}–${episode.end_s} SESSION seconds. Reviewed with up to 5 seconds either side.
 Current visual segments: ${JSON.stringify(segments)}

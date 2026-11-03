@@ -145,7 +145,7 @@ export default function Layout() {
   }, []);
 
   const isDisplayView = ["/capture", "/review-player"].includes(location.pathname)
-    && new URLSearchParams(location.search).get("display") === "focus";
+    && ["focus","telemetry","media"].includes(new URLSearchParams(location.search).get("display"));
 
   useEffect(() => {
     const key = routeKey(location);

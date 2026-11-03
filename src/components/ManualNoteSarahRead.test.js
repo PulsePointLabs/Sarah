@@ -14,7 +14,7 @@ const component = source.slice(source.indexOf('function ManualNoteSarahRead('), 
 const module = { exports: {} };
 vm.runInNewContext(transformSync(`export ${component}`, { loader: 'jsx', jsx: 'automatic', format: 'cjs' }).code, {
   module, exports: module.exports, require: createRequire(import.meta.url),
-  Sparkles: () => null, formatManualAnnotationReviewText, fmtMmSs: formatSessionClock, manualAnnotationReport,
+  AnatomyEvidenceReview: () => null, Sparkles: () => null, formatManualAnnotationReviewText, fmtMmSs: formatSessionClock, manualAnnotationReport,
 });
 const render = (props) => renderToStaticMarkup(React.createElement(module.exports.ManualNoteSarahRead, props));
 

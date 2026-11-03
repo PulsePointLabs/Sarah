@@ -24,10 +24,10 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   const sizes=()=>page.locator('[data-video-section]').evaluateAll(nodes=>Object.fromEntries(nodes.map(n=>[n.dataset.videoSection,n.getBoundingClientRect().height])));
   const fits=async()=>{
     await page.waitForTimeout(150);
-    assert.ok(await sidebar.evaluate(el=>el.scrollHeight<=el.clientHeight+2),'sidebar never needs scrolling');
+    assert.ok(await sidebar.evaluate(el=>getComputedStyle(el).overflowY==='auto'),'readable floors can scroll on crowded screens');
     const issues=await page.locator('[data-video-section]').evaluateAll(nodes=>nodes.flatMap(n=>{
       const content=n.firstElementChild,card=content.firstElementChild,box=n.getBoundingClientRect();
-      return box.bottom>innerHeight+1||content.scrollWidth>content.clientWidth+2||content.scrollHeight>content.clientHeight+2||card.scrollHeight>card.clientHeight+2?[{id:n.dataset.videoSection,content:content.scrollHeight-content.clientHeight,card:card.scrollHeight-card.clientHeight,bottom:box.bottom}]:[];
+      return content.scrollWidth>content.clientWidth+2||content.scrollHeight>content.clientHeight+2||card.scrollHeight>card.clientHeight+2?[{id:n.dataset.videoSection,content:content.scrollHeight-content.clientHeight,card:card.scrollHeight-card.clientHeight,bottom:box.bottom}]:[];
     }));
     assert.deepEqual(issues,[],'all selected cards fit without clipped content');
     assert.deepEqual(await sidebar.locator('.telemetry-metric-card').evaluateAll(nodes=>nodes.filter(n=>n.scrollHeight>n.clientHeight+2||n.scrollWidth>n.clientWidth+2).map(n=>n.title)),[],'vital values, units and deltas fit inside their cells');
@@ -53,25 +53,25 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   await widthHandle.focus();await page.keyboard.press('Home');await fits();
   const pressureHandle=page.getByRole('separator',{name:'Resize Pelvic response height',exact:true});
   await pressureHandle.focus();await page.keyboard.press('End');await fits();
-  assert.ok((await sizes()).civet<=360);
+  assert.ok((await sizes()).civet<=700);
   for(let i=0;i<40;i++)await page.keyboard.press('ArrowDown');await fits();
   await pressureHandle.focus();await page.keyboard.press('Home');await fits();
   const box=await pressureHandle.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+4);await page.mouse.down();await page.mouse.move(box.x+box.width/2,box.y+50,{steps:5});await page.mouse.up();await fits();
   const metricsHandle=page.getByRole('separator',{name:'Resize Vital signs height'});
+  await metricsHandle.focus();await page.keyboard.press('Home');await fits();
   const metric=sidebar.locator('.monitor-metric-value').first();
   const fontBefore=await metric.evaluate(el=>parseFloat(getComputedStyle(el).fontSize));
   await metricsHandle.focus();for(let i=0;i<10;i++)await page.keyboard.press('ArrowDown');await fits();
   assert.ok(await metric.evaluate(el=>parseFloat(getComputedStyle(el).fontSize))>fontBefore,'vital text increases when the card is made taller');
-  const picker=page.getByLabel('Sidebar cards',{exact:true});await picker.click();
-  const menu=page.getByRole('group',{name:'Visible sidebar cards'});
-  const beforeHide=await sizes();await menu.getByRole('checkbox',{name:'Pelvic response',exact:true}).uncheck();
+  const picker=page.getByRole('button',{name:'Cards',exact:true});
+  const menu=page.getByRole('menu',{name:'Cards options'});
+  await picker.click();const beforeHide=await sizes();await menu.getByRole('menuitemcheckbox',{name:'Pelvic response',exact:true}).click();
   const afterHide=await sizes();for(const id of Object.keys(afterHide))assert.ok(afterHide[id]<=beforeHide[id]+2,'hiding cards does not stretch the rest');
-  for(const checkbox of await menu.getByRole('checkbox').all())await checkbox.uncheck();
-  assert.equal(await page.locator('[data-video-section]').count(),0,'every card can be hidden');
-  await menu.getByRole('checkbox',{name:'Cardiac trend',exact:true}).check();
-  assert.ok((await sizes()).cardiac<=360,'single remaining card cannot fill the screen');
-  for(const checkbox of await menu.getByRole('checkbox').all())await checkbox.check();await picker.click();await fits();
-  await page.locator('.video-overlay-picker summary').click();await page.locator('.video-overlay-picker').getByRole('button',{name:/Vital signs/}).click();
+  const setAll=async checked=>{await picker.click();const labels=await menu.getByRole('menuitemcheckbox').allTextContents();for(const label of labels){if(!await menu.isVisible())await picker.click();const item=menu.getByRole('menuitemcheckbox',{name:label.trim(),exact:true});if((await item.getAttribute('aria-checked'))!==String(checked))await item.click();}if(await menu.isVisible())await page.keyboard.press('Escape');};
+  await setAll(false);assert.equal(await page.locator('[data-video-section]').count(),0,'every card can be hidden');
+  await picker.click();await menu.getByRole('menuitemcheckbox',{name:'Cardiac trend',exact:true}).click();assert.ok((await sizes()).cardiac<=700);
+  await setAll(true);await fits();
+  await page.getByRole('button',{name:'Add overlays to video',exact:true}).click();await page.getByRole('menuitemcheckbox',{name:'Vital signs',exact:true}).click();
   await page.mouse.move(100,100);await page.keyboard.press('h');
   assert.equal(await sidebar.isVisible(),false);assert.equal(await page.locator('[data-video-overlay=metrics]').isVisible(),true);
   const playback=page.getByLabel('Video playback controls');
@@ -86,5 +86,5 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   await page.getByRole('button',{name:'Full Telemetry',exact:true}).click();
   await sidebar.getByText('No current pressure sample',{exact:true}).waitFor();await fits();
   assert.deepEqual(errors,[]);
-  console.log('PASS viewport-fitted equal graph cards, short scalable vitals, dropdown toggles, bounded resizing, no hidden-card inflation, pressure/phase pixel axes, overlays and video-only hover controls');
+  console.log('PASS readable graph/vital floors, scalable values, menu toggles, bounded resizing, no hidden-card inflation, pixel axes, overlays and video-only hover controls');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

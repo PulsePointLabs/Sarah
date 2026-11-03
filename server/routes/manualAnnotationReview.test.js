@@ -1,3 +1,4 @@
+import { REVIEW_READER_RULE, anatomyChecklistLabels } from '../../src/lib/anatomyReview.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -22,7 +23,7 @@ function fixture(prior = [], { duration = 1200, offset = 0 } = {}) {
   const cleanup = [];
   let response = { summary: "", findings: [], narrative: { before: "Before, your left toes begin to curl.", around: "Around the mark, flexion increases.", after: "Afterward, toe flexion decreases while the ankle remains plantar-flexed." } };
   let aiError = null;
-  const context = {
+  const context = { REVIEW_READER_RULE, anatomyChecklistLabels, structuredClone,
     ...coverage, ...text, ...temporal, crypto, directObservationText, polishFeetReview,
     withManualEvidenceWorkspace: async task => { try { return await task("synthetic-workspace"); } finally { cleanup.push("workspace"); } },
     probeAnnotationVideo: async () => ({ width: 1920, height: 1080, fps: 30, duration_s: duration }),

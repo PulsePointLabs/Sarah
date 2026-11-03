@@ -1,3 +1,5 @@
+import AnatomyEvidenceReview from "./AnatomyEvidenceReview.jsx";
+import { formatManualAnnotationReviewText as readerText } from "../lib/manualAnnotationReviewText.js";
 import { episodeSignature } from '../lib/episodeAnalysis.js';
 import { episodeClock } from '../lib/episodeReviewContext.js';
 
@@ -20,27 +22,20 @@ export default function EpisodeAnalysisReview({episode, review, onAnalyze, disab
     {partial && <p className="mt-2 text-primary">{result.segments.length} of {result.total_segments} visual segments saved. {result.visual_complete ? 'The full visual checklist is available; the episode summary is pending.' : 'Completed observations are available below while the review continues.'}</p>}
     {result?.comparison_error && <p className="mt-2 text-amber-300">{result.comparison_error}</p>}
     {result && <>
-      <p className="mt-2 leading-relaxed">{result.synthesis.overview}</p>
+      <p className="mt-2 leading-relaxed">{readerText(result.synthesis.overview)}</p>
       <div className="mt-2 flex flex-wrap gap-3 text-muted-foreground"><span>Approach evidence: <b className="text-foreground">{result.evidence.peak?.score ?? '—'}/100</b>{result.evidence.peak && <button className="ml-1 text-primary" onClick={()=>onSeek(result.evidence.peak.time_s)}>at {episodeClock(result.evidence.peak.time_s)} ↗</button>}</span><span>Median {result.evidence.median_score ?? '—'}/100</span><span>Usable HRV: {result.evidence.usable_hrv_samples} samples</span></div>
       <p className="mt-1 text-[10px] text-muted-foreground">Evidence estimate · not calibrated climax probability</p>
       <details className="mt-3"><summary className="cursor-pointer text-primary">Physiology, progression & recovery</summary>
-        {[['Approach evidence',result.synthesis.approach_assessment],['Progression',result.synthesis.progression],['Release / recovery',result.synthesis.recovery]].map(([title,text])=><div key={title} className="mt-2"><b>{title}</b><p className="mt-1 whitespace-pre-wrap leading-relaxed">{text}</p></div>)}
+        {[['Approach evidence',result.synthesis.approach_assessment],['Progression',result.synthesis.progression],['Release / recovery',result.synthesis.recovery]].map(([title,text])=><div key={title} className="mt-2"><b>{title}</b><p className="mt-1 whitespace-pre-wrap leading-relaxed">{readerText(text)}</p></div>)}
       </details>
-      <details className="mt-3" open><summary className="cursor-pointer text-primary">Head-to-toe visual checklist · {result.source.role === 'feet' ? 'Feet / lower body only' : 'Main'} · {result.segments.length} segments</summary>
-        {result.segments.map(segment=><details key={segment.start_s} className="mt-2 rounded border border-border p-2"><summary className="cursor-pointer">{episodeClock(segment.start_s)}–{episodeClock(segment.end_s)} · {segment.summary}</summary>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">{segment.metrics.map(item=><div key={item.metric} className="min-w-0 rounded bg-muted/30 p-2">
-            <div className="flex flex-wrap justify-between gap-1"><b>{item.metric}</b><span className="text-[10px] text-muted-foreground">{item.visibility.replaceAll('_',' ')} · {item.confidence}</span></div>
-            <p className="mt-1 leading-relaxed">{item.observation}</p><p className="mt-1 text-muted-foreground">{item.progression}</p>
-            <p className="mt-1 text-[10px] text-muted-foreground">{[item.laterality,item.magnitude].filter(Boolean).join(' · ')}</p>
-            <button onClick={()=>onSeek(item.time_s)} className="mt-1 text-primary">{episodeClock(item.time_s)} ↗</button>
-          </div>)}</div>
-        </details>)}
-      </details>
+      <AnatomyEvidenceReview role={result.source.role} onSeek={onSeek}
+        findings={result.segments.flatMap(segment=>segment.metrics.map(item=>({...item,anatomical_area:item.metric,evidence_time_s:item.time_s})))}
+        frames={result.segments.flatMap(segment=>segment.sampled_frames || [])} />
       <details className="mt-3"><summary className="cursor-pointer text-primary">Compared with earlier episodes ({result.synthesis.comparisons.length})</summary>
-        {result.synthesis.comparisons.map((item,i)=><p key={i} className="mt-2 leading-relaxed">{item.observation}</p>)}
+        {result.synthesis.comparisons.map((item,i)=><p key={i} className="mt-2 leading-relaxed">{readerText(item.observation)}</p>)}
         {!result.synthesis.comparisons.length && <p className="mt-2 text-muted-foreground">{result.comparison_status === 'not_applicable' ? 'First logged episode: this is the baseline for subsequent comparisons.' : result.comparison_status === 'pending' ? 'Comparing earlier episodes…' : 'No earlier episode comparison was available.'}</p>}
       </details>
-      {result.synthesis.limitations && <p className="mt-3 text-[11px] text-muted-foreground">{result.synthesis.limitations}</p>}
+      {result.synthesis.limitations && <p className="mt-3 text-[11px] text-muted-foreground">{readerText(result.synthesis.limitations)}</p>}
     </>}
   </div>;
 }

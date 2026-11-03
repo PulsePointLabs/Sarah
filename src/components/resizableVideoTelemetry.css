@@ -1,4 +1,4 @@
-.video-resizable-sidebar { overflow:visible !important; padding:4px !important; gap:3px !important; position:relative; }
+.video-resizable-sidebar { overflow-x:hidden !important; overflow-y:auto !important; padding:4px !important; gap:3px !important; position:relative; }
 .video-resizable-section { display:flex; flex-direction:column; flex:0 0 auto; min-width:0; min-height:0; }
 .video-resizable-content { min-height:0; flex:1; container-type:size; }
 .video-resizable-content > * { height:100% !important; min-height:0; }
@@ -66,3 +66,12 @@
   .video-phase-card > .mt-1.flex p.text-sm { font-size:10px !important; }
 }
 @media (max-width:799px) { .video-full-header { height:auto; min-height:40px; flex-wrap:wrap; } }
+
+/* Readable floors win over shrinking the whole card into tiny text. */
+.video-resizable-sidebar{overflow-y:auto}
+.video-resizable-content :is(p,span,button,summary,h3,b,small){font-size:max(16px,var(--section-font))!important}
+.video-resizable-content .recharts-cartesian-axis-tick text,.video-resizable-content>section>svg text{font-size:16px}
+.video-resizable-content .metric-short-label,.video-resizable-content .monitor-metric-value>span,.video-resizable-content>.grid>div>div,.video-resizable-content>.grid>div>p:not(.monitor-metric-value){font-size:16px!important}
+.video-resizable-content .monitor-metric-value{font-size:clamp(32px,min(var(--section-value),var(--metric-width-font,34cqi),48cqh),160px)!important}
+
+@container(max-height:220px){.video-phase-card>.mt-1.flex p.text-\[9px\],.video-phase-card>.video-phase-legend{display:none}}

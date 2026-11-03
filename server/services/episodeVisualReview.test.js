@@ -35,7 +35,7 @@ function fixture({feet=false,fail=false,edit=false,cancel=false,first=false,inva
     if(cancel)controller.abort();
     return {overview:'Current independent evidence',approach_assessment:'No calibrated probability',progression:'Early to late',recovery:'Local release',limitations:'Synthetic source',comparisons:[{episode_id:'earlier',observation:'Earlier episode has no visual review'}]};
   };
-  const dependencies={getEntity:(entity)=>entity==='EpisodeVisualReview'?entry:record,
+  const dependencies={retain:async frames=>frames.map(frame=>({...frame,url:'/uploads/synthetic-evidence.jpg'})),removeEvidence:async()=>{},getEntity:(entity)=>entity==='EpisodeVisualReview'?entry:record,
     upsertEntity:(...args)=>{writes.push(structuredClone(args));Object.assign(entry,args[2]);},listEntitiesByExactCriteria:()=>[],
     probe:async()=>({width:3840,height:2160,fps:30,duration_s:60}),
     workspace:task=>withManualEvidenceWorkspace(async dir=>{workspaces.push(dir);await fs.writeFile(path.join(dir,'analysis.jpg'),'synthetic');return task(dir);}),
@@ -48,6 +48,7 @@ test('full episode, source offset, independent pass then prior comparison, one d
   const result=f.entry.result;
   assert.deepEqual(result.reviewed_window,{start_s:5,end_s:36});assert.equal(result.segments.length,4);
   assert.equal(result.segments[0].evidence.frame_times_s[0],5);
+  assert.ok(result.segments[0].sampled_frames.some(frame=>frame.url && frame.recordTimeSeconds===5));
   assert.equal(result.segments.at(-1).end_s,36);assert.equal(result.segments[0].metrics[0].confidence,'low');
   assert.equal(f.calls.length,6);assert.match(f.calls.at(-1).prompt,/Earlier episodes/);assert.equal(f.writes.filter(w=>w[2].checkpoint).length,4);
   for(const dir of f.workspaces)await assert.rejects(fs.access(dir));

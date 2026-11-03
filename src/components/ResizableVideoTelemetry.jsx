@@ -1,3 +1,4 @@
+import TelemetryPickerMenu from './TelemetryPickerMenu.jsx';
 import { Children, cloneElement, isValidElement, useLayoutEffect, useRef, useState } from 'react';
 import { fitTelemetryHeights, telemetryMinimum, telemetryMaximum } from '../lib/videoTelemetrySizing.js';
 import './resizableVideoTelemetry.css';
@@ -37,31 +38,27 @@ function FittedSidebar({ children }) {
   // Ignore old scrolling/weight preferences, while retaining card visibility.
   const defaultIds = [...allIds, ...Array.from({length:defaultCardCount.current-allIds.length}, (_, index) => `reserved-${index}`)];
   const defaults = fitTelemetryHeights(defaultIds, available);
-  const sizes = fitTelemetryHeights(ids, available, Object.fromEntries(ids.map(id => [id, heights[id] ?? defaults[id]])));
+  const sizes = fitTelemetryHeights(ids, available, Object.fromEntries(ids.map(id => [id, heights[id] ?? defaults[id]])), heights.__locked);
   const resize = (id, value) => {
-    const maximum = Math.min(telemetryMaximum(id), available - ids.filter(key => key !== id).reduce((sum, key) => sum + telemetryMinimum(key), 0));
+    const maximum = telemetryMaximum(id);
     const target = Math.max(telemetryMinimum(id), Math.min(maximum, value));
     const next = fitTelemetryHeights(ids, available, { ...sizes, [id]: target }, id);
-    setHeights(previous => { const result = { ...previous, ...next }; persist(STORAGE, result); return result; });
+    setHeights(previous => { const result = { ...previous, ...next, __locked:id }; persist(STORAGE, result); return result; });
   };
   return cloneElement(children, { ref, className: `${children.props.className} video-resizable-sidebar` },
-    <details key="card-toggles" className="video-card-picker">
-      <summary aria-label="Sidebar cards">Cards <span>{ids.length} / {allIds.length}</span></summary>
-      <div className="video-card-menu" role="group" aria-label="Visible sidebar cards">
-        {sections.map(child => { const [id, label] = child.props['data-sidebar-section']; return <label key={id}>
-          <input type="checkbox" checked={!hidden[id]} onChange={() => { const next = { ...hidden, [id]: !hidden[id] }; setHidden(next); persist(VISIBILITY, next); }} />{label}
-        </label>; })}
-      </div>
-    </details>,
+    <TelemetryPickerMenu key="card-toggles" label="Cards" summary={`${ids.length} / ${allIds.length}`} options={sections.map(child => {
+      const [id, label] = child.props['data-sidebar-section'];
+      return {id,label,checked:!hidden[id],onChange:()=>{const next={...hidden,[id]:!hidden[id]};setHidden(next);persist(VISIBILITY,next);}};
+    })} />,
     items.map(child => {
       if (!isValidElement(child) || !child.props['data-sidebar-section']) return child;
       const [id, label] = child.props['data-sidebar-section'];
       if (hidden[id]) return null;
       const size = sizes[id];
-      const maximum = Math.max(telemetryMinimum(id), Math.min(telemetryMaximum(id), available - ids.filter(key => key !== id).reduce((sum, key) => sum + telemetryMinimum(key), 0)));
+      const maximum = telemetryMaximum(id);
       return <div key={id} data-video-section={id} className="video-resizable-section" style={{ height: size,
-        '--section-font': `${Math.min(14, 10 + Math.max(0, size - 140) / 65)}px`,
-        '--section-value': `${Math.min(72, 24 + Math.max(0, size - 76) * .38)}px` }}>
+        '--section-font': `${Math.min(24, 16 + Math.max(0, size - 160) / 60)}px`,
+        '--section-value': `${Math.min(160, 32 + Math.max(0, size - 100) * .38)}px` }}>
         <div className="video-resizable-content">{child}</div>
         <div role="separator" tabIndex={0} aria-label={`Resize ${label} height`} aria-orientation="horizontal" aria-valuemin={telemetryMinimum(id)} aria-valuemax={Math.round(maximum)} aria-valuenow={Math.round(size)}
           title="Drag to resize; Up/Down adjust height; Home resets the card" className="video-section-handle"

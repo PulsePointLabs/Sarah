@@ -1,3 +1,4 @@
+import TelemetryPickerMenu from './TelemetryPickerMenu.jsx';
 import { Children, isValidElement, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import ResizableVideoTelemetry from './ResizableVideoTelemetry.jsx';
@@ -26,7 +27,8 @@ export function useVideoTelemetryOverlays() {
     if (next[id]) delete next[id];
     else {
       const offset = (Object.keys(next).length % 6) * .045;
-      const candidate = { x: .03 + offset, y: .03 + offset, w: id.startsWith('metric-') ? .24 : .48, h: id.startsWith('metric-') ? .25 : .4, opacity: .9 };
+      const rect=target?.getBoundingClientRect();
+      const candidate = { x:.03+offset,y:.03+offset,w:Math.min(.95,Math.max(id.startsWith('metric-')?.24:.48,(id.startsWith('metric-')?200:280)/(rect?.width||1200))),h:Math.min(.95,Math.max(id.startsWith('metric-')?.25:.4,(id.startsWith('metric-')?140:240)/(rect?.height||800))),opacity:.9 };
       const available = place(candidate, next);
       if (available) next[id] = available;
       else setNotice('No free space for this overlay. Shrink or remove another card first.');
@@ -39,26 +41,32 @@ export function useVideoTelemetryOverlays() {
 function FloatingTelemetry({ id, label, children, controller }) {
   const drag = useRef(null);
   const suppressClick = useRef(false);
+  const [preview, setPreview] = useState(null);
 
-  const box = controller.boxes[id];
+  const savedBox = controller.boxes[id];
+  const box = preview || savedBox;
   const start = (event, mode) => {
     if (event.button !== 0) return;
     event.preventDefault(); event.stopPropagation();
     suppressClick.current = true;
     event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId);
     const bounds = controller.target.getBoundingClientRect();
-    drag.current = { mode, x: event.clientX, y: event.clientY, bounds, box };
+    drag.current = { mode, x: event.clientX, y: event.clientY, bounds, box: savedBox, next: savedBox };
   };
   const move = event => {
     const d = drag.current;
     if (!d || !d.bounds.width || !d.bounds.height) return;
     const dx = (event.clientX - d.x) / d.bounds.width, dy = (event.clientY - d.y) / d.bounds.height;
-    controller.update(id, d.mode === 'move'
+    d.next = { ...d.box, ...(d.mode === 'move'
       ? { x: clamp(d.box.x + dx, 0, 1-d.box.w), y: clamp(d.box.y + dy, 0, 1-d.box.h) }
-      : { w: clamp(d.box.w + dx, Math.min(.15, 1-d.box.x), 1-d.box.x), h: clamp(d.box.h + dy, Math.min(.12, 1-d.box.y), 1-d.box.y) });
+      : { w: clamp(d.box.w + dx, Math.min(Math.max(.15,(id.startsWith('metric-')?200:280)/d.bounds.width),1-d.box.x), 1-d.box.x), h: clamp(d.box.h + dy, Math.min(Math.max(.12,(id.startsWith('metric-')?140:240)/d.bounds.height),1-d.box.y), 1-d.box.y) }) };
+    // Preview can cross occupied space. Only the final drop is persisted.
+    setPreview(d.next);
   };
-  const stop = event => { drag.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); };
-  const pointerProps = { onPointerMove: move, onPointerUp: stop, onPointerCancel: stop, onLostPointerCapture: () => { drag.current = null; } };
+  const stop = event => { const d=drag.current; drag.current=null; setPreview(null);
+    if (d && event.type!=='pointercancel') controller.update(id,d.next);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); };
+  const pointerProps = { onPointerMove: move, onPointerUp: stop, onPointerCancel: stop, onLostPointerCapture: () => { drag.current = null; setPreview(null); } };
   const keyboard = (event, mode) => {
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
     event.preventDefault();
@@ -87,7 +95,7 @@ function FloatingTelemetry({ id, label, children, controller }) {
       if (event.ctrlKey) start(event, 'move');
     }} {...pointerProps}
     onClickCapture={event => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false; } }}
-    style={{ left: `${box.x*100}%`, top: `${box.y*100}%`, width: `${box.w*100}%`, height: `${box.h*100}%` }}>
+    style={{ left: `${box.x*100}%`, top: `${box.y*100}%`, width: `${box.w*100}%`, height: `${box.h*100}%`, zIndex: preview ? 50 : undefined }}>
     <div className="video-overlay-content" style={{ opacity: box.opacity }}>{children}</div>
     <button type="button" className="video-overlay-resize" aria-label={`Resize ${label} overlay`} title="Drag to resize; arrow keys also resize"
       onPointerDown={event => start(event, 'resize')} onKeyDown={event => { keyboard(event, 'resize'); event.stopPropagation(); }} {...pointerProps}>◢</button>
@@ -104,11 +112,10 @@ export default function VideoTelemetryOverlays({ children, controller, resizable
     if (child.props.label) entries.push({ id: `metric-${child.props.label.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-')}`, label: child.props.label, child });
   });
   const missing = Object.keys(controller.boxes).filter(id => !entries.some(entry => entry.id === id));
-  const picker = <details key="overlay-picker" className="video-overlay-picker">
-    <summary><span>＋ Add overlays to video</span><span className="video-overlay-count">{Object.keys(controller.boxes).length} selected ▾</span></summary>
-    <div><p className="video-overlay-picker-help">Choose a card or graph to add over the video. Originals stay here. Click a card to select it: + makes it more transparent, − less transparent. Hold Ctrl and drag to move. Drag its corner to resize. Deselect here or press Delete to remove.</p>{entries.map(({id,label}) => <button type="button" key={id} aria-pressed={Boolean(controller.boxes[id])} onClick={() => controller.toggle(id)}>{controller.boxes[id] ? '✓ ' : '＋ '}{label}</button>)}
-      {controller.notice && <p role="status">{controller.notice}</p>}{missing.map(id => <button type="button" key={id} aria-pressed="true" onClick={() => controller.toggle(id)}>{id} · no data (remove)</button>)}</div>
-  </details>;
+  const picker = <TelemetryPickerMenu key="overlay-picker" label="Add overlays to video" summary={`${Object.keys(controller.boxes).length} selected`}
+    help="Select a card to add or remove it. Drag an overlay with Ctrl to move it, or drag its corner to resize."
+    notice={controller.notice} options={[...entries.map(({id,label})=>({id,label,checked:Boolean(controller.boxes[id]),onChange:()=>controller.toggle(id)})),
+      ...missing.map(id=>({id,label:`${id} · no data (remove)`,checked:true,onChange:()=>controller.toggle(id)}))]} />;
   return <><ResizableVideoTelemetry enabled={resizable} dashboard={dashboard}>{children}</ResizableVideoTelemetry>
     {controller.pickerTarget && createPortal(picker, controller.pickerTarget)}
     {controller.target && createPortal(entries.filter(entry => controller.boxes[entry.id]).map(({ id, label, child }) =>

@@ -1,6 +1,7 @@
 .telemetry-viewport-grid { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); gap:4px; flex:1; min-height:0; min-width:0; padding:3px; }
 .telemetry-fit-outer { width:100%; height:100%; position:relative; }
-.telemetry-fit-body { position:absolute; left:0; top:0; transform-origin:top left; container-type:size; }
+.telemetry-viewport-scroll { flex:1; min-height:0; min-width:0; overflow:auto; }
+.telemetry-fit-body { position:absolute; inset:0; width:100%; height:100%; container-type:size; font-size:16px; }
 .telemetry-fit-body > * { overflow:visible !important; }
 .telemetry-fit-body .line-clamp-1 { display:block; -webkit-line-clamp:unset; overflow:visible; }
 .telemetry-text-slot { position:relative; min-width:0; }
@@ -20,3 +21,17 @@
 .telemetry-fit-body .telemetry-phase-stats .text-4xl { font-size:clamp(28px,min(22cqw,42cqh),100px); line-height:1; font-variant-numeric:tabular-nums; }
 .telemetry-fit-body .telemetry-trend-heading { height:76px; flex:none; }
 .telemetry-top-controls { position:absolute; left:0; right:0; top:100%; padding:12px; background:hsl(var(--card)); border:1px solid hsl(var(--border)); border-radius:0 0 12px 12px; box-shadow:0 12px 30px #0008; z-index:35; max-height:75dvh; overflow:auto; }
+.telemetry-fit-body :is(p,small,span,label,button,select){font-size:clamp(16px,2.5cqw,24px)}
+.telemetry-fit-body .telemetry-text-slot>div{transform:none!important;position:relative;top:auto!important}
+.telemetry-fit-body .telemetry-metric-card{padding:8px;grid-template-rows:24px minmax(36px,1fr) 40px}
+.telemetry-fit-body .telemetry-metric-helper{height:40px;overflow:auto;line-height:20px}
+.telemetry-fit-body .telemetry-metric-value{font-size:clamp(36px,min(24cqw,42cqh),180px)!important}
+.telemetry-fit-body .telemetry-metric-main{grid-template-columns:minmax(0,1fr) 22%}
+.telemetry-fit-body .telemetry-metric-value small{font-size:clamp(16px,4cqw,28px)}
+[data-telemetry-item="phase"] .telemetry-phase-body{grid-template-rows:auto minmax(0,1fr)}
+.telemetry-fit-body .telemetry-phase-explanation,.telemetry-fit-body .telemetry-phase-cue{display:none}
+.telemetry-viewport-grid svg text{font-size:16px}
+[data-telemetry-fullscreen="true"] [data-telemetry-header]{position:absolute;inset:0 0 auto;opacity:0;background:hsl(var(--card));padding:10px;z-index:100}
+[data-telemetry-fullscreen="true"] [data-telemetry-header]:hover,[data-telemetry-fullscreen="true"] [data-telemetry-header]:focus-within{opacity:1}
+
+.telemetry-viewport-grid [data-telemetry-item="civet"] :is(p,small,span,label,button,select){font-size:clamp(16px,2.5cqw,24px)}

@@ -1766,6 +1766,26 @@ export default function LiveCapture() {
   const [telemetryDashboardOpen, setTelemetryDashboardOpen] = useState(false);
   const [telemetryDashboard, setTelemetryDashboard] = useState(() => readTelemetryDashboard());
   const [selectedTelemetryPanel, setSelectedTelemetryPanel] = useState("");
+  const telemetryDisplayRef = useRef(null);
+  const [telemetryFullscreen,setTelemetryFullscreen] = useState(false);
+  const toggleTelemetryFullscreen = useCallback(async()=>{
+    try {
+      if(document.fullscreenElement)await document.exitFullscreen();
+      else {setSelectedTelemetryPanel('');setTelemetryControlsOpen(false);document.activeElement?.blur?.();await telemetryDisplayRef.current?.requestFullscreen();}
+    } catch(error) {toast({title:'Could not open full screen',description:error.message});}
+  },[toast]);
+  const openTelemetryScreen = useCallback(()=>{
+    const url=new URL(window.location.href);url.searchParams.set('display','telemetry');url.searchParams.set('standalone','1');
+    const screen=window.open(url.href,'sarah-live-telemetry','popup,width=1440,height=900');
+    if(!screen)toast({title:'Allow popups for Sarah to open the telemetry screen'});
+  },[toast]);
+  useEffect(()=>{
+    const changed=()=>setTelemetryFullscreen(document.fullscreenElement===telemetryDisplayRef.current && Boolean(document.fullscreenElement));
+    const key=event=>{if(telemetryFocusView && event.key.toLowerCase()==='f' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.target.closest('input,textarea,select,[role=menu],[contenteditable=true]')){event.preventDefault();void toggleTelemetryFullscreen();}};
+    document.addEventListener('fullscreenchange',changed);window.addEventListener('keydown',key);
+    return()=>{document.removeEventListener('fullscreenchange',changed);window.removeEventListener('keydown',key);};
+  },[telemetryFocusView,toggleTelemetryFullscreen]);
+
   const [detailedTelemetryOpen, setDetailedTelemetryOpen] = useState(false);
   const [draggedTelemetryPanelId, setDraggedTelemetryPanelId] = useState("");
   const [calibrationOpen, setCalibrationOpen] = useState(false);
@@ -9473,7 +9493,7 @@ export default function LiveCapture() {
         </CollapsibleControlSection>
       )}
 
-      {(telemetryFocusView || (!mediaFocusView && mainTelemetryView) || (!mediaFocusView && launchActive && detailedTelemetryOpen)) && <div
+      {(telemetryFocusView || (!mediaFocusView && mainTelemetryView) || (!mediaFocusView && launchActive && detailedTelemetryOpen)) && <div ref={telemetryDisplayRef} data-telemetry-fullscreen={telemetryFullscreen}
         onPointerDown={(event) => { if (!event.target.closest("[data-telemetry-header]")) setTelemetryControlsOpen(false); }}
         className={telemetryFocusView
           ? "fixed inset-0 z-[60] !m-0 flex h-[100dvh] flex-col overflow-hidden bg-card p-3"
@@ -9494,7 +9514,7 @@ export default function LiveCapture() {
 
             {telemetryFocusView && <span className="ml-2 whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{new Date(liveHealthNowMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}
           </h3>
-          {telemetryFocusView && <div className="flex items-center gap-3"><span aria-label="Session timer" className="whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{launchActive && resolveLiveSessionStartMs() ? fmtMmSs(Math.max(0, (liveHealthNowMs - resolveLiveSessionStartMs()) / 1000)) : "00:00"}</span><button type="button" aria-label="Telemetry controls" aria-expanded={telemetryControlsOpen} onClick={() => setTelemetryControlsOpen(true)} className="rounded-lg border border-border px-2 py-1 text-sm">Controls</button></div>}
+          {telemetryFocusView && <div className="flex items-center gap-3"><span aria-label="Session timer" className="whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{launchActive && resolveLiveSessionStartMs() ? fmtMmSs(Math.max(0, (liveHealthNowMs - resolveLiveSessionStartMs()) / 1000)) : "00:00"}</span><button type="button" onClick={toggleTelemetryFullscreen} className="rounded-lg border border-border px-3 py-2 text-sm">{telemetryFullscreen?'Exit full screen':'Full screen (F)'}</button><button type="button" onClick={openTelemetryScreen} className="rounded-lg border border-border px-3 py-2 text-sm">Second screen</button><button type="button" aria-label="Telemetry controls" aria-expanded={telemetryControlsOpen} onClick={() => setTelemetryControlsOpen(true)} className="rounded-lg border border-border px-2 py-1 text-sm">Controls</button></div>}
           <div hidden={telemetryFocusView && !telemetryControlsOpen} className={telemetryFocusView ? "telemetry-top-controls" : ""}>
             <BloodPressureCuffControls label="Telemetry cuff controls" listening={bpOmronListening} busy={bpOmronActionInFlightRef.current}
         message={bpCapture.error || bpCapture.cuffConnectionMessage || (bpOmronListening ? "Waiting for cuff." : "Cuff disconnected.")}

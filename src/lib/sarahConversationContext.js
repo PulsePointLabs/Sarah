@@ -19,10 +19,13 @@ async function jsonRequest(path, options = {}) {
   return data;
 }
 
-export async function loadSarahConversationContext(payload = {}) {
+export async function loadSarahConversationContext(payload = {}, { timeoutMs = 6000 } = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await jsonRequest("/sarah-conversation/context", {
       method: "POST",
+      signal: controller.signal,
       body: JSON.stringify(payload),
     });
   } catch (error) {
@@ -43,7 +46,7 @@ export async function loadSarahConversationContext(payload = {}) {
       degraded: true,
       error: error.message || String(error),
     };
-  }
+  } finally { clearTimeout(timeout); }
 }
 
 export function loadSarahLanguageProfile() {

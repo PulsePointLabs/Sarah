@@ -1,3 +1,5 @@
+import AnatomyEvidenceReview from "./AnatomyEvidenceReview.jsx";
+import TelemetryPickerMenu from './TelemetryPickerMenu.jsx';
 import StackedVideoViews from './StackedVideoViews.jsx';
 import { useVideoTelemetryOverlays } from './VideoTelemetryOverlays.jsx';
 import VideoPhaseVoice from "./VideoPhaseVoice.jsx";
@@ -365,7 +367,7 @@ function AnnotationTagPill({ value }) {
 function ManualNoteSarahRead({ review, pending = false, compact = false, cameraLabel, onReview }) {
   if (!review && !pending && !onReview) return null;
   const { summary, findings } = manualAnnotationReport(review || {});
-  const visibleFindings = compact ? findings.slice(0, 2) : findings;
+  const visibleFindings = findings.slice(0, compact ? 2 : 3);
   return (
     <div onClick={(event) => event.stopPropagation()} className="mt-2 rounded-md border border-primary/20 bg-primary/[0.06] px-2.5 py-2 text-left">
       <div className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-wider text-primary">
@@ -390,11 +392,12 @@ function ManualNoteSarahRead({ review, pending = false, compact = false, cameraL
                   {(finding.evidence_status === "candidate" || finding.confidence === "low") && <span className="text-muted-foreground">Possible · </span>}{formatManualAnnotationReviewText(finding.observation)}
                 </p>
               ))}
-              {compact && findings.length > visibleFindings.length && (
-                <p className="text-[9px] text-muted-foreground">+{findings.length - visibleFindings.length} more finding{findings.length - visibleFindings.length === 1 ? "" : "s"} on the full note card</p>
+              {findings.length > visibleFindings.length && (
+                <p className="text-[9px] text-muted-foreground">+{findings.length - visibleFindings.length} more finding{findings.length - visibleFindings.length === 1 ? "" : "s"} in anatomy & images</p>
               )}
             </div>
           )}
+          {review && <AnatomyEvidenceReview findings={[...findings,...(review.anatomy_checklist || [])]} frames={review.sampled_frames || []} role={review.source_video_role || review.source_video?.role || "main"} />}
           {onReview && <button type="button" onClick={onReview} className="mt-2 text-[10px] font-semibold text-primary underline">{review ? "Review again" : "Review this camera"}</button>}
         </>
       )}
@@ -2215,7 +2218,7 @@ export default function VideoSyncPlayer({
     const handleKeyDown = (e) => {
       if (addingNew || e.isComposing) return;
       const active = e.target?.ownerDocument?.activeElement || document.activeElement;
-      if (e.defaultPrevented || active?.getAttribute?.("role") === "slider") return;
+      if (e.defaultPrevented || active?.closest?.("[data-anatomy-dialog],[role=menu]") || active?.getAttribute?.("role") === "slider") return;
       const inInput = active?.tagName === "INPUT" || active?.tagName === "TEXTAREA" || active?.tagName === "SELECT";
       if (fullTelemetryView && e.code === "KeyH" && !inInput && !active?.isContentEditable && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); active?.blur?.(); setVideoControlsHidden(v => !v); setVideoBottomHovered(false); return; }
       if (active?.isContentEditable) return;
@@ -2684,25 +2687,12 @@ export default function VideoSyncPlayer({
               <span role="status">{subjective.error || (subjective.saving ? "Saving episode..." : "")}</span>
             </div>}
             <div ref={telemetryOverlays.setPickerTarget} className={`${telemetryFocus && !telemetryWindow.target ? 'hidden' : ''} relative z-50 shrink-0`} />
-            <details className={`${telemetryFocus ? "hidden" : ""} video-channel-picker shrink-0`}>
-              <summary>Channels</summary>
-              <div role="group" aria-label="Optional telemetry channels">
-                {[
-                  hasSpo2 && ["spo2", "SpO2"],
-                  (howl.rows.length > 0 || howl.error) && ["howl", "Howl"],
-                  (civet.rows.length > 0 || civet.loading || civet.error) && ["civet", "CIVET"],
-                  ["respiration", "Resp"],
-                  ["motion", "Motion"],
-                ].filter(Boolean).map(([key, label]) => (
-                  <label
-                    key={key}
-                  >
-                    <input type="checkbox" checked={Boolean(fullTelemetryChannels[key])} onChange={() => setFullTelemetryChannels((current) => ({ ...current, [key]: !current[key] }))} />
-                    {label}
-                  </label>
-                ))}
-              </div>
-            </details>
+            <TelemetryPickerMenu label="Channels" className={telemetryFocus ? "hidden" : ""} options={[
+              hasSpo2 && ["spo2", "SpO2"],
+              (howl.rows.length > 0 || howl.error) && ["howl", "Howl"],
+              (civet.rows.length > 0 || civet.loading || civet.error) && ["civet", "CIVET"],
+              ["respiration", "Resp"], ["motion", "Motion"],
+            ].filter(Boolean).map(([id,label])=>({id,label,checked:Boolean(fullTelemetryChannels[id]),onChange:()=>setFullTelemetryChannels(current=>({...current,[id]:!current[id]}))}))} />
             <div className={telemetryWindow.target ? "monitor-dashboard" : "min-h-0 flex-1"}>
               <VideoSyncPhysiologySidebar
                 timelineRows={timelineRows}

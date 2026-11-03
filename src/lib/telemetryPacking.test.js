@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { packTelemetry } from './telemetryPacking.js';
+import { packTelemetry, telemetryPositionFree } from './telemetryPacking.js';
 
 test('all combinations of widths and heights pack without overlap or horizontal overflow', () => {
   for (let count = 1; count <= 30; count++) {
@@ -14,4 +14,12 @@ test('all combinations of widths and heights pack without overlap or horizontal 
       }
     }
   }
+});
+
+test('free positions remain pinned and do not pull neighboring cards into the vacated space',()=>{
+ const packed=packTelemetry([{id:'a',cols:3,rows:2,x:6,y:0},{id:'b',cols:3,rows:2,x:3,y:0}]);
+ assert.equal(packed.placements[0].x,6);assert.equal(packed.placements[1].x,3);
+ assert.equal(telemetryPositionFree({...packed.placements[0],x:0},packed.placements,packed.rows),true);
+ assert.equal(telemetryPositionFree({...packed.placements[0],x:3},packed.placements,packed.rows),false);
+ assert.equal(telemetryPositionFree({...packed.placements[0],x:11},packed.placements,packed.rows),false);
 });

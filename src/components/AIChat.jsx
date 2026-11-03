@@ -1,3 +1,4 @@
+import { buildChatHistory, conversationalRequestInstruction } from "@/lib/chatConversationPrompt";
 import {
   forwardRef,
   memo,
@@ -75,10 +76,6 @@ const VOICE_AUTO_STOP_MIN_RECORDING_MS = 1200;
 const OPTIONAL_VITALS_CONTEXT_TIMEOUT_MS = 3500;
 const REVIEW_PREP_SLOW_HINT_MS = 12000;
 const REVIEW_BACKGROUND_SLOW_HINT_MS = 45000;
-const CHAT_PROVIDER_HISTORY_LIMIT = 10;
-const CHAT_INTERACTIVE_HISTORY_LIMIT = 6;
-const CHAT_HISTORY_MESSAGE_MAX_CHARS = 520;
-const CHAT_INTERACTIVE_CONTEXT_MAX_CHARS = 14000;
 const CHAT_VISUAL_REVIEW_CONTEXT_MAX_CHARS = 18000;
 
 function getSpeechRecognitionConstructor() {
@@ -94,20 +91,6 @@ function clipPromptText(value = "", maxChars = 800) {
   const normalized = String(value || "").replace(/\s+\n/g, "\n").trim();
   if (!normalized || normalized.length <= maxChars) return normalized;
   return `${normalized.slice(0, Math.max(0, maxChars - 29)).trimEnd()}\n\n[truncated for faster live chat]`;
-}
-
-function buildPromptHistory(messages = [], options = {}) {
-  const {
-    limit = CHAT_PROVIDER_HISTORY_LIMIT,
-    perMessageChars = CHAT_HISTORY_MESSAGE_MAX_CHARS,
-  } = options;
-  return messages
-    .slice(-Math.max(1, limit))
-    .map((m) => {
-      const attachmentLine = m.imageAttachments?.length ? ` [${m.imageAttachments.length} attached image${m.imageAttachments.length === 1 ? "" : "s"}]` : "";
-      return `${m.role === "user" ? "User" : "AI"} (${formatMessagePromptTime(m)}): ${clipPromptText(m.text, perMessageChars)}${attachmentLine}`;
-    })
-    .join("\n");
 }
 
 function buildMessageSyncKey(messages = []) {
@@ -2234,10 +2217,7 @@ export default function AIChat({
       && isVisualEvidenceQuestion(text)
       && Boolean(String(extraReviewContext || "").trim());
     const hasVisualReviewContext = isVisualReviewRequest || isSavedVisualContextRequest;
-    const history = buildPromptHistory(updated, {
-      limit: hasVisualReviewContext ? CHAT_PROVIDER_HISTORY_LIMIT : CHAT_INTERACTIVE_HISTORY_LIMIT,
-      perMessageChars: hasVisualReviewContext ? 760 : CHAT_HISTORY_MESSAGE_MAX_CHARS,
-    });
+    const history = buildChatHistory(updated, { visual: hasVisualReviewContext, formatTime: formatMessagePromptTime });
     const videoContext = imagePayload.metadata
       .filter((item) => item.sourceVideo)
       .map((item) => item.sourceVideo)
@@ -2302,7 +2282,7 @@ SYNC AND BASELINE RULES:
 
     const profileGroundingContext = hasVisualReviewContext
       ? clipPromptText(buildAIGroundingContext(userProfile), CHAT_VISUAL_REVIEW_CONTEXT_MAX_CHARS)
-      : "";
+      : buildAIGroundingContext(userProfile);
     const groundingContext = [profileGroundingContext, alignedPhysiologyContext]
       .filter(Boolean)
       .join("\n\n");
@@ -2336,11 +2316,12 @@ SYNC AND BASELINE RULES:
       isTechnical: false,
     });
     const intimateChatTonePrompt = buildIntimateChatTonePrompt(intimateChatSettings);
-    const combinedContext = clipPromptText([
+    const recordContext = [
       hasVisualReviewContext ? "SAVED VISUAL EVIDENCE RULE: This record contains timestamped Sarah video-pass findings and may include saved sampled frames in this request. Treat those as actual previously reviewed visual evidence for this specific record. Answer the visual question directly from that evidence. Never claim that you lack frame access, that only session notes are available, or that no visual evidence exists when the supplied saved visual evidence describes or shows the requested body area. Distinguish a prior saved visual observation from a brand-new inspection only when that distinction matters." : "",
       hasVisualReviewContext ? String(extraReviewContext || "").trim() : "",
       String(context || "").trim(),
-    ].filter(Boolean).join("\n\n"), hasVisualReviewContext ? CHAT_VISUAL_REVIEW_CONTEXT_MAX_CHARS : CHAT_INTERACTIVE_CONTEXT_MAX_CHARS);
+    ].filter(Boolean).join("\n\n");
+    const combinedContext = hasVisualReviewContext ? clipPromptText(recordContext, CHAT_VISUAL_REVIEW_CONTEXT_MAX_CHARS) : recordContext;
 
     const ANATOMY_RULE = `ANATOMY RULE: Use ONLY the anatomical and physiological details stated in the profile above. Never assume or infer biological sex, genitalia, or anatomy not explicitly mentioned. If anatomy is ambiguous, use neutral language (e.g. "genital stimulation", "pelvic region", "that area").`;
 
@@ -2372,7 +2353,7 @@ If nothing specific stands out, ask what surprised them most or what they'd most
     const SARAH_QA_STYLE_RULE = `EMOJI STYLE RULE: In conversational Q&A replies, Sarah may use an occasional emoji when the user uses emojis or when one naturally fits the tone. Keep it light and human, not decorative or spammy. Do not put emojis in structured saved findings.`;
     const CURRENT_TOPIC_RULE = `CURRENT TOPIC RULE: The user's newest message controls the subject of this reply. Treat earlier conversation as background context, not as an agenda. If the newest message changes subjects, follow that change immediately and do not return to the prior topic unless the user explicitly connects it or asks to resume it. Answer the newest request directly before asking any follow-up question. Never keep steering back to a procedure, examination, device, or body topic merely because it appeared repeatedly in earlier turns.`;
 
-    const systemPrompt = messages.length === 1
+    const interviewPrompt = messages.length === 1
       ? mode === "profile"
         ? `You're having a genuine, immersive conversation with someone about their physiology and arousal — like a knowledgeable friend who has studied their data closely. They've just shared something. Respond naturally, ask ONE follow-up question that goes deeper. Curious, specific, engaged. 2–3 sentences. No bullets, no clinical jargon. ${CURRENT_TOPIC_RULE} ${ANATOMY_RULE} ${SARAH_QA_STYLE_RULE}`
         : `You're a curious, knowledgeable friend helping someone unpack a specific ${conversationSubject}. They just shared something. React briefly and naturally, then ask ONE question grounded in a real detail from this ${conversationSubject} — a method used, a logged event or note, a subjective metric gap, or something about the body response. Sound like you actually read the record, not like you're scanning a graph. Keep it casual and conversational.
@@ -2401,6 +2382,8 @@ ${QUESTION_QUALITY_RULE}
 ${ANATOMY_RULE}
 ${SARAH_QA_STYLE_RULE}
 No affirmations or pleasantries. 2–3 sentences.`;
+
+    const systemPrompt = conversationalRequestInstruction(text, interviewPrompt);
 
     const imageReviewPrompt = isVisualReviewRequest ? `SARAH IMAGE REVIEW MODE:
 You are Sarah inside the Sarah app. The user may provide explicit adult anatomical or device images for private self-analysis. Analyze clinically/functionally, not erotically.
