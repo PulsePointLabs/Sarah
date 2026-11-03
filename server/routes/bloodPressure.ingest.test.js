@@ -48,4 +48,19 @@ test('uncertain reception times, post-recording readings and pause readings rema
  const result=await ingest({external_id:'valid-delayed',measured_at:new Date(start+40000).toISOString(),timestamp_source:'cuff_clock',source_app:'OMRON native BLE',systolic_mm_hg:120,diastolic_mm_hg:80});
  assert.equal(result.status,200);assert.equal(getEntity('Session','bounded').event_timeline.length,1);
 });
+test('a verified DST-corrected reading joins its recording while retaining the original cuff date',async()=>{
+ const start=Date.now()-60000,measured=start+45000;
+ upsertEntity('Session','dst',{capture_started_at:new Date(start).toISOString()});
+ setBloodPressureCaptureResolver(()=>({id:'dst',entity:'Session',startedAt:new Date(start).toISOString()}));
+ const original=new Date(measured+3600000).toISOString();
+ const result=await ingest({external_id:'dst-clock',measured_at:new Date(measured).toISOString(),
+  received_at:new Date().toISOString(),source_app:'OMRON native BLE',systolic_mm_hg:120,diastolic_mm_hg:80,
+  raw:{timestamp_source:'cuff_clock_corrected',cuff_measured_at:original,clock_offset_ms:3600000}});
+ assert.equal(result.status,200);assert.equal(getEntity('Session','dst').event_timeline[0].time_s,45);
+ assert.equal(getEntity('BloodPressureReading','bp-dst-clock').raw.cuff_measured_at,original);
+ assert.equal(result.data.readings[0].timestamp_source,'cuff_clock_corrected');
+ await ingest({...result.data.readings[0],raw:{timestamp_source:'cuff_clock_corrected',cuff_measured_at:original}});
+ assert.equal(getEntity('Session','dst').event_timeline.length,1);
+});
+
 test.after(async()=>{await new Promise(resolve=>server.close(resolve));db.close();fs.rmSync(temp,{recursive:true,force:true});});
