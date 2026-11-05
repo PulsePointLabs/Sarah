@@ -1,0 +1,34 @@
+<resources>
+    <color name="bg">#FF14161C</color>
+    <color name="card">#FF1E2129</color>
+    <color name="text">#FFF4F5F8</color>
+    <color name="muted">#FF8A90A0</color>
+    <color name="accent">#FF4F8DFF</color>
+
+    <style name="Theme.Clock" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:colorBackground">@color/bg</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorPrimary">@color/bg</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/muted</item>
+    </style>
+
+    <style name="Label">
+        <item name="android:textColor">@color/text</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:fontFamily">@font/inter_medium</item>
+    </style>
+    <style name="Hint">
+        <item name="android:textColor">@color/muted</item>
+        <item name="android:textSize">13sp</item>
+    </style>
+    <style name="Card">
+        <item name="android:background">@drawable/card</item>
+        <item name="android:padding">18dp</item>
+        <item name="android:layout_marginBottom">14dp</item>
+        <item name="android:orientation">vertical</item>
+    </style>
+</resources>

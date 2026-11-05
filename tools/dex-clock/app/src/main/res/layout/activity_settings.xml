@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Floating Clock"
+            android:textColor="@color/text"
+            android:textSize="26sp"
+            android:fontFamily="@font/inter_medium" />
+
+        <TextView
+            android:id="@+id/status"
+            style="@style/Hint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="18dp" />
+
+        <Button
+            android:id="@+id/toggle"
+            android:layout_width="match_parent"
+            android:layout_height="54dp"
+            android:layout_marginBottom="18dp"
+            android:background="@drawable/button"
+            android:fontFamily="@font/inter_medium"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFFFF"
+            android:textSize="16sp"
+            android:stateListAnimator="@null" />
+
+        <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                <TextView style="@style/Label" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="Clock opacity" />
+                <TextView android:id="@+id/opacityVal" style="@style/Hint" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+            </LinearLayout>
+            <SeekBar android:id="@+id/opacity" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:min="20" android:max="100" />
+            <TextView style="@style/Hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="Fades the whole thing, digits included." />
+        </LinearLayout>
+
+        <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                <TextView style="@style/Label" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="Background" />
+                <TextView android:id="@+id/bgVal" style="@style/Hint" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+            </LinearLayout>
+            <SeekBar android:id="@+id/bg" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:min="0" android:max="100" />
+            <TextView style="@style/Hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="Just the dark glass behind the digits. 0% = floating numbers." />
+        </LinearLayout>
+
+        <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                <TextView style="@style/Label" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="Size" />
+                <TextView android:id="@+id/sizeVal" style="@style/Hint" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+            </LinearLayout>
+            <SeekBar android:id="@+id/size" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:min="50" android:max="300" />
+            <TextView style="@style/Hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="Or drag the clock's corner, scroll the mouse wheel over it, or pinch it." />
+        </LinearLayout>
+
+        <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <Switch android:id="@+id/boot" style="@style/Label" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Start when the phone boots" />
+        </LinearLayout>
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+            <Button android:id="@+id/reset" android:layout_width="0dp" android:layout_weight="1" android:layout_height="46dp" android:layout_marginEnd="6dp"
+                android:background="@drawable/button_quiet" android:textAllCaps="false" android:textColor="@color/text" android:stateListAnimator="@null" android:text="Reset position" />
+            <Button android:id="@+id/battery" android:layout_width="0dp" android:layout_weight="1" android:layout_height="46dp" android:layout_marginStart="6dp"
+                android:background="@drawable/button_quiet" android:textAllCaps="false" android:textColor="@color/text" android:stateListAnimator="@null" android:text="Battery settings" />
+        </LinearLayout>
+
+        <TextView style="@style/Hint" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:lineSpacingMultiplier="1.3"
+            android:text="Drag the clock to move it. Hover with the mouse (or tap it) to show the gear and resize corner. If Samsung keeps killing it, set this app's battery to Unrestricted." />
+    </LinearLayout>
+</ScrollView>

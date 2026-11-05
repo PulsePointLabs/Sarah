@@ -1,0 +1,15 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- "24" style digits as two thin white blocks with a colon -->
+    <path android:fillColor="#FFF4F5F8" android:pathData="M33,42h14v3h-14z M33,42h3v24h-3z M44,42h3v24h-3z M33,63h14v3h-14z" />
+    <path android:fillColor="#FFF4F5F8" android:pathData="M52,48h4v4h-4z M52,57h4v4h-4z" />
+    <path android:fillColor="#FFF4F5F8" android:pathData="M61,42h14v3h-14z M61,42h3v24h-3z M72,42h3v24h-3z M61,63h14v3h-14z" />
+    <!-- hour bar -->
+    <path android:pathData="M33,72h42v4h-42z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="33" android:startY="0" android:endX="75" android:endY="0"
+                android:startColor="#FF4F8DFF" android:centerColor="#FFA06CF0" android:endColor="#FFFF5252" />
+        </aapt:attr>
+    </path>
+</vector>
