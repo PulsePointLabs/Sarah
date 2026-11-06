@@ -2,6 +2,7 @@ package com.pulsepointlabs.dexclock
 
 import android.Manifest
 import android.app.Activity
+import android.app.TimePickerDialog
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
@@ -63,6 +64,7 @@ class SettingsActivity : Activity(), SharedPreferences.OnSharedPreferenceChangeL
             setOnCheckedChangeListener { _, on -> prefs.edit().putBoolean(Prefs.BOOT, on).apply() }
         }
         setupWeather()
+        setupBedtime()
 
         findViewById<Button>(R.id.reset).setOnClickListener {
             prefs.edit().putLong(Prefs.RESET, System.currentTimeMillis()).apply()
@@ -86,6 +88,28 @@ class SettingsActivity : Activity(), SharedPreferences.OnSharedPreferenceChangeL
             override fun onStopTrackingTouch(s: SeekBar) {}
         })
         return bar
+    }
+
+    // ---------------------------------------------------------------- bedtime
+
+    private fun setupBedtime() {
+        findViewById<Switch>(R.id.bedOn).apply {
+            isChecked = prefs.getBoolean(Prefs.BED_ON, false)
+            setOnCheckedChangeListener { _, on -> prefs.edit().putBoolean(Prefs.BED_ON, on).apply() }
+        }
+        val btn = findViewById<Button>(R.id.bedTime)
+        fun show() {
+            val m = prefs.getInt(Prefs.BED_TIME, Prefs.BED_DEFAULT)
+            btn.text = "%02d:%02d".format(m / 60, m % 60)
+        }
+        show()
+        btn.setOnClickListener {
+            val m = prefs.getInt(Prefs.BED_TIME, Prefs.BED_DEFAULT)
+            TimePickerDialog(this, { _, h, min ->
+                prefs.edit().putInt(Prefs.BED_TIME, h * 60 + min).apply()
+                show()
+            }, m / 60, m % 60, true).show()
+        }
     }
 
     // ---------------------------------------------------------------- weather

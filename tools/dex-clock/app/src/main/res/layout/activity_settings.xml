@@ -84,11 +84,23 @@
 
         <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                <TextView style="@style/Label" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="Size" />
+                <TextView style="@style/Label" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="Clock size" />
                 <TextView android:id="@+id/sizeVal" style="@style/Hint" android:layout_width="wrap_content" android:layout_height="wrap_content" />
             </LinearLayout>
             <SeekBar android:id="@+id/size" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:min="50" android:max="300" />
-            <TextView style="@style/Hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="Or drag the clock's corner, scroll the mouse wheel over it, or pinch it." />
+            <TextView style="@style/Hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="Or drag a card's corner, scroll the mouse wheel over it, or pinch it." />
+        </LinearLayout>
+
+        <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <Switch android:id="@+id/bedOn" style="@style/Label" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Bedtime countdown" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="horizontal" android:gravity="center_vertical">
+                <TextView style="@style/Hint" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="Bedtime" />
+                <Button android:id="@+id/bedTime" android:layout_width="wrap_content" android:layout_height="44dp" android:minWidth="96dp"
+                    android:background="@drawable/button_quiet" android:textAllCaps="false" android:textColor="@color/text" android:textSize="16sp"
+                    android:fontFamily="@font/inter_medium" android:stateListAnimator="@null" />
+            </LinearLayout>
+            <TextView style="@style/Hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8dp"
+                android:text="A second card with the same look. Drag, resize and hover it just like the clock. Goes blue to red over the last 4 hours." />
         </LinearLayout>
 
         <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">

@@ -24,14 +24,16 @@ import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import java.time.LocalTime
 import java.util.concurrent.Executors
 import kotlin.math.abs
 
 /**
- * Keeps the clock floating on top of everything.
+ * Keeps the floating cards (the clock, plus the optional bedtime countdown) on top of
+ * everything.
  *
  * DeX runs on the external monitor as its own Android "display". A plain overlay would
- * land on the phone screen, so we look for a non-phone display and put the clock there,
+ * land on the phone screen, so we look for a non-phone display and put the cards there,
  * and hop back and forth as DeX connects / disconnects.
  */
 class ClockService : Service(),
@@ -52,43 +54,53 @@ class ClockService : Service(),
             private set
     }
 
+    /** One floating card: its window, size and saved-position keys. */
+    private inner class Card(val id: String) {
+        var view: ClockView? = null
+        var params: WindowManager.LayoutParams? = null
+        var scale = 1f
+        val save = Runnable {
+            val p = params ?: return@Runnable
+            prefs.edit()
+                .putInt(Prefs.xKey(external, id), p.x)
+                .putInt(Prefs.yKey(external, id), p.y)
+                .putInt(Prefs.sizeKey(id), (scale * 100).toInt())
+                .apply()
+        }
+        val hideChrome = Runnable { view?.chrome = false }
+        val isBed get() = id == "bed"
+    }
+
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var prefs: SharedPreferences
     private lateinit var displays: DisplayManager
 
+    private val clock = Card("")
+    private val bed = Card("bed")
+    private val cards = listOf(clock, bed)
+
     private var wm: WindowManager? = null
-    private var view: ClockView? = null
-    private var params: WindowManager.LayoutParams? = null
+    private var windowCtx: Context? = null
     private var displayId = Display.DEFAULT_DISPLAY
     private val external get() = displayId != Display.DEFAULT_DISPLAY
     private var density = 1f
-    private var scale = 1f
     private var weather: Weather? = null
     private val io = Executors.newSingleThreadExecutor()
     private val weatherTick = Runnable { refreshWeather() }
 
     private val tick = object : Runnable {
         override fun run() {
-            view?.invalidate()
+            cards.forEach { it.view?.invalidate() }
             handler.postDelayed(this, 1000 - System.currentTimeMillis() % 1000 + 5)
         }
     }
-    private val hideChrome = Runnable { view?.chrome = false }
-    private val savePrefs = Runnable {
-        val p = params ?: return@Runnable
-        prefs.edit()
-            .putInt(Prefs.xKey(external), p.x)
-            .putInt(Prefs.yKey(external), p.y)
-            .putInt(Prefs.SIZE, (scale * 100).toInt())
-            .apply()
-    }
     private val recheckDisplay = Runnable {
         val target = pickDisplay()
-        if (target.displayId != displayId || view == null) {
-            detach()
-            attach(target)
+        if (target.displayId != displayId || clock.view == null) {
+            detachAll()
+            attachAll(target)
         } else {
-            clampAndUpdate()
+            cards.forEach { clampAndUpdate(it) }
         }
     }
 
@@ -103,9 +115,9 @@ class ClockService : Service(),
 
         if (!Settings.canDrawOverlays(this)) { stopSelf(); return }
 
-        scale = prefs.getInt(Prefs.SIZE, 100) / 100f
+        cards.forEach { it.scale = prefs.getInt(Prefs.sizeKey(it.id), 100) / 100f }
         weather = cachedWeather()
-        attach(pickDisplay())
+        attachAll(pickDisplay())
         handler.post(weatherTick)
         prefs.registerOnSharedPreferenceChangeListener(this)
         displays.registerDisplayListener(this, handler)
@@ -126,7 +138,7 @@ class ClockService : Service(),
         handler.removeCallbacksAndMessages(null)
         if (::prefs.isInitialized) prefs.unregisterOnSharedPreferenceChangeListener(this)
         if (::displays.isInitialized) displays.unregisterDisplayListener(this)
-        detach()
+        detachAll()
         io.shutdownNow()
         super.onDestroy()
     }
@@ -154,106 +166,128 @@ class ClockService : Service(),
         handler.postDelayed(recheckDisplay, 600)   // DeX fires a burst of these; settle first
     }
 
-    // ---------------------------------------------------------------- window
+    // ---------------------------------------------------------------- windows
 
-    private fun attach(display: Display) {
+    private fun wanted(c: Card) = !c.isBed || prefs.getBoolean(Prefs.BED_ON, false)
+
+    private fun attachAll(display: Display) {
         try {
-            addWindow(display)
+            useDisplay(display)
+            cards.filter(::wanted).forEach(::addWindow)
         } catch (e: Exception) {
             // Couldn't use that screen for some reason; fall back to the phone.
-            detach()
+            detachAll()
             if (display.displayId != Display.DEFAULT_DISPLAY) {
-                runCatching { addWindow(displays.getDisplay(Display.DEFAULT_DISPLAY)) }
+                runCatching {
+                    useDisplay(displays.getDisplay(Display.DEFAULT_DISPLAY))
+                    cards.filter(::wanted).forEach(::addWindow)
+                }
             }
         }
     }
 
-    private fun addWindow(display: Display) {
+    private fun useDisplay(display: Display) {
         val ctx = createDisplayContext(display)
             .createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
-        val windowManager = ctx.getSystemService(WindowManager::class.java)
+        windowCtx = ctx
+        wm = ctx.getSystemService(WindowManager::class.java)
         displayId = display.displayId
         density = ctx.resources.displayMetrics.density
+    }
 
+    private fun addWindow(c: Card) {
+        val ctx = windowCtx ?: return
+        if (c.view != null) return
         val v = ClockView(ctx).apply {
-            scale = this@ClockService.scale
+            scale = c.scale
             alpha = prefs.getInt(Prefs.OPACITY, 100) / 100f
             bgAlpha = prefs.getInt(Prefs.BG, 62) / 100f
             tint = prefs.getInt(Prefs.TINT, 50) / 100f
-            weather = this@ClockService.weather
+            if (c.isBed) bedtime = bedtimePref() else weather = this@ClockService.weather
         }
         val lp = WindowManager.LayoutParams(
-            ClockView.windowW(density, scale),
-            ClockView.windowH(density, scale),
+            ClockView.windowW(density, c.scale),
+            ClockView.windowH(density, c.scale),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            title = "Floating Clock"
+            title = if (c.isBed) "Bedtime Countdown" else "Floating Clock"
         }
-        wm = windowManager; view = v; params = lp
-        placeFromPrefs()
-        wireInput(v)
-        windowManager.addView(v, lp)
+        c.view = v; c.params = lp
+        placeFromPrefs(c)
+        wireInput(c)
+        wm!!.addView(v, lp)
     }
 
-    private fun detach() {
-        val v = view ?: return
+    private fun detach(c: Card) {
+        val v = c.view ?: return
         runCatching { wm?.removeViewImmediate(v) }
-        view = null; params = null; wm = null
+        c.view = null; c.params = null
     }
+
+    private fun detachAll() {
+        cards.forEach(::detach)
+        wm = null; windowCtx = null
+    }
+
+    private fun bedtimePref(): LocalTime =
+        LocalTime.ofSecondOfDay(prefs.getInt(Prefs.BED_TIME, Prefs.BED_DEFAULT) * 60L)
 
     private fun screen() = wm!!.currentWindowMetrics.bounds
 
-    private fun placeFromPrefs() {
-        val lp = params ?: return
-        val x = prefs.getInt(Prefs.xKey(external), -1)
-        val y = prefs.getInt(Prefs.yKey(external), -1)
+    private fun placeFromPrefs(c: Card) {
+        val lp = c.params ?: return
+        val x = prefs.getInt(Prefs.xKey(external, c.id), -1)
+        val y = prefs.getInt(Prefs.yKey(external, c.id), -1)
         if (x < 0 || y < 0) {
-            lp.x = screen().width() - lp.width - (16 * density).toInt()
-            lp.y = (16 * density).toInt()
+            // Top-right corner; the bedtime card tucks in just under the clock.
+            val pad = (16 * density).toInt()
+            lp.x = screen().width() - lp.width - pad
+            lp.y = if (c.isBed) pad + ClockView.windowH(density, clock.scale) else pad
         } else {
             lp.x = x; lp.y = y
         }
-        clamp()
+        clamp(c)
     }
 
-    private fun clamp() {
-        val lp = params ?: return
+    private fun clamp(c: Card) {
+        val lp = c.params ?: return
         val b = screen()
         lp.x = lp.x.coerceIn(0, (b.width() - lp.width).coerceAtLeast(0))
         lp.y = lp.y.coerceIn(0, (b.height() - lp.height).coerceAtLeast(0))
     }
 
-    private fun clampAndUpdate() {
-        clamp()
-        val v = view ?: return
-        runCatching { wm?.updateViewLayout(v, params) }
+    private fun clampAndUpdate(c: Card) {
+        val v = c.view ?: return
+        clamp(c)
+        runCatching { wm?.updateViewLayout(v, c.params) }
     }
 
-    private fun setScale(s: Float, persist: Boolean = true) {
+    private fun setScale(c: Card, s: Float, persist: Boolean = true) {
         val next = s.coerceIn(MIN_SCALE, MAX_SCALE)
-        if (abs(next - scale) < 0.005f) return
-        scale = next
-        val lp = params ?: return
-        lp.width = ClockView.windowW(density, scale)
-        lp.height = ClockView.windowH(density, scale)
-        view?.scale = scale
-        clampAndUpdate()
-        if (persist) { handler.removeCallbacks(savePrefs); handler.postDelayed(savePrefs, 400) }
+        if (abs(next - c.scale) < 0.005f) return
+        c.scale = next
+        val lp = c.params ?: return
+        lp.width = ClockView.windowW(density, c.scale)
+        lp.height = ClockView.windowH(density, c.scale)
+        c.view?.scale = c.scale
+        clampAndUpdate(c)
+        if (persist) { handler.removeCallbacks(c.save); handler.postDelayed(c.save, 400) }
     }
 
-    private fun showChrome(forMs: Long) {
-        view?.chrome = true
-        handler.removeCallbacks(hideChrome)
-        if (forMs > 0) handler.postDelayed(hideChrome, forMs)
+    private fun showChrome(c: Card, forMs: Long) {
+        c.view?.chrome = true
+        handler.removeCallbacks(c.hideChrome)
+        if (forMs > 0) handler.postDelayed(c.hideChrome, forMs)
     }
 
     // ---------------------------------------------------------------- input
 
     @SuppressLint("ClickableViewAccessibility")
-    private fun wireInput(v: ClockView) {
+    private fun wireInput(c: Card) {
+        val v = c.view ?: return
         val slop = ViewConfiguration.get(v.context).scaledTouchSlop
         var downX = 0f; var downY = 0f
         var startX = 0; var startY = 0
@@ -262,30 +296,30 @@ class ClockService : Service(),
 
         val pinch = ScaleGestureDetector(v.context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScaleBegin(d: ScaleGestureDetector): Boolean { pinching = true; moved = true; return true }
-            override fun onScale(d: ScaleGestureDetector): Boolean { setScale(scale * d.scaleFactor); return true }
+            override fun onScale(d: ScaleGestureDetector): Boolean { setScale(c, c.scale * d.scaleFactor); return true }
         })
 
         v.setOnTouchListener { _, e ->
             pinch.onTouchEvent(e)
-            val lp = params ?: return@setOnTouchListener false
+            val lp = c.params ?: return@setOnTouchListener false
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = e.rawX; downY = e.rawY
                     startX = lp.x; startY = lp.y
-                    startScale = scale; startW = lp.width
+                    startScale = c.scale; startW = lp.width
                     resizing = v.hitGrip(e.x, e.y)
                     moved = false; pinching = false
-                    showChrome(0)
+                    showChrome(c, 0)
                 }
                 MotionEvent.ACTION_MOVE -> if (!pinching) {
                     val dx = e.rawX - downX; val dy = e.rawY - downY
                     if (!moved && (abs(dx) > slop || abs(dy) > slop)) moved = true
                     if (moved) {
                         if (resizing) {
-                            setScale(startScale * (startW + dx) / startW, persist = false)
+                            setScale(c, startScale * (startW + dx) / startW, persist = false)
                         } else {
                             lp.x = startX + dx.toInt(); lp.y = startY + dy.toInt()
-                            clampAndUpdate()
+                            clampAndUpdate(c)
                         }
                     }
                 }
@@ -293,10 +327,10 @@ class ClockService : Service(),
                     if (!moved && e.actionMasked == MotionEvent.ACTION_UP && v.hitGear(e.x, e.y)) {
                         openSettings()
                     }
-                    if (moved) { handler.removeCallbacks(savePrefs); handler.post(savePrefs) }
+                    if (moved) { handler.removeCallbacks(c.save); handler.post(c.save) }
                     // Mouse users get hover; fingers get a few seconds to find the gear/grip.
                     val mouse = e.isFromSource(InputDevice.SOURCE_MOUSE)
-                    showChrome(if (mouse) 0 else 3500)
+                    showChrome(c, if (mouse) 0 else 3500)
                 }
             }
             true
@@ -304,17 +338,17 @@ class ClockService : Service(),
 
         v.setOnHoverListener { _, e ->
             when (e.actionMasked) {
-                MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> showChrome(0)
-                MotionEvent.ACTION_HOVER_EXIT -> showChrome(900)
+                MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> showChrome(c, 0)
+                MotionEvent.ACTION_HOVER_EXIT -> showChrome(c, 900)
             }
             true
         }
 
-        // Mouse wheel over the clock = resize. Very DeX-friendly.
+        // Mouse wheel over a card = resize it. Very DeX-friendly.
         v.setOnGenericMotionListener { _, e ->
             if (e.actionMasked == MotionEvent.ACTION_SCROLL) {
                 val d = e.getAxisValue(MotionEvent.AXIS_VSCROLL)
-                if (d != 0f) setScale(scale * if (d > 0) 1.06f else 1 / 1.06f)
+                if (d != 0f) setScale(c, c.scale * if (d > 0) 1.06f else 1 / 1.06f)
                 true
             } else false
         }
@@ -331,17 +365,24 @@ class ClockService : Service(),
 
     override fun onSharedPreferenceChanged(p: SharedPreferences, key: String?) {
         when (key) {
-            Prefs.OPACITY -> view?.alpha = p.getInt(key, 100) / 100f
-            Prefs.BG -> view?.bgAlpha = p.getInt(key, 62) / 100f
-            Prefs.TINT -> view?.tint = p.getInt(key, 50) / 100f
+            Prefs.OPACITY -> cards.forEach { it.view?.alpha = p.getInt(key, 100) / 100f }
+            Prefs.BG -> cards.forEach { it.view?.bgAlpha = p.getInt(key, 62) / 100f }
+            Prefs.TINT -> cards.forEach { it.view?.tint = p.getInt(key, 50) / 100f }
             Prefs.WEATHER, Prefs.CELSIUS, Prefs.LAT, Prefs.LON -> {
                 handler.removeCallbacks(weatherTick)
                 handler.postDelayed(weatherTick, 300)
             }
-            Prefs.SIZE -> setScale(p.getInt(key, 100) / 100f, persist = false)
+            Prefs.SIZE -> setScale(clock, p.getInt(key, 100) / 100f, persist = false)
+            Prefs.BED_ON -> when {
+                !p.getBoolean(key, false) -> detach(bed)
+                wm != null -> runCatching { addWindow(bed) }
+            }
+            Prefs.BED_TIME -> bed.view?.bedtime = bedtimePref()
             Prefs.RESET -> {
-                p.edit().remove(Prefs.xKey(external)).remove(Prefs.yKey(external)).apply()
-                placeFromPrefs(); clampAndUpdate()
+                val e = p.edit()
+                cards.forEach { e.remove(Prefs.xKey(external, it.id)).remove(Prefs.yKey(external, it.id)) }
+                e.apply()
+                cards.forEach { placeFromPrefs(it); clampAndUpdate(it) }
             }
         }
     }
@@ -375,7 +416,7 @@ class ClockService : Service(),
 
     private fun setWeather(w: Weather?) {
         weather = w
-        view?.weather = w
+        clock.view?.weather = w
     }
 
     private fun cachedWeather(): Weather? {

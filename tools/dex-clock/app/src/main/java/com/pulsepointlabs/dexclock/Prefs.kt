@@ -20,11 +20,18 @@ object Prefs {
     const val PLACE = "place"          // human-readable name for the settings screen
     const val W_CACHE = "w_cache"      // "temp,code,day,epochMillis" so it shows instantly
 
+    const val BED_ON = "bed_on"        // show the bedtime countdown card
+    const val BED_TIME = "bed_time"    // minutes after midnight, e.g. 22*60+30
+    const val BED_DEFAULT = 22 * 60 + 30
+
     fun get(ctx: Context): SharedPreferences =
         ctx.getSharedPreferences("clock", Context.MODE_PRIVATE)
 
     // Positions are kept separately for the phone screen and the DeX screen,
     // since they're very different sizes.
-    fun xKey(external: Boolean) = if (external) "x_ext" else "x_phone"
-    fun yKey(external: Boolean) = if (external) "y_ext" else "y_phone"
+    // Each card (clock = "", bedtime = "bed") keeps its own spot and size.
+    fun xKey(external: Boolean, card: String = "") = card.prefix() + if (external) "x_ext" else "x_phone"
+    fun yKey(external: Boolean, card: String = "") = card.prefix() + if (external) "y_ext" else "y_phone"
+    fun sizeKey(card: String = "") = card.prefix() + SIZE
+    private fun String.prefix() = if (isEmpty()) "" else "${this}_"
 }

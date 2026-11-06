@@ -7,7 +7,9 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.view.View
+import java.time.Duration
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -15,6 +17,9 @@ import java.util.Locale
  * Style C: smoked-glass card, white 24h digits, full date + weather, and a bar along
  * the bottom that fills across the hour and drifts blue -> violet -> red. The card
  * itself can take on the same colour ([tint]).
+ *
+ * With [bedtime] set, the same card becomes a bedtime countdown instead: big H:MM
+ * left until bed, and the colour runs blue -> red over the last [WIND_DOWN_H] hours.
  *
  * Everything is laid out in "base" dp units (card is 280 x 120) and multiplied by
  * [k] = density * scale at draw time, so text stays crisp at any size.
@@ -40,6 +45,24 @@ class ClockView(ctx: Context) : View(ctx) {
             return lerp(STOPS[i], STOPS[i + 1], t - i)
         }
 
+        /** Colour/bar for the bedtime card starts moving this many hours before bed. */
+        const val WIND_DOWN_H = 4L
+        /** Keep showing "past bedtime" this long before switching to tomorrow's countdown. */
+        const val OVERDUE_H = 4L
+
+        /**
+         * Seconds until the bedtime that matters right now (negative = past it), and the
+         * matching 0..1 progress through the wind-down window.
+         */
+        fun bedState(now: LocalDateTime, bed: LocalTime): Pair<Long, Float> {
+            val target = (-1L..1L)
+                .map { now.toLocalDate().plusDays(it).atTime(bed) }
+                .first { it.plusHours(OVERDUE_H).isAfter(now) }
+            val secs = Duration.between(now, target).seconds
+            val p = 1f - secs.toFloat() / (WIND_DOWN_H * 3600f)
+            return secs to p.coerceIn(0f, 1f)
+        }
+
         fun lerp(a: Int, b: Int, f: Float): Int = Color.rgb(
             (Color.red(a) + (Color.red(b) - Color.red(a)) * f).toInt(),
             (Color.green(a) + (Color.green(b) - Color.green(a)) * f).toInt(),
@@ -58,6 +81,9 @@ class ClockView(ctx: Context) : View(ctx) {
         set(v) { field = v; invalidate() }
     var weather: Weather? = null
         set(v) { field = v; invalidate() }
+    /** Non-null turns this card into the bedtime countdown. */
+    var bedtime: LocalTime? = null
+        set(v) { field = v; invalidate() }
     /** For previews/tests only: freeze the clock at this time. */
     var timeOverride: LocalDateTime? = null
         set(v) { field = v; invalidate() }
@@ -67,6 +93,7 @@ class ClockView(ctx: Context) : View(ctx) {
     private val k get() = density * scale
 
     private val dateFmt = DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.getDefault())
+    private val hhmm = DateTimeFormatter.ofPattern("HH:mm")
 
     private val baseCard = Color.rgb(16, 18, 24)
     private val cardPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -104,7 +131,15 @@ class ClockView(ctx: Context) : View(ctx) {
 
     override fun onDraw(canvas: Canvas) {
         val now = timeOverride ?: LocalDateTime.now()
-        val progress = (now.minute * 60 + now.second + now.nano / 1e9f) / 3600f
+        val bed = bedtime
+        val bedSecs: Long
+        val progress: Float
+        if (bed != null) {
+            val st = bedState(now, bed); bedSecs = st.first; progress = st.second
+        } else {
+            bedSecs = 0
+            progress = (now.minute * 60 + now.second + now.nano / 1e9f) / 3600f
+        }
         val accent = hourColor(progress)
 
         card.set(x(0f), y(0f), x(BASE_W), y(BASE_H))
@@ -131,9 +166,16 @@ class ClockView(ctx: Context) : View(ctx) {
         iconPaint.setShadowLayer(2 * k, 0f, 1 * k, textShadow)
 
         timePaint.textSize = 58 * k
-        canvas.drawText("%02d:%02d".format(now.hour, now.minute), x(BASE_W / 2), y(66f), timePaint)
-
-        drawDateLine(canvas, now.format(dateFmt))
+        if (bed != null) {
+            // Round up while counting down, so it reads 0:00 right at bedtime.
+            val mins = if (bedSecs >= 0) (bedSecs + 59) / 60 else -bedSecs / 60
+            val text = (if (bedSecs < 0) "+" else "") + "%d:%02d".format(mins / 60, mins % 60)
+            canvas.drawText(text, x(BASE_W / 2), y(66f), timePaint)
+            drawBedLine(canvas, if (bedSecs >= 0) "until bed at ${bed.format(hhmm)}" else "past bedtime (${bed.format(hhmm)})")
+        } else {
+            canvas.drawText("%02d:%02d".format(now.hour, now.minute), x(BASE_W / 2), y(66f), timePaint)
+            drawDateLine(canvas, now.format(dateFmt))
+        }
 
         // Hour bar, clipped to the card's rounded bottom corners.
         canvas.save()
@@ -176,6 +218,18 @@ class ClockView(ctx: Context) : View(ctx) {
         WeatherIcon.draw(canvas, w.code, w.day, x(cur + s / 2), y(baseline - size * 0.36f), s * k, iconPaint)
         cur += s + gapB
         canvas.drawText("${w.temp}°", x(cur), y(baseline), tempPaint)
+    }
+
+    /** "☾ until bed at 22:30", centred. */
+    private fun drawBedLine(canvas: Canvas, label: String) {
+        val size = 15f; val icon = 16f; val gap = 7f
+        datePaint.textSize = size * k
+        val total = icon + gap + datePaint.measureText(label) / k
+        val baseline = 95.5f
+        var cur = BASE_W / 2 - total / 2
+        WeatherIcon.draw(canvas, 0, false, x(cur + icon / 2), y(baseline - size * 0.36f), icon * k, iconPaint)
+        cur += icon + gap
+        canvas.drawText(label, x(cur), y(baseline), datePaint)
     }
 
     private fun drawChrome(canvas: Canvas) {

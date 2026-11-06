@@ -6,6 +6,8 @@ Ben's always-on-top desktop clock for Samsung DeX on the S25 Ultra.
 - Bar along the bottom fills across the hour, drifting **blue → violet → red**
 - The glass background can take on the same hour colour (Background colour slider)
 - Weather icon + temperature on the date line (Open-Meteo, no account or key needed)
+- Optional second card: **bedtime countdown** (H:MM until bed, blue → red over the last
+  4 hours, then "+H:MM past bedtime" for up to 4 hours). Same look, moves and resizes on its own.
 - Floats over every app, and automatically jumps to the DeX monitor when DeX is connected
   (back to the phone screen when it isn't)
 
@@ -25,7 +27,7 @@ Ben's always-on-top desktop clock for Samsung DeX on the S25 Ultra.
 | Drag the clock | Move it |
 | Hover with the mouse (or tap it) | Gear + resize corner appear |
 | Drag the bottom-right corner, mouse-wheel over it, or pinch | Resize |
-| Click the gear | Settings (opacity, background, colour tint, size, weather, start on boot) |
+| Click the gear | Settings (opacity, background, colour tint, size, weather, bedtime, start on boot) |
 | "Hide clock" in the notification | Put it away |
 
 ## Build
