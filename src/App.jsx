@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
@@ -52,6 +53,13 @@ const AuthenticatedApp = () => {
     navigateToLogin,
   } = useAuth();
   const bootScreenVisibleRef = useRef(null);
+  const [offlineCapture, setOfflineCapture] = useState(false);
+  const openOfflineCapture = Capacitor.getPlatform() === 'android' && location.pathname !== '/chat'
+    ? <button type="button" onClick={() => setOfflineCapture(true)}
+        className="mt-4 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">
+        Open Phone Capture
+      </button>
+    : null;
 
   useEffect(() => {
     incrementLifecycleMountCount('router_tree');
@@ -132,13 +140,17 @@ const AuthenticatedApp = () => {
     });
   }, [bootScreenVisible, isLoadingAuth, isLoadingPublicSettings]);
 
+  if (offlineCapture) {
+    return <LiveCapture phoneOnly onExitPhoneCapture={() => setOfflineCapture(false)} />;
+  }
+
   // Show loading spinner while checking app public settings or auth
   if (bootScreenVisible) {
     return (
       <SarahSplash
         message={bootStatus?.message}
         detail={bootStatus?.detail}
-      />
+      >{openOfflineCapture}</SarahSplash>
     );
   }
 
@@ -156,7 +168,7 @@ const AuthenticatedApp = () => {
           message={bootStatus?.message || 'Could not start Sarah'}
           detail={bootStatus?.detail || authError.message}
           error
-        />
+        >{openOfflineCapture}</SarahSplash>
       );
     }
   }

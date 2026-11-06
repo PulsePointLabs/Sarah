@@ -3,6 +3,26 @@ import { getSarahApiBaseCandidates, isSarahNativeShell } from "@/lib/mobileApiBa
 
 const SarahFileSaver = registerPlugin("SarahFileSaver");
 
+export async function saveBlobToAndroidDownloads(blob, filename) {
+  const { id } = await SarahFileSaver.beginCaptureFile({ filename, mimeType: blob.type.split(";")[0] });
+  try {
+    const chunkSize = 256 * 1024;
+    for (let offset = 0; offset < blob.size; offset += chunkSize) {
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(reader.error);
+        reader.onload = () => resolve(String(reader.result).split(",")[1]);
+        reader.readAsDataURL(blob.slice(offset, offset + chunkSize));
+      });
+      await SarahFileSaver.appendCaptureFile({ id, data });
+    }
+    await SarahFileSaver.finishCaptureFile({ id });
+  } catch (error) {
+    await SarahFileSaver.finishCaptureFile({ id, discard: true }).catch(() => {});
+    throw error;
+  }
+}
+
 function guessMimeType(filename = "", fallback = "") {
   if (fallback) return fallback;
   const lower = String(filename || "").toLowerCase();

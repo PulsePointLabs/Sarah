@@ -3,7 +3,12 @@ package com.pulsepointlabs.sarah
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.content.ContentValues
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
+import android.util.Base64
 import androidx.activity.result.ActivityResult
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -12,9 +17,81 @@ import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
 import org.json.JSONObject
+import java.io.OutputStream
+import java.util.UUID
 
 @CapacitorPlugin(name = "SarahFileSaver")
 class SarahFileSaverPlugin : Plugin() {
+    private data class CaptureFile(val uri: Uri, val output: OutputStream)
+    private val captureFiles = mutableMapOf<String, CaptureFile>()
+
+    @PluginMethod
+    fun beginCaptureFile(call: PluginCall) {
+        if (Build.VERSION.SDK_INT < 29) {
+            call.reject("Saving phone capture to Downloads requires Android 10 or later.")
+            return
+        }
+        val filename = safeFilename(call.getString("filename") ?: "sarah-capture")
+        val mime = call.getString("mimeType") ?: "application/octet-stream"
+        val resolver = context.contentResolver
+        var uri: Uri? = null
+        try {
+            val target = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/Sarah")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }) ?: error("Android did not create a download.")
+            uri = target
+            val output = resolver.openOutputStream(target) ?: error("Could not open the download.")
+            val id = UUID.randomUUID().toString()
+            captureFiles[id] = CaptureFile(target, output)
+            call.resolve(JSObject().put("id", id))
+        } catch (error: Exception) {
+            uri?.let { runCatching { resolver.delete(it, null, null) } }
+            call.reject("Could not create $filename in Downloads/Sarah.", error)
+        }
+    }
+
+    @PluginMethod
+    fun appendCaptureFile(call: PluginCall) {
+        val file = captureFiles[call.getString("id")]
+        if (file == null) {
+            call.reject("The capture file is closed.")
+            return
+        }
+        try {
+            file.output.write(Base64.decode(call.getString("data").orEmpty(), Base64.DEFAULT))
+            call.resolve()
+        } catch (error: Exception) {
+            call.reject("Could not write the capture file.", error)
+        }
+    }
+
+    @PluginMethod
+    fun finishCaptureFile(call: PluginCall) {
+        val file = captureFiles.remove(call.getString("id"))
+        if (file == null) {
+            call.reject("The capture file is closed.")
+            return
+        }
+        val resolver = context.contentResolver
+        try {
+            file.output.close()
+            if (call.getBoolean("discard") == true) {
+                resolver.delete(file.uri, null, null)
+            } else {
+                check(resolver.update(file.uri, ContentValues().apply {
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
+                }, null, null) == 1)
+            }
+            call.resolve()
+        } catch (error: Exception) {
+            runCatching { resolver.delete(file.uri, null, null) }
+            call.reject("Could not finish saving the capture file.", error)
+        }
+    }
+
     @PluginMethod
     fun downloadWithManager(call: PluginCall) {
         // Backward-compatible bridge name. The APK download path must still use

@@ -88,6 +88,7 @@ export function SarahSplash({
   message = "Starting local cockpit...",
   detail = "",
   error = false,
+  children,
 }) {
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-background px-5 text-foreground">
@@ -122,6 +123,7 @@ export function SarahSplash({
             Retry
           </button>
         )}
+        {children}
       </div>
     </div>
   );

@@ -18,6 +18,7 @@ import LiveEncouragementControls from "@/components/LiveEncouragementControls";
 import { liveCuePlaybackMessage } from "@/lib/liveCueAudioReadiness";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { acknowledgeAndroidVoice, connectLiveVoiceWake, liveVoiceWakePlatform, playAndroidWakeCue } from "@/lib/liveVoiceWake";
 import { BleClient } from "@capacitor-community/bluetooth-le";
 import { NativeH10 } from "@/lib/nativeH10Collector";
 import ObsRecordingSync from "@/components/live/ObsRecordingSync";
@@ -176,30 +177,12 @@ const LIVE_HEALTH_HR_GRACE_MS = 6000;
 const LIVE_HEALTH_RR_USABLE_GRACE_MS = 8000;
 const LIVE_HEALTH_RR_SEEN_GRACE_MS = 10000;
 const LIVE_HEALTH_EMG_GRACE_MS = 6000;
-const TERMINAL_WAKE_LISTENER_ERRORS = new Set([
-  "network",
-  "not-allowed",
-  "service-not-allowed",
-  "audio-capture",
-]);
 const WHISPER_PROMPT =
   "Sarah live session annotation. Timestamped observation during physiological recording. " +
   "Heart rate, arousal, stimulation, physical finding, penis, glans, meatus, foreskin, shaft, scrotum, testes, perineum, legs tense, feet planted, toe curl, tremor, breathing, " +
   "stroke speed, grip pressure, repositioning, comfort adjustment, nearing climax, ejaculation, climax, recovery. " +
   "Enema, rectal instillation, milliliters, mL, cc, fluid instilled, retained volume, leakage, cramping, contractions, expulsion.";
 
-function wakeListenerErrorMessage(errorCode) {
-  if (errorCode === "network") {
-    return "Wake phrase is unavailable in this app/browser right now. Use Record Now; Sarah will still timestamp and save the note.";
-  }
-  if (errorCode === "not-allowed" || errorCode === "service-not-allowed") {
-    return "Wake phrase needs microphone/speech permission. Use Record Now or allow microphone access, then try Wake again.";
-  }
-  if (errorCode === "audio-capture") {
-    return "Wake phrase cannot access the microphone. Check the selected mic, or use Record Now after mic access is restored.";
-  }
-  return errorCode ? `Wake listener: ${errorCode}` : "Wake listener stopped.";
-}
 const HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb";
 const HEART_RATE_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb";
 const BATTERY_SERVICE_UUID = "0000180f-0000-1000-8000-00805f9b34fb";
@@ -1678,7 +1661,7 @@ function LiveHealthPill({ label, value, helper, tone = "neutral" }) {
   );
 }
 
-export default function LiveCapture() {
+export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = {}) {
   const [searchParams, setSearchParams] = useSearchParams();
   const displayViewMode = searchParams.get("display");
   const mediaFocusView = displayViewMode === "media";
@@ -1832,7 +1815,13 @@ export default function LiveCapture() {
   });
   const [bpOmronListening, setBpOmronListening] = useState(false);
   const [launchProfile, setLaunchProfile] = useState(() => readLiveCaptureLaunchProfile());
-  const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
+  const [captureTab, setCaptureTab] = useState(() => phoneOnly || isCapacitorAndroidShell()
+    ? "camera" : captureMode === "hr" ? "telemetry" : captureMode === "media" ? "camera" : "session");
+  const [cameraAudioActive, setCameraAudioActive] = useState(false);
+  const [phoneCaptureBusy, setPhoneCaptureBusy] = useState(false);
+  const phoneCaptureRef = useRef(null);
+  const setAdvancedSetupOpen = (open) => setCaptureTab((tab) =>
+    (typeof open === "function" ? open(tab === "devices") : open) ? "devices" : "session");
   const [launchState, setLaunchState] = useState({ phase: "idle", message: "", steps: [], busy: false, error: "" });
   const [captureArmed, setCaptureArmed] = useState(false);
   const [endingSession, setEndingSession] = useState(false);
@@ -1852,13 +1841,12 @@ export default function LiveCapture() {
   const perinealProtocolRef = useRef(perinealProtocol);
   const perinealSaveQueueRef = useRef(Promise.resolve());
   const lastPerinealSampleSignatureRef = useRef("");
-  const recognitionRef = useRef(null);
-  const wakeRestartTimerRef = useRef(null);
+  const wakeConnectionRef = useRef(null);
+  const wakeActionsRef = useRef(null);
   const voiceWakeEnabledRef = useRef(false);
-  const annotationRecordingRef = useRef(false);
-  const applyLiveCommandRef = useRef(null);
-  const startVoiceAnnotationRef = useRef(null);
-  const desktopWakeHoldoffUntilRef = useRef(0);
+  const manualVoiceBusyRef = useRef(false);
+  const voicePageMountedRef = useRef(false);
+  const [manualVoiceBusy, setManualVoiceBusy] = useState(false);
   const mediaRecorderRef = useRef(null);
   const voiceChunksRef = useRef([]);
   const voiceNoteTimeRef = useRef(0);
@@ -2491,7 +2479,7 @@ export default function LiveCapture() {
   }, [howlControlForm]);
 
   const getCurrentSessionTime = useCallback(() => {
-    const startMs = Number(recording?.startedAtMs) || (liveSession?.startedAt ? new Date(liveSession.startedAt).getTime() : 0);
+    const startMs = Date.parse(phoneCaptureRef.current?.startedAt || "") || Number(recording?.startedAtMs) || (liveSession?.startedAt ? new Date(liveSession.startedAt).getTime() : 0);
     if (!startMs || Number.isNaN(startMs)) return 0;
     return Math.max(0, Math.round((Date.now() - startMs) / 1000));
   }, [liveSession?.startedAt, recording?.startedAtMs]);
@@ -3968,7 +3956,6 @@ export default function LiveCapture() {
   const hrConnected = Boolean(recentHrPacket || status?.hr?.sourceStatus?.connected || status?.hr?.connected);
   const emgSourceAt = emgTelemetry?.source_at || status?.emg?.lastSourceAt || status?.emg?.lastMessageAt;
   const emgLive = captureMode !== "hr" && recordingActive && isRecent(emgSourceAt);
-  const mainTelemetryView = captureMode === "hr";
   const telemetryEmgLive = isRecent(emgSourceAt);
   const distanceTelemetryView = true;
   const hasHrTrend = telemetryHistory.some((point) => point.hr != null || point.hrSmoothed != null);
@@ -4817,21 +4804,10 @@ export default function LiveCapture() {
     return () => window.clearTimeout(timer);
   }, [recording?.filename, recording?.startedAtMs, recordingTransportActive]);
 
-  useEffect(() => {
-    voiceWakeEnabledRef.current = voiceWakeEnabled;
-  }, [voiceWakeEnabled]);
-
-  useEffect(() => {
-    annotationRecordingRef.current = annotationRecording;
-  }, [annotationRecording]);
-
-  const speechRecognitionSupported = typeof window !== "undefined" && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
   const voiceRecordingSupported = typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia) && typeof MediaRecorder !== "undefined";
-  const desktopVoiceWakeAvailable = typeof window !== "undefined" && Boolean(window.sarahDesktop?.startVoiceWake && window.sarahDesktop?.onVoiceWakeEvent);
-  const voiceWakeSupported = speechRecognitionSupported || desktopVoiceWakeAvailable;
-  const desktopWakeUnsupported = isSarahDesktopRuntime() && voiceRecordingSupported && !voiceWakeSupported;
-  const desktopWakeFallbackActive = isSarahDesktopRuntime() && desktopVoiceWakeAvailable && !speechRecognitionSupported;
-  const voiceReady = voiceWakeSupported && voiceRecordingSupported;
+  const wakePlatform = liveVoiceWakePlatform();
+  const desktopWakeUnsupported = isSarahDesktopRuntime() && !wakePlatform;
+  const voiceReady = Boolean(wakePlatform);
   const embeddedObsStatus = status?.hr?.relay?.obs || null;
   const obsReady = Boolean(recordingActive || embeddedObsStatus?.identified);
   const emgRecent = isRecent(emgSourceAt);
@@ -6066,7 +6042,7 @@ export default function LiveCapture() {
       if (!ctx) return;
       if (type === "start") playToneSequence(ctx, [660, 880]);
       else if (type === "stop") playToneSequence(ctx, [520, 330]);
-      else if (type === "wake") playToneSequence(ctx, [740, 988, 1175]);
+      else if (type === "wake") playToneSequence(ctx, [988]);
     } catch {}
   }, [getAudioContext]);
 
@@ -6124,11 +6100,11 @@ export default function LiveCapture() {
   const appendVoiceAnnotation = useCallback(async (text, timeS, physiologySnapshot = null) => {
     const clean = normalizeVoiceAnnotationText(text);
     if (!clean) return;
-    const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();
+    const phoneSession = phoneCaptureRef.current;
+    const sessionState = phoneSession ? null : liveSession?.activeSessionId ? liveSession : await ensureSession();
     const sessionId = sessionState?.activeSessionId;
-    if (!sessionId) throw new Error("No active live session is available for the annotation.");
-    const rows = await liveRecordApi.filter({ id: sessionId });
-    const session = rows[0] || {};
+    if (!phoneSession && !sessionId) throw new Error("Start a capture before saving an annotation.");
+    const session = phoneSession || (await liveRecordApi.filter({ id: sessionId }))[0] || {};
     const existingEvents = session.event_timeline || [];
     const volumeEntry = parseEnemaVolumeEntry(clean);
     const timelineTotal = sumEnemaInstilledVolume(existingEvents);
@@ -6182,9 +6158,13 @@ export default function LiveCapture() {
         enema_volume_updated_at: nextEvent.created_at,
       } : {}),
     };
-    await liveRecordApi.update(sessionId, patch);
-    setLiveEvents(updated);
-    setActiveSessionDoc((prev) => (prev ? { ...prev, ...patch } : prev));
+    if (phoneSession) {
+      Object.assign(phoneSession, patch);
+    } else {
+      await liveRecordApi.update(sessionId, patch);
+      setLiveEvents(updated);
+      setActiveSessionDoc((prev) => (prev ? { ...prev, ...patch } : prev));
+    }
     setLastVoiceNote(`[${Math.floor(nextEvent.time_s / 60)}:${String(nextEvent.time_s % 60).padStart(2, "0")}] ${nextEvent.note}`);
     return { event: nextEvent, volumeEntry, cumulativeVolumeMl };
   }, [buildLivePhysiologySnapshot, ensureSession, liveRecordApi, liveSession]);
@@ -6380,6 +6360,7 @@ export default function LiveCapture() {
   const applyLiveCommand = useCallback(async (command) => {
     if (!command) return false;
     if (command.type === "stop_listening") {
+      voiceWakeEnabledRef.current = false;
       setVoiceWakeEnabled(false);
       setVoiceStatus("Wake listening paused.");
       return true;
@@ -6406,67 +6387,134 @@ export default function LiveCapture() {
     return false;
   }, [captureIsBodyExploration, captureLiveMoment, recordQuickLiveEvent, undoLastVoiceAnnotation, updateActiveSession]);
 
+  wakeActionsRef.current = {
+    moment: captureLiveMoment,
+    async command(heard, explicitlyAddressed) {
+      const normalized = heard.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      if (isEndListeningCommand(normalized)) {
+        voiceWakeEnabledRef.current = false;
+        setVoiceWakeEnabled(false);
+        setVoiceStatus("Wake listening stopped.");
+        return true;
+      }
+      const howlCommand = !phoneOnly && explicitlyAddressed
+        && /^(?:emergency stop|panic|kill|mute|stop howl|howl|(?:set|turn) (?:howl|power|intensity)|(?:switch|change|load|select|start|play) (?:to |howl )?|(?:power|channel [ab]) (?:up|down))\b/.test(normalized)
+        && parseHowlVoiceCommand(`Sarah ${heard}`, { ceiling: howlControlCeiling });
+      if (howlCommand) {
+        await runHowlVoiceCommand(howlCommand);
+        return true;
+      }
+      const command = parseLiveCommand(normalized);
+      if (!command) return false;
+      const phoneSession = phoneCaptureRef.current;
+      if (phoneSession && command.type === "undo_last") {
+        phoneSession.event_timeline.pop();
+        phoneSession.enema_instilled_total_ml = sumEnemaInstilledVolume(phoneSession.event_timeline);
+        phoneSession.enema_instillation_count = phoneSession.event_timeline.filter((event) => enemaInstilledAmountFromEvent(event) > 0).length;
+        setLastVoiceNote("");
+        return true;
+      }
+      if (phoneSession && command.type === "mark_phase") {
+        await appendVoiceAnnotation(command.label, getCurrentSessionTime());
+        return true;
+      }
+      if (phoneOnly && command.type !== "stop_listening") return false;
+      return applyLiveCommand(command);
+    },
+    async save(heard, moment) {
+      const saved = await appendVoiceAnnotation(heard, moment.timeS, moment.physiologySnapshot);
+      if (saved?.volumeEntry) {
+        return `Volume saved. Total instilled: ${formatMilliliters(saved.cumulativeVolumeMl)}.`;
+      }
+      return saved ? "Annotation saved." : "No speech detected.";
+    },
+  };
+
   useEffect(() => {
-    applyLiveCommandRef.current = applyLiveCommand;
-  }, [applyLiveCommand]);
-
-  const stopWakeListening = useCallback(() => {
-    clearTimeout(wakeRestartTimerRef.current);
-    wakeRestartTimerRef.current = null;
-    if (desktopWakeFallbackActive) {
-      try { window.sarahDesktop?.stopVoiceWake?.(); } catch {}
-    }
-    const recognition = recognitionRef.current;
-    recognitionRef.current = null;
-    if (recognition) {
-      recognition.onstart = null;
-      recognition.onerror = null;
-      recognition.onresult = null;
-      recognition.onend = null;
-      try { recognition.stop(); } catch {}
-    }
-    setWakeListening(false);
-  }, [desktopWakeFallbackActive]);
-
-  const handleWakeTranscript = useCallback(async (heard) => {
-    const normalized = String(heard || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-    if (!normalized) return false;
-    if (isEndListeningCommand(normalized)) {
-      desktopWakeHoldoffUntilRef.current = Date.now() + 1500;
-      setVoiceWakeEnabled(false);
-      setVoiceStatus("Wake listening stopped.");
-      playVoiceFeedback("stop");
-      stopWakeListening();
-      return true;
-    }
-    const howlVoiceCommand = parseHowlVoiceCommand(heard, { ceiling: howlControlCeiling });
-    if (howlVoiceCommand) {
-      desktopWakeHoldoffUntilRef.current = Date.now() + 1500;
-      stopWakeListening();
-      await runHowlVoiceCommand(howlVoiceCommand);
-      return true;
-    }
-    const command = parseLiveCommand(normalized);
-    if (command) {
-      desktopWakeHoldoffUntilRef.current = Date.now() + 1500;
-      stopWakeListening();
-      await applyLiveCommandRef.current?.(command);
-      return true;
-    }
-    if (/\bsarah\b/.test(normalized)) {
-      desktopWakeHoldoffUntilRef.current = Date.now() + 2500;
-      setVoiceStatus("Wake phrase heard. Recording annotation…");
-      playVoiceFeedback("wake");
-      stopWakeListening();
-      window.setTimeout(() => {
-        if (voiceWakeEnabledRef.current && !annotationRecordingRef.current) {
-          startVoiceAnnotationRef.current?.();
-        }
-      }, 120);
-      return true;
-    }
-    return false;
-  }, [howlControlCeiling, playVoiceFeedback, runHowlVoiceCommand, stopWakeListening]);
+    if (!voiceWakeEnabled || !wakePlatform || manualVoiceBusy || cameraAudioActive) return undefined;
+    let active = true;
+    let ready = false;
+    let note = null;
+    let noteTimer;
+    let busy = false;
+    const armedStatus = "Listening for “Sarah”… say “Sarah, stop listening” to turn it off.";
+    const clearNote = () => {
+      clearTimeout(noteTimer);
+      note = null;
+    };
+    const cue = () => {
+      setVoiceStatus("Speak your annotation or command…");
+      if (wakePlatform === "android") playAndroidWakeCue();
+      else playVoiceFeedback("wake");
+      clearTimeout(noteTimer);
+      noteTimer = setTimeout(() => {
+        clearNote();
+        setVoiceStatus("No annotation heard. " + armedStatus);
+      }, MAX_VOICE_NOTE_MS);
+    };
+    setVoiceStatus("Starting Wake Listening…");
+    const disconnect = connectLiveVoiceWake(wakePlatform, (event) => {
+      if (!active || !voiceWakeEnabledRef.current || manualVoiceBusyRef.current) return;
+      if (event.type === "error") {
+        voiceWakeEnabledRef.current = false;
+        setVoiceWakeEnabled(false);
+        setVoiceError(event.message);
+        setVoiceStatus("Wake listening stopped. Record Now is available.");
+      } else if (event.type === "suspended" || event.type === "retrying") {
+        ready = false;
+        clearNote();
+        setWakeListening(false);
+        setVoiceStatus(event.type === "suspended" ? "Wake will resume when Live Capture is visible." : "Reconnecting speech…");
+      } else if (event.type === "ready") {
+        setWakeListening(true);
+        if (!ready && !busy) setVoiceStatus(armedStatus);
+        ready = true;
+      } else if (event.type === "recognized" && !busy) {
+        const heard = String(event.transcript || "").trim();
+        if (!heard) return;
+        const wakeWord = /^\s*(?:hey[\s,]+)?(?:sarah|sara)\b[\s,.:!?-]*/i.exec(heard);
+        if (!note && !wakeWord) return;
+        const moment = note?.moment;
+        const input = (wakeWord ? heard.slice(wakeWord[0].length) : heard).trim();
+        busy = true;
+        (async () => {
+          if (!ready) return;
+          if (!input) {
+            note = { moment: moment || wakeActionsRef.current.moment() };
+            cue();
+            return;
+          }
+          clearNote();
+          const capturedAt = moment || wakeActionsRef.current.moment();
+          const isNote = /^\s*(?:note|annotation)[\s,:-]+/i.test(input);
+          const command = !isNote && await wakeActionsRef.current.command(input, Boolean(wakeWord));
+          let status = "Command heard.";
+          if (!command) {
+            setVoiceStatus("Saving annotation…");
+            status = await wakeActionsRef.current.save(input.replace(/^(?:note|annotation)[\s,:-]+/i, ""), capturedAt);
+          }
+          if (active && voiceWakeEnabledRef.current) {
+            setVoiceStatus(status + " " + armedStatus);
+            if (wakePlatform === "android" && status !== "No speech detected.") acknowledgeAndroidVoice(Boolean(command));
+            else playVoiceFeedback("start");
+          }
+        })().catch((error) => {
+          if (active) {
+            setVoiceError(error.message || "Voice command or annotation could not be completed.");
+            setVoiceStatus(armedStatus);
+          }
+        }).finally(() => { busy = false; });
+      }
+    });
+    wakeConnectionRef.current = disconnect;
+    return () => {
+      active = false;
+      clearNote();
+      disconnect();
+      wakeConnectionRef.current = null;
+      setWakeListening(false);
+    };
+  }, [cameraAudioActive, manualVoiceBusy, playVoiceFeedback, voiceWakeEnabled, wakePlatform]);
 
   const stopVoiceAnnotation = useCallback(() => {
     clearTimeout(voiceNoteTimeoutRef.current);
@@ -6484,137 +6532,19 @@ export default function LiveCapture() {
     }
   }, []);
 
-  const startWakeListening = useCallback(async () => {
-    if (!voiceWakeEnabledRef.current || annotationRecordingRef.current || !voiceWakeSupported) return;
-    stopWakeListening();
-    if (desktopWakeFallbackActive) {
-      try {
-        const result = await window.sarahDesktop.startVoiceWake();
-        if (!result?.ok) throw new Error(result?.error || "Windows wake listening could not start.");
-        setWakeListening(true);
-        setVoiceStatus("Listening for “Sarah”… say “end” to stop.");
-        setVoiceError("");
-      } catch (error) {
-        setVoiceWakeEnabled(false);
-        voiceWakeEnabledRef.current = false;
-        setWakeListening(false);
-        setVoiceError(error?.message || "Wake phrase could not start here. Use Record Now for timestamped voice notes.");
-        setVoiceStatus("Wake phrase paused. Record Now still works for timestamped voice notes.");
-      }
-      return;
-    }
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new Recognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
-    recognition.onstart = () => {
-      setWakeListening(true);
-      setVoiceStatus("Listening for “Sarah”… say “end” to stop.");
-      setVoiceError("");
-    };
-    recognition.onerror = (event) => {
-      const errorCode = event?.error || "";
-      const transient = event?.error === "no-speech" || event?.error === "aborted";
-      const terminal = TERMINAL_WAKE_LISTENER_ERRORS.has(errorCode);
-      if (terminal) {
-        voiceWakeEnabledRef.current = false;
-        setVoiceWakeEnabled(false);
-        clearTimeout(wakeRestartTimerRef.current);
-        wakeRestartTimerRef.current = null;
-      }
-      if (terminal || !voiceWakeEnabledRef.current || annotationRecordingRef.current) {
-        setWakeListening(false);
-      }
-      if (!transient) {
-        setVoiceError(wakeListenerErrorMessage(errorCode));
-        if (terminal) {
-          setVoiceStatus("Wake phrase paused. Record Now still works for timestamped voice notes.");
-        }
-      }
-    };
-    recognition.onresult = (event) => {
-      let heard = "";
-      let hasFinal = false;
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        heard += event.results[i][0]?.transcript || "";
-        if (event.results[i].isFinal) hasFinal = true;
-      }
-      if (!hasFinal) return;
-      handleWakeTranscript(heard).catch((error) => setVoiceError(error.message || String(error)));
-    };
-    recognition.onend = () => {
-      const shouldRestart = voiceWakeEnabledRef.current && !annotationRecordingRef.current;
-      if (shouldRestart) {
-        setWakeListening(true);
-        wakeRestartTimerRef.current = window.setTimeout(startWakeListening, 900);
-      } else {
-        setWakeListening(false);
-      }
-    };
-    recognitionRef.current = recognition;
-    try {
-      recognition.start();
-    } catch {
-      setVoiceWakeEnabled(false);
-      voiceWakeEnabledRef.current = false;
-      setWakeListening(false);
-      setVoiceError("Wake phrase could not start here. Use Record Now for timestamped voice notes.");
-      setVoiceStatus("Wake phrase paused. Record Now still works for timestamped voice notes.");
-    }
-  }, [desktopWakeFallbackActive, handleWakeTranscript, stopWakeListening, voiceWakeSupported]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.sarahDesktop?.onVoiceWakeEvent) return undefined;
-    return window.sarahDesktop.onVoiceWakeEvent((payload) => {
-      if (!payload || (!voiceWakeEnabledRef.current && payload.type !== "error")) return;
-      if (payload.type === "ready") {
-        setWakeListening(true);
-        setVoiceError("");
-        setVoiceStatus("Listening for “Sarah”… say “end” to stop.");
-        return;
-      }
-      if (payload.type === "recognized") {
-        handleWakeTranscript(payload.transcript || payload.text || "").catch((error) => {
-          setVoiceError(error?.message || String(error));
-        });
-        return;
-      }
-      if (payload.type === "error") {
-        setWakeListening(false);
-        setVoiceError(payload.message || "Windows wake listener failed.");
-        setVoiceStatus("Wake phrase paused. Record Now still works for timestamped voice notes.");
-        if (voiceWakeEnabledRef.current && !annotationRecordingRef.current && Date.now() >= desktopWakeHoldoffUntilRef.current) {
-          clearTimeout(wakeRestartTimerRef.current);
-          wakeRestartTimerRef.current = window.setTimeout(() => {
-            startWakeListening();
-          }, 1200);
-        }
-        return;
-      }
-      if (payload.type === "stopped") {
-        const shouldRestart = voiceWakeEnabledRef.current
-          && !annotationRecordingRef.current
-          && Date.now() >= desktopWakeHoldoffUntilRef.current;
-        if (shouldRestart) {
-          setWakeListening(false);
-          clearTimeout(wakeRestartTimerRef.current);
-          wakeRestartTimerRef.current = window.setTimeout(() => {
-            startWakeListening();
-          }, 900);
-        } else {
-          setWakeListening(false);
-        }
-      }
-    });
-  }, [handleWakeTranscript, startWakeListening]);
-
   const startVoiceAnnotation = useCallback(async () => {
-    if (!voiceRecordingSupported || annotationRecordingRef.current) return;
-    desktopWakeHoldoffUntilRef.current = Date.now() + 2500;
-    stopWakeListening();
+    if (phoneOnly || !voiceRecordingSupported || manualVoiceBusyRef.current || cameraAudioActive) return;
+    manualVoiceBusyRef.current = true;
+    setManualVoiceBusy(true);
+    let stream;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      await wakeConnectionRef.current?.();
+      if (!voicePageMountedRef.current) return;
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!voicePageMountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
         : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/ogg";
@@ -6666,9 +6596,8 @@ export default function LiveCapture() {
           setVoiceError(error.message || String(error));
           setVoiceStatus("Annotation failed. Listening can continue.");
         } finally {
-          if (voiceWakeEnabledRef.current) {
-            window.setTimeout(startWakeListening, 600);
-          }
+          manualVoiceBusyRef.current = false;
+          if (voicePageMountedRef.current) setManualVoiceBusy(false);
         }
       };
       mediaRecorderRef.current = recorder;
@@ -6714,40 +6643,34 @@ export default function LiveCapture() {
 
       voiceNoteTimeoutRef.current = window.setTimeout(stopVoiceAnnotation, MAX_VOICE_NOTE_MS);
     } catch (error) {
+      stream?.getTracks().forEach((track) => track.stop());
+      mediaRecorderRef.current = null;
+      manualVoiceBusyRef.current = false;
+      if (!voicePageMountedRef.current) return;
       setVoiceError(error.message || String(error));
       setAnnotationRecording(false);
-      if (voiceWakeEnabledRef.current) window.setTimeout(startWakeListening, 600);
+      setManualVoiceBusy(false);
     }
-  }, [appendVoiceAnnotation, buildLivePhysiologySnapshot, getAudioContext, getCurrentSessionTime, speakLiveAcknowledgement, startWakeListening, stopVoiceAnnotation, stopWakeListening, voiceRecordingSupported]);
+  }, [appendVoiceAnnotation, buildLivePhysiologySnapshot, cameraAudioActive, getAudioContext, getCurrentSessionTime, phoneOnly, speakLiveAcknowledgement, stopVoiceAnnotation, voiceRecordingSupported]);
 
-  useEffect(() => {
-    startVoiceAnnotationRef.current = startVoiceAnnotation;
-  }, [startVoiceAnnotation]);
-
-  const toggleVoiceWake = useCallback(async () => {
-    await getAudioContext();
-    if (voiceWakeEnabled) playVoiceFeedback("stop");
+  const toggleVoiceWake = useCallback(() => {
+    const enabled = !voiceWakeEnabledRef.current;
+    voiceWakeEnabledRef.current = enabled;
+    setVoiceWakeEnabled(enabled);
     setVoiceError("");
-    setVoiceWakeEnabled((value) => !value);
-  }, [getAudioContext, playVoiceFeedback, voiceWakeEnabled]);
+    if (enabled && wakePlatform !== "android") getAudioContext().catch(() => {});
+    if (!enabled) setVoiceStatus("Wake listening stopped.");
+  }, [getAudioContext, wakePlatform]);
 
-  const startManualVoiceNote = useCallback(() => {
-    startVoiceAnnotation();
-  }, [startVoiceAnnotation]);
+  const startManualVoiceNote = startVoiceAnnotation;
 
   useEffect(() => {
-    if (voiceWakeEnabled) startWakeListening();
-    else {
-      stopWakeListening();
-      stopVoiceAnnotation();
-      setVoiceStatus("Say “Sarah” to start a voice annotation. Say “end” to stop listening.");
-    }
+    voicePageMountedRef.current = true;
     return () => {
-      stopWakeListening();
+      voicePageMountedRef.current = false;
       stopVoiceAnnotation();
-      clearTimeout(voiceNoteTimeoutRef.current);
     };
-  }, [startWakeListening, stopVoiceAnnotation, stopWakeListening, voiceWakeEnabled]);
+  }, [stopVoiceAnnotation]);
 
   const voiceAnnotationPanel = (
     <div className="rounded-xl border border-border bg-card p-4">
@@ -6758,15 +6681,17 @@ export default function LiveCapture() {
           </p>
           <div className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
             <Mic className={`h-4 w-4 ${annotationRecording || wakeListening ? "text-primary" : "text-muted-foreground"}`} />
-            <span>{voiceStatus}</span>
+            <span role="status">{cameraAudioActive ? "Camera audio is using the microphone." : voiceStatus}</span>
           </div>
           {desktopWakeUnsupported && (
             <p className="mt-1 text-xs text-destructive">Wake phrase listening is not available in the Windows EXE right now. Use Record Now for timestamped notes.</p>
           )}
-          {!desktopWakeUnsupported && !speechRecognitionSupported && (
-            <p className="mt-1 text-xs text-destructive">Wake phrase listening is not supported in this browser. Use Record Now instead.</p>
+          {!desktopWakeUnsupported && !voiceReady && (
+            <p className="mt-1 text-xs text-destructive">Wake needs on-device speech support. Use Record Now for manual notes.</p>
           )}
-          {!voiceRecordingSupported && (
+          {phoneOnly ? (
+            <p className="mt-1 text-xs text-muted-foreground">Start the camera first, then use Wake to save notes alongside the recording.</p>
+          ) : !voiceRecordingSupported && (
             <p className="mt-1 text-xs text-destructive">Microphone recording is not available in this browser context.</p>
           )}
           {voiceError && <p className="mt-1 text-xs text-destructive">{voiceError}</p>}
@@ -6783,13 +6708,8 @@ export default function LiveCapture() {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={async () => {
-              await getAudioContext();
-              if (voiceWakeEnabled) playVoiceFeedback("stop");
-              setVoiceError("");
-              setVoiceWakeEnabled((value) => !value);
-            }}
-            disabled={!voiceReady}
+            onClick={toggleVoiceWake}
+            disabled={!voiceReady || cameraAudioActive}
             className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:opacity-50 ${
               voiceWakeEnabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : "bg-muted text-foreground hover:bg-muted/80"
             }`}
@@ -6809,7 +6729,7 @@ export default function LiveCapture() {
             <button
               type="button"
               onClick={startVoiceAnnotation}
-              disabled={!voiceRecordingSupported}
+              disabled={phoneOnly || !voiceRecordingSupported || cameraAudioActive || manualVoiceBusy}
               className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-xs font-semibold text-foreground hover:bg-muted/80 disabled:opacity-50"
             >
               <Mic className="h-3.5 w-3.5" /> Record Now
@@ -7370,7 +7290,7 @@ export default function LiveCapture() {
         ? "Prepare Sarah and Start Session"
         : "Start Session";
   const showLiveControlBar = !focusView && (launchActive || endingSession);
-  const showAdvancedSetupConsole = advancedSetupOpen;
+  const showAdvancedSetupConsole = !phoneOnly && captureTab === "devices";
   const obsPreferred = Boolean(launchProfile.obsEnabled && !launchProfile.telemetryOnlyFallback);
   const h10RawStreamsActive = Boolean(
     directH10Source
@@ -7519,14 +7439,45 @@ export default function LiveCapture() {
 
   return (
     <div className={`${focusView ? "h-screen overflow-hidden bg-[#071016] p-0" : "p-4 md:p-6"} space-y-4`}>
-      {!mainTelemetryView && <BloodPressureCuffControls label="Blood pressure cuff controls" listening={bpOmronListening} busy={bpOmronActionInFlightRef.current}
+      {!focusView && <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <PageHeader
+          title="Live Capture"
+          subtitle="Record, monitor telemetry, and annotate a live session."
+          icon={Radio}
+        />
+        <div className="flex flex-wrap items-center gap-2 md:mt-1">
+          {phoneOnly ? <button type="button" onClick={onExitPhoneCapture} disabled={phoneCaptureBusy}
+            className="rounded-lg border border-border px-3 py-2 text-sm font-semibold disabled:opacity-50">
+            Exit Phone Capture
+          </button> :
+          <button
+            type="button"
+            onClick={() => setFocusView(true)}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm font-semibold text-foreground shadow-sm hover:bg-primary/15"
+          >
+            <Maximize2 className="h-4 w-4 text-primary" />
+            <span>Display View</span>
+          </button>}
+        </div>
+      </div>}
+
+      {!focusView && <nav aria-label="Live Capture sections" className="flex flex-wrap gap-1 rounded-xl border border-border bg-card p-1.5">
+        {[["session", "Session"], ["camera", "Camera"], ["telemetry", "Telemetry"], ["voice", "Voice & Audio"], ["devices", "Devices & Setup"]]
+          .filter(([id]) => !phoneOnly || ["camera", "telemetry", "voice"].includes(id)).map(([id, label]) => (
+          <button key={id} type="button" aria-pressed={captureTab === id} onClick={() => setCaptureTab(id)}
+            className={`min-h-10 flex-1 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-semibold ${captureTab === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
+            {label}
+          </button>
+        ))}
+      </nav>}
+      {!focusView && showAdvancedSetupConsole && <BloodPressureCuffControls label="Blood pressure cuff controls" listening={bpOmronListening} busy={bpOmronActionInFlightRef.current}
         message={bpCapture.error || bpCapture.cuffConnectionMessage || (bpOmronListening ? "Waiting for cuff." : "Cuff disconnected.")}
         error={Boolean(bpCapture.error || bpCapture.cuffDeliveryPending)} receipt={bpCapture.lastCuffReceipt} sessionReading={latestBpReading} deliveryPending={bpCapture.cuffDeliveryPending}
         onToggle={toggleOmronBloodPressureListener} onChoose={() => startOmronBloodPressureListenerForLiveSession({forceDevicePicker:true})} onDiagnostics={copyCuffDiagnostics} />}
       <CivetLiveAlert live={civet} onSetup={() => setCivetSetupOpen(true)} />
       {civetSetupOpen && <CivetSetup live={civet} onClose={() => setCivetSetupOpen(false)} />}
       {emgSetupOpen && <EmgSetup onClose={() => setEmgSetupOpen(false)} onProfileChange={names => { if(names) setEmgNames(names); }} onConnected={() => updateTelemetryPanel("emg", { enabled: true })} />}
-      {!focusView && <div className="flex flex-wrap items-center gap-3"><button type="button" className="rounded-lg border border-primary px-4 py-2" onClick={() => setCivetSetupOpen(true)}>Pelvic pressure · setup</button><button type="button" className="rounded-lg border border-primary px-4 py-2" onClick={() => setEmgSetupOpen(true)}>EMG · setup & sensor names</button><span className="text-sm text-muted-foreground">{!emgSetupStatus?'EMG status unavailable':emgSetupStatus.receiving?'EMG receiving live samples':emgSetupStatus.running?'EMG helper running · waiting for samples':emgSetupStatus.installed?'EMG helper installed · stopped':'EMG helper setup needed'}</span></div>}
+      {!focusView && showAdvancedSetupConsole && <div className="flex flex-wrap items-center gap-3"><button type="button" className="rounded-lg border border-primary px-4 py-2" onClick={() => setCivetSetupOpen(true)}>Pelvic pressure · setup</button><button type="button" className="rounded-lg border border-primary px-4 py-2" onClick={() => setEmgSetupOpen(true)}>EMG · setup & sensor names</button><span className="text-sm text-muted-foreground">{!emgSetupStatus?'EMG status unavailable':emgSetupStatus.receiving?'EMG receiving live samples':emgSetupStatus.running?'EMG helper running · waiting for samples':emgSetupStatus.installed?'EMG helper installed · stopped':'EMG helper setup needed'}</span></div>}
       {hrLossDialog && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4">
           <div
@@ -7604,7 +7555,7 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {!focusView && !mainTelemetryView && <ObsRecordingSync />}
+      {!focusView && showAdvancedSetupConsole && <ObsRecordingSync />}
 
       {(recordingTransportActive || liveSession?.activeSessionId) && !focusView && !liveSession?.importing && (
         <button
@@ -7619,7 +7570,7 @@ export default function LiveCapture() {
         </button>
       )}
 
-      {showLiveControlBar && (
+      {!phoneOnly && showLiveControlBar && (
         <section className={`${focusView ? "fixed left-3 right-3 top-3 z-[80]" : "sticky top-2 z-50"} rounded-2xl border border-primary/35 bg-card/95 p-3 shadow-xl backdrop-blur`} aria-label="Live session controls">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex min-w-0 items-center gap-3">
@@ -7661,7 +7612,7 @@ export default function LiveCapture() {
                 <button
                   type="button"
                   onClick={annotationRecording ? stopVoiceAnnotation : startManualVoiceNote}
-                  disabled={!voiceRecordingSupported}
+                  disabled={!annotationRecording && (!voiceRecordingSupported || cameraAudioActive || manualVoiceBusy)}
                   className={`inline-flex min-h-11 items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold disabled:opacity-45 ${annotationRecording ? "bg-primary text-primary-foreground" : "border border-border bg-muted/50 text-foreground hover:bg-muted"}`}
                 >
                   {annotationRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
@@ -7712,7 +7663,7 @@ export default function LiveCapture() {
                   onClick={() => setAdvancedSetupOpen((open) => !open)}
                   className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-sm font-bold text-foreground hover:bg-muted"
                 >
-                  <SlidersHorizontal className="h-4 w-4" /> {advancedSetupOpen ? "Hide setup" : "Setup"}
+                  <SlidersHorizontal className="h-4 w-4" /> {showAdvancedSetupConsole ? "Hide setup" : "Setup"}
                 </button>
               )}
             </div>
@@ -7720,7 +7671,7 @@ export default function LiveCapture() {
         </section>
       )}
 
-      {!focusView && launchActive && (<section className={`rounded-2xl border p-4 shadow-sm ${liveHealthToneClasses(liveGuidanceMode.tone)}`} aria-live="polite">
+      {!focusView && captureTab === "session" && launchActive && (<section className={`rounded-2xl border p-4 shadow-sm ${liveHealthToneClasses(liveGuidanceMode.tone)}`} aria-live="polite">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
@@ -7777,7 +7728,7 @@ export default function LiveCapture() {
         </div>}
       </section>)}
 
-      {!focusView && completedLiveSession && (
+      {!focusView && captureTab === "session" && completedLiveSession && (
         <section className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 shadow-sm">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
@@ -7801,19 +7752,41 @@ export default function LiveCapture() {
         </section>
       )}
 
-      {!focusView && <PhaseAnnouncementControls controller={phaseAnnouncements} />}
-      <LiveEncouragementControls
-        enabled={liveCueSettings.enabled}
-        volume={liveCueSettings.volume}
-        audioState={liveCueAudio.audioState}
-        status={liveCueAudio.status}
-        playback={liveCueEngine.latestCue?.playback}
-        onToggle={toggleLiveEncouragement}
-        onTest={testLiveEncouragement}
-        onVolume={(volume) => setLiveCueSettings((previous) => ({ ...previous, volume }))}
-      />
+      {!focusView && captureTab === "voice" && (
+        <div className="space-y-3">
+          {voiceAnnotationPanel}
+          <PhaseAnnouncementControls controller={phaseAnnouncements} />
+          <LiveEncouragementControls
+            enabled={liveCueSettings.enabled}
+            volume={liveCueSettings.volume}
+            audioState={liveCueAudio.audioState}
+            status={liveCueAudio.status}
+            playback={liveCueEngine.latestCue?.playback}
+            onToggle={toggleLiveEncouragement}
+            onTest={testLiveEncouragement}
+            onVolume={(volume) => setLiveCueSettings((previous) => ({ ...previous, volume }))}
+          />
+        </div>
+      )}
 
-      {!focusView && !launchActive && (
+      <div hidden={focusView || captureTab !== "camera"}>
+        <LiveSessionMobileRecorder
+          activeSessionDoc={activeSessionDoc}
+          liveSession={liveSession}
+          ensureSession={ensureSession}
+          phoneCaptureRef={phoneCaptureRef}
+          onCameraAudioChange={setCameraAudioActive}
+          onCaptureBusyChange={setPhoneCaptureBusy}
+          wakeEnabled={voiceWakeEnabled || manualVoiceBusy}
+          telemetryHistory={telemetryHistory}
+          hrTelemetry={hrTelemetry}
+          emgTelemetry={emgTelemetry}
+          latestBpReading={latestBpReading}
+          latestSpo2Reading={activeSessionDoc?.latest_pulse_ox_reading || activeSessionDoc?.session_context?.pulse_ox || null}
+        />
+      </div>
+
+      {!focusView && captureTab === "session" && !launchActive && (
         <LiveCaptureLaunchpad
           setupSummary={launchSetupSummary}
           readiness={launchReadiness}
@@ -7826,7 +7799,7 @@ export default function LiveCapture() {
           captureKind={captureKind}
           captureKinds={CAPTURE_KINDS}
           obsRequired={obsPreferred}
-          onOpenSetup={() => setAdvancedSetupOpen(true)}
+          onOpenSetup={() => setCaptureTab("devices")}
           onCaptureKindChange={setCaptureKind}
           onStart={() => startFromLaunchpad().catch((error) => {
             toast({
@@ -7838,7 +7811,7 @@ export default function LiveCapture() {
         />
       )}
 
-      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
+      {!focusView && showAdvancedSetupConsole && (
         <CollapsibleControlSection
           icon={Activity}
           title="Blood Pressure"
@@ -7949,18 +7922,7 @@ export default function LiveCapture() {
         </CollapsibleControlSection>
       )}
 
-      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
-        <LiveSessionMobileRecorder
-          activeSessionDoc={activeSessionDoc}
-          liveSession={liveSession}
-          ensureSession={ensureSession}
-          telemetryHistory={telemetryHistory}
-          hrTelemetry={hrTelemetry}
-          emgTelemetry={emgTelemetry}
-          latestBpReading={latestBpReading}
-          latestSpo2Reading={activeSessionDoc?.latest_pulse_ox_reading || activeSessionDoc?.session_context?.pulse_ox || null}
-        />
-      )}
+
 
       {!focusView && launchState.error && (
         <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
@@ -7999,37 +7961,9 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {!focusView && <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-        <PageHeader
-          title="Live Capture"
-          subtitle={captureIsBodyExploration
-            ? "Real-time HR, EMG, OBS recording state, and body exploration telemetry"
-            : "Real-time HR, EMG, OBS recording state, and prediction telemetry"}
-          icon={Radio}
-        />
-        <div className="flex flex-wrap items-center gap-2 md:mt-1">
-          <button
-            type="button"
-            onClick={() => setFocusView(true)}
-            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm font-semibold text-foreground shadow-sm hover:bg-primary/15"
-          >
-            <Maximize2 className="h-4 w-4 text-primary" />
-            <span>Display View</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setAdvancedSetupOpen((open) => !open)}
-            aria-expanded={advancedSetupOpen}
-            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-foreground shadow-sm hover:bg-muted/50"
-          >
-            <SlidersHorizontal className="h-4 w-4 text-primary" />
-            <span>Settings & Devices</span>
-            <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${advancedSetupOpen ? "rotate-180" : ""}`} />
-          </button>
-        </div>
-      </div>}
 
-      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
+
+      {!focusView && showAdvancedSetupConsole && (
         <div className="rounded-xl border border-border bg-card p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -8157,7 +8091,7 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
+      {!focusView && showAdvancedSetupConsole && (
         <div className="rounded-xl border border-primary/20 bg-primary/[0.05] p-3">
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             {[
@@ -8175,7 +8109,7 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
+      {!focusView && showAdvancedSetupConsole && (
         <div className="rounded-2xl border border-primary/25 bg-card p-4 shadow-sm">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
@@ -8333,7 +8267,7 @@ export default function LiveCapture() {
             <SetupTile
               icon={voiceWakeEnabled ? <Mic className="h-3.5 w-3.5 text-primary" /> : <MicOff className="h-3.5 w-3.5 text-primary" />}
               label="Voice Notes"
-              value={annotationRecording ? "Recording" : voiceWakeEnabled ? "Listening" : "Manual"}
+              value={annotationRecording ? "Recording" : voiceWakeEnabled ? "Armed" : "Manual"}
               helper={desktopWakeUnsupported
                 ? "Wake phrase is unavailable in the Windows EXE right now. Record Note still timestamps the session."
                 : voiceReady
@@ -8344,7 +8278,7 @@ export default function LiveCapture() {
               <button
                 type="button"
                 onClick={toggleVoiceWake}
-                disabled={!voiceReady}
+                disabled={!voiceReady || cameraAudioActive}
                 className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
               >
                 {desktopWakeUnsupported ? "Wake Unavailable" : voiceWakeEnabled ? "Wake Off" : "Wake On"}
@@ -8352,7 +8286,7 @@ export default function LiveCapture() {
               <button
                 type="button"
                 onClick={startManualVoiceNote}
-                disabled={!voiceRecordingSupported || annotationRecording}
+                disabled={!voiceRecordingSupported || cameraAudioActive || manualVoiceBusy}
                 className="rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 disabled:opacity-50"
               >
                 Record Note
@@ -8420,9 +8354,9 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {mediaPanel}
+      {(mediaFocusView || captureTab === "camera") && mediaPanel}
 
-      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
+      {!focusView && showAdvancedSetupConsole && (
         <CollapsibleControlSection
           icon={HeartPulse}
           title="Heart-Rate Source Settings"
@@ -8445,7 +8379,7 @@ export default function LiveCapture() {
         </CollapsibleControlSection>
       )}
 
-      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && <CollapsibleControlSection
+      {!focusView && showAdvancedSetupConsole && <CollapsibleControlSection
         icon={CheckCircle2}
         title="Capture Readiness"
         helper="OBS is the session boundary; HR can run alone and EMG stays optional."
@@ -8499,11 +8433,9 @@ export default function LiveCapture() {
           <ReadinessItem
             label="Voice Notes"
             value={voiceReady ? "Available" : "Unavailable"}
-            helper={desktopWakeFallbackActive
-              ? "Windows local wake listening is active in the EXE, and Record Now still handles the actual timestamped note."
-              : voiceReady
-                ? "Wake phrase and Record Now can timestamp annotations."
-                : "This browser context cannot provide wake listening or microphone capture."}
+            helper={voiceReady
+              ? "Wake uses on-device speech while Live Capture is open. Record Now uses your selected transcription provider."
+              : voiceRecordingSupported ? "Record Now is available for manual notes." : "Microphone capture is unavailable here."}
             ready={voiceReady}
           />
           <ReadinessItem
@@ -8516,7 +8448,7 @@ export default function LiveCapture() {
         </div>
       </CollapsibleControlSection>}
 
-      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
+      {!focusView && showAdvancedSetupConsole && (
         <div className="rounded-xl border border-border bg-card">
           <button
             type="button"
@@ -9038,9 +8970,8 @@ export default function LiveCapture() {
         </div>
       )}
 
-      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && voiceAnnotationPanel}
 
-      {!focusView && captureMode !== "media" && (
+      {!focusView && showAdvancedSetupConsole && captureMode !== "media" && (
         <div className="rounded-xl border border-border bg-card">
           <button
             type="button"
@@ -9316,7 +9247,7 @@ export default function LiveCapture() {
 
       {(captureMode !== "media" || telemetryFocusView) && (
         <>
-      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && <CollapsibleControlSection
+      {!focusView && showAdvancedSetupConsole && <CollapsibleControlSection
         icon={Radio}
         title="Connection Details"
         helper="Relay, provider, EMG, and OBS status for troubleshooting."
@@ -9336,7 +9267,7 @@ export default function LiveCapture() {
         </div>
       </CollapsibleControlSection>}
 
-      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && <div className="rounded-xl border border-border bg-card p-4">
+      {!focusView && showAdvancedSetupConsole && <div className="rounded-xl border border-border bg-card p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
@@ -9478,7 +9409,7 @@ export default function LiveCapture() {
         )}
       </div>}
 
-      {!focusView && !mainTelemetryView && showAdvancedSetupConsole && (
+      {!focusView && showAdvancedSetupConsole && (
         <CollapsibleControlSection
           icon={Footprints}
           title="Lower-Body Tracking"
@@ -9495,7 +9426,7 @@ export default function LiveCapture() {
         </CollapsibleControlSection>
       )}
 
-      {(telemetryFocusView || (!mediaFocusView && mainTelemetryView) || (!mediaFocusView && launchActive && detailedTelemetryOpen)) && <div ref={telemetryDisplayRef} data-telemetry-fullscreen={telemetryFullscreen}
+      {(telemetryFocusView || (!focusView && captureTab === "telemetry") || (!focusView && captureTab === "session" && launchActive && detailedTelemetryOpen)) && <div ref={telemetryDisplayRef} data-telemetry-fullscreen={telemetryFullscreen}
         onPointerDown={(event) => { if (!event.target.closest("[data-telemetry-header]")) setTelemetryControlsOpen(false); }}
         className={telemetryFocusView
           ? "fixed inset-0 z-[60] !m-0 flex h-[100dvh] flex-col overflow-hidden bg-card p-3"

@@ -4,6 +4,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Download, Play, Radio, Square, UploadCloud, Video } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
+import { saveBlobToAndroidDownloads } from "@/lib/nativeFileSaver";
 
 const CHUNK_SIZE = 4 * 1024 * 1024;
 
@@ -34,6 +36,7 @@ function latestValue(...values) {
 }
 
 function normalizeHrSample(sample = {}, fallbackTimeS = 0) {
+  if (!sample) return null;
   const hr = latestValue(sample.hr, sample.currentHr, sample.heart_rate_bpm, sample.value);
   if (hr == null) return null;
   return {
@@ -45,6 +48,7 @@ function normalizeHrSample(sample = {}, fallbackTimeS = 0) {
 }
 
 function normalizeEmgSample(sample = {}, fallbackTimeS = 0) {
+  if (!sample) return null;
   const left = latestValue(sample.left, sample.left_pct, sample.level_pct);
   const right = latestValue(sample.right, sample.right_pct);
   if (left == null && right == null) return null;
@@ -107,12 +111,18 @@ export default function LiveSessionMobileRecorder({
   activeSessionDoc,
   liveSession,
   ensureSession,
+  phoneCaptureRef,
+  onCameraAudioChange,
+  onCaptureBusyChange,
+  wakeEnabled,
   telemetryHistory = [],
   hrTelemetry,
   emgTelemetry,
   latestBpReading,
   latestSpo2Reading,
 }) {
+  const local = Capacitor.getPlatform() === "android";
+  const [includeAudio, setIncludeAudio] = useState(false);
   const [supported, setSupported] = useState(false);
   const [capabilities, setCapabilities] = useState(null);
   const [capabilityChecked, setCapabilityChecked] = useState(false);
@@ -123,7 +133,7 @@ export default function LiveSessionMobileRecorder({
   const [busy, setBusy] = useState(false);
   const [rendered, setRendered] = useState(null);
   const [job, setJob] = useState(null);
-  const [startedAt, setStartedAt] = useState(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const recorderRef = useRef(null);
@@ -134,12 +144,20 @@ export default function LiveSessionMobileRecorder({
   const latestTelemetryRef = useRef({ hrTelemetry, emgTelemetry, latestBpReading, latestSpo2Reading });
   const startRef = useRef({ iso: null, perfMs: 0 });
   const pollRef = useRef(null);
+  const startingRef = useRef(false);
+  const localFilesRef = useRef([]);
+  const [retrySave, setRetrySave] = useState(false);
+
+  useEffect(() => {
+    onCaptureBusyChange(recording || busy || retrySave);
+  }, [busy, onCaptureBusyChange, recording, retrySave]);
 
   useEffect(() => {
     setSupported(Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder));
   }, []);
 
   useEffect(() => {
+    if (local) return undefined;
     let cancelled = false;
     setCapabilityChecked(false);
     base44.integrations.Core.GetSessionVideoCapabilities()
@@ -166,7 +184,7 @@ export default function LiveSessionMobileRecorder({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [local]);
 
   useEffect(() => {
     latestTelemetryRef.current = { hrTelemetry, emgTelemetry, latestBpReading, latestSpo2Reading };
@@ -176,21 +194,23 @@ export default function LiveSessionMobileRecorder({
     if (pollRef.current) window.clearInterval(pollRef.current);
     if (sampleTimerRef.current) window.clearInterval(sampleTimerRef.current);
     streamRef.current?.getTracks?.().forEach((track) => track.stop());
+  }, []);
+
+  useEffect(() => () => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
   }, [previewUrl]);
 
   const sessionId = liveSession?.activeSessionId || activeSessionDoc?.id || null;
   const elapsedText = useMemo(() => {
-    if (!startedAt) return "";
-    const elapsed = Math.max(0, Math.round((Date.now() - new Date(startedAt).getTime()) / 1000));
-    const min = Math.floor(elapsed / 60);
-    const sec = String(elapsed % 60).padStart(2, "0");
+    const min = Math.floor(elapsedSeconds / 60);
+    const sec = String(elapsedSeconds % 60).padStart(2, "0");
     return `${min}:${sec}`;
-  }, [startedAt, recording]);
+  }, [elapsedSeconds]);
 
   const captureTelemetrySample = () => {
     const startedPerf = startRef.current.perfMs || performance.now();
     const timeS = Math.max(0, Number(((performance.now() - startedPerf) / 1000).toFixed(2)));
+    setElapsedSeconds(Math.floor(timeS));
     const latest = latestTelemetryRef.current;
     samplesRef.current.push({
       time_s: timeS,
@@ -296,14 +316,54 @@ export default function LiveSessionMobileRecorder({
     }, 1400);
   };
 
+  const saveLocalFiles = async () => {
+    setBusy(true);
+    setStatus("Saving to Downloads/Sarah…");
+    try {
+      while (localFilesRef.current.length) {
+        const { blob, filename } = localFilesRef.current[0];
+        await saveBlobToAndroidDownloads(blob, filename);
+        localFilesRef.current.shift();
+      }
+      setRetrySave(false);
+      setStatus("Video and telemetry saved to Downloads/Sarah.");
+    } catch (error) {
+      setRetrySave(true);
+      setStatus(error.message || "Save failed. Retry while Live Capture is open.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const startRecording = async () => {
-    if (!supported || recording || busy || !capabilities?.ffmpeg_available) return;
-    setStatus("Creating/reusing Sarah session...");
-    const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession?.();
-    if (!sessionState?.activeSessionId) throw new Error("Sarah could not create an active session shell.");
-    sessionStateRef.current = sessionState;
+    if (!readyToRecord || recording || busy || retrySave || startingRef.current) return;
+    startingRef.current = true;
+    setBusy(true);
+    try {
+      await openRecording();
+    } catch (error) {
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+      phoneCaptureRef.current = null;
+      onCameraAudioChange(false);
+      setStatus(error.message || "Could not start the camera. Check camera and microphone permissions.");
+    } finally {
+      startingRef.current = false;
+      setBusy(false);
+    }
+  };
+
+  const openRecording = async () => {
+    if (!local) {
+      setStatus("Connecting to the active Sarah session…");
+      const sessionState = liveSession?.active ? liveSession : await ensureSession?.();
+      if (!sessionState?.activeSessionId) throw new Error("Start OBS before using the desktop render workflow.");
+      sessionStateRef.current = sessionState;
+    }
+    const audio = !local || includeAudio;
+    onCameraAudioChange(audio);
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
+      audio,
       video: {
         facingMode: { ideal: "environment" },
         width: { ideal: 1280 },
@@ -314,10 +374,10 @@ export default function LiveSessionMobileRecorder({
     streamRef.current = stream;
     if (videoRef.current) {
       videoRef.current.srcObject = stream;
-      await videoRef.current.play().catch(() => {});
+      videoRef.current.play().catch(() => {});
     }
     chunksRef.current = [];
-    samplesRef.current = telemetryHistory.slice(-240).map((point) => ({
+    samplesRef.current = (local ? [] : telemetryHistory.slice(-240)).map((point) => ({
       time_s: Number(point.t ?? point.time_s ?? 0) || 0,
       captured_at: point.captured_at || new Date().toISOString(),
       hr: point,
@@ -327,7 +387,13 @@ export default function LiveSessionMobileRecorder({
     const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     recorderRef.current = recorder;
     startRef.current = { iso: new Date().toISOString(), perfMs: performance.now() };
-    setStartedAt(startRef.current.iso);
+    if (local) {
+      phoneCaptureRef.current = {
+        startedAt: startRef.current.iso,
+        id: crypto.randomUUID(),
+        event_timeline: [],
+      };
+    }
     recorder.ondataavailable = (event) => {
       if (event.data?.size) chunksRef.current.push(event.data);
     };
@@ -335,15 +401,41 @@ export default function LiveSessionMobileRecorder({
       const finalMime = recorder.mimeType || mimeType || "video/webm";
       const blob = new Blob(chunksRef.current, { type: finalMime });
       const localUrl = URL.createObjectURL(blob);
-      setPreviewUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return localUrl;
-      });
+      setPreviewUrl(localUrl);
       streamRef.current?.getTracks?.().forEach((track) => track.stop());
       streamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
       if (sampleTimerRef.current) window.clearInterval(sampleTimerRef.current);
       sampleTimerRef.current = null;
       setRecording(false);
+      onCameraAudioChange(false);
+      if (local) {
+        const session = phoneCaptureRef.current;
+        phoneCaptureRef.current = null;
+        if (!blob.size) {
+          setStatus("The camera returned an empty recording.");
+          return;
+        }
+        const startedAt = startRef.current.iso;
+        const durationSeconds = (performance.now() - startRef.current.perfMs) / 1000;
+        const telemetry = buildTelemetryPackage({
+          session,
+          startedAt,
+          stoppedAt: new Date().toISOString(),
+          startedPerfMs: startRef.current.perfMs,
+          durationSeconds,
+          samples: samplesRef.current,
+          latestBp: latestTelemetryRef.current.latestBpReading,
+          latestSpo2: latestTelemetryRef.current.latestSpo2Reading,
+        });
+        const stem = `sarah-phone-${startedAt.replace(/[:.]/g, "-")}`;
+        localFilesRef.current = [
+          { blob, filename: `${stem}.${extensionForMime(finalMime)}` },
+          { blob: new Blob([JSON.stringify(telemetry)], { type: "application/json" }), filename: `${stem}.json` },
+        ];
+        void saveLocalFiles();
+        return;
+      }
       uploadAndRender(blob, finalMime).catch((error) => {
         setBusy(false);
         setStatus(error?.message || "Could not upload/render the phone recording.");
@@ -364,7 +456,7 @@ export default function LiveSessionMobileRecorder({
     }
   };
 
-  const readyToRecord = supported && Boolean(capabilities?.ffmpeg_available);
+  const readyToRecord = supported && (local || Boolean(capabilities?.ffmpeg_available));
 
   return (
     <div className="rounded-xl border border-border bg-card p-4">
@@ -374,50 +466,51 @@ export default function LiveSessionMobileRecorder({
             <Video className="h-4 w-4" /> Phone Session Recording
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Record clean camera/mic video in the APK, upload it to the desktop server, and watch the render finish here.
+            {local ? "Record on this phone. Video and timestamped telemetry go to Downloads/Sarah." : "Record camera video into the active OBS session and render it on the Sarah server."}
           </p>
           <div className="mt-2 flex flex-wrap gap-2">
             <Badge variant={supported ? "default" : "secondary"}>{supported ? "Camera available" : "Camera unavailable"}</Badge>
-            <Badge variant={capabilities?.ffmpeg_available ? "default" : "secondary"}>
+            {!local && <Badge variant={capabilities?.ffmpeg_available ? "default" : "secondary"}>
               {!capabilityChecked ? "Checking desktop" : capabilities?.ffmpeg_available ? "Desktop renderer ready" : "Desktop renderer unavailable"}
-            </Badge>
+            </Badge>}
             {sessionId && <Badge variant="outline">Session {String(sessionId).slice(0, 8)}</Badge>}
             {recording && <Badge variant="destructive">Recording {elapsedText}</Badge>}
             {job?.status && <Badge variant="outline">Render {job.status}</Badge>}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          {local && !recording && <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={includeAudio} disabled={busy || (wakeEnabled && !includeAudio)} onChange={(event) => setIncludeAudio(event.target.checked)} />
+            Camera audio
+          </label>}
+          {retrySave && <Button type="button" variant="secondary" onClick={saveLocalFiles} disabled={busy}>Retry save</Button>}
           {!recording ? (
-            <Button type="button" onClick={() => startRecording().catch((error) => setStatus(error?.message || "Could not start recording."))} disabled={!readyToRecord || busy}>
+            <Button type="button" onClick={startRecording} disabled={!readyToRecord || busy || retrySave || (local && includeAudio && wakeEnabled)}>
               <Radio className="mr-2 h-4 w-4" />
               Start Phone Recording
             </Button>
           ) : (
             <Button type="button" variant="destructive" onClick={stopRecording}>
               <Square className="mr-2 h-4 w-4" />
-              Stop & Render
+              {local ? "Stop & Save" : "Stop & Render"}
             </Button>
           )}
         </div>
       </div>
+      {local && <p className="mt-2 text-xs text-muted-foreground">Leave camera audio off to use Sarah’s wake microphone during recording.</p>}
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.9fr)]">
-        <div className={`overflow-hidden rounded-lg border ${recording ? "border-border bg-black" : "border-dashed border-border bg-muted/20"}`}>
-          <video ref={videoRef} className={`${recording ? "aspect-video" : "h-0"} w-full object-contain`} muted playsInline autoPlay />
-          {!recording && (
-            <div className="p-4 text-sm text-muted-foreground">
-            Camera preview appears here only while recording, so Live Capture stays compact before the session starts.
-            </div>
-          )}
+      <div className={`mt-4 grid gap-4 ${recording ? "lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.9fr)]" : ""}`}>
+        <div hidden={!recording} className="overflow-hidden rounded-lg border border-border bg-black">
+          <video ref={videoRef} className="aspect-video w-full object-contain" muted playsInline autoPlay />
         </div>
         <div className="space-y-3">
           <div className="rounded-lg border border-border bg-muted/20 p-3">
-            <p className="text-sm text-muted-foreground">{status}</p>
-            <Progress value={progress} className="mt-3" />
+            <p role="status" className="text-sm text-muted-foreground">{status}</p>
+            {!local && <Progress value={progress} className="mt-3" />}
             {busy && (
               <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                 <UploadCloud className="h-3.5 w-3.5" />
-                Keep the APK open until upload/render completes.
+                {local ? "Keep Live Capture open until saving completes." : "Keep this page open until upload/render completes."}
               </p>
             )}
           </div>

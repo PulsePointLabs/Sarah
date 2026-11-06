@@ -2,6 +2,51 @@ apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.android'
 
 def sarahChatOnly = providers.gradleProperty('sarahChatOnly').orNull?.toBoolean() ?: false
+def wakeModelName = 'vosk-model-small-en-us-0.15'
+def wakeModelSha256 = '30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498'
+def wakeAssets = layout.buildDirectory.dir('generated/sarahWakeAssets')
+def prepareWakeModel = tasks.register('prepareWakeModel') {
+    inputs.property('sha256', wakeModelSha256)
+    outputs.dir(wakeAssets)
+    doLast {
+        def cache = new File(gradle.gradleUserHomeDir, "caches/sarah-models/${wakeModelName}.zip")
+        def checksum = { File file ->
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            file.withInputStream { input ->
+                byte[] buffer = new byte[65536]
+                for (int count = input.read(buffer); count != -1; count = input.read(buffer)) {
+                    digest.update(buffer, 0, count)
+                }
+            }
+            digest.digest().encodeHex().toString()
+        }
+        if (!cache.isFile() || checksum(cache) != wakeModelSha256) {
+            cache.parentFile.mkdirs()
+            def temporary = File.createTempFile('sarah-wake-', '.zip', cache.parentFile)
+            try {
+                def connection = new URI("https://alphacephei.com/vosk/models/${wakeModelName}.zip").toURL().openConnection()
+                connection.connectTimeout = 15000
+                connection.readTimeout = 30000
+                connection.inputStream.withCloseable { input ->
+                    temporary.withOutputStream { output -> output << input }
+                }
+                if (checksum(temporary) != wakeModelSha256) throw new GradleException('Sarah speech model checksum failed.')
+                java.nio.file.Files.move(temporary.toPath(), cache.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            } finally {
+                temporary.delete()
+            }
+        }
+        def modelDir = wakeAssets.get().dir('model-en-us').asFile
+        project.sync { copy ->
+            copy.from(project.zipTree(cache)) { source ->
+                source.eachFile { entry -> entry.path = entry.path.substring(wakeModelName.length() + 1) }
+                source.includeEmptyDirs = false
+            }
+            copy.into(modelDir)
+        }
+        new File(modelDir, 'uuid').text = wakeModelSha256
+    }
+}
 
 android {
     namespace = "com.pulsepointlabs.sarah"
@@ -10,8 +55,8 @@ android {
         applicationId sarahChatOnly ? "com.pulsepointlabs.sarahchat" : "com.pulsepointlabs.sarah"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 298
-        versionName "0.1.298"
+        versionCode 299
+        versionName "0.1.299"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "boolean", "SARAH_CHAT_ONLY", sarahChatOnly.toString()
         manifestPlaceholders = [appLabel: sarahChatOnly ? "Sarah Chat" : "Sarah"]
@@ -24,6 +69,7 @@ android {
     buildFeatures {
         buildConfig true
     }
+    sourceSets.main.assets.srcDir(wakeAssets)
     buildTypes {
         release {
             minifyEnabled false
@@ -31,6 +77,7 @@ android {
         }
     }
 }
+tasks.named('preBuild').configure { dependsOn(prepareWakeModel) }
 
 repositories {
     flatDir{
@@ -48,6 +95,7 @@ dependencies {
     implementation "androidx.media3:media3-session:1.9.0"
     implementation "androidx.media3:media3-ui:1.9.0"
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
+    implementation 'com.alphacephei:vosk-android:0.3.75'
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
