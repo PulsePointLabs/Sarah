@@ -24,6 +24,7 @@ import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import java.util.concurrent.Executors
 import kotlin.math.abs
 
 /**
@@ -43,6 +44,9 @@ class ClockService : Service(),
         private const val NOTIF_ID = 1
         private const val MIN_SCALE = 0.5f
         private const val MAX_SCALE = 3.0f
+        private const val WEATHER_EVERY_MS = 20 * 60_000L
+        private const val WEATHER_RETRY_MS = 5 * 60_000L
+        private const val WEATHER_STALE_MS = 3 * 60 * 60_000L
 
         @Volatile var running = false
             private set
@@ -59,6 +63,9 @@ class ClockService : Service(),
     private val external get() = displayId != Display.DEFAULT_DISPLAY
     private var density = 1f
     private var scale = 1f
+    private var weather: Weather? = null
+    private val io = Executors.newSingleThreadExecutor()
+    private val weatherTick = Runnable { refreshWeather() }
 
     private val tick = object : Runnable {
         override fun run() {
@@ -97,7 +104,9 @@ class ClockService : Service(),
         if (!Settings.canDrawOverlays(this)) { stopSelf(); return }
 
         scale = prefs.getInt(Prefs.SIZE, 100) / 100f
+        weather = cachedWeather()
         attach(pickDisplay())
+        handler.post(weatherTick)
         prefs.registerOnSharedPreferenceChangeListener(this)
         displays.registerDisplayListener(this, handler)
         handler.post(tick)
@@ -118,6 +127,7 @@ class ClockService : Service(),
         if (::prefs.isInitialized) prefs.unregisterOnSharedPreferenceChangeListener(this)
         if (::displays.isInitialized) displays.unregisterDisplayListener(this)
         detach()
+        io.shutdownNow()
         super.onDestroy()
     }
 
@@ -169,6 +179,8 @@ class ClockService : Service(),
             scale = this@ClockService.scale
             alpha = prefs.getInt(Prefs.OPACITY, 100) / 100f
             bgAlpha = prefs.getInt(Prefs.BG, 62) / 100f
+            tint = prefs.getInt(Prefs.TINT, 50) / 100f
+            weather = this@ClockService.weather
         }
         val lp = WindowManager.LayoutParams(
             ClockView.windowW(density, scale),
@@ -321,12 +333,58 @@ class ClockService : Service(),
         when (key) {
             Prefs.OPACITY -> view?.alpha = p.getInt(key, 100) / 100f
             Prefs.BG -> view?.bgAlpha = p.getInt(key, 62) / 100f
+            Prefs.TINT -> view?.tint = p.getInt(key, 50) / 100f
+            Prefs.WEATHER, Prefs.CELSIUS, Prefs.LAT, Prefs.LON -> {
+                handler.removeCallbacks(weatherTick)
+                handler.postDelayed(weatherTick, 300)
+            }
             Prefs.SIZE -> setScale(p.getInt(key, 100) / 100f, persist = false)
             Prefs.RESET -> {
                 p.edit().remove(Prefs.xKey(external)).remove(Prefs.yKey(external)).apply()
                 placeFromPrefs(); clampAndUpdate()
             }
         }
+    }
+
+    // ---------------------------------------------------------------- weather
+
+    private fun refreshWeather() {
+        handler.removeCallbacks(weatherTick)
+        if (!running) return
+        val on = prefs.getBoolean(Prefs.WEATHER, true)
+        if (!on || !prefs.contains(Prefs.LAT)) { setWeather(null); return }
+        val lat = prefs.getFloat(Prefs.LAT, 0f).toDouble()
+        val lon = prefs.getFloat(Prefs.LON, 0f).toDouble()
+        val celsius = prefs.getBoolean(Prefs.CELSIUS, false)
+        io.execute {
+            val result = runCatching { WeatherApi.current(lat, lon, celsius) }
+            handler.post {
+                if (!running) return@post
+                result.onSuccess { w ->
+                    setWeather(w)
+                    prefs.edit().putString(
+                        Prefs.W_CACHE, "${w.temp},${w.code},${if (w.day) 1 else 0},${System.currentTimeMillis()}"
+                    ).apply()
+                }
+                // Offline? Keep showing the last reading until it's hours old.
+                if (result.isFailure && cachedWeather() == null) setWeather(null)
+                handler.postDelayed(weatherTick, if (result.isSuccess) WEATHER_EVERY_MS else WEATHER_RETRY_MS)
+            }
+        }
+    }
+
+    private fun setWeather(w: Weather?) {
+        weather = w
+        view?.weather = w
+    }
+
+    private fun cachedWeather(): Weather? {
+        if (!prefs.getBoolean(Prefs.WEATHER, true)) return null
+        val parts = prefs.getString(Prefs.W_CACHE, null)?.split(",") ?: return null
+        if (parts.size != 4) return null
+        val age = System.currentTimeMillis() - (parts[3].toLongOrNull() ?: 0L)
+        if (age > WEATHER_STALE_MS) return null
+        return Weather(parts[0].toInt(), parts[1].toInt(), parts[2] == "1")
     }
 
     // ---------------------------------------------------------------- notification

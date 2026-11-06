@@ -59,6 +59,31 @@
 
         <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                <TextView style="@style/Label" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="Background colour" />
+                <TextView android:id="@+id/tintVal" style="@style/Hint" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+            </LinearLayout>
+            <SeekBar android:id="@+id/tint" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:min="0" android:max="100" />
+            <TextView style="@style/Hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="How much the glass takes on the blue to red hour colour. 0% = plain dark." />
+        </LinearLayout>
+
+        <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <Switch android:id="@+id/weather" style="@style/Label" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Show weather" />
+            <TextView android:id="@+id/place" style="@style/Hint" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" />
+            <Button android:id="@+id/locate" android:layout_width="match_parent" android:layout_height="44dp" android:layout_marginTop="12dp"
+                android:background="@drawable/button_quiet" android:textAllCaps="false" android:textColor="@color/text" android:stateListAnimator="@null" android:text="Use my location" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:orientation="horizontal" android:gravity="center_vertical">
+                <EditText android:id="@+id/query" android:layout_width="0dp" android:layout_weight="1" android:layout_height="44dp"
+                    android:background="@drawable/button_quiet" android:paddingStart="12dp" android:paddingEnd="12dp"
+                    android:hint="or type a city or ZIP" android:textColorHint="@color/muted" android:textColor="@color/text" android:textSize="14sp"
+                    android:inputType="textPostalAddress" android:imeOptions="actionSearch" android:singleLine="true" />
+                <Button android:id="@+id/search" android:layout_width="wrap_content" android:layout_height="44dp" android:layout_marginStart="8dp" android:minWidth="64dp"
+                    android:background="@drawable/button_quiet" android:textAllCaps="false" android:textColor="@color/text" android:stateListAnimator="@null" android:text="Set" />
+            </LinearLayout>
+            <Switch android:id="@+id/celsius" style="@style/Label" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="14dp" android:text="Use °C" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
                 <TextView style="@style/Label" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="Size" />
                 <TextView android:id="@+id/sizeVal" style="@style/Hint" android:layout_width="wrap_content" android:layout_height="wrap_content" />
             </LinearLayout>

@@ -3,7 +3,9 @@
 Ben's always-on-top desktop clock for Samsung DeX on the S25 Ultra.
 
 - 24h time, full date ("Thursday, November 5")
-- Thin bar along the bottom fills across the hour, drifting **blue → violet → red**
+- Bar along the bottom fills across the hour, drifting **blue → violet → red**
+- The glass background can take on the same hour colour (Background colour slider)
+- Weather icon + temperature on the date line (Open-Meteo, no account or key needed)
 - Floats over every app, and automatically jumps to the DeX monitor when DeX is connected
   (back to the phone screen when it isn't)
 
@@ -13,6 +15,8 @@ Ben's always-on-top desktop clock for Samsung DeX on the S25 Ultra.
 2. Open **Floating Clock**, tap **Show clock**, and turn on **Allow display over other apps** when asked.
 3. Allow notifications. Android needs a small "Clock is floating" notification to keep it alive.
 4. Recommended: **Battery settings → Battery → Unrestricted**, so One UI doesn't put it to sleep.
+5. For weather: in settings tap **Use my location** once (or type a city / ZIP). It's only looked
+   up when you tap, never tracked in the background. Weather refreshes every 20 minutes.
 
 ## Using it
 
@@ -21,7 +25,7 @@ Ben's always-on-top desktop clock for Samsung DeX on the S25 Ultra.
 | Drag the clock | Move it |
 | Hover with the mouse (or tap it) | Gear + resize corner appear |
 | Drag the bottom-right corner, mouse-wheel over it, or pinch | Resize |
-| Click the gear | Settings (opacity, background, size, start on boot) |
+| Click the gear | Settings (opacity, background, colour tint, size, weather, start on boot) |
 | "Hide clock" in the notification | Put it away |
 
 ## Build

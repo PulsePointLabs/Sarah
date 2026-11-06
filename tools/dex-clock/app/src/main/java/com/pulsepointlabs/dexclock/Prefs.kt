@@ -11,6 +11,14 @@ object Prefs {
     const val BOOT = "boot"            // restart after reboot
     const val WANTED = "wanted"        // user last chose "show" (vs "hide")
     const val RESET = "reset"          // bump to snap back to default spot
+    const val TINT = "tint"            // 0..100, how much the card takes the hour colour
+
+    const val WEATHER = "weather"      // show weather on the date line
+    const val CELSIUS = "celsius"
+    const val LAT = "lat"              // saved location (float); absent = none yet
+    const val LON = "lon"
+    const val PLACE = "place"          // human-readable name for the settings screen
+    const val W_CACHE = "w_cache"      // "temp,code,day,epochMillis" so it shows instantly
 
     fun get(ctx: Context): SharedPreferences =
         ctx.getSharedPreferences("clock", Context.MODE_PRIVATE)

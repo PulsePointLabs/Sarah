@@ -12,19 +12,20 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
- * Style C: smoked-glass card, white 24h digits, full date, and a thin bar along the
- * bottom that fills across the hour and drifts blue -> violet -> red.
+ * Style C: smoked-glass card, white 24h digits, full date + weather, and a bar along
+ * the bottom that fills across the hour and drifts blue -> violet -> red. The card
+ * itself can take on the same colour ([tint]).
  *
- * Everything is laid out in "base" dp units (card is 260 x 118) and multiplied by
+ * Everything is laid out in "base" dp units (card is 280 x 120) and multiplied by
  * [k] = density * scale at draw time, so text stays crisp at any size.
  */
 class ClockView(ctx: Context) : View(ctx) {
 
     companion object {
-        const val BASE_W = 260f
-        const val BASE_H = 118f
+        const val BASE_W = 280f
+        const val BASE_H = 120f
         const val MARGIN = 10f          // room around the card for its shadow
-        const val BAR_H = 5f
+        const val BAR_H = 7f
         const val RADIUS = 18f
 
         fun windowW(density: Float, scale: Float) = ((BASE_W + 2 * MARGIN) * density * scale).toInt()
@@ -39,7 +40,7 @@ class ClockView(ctx: Context) : View(ctx) {
             return lerp(STOPS[i], STOPS[i + 1], t - i)
         }
 
-        private fun lerp(a: Int, b: Int, f: Float): Int = Color.rgb(
+        fun lerp(a: Int, b: Int, f: Float): Int = Color.rgb(
             (Color.red(a) + (Color.red(b) - Color.red(a)) * f).toInt(),
             (Color.green(a) + (Color.green(b) - Color.green(a)) * f).toInt(),
             (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * f).toInt(),
@@ -52,6 +53,14 @@ class ClockView(ctx: Context) : View(ctx) {
         set(v) { field = v; invalidate() }
     var bgAlpha = 0.62f
         set(v) { field = v; invalidate() }
+    /** 0 = plain dark glass, 1 = strongly tinted with the hour colour. */
+    var tint = 0.5f
+        set(v) { field = v; invalidate() }
+    var weather: Weather? = null
+        set(v) { field = v; invalidate() }
+    /** For previews/tests only: freeze the clock at this time. */
+    var timeOverride: LocalDateTime? = null
+        set(v) { field = v; invalidate() }
     var chrome = false
         set(v) { if (field != v) { field = v; invalidate() } }
 
@@ -59,7 +68,8 @@ class ClockView(ctx: Context) : View(ctx) {
 
     private val dateFmt = DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.getDefault())
 
-    private val cardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(16, 18, 24) }
+    private val baseCard = Color.rgb(16, 18, 24)
+    private val cardPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = Color.WHITE }
     private val timePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = resources.getFont(R.font.inter_light)
@@ -71,10 +81,15 @@ class ClockView(ctx: Context) : View(ctx) {
     private val datePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = resources.getFont(R.font.inter_medium)
         color = Color.rgb(201, 205, 214)
-        textAlign = Paint.Align.CENTER
         letterSpacing = 0.01f
     }
-    private val trackPaint = Paint().apply { color = Color.argb(20, 255, 255, 255) }
+    private val tempPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        typeface = resources.getFont(R.font.inter_medium)
+        color = Color.rgb(236, 238, 243)
+        fontFeatureSettings = "tnum"
+    }
+    private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(236, 238, 243) }
+    private val trackPaint = Paint()
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val gripPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; color = Color.argb(150, 255, 255, 255)
@@ -88,15 +103,17 @@ class ClockView(ctx: Context) : View(ctx) {
     private fun y(v: Float) = (MARGIN + v) * k
 
     override fun onDraw(canvas: Canvas) {
-        val now = LocalDateTime.now()
+        val now = timeOverride ?: LocalDateTime.now()
         val progress = (now.minute * 60 + now.second + now.nano / 1e9f) / 3600f
         val accent = hourColor(progress)
 
         card.set(x(0f), y(0f), x(BASE_W), y(BASE_H))
         val r = RADIUS * k
+        val mix = tint.coerceIn(0f, 1f) * 0.75f
 
         // Card + soft shadow. Both fade out with the Background slider.
         if (bgAlpha > 0.01f) {
+            cardPaint.color = lerp(baseCard, accent, mix)
             cardPaint.alpha = (bgAlpha * 255).toInt()
             cardPaint.setShadowLayer(8 * k, 0f, 3 * k, Color.argb((90 * bgAlpha).toInt(), 0, 0, 0))
             canvas.drawRoundRect(card, r, r, cardPaint)
@@ -110,25 +127,55 @@ class ClockView(ctx: Context) : View(ctx) {
         val textShadow = Color.argb(((1f - bgAlpha) * 140).toInt().coerceAtLeast(0), 0, 0, 0)
         timePaint.setShadowLayer(3 * k, 0f, 1 * k, textShadow)
         datePaint.setShadowLayer(2 * k, 0f, 1 * k, textShadow)
+        tempPaint.setShadowLayer(2 * k, 0f, 1 * k, textShadow)
+        iconPaint.setShadowLayer(2 * k, 0f, 1 * k, textShadow)
 
         timePaint.textSize = 58 * k
         canvas.drawText("%02d:%02d".format(now.hour, now.minute), x(BASE_W / 2), y(66f), timePaint)
 
-        datePaint.textSize = 15 * k
-        canvas.drawText(now.format(dateFmt), x(BASE_W / 2), y(95.5f), datePaint)
+        drawDateLine(canvas, now.format(dateFmt))
 
         // Hour bar, clipped to the card's rounded bottom corners.
         canvas.save()
         clip.reset()
         clip.addRoundRect(card, r, r, Path.Direction.CW)
         canvas.clipPath(clip)
+        // On a tinted card the bar would vanish into its own colour, so lift it toward white.
+        trackPaint.color = Color.argb((20 + 40 * mix).toInt(), 255, 255, 255)
         canvas.drawRect(x(0f), y(BASE_H - BAR_H), x(BASE_W), y(BASE_H), trackPaint)
-        barPaint.color = accent
+        barPaint.color = lerp(accent, Color.WHITE, mix * bgAlpha.coerceAtMost(1f) * 0.6f)
         val end = x(BASE_W * progress)
-        canvas.drawRoundRect(x(-4f), y(BASE_H - BAR_H), end, y(BASE_H), 2.5f * k, 2.5f * k, barPaint)
+        canvas.drawRoundRect(x(-4f), y(BASE_H - BAR_H), end, y(BASE_H), 3.5f * k, 3.5f * k, barPaint)
         canvas.restore()
 
         if (chrome) drawChrome(canvas)
+    }
+
+    /** "Friday, November 6   ☁ 71°", centred, shrinking a touch if a long date won't fit. */
+    private fun drawDateLine(canvas: Canvas, date: String) {
+        val w = weather
+        var size = 15f
+        val icon = 18f; val gapA = 11f; val gapB = 5f
+        // Paints work in screen pixels; layout here is in base units, hence the * k and / k.
+        fun widthAt(sz: Float): Float {
+            datePaint.textSize = sz * k; tempPaint.textSize = sz * k
+            var total = datePaint.measureText(date) / k
+            if (w != null) total += gapA + icon * sz / 15f + gapB + tempPaint.measureText("${w.temp}°") / k
+            return total
+        }
+        var total = widthAt(size)
+        val room = BASE_W - 32
+        if (total > room) { size *= room / total; total = widthAt(size) }
+
+        val baseline = 95.5f
+        var cur = BASE_W / 2 - total / 2
+        canvas.drawText(date, x(cur), y(baseline), datePaint)
+        if (w == null) return
+        cur += datePaint.measureText(date) / k + gapA
+        val s = icon * size / 15f
+        WeatherIcon.draw(canvas, w.code, w.day, x(cur + s / 2), y(baseline - size * 0.36f), s * k, iconPaint)
+        cur += s + gapB
+        canvas.drawText("${w.temp}°", x(cur), y(baseline), tempPaint)
     }
 
     private fun drawChrome(canvas: Canvas) {

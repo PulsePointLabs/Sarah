@@ -9,10 +9,10 @@ android {
 
     defaultConfig {
         applicationId "com.pulsepointlabs.dexclock"
-        minSdk 30
+        minSdk 33
         targetSdk 35
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "1.1"
     }
 
     // Fixed debug key checked into the repo so every build can install over the
